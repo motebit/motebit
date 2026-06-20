@@ -143,10 +143,64 @@ across the flat surfaces ([`panels-pattern.md`](panels-pattern.md)):
   money-history projection (`AgentEconomicSummary`) are shipped; the felt move is
   the owner glancing at _their_ graph deepening, not a stranger reading a roster.
 - **Memory** — the index and decay are real; felt is the owner sensing the graph
-  hold and shed, calmly, without reading rows.
+  hold and shed, calmly, without reading rows (specced in §5).
 
 No new accrual machinery. A legibility layer over accrual that is already governed,
 signed, and sovereign.
+
+## 5. The memory record — the standing record to consolidation's acts
+
+Consolidation (§2) is the **act** side of the core interior axis: _what changed this
+cycle_, a discrete event with a signed `ConsolidationMutationManifest` behind it. The
+memory graph is the **record** side: _what the interior holds, at rest_. They are one
+axis in two registers ([`records-vs-acts.md`](records-vs-acts.md)) — the cycle is the
+recent motion, the graph is the standing mass — and the owner should feel both: that
+the interior _learned_ (the act) and that it _holds_ (the record). Building the memory
+record completes that pairing; without it, the owner feels the motion and never the
+mass.
+
+The substance is shipped: `auditMemoryGraph` and the decayed-confidence math in
+[`@motebit/memory-graph`](../../packages/memory-graph/src/index.ts) already expose the
+graph's shape and what is fading. The elevation is a calm resting summary — the owner
+sensing the graph hold and shed, **without reading rows** — built in the shared memory
+controller as `resolveFeltMemory` → `FeltMemoryRecord`, the parallel to consolidation's
+`resolveFeltConsolidation`, rendered on the flat surfaces where the Memory panel already
+lives (desktop, web, mobile). Spatial defers to its own register — a creature-ambient
+depth cue, a Presentation primitive, never a panel ([`panels-pattern.md`](panels-pattern.md)).
+
+**The honesty model differs from consolidation's, and the difference is the spec.**
+Consolidation's record is honest-by-construction-via-_signing_: a signed manifest gives
+it the discriminated `{ status: "verified", mutations } | { status: "receipt_only" }`
+evidence, so "detail-shown ⟺ verified" is _unrepresentable_ to violate. The memory
+graph's standing state is **unsigned and local by construction** — there is no
+`MemoryGraphStateReceipt`, and there must not be one minted per glance: the live graph
+is the private interior, and a discrete event is signable where a continuous state is
+not. So the memory record's honesty rests on a different floor, and it must be just as
+structural:
+
+- **It makes no assurance claim, ever.** `FeltMemoryRecord` carries no verified/attested
+  variant at all — claiming verification is unrepresentable by the _type_, not avoided by
+  convention (the [`runtime-invariants-over-prompt-rules.md`](runtime-invariants-over-prompt-rules.md)
+  move). A glanced memory summary says only "what your device's local graph holds right
+  now," and claims nothing more. This is the inverse discipline to §2: consolidation may
+  show detail _because_ it is signed; memory shows _shape_ _because_ it is not.
+- **Summary-not-secret, sensitivity-ceilinged** — identical to §3. The projection is
+  shape-and-presence bounded by each contributing memory's tier; a `medical`/`secret`
+  memory adds to the felt mass, never to a named line, and the ceiling falls to
+  existence-without-content where even the shape is identifying. The felt memory record
+  must never become a reason to surface sensitive memory content.
+- **Local stays local; sharing routes through the signed export.** The live record is
+  local-only and never synced (the memory graph never leaves the device); the moment the
+  owner _exports_ a view it becomes stranger-facing and goes through the existing
+  counts-only `emitSignedExport` path with the §1 sensitivity floor — never an ad-hoc
+  transmission of the local summary. This preserves the Gotchas-§"the owner is not the
+  only eventual reader" bound.
+
+What this is **not**: the §"What not to build" applies hardest here, because a memory
+count is the most natural vanity metric of the three. Not a memory-count score, streak,
+or growth chart — a rising number is the gameable aggregate §1 refuses, turned inward,
+and the likeliest place to manufacture performance anxiety. The record is the graph's
+_shape and its quiet hold-and-shed_, honest on its still days, never a number that goes up.
 
 ## What not to build
 

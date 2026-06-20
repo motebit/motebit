@@ -170,6 +170,12 @@ const BACKTICK_IDENT = /`([A-Za-z_][A-Za-z0-9_]*)`/g;
  */
 const IDENTIFIER_ALLOWLIST: Record<string, string> = {
   // ----- Anticipated future symbols (named ahead of landing) -----
+  resolveFeltMemory:
+    "anticipated future symbol — `felt-interior.md` §5 names the canonical entry point for the memory felt record (parallel to the shipped `resolveFeltConsolidation`); lands in `@motebit/panels`'s memory controller when the increment ships.",
+  FeltMemoryRecord:
+    "anticipated future type — `felt-interior.md` §5 names the memory felt record's render contract (parallel to the shipped `FeltConsolidationRecord`); lands with `resolveFeltMemory`.",
+  MemoryGraphStateReceipt:
+    "deliberately-nonexistent symbol — `felt-interior.md` §5 names it to say there is NO signed memory-state artifact and there must not be one (the memory record is unsigned-local by construction). Naming the thing that must not exist is what makes the unsigned-local honesty model legible; same illustrative-counterexample class as `EvalReceipt`.",
   VerificationVerdict:
     "anticipated future type — `verify-family-fail-closed.md` names the structured verdict that replaces the verify family's bare booleans when the reshape ships (the VerificationVerdict arc). The doc names it ahead of the landing so the arc is recorded; the type lands with that coordinated major, same pattern as `RetentionSemiring` / `EvalAttestation`.",
 
