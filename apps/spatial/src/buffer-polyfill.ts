@@ -10,4 +10,10 @@
 // sibling-boundary rule: same fix, same shape, every browser surface.
 import { Buffer } from "buffer";
 
-globalThis.Buffer = Buffer;
+// `Object.assign` rather than `globalThis.Buffer = Buffer`: the latter is a
+// property-index write on `typeof globalThis`, which trips TS7017 (implicit-any,
+// no index signature) under `noImplicitAny` when @types/node's global Buffer
+// augmentation isn't in scope for this project's build — true in CI's strict
+// install even though local hoisting masks it. Object.assign is fully typed and
+// has the identical runtime effect.
+Object.assign(globalThis, { Buffer });

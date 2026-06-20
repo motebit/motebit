@@ -10,4 +10,8 @@
 // Mirrors apps/web — sibling-boundary rule.
 import { Buffer } from "buffer";
 
-globalThis.Buffer = Buffer;
+// `Object.assign`, not `globalThis.Buffer = Buffer` — the bare property-index
+// write trips TS7017 under `noImplicitAny` if @types/node's global Buffer
+// augmentation isn't in this project's build scope (it is here today, but the
+// sibling spatial build proved it's not guaranteed; this form is immune).
+Object.assign(globalThis, { Buffer });
