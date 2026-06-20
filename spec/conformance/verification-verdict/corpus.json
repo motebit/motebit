@@ -459,6 +459,81 @@
           "fix": "The token's activation window has not started under this temporal basis — do not act until its slot; if you judge validity by ordering, set temporalMode: 'ordering'."
         }
       }
+    },
+    {
+      "name": "token-didkey-delegator-sovereign",
+      "kind": "delegation_token",
+      "description": "A valid in-TTL tick whose grant's delegator_id is a W3C did:key committing to the delegator key by construction. identityBinding MUST read 'sovereign' — a did:key is the tautological case-1 binding (the id IS the key), the strongest rung. Before the fix it read 'unverified' — a true binding under-reported (the inverse of a silent-true; the agency.computer parity catch). Otherwise all-green, so isFullyVerified is true.",
+      "input": {
+        "token": {
+          "delegator_id": "did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX",
+          "delegator_public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+          "delegate_id": "mote-delegate",
+          "delegate_public_key": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+          "scope": "web.search",
+          "grant_id": "grant-didkey",
+          "issued_at": 1700000000000,
+          "expires_at": 1700003600000,
+          "suite": "motebit-jcs-ed25519-b64-v1",
+          "signature": "Z0U4URGMb_L8mRnPx98-b0fnI8-aXcFeuMstnTniRC8x95xU3Jvh6TvxDnxx_6cYuGFyl09AQIqJCN-2EwLxBQ"
+        },
+        "grant": {
+          "grant_id": "grant-didkey",
+          "delegator_id": "did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX",
+          "delegator_public_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+          "delegate_id": "mote-delegate",
+          "delegate_public_key": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+          "scope": "web.search,brief.compose",
+          "subject": "research:thesis=x",
+          "cadence_ms": 86400000,
+          "issued_at": 1699999999000,
+          "not_before": null,
+          "expires_at": 1702592000000,
+          "max_token_ttl_ms": 3600000,
+          "suite": "motebit-jcs-ed25519-b64-v1",
+          "signature": "vErQI0IiVuJOtAIecEeh9gRN83SmRuU2XGL8YCKkNYSFMDeXRDUeDUPYAzYnDdFem8w1giHpfd3QQ2pxHAuFCg"
+        },
+        "options": {
+          "now": 1700000000000,
+          "revocations": [],
+          "revocationFreshness": {
+            "basis": "asserted",
+            "asOf": {
+              "timestamp_ms": 1700000000000
+            }
+          }
+        }
+      },
+      "expected": {
+        "type": "delegation_token",
+        "integrity": "verified",
+        "identityBinding": "sovereign",
+        "authority": "valid",
+        "revocation": {
+          "status": "fresh",
+          "freshness": {
+            "basis": "asserted",
+            "asOf": {
+              "timestamp_ms": 1700000000000
+            }
+          }
+        },
+        "temporalBasis": "local_clock",
+        "evidenceBasis": [
+          {
+            "kind": "delegation_token",
+            "ref": "Z0U4URGMb_L8mRnPx98-b0fnI8-aXcFeuMstnTniRC8x95xU3Jvh6TvxDnxx_6cYuGFyl09AQIqJCN-2EwLxBQ"
+          },
+          {
+            "kind": "grant",
+            "ref": "grant-didkey"
+          },
+          {
+            "kind": "public_key",
+            "ref": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+          }
+        ]
+      }
     }
   ]
 }

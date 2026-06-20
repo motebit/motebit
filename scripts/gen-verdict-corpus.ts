@@ -27,6 +27,7 @@ import {
   signDelegation,
   signDelegationRevocation,
   deriveSovereignMotebitId,
+  publicKeyToDidKey,
   bytesToHex,
   hash,
   verifyReceiptVerdict,
@@ -284,6 +285,63 @@ async function main() {
       "The SAME token as token-clock-rollback-ordering, judged by WALL-CLOCK with the rolled-back clock → authority not_yet_valid, temporalBasis local_clock. The pair proves a consumer MUST branch on temporalBasis, never assume wall-clock.",
     input: { token: tok3, grant, options: opts3w },
     expected: v3w,
+  });
+
+  // Fixture — did:key delegator (the agency parity catch). A valid in-TTL tick
+  // whose grant's delegator_id is a W3C did:key that commits to the delegator key
+  // by construction. identityBinding MUST read sovereign (the tautological case-1
+  // binding, the strongest rung) — before the fix it read 'unverified', a true
+  // binding under-reported. Otherwise all-green, so isFullyVerified is true: the
+  // vector that lets a did:key consumer tighten to isFullyVerified.
+  const didKeyParties = {
+    delegator_id: publicKeyToDidKey(del.pub),
+    delegator_public_key: del.hex,
+    delegate_id: "mote-delegate",
+    delegate_public_key: delegate.hex,
+  };
+  const didKeyGrant = await signStandingDelegation(
+    {
+      grant_id: "grant-didkey",
+      ...didKeyParties,
+      scope: "web.search,brief.compose",
+      subject: "research:thesis=x",
+      cadence_ms: DAY,
+      issued_at: NOW - 1000,
+      not_before: null,
+      expires_at: NOW + 30 * DAY,
+      max_token_ttl_ms: HOUR,
+    },
+    del.priv,
+  );
+  const didKeyTick = await signDelegation(
+    {
+      ...didKeyParties,
+      scope: "web.search",
+      grant_id: "grant-didkey",
+      issued_at: NOW,
+      expires_at: NOW + HOUR,
+    },
+    del.priv,
+  );
+  const optsDidKey = {
+    now: NOW,
+    revocations: [],
+    revocationFreshness: { basis: "asserted", asOf: { timestamp_ms: NOW } },
+  };
+  const vDK = await verifyDelegationTokenVerdict(didKeyTick, didKeyGrant, optsDidKey as never);
+  assertInvariant("token-didkey-delegator-sovereign", vDK, {
+    integrity: "verified",
+    identityBinding: "sovereign",
+    authority: "valid",
+    "revocation.status": "fresh",
+  });
+  cases.push({
+    name: "token-didkey-delegator-sovereign",
+    kind: "delegation_token",
+    description:
+      "A valid in-TTL tick whose grant's delegator_id is a W3C did:key committing to the delegator key by construction. identityBinding MUST read 'sovereign' — a did:key is the tautological case-1 binding (the id IS the key), the strongest rung. Before the fix it read 'unverified' — a true binding under-reported (the inverse of a silent-true; the agency.computer parity catch). Otherwise all-green, so isFullyVerified is true.",
+    input: { token: didKeyTick, grant: didKeyGrant, options: optsDidKey },
+    expected: vDK,
   });
 
   mkdirSync(OUT_DIR, { recursive: true });

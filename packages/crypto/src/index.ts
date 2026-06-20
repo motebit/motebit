@@ -768,14 +768,25 @@ function base58btcDecode(str: string): Uint8Array {
 // did:key derivation and parsing
 // ===========================================================================
 
-function publicKeyToDidKey(pubKey: Uint8Array): string {
+/**
+ * Encode an Ed25519 public key as a W3C `did:key` (multicodec `ed25519-pub`
+ * `0xed01`, base58btc / `z`-multibase). The id IS the key — a tautological,
+ * by-construction commitment. Inverse of {@link didKeyToPublicKey}.
+ */
+function publicKeyToDidKey(publicKey: Uint8Array): string {
   const prefixed = new Uint8Array(34);
   prefixed[0] = 0xed;
   prefixed[1] = 0x01;
-  prefixed.set(pubKey, 2);
+  prefixed.set(publicKey, 2);
   return `did:key:z${base58btcEncode(prefixed)}`;
 }
 
+/**
+ * Decode a W3C `did:key` (`ed25519-pub` / base58btc) back to its 32-byte Ed25519
+ * public key. Throws on a non-`z` multibase, wrong length, or a non-`ed25519-pub`
+ * multicodec prefix (fail-closed). Inverse of {@link publicKeyToDidKey};
+ * `verifySovereignBinding` uses it to read a did:key id as the sovereign rung.
+ */
 function didKeyToPublicKey(did: string): Uint8Array {
   if (!did.startsWith("did:key:z")) {
     throw new Error("Invalid did:key URI: must start with did:key:z");
@@ -1286,6 +1297,19 @@ export async function verifySovereignBinding(
   genesisPublicKeyHex: string,
 ): Promise<boolean> {
   try {
+    // A W3C `did:key` IS the multicodec-encoded public key — a tautological,
+    // by-construction commitment (the case-1 self-certification in
+    // docs/doctrine/identity-binding-verification.md § "The sovereign rung is
+    // id-scheme-agnostic"). Decode and compare to the artifact's key; equal ⇒
+    // sovereign, the same math-rooted / operator-free property as the motebit_id
+    // derivation below, different id scheme (agency.computer + the broader W3C
+    // ecosystem). A non-`z` / malformed did:key throws → caught → false
+    // (fail-closed). The id IS the key, so there is no forgery surface.
+    if (motebitId.startsWith("did:key:")) {
+      const decoded = didKeyToPublicKey(motebitId); // throws on non-`z`/malformed → caught → false
+      const expected = hexToBytes(genesisPublicKeyHex);
+      return decoded.length === expected.length && decoded.every((b, i) => b === expected[i]);
+    }
     const expected = await deriveSovereignMotebitId(genesisPublicKeyHex);
     return motebitId.toLowerCase() === expected;
   } catch {
