@@ -6,8 +6,19 @@ Network-free. No relay contact, no external service, no cloud dependency. Every 
 
 ```bash
 npm install -g @motebit/verify
-motebit-verify cred.json
+motebit-verify example        # verify the bundled sample — no artifact needed
+motebit-verify cred.json      # verify your own
 ```
+
+`motebit-verify example` verifies a sample receipt shipped inside the package, so the tool proves itself the moment it's installed:
+
+```
+VALID (receipt)
+  signer:   did:key:z6MknTDuE9nStgifh9bzrGNC8AcsxKSoyikuanL4z8jNN6gm
+  binding:  sovereign · motebit_id commits to the key (offline, no operator)
+```
+
+Point it at your own artifact and the output looks the same, dispatched on the artifact type:
 
 ```
 VALID (credential)

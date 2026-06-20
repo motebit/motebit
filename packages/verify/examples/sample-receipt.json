@@ -1,0 +1,16 @@
+{
+  "task_id": "69755e82-5c11-47f4-9768-c9fc275f6c93",
+  "motebit_id": "93d0bd7c-d233-845e-946d-60aff1dcfb69",
+  "device_id": "791594f2-33e1-4c8e-82d8-173cf1bbfbd7",
+  "submitted_at": 1781970184898,
+  "completed_at": 1781970184898,
+  "status": "completed",
+  "result": "4",
+  "tools_used": [],
+  "memories_formed": 0,
+  "prompt_hash": "b79477f7e22ce5f780d87b60b086fe322586a7710c7c168106f9ddc317fc3b44",
+  "result_hash": "4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a",
+  "public_key": "76db122a100754f266d46926ee8540e6a9fb3ed94873b5b3873edf43698b1dce",
+  "suite": "motebit-jcs-ed25519-b64-v1",
+  "signature": "u6zC1e27dbLEEa5yke51mRaJA0joXKkkkEwUt4pap6t2YCNLchawdcok1ikXmzPg3a4Xgaq2449uZsM1OSCEAQ"
+}

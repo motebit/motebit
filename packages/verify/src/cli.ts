@@ -40,7 +40,7 @@
  *   @motebit/crypto   — Apache-2.0 primitives (verify, sign, suite dispatch)
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -919,8 +919,23 @@ async function verifyContentArtifactCli(args: ParsedArgs, json: boolean): Promis
   return result.valid && !innerFailed ? 0 : 1;
 }
 
+/**
+ * Resolve the bundled sample receipt shipped beside the binary (dist/ and
+ * examples/ are siblings in both the repo and the published tarball). Lets
+ * `motebit-verify example` prove the tool the instant it's installed — a green
+ * check with no artifact to find, closing the "README says `motebit-verify
+ * cred.json` but a new user has no cred.json" gap.
+ */
+function resolveExamplePath(): string {
+  return join(dirname(fileURLToPath(import.meta.url)), "..", "examples", "sample-receipt.json");
+}
+
 async function main(): Promise<number> {
-  const args = parseArgs(process.argv.slice(2));
+  const rawArgs = process.argv.slice(2);
+  // `motebit-verify example` → verify the bundled sample. Rewrite to its path so
+  // the entire detect-verify-format pipeline below is reused unchanged.
+  const argv = rawArgs[0] === "example" ? [resolveExamplePath(), ...rawArgs.slice(1)] : rawArgs;
+  const args = parseArgs(argv);
 
   if (args.mode === "version") {
     process.stdout.write(`${getPackageVersion()}\n`);
@@ -1001,22 +1016,32 @@ async function main(): Promise<number> {
   return result.valid ? 0 : 1;
 }
 
-// Entry-point guard: only run when invoked as the binary, not when
-// imported by tests or programmatic consumers. Mirrors the standard
-// Node ESM pattern `if (import.meta.url === pathToFileURL(argv[1]))`.
-// Without this, importing cli.ts to test the pure-function helpers
-// triggers main() with vitest's argv and exits the test process.
-const invokedAsBinary = (() => {
-  if (process.argv[1] === undefined) return false;
+/**
+ * True when this module is the process entry point — only then does `main()`
+ * run, so importing cli.ts to test the pure helpers never triggers it.
+ *
+ * The comparison is by REALPATH, deliberately. Every real way a user runs this
+ * binary — npm's `.bin/motebit-verify`, a global install on `$PATH`, `npx
+ * @motebit/verify` — passes the SYMLINK path as `process.argv[1]`, while
+ * `import.meta.url` is the realpath of the target. The previous string compare
+ * (`import.meta.url === \`file://${argv[1]}\``) never matched in those cases, so
+ * `main()` never ran and the CLI silently no-op'd with exit 0 for every
+ * installed invocation (it only worked when `node`-ing the realpath directly,
+ * which no user does) — a violation of Rule 5 (never silent acceptance).
+ * Resolving the symlink on both sides via `realpathSync` makes the bin work the
+ * way it's installed. Exported so the bin-invocation regression test can assert
+ * the symlink case without spawning.
+ */
+export function isMainModule(metaUrl: string, argv1: string | undefined): boolean {
+  if (argv1 === undefined) return false;
   try {
-    const argvFileUrl = new URL(`file://${process.argv[1]}`).href;
-    return import.meta.url === argvFileUrl;
+    return realpathSync(fileURLToPath(metaUrl)) === realpathSync(argv1);
   } catch {
     return false;
   }
-})();
+}
 
-if (invokedAsBinary) {
+if (isMainModule(import.meta.url, process.argv[1])) {
   main()
     .then((code) => {
       process.exit(code);
