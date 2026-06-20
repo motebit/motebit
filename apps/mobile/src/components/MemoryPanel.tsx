@@ -10,14 +10,22 @@ import {
   Platform,
   Alert,
 } from "react-native";
-import { SensitivityLevel } from "@motebit/sdk";
+import { SensitivityLevel, EventType } from "@motebit/sdk";
 import type { MobileApp } from "../mobile-app";
 import { useTheme, type ThemeColors } from "../theme";
 import {
   createMemoryController,
   classifyCertainty,
   resolveFeltMemory,
+  resolveFeltConsolidation,
+  feltHeadline,
+  feltMutationLine,
+  feltVerifiedAssurance,
+  feltAssuranceGlyph,
+  feltReceiptScope,
   type FeltMemoryNode,
+  type FeltConsolidationRecord,
+  type FeltCoverageAdapter,
   type MemoryFetchAdapter,
   type MemoryState,
 } from "@motebit/panels";
@@ -50,6 +58,43 @@ function createMobileMemoryAdapter(app: MobileApp): MemoryFetchAdapter {
   };
 }
 
+/**
+ * Load the consolidation felt record (felt-interior §2/§4) — "what the interior
+ * has been learning." `resolveFeltConsolidation` is the canonical boundary: it
+ * projects + verifies internally and returns only render-safe records. Mobile
+ * holds the owner's signing key, so it supplies the verified-coverage adapter
+ * (same dynamic-crypto pattern as desktop/web) — detail is shown ⟺ verified.
+ * With no public key (pre-bootstrap), every record degrades to receipt-only.
+ */
+async function loadFeltConsolidation(app: MobileApp): Promise<FeltConsolidationRecord[]> {
+  const events = await app.queryEvents({
+    event_types: [
+      EventType.ConsolidationCycleRun,
+      EventType.ConsolidationReceiptSigned,
+      EventType.ConsolidationReceiptsAnchored,
+      EventType.MemoryFormed,
+      EventType.MemoryConsolidated,
+    ],
+  });
+  let adapter: FeltCoverageAdapter | undefined;
+  const pubHex = app.publicKey;
+  if (pubHex !== "") {
+    const {
+      verifyConsolidationMutationManifest,
+      consolidationReceiptDigest,
+      consolidationContentDigest,
+      hexToBytes,
+    } = await import("@motebit/encryption");
+    const ownerKey = hexToBytes(pubHex);
+    adapter = {
+      verifyManifest: (m) => verifyConsolidationMutationManifest(m, ownerKey),
+      receiptDigest: (r) => consolidationReceiptDigest(r),
+      contentDigest: (c) => consolidationContentDigest(c),
+    };
+  }
+  return resolveFeltConsolidation(events, adapter);
+}
+
 export function MemoryPanel({ visible, app, onClose }: MemoryPanelProps): React.ReactElement {
   const colors = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -80,6 +125,39 @@ export function MemoryPanel({ visible, app, onClose }: MemoryPanelProps): React.
     if (!visible) return;
     void ctrlRef.current?.refresh();
   }, [visible]);
+
+  // The consolidation felt record (felt-interior §2/§4) — "what I've been
+  // learning," the ACTS to the memory record's standing mass. Fetched on open;
+  // verified against the owner's own key. Mobile's first consolidation surface.
+  const [feltConsolidation, setFeltConsolidation] = useState<FeltConsolidationRecord[]>([]);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    if (!visible) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const records = await loadFeltConsolidation(app);
+        if (!cancelled) setFeltConsolidation(records);
+      } catch {
+        // Fail-soft: the resting record is additive. Leave it empty (honest by
+        // absence) rather than disturbing the memory list.
+        if (!cancelled) setFeltConsolidation([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, app]);
+
+  const toggleCycle = (key: string): void => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   const filtered = ctrlRef.current?.filteredView() ?? state.memories;
 
@@ -140,6 +218,43 @@ export function MemoryPanel({ visible, app, onClose }: MemoryPanelProps): React.
             {feltShapeLine !== "" ? (
               <Text style={styles.feltMemoryShape}>{feltShapeLine}</Text>
             ) : null}
+          </View>
+        ) : null}
+
+        {feltConsolidation.length > 0 ? (
+          <View style={styles.feltCons}>
+            <Text style={styles.feltConsHeader}>Recently learned</Text>
+            {feltConsolidation.slice(0, 4).map((rec) => {
+              const key = `${rec.cycleId}-${rec.finishedAt}`;
+              const glyph = feltAssuranceGlyph(rec.assurance);
+              const verified = rec.evidence.status === "verified";
+              const open = expanded.has(key);
+              return (
+                <View key={key} style={styles.feltConsRow}>
+                  <TouchableOpacity
+                    activeOpacity={verified ? 0.6 : 1}
+                    onPress={verified ? () => toggleCycle(key) : undefined}
+                    accessibilityLabel={feltReceiptScope(rec.assurance, rec.evidence.status)}
+                  >
+                    <View style={styles.feltConsHeadRow}>
+                      <Text style={styles.feltConsHeadline}>{feltHeadline(rec)}</Text>
+                      {glyph !== "" ? <Text style={styles.feltConsGlyph}>{glyph}</Text> : null}
+                      <Text style={styles.feltConsTime}>{formatTimeAgo(rec.finishedAt)}</Text>
+                    </View>
+                  </TouchableOpacity>
+                  {rec.evidence.status === "verified" && open ? (
+                    <View style={styles.feltConsDetail}>
+                      {rec.evidence.mutations.map((m) => (
+                        <Text key={m.nodeId} style={styles.feltConsLine}>
+                          {feltMutationLine(m)}
+                        </Text>
+                      ))}
+                      <Text style={styles.feltConsNote}>{feltVerifiedAssurance().label}</Text>
+                    </View>
+                  ) : null}
+                </View>
+              );
+            })}
           </View>
         ) : null}
 
@@ -219,6 +334,29 @@ function createStyles(c: ThemeColors) {
     },
     feltMemoryHeadline: { color: c.textPrimary, fontSize: 14, lineHeight: 19 },
     feltMemoryShape: { color: c.textMuted, fontSize: 12 },
+    feltCons: {
+      paddingHorizontal: 16,
+      paddingTop: 10,
+      paddingBottom: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.borderPrimary,
+      gap: 6,
+    },
+    feltConsHeader: {
+      color: c.textMuted,
+      fontSize: 11,
+      fontWeight: "600",
+      textTransform: "uppercase",
+      letterSpacing: 0.4,
+    },
+    feltConsRow: { gap: 4 },
+    feltConsHeadRow: { flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" },
+    feltConsHeadline: { color: c.textSecondary, fontSize: 13, flexShrink: 1 },
+    feltConsGlyph: { color: c.textMuted, fontSize: 12 },
+    feltConsTime: { color: c.textMuted, fontSize: 11, marginLeft: "auto" },
+    feltConsDetail: { paddingLeft: 10, gap: 2, marginTop: 2 },
+    feltConsLine: { color: c.textMuted, fontSize: 12, lineHeight: 17 },
+    feltConsNote: { color: c.accent, fontSize: 11, fontWeight: "500", marginTop: 2 },
     header: {
       flexDirection: "row",
       justifyContent: "space-between",

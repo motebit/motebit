@@ -1810,6 +1810,30 @@ export class MobileApp {
     return computeDecayedConfidence(node.confidence, node.half_life, Date.now() - node.created_at);
   }
 
+  /**
+   * Event-log reads for the Memory panel's consolidation felt record
+   * (`docs/doctrine/felt-interior.md` §2/§4). Local runtime only — mobile has
+   * no attached coordinator. Identity scope is always the interior's own (the
+   * caller never passes a motebit_id). Returns the minimal `FeltSourceEvent`
+   * shape `@motebit/panels` reads, so the panel needs no event-log types.
+   */
+  async queryEvents(
+    filter: { event_types?: string[]; limit?: number; after_timestamp?: number } = {},
+  ): Promise<Array<{ event_type: string; timestamp: number; payload: Record<string, unknown> }>> {
+    if (!this.runtime) return [];
+    const events = await this.runtime.events.query({
+      motebit_id: this.motebitId,
+      ...(filter.event_types ? { event_types: filter.event_types as EventType[] } : {}),
+      ...(filter.limit !== undefined ? { limit: filter.limit } : {}),
+      ...(filter.after_timestamp !== undefined ? { after_timestamp: filter.after_timestamp } : {}),
+    });
+    return events.map((e) => ({
+      event_type: e.event_type,
+      timestamp: e.timestamp,
+      payload: e.payload,
+    }));
+  }
+
   // === Conversation Browsing ===
 
   /** List recent conversations. */
