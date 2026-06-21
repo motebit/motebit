@@ -283,8 +283,20 @@ jobs:
               [ -n "$TAG" ] || continue
               git tag "$TAG" 2>/dev/null || true
               git push origin "refs/tags/$TAG" || echo "::warning::tag push failed for $TAG"
-              gh release create "$TAG" --title "$TAG" \
-                --notes "Automated release of \`$TAG\`. See the package's CHANGELOG.md for details." \
+              # Inline this version's CHANGELOG section so the GitHub Release
+              # shows what actually changed, not a stub. Fully fault-tolerant:
+              # a tag is `@motebit/<name>@<ver>`; resolve the package dir from
+              # its package.json name, slice the `## <ver>` section out of its
+              # CHANGELOG.md, and fall back to the generic note on any miss —
+              # a release body must never fail the (irreversible) npm publish.
+              PKG="${TAG%@*}"; VER="${TAG##*@}"
+              DIR=$(grep -rl "\"name\": \"$PKG\"" --include=package.json packages apps services 2>/dev/null | head -1 | xargs -r dirname || true)
+              NOTES=""
+              if [ -n "$DIR" ] && [ -f "$DIR/CHANGELOG.md" ]; then
+                NOTES=$(awk -v v="## $VER" '$0==v{f=1;next} /^## /{if(f)exit} f{print}' "$DIR/CHANGELOG.md" || true)
+              fi
+              [ -n "$NOTES" ] || NOTES="Automated release of \`$TAG\`. See the package's CHANGELOG.md for details."
+              gh release create "$TAG" --title "$TAG" --notes "$NOTES" \
                 || echo "::warning::GitHub Release for $TAG skipped (may already exist)"
             done || true
           else
