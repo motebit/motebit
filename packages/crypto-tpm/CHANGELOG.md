@@ -1,5 +1,12 @@
 # @motebit/crypto-tpm
 
+## 1.1.20
+
+### Patch Changes
+
+- Updated dependencies [f460df1]
+  - @motebit/crypto@3.12.0
+
 ## 1.1.19
 
 ### Patch Changes
