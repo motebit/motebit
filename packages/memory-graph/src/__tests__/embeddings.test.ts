@@ -8,6 +8,20 @@ import {
 } from "../embeddings";
 import { cosineSimilarity } from "../index";
 
+// Mock the @xenova/transformers load to FAIL — declared ONCE at top level (the
+// idiomatic placement). The prior version scattered four identical `vi.mock`
+// calls inside `it()` bodies; they hoisted to the top anyway, and that nested
+// form — combined with a `vi.doMock` success override in another block —
+// produced non-deterministic module state that flaked under CI timing (passed
+// locally, intermittently red in CI). With the load mocked to fail, the whole
+// suite runs on the deterministic hash fallback and CI never downloads a model.
+// The successful-pipeline code path is covered in its own file
+// (embeddings-pipeline-success.test.ts) with its own top-level success mock —
+// one module-mock state per file is the rule that keeps both deterministic.
+vi.mock("@xenova/transformers", () => {
+  throw new Error("Simulated download failure");
+});
+
 describe("embedText (semantic)", () => {
   afterAll(() => resetPipeline());
 
@@ -52,50 +66,36 @@ describe("embedText (semantic)", () => {
 }, 120_000);
 
 describe("embedText (hash fallback when pipeline fails)", () => {
+  // The top-level vi.mock makes the @xenova/transformers load throw, so
+  // embedText falls through to the hash embedding. resetPipeline() clears the
+  // cached failure flag between assertions.
   afterEach(() => {
     resetPipeline();
     vi.restoreAllMocks();
   });
 
   it("falls back to hash-based embedding padded to 384 dims", async () => {
-    // Force pipeline to fail by mocking the dynamic import
-    vi.mock("@xenova/transformers", () => {
-      throw new Error("Simulated download failure");
-    });
-    resetPipeline(); // clear cached pipeline so it retries
-
+    resetPipeline();
     const vec = await embedText("hello world");
     expect(vec).toHaveLength(EMBEDDING_DIMENSIONS);
   });
 
   it("fallback produces an L2-normalized vector", async () => {
-    vi.mock("@xenova/transformers", () => {
-      throw new Error("Simulated download failure");
-    });
     resetPipeline();
-
     const vec = await embedText("the quick brown fox");
     const norm = Math.sqrt(vec.reduce((sum, v) => sum + v * v, 0));
     expect(norm).toBeCloseTo(1.0, 5);
   });
 
   it("fallback is deterministic", async () => {
-    vi.mock("@xenova/transformers", () => {
-      throw new Error("Simulated download failure");
-    });
     resetPipeline();
-
     const a = await embedText("test input");
     const b = await embedText("test input");
     expect(a).toEqual(b);
   });
 
   it("fallback pads hash embedding (128d) to EMBEDDING_DIMENSIONS (384d) with zeros", async () => {
-    vi.mock("@xenova/transformers", () => {
-      throw new Error("Simulated download failure");
-    });
     resetPipeline();
-
     const vec = await embedText("some text");
     expect(vec).toHaveLength(EMBEDDING_DIMENSIONS);
 
@@ -140,34 +140,6 @@ describe("remoteEmbed error response", () => {
     setRemoteEmbedUrl("https://example.com/v1/embed");
     const vec = await embedText("hello");
     expect(vec).toHaveLength(EMBEDDING_DIMENSIONS);
-  });
-});
-
-describe("embedText with mock pipeline (successful ONNX path)", () => {
-  afterEach(() => {
-    resetPipeline();
-    vi.restoreAllMocks();
-  });
-
-  it("uses pipeline output when available", async () => {
-    const mockData = new Float32Array(384).fill(0.05);
-    const mockExtractor = vi.fn().mockResolvedValue({ data: mockData });
-
-    // Dynamically mock the module for this test
-    vi.doMock("@xenova/transformers", () => ({
-      pipeline: vi.fn().mockResolvedValue(mockExtractor),
-    }));
-    resetPipeline(); // clear cached state so it retries
-
-    // Re-import to pick up the new mock
-    const { embedText: embedTextFresh, resetPipeline: resetFresh } =
-      await import("../embeddings.js");
-    const vec = await embedTextFresh("test pipeline");
-    expect(vec).toHaveLength(EMBEDDING_DIMENSIONS);
-    // Should contain the mock data values
-    expect(vec[0]).toBeCloseTo(0.05, 5);
-    resetFresh();
-    vi.doUnmock("@xenova/transformers");
   });
 });
 
