@@ -52,8 +52,8 @@ const rand = () => Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toStr
 async function fed(relay: SyncRelay, method: string, path: string, body?: unknown) {
   const res = await relay.app.request(path, {
     method,
-    headers: body ? { "Content-Type": "application/json" } : {},
-    body: body ? JSON.stringify(body) : undefined,
+    headers: body != null ? { "Content-Type": "application/json" } : {},
+    body: body != null ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
   return { status: res.status, body: text ? (JSON.parse(text) as Record<string, unknown>) : null };

@@ -850,7 +850,7 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
       await scheduler.runNow(goalId, (chunk) => {
         const stepsEl = document.getElementById(`goal-steps-${goalId}`);
         if (!stepsEl) return;
-        if (chunk && typeof chunk === "object" && "type" in chunk) {
+        if (chunk != null && typeof chunk === "object" && "type" in chunk) {
           renderPlanChunk(stepsEl, chunk as PlanChunk);
         }
       });
@@ -1437,7 +1437,7 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
 
       const meta = document.createElement("div");
       meta.className = "agent-item-meta";
-      if (agent.trust_level) {
+      if (agent.trust_level != null && agent.trust_level !== "") {
         const badge = document.createElement("span");
         badge.className = `agent-trust-badge ${TRUST_BADGE_CLASS[agent.trust_level] ?? "unknown"}`;
         const interactionSuffix =

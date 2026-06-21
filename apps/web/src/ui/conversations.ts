@@ -144,6 +144,7 @@ export function initConversations(
             // the full detail for diagnosis.
             close();
             const msg = err instanceof Error ? err.message : String(err);
+            // eslint-disable-next-line no-console -- diagnostic for a real "click does nothing" failure; toast is user-facing, this preserves full detail for devtools
             console.error("[conversations] load failed:", msg);
             ctx.showToast("Couldn't open that conversation — try again");
             callbacks.onLoad();

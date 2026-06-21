@@ -134,7 +134,7 @@ export class ThreeJSAdapter implements RenderAdapter {
 
     // === Spatial Canvas — artifact positioning in creature's world ===
     const container = canvas.parentElement ?? document.body;
-    if (this.creatureRefs) {
+    if (this.creatureRefs != null) {
       this.artifactManager = new ArtifactManager(this.creatureRefs.group, container);
       // Slab — the "Motebit Computer" (docs/doctrine/motebit-computer.md).
       // Hangs off the creature group; detachHandler routes pinched items
@@ -548,7 +548,7 @@ export class WebXRThreeJSAdapter implements RenderAdapter {
     // visible tablet mesh + emerge/dissolve animations. See
     // `docs/doctrine/spatial-as-endgame.md` and the
     // `spatial_slab_port_held_tablet` memory for the split rationale.
-    if (this.creatureRefs) {
+    if (this.creatureRefs != null) {
       this.slab = new SpatialSlabManager(this.creatureRefs.group);
     }
 

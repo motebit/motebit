@@ -383,7 +383,10 @@ export function createSlabController(deps: SlabControllerDeps = {}): SlabControl
         cancel: () => clearTimeout(handle),
       };
     });
-  const warn = deps.logger?.warn.bind(deps.logger) ?? ((msg, ctx) => console.warn(msg, ctx));
+  const warn =
+    deps.logger?.warn.bind(deps.logger) ??
+    // eslint-disable-next-line no-console -- default sink when no pluggable logger is injected (repo convention)
+    ((msg, ctx) => console.warn(msg, ctx));
 
   const items = new Map<string, SlabItem>();
   const subscribers = new Set<SlabSubscriber>();

@@ -389,7 +389,7 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
                       <Text style={styles.agentId}>{truncateId(item.motebit_id)}</Text>
                     </View>
                     <View style={styles.badgeRow}>
-                      {item.trust_level && (
+                      {item.trust_level != null && item.trust_level !== "" && (
                         <View style={[styles.trustBadge, { borderColor: trustColor }]}>
                           <Text style={[styles.trustText, { color: trustColor }]}>
                             {item.trust_level}

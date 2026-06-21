@@ -48,7 +48,10 @@ export interface MemoryFormationQueueDeps {
 export function createMemoryFormationQueue(
   deps: MemoryFormationQueueDeps = {},
 ): MemoryFormationQueue {
-  const warn = deps.logger?.warn.bind(deps.logger) ?? ((msg, ctx) => console.warn(msg, ctx));
+  const warn =
+    deps.logger?.warn.bind(deps.logger) ??
+    // eslint-disable-next-line no-console -- default sink when no pluggable logger is injected (repo convention)
+    ((msg, ctx) => console.warn(msg, ctx));
 
   let tail: Promise<unknown> = Promise.resolve();
   let pending = 0;

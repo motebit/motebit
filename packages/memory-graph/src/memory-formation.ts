@@ -104,9 +104,9 @@ export async function formMemoriesFromCandidates(
   //    ≤3 candidates × ≤10 retrieved = ≤30 cosine ops, all in-memory.
   if (memoriesFormed.length > 0) {
     for (const newNode of memoriesFormed) {
-      if (!newNode.embedding || newNode.embedding.length === 0) continue;
+      if (newNode.embedding.length === 0) continue;
       for (const retrieved of relevantMemories) {
-        if (!retrieved.embedding || retrieved.embedding.length === 0) continue;
+        if (retrieved.embedding.length === 0) continue;
         const sim = cosineSimilarity(newNode.embedding, retrieved.embedding);
         if (sim >= MEMORY_EDGE_SIMILARITY_THRESHOLD) {
           await deps.memoryGraph.link(
@@ -122,7 +122,7 @@ export async function formMemoriesFromCandidates(
       for (let j = i + 1; j < memoriesFormed.length; j++) {
         const a = memoriesFormed[i]!;
         const b = memoriesFormed[j]!;
-        if (!a.embedding || !b.embedding) continue;
+        if (a.embedding.length === 0 || b.embedding.length === 0) continue;
         const sim = cosineSimilarity(a.embedding, b.embedding);
         if (sim >= MEMORY_EDGE_SIMILARITY_THRESHOLD) {
           await deps.memoryGraph.link(a.node_id, b.node_id, RelationType.Related, sim);

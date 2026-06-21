@@ -196,6 +196,7 @@ export class MobilePairingManager {
           secureErase(identitySeed);
         }
       } catch (err) {
+        // eslint-disable-next-line no-console -- operator diagnostic: recoverable key-transfer degradation
         console.warn("Key transfer failed, device keeps its own keypair:", err);
       } finally {
         secureErase(ephemeralPrivateKey);

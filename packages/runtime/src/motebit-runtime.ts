@@ -1083,9 +1083,8 @@ export class MotebitRuntime {
       getDeviceId: () => this._deviceId,
       getSigningPrivateKey: () => this._signingKeys?.privateKey ?? null,
       getSigningPublicKey: () => this._signingKeys?.publicKey ?? null,
-      onToolInvocation: this._onToolInvocation
-        ? (receipt) => this._onToolInvocation?.(receipt)
-        : undefined,
+      onToolInvocation:
+        this._onToolInvocation != null ? (receipt) => this._onToolInvocation?.(receipt) : undefined,
       onToolActivity: this._onToolActivity ? (event) => this._onToolActivity?.(event) : undefined,
       onApprovalDecision: (decision) => this.recordApprovalDecision(decision),
     });

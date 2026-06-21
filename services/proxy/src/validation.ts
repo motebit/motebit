@@ -357,7 +357,7 @@ export function calculateCostMicro(
   cacheCreationTokens = 0,
 ): number {
   const config = MODEL_CONFIG[model];
-  if (!config) return 0;
+  if (config == null) return 0;
   // Cache-read discount is provider-specific: Anthropic reads cached input at
   // 0.1x (90% off), OpenAI at 0.5x (50% off). Cache CREATION is an Anthropic-only
   // surcharge (1.25x) — OpenAI auto-caches with no creation charge, so its callers
@@ -485,7 +485,7 @@ export interface MessageValidation {
 }
 
 export function validateModel(model: unknown, isBYOK: boolean): MessageValidation {
-  if (!model || typeof model !== "string") {
+  if (typeof model !== "string" || model.length === 0) {
     return { valid: false, error: "invalid_model", status: 400 };
   }
   if (!isBYOK && !FREE_MODEL_ALLOWLIST.includes(model)) {
@@ -520,7 +520,7 @@ export function validateMessages(messages: unknown): MessageValidation {
 }
 
 export function validateFetchUrl(url: unknown): MessageValidation {
-  if (!url || typeof url !== "string") {
+  if (typeof url !== "string" || url.length === 0) {
     return { valid: false, error: "missing url", status: 400 };
   }
   if (!url.startsWith("http://") && !url.startsWith("https://")) {
@@ -545,7 +545,7 @@ export function buildProxiedBody(
   let maxTokens: number;
   if (isBYOK) {
     maxTokens = (body.max_tokens as number) || defaultMax;
-  } else if (opts?.maxTokens) {
+  } else if (opts?.maxTokens != null && opts.maxTokens > 0) {
     maxTokens = Math.min((body.max_tokens as number) || opts.maxTokens, opts.maxTokens);
   } else {
     maxTokens = Math.min((body.max_tokens as number) || defaultMax, defaultMax);

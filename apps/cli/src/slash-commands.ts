@@ -2380,7 +2380,7 @@ export async function handleSlashCommand(
       // (enum members carry the same string values as wire format).
       const argStr = arg;
       const match = VALID.find((v) => (v as string) === argStr);
-      if (!match) {
+      if (match == null) {
         console.log(
           warn(
             `Usage: /sensitivity [<level>] — level ∈ {${VALID.join(", ")}} (current: ${runtime.getSessionSensitivity()})`,

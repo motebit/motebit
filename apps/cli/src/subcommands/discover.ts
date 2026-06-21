@@ -95,7 +95,8 @@ export async function handleDiscover(config: CliConfig): Promise<void> {
   console.log(`  Relay:    ${data.relay_id}`);
   if (data.relay_url) console.log(`  URL:      ${data.relay_url}`);
   if (data.public_key) console.log(`  Key:      ${data.public_key.slice(0, 16)}...`);
-  if (data.capabilities?.length) console.log(`  Caps:     ${data.capabilities.join(", ")}`);
+  if (data.capabilities != null && data.capabilities.length > 0)
+    console.log(`  Caps:     ${data.capabilities.join(", ")}`);
   console.log(`  Path:     ${data.resolved_via.join(" → ")}`);
   console.log(`  Cached:   ${data.cached}`);
   console.log(`  TTL:      ${data.ttl}s`);

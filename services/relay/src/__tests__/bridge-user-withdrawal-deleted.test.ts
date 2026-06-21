@@ -71,7 +71,7 @@ let relay: SyncRelay;
 
 describe("Bridge user-withdrawal path — structural deletion", () => {
   afterEach(async () => {
-    if (relay) await relay.close();
+    await relay?.close();
   });
 
   it("the Bridge webhook endpoint /api/v1/bridge/webhook returns 404 (deleted)", async () => {

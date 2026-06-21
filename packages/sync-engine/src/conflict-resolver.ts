@@ -194,6 +194,7 @@ export interface ConflictLogger {
 
 const defaultLogger: ConflictLogger = {
   warn: (message: string, data?: Record<string, unknown>) => {
+    // eslint-disable-next-line no-console -- intended sink: console fallback for the pluggable ConflictLogger when no logger is injected
     console.warn(message, data);
   },
 };

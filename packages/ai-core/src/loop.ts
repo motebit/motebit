@@ -1519,7 +1519,9 @@ export async function* runTurnStreaming(
     conversationHistory.push({
       role: "assistant",
       content: finalResponse.text || "",
-      ...(finalResponse.tool_calls?.length ? { tool_calls: finalResponse.tool_calls } : {}),
+      ...((finalResponse.tool_calls?.length ?? 0) > 0
+        ? { tool_calls: finalResponse.tool_calls }
+        : {}),
     });
     conversationHistory.push({
       role: "user",

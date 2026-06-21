@@ -222,7 +222,10 @@ const TERMINAL_STATUSES: ReadonlySet<GoalLifecycleStatus> = new Set<GoalLifecycl
 
 export function createGoalsEmitter(deps: GoalsEmitterDeps): GoalsEmitter {
   const { motebitId, events, getGoalStatus, logger } = deps;
-  const warn = logger?.warn.bind(logger) ?? ((msg, ctx) => console.warn(msg, ctx));
+  const warn =
+    logger?.warn.bind(logger) ??
+    // eslint-disable-next-line no-console -- default sink when no pluggable logger is injected (repo convention)
+    ((msg, ctx) => console.warn(msg, ctx));
 
   const isTerminal = (goalId: string): boolean => {
     if (!getGoalStatus) return false;

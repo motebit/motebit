@@ -528,7 +528,7 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
 
       const meta = document.createElement("div");
       meta.className = "agent-item-meta";
-      if (agent.trust_level) {
+      if (agent.trust_level != null && agent.trust_level !== "") {
         const badge = document.createElement("span");
         badge.className = `agent-trust-badge ${TRUST_BADGE_CLASS[agent.trust_level] ?? "unknown"}`;
         const interactionSuffix =

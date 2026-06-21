@@ -118,7 +118,7 @@ describe("p2p-verifier fee-leg validation (Arc 2)", () => {
   });
 
   afterEach(async () => {
-    if (relay) await relay.close();
+    await relay?.close();
   });
 
   it("verifies when both legs present and match (status → verified)", async () => {

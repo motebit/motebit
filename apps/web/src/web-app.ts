@@ -825,9 +825,11 @@ export class UnbootedWebApp {
         await this._convStore?.preloadAllMessages();
         const fixed = this.runtime?.backfillMissingConversationTitles() ?? 0;
         if (fixed > 0) {
+          // eslint-disable-next-line no-console -- one-shot repair diagnostic for the pre-fix title backfill; fire-and-forget, no UI surface
           console.log(`[conversations] backfilled ${fixed} missing title(s)`);
         }
       } catch (err: unknown) {
+        // eslint-disable-next-line no-console -- title backfill must not block boot; failure logged only
         console.warn(
           "[conversations] title backfill failed:",
           err instanceof Error ? err.message : String(err),
@@ -3446,9 +3448,11 @@ export class UnbootedWebApp {
       if (!reg.ok) {
         // Log once — the user-visible failure surfaces through the chip-tap
         // path's `sync_not_enabled` copy if/when they try to invoke.
+        // eslint-disable-next-line no-console -- honest-degrade diagnostic; user-facing remediation arrives via the deterministic-invocation path
         console.warn("[motebit] device self-registration failed:", reg.code, reg.message);
       }
     } catch (err: unknown) {
+      // eslint-disable-next-line no-console -- honest-degrade diagnostic; user-facing remediation arrives via the deterministic-invocation path
       console.warn(
         "[motebit] device self-registration threw:",
         err instanceof Error ? err.message : String(err),

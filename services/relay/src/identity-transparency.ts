@@ -63,7 +63,7 @@ export function readSuccessionChain(db: DatabaseDriver, motebitId: string): Succ
     ...(r.reason != null ? { reason: r.reason } : {}),
     ...(r.old_key_signature != null ? { old_key_signature: r.old_key_signature } : {}),
     new_key_signature: r.new_key_signature,
-    ...(r.recovery ? { recovery: true } : {}),
+    ...(r.recovery === 1 ? { recovery: true } : {}),
     ...(r.guardian_signature != null ? { guardian_signature: r.guardian_signature } : {}),
   }));
 }

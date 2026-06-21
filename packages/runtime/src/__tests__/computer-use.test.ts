@@ -1309,7 +1309,7 @@ describe("v1.5 — summarize() session-summary roll-up", () => {
     });
     expect(captured).not.toBeNull();
     expect(captured).toHaveLength(2);
-    if (captured) {
+    if (captured != null) {
       const arr = captured as Array<{ kind: string; outcome: string }>;
       const a = arr[0];
       const b = arr[1];
@@ -1574,7 +1574,7 @@ describe("ComputerSessionManager — co-browse control gate (Slice 1)", () => {
       });
     });
     expect(realRecords).not.toBeNull();
-    if (!realRecords) return;
+    if (realRecords == null) return;
 
     // Sign the receipt body with the REAL hash.
     const kp = await generateKeypair();

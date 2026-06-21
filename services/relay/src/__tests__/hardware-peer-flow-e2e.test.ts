@@ -161,7 +161,7 @@ describe("Hardware-attestation peer flow — Phase 1 E2E (software sentinel)", (
   });
 
   afterAll(async () => {
-    if (relay) await relay.close();
+    await relay?.close();
   });
 
   it("worker attaches its self-hardware credential to the device record", async () => {
@@ -439,7 +439,7 @@ describe("Hardware-attestation peer flow — Phase 2 (secure_enclave)", () => {
   });
 
   afterAll(async () => {
-    if (relay) await relay.close();
+    await relay?.close();
   });
 
   it("worker mints + attaches a verified secure_enclave hardware credential", async () => {
@@ -609,7 +609,7 @@ describe("Hardware-attestation peer flow — Phase 2 (android_keystore)", () => 
   });
 
   afterAll(async () => {
-    if (relay) await relay.close();
+    await relay?.close();
   });
 
   it("worker attaches a self-issued android_keystore hardware credential", async () => {
@@ -757,7 +757,7 @@ describe("Hardware-attestation peer flow — Phase 2 (device_check)", () => {
   });
 
   afterAll(async () => {
-    if (relay) await relay.close();
+    await relay?.close();
   });
 
   it("worker attaches a self-issued device_check hardware credential", async () => {
@@ -897,7 +897,7 @@ describe("Hardware-attestation peer flow — Phase 2 (tpm)", () => {
   });
 
   afterAll(async () => {
-    if (relay) await relay.close();
+    await relay?.close();
   });
 
   it("worker attaches a self-issued tpm hardware credential", async () => {
@@ -1032,7 +1032,7 @@ describe("Hardware-attestation peer flow — Phase 2 (webauthn)", () => {
   });
 
   afterAll(async () => {
-    if (relay) await relay.close();
+    await relay?.close();
   });
 
   it("worker attaches a self-issued webauthn hardware credential", async () => {

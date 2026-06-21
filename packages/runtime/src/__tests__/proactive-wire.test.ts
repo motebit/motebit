@@ -355,7 +355,7 @@ describe("Runtime — proactive interior wire-in", () => {
       event_types: [EventType.ConsolidationReceiptSigned],
     });
     const withManifest = events.find(
-      (e) => (e.payload as { mutation_manifest?: unknown }).mutation_manifest,
+      (e) => (e.payload as { mutation_manifest?: unknown }).mutation_manifest != null,
     );
     expect(withManifest).toBeDefined();
     if (!withManifest) return;

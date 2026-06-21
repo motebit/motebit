@@ -200,6 +200,7 @@ export function wireServerDeps(
       };
       if (runtime.events.appendWithClock) {
         void runtime.events.appendWithClock(entry).catch((err: unknown) => {
+          // eslint-disable-next-line no-console -- no logger in wireServerDeps scope; stderr is the fail-loud sink (matches the package default logger)
           console.warn(
             "[motebit] tool event log failed:",
             err instanceof Error ? err.message : String(err),
@@ -209,6 +210,7 @@ export function wireServerDeps(
         void runtime.events
           .append({ ...entry, version_clock: 0 } as EventLogEntry)
           .catch((err: unknown) => {
+            // eslint-disable-next-line no-console -- no logger in wireServerDeps scope; stderr is the fail-loud sink (matches the package default logger)
             console.warn(
               "[motebit] tool event log failed:",
               err instanceof Error ? err.message : String(err),
@@ -344,7 +346,10 @@ export function wireServerDeps(
                 agents?: Array<{ motebit_id?: string; public_key?: string }>;
               };
               const agent = raw.agents?.find(
-                (a) => a.motebit_id === callerMotebitId && a.public_key,
+                (a) =>
+                  a.motebit_id === callerMotebitId &&
+                  a.public_key != null &&
+                  a.public_key.length > 0,
               );
               if (agent?.public_key) {
                 relayConfirmedCallers.add(callerMotebitId);
@@ -463,7 +468,9 @@ export async function startServiceServer(
   // silently hid registration failures across every deployed service —
   // classic fail-loudly violation. Callers who want to suppress pass `() => {}`.
   const log: (msg: string) => void =
-    config.log ?? ((msg) => console.warn(`[motebit/mcp-server] ${msg}`));
+    config.log ??
+    // eslint-disable-next-line no-console -- intended default sink; the fail-loud logger when no config.log is injected (see comment above)
+    ((msg) => console.warn(`[motebit/mcp-server] ${msg}`));
 
   const mcpServer = new McpServerAdapter(
     {

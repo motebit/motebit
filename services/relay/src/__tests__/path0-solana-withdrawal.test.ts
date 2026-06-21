@@ -85,7 +85,7 @@ let relay: SyncRelay;
 
 describe("Path 0 — Solana sovereign-return withdrawal", () => {
   afterEach(async () => {
-    if (relay) await relay.close();
+    await relay?.close();
   });
 
   it("fires when destination is base58-shaped and operator is injected", async () => {

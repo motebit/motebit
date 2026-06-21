@@ -368,7 +368,7 @@ export class CloudBrowserDispatcher implements ComputerPlatformDispatcher {
         "DELETE",
         `/sessions/${encodeURIComponent(cloudId)}`,
       );
-      if (this.onCookiesPersisted && res && Array.isArray(res.cookies)) {
+      if (this.onCookiesPersisted != null && res != null && Array.isArray(res.cookies)) {
         try {
           await this.onCookiesPersisted(res.cookies);
         } catch {

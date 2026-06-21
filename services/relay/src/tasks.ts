@@ -1925,7 +1925,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       const alreadySettled = moteDb.db
         .prepare("SELECT 1 FROM relay_settlements WHERE p2p_tx_hash = ? LIMIT 1")
         .get(proof.tx_hash);
-      if (alreadySettled) {
+      if (alreadySettled != null) {
         throw new TaskError(
           "TASK_P2P_PROOF_REPLAYED",
           "This payment proof (tx_hash) has already settled a task — each onchain payment funds exactly one task",

@@ -189,7 +189,7 @@ function makeFetchImpl(
         headers: { "content-type": "application/json" },
       });
     }
-    if (policy.status && policy.status !== 200) {
+    if (policy.status != null && policy.status !== 200) {
       return new Response(JSON.stringify({ error_code: "test_injected", message: "test" }), {
         status: policy.status,
         headers: { "content-type": "application/json" },

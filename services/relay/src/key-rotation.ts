@@ -193,7 +193,7 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
         reason: r.reason,
         ...(r.old_key_signature ? { old_key_signature: r.old_key_signature } : {}),
         new_key_signature: r.new_key_signature,
-        ...(r.recovery ? { recovery: true, guardian_signature: r.guardian_signature } : {}),
+        ...(r.recovery === 1 ? { recovery: true, guardian_signature: r.guardian_signature } : {}),
       })),
       current_public_key: agent?.public_key ?? null,
     });

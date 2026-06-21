@@ -447,7 +447,7 @@ function buildMark(
   // The ring is a positioned ::after-shaped div outside the mark.
   // Stays subtle — calm-software register, not a notification dot.
   const sensitivity = decorations.sensitivity;
-  const ringColor = sensitivity ? sensitivityRingColor(sensitivity) : null;
+  const ringColor = sensitivity != null ? sensitivityRingColor(sensitivity) : null;
   if (ringColor) {
     const ring = document.createElement("div");
     ring.className = `cobrowse-chrome-mark-ring cobrowse-chrome-mark-ring-${sensitivity}`;

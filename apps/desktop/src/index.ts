@@ -1254,10 +1254,12 @@ export class DesktopApp {
         this._attachedHost = election.client;
         election.client.onClose(() => {
           this._attachedHost = null;
+          // eslint-disable-next-line no-console -- operator diagnostic: coordinator lost
           console.warn(
             "[runtime-host] coordinator exited — restart the desktop to take over as coordinator",
           );
         });
+        // eslint-disable-next-line no-console -- operator diagnostic: attached to coordinator
         console.info(
           `[runtime-host] attached to the machine's coordinator (pid ${election.client.coordinatorPid}) — organs bridged, chat proxied`,
         );

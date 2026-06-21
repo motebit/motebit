@@ -898,6 +898,7 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
             // deliberate later step.
             if (chunk.result.latency) {
               const l = chunk.result.latency;
+              // eslint-disable-next-line no-console -- deliberate TTFT instrumentation, one content-free latency line per turn, emitted in every environment so the breakdown is readable from a live session
               console.debug(
                 `[ttft] ${l.ttft_ms}ms (pipeline ${l.context_pipeline_ms}ms · provider ${l.provider_ttft_ms}ms · embed ${l.embed_ms} · retrieve ${l.memory_retrieve_ms} · events ${l.event_query_ms} · pinned ${l.pinned_ms})`,
               );

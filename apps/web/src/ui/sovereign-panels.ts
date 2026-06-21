@@ -1163,7 +1163,7 @@ export function initSovereignPanels(ctx: WebContext): SovereignPanelsAPI {
   // Present / verify / copy
   credPresentBtn.addEventListener("click", () => {
     void ctrl.present().then((presentation) => {
-      if (presentation) {
+      if (presentation != null) {
         credVpJson.textContent = JSON.stringify(presentation, null, 2);
         credVpOutput.style.display = "block";
       } else {
