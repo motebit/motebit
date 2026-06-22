@@ -224,7 +224,7 @@ const PROBES: ReadonlyArray<Probe> = [
   {
     script: "check-money-identity-path-canonical",
     proves:
-      "flags a stale registry entry (a member naming no real workspace package) — the registry-integrity half that ships today; Amendment-2 membership derivation is gated off until issue #110",
+      "flags a stale registry entry (a member naming no real workspace package); the Amendment-2 fail-closed membership derivation is now unconditionally enforced too (issue #110 closed)",
     perturb: () =>
       // Inject a bogus member into the registry Map. The integrity check fails
       // because it names no real workspace package. Cleanup restores verbatim.

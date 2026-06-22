@@ -24,14 +24,14 @@
  *     consumer surfaces under integration-test conventions where a unit-coverage
  *     floor measures the wrong thing — directory is the structural filter.
  *
- *     ⚠️ GATED OFF TODAY (AMENDMENT_2_ENABLED = false) — issue #110. It fires on
- *     one real over-fire: @motebit/runtime value-imports @motebit/wallet-solana
- *     (the sovereign-rail adapter boundary). The honest fix is the runtime
- *     refactor (route default rail construction through the SDK; relocate
- *     identity→address derivation), NOT a waiver. Amendment-2 flips on WITH that
- *     refactor. Until then the registry is hand-maintained (loud marker in
- *     money-identity-path.ts). The derivation below is written and packages/-scoped
- *     so the flip is one line + the runtime dep removal.
+ *     Amendment-2 membership derivation is UNCONDITIONALLY ENFORCED (#110 closed
+ *     2026-06-21). The one real over-fire — @motebit/runtime value-importing
+ *     @motebit/wallet-solana (the sovereign-rail adapter boundary) — was removed
+ *     by the runtime sovereign-rail refactor (PR #114): default rail construction
+ *     routes through the SDK, and runtime consumes the `SovereignWalletRail` port
+ *     + `base58Encode` codec from @motebit/protocol. runtime now declares
+ *     wallet-solana only as a devDep, so the deps/peerDeps-scoped derivation no
+ *     longer flags it — the flip needed no waiver.
  *
  * Usage: tsx scripts/check-money-identity-path-canonical.ts   # exit 1 on violation
  */
@@ -39,13 +39,6 @@
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { MONEY_IDENTITY_PATH, MEMBERSHIP_TRIGGERS } from "./money-identity-path.js";
-
-/**
- * Fail-closed membership derivation. Enabled once the runtime sovereign-rail
- * adapter refactor (issue #110) removed runtime's direct wallet-solana dep — the
- * runtime now consumes the `SovereignWalletRail` port from `@motebit/protocol`.
- */
-const AMENDMENT_2_ENABLED = true;
 
 const REPO_ROOT = resolve(new URL(".", import.meta.url).pathname, "..");
 const WORKSPACE_ROOTS = ["packages", "services", "apps"];
@@ -111,28 +104,25 @@ function main(): void {
   }
 
   // 2. fail-closed membership (Amendment 2): a packages/ package depending on a
-  //    trigger (deps/peerDeps) ⇒ must be on the registry. Gated off until #110.
+  //    trigger (deps/peerDeps) ⇒ must be on the registry. Unconditionally
+  //    enforced since #110 removed the lone over-fire (runtime → wallet-solana).
   let checked = 0;
-  if (AMENDMENT_2_ENABLED) {
-    for (const pkg of packages) {
-      if (pkg.root !== "packages") continue; // structural filter: services/apps are consumers
-      const hits = pkg.directDeps.filter((d) => MEMBERSHIP_TRIGGERS.has(d));
-      if (hits.length === 0) continue;
-      checked++;
-      if (!registry.has(pkg.name)) {
-        errors.push(
-          `${pkg.name} has a direct (dependencies/peerDependencies) dependency on money/identity primitive(s) [${hits.join(", ")}] but is NOT a money/identity-path registry member.\n` +
-            `      Add it to MONEY_IDENTITY_PATH in scripts/money-identity-path.ts (it handles money/attestation, so it must declare a tier floor).`,
-        );
-      }
+  for (const pkg of packages) {
+    if (pkg.root !== "packages") continue; // structural filter: services/apps are consumers
+    const hits = pkg.directDeps.filter((d) => MEMBERSHIP_TRIGGERS.has(d));
+    if (hits.length === 0) continue;
+    checked++;
+    if (!registry.has(pkg.name)) {
+      errors.push(
+        `${pkg.name} has a direct (dependencies/peerDependencies) dependency on money/identity primitive(s) [${hits.join(", ")}] but is NOT a money/identity-path registry member.\n` +
+          `      Add it to MONEY_IDENTITY_PATH in scripts/money-identity-path.ts (it handles money/attestation, so it must declare a tier floor).`,
+      );
     }
   }
 
   console.log(
     `check-money-identity-path-canonical — ${registry.size} registry members, ${MEMBERSHIP_TRIGGERS.size} triggers; ` +
-      (AMENDMENT_2_ENABLED
-        ? `${checked} packages/ depend on a trigger (membership enforced)\n`
-        : `membership derivation GATED OFF (Amendment-2 ships with the runtime refactor — issue #110)\n`),
+      `${checked} packages/ depend on a trigger (membership enforced)\n`,
   );
 
   if (errors.length === 0) {

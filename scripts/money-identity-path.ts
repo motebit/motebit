@@ -74,8 +74,8 @@ export const TIER_FLOOR: Readonly<Record<PathTier, CoverageFloor>> = {
  * Membership is fail-closed: `check-money-identity-path-canonical`'s Amendment-2
  * derivation flags any package under packages/ whose direct dependencies include
  * a MEMBERSHIP_TRIGGER but which is not listed here — so a forgotten entry is a
- * CI failure, not a silent omission. (Enabled once issue #110's runtime
- * sovereign-rail refactor removed the lone over-fire.)
+ * CI failure, not a silent omission. (Unconditionally enforced — issue #110's
+ * runtime sovereign-rail refactor removed the lone over-fire.)
  */
 export const MONEY_IDENTITY_PATH: ReadonlyMap<string, PathTier> = new Map([
   ["@motebit/virtual-accounts", "money"],
