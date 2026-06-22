@@ -209,11 +209,18 @@ export function useChatStream(deps: UseChatStreamDeps): UseChatStreamResult {
               break;
 
             case "result":
-              // Final update
+              // Final update — thread the leverage moment (felt-accumulation
+              // Inc 3) onto the message, produced-not-authored; absent is the
+              // fail-closed default (no consequential recall → no attribution).
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantId
-                    ? { ...m, content: stripTags(assistantContent) || "...", timestamp: Date.now() }
+                    ? {
+                        ...m,
+                        content: stripTags(assistantContent) || "...",
+                        timestamp: Date.now(),
+                        accrualBasis: chunk.result.accrualBasis,
+                      }
                     : m,
                 ),
               );

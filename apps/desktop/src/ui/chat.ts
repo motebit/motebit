@@ -1,7 +1,8 @@
 import { stripPartialActionTag } from "@motebit/ai-core";
 import type { RelayConfig } from "@motebit/runtime";
 import { buildReceiptArtifact } from "@motebit/render-engine";
-import type { ExecutionReceipt } from "@motebit/sdk";
+import { resolveAccrualAttribution } from "@motebit/panels";
+import type { ExecutionReceipt, AccrualBasis } from "@motebit/sdk";
 import {
   isSlashCommand,
   parseSlashCommand,
@@ -557,6 +558,20 @@ async function consumeGoalApproval(ctx: DesktopContext, approved: boolean): Prom
 // === Memory Footer ===
 
 const SENSITIVE_LEVELS = new Set(["medical", "financial", "secret"]);
+
+/**
+ * The calm in-flow leverage attribution (felt-accumulation Inc 3) — woven into
+ * the assistant message, never a toast. The basis is produced-not-authored by
+ * the memory-graph accrual source; `resolveAccrualAttribution` projects it to a
+ * sensitivity-bounded phrase. A quiet aside on the bubble, like the memory
+ * footer. (Mirrors the web surface render.)
+ */
+function buildAccrualAttributionEl(basis: AccrualBasis): HTMLElement {
+  const el = document.createElement("div");
+  el.className = "accrual-attribution";
+  el.textContent = `↻ ${resolveAccrualAttribution(basis).text}`;
+  return el;
+}
 
 function createMemoryFooter(
   retrieved: Array<{ node_id: string; content: string; confidence: number; sensitivity: string }>,
@@ -1137,6 +1152,10 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
       sensitivity: string;
     }> = [];
     let memoriesFormed: Array<{ node_id: string; content: string; sensitivity: string }> = [];
+    // The leverage moment for this turn (felt-accumulation Inc 3) — produced by
+    // the memory-graph accrual source, threaded onto the result; absent is the
+    // fail-closed default (no consequential recall → no attribution).
+    let accrualBasis: AccrualBasis | undefined;
     // Captured from the most recent delegation_complete that carried a full
     // signed receipt. Emerged as a scene artifact after the result chunk
     // (mirrors the web receipt-artifact pattern). The receipt is the witness,
@@ -1196,6 +1215,7 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
               sensitivity: string;
             }>;
             memoriesFormed?: Array<{ node_id: string; content: string; sensitivity: string }>;
+            accrualBasis?: AccrualBasis;
           };
           memoriesRetrieved = (r.memoriesRetrieved ?? []).map((m) => ({
             node_id: m.node_id,
@@ -1208,6 +1228,7 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
             content: m.content,
             sensitivity: String(m.sensitivity).toLowerCase(),
           }));
+          accrualBasis = r.accrualBasis;
         }
       }
 
@@ -1220,6 +1241,11 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
           callbacks.openMemoryPanel(nodeId),
         );
         finalBubble.appendChild(footer);
+      }
+      // Felt accumulation (Inc 3): the calm leverage-moment attribution, woven
+      // into the message when this turn drew on a recalled memory. Never a toast.
+      if (finalBubble && accrualBasis) {
+        finalBubble.appendChild(buildAccrualAttributionEl(accrualBasis));
       }
 
       // Emerge the receipt bubble after the review text settles. 200ms beat

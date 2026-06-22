@@ -38,6 +38,7 @@ const Feather = require("@expo/vector-icons/Feather").default as React.Component
 import * as SecureStore from "expo-secure-store";
 import type { MotebitState, BehaviorCues } from "@motebit/sdk";
 import { computeSpeechEnergy } from "@motebit/voice";
+import { resolveAccrualAttribution } from "@motebit/panels";
 import { MobileApp, APPROVAL_PRESET_CONFIGS, COLOR_PRESETS, setBackgroundApp } from "./mobile-app";
 import { SECURE_STORE_KEYS } from "./storage-keys";
 import type {
@@ -86,6 +87,10 @@ interface ChatMessage {
   approvalResolved?: boolean;
   // Receipt-specific field — present when role === "receipt"
   receipt?: import("@motebit/sdk").ExecutionReceipt;
+  // The leverage moment (felt-accumulation Inc 3) — produced-not-authored,
+  // present when this turn drew on a recalled memory; absent is the
+  // fail-closed default (no attribution).
+  accrualBasis?: import("@motebit/sdk").AccrualBasis;
 }
 
 // === App singleton ===
@@ -1107,6 +1112,11 @@ export default function App(): React.ReactElement {
                 >
                   {item.content}
                 </Text>
+                {item.accrualBasis ? (
+                  <Text style={ds.accrualAttribution}>
+                    {`↻ ${resolveAccrualAttribution(item.accrualBasis).text}`}
+                  </Text>
+                ) : null}
               </AnimatedBubble>
             );
           }}
@@ -1492,6 +1502,15 @@ function createDynamicStyles(c: ThemeColors) {
     },
     assistantText: {
       color: c.assistantBubbleText,
+    },
+    // Felt accumulation: the calm leverage-moment attribution — a quiet aside
+    // on the message, present and glanceable, never grabbing.
+    accrualAttribution: {
+      marginTop: 4,
+      fontSize: 12,
+      fontStyle: "italic",
+      color: c.assistantBubbleText,
+      opacity: 0.7,
     },
     systemText: {
       color: c.systemText,
