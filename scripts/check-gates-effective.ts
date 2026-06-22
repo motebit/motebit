@@ -179,6 +179,30 @@ const PROBES: ReadonlyArray<Probe> = [
       ),
   },
   {
+    script: "check-accrual-basis-canonical",
+    proves:
+      'flags the produced-not-authored arm — an accrual-kind literal appearing in the model-facing loop (ai-core), the construction fingerprint that means the loop is minting a basis instead of threading one from the memory-graph accrual source. Injecting `"recalled_memory"` at the production site simulates a refactor that fabricates leverage from model output.',
+    perturb: () =>
+      mutateFile("packages/ai-core/src/loop.ts", (src) =>
+        src.replace(
+          "const recalledBasis = recalledMemoryBasis(queryEmbedding, relevantMemories);",
+          'const recalledBasis = recalledMemoryBasis(queryEmbedding, relevantMemories);\n  const _probe = "recalled_memory";\n  void _probe;',
+        ),
+      ),
+  },
+  {
+    script: "check-accrual-basis-canonical",
+    proves:
+      "flags the no-inward-aggregate arm — adding a `score` field to AccrualBasis re-introduces the gameable aggregate (a climbing leverage score) the felt family refuses. The gate scans the AccrualBasis interface body for any count/score/rate/streak field.",
+    perturb: () =>
+      mutateFile("packages/protocol/src/accrual.ts", (src) =>
+        src.replace(
+          "readonly sensitivity: SensitivityLevel;",
+          "readonly sensitivity: SensitivityLevel;\n  readonly score: number;",
+        ),
+      ),
+  },
+  {
     script: "check-sync-token-freshness",
     proves:
       "flags a web HTTP sync adapter regressed back to a static `authToken` (no `credentialSource`) — the exact 2026-06-15 staleness bug where a polling adapter handed a single 5-min JWT 403'd every relay request past minute 5. The fixture constructs `new HttpConversationSyncAdapter({ … authToken })` in apps/web/src, which the gate scans textually (no typecheck needed).",
