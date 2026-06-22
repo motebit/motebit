@@ -3,8 +3,9 @@ import { hasCeilingBeenShown, markCeilingShown } from "../storage";
 import { StreamingTTSQueue, WebSpeechTTSProvider } from "@motebit/voice";
 import type { TTSProvider } from "@motebit/voice";
 import { stripInternalTags } from "@motebit/ai-core";
-import type { ExecutionReceipt } from "@motebit/sdk";
+import type { ExecutionReceipt, AccrualBasis } from "@motebit/sdk";
 import { buildReceiptArtifact } from "@motebit/render-engine";
+import { resolveAccrualAttribution } from "@motebit/panels";
 import { installPrUrlChip } from "./pr-url-chip";
 import { installHireChip, type HireComposeRequest } from "./hire-chip";
 
@@ -308,6 +309,20 @@ function formatToolLabel(name: string, context?: string): string {
   const label = TOOL_DISPLAY_NAMES[name] ?? name;
   if (!context) return label;
   return `${label} — ${context}`;
+}
+
+/**
+ * Build the calm in-flow leverage attribution (felt-accumulation Inc 3) — woven
+ * into the assistant message, never a toast. The basis is produced-not-authored
+ * by the memory-graph accrual source; `resolveAccrualAttribution` projects it to
+ * a sensitivity-bounded phrase. Rendered as a quiet aside on the message bubble,
+ * like the cost line — present and glanceable, never grabbing.
+ */
+export function buildAccrualAttributionEl(basis: AccrualBasis): HTMLDivElement {
+  const el = document.createElement("div");
+  el.className = "accrual-attribution";
+  el.textContent = `↻ ${resolveAccrualAttribution(basis).text}`;
+  return el;
 }
 
 export function showToolStatus(name: string, context?: string): void {
@@ -890,6 +905,13 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
               costEl.className = "message-cost";
               costEl.textContent = `${chunk.result.totalTokens.toLocaleString()} tokens`;
               bubble.appendChild(costEl);
+            }
+            // Felt accumulation (Inc 3): the leverage moment — a calm in-flow
+            // attribution when this turn drew on a recalled memory. Woven into
+            // the message, never a toast. Produced-not-authored upstream; absent
+            // is the fail-closed default (no consequential recall → nothing).
+            if (chunk.result.accrualBasis && bubble) {
+              bubble.appendChild(buildAccrualAttributionEl(chunk.result.accrualBasis));
             }
             // TTFT instrumentation: one content-free latency line per turn — the
             // time-to-first-token split (context pipeline vs provider). Console-only

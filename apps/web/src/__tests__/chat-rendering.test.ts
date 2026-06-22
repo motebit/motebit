@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
+import { SensitivityLevel, type AccrualBasis } from "@motebit/sdk";
 
 // Mock @motebit/voice — chat.ts imports StreamingTTSQueue and WebSpeechTTSProvider.
 vi.mock("@motebit/voice", () => ({
@@ -67,11 +68,38 @@ beforeAll(() => {
 // Dynamic import so the stubs are in place first
 let renderMarkdown: (raw: string) => string;
 let formatErrorMessage: (msg: string) => string;
+let buildAccrualAttributionEl: (basis: AccrualBasis) => { className: string; textContent: string };
 
 beforeAll(async () => {
   const mod = await import("../ui/chat");
   renderMarkdown = mod.renderMarkdown;
   formatErrorMessage = mod.formatErrorMessage;
+  buildAccrualAttributionEl = mod.buildAccrualAttributionEl as typeof buildAccrualAttributionEl;
+});
+
+// ─── buildAccrualAttributionEl — the calm leverage-moment render (Inc 3) ───
+
+describe("buildAccrualAttributionEl", () => {
+  it("renders a calm recalled-memory attribution at the open tier", () => {
+    const el = buildAccrualAttributionEl({
+      kind: "recalled_memory",
+      sourceRef: "n1",
+      sensitivity: SensitivityLevel.None,
+    });
+    expect(el.className).toBe("accrual-attribution");
+    expect(el.textContent).toContain("Recalled from what you've told me");
+    expect(el.textContent).toContain("↻"); // the calm recall anchor
+  });
+
+  it("redacts at the guarded tier and never leaks the source ref onto the surface", () => {
+    const el = buildAccrualAttributionEl({
+      kind: "recalled_memory",
+      sourceRef: "secret_node_id_0xdeadbeef",
+      sensitivity: SensitivityLevel.Medical,
+    });
+    expect(el.textContent).toContain("Acted on a private memory");
+    expect(el.textContent).not.toContain("secret_node_id");
+  });
 });
 
 // ─── formatErrorMessage — the cloud-inference failure wall ─────────────

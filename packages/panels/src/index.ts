@@ -109,6 +109,15 @@ export {
 } from "./memory/felt-memory";
 
 export {
+  // The leverage-moment attribution (felt-accumulation Inc 3) — the calm,
+  // sensitivity-bounded phrase a surface weaves into the act when accrued
+  // state was drawn upon. Pure projection; the basis is produced-not-authored
+  // upstream. Surfaces render the returned text their own way (Ring 3).
+  resolveAccrualAttribution,
+  type AccrualAttribution,
+} from "./memory/accrual-attribution";
+
+export {
   createActivityController,
   filterActivityView,
   type ActivityController,
