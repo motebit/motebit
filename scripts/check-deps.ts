@@ -254,6 +254,11 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     // registry per docs/doctrine/registry-pattern-canonical.md.
     // Same shape as `isSettlementMode`.
     "isMemorySource",
+    // Accrual (leverage) kind guard — pure type guard over the frozen
+    // `ALL_ACCRUAL_KINDS`. A structural-lock LOCAL closed union (felt
+    // leverage attributions are owner-facing and never synced), not a
+    // registered wire registry. Doctrine: docs/doctrine/felt-accumulation.md.
+    "isAccrualKind",
   ]),
   "@motebit/crypto": new Set([
     // Artifact verification (original verify package)

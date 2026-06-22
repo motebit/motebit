@@ -3117,6 +3117,18 @@ export {
   MEMORY_SOURCE_MARKER_UNKNOWN,
 } from "./memory-source.js";
 
+// ── Accrual basis (protocol-level) ──────────────────────────────
+// The leverage register of the felt interior — the typed basis an act
+// carries when it was shaped by ACCRUED state (thesis #2 made felt).
+// PRODUCED by the accrual code path, never model-authored — the honesty
+// floor enforced downstream by the Inc-5 gate `check-accrual-basis-canonical`.
+// LOCAL (owner-facing, body-rendered, never synced) → structural-lock closed
+// union, not a registered wire registry. Doctrine:
+// `docs/doctrine/felt-accumulation.md`.
+
+export type { AccrualKind, AccrualBasis, AccrualAttributed } from "./accrual.js";
+export { ALL_ACCRUAL_KINDS, isAccrualKind, ACCRUAL_KIND_MARKERS } from "./accrual.js";
+
 // ── Settlement Asset (protocol-level) ───────────────────────────
 // The closed vocabulary of stablecoin assets the protocol clears
 // settlement in. Sub-phase A: closed union with bespoke coverage;

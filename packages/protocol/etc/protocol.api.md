@@ -20,6 +20,28 @@ export const ACCOUNT_WITHDRAW_AUDIENCE: TokenAudience;
 export const ACCOUNT_WITHDRAWALS_AUDIENCE: TokenAudience;
 
 // @public
+export const ACCRUAL_KIND_MARKERS: Readonly<Record<AccrualKind, string>>;
+
+// @public
+export interface AccrualAttributed {
+    // (undocumented)
+    readonly accrualBasis?: AccrualBasis;
+}
+
+// @public
+export interface AccrualBasis {
+    // (undocumented)
+    readonly kind: AccrualKind;
+    // (undocumented)
+    readonly sensitivity: SensitivityLevel;
+    // (undocumented)
+    readonly sourceRef: string;
+}
+
+// @public
+export type AccrualKind = "recalled_memory" | "trust_edge" | "consolidated_fact" | "prior_approval_pattern" | "standing_delegation";
+
+// @public
 export interface AdjudicatorVote {
     dispute_id: string;
     peer_id: string;
@@ -280,6 +302,9 @@ export interface AgentTrustStoreAdapter {
     // (undocumented)
     updateTrustLevel(motebitId: string, remoteMotebitId: string, level: AgentTrustLevel): Promise<void>;
 }
+
+// @public
+export const ALL_ACCRUAL_KINDS: readonly AccrualKind[];
 
 // @public
 export const ALL_AGENT_REVOCATION_REASONS: readonly AgentRevocationReason[];
@@ -2069,6 +2094,9 @@ export interface InjectionWarning {
 
 // @public
 export type IntentOrigin = "user-tap" | "ai-loop" | "scheduled" | "agent-to-agent";
+
+// @public
+export function isAccrualKind(value: unknown): value is AccrualKind;
 
 // @public
 export function isAgentRevocationReason(value: unknown): value is AgentRevocationReason;
