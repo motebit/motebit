@@ -128,6 +128,36 @@ interface DispatchTree {
  * reject *unknown* invocations, so over-accepting in extraction is the safe
  * direction. False negatives would be the fail mode worth fixing.
  */
+/**
+ * Members of a string-literal union type (`type Foo = "a" | "b" | "c"`) defined
+ * in index.ts or a subcommands/*.ts file. Resolves type-guard-based child
+ * dispatch (e.g. `isVerifyKind(first)`, where `type VerifyKind = "receipt" |
+ * "token" | "listing"`) into concrete child names, source-derived — so a new
+ * kind auto-extends the gate. Returns [] if the type isn't found.
+ */
+function stringUnionMembers(typeName: string): string[] {
+  const files = [CLI_INDEX];
+  try {
+    for (const f of fs.readdirSync(CLI_SUBCOMMANDS_DIR)) {
+      if (f.endsWith(".ts")) files.push(path.join(CLI_SUBCOMMANDS_DIR, f));
+    }
+  } catch {
+    /* subcommands dir absent — index.ts alone is fine */
+  }
+  const typeRe = new RegExp(`type\\s+${typeName}\\s*=\\s*([^;]+)`);
+  for (const f of files) {
+    let src: string;
+    try {
+      src = fs.readFileSync(f, "utf8");
+    } catch {
+      continue;
+    }
+    const m = src.match(typeRe);
+    if (m) return [...m[1]!.matchAll(/"([a-z][a-z0-9-]*)"/g)].map((x) => x[1]!);
+  }
+  return [];
+}
+
 function loadDispatchTree(): DispatchTree {
   const text = fs.readFileSync(CLI_INDEX, "utf8");
   const subcommands = new Set<string>();
@@ -148,6 +178,14 @@ function loadDispatchTree(): DispatchTree {
     const childSet = new Set<string>();
     for (const cm of body.matchAll(childPattern)) {
       childSet.add(cm[1]!);
+    }
+    // Type-guard dispatch: `verify` routes its kinds via `isVerifyKind(first)`,
+    // not `first === "..."`, so the `=== "Y"` scan misses receipt/token/listing.
+    // Resolve any `is<Name>Kind(` guard to the members of the `<Name>Kind`
+    // string-literal union (source-derived). Without this the gate
+    // false-negatives on a real `motebit verify receipt` — the #54 fail mode.
+    for (const gm of body.matchAll(/\bis([A-Z]\w*)Kind\s*\(/g)) {
+      for (const lit of stringUnionMembers(`${gm[1]!}Kind`)) childSet.add(lit);
     }
     if (childSet.size > 0) {
       children.set(sub, childSet);
