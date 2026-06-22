@@ -703,6 +703,22 @@ export async function probeLeak(): Promise<boolean> {
       ),
   },
   {
+    script: "check-claude-md",
+    proves:
+      "flags a root index entry that balloons past the per-entry character cap — the always-loaded index drifting from a one-line hook into a mini-essay, paid as redundant tokens every session",
+    perturb: () =>
+      // Append distinctive padding to the evidence-provenance doctrine entry,
+      // pushing it past the 800-char cap while leaving its link target intact.
+      // The length arm should fire. mutateFile restores byte-identical on
+      // cleanup; the `PROBE-ONLY` marker is trivially greppable if cleanup fails.
+      mutateFile("CLAUDE.md", (src) =>
+        src.replace(
+          /^- \[`docs\/doctrine\/evidence-provenance\.md`\][^\n]*/m,
+          (line) => `${line} PROBE-ONLY length-cap perturbation ${"x".repeat(260)}`,
+        ),
+      ),
+  },
+  {
     script: "check-readme-bin-claims",
     proves:
       "flags an `npm i -g @motebit/<pkg>` invocation in any README.md / CLAUDE.md naming a workspace package whose package.json has no `bin` field",

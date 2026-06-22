@@ -27,10 +27,18 @@
  *     link in root CLAUDE.md.
  *   - Every path referenced in root resolves to a file on disk (catches
  *     stale links after a rename or removal).
+ *   - Every index entry stays under a per-entry character cap. Root
+ *     CLAUDE.md is loaded into *every* session's context, so an entry that
+ *     balloons from a one-line hook into a mini-essay is redundant token
+ *     cost paid every turn, restating what the canonical doc already holds.
+ *     The hook carries the primitive + load-bearing invariants; status
+ *     ("Shipped:/held:"), gotchas enumerations, and full derivation belong
+ *     in the linked doc. Added 2026-06-22 (doctrine-inhale pass: four
+ *     entries had reached 767–1778 chars against a 268-char median).
  *
- * Editorial concerns (the one-line description after each link, the
- * grouping headers, the order) are left to humans. This probe only
- * asserts the existence link.
+ * Other editorial concerns (the wording of each description, the grouping
+ * headers, the order) are left to humans. This probe asserts the existence
+ * link in both directions, plus the per-entry length cap.
  *
  * This is the twenty-fifth synchronization invariant defense — one gate,
  * one drift class ("CLAUDE.md indexes ↔ filesystem"), two lists covered.
@@ -72,6 +80,19 @@ interface Finding {
   loc: string;
   message: string;
 }
+
+// Per-entry length cap for the two governed index lists. Generous by design:
+// it forbids mini-essays, not density. The median entry is ~270 chars and the
+// p90 ~630; 800 sits clearly in essay territory while leaving real headroom for
+// a legitimately dense hook. See the header comment for why every char here is
+// paid in every session's context.
+const MAX_INDEX_ENTRY_CHARS = 800;
+
+// A governed index entry is a top-level bullet that STARTS with a backticked
+// link to a doctrine doc or a sub-CLAUDE.md — `- [`<path>`](<path>) — …`. The
+// start-anchor is load-bearing: it excludes Principles/prose bullets that merely
+// link a doctrine doc mid-sentence (those legitimately run long).
+const GOVERNED_INDEX_ENTRY_RE = /^- \[`(docs\/doctrine\/[^`]+\.md|[^`]*CLAUDE\.md)`\]\(/;
 
 // ── Discovery ─────────────────────────────────────────────────────────
 
@@ -159,6 +180,30 @@ function extractReferencedDoctrinePaths(): Set<string> {
   return refs;
 }
 
+/**
+ * Flag any governed index entry that exceeds the per-entry character cap.
+ * Same drift class as the existence checks — the always-loaded index drifting
+ * away from a tight hook — just measured on length instead of presence.
+ */
+function checkIndexEntryLengths(findings: Finding[]): void {
+  const lines = readFileSync(ROOT_CLAUDE, "utf-8").split("\n");
+  lines.forEach((line, i) => {
+    const m = GOVERNED_INDEX_ENTRY_RE.exec(line);
+    if (!m) return;
+    if (line.length > MAX_INDEX_ENTRY_CHARS) {
+      findings.push({
+        loc: `CLAUDE.md:${i + 1}`,
+        message:
+          `index entry for ${m[1]} is ${line.length} chars (cap ${MAX_INDEX_ENTRY_CHARS}). ` +
+          `Root CLAUDE.md loads into every session, so an entry this long pays redundant ` +
+          `tokens every turn restating what the doc already holds. Trim it to a one-line hook ` +
+          `(primitive + load-bearing invariants); move status ("Shipped:/held:"), gotchas ` +
+          `enumerations, and full derivation into ${m[1]} itself — the index points, the doc holds.`,
+      });
+    }
+  });
+}
+
 // ── Assertions ────────────────────────────────────────────────────────
 
 function main(): void {
@@ -227,9 +272,12 @@ function main(): void {
     }
   }
 
+  // ── Length cap — both lists ─────────────────────────────────────────
+  checkIndexEntryLengths(findings);
+
   if (findings.length === 0) {
     process.stderr.write(
-      `✓ check-claude-md: ${claudeOnDisk.length} sub-CLAUDE.md file(s) and ${doctrineOnDisk.length} doctrine file(s) all referenced from root.\n`,
+      `✓ check-claude-md: ${claudeOnDisk.length} sub-CLAUDE.md file(s) and ${doctrineOnDisk.length} doctrine file(s) all referenced from root and within the ${MAX_INDEX_ENTRY_CHARS}-char entry cap.\n`,
     );
     return;
   }
