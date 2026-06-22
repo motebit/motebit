@@ -178,6 +178,10 @@ const IDENTIFIER_ALLOWLIST: Record<string, string> = {
     "deliberately-nonexistent symbol — `felt-interior.md` §5 names it to say there is NO signed memory-state artifact and there must not be one (the memory record is unsigned-local by construction). Naming the thing that must not exist is what makes the unsigned-local honesty model legible; same illustrative-counterexample class as `EvalReceipt`.",
   VerificationVerdict:
     "anticipated future type — `verify-family-fail-closed.md` names the structured verdict that replaces the verify family's bare booleans when the reshape ships (the VerificationVerdict arc). The doc names it ahead of the landing so the arc is recorded; the type lands with that coordinated major, same pattern as `RetentionSemiring` / `EvalAttestation`.",
+  AccrualKind:
+    "anticipated future type — `felt-accumulation.md` (Inc 0, doctrine-first) names the closed registry of accrual kinds (`recalled_memory` / `trust_edge` / …) the leverage-moment basis dispatches on; lands in `@motebit/protocol` at Inc 1, sibling to the produced-not-authored `AccrualBasis`.",
+  AccrualBasis:
+    "anticipated future type — `felt-accumulation.md` (Inc 0) names the produced-not-authored leverage basis an act carries when accrued state shaped it (the §3 honesty floor; the render path takes the attributed type so a claim without a produced basis is a compile error); lands in `@motebit/protocol` at Inc 1 alongside `AccrualKind`.",
 
   // ----- Real symbols living in a corpus-excluded file -----
   REPAIR_CONTRACT_ALLOWLIST:

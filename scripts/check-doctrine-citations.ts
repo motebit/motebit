@@ -153,6 +153,8 @@ const LINE_ANCHOR_PATTERN = new RegExp(
 const GATE_ALLOWLIST: Record<string, string> = {
   "check-coverage-graduation":
     "anticipated future gate — coverage-graduation doctrine names this as the hard-fail name for the soft-signal coverage report when escalation criteria fire (a date missed twice without rationale). Land when conditions are met; until then, the reference is forward-looking.",
+  "check-accrual-basis-canonical":
+    "anticipated future gate — felt-accumulation doctrine (Inc 0, doctrine-first) names this as the Inc-5 gate that will lock the produced-not-authored honesty floor (a leverage attribution must trace to a real accrual code path, never model-authored) and the no-aggregate refusal. Lands with the AccrualBasis arc; until then the reference is forward-looking, the same shape as check-coverage-graduation.",
 };
 
 /**
