@@ -769,6 +769,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-coverage-config-present",
   },
   {
+    name: "check-coverage-graduation",
+    defends:
+      "graduation commitments are kept, fail-closed on the deadline (issue #111). A money/identity-path package whose coverage floor sits below the project's 80% target carries an explicit `target_date` in `coverage-graduation.json` (the ceiling commitment paired with `check-coverage-config-present`'s floor). The report is a soft quarterly conversation BEFORE the date; on or after it, an entry whose live vitest thresholds still do not meet its `target` fails CI. Closes the opt-in fail-open recurring one layer up inside graduation itself — a raise-by date that passes without compliance would otherwise rot silently, the exact shape the money/identity coverage slate exists to forbid. Same hard-on-the-deadline discipline as the registry it complements; the failure condition (`daysUntil(target_date) < 0 && !meetsTarget(live, target)`) is computed per-axis from the live config, not from a hand-maintained snapshot. Probed in `check-gates-effective` (past-date an unmet entry). Doctrine: `docs/doctrine/coverage-graduation.md`.",
+    script: "check-coverage-graduation",
+  },
+  {
     name: "check-money-identity-path-canonical",
     defends:
       "the money/identity-path coverage registry (`scripts/money-identity-path.ts`) is self-consistent — every MEMBERSHIP_TRIGGER is itself a registry member (triggers ⊊ registry) and every registry entry names a real workspace package (no stale entries). The fail-closed membership derivation (Amendment 2 — any `packages/` package whose direct `dependencies`/`peerDependencies` include a trigger must be a registry member, so a new money/attestation primitive cannot dodge a floor) is `packages/`-scoped and UNCONDITIONALLY ENFORCED: the runtime sovereign-rail adapter refactor (PR #114, issue #110) removed the one real over-fire (`@motebit/runtime` consumed `@motebit/wallet-solana` only as a value dep; it now consumes the `SovereignWalletRail` port + `base58Encode` codec from `@motebit/protocol` and declares wallet-solana as a devDep), so membership is derived from the dependency graph with no hand-maintained marker. No WAIVERS escape hatch by design (a per-diff waiver list is the fail-open this gate exists to close).",

@@ -1,5 +1,5 @@
 {
-  "policy": "soft-signal",
+  "policy": "soft-before-deadline",
   "scope": "money + identity path packages",
   "doctrine": "docs/doctrine/coverage-graduation.md",
   "packages": [

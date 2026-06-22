@@ -222,6 +222,16 @@ const PROBES: ReadonlyArray<Probe> = [
       ),
   },
   {
+    script: "check-coverage-graduation",
+    proves:
+      "flags a graduation commitment whose target_date has passed while its live coverage thresholds still fall short of the target — the raise-by promise rotting silently past its deadline",
+    perturb: () =>
+      // Past-date core-identity's entry (its live thresholds are below target —
+      // why it's under graduation). The deadline gate then fires: past
+      // target_date + target unmet. Cleanup restores the manifest verbatim.
+      mutateFile("coverage-graduation.json", (src) => src.replace('"2026-08-15"', '"2020-01-01"')),
+  },
+  {
     script: "check-money-identity-path-canonical",
     proves:
       "flags a stale registry entry (a member naming no real workspace package); the Amendment-2 fail-closed membership derivation is now unconditionally enforced too (issue #110 closed)",

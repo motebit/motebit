@@ -4,7 +4,7 @@ Two policies, one direction.
 
 **Floor (invariant).** Coverage thresholds never lower. Every `vitest.config.ts` declares its measured baseline; CI fails if a regression lands. Enforced by `turbo run test:coverage` (drift-defenses #5) and the `defineMotebitTest` factory in `vitest.shared.ts` (which makes thresholds a required argument). Anchored in the `feedback_coverage_thresholds` memory.
 
-**Ceiling (commitment).** Money + identity path packages whose floor sits below the project's 80% target carry an explicit raise-by date in `coverage-graduation.json`. Soft signal — `pnpm coverage-graduation` prints the timeline; CI does not fail. Escalated to a hard gate only if the soft signal is ignored.
+**Ceiling (commitment).** Money + identity path packages whose floor sits below the project's 80% target carry an explicit raise-by date in `coverage-graduation.json`. **Soft before the date, hard on or after it** (issue #111): `pnpm coverage-graduation` (the `check-coverage-graduation` gate) prints the timeline and exits 0 while every commitment is still in its window; once an entry's `target_date` passes with its `target` still unmet, CI fails. The deadline is enforced; the target itself stays team-chosen.
 
 The floor prevents decay. The ceiling prevents stasis at a low baseline.
 
@@ -22,7 +22,7 @@ The packages on the **money path** or the **identity path** — anything where a
 
 A package belongs in this scope when an untested path could move money, sign on behalf of an identity, or admit a signed artifact that should have been rejected.
 
-A package is **a graduation candidate** when any axis of its declared threshold is below 80. As of 2026-04-24 the manifest is empty — every in-scope package sits at or above the 80/80/80 target. The most recent graduation was `@motebit/wallet-solana`: 42/86/58/42 at the 2026-04-16 baseline, raised in three passes (memo-submitter → rail.ts → jupiter.ts) to 97/96/100/97 by 2026-04-20, then removed from the manifest ahead of the 2026-06-01 deadline per the "when all targets are met, remove the entry" rule. See `packages/wallet-solana/vitest.config.ts` for the per-pass narrative.
+A package is **a graduation candidate** when any axis of its declared threshold is below 80. As of 2026-06-21 the manifest carries six entries — `@motebit/core-identity` (raise-by 2026-08-15) plus the five hardware/aggregator verifiers (`crypto-{appattest,android-keystore,tpm,webauthn}`, `verify`; raise-by 2026-09-30), added by the money/identity coverage slate. An earlier graduation, `@motebit/wallet-solana`, went 42/86/58/42 at the 2026-04-16 baseline → raised in three passes (memo-submitter → rail.ts → jupiter.ts) to 97/96/100/97 by 2026-04-20, then removed from the manifest ahead of the 2026-06-01 deadline per the "when all targets are met, remove the entry" rule. See `packages/wallet-solana/vitest.config.ts` for the per-pass narrative.
 
 ## Manifest
 
@@ -30,7 +30,7 @@ A package is **a graduation candidate** when any axis of its declared threshold 
 
 ```json
 {
-  "policy": "soft-signal",
+  "policy": "soft-before-deadline",
   "scope": "money + identity path packages",
   "packages": [
     {
@@ -45,22 +45,26 @@ A package is **a graduation candidate** when any axis of its declared threshold 
 }
 ```
 
-Today `packages` is `[]` — the quiet state is an explicit statement that no money/identity package is below floor.
+When `packages` is `[]` the quiet state is an explicit statement that no money/identity package is below floor; today it carries the six slate entries above.
 
 Three states per entry:
 
 - **Active** — current < target on at least one axis. The report shows the gap and remaining days.
 - **Drift** — manifest `current` no longer matches the live `vitest.config` thresholds. Update the manifest in the same PR that raised the threshold; if all targets are now met, remove the entry.
-- **Overdue** — `target_date` has passed and targets unmet. The soft signal still exits 0; the conversation it forces is the point.
+- **Overdue** — `target_date` has passed and targets unmet. **CI fails (exit 1)** — a commitment past its date that nobody honored is a broken promise, the opt-in fail-open this primitive exists to close. Close the gap (raise the threshold) or re-target with a rationale; never silently extend the date.
 
 When all targets are met, remove the entry. When a new package belongs in scope, add one.
 
-## Why soft, not hard
+## Soft before the deadline, hard after (and why that isn't theatre)
 
-A hard CI gate that says "wallet-solana must reach 80% by 2026-06-01" would be theatre — either the date slips and the gate is disabled (band-aid), or the date drives test-quantity over test-quality (`feedback_endgame_not_mvp`). The signal works because someone reads it; the doctrine names when to escalate:
+The original doctrine kept this soft, reasoning that a hard gate saying "wallet-solana must reach 80% by 2026-06-01" is theatre — either the date slips and the gate is disabled (band-aid), or the date drives test-quantity over test-quality (`feedback_endgame_not_mvp`). That reasoning was right about a _naive_ hard gate, and the escalation (issue #111) **keeps the insight** rather than discarding it:
 
-- The same target date is missed twice without rationale → promote to `check-coverage-graduation` as a hard gate.
-- A package's coverage regresses below the manifest's recorded `current` snapshot → already a CI failure (the floor invariant) before this report runs.
+- The gate does NOT mandate a universal target or dictate "more tests." The team still chooses each entry's `target` and `target_date`. What the gate enforces is only that a commitment _already made_ isn't silently abandoned once its date passes.
+- The escape valve is not "disable the gate." Past the date with the target unmet, the honest closes are (a) raise the threshold to the committed target, or (b) re-target with a doctrine-grade rationale. **Silently extending the date is the one move that's forbidden** — it's the band-aid the original concern named.
+
+What changed is the stakes. The primitive is now load-bearing: the money/identity coverage slate put six entries under graduation (sized for three). At that scale a soft signal is an _opt-in fail-open_ — a raise-by date that passes unread rots silently, the exact shape the slate was built to forbid, recurring one layer up inside graduation itself. Soft-before-the-date preserves the "someone reads it" conversation; hard-after makes the deadline a real boundary instead of a suggestion. Landed before the earliest live date (2026-08-15, `@motebit/core-identity`) so the discipline is exercised against a real deadline, not a hypothetical.
+
+A package's coverage regressing below the manifest's recorded `current` snapshot is already a CI failure (the floor invariant) before this report runs — that half was always hard.
 
 ## How to use
 
