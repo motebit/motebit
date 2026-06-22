@@ -52,6 +52,7 @@ import type {
   MotebitState,
   BehaviorCues,
   ExecutionReceipt,
+  AccrualBasis,
   GovernanceConfig,
   UnifiedProviderConfig,
   ProviderSpec,
@@ -245,6 +246,11 @@ export class SpatialApp {
   // completed delegations as orbital scene objects. Fires once per
   // `delegation_complete` chunk that carries a signed `full_receipt`.
   private receiptListeners: Array<(r: ExecutionReceipt) => void> = [];
+
+  // Felt accumulation (Inc 3, spatial): the leverage moment as a transient
+  // mid-ring orbit. Fires once per `result` chunk that carries a produced
+  // `accrualBasis` (a turn that drew on accrued state).
+  private accrualListeners: Array<(b: AccrualBasis) => void> = [];
 
   // Network settings
   private networkSettings: SpatialNetworkSettings = {
@@ -1060,6 +1066,7 @@ export class SpatialApp {
       for await (const chunk of this.runtime.sendMessageStreaming(text)) {
         this.pushStreamActivity(chunk);
         this.emitReceiptIfPresent(chunk);
+        this.emitAccrualIfPresent(chunk);
         yield chunk;
       }
     } finally {
@@ -1098,6 +1105,31 @@ export class SpatialApp {
   }
 
   /**
+   * Subscribe to the leverage moment (felt-accumulation Inc 3). Fires when a
+   * turn's result carries a produced `accrualBasis`. The host mounts a transient
+   * mid-ring orbit; returns an unsubscribe.
+   */
+  onAccrual(cb: (b: AccrualBasis) => void): () => void {
+    this.accrualListeners.push(cb);
+    return () => {
+      this.accrualListeners = this.accrualListeners.filter((l) => l !== cb);
+    };
+  }
+
+  private emitAccrualIfPresent(chunk: StreamChunk): void {
+    if (chunk.type !== "result") return;
+    const basis = chunk.result.accrualBasis;
+    if (!basis) return; // fail-closed: no consequential recall → no orbit
+    for (const cb of this.accrualListeners) {
+      try {
+        cb(basis);
+      } catch {
+        // Listener errors must not break the stream loop.
+      }
+    }
+  }
+
+  /**
    * Send a message and speak the response. Handles voice commands, tool approvals,
    * and streaming TTS. Returns the accumulated display text.
    */
@@ -1118,6 +1150,7 @@ export class SpatialApp {
     for await (const chunk of this.runtime.sendMessageStreaming(text)) {
       this.pushStreamActivity(chunk);
       this.emitReceiptIfPresent(chunk);
+      this.emitAccrualIfPresent(chunk);
       if (chunk.type === "text") {
         accumulated += chunk.text;
       } else if (chunk.type === "approval_request") {

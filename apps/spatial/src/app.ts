@@ -27,6 +27,7 @@ import { ReceiptSatelliteCoordinator } from "./receipt-satellites";
 import {
   TrustConstellationCoordinator,
   MemoryEnvironmentCoordinator,
+  AccrualSatelliteCoordinator,
 } from "@motebit/render-engine";
 
 // === DOM elements ===
@@ -133,6 +134,26 @@ function ensureReceiptSatellites(): ReceiptSatelliteCoordinator {
 // ensureReceiptSatellites() call after adapter.init.
 app.onReceipt((receipt) => {
   ensureReceiptSatellites().addReceipt(receipt);
+});
+
+// Felt accumulation (Inc 3, spatial): the leverage moment as a transient mid-ring
+// orbit drawing on the memory haze. Event-driven like receipts — a produced
+// `accrualBasis` on a result chunk emerges an orb that briefly orbits, then fades
+// (records-vs-acts: an act recedes when its work ends). Render-engine primitive
+// per gate #26; the orbit carries no count (no inward aggregate).
+const accrualSatellites = new AccrualSatelliteCoordinator();
+let accrualSatellitesAttached = false;
+function ensureAccrualSatellites(): AccrualSatelliteCoordinator {
+  if (accrualSatellitesAttached) return accrualSatellites;
+  const group = app.adapter.getCreatureGroup();
+  if (group) {
+    accrualSatellites.attach(group);
+    accrualSatellitesAttached = true;
+  }
+  return accrualSatellites;
+}
+app.onAccrual((basis) => {
+  ensureAccrualSatellites().addAccrual(basis.kind, performance.now());
 });
 
 // Trust constellation — the first-person trust graph as an inner ring of orbs
@@ -886,6 +907,7 @@ function startFlatPreview(): void {
     receiptSatellites.tick(now);
     trustConstellation.tick(now);
     memoryEnvironment.tick(now);
+    accrualSatellites.tick(now);
     app.renderFrame(dt, time);
     requestAnimationFrame(loop);
   }
@@ -959,6 +981,7 @@ async function startAR(): Promise<void> {
     receiptSatellites.tick(now);
     trustConstellation.tick(now);
     memoryEnvironment.tick(now);
+    accrualSatellites.tick(now);
 
     // Render with behavior cues from runtime (or idle cues)
     app.renderFrame(dt, t);
