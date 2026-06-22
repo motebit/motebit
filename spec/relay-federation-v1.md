@@ -8,6 +8,7 @@
 
 **Version history:**
 
+- **Deprecation notice (2026-06-21):** the `requireDiscoverSignature` config default flips `false → true` on **2026-07-21** (ships as 1.4), ending the 1.3 tolerant-reader window — an unsigned inbound discover then rejects (403) by default. Config-restorable (`requireDiscoverSignature: false`), wire unchanged. See §4.1.1.
 - **1.3** (2026-06-11) — Additive: per-hop sender authentication on `POST /federation/v1/discover` (§4.1). Each forwarding relay signs the request as the immediate `sender_relay` (distinct from the multi-hop `origin_relay`, which carries through for dedup/merge); the receiver verifies that direct neighbor's signature against `relay_peers` (state `active`) and enforces the ±5-minute `timestamp` drift window. Backward-compatible via a tolerant-reader rollout — an unsigned discover is accepted with a warning until an operator sets `requireDiscoverSignature`, after which an unsigned request rejects (403); a PRESENT-but-invalid signature always rejects regardless. Also closes the §10.2 latent fail-open by making `verifyPeerSignature` REQUIRE the in-body `timestamp` (previously the drift check was skipped when the field was absent) across task/forward, task/result, settlement/forward, and discover — every sender already stamps it, so only malformed/replayed requests are affected. Route table unchanged (fifteen entries); peers without 1.3 interoperate through the rollout window.
 - **1.2 — Corrigendum** (2026-06-11) — Documentation correctness, no wire change. §10/§10.2/§10.3 previously described a uniform `X-Relay-Id`/`X-Relay-Signature`/`X-Relay-Timestamp` transport-header authentication scheme returning HTTP 401. That scheme was never normative and contradicted the in-body signing constructions specified since 1.0 in §3.1, §3.2, §5.3–§5.4, and §7.3 — and never implemented. The authentication map is now per-endpoint and in-body (in-body `signature` field over RFC 8785 canonical JSON; signer keyed by the in-body relay id against `relay_peers`; failures are 403/400, not 401). This corrects the prose to match the wire that 1.0–1.2 always spoke. Also documents `/discover`'s current mesh-membership authentication and names **per-hop sender signing** as a tracked hardening item — shipped in 1.3 above.
 - **1.2** (2026-05-01) — Additive: `/disputes/:disputeId/vote-request` endpoint (§16) for federation peer fan-out during execution-ledger dispute adjudication (`spec/dispute-v1.md` §6.2). Extends the route table from fourteen to fifteen entries. Backward-compatible — peers without §16 support continue to interoperate on §3–15; vote-request fan-out is opt-in (relays without peers self-adjudicate when not party, 503 when party per §6.5).
@@ -220,6 +221,19 @@ Receiver algorithm:
 optional on the wire so a 1.3 relay interoperates with pre-1.3 peers during a
 rolling deploy; senders always sign. Once every peer emits signed discover
 requests, operators flip `requireDiscoverSignature` to close the unsigned path.
+
+**Default flip — sunset 2026-07-21 (the tolerant-reader window closes).** The
+`requireDiscoverSignature` config default is `false` (tolerant) through this
+rollout. On **2026-07-21** it flips to `true`: an unsigned inbound discover
+rejects (403) by **default**, closing the cold-audit P0-3b fail-open for every
+relay that has not explicitly opted out. It is a behavior change only for a
+self-hosted relay whose direct neighbors do not yet sign (running
+relay-federation < 1.3) — announced here and in `docs/operator/self-host.md`
+rather than flipped silently. It is **config-restorable**: an operator who must
+keep accepting unsigned discovers sets `requireDiscoverSignature: false`
+explicitly (and owns the fail-open for their own mesh). The wire is unchanged
+(the signature fields are optional since 1.3); only the default acceptance policy
+changes, so the flip ships as a minor (1.4), not a peering-incompatible major.
 
 ### 4.2 — Hop Limit
 

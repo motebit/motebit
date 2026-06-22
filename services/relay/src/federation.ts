@@ -123,6 +123,23 @@ export interface FederationConfig {
   requireDiscoverSignature?: boolean;
 }
 
+/**
+ * Default for {@link FederationConfig.requireDiscoverSignature}, extracted to a
+ * named const so the sunset forcing-test (#188) can assert it.
+ *
+ * **SUNSET 2026-07-21 (#188).** This tolerant default is a P0 fail-open
+ * (cold-audit finding P0-3b): an unsigned inbound discover is accepted during the
+ * relay-federation@1.3 rollout window. Every motebit relay already runs strict;
+ * the default stays tolerant only to spare an unknown, un-upgraded self-hosted
+ * peer a hard 403 during the announced window. On 2026-07-21 it FLIPS to `true`
+ * (announced in spec `relay-federation-v1.md` §4.1.1 + `docs/operator/self-host.md`);
+ * an operator who still needs tolerant sets `requireDiscoverSignature: false`
+ * explicitly. The flip is enforced by the dated test in
+ * `services/relay/src/__tests__/federation-discover-sunset.test.ts` so it cannot
+ * rot in a recap — change this one line to `true` and the test goes green.
+ */
+export const DEFAULT_REQUIRE_DISCOVER_SIGNATURE = false;
+
 export interface AgentInfo {
   motebit_id: string;
   public_key: string;
@@ -1217,7 +1234,8 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       : federationConfig?.endpointUrl != null;
 
   const maxPeers = federationConfig?.maxPeers ?? 50;
-  const requireDiscoverSignature = federationConfig?.requireDiscoverSignature ?? false;
+  const requireDiscoverSignature =
+    federationConfig?.requireDiscoverSignature ?? DEFAULT_REQUIRE_DISCOVER_SIGNATURE;
 
   /** Throw 403 if federation is explicitly disabled. */
   function checkFederationEnabled(): void {
