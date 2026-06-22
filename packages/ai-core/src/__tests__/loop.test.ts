@@ -13,7 +13,7 @@ import type { SensitivityCleared } from "@motebit/sdk";
 import { AnthropicProvider } from "../index";
 import type { AnthropicProviderConfig, StreamingProvider } from "../index";
 import { EventStore, InMemoryEventStore } from "@motebit/event-log";
-import { MemoryGraph, InMemoryMemoryStorage } from "@motebit/memory-graph";
+import { MemoryGraph, InMemoryMemoryStorage, embedText } from "@motebit/memory-graph";
 import { StateVectorEngine } from "@motebit/state-vector";
 import { BehaviorEngine } from "@motebit/behavior-engine";
 import { SensitivityLevel } from "@motebit/sdk";
@@ -214,6 +214,45 @@ describe("runTurn", () => {
       expect(edge.relation_type).toBe("related");
       expect(edge.weight).toBeGreaterThanOrEqual(0.7);
     }
+  });
+
+  it("emits a recalled_memory accrual basis when a memory is consequentially recalled (felt-accumulation Inc 2)", async () => {
+    const deps = makeDeps();
+
+    // Seed a memory whose embedding IS the same `embedText` output the loop
+    // computes for the query (the harness mocks `embedText` to the 128-d hash;
+    // model-driven formation uses a different, larger-dim embed, so we seed
+    // directly to keep query and storage embeddings comparable). An identical
+    // string → identical L2-normalized vector → cosine similarity 1.0, well
+    // above the 0.7 consequential bar — a deterministic leverage moment.
+    const emb = await embedText("I love jazz music");
+    const seeded = await deps.memoryGraph.formMemory(
+      {
+        content: "I love jazz music",
+        confidence: 0.9,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
+      emb,
+    );
+
+    mockFetchSuccess("You're into jazz.");
+    const result = await runTurn(deps, "I love jazz music");
+
+    expect(result.memoriesRetrieved.length).toBeGreaterThan(0);
+    expect(result.accrualBasis).toBeDefined();
+    expect(result.accrualBasis?.kind).toBe("recalled_memory");
+    // Produced-not-authored: the basis points to the genuinely-recalled node,
+    // and carries its sensitivity ceiling — both read off the node, not narrated.
+    expect(result.accrualBasis?.sourceRef).toBe(seeded.node_id);
+    expect(result.accrualBasis?.sensitivity).toBe(SensitivityLevel.None);
+  });
+
+  it("emits no accrual basis when nothing was consequentially recalled (fail-closed)", async () => {
+    const deps = makeDeps();
+    mockFetchSuccess("Hello there.");
+    const result = await runTurn(deps, "hello");
+    expect(result.accrualBasis).toBeUndefined();
   });
 
   it("links multiple memories formed in the same turn", async () => {

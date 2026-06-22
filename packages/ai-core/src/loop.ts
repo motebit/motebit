@@ -11,12 +11,13 @@ import type {
   PolicyDecision,
   TurnContext,
   ConversationMessage,
+  AccrualBasis,
 } from "@motebit/sdk";
 import { EventType, SensitivityLevel, rankSensitivity } from "@motebit/sdk";
 import type { SensitivityCleared } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import type { MemoryGraph, ConsolidationProvider } from "@motebit/memory-graph";
-import { embedText, formMemoriesFromCandidates } from "@motebit/memory-graph";
+import { embedText, formMemoriesFromCandidates, recalledMemoryBasis } from "@motebit/memory-graph";
 import type { StateVectorEngine } from "@motebit/state-vector";
 import type { BehaviorEngine } from "@motebit/behavior-engine";
 import type { StreamingProvider } from "./index.js";
@@ -518,6 +519,16 @@ export interface TurnResult {
   toolCallsDenied?: number;
   /** Number of tool calls that failed during execution. */
   toolCallsFailed: number;
+  /**
+   * The leverage moment for this turn, if accrued state was consequentially
+   * drawn upon — felt-accumulation's `recalled_memory` basis (a question not
+   * re-asked, a preference honored). PRODUCED by the memory-graph accrual
+   * source (`recalledMemoryBasis`), never authored by the model; absent is the
+   * fail-closed default (no consequential recall → no attribution). A surface
+   * (Inc 3) renders it as a calm in-flow attribution bounded by `sensitivity`.
+   * Doctrine: `docs/doctrine/felt-accumulation.md`.
+   */
+  accrualBasis?: AccrualBasis;
 }
 
 export interface TurnOptions {
@@ -902,6 +913,12 @@ export async function* runTurnStreaming(
   const pinnedIds = new Set(pinnedMemories.map((m) => m.node_id));
   const dedupedSimilarity = similarityMemories.filter((m) => !pinnedIds.has(m.node_id));
   const relevantMemories = [...pinnedMemories.slice(0, 5), ...dedupedSimilarity];
+
+  // The leverage moment (felt-accumulation Inc 2): mint the `recalled_memory`
+  // accrual basis in the memory-graph accrual source — produced-not-authored —
+  // when a recalled memory was consequentially drawn upon. Undefined is the
+  // fail-closed default (no strong recall → no attribution).
+  const recalledBasis = recalledMemoryBasis(queryEmbedding, relevantMemories);
 
   // Layer-1 memory index — best-effort; a failure here must not fail the
   // turn. The agent still gets Layer-2 retrieval via `relevant_memories`.
@@ -1818,6 +1835,7 @@ export async function* runTurnStreaming(
       toolCallsFailed,
       ...(turnCtx && turnCtx.costAccumulated > 0 ? { totalTokens: turnCtx.costAccumulated } : {}),
       ...(latency ? { latency } : {}),
+      ...(recalledBasis ? { accrualBasis: recalledBasis } : {}),
     },
   };
 }

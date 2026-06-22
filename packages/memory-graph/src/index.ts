@@ -38,6 +38,9 @@ export type {
   ChainResult,
   ResolvedScoringConfig,
 } from "./retrieval.js";
+// Accrual production — the `recalled_memory` leverage moment, minted in the
+// accrual source (produced-not-authored). Doctrine: felt-accumulation.md.
+export { recalledMemoryBasis, CONSEQUENTIAL_RECALL_SIMILARITY } from "./accrual.js";
 export {
   NotabilitySemiring,
   rankNotableMemories,
