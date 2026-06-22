@@ -178,14 +178,48 @@ jobs:
           path: apps/web/test-results/
           retention-days: 7
 
+  changes:
+    # Real changed-files detection feeding the gate-effectiveness trigger.
+    # The prior `contains(toJson(github.event.pull_request), 'scripts/')`
+    # matched the PR title/body TEXT (pull_request is metadata, not the diff),
+    # so gate-effectiveness silently skipped on PRs that genuinely touched
+    # scripts/ (#115). This job ALWAYS runs (so the `needs` below is always
+    # satisfied — a skipped need would otherwise cascade-skip gate-effectiveness
+    # even on push) and emits a `scripts` output; on push the value is unused
+    # (gate-effectiveness runs unconditionally). git diff vs the base ref is the
+    # same idiom the sibling-audit job uses.
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      scripts: ${{ steps.filter.outputs.scripts }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+
+      - id: filter
+        name: Detect scripts/ changes vs base
+        run: |
+          scripts=false
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            if git diff --name-only "origin/${{ github.base_ref }}...HEAD" | grep -qE '^scripts/'; then
+              scripts=true
+            fi
+          fi
+          echo "scripts=$scripts" >> "$GITHUB_OUTPUT"
+          echo "scripts/ touched vs '${{ github.base_ref }}': $scripts"
+
   gate-effectiveness:
     # Probe every drift-defense gate with a known-violating fixture to prove
     # each one actually fires. Scoped to scripts/* changes + pushes to main
     # so the expense (every gate runs under a perturbation) isn't paid on
     # unrelated PRs — but any change to a gate or the gate list triggers it.
+    # Trigger uses the `changes` job's real diff detection, not a text match
+    # on PR metadata (#115).
+    needs: changes
     if: |
       github.event_name == 'push' ||
-      contains(toJson(github.event.pull_request), 'scripts/')
+      needs.changes.outputs.scripts == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
