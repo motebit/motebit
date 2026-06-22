@@ -181,6 +181,8 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     // Cryptosuite registry — pure type guard + lookup over a frozen record
     "isSuiteId",
     "getSuiteEntry",
+    // Content-digest algorithm — pure type guard over a frozen union (evidence-provenance)
+    "isDigestAlgorithm",
     // Tool-mode taxonomy — pure sort-priority lookup over a closed union
     "toolModePriority",
     // Sensitivity ladder algebra — pure math over the closed
@@ -285,6 +287,7 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     "verifyReceipt",
     "verifyReceiptVerdict",
     "verifyDelegationTokenVerdict",
+    "verifyEvidenceProvenance",
     "isFullyVerified",
     "signSovereignPaymentReceipt",
     "verifyReceiptChain",

@@ -1,0 +1,30 @@
+# Evidence provenance — verifiable locality, from signatures to evidence
+
+The `VerificationVerdict`'s `evidenceBasis: EvidenceRef[]` was an emerging axis: a list of `{ kind, ref }` POINTERS naming what a verdict used, but not independently re-checkable. This arc (co-designed with agency.computer, 2026-06, the second verify-family consumer — the same consumer-forces-need / producer-forces-shape loop as the [VerificationVerdict reshape](verify-family-fail-closed.md)) makes that pointer **resolve to a re-verifiable provenance**, extending the system's deepest property — _verify the claim without trusting the claimant_ — from a SIGNATURE ("is this artifact authentic?") to EVIDENCE ("is this claim backed by a primary record?").
+
+## The law
+
+`verifyEvidenceProvenance(bytes, provenance, { resolveProjection? })` (`@motebit/crypto`, pure, I/O-free): **the named `span` is an exact substring of `projection(bytes)`, where the bytes content-address to `digest`.** It re-verifies PRESENCE — never TRUTH, with no oracle. The bytes either contain the span or they don't. "Model proposes, code disposes": a fabricated figure cannot be placed into the record, because the verifier only accepts an exact substring of content-addressed bytes — the [runtime-invariants-over-prompt-rules](runtime-invariants-over-prompt-rules.md) pattern applied to evidence.
+
+The shape (`@motebit/protocol`, additive, back-compat by absence — a producer that doesn't retrieve emits bare `{ kind, ref }` as before):
+
+```
+EvidenceRef       = { kind, ref, provenance? }
+EvidenceProvenance = { digest: { algorithm, value }, projection?, span, locator?, binding? }
+```
+
+## The boundary (load-bearing)
+
+motebit owns the **shape** and the **re-check law**; NEVER the venue authority. Deciding what counts as a primary record, the document→text projection, and domain identity semantics (e.g. SEC/CIK) are **app-layer**, the consumer's. The subject is re-verifiable _presence_, not _truth_.
+
+## The three guardrails (and the keystone)
+
+1. **Hash-agility, not a baked-in algorithm.** `digest` is `{ algorithm, value }` (a `DigestAlgorithm` role — a content digest is hashed, not signed, so it rides its own role, not `SuiteId`). `sha-256` today; a new hash is a registry append, not a wire break ([agility-as-role](agility-as-role.md)).
+2. **Domain-blind identity binding.** `binding?` references an opaque resolved identity (a `motebit_id` or a domain token the consumer resolves) — it is CARRIED, not verified by the law. Who is a valid issuer is app-layer.
+3. **Byte-exact reproducibility — the make-or-break.** The `digest` is over the RAW, independently-obtainable bytes (a third party fetches the same primary source). The `span` is re-checkable iff EITHER `projection` is absent (located over the raw bytes directly — re-verifiable _by construction_, the **default**) OR the named recipe is spec'd to byte-determinism: a third party reimplements it from its spec to byte identity, proven by a conformance fixture that pits TWO INDEPENDENT implementations against each other (one impl checked against itself is the nominal-recipe trap). Same discipline as JCS canonicalization — both sides must produce byte-identical input or it fails mysteriously.
+
+**Keystone — projection is an injected seam.** Because the projection recipe is app-owned (guardrail 1's twin), `verifyEvidenceProvenance` takes it as an INJECTED function — the same shape as `verifyStandingDelegation`'s `isRevoked`. Projection absent → motebit does it fully (raw bytes). Projection present + resolver → apply, then check. Projection present + no resolver → **fail closed** (`projection_unresolved`). This keeps the verifier pure and domain-blind; the recipe implementation never enters motebit's tree. `locator?` is advisory (the law is substring presence), never a second thing a re-verifier must reproduce.
+
+## Status
+
+**Shipped:** the additive `EvidenceProvenance`/`EvidenceRef` vocabulary in `@motebit/protocol` (graduated from `@motebit/crypto`'s free `{kind,ref}`), `verifyEvidenceProvenance` with the injected projection seam in `@motebit/crypto`, and the hostile corpus (span-absent, digest-mismatch, projection-unresolved-fail-closed, raw-byte-happy, projection-applied, projection-divergence, binding-carried-not-verified). **Deferred (consumer-forces-shape, agency's side):** a published byte-deterministic projection recipe (e.g. `agency.html-text.vN`) + its committed reference fixture, which lands the real cross-implementation projection-divergence conformance case; and the wire spec formalizing the provenance shape. The verdict producers do not yet populate `provenance` — it is consumer-populated until a producer retrieves.

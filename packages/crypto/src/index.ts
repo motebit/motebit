@@ -35,6 +35,12 @@ import {
   type SignableReceipt,
 } from "./artifacts.js";
 import type { DelegationToken, StandingDelegation, DelegationRevocation } from "@motebit/protocol";
+import type {
+  EvidenceRef,
+  EvidenceProvenance,
+  DigestRef,
+  DigestAlgorithm,
+} from "@motebit/protocol";
 import { hash, isScopeNarrowed } from "./signing.js";
 // The @noble/ed25519 SHA-512 binding is performed in suite-dispatch.ts
 // as a side effect of module load. Importing verifyBySuite here is
@@ -454,12 +460,13 @@ export interface RevocationVerdict {
 }
 
 /** A reference to the evidence an axis was established from (a receipt hash, a key id, a revocation root). */
-export interface EvidenceRef {
-  /** e.g. "receipt", "public_key", "revocation_root", "anchor". */
-  kind: string;
-  /** The evidence value or locator (hash, hex key, root, slot). */
-  ref: string;
-}
+// EvidenceRef + the evidence-provenance vocabulary graduated to @motebit/protocol
+// (the closed verdict vocabulary's home). Re-exported here (local type bindings,
+// import-type only — crypto keeps zero runtime monorepo deps) so the verify
+// family's public surface is unchanged. The optional `provenance` makes a
+// verdict's evidence axis re-verifiable down to the primary record — see
+// `verifyEvidenceProvenance` below (evidence-provenance arc).
+export type { EvidenceRef, EvidenceProvenance, DigestRef, DigestAlgorithm };
 
 /**
  * Machine-readable repair instruction for a failing axis — first-class, not
@@ -2036,6 +2043,75 @@ export async function verifyDelegationTokenVerdict(
     evidenceBasis,
     ...(repair ? { repair } : {}),
   };
+}
+
+/**
+ * Result of {@link verifyEvidenceProvenance}. Structured (not a bare boolean) so
+ * a non-present result names WHY — same legibility discipline as the verdict.
+ */
+export type EvidenceProvenanceResult =
+  | { present: true }
+  | { present: false; reason: "digest_mismatch" | "projection_unresolved" | "span_absent" };
+
+/**
+ * Verify an {@link EvidenceProvenance} against the raw bytes it content-addresses
+ * — the evidence-axis analog of signature integrity (verifiable-locality
+ * extended from signatures to EVIDENCE; agency.computer co-design). The law: the
+ * named `span` is an exact substring of `projection(bytes)`, where the bytes hash
+ * to `provenance.digest`. It re-verifies PRESENCE ("is this claim backed by a
+ * primary record?"), NEVER truth, with no oracle — the bytes either contain the
+ * span or they don't.
+ *
+ * Domain-blind by construction: `projection` is an OPAQUE, app-owned recipe id,
+ * so the projection is an INJECTED SEAM (same shape as `verifyStandingDelegation`'s
+ * `isRevoked` — motebit never owns a projection catalog, which would be
+ * document-format authority):
+ *   - projection ABSENT  → the span is checked against the raw bytes directly
+ *     (re-verifiable by construction, no shared code).
+ *   - projection PRESENT + `resolveProjection` injected → apply, then check.
+ *   - projection PRESENT + no resolver → FAIL CLOSED (`projection_unresolved`).
+ *
+ * `provenance.binding` (issuer authority) is NOT verified here — app-layer.
+ * `locator` is advisory: the law is exact-substring presence, never a second
+ * thing a re-verifier must reproduce.
+ */
+export async function verifyEvidenceProvenance(
+  bytes: Uint8Array,
+  provenance: EvidenceProvenance,
+  opts?: {
+    /**
+     * Apply an opaque, app-owned projection recipe to the raw bytes and return
+     * the projected text. Injected so motebit stays domain-blind; a present
+     * `projection` with no resolver fails closed.
+     */
+    resolveProjection?: (recipeId: string, bytes: Uint8Array) => string | Promise<string>;
+  },
+): Promise<EvidenceProvenanceResult> {
+  // 1. Content-address the RAW, independently-obtainable bytes. `DigestAlgorithm`
+  //    is `"sha-256"` today (the only member), so we hash directly; a second
+  //    algorithm adds a dispatch here (the field carries the role so that is a
+  //    registry append, not a wire break). An unknown algorithm fails closed —
+  //    its value cannot match the sha-256 digest.
+  const computed = await hash(bytes);
+  if (computed.toLowerCase() !== provenance.digest.value.toLowerCase()) {
+    return { present: false, reason: "digest_mismatch" };
+  }
+
+  // 2. Projection — the injected seam. motebit owns the law, never the recipe.
+  let text: string;
+  if (provenance.projection != null) {
+    if (opts?.resolveProjection == null) {
+      return { present: false, reason: "projection_unresolved" };
+    }
+    text = await opts.resolveProjection(provenance.projection, bytes);
+  } else {
+    text = new TextDecoder().decode(bytes);
+  }
+
+  // 3. Exact-substring presence (locator is advisory, not load-bearing).
+  return text.includes(provenance.span)
+    ? { present: true }
+    : { present: false, reason: "span_absent" };
 }
 
 /**

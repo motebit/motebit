@@ -3145,6 +3145,13 @@ export type {
   SuitePublicKeyEncoding,
 } from "./crypto-suite.js";
 export { SUITE_REGISTRY, ALL_SUITE_IDS, isSuiteId, getSuiteEntry } from "./crypto-suite.js";
+export type {
+  DigestAlgorithm,
+  DigestRef,
+  EvidenceProvenance,
+  EvidenceRef,
+} from "./evidence-provenance.js";
+export { ALL_DIGEST_ALGORITHMS, isDigestAlgorithm } from "./evidence-provenance.js";
 
 // Merkle tree-hash version registry — the agility axis for leaf/node domain
 // separation (RFC 6962 §2.1). Separate from `SuiteId` (signature recipe): this

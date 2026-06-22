@@ -16,10 +16,14 @@ import type { DelegationRevocation } from '@motebit/protocol';
 import type { DelegationToken } from '@motebit/protocol';
 import type { DeletionCertificate } from '@motebit/protocol';
 import type { DepartureAttestation } from '@motebit/protocol';
+import type { DigestAlgorithm } from '@motebit/protocol';
+import type { DigestRef } from '@motebit/protocol';
 import type { DisputeAppeal } from '@motebit/protocol';
 import type { DisputeEvidence } from '@motebit/protocol';
 import type { DisputeRequest } from '@motebit/protocol';
 import type { DisputeResolution } from '@motebit/protocol';
+import type { EvidenceProvenance } from '@motebit/protocol';
+import type { EvidenceRef } from '@motebit/protocol';
 import type { ExecutionTimelineEntry } from '@motebit/protocol';
 import type { FederationSettlementRecord } from '@motebit/protocol';
 import type { GoalExecutionManifest } from '@motebit/protocol';
@@ -417,6 +421,10 @@ export type DeviceRegistrationVerifyResult = {
 // @public
 export function didKeyToPublicKey(did: string): Uint8Array;
 
+export { DigestAlgorithm }
+
+export { DigestRef }
+
 // @public
 export const DISPUTE_APPEAL_SUITE: "motebit-jcs-ed25519-b64-v1";
 
@@ -446,11 +454,17 @@ export function ed25519Verify(signature: Uint8Array, message: Uint8Array, public
 // @public
 export function encodeSecureEnclaveReceiptForTest(bodyBytes: Uint8Array, sigBytes: Uint8Array): string;
 
+export { EvidenceProvenance }
+
 // @public
-export interface EvidenceRef {
-    kind: string;
-    ref: string;
-}
+export type EvidenceProvenanceResult = {
+    present: true;
+} | {
+    present: false;
+    reason: "digest_mismatch" | "projection_unresolved" | "span_absent";
+};
+
+export { EvidenceRef }
 
 // @public
 export const EXECUTION_RECEIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
@@ -1762,6 +1776,11 @@ export function verifyDisputeRequest(request: DisputeRequest, filerPublicKey: Ui
 
 // @public
 export function verifyDisputeResolution(resolution: DisputeResolution, adjudicatorPublicKey: Uint8Array, peerKeys?: Map<string, Uint8Array>): Promise<boolean>;
+
+// @public
+export function verifyEvidenceProvenance(bytes: Uint8Array, provenance: EvidenceProvenance, opts?: {
+    resolveProjection?: (recipeId: string, bytes: Uint8Array) => string | Promise<string>;
+}): Promise<EvidenceProvenanceResult>;
 
 // @public
 export function verifyExecutionReceipt(receipt: SignableReceipt, publicKey: Uint8Array): Promise<boolean>;

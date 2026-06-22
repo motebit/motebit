@@ -287,6 +287,9 @@ export const ALL_AGENT_REVOCATION_REASONS: readonly AgentRevocationReason[];
 // @public
 export const ALL_CONTENT_ARTIFACT_TYPES: readonly ContentArtifactType[];
 
+// @public (undocumented)
+export const ALL_DIGEST_ALGORITHMS: readonly DigestAlgorithm[];
+
 // @public
 export const ALL_EVENT_TYPES: readonly EventType[];
 
@@ -1310,6 +1313,15 @@ export interface DeviceRegistrationRequest {
 }
 
 // @public
+export type DigestAlgorithm = "sha-256";
+
+// @public
+export interface DigestRef {
+    readonly algorithm: DigestAlgorithm;
+    readonly value: string;
+}
+
+// @public
 export interface DisputeAppeal {
     additional_evidence?: string[];
     appealed_at: number;
@@ -1635,6 +1647,25 @@ export enum EventType {
     TrustLevelChanged = "trust_level_changed",
     // (undocumented)
     UserInputForwarded = "user_input_forwarded"
+}
+
+// @public
+export interface EvidenceProvenance {
+    readonly binding?: string;
+    readonly digest: DigestRef;
+    readonly locator?: {
+        readonly start: number;
+        readonly end: number;
+    };
+    readonly projection?: string;
+    readonly span: string;
+}
+
+// @public
+export interface EvidenceRef {
+    readonly kind: string;
+    readonly provenance?: EvidenceProvenance;
+    readonly ref: string;
 }
 
 // @public
@@ -2050,6 +2081,9 @@ export function isContentArtifactType(value: unknown): value is ContentArtifactT
 
 // @public
 export function isDepositableRail(rail: GuestRail): rail is DepositableGuestRail;
+
+// @public (undocumented)
+export function isDigestAlgorithm(s: string): s is DigestAlgorithm;
 
 // @public
 export function isEventType(value: unknown): value is EventType;
