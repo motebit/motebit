@@ -259,6 +259,11 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     // leverage attributions are owner-facing and never synced), not a
     // registered wire registry. Doctrine: docs/doctrine/felt-accumulation.md.
     "isAccrualKind",
+    // Commitment-bond structural guard — pure shape check over the
+    // BondCommitment fields (NOT signature/binding validity, which is
+    // @motebit/crypto's verifyBondCommitment). An anti-sybil staked signal;
+    // doctrine: docs/doctrine/commitment-bond.md.
+    "isBondCommitment",
   ]),
   "@motebit/crypto": new Set([
     // Artifact verification (original verify package)

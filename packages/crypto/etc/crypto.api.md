@@ -7,6 +7,7 @@
 import type { AdjudicatorVote } from '@motebit/protocol';
 import type { ApprovalDecision } from '@motebit/protocol';
 import type { BalanceWaiver } from '@motebit/protocol';
+import type { BondCommitment } from '@motebit/protocol';
 import type { ComputerSessionActionRecord } from '@motebit/protocol';
 import type { ConsolidationMutationManifest } from '@motebit/protocol';
 import type { ConsolidationReceipt } from '@motebit/protocol';
@@ -149,6 +150,11 @@ export function base58btcDecode(str: string): Uint8Array;
 
 // @public (undocumented)
 export function base58btcEncode(bytes: Uint8Array): string;
+
+// @public
+export const BOND_COMMITMENT_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+export { BondCommitment }
 
 // @public (undocumented)
 export function bytesToHex(bytes: Uint8Array): string;
@@ -1239,6 +1245,9 @@ export function signApprovalDecision<T extends Omit<ApprovalDecision, "signature
 export function signBalanceWaiver(waiver: Omit<BalanceWaiver, "signature" | "suite">, agentPrivateKey: Uint8Array): Promise<BalanceWaiver>;
 
 // @public
+export function signBondCommitment(commitment: Omit<BondCommitment, "signature" | "suite">, bondedPrivateKey: Uint8Array): Promise<BondCommitment>;
+
+// @public
 export function signBySuite(suite: SuiteId, canonicalBytes: Uint8Array, privateKeyBytes: Uint8Array): Promise<Uint8Array>;
 
 // @public
@@ -1695,6 +1704,9 @@ export function verifyApprovalDecision(decision: ApprovalDecision, approverPubli
 
 // @public
 export function verifyBalanceWaiver(waiver: BalanceWaiver, agentPublicKey: Uint8Array): Promise<boolean>;
+
+// @public
+export function verifyBondCommitment(commitment: BondCommitment): Promise<boolean>;
 
 // @public (undocumented)
 export function verifyBySuite(suite: SuiteId, canonicalBytes: Uint8Array, signatureBytes: Uint8Array, publicKeyBytes: Uint8Array): Promise<boolean>;

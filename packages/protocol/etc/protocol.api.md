@@ -570,6 +570,24 @@ export enum BatteryMode {
 }
 
 // @public
+export const BOND_COMMITMENT_SPEC_ID: "motebit/bond@1.0";
+
+// @public
+export interface BondCommitment {
+    asset: SettlementAsset;
+    bond_amount_micro: number;
+    bond_id: string;
+    bonded_address: string;
+    bonded_public_key: string;
+    chain: string;
+    expires_at: number;
+    issued_at: number;
+    motebit_id: string;
+    signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
+}
+
+// @public
 export const BooleanSemiring: Semiring<boolean>;
 
 // @public
@@ -2103,6 +2121,9 @@ export function isAgentRevocationReason(value: unknown): value is AgentRevocatio
 
 // @public
 export function isBatchableRail(rail: GuestRail): rail is BatchableGuestRail;
+
+// @public
+export function isBondCommitment(value: unknown): value is BondCommitment;
 
 // @public
 export function isContentArtifactType(value: unknown): value is ContentArtifactType;

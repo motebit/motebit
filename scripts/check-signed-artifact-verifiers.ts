@@ -107,6 +107,11 @@ export const REGISTRY: Record<string, Classification> = {
   CredentialAnchorProof: { kind: "verifier", verifier: "verifyCredentialAnchor" },
   AdjudicatorVote: { kind: "verifier", verifier: "verifyAdjudicatorVote" },
   ApprovalDecision: { kind: "verifier", verifier: "verifyApprovalDecision" },
+  // Self-anchoring: verifyBondCommitment takes no external key (the key is
+  // embedded as bonded_public_key and IS the bonded address). The verifier
+  // enforces the anti-sybil address binding in addition to the signature —
+  // locked by check-bond-address-binding.
+  BondCommitment: { kind: "verifier", verifier: "verifyBondCommitment" },
   DisputeAppeal: { kind: "verifier", verifier: "verifyDisputeAppeal" },
   DisputeEvidence: { kind: "verifier", verifier: "verifyDisputeEvidence" },
   DisputeRequest: { kind: "verifier", verifier: "verifyDisputeRequest" },

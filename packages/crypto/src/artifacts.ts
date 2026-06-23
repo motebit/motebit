@@ -19,6 +19,7 @@ import {
   isScopeNarrowed,
   signBySuite,
   verifyBySuite,
+  base58btcEncode,
 } from "./signing.js";
 
 /**
@@ -1407,6 +1408,87 @@ export async function verifyDisputeRequest(
   try {
     const sig = fromBase64Url(signature);
     return await verifyBySuite(request.suite, message, sig, filerPublicKey);
+  } catch {
+    return false;
+  }
+}
+
+// === Commitment Bonds (anti-sybil staked signal — docs/doctrine/commitment-bond.md) ===
+
+// prettier-ignore
+import type { BondCommitment } from "@motebit/protocol";
+export type { BondCommitment };
+
+/** The one suite BondCommitments sign under today — spec/bond-v1.md §4. */
+export const BOND_COMMITMENT_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
+
+/**
+ * Sign a commitment bond. The bond is **self-signed by the bonded public key**
+ * — the agent's own identity key, whose base58btc encoding IS `bonded_address`.
+ * Signing with that key proves control of the address the bond names. Callers
+ * pass the body without `signature` or `suite`; the signer owns both.
+ *
+ * The caller is responsible for passing a `commitment` whose `bonded_address`
+ * already equals `deriveSolanaAddress(bonded_public_key)`; `verifyBondCommitment`
+ * rejects a mismatch, so signing one is producing an unverifiable bond.
+ */
+export async function signBondCommitment(
+  commitment: Omit<BondCommitment, "signature" | "suite">,
+  bondedPrivateKey: Uint8Array,
+): Promise<BondCommitment> {
+  const body = { ...commitment, suite: BOND_COMMITMENT_SUITE };
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  const sig = await signBySuite(BOND_COMMITMENT_SUITE, message, bondedPrivateKey);
+  return { ...body, signature: toBase64Url(sig) };
+}
+
+/**
+ * Verify a commitment bond. Two checks, both fail-closed:
+ *
+ *   1. **The anti-sybil address binding (the whole justification).**
+ *      `bonded_address` MUST equal `base58btcEncode(bonded_public_key)` — the
+ *      Solana address derivation. A bond whose backing address is not the
+ *      agent's OWN sovereign identity address is rejected, so one wallet cannot
+ *      back many identities (each identity's address is distinct and must
+ *      independently hold the capital). `check-bond-address-binding` locks that
+ *      this check cannot be silently removed.
+ *   2. **The self-signature.** The bond is signed by `bonded_public_key`, which
+ *      (by check 1) IS the bonded address — proving control of the address it
+ *      names. No external key argument: the key is embedded and self-anchoring.
+ *
+ * This verifies the artifact STANDALONE. It does NOT bind the bond to a claimed
+ * `motebit_id` (that the `bonded_public_key` is the registry key for
+ * `commitment.motebit_id`) — that key→id check is the verifying relay's
+ * separate responsibility (the `verifySovereignBinding` shape), exactly as
+ * other verifiers leave party-membership to the caller. And it does NOT prove
+ * the address is solvent NOW — backing is the relay's live RPC read.
+ *
+ * Fail-closed on unknown suite, malformed hex key, wrong key length, a broken
+ * address binding, base64url decode error, and primitive verification failure.
+ */
+export async function verifyBondCommitment(commitment: BondCommitment): Promise<boolean> {
+  if (commitment.suite !== BOND_COMMITMENT_SUITE) return false;
+
+  let bondedKey: Uint8Array;
+  try {
+    bondedKey = hexToBytes(commitment.bonded_public_key);
+  } catch {
+    return false;
+  }
+  // A Solana address is base58btc of the 32-byte Ed25519 public key. Anything
+  // else cannot be a sovereign identity address.
+  if (bondedKey.length !== 32) return false;
+  // THE ANTI-SYBIL BINDING — bonded_address must be the agent's OWN sovereign
+  // address (see check-bond-address-binding).
+  if (commitment.bonded_address !== base58btcEncode(bondedKey)) return false;
+
+  const { signature, ...body } = commitment;
+  const canonical = canonicalJson(body);
+  const message = new TextEncoder().encode(canonical);
+  try {
+    const sig = fromBase64Url(signature);
+    return await verifyBySuite(commitment.suite, message, sig, bondedKey);
   } catch {
     return false;
   }

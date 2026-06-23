@@ -160,6 +160,11 @@ export {
   buildAgentRevocationFeedJsonSchema,
 } from "./agent-revocation.js";
 export {
+  BondCommitmentSchema,
+  BOND_COMMITMENT_SCHEMA_ID,
+  buildBondCommitmentJsonSchema,
+} from "./bond.js";
+export {
   AgentSettlementAnchorBatchSchema,
   AGENT_SETTLEMENT_ANCHOR_BATCH_SCHEMA_ID,
   buildAgentSettlementAnchorBatchJsonSchema,

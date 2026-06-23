@@ -3140,6 +3140,17 @@ export type { SettlementAsset } from "./settlement-asset.js";
 export { ALL_SETTLEMENT_ASSETS, isSettlementAsset } from "./settlement-asset.js";
 export { base58Encode } from "./base58.js";
 
+// ── Commitment Bond (protocol-level) ────────────────────────────
+// An agent's self-signed proof-of-funds at its OWN sovereign Solana
+// address — an anti-sybil staked SIGNAL (phase 1: NOT collateral /
+// escrow / recourse). The load-bearing binding (`bonded_address ===
+// deriveSolanaAddress(bonded_public_key)`) is enforced by
+// `@motebit/crypto`'s `verifyBondCommitment` and locked by
+// `check-bond-address-binding`. Doctrine: `docs/doctrine/commitment-bond.md`.
+
+export type { BondCommitment } from "./bond.js";
+export { BOND_COMMITMENT_SPEC_ID, isBondCommitment } from "./bond.js";
+
 // === Cryptosuite Registry ===
 // Every signed wire-format artifact in motebit declares its verification
 // recipe via a `suite: SuiteId` field. Missing or unknown values are

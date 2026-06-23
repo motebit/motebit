@@ -203,6 +203,18 @@ const PROBES: ReadonlyArray<Probe> = [
       ),
   },
   {
+    script: "check-bond-address-binding",
+    proves:
+      "flags the load-bearing arm — removing the anti-sybil address-binding check from `verifyBondCommitment`. Replacing the `bonded_address !== base58btcEncode(...)` rejection with a no-op simulates a refactor that drops the binding, silently letting one wallet back unlimited identities. The gate scans the verifier body for the fail-closed comparison.",
+    perturb: () =>
+      mutateFile("packages/crypto/src/artifacts.ts", (src) =>
+        src.replace(
+          "if (commitment.bonded_address !== base58btcEncode(bondedKey)) return false;",
+          "/* probe: binding check removed */",
+        ),
+      ),
+  },
+  {
     script: "check-sync-token-freshness",
     proves:
       "flags a web HTTP sync adapter regressed back to a static `authToken` (no `credentialSource`) — the exact 2026-06-15 staleness bug where a polling adapter handed a single 5-min JWT 403'd every relay request past minute 5. The fixture constructs `new HttpConversationSyncAdapter({ … authToken })` in apps/web/src, which the gate scans textually (no typecheck needed).",
