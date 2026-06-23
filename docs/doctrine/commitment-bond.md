@@ -95,8 +95,12 @@ cannot be reused across identities. Cohort protected: marketplace-active, reputa
 mid-value tickets. **Does NOT** (these wait for the deferred recourse half / hard-guarantee fork):
 provide recourse (a wronged counterparty gets nothing back in phase 1); deter a capitalized single-shot
 fraudster (defraud once + drain faces zero protocol consequence until the call/default ships); protect
-against drain-and-default, exit-scam, or a closed high-value pair going dark. We ship phase 1 knowing it
-filters sybils and signals seriousness — nothing more, and surfaces must say so.
+against drain-and-default, exit-scam, or a closed high-value pair going dark; nor tightly bound
+_concurrent_ cross-ticket exposure — the live-read recognizes a ticket's exposure only once its
+settlement row exists, so concurrent submissions before that can momentarily over-admit against one bond
+(fund-loss-free in phase 1 — no recourse means no loss; closed by the deferred reservation ledger, see
+§ Status "Known bound"). We ship phase 1 knowing it filters sybils and signals seriousness — nothing
+more, and surfaces must say so.
 
 ## Status
 
@@ -111,11 +115,28 @@ decision-time re-verification adapter wired into the live submission gate.
 
 **The cross-ticket reuse defense is a conservative LIVE READ, not a stored reservation ledger.** The
 predicate (`backing − k·in_flight ≥ k·ticket`) is computed by summing the worker's PENDING p2p
-settlements (`workerInFlightP2pCostMicro`) — strictly conservative (over-counts, never under), self-
-releasing through the existing settlement state machine, zero new money-path write-surface. A precise
-per-bond reservation ledger is deferred with the recourse half (it earns its complexity only once a bond
-can be _called_). The identity-address binding (§Inc 1) handles cross-IDENTITY reuse; this handles
-cross-TICKET reuse within one identity.
+settlements (`workerInFlightP2pCostMicro`) — strictly conservative (over-counts, never under, because it
+counts ALL of the worker's in-flight p2p value, not only bond-admitted tickets), self-releasing through
+the existing settlement state machine, zero new money-path write-surface. The identity-address binding
+(§Inc 1) handles cross-IDENTITY reuse; this handles cross-TICKET reuse within one identity.
+
+**Known bound (named — the one axis a reservation ledger would strengthen):** exposure is recognized only
+once a ticket's settlement row exists, so two _concurrent_ submissions evaluated before either's row is
+recorded can both pass — a small over-admission window the conservative coefficient `k` absorbs but does
+not close. **This is fund-loss-free in phase 1 _by construction_:** there is no recourse, so over-admitting
+a concurrent ticket costs no one anything — it only momentarily dilutes the anti-sybil _signal_, while the
+load-bearing protection (real capital tied at the identity address) still holds. The window gains teeth
+only when a bond can be _called_ (under-collateralized calls), which is exactly the recourse half — so the
+precise close is deferred to land WITH it, below. Pinned by an adversarial characterization test
+(`commitment-bond.test.ts`) so the bound is regression-visible, not silent. Atomic reserve-at-grant is the
+only close, and that IS the reservation ledger; there is no cheaper middle (eligibility is a read, so a
+race-closing marker is itself a write at grant time).
+
+**Deferred — precise per-bond reservation ledger (named-with-trigger):** an atomic reserve-at-grant /
+reaped-release ledger keyed per bond, closing the concurrent-submission window above and attributing
+exposure to bond-admitted tickets only (vs. the conservative all-in-flight sum). **Trigger:** the recourse
+half — the window is fund-loss-free until a bond can be called, and the ledger's precision is what keeps a
+_called_ bond honestly collateralized. Building it before recourse is the vault before the gold.
 
 **Deferred — recourse half (named-with-trigger):** the `BondCall`/`BondDefault` wire types + production —
 the call on the `executeFundAction` P2P no-op, the agent-signed voluntary settlement, the `BondDefault`

@@ -209,8 +209,18 @@ export function getBestLiveBond(
  *
  * Conservative by construction: it counts ALL of the worker's in-flight p2p
  * value, not only bond-admitted tickets, so it never UNDER-counts exposure.
- * The precise per-bond reservation ledger is a deliberate upgrade deferred with
- * the recourse half + bond-ingestion arc.
+ *
+ * KNOWN BOUND (named, tested, deferred-with-trigger — docs/doctrine/commitment-bond.md
+ * § Status "Known bound"): exposure is recognized only once a ticket's settlement
+ * row exists. Two CONCURRENT submissions evaluated before either's row is recorded
+ * therefore both see the same (lower) exposure and can both pass — a small
+ * over-admission window the coefficient `k` absorbs but does not close. This is
+ * fund-loss-free in phase 1 BY CONSTRUCTION (no recourse → over-admission costs no
+ * one; it only momentarily dilutes the anti-sybil signal). The only close is atomic
+ * reserve-at-grant, which IS the precise per-bond reservation ledger — deferred to
+ * land WITH the recourse half, where the window gains fund-loss teeth (an
+ * under-collateralized call). A characterization test in `commitment-bond.test.ts`
+ * pins the window so it is regression-visible, not silent.
  */
 export function workerInFlightP2pCostMicro(db: DatabaseDriver, workerId: string): bigint {
   const row = db

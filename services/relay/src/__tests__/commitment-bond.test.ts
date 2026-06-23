@@ -414,6 +414,37 @@ describe("evaluateSettlementEligibility — additive bonded branch", () => {
     expect(second.allowed).toBe(false);
   });
 
+  it("KNOWN BOUND (characterization): concurrent submissions before a settlement row exists can over-admit", async () => {
+    // The live-read recognizes exposure only once a ticket's PENDING settlement
+    // row exists. A bond sized for exactly ONE such ticket (k=10 → $10 backs a $1
+    // ticket) therefore admits TWO concurrent evaluations that race ahead of either
+    // row being recorded — both see in-flight=0 and both pass. This is the
+    // documented phase-1 over-admission window (fund-loss-free: no recourse exists,
+    // so over-admission costs no one; closed only by the deferred precise per-bond
+    // reservation ledger, which lands WITH the recourse half). This test PINS the
+    // bound — it is expected to FLIP to "the second rejects" the day that ledger
+    // ships, which is the intended tripwire. See bond-store.workerInFlightP2pCostMicro
+    // and docs/doctrine/commitment-bond.md § Status "Known bound".
+    await freshBackedBond(10_000_000, 10_000_000); // $10 bond backs exactly one $1 ticket at k=10
+    const a = await evaluateSettlementEligibility(relay.moteDb.db, "del-b", "bond-worker", false, {
+      unitCostMicro: 1_000_000n,
+    });
+    const b = await evaluateSettlementEligibility(relay.moteDb.db, "del-b", "bond-worker", false, {
+      unitCostMicro: 1_000_000n,
+    });
+    // Both pass — the over-admission window (neither has recorded a pending row).
+    expect(a.allowed).toBe(true);
+    expect(b.allowed).toBe(true);
+
+    // The defense engages the moment exposure is observable (the FIRST ticket's
+    // pending row exists): the next evaluation is correctly rejected.
+    insertPendingP2p(relay.moteDb.db, "bond-worker", "race-1", 1_000_000);
+    const c = await evaluateSettlementEligibility(relay.moteDb.db, "del-b", "bond-worker", false, {
+      unitCostMicro: 1_000_000n,
+    });
+    expect(c.allowed).toBe(false);
+  });
+
   it("an expired bond does not qualify", async () => {
     const expired = await worker.signBond({
       amountMicro: 10_000_000,
