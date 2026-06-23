@@ -1,6 +1,6 @@
 {
   "name": "@motebit/state-export-client",
-  "version": "0.5.11",
+  "version": "0.5.12",
   "description": "Browser-safe client for verified motebit state-export reads. Wraps fetch with X-Motebit-Content-Manifest verification + Trust-On-First-Use bootstrap from /.well-known/motebit-transparency.json. Apache-2.0; consumes @motebit/crypto + @motebit/protocol only.",
   "repository": {
     "type": "git",
