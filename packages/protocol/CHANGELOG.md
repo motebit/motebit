@@ -1,5 +1,40 @@
 # @motebit/protocol
 
+## 3.6.0
+
+### Minor Changes
+
+- 7941af4: Accrual basis — the Ring-1 contract for the felt-interior leverage register (felt-accumulation doctrine, Inc 1).
+
+  Adds the typed shape of a "leverage moment": the basis an act carries when it was shaped by ACCRUED state — thesis #2 (the agent gets more capable the longer it runs) made felt, as the interior DRAWN UPON rather than its resting mass.
+  - `AccrualKind` — closed, append-only union (`recalled_memory` / `trust_edge` / `consolidated_fact` / `prior_approval_pattern` / `standing_delegation`) with `ALL_ACCRUAL_KINDS`, `isAccrualKind`, and `ACCRUAL_KIND_MARKERS` (`Record<AccrualKind, string>` — append-without-marker is a compile error).
+  - `AccrualBasis` (`{ kind, sourceRef, sensitivity }`) — the produced basis. `sourceRef` is an opaque pointer to the leveraged source for explicit reveal, never the source artifact itself (leverage reveals, never authorizes — for `trust_edge`/`standing_delegation` it points to the signed grant the act ran under). `sensitivity` bounds the render (summary-not-secret, the disclosure ceiling falls as the tier rises).
+  - `AccrualAttributed` — the optional carrier mixin; absence is the fail-closed default (no leverage → no attribution → the act renders plain).
+
+  LOCAL by construction (owner-facing, body-rendered, never synced) → a structural-lock closed union, not a registered wire registry. The produced-not-authored honesty floor lands as the Inc-5 gate `check-accrual-basis-canonical`; Inc 2 threads production at the real memory-graph / trust-graph seams.
+
+- 0045b07: Commitment bond — the `BondCommitment` wire artifact + verifier (commitment-bond doctrine, phase 1 Inc 1).
+
+  A commitment bond is an agent's OWN sovereign capital, posted as a self-signed proof-of-funds and RPC-verified by the relay, never custodied. **Phase 1 is an anti-sybil staked _signal_, NOT collateral / escrow / recourse** — honest naming is load-bearing; the recourse half (`BondCall` / `BondDefault`) is deferred-with-trigger.
+
+  `@motebit/protocol`:
+  - `BondCommitment` — the signed wire type (`motebit/bond@1.0`): `bonded_public_key` + `bonded_address` + `bond_amount_micro` + `asset` + `chain` (CAIP-2) + `issued_at`/`expires_at`. `BOND_COMMITMENT_SPEC_ID` pins the family; `isBondCommitment` is a structural guard (shape only — NOT signature or binding validity).
+
+  `@motebit/crypto`:
+  - `signBondCommitment` / `verifyBondCommitment` (+ `BOND_COMMITMENT_SUITE`). The bond is **self-anchoring**: signed by `bonded_public_key`, which IS the bonded address. `verifyBondCommitment` takes no external key and enforces, fail-closed, **the load-bearing anti-sybil binding** — `bonded_address` MUST equal `base58btc(bonded_public_key)` (the Solana address derivation, computed inside `@motebit/crypto` with zero monorepo deps). So one wallet cannot back many identities. Binding the bond to a claimed `motebit_id` (the key→id check) stays the verifying relay's separate responsibility (the `verifySovereignBinding` shape).
+
+  The binding cannot be silently removed: `check-bond-address-binding` (drift invariant #132) locks the type fields, the verifier's fail-closed enforcement, and the `spec/bond-v1.md` §2 foundation law together. The bond is an additive eligibility input, never a new `SettlementMode`. Doctrine: `docs/doctrine/commitment-bond.md`.
+
+- a730451: Evidence provenance — verifiable locality extended from signatures to EVIDENCE (agency.computer co-design).
+
+  A `VerificationVerdict`'s `evidenceBasis` was a list of `{ kind, ref }` POINTERS — naming what a verdict used, but not independently re-checkable. This additive arc makes that pointer resolve to a re-verifiable provenance, so a verdict's evidence axis becomes locally re-checkable down to the primary record.
+
+  `@motebit/protocol` (additive, back-compat by absence): `EvidenceRef` graduates here from `@motebit/crypto`'s free `{kind,ref}` (re-exported from crypto, so the verify-family surface is unchanged) and gains an optional `provenance?: EvidenceProvenance` — `{ digest: { algorithm, value }, projection?, span, locator?, binding? }`. `DigestAlgorithm` (`sha-256` today) rides its own role — a content digest is hashed, not signed, so it does NOT reuse `SuiteId`; a new hash is a registry append, not a wire break.
+
+  `@motebit/crypto` (additive): `verifyEvidenceProvenance(bytes, provenance, { resolveProjection? }) → EvidenceProvenanceResult`, pure and I/O-free. The law: the named `span` is an exact substring of `projection(bytes)`, where the bytes content-address to `digest`. Re-verifies PRESENCE, never truth, no oracle. The projection is an INJECTED SEAM (same shape as `verifyStandingDelegation`'s `isRevoked`) so motebit stays domain-blind — projection absent → checks the raw bytes directly (re-verifiable by construction); projection present + injected resolver → apply, then check; projection present + no resolver → fails closed (`projection_unresolved`). `binding` is carried but NOT verified (issuer authority is app-layer); `locator` is advisory.
+
+  Hostile corpus locks the law (span-absent, digest-mismatch, projection-unresolved fail-closed, raw-byte-happy, projection-applied, projection-divergence, binding-carried-not-verified). Deferred to agency's side (consumer-forces-shape): a published byte-deterministic projection recipe + its committed reference fixture (the real cross-implementation projection-divergence case), and the wire spec. Doctrine: `docs/doctrine/evidence-provenance.md`.
+
 ## 3.5.0
 
 ### Minor Changes
