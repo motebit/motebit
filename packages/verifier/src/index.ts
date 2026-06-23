@@ -99,6 +99,20 @@ export type {
   EvidenceRef,
   RepairInstruction,
 } from "@motebit/crypto";
+// Evidence provenance (docs/doctrine/evidence-provenance.md) — verifiable-locality
+// extended from signatures to EVIDENCE. A verdict's `evidenceBasis: EvidenceRef[]`
+// carries optional `provenance`; `verifyEvidenceProvenance` is the law that
+// re-checks it (the named `span` is an exact substring of `projection(bytes)`,
+// bytes content-addressed by `digest` — PRESENCE, never truth). Re-exported here
+// so a consumer pinning @motebit/verifier can re-check evidence from the SAME
+// surface it consumes — never reaching past the aggregator into @motebit/crypto
+// (the agency-proof-integration contract: consume the verifier, never fork it).
+export type {
+  EvidenceProvenance,
+  EvidenceProvenanceResult,
+  DigestRef,
+  DigestAlgorithm,
+} from "@motebit/crypto";
 // The verdict producers and the fail-closed collapse. `verifyReceiptVerdict`
 // (A.2.1) returns the structured verdict for a signed receipt;
 // `verifyDelegationTokenVerdict` (A.2.2) does so for a per-tick token against
@@ -111,3 +125,7 @@ export {
   verifyDelegationTokenVerdict,
   isFullyVerified,
 } from "@motebit/crypto";
+// The evidence-provenance re-check law (pure, I/O-free; the projection recipe is
+// an injected, app-owned seam, so a present projection with no resolver fails
+// closed). Paired with the verdict's `EvidenceRef.provenance` above.
+export { verifyEvidenceProvenance } from "@motebit/crypto";
