@@ -178,6 +178,16 @@ const IDENTIFIER_ALLOWLIST: Record<string, string> = {
     "deliberately-nonexistent symbol — `felt-interior.md` §5 names it to say there is NO signed memory-state artifact and there must not be one (the memory record is unsigned-local by construction). Naming the thing that must not exist is what makes the unsigned-local honesty model legible; same illustrative-counterexample class as `EvalReceipt`.",
   VerificationVerdict:
     "anticipated future type — `verify-family-fail-closed.md` names the structured verdict that replaces the verify family's bare booleans when the reshape ships (the VerificationVerdict arc). The doc names it ahead of the landing so the arc is recorded; the type lands with that coordinated major, same pattern as `RetentionSemiring` / `EvalAttestation`.",
+  BondCommitment:
+    "anticipated future type — `commitment-bond.md` (Inc 0 doctrine) names the agent-signed bond wire artifact; lands in `@motebit/protocol`'s `bond.ts` at Inc 1, with `sign/verifyBondCommitment` in `@motebit/crypto` enforcing the identity-address binding.",
+  getUsdcBalanceOf:
+    "anticipated future symbol — `commitment-bond.md` names the arbitrary-address USDC read on `SolanaRpcAdapter` (the honest floor distinct from today's own-ATA `getUsdcBalance`); lands in `@motebit/wallet-solana` at Inc 2.",
+  startBondVerifierLoop:
+    "anticipated future symbol — `commitment-bond.md` names the relay-side supervised RPC poller (mirror of the shipped `startP2pVerifierLoop`); lands in `services/relay/src/bond-verifier.ts` at Inc 2.",
+  BondCall:
+    "anticipated future type (deferred-with-trigger) — `commitment-bond.md` § Status names the recourse-half wire type, deliberately NOT defined in phase 1; lands when real settlement volume + disputes arrive (same name-ahead-of-landing pattern as `VerificationVerdict`).",
+  BondDefault:
+    "anticipated future type (deferred-with-trigger) — `commitment-bond.md` § Status names the recourse-half public append-only feed artifact (sibling of `AgentRevocationFeed`), deliberately NOT defined in phase 1; lands with the recourse half.",
 
   // ----- Real symbols living in a corpus-excluded file -----
   REPAIR_CONTRACT_ALLOWLIST:
