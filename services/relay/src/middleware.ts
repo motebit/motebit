@@ -280,6 +280,11 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   // Credential submission: write-rate (peers push collected credentials for relay indexing)
   app.use("/api/v1/agents/:motebitId/credentials/submit", rl(writeLimiter));
 
+  // Commitment-bond submission + status read: write-rate (an agent posts its own
+  // self-verifying proof-of-funds; the GET status read shares the path). Same
+  // artifact-verified class as credentials/submit — no new audience.
+  app.use("/api/v1/agents/:motebitId/bond", rl(writeLimiter));
+
   // Read endpoints: discover, credentials, capabilities, listings (60 req/min)
   app.use("/api/v1/agents/discover", rl(readLimiter));
   app.use("/api/v1/agents/:motebitId/credentials", rl(readLimiter));

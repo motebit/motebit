@@ -70,6 +70,7 @@ import {
   type ReceiptCandidate,
 } from "./task-routing.js";
 import type { TaskRouter } from "./task-routing.js";
+import { getBondBackingAdapter } from "./bond-backing-adapter.js";
 import { persistReceiptChain } from "./receipts-store.js";
 import {
   MAX_SETTLEMENT_DEPTH,
@@ -1951,20 +1952,23 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         // Arc 3: pass the delegator's cold-start acknowledgment through to
         // the eligibility gate. Established pairs ignore it; new pairs
         // require it set true to unlock the bootstrap branch.
+        // Bond-eligibility opt-in (additive — commitment-bond phase 1). Passing
+        // the ticket value lets the gate consider a worker's verified, backed
+        // commitment bond as a cold-start signal (CLAUDE.md rule 19). The
+        // read-only adapter is the spec §6 accept-time re-verification seam: a
+        // bond whose cached backing is stale — or that was just submitted and is
+        // still `pending` — is re-checked synchronously at decision time rather
+        // than trusted blindly or fail-closed-rejected. `null` when
+        // SOLANA_RPC_URL is unset (bonds inert) → cached reads only, stale fails closed.
+        const bondBackingAdapter = getBondBackingAdapter();
         const eligibility = await evaluateSettlementEligibility(
           moteDb.db,
           submittedBy,
           body.target_agent,
           body.delegator_acknowledges_no_history_risk === true,
-          // Bond-eligibility opt-in (additive — commitment-bond phase 1). Passing
-          // the ticket value lets the gate consider a worker's verified, backed
-          // commitment bond as a cold-start signal (CLAUDE.md rule 19). Inert
-          // until a bond reaches the table (ingestion surface deferred), so this
-          // changes nothing today. No `adapter` here: accept-time synchronous
-          // re-verification rides the bond-ingestion arc; until then the 60s
-          // verifier loop keeps cached reads fresh and a stale read fails closed.
           {
             unitCostMicro: unitCostAtSubmission > 0 ? BigInt(toMicro(unitCostAtSubmission)) : 0n,
+            ...(bondBackingAdapter ? { adapter: bondBackingAdapter } : {}),
           },
         );
         if (!eligibility.allowed) {

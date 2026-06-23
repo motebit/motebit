@@ -1,0 +1,13 @@
+---
+"@motebit/relay": patch
+---
+
+Commitment bond — phase 1, Inc 4 (ingestion surface). The bond becomes **live**: an agent can now submit its signed `BondCommitment` to the relay, and the submission gate re-verifies backing at decision time. This is the surface that turns the prod-inert mechanism (Inc 2+3) into a working anti-sybil signal.
+
+- **`POST /api/v1/agents/:motebit_id/bond`** — an agent submits its signed bond. Mirrors `credentials/submit`: a self-verifying signed artifact recorded by `recordBondCommitment` after `verifyBondCommitment` (suite + §2 anti-sybil address binding + self-signature) AND the relay's separate registered-key→`motebit_id` binding. **Security is in the artifact, not the transport** — no new `TokenAudience`; a third party cannot forge a bond (no private key) nor bind one to an identity whose registered key differs, and re-submitting an agent's own public bond is idempotent. `writeLimiter` (30/min). Fail-closed: 400 on a malformed body or path/body id mismatch, 422 on an unregistered agent / wrong key / invalid signature.
+- **`GET /api/v1/agents/:motebit_id/bond`** — the agent's live bond status with the explicit **as-of timestamp** (`backing_as_of`) per spec §6; neutral field names only (§7 — never framed as secured funds).
+- **Decision-time re-verification (spec §6).** A new read-only `getBondBackingAdapter` (lazy, process-lifetime, `null` when `SOLANA_RPC_URL` is unset) is wired into the submission gate's `bondEval`. A bond whose cached backing is stale — or that was just submitted and is still `pending` — is re-read synchronously at decision time rather than trusted blindly or fail-closed-rejected. This makes a just-submitted bond usable the moment a delegator acts, without waiting for the 60s verifier loop.
+
+Doc reconciliation: the cross-ticket reuse defense is documented accurately as a **conservative live read** over the worker's pending p2p settlements (`workerInFlightP2pCostMicro`) — strictly over-counting, self-releasing via the existing settlement state machine — NOT a stored reservation ledger (that precise variant is deferred with the recourse half). Corrected the prior "reservable-exposure ledger" phrasing in `services/relay/CLAUDE.md` rule 19 and `docs/doctrine/commitment-bond.md` to match what shipped.
+
+Still deferred-with-trigger: the recourse half (`BondCall`/`BondDefault`), cross-operator bond propagation, and the agent-side client tooling (CLI/SDK to create + post a bond — agents post directly with `@motebit/crypto`'s `signBondCommitment` today). Doctrine: `docs/doctrine/commitment-bond.md`; `spec/bond-v1.md` §9.

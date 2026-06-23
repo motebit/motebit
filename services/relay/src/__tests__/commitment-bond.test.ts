@@ -30,6 +30,7 @@ import {
   markBondBacking,
 } from "../bond-store.js";
 import { startBondVerifierLoop } from "../bond-verifier.js";
+import { getBondBackingAdapter, __setBondBackingAdapterForTest } from "../bond-backing-adapter.js";
 import { evaluateSettlementEligibility } from "../task-routing.js";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 
@@ -427,5 +428,130 @@ describe("evaluateSettlementEligibility — additive bonded branch", () => {
       { unitCostMicro: 1_000_000n },
     );
     expect(result.allowed).toBe(false);
+  });
+
+  it("a just-submitted (pending, never-checked) bond is re-verified at decision time", async () => {
+    // The ingestion handler records but does NOT RPC-check — the bond is
+    // `pending` until the verifier loop runs (≤60s). spec/bond-v1.md §6 requires
+    // re-verification AT DECISION TIME, so a delegator who acts immediately gets
+    // a synchronous backing read via the adapter and the bond qualifies now.
+    const bond = await worker.signBond({ amountMicro: 10_000_000 });
+    expect((await recordBondCommitment(relay.moteDb.db, bond)).ok).toBe(true);
+    const stored = getBestLiveBond(relay.moteDb.db, "bond-worker", Date.now())!;
+    expect(stored.backing_state).toBe("pending");
+    expect(stored.last_checked_at).toBeNull();
+
+    const adapter = { getUsdcBalanceOf: vi.fn().mockResolvedValue(10_000_000n) };
+    const result = await evaluateSettlementEligibility(
+      relay.moteDb.db,
+      "del-b",
+      "bond-worker",
+      false,
+      { unitCostMicro: 1_000_000n, adapter },
+    );
+    expect(result.allowed).toBe(true);
+    expect(adapter.getUsdcBalanceOf).toHaveBeenCalledOnce();
+    // The sync read also refreshed the cache (best-effort).
+    const after = getBestLiveBond(relay.moteDb.db, "bond-worker", Date.now())!;
+    expect(after.backing_state).toBe("backed");
+    expect(after.last_checked_at).not.toBeNull();
+  });
+});
+
+describe("bond ingestion endpoints — POST/GET /api/v1/agents/:id/bond", () => {
+  let relay: SyncRelay;
+  let worker: Awaited<ReturnType<typeof makeWorkerKeys>>;
+
+  beforeEach(async () => {
+    relay = await createTestRelay({ enableDeviceAuth: false });
+    worker = await makeWorkerKeys();
+    await registerAgent(relay, "bond-worker", worker.pubHex, { settlementAddress: WORKER_ADDR });
+  });
+  afterEach(async () => {
+    await relay.close();
+  });
+
+  function postBond(id: string, body: unknown) {
+    return relay.app.request(`/api/v1/agents/${id}/bond`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it("records a valid bond and reflects it on the status read (with as-of timestamp)", async () => {
+    const bond = await worker.signBond();
+    const res = await postBond("bond-worker", bond);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, bond_id: bond.bond_id, status: "recorded" });
+
+    const statusRes = await relay.app.request(`/api/v1/agents/bond-worker/bond`, {
+      headers: { ...AUTH_HEADER },
+    });
+    expect(statusRes.status).toBe(200);
+    const status = (await statusRes.json()) as Record<string, unknown>;
+    expect(status.bonded).toBe(true);
+    expect(status.bond_amount_micro).toBe(10_000_000);
+    expect(status.backing_state).toBe("pending");
+    expect(status).toHaveProperty("backing_as_of", null); // §6 as-of, never checked yet
+  });
+
+  it("returns { bonded: false } when the agent has no live bond", async () => {
+    const res = await relay.app.request(`/api/v1/agents/bond-worker/bond`, {
+      headers: { ...AUTH_HEADER },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ bonded: false });
+  });
+
+  it("rejects a malformed body (not a BondCommitment) with 400", async () => {
+    const res = await postBond("bond-worker", { not: "a bond" });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a path/body motebit_id mismatch with 400", async () => {
+    const bond = await worker.signBond(); // motebit_id = "bond-worker"
+    const res = await postBond("someone-else", bond);
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a bond for an unregistered agent with 422", async () => {
+    const other = await makeWorkerKeys();
+    const bond = await other.signBond({ motebitId: "ghost" });
+    const res = await postBond("ghost", bond);
+    expect(res.status).toBe(422);
+    expect(JSON.stringify(await res.json())).toContain("bonding_agent_not_registered");
+  });
+
+  it("rejects a tampered bond with 422 (artifact verification, not transport)", async () => {
+    const bond = await worker.signBond();
+    const tampered = { ...bond, bond_amount_micro: 999_000_000 };
+    const res = await postBond("bond-worker", tampered);
+    expect(res.status).toBe(422);
+    expect(JSON.stringify(await res.json())).toContain("bond_signature_or_binding_invalid");
+  });
+});
+
+describe("bond-backing-adapter — decision-time re-verification seam", () => {
+  const original = process.env.SOLANA_RPC_URL;
+  afterEach(() => {
+    __setBondBackingAdapterForTest(undefined); // clear memo
+    if (original === undefined) delete process.env.SOLANA_RPC_URL;
+    else process.env.SOLANA_RPC_URL = original;
+  });
+
+  it("returns null when SOLANA_RPC_URL is unset (bonds inert → stale fails closed)", () => {
+    __setBondBackingAdapterForTest(undefined);
+    delete process.env.SOLANA_RPC_URL;
+    expect(getBondBackingAdapter()).toBeNull();
+  });
+
+  it("constructs and memoizes a read-only reader when SOLANA_RPC_URL is set", () => {
+    __setBondBackingAdapterForTest(undefined);
+    process.env.SOLANA_RPC_URL = "http://localhost:8899";
+    const a = getBondBackingAdapter();
+    expect(a).not.toBeNull();
+    expect(typeof a!.getUsdcBalanceOf).toBe("function");
+    expect(getBondBackingAdapter()).toBe(a); // memoized
   });
 });

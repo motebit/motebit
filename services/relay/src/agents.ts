@@ -30,7 +30,12 @@ import { ExecutionReceiptSchema } from "@motebit/wire-schemas";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import { getAccountBalanceDetailed } from "./accounts.js";
 import { listStoredReceipts, getStoredReceiptJson } from "./receipts-store.js";
-import { isAgentRevocationReason, type AgentRevocationReason } from "@motebit/protocol";
+import {
+  isAgentRevocationReason,
+  type AgentRevocationReason,
+  isBondCommitment,
+} from "@motebit/protocol";
+import { recordBondCommitment, getBestLiveBond } from "./bond-store.js";
 import {
   buildSignedRevocationRecord,
   insertRevocationRecord,
@@ -1520,6 +1525,75 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       ack,
     );
     return c.json({ allowed: eligibility.allowed, reason: eligibility.reason });
+  });
+
+  // POST /api/v1/agents/:motebitId/bond — submit a signed commitment bond.
+  //
+  // Mirrors /credentials/submit: a self-verifying signed artifact submitted for
+  // relay indexing. Security is in the ARTIFACT, not the transport —
+  // `recordBondCommitment` runs `verifyBondCommitment` (suite + the §2 anti-sybil
+  // address binding + the self-signature) AND the relay's separate key→motebit_id
+  // binding (the bonded key must be the agent's registered key). So even a fully
+  // permissive endpoint is safe: a third party cannot forge a bond (no private
+  // key) nor bind one to an agent whose registered key differs; the worst it can
+  // do is re-submit an agent's own already-public bond (idempotent).
+  //
+  // Phase-1 anti-sybil SIGNAL, never recourse (CLAUDE.md rule 19; spec/bond-v1.md).
+  // The relay records a public proof-of-funds and RPC-reads its backing — it NEVER
+  // holds, transmits, or seizes the capital. No new TokenAudience: same
+  // artifact-verified class as credentials/submit.
+  /** @spec motebit/bond@1.0 */
+  app.post("/api/v1/agents/:motebitId/bond", async (c) => {
+    const motebitId = c.req.param("motebitId");
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      throw new HTTPException(400, { message: "Invalid JSON body" });
+    }
+    if (!isBondCommitment(body)) {
+      throw new HTTPException(400, { message: "Body is not a well-formed BondCommitment" });
+    }
+    if (body.motebit_id !== motebitId) {
+      throw new HTTPException(400, {
+        message: "Path motebit_id does not match bond.motebit_id",
+      });
+    }
+
+    const result = await recordBondCommitment(moteDb.db, body);
+    if (!result.ok) {
+      // Fail-closed structured rejection. The body parsed as a BondCommitment but
+      // is cryptographically invalid, names a key the relay does not know for this
+      // identity, or the agent is unregistered — 422 Unprocessable.
+      throw new HTTPException(422, { message: `Bond rejected: ${result.reason}` });
+    }
+
+    logger.info("agent.bond.recorded", { motebit_id: motebitId, bond_id: body.bond_id });
+    return c.json({ ok: true, bond_id: body.bond_id, status: "recorded" });
+  });
+
+  // GET /api/v1/agents/:motebitId/bond — the agent's current live bond status.
+  // @internal: advisory/transparency read. Surfaces an explicit AS-OF timestamp
+  // (`backing_as_of` = the last backing read) per spec/bond-v1.md §6 — backing is
+  // eventually-consistent and MUST NOT be presented as real-time. Neutral field
+  // names only: a bond is a soft anti-sybil signal, never secured funds (§7).
+  /** @spec motebit/bond@1.0 */
+  app.get("/api/v1/agents/:motebitId/bond", (c) => {
+    const motebitId = c.req.param("motebitId");
+    const bond = getBestLiveBond(moteDb.db, motebitId, Date.now());
+    if (!bond) return c.json({ bonded: false });
+    return c.json({
+      bonded: true,
+      bond_id: bond.bond_id,
+      bond_amount_micro: bond.bond_amount_micro,
+      asset: bond.asset,
+      chain: bond.chain,
+      expires_at: bond.expires_at,
+      backing_state: bond.backing_state,
+      backed_amount_micro: bond.backed_amount_micro,
+      // §6 as-of timestamp; null = never checked (treat as not-currently-backed).
+      backing_as_of: bond.last_checked_at,
+    });
   });
 
   // GET /api/v1/agents/:motebitId — get specific agent

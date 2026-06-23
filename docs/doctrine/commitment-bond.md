@@ -105,7 +105,17 @@ type (`@motebit/protocol`) + `sign/verifyBondCommitment` (`@motebit/crypto`, the
 enforced) + `check-bond-address-binding`; Inc 2 the `getUsdcBalanceOf` arbitrary-address read
 (`@motebit/wallet-solana`) + the supervised `startBondVerifierLoop` (relay) + the as-of/staleness
 bound; Inc 3 the additive bonded branch in `evaluateSettlementEligibility` (tiered-with-sovereign) +
-accept-time re-verification + the reservable-exposure ledger + `check-bond-surface-honesty`.
+accept-time re-verification + the cross-ticket exposure defense + `check-bond-surface-honesty`; Inc 4 the
+bond-ingestion surface (POST/GET `/api/v1/agents/:id/bond`, artifact-verified, no new audience) + the
+decision-time re-verification adapter wired into the live submission gate.
+
+**The cross-ticket reuse defense is a conservative LIVE READ, not a stored reservation ledger.** The
+predicate (`backing − k·in_flight ≥ k·ticket`) is computed by summing the worker's PENDING p2p
+settlements (`workerInFlightP2pCostMicro`) — strictly conservative (over-counts, never under), self-
+releasing through the existing settlement state machine, zero new money-path write-surface. A precise
+per-bond reservation ledger is deferred with the recourse half (it earns its complexity only once a bond
+can be _called_). The identity-address binding (§Inc 1) handles cross-IDENTITY reuse; this handles
+cross-TICKET reuse within one identity.
 
 **Deferred — recourse half (named-with-trigger):** the `BondCall`/`BondDefault` wire types + production —
 the call on the `executeFundAction` P2P no-op, the agent-signed voluntary settlement, the `BondDefault`

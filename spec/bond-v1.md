@@ -156,3 +156,36 @@ A hard, seizure-based guarantee would require custody (an escrow program or an
 underwriter), which this spec's §1 custody rule forbids the relay from holding;
 that fork is deferred behind its own trigger (a default rate that breaks the game
 theory, or a materially-exposed cohort).
+
+## 9. Ingestion
+
+How a `BondCommitment` enters a relying party — the live surface that turns the
+artifact into an eligibility signal.
+
+#### Routes (foundation law)
+
+The two routes below are the binding cross-implementation contract for bond
+ingestion. Renaming or relocating either of them is a wire break.
+
+- `POST /api/v1/agents/:motebitId/bond` — an agent submits its signed
+  `BondCommitment` (the §3.1 artifact verbatim). Recorded only after both §5
+  checks pass: the standalone `verifyBondCommitment` AND the relying party's
+  separate key→`motebit_id` binding against the registered key.
+- `GET /api/v1/agents/:motebitId/bond` — the agent's current live bond status,
+  including the **as-of timestamp** of the last backing read (§6).
+
+**Security is in the artifact, not the transport.** The bond is self-verifying
+and identity-bound, so the submission route needs no bearer audience of its own —
+a third party cannot forge a bond (no private key) nor bind one to an identity
+whose registered key differs; re-submitting an agent's own public bond is
+idempotent (same class as a self-verifying credential submission). The status read
+reports neutral field names; per §7 it is never framed as secured funds.
+
+**Decision-time re-verification (§6) is the relying party's job, not the
+submitter's.** Ingestion only records; the relying party re-reads backing when it
+grants an effect (a fresh cached read within the staleness bound, else a
+synchronous balance check). A just-submitted bond is therefore usable the moment a
+relying party re-verifies it, without waiting for a background poll.
+
+The **recourse half** (§8) and any cross-operator bond propagation remain
+deferred-with-trigger.
