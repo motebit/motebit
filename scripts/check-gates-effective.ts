@@ -215,6 +215,15 @@ const PROBES: ReadonlyArray<Probe> = [
       ),
   },
   {
+    script: "check-bond-surface-honesty",
+    proves:
+      "flags the doc-anchor arm — removing the §7 'Surface honesty' interop law from spec/bond-v1.md. Phase-1 honesty (a bond is a signal, never recourse) is load-bearing; deleting the spec law that forbids secured/guaranteed/recourse framing simulates the rule being silently dropped. The gate also scans every user-facing surface for a bond token conjoined with a forbidden framing.",
+    perturb: () =>
+      mutateFile("spec/bond-v1.md", (src) =>
+        src.replace("## 7. Surface honesty", "## 7. (removed)"),
+      ),
+  },
+  {
     script: "check-sync-token-freshness",
     proves:
       "flags a web HTTP sync adapter regressed back to a static `authToken` (no `credentialSource`) — the exact 2026-06-15 staleness bug where a polling adapter handed a single 5-min JWT 403'd every relay request past minute 5. The fixture constructs `new HttpConversationSyncAdapter({ … authToken })` in apps/web/src, which the gate scans textually (no typecheck needed).",

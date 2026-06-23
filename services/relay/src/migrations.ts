@@ -1758,4 +1758,58 @@ export const relayMigrations: Migration[] = [
       }
     },
   },
+  {
+    version: 38,
+    name: "commitment_bonds",
+    up: (db) => {
+      // Commitment-bond phase 1 — an anti-sybil staked SIGNAL (NOT recourse,
+      // NOT custody). Each row is a signed `BondCommitment` (spec/bond-v1.md)
+      // an agent posted as proof-of-funds at its OWN sovereign identity
+      // address. The relay only ever READS the backing balance via Solana RPC
+      // (`bond-verifier.ts`); it never holds, transmits, or seizes the capital
+      // — the user-funds transmitter surface stays structurally zero
+      // (services/relay/CLAUDE.md rule 19 + spec §1 custody).
+      //
+      // `commitment_json` stores the EXACT canonical bytes of the signed bond
+      // (the relay_receipts.receipt_json / settlements.record_json convention)
+      // so anyone can re-run `verifyBondCommitment` over the verbatim artifact
+      // — never a re-typed column projection.
+      //
+      // Backing columns are the verifier's cache: `backing_state`
+      // (pending|backed|underbacked), `backed_amount_micro` (last observed
+      // balance), `last_checked_at` (the staleness clock — eligibility
+      // re-verifies at acceptance time when this read is older than the spec
+      // freshness bound, spec §6). An RPC error never downgrades a prior
+      // reading: the verifier leaves the row untouched, so its read naturally
+      // ages into "stale" and forces a synchronous re-check at decision time.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_bond_commitments (
+          bond_id             TEXT PRIMARY KEY,
+          motebit_id          TEXT NOT NULL,
+          bonded_address      TEXT NOT NULL,
+          bonded_public_key   TEXT NOT NULL,
+          bond_amount_micro   INTEGER NOT NULL,
+          asset               TEXT NOT NULL,
+          chain               TEXT NOT NULL,
+          issued_at           INTEGER NOT NULL,
+          expires_at          INTEGER NOT NULL,
+          suite               TEXT NOT NULL,
+          signature           TEXT NOT NULL,
+          commitment_json     TEXT NOT NULL,
+          backing_state       TEXT NOT NULL DEFAULT 'pending',
+          backed_amount_micro INTEGER,
+          last_checked_at     INTEGER,
+          recorded_at         INTEGER NOT NULL
+        );
+      `);
+      // Eligibility looks up a worker's live (non-expired) bonds; the verifier
+      // polls by staleness. Both key on motebit_id + expiry/recency.
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_relay_bond_commitments_worker ON relay_bond_commitments(motebit_id, expires_at);",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_relay_bond_commitments_stale ON relay_bond_commitments(expires_at, last_checked_at);",
+      );
+    },
+  },
 ];

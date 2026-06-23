@@ -23,6 +23,7 @@ function makeAdapter(overrides: Partial<SolanaRpcAdapter> = {}): SolanaRpcAdapte
   return {
     ownAddress: "RelayTreasuryAddressBase58",
     getUsdcBalance: vi.fn().mockResolvedValue(10_000_000n),
+    getUsdcBalanceOf: vi.fn().mockResolvedValue(10_000_000n),
     getSolBalance: vi.fn().mockResolvedValue(10_000_000n),
     sendUsdc: vi.fn().mockResolvedValue({
       signature: "tx-sig-123",

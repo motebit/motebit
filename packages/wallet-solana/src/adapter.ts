@@ -115,6 +115,20 @@ export interface SolanaRpcAdapter {
   /** USDC balance in micro-units. Returns 0 if no token account exists yet. */
   getUsdcBalance(): Promise<bigint>;
 
+  /**
+   * USDC balance in micro-units at an ARBITRARY base58 owner address.
+   *
+   * Distinct from `getUsdcBalance()`, which reads only the adapter's OWN
+   * Associated Token Account. This is the single authorized read of a
+   * counterparty's balance — the commitment-bond verifier
+   * (`services/relay/src/bond-verifier.ts`) uses it to confirm an agent's
+   * self-declared backing at the agent's own sovereign address. It reads,
+   * never moves: there is no custody implication. Returns 0 when no token
+   * account exists for `ownerAddress`. Throws `InvalidSolanaAddressError`
+   * when `ownerAddress` is not a valid base58 public key.
+   */
+  getUsdcBalanceOf(ownerAddress: string): Promise<bigint>;
+
   /** Native SOL balance in lamports. */
   getSolBalance(): Promise<bigint>;
 

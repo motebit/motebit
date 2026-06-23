@@ -13,7 +13,14 @@ import type { CapabilityPrice, AgentTrustRecord, SettlementEligibility } from "@
 import { asMotebitId, asListingId, AgentTrustLevel } from "@motebit/sdk";
 import { trustLevelToScore } from "@motebit/market";
 import { verifySovereignBinding } from "@motebit/crypto";
+import type { SolanaRpcAdapter } from "@motebit/wallet-solana";
 import type { ListingId } from "@motebit/sdk";
+import {
+  getBestLiveBond,
+  workerInFlightP2pCostMicro,
+  markBondBacking,
+  BOND_BACKING_STALENESS_MS,
+} from "./bond-store.js";
 import { hexPublicKeyToDidKey, didKeyToPublicKey, bytesToHex } from "@motebit/encryption";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { RelayIdentity, FederationConfig } from "./federation.js";
@@ -1101,6 +1108,142 @@ const P2P_SOVEREIGN_MIN_TRUST_SCORE = 0.3;
 const P2P_SOVEREIGN_MIN_INTERACTIONS = 2;
 
 /**
+ * Bonded-worker cold-start bar. Tiered WITH sovereign-binding, **never below**
+ * it (`P2P_BONDED_MIN_* ≥ P2P_SOVEREIGN_MIN_*`): a commitment bond is a costly
+ * signal in the SAME justification class as sovereign-binding (both raise the
+ * cost of a disposable identity), so it earns the same modest relaxation — and
+ * no more. A bond never buys a LOWER trust/interaction floor than sovereignty;
+ * what it adds is a capital-based path to that floor for a worker, gated by the
+ * same real-history requirement (first_contact trust + ≥2 completed
+ * interactions). The bond never fabricates trust and is NEVER recourse (phase-1
+ * signal only — docs/doctrine/commitment-bond.md).
+ */
+const P2P_BONDED_MIN_TRUST_SCORE = P2P_SOVEREIGN_MIN_TRUST_SCORE;
+const P2P_BONDED_MIN_INTERACTIONS = P2P_SOVEREIGN_MIN_INTERACTIONS;
+
+/**
+ * How many multiples of the at-risk ticket value a worker must have committed
+ * (and unexposed) to qualify at the bonded bar. A fixed anti-sybil coefficient
+ * — NOT a per-agent trust threshold and NOT a stored cross-agent rank, so it
+ * carries the `REFERENCE_` discipline (a tunable reference constant, never an
+ * inward score). `bond ≥ k × (ticket + in-flight)` means a $1 ticket needs $10
+ * of committed-and-unexposed backing: a serious signal, not a throwaway.
+ */
+const REFERENCE_BOND_COVERAGE_MULTIPLE = 10n;
+
+/**
+ * The committed-and-unexposed backing a worker must show to take on a ticket of
+ * `atRiskMicro` — `k × atRiskMicro`, a pure local predicate over the ticket
+ * value alone (never a stored cross-agent quantity).
+ */
+function requiredBondForTicket(atRiskMicro: bigint): bigint {
+  return atRiskMicro * REFERENCE_BOND_COVERAGE_MULTIPLE;
+}
+
+/**
+ * Opt-in context for the additive bonded-eligibility branch. When OMITTED the
+ * branch is skipped entirely and `evaluateSettlementEligibility` is
+ * byte-identical to its pre-bond behavior — only the submission gate, which
+ * knows the ticket value, opts in. Convenience reads (e.g. agents.ts) omit it.
+ */
+export interface BondEligibilityContext {
+  /** At-risk ticket value (worker's net unit cost), micro-USDC. */
+  unitCostMicro: bigint;
+  /**
+   * Optional read-only RPC adapter for accept-time re-verification: when the
+   * worker's freshest backing read is older than {@link BOND_BACKING_STALENESS_MS},
+   * a synchronous `getUsdcBalanceOf` re-checks backing rather than trusting a
+   * stale "backed". OMITTED → a stale read simply does not qualify (fail-closed,
+   * never accept on stale). The verifier loop keeps most reads fresh; this seam
+   * is the belt-and-suspenders for the exact-staleness edge.
+   */
+  adapter?: Pick<SolanaRpcAdapter, "getUsdcBalanceOf">;
+  /** Clock injection (tests). */
+  now?: () => number;
+}
+
+/** Outcome of the bond-coverage check, carrying the numbers for the reason. */
+interface BondCoverage {
+  qualifies: boolean;
+  usableMicro: bigint;
+  requiredMicro: bigint;
+  inFlightMicro: bigint;
+}
+
+/**
+ * Does the worker hold a verified, currently-backed commitment bond large
+ * enough to cover this ticket PLUS its in-flight p2p exposure, at the
+ * {@link REFERENCE_BOND_COVERAGE_MULTIPLE}? Two orthogonal anti-reuse defenses
+ * compose here:
+ *
+ *   - **Cross-identity reuse** is defeated upstream by the §2 address binding
+ *     (`verifyBondCommitment` at record time): the bonded capital sits at the
+ *     worker's OWN sovereign address, so one wallet cannot back many identities.
+ *   - **Cross-ticket reuse** is defeated here by subtracting the worker's
+ *     in-flight (pending) p2p value from available backing — a worker cannot
+ *     lean on one bond to back unbounded concurrent tickets.
+ *
+ * Backing is a LIVE fact, never a stored "backed" trusted blindly: a reading
+ * older than the staleness bound is re-verified synchronously (when an adapter
+ * is supplied) or treated as not-currently-backed (fail-closed). The usable
+ * amount is `min(committed, observed)` — never more capital than is actually
+ * present at the address right now.
+ */
+async function bondCoversTicket(
+  db: DatabaseDriver,
+  workerId: string,
+  bondEval: BondEligibilityContext,
+): Promise<BondCoverage> {
+  const nowFn = bondEval.now ?? Date.now;
+  const nowMs = nowFn();
+  const inFlightMicro = workerInFlightP2pCostMicro(db, workerId);
+  const requiredMicro = requiredBondForTicket(bondEval.unitCostMicro + inFlightMicro);
+
+  const bond = getBestLiveBond(db, workerId, nowMs);
+  if (!bond) {
+    return { qualifies: false, usableMicro: 0n, requiredMicro, inFlightMicro };
+  }
+
+  const committed = BigInt(bond.bond_amount_micro);
+
+  // Resolve the OBSERVED backing — fresh cache, else synchronous re-verify.
+  const fresh =
+    bond.last_checked_at != null && nowMs - bond.last_checked_at <= BOND_BACKING_STALENESS_MS;
+  let observedMicro: bigint | null;
+  if (fresh && bond.backed_amount_micro != null) {
+    observedMicro = BigInt(bond.backed_amount_micro);
+  } else if (bondEval.adapter) {
+    // Stale or never-checked — re-read at decision time (spec/bond-v1.md §6).
+    try {
+      const balance = await bondEval.adapter.getUsdcBalanceOf(bond.bonded_address);
+      const state = balance >= committed ? "backed" : "underbacked";
+      try {
+        markBondBacking(db, bond.bond_id, state, Number(balance), nowMs);
+      } catch {
+        // Cache refresh is best-effort; the decision uses the fresh read regardless.
+      }
+      observedMicro = balance;
+    } catch {
+      observedMicro = null; // RPC failure → fail-closed, never accept on stale
+    }
+  } else {
+    observedMicro = null; // stale + no adapter → fail-closed
+  }
+
+  if (observedMicro === null) {
+    return { qualifies: false, usableMicro: 0n, requiredMicro, inFlightMicro };
+  }
+
+  const usableMicro = observedMicro < committed ? observedMicro : committed;
+  return {
+    qualifies: usableMicro >= requiredMicro,
+    usableMicro,
+    requiredMicro,
+    inFlightMicro,
+  };
+}
+
+/**
  * Evaluate whether a delegator→worker pair qualifies to transact at all.
  *
  * After Arc 3 of the off-ramp arc, P2P is the only worker-settlement
@@ -1144,6 +1287,7 @@ export async function evaluateSettlementEligibility(
   delegatorId: string,
   workerId: string,
   delegatorAcknowledgesNoHistoryRisk: boolean = false,
+  bondEval?: BondEligibilityContext,
 ): Promise<SettlementEligibility> {
   // Worker must have a settlement address (both branches require it —
   // there's no destination without it). `public_key` feeds the offline
@@ -1223,6 +1367,34 @@ export async function evaluateSettlementEligibility(
         mode: "p2p",
         reason: `Sovereign-bound worker (motebit_id commits to key) — trust ${score}, ${trustRow.interaction_count} interactions (reduced bar ${P2P_SOVEREIGN_MIN_TRUST_SCORE}/${P2P_SOVEREIGN_MIN_INTERACTIONS})`,
       };
+    }
+  }
+
+  // Bonded-worker branch — additive, never a gate. A worker that has posted a
+  // verified, currently-backed commitment bond at its OWN sovereign identity
+  // address (the §2 anti-sybil binding) has tied up real, ticket-sized capital
+  // it cannot reuse across identities — a costly signal in the same class as
+  // sovereign-binding, so it relaxes the SAME cold-start floor (and no lower).
+  // Placed AFTER the strict + sovereign branches and gated on `bondEval` (the
+  // opt-in the caller sets only when it knows the ticket value), so it ONLY
+  // adds a qualification path — flows that don't opt in are byte-identical.
+  // Still requires real history (the bonded bar ≥ the sovereign bar); the bond
+  // never fabricates trust and is NEVER recourse (phase-1 signal only). See
+  // docs/doctrine/commitment-bond.md + spec/bond-v1.md.
+  if (bondEval && trustRow && bondEval.unitCostMicro > 0n) {
+    const score = trustLevelToScore(trustRow.trust_level as AgentTrustLevel);
+    if (
+      score >= P2P_BONDED_MIN_TRUST_SCORE &&
+      trustRow.interaction_count >= P2P_BONDED_MIN_INTERACTIONS
+    ) {
+      const cover = await bondCoversTicket(db, workerId, bondEval);
+      if (cover.qualifies) {
+        return {
+          allowed: true,
+          mode: "p2p",
+          reason: `Bonded worker — backing ${cover.usableMicro} ≥ required ${cover.requiredMicro} (ticket ${bondEval.unitCostMicro} + in-flight ${cover.inFlightMicro}, ${REFERENCE_BOND_COVERAGE_MULTIPLE}×) at trust ${score}, ${trustRow.interaction_count} interactions (reduced bar ${P2P_BONDED_MIN_TRUST_SCORE}/${P2P_BONDED_MIN_INTERACTIONS}); anti-sybil signal, not recourse`,
+        };
+      }
     }
   }
 

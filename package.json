@@ -133,6 +133,7 @@
     "check-felt-interior-honesty": "npx tsx scripts/check-felt-interior-honesty.ts",
     "check-accrual-basis-canonical": "npx tsx scripts/check-accrual-basis-canonical.ts",
     "check-bond-address-binding": "npx tsx scripts/check-bond-address-binding.ts",
+    "check-bond-surface-honesty": "npx tsx scripts/check-bond-surface-honesty.ts",
     "check-sync-token-freshness": "npx tsx scripts/check-sync-token-freshness.ts",
     "check-browser-surface-buffer-polyfill": "npx tsx scripts/check-browser-surface-buffer-polyfill.ts",
     "check-docs-cli-claims": "npx tsx scripts/check-docs-cli-claims.ts",

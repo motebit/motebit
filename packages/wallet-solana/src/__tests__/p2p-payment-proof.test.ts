@@ -32,6 +32,9 @@ function fakeAdapter(
     async getUsdcBalance() {
       return 0n;
     },
+    async getUsdcBalanceOf() {
+      return 0n;
+    },
     async getSolBalance() {
       return 0n;
     },

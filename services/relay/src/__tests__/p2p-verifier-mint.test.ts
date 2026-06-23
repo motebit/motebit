@@ -73,6 +73,7 @@ describe("p2p-verifier mint threading", () => {
     const injected = {
       ownAddress: "stub",
       getUsdcBalance: vi.fn(),
+      getUsdcBalanceOf: vi.fn(),
       getSolBalance: vi.fn(),
       sendUsdc: vi.fn(),
       sendUsdcBatch: vi.fn(),

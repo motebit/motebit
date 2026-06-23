@@ -144,6 +144,28 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
     }
   }
 
+  async getUsdcBalanceOf(ownerAddress: string): Promise<bigint> {
+    // Read-only counterparty balance lookup (commitment-bond backing). Mirror
+    // of `getUsdcBalance` but for an arbitrary owner — resolve the owner's USDC
+    // ATA and read its amount. No keypair, no transfer: this method never
+    // touches custody. A malformed address is a caller error, surfaced as the
+    // same `InvalidSolanaAddressError` the send path uses.
+    let owner: PublicKey;
+    try {
+      owner = new PublicKey(ownerAddress);
+    } catch (err) {
+      throw new InvalidSolanaAddressError(ownerAddress, err);
+    }
+    const ata = await getAssociatedTokenAddress(this.mint, owner);
+    try {
+      const account = await getAccount(this.connection, ata, this.commitment);
+      return account.amount;
+    } catch (err) {
+      if (err instanceof TokenAccountNotFoundError) return 0n;
+      throw err;
+    }
+  }
+
   async sendUsdc(args: SendUsdcArgs): Promise<SendUsdcResult> {
     // 1. Validate recipient.
     let recipient: PublicKey;

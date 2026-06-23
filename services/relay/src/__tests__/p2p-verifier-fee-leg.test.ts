@@ -27,6 +27,7 @@ function makeStubAdapter(result: TxVerificationResult): SolanaRpcAdapter {
   return {
     ownAddress: "stub-own",
     getUsdcBalance: vi.fn().mockResolvedValue(0n),
+    getUsdcBalanceOf: vi.fn().mockResolvedValue(0n),
     getSolBalance: vi.fn().mockResolvedValue(0n),
     sendUsdc: vi.fn(),
     sendUsdcBatch: vi.fn(),

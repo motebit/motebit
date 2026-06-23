@@ -1573,6 +1573,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // --- P2P payment verifier (async onchain verification of direct settlements) ---
   let p2pVerifierInterval: ReturnType<typeof setInterval> | undefined;
+  let bondVerifierInterval: ReturnType<typeof setInterval> | undefined;
   if (solanaRpcUrl) {
     const { startP2pVerifierLoop } = await import("./p2p-verifier.js");
     // Relay treasury Solana address — same identity-derived wallet that
@@ -1600,6 +1601,26 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       loopSupervisor,
     );
     logger.info("p2p_verifier.started", { intervalMs: 60000, relayTreasuryAddress });
+
+    // --- Commitment-bond verifier (RPC-reads agent self-declared backing) ---
+    // Phase-1 anti-sybil SIGNAL, never custody (CLAUDE.md rule 19). Reads each
+    // live bond's bonded-address USDC balance via getUsdcBalanceOf and caches
+    // backed/underbacked + last_checked_at; an RPC error never downgrades a
+    // prior reading. Structurally inert until a bond reaches the table (the
+    // bond-ingestion surface is deferred-with-trigger), so in prod today this
+    // loop polls an empty set and is a supervised no-op. Same SOLANA_USDC_MINT
+    // threading as the p2p verifier and Solana reconciler above.
+    const { startBondVerifierLoop } = await import("./bond-verifier.js");
+    bondVerifierInterval = startBondVerifierLoop(
+      moteDb.db,
+      {
+        rpcUrl: solanaRpcUrl,
+        ...(solanaUsdcMint ? { usdcMint: solanaUsdcMint } : {}),
+      },
+      () => getEmergencyFreeze(),
+      loopSupervisor,
+    );
+    logger.info("bond_verifier.started", { intervalMs: 60000 });
 
     // --- Solana treasury reconciliation (compares verified-p2p fee sum to onchain balance) ---
     // Sibling-but-distinct from the EVM treasury reconciler — see
@@ -1767,6 +1788,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     clearInterval(depositDetectorInterval);
     if (treasuryReconciliationInterval) clearInterval(treasuryReconciliationInterval);
     if (p2pVerifierInterval) clearInterval(p2pVerifierInterval);
+    if (bondVerifierInterval) clearInterval(bondVerifierInterval);
     if (solanaTreasuryReconciliationInterval) clearInterval(solanaTreasuryReconciliationInterval);
     clearInterval(sweepInterval);
     clearInterval(batchWithdrawalInterval);

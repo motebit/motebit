@@ -418,6 +418,37 @@ describe("Web3JsRpcAdapter balance methods", () => {
     getAccountMock.mockRejectedValue(new Error("RPC down"));
     await expect(adapter.getUsdcBalance()).rejects.toThrow("RPC down");
   });
+
+  // `getUsdcBalanceOf` is the arbitrary-address read the commitment-bond
+  // verifier uses. Same TokenAccountNotFoundError→0n / rethrow contract as
+  // `getUsdcBalance`, plus an address-validation guard (the own-ATA path
+  // can't take a bad address; this one can).
+  const VALID_OWNER = "11111111111111111111111111111111"; // System Program — valid 32-byte base58
+
+  it("getUsdcBalanceOf returns the owner ATA amount when the account exists", async () => {
+    const adapter = makeAdapterForTx();
+    getAccountMock.mockResolvedValue({ amount: 750_000n });
+    expect(await adapter.getUsdcBalanceOf(VALID_OWNER)).toBe(750_000n);
+  });
+
+  it("getUsdcBalanceOf returns 0n when the owner has no token account", async () => {
+    const adapter = makeAdapterForTx();
+    getAccountMock.mockRejectedValue(new TokenAccountNotFoundError());
+    expect(await adapter.getUsdcBalanceOf(VALID_OWNER)).toBe(0n);
+  });
+
+  it("getUsdcBalanceOf rethrows non-TokenAccountNotFoundError failures", async () => {
+    const adapter = makeAdapterForTx();
+    getAccountMock.mockRejectedValue(new Error("RPC down"));
+    await expect(adapter.getUsdcBalanceOf(VALID_OWNER)).rejects.toThrow("RPC down");
+  });
+
+  it("getUsdcBalanceOf rejects a malformed owner address with InvalidSolanaAddressError", async () => {
+    const adapter = makeAdapterForTx();
+    await expect(adapter.getUsdcBalanceOf("not-a-valid-address!!!")).rejects.toBeInstanceOf(
+      InvalidSolanaAddressError,
+    );
+  });
 });
 
 // ── sendUsdc ──────────────────────────────────────────────────────────────

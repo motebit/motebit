@@ -1956,6 +1956,16 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           submittedBy,
           body.target_agent,
           body.delegator_acknowledges_no_history_risk === true,
+          // Bond-eligibility opt-in (additive — commitment-bond phase 1). Passing
+          // the ticket value lets the gate consider a worker's verified, backed
+          // commitment bond as a cold-start signal (CLAUDE.md rule 19). Inert
+          // until a bond reaches the table (ingestion surface deferred), so this
+          // changes nothing today. No `adapter` here: accept-time synchronous
+          // re-verification rides the bond-ingestion arc; until then the 60s
+          // verifier loop keeps cached reads fresh and a stale read fails closed.
+          {
+            unitCostMicro: unitCostAtSubmission > 0 ? BigInt(toMicro(unitCostAtSubmission)) : 0n,
+          },
         );
         if (!eligibility.allowed) {
           throw new TaskError("TASK_P2P_INELIGIBLE", eligibility.reason, 403);

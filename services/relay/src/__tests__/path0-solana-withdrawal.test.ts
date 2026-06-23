@@ -41,6 +41,7 @@ function makeOperator(overrides: Partial<SolanaRpcAdapter> = {}): {
   const adapter: SolanaRpcAdapter = {
     ownAddress: "RelayTreasuryAddressBase58",
     getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),
+    getUsdcBalanceOf: vi.fn().mockResolvedValue(10_000_000_000n),
     getSolBalance: vi.fn().mockResolvedValue(10_000_000n),
     sendUsdc: vi.fn().mockResolvedValue({
       signature:

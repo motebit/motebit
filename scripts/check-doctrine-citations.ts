@@ -153,8 +153,6 @@ const LINE_ANCHOR_PATTERN = new RegExp(
 const GATE_ALLOWLIST: Record<string, string> = {
   "check-coverage-graduation":
     "anticipated future gate — coverage-graduation doctrine names this as the hard-fail name for the soft-signal coverage report when escalation criteria fire (a date missed twice without rationale). Land when conditions are met; until then, the reference is forward-looking.",
-  "check-bond-surface-honesty":
-    "anticipated future gate — `commitment-bond.md` names this as the prose-vs-truth honesty gate (sibling of `check-public-fee-claims`) forbidding secured/guaranteed/recourse framing near bond UI. Lands with the Inc 3 eligibility surface.",
 };
 
 /**
