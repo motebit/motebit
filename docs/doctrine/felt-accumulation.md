@@ -155,14 +155,34 @@ growing interior by betraying the substrate that makes the feeling earned.
 
 ## Status
 
-**Doctrine (Inc 0) — this file.** The arc: Ring-1 `AccrualBasis` / `AccrualKind` in
-`@motebit/protocol` (Inc 1); production at the real leverage seams in `memory-graph` /
-trust-graph / `ai-core`, threaded produced-not-authored (Inc 2); per-surface render — flat
-in-flow attribution, spatial as the generalized `CredentialSatelliteRenderer`-shape orbit
-drawing on the memory haze / trust constellation (Inc 3); the deepening graft onto the
-shipped `Felt*` records (Inc 4); `check-accrual-basis-canonical` locking
-produced-not-authored and the no-aggregate refusal (Inc 5). Smallest honest first slice:
-`recalled_memory` end-to-end on web only.
+**Shipped.** Doctrine (Inc 0, this file); Ring-1 `AccrualBasis` / `AccrualKind` in
+`@motebit/protocol` (Inc 1); production in the `memory-graph` accrual source
+(`recalledMemoryBasis`), threaded produced-not-authored onto the turn result (Inc 2);
+per-surface render on all four surfaces — a calm in-flow attribution on web / desktop /
+mobile, the generalized `CredentialSatelliteRenderer`-shape orbit drawing on the memory haze
+on spatial (Inc 3); `check-accrual-basis-canonical` locking produced-not-authored + the
+no-aggregate refusal (Inc 5).
+
+**Producers, per kind.** `recalled_memory` and `consolidated_fact` are produced — the latter
+when the leveraged memory's `MemorySource` is `consolidation_derived` ("I pieced this
+together" vs "you told me"). `standing_delegation` has a real seam (the `verifiedGrant`
+auto-execution in `policy-gate`) and is the next increment — minted in the accrual source,
+NOT in `ai-core` (the Inc-5 gate forbids a kind literal there), with single-basis arbitration
+for a turn that both recalls and auto-runs. `trust_edge` and `prior_approval_pattern` are
+**deferred-until-seam**: their decisions do not exist today — trust is display-only plus an
+inbound approval-band nudge (no outbound trust-gated skip), and every approval is asked fresh
+(no pattern memory). Producing them now would FABRICATE a leverage moment — the exact
+produced-not-authored violation the arc exists to prevent. They land when the real decision
+ships (an outbound trust-gated skip-verification; approval-pattern matching), not before.
+
+**The deepening needs no separate increment.** "Deepening" is felt-interior's own move (§6):
+a quality of the standing graph rendered as _present shape, never a delta, streak, or growth
+chart_ — and the shipped `Felt*` records already deliver it (the memory mass, the trust tier
+distribution, the consolidation record). A _temporal_ deepening ("denser than when you last
+looked") is the forbidden delta — refused here and structurally blocked by
+`check-felt-interior-honesty` (no `trend`/`delta`/`growth` field). The leverage register (this
+doctrine) and the resting-record deepening (`felt-interior.md`) are the two present-tense
+halves; there is no third "graft" to build.
 
 ## Related
 

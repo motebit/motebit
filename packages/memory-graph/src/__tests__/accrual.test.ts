@@ -1,16 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { SensitivityLevel, type MemoryNode } from "@motebit/sdk";
+import { SensitivityLevel, type MemoryNode, type MemorySource } from "@motebit/sdk";
 import { recalledMemoryBasis, CONSEQUENTIAL_RECALL_SIMILARITY } from "../index.js";
 
 /**
- * Inc-2 producer tests — `recalledMemoryBasis` mints the `recalled_memory`
- * leverage moment in the accrual source, produced-not-authored.
- * Doctrine: docs/doctrine/felt-accumulation.md.
+ * Inc-2/2.1 producer tests — `recalledMemoryBasis` mints the `recalled_memory`
+ * / `consolidated_fact` leverage moment in the accrual source,
+ * produced-not-authored. Doctrine: docs/doctrine/felt-accumulation.md.
  */
 function makeNode(
   id: string,
   embedding: number[],
-  opts: { sensitivity?: SensitivityLevel; tombstoned?: boolean } = {},
+  opts: { sensitivity?: SensitivityLevel; tombstoned?: boolean; source?: MemorySource } = {},
 ): MemoryNode {
   return {
     node_id: id as MemoryNode["node_id"],
@@ -24,6 +24,7 @@ function makeNode(
     content: `content-${id}`,
     confidence: 0.9,
     sensitivity: opts.sensitivity ?? SensitivityLevel.None,
+    source: opts.source,
   };
 }
 
@@ -54,6 +55,21 @@ describe("recalledMemoryBasis — the consequential-recall producer", () => {
       sourceRef: "strong",
       sensitivity: SensitivityLevel.Personal,
     });
+  });
+
+  it("emits consolidated_fact when the leveraged memory is consolidation-derived (I pieced this together)", () => {
+    const basis = recalledMemoryBasis(QUERY, [
+      makeNode("synth", [1, 0, 0], { source: "consolidation_derived" }),
+    ]);
+    expect(basis?.kind).toBe("consolidated_fact");
+    expect(basis?.sourceRef).toBe("synth"); // still points to the leveraged node
+  });
+
+  it("emits recalled_memory for user-stated or source-less memories (you told me)", () => {
+    expect(
+      recalledMemoryBasis(QUERY, [makeNode("u", [1, 0, 0], { source: "user_stated" })])?.kind,
+    ).toBe("recalled_memory");
+    expect(recalledMemoryBasis(QUERY, [makeNode("n", [1, 0, 0])])?.kind).toBe("recalled_memory");
   });
 
   it("picks the MOST similar memory when several clear the bar", () => {

@@ -1,10 +1,15 @@
 /**
- * Accrual production for the memory axis — the `recalled_memory` leverage
- * moment, produced HERE in the accrual source (felt-accumulation §3), never
- * authored by the model. The memory-graph retrieval is the only thing that
- * knows a memory was genuinely drawn upon for a turn; it mints the basis, and
- * `ai-core` only threads it onto the turn result. A model that could author
- * "I remembered" could fabricate a recall that never happened — so it cannot.
+ * Accrual production for the memory axis — the `recalled_memory` /
+ * `consolidated_fact` leverage moment, produced HERE in the accrual source
+ * (felt-accumulation §3), never authored by the model. The memory-graph
+ * retrieval is the only thing that knows a memory was genuinely drawn upon for
+ * a turn; it mints the basis, and `ai-core` only threads it onto the turn
+ * result. A model that could author "I remembered" could fabricate a recall
+ * that never happened — so it cannot. The KIND is read off the leveraged
+ * memory's own `MemorySource`: a `consolidation_derived` memory is the agent's
+ * own synthesis ("I pieced this together"), distinct from a user-stated recall
+ * ("you told me") — and the provenance, like everything else, is read off the
+ * node, never narrated.
  *
  * Doctrine: `docs/doctrine/felt-accumulation.md`.
  */
@@ -70,7 +75,10 @@ export function recalledMemoryBasis(
   if (best === undefined) return undefined;
 
   return {
-    kind: "recalled_memory",
+    // The leveraged memory's provenance chooses the kind: a consolidation-cycle
+    // synthesis is `consolidated_fact` ("I pieced this together"); everything
+    // else is `recalled_memory` ("you told me"). Read off the node, not narrated.
+    kind: best.node.source === "consolidation_derived" ? "consolidated_fact" : "recalled_memory",
     sourceRef: best.node.node_id,
     sensitivity: best.node.sensitivity,
   };
