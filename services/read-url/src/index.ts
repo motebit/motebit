@@ -99,12 +99,17 @@ async function main(): Promise<void> {
           toolsUsed: ["read_url"],
           relayTaskId: options?.relayTaskId,
           delegatedScope: options?.delegatedScope,
-          // Attest the raw-source content address when read_url produced a
-          // raw-byte-addressable result (text/* verbatim). Absent otherwise —
-          // back-compat by absence. Makes the cited excerpt re-verifiable down to
-          // the primary record once a citation builder copies it into provenance.
+          // Attest the raw-source content address when read_url produced verifiable
+          // output: the raw-byte path (text/* verbatim, projection absent) or the
+          // recipe path (HTML, source_projection = the byte-deterministic recipe whose
+          // output `data` is). Absent otherwise — back-compat by absence. Makes the
+          // cited excerpt re-verifiable down to the primary record once a citation
+          // builder copies digest (+ projection) into provenance.
           ...(result.ok && result.source_digest != null
             ? { sourceDigest: result.source_digest }
+            : {}),
+          ...(result.ok && result.source_projection != null
+            ? { sourceProjection: result.source_projection }
             : {}),
         });
         log(`receipt=${signed.signature.slice(0, 12)}… url="${prompt.slice(0, 60)}"`);

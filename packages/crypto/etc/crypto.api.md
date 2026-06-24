@@ -1183,6 +1183,7 @@ export interface SignableReceipt {
     // (undocumented)
     signature: string;
     source_digest?: DigestRef;
+    source_projection?: string;
     // (undocumented)
     status: "completed" | "failed" | "denied";
     // (undocumented)

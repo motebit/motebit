@@ -2,7 +2,12 @@ import { InMemoryToolRegistry } from "../index.js";
 import type { SearchProvider } from "../search-provider.js";
 
 export { webSearchDefinition, createWebSearchHandler } from "./web-search.js";
-export { readUrlDefinition, createReadUrlHandler } from "./read-url.js";
+export {
+  readUrlDefinition,
+  createReadUrlHandler,
+  projectAgencyHtmlTextV1,
+  AGENCY_HTML_TEXT_V1_RECIPE_ID,
+} from "./read-url.js";
 export { readFileDefinition, createReadFileHandler } from "./read-file.js";
 export { writeFileDefinition, createWriteFileHandler } from "./write-file.js";
 export type { WriteFileConfig } from "./write-file.js";

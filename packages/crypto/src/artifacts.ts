@@ -79,6 +79,14 @@ export interface SignableReceipt {
    */
   source_digest?: DigestRef;
   /**
+   * The byte-deterministic projection recipe id whose output `result` is, set
+   * alongside `source_digest` when `result` is an extracted transform of the raw
+   * bytes rather than the bytes verbatim (`read_url` over HTML →
+   * `"agency.html-text.v1"`). Signature-bound; back-compat by absence. Absent on the
+   * raw-byte path. Copied into `Citation.provenance.projection`.
+   */
+  source_projection?: string;
+  /**
    * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"` today —
    * the verification recipe is JCS canonicalization of the unsigned body,
    * Ed25519 primitive, base64url signature encoding. Every ExecutionReceipt

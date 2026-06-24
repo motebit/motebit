@@ -875,6 +875,17 @@ export interface ToolResult {
    * ignored by every tool/consumer that doesn't set or read it.
    */
   source_digest?: DigestRef;
+  /**
+   * The app-owned projection recipe id whose output `data` is (e.g.
+   * `"agency.html-text.v1"` for `read_url` over HTML). Set ONLY alongside
+   * {@link source_digest} when `data` is NOT the raw bytes verbatim but a
+   * byte-deterministic transform of them — so a citation's span is re-checkable by
+   * re-fetching the raw bytes (digest) and re-applying the named recipe. ABSENT on
+   * the raw-byte path (`text/*`), where the span is located over the raw bytes
+   * directly. Copied into `Citation.provenance.projection`; the domain-blind verifier
+   * resolves it via an injected `resolveProjection`. Back-compat by absence.
+   */
+  source_projection?: string;
 }
 
 export type ToolHandler = (args: Record<string, unknown>) => Promise<ToolResult>;
@@ -1176,6 +1187,16 @@ export interface ExecutionReceipt {
    * primary record (evidence-provenance, raw-byte path).
    */
   source_digest?: DigestRef;
+  /**
+   * The projection recipe id whose byte-deterministic output the task's `result`
+   * is, when `result` is NOT the raw bytes verbatim but a published transform of
+   * them (a fetch-type atom — `read_url` over HTML — sets `"agency.html-text.v1"`).
+   * Set from the tool's {@link ToolResult.source_projection}; signature-bound.
+   * Present ⇒ `source_digest` is over the RAW bytes and a re-verifier applies this
+   * recipe before locating the span; ABSENT ⇒ the raw-byte path (span over raw bytes
+   * directly). Copied into `Citation.provenance.projection`. Back-compat by absence.
+   */
+  source_projection?: string;
   /**
    * How this task was authorized for invocation. Discriminates user-explicit
    * affordances (chip tap, slash command, scene click) from AI-mediated

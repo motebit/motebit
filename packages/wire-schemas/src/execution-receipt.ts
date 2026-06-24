@@ -189,6 +189,12 @@ export const ExecutionReceiptSchema: z.ZodType<ExecutionReceiptShape> = z.lazy((
         .describe(
           "Content digest of the RAW primary-source bytes a fetch-type task retrieved, when `result` is a verbatim raw-byte-addressable span of them (e.g. read_url over a text/* source). Signature-bound; back-compat by absence. A citation builder copies it into Citation.provenance for evidence-provenance re-checking. See spec/evidence-provenance-v1.md.",
         ),
+      source_projection: z
+        .string()
+        .optional()
+        .describe(
+          "App-owned byte-deterministic projection recipe id (e.g. `agency.html-text.v1`) whose output `result` is, set alongside `source_digest` when `result` is an extracted transform of the raw bytes (read_url over HTML) rather than the bytes verbatim. Present ⇒ a re-verifier applies the recipe to the raw bytes before locating the span; absent ⇒ raw-byte path. Copied into Citation.provenance.projection. See spec/evidence-provenance-v1.md.",
+        ),
       invocation_origin: IntentOriginSchema.optional(),
       suite: SuiteSchema,
       signature: z

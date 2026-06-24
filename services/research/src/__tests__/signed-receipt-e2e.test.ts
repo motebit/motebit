@@ -34,6 +34,7 @@ import {
 } from "@motebit/encryption";
 import type { KeyPair } from "@motebit/encryption";
 import { buildServiceReceipt } from "@motebit/mcp-server";
+import { projectAgencyHtmlTextV1, AGENCY_HTML_TEXT_V1_RECIPE_ID } from "@motebit/tools";
 import { AgentTrustLevel } from "@motebit/sdk";
 import type { ExecutionReceipt } from "@motebit/sdk";
 
@@ -58,6 +59,11 @@ const STATIC_RESULTS = JSON.stringify([
   { title: "Doc A", url: "https://example.com/a", snippet: "about a" },
   { title: "Doc B", url: "https://example.com/b", snippet: "about b" },
 ]);
+
+// A raw HTML primary record for the recipe-path round trip — projects under
+// agency.html-text.v1 to the verbatim span "Revenue $ 81,615 Data Center $ 75,246".
+const HTML_RECIPE_FIXTURE =
+  "<table><tr><td>Revenue</td><td>$ 81,615</td></tr><tr><td>Data Center</td><td>$ 75,246</td></tr></table>";
 
 let wsAtom: AtomFixture;
 let ruAtom: AtomFixture;
@@ -88,17 +94,34 @@ beforeAll(async () => {
     deviceId: RU_DEVICE_ID,
     port: RU_PORT,
     handler: async (args) => {
-      // A raw-byte-addressable text source: `data` IS the served body verbatim, so
-      // it attests source_digest = sha256(body) — exactly the real read_url text/*
-      // path. This makes the producer→citation→provenance round trip end-to-end.
       const url = typeof args["url"] === "string" ? args["url"] : "?";
+      const sha = async (bytes: Uint8Array): Promise<string> =>
+        Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as BufferSource)))
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
+      // RECIPE path (HTML): `data` is agency.html-text.v1 applied to the RAW html, the
+      // digest is over the RAW html bytes (honesty invariant), and source_projection
+      // names the recipe — exactly the real read_url HTML path.
+      if (url.endsWith(".html")) {
+        const rawHtml = new TextEncoder().encode(HTML_RECIPE_FIXTURE);
+        return {
+          ok: true,
+          data: projectAgencyHtmlTextV1(rawHtml),
+          source_digest: { algorithm: "sha-256" as const, value: await sha(rawHtml) },
+          source_projection: AGENCY_HTML_TEXT_V1_RECIPE_ID,
+        };
+      }
+      // RAW-BYTE path (text/*): `data` IS the served body verbatim, so it attests
+      // source_digest = sha256(body) with projection absent.
       const data = `page-content:${url}`;
-      const value = Array.from(
-        new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(data))),
-      )
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join("");
-      return { ok: true, data, source_digest: { algorithm: "sha-256" as const, value } };
+      return {
+        ok: true,
+        data,
+        source_digest: {
+          algorithm: "sha-256" as const,
+          value: await sha(new TextEncoder().encode(data)),
+        },
+      };
     },
     knownCallers,
   });
@@ -244,6 +267,57 @@ describe("research — signed receipt E2E (molecule → web-search + read-url)",
       ...web!.provenance!,
       span: "a fabricated figure that never appeared in the source",
     });
+    expect(tampered).toEqual({ present: false, reason: "span_absent" });
+  });
+
+  it("a read_url citation over HTML re-verifies via the published agency.html-text.v1 recipe (recipe path)", async () => {
+    const url = "https://example.com/filing.html";
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [{ type: "tool_use", id: "tu-1", name: "motebit_read_url", input: { url } }],
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Done." }] });
+
+    const result = await research("provenance-html", {
+      anthropicApiKey: "sk-ant-test",
+      webSearchUrl: wsAtom.url,
+      readUrlUrl: ruAtom.url,
+      callerMotebitId: RESEARCH_MOTEBIT_ID,
+      callerDeviceId: RESEARCH_DEVICE_ID,
+      callerPrivateKey: researcherKeypair.privateKey,
+      maxToolCalls: 8,
+    });
+
+    const web = result.citations.find((c) => c.source === "web");
+    expect(web).toBeDefined();
+    // The producer named the recipe — this is the recipe path, NOT raw-byte.
+    expect(web!.provenance).toBeDefined();
+    expect(web!.provenance!.projection).toBe(AGENCY_HTML_TEXT_V1_RECIPE_ID);
+
+    // The bytes a stranger re-fetches are the RAW html (NOT the projected text). The
+    // re-verifier injects the published recipe as resolveProjection, applies it to the
+    // raw bytes, then locates the span — verifiable-locality across the projection.
+    const rawHtml = new TextEncoder().encode(HTML_RECIPE_FIXTURE);
+    const resolveProjection = (recipeId: string, bytes: Uint8Array): string => {
+      if (recipeId === AGENCY_HTML_TEXT_V1_RECIPE_ID) return projectAgencyHtmlTextV1(bytes);
+      throw new Error(`unexpected recipe ${recipeId}`);
+    };
+    const verdict = await verifyEvidenceProvenance(rawHtml, web!.provenance!, {
+      resolveProjection,
+    });
+    expect(verdict).toEqual({ present: true });
+
+    // FAIL-CLOSED without the recipe: a verifier that cannot resolve the projection
+    // must NOT silently pass — it returns projection_unresolved (domain-blind law).
+    const noResolver = await verifyEvidenceProvenance(rawHtml, web!.provenance!);
+    expect(noResolver).toEqual({ present: false, reason: "projection_unresolved" });
+
+    // A fabricated span is absent from the projected record even WITH the recipe.
+    const tampered = await verifyEvidenceProvenance(
+      rawHtml,
+      { ...web!.provenance!, span: "Revenue $ 99,999 fabricated" },
+      { resolveProjection },
+    );
     expect(tampered).toEqual({ present: false, reason: "span_absent" });
   });
 

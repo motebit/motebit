@@ -363,17 +363,27 @@ export async function research(question: string, config: ResearchConfig): Promis
           source: "web",
           locator: prompt,
           receipt_task_id: receipt.task_id,
-          // Re-verifiable evidence provenance — present only when the read_url atom
-          // attested a RAW-BYTE-ADDRESSABLE source (text/*), where `resultText` is a
-          // verbatim span of the raw fetched bytes content-addressed by
-          // `source_digest`. projection absent (raw-byte path); a third party
-          // re-fetches `locator`, re-checks the span with no shared code
-          // (verifyEvidenceProvenance). ABSENT for HTML/JSON (extracted/reformatted)
-          // until a published projection recipe lands — back-compat by absence,
-          // never a claim the producer can't back. `binding` is omitted: motebit
-          // resolves no issuer identity for arbitrary URLs (domain-blind).
+          // Re-verifiable evidence provenance — present when the read_url atom
+          // attested the raw source. `resultText` is the span; `source_digest`
+          // content-addresses the RAW fetched bytes. Two paths, both re-checkable by a
+          // third party who re-fetches `locator` (verifyEvidenceProvenance, no shared
+          // code): RAW-BYTE (text/*) — projection absent, span located over the raw
+          // bytes directly; RECIPE (HTML) — `source_projection` names the published
+          // byte-deterministic recipe (`agency.html-text.v1`) a re-verifier applies to
+          // the raw bytes before locating the span. ABSENT for reformatted JSON until a
+          // JSON recipe lands — back-compat by absence, never a claim the producer
+          // can't back. `binding` is omitted: motebit resolves no issuer identity for
+          // arbitrary URLs (domain-blind).
           ...(receipt.source_digest != null
-            ? { provenance: { digest: receipt.source_digest, span: resultText } }
+            ? {
+                provenance: {
+                  digest: receipt.source_digest,
+                  span: resultText,
+                  ...(receipt.source_projection != null
+                    ? { projection: receipt.source_projection }
+                    : {}),
+                },
+              }
             : {}),
         });
       }

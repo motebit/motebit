@@ -1746,6 +1746,7 @@ export interface ExecutionReceipt {
     // (undocumented)
     signature: string;
     source_digest?: DigestRef;
+    source_projection?: string;
     status: "completed" | "failed" | "denied";
     // (undocumented)
     submitted_at: number;
@@ -4040,6 +4041,7 @@ export interface ToolResult {
     reason?: string;
     _sanitized?: boolean;
     source_digest?: DigestRef;
+    source_projection?: string;
 }
 
 // @public (undocumented)

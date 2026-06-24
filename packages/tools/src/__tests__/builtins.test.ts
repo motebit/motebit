@@ -4,6 +4,8 @@ import { BraveSearchProvider } from "../providers/brave-search";
 import {
   createWebSearchHandler,
   createReadUrlHandler,
+  projectAgencyHtmlTextV1,
+  AGENCY_HTML_TEXT_V1_RECIPE_ID,
   createReadFileHandler,
   writeFileDefinition,
   createWriteFileHandler,
@@ -18,6 +20,7 @@ import {
   DESTRUCTIVE_PATTERNS,
 } from "../builtins/index";
 import { createSelfReflectHandler } from "../builtins/self-reflect";
+import { readFileSync } from "node:fs";
 
 // ---------- web_search ----------
 
@@ -329,6 +332,14 @@ describe("read_url", () => {
         "<html><head><style>body{}</style></head><body><p>Hello World</p><script>alert(1)</script></body></html>",
     }) as unknown as typeof fetch;
 
+    const html =
+      "<html><head><style>body{}</style></head><body><p>Hello World</p><script>alert(1)</script></body></html>";
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ "content-type": "text/html" }),
+      text: async () => html,
+    }) as unknown as typeof fetch;
+
     const handler = createReadUrlHandler();
     const result = await handler({ url: "https://example.com" });
 
@@ -336,10 +347,19 @@ describe("read_url", () => {
     expect(result.data as string).toContain("Hello World");
     expect(result.data as string).not.toContain("<script>");
     expect(result.data as string).not.toContain("<style>");
-    // HTML is EXTRACTED (not raw-byte-addressable) — no source_digest, so a citation
-    // builder omits provenance (back-compat by absence). Provenance for HTML needs a
-    // published byte-deterministic projection recipe (deferred).
-    expect(result.source_digest).toBeUndefined();
+    // HTML is now the RECIPE path (agency.html-text.v1): `data` is the recipe applied
+    // to the raw bytes, source_digest is sha256 of the RAW html (the honesty invariant
+    // — digest the bytes a re-fetcher obtains, never the extracted text), and
+    // source_projection names the recipe so a re-verifier can reproduce the span.
+    expect(result.data).toBe(projectAgencyHtmlTextV1(new TextEncoder().encode(html)));
+    expect(result.source_projection).toBe(AGENCY_HTML_TEXT_V1_RECIPE_ID);
+    expect(result.source_digest?.algorithm).toBe("sha-256");
+    const expectedHtmlDigest = Array.from(
+      new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(html))),
+    )
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+    expect(result.source_digest?.value).toBe(expectedHtmlDigest);
   });
 
   it("attests source_digest for a raw-byte-addressable text/* source (the evidence-provenance producer path)", async () => {
@@ -366,6 +386,32 @@ describe("read_url", () => {
     expect(result.source_digest?.value).toBe(expected);
   });
 
+  // Conformance: this PRODUCTION impl of agency.html-text.v1 reproduces the published,
+  // content-addressed fixture byte-for-byte (the §7 byte-determinism guardrail — a
+  // recipe is only a real protocol artifact if independent impls reproduce its fixture;
+  // crypto's evidence-provenance-conformance.test.ts is the INDEPENDENT second impl).
+  // Reads the single source-of-truth fixture from @motebit/crypto — no second copy to
+  // drift; if crypto moves it, this breaks loudly.
+  describe("agency.html-text.v1 projection — production impl vs published fixture", () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        new URL("../../../crypto/src/__tests__/fixtures/agency-html-text-v1.json", import.meta.url),
+        "utf8",
+      ),
+    ) as { cases: ReadonlyArray<{ name: string; html: string; text: string }> };
+    const enc = new TextEncoder();
+
+    for (const c of fixture.cases) {
+      it(`byte-identical: ${c.name}`, () => {
+        expect(projectAgencyHtmlTextV1(enc.encode(c.html))).toBe(c.text);
+      });
+    }
+
+    it("determinism canary (single pass, no re-scan): a&amp;lt;b → a&lt;b", () => {
+      expect(projectAgencyHtmlTextV1(enc.encode("a&amp;lt;b"))).toBe("a&lt;b");
+    });
+  });
+
   it("returns error on missing url", async () => {
     const handler = createReadUrlHandler();
     const result = await handler({});
@@ -386,18 +432,22 @@ describe("read_url", () => {
     expect(result.error).toContain("HTTP 404");
   });
 
-  it("decodes HTML entities so the model reads prose, not escape codes", async () => {
-    // Without entity decoding the model sees "&nbsp;Advanced search", "&copy;",
-    // "&amp;", which a small local model parses as something broken. After the
-    // fix the read_url result reads as plain prose. Sibling: the same decode
-    // pass lives in services/proxy/src/app/v1/fetch/route.ts.
+  it("decodes structural HTML entities; presentational entities pass through verbatim (agency.html-text.v1)", async () => {
+    // read_url's HTML extraction IS the byte-deterministic recipe agency.html-text.v1.
+    // It decodes ONLY the structural §2.1 entities (&nbsp;/&amp;/&lt;/&gt;/&quot;/&apos;
+    // + their numeric forms) so the transform is cross-language reproducible (the
+    // re-verifiability requirement); richer presentational entities (&copy;, &mdash;,
+    // &#65;) pass through VERBATIM rather than diverge across decoders. Determinism over
+    // cosmetic richness — a deliberate change from the old rich decoder. (The
+    // services/proxy browser path keeps its own display decoder; it is NOT a provenance
+    // producer, so the two intentionally differ now.)
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       headers: new Headers({ "content-type": "text/html" }),
       text: async () =>
-        "<html><body><p>Google Gmail Images Sign in&nbsp;Advanced search</p>" +
-        "<p>About Google &copy; 2026 - Privacy &amp; Terms</p>" +
-        "<p>x &mdash; y &lsquo;quote&rsquo; &#65; &#x42;</p></body></html>",
+        "<html><body><p>Sign in&nbsp;Advanced search</p>" +
+        "<p>About Google &copy; 2026 - Privacy &amp; Terms &lt;x&gt;</p>" +
+        "<p>x &mdash; y &#65;</p></body></html>",
     }) as unknown as typeof fetch;
 
     const handler = createReadUrlHandler();
@@ -405,16 +455,15 @@ describe("read_url", () => {
 
     expect(result.ok).toBe(true);
     const data = result.data as string;
+    // Structural entities decode (and tag-strip runs BEFORE decode, so a decoded < is text):
     expect(data).not.toContain("&nbsp;");
-    expect(data).not.toContain("&copy;");
     expect(data).not.toContain("&amp;");
-    expect(data).not.toContain("&mdash;");
-    expect(data).not.toContain("&#65;");
-    expect(data).not.toContain("&#x42;");
-    expect(data).toContain("Google Gmail Images Sign in Advanced search");
-    expect(data).toContain("© 2026");
-    expect(data).toContain("Privacy & Terms");
-    expect(data).toContain("x — y ‘quote’ A B");
+    expect(data).toContain("Sign in Advanced search");
+    expect(data).toContain("Privacy & Terms <x>");
+    // Non-table (presentational) entities pass through verbatim — byte-determinism:
+    expect(data).toContain("&copy; 2026");
+    expect(data).toContain("&mdash;");
+    expect(data).toContain("&#65;");
   });
 
   it("leaves unknown entities verbatim instead of crashing", async () => {

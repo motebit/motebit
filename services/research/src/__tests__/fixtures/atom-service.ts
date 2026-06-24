@@ -128,11 +128,14 @@ export async function startAtom(opts: AtomOptions): Promise<AtomFixture> {
         toolsUsed: [toolName],
         relayTaskId: options?.relayTaskId,
         delegatedScope: options?.delegatedScope,
-        // Mirror the real read-url service: thread a raw-byte-addressable source's
-        // content digest into the signed receipt so the producer→citation provenance
-        // path is exercised end-to-end.
+        // Mirror the real read-url service: thread the raw-source content digest
+        // (+ the projection recipe id on the HTML recipe path) into the signed
+        // receipt so the producer→citation provenance path is exercised end-to-end.
         ...(result.ok && result.source_digest != null
           ? { sourceDigest: result.source_digest }
+          : {}),
+        ...(result.ok && result.source_projection != null
+          ? { sourceProjection: result.source_projection }
           : {}),
       });
       yield { type: "task_result" as const, receipt: signed as unknown as Record<string, unknown> };

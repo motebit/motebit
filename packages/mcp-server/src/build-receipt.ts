@@ -64,9 +64,17 @@ export interface BuildServiceReceiptInput {
    * `result` is a verbatim raw-byte-addressable span of them (a fetch-type atom
    * — read_url over a text/* source). Set from the tool's
    * {@link ToolResult.source_digest}; signature-bound on the receipt. Optional —
-   * omitted for extracted output (HTML/JSON) and non-fetch tasks.
+   * omitted for non-fetch tasks. Present for both the raw-byte path (`text/*`) and
+   * the recipe path (HTML, paired with {@link sourceProjection}).
    */
   sourceDigest?: DigestRef;
+  /**
+   * The projection recipe id whose byte-deterministic output `result` is (e.g.
+   * `"agency.html-text.v1"` for read_url over HTML). Set from the tool's
+   * {@link ToolResult.source_projection}, alongside {@link sourceDigest}, on the
+   * recipe path; omitted on the raw-byte path. Signature-bound on the receipt.
+   */
+  sourceProjection?: string;
 }
 
 /**
@@ -100,6 +108,7 @@ export async function buildServiceReceipt(
       : {}),
     ...(input.invocationOrigin != null ? { invocation_origin: input.invocationOrigin } : {}),
     ...(input.sourceDigest != null ? { source_digest: input.sourceDigest } : {}),
+    ...(input.sourceProjection != null ? { source_projection: input.sourceProjection } : {}),
   };
 
   const signed = (await signExecutionReceipt(

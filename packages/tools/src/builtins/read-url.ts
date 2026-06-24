@@ -52,49 +52,82 @@ const defaultFetcher: ReadUrlFetcher = async (url) => {
   return { status: res.status, contentType, body };
 };
 
-// HTML entity decoder — covers the entities real web pages actually emit.
-// Unknown entities pass through verbatim so a stray "&" never crashes a
-// fetch. `nbsp` decodes to U+0020 (not U+00A0) so the whitespace-collapse
-// pass below treats it uniformly across engines. Sibling site:
-// `services/proxy/src/app/v1/fetch/route.ts` (proxy fetch route) — keep
-// the entity table aligned in the same pass.
-const HTML_NAMED_ENTITIES: Record<string, string> = {
-  amp: "&",
-  lt: "<",
-  gt: ">",
-  quot: '"',
-  apos: "'",
-  nbsp: " ",
-  copy: "©",
-  reg: "®",
-  trade: "™",
-  mdash: "—",
-  ndash: "–",
-  hellip: "…",
-  lsquo: "‘",
-  rsquo: "’",
-  ldquo: "“",
-  rdquo: "”",
-  laquo: "«",
-  raquo: "»",
-  bull: "•",
-  middot: "·",
-  times: "×",
-  divide: "÷",
-};
+// ── Producer projection: agency.html-text.v1 (HTML → text) ────────────────────
+// Motebit ADOPTS the world-public, content-addressed, immutable recipe
+// `agency.html-text.v1` (github.com/agency-computer/html-text-spec @ 01b475be) as
+// its byte-deterministic HTML→text transform for evidence-provenance. The Metabolic
+// Principle: a deterministic HTML→text projection is a solved commodity, not a
+// motebit enzyme — absorb the published recipe, own the re-check LAW (the
+// @motebit/crypto verifier stays domain-blind, injecting this as a resolver). One
+// resolver re-checks BOTH motebit's and agency's HTML citations — the protocol
+// working across parties. Conformance is locked against the published fixture by an
+// INDEPENDENT second impl (packages/crypto/.../evidence-provenance-conformance.test.ts)
+// and this impl (packages/tools/.../builtins.test.ts) — §7 byte-determinism.
+export const AGENCY_HTML_TEXT_V1_RECIPE_ID = "agency.html-text.v1";
 
-function decodeHtmlEntities(s: string): string {
-  return s.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]+);/g, (match, ref: string) => {
-    if (ref.startsWith("#x") || ref.startsWith("#X")) {
-      const code = parseInt(ref.slice(2), 16);
-      return Number.isFinite(code) && code > 0 ? String.fromCodePoint(code) : match;
+// The fixed §2.1 entity table — decoded in a SINGLE left-to-right pass (the
+// determinism crux: `a&amp;lt;b` → `a&lt;b`, never `a<b`). The replacement is NOT
+// re-scanned; any entity absent from this table passes through verbatim. Small by
+// design: only the structural entities, so the transform stays cross-language exact.
+const HTML_TEXT_V1_ENTITIES: ReadonlyArray<readonly [string, string]> = [
+  ["&nbsp;", " "],
+  ["&#160;", " "],
+  ["&#xa0;", " "],
+  ["&#xA0;", " "],
+  ["&amp;", "&"],
+  ["&#38;", "&"],
+  ["&lt;", "<"],
+  ["&#60;", "<"],
+  ["&gt;", ">"],
+  ["&#62;", ">"],
+  ["&quot;", '"'],
+  ["&#34;", '"'],
+  ["&apos;", "'"],
+  ["&#39;", "'"],
+];
+
+/**
+ * Apply `agency.html-text.v1` to raw document bytes → text. PURE + byte-deterministic
+ * (ASCII-only whitespace collapse, single-pass entity decode — JS `\s`/`.trim()`
+ * deliberately avoided: they fold a wider, engine-specific whitespace set and would
+ * break cross-language re-verification). Used by read_url to produce HTML `data` AND
+ * exported so a consumer can inject it as the `resolveProjection` for re-checking an
+ * HTML citation. Five ordered, total steps (agency-html-text-v1.md §2).
+ */
+export function projectAgencyHtmlTextV1(bytes: Uint8Array): string {
+  let s = new TextDecoder("utf-8").decode(bytes);
+  // 1. Remove <script>/<style> blocks (tag AND content), case-insensitive → one space.
+  s = s.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, " ");
+  s = s.replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, " ");
+  // 2. Strip remaining tags — every "<" through the next ">" → one space.
+  s = s.replace(/<[^>]*>/g, " ");
+  // 3. Single-pass entity decode over the fixed table (replacement not re-scanned).
+  let out = "";
+  let i = 0;
+  while (i < s.length) {
+    if (s[i] === "&") {
+      let matched: readonly [string, string] | null = null;
+      for (const entry of HTML_TEXT_V1_ENTITIES) {
+        if (s.startsWith(entry[0], i)) {
+          matched = entry;
+          break;
+        }
+      }
+      if (matched) {
+        out += matched[1];
+        i += matched[0].length;
+        continue;
+      }
     }
-    if (ref.startsWith("#")) {
-      const code = parseInt(ref.slice(1), 10);
-      return Number.isFinite(code) && code > 0 ? String.fromCodePoint(code) : match;
-    }
-    return HTML_NAMED_ENTITIES[ref] ?? match;
-  });
+    out += s[i];
+    i++;
+  }
+  s = out;
+  // 4. Collapse ASCII whitespace runs → one U+0020 (ASCII-only for cross-language
+  //    determinism). Non-ASCII whitespace passes through.
+  s = s.replace(/[ \t\n\r\f\v]+/g, " ");
+  // 5. Trim leading and trailing U+0020.
+  return s.replace(/^ +/, "").replace(/ +$/, "");
 }
 
 /**
@@ -171,15 +204,26 @@ export function createReadUrlHandler(opts?: {
         return { ok: true, data: body.slice(0, 64_000), source_digest };
       }
 
-      const cleaned = decodeHtmlEntities(
-        body
-          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-          .replace(/<[^>]+>/g, " "),
-      )
-        .replace(/\s{2,}/g, " ")
-        .trim();
-      return { ok: true, data: cleaned.slice(0, 8000) };
+      // HTML: extracted, NOT raw-byte-addressable as served — but re-derivable via a
+      // PUBLISHED, byte-deterministic recipe. `data` is `agency.html-text.v1` applied
+      // to the raw bytes, so a cited span is reproducible by a third party who
+      // re-fetches the raw HTML and re-runs the SAME recipe. Attest source_digest =
+      // sha256(RAW html bytes) — the honesty invariant: digest the bytes a stranger
+      // re-fetches, never the extracted text — and name the recipe in
+      // source_projection. A citation builder copies both into
+      // Citation.provenance{digest, projection, span}; the domain-blind verifier
+      // injects projectAgencyHtmlTextV1 as resolveProjection. (The opts.proxyUrl
+      // browser path above returns pre-stripped data WITHOUT provenance — a known
+      // coverage gap: the edge proxy would have to apply this recipe + digest the raw
+      // bytes itself. Not a producer of signed citations today.)
+      const rawBytes = new TextEncoder().encode(body);
+      const projected = projectAgencyHtmlTextV1(rawBytes);
+      return {
+        ok: true,
+        data: projected.slice(0, 8000),
+        source_digest: { algorithm: "sha-256" as const, value: await sha256Hex(rawBytes) },
+        source_projection: AGENCY_HTML_TEXT_V1_RECIPE_ID,
+      };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       return { ok: false, error: `Fetch error: ${msg}` };
