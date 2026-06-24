@@ -99,6 +99,8 @@ These two booleans are the entire trust contract; do not over-read them.
 
 The **private key** must never reach a browser bundle. Mint receipts **server-side** (or in a trusted backend/CLI); the key lives in a secret manager. **Verifying** is safe anywhere — the verifier needs only the public receipt, so you can verify in the browser to independently check a server's work. If you persist a signing identity, store only the private key (seed) and re-derive the public key + `motebit_id` from it; see [Produce a receipt](/docs/developer/produce-a-receipt#the-signing-identity).
 
+This is the rule for an **integrator's service key** — a key that signs on behalf of your backend. A different, deliberate model is a **sovereign motebit that lives in the browser** (the motebit web app): the user's own identity key is held client-side under a non-extractable WebCrypto wrapping key in IndexedDB and erased from memory after each use. That is a consumer-wallet trust model (the user owns the key on their own device), not a server handing its key to untrusted clients — don't conflate the two. If you are building a backend service, keep its key server-side as above.
+
 ## Next
 
 - **Producer details** — key custody, the governance triad (approval → invocation → execution), the two hash recipes in depth: [Produce a receipt](/docs/developer/produce-a-receipt).

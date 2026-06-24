@@ -13,7 +13,7 @@ The identity belongs to its owner, not to a service provider. Switch AI provider
 
 ## Cryptographic keys
 
-Each device that hosts a motebit generates an Ed25519 keypair. The private key is stored in the operating system's secure keyring — it never touches the filesystem, never leaves the device, and never gets sent over the network. The public key is shared with services that need to verify the agent's identity.
+Each device that hosts a motebit generates an Ed25519 keypair. The private key is stored in the operating system's secure keyring (on the CLI, in a passphrase-encrypted file instead; on desktop, with an owner-only local fallback when the OS keyring write cannot be confirmed) — it never leaves the device and never gets sent over the network. The public key is shared with services that need to verify the agent's identity.
 
 Ed25519 was chosen for its speed, small key size, and resistance to timing attacks. It's the same signature scheme used by SSH, Signal, and WireGuard.
 

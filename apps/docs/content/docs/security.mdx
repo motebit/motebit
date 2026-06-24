@@ -31,7 +31,7 @@ Retention is governed too. Deleted data produces a signed **deletion certificate
 
 Your motebit's identity is an **Ed25519 keypair**. The public key (and the `motebit_id` derived from it) is shareable; the private key is the root of all authority.
 
-- **At rest.** The private key lives in the OS keyring on desktop and mobile. On the CLI it is encrypted with your passphrase using PBKDF2 (600,000 iterations, SHA-256) and AES-256-GCM — never written in plaintext.
+- **At rest.** On mobile the private key lives in the iOS Keychain / Android Keystore. On desktop it lives in the OS keyring, with an owner-only (`0600`) local fallback file when a keyring write cannot be confirmed (access-controlled, not application-encrypted — verified-keyring-only writes on signed builds are tracked hardening). On the CLI it is encrypted with your passphrase using PBKDF2 (600,000 iterations, SHA-256) and AES-256-GCM. It never crosses the network and never enters the non-secret config metadata.
 - **Recovery.** A recovery seed re-derives a sovereign identity. A sovereign `motebit_id` is a cryptographic commitment to its genesis key, so the binding between an id and its key is checkable offline by anyone.
 - **Rotation & succession.** Keys can be rotated; a signed succession chain (old and new keys both sign) preserves continuity, so a rotated key does not orphan past receipts.
 - **Hardware attestation is additive.** Secure Enclave / TPM / StrongBox attestations *raise* an identity's assurance score — they never replace the Ed25519 key, and their absence never blocks a software identity. Software identity is the floor.
