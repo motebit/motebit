@@ -503,6 +503,16 @@ export class PolicyGate {
   }
 
   /**
+   * Redact ONLY the high-precision credential-class secrets — for masking a user's
+   * own typed message before it reaches a non-sovereign (cloud) provider. Narrower
+   * than {@link redact} (no SSN / card / bare-base64). See
+   * `RedactionEngine.redactForCloudEgress`.
+   */
+  redactForCloudEgress(text: string): string {
+    return this.redaction.redactForCloudEgress(text).text;
+  }
+
+  /**
    * Check if text contains secrets that should never be stored in memory.
    */
   containsSecrets(text: string): boolean {

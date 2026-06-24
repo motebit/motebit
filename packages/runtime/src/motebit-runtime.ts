@@ -233,6 +233,7 @@ import {
 import { InMemoryGradientStore } from "./gradient.js";
 import { InMemoryAgentTrustStore } from "./in-memory-agent-trust-store.js";
 import { AgentGraphManager } from "./agent-graph.js";
+import { SecretRedactingProvider } from "./secret-redacting-provider.js";
 import { CredentialManager } from "./credential-manager.js";
 import { readLatestHardwareAttestationClaim } from "./hardware-attestation-projection.js";
 import { readLatencyStats } from "./latency-stats-projection.js";
@@ -661,7 +662,7 @@ export class MotebitRuntime {
       warn: (msg, ctx) => console.warn(`[motebit] ${msg}`, ctx ? JSON.stringify(ctx) : ""),
     };
     this.renderer = adapters.renderer;
-    this.provider = adapters.ai ?? null;
+    this.provider = adapters.ai != null ? this.wrapProvider(adapters.ai) : null;
     this.stateSnapshot = adapters.storage.stateSnapshot;
     this.keyring = adapters.keyring ?? null;
 
@@ -1222,7 +1223,7 @@ export class MotebitRuntime {
   }
 
   setProvider(provider: StreamingProvider): void {
-    this.provider = provider;
+    this.provider = this.wrapProvider(provider);
     this.wireLoopDeps();
 
     // Restore last reflection from event log — creature wakes with behavioral learning intact
@@ -1237,6 +1238,22 @@ export class MotebitRuntime {
     ) {
       void this.reflectAndStore();
     }
+  }
+
+  /**
+   * Wrap a provider so credential-class secrets a user typed into an UNMARKED
+   * cloud session are masked before they reach the model (the additive outbound
+   * floor behind `assertSensitivityPermitsAiCall`, which blocks whole calls when
+   * the SESSION tier is medical/financial/secret). No-op on a sovereign provider.
+   * The callbacks are resolved lazily at generate-time, so this is safe to call
+   * from the constructor before `this.policy` is assigned. See
+   * `secret-redacting-provider.ts`.
+   */
+  private wrapProvider(provider: StreamingProvider): StreamingProvider {
+    return new SecretRedactingProvider(provider, {
+      isSovereign: () => this.providerIsSovereign(),
+      redact: (text) => this.policy.redactForCloudEgress(text),
+    });
   }
 
   /** Access the tool registry to register additional tools at runtime. */
