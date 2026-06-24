@@ -1,0 +1,42 @@
+{
+  "recipe": "agency.html-text.v1",
+  "spec": "docs/specs/agency-html-text-v1.md",
+  "description": "Committed reference fixture for the agency.html-text.v1 projection recipe — the second implementation of the evidence-provenance projection-divergence conformance case checks its output byte-for-byte against `text` for each `html`. An independent implementation built ONLY from the prose spec must produce these exact strings.",
+  "cases": [
+    {
+      "name": "script and style blocks removed, tag and content",
+      "html": "<style>.x{color:red}</style><script>doc()</script><p>Hi there</p>",
+      "text": "Hi there"
+    },
+    {
+      "name": "tags become a single space; figures across cells join",
+      "html": "<a href=\"x\">Revenue</a> <b>$81,615</b>",
+      "text": "Revenue $81,615"
+    },
+    {
+      "name": "enumerated entities decode; tag-strip runs BEFORE decode so a decoded < is text",
+      "html": "Revenue &amp; cost &lt;x&gt; &quot;q&quot;&#160;gap",
+      "text": "Revenue & cost <x> \"q\" gap"
+    },
+    {
+      "name": "DETERMINISM CANARY — single pass, no re-scan: &amp;lt; is &lt;, never <",
+      "html": "a&amp;lt;b",
+      "text": "a&lt;b"
+    },
+    {
+      "name": "entities NOT in the table pass through verbatim",
+      "html": "&copy; 2026 &reg; ok",
+      "text": "&copy; 2026 &reg; ok"
+    },
+    {
+      "name": "ASCII whitespace runs collapse to one space, then trim",
+      "html": "a\n\n  b\t\tc   d",
+      "text": "a b c d"
+    },
+    {
+      "name": "a filing table flattens to the line a verbatim span is located in",
+      "html": "<table><tr><td>Revenue</td><td>$ 81,615</td></tr><tr><td>Data Center</td><td>$ 75,246</td></tr></table>",
+      "text": "Revenue $ 81,615 Data Center $ 75,246"
+    }
+  ]
+}
