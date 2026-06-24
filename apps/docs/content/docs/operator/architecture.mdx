@@ -5,7 +5,7 @@ description: Monorepo structure, enforced layers, services, specs, and data flow
 
 Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **52 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 9 services · 30 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
+The shape is **52 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 9 services · 31 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
 <DiagramFigure
   src="protocol-stack"
@@ -125,7 +125,7 @@ motebit/
 │   ├── browser-sandbox/       [atom]        Playwright-driven Chromium for the virtual_browser embodiment — second computer-use-v1 producer.
 │   └── proxy/                 [glue]        Vercel edge CORS proxy for the web app.
 │
-├── spec/                      # 30 open specifications, each motebit/<name>@1.0
+├── spec/                      # 31 open specifications, each motebit/<name>@1.0
 │   ├── identity-v1.md                       motebit.md format, signing, multi-device, guardian, succession.
 │   ├── execution-ledger-v1.md               Timeline, signed manifests, receipt structure.
 │   ├── relay-federation-v1.md               Peering, discovery, cross-relay routing, circuit breaker.
@@ -155,7 +155,8 @@ motebit/
 │   ├── proposals-v1.md                      Multi-agent plan negotiation — proposal submission, acceptance, withdrawal, and collaborative-step-result reporting.
 │   ├── skills-v1.md                         agentskills.io-compatible procedural-knowledge files with motebit-namespaced extensions for cryptographic provenance, sensitivity-tiered loading, and HA gating.
 │   ├── skills-registry-v1.md                Relay-hosted index of submitted skill envelopes. Permissive submit, curated discovery, content-addressed identity, consumer-side re-verification.
-│   └── bond-v1.md                           Agent's own sovereign capital as an anti-sybil staked signal — self-signed proof-of-funds, RPC-verified never custodied; address bound to identity. Phase 1: signal, not recourse.
+│   ├── bond-v1.md                           Agent's own sovereign capital as an anti-sybil staked signal — self-signed proof-of-funds, RPC-verified never custodied; address bound to identity. Phase 1: signal, not recourse.
+│   └── evidence-provenance-v1.md            Re-verifiable provenance on a verdict's EvidenceRef — a content-addressed verbatim span in a primary record; the byte-determinism conformance requirement for projection recipes. Verifiable-locality from signatures to evidence.
 │
 └── scripts/                   # Drift-defense CI gates
     ├── check-deps.ts                        Layer DAG enforcement. Source of truth for L0–L6.

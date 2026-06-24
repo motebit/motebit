@@ -39,6 +39,10 @@ import {
 } from "../agent-revocation.js";
 import { BOND_COMMITMENT_SCHEMA_ID, buildBondCommitmentJsonSchema } from "../bond.js";
 import {
+  EVIDENCE_PROVENANCE_SCHEMA_ID,
+  buildEvidenceProvenanceJsonSchema,
+} from "../evidence-provenance.js";
+import {
   CREDENTIAL_ANCHOR_BATCH_SCHEMA_ID,
   CREDENTIAL_ANCHOR_PROOF_SCHEMA_ID,
   buildCredentialAnchorBatchJsonSchema,
@@ -687,6 +691,12 @@ const CASES: SchemaCase[] = [
     filename: "bond-commitment-v1.json",
     expectedId: BOND_COMMITMENT_SCHEMA_ID,
     build: buildBondCommitmentJsonSchema,
+  },
+  {
+    name: "evidence-provenance-v1",
+    filename: "evidence-provenance-v1.json",
+    expectedId: EVIDENCE_PROVENANCE_SCHEMA_ID,
+    build: buildEvidenceProvenanceJsonSchema,
   },
 ];
 

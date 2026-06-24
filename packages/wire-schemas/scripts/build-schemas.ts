@@ -38,6 +38,7 @@ import {
   buildAgentRevocationFeedJsonSchema,
 } from "../src/agent-revocation.js";
 import { buildBondCommitmentJsonSchema } from "../src/bond.js";
+import { buildEvidenceProvenanceJsonSchema } from "../src/evidence-provenance.js";
 import {
   buildAgentSettlementAnchorBatchJsonSchema,
   buildAgentSettlementAnchorProofJsonSchema,
@@ -135,6 +136,7 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   { filename: "agent-revocation-record-v1.json", build: buildAgentRevocationRecordJsonSchema },
   { filename: "agent-revocation-feed-v1.json", build: buildAgentRevocationFeedJsonSchema },
   { filename: "bond-commitment-v1.json", build: buildBondCommitmentJsonSchema },
+  { filename: "evidence-provenance-v1.json", build: buildEvidenceProvenanceJsonSchema },
   { filename: "delegation-token-v1.json", build: buildDelegationTokenJsonSchema },
   { filename: "standing-delegation-v1.json", build: buildStandingDelegationJsonSchema },
   { filename: "delegation-revocation-v1.json", build: buildDelegationRevocationJsonSchema },

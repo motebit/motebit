@@ -165,6 +165,11 @@ export {
   buildBondCommitmentJsonSchema,
 } from "./bond.js";
 export {
+  EvidenceProvenanceSchema,
+  EVIDENCE_PROVENANCE_SCHEMA_ID,
+  buildEvidenceProvenanceJsonSchema,
+} from "./evidence-provenance.js";
+export {
   AgentSettlementAnchorBatchSchema,
   AGENT_SETTLEMENT_ANCHOR_BATCH_SCHEMA_ID,
   buildAgentSettlementAnchorBatchJsonSchema,
