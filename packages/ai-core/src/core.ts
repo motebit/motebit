@@ -16,6 +16,7 @@ import {
   MemoryType,
   MEMORY_SOURCE_MARKERS,
   MEMORY_SOURCE_MARKER_UNKNOWN,
+  isMemorySource,
 } from "@motebit/sdk";
 import type { MemorySource } from "@motebit/sdk";
 import { buildSystemPromptCacheable as buildPromptCacheable } from "./prompt.js";
@@ -216,8 +217,14 @@ function escapeMemoryContent(content: string): string {
  * boundary, content inside. `[from:user]` is the only marker that
  * records a direct user statement; everything else is an absorbed
  * claim the prompt teaches the model to weigh accordingly
- * (docs/doctrine/memory-provenance.md). Absent source renders
- * honestly as `unknown` — never fabricated.
+ * (docs/doctrine/memory-provenance.md). Any source that is NOT a known
+ * `MemorySource` member — absent, or present-but-corrupt (a malformed enum
+ * from a tampered/forward-version store) — renders honestly as `unknown`,
+ * never `[from:undefined]` and never fabricated. The `isMemorySource` guard
+ * (not a non-null check) is what makes the render fail closed: the type says
+ * `MemorySource`, but the bytes on disk are not type-checked, so the marker is
+ * derived only after re-validating the value at the boundary where it becomes
+ * a claim to the model.
  */
 function renderMemoryLine(mem: {
   content: string;
@@ -226,8 +233,9 @@ function renderMemoryLine(mem: {
 }): string {
   // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- pinned is narrowed to any via `in` check
   const prefix = "pinned" in mem && (mem as { pinned?: boolean }).pinned ? "[pinned] " : "";
-  const marker =
-    mem.source !== undefined ? MEMORY_SOURCE_MARKERS[mem.source] : MEMORY_SOURCE_MARKER_UNKNOWN;
+  const marker = isMemorySource(mem.source)
+    ? MEMORY_SOURCE_MARKERS[mem.source]
+    : MEMORY_SOURCE_MARKER_UNKNOWN;
   return `  ${prefix}[from:${marker}] [confidence=${mem.confidence.toFixed(2)}] [MEMORY_DATA]${escapeMemoryContent(mem.content)}[/MEMORY_DATA]`;
 }
 

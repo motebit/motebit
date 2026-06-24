@@ -170,6 +170,24 @@ describe("packContext", () => {
     expect(result).toContain("[from:unknown]");
   });
 
+  it("clamps a corrupt/unknown source to [from:unknown] — never [from:undefined]", () => {
+    // A source that is PRESENT but not a known MemorySource member (a malformed
+    // enum from a tampered or forward-version store) must fail closed to `unknown`,
+    // not leak `[from:undefined]`. The bytes on disk are not type-checked; the
+    // marker is re-validated at the render boundary (isMemorySource guard).
+    const result = packContext(
+      makeContextPack({
+        relevant_memories: [
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- deliberately bypass the type to simulate a corrupt store value
+          makeMemory({ content: "corrupt fact", source: "totally_bogus_source" as any }),
+        ],
+      }),
+    );
+    expect(result).toContain("[from:unknown]");
+    expect(result).not.toContain("[from:undefined]");
+    expect(result).not.toContain("[from:totally_bogus_source]");
+  });
+
   it("escapes a spoofed [from: marker inside memory content", () => {
     const result = packContext(
       makeContextPack({
