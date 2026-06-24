@@ -6,18 +6,18 @@
     {
       "package": "@motebit/core-identity",
       "vitest_config": "packages/core-identity/vitest.config.ts",
-      "current": { "statements": 82, "branches": 93, "functions": 83, "lines": 82 },
-      "target": { "statements": 85, "branches": 93, "functions": 85, "lines": 85 },
+      "current": { "statements": 82, "branches": 86, "functions": 83, "lines": 82 },
+      "target": { "statements": 85, "branches": 80, "functions": 85, "lines": 85 },
       "target_date": "2026-08-15",
-      "rationale": "Short of the identity floor (85/80/85/85) on statements/functions/lines — the gap is the service-layer error/retry branches in bootstrap + register-with-relay, exercised today only on the happy path. Plan: a dedicated PR adding register-with-relay failure-path tests (relay 4xx/5xx, signature-mismatch) + bootstrap re-entry/partial-state tests, which cover the uncovered branches without touching the pure crypto. Lever: those named error paths, not a coverage knob."
+      "rationale": "Short of the identity floor (85/80/85/85) on statements/functions/lines — the gap is the service-layer error/retry branches in bootstrap + register-with-relay, exercised today only on the happy path. Plan: a dedicated PR adding register-with-relay failure-path tests (relay 4xx/5xx, signature-mismatch) + bootstrap re-entry/partial-state tests, which cover the uncovered branches without touching the pure crypto. Lever: those named error paths, not a coverage knob. Recalibrated 2026-06 to vitest-4 coverage-v8 (commits c0faba1e + bf254dd8): the same tests measure ~7pts lower on branches under v8, so the enforced threshold + this snapshot moved 93→86. The branches target was a no-regress pin on the old inflated current; it is reset to the named 80 floor (already met at 86) so it cannot become an unreachable hard-fail under v8 — the real statements/functions/lines→85 gaps are unchanged."
     },
     {
       "package": "@motebit/crypto-appattest",
       "vitest_config": "packages/crypto-appattest/vitest.config.ts",
-      "current": { "statements": 90, "branches": 75, "functions": 100, "lines": 90 },
-      "target": { "statements": 90, "branches": 80, "functions": 100, "lines": 90 },
+      "current": { "statements": 84, "branches": 75, "functions": 100, "lines": 89 },
+      "target": { "statements": 85, "branches": 80, "functions": 100, "lines": 85 },
       "target_date": "2026-09-30",
-      "rationale": "Branches 75 < 80 floor — the systematic cert-chain rare-error gap shared by all four platform verifiers (malformed/expired/wrong-root attestation paths exercised only by a few hand-built fixtures). Plan: a shared fuzz/property-based malformed-certificate fixture generator across the four verifiers so the rejection branches are exercised systematically. Lever: that fixture generator (one PR, four packages); raise-now would be hand-stubbed branches = the test-theater we ruled out."
+      "rationale": "Branches 75 < 80 floor (plus a statements 84→85 sliver) — the systematic cert-chain rare-error gap shared by all four platform verifiers (malformed/expired/wrong-root attestation paths exercised only by a few hand-built fixtures). Plan: a shared fuzz/property-based malformed-certificate fixture generator across the four verifiers so the rejection branches are exercised systematically. Lever: that fixture generator (one PR, four packages); raise-now would be hand-stubbed branches = the test-theater we ruled out. Recalibrated 2026-06 to vitest-4 coverage-v8 (commits c0faba1e + bf254dd8): the same tests measure statements 90→84, lines 90→89 under v8; this snapshot syncs to that, and the statements/lines no-regress pins (old inflated 90/90) reset to the shared platform-verifier floor 85/80/100/85 so they cannot become unreachable hard-fails — harmonizing all four verifiers on one floor. The real branches→80 gap is unchanged."
     },
     {
       "package": "@motebit/crypto-android-keystore",
