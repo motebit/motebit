@@ -23,7 +23,9 @@ Every piece of stored state carries a **sensitivity level**, and the level gover
 | `financial` | Account details, balances | **Never** |
 | `secret` | Credentials, keys | **Never** |
 
-`medical`, `financial`, and `secret` data never leave the device for a cloud model. The boundary is **fail-closed**: on any classification error, the system denies rather than leaks. Sensitivity is enforced at every boundary — storage, retrieval, sync, and the context assembled for the model — not at a single chokepoint.
+**Stored state** at `medical`, `financial`, or `secret` never syncs to a relay and is never assembled into the context sent to a cloud model — enforced at storage, retrieval, sync, and context assembly, fail-closed (on a classification error the memory is rejected, not leaked). Tool results are scanned for secret patterns (keys, tokens, card numbers, seed phrases) and redacted before they reach the model.
+
+What governs the **live conversation** is the **session sensitivity tier**: when a session is at `medical`/`financial`/`secret` (you set it, or a sensitive document on the slab raises it), every call to a non-sovereign provider is blocked — the model gets nothing until you switch to an on-device provider or de-escalate. The system does **not** auto-classify the content of your own live messages, so this is a control you hold, not magic detection: to keep a sensitive conversation local, mark the session (or use an on-device provider) **before** you type it. Handling of obvious secrets typed directly into an unmarked cloud session is a deliberate, in-progress hardening — see the [security backlog](https://github.com/motebit/motebit/blob/main/docs/doctrine/security-boundaries.md).
 
 Retention is governed too. Deleted data produces a signed **deletion certificate**, and sensitivity ceilings on what may persist (or sync to a relay) are interoperability law, not a configuration preference. See [Governance](/docs/concepts/governance) for the enforcement model.
 
