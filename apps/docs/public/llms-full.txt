@@ -387,7 +387,7 @@ Retention is governed too. Deleted data produces a signed **deletion certificate
 
 Your motebit's identity is an **Ed25519 keypair**. The public key (and the `motebit_id` derived from it) is shareable; the private key is the root of all authority.
 
-- **At rest.** The private key lives in the OS keyring on desktop and mobile. On the CLI it is encrypted with your passphrase using PBKDF2 (600,000 iterations, SHA-256) and AES-256-GCM — never written in plaintext.
+- **At rest.** On mobile the private key lives in the iOS Keychain / Android Keystore. On desktop it lives in the OS keyring, with an owner-only (`0600`) local fallback file when a keyring write cannot be confirmed (access-controlled, not application-encrypted — verified-keyring-only writes on signed builds are tracked hardening). On the CLI it is encrypted with your passphrase using PBKDF2 (600,000 iterations, SHA-256) and AES-256-GCM. It never crosses the network and never enters the non-secret config metadata.
 - **Recovery.** A recovery seed re-derives a sovereign identity. A sovereign `motebit_id` is a cryptographic commitment to its genesis key, so the binding between an id and its key is checkable offline by anyone.
 - **Rotation & succession.** Keys can be rotated; a signed succession chain (old and new keys both sign) preserves continuity, so a rotated key does not orphan past receipts.
 - **Hardware attestation is additive.** Secure Enclave / TPM / StrongBox attestations *raise* an identity's assurance score — they never replace the Ed25519 key, and their absence never blocks a software identity. Software identity is the floor.
@@ -440,7 +440,7 @@ The identity belongs to its owner, not to a service provider. Switch AI provider
 
 ## Cryptographic keys
 
-Each device that hosts a motebit generates an Ed25519 keypair. The private key is stored in the operating system's secure keyring — it never touches the filesystem, never leaves the device, and never gets sent over the network. The public key is shared with services that need to verify the agent's identity.
+Each device that hosts a motebit generates an Ed25519 keypair. The private key is stored in the operating system's secure keyring (on the CLI, in a passphrase-encrypted file instead; on desktop, with an owner-only local fallback when the OS keyring write cannot be confirmed) — it never leaves the device and never gets sent over the network. The public key is shared with services that need to verify the agent's identity.
 
 Ed25519 was chosen for its speed, small key size, and resistance to timing attacks. It's the same signature scheme used by SSH, Signal, and WireGuard.
 
@@ -982,6 +982,8 @@ These two booleans are the entire trust contract; do not over-read them.
 ## Server vs browser
 
 The **private key** must never reach a browser bundle. Mint receipts **server-side** (or in a trusted backend/CLI); the key lives in a secret manager. **Verifying** is safe anywhere — the verifier needs only the public receipt, so you can verify in the browser to independently check a server's work. If you persist a signing identity, store only the private key (seed) and re-derive the public key + `motebit_id` from it; see [Produce a receipt](/docs/developer/produce-a-receipt#the-signing-identity).
+
+This is the rule for an **integrator's service key** — a key that signs on behalf of your backend. A different, deliberate model is a **sovereign motebit that lives in the browser** (the motebit web app): the user's own identity key is held client-side under a non-extractable WebCrypto wrapping key in IndexedDB and erased from memory after each use. That is a consumer-wallet trust model (the user owns the key on their own device), not a server handing its key to untrusted clients — don't conflate the two. If you are building a backend service, keep its key server-side as above.
 
 ## Next
 
@@ -2093,7 +2095,7 @@ For the conceptual foundation, see [Identity](/docs/concepts/identity). For wher
 On first launch, the system runs a shared bootstrap protocol (`bootstrapIdentity` in `@motebit/core-identity`):
 
 1. **Generate an Ed25519 keypair** using `@noble/ed25519` — a zero-dependency, audited library. The same signing scheme used by SSH, Signal, and WireGuard.
-2. **Store the private key** in the platform's secure storage. On desktop, the Tauri keyring. On CLI, PBKDF2-encrypted as `cli_encrypted_key` in `~/.motebit/config.json`. On mobile, `expo-secure-store`. The private key never touches a plaintext config file.
+2. **Store the private key** in the platform's secure storage. On desktop, the Tauri keyring (the OS Keychain / Credential Manager / Secret Service) — with an owner-only (mode `0600`) local fallback file, because some OS keyrings silently drop writes on certain build signatures and the failure cannot be detected in-process. On CLI, PBKDF2-encrypted as `cli_encrypted_key` in `~/.motebit/config.json`. On mobile, `expo-secure-store` (iOS Keychain / Android Keystore, no fallback). The private key never appears in the non-secret `config.json` and never crosses the network; on desktop the keyring fallback is access-controlled but not application-encrypted (verified-keyring-only writes on signed builds are tracked hardening — see [security boundaries](https://github.com/motebit/motebit/blob/main/docs/doctrine/security-boundaries.md)).
 3. **Generate a UUID v7** `motebit_id` (time-ordered, sortable) and a `device_id`.
 4. **Register the device** against the identity, binding the device's public key to the `motebit_id`.
 5. **Write config** — the `motebit_id`, `device_id`, and public key are persisted to `~/.motebit/config.json` (non-secret metadata only).
@@ -2153,7 +2155,8 @@ Sensitive data is encrypted before leaving the agent boundary:
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | **Sync payloads**   | AES-256-GCM with a 256-bit random key and 12-byte nonce. The 16-byte authentication tag is appended to the ciphertext. |
 | **CLI private key** | PBKDF2 key derivation (600,000 iterations, SHA-256) from a user passphrase, then AES-256-GCM encryption.               |
-| **Desktop/mobile**  | Private key stored in OS keyring (hardware-backed where available). No application-layer encryption needed.            |
+| **Mobile**          | Private key stored in `expo-secure-store` (iOS Keychain / Android Keystore, hardware-backed where available). No fallback.                                                                                                                |
+| **Desktop**         | Private key stored in the OS keyring, with an owner-only (`0600`) local fallback file when a keyring write cannot be confirmed (some build signatures silently drop keyring writes). The fallback is access-controlled, not application-encrypted; verified-keyring-only writes on signed builds are tracked hardening. |
 
 All cryptographic operations use Web Crypto API or `@noble/hashes` and `@noble/ciphers` — zero-dependency, audited implementations. Sensitive byte arrays are securely erased (overwritten with random data, then zeroed) after use.
 
@@ -2191,7 +2194,7 @@ A valid signature proves the holder has the private key. It does not prove the h
 
 | Concern               | Approach                                                                                                                                                                                                                                                                                                                                                   |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Key storage**       | OS keychain (desktop/mobile) or PBKDF2-encrypted file (CLI). Never plaintext.                                                                                                                                                                                                                                                                              |
+| **Key storage**       | Mobile: iOS Keychain / Android Keystore. Desktop: OS keyring, with an owner-only (`0600`) local fallback file when a keyring write cannot be confirmed (access-controlled, not application-encrypted — verified-keyring-only writes on signed builds are tracked hardening). CLI: PBKDF2-encrypted file. Never in the non-secret `config.json`.                 |
 | **Key rotation**      | Signed succession records (spec §3.8). The old keypair signs a tombstone declaring the new keypair as successor — both keys sign the canonical payload. The `motebit_id` persists across rotations. Rotate via `motebit rotate` (CLI) or `npx create-motebit rotate` (scaffolder). No centralized revocation — succession chains are verifiable by anyone. |
 | **Guardian recovery** | Enterprise agents can declare an organizational guardian (spec §3.3). If the primary key is compromised, the guardian signs a recovery succession record — rotating to a new key without the compromised key. Guardian revocation requires dual authorization (both keys sign).                                                                            |
 | **Secure erasure**    | `secureErase()` overwrites byte arrays with random data then zeros before garbage collection.                                                                                                                                                                                                                                                              |
