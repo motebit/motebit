@@ -465,6 +465,16 @@ jobs:
           pnpm --filter @motebit/verifier... --filter @motebit/state-export-client... build
           REQUIRE_PYTHON=1 npx tsx scripts/check-receipt-conformance.ts
 
+      - name: Cross-implementation evidence-provenance conformance
+        # Every committed evidence-provenance vector must produce the same structured
+        # result across @motebit/crypto's verifyEvidenceProvenance and the stdlib-only
+        # Python reference — proving evidence-provenance (and the agency.html-text.v1
+        # recipe it resolves) is a real cross-language protocol, not a TypeScript
+        # feature. No pynacl needed: evidence-provenance is sha-256 + substring.
+        run: |
+          pnpm --filter @motebit/crypto --filter @motebit/tools build
+          REQUIRE_PYTHON=1 npx tsx scripts/check-evidence-provenance-conformance.ts
+
       - name: Capture relay log lines for the round-trip
         if: success()
         run: |

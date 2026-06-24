@@ -1,0 +1,105 @@
+{
+  "schema": "motebit.evidence-provenance-corpus.v1",
+  "description": "Cross-implementation conformance vectors for verifyEvidenceProvenance (motebit/evidence-provenance@1.0). Each case: run the law over `input.bytes_utf8` (UTF-8 encoded to bytes) + `input.provenance`, with a resolver that handles exactly `input.resolvable_recipes`, and assert the structured result deep-equals `expected`. The law: the named `span` is an exact substring of projection(bytes), where the bytes hash to `provenance.digest`; projection is an injected, app-owned seam (absent ⇒ raw bytes; present+resolvable ⇒ apply the recipe; present+unresolvable ⇒ fail closed). Re-verifies PRESENCE, never truth, with no oracle. The recipe `agency.html-text.v1` is the published, world-public, byte-deterministic HTML→text projection (github.com/agency-computer/html-text-spec @ 01b475be); a conforming impl reproduces its output byte-for-byte. See ./README.md and spec/evidence-provenance-v1.md.",
+  "cases": [
+    {
+      "name": "raw-byte-present",
+      "description": "Raw-byte path (projection absent): the span is an exact substring of the raw bytes a re-fetcher obtains, content-addressed by the digest. The honest floor — re-verifiable by construction, no shared code.",
+      "input": {
+        "bytes_utf8": "Total revenue for the quarter was $81,615 million, up 122% year over year.\nData Center revenue was $75,246 million.",
+        "provenance": {
+          "digest": {
+            "algorithm": "sha-256",
+            "value": "f5fcede7720f4531c9f7bdfe4242101bb3306c41dc135a78aa3674cc98b9481b"
+          },
+          "span": "$81,615 million"
+        },
+        "resolvable_recipes": []
+      },
+      "expected": { "present": true }
+    },
+    {
+      "name": "raw-byte-digest-mismatch",
+      "description": "The digest does not address these bytes → fail closed BEFORE any span check. A re-verifier handed the wrong primary record (or a tampered digest) must not proceed to locate a span.",
+      "input": {
+        "bytes_utf8": "Total revenue for the quarter was $81,615 million, up 122% year over year.\nData Center revenue was $75,246 million.",
+        "provenance": {
+          "digest": {
+            "algorithm": "sha-256",
+            "value": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "span": "$81,615 million"
+        },
+        "resolvable_recipes": []
+      },
+      "expected": { "present": false, "reason": "digest_mismatch" }
+    },
+    {
+      "name": "raw-byte-span-absent",
+      "description": "Digest matches, but the cited span is NOT in the bytes → span_absent. The anti-fabrication case: a producer cannot place a figure into a content-addressed record it does not contain.",
+      "input": {
+        "bytes_utf8": "Total revenue for the quarter was $81,615 million, up 122% year over year.\nData Center revenue was $75,246 million.",
+        "provenance": {
+          "digest": {
+            "algorithm": "sha-256",
+            "value": "f5fcede7720f4531c9f7bdfe4242101bb3306c41dc135a78aa3674cc98b9481b"
+          },
+          "span": "$99,999 million"
+        },
+        "resolvable_recipes": []
+      },
+      "expected": { "present": false, "reason": "span_absent" }
+    },
+    {
+      "name": "recipe-html-present",
+      "description": "Recipe path: bytes are raw HTML, digest is over the RAW HTML (honesty invariant), projection names agency.html-text.v1. A resolver that owns the recipe applies it to the raw bytes → 'Revenue $ 81,615 Data Center $ 75,246'; the span is present. Cross-language byte-determinism of the recipe is the §7 make-or-break, proven here across TS + Python.",
+      "input": {
+        "bytes_utf8": "<table><tr><td>Revenue</td><td>$ 81,615</td></tr><tr><td>Data Center</td><td>$ 75,246</td></tr></table>",
+        "provenance": {
+          "digest": {
+            "algorithm": "sha-256",
+            "value": "e94256f6ab2a1ccf10c763eb50dbdf813f3944dd26fd356d5e83f7d1eab60f05"
+          },
+          "projection": "agency.html-text.v1",
+          "span": "Revenue $ 81,615"
+        },
+        "resolvable_recipes": ["agency.html-text.v1"]
+      },
+      "expected": { "present": true }
+    },
+    {
+      "name": "recipe-projection-unresolved",
+      "description": "Same artifact as recipe-html-present, but the verifier owns NO resolver for the recipe → FAIL CLOSED. A re-verifier that cannot reproduce the projection must NOT silently pass (domain-blind law: motebit owns no projection catalog). Resolver totality: 'cannot resolve' is signaled by omitting the resolver, never by a throwing one.",
+      "input": {
+        "bytes_utf8": "<table><tr><td>Revenue</td><td>$ 81,615</td></tr><tr><td>Data Center</td><td>$ 75,246</td></tr></table>",
+        "provenance": {
+          "digest": {
+            "algorithm": "sha-256",
+            "value": "e94256f6ab2a1ccf10c763eb50dbdf813f3944dd26fd356d5e83f7d1eab60f05"
+          },
+          "projection": "agency.html-text.v1",
+          "span": "Revenue $ 81,615"
+        },
+        "resolvable_recipes": []
+      },
+      "expected": { "present": false, "reason": "projection_unresolved" }
+    },
+    {
+      "name": "recipe-html-span-absent",
+      "description": "Recipe resolvable and applied, digest matches, but the cited figure is absent from the projected text → span_absent. Anti-fabrication on the recipe path: applying the real recipe still cannot conjure a span the record does not contain.",
+      "input": {
+        "bytes_utf8": "<table><tr><td>Revenue</td><td>$ 81,615</td></tr><tr><td>Data Center</td><td>$ 75,246</td></tr></table>",
+        "provenance": {
+          "digest": {
+            "algorithm": "sha-256",
+            "value": "e94256f6ab2a1ccf10c763eb50dbdf813f3944dd26fd356d5e83f7d1eab60f05"
+          },
+          "projection": "agency.html-text.v1",
+          "span": "Revenue $ 99,999"
+        },
+        "resolvable_recipes": ["agency.html-text.v1"]
+      },
+      "expected": { "present": false, "reason": "span_absent" }
+    }
+  ]
+}
