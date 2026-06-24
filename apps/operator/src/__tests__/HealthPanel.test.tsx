@@ -60,11 +60,15 @@ describe("HealthPanel", () => {
   it("renders empty-relay state with the partnership-not-code signal", async () => {
     mockHealth(ZERO_SUMMARY);
     render(React.createElement(HealthPanel));
+    // Wait for the async DATA to render, not just the synchronous heading — the
+    // heading paints before the mocked fetch resolves, so asserting on the "0"
+    // headline numbers right after a heading-only waitFor races the data render
+    // (flaked in CI: "Unable to find an element with the text: 0"). The sibling
+    // active-relay test already waits on a data value ("3 / 4") for this reason.
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Health" })).toBeTruthy();
+      expect(screen.getAllByText("0").length).toBeGreaterThan(5);
     });
-    // Headline numbers
-    expect(screen.getAllByText("0").length).toBeGreaterThan(5);
     // The signal text — the whole point of the panel
     expect(
       screen.getByText(
