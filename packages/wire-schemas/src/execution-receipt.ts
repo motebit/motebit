@@ -177,6 +177,18 @@ export const ExecutionReceiptSchema: z.ZodType<ExecutionReceiptShape> = z.lazy((
         .describe(
           "Scope from the delegation token that authorized this execution, if any. Present when the executor received a scoped token; absent for self-submitted tasks.",
         ),
+      source_digest: z
+        .object({
+          algorithm: z
+            .string()
+            .describe("Content-digest hash algorithm — `sha-256` today (a `DigestAlgorithm`)."),
+          value: z.string().describe("Lowercase hex digest under `algorithm`."),
+        })
+        .strict()
+        .optional()
+        .describe(
+          "Content digest of the RAW primary-source bytes a fetch-type task retrieved, when `result` is a verbatim raw-byte-addressable span of them (e.g. read_url over a text/* source). Signature-bound; back-compat by absence. A citation builder copies it into Citation.provenance for evidence-provenance re-checking. See spec/evidence-provenance-v1.md.",
+        ),
       invocation_origin: IntentOriginSchema.optional(),
       suite: SuiteSchema,
       signature: z

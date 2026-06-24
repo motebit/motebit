@@ -31,6 +31,7 @@
 
 import { buildServiceReceipt, runMolecule } from "@motebit/molecule-runner";
 import { InMemoryToolRegistry, readUrlDefinition, createReadUrlHandler } from "@motebit/tools";
+import type { ToolResult } from "@motebit/sdk";
 import { loadConfig } from "./helpers.js";
 
 function log(msg: string): void {
@@ -68,7 +69,9 @@ async function main(): Promise<void> {
         const taskId = crypto.randomUUID();
         const submittedAt = Date.now();
 
-        let result: { ok: boolean; data?: unknown; error?: string };
+        // ToolResult (not a subset) so `source_digest` — set by read_url for a
+        // raw-byte-addressable text/* source — survives into the signed receipt.
+        let result: ToolResult;
         try {
           result = await registry.execute("read_url", { url: prompt });
         } catch (err: unknown) {
@@ -96,6 +99,13 @@ async function main(): Promise<void> {
           toolsUsed: ["read_url"],
           relayTaskId: options?.relayTaskId,
           delegatedScope: options?.delegatedScope,
+          // Attest the raw-source content address when read_url produced a
+          // raw-byte-addressable result (text/* verbatim). Absent otherwise —
+          // back-compat by absence. Makes the cited excerpt re-verifiable down to
+          // the primary record once a citation builder copies it into provenance.
+          ...(result.ok && result.source_digest != null
+            ? { sourceDigest: result.source_digest }
+            : {}),
         });
         log(`receipt=${signed.signature.slice(0, 12)}… url="${prompt.slice(0, 60)}"`);
         yield {

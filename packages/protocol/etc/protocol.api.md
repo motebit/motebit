@@ -663,6 +663,7 @@ export const CHAT_TASK_SHAPE: TaskShape;
 // @public
 export interface Citation {
     locator: string;
+    provenance?: EvidenceProvenance;
     receipt_task_id?: string;
     source: CitationSource;
     text_excerpt: string;
@@ -1744,6 +1745,7 @@ export interface ExecutionReceipt {
     result_hash: string;
     // (undocumented)
     signature: string;
+    source_digest?: DigestRef;
     status: "completed" | "failed" | "denied";
     // (undocumented)
     submitted_at: number;
@@ -4037,6 +4039,7 @@ export interface ToolResult {
     ok: boolean;
     reason?: string;
     _sanitized?: boolean;
+    source_digest?: DigestRef;
 }
 
 // @public (undocumented)

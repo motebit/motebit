@@ -363,6 +363,18 @@ export async function research(question: string, config: ResearchConfig): Promis
           source: "web",
           locator: prompt,
           receipt_task_id: receipt.task_id,
+          // Re-verifiable evidence provenance — present only when the read_url atom
+          // attested a RAW-BYTE-ADDRESSABLE source (text/*), where `resultText` is a
+          // verbatim span of the raw fetched bytes content-addressed by
+          // `source_digest`. projection absent (raw-byte path); a third party
+          // re-fetches `locator`, re-checks the span with no shared code
+          // (verifyEvidenceProvenance). ABSENT for HTML/JSON (extracted/reformatted)
+          // until a published projection recipe lands — back-compat by absence,
+          // never a claim the producer can't back. `binding` is omitted: motebit
+          // resolves no issuer identity for arbitrary URLs (domain-blind).
+          ...(receipt.source_digest != null
+            ? { provenance: { digest: receipt.source_digest, span: resultText } }
+            : {}),
         });
       }
 

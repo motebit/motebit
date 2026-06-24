@@ -30,6 +30,7 @@ import {
   hexToBytes,
   verifyExecutionReceipt,
   verifyReceiptChain,
+  verifyEvidenceProvenance,
 } from "@motebit/encryption";
 import type { KeyPair } from "@motebit/encryption";
 import { buildServiceReceipt } from "@motebit/mcp-server";
@@ -86,9 +87,18 @@ beforeAll(async () => {
     motebitId: RU_MOTEBIT_ID,
     deviceId: RU_DEVICE_ID,
     port: RU_PORT,
-    handler: (args) => {
+    handler: async (args) => {
+      // A raw-byte-addressable text source: `data` IS the served body verbatim, so
+      // it attests source_digest = sha256(body) — exactly the real read_url text/*
+      // path. This makes the producer→citation→provenance round trip end-to-end.
       const url = typeof args["url"] === "string" ? args["url"] : "?";
-      return { ok: true, data: `page-content:${url}` };
+      const data = `page-content:${url}`;
+      const value = Array.from(
+        new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(data))),
+      )
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+      return { ok: true, data, source_digest: { algorithm: "sha-256" as const, value } };
     },
     knownCallers,
   });
@@ -192,6 +202,49 @@ describe("research — signed receipt E2E (molecule → web-search + read-url)",
     );
     expect(searchOk).toBe(true);
     expect(fetchOk).toBe(true);
+  });
+
+  it("a read_url citation carries re-verifiable evidence provenance down to the primary record (raw-byte path)", async () => {
+    const url = "https://example.com/filing.txt";
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [{ type: "tool_use", id: "tu-1", name: "motebit_read_url", input: { url } }],
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Done." }] });
+
+    const result = await research("provenance", {
+      anthropicApiKey: "sk-ant-test",
+      webSearchUrl: wsAtom.url,
+      readUrlUrl: ruAtom.url,
+      callerMotebitId: RESEARCH_MOTEBIT_ID,
+      callerDeviceId: RESEARCH_DEVICE_ID,
+      callerPrivateKey: researcherKeypair.privateKey,
+      maxToolCalls: 8,
+    });
+
+    const web = result.citations.find((c) => c.source === "web");
+    expect(web).toBeDefined();
+    // The producer attached provenance: the read_url receipt attested a raw-byte source.
+    expect(web!.provenance).toBeDefined();
+    expect(web!.provenance!.digest.algorithm).toBe("sha-256");
+    expect(web!.provenance!.projection).toBeUndefined(); // raw-byte path, no recipe
+
+    // THE ROUND TRIP — motebit's OWN agent output re-verifies down to the source: the
+    // cited excerpt is a span of the raw fetched bytes a stranger re-fetches, confirmed
+    // with no shared extraction code (verifiable-locality, signatures → evidence).
+    const verdict = await verifyEvidenceProvenance(
+      new TextEncoder().encode(web!.text_excerpt),
+      web!.provenance!,
+    );
+    expect(verdict).toEqual({ present: true });
+
+    // A fabricated excerpt cannot be placed into the content-addressed record — the law
+    // disposes (model proposes, code disposes), applied to the agent's own answers.
+    const tampered = await verifyEvidenceProvenance(new TextEncoder().encode(web!.text_excerpt), {
+      ...web!.provenance!,
+      span: "a fabricated figure that never appeared in the source",
+    });
+    expect(tampered).toEqual({ present: false, reason: "span_absent" });
   });
 
   it("cryptosuite motebit-jcs-ed25519-b64-v1 is pinned on every receipt in the chain", async () => {

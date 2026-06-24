@@ -61,6 +61,8 @@ export {
   signSovereignPaymentReceipt,
   verifyReceiptChain,
   verifyReceiptSequence,
+  // Evidence provenance — re-check a content-addressed span in a primary record.
+  verifyEvidenceProvenance,
   signComputerSessionReceipt,
   verifyComputerSessionReceipt,
   hashComputerSessionActions,

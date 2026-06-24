@@ -1182,6 +1182,7 @@ export interface SignableReceipt {
     result_hash: string;
     // (undocumented)
     signature: string;
+    source_digest?: DigestRef;
     // (undocumented)
     status: "completed" | "failed" | "denied";
     // (undocumented)

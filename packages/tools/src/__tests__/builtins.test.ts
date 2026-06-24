@@ -317,6 +317,8 @@ describe("read_url", () => {
 
     expect(result.ok).toBe(true);
     expect(result.data).toContain('"key": "value"');
+    // JSON is REFORMATTED (pretty-printed) — not raw-byte-addressable, no source_digest.
+    expect(result.source_digest).toBeUndefined();
   });
 
   it("fetches and strips HTML content", async () => {
@@ -334,6 +336,34 @@ describe("read_url", () => {
     expect(result.data as string).toContain("Hello World");
     expect(result.data as string).not.toContain("<script>");
     expect(result.data as string).not.toContain("<style>");
+    // HTML is EXTRACTED (not raw-byte-addressable) — no source_digest, so a citation
+    // builder omits provenance (back-compat by absence). Provenance for HTML needs a
+    // published byte-deterministic projection recipe (deferred).
+    expect(result.source_digest).toBeUndefined();
+  });
+
+  it("attests source_digest for a raw-byte-addressable text/* source (the evidence-provenance producer path)", async () => {
+    const body = "Total revenue for the quarter was Revenue $ 81,615 million.\nNext line.";
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ "content-type": "text/plain; charset=utf-8" }),
+      text: async () => body,
+    }) as unknown as typeof fetch;
+
+    const handler = createReadUrlHandler();
+    const result = await handler({ url: "https://example.com/filing.txt" });
+
+    // data is the body verbatim (raw-byte-addressable), and source_digest is sha256
+    // of the FULL raw body — what a re-fetcher reproduces.
+    expect(result.ok).toBe(true);
+    expect(result.data).toBe(body);
+    expect(result.source_digest?.algorithm).toBe("sha-256");
+    const expected = Array.from(
+      new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body))),
+    )
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+    expect(result.source_digest?.value).toBe(expected);
   });
 
   it("returns error on missing url", async () => {
@@ -435,11 +465,13 @@ describe("read_url", () => {
 describe("read_file", () => {
   it("reads an existing file", async () => {
     const handler = createReadFileHandler();
-    // Read this test file itself
+    // Read this test file itself. Assert on a token at the TOP of the file (the
+    // import line) rather than a string near the bottom — read_file caps its read,
+    // so a bottom-of-file assertion is brittle to this file growing.
     const result = await handler({ path: __filename });
 
     expect(result.ok).toBe(true);
-    expect(result.data as string).toContain("read_file");
+    expect(result.data as string).toContain('from "vitest"');
   });
 
   it("returns error on missing path", async () => {

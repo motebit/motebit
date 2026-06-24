@@ -3,6 +3,10 @@
 // this barrel; the local binding here is what lets the anchor type reference it.
 import type { MerkleTreeVersion } from "./merkle-tree-hash.js";
 import type { MemorySource } from "./memory-source.js";
+// Local bindings for `Citation.provenance` + the producer-side `source_digest`
+// fields below (re-exported with the rest of the evidence-provenance vocabulary
+// near the bottom of this barrel).
+import type { EvidenceProvenance, DigestRef } from "./evidence-provenance.js";
 
 // === Branded ID Types ===
 //
@@ -858,6 +862,19 @@ export interface ToolResult {
   reason?: string;
   /** Set by adapters that already applied boundary wrapping (e.g. MCP client). */
   _sanitized?: boolean;
+  /**
+   * Content digest of the RAW retrieved primary-source bytes, set by a
+   * fetch-type tool (today: `read_url`) ONLY when the returned `data` is a
+   * verbatim span of those raw bytes — i.e. re-derivable by a third party who
+   * re-fetches the source with no shared extraction code (`text/*` non-HTML).
+   * Its PRESENCE is the signal that `data` is raw-byte-addressable; absent for
+   * extracted/reformatted output (HTML, pretty-printed JSON) where a span is not
+   * re-derivable without a published projection recipe. The producer threads this
+   * into the signed receipt's `source_digest`, which a citation builder copies
+   * into `Citation.provenance` (evidence-provenance, raw-byte path). Optional and
+   * ignored by every tool/consumer that doesn't set or read it.
+   */
+  source_digest?: DigestRef;
 }
 
 export type ToolHandler = (args: Record<string, unknown>) => Promise<ToolResult>;
@@ -1147,6 +1164,18 @@ export interface ExecutionReceipt {
   relay_task_id?: string;
   /** Scope from the delegation token that authorized this execution, if any. */
   delegated_scope?: string;
+  /**
+   * Content digest of the RAW primary-source bytes this task retrieved, when the
+   * task's `result` is a verbatim, raw-byte-addressable span of those bytes
+   * (a fetch-type atom — `read_url` — over a `text/*` non-HTML source). Set from
+   * the tool's {@link ToolResult.source_digest}. Signature-bound (canonicalized
+   * with the rest of the body), so a re-fetcher who reproduces the bytes can
+   * trust the attestation; absent for extracted/reformatted output (HTML/JSON) or
+   * non-fetch tasks — back-compat by absence. A citation builder copies this into
+   * `Citation.provenance` to make the cited excerpt re-verifiable down to the
+   * primary record (evidence-provenance, raw-byte path).
+   */
+  source_digest?: DigestRef;
   /**
    * How this task was authorized for invocation. Discriminates user-explicit
    * affordances (chip tap, slash command, scene click) from AI-mediated
@@ -1597,6 +1626,18 @@ export interface Citation {
    * for `"interior"` (the committed corpus is the provenance).
    */
   receipt_task_id?: string;
+  /**
+   * Re-verifiable evidence provenance for a `"web"` citation: the `text_excerpt`
+   * as a content-addressed span in the primary record at `locator`
+   * (`@motebit/crypto` `verifyEvidenceProvenance`; spec/evidence-provenance-v1.md).
+   * Present only when the producer retrieved the source AND the excerpt is
+   * re-derivable from the raw fetched bytes (digest over the raw response;
+   * `projection` absent for raw-byte spans, or a published recipe id for an
+   * extraction). ABSENT otherwise — back-compat by absence, never a claim the
+   * producer can't back. The bare `{ kind, ref }`-style citation is unchanged;
+   * this only adds independent re-checkability down to the primary record.
+   */
+  provenance?: EvidenceProvenance;
 }
 
 /**

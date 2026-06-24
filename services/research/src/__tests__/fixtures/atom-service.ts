@@ -41,7 +41,7 @@ export interface AtomOptions {
   port: number;
   authToken?: string;
   /** Handler response for the atom's one tool. */
-  handler: (args: Record<string, unknown>) => ToolResult;
+  handler: (args: Record<string, unknown>) => ToolResult | Promise<ToolResult>;
   /** Motebit-signed-token callers this atom trusts. Required when McpClientAdapter uses `motebit: true`. */
   knownCallers?: Map<string, { publicKey: string; trustLevel: AgentTrustLevel }>;
 }
@@ -128,6 +128,12 @@ export async function startAtom(opts: AtomOptions): Promise<AtomFixture> {
         toolsUsed: [toolName],
         relayTaskId: options?.relayTaskId,
         delegatedScope: options?.delegatedScope,
+        // Mirror the real read-url service: thread a raw-byte-addressable source's
+        // content digest into the signed receipt so the producer→citation provenance
+        // path is exercised end-to-end.
+        ...(result.ok && result.source_digest != null
+          ? { sourceDigest: result.source_digest }
+          : {}),
       });
       yield { type: "task_result" as const, receipt: signed as unknown as Record<string, unknown> };
     },

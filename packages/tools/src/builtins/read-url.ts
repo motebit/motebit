@@ -97,6 +97,22 @@ function decodeHtmlEntities(s: string): string {
   });
 }
 
+/**
+ * Lowercase-hex SHA-256 of `bytes` via Web Crypto — available in Node ≥ 20 and
+ * every browser, so the handler stays browser-safe and zero-dep on
+ * `@motebit/crypto`. Byte-equivalent to `@motebit/crypto`'s `hash`, which the
+ * evidence-provenance verifier uses (it compares digests case-insensitively).
+ * This is the content address of the raw fetched bytes for `source_digest`.
+ */
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  // Cast around lib.dom's `Uint8Array<ArrayBufferLike>` vs `BufferSource` friction;
+  // a Uint8Array is a valid ArrayBufferView at runtime.
+  const digest = await crypto.subtle.digest("SHA-256", bytes as BufferSource);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 export function createReadUrlHandler(opts?: {
   proxyUrl?: string;
   fetcher?: ReadUrlFetcher;
@@ -139,7 +155,20 @@ export function createReadUrlHandler(opts?: {
       // whitespace verbatim. HTML-stripping regexes below collapse newlines and
       // destroy the structure of anything that isn't prose.
       if (contentType.startsWith("text/") && !contentType.includes("text/html")) {
-        return { ok: true, data: body.slice(0, 64_000) };
+        // RAW-BYTE-ADDRESSABLE: `data` is the served body verbatim (a prefix), so a
+        // cited excerpt is re-derivable by a third party who re-fetches the URL with
+        // no shared extraction code. Attest the content address of the FULL raw body
+        // (the bytes a re-fetcher obtains, before the slice). The producer threads
+        // `source_digest` into the signed receipt; a citation builder copies it into
+        // Citation.provenance (evidence-provenance, raw-byte / projection-absent path).
+        // The convention is `digest = sha256(UTF-8(body))`, which the verifier
+        // reproduces. NOT set for HTML (extracted) or JSON (reformatted) below —
+        // those need a published byte-deterministic projection recipe.
+        const source_digest = {
+          algorithm: "sha-256" as const,
+          value: await sha256Hex(new TextEncoder().encode(body)),
+        };
+        return { ok: true, data: body.slice(0, 64_000), source_digest };
       }
 
       const cleaned = decodeHtmlEntities(

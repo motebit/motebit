@@ -69,6 +69,16 @@ export interface SignableReceipt {
   relay_task_id?: string;
   delegated_scope?: string;
   /**
+   * Content digest of the RAW primary-source bytes a fetch-type task retrieved,
+   * when the `result` is a verbatim raw-byte-addressable span of them (e.g.
+   * `read_url` over a `text/*` source). Signature-bound via `canonicalJson(body)`
+   * like every other field; optional and back-compat by absence. The protocol
+   * `DigestRef` exactly (type-only import — erased at runtime, like
+   * `BondCommitment` below — so a `SignableReceipt` stays assignable to an
+   * `ExecutionReceipt`).
+   */
+  source_digest?: DigestRef;
+  /**
    * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-b64-v1"` today —
    * the verification recipe is JCS canonicalization of the unsigned body,
    * Ed25519 primitive, base64url signature encoding. Every ExecutionReceipt
@@ -1416,7 +1426,7 @@ export async function verifyDisputeRequest(
 // === Commitment Bonds (anti-sybil staked signal — docs/doctrine/commitment-bond.md) ===
 
 // prettier-ignore
-import type { BondCommitment } from "@motebit/protocol";
+import type { BondCommitment, DigestRef } from "@motebit/protocol";
 export type { BondCommitment };
 
 /** The one suite BondCommitments sign under today — spec/bond-v1.md §4. */

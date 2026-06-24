@@ -14,7 +14,7 @@
  */
 
 import { hash as sha256, signExecutionReceipt, verifyExecutionReceipt } from "@motebit/encryption";
-import type { ExecutionReceipt, IntentOrigin } from "@motebit/sdk";
+import type { ExecutionReceipt, IntentOrigin, DigestRef } from "@motebit/sdk";
 
 export interface BuildServiceReceiptInput {
   /** Service's motebit identity (same for every receipt this service signs). */
@@ -59,6 +59,14 @@ export interface BuildServiceReceiptInput {
    * — omitted means "unknown origin" on the resulting receipt.
    */
   invocationOrigin?: IntentOrigin;
+  /**
+   * Content digest of the RAW primary-source bytes this task retrieved, when the
+   * `result` is a verbatim raw-byte-addressable span of them (a fetch-type atom
+   * — read_url over a text/* source). Set from the tool's
+   * {@link ToolResult.source_digest}; signature-bound on the receipt. Optional —
+   * omitted for extracted output (HTML/JSON) and non-fetch tasks.
+   */
+  sourceDigest?: DigestRef;
 }
 
 /**
@@ -91,6 +99,7 @@ export async function buildServiceReceipt(
       ? { delegation_receipts: input.delegationReceipts }
       : {}),
     ...(input.invocationOrigin != null ? { invocation_origin: input.invocationOrigin } : {}),
+    ...(input.sourceDigest != null ? { source_digest: input.sourceDigest } : {}),
   };
 
   const signed = (await signExecutionReceipt(
