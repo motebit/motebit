@@ -977,7 +977,7 @@ These two booleans are the entire trust contract; do not over-read them.
 
 - **`valid: true`** — the bytes are authentic (Ed25519 signature checks) and, under `strictHashBinding`, internally self-consistent (`result_hash === SHA-256(result)`). It does **not** tell you _who_ signed it.
 - **`sovereign: true`** — the `motebit_id` is a cryptographic commitment to the signing key. It does **not** mean you know whose identity that is. To trust a _specific_ agent, pin its `motebit_id` / `public_key` to an identity you already know, and check the receipt matches.
-- **The honesty boundary** — a verified receipt proves _the signer computed this `result` for this work_. It does **not** prove anything about the _inputs_ the agent used (e.g. that data it fetched from a third party was real or complete). There is no oracle inside a signature. If your agent acts on external data, attest that data's provenance inside the signed `result` and state the limit plainly. Overselling "verified" past what the signature covers is the exact failure receipts exist to prevent.
+- **The honesty boundary** — a verified receipt proves _the signer computed this `result` for this work_. It does **not** prove anything about the _inputs_ the agent used (e.g. that data it fetched from a third party was real or complete). There is no oracle inside a signature. If your agent acts on external data, attest that data's provenance inside the signed `result` and state the limit plainly. Overselling "verified" past what the signature covers is the exact failure receipts exist to prevent. To make input _presence_ independently re-checkable (still presence, never truth), attach an `EvidenceProvenance` to a citation — see [Verify a citation's evidence](/docs/developer/verify-evidence).
 
 ## Server vs browser
 
@@ -3331,6 +3331,8 @@ Make this assertion a test in your minting code. It is the cheapest guard agains
 
 A receipt proves the agent **computed this result over the inputs it attested** — it does not prove those inputs match some external source of truth. There is no oracle inside the signature. If your agent fetched data from a third party, the receipt commits to what the agent claims it fetched; attest input provenance and completeness inside the signed `result` payload, and state the boundary plainly in any UI. Overselling "verified" past what the signature covers is the exact dishonesty receipts exist to prevent.
 
+You can narrow this boundary — not erase it — with **evidence provenance**: attach an `EvidenceProvenance` to a citation and a consumer can re-fetch the primary source and re-check that the cited span is actually present in it, offline and in any language. That makes input _presence_ independently re-verifiable; it still proves presence, never truth (no oracle). See [Verify a citation's evidence](/docs/developer/verify-evidence).
+
 ## Reference
 
 - Working producer example: [`mint-sovereign-fixture.mjs`](https://github.com/motebit/motebit/blob/main/examples/python-receipt-verifier/fixtures/mint-sovereign-fixture.mjs)
@@ -3468,6 +3470,90 @@ Only if you cannot use the published library in your environment. If you do, you
 - [Execution ledger](/docs/developer/execution-ledger) — the full wire format
 - [Delegation](/docs/developer/delegation) — discover → verify → delegate → receipt
 - [API reference](/docs/developer/api-reference) — the published package surface
+
+---
+
+# Verify a Citation's Evidence
+Source: https://docs.motebit.com/docs/developer/verify-evidence
+
+> Re-check that a cited claim is actually present in its primary source — offline, in any language, with no relay and no trust in the producer's index.
+
+A receipt proves _who computed a result_. It does not, by itself, prove anything about the **inputs** the agent used — see [the honesty boundary](/docs/developer/produce-a-receipt#the-honesty-boundary). **Evidence provenance** closes part of that gap: when a citation carries an `EvidenceProvenance`, you can re-fetch the primary source and re-check that the cited span is actually present in it — the evidence-axis analog of verifying a signature.
+
+The one thing to internalize: this re-verifies **presence, never truth**. There is no oracle inside the check — the bytes either contain the cited span or they don't. It answers _"is this claim backed by the record it cites?"_, not _"is the record correct?"_. That honesty is the whole point: it is a claim you (or anyone) can independently re-derive, not one you have to trust.
+
+## What you get back
+
+`verifyEvidenceProvenance(bytes, provenance, opts?)` returns a **structured** result — never a bare boolean, so a non-present answer names _why_:
+
+```ts
+{ present: true }
+| { present: false, reason: "digest_mismatch" | "projection_unresolved" | "span_absent" }
+```
+
+- `digest_mismatch` — the bytes you fetched are not the bytes the producer attested (wrong record, or tampered). Fail closed _before_ any span check.
+- `span_absent` — the bytes are right, but the cited span is not in them. The anti-fabrication case: a producer cannot place a figure into a record that does not contain it.
+- `projection_unresolved` — the citation names a document→text recipe you did not supply a resolver for (see [the recipe path](#the-recipe-path-html)). Fail closed — never silently pass.
+
+Evaluation order is load-bearing: **digest first, then projection, then substring.**
+
+## The raw-byte path (the frictionless floor)
+
+When the producer cited a raw-byte-addressable source — plain text, a `.txt` filing, a patch — `provenance.projection` is absent and you check the span against the raw bytes directly. **No shared code, no recipe — re-verifiable by construction:**
+
+```ts
+import { verifyEvidenceProvenance } from "@motebit/verifier";
+
+// A citation you received (e.g. on a signed research brief).
+const citation = {
+  locator: "https://example.com/filing.txt",
+  provenance: {
+    digest: { algorithm: "sha-256", value: "f5fcede7…" },
+    span: "$81,615 million",
+  },
+};
+
+// Re-fetch the primary source yourself — the bytes a stranger obtains.
+const bytes = new Uint8Array(await (await fetch(citation.locator)).arrayBuffer());
+
+const result = await verifyEvidenceProvenance(bytes, citation.provenance);
+// { present: true }  → the cited span is in the source you just fetched.
+// { present: false, reason: "digest_mismatch" } → you fetched a different record.
+// { present: false, reason: "span_absent" }     → the span was fabricated.
+```
+
+`@motebit/verifier` is the Apache-2.0, zero-monorepo-dependency, browser-safe consumer surface. `verifyEvidenceProvenance` (and the `EvidenceProvenance` / `EvidenceProvenanceResult` types) re-export from `@motebit/crypto` through it.
+
+## The recipe path (HTML)
+
+HTML and other extracted sources are not raw-byte-addressable: the producer cited a span of the **text** extracted from the page, but the digest is over the **raw HTML bytes** (the honest invariant — you re-fetch raw bytes, not the producer's extraction). So `provenance.projection` names a published, **byte-deterministic** document→text recipe, and you inject a resolver for the recipes you trust:
+
+```ts
+const result = await verifyEvidenceProvenance(rawHtmlBytes, citation.provenance, {
+  resolveProjection: (recipeId, bytes) => {
+    if (recipeId === "agency.html-text.v1") return projectAgencyHtmlTextV1(bytes);
+    throw new Error(`unsupported recipe ${recipeId}`); // a resolver fault, not "absent"
+  },
+});
+```
+
+The verifier is **domain-blind by construction** — it owns no recipe catalog (that would be document-format authority). You bring a resolver only for recipes you trust; for any other recipe the check fails closed with `projection_unresolved`. To signal "I can't resolve this," _omit_ the recipe from your resolver — never throw as a "not supported" signal (a throw propagates as a caller fault, never a false `present: false`).
+
+The one recipe in use today, [`agency.html-text.v1`](https://github.com/agency-computer/html-text-spec), is a frozen, world-public spec. A conforming implementation reproduces its output **byte-for-byte** from §2 of that spec — five ordered steps, ASCII-only whitespace, a single-pass entity decode. The canonical port to copy is the stdlib-only [Python reference](https://github.com/motebit/motebit/blob/main/examples/python-receipt-verifier/verify_evidence_provenance.py) (`project_agency_html_text_v1`). (If you are already running a motebit, `@motebit/tools` exports `projectAgencyHtmlTextV1`; a lightweight standalone resolver package is on the roadmap — file an issue if you want it sooner.)
+
+## Verify in any language
+
+This is a protocol, not a TypeScript feature. The law is sha-256 + substring presence (plus a published recipe on the HTML path) — no signing library required. A language-neutral conformance corpus, [`spec/conformance/evidence-provenance/corpus.json`](https://github.com/motebit/motebit/blob/main/spec/conformance/evidence-provenance/corpus.json), is verified byte-identically by both `@motebit/crypto` and the stdlib-only Python reference, enforced in CI. Run it yourself:
+
+```bash
+curl -sL https://raw.githubusercontent.com/motebit/motebit/main/spec/conformance/evidence-provenance/corpus.json -o corpus.json
+python examples/python-receipt-verifier/verify_evidence_provenance.py corpus.json
+# → one { present, reason? } per vector, matching the corpus's `expected`.
+```
+
+## The boundary, restated
+
+`provenance.binding` (issuer authority — "this filing is really from issuer X") is **not** verified here; it is app-layer. `locator` is advisory. The law is exact-substring presence against content-addressed bytes — re-verifiable **presence**, never truth, no oracle. State that plainly in any UI: a re-verified citation means _the cited claim is present in the record at this URL_, which is exactly as much, and as little, as it sounds. Doctrine: [`evidence-provenance.md`](https://github.com/motebit/motebit/blob/main/docs/doctrine/evidence-provenance.md); spec: [`spec/evidence-provenance-v1.md`](https://github.com/motebit/motebit/blob/main/spec/evidence-provenance-v1.md).
 
 ---
 

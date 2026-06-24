@@ -13,6 +13,7 @@
     "execution-ledger",
     "produce-a-receipt",
     "verify-a-receipt",
+    "verify-evidence",
     "choosing-a-verify-surface",
     "governance-triad",
     "budget-settlement",

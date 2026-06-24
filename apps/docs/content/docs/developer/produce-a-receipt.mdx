@@ -125,6 +125,8 @@ Make this assertion a test in your minting code. It is the cheapest guard agains
 
 A receipt proves the agent **computed this result over the inputs it attested** — it does not prove those inputs match some external source of truth. There is no oracle inside the signature. If your agent fetched data from a third party, the receipt commits to what the agent claims it fetched; attest input provenance and completeness inside the signed `result` payload, and state the boundary plainly in any UI. Overselling "verified" past what the signature covers is the exact dishonesty receipts exist to prevent.
 
+You can narrow this boundary — not erase it — with **evidence provenance**: attach an `EvidenceProvenance` to a citation and a consumer can re-fetch the primary source and re-check that the cited span is actually present in it, offline and in any language. That makes input _presence_ independently re-verifiable; it still proves presence, never truth (no oracle). See [Verify a citation's evidence](/docs/developer/verify-evidence).
+
 ## Reference
 
 - Working producer example: [`mint-sovereign-fixture.mjs`](https://github.com/motebit/motebit/blob/main/examples/python-receipt-verifier/fixtures/mint-sovereign-fixture.mjs)
