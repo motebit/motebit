@@ -32,7 +32,12 @@ import { generate as generateIdentity, verify as verifyIdentity } from "@motebit
 
 // Deterministic test ID
 const TEST_MOTEBIT_ID = "01961234-5678-7abc-def0-123456789abc";
-const TEST_PORT = 39201; // High port to avoid conflicts
+// Below Linux's default ephemeral range (32768–60999) so parallel turbo runs of
+// `port: 0` MCP-server tests cannot grab this port out from under us — an
+// EADDRINUSE here skips the whole suite and craters coverage. Own band per
+// service: read-url 193xx, code-review 194xx, research 195xx, web-search 196xx,
+// summarize 197xx. (A "high" port in the ephemeral range is MORE collision-prone.)
+const TEST_PORT = 19601;
 const TEST_TOKEN = "test-integration-token";
 
 let server: McpServerAdapter;

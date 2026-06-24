@@ -29,8 +29,13 @@ import { createSummarizeSearchHandler, summarizeSearchDefinition } from "../tool
 // Deterministic test IDs
 const WS_MOTEBIT_ID = "01961234-0001-7abc-def0-111111111111";
 const SUM_MOTEBIT_ID = "01961234-0002-7abc-def0-222222222222";
-const WS_PORT = 39210;
-const SUM_PORT = 39211;
+// Below Linux's default ephemeral range (32768–60999) so parallel turbo runs of
+// `port: 0` MCP-server tests cannot grab these ports out from under us — an
+// EADDRINUSE in beforeAll skips all 5 integration tests and craters branch
+// coverage below threshold (the 2026-06 CI failure). Own band per service:
+// read-url 193xx, code-review 194xx, research 195xx, web-search 196xx, summarize 197xx.
+const WS_PORT = 19701;
+const SUM_PORT = 19702;
 const TEST_TOKEN = "test-integration-token";
 
 function toHex(bytes: Uint8Array): string {
