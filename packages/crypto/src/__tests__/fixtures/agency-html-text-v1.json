@@ -1,6 +1,6 @@
 {
   "recipe": "agency.html-text.v1",
-  "spec": "docs/specs/agency-html-text-v1.md",
+  "spec": "agency-html-text-v1.md",
   "description": "Committed reference fixture for the agency.html-text.v1 projection recipe — the second implementation of the evidence-provenance projection-divergence conformance case checks its output byte-for-byte against `text` for each `html`. An independent implementation built ONLY from the prose spec must produce these exact strings.",
   "cases": [
     {

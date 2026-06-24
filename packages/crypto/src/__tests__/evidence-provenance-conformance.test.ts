@@ -7,13 +7,15 @@
  * is not confirmable by another and verifiable-locality dies.
  *
  * The recipe under test is `agency.html-text.v1`, published by agency.computer as a
- * frozen, citable spec (the consumer-forces-shape half of the co-design):
+ * frozen, world-public, citable spec (the consumer-forces-shape half of the co-design):
  *
- *   repo:    github.com/agency-computer/agency
- *   commit:  096c5de39a09f79513ca38719126dd335c02032d   (pinned — v1 is immutable)
- *   spec:    docs/specs/agency-html-text-v1.md           (the AUTHORITY)
- *   fixture: apps/app/lib/research/fixtures/agency-html-text-v1.json
+ *   repo:    github.com/agency-computer/html-text-spec  (PUBLIC — raw URLs 200 unauth)
+ *   commit:  01b475be38276621aab553d1aed7e6f02d80a64b  (pinned — v1 is immutable, §5)
+ *   spec:    agency-html-text-v1.md                     (the AUTHORITY)
+ *   fixture: agency-html-text-v1.json
  *            → vendored verbatim at ./fixtures/agency-html-text-v1.json
+ *              (sha256 1e36c0223c57cf85b4f50a7b1bbf7b2bf664178bbaa9d43edcf81ab5337214d8 —
+ *               byte-identical to the public source at the pinned commit; re-fetchable)
  *
  * BOUNDARY (load-bearing): motebit owns the SHAPE + the re-check LAW, NEVER the
  * projection recipe (document-format authority stays with the consumer). The
@@ -21,7 +23,7 @@
  * shipped `verifyEvidenceProvenance` (which is domain-blind — it injects the
  * resolver). It exists ONLY here, as motebit acting as the INDEPENDENT second
  * implementer the guardrail requires: written from §2 of the spec ALONE (their
- * reference `projection.ts` was deliberately NOT read), to prove the recipe is
+ * reference `reference/projection.ts` was deliberately NOT read), to prove the recipe is
  * byte-deterministic. A divergence would be a spec/impl defect to report upstream,
  * never a tolerance to widen.
  */
