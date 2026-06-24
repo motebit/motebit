@@ -1678,6 +1678,8 @@ export enum EventType {
     // (undocumented)
     ReflectionCompleted = "reflection_completed",
     // (undocumented)
+    SecretRedactedFromEgress = "secret_redacted_from_egress",
+    // (undocumented)
     SensitivityGateFired = "sensitivity_gate_fired",
     // (undocumented)
     SkillLoaded = "skill_loaded",
@@ -3226,6 +3228,13 @@ export interface ScrollAction {
     readonly kind: "scroll";
     // (undocumented)
     readonly target: ComputerPoint;
+}
+
+// @public
+export interface SecretRedactedFromEgressPayload {
+    readonly labels: readonly string[];
+    readonly provider_mode: "on-device" | "motebit-cloud" | "byok" | "unset";
+    readonly redacted_count: number;
 }
 
 // @public

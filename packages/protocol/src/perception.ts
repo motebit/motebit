@@ -373,3 +373,33 @@ export interface SensitivityGateFiredPayload {
    */
   readonly tool_name?: string;
 }
+
+/**
+ * Payload for `EventType.SecretRedactedFromEgress`. Emitted by the runtime when
+ * `SecretRedactingProvider` masks credential-class secrets a user typed into an
+ * UNMARKED cloud session before they reach a non-sovereign provider — the
+ * privacy-egress sibling of {@link SensitivityGateFiredPayload}: that one records a
+ * BLOCKED crossing (marked-sensitive session), this one records a REDACTED one
+ * (unmarked session), so the otherwise-silent transform leaves an inspectable trail.
+ *
+ * **Strictly metadata.** Carries the COUNT of masked spans and the credential-class
+ * LABEL names that fired (`"API_KEY"`, `"JWT"`, …) — these are pattern-class
+ * identifiers, NOT the secret content, exactly as `tool_name` above is a public
+ * capability name. Logging the redacted bytes would itself be the leak the redaction
+ * exists to prevent.
+ */
+export interface SecretRedactedFromEgressPayload {
+  /** How many credential-class spans were masked from the outbound payload this call. */
+  readonly redacted_count: number;
+  /**
+   * Distinct credential-class label names that fired (e.g. `"API_KEY"`, `"JWT"`,
+   * `"CONNECTION_STRING"`). Pattern-class identifiers — never the secret content.
+   */
+  readonly labels: readonly string[];
+  /**
+   * Provider mode at redaction time. Always a non-sovereign mode — redaction is a
+   * no-op on a sovereign (on-device) provider. Same inline `ProviderMode | "unset"`
+   * union as {@link SensitivityGateFiredPayload.provider_mode}.
+   */
+  readonly provider_mode: "on-device" | "motebit-cloud" | "byok" | "unset";
+}

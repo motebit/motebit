@@ -31,33 +31,65 @@
 import type { StreamingProvider } from "@motebit/ai-core";
 import type { ContextPack, AIResponse, MemoryCandidate } from "@motebit/sdk";
 
+/** A credential-class redactor: masks secrets and reports what it masked. */
+export type CloudEgressRedactor = (text: string) => {
+  text: string;
+  redactionCount: number;
+  labels: string[];
+};
+
+export interface PackRedactionResult {
+  pack: ContextPack;
+  /** Total credential-class spans masked across the user-authored fields. */
+  redactedCount: number;
+  /** Distinct credential-class label names that fired — content-free audit metadata. */
+  labels: string[];
+}
+
 /**
  * Redact the credential-class secrets from a user's outbound content in a
- * ContextPack — `user_message` plus user-role `conversation_history` entries.
- * Pure; returns a shallow copy. Exported for direct unit testing.
+ * ContextPack — `user_message` plus user-role `conversation_history` entries —
+ * and report the aggregate count + distinct labels (for the audit event). Pure;
+ * the returned pack is a shallow copy, the original is not mutated. Exported for
+ * direct unit testing.
  */
 export function redactPackForCloudEgress(
   pack: ContextPack,
-  redact: (text: string) => string,
-): ContextPack {
-  return {
+  redact: CloudEgressRedactor,
+): PackRedactionResult {
+  let redactedCount = 0;
+  const labels = new Set<string>();
+  const apply = (text: string): string => {
+    const r = redact(text);
+    redactedCount += r.redactionCount;
+    for (const l of r.labels) labels.add(l);
+    return r.text;
+  };
+  const newPack: ContextPack = {
     ...pack,
-    user_message: redact(pack.user_message),
+    user_message: apply(pack.user_message),
     ...(pack.conversation_history !== undefined
       ? {
           conversation_history: pack.conversation_history.map((m) =>
-            m.role === "user" ? { ...m, content: redact(m.content) } : m,
+            m.role === "user" ? { ...m, content: apply(m.content) } : m,
           ),
         }
       : {}),
   };
+  return { pack: newPack, redactedCount, labels: [...labels] };
 }
 
 export interface SecretRedactingProviderOptions {
   /** True when the configured provider runs on-device — redaction is then a no-op. */
   isSovereign: () => boolean;
   /** Credential-class redactor, e.g. `PolicyGate.redactForCloudEgress`. */
-  redact: (text: string) => string;
+  redact: CloudEgressRedactor;
+  /**
+   * Called ONLY when a redaction actually fired, with content-free metadata
+   * (count + credential-class label names, never the secret). The runtime wires
+   * this to emit a `SecretRedactedFromEgress` audit event.
+   */
+  onRedacted?: (info: { count: number; labels: string[] }) => void;
 }
 
 export class SecretRedactingProvider implements StreamingProvider {
@@ -68,7 +100,14 @@ export class SecretRedactingProvider implements StreamingProvider {
 
   /** Redact the outbound pack unless the provider is sovereign (on-device). */
   private packFor(pack: ContextPack): ContextPack {
-    return this.opts.isSovereign() ? pack : redactPackForCloudEgress(pack, this.opts.redact);
+    if (this.opts.isSovereign()) return pack;
+    const {
+      pack: redacted,
+      redactedCount,
+      labels,
+    } = redactPackForCloudEgress(pack, this.opts.redact);
+    if (redactedCount > 0) this.opts.onRedacted?.({ count: redactedCount, labels });
+    return redacted;
   }
 
   get model(): string {

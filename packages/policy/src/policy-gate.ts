@@ -508,8 +508,8 @@ export class PolicyGate {
    * than {@link redact} (no SSN / card / bare-base64). See
    * `RedactionEngine.redactForCloudEgress`.
    */
-  redactForCloudEgress(text: string): string {
-    return this.redaction.redactForCloudEgress(text).text;
+  redactForCloudEgress(text: string): { text: string; redactionCount: number; labels: string[] } {
+    return this.redaction.redactForCloudEgress(text);
   }
 
   /**

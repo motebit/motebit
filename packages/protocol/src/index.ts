@@ -537,6 +537,15 @@ export enum EventType {
   // content. Doctrine: motebit-computer.md §"Mode contract" and the
   // four-egress closure arc.
   SensitivityGateFired = "sensitivity_gate_fired",
+  // Emitted by the runtime when `SecretRedactingProvider` masks credential-class
+  // secrets a user typed into an UNMARKED cloud session, before the payload reaches
+  // a non-sovereign provider. The sibling of `SensitivityGateFired` on the same
+  // privacy-egress axis: the gate BLOCKS a marked-sensitive session; this RECORDS a
+  // redaction in an unmarked one — turning the otherwise-silent transform into an
+  // observable, inspectable trail. Payload: `SecretRedactedFromEgressPayload` in
+  // `perception.ts`. STRICTLY metadata — count + credential-class label names, never
+  // the secret content. Doctrine: security-boundaries.md.
+  SecretRedactedFromEgress = "secret_redacted_from_egress",
 }
 
 export enum MemoryType {
@@ -3399,6 +3408,7 @@ export type {
   SensitivityGateEntry,
   SensitivityElevationSource,
   SensitivityGateFiredPayload,
+  SecretRedactedFromEgressPayload,
 } from "./perception.js";
 export { resolveDropTarget } from "./perception.js";
 

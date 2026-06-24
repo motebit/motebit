@@ -135,6 +135,7 @@ const EVENT_TYPES_REFERENCE = [
   "user_input_forwarded",
   "skill_loaded",
   "sensitivity_gate_fired",
+  "secret_redacted_from_egress",
 ] as const;
 
 const SNAKE_CASE_PATTERN = /^[a-z][a-z0-9]*(_[a-z0-9]+)*$/;

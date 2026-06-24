@@ -149,19 +149,27 @@ export class RedactionEngine {
    * blocks a whole call when the SESSION tier is medical/financial/secret; this is
    * the additive floor for secrets typed into an UNMARKED cloud session.
    */
-  redactForCloudEgress(text: string): { text: string; redactionCount: number } {
+  redactForCloudEgress(text: string): {
+    text: string;
+    redactionCount: number;
+    labels: string[];
+  } {
     let result = text;
     let count = 0;
+    const labels: string[] = [];
     for (const { pattern, label, cloudEgress } of SECRET_PATTERNS) {
       if (!cloudEgress) continue;
       const re = new RegExp(pattern.source, pattern.flags);
       const matches = result.match(re);
       if (matches) {
         count += matches.length;
+        // Distinct pattern-class label names (e.g. "API_KEY") — safe audit metadata,
+        // never the secret content. See SecretRedactedFromEgressPayload.
+        if (!labels.includes(label)) labels.push(label);
         result = result.replace(re, `[REDACTED:${label}]`);
       }
     }
-    return { text: result, redactionCount: count };
+    return { text: result, redactionCount: count, labels };
   }
 
   /**

@@ -52,6 +52,7 @@ import type {
   DropPayloadKind,
   SensitivityGateEntry,
   SensitivityGateFiredPayload,
+  SecretRedactedFromEgressPayload,
   UserActionAttestation,
 } from "@motebit/sdk";
 import { resolveDropTarget } from "@motebit/sdk";
@@ -1253,6 +1254,31 @@ export class MotebitRuntime {
     return new SecretRedactingProvider(provider, {
       isSovereign: () => this.providerIsSovereign(),
       redact: (text) => this.policy.redactForCloudEgress(text),
+      onRedacted: (info) => this.emitSecretRedactedEvent(info),
+    });
+  }
+
+  /**
+   * Record a `SecretRedactedFromEgress` audit event when the secret-redacting
+   * provider masked credential-class secrets from an outbound payload — the
+   * privacy-egress sibling of the `SensitivityGateFired` emission, turning the
+   * otherwise-silent redaction into an inspectable trail. STRICTLY metadata
+   * (count + credential-class label names + provider mode), never the secret.
+   * Fire-and-forget, like the gate's audit write.
+   */
+  private emitSecretRedactedEvent(info: { count: number; labels: string[] }): void {
+    const payload: SecretRedactedFromEgressPayload = {
+      redacted_count: info.count,
+      labels: info.labels,
+      provider_mode: this._providerMode ?? "unset",
+    };
+    void this.events.appendWithClock({
+      event_id: crypto.randomUUID(),
+      motebit_id: this.motebitId,
+      timestamp: Date.now(),
+      event_type: EventType.SecretRedactedFromEgress,
+      payload: payload as unknown as Record<string, unknown>,
+      tombstoned: false,
     });
   }
 

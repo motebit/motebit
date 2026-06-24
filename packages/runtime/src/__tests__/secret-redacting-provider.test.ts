@@ -42,10 +42,17 @@ function makePack(userMessage: string, history?: ConversationMessage[]): Context
   };
 }
 
-// A deterministic stand-in redactor — the decorator under test injects whatever
-// redactor the runtime wires; the actual credential patterns are covered by
-// @motebit/policy's redaction.test.ts.
-const redact = (s: string) => s.replace(/SECRET/g, "[REDACTED]");
+// A deterministic stand-in redactor reporting count + labels — the decorator under
+// test injects whatever redactor the runtime wires; the actual credential patterns
+// are covered by @motebit/policy's redaction.test.ts.
+const redact = (s: string) => {
+  const count = (s.match(/SECRET/g) ?? []).length;
+  return {
+    text: s.replace(/SECRET/g, "[REDACTED:API_KEY]"),
+    redactionCount: count,
+    labels: count > 0 ? ["API_KEY"] : [],
+  };
+};
 
 describe("redactPackForCloudEgress", () => {
   it("redacts user_message and user-role history, leaving other roles + the original pack untouched", () => {
@@ -57,20 +64,29 @@ describe("redactPackForCloudEgress", () => {
     const pack = makePack("current SECRET", history);
     const out = redactPackForCloudEgress(pack, redact);
 
-    expect(out.user_message).toBe("current [REDACTED]");
-    expect(out.conversation_history?.[0]?.content).toBe("earlier [REDACTED]");
+    expect(out.pack.user_message).toBe("current [REDACTED:API_KEY]");
+    expect(out.pack.conversation_history?.[0]?.content).toBe("earlier [REDACTED:API_KEY]");
     // assistant + tool roles are NOT touched (already sanitized upstream).
-    expect(out.conversation_history?.[1]?.content).toBe("ack SECRET");
-    expect(out.conversation_history?.[2]?.content).toBe("tool SECRET");
+    expect(out.pack.conversation_history?.[1]?.content).toBe("ack SECRET");
+    expect(out.pack.conversation_history?.[2]?.content).toBe("tool SECRET");
+    // Aggregate metadata for the audit event (current + earlier user messages).
+    expect(out.redactedCount).toBe(2);
+    expect(out.labels).toEqual(["API_KEY"]);
     // The original pack is not mutated.
     expect(pack.user_message).toBe("current SECRET");
     expect(pack.conversation_history?.[0]?.content).toBe("earlier SECRET");
   });
 
+  it("reports zero on clean content", () => {
+    const out = redactPackForCloudEgress(makePack("a clean message"), redact);
+    expect(out.redactedCount).toBe(0);
+    expect(out.labels).toEqual([]);
+  });
+
   it("handles a pack with no conversation_history", () => {
     const out = redactPackForCloudEgress(makePack("hi SECRET"), redact);
-    expect(out.user_message).toBe("hi [REDACTED]");
-    expect(out.conversation_history).toBeUndefined();
+    expect(out.pack.user_message).toBe("hi [REDACTED:API_KEY]");
+    expect(out.pack.conversation_history).toBeUndefined();
   });
 });
 
@@ -82,7 +98,31 @@ describe("SecretRedactingProvider", () => {
       redact,
     });
     await provider.generate(makePack("my key is SECRET"));
-    expect(sink.pack?.user_message).toBe("my key is [REDACTED]");
+    expect(sink.pack?.user_message).toBe("my key is [REDACTED:API_KEY]");
+  });
+
+  it("fires onRedacted with content-free metadata ONLY when a redaction happened", async () => {
+    const calls: { count: number; labels: string[] }[] = [];
+    const provider = new SecretRedactingProvider(recordingProvider({}), {
+      isSovereign: () => false,
+      redact,
+      onRedacted: (info) => calls.push(info),
+    });
+    await provider.generate(makePack("key SECRET and SECRET again"));
+    await provider.generate(makePack("a perfectly clean message"));
+    // Only the first call redacted → exactly one onRedacted with count 2.
+    expect(calls).toEqual([{ count: 2, labels: ["API_KEY"] }]);
+  });
+
+  it("never fires onRedacted on a SOVEREIGN provider, even with secrets", async () => {
+    const calls: unknown[] = [];
+    const provider = new SecretRedactingProvider(recordingProvider({}), {
+      isSovereign: () => true,
+      redact,
+      onRedacted: (info) => calls.push(info),
+    });
+    await provider.generate(makePack("key SECRET"));
+    expect(calls).toEqual([]);
   });
 
   it("is a NO-OP on a SOVEREIGN provider — same pack reference, raw content kept", async () => {
@@ -106,7 +146,7 @@ describe("SecretRedactingProvider", () => {
     for await (const _ of provider.generateStream(makePack("stream SECRET"))) {
       // drain
     }
-    expect(sink.pack?.user_message).toBe("stream [REDACTED]");
+    expect(sink.pack?.user_message).toBe("stream [REDACTED:API_KEY]");
   });
 
   it("delegates every non-generate member transparently", async () => {
