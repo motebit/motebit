@@ -81,6 +81,30 @@ describe("verifyEvidenceProvenance — law + hostile corpus", () => {
     });
   });
 
+  it("a resolver that THROWS propagates — a resolver fault is a caller bug, never a false present:false", async () => {
+    // Contract (agency.computer adoption): the injected resolver is assumed total
+    // for recipes it accepts; a throw is NOT mapped to a reason (that would let a
+    // broken recipe masquerade as "evidence absent" and hide the bug). It propagates.
+    const prov = await provFor(raw, span, { projection: "agency.html-text.v1" });
+    const faulty = () => {
+      throw new Error("recipe blew up");
+    };
+    await expect(
+      verifyEvidenceProvenance(raw, prov, { resolveProjection: faulty }),
+    ).rejects.toThrow("recipe blew up");
+  });
+
+  it("the correct 'cannot resolve this recipe' signal is to OMIT the resolver → projection_unresolved (not a throwing resolver)", async () => {
+    // The paired half of the contract above: a consumer whose resolver doesn't own
+    // a recipe lets it fall through to the no-resolver path, which fails closed —
+    // never injects a throwing resolver as a not-supported signal.
+    const prov = await provFor(raw, span, { projection: "some.other-recipe.v9" });
+    expect(await verifyEvidenceProvenance(raw, prov)).toEqual({
+      present: false,
+      reason: "projection_unresolved",
+    });
+  });
+
   it("binding is carried but NOT verified by the law (issuer authority is app-layer)", async () => {
     const bound = await provFor(raw, span, { binding: "did:example:not-checked-here" });
     // Same present result regardless of binding value — the law is domain-blind on it.

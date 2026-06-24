@@ -2082,7 +2082,17 @@ export async function verifyEvidenceProvenance(
     /**
      * Apply an opaque, app-owned projection recipe to the raw bytes and return
      * the projected text. Injected so motebit stays domain-blind; a present
-     * `projection` with no resolver fails closed.
+     * `projection` with no resolver fails closed (`projection_unresolved`).
+     *
+     * Assumed TOTAL for any recipe it accepts: if the resolver THROWS, the
+     * exception PROPAGATES — a resolver fault is a caller bug, not an evidence
+     * verdict, and is never swallowed into a false `present:false` (that would let
+     * a broken recipe masquerade as "evidence absent" and hide the bug). To signal
+     * "I cannot resolve this recipe," OMIT the resolver and let the no-resolver
+     * path fail closed (`projection_unresolved`) — never inject a throwing resolver
+     * as a not-supported signal. (Contract clarified from agency.computer adoption,
+     * 2026-06 — their wrapper injects a resolver only for the recipes it owns and
+     * lets every other recipe fall through to `projection_unresolved`.)
      */
     resolveProjection?: (recipeId: string, bytes: Uint8Array) => string | Promise<string>;
   },
@@ -2103,6 +2113,10 @@ export async function verifyEvidenceProvenance(
     if (opts?.resolveProjection == null) {
       return { present: false, reason: "projection_unresolved" };
     }
+    // The resolver is assumed total for recipes it accepts — a throw PROPAGATES
+    // (a caller bug, not an evidence verdict; see the resolveProjection contract).
+    // "Cannot resolve this recipe" is signaled by OMITTING the resolver above, not
+    // by throwing here.
     text = await opts.resolveProjection(provenance.projection, bytes);
   } else {
     text = new TextDecoder().decode(bytes);
