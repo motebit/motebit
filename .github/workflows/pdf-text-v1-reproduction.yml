@@ -1,0 +1,32 @@
+# Independent reproduction of agency.computer's `agency.pdf-text.v1` recipe — the
+# tool-pinned §7-tool gold rung (docs/doctrine/evidence-provenance.md). motebit
+# rebuilds the wasm from the pinned spec source in the pinned rust image and
+# asserts the published tool digest, then runs the recipe's conformance over its
+# fixtures. "Verify, don't trust the tarball" — the whole point of tool-pinned.
+#
+# Deliberately NOT a per-PR gate: it depends on an EXTERNAL repo and a multi-
+# minute docker build. A red run is a cross-party reproducibility signal to take
+# back to agency, never a motebit merge blocker. Manual + weekly so drift (a
+# re-pin, a non-deterministic build, a host-divergent fixture) surfaces on a
+# cadence rather than at a filing.
+name: pdf-text.v1 reproduction
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-latest # docker + node preinstalled
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "22"
+      - name: Reproduce agency.pdf-text.v1 (rebuild → assert digest → conformance)
+        run: bash scripts/verify-pdf-text-v1-reproduction.sh
