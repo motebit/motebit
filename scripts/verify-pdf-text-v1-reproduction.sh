@@ -42,7 +42,12 @@ sha256_hex() {
 }
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+# build.sh's docker run writes target/ as ROOT (containers run as root), so a
+# plain `rm -rf` by the non-root runner fails — and a failing EXIT-trap rm both
+# floods the log and MASKS the script's real exit code (a reproducibility gap at
+# exit 5 looked like a bare exit 1). Clean as root via the runner's sudo, and
+# never let cleanup change the verdict.
+trap 'rm -rf "$WORK" 2>/dev/null || sudo rm -rf "$WORK" 2>/dev/null || true' EXIT
 
 # ── 1. Fetch the recipe at its EXACT pin, and prove the pin didn't move ───────
 log "Cloning $SPEC_REPO @ $SPEC_SHA"
@@ -60,6 +65,17 @@ BUILD_SH="$(find "$WORK/spec" -name build.sh -path '*/tool/*' | head -1)"
 [ -n "$BUILD_SH" ] || fail 4 "No tool/build.sh found in the spec repo — layout differs from agency's description; fix this script's discovery."
 TOOL_DIR="$(dirname "$BUILD_SH")"
 log "Found build script: ${BUILD_SH#"$WORK/spec/"}"
+
+# Reproducibility diagnostic. An unlocked dependency graph is the classic
+# non-hermetic build: transitive crates resolve to whatever crates.io serves at
+# build time, so the wasm bytes drift over time even from pinned source in a
+# pinned image. Surfaced because run 28169687361 rebuilt 76d7fbfb… ≠ 89c8f640…
+# while "Updating crates.io index" fetched current versions.
+if [ -f "$TOOL_DIR/Cargo.lock" ]; then
+  log "Cargo.lock present — dependency graph is locked."
+else
+  log "⚠ NO Cargo.lock in tool/ — transitive deps resolve at build time (primary reproducibility-gap suspect)."
+fi
 
 # ── 3. Reproducible build ─────────────────────────────────────────────────────
 # build.sh is the HOST orchestrator: it drives the pinned image ITSELF (it calls
