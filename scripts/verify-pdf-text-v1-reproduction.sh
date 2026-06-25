@@ -61,14 +61,18 @@ BUILD_SH="$(find "$WORK/spec" -name build.sh -path '*/tool/*' | head -1)"
 TOOL_DIR="$(dirname "$BUILD_SH")"
 log "Found build script: ${BUILD_SH#"$WORK/spec/"}"
 
-# ── 3. Reproducible build in the pinned image (cargo fetches pinned deps) ──────
-log "Pulling pinned build image $BUILD_IMAGE"
-docker pull --quiet "$BUILD_IMAGE" >/dev/null
-log "Building wasm via build.sh inside the pinned image"
-# Mount the whole clone (build.sh may write outside tool/) and run from tool/.
-docker run --rm -v "$WORK/spec":/spec -w "/spec/${TOOL_DIR#"$WORK/spec/"}" \
-  "$BUILD_IMAGE" bash build.sh \
-  || fail 4 "build.sh exited non-zero inside the pinned image — build orchestration gap (not yet a reproducibility verdict)."
+# ── 3. Reproducible build ─────────────────────────────────────────────────────
+# build.sh is the HOST orchestrator: it drives the pinned image ITSELF (it calls
+# `docker` internally — the first run proved this with "docker: command not found"
+# when we wrongly ran build.sh INSIDE the rust image). So run it on the host (the
+# runner has docker); build.sh owns the $BUILD_IMAGE pin where 89c8f640
+# reproducibility lives. We dump build.sh first so its real contract is on the
+# record (and so any further layout surprise is diagnosable in one run).
+log "build.sh contract (diagnostic dump):"
+sed 's/^/    /' "$BUILD_SH"
+log "Running build.sh on the host (it drives the pinned image $BUILD_IMAGE)"
+( cd "$TOOL_DIR" && bash build.sh ) \
+  || fail 4 "build.sh exited non-zero on the host — orchestration gap (not yet a reproducibility verdict). See the dump above for its actual contract."
 
 # Discover the produced wasm (don't hardcode an output path we haven't seen).
 WASM="$(find "$WORK/spec" -name '*.wasm' -newer "$BUILD_SH" | head -1)"
