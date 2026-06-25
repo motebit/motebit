@@ -383,7 +383,21 @@ what keeps the cost from eating the property it paid for.
   only multi-hop structure is delegation edges I personally witnessed. **Bound:**
   do not market "trust graph" as recommendation/reachability; transitive or
   delegated trust is a future axis with its own threat model (trust laundering
-  through cheap intermediaries), never a silent default.
+  through cheap intermediaries), never a silent default. **Enforced invariant
+  (the current posture against that laundering):** trust is written for the
+  _direct counterparty of a receipt my runtime received only_ — `bumpTrustFromReceipt`
+  ([`packages/runtime/src/agent-trust.ts`](../../packages/runtime/src/agent-trust.ts))
+  writes `[me, receipt.motebit_id]` and never recurses into `delegation_receipts`,
+  so a compromised intermediary B that sub-delegates to its own sybil C cannot
+  bootstrap `[me, C]` standing by handing me a tree that names C. A sub-delegated
+  receipt informs _routing_ — `addDelegationEdges`
+  ([`packages/semiring/src/agent-network.ts`](../../packages/semiring/src/agent-network.ts))
+  writes the peer→peer edge `B→C`, never `me→C` — but it must never write my
+  first-person trust ledger. This property is held by call-site discipline, not by
+  a structural type, so it is pinned by regression test (the "does NOT launder trust
+  through a sub-delegation" case in
+  [`packages/runtime/src/__tests__/agent-trust.test.ts`](../../packages/runtime/src/__tests__/agent-trust.test.ts));
+  reopening delegated-trust harvesting is a deliberate threat-model decision, not a refactor.
 
 - **The sigil's distinctness budget is necessary, not sufficient (§4).** The
   measurable bound is output-space size; the real limit is human perceptual

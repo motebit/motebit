@@ -294,6 +294,33 @@ describe("MotebitRuntime bumpTrustFromReceipt", () => {
     // Trust should be at least the static FirstContact score (0.3)
     expect(edge!.weight.trust).toBeGreaterThanOrEqual(0.3);
   });
+
+  // INVARIANT — direct-witness-only trust writes (anti delegation-laundering).
+  // Trust is first-person and pairwise: I write a trust edge only for the DIRECT
+  // counterparty of a receipt my runtime received, never for a sub-worker buried
+  // in the receipt tree (docs/doctrine/agents-as-first-person-trust-graph.md §"It
+  // is an ego-star, not a transitive graph"). A compromised intermediary B that
+  // sub-delegates to its own sybil C must NOT be able to bootstrap [me, C] standing
+  // by handing me a tree whose nested receipt names C. Sub-delegation informs
+  // ROUTING — peer→peer edges in the agent graph (addDelegationEdges writes B→C,
+  // never me→C) — but it must never write my first-person trust ledger. This test
+  // pins that property: today it holds because `bumpTrustFromReceipt` does not
+  // recurse into `delegation_receipts`, but nothing structural enforces it (cf. the
+  // recursive `collect()` walk in agent-graph.ts), so the regression net lives here.
+  it("does NOT launder trust through a sub-delegation — a nested receipt writes no edge at my root", async () => {
+    const subWorker = { ...fakeReceipt("sybil-C"), task_id: "sub-task" };
+    const intermediary = {
+      ...fakeReceipt("intermediary-B"),
+      delegation_receipts: [subWorker],
+    };
+
+    await runtime.bumpTrustFromReceipt(intermediary, true);
+
+    // The direct counterparty earns first-person trust...
+    expect(await trustStore.getAgentTrust("test-mote", "intermediary-B")).not.toBeNull();
+    // ...the buried sub-worker earns NOTHING from me — it never witnessed me, I never witnessed it.
+    expect(await trustStore.getAgentTrust("test-mote", "sybil-C")).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
