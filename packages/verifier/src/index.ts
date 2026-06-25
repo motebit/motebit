@@ -112,6 +112,10 @@ export type {
   EvidenceProvenanceResult,
   DigestRef,
   DigestAlgorithm,
+  // The projection assurance class a consumer reads off `provenance.projectionClass`
+  // to policy on re-verifiability (`spec-reproducible` vs `tool-pinned`; absent ⇒
+  // spec-reproducible). Surfaced from the SAME aggregator the consumer pins.
+  ProjectionClass,
 } from "@motebit/crypto";
 // The verdict producers and the fail-closed collapse. `verifyReceiptVerdict`
 // (A.2.1) returns the structured verdict for a signed receipt;

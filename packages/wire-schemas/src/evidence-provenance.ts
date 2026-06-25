@@ -16,8 +16,8 @@
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
-import type { EvidenceProvenance, DigestAlgorithm } from "@motebit/protocol";
-import { ALL_DIGEST_ALGORITHMS } from "@motebit/protocol";
+import type { EvidenceProvenance, DigestAlgorithm, ProjectionClass } from "@motebit/protocol";
+import { ALL_DIGEST_ALGORITHMS, ALL_PROJECTION_CLASSES } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
@@ -59,6 +59,14 @@ export const EvidenceProvenanceSchema = z
       .optional()
       .describe(
         "Opaque, app-owned projection recipe id (e.g. agency.html-text.v1). Absent ⇒ the span is located over the raw bytes directly; present ⇒ a re-verifier applies the consumer-injected recipe, else fails closed (projection_unresolved).",
+      ),
+    projectionClass: z
+      // Cast preserves the literal `ProjectionClass` union in z.infer; runtime
+      // validation is identical (z.enum checks the same ALL_PROJECTION_CLASSES values).
+      .enum(ALL_PROJECTION_CLASSES as unknown as [ProjectionClass, ...ProjectionClass[]])
+      .optional()
+      .describe(
+        "Assurance class of a present projection: `spec-reproducible` (§7 — independently reimplementable from spec, the default) or `tool-pinned` (§7-tool — reproducible only by running the recipe's content-addressed pinned tool). ABSENT ⇒ spec-reproducible (the weaker class is opt-in). Carried, NOT verified by the law — the consumer policies on it.",
       ),
     span: z
       .string()

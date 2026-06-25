@@ -64,6 +64,14 @@ EvidenceProvenance {
                  // Absent ⇒ the span is located over the raw bytes directly. Present ⇒
                  // a re-verifier applies the consumer-injected recipe before confirming
                  // the span; with no injected resolver the check fails closed.
+  projectionClass?: "spec-reproducible" | "tool-pinned"
+                 // assurance class of a PRESENT projection — HOW it is re-verified and
+                 // BY WHOM. spec-reproducible (§7): independently reimplementable from
+                 // the recipe's spec to byte identity. tool-pinned (§7-tool): byte-
+                 // reproducible only by running the recipe's content-addressed pinned
+                 // tool. ABSENT ⇒ spec-reproducible (the weaker class is OPT-IN — never
+                 // claimed by omission). CARRIED, NOT verified by the law — the assurance
+                 // level the CONSUMER policies on.
   span:        string
                  // the verbatim span asserted PRESENT in projection(bytes) — the law's subject.
   locator?:    { start: number, end: number }
@@ -79,6 +87,13 @@ EvidenceProvenance {
 `DigestAlgorithm` is a closed registry (`@motebit/protocol`): `sha-256` today. A
 content digest is hashed, not signed, so it rides its own role — a new hash is a
 registry append, never a wire break (it is NOT a `SuiteId`).
+
+`ProjectionClass` is a closed registry (`@motebit/protocol`): `spec-reproducible`
+and `tool-pinned` today. It names the assurance ladder, not a recipe — the recipe
+CATALOG stays app-owned. A future class (e.g. a TEE-attested tool run) is a registry
+append, never a wire break. ABSENT ⇒ `spec-reproducible`: the strong rung is the
+default, so a producer cannot understate the assurance it owes by leaving the field
+off, and the weaker rung must be declared affirmatively.
 
 ## 4. The re-check law
 
@@ -137,16 +152,29 @@ not-supported signal.
    independently-obtainable bytes (a third party fetches the same primary source). The
    `span` is re-checkable iff EITHER `projection` is absent (located over the raw bytes
    directly — re-verifiable by construction, the **default**) OR the named recipe is
-   spec'd to **byte-determinism** (§7). A digest over PROJECTED text would be re-checkable
-   only by whoever owns the projection — "agency-re-verifiable," not independently — and
-   the locality property dies. Same discipline as JCS canonicalization: both sides MUST
+   spec'd to **byte-determinism** under one of the two conformance classes (§7): from
+   prose (`spec-reproducible`) or by a content-addressed pinned tool (`tool-pinned`). A
+   digest over PROJECTED text bound to NO declared class would be re-checkable only by
+   whoever owns the projection — "agency-re-verifiable," not independently — and the
+   locality property dies. Same discipline as JCS canonicalization: both sides MUST
    produce byte-identical input or it fails mysteriously.
 
-## 7. Conformance — projection recipes MUST be byte-deterministic
+## 7. Conformance — projection recipes MUST be byte-deterministic, in one of two classes
 
-A named `projection` recipe is a real PUBLIC protocol artifact only if an independent
-implementer, from its SPEC alone, reproduces its output byte-for-byte. A recipe used in
-provenance therefore MUST:
+A projection recipe is a real PUBLIC protocol artifact only if it is byte-deterministic
+AND it declares which **assurance class** that determinism belongs to (`projectionClass`).
+The class is binary by design: it tells a consumer, per evidence claim, whether THEY can
+re-verify the span independently or only by obtaining the producer's pinned tool. There
+are exactly two classes, plus the null (a projection nobody can re-run is not a third
+class — emit the bare `EvidenceRef` pointer with no `provenance`). A recipe MUST meet the
+obligations of the class it declares; a `tool-pinned` recipe that omits `projectionClass`
+(thereby claiming `spec-reproducible` by default) is an OVER-CLAIM and a conformance
+violation — the missing two-implementation fixture exposes it.
+
+### 7.1 — `spec-reproducible` (the strong rung, the default)
+
+A `spec-reproducible` recipe is one an independent implementer, from its SPEC alone,
+reproduces byte-for-byte. It MUST:
 
 1. be published as a **world-public, content-addressed (pinnable)** spec — the recipe
    algorithm stated to byte-determinism — plus a committed **conformance fixture** (a
@@ -169,9 +197,52 @@ written from the spec alone reproduces all 7 byte-for-byte
 two implementations pinned against the same public fixture, both green. That is the
 guardrail standing on its own legs rather than either party's word.
 
+### 7-tool — `tool-pinned` (the lesser rung, for genuinely heuristic projections)
+
+Some projections cannot meet §7.1 and never will. A PDF is a graphics format: text is
+glyphs placed at coordinates, and "the text" — reading order, word-spacing, column and
+table flow — is a genuine INFERENCE. `pdftotext`, `pdf.js`, `pdfminer`, and `mupdf`
+produce DIFFERENT bytes on real filings; there is no canonical text of a PDF, and even
+the deterministic core (decompress → parse content stream → map glyphs via `ToUnicode`
+→ emit in draw order) requires a full parser (not a prose recipe) and emits draw-order
+text that often is not the line a human reads. There is no honest `spec-reproducible`
+recipe for it. Forcing such a projection under §7.1 anyway would make §7.1 soft —
+"verified" would silently mean "re-verifiable against the producer's exact library,"
+the quiet falsehood §7 exists to forbid.
+
+A `tool-pinned` recipe is byte-reproducible by running a **content-addressed,
+version-pinned tool** against a committed fixture — deterministic GIVEN the tool, NOT
+independently reimplementable from prose. It is a real, lesser, honestly-named
+assurance, never §7.1. It MUST:
+
+1. publish a **content-addressed, world-obtainable** tool — a digest of the BUILD/binary
+   (not a version string like "poppler 24.x"), fetch-and-runnable by an independent party.
+   A **reproducible build from a pinned source commit** is strongly preferred and SHOULD
+   be used where the toolchain allows: it recovers byte-reproducibility one level down
+   (you cannot reimplement the heuristic from prose, but you CAN reproduce the binary from
+   pinned source). A producer-PRIVATE build is NOT a `tool-pinned` recipe — it is the
+   "agency-re-verifiable only" footgun of §6 wearing a hat, and is non-conformant;
+2. commit a **fixture** proving that tool@digest emits the EXACT required bytes on a set
+   of input documents — ONE implementation, the pinned one (this is the honest delta from
+   §7.1's TWO-independent-implementation requirement);
+3. be **immutable** under its id exactly as §7.2: because the tool digest DETERMINES the
+   output, a new tool digest is a NEW recipe id. The tool digest therefore lives in the
+   recipe's published spec (where the id already binds it) and is NOT carried per-span on
+   the wire — that would be redundant and would pull an app-owned detail onto the protocol
+   surface.
+
+`tool-pinned` is on-wire (`projectionClass: "tool-pinned"`) so a consumer sees the lesser
+assurance at the point of the claim and may policy-gate it ("I require `spec-reproducible`
+for filings") — the visibility is what stops the lesser class from being chosen out of
+laziness. motebit owns the class VOCABULARY and these obligations (shape + law); it never
+adjudicates whether `tool-pinned` is good enough for a given use, and it never owns the
+recipe catalog (which tool, which digest) — that stays app-owned, domain-blind.
+
 ## 8. Versioning
 
 `EvidenceProvenance` is additive on `EvidenceRef` (back-compat by absence, §1).
-`DigestAlgorithm` agility is a registry append. Projection recipe ids are immutable
-(§7.2). The verdict producers populate `provenance` only when they actually retrieve a
-primary record; absence is the back-compatible default.
+`DigestAlgorithm` and `ProjectionClass` agility are registry appends. `projectionClass`
+is itself additive (absent ⇒ `spec-reproducible`), so every span emitted before the class
+existed keeps the strong reading. Projection recipe ids are immutable (§7.2 / §7-tool.3).
+The verdict producers populate `provenance` only when they actually retrieve a primary
+record; absence is the back-compatible default.

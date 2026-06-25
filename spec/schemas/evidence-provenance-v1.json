@@ -29,6 +29,11 @@
       "minLength": 1,
       "description": "Opaque, app-owned projection recipe id (e.g. agency.html-text.v1). Absent ⇒ the span is located over the raw bytes directly; present ⇒ a re-verifier applies the consumer-injected recipe, else fails closed (projection_unresolved)."
     },
+    "projectionClass": {
+      "type": "string",
+      "enum": ["spec-reproducible", "tool-pinned"],
+      "description": "Assurance class of a present projection: `spec-reproducible` (§7 — independently reimplementable from spec, the default) or `tool-pinned` (§7-tool — reproducible only by running the recipe's content-addressed pinned tool). ABSENT ⇒ spec-reproducible (the weaker class is opt-in). Carried, NOT verified by the law — the consumer policies on it."
+    },
     "span": {
       "type": "string",
       "description": "The verbatim span asserted PRESENT in projection(bytes) — the law's subject."
@@ -81,6 +86,11 @@
           "type": "string",
           "minLength": 1,
           "description": "Opaque, app-owned projection recipe id (e.g. agency.html-text.v1). Absent ⇒ the span is located over the raw bytes directly; present ⇒ a re-verifier applies the consumer-injected recipe, else fails closed (projection_unresolved)."
+        },
+        "projectionClass": {
+          "type": "string",
+          "enum": ["spec-reproducible", "tool-pinned"],
+          "description": "Assurance class of a present projection: `spec-reproducible` (§7 — independently reimplementable from spec, the default) or `tool-pinned` (§7-tool — reproducible only by running the recipe's content-addressed pinned tool). ABSENT ⇒ spec-reproducible (the weaker class is opt-in). Carried, NOT verified by the law — the consumer policies on it."
         },
         "span": {
           "type": "string",

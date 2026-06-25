@@ -3242,10 +3242,16 @@ export { SUITE_REGISTRY, ALL_SUITE_IDS, isSuiteId, getSuiteEntry } from "./crypt
 export type {
   DigestAlgorithm,
   DigestRef,
+  ProjectionClass,
   EvidenceProvenance,
   EvidenceRef,
 } from "./evidence-provenance.js";
-export { ALL_DIGEST_ALGORITHMS, isDigestAlgorithm } from "./evidence-provenance.js";
+export {
+  ALL_DIGEST_ALGORITHMS,
+  isDigestAlgorithm,
+  ALL_PROJECTION_CLASSES,
+  isProjectionClass,
+} from "./evidence-provenance.js";
 
 // Merkle tree-hash version registry — the agility axis for leaf/node domain
 // separation (RFC 6962 §2.1). Separate from `SuiteId` (signature recipe): this

@@ -35,6 +35,7 @@ import type { MerkleTreeVersion } from '@motebit/protocol';
 import type { MigrationPresentation } from '@motebit/protocol';
 import type { MigrationRequest } from '@motebit/protocol';
 import type { MigrationToken } from '@motebit/protocol';
+import type { ProjectionClass } from '@motebit/protocol';
 import type { RelayMetadata } from '@motebit/protocol';
 import type { RetentionManifest } from '@motebit/protocol';
 import type { SettlementAsset } from '@motebit/protocol';
@@ -955,6 +956,8 @@ export interface PresentationVerifyResult extends BaseResult {
     // (undocumented)
     type: "presentation";
 }
+
+export { ProjectionClass }
 
 // @public
 export function publicKeyToDidKey(publicKey: Uint8Array): string;

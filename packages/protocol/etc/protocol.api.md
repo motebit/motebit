@@ -324,6 +324,9 @@ export const ALL_MEMORY_SOURCES: readonly MemorySource[];
 // @public
 export const ALL_MERKLE_TREE_VERSIONS: readonly MerkleTreeVersion[];
 
+// @public (undocumented)
+export const ALL_PROJECTION_CLASSES: readonly ProjectionClass[];
+
 // @public
 export const ALL_SENSITIVITY_LEVELS: readonly SensitivityLevel[];
 
@@ -1704,6 +1707,7 @@ export interface EvidenceProvenance {
         readonly end: number;
     };
     readonly projection?: string;
+    readonly projectionClass?: ProjectionClass;
     readonly span: string;
 }
 
@@ -2147,6 +2151,9 @@ export function isMemorySource(value: unknown): value is MemorySource;
 
 // @public
 export function isMerkleTreeVersion(value: unknown): value is MerkleTreeVersion;
+
+// @public (undocumented)
+export function isProjectionClass(s: string): s is ProjectionClass;
 
 // @public
 export function isSensitivityLevel(value: unknown): value is SensitivityLevel;
@@ -2810,6 +2817,9 @@ export interface PolicyDecision {
 
 // @public
 export function productSemiring<A, B>(sa: Semiring<A>, sb: Semiring<B>): Semiring<readonly [A, B]>;
+
+// @public
+export type ProjectionClass = "spec-reproducible" | "tool-pinned";
 
 // @public
 export const PROPOSAL_AUDIENCE: TokenAudience;

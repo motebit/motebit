@@ -40,6 +40,7 @@ import type {
   EvidenceProvenance,
   DigestRef,
   DigestAlgorithm,
+  ProjectionClass,
 } from "@motebit/protocol";
 import { hash, isScopeNarrowed } from "./signing.js";
 // The @noble/ed25519 SHA-512 binding is performed in suite-dispatch.ts
@@ -466,7 +467,7 @@ export interface RevocationVerdict {
 // family's public surface is unchanged. The optional `provenance` makes a
 // verdict's evidence axis re-verifiable down to the primary record — see
 // `verifyEvidenceProvenance` below (evidence-provenance arc).
-export type { EvidenceRef, EvidenceProvenance, DigestRef, DigestAlgorithm };
+export type { EvidenceRef, EvidenceProvenance, DigestRef, DigestAlgorithm, ProjectionClass };
 
 /**
  * Machine-readable repair instruction for a failing axis — first-class, not
