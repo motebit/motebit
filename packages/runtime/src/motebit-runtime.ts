@@ -440,7 +440,6 @@ export class MotebitRuntime {
   };
   private stateSnapshot?: StateSnapshotAdapter;
   private compactionThreshold: number;
-  private lastKnownClock = 0;
   private running = false;
   private toolRegistry: SimpleToolRegistry;
   /** Presence-scoped view onto `toolRegistry`. Filters tool visibility +
@@ -1201,10 +1200,14 @@ export class MotebitRuntime {
     this._idleTick?.stop();
     this.sync.stop();
     this.state.stop();
-    // Snapshot synchronously, compact in background
+    // Snapshot synchronously so state survives an immediate exit; compact in
+    // background. The synchronous stamp uses clock 0 — `stop()` cannot await
+    // `getLatestClock()`, restore (`loadState`) does not read the snapshot
+    // clock, and the `autoCompact()` below re-saves with the authoritative
+    // clock anyway. (Was a never-assigned `lastKnownClock` field that implied
+    // a tracked clock; removed.)
     if (this.stateSnapshot) {
-      const clock = this.lastKnownClock;
-      this.stateSnapshot.saveState(this.motebitId, this.state.serialize(), clock);
+      this.stateSnapshot.saveState(this.motebitId, this.state.serialize(), 0);
     }
     void this.autoCompact();
     // Disconnect MCP servers in background
@@ -3088,19 +3091,33 @@ export class MotebitRuntime {
    *
    * Returns `null` when there are no pending receipts.
    */
-  async anchorPendingConsolidationReceipts(
-    submitter?: ChainAnchorSubmitter,
-  ): Promise<ConsolidationAnchor | null> {
-    const signedEvents = await this.events.query({
-      motebit_id: this.motebitId,
-      event_types: [EventType.ConsolidationReceiptSigned],
-    });
-    const anchoredEvents = await this.events.query({
-      motebit_id: this.motebitId,
-      event_types: [EventType.ConsolidationReceiptsAnchored],
-    });
+  /**
+   * Shared "pending = signed − anchored" computation for the consolidation
+   * anchor pair. Returns the signed consolidation receipts not yet covered by
+   * any `ConsolidationReceiptsAnchored` batch, plus the most recent anchor
+   * timestamp. Single source of truth so the auto-anchor TRIGGER
+   * (`maybeAutoAnchor`) and the actual anchor BATCH
+   * (`anchorPendingConsolidationReceipts`) can never disagree on what counts as
+   * "pending" — the divergence hazard if the predicate were duplicated.
+   */
+  private async computePendingConsolidationReceipts(): Promise<{
+    pending: ConsolidationReceipt[];
+    lastAnchorAt: number;
+  }> {
+    const [signedEvents, anchoredEvents] = await Promise.all([
+      this.events.query({
+        motebit_id: this.motebitId,
+        event_types: [EventType.ConsolidationReceiptSigned],
+      }),
+      this.events.query({
+        motebit_id: this.motebitId,
+        event_types: [EventType.ConsolidationReceiptsAnchored],
+      }),
+    ]);
     const alreadyAnchored = new Set<string>();
+    let lastAnchorAt = 0;
     for (const ev of anchoredEvents) {
+      if (ev.timestamp > lastAnchorAt) lastAnchorAt = ev.timestamp;
       const anchor = (ev.payload as { anchor?: ConsolidationAnchor }).anchor;
       if (anchor) for (const id of anchor.receipt_ids) alreadyAnchored.add(id);
     }
@@ -3109,6 +3126,13 @@ export class MotebitRuntime {
       const receipt = (ev.payload as { receipt?: ConsolidationReceipt }).receipt;
       if (receipt && !alreadyAnchored.has(receipt.receipt_id)) pending.push(receipt);
     }
+    return { pending, lastAnchorAt };
+  }
+
+  async anchorPendingConsolidationReceipts(
+    submitter?: ChainAnchorSubmitter,
+  ): Promise<ConsolidationAnchor | null> {
+    const { pending } = await this.computePendingConsolidationReceipts();
     if (pending.length === 0) return null;
 
     // Stable leaf order: the receipt's signed `finished_at` (cycle clock),
@@ -3282,28 +3306,8 @@ export class MotebitRuntime {
     const threshold = policy.batchThreshold ?? 8;
     const intervalMs = policy.minAnchorIntervalMs ?? 0;
     try {
-      const [signedEvents, anchoredEvents] = await Promise.all([
-        this.events.query({
-          motebit_id: this.motebitId,
-          event_types: [EventType.ConsolidationReceiptSigned],
-        }),
-        this.events.query({
-          motebit_id: this.motebitId,
-          event_types: [EventType.ConsolidationReceiptsAnchored],
-        }),
-      ]);
-      const alreadyAnchored = new Set<string>();
-      let lastAnchorAt = 0;
-      for (const ev of anchoredEvents) {
-        if (ev.timestamp > lastAnchorAt) lastAnchorAt = ev.timestamp;
-        const anchor = (ev.payload as { anchor?: ConsolidationAnchor }).anchor;
-        if (anchor) for (const id of anchor.receipt_ids) alreadyAnchored.add(id);
-      }
-      let pendingCount = 0;
-      for (const ev of signedEvents) {
-        const receipt = (ev.payload as { receipt?: ConsolidationReceipt }).receipt;
-        if (receipt && !alreadyAnchored.has(receipt.receipt_id)) pendingCount++;
-      }
+      const { pending, lastAnchorAt } = await this.computePendingConsolidationReceipts();
+      const pendingCount = pending.length;
       if (pendingCount === 0) return;
       const thresholdReached = threshold > 0 && pendingCount >= threshold;
       const timeReached = intervalMs > 0 && Date.now() - lastAnchorAt >= intervalMs;
@@ -3517,10 +3521,15 @@ export class MotebitRuntime {
         // boundary. Local-only tools (read_file, recall_memories, etc.)
         // dispatch unchanged. The scoped registry's presence-aware
         // predicate continues to apply through the wrapper.
-        tools:
-          this.scopedToolRegistry.size > 0
-            ? this.wrapToolRegistryForSensitivity(this.scopedToolRegistry)
-            : undefined,
+        //
+        // ALWAYS wrap — never gate on `size > 0`. The wrapper forwards
+        // `list()`/`execute()` LIVE against the scoped registry, and ai-core
+        // tolerates an empty `list()`. Gating on the wire-time size froze
+        // `tools` to `undefined` for any runtime built with an empty registry
+        // (mobile/desktop construct provider-only, then populate via the raw
+        // `getToolRegistry().register(...)` with no re-wire hook) → a toolless
+        // AI loop. See toolless-loop-regression.test.ts.
+        tools: this.wrapToolRegistryForSensitivity(this.scopedToolRegistry),
         policyGate: this.policy,
         memoryGovernor: this.memoryGovernor,
         consolidationProvider,
