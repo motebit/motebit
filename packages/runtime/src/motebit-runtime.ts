@@ -725,59 +725,7 @@ export class MotebitRuntime {
     // logger; no additional config today.
     this.slab = createSlabController({ logger: this._logger });
     this.dropDispatcher = new DropDispatcher({ slab: this.slab, logger: this._logger });
-    if (config.proactiveTickMs != null && config.proactiveTickMs > 0) {
-      const tickMs = config.proactiveTickMs;
-      const quietMs = config.proactiveQuietWindowMs ?? 60_000;
-      const action = config.proactiveAction ?? "none";
-      // Catch-up only when consolidation is the configured idle action.
-      this._proactiveConsolidationEnabled = action === "consolidate";
-      this._proactiveCatchUpMaxAgeMs =
-        config.proactiveCatchUpMaxAgeMs ?? DEFAULT_PROACTIVE_CATCH_UP_MAX_AGE_MS;
-      this._idleTick = createIdleTickController({
-        intervalMs: tickMs,
-        quietWindowMs: quietMs,
-        isProcessing: () => this._isProcessing,
-        lastUserMessageAt: () => this._lastUserMessageAt,
-        onTick: async (timestamp) => {
-          try {
-            await this.events.appendWithClock({
-              event_id: crypto.randomUUID(),
-              motebit_id: this.motebitId,
-              timestamp,
-              event_type: EventType.IdleTickFired,
-              payload: {
-                interval_ms: tickMs,
-                quiet_window_ms: quietMs,
-                action,
-              },
-              tombstoned: false,
-            });
-          } catch {
-            // Event-log append is best-effort — a missed tick record
-            // does not corrupt state.
-          }
-          // Perform the configured action AFTER the heartbeat event
-          // is logged — so a reflection failure cannot prevent the
-          // cadence signal from being recorded. Each action path is
-          // best-effort; a throw here is caught by the idle-tick
-          // controller's logger.
-          if (action === "reflect") {
-            // Calls the public `reflect()` directly (not the private
-            // reflectAndStore) so a thrown error reaches the
-            // idle-tick controller's logger. The `reflect()` method
-            // updates gradient state on success; the controller's
-            // catch wrapper handles failure as best-effort.
-            await this.reflect();
-          } else if (action === "consolidate") {
-            // Full proactive interior: 4-phase consolidation cycle. The
-            // cycle owns presence transitions and tool scoping; idle-tick
-            // just kicks it off. Errors caught by the idle-tick controller.
-            await this.consolidationCycle();
-          }
-        },
-        logger: this._logger,
-      });
-    }
+    this.setupIdleTick(config);
     this.memory = new MemoryGraph(adapters.storage.memoryStorage, this.events, this.motebitId);
     this.identity = new IdentityManager(adapters.storage.identityStorage, this.events);
     this.auditLog = adapters.storage.auditLog;
@@ -857,54 +805,7 @@ export class MotebitRuntime {
     // read above so the privacy layer could take ownership of the
     // delete-conversation choke point; the manager reads the same
     // handle for in-memory history management.
-    this.conversation = new ConversationManager({
-      motebitId: this.motebitId,
-      maxHistory: config.maxConversationHistory ?? 40,
-      summarizeAfterMessages: config.summarizeAfterMessages ?? 20,
-      store: this.conversationStore,
-      getProvider: () => this.provider,
-      getTaskRouter: () => this.taskRouter,
-      generateCompletion: (prompt, taskType) => this.generateCompletion(prompt, taskType),
-      // Single authorized brand producer for the summarization
-      // path. ConversationManager projects the cleared provider
-      // and passes it to ai-core's summarizeConversation; the
-      // brand makes any path that bypasses the gate a compile
-      // error.
-      assertSensitivityPermitsAiCall: (entry, toolName) =>
-        this.assertSensitivityPermitsAiCall(entry, toolName),
-      // Default sensitivity baseline for persisted messages. Set to
-      // `None` to match the read-side filter's default in
-      // `trimmed()` (which falls back to `None` when
-      // `getEffectiveSensitivity` is absent). The two MUST share a
-      // baseline or the runtime falls into the "remember nothing"
-      // failure mode: write-side floors at one tier, read-side
-      // filters at a lower tier, and on a calm None-tier turn every
-      // message the runtime wrote becomes unreadable to its own
-      // next turn. Witnessed 2026-05-11: the AI told the user
-      // "I don't have a previous message in this session" mid-chat
-      // because `?? SensitivityLevel.Personal` was stamping every
-      // message Personal while `?? SensitivityLevel.None` was the
-      // read-side default — asymmetric defaults on the same axis.
-      //
-      // Real cross-device leak protection (the original motivation
-      // for the floor) is unchanged: when a tool result classifies
-      // at a higher tier (`classifyToolResult`), or a slab item
-      // arrives in a `tier-bounded-by-source` mode, or the user
-      // explicitly elevates via `/sensitivity`, `effective` rises
-      // above `None` and `max(None, effective)` stamps the
-      // appropriately-elevated tier on those messages. The floor is
-      // load-bearing for ELEVATION-derived stamping, not for the
-      // calm-session baseline.
-      defaultSensitivity: SensitivityLevel.None,
-      // Conversation-message sensitivity floor — closes the cross-
-      // device leak shape: a Secret-effective turn persisting messages
-      // at the static default tier, syncing to the relay, retrieved on
-      // another device's None-tier session, included in trimmed
-      // history → BYOK egress. Same shape as the memory-write floor
-      // shipped earlier this arc; ConversationManager floors persisted
-      // tier at max(default, effective) at write time.
-      getEffectiveSensitivity: () => this.getEffectiveSessionSensitivity(),
-    });
+    this.conversation = new ConversationManager(this.buildConversationDeps(config));
     this.conversation.resumeActiveConversation();
     // First conversation: no prior history was loaded from persistence
     this._isFirstConversation = this.conversation.getHistory().length === 0;
@@ -957,10 +858,123 @@ export class MotebitRuntime {
     this.approvalStore = adapters.storage.approvalStore ?? null;
 
     // Agent graph — algebraic routing substrate
-    // The credential store adapter reads from persistent storage (survives restart)
-    // with fallback to in-memory credentials for environments without persistence.
+    this.agentGraph = new AgentGraphManager(
+      this.motebitId,
+      this.agentTrustStore,
+      this.serviceListingStore,
+      this.latencyStatsStore,
+      this.buildGraphCredentialStore(),
+    );
+
+    // Plan execution manager — wires `_logPlanChunkEvent` with the
+    // step-state guard that enforces spec/plan-lifecycle-v1 §3.4.
+    this.planExecution = new PlanExecutionManager({
+      motebitId: this.motebitId,
+      planEngine: this.planEngine,
+      planStore: this.planStore,
+      toolRegistry: this.toolRegistry,
+      events: this.events,
+      toolAuditSink: this.toolAuditSink,
+      logger: this._logger,
+      assertSensitivityPermitsAiCall: (entry, toolName) =>
+        this.assertSensitivityPermitsAiCall(entry, toolName),
+      getLocalCapabilities: () => this._localCapabilities,
+      getTaskRouter: () => this.taskRouter,
+    });
+
+    // Interactive delegation — delegate_to_agent tool + receipt stash
+    this.interactiveDelegation = new InteractiveDelegationManager({
+      motebitId: this.motebitId,
+      logger: this._logger,
+      toolRegistry: this.toolRegistry,
+      motebitToolServers: this.motebitToolServers,
+      setCredentialSubmitter: (submitter) => {
+        this.credentialManager.credentialSubmitter = submitter;
+      },
+      bumpTrustFromReceipt: (receipt) => this.bumpTrustFromReceipt(receipt, true),
+      wireLoopDeps: () => this.wireLoopDeps(),
+    });
+
+    // Streaming & Approval — stream processing, tool approval lifecycle, timeouts
+    this.streaming = new StreamingManager(this.buildStreamingDeps(config));
+
+    this.wireLoopDeps();
+  }
+
+  // === Construction helpers ===
+  //
+  // These build the bulky dependency objects the constructor injects into
+  // managers. They RETURN the deps (or, for setupIdleTick, perform a
+  // self-contained sub-wiring); the `this.X = new Y(...)` assignment and the
+  // overall init order stay in the constructor, so `strictPropertyInitialization`
+  // and the single-composition-root reading are both preserved. Pure mechanical
+  // extraction from the constructor body — no behavior change.
+
+  /** Idle-tick controller + proactive flags. No-op unless `proactiveTickMs > 0`. */
+  private setupIdleTick(config: RuntimeConfig): void {
+    if (config.proactiveTickMs != null && config.proactiveTickMs > 0) {
+      const tickMs = config.proactiveTickMs;
+      const quietMs = config.proactiveQuietWindowMs ?? 60_000;
+      const action = config.proactiveAction ?? "none";
+      // Catch-up only when consolidation is the configured idle action.
+      this._proactiveConsolidationEnabled = action === "consolidate";
+      this._proactiveCatchUpMaxAgeMs =
+        config.proactiveCatchUpMaxAgeMs ?? DEFAULT_PROACTIVE_CATCH_UP_MAX_AGE_MS;
+      this._idleTick = createIdleTickController({
+        intervalMs: tickMs,
+        quietWindowMs: quietMs,
+        isProcessing: () => this._isProcessing,
+        lastUserMessageAt: () => this._lastUserMessageAt,
+        onTick: async (timestamp) => {
+          try {
+            await this.events.appendWithClock({
+              event_id: crypto.randomUUID(),
+              motebit_id: this.motebitId,
+              timestamp,
+              event_type: EventType.IdleTickFired,
+              payload: {
+                interval_ms: tickMs,
+                quiet_window_ms: quietMs,
+                action,
+              },
+              tombstoned: false,
+            });
+          } catch {
+            // Event-log append is best-effort — a missed tick record
+            // does not corrupt state.
+          }
+          // Perform the configured action AFTER the heartbeat event
+          // is logged — so a reflection failure cannot prevent the
+          // cadence signal from being recorded. Each action path is
+          // best-effort; a throw here is caught by the idle-tick
+          // controller's logger.
+          if (action === "reflect") {
+            // Calls the public `reflect()` directly (not the private
+            // reflectAndStore) so a thrown error reaches the
+            // idle-tick controller's logger. The `reflect()` method
+            // updates gradient state on success; the controller's
+            // catch wrapper handles failure as best-effort.
+            await this.reflect();
+          } else if (action === "consolidate") {
+            // Full proactive interior: 4-phase consolidation cycle. The
+            // cycle owns presence transitions and tool scoping; idle-tick
+            // just kicks it off. Errors caught by the idle-tick controller.
+            await this.consolidationCycle();
+          }
+        },
+        logger: this._logger,
+      });
+    }
+  }
+
+  /**
+   * Agent-graph credential store: reputation credentials for a subject, preferring
+   * the persistent store (survives restart) and falling back to in-memory issuance.
+   */
+  private buildGraphCredentialStore(): ConstructorParameters<typeof AgentGraphManager>[4] {
+    const credentialStore = this.credentialStore;
     const credentialMgr = this.credentialManager;
-    const graphCredentialStore = {
+    return {
       getCredentialsForSubject: (subjectMotebitId: string) => {
         // Prefer persistent store (has historical credentials across sessions)
         if (credentialStore) {
@@ -1006,45 +1020,67 @@ export class MotebitRuntime {
           }));
       },
     };
-    this.agentGraph = new AgentGraphManager(
-      this.motebitId,
-      this.agentTrustStore,
-      this.serviceListingStore,
-      this.latencyStatsStore,
-      graphCredentialStore,
-    );
+  }
 
-    // Plan execution manager — wires `_logPlanChunkEvent` with the
-    // step-state guard that enforces spec/plan-lifecycle-v1 §3.4.
-    this.planExecution = new PlanExecutionManager({
+  /** Conversation-manager dependencies (provider projection, sensitivity floors). */
+  private buildConversationDeps(
+    config: RuntimeConfig,
+  ): ConstructorParameters<typeof ConversationManager>[0] {
+    return {
       motebitId: this.motebitId,
-      planEngine: this.planEngine,
-      planStore: this.planStore,
-      toolRegistry: this.toolRegistry,
-      events: this.events,
-      toolAuditSink: this.toolAuditSink,
-      logger: this._logger,
+      maxHistory: config.maxConversationHistory ?? 40,
+      summarizeAfterMessages: config.summarizeAfterMessages ?? 20,
+      store: this.conversationStore,
+      getProvider: () => this.provider,
+      getTaskRouter: () => this.taskRouter,
+      generateCompletion: (prompt, taskType) => this.generateCompletion(prompt, taskType),
+      // Single authorized brand producer for the summarization
+      // path. ConversationManager projects the cleared provider
+      // and passes it to ai-core's summarizeConversation; the
+      // brand makes any path that bypasses the gate a compile
+      // error.
       assertSensitivityPermitsAiCall: (entry, toolName) =>
         this.assertSensitivityPermitsAiCall(entry, toolName),
-      getLocalCapabilities: () => this._localCapabilities,
-      getTaskRouter: () => this.taskRouter,
-    });
+      // Default sensitivity baseline for persisted messages. Set to
+      // `None` to match the read-side filter's default in
+      // `trimmed()` (which falls back to `None` when
+      // `getEffectiveSensitivity` is absent). The two MUST share a
+      // baseline or the runtime falls into the "remember nothing"
+      // failure mode: write-side floors at one tier, read-side
+      // filters at a lower tier, and on a calm None-tier turn every
+      // message the runtime wrote becomes unreadable to its own
+      // next turn. Witnessed 2026-05-11: the AI told the user
+      // "I don't have a previous message in this session" mid-chat
+      // because `?? SensitivityLevel.Personal` was stamping every
+      // message Personal while `?? SensitivityLevel.None` was the
+      // read-side default — asymmetric defaults on the same axis.
+      //
+      // Real cross-device leak protection (the original motivation
+      // for the floor) is unchanged: when a tool result classifies
+      // at a higher tier (`classifyToolResult`), or a slab item
+      // arrives in a `tier-bounded-by-source` mode, or the user
+      // explicitly elevates via `/sensitivity`, `effective` rises
+      // above `None` and `max(None, effective)` stamps the
+      // appropriately-elevated tier on those messages. The floor is
+      // load-bearing for ELEVATION-derived stamping, not for the
+      // calm-session baseline.
+      defaultSensitivity: SensitivityLevel.None,
+      // Conversation-message sensitivity floor — closes the cross-
+      // device leak shape: a Secret-effective turn persisting messages
+      // at the static default tier, syncing to the relay, retrieved on
+      // another device's None-tier session, included in trimmed
+      // history → BYOK egress. Same shape as the memory-write floor
+      // shipped earlier this arc; ConversationManager floors persisted
+      // tier at max(default, effective) at write time.
+      getEffectiveSensitivity: () => this.getEffectiveSessionSensitivity(),
+    };
+  }
 
-    // Interactive delegation — delegate_to_agent tool + receipt stash
-    this.interactiveDelegation = new InteractiveDelegationManager({
-      motebitId: this.motebitId,
-      logger: this._logger,
-      toolRegistry: this.toolRegistry,
-      motebitToolServers: this.motebitToolServers,
-      setCredentialSubmitter: (submitter) => {
-        this.credentialManager.credentialSubmitter = submitter;
-      },
-      bumpTrustFromReceipt: (receipt) => this.bumpTrustFromReceipt(receipt, true),
-      wireLoopDeps: () => this.wireLoopDeps(),
-    });
-
-    // Streaming & Approval — stream processing, tool approval lifecycle, timeouts
-    this.streaming = new StreamingManager({
+  /** Streaming-manager dependencies (state/behavior taps, sanitize/redact, signing). */
+  private buildStreamingDeps(
+    config: RuntimeConfig,
+  ): ConstructorParameters<typeof StreamingManager>[0] {
+    return {
       pushStateUpdate: (u) => this.state.pushUpdate(u),
       setSpeaking: (a) => this.behavior.setSpeaking(a),
       setDelegating: (a) => this.behavior.setDelegating(a),
@@ -1089,9 +1125,7 @@ export class MotebitRuntime {
         this._onToolInvocation != null ? (receipt) => this._onToolInvocation?.(receipt) : undefined,
       onToolActivity: this._onToolActivity ? (event) => this._onToolActivity?.(event) : undefined,
       onApprovalDecision: (decision) => this.recordApprovalDecision(decision),
-    });
-
-    this.wireLoopDeps();
+    };
   }
 
   /**
