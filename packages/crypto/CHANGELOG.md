@@ -1,5 +1,42 @@
 # @motebit/crypto Changelog
 
+## 3.14.0
+
+### Minor Changes
+
+- 09f4704: Producer-side evidence provenance — motebit's own grounded-answer output now carries re-verifiable provenance down to the retrieved primary source (dogfooding the evidence-provenance protocol motebit owns; agency.computer was the first producer, this makes motebit one too). Covers both the raw-byte path (`text/*`) and the recipe path (HTML).
+
+  Additive wire surface (back-compat by absence):
+  - `@motebit/protocol`:
+    - `Citation.provenance?: EvidenceProvenance` — a `"web"` citation's `text_excerpt` as a content-addressed span in the primary record at `locator`, re-checkable with `verifyEvidenceProvenance`.
+    - `ToolResult.source_digest?: DigestRef` — set by a fetch-type tool (`read_url`) whose returned `data` is re-derivable from the raw fetched bytes; its presence is the signal. `ToolResult.source_projection?: string` — the byte-deterministic projection recipe id whose output `data` is, set alongside `source_digest` on the recipe path (HTML → `"agency.html-text.v1"`); ABSENT on the raw-byte path (`text/*`).
+    - `ExecutionReceipt.source_digest?: DigestRef` + `ExecutionReceipt.source_projection?: string` — the signature-bound attestation of the raw-source digest (and the recipe id, when extracted), threaded from the tool into the signed receipt.
+  - `@motebit/crypto`: `SignableReceipt.source_digest?` + `SignableReceipt.source_projection?` so the signer types + canonicalizes the fields (signed over `canonicalJson(body)` like every other field). `verifyEvidenceProvenance` is also re-exported through `@motebit/encryption` (the verify surface services consume).
+
+  The honesty invariant is enforced structurally: the digest is over the RAW served bytes a stranger re-fetches (never extracted text — the not-independent trap). On the raw-byte path `projection` is absent and the span is located over the raw bytes directly. On the recipe path, `read_url` ADOPTS the world-public, content-addressed, immutable recipe `agency.html-text.v1` (the Metabolic Principle — a deterministic HTML→text transform is a solved commodity, not a motebit enzyme; one resolver re-checks both motebit's and agency's HTML citations) and names it in `source_projection`, so a re-verifier re-fetches the raw HTML, re-applies the published recipe, then locates the span. The `@motebit/crypto` verifier stays domain-blind — it injects the resolver, owns no recipe catalog. The production recipe impl (`projectAgencyHtmlTextV1`, exported from `@motebit/tools`) is conformance-tested byte-for-byte against the published fixture; a separate independent impl in `@motebit/crypto` is the §7 byte-determinism guard.
+
+  Behavior change (read_url HTML): extraction is now the byte-deterministic `agency.html-text.v1` recipe — it decodes only the structural entities (`&amp;`/`&lt;`/`&gt;`/`&quot;`/`&apos;`/`&nbsp;` + numeric forms) and passes presentational entities (`&copy;`, `&mdash;`, …) through verbatim, trading cosmetic richness for cross-language re-verifiability. JSON output stays projection-absent (no provenance) until a JSON recipe lands. The browser `proxyUrl` path returns pre-stripped data without provenance — a known coverage gap (the edge proxy is not a producer of signed citations).
+
+  Round-trip e2e proves a stranger re-verifies a real research citation against the raw source on BOTH paths, that the HTML path fails closed without the recipe (`projection_unresolved`), and that a fabricated excerpt fails closed (`span_absent`) — verifiable-locality applied to the agent's own factual answers. Doctrine: `docs/doctrine/evidence-provenance.md`; spec/evidence-provenance-v1.md.
+
+- b4a1c9e: Evidence-provenance: a second projection conformance class (`projectionClass`) to keep §7 binary (agency.computer co-design).
+
+  A PDF cannot meet §7 (`spec-reproducible`): PDF→text is a genuine inference (glyphs at coordinates, reading order is heuristic; `pdftotext`/`pdf.js`/`pdfminer`/`mupdf` disagree byte-for-byte). Shipping such a recipe under the same `projection` umbrella would soften §7 to "usually real" and a "verified" PDF span would silently re-verify only against the producer's exact library. Rather than corrupt §7, the protocol adds a second, honestly-named assurance class.
+
+  `@motebit/protocol`: new closed registry `ProjectionClass` (`spec-reproducible` | `tool-pinned`) + `ALL_PROJECTION_CLASSES` + `isProjectionClass`, mirroring `DigestAlgorithm`'s lighter treatment (not the registered-registry ceremony). New optional `EvidenceProvenance.projectionClass` — ABSENT ⇒ `spec-reproducible`, so the weaker class is opt-in and can never be claimed by omission. Additive, back-compat.
+
+  `@motebit/crypto` + `@motebit/verifier`: re-export `ProjectionClass` so a consumer pinning the aggregator reads the class off the SAME surface it consumes (agency-proof-integration contract). `verifyEvidenceProvenance` is UNCHANGED — the class is carried-but-law-advisory (like `binding`/`locator`); it is the assurance level the consumer policies on.
+
+  `@motebit/wire-schemas`: `projectionClass` added to the zod schema + the committed `spec/schemas/evidence-provenance-v1.json` (parity-checked).
+
+  `tool-pinned` is on-wire (visible per claim, so a consumer can policy-gate it) but its conformance obligations live in `spec/evidence-provenance-v1.md` §7-tool: a content-addressed, world-obtainable, version-pinned tool (reproducible-build preferred) + a committed fixture; the tool digest lives in the app-owned recipe spec (already bound by the immutable-recipe-id rule), never per-span on the wire. No `tool-pinned` recipe ships in-tree yet — this is the class vocabulary + obligations only.
+
+### Patch Changes
+
+- 17304af: Clarify the `verifyEvidenceProvenance` resolver contract: the injected `resolveProjection` is assumed **total** for any recipe it accepts. A resolver that throws PROPAGATES the exception — a resolver fault is a caller bug, not an evidence verdict, and is never swallowed into a false `present: false` (which would let a broken recipe masquerade as "evidence absent" and hide the bug). To signal "I cannot resolve this recipe," a consumer OMITS the resolver for it and lets the no-resolver path fail closed (`projection_unresolved`) — i.e. inject a resolver only for the recipes you own, and let every other recipe fall through.
+
+  Behavior is unchanged — this pins, in the JSDoc contract and an executable test, a property the prose hadn't stated. Surfaced by agency.computer's adoption probe against the published `@motebit/crypto@3.13.0` (the consumer-forces-shape loop): their wrapper already does exactly this. Doctrine: `docs/doctrine/evidence-provenance.md` (Keystone).
+
 ## 3.13.0
 
 ### Minor Changes
