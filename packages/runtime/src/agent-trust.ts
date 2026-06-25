@@ -90,8 +90,15 @@ export interface AgentTrustDeps {
 
 /**
  * Update trust for a remote agent based on a verified execution receipt.
- * Trust progression: Unknown → FirstContact (on first interaction) → Verified (after 5+ verified).
- * Never auto-promotes to Trusted — requires explicit owner action.
+ *
+ * Trust progression is first-person and pairwise — promoted by MY success rate with THIS
+ * peer, never by a global score (docs/doctrine/agents-as-first-person-trust-graph.md). The
+ * ladder climbs via `evaluateTrustTransition` against REFERENCE_TRUST_THRESHOLDS:
+ * FirstContact on the first verified receipt → Verified at 5 successes / ≥0.8 rate →
+ * Trusted at 20 successes / ≥0.9 rate; sustained failure (≥3 tasks, <0.5 rate) demotes one
+ * level, fail-fast. `setAgentTrustLevel` is an ADDITIONAL, explicit-owner path to any level
+ * (including Trusted), not a precondition for it. Unverified receipts never move trust.
+ * See trust-graph-longitudinal-eval.test.ts for the measured ladder.
  */
 export async function bumpTrustFromReceipt(
   deps: AgentTrustDeps,
