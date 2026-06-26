@@ -27,10 +27,22 @@
 set -euo pipefail
 
 SPEC_REPO="${SPEC_REPO:-https://github.com/agency-computer/pdf-text-spec}"
-SPEC_SHA="${SPEC_SHA:-a6372ed}"
+# Re-cut fdbc4ad (was a6372ed): this independent reproduction caught a real gap —
+# the v1 build at a6372ed forked on HOST ARCHITECTURE. rust@sha256:c0a38f… is a
+# multi-arch manifest LIST, so a digest "pin" pins the list and each host pulls
+# its own arch's rustc: agency's arm64 → 89c8f640, our amd64 CI → 76d7fbf, each
+# stable per-arch (which is why their same-host "twice-identical" check missed it
+# and our independent amd64 host caught it — the §6 footgun). Fix (agency, still
+# v1, source byte-unchanged, output text identical): build.sh now pins
+# `--platform linux/amd64` (+ `--locked`); amd64 is canonical, arm64 reproduces
+# under emulation. So the canonical tool digest is now the amd64 one — exactly
+# what our runner already produced.
+SPEC_SHA="${SPEC_SHA:-fdbc4ad}"
 # Expected sha256 of the built wasm (the §7-tool tool digest, hex, no "sha256:").
-EXPECTED_TOOL_DIGEST="${EXPECTED_TOOL_DIGEST:-89c8f640efdd3a02ac900731137880a0945c432a8522c9b8f53a97e0f5b39045}"
-# The pinned, reproducible build image (rustc 1.93.1). Pinned by digest, not tag.
+EXPECTED_TOOL_DIGEST="${EXPECTED_TOOL_DIGEST:-76d7fbfbc215bf9b061fc90c3b11c9ac86482274a228bb39ad7833c0d6fbaddc}"
+# The build image (rustc 1.93.1) — a MULTI-ARCH manifest list; build.sh now pins
+# `--platform linux/amd64` so the arch can't silently fork. GitHub's ubuntu runner
+# is amd64, so this builds native (no emulation).
 BUILD_IMAGE="${BUILD_IMAGE:-rust@sha256:c0a38f5662afdb298898da1d70b909af4bda4e0acff2dc52aea6360a9b9c6956}"
 
 log()  { printf '\033[1m▸ %s\033[0m\n' "$*"; }
@@ -66,15 +78,15 @@ BUILD_SH="$(find "$WORK/spec" -name build.sh -path '*/tool/*' | head -1)"
 TOOL_DIR="$(dirname "$BUILD_SH")"
 log "Found build script: ${BUILD_SH#"$WORK/spec/"}"
 
-# Reproducibility diagnostic. An unlocked dependency graph is the classic
-# non-hermetic build: transitive crates resolve to whatever crates.io serves at
-# build time, so the wasm bytes drift over time even from pinned source in a
-# pinned image. Surfaced because run 28169687361 rebuilt 76d7fbfb… ≠ 89c8f640…
-# while "Updating crates.io index" fetched current versions.
+# Reproducibility diagnostic (retained guard). When the a6372ed gap was open this
+# checked the dep-drift hypothesis — and refuted it: Cargo.lock was already
+# present, which is what pushed the diagnosis to HOST ARCHITECTURE (the real
+# cause; build.sh now pins --platform). Kept as a standing guard — an unlocked
+# graph would be a fresh, different reproducibility risk.
 if [ -f "$TOOL_DIR/Cargo.lock" ]; then
   log "Cargo.lock present — dependency graph is locked."
 else
-  log "⚠ NO Cargo.lock in tool/ — transitive deps resolve at build time (primary reproducibility-gap suspect)."
+  log "⚠ NO Cargo.lock in tool/ — transitive deps resolve at build time (a reproducibility risk)."
 fi
 
 # ── 3. Reproducible build ─────────────────────────────────────────────────────
