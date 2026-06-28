@@ -15,6 +15,12 @@ const ALWAYS_DESTRUCTIVE = new Set(["dd", "mkfs", "fdisk", "shred"]);
  * Destructive command+flag combinations. Each entry is a command name
  * mapped to argument patterns that make it destructive.
  * Exported for reuse and testing.
+ *
+ * Canonical source: this vocabulary is mirrored in the desktop Rust tool-guard
+ * (`apps/desktop/src-tauri/src/tool_guard.rs`) as defense-in-depth behind the
+ * bypassable TS policy gate on the strongest-root surface. Set-for-set parity is
+ * enforced by `scripts/check-tool-guard-parity.ts` — add a command here and the
+ * gate fails until the Rust mirror matches.
  */
 export const DESTRUCTIVE_PATTERNS: Record<string, (args: string[]) => boolean> = {
   rm: (args) => args.some((a) => /^-.*r/i.test(a) || a === "--recursive"),

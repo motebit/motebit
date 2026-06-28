@@ -16,7 +16,8 @@
 //!     boundary — raw `sh -c` can obfuscate) that blocks the catastrophic-wipe
 //!     class. Mirrors `@motebit/tools` shell-exec `DESTRUCTIVE_PATTERNS` +
 //!     `ALWAYS_DESTRUCTIVE` (packages/tools/src/builtins/shell-exec.ts:11-33);
-//!     keep the two in sync (sibling-boundary rule).
+//!     keep the two in sync (sibling-boundary rule, enforced by
+//!     `scripts/check-tool-guard-parity.ts`).
 
 use std::path::{Component, Path, PathBuf};
 
