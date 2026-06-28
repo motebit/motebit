@@ -1736,6 +1736,15 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
       ),
   },
   {
+    script: "check-tool-guard-parity",
+    proves:
+      "flags a destructive command present in the canonical TS source but missing from the desktop Rust tool-guard mirror. Adding `wipefs: (args) => true,` to `DESTRUCTIVE_PATTERNS` in packages/tools/src/builtins/shell-exec.ts introduces a pattern-guarded command the Rust `is_destructive_command` does not handle, firing the gate's in-TS-not-Rust arm — exactly the asymmetric Rust↔TS wipe-guard drift the gate exists to catch on the strongest-root surface. The symmetric in-Rust-not-TS arm and the ALWAYS_DESTRUCTIVE-set arm are exercised the same way during the gate's own development.",
+    perturb: () =>
+      mutateFile("packages/tools/src/builtins/shell-exec.ts", (src) =>
+        src.replace(/(\n {2}chown: \(args\))/, "\n  wipefs: (args) => true,$1"),
+      ),
+  },
+  {
     script: "check-computer-dispatcher-modes",
     proves:
       'flags a `computer` tool registration site that fails to stamp an explicit `embodimentMode`. Renaming the field name `embodimentMode:` → `embodimentModeDisabled:` in apps/web/src/computer-tool.ts breaks the literal extraction the gate uses (`embodimentMode:\\s*"<value>"`), so the gate sees the cloud-browser registration as unstamped and fires. The desktop registration still has the field, so the failure is asymmetric — exactly the per-dispatcher-mode-stamping drift the gate exists to catch (v1.1 of the virtual_browser arc).',
