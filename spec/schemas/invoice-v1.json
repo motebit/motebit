@@ -1,0 +1,301 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/invoice-v1.json",
+  "title": "InvoiceV1 (v1)",
+  "description": "An issuer-signed demand for payment: a flat fee plus passthrough compute bounded by the summed CostAttestation costs (passthrough_cost_minor <= floor(Σ cost_nanos / 1e7)), re-derivable and refusable offline. Amounts in minor units (cents); cost references carry nano-USD. Idempotency is the issuer's stateful ledger, never the artifact. See spec/settlement-invoice-v1.md §4.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "motebit.invoice.v1",
+      "description": "This artifact's type tag."
+    },
+    "invoice_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "UUIDv7. The bill's idempotency anchor."
+    },
+    "issuer_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The issuer's motebit_id / did."
+    },
+    "issuer_public_key": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Issuer Ed25519 public key, hex. OPTIONAL; verify against the registered key."
+    },
+    "customer_ref": {
+      "type": "string",
+      "description": "Opaque issuer-owned addressing token. NOT PII."
+    },
+    "currency": {
+      "type": "string",
+      "const": "USD",
+      "description": "Bill currency. Amounts are minor units (cents) of this."
+    },
+    "period_start": {
+      "type": "number",
+      "description": "ms epoch, inclusive."
+    },
+    "period_end": {
+      "type": "number",
+      "description": "ms epoch, exclusive."
+    },
+    "line_items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "receipt_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The billed ExecutionReceipt.task_id."
+          },
+          "receipt_digest": {
+            "type": "object",
+            "properties": {
+              "algorithm": {
+                "type": "string",
+                "const": "sha-256",
+                "description": "Hash algorithm — the role, never baked into a field name."
+              },
+              "value": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+                "description": "Lowercase hex SHA-256 of the JCS canonicalization of the full signed artifact."
+              }
+            },
+            "required": ["algorithm", "value"],
+            "additionalProperties": false,
+            "description": "`executionReceiptDigest(receipt)` — binds the line to the exact receipt."
+          },
+          "cost_nanos": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The passthrough cost for this line, nano-USD. Non-negative."
+          },
+          "cost_attestation_digest": {
+            "type": "object",
+            "properties": {
+              "algorithm": {
+                "$ref": "#/definitions/InvoiceV1/properties/line_items/items/properties/receipt_digest/properties/algorithm"
+              },
+              "value": {
+                "$ref": "#/definitions/InvoiceV1/properties/line_items/items/properties/receipt_digest/properties/value"
+              }
+            },
+            "required": ["algorithm", "value"],
+            "additionalProperties": false,
+            "description": "`costAttestationDigest(att)` — binds the line to the CostAttestation that priced it."
+          }
+        },
+        "required": ["receipt_id", "receipt_digest", "cost_nanos", "cost_attestation_digest"],
+        "additionalProperties": false
+      },
+      "description": "One per billed receipt; each binds to a receipt + its cost attestation."
+    },
+    "flat_fee_minor": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The per-outcome flat fee, minor units (cents)."
+    },
+    "passthrough_cost_minor": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Passthrough compute, minor units. Bounded by `<= floor(Σ cost_nanos / 1e7)` (spec §4.2.3)."
+    },
+    "total_minor": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "`flat_fee_minor + passthrough_cost_minor`. The verifier recomputes."
+    },
+    "rate_table_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The rate table the passthrough was costed under."
+    },
+    "issued_at": {
+      "type": "number",
+      "description": "ms epoch."
+    },
+    "suite": {
+      "type": "string",
+      "const": "motebit-jcs-ed25519-b64-v1",
+      "description": "Cryptosuite identifier."
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Base64url Ed25519 over `canonicalJson(body minus signature)`."
+    }
+  },
+  "required": [
+    "schema",
+    "invoice_id",
+    "issuer_id",
+    "customer_ref",
+    "currency",
+    "period_start",
+    "period_end",
+    "line_items",
+    "flat_fee_minor",
+    "passthrough_cost_minor",
+    "total_minor",
+    "rate_table_id",
+    "issued_at",
+    "suite",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "definitions": {
+    "InvoiceV1": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "motebit.invoice.v1",
+          "description": "This artifact's type tag."
+        },
+        "invoice_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "UUIDv7. The bill's idempotency anchor."
+        },
+        "issuer_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The issuer's motebit_id / did."
+        },
+        "issuer_public_key": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Issuer Ed25519 public key, hex. OPTIONAL; verify against the registered key."
+        },
+        "customer_ref": {
+          "type": "string",
+          "description": "Opaque issuer-owned addressing token. NOT PII."
+        },
+        "currency": {
+          "type": "string",
+          "const": "USD",
+          "description": "Bill currency. Amounts are minor units (cents) of this."
+        },
+        "period_start": {
+          "type": "number",
+          "description": "ms epoch, inclusive."
+        },
+        "period_end": {
+          "type": "number",
+          "description": "ms epoch, exclusive."
+        },
+        "line_items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "receipt_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The billed ExecutionReceipt.task_id."
+              },
+              "receipt_digest": {
+                "type": "object",
+                "properties": {
+                  "algorithm": {
+                    "type": "string",
+                    "const": "sha-256",
+                    "description": "Hash algorithm — the role, never baked into a field name."
+                  },
+                  "value": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "Lowercase hex SHA-256 of the JCS canonicalization of the full signed artifact."
+                  }
+                },
+                "required": ["algorithm", "value"],
+                "additionalProperties": false,
+                "description": "`executionReceiptDigest(receipt)` — binds the line to the exact receipt."
+              },
+              "cost_nanos": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "The passthrough cost for this line, nano-USD. Non-negative."
+              },
+              "cost_attestation_digest": {
+                "type": "object",
+                "properties": {
+                  "algorithm": {
+                    "$ref": "#/definitions/InvoiceV1/properties/line_items/items/properties/receipt_digest/properties/algorithm"
+                  },
+                  "value": {
+                    "$ref": "#/definitions/InvoiceV1/properties/line_items/items/properties/receipt_digest/properties/value"
+                  }
+                },
+                "required": ["algorithm", "value"],
+                "additionalProperties": false,
+                "description": "`costAttestationDigest(att)` — binds the line to the CostAttestation that priced it."
+              }
+            },
+            "required": ["receipt_id", "receipt_digest", "cost_nanos", "cost_attestation_digest"],
+            "additionalProperties": false
+          },
+          "description": "One per billed receipt; each binds to a receipt + its cost attestation."
+        },
+        "flat_fee_minor": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The per-outcome flat fee, minor units (cents)."
+        },
+        "passthrough_cost_minor": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Passthrough compute, minor units. Bounded by `<= floor(Σ cost_nanos / 1e7)` (spec §4.2.3)."
+        },
+        "total_minor": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "`flat_fee_minor + passthrough_cost_minor`. The verifier recomputes."
+        },
+        "rate_table_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The rate table the passthrough was costed under."
+        },
+        "issued_at": {
+          "type": "number",
+          "description": "ms epoch."
+        },
+        "suite": {
+          "type": "string",
+          "const": "motebit-jcs-ed25519-b64-v1",
+          "description": "Cryptosuite identifier."
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base64url Ed25519 over `canonicalJson(body minus signature)`."
+        }
+      },
+      "required": [
+        "schema",
+        "invoice_id",
+        "issuer_id",
+        "customer_ref",
+        "currency",
+        "period_start",
+        "period_end",
+        "line_items",
+        "flat_fee_minor",
+        "passthrough_cost_minor",
+        "total_minor",
+        "rate_table_id",
+        "issued_at",
+        "suite",
+        "signature"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

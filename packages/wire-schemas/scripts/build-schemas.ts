@@ -29,6 +29,10 @@ import { buildSignedRequestEnvelopeJsonSchema } from "../src/signed-request-enve
 import { buildSeedEscrowPayloadJsonSchema } from "../src/seed-escrow-payload.js";
 import { buildExecutionReceiptJsonSchema } from "../src/execution-receipt.js";
 import {
+  buildCostAttestationJsonSchema,
+  buildInvoiceJsonSchema,
+} from "../src/settlement-invoice.js";
+import {
   buildCredentialAnchorBatchJsonSchema,
   buildCredentialAnchorProofJsonSchema,
 } from "../src/credential-anchor.js";
@@ -141,6 +145,8 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   { filename: "standing-delegation-v1.json", build: buildStandingDelegationJsonSchema },
   { filename: "delegation-revocation-v1.json", build: buildDelegationRevocationJsonSchema },
   { filename: "subject-binding-v1.json", build: buildSubjectBindingV1JsonSchema },
+  { filename: "cost-attestation-v1.json", build: buildCostAttestationJsonSchema },
+  { filename: "invoice-v1.json", build: buildInvoiceJsonSchema },
   {
     filename: "signed-request-envelope-v1.json",
     build: buildSignedRequestEnvelopeJsonSchema,

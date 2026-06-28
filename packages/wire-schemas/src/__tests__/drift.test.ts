@@ -129,6 +129,12 @@ import {
   buildSubjectBindingV1JsonSchema,
 } from "../standing-delegation.js";
 import {
+  COST_ATTESTATION_SCHEMA_ID,
+  INVOICE_SCHEMA_ID,
+  buildCostAttestationJsonSchema,
+  buildInvoiceJsonSchema,
+} from "../settlement-invoice.js";
+import {
   EXECUTION_RECEIPT_SCHEMA_ID,
   buildExecutionReceiptJsonSchema,
 } from "../execution-receipt.js";
@@ -260,6 +266,18 @@ const CASES: SchemaCase[] = [
     filename: "subject-binding-v1.json",
     expectedId: SUBJECT_BINDING_SCHEMA_ID,
     build: buildSubjectBindingV1JsonSchema,
+  },
+  {
+    name: "cost-attestation-v1",
+    filename: "cost-attestation-v1.json",
+    expectedId: COST_ATTESTATION_SCHEMA_ID,
+    build: buildCostAttestationJsonSchema,
+  },
+  {
+    name: "invoice-v1",
+    filename: "invoice-v1.json",
+    expectedId: INVOICE_SCHEMA_ID,
+    build: buildInvoiceJsonSchema,
   },
   {
     name: "signed-request-envelope-v1",
