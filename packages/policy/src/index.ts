@@ -3,6 +3,21 @@
 export { classifyTool, isToolAllowed } from "./risk-model.js";
 export { BudgetEnforcer, DEFAULT_BUDGET } from "./budget.js";
 export type { BudgetConfig, BudgetCheckResult } from "./budget.js";
+export {
+  evaluateBlastRadius,
+  freshGrantSpendState,
+  canonicalizeCounterparty,
+  InMemoryGrantSpendStore,
+} from "./grant-blast-radius.js";
+export type {
+  GrantSpendCeiling,
+  MoneyAction,
+  GrantSpendState,
+  BlastRadiusDenial,
+  BlastRadiusDecision,
+  BlastRadiusEvaluation,
+  GrantSpendStore,
+} from "./grant-blast-radius.js";
 export { RedactionEngine } from "./redaction.js";
 export {
   ContentSanitizer,
