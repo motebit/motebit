@@ -430,6 +430,125 @@ export interface DelegationRevocation {
   signature: string;
 }
 
+// === Settlement invoice (settlement-invoice@1.0) ===
+// The settlement-layer members of the receipt family — the bill a customer
+// re-derives offline. motebit owns the FORMAT; the issuer runs the rails. There
+// is no charge/balance/ledger primitive here, ever. Spec: spec/settlement-invoice-v1.md.
+// Doctrine: docs/doctrine/clearing-house-not-thin-waist.md.
+
+/**
+ * An issuer-signed declaration of the cost of ONE execution, in integer nano-USD
+ * against a named rate table — the thing summed by an {@link InvoiceV1}. Separate
+ * from the `ExecutionReceipt` by design: cost is a declaration ("what we computed,
+ * by these rates"), not the receipt's proof ("this work happened"). Correctable via
+ * supersession (a new `attestation_id` against the same receipt) without re-signing
+ * the immutable receipt. Signed/verified by `@motebit/crypto`
+ * `signCostAttestation`/`verifyCostAttestation`.
+ */
+export interface CostAttestationV1 {
+  schema: "motebit.cost-attestation.v1";
+  /** UUIDv7. A supersession is a NEW id (spec §3.3). */
+  attestation_id: string;
+  /** The {@link ExecutionReceipt.task_id} this prices (human/index handle). */
+  receipt_id: string;
+  /** `executionReceiptDigest(receipt)` over the full signed receipt — binds the cost to the exact receipt. */
+  receipt_digest: DigestRef;
+  /** The cost, in integer nano-USD (1 USD = 1e9 nano). Positive. */
+  cost_nanos: number;
+  /** The versioned rate table the cost was computed under (e.g. `"agency-rates-v1"`). */
+  rate_table_id: string;
+  /** Issuer-owned label for what the cost accounts for (rate-table basis). Opaque to motebit. */
+  covers: string;
+  /** The issuer's motebit_id / did. */
+  issuer_id: string;
+  /** Issuer Ed25519 public key, hex (64 lowercase). OPTIONAL (TOFU); verify against the REGISTERED key. */
+  issuer_public_key?: string;
+  /** ms epoch. MUST be >= the receipt's `completed_at` — a cost can't be attested before the work finished. */
+  attested_at: number;
+  suite: "motebit-jcs-ed25519-b64-v1";
+  /** Base64url Ed25519 over JCS(body). */
+  signature: string;
+}
+
+/** One billed line of an {@link InvoiceV1} — binds to a receipt and the cost attestation that priced it. */
+export interface InvoiceLineItem {
+  /** The billed {@link ExecutionReceipt.task_id}. */
+  receipt_id: string;
+  /** `executionReceiptDigest(receipt)` — binds the line to the exact receipt. */
+  receipt_digest: DigestRef;
+  /** The passthrough cost for this line, integer nano-USD. Non-negative. */
+  cost_nanos: number;
+  /** `costAttestationDigest(att)` — binds the line to the {@link CostAttestationV1} that priced it. */
+  cost_attestation_digest: DigestRef;
+}
+
+/**
+ * An issuer-signed demand for payment: a flat fee per signed outcome plus passthrough
+ * compute bounded by the summed {@link CostAttestationV1} costs — re-derivable and
+ * refusable offline. Amounts are minor units (cents); cost references carry nano-USD to
+ * preserve the `≤`/floor passthrough law. Idempotency is the issuer's stateful ledger,
+ * never the artifact. Signed/verified by `signInvoice`/`verifyInvoice`.
+ */
+export interface InvoiceV1 {
+  schema: "motebit.invoice.v1";
+  /** UUIDv7. The bill's idempotency anchor. */
+  invoice_id: string;
+  issuer_id: string;
+  /** hex, optional; verify against the registered key. */
+  issuer_public_key?: string;
+  /** Opaque issuer-owned addressing token. NOT PII. */
+  customer_ref: string;
+  currency: "USD";
+  /** ms epoch, inclusive. */
+  period_start: number;
+  /** ms epoch, exclusive. */
+  period_end: number;
+  line_items: InvoiceLineItem[];
+  /** The per-outcome flat fee, minor units (cents). Non-negative. */
+  flat_fee_minor: number;
+  /** Passthrough compute, minor units. Bounded by `passthrough_cost_minor <= floor(Σ cost_nanos / 1e7)`. */
+  passthrough_cost_minor: number;
+  /** `flat_fee_minor + passthrough_cost_minor`. The verifier recomputes. */
+  total_minor: number;
+  rate_table_id: string;
+  issued_at: number;
+  suite: "motebit-jcs-ed25519-b64-v1";
+  signature: string;
+}
+
+/** Per-axis verdict from `verifyCostAttestation` (structured, never a naked boolean). */
+export interface CostAttestationVerdict {
+  /** All MUST axes hold. */
+  valid: boolean;
+  /** Signature verifies against the registered issuer key. */
+  signature_valid: boolean;
+  /** `cost_nanos` is a positive safe integer. */
+  cost_positive: boolean;
+  /** Digest+issuer binding to the supplied receipt — `unchecked` when no receipt was supplied. */
+  binding: "valid" | "invalid" | "unchecked";
+  /** `attested_at >= receipt.completed_at` — `unchecked` when the receipt/`completed_at` is absent. */
+  temporal: "valid" | "invalid" | "unchecked";
+}
+
+/** Per-axis verdict from `verifyInvoice` (structured — so "valid against the cite" and "stale vs latest" are distinct). */
+export interface InvoiceVerdict {
+  /** All MUST axes hold (idempotency + stale-cost are detectable, not gating). */
+  valid: boolean;
+  signature_valid: boolean;
+  /** `total == flat + passthrough`, all amounts non-negative safe integers. */
+  arithmetic: boolean;
+  /** `passthrough_cost_minor <= floor(Σ line.cost_nanos / 1e7)`. */
+  passthrough_cap: boolean;
+  /** Each line resolves to its cited cost attestation (schema-checked) and `line.cost_nanos <= att.cost_nanos`. */
+  per_line_binding: "valid" | "invalid" | "unchecked";
+  /** Every referenced receipt/attestation shares the invoice's issuer. */
+  issuer_consistency: "valid" | "invalid" | "unchecked";
+  /** A receipt_id seen across supplied invoices — detectable, not gating. */
+  idempotency: "ok" | "duplicate_detected" | "unchecked";
+  /** Passthrough overstates the LATEST non-superseded cost (the §3.3 customer-protection axis) — detectable, not gating. */
+  stale_cost_overstatement: "none" | "detected" | "unchecked";
+}
+
 export enum SensitivityLevel {
   None = "none",
   Personal = "personal",

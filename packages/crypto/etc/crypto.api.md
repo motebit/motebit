@@ -12,6 +12,8 @@ import type { ComputerSessionActionRecord } from '@motebit/protocol';
 import type { ConsolidationMutationManifest } from '@motebit/protocol';
 import type { ConsolidationReceipt } from '@motebit/protocol';
 import type { ContentArtifactType } from '@motebit/protocol';
+import type { CostAttestationV1 } from '@motebit/protocol';
+import type { CostAttestationVerdict } from '@motebit/protocol';
 import type { CredentialBundle } from '@motebit/protocol';
 import type { DelegationRevocation } from '@motebit/protocol';
 import type { DelegationToken } from '@motebit/protocol';
@@ -25,12 +27,15 @@ import type { DisputeRequest } from '@motebit/protocol';
 import type { DisputeResolution } from '@motebit/protocol';
 import type { EvidenceProvenance } from '@motebit/protocol';
 import type { EvidenceRef } from '@motebit/protocol';
+import type { ExecutionReceipt as ExecutionReceipt_2 } from '@motebit/protocol';
 import type { ExecutionTimelineEntry } from '@motebit/protocol';
 import type { FederationSettlementRecord } from '@motebit/protocol';
 import type { GoalExecutionManifest } from '@motebit/protocol';
 import type { HardwareAttestationClaim } from '@motebit/protocol';
 import type { HorizonWitness } from '@motebit/protocol';
 import type { HorizonWitnessRequestBody } from '@motebit/protocol';
+import type { InvoiceV1 } from '@motebit/protocol';
+import type { InvoiceVerdict } from '@motebit/protocol';
 import type { MerkleTreeVersion } from '@motebit/protocol';
 import type { MigrationPresentation } from '@motebit/protocol';
 import type { MigrationRequest } from '@motebit/protocol';
@@ -266,6 +271,13 @@ export interface ContentArtifactManifest {
     readonly signature: string;
     readonly suite: SuiteId;
 }
+
+// @public
+export function costAttestationDigest(att: CostAttestationV1): Promise<string>;
+
+export { CostAttestationV1 }
+
+export { CostAttestationVerdict }
 
 // @public (undocumented)
 export function createPresentation(credentials: VerifiableCredential[], privateKey: Uint8Array, publicKey: Uint8Array): Promise<VerifiablePresentation>;
@@ -508,6 +520,9 @@ export interface ExecutionReceipt {
     // (undocumented)
     tools_used: string[];
 }
+
+// @public
+export function executionReceiptDigest(receipt: ExecutionReceipt_2): Promise<string>;
 
 // @public
 export const FEDERATION_SETTLEMENT_ANCHOR_SUITE: "motebit-jcs-ed25519-hex-v1";
@@ -756,6 +771,10 @@ export interface IdentityVerifyResult extends BaseResult {
 
 // @public
 export type IntegrityVerdict = "verified" | "invalid";
+
+export { InvoiceV1 }
+
+export { InvoiceVerdict }
 
 // @public
 export function isAnnouncementSurface(s: unknown): s is AnnouncementSurface;
@@ -1311,6 +1330,9 @@ export interface SignContentArtifactOptions {
 }
 
 // @public
+export function signCostAttestation(input: Omit<CostAttestationV1, "signature" | "suite">, issuerPrivateKey: Uint8Array): Promise<CostAttestationV1>;
+
+// @public
 export function signCredentialBundle(bundle: Omit<CredentialBundle, "bundle_hash" | "signature">, privateKey: Uint8Array): Promise<CredentialBundle>;
 
 // @public
@@ -1394,6 +1416,9 @@ export function signHorizonWitness(cert: Extract<DeletionCertificate, {
 
 // @public
 export function signHorizonWitnessRequestBody(body: HorizonWitnessRequestBody, privateKey: Uint8Array): Promise<string>;
+
+// @public
+export function signInvoice(input: Omit<InvoiceV1, "signature" | "suite">, issuerPrivateKey: Uint8Array): Promise<InvoiceV1>;
 
 // @public
 export function signKeySuccession(oldPrivateKey: Uint8Array, newPrivateKey: Uint8Array, newPublicKey: Uint8Array, oldPublicKey: Uint8Array, reason?: string): Promise<KeySuccessionRecord>;
@@ -1745,6 +1770,11 @@ export interface VerifyContentArtifactResult {
 }
 
 // @public
+export function verifyCostAttestation(att: CostAttestationV1, registeredIssuerKeyHex: string, options?: {
+    receipt?: ExecutionReceipt_2;
+}): Promise<CostAttestationVerdict>;
+
+// @public
 export function verifyCredentialAnchor(credential: Record<string, unknown>, anchorProof: CredentialAnchorProofFields, chainVerifier?: ChainAnchorVerifier): Promise<CredentialAnchorVerifyResult>;
 
 // @public
@@ -1829,6 +1859,14 @@ export function verifyHorizonWitnessRequestSignature(body: HorizonWitnessRequest
 
 // @public
 export function verifyIdentityBindingAnchored(identity: MotebitIdentityFile, signingKeyHex: string, atTimestampMs: number, proof: IdentityLogInclusionProof, guardianPublicKeyHex?: string): Promise<KeyBindingResult>;
+
+// @public
+export function verifyInvoice(invoice: InvoiceV1, registeredIssuerKeyHex: string, options?: {
+    costAttestations?: readonly CostAttestationV1[];
+    receipts?: readonly ExecutionReceipt_2[];
+    latestCostAttestations?: ReadonlyMap<string, CostAttestationV1>;
+    otherInvoices?: readonly InvoiceV1[];
+}): Promise<InvoiceVerdict>;
 
 // @public
 export function verifyKeyBindingAtTime(identity: MotebitIdentityFile, signingKeyHex: string, atTimestampMs: number, guardianPublicKeyHex?: string): Promise<KeyBindingResult>;
