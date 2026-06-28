@@ -1,5 +1,12 @@
 # @motebit/sdk Changelog
 
+## 2.2.8
+
+### Patch Changes
+
+- Updated dependencies [85c0b10]
+  - @motebit/protocol@3.8.0
+
 ## 2.2.7
 
 ### Patch Changes
