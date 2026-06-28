@@ -752,8 +752,14 @@ import type {
   StandingDelegation,
   DelegationRevocation,
   SubjectBindingV1,
+  ExecutionReceipt,
+  CostAttestationV1,
+  InvoiceV1,
+  CostAttestationVerdict,
+  InvoiceVerdict,
 } from "@motebit/protocol";
 export type { DelegationToken, StandingDelegation, DelegationRevocation, SubjectBindingV1 };
+export type { CostAttestationV1, InvoiceV1, CostAttestationVerdict, InvoiceVerdict };
 
 /** The one suite DelegationTokens sign under today. */
 export const DELEGATION_TOKEN_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
@@ -1093,6 +1099,210 @@ export async function findGrantRevocation(
     if (await verifyDelegationRevocation(rev)) return rev;
   }
   return null;
+}
+
+// === Settlement invoice (settlement-invoice@1.0) ===
+// The bill that extends the receipt chain to the money. motebit owns the FORMAT;
+// the issuer runs the rails. Spec: spec/settlement-invoice-v1.md.
+
+/** 1 minor unit (cent) = 1e7 nano-USD. The only unit crossing in the invoice law (spec §5). */
+const NANOS_PER_MINOR = 10_000_000;
+
+/**
+ * JCS-SHA256 (hex) of the full signed `ExecutionReceipt` (`signature` included).
+ * Producer and verifier MUST use this exact function so a `receipt_digest` binding
+ * is reproducible by construction (the `consolidationReceiptDigest` discipline).
+ */
+export async function executionReceiptDigest(receipt: ExecutionReceipt): Promise<string> {
+  return canonicalSha256(receipt);
+}
+
+/** JCS-SHA256 (hex) of the full signed `CostAttestation`. Same reproducibility discipline. */
+export async function costAttestationDigest(att: CostAttestationV1): Promise<string> {
+  return canonicalSha256(att);
+}
+
+/** Sign a `CostAttestation` with the issuer's private key. */
+export async function signCostAttestation(
+  input: Omit<CostAttestationV1, "signature" | "suite">,
+  issuerPrivateKey: Uint8Array,
+): Promise<CostAttestationV1> {
+  const body = { ...input, suite: DELEGATION_TOKEN_SUITE };
+  const message = new TextEncoder().encode(canonicalJson(body));
+  const sig = await signBySuite(DELEGATION_TOKEN_SUITE, message, issuerPrivateKey);
+  return { ...body, signature: toBase64Url(sig) };
+}
+
+/** Verify a signature against the registered issuer key; the carried key, if present, MUST match it. */
+async function verifyIssuerSig(
+  artifact: { suite: string; signature: string; issuer_public_key?: string },
+  registeredIssuerKeyHex: string,
+): Promise<boolean> {
+  if (artifact.suite !== DELEGATION_TOKEN_SUITE) return false;
+  if (artifact.issuer_public_key != null && artifact.issuer_public_key !== registeredIssuerKeyHex) {
+    return false;
+  }
+  const { signature, ...body } = artifact;
+  const message = new TextEncoder().encode(canonicalJson(body));
+  try {
+    return await verifyBySuite(
+      DELEGATION_TOKEN_SUITE,
+      message,
+      fromBase64Url(signature),
+      hexToBytes(registeredIssuerKeyHex),
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Verify a `CostAttestation` → structured verdict (spec §3.1). `valid` iff signature +
+ * positive cost + (binding/temporal not invalid). Binding/temporal are `unchecked`
+ * without the receipt.
+ */
+export async function verifyCostAttestation(
+  att: CostAttestationV1,
+  registeredIssuerKeyHex: string,
+  options?: { receipt?: ExecutionReceipt },
+): Promise<CostAttestationVerdict> {
+  const signature = await verifyIssuerSig(att, registeredIssuerKeyHex);
+  const cost_positive = Number.isSafeInteger(att.cost_nanos) && att.cost_nanos > 0;
+
+  let binding: CostAttestationVerdict["binding"] = "unchecked";
+  let temporal: CostAttestationVerdict["temporal"] = "unchecked";
+  const receipt = options?.receipt;
+  if (receipt) {
+    const expected = await executionReceiptDigest(receipt);
+    const digestOk =
+      att.receipt_digest.algorithm === "sha-256" && att.receipt_digest.value === expected;
+    const issuerOk = receipt.motebit_id === att.issuer_id;
+    binding = digestOk && issuerOk ? "valid" : "invalid";
+    if (receipt.completed_at != null) {
+      temporal = att.attested_at >= receipt.completed_at ? "valid" : "invalid";
+    }
+  }
+
+  const valid = signature && cost_positive && binding !== "invalid" && temporal !== "invalid";
+  return { valid, signature_valid: signature, cost_positive, binding, temporal };
+}
+
+/** Sign an `Invoice` with the issuer's private key. */
+export async function signInvoice(
+  input: Omit<InvoiceV1, "signature" | "suite">,
+  issuerPrivateKey: Uint8Array,
+): Promise<InvoiceV1> {
+  const body = { ...input, suite: DELEGATION_TOKEN_SUITE };
+  const message = new TextEncoder().encode(canonicalJson(body));
+  const sig = await signBySuite(DELEGATION_TOKEN_SUITE, message, issuerPrivateKey);
+  return { ...body, signature: toBase64Url(sig) };
+}
+
+/**
+ * Verify an `Invoice` → structured verdict (spec §4.2). `valid` requires the MUST axes
+ * (signature, arithmetic, passthrough cap, and per-line/issuer not invalid); idempotency
+ * and stale-cost overstatement are DETECTABLE axes (surfaced, never silent, but consumer
+ * policy decides whether they fail the bill).
+ */
+export async function verifyInvoice(
+  invoice: InvoiceV1,
+  registeredIssuerKeyHex: string,
+  options?: {
+    /** The cited cost attestations, resolved against each line's `cost_attestation_digest`. */
+    costAttestations?: readonly CostAttestationV1[];
+    /** The billed receipts, for issuer consistency. */
+    receipts?: readonly ExecutionReceipt[];
+    /** receipt_id → latest non-superseded cost attestation (the §3.3 customer-protection check). */
+    latestCostAttestations?: ReadonlyMap<string, CostAttestationV1>;
+    /** Other held invoices, for double-billing detection. */
+    otherInvoices?: readonly InvoiceV1[];
+  },
+): Promise<InvoiceVerdict> {
+  const signature = await verifyIssuerSig(invoice, registeredIssuerKeyHex);
+
+  const nonNeg = (n: number): boolean => Number.isSafeInteger(n) && n >= 0;
+  const arithmetic =
+    nonNeg(invoice.flat_fee_minor) &&
+    nonNeg(invoice.passthrough_cost_minor) &&
+    invoice.line_items.every((li) => nonNeg(li.cost_nanos)) &&
+    invoice.total_minor === invoice.flat_fee_minor + invoice.passthrough_cost_minor;
+
+  const sumNanos = invoice.line_items.reduce((s, li) => s + li.cost_nanos, 0);
+  const passthrough_cap = invoice.passthrough_cost_minor <= Math.floor(sumNanos / NANOS_PER_MINOR);
+
+  // Per-line binding + issuer consistency (need the cited attestations / receipts).
+  let per_line_binding: InvoiceVerdict["per_line_binding"] = "unchecked";
+  let issuer_consistency: InvoiceVerdict["issuer_consistency"] = "unchecked";
+  const atts = options?.costAttestations;
+  if (atts) {
+    const byDigest = new Map<string, CostAttestationV1>();
+    for (const a of atts) byDigest.set(await costAttestationDigest(a), a);
+    let linesOk = true;
+    let issuerOk = true;
+    for (const li of invoice.line_items) {
+      const att = byDigest.get(li.cost_attestation_digest.value);
+      if (
+        att === undefined ||
+        att.schema !== "motebit.cost-attestation.v1" || // substitution belt
+        att.receipt_id !== li.receipt_id ||
+        li.cost_nanos > att.cost_nanos || // a line above its cited cost
+        !(await verifyCostAttestation(att, registeredIssuerKeyHex)).signature_valid
+      ) {
+        linesOk = false;
+      }
+      if (att !== undefined && att.issuer_id !== invoice.issuer_id) issuerOk = false;
+    }
+    per_line_binding = linesOk ? "valid" : "invalid";
+    issuer_consistency = issuerOk ? "valid" : "invalid";
+  }
+  if (options?.receipts) {
+    const receiptsOk = options.receipts.every((r) => r.motebit_id === invoice.issuer_id);
+    if (issuer_consistency === "unchecked") issuer_consistency = receiptsOk ? "valid" : "invalid";
+    else if (!receiptsOk) issuer_consistency = "invalid";
+  }
+
+  // Idempotency — detectable across held invoices.
+  let idempotency: InvoiceVerdict["idempotency"] = "unchecked";
+  if (options?.otherInvoices) {
+    const mine = new Set(invoice.line_items.map((li) => li.receipt_id));
+    const dup = options.otherInvoices.some(
+      (other) =>
+        other.invoice_id !== invoice.invoice_id &&
+        other.line_items.some((li) => mine.has(li.receipt_id)),
+    );
+    idempotency = dup ? "duplicate_detected" : "ok";
+  }
+
+  // Stale-cost overstatement — passthrough exceeds the LATEST non-superseded cost (§3.3, §4.2.7).
+  let stale_cost_overstatement: InvoiceVerdict["stale_cost_overstatement"] = "unchecked";
+  const latest = options?.latestCostAttestations;
+  if (latest) {
+    const latestSum = invoice.line_items.reduce((s, li) => {
+      const a = latest.get(li.receipt_id);
+      return s + (a ? a.cost_nanos : li.cost_nanos);
+    }, 0);
+    stale_cost_overstatement =
+      invoice.passthrough_cost_minor > Math.floor(latestSum / NANOS_PER_MINOR)
+        ? "detected"
+        : "none";
+  }
+
+  const valid =
+    signature &&
+    arithmetic &&
+    passthrough_cap &&
+    per_line_binding !== "invalid" &&
+    issuer_consistency !== "invalid";
+  return {
+    valid,
+    signature_valid: signature,
+    arithmetic,
+    passthrough_cap,
+    per_line_binding,
+    issuer_consistency,
+    idempotency,
+    stale_cost_overstatement,
+  };
 }
 
 // === Signed Request Envelope (signed-request-envelope@1.0) ===

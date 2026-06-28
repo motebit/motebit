@@ -1044,6 +1044,33 @@ export interface ConversationSyncResult {
 }
 
 // @public
+export interface CostAttestationV1 {
+    attestation_id: string;
+    attested_at: number;
+    cost_nanos: number;
+    covers: string;
+    issuer_id: string;
+    issuer_public_key?: string;
+    rate_table_id: string;
+    receipt_digest: DigestRef;
+    receipt_id: string;
+    // (undocumented)
+    schema: "motebit.cost-attestation.v1";
+    signature: string;
+    // (undocumented)
+    suite: "motebit-jcs-ed25519-b64-v1";
+}
+
+// @public
+export interface CostAttestationVerdict {
+    binding: "valid" | "invalid" | "unchecked";
+    cost_positive: boolean;
+    signature_valid: boolean;
+    temporal: "valid" | "invalid" | "unchecked";
+    valid: boolean;
+}
+
+// @public
 export const CostSemiring: Semiring<number>;
 
 // @public
@@ -2121,6 +2148,55 @@ export interface InjectionWarning {
 
 // @public
 export type IntentOrigin = "user-tap" | "ai-loop" | "scheduled" | "agent-to-agent";
+
+// @public
+export interface InvoiceLineItem {
+    cost_attestation_digest: DigestRef;
+    cost_nanos: number;
+    receipt_digest: DigestRef;
+    receipt_id: string;
+}
+
+// @public
+export interface InvoiceV1 {
+    // (undocumented)
+    currency: "USD";
+    customer_ref: string;
+    flat_fee_minor: number;
+    invoice_id: string;
+    // (undocumented)
+    issued_at: number;
+    // (undocumented)
+    issuer_id: string;
+    issuer_public_key?: string;
+    // (undocumented)
+    line_items: InvoiceLineItem[];
+    passthrough_cost_minor: number;
+    period_end: number;
+    period_start: number;
+    // (undocumented)
+    rate_table_id: string;
+    // (undocumented)
+    schema: "motebit.invoice.v1";
+    // (undocumented)
+    signature: string;
+    // (undocumented)
+    suite: "motebit-jcs-ed25519-b64-v1";
+    total_minor: number;
+}
+
+// @public
+export interface InvoiceVerdict {
+    arithmetic: boolean;
+    idempotency: "ok" | "duplicate_detected" | "unchecked";
+    issuer_consistency: "valid" | "invalid" | "unchecked";
+    passthrough_cap: boolean;
+    per_line_binding: "valid" | "invalid" | "unchecked";
+    // (undocumented)
+    signature_valid: boolean;
+    stale_cost_overstatement: "none" | "detected" | "unchecked";
+    valid: boolean;
+}
 
 // @public
 export function isAccrualKind(value: unknown): value is AccrualKind;
