@@ -70,6 +70,23 @@ export {
 // (resolved by the caller from `motebit_id`), never a key the request carries.
 export { signRequestEnvelope, verifyRequestEnvelope } from "@motebit/crypto";
 export type { SignedRequestEnvelope } from "@motebit/crypto";
+// Settlement invoice (settlement-invoice@1.0). Explicitly re-exported like the
+// delegation family — both artifacts are verified against the ISSUER's registered
+// key (the carried key, if present, must match it), never a key the artifact alone
+// vouches for. The two digest helpers are mandated so a consumer's receipt_digest /
+// cost_attestation_digest bindings reproduce by construction.
+export {
+  executionReceiptDigest,
+  costAttestationDigest,
+  verifyCostAttestation,
+  verifyInvoice,
+} from "@motebit/crypto";
+export type {
+  CostAttestationV1,
+  InvoiceV1,
+  CostAttestationVerdict,
+  InvoiceVerdict,
+} from "@motebit/crypto";
 export type {
   VerifyResult,
   ArtifactType,

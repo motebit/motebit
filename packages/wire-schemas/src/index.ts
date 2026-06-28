@@ -50,6 +50,14 @@ export {
   buildSubjectBindingV1JsonSchema,
 } from "./standing-delegation.js";
 export {
+  CostAttestationV1Schema,
+  InvoiceV1Schema,
+  COST_ATTESTATION_SCHEMA_ID,
+  INVOICE_SCHEMA_ID,
+  buildCostAttestationJsonSchema,
+  buildInvoiceJsonSchema,
+} from "./settlement-invoice.js";
+export {
   SignedRequestEnvelopeSchema,
   SIGNED_REQUEST_ENVELOPE_SCHEMA_ID,
   buildSignedRequestEnvelopeJsonSchema,

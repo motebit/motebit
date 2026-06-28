@@ -1,0 +1,187 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/cost-attestation-v1.json",
+  "title": "CostAttestationV1 (v1)",
+  "description": "An issuer-signed declaration of the cost of one execution, in integer nano-USD against a named rate table, referencing an ExecutionReceipt by id + digest. Separate from the receipt by design (cost is a declaration, not the receipt's proof); supersedable via new attestation_id. Canonicalization: JCS (RFC 8785). Signature: Ed25519 over canonicalJson(body minus signature), base64url. See spec/settlement-invoice-v1.md §3.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "motebit.cost-attestation.v1",
+      "description": "This artifact's type tag (in-body domain separation)."
+    },
+    "attestation_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "UUIDv7. A supersession is a NEW id (spec §3.3)."
+    },
+    "receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The ExecutionReceipt.task_id this prices (human/index handle)."
+    },
+    "receipt_digest": {
+      "type": "object",
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "const": "sha-256",
+          "description": "Hash algorithm — the role, never baked into a field name."
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Lowercase hex SHA-256 of the JCS canonicalization of the full signed artifact."
+        }
+      },
+      "required": ["algorithm", "value"],
+      "additionalProperties": false,
+      "description": "`executionReceiptDigest(receipt)` over the full signed ExecutionReceipt — binds the cost to the exact receipt."
+    },
+    "cost_nanos": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "description": "The cost, in integer nano-USD (1 USD = 1e9 nano). Positive."
+    },
+    "rate_table_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The versioned rate table the cost was computed under (e.g. `agency-rates-v1`)."
+    },
+    "covers": {
+      "type": "string",
+      "description": "Issuer-owned label for what the cost accounts for (rate-table basis). Opaque to motebit."
+    },
+    "issuer_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The issuer's motebit_id / did."
+    },
+    "issuer_public_key": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Issuer Ed25519 public key, hex (64 lowercase). OPTIONAL; verify against the REGISTERED key."
+    },
+    "attested_at": {
+      "type": "number",
+      "description": "ms epoch. MUST be >= the receipt's `completed_at` — a cost can't be attested before the work finished."
+    },
+    "suite": {
+      "type": "string",
+      "const": "motebit-jcs-ed25519-b64-v1",
+      "description": "Cryptosuite: JCS (RFC 8785), Ed25519, base64url signature, hex public keys."
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Base64url Ed25519 over `canonicalJson(body minus signature)`. Verify with the registered issuer key."
+    }
+  },
+  "required": [
+    "schema",
+    "attestation_id",
+    "receipt_id",
+    "receipt_digest",
+    "cost_nanos",
+    "rate_table_id",
+    "covers",
+    "issuer_id",
+    "attested_at",
+    "suite",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "definitions": {
+    "CostAttestationV1": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "motebit.cost-attestation.v1",
+          "description": "This artifact's type tag (in-body domain separation)."
+        },
+        "attestation_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "UUIDv7. A supersession is a NEW id (spec §3.3)."
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The ExecutionReceipt.task_id this prices (human/index handle)."
+        },
+        "receipt_digest": {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "type": "string",
+              "const": "sha-256",
+              "description": "Hash algorithm — the role, never baked into a field name."
+            },
+            "value": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "description": "Lowercase hex SHA-256 of the JCS canonicalization of the full signed artifact."
+            }
+          },
+          "required": ["algorithm", "value"],
+          "additionalProperties": false,
+          "description": "`executionReceiptDigest(receipt)` over the full signed ExecutionReceipt — binds the cost to the exact receipt."
+        },
+        "cost_nanos": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "The cost, in integer nano-USD (1 USD = 1e9 nano). Positive."
+        },
+        "rate_table_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The versioned rate table the cost was computed under (e.g. `agency-rates-v1`)."
+        },
+        "covers": {
+          "type": "string",
+          "description": "Issuer-owned label for what the cost accounts for (rate-table basis). Opaque to motebit."
+        },
+        "issuer_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The issuer's motebit_id / did."
+        },
+        "issuer_public_key": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Issuer Ed25519 public key, hex (64 lowercase). OPTIONAL; verify against the REGISTERED key."
+        },
+        "attested_at": {
+          "type": "number",
+          "description": "ms epoch. MUST be >= the receipt's `completed_at` — a cost can't be attested before the work finished."
+        },
+        "suite": {
+          "type": "string",
+          "const": "motebit-jcs-ed25519-b64-v1",
+          "description": "Cryptosuite: JCS (RFC 8785), Ed25519, base64url signature, hex public keys."
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base64url Ed25519 over `canonicalJson(body minus signature)`. Verify with the registered issuer key."
+        }
+      },
+      "required": [
+        "schema",
+        "attestation_id",
+        "receipt_id",
+        "receipt_digest",
+        "cost_nanos",
+        "rate_table_id",
+        "covers",
+        "issuer_id",
+        "attested_at",
+        "suite",
+        "signature"
+      ],
+      "additionalProperties": false
+    }
+  }
+}
