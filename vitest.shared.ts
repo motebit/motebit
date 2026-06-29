@@ -51,16 +51,24 @@ const BASE_TEST_EXCLUDE = ["**/node_modules/**", "**/dist/**", "**/coverage/**"]
 const BASE_COVERAGE_INCLUDE = ["src/**/*.ts"];
 const BASE_COVERAGE_EXCLUDE = ["src/__tests__/**", "src/**/*.d.ts"];
 
-// 15s, not vitest's default 5s. The monorepo's `test:coverage` runs every
+// 30s, not vitest's default 5s. The monorepo's `test:coverage` runs every
 // package concurrently under turbo (CI `check` + the Release job), so an
 // integration-shaped test that finishes in milliseconds in isolation can get
-// CPU-starved enough to blow the 5s default and fail the whole run — a pure
+// CPU-starved enough to blow a tight timeout and fail the whole run — a pure
 // contention flake, not a slow test. Seen on apps/cli `scheduler-approvals`
-// (fixed inline, bare config) and `@motebit/ai-core` terrarium. Raising the
-// shared default fixes the class in one place instead of per-package; a correct
-// test still completes well under this ceiling, so the only effect is how long
-// a genuinely hung test takes to surface. Override per-package via `extra.testTimeout`.
-const DEFAULT_TEST_TIMEOUT_MS = 15_000;
+// (fixed inline, bare config) and `@motebit/ai-core` terrarium; this default
+// went 5s→15s for it, then 15s blew the same way on `@motebit/verify`
+// published-contents (2026-06-29, CI `check` job) as the workspace grew to 52
+// ignore-listed packages and the contention with it. Raising the shared default
+// fixes the class in ONE place instead of per-package; a correct test still
+// completes well under this ceiling (raising costs nothing on normal runs — a
+// timeout only fires when exceeded), so the only effect is how long a genuinely
+// hung test takes to surface. Override per-package via `extra.testTimeout`.
+//
+// ESCALATION (if 30s recurs): the cure is structural, not a bigger number —
+// contention grows with every package added, so cap the test concurrency
+// (turbo `--concurrency`, or vitest workers) rather than bumping this again.
+const DEFAULT_TEST_TIMEOUT_MS = 30_000;
 
 export function defineMotebitTest(opts: MotebitVitestOptions): ViteUserConfig {
   const { thresholds, testExclude = [], coverageInclude, coverageExclude = [], extra, vite } = opts;
