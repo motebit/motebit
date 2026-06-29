@@ -711,6 +711,7 @@ export class MemoryGraph {
     candidate: AttributedMemoryCandidate,
     embedding: number[],
     halfLife?: number,
+    atMs?: number,
   ): Promise<MemoryNode> {
     // Guard: reject redacted content that arrives via sync.
     // The relay redacts sensitive memory_formed events, replacing content with
@@ -724,7 +725,12 @@ export class MemoryGraph {
     }
 
     const nodeId = crypto.randomUUID();
-    const now = Date.now();
+    // Accept an injected stamp so a supersede can make the new node's `valid_from`
+    // EQUAL the superseded node's `valid_until` — the bi-temporal intervals must
+    // abut exactly (no gap, no overlap), which two separate `Date.now()` reads
+    // across an `await` cannot guarantee. Defaults to the wall clock for the
+    // standalone ADD path.
+    const now = atMs ?? Date.now();
     const memoryType = candidate.memory_type ?? MemoryType.Semantic;
     const resolvedHalfLife =
       halfLife ??
@@ -855,8 +861,9 @@ export class MemoryGraph {
           oldNode.valid_until = now;
           await this.storage.saveNode(oldNode);
         }
-        // Form new node with valid_from = now
-        const newNode = await this.formMemory(candidate, embedding, halfLife);
+        // Form new node with valid_from = now — the SAME `now` stamped on the old
+        // node's valid_until above, so the intervals abut exactly (no temporal hole).
+        const newNode = await this.formMemory(candidate, embedding, halfLife, now);
         // Create Supersedes edge
         if (decision.existingNodeId) {
           await this.link(newNode.node_id, decision.existingNodeId, RT.Supersedes);
@@ -1313,6 +1320,10 @@ export class MemoryGraph {
     const { embedText } = await import("./embeddings.js");
     const embedding = await embedText(newContent);
 
+    // Stamp once, BEFORE forming the new node, so the new node's `valid_from`
+    // equals the old node's `valid_until` exactly — intervals abut with no
+    // overlap (two beliefs valid at once) and no gap.
+    const now = Date.now();
     const newNode = await this.formMemory(
       {
         content: newContent,
@@ -1328,9 +1339,9 @@ export class MemoryGraph {
       },
       embedding,
       oldNode.half_life,
+      now,
     );
 
-    const now = Date.now();
     oldNode.valid_until = now;
     oldNode.tombstoned = true;
     await this.storage.saveNode(oldNode);

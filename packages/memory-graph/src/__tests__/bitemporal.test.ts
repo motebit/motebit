@@ -190,3 +190,66 @@ describe("supersession is invalidation-with-provenance + emits validity on the w
     expect(consolidated?.payload.superseded_valid_until).toBe(aAfter!.valid_until);
   });
 });
+
+describe("supersede intervals abut EXACTLY under clock jitter (no temporal hole or overlap)", () => {
+  // Regression for the bi-temporal abutment bug: the superseded node's `valid_until`
+  // and the new node's `valid_from` were stamped from two SEPARATE `Date.now()`
+  // reads across an `await`, so under scheduling jitter they diverged — a temporal
+  // GAP (`consolidateAndForm`: form read the later clock) or an OVERLAP
+  // (`supersedeMemoryByNodeId`: form read the earlier clock). Both now stamp a
+  // single `now`. This surfaced as a flaky CI failure on the consolidation eval that
+  // never reproduced on slower hardware; we make it deterministic by forcing MAXIMAL
+  // jitter — every `Date.now()` read jumps 5s — under which the pre-fix code is
+  // GUARANTEED to diverge, and assert the intervals still abut to the millisecond.
+  const cand = (content: string): AttributedMemoryCandidate => ({
+    content,
+    source: "user_stated",
+    confidence: 0.9,
+    sensitivity: SensitivityLevel.None,
+    memory_type: MemoryType.Semantic,
+  });
+
+  const withJumpingClock = async (fn: () => Promise<void>): Promise<void> => {
+    const realNow = Date.now;
+    let t = 1_700_000_000_000;
+    Date.now = () => (t += 5_000); // every read advances 5s — pre-fix ⇒ guaranteed divergence
+    try {
+      await fn();
+    } finally {
+      Date.now = realNow;
+    }
+  };
+
+  it("consolidateAndForm UPDATE: new.valid_from === old.valid_until (no gap)", async () => {
+    await withJumpingClock(async () => {
+      const storage = new InMemoryMemoryStorage();
+      const graph = new MemoryGraph(storage, new EventStore(new InMemoryEventStore()), "m");
+      const a = await graph.formMemory(cand("home=Paris"), EMB);
+      const provider: ConsolidationProvider = {
+        classify: () =>
+          Promise.resolve({
+            action: ConsolidationAction.UPDATE,
+            existingNodeId: a.node_id,
+            reason: "moved",
+          }),
+      };
+      const { node: b } = await graph.consolidateAndForm(cand("home=Lyon"), EMB, provider);
+      const aAfter = (await storage.getNode(a.node_id))!;
+      expect(typeof aAfter.valid_until).toBe("number");
+      expect(b!.valid_from).toBe(aAfter.valid_until); // abut to the ms — no temporal hole
+    });
+  });
+
+  it("supersedeMemoryByNodeId: new.valid_from === old.valid_until (no overlap)", async () => {
+    await withJumpingClock(async () => {
+      const storage = new InMemoryMemoryStorage();
+      const graph = new MemoryGraph(storage, new EventStore(new InMemoryEventStore()), "m");
+      const a = await graph.formMemory(cand("home=Paris"), EMB);
+      const newId = await graph.supersedeMemoryByNodeId(a.node_id, "home=Lyon", "moved");
+      const aAfter = (await storage.getNode(a.node_id))!;
+      const b = (await storage.getNode(newId))!;
+      expect(typeof aAfter.valid_until).toBe("number");
+      expect(b.valid_from).toBe(aAfter.valid_until); // abut to the ms — no overlap
+    });
+  });
+});
