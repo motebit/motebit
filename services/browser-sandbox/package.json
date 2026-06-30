@@ -22,7 +22,7 @@
     "@motebit/crypto": "workspace:*",
     "@motebit/protocol": "workspace:*",
     "hono": "^4.6.0",
-    "playwright-core": "^1.60.0",
+    "playwright-core": "^1.61.1",
     "playwright-extra": "^4.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2"
   },
