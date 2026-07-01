@@ -1129,6 +1129,12 @@ export interface CredentialChainAnchor {
     tx_hash: string;
 }
 
+// @public
+export const CREDENTIALS_AUDIENCE: TokenAudience;
+
+// @public
+export const CREDENTIALS_PRESENT_AUDIENCE: TokenAudience;
+
 // @public (undocumented)
 export interface CredentialStoreAdapter {
     list(motebitId: string, type?: string, limit?: number): StoredCredential[];
@@ -2342,6 +2348,9 @@ export type ListingId = Brand<string, "ListingId">;
 
 // @public
 export function mappedSemiring<T, U>(base: Semiring<T>, to: (t: T) => U, from: (u: U) => T): Semiring<U>;
+
+// @public
+export const MARKET_LISTING_AUDIENCE: TokenAudience;
 
 // @public (undocumented)
 export interface MarketConfig {
@@ -4017,6 +4026,12 @@ export interface SyncPlanStep {
 }
 
 // @public
+export const TASK_QUERY_AUDIENCE: TokenAudience;
+
+// @public
+export const TASK_RESULT_AUDIENCE: TokenAudience;
+
+// @public
 export const TASK_SUBMIT_AUDIENCE: TokenAudience;
 
 // @public
@@ -4026,7 +4041,7 @@ export type TaskShape = "quick" | "chat" | "reasoning" | "code" | "research" | "
 export function toCents(dollars: number): number;
 
 // @public
-export type TokenAudience = "sync" | "device:auth" | "pair" | "rotate-key" | "push:register" | "task:submit" | "admin:query" | "proposal" | "receipts:read" | "account:balance" | "account:deposit" | "account:withdraw" | "account:withdrawals" | "account:checkout" | "browser-sandbox-grant" | "browser-sandbox" | "runtime:attach";
+export type TokenAudience = "sync" | "device:auth" | "pair" | "rotate-key" | "push:register" | "task:submit" | "task:query" | "task:result" | "admin:query" | "proposal" | "receipts:read" | "market:listing" | "credentials" | "credentials:present" | "account:balance" | "account:deposit" | "account:withdraw" | "account:withdrawals" | "account:checkout" | "browser-sandbox-grant" | "browser-sandbox" | "runtime:attach";
 
 // @public
 export function toMicro(dollars: number): number;

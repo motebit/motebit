@@ -316,6 +316,11 @@ const DOCS: ReadonlyArray<DocFile> = [
         key: "publishedApache",
         label: "License-tier section — permissive-floor (Apache-2.0) count",
       },
+      {
+        regex: /All (\d+) specs \(listed in the tree above\)/,
+        key: "specs",
+        label: "Specifications section — spec count",
+      },
     ],
   },
   {

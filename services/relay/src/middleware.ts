@@ -11,6 +11,7 @@ import { bearerAuth } from "hono/bearer-auth";
 import { HTTPException } from "hono/http-exception";
 import type { IdentityManager } from "@motebit/core-identity";
 import {
+  type TokenAudience,
   TASK_SUBMIT_AUDIENCE,
   BROWSER_SANDBOX_GRANT_AUDIENCE,
   ACCOUNT_DEPOSIT_AUDIENCE,
@@ -152,7 +153,7 @@ export function createDualAuth(deps: MiddlewareDeps) {
   return async function dualAuth(
     c: Parameters<Parameters<Hono["use"]>[1]>[0],
     next: () => Promise<void>,
-    expectedAudience: string,
+    expectedAudience: TokenAudience,
   ): Promise<Response | void> {
     const authHeader = c.req.header("authorization");
     if (authHeader == null || !authHeader.startsWith("Bearer ")) {

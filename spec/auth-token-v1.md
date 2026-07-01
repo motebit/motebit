@@ -138,16 +138,20 @@ Optional additional checks:
 
 The `aud` field MUST contain exactly one of the canonical audience values. Tokens are valid only at the endpoint matching their audience. This prevents an attacker who intercepts a sync token from replaying it to submit tasks.
 
-| Audience          | Endpoint / Operation                           | Description                            |
-| ----------------- | ---------------------------------------------- | -------------------------------------- |
-| `sync`            | WebSocket sync connection, HTTP sync endpoints | Multi-device data synchronization      |
-| `task:submit`     | `POST /agent/{id}/task`                        | Submit a task for delegation           |
-| `task:query`      | `GET /agent/{id}/task/{taskId}`                | Poll for task result                   |
-| `admin:query`     | `GET /api/v1/admin/*`                          | Operator console queries               |
-| `rotate-key`      | `POST /api/v1/agents/{id}/rotate-key`          | Key rotation endpoint                  |
-| `pair`            | `POST /api/v1/pair/*`                          | Multi-device pairing flow              |
-| `register-device` | `POST /api/v1/agents/{id}/register`            | Device registration                    |
-| `market:query`    | `GET /api/v1/market/*`                         | Market discovery and candidate queries |
+| Audience              | Endpoint / Operation                               | Description                            |
+| --------------------- | -------------------------------------------------- | -------------------------------------- |
+| `sync`                | WebSocket sync connection, HTTP sync endpoints     | Multi-device data synchronization      |
+| `task:submit`         | `POST /agent/{id}/task`                            | Submit a task for delegation           |
+| `task:query`          | `GET /agent/{id}/task/{taskId}`                    | Poll for task result                   |
+| `task:result`         | `POST /agent/{id}/task/{taskId}/result`            | Worker posts signed execution receipt  |
+| `market:listing`      | `GET /api/v1/agents/{id}/listing`, p2p-eligibility | Service-listing + eligibility reads    |
+| `credentials`         | `/api/v1/agents/{id}/credentials/*`                | Credential submit / verify / revoke    |
+| `credentials:present` | `POST /api/v1/agents/{id}/presentation`            | Verifiable-presentation submission     |
+| `admin:query`         | `GET /api/v1/admin/*`                              | Operator console queries               |
+| `rotate-key`          | `POST /api/v1/agents/{id}/rotate-key`              | Key rotation endpoint                  |
+| `pair`                | `POST /api/v1/pair/*`                              | Multi-device pairing flow              |
+| `register-device`     | `POST /api/v1/agents/{id}/register`                | Device registration                    |
+| `market:query`        | `GET /api/v1/market/*`                             | Market discovery and candidate queries |
 
 Implementations MAY define additional audience values for custom endpoints. Custom values SHOULD use a namespaced format (e.g., `custom:my-endpoint`) to avoid collision with canonical values.
 
