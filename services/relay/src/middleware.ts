@@ -18,6 +18,7 @@ import {
   ACCOUNT_WITHDRAW_AUDIENCE,
   ACCOUNT_WITHDRAWALS_AUDIENCE,
   ACCOUNT_CHECKOUT_AUDIENCE,
+  MARKET_QUERY_AUDIENCE,
 } from "@motebit/protocol";
 import { FixedWindowLimiter } from "./rate-limiter.js";
 import type { verifySignedTokenForDevice, parseTokenPayloadUnsafe } from "./auth.js";
@@ -502,6 +503,10 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
         // `/api/v1/onramp/` above. See `docs/doctrine/off-ramp-as-user-action.md`.
         c.req.path.startsWith("/api/v1/offramp/") ||
         c.req.path.startsWith("/api/v1/discover/") ||
+        // Market candidate discovery has its own dualAuth (market:query device
+        // token or master) above — agents discovering workers don't hold the
+        // master token. /api/v1/market/revenue is NOT carved out (operator-only).
+        c.req.path === "/api/v1/market/candidates" ||
         c.req.path.startsWith("/api/v1/allocations/") ||
         c.req.path.startsWith("/api/v1/disputes/") ||
         // Skills registry (spec/skills-registry-v1.md §5): permissive-by-
@@ -735,6 +740,15 @@ export function registerAuthMiddleware(deps: MiddlewareDeps): void {
   app.use("/api/v1/agents/*/checkout", async (c, next) => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
     return dualAuth(c, next, ACCOUNT_CHECKOUT_AUDIENCE);
+  });
+  // Market candidate discovery is device-authable: a delegating agent (sovereign
+  // delegation / `motebit delegate`) calls it with its OWN `market:query` device
+  // token to find workers — it does not hold the operator master token. Carved
+  // out of the /api/v1/* master-only catch-all below. (`/api/v1/market/revenue`
+  // is operator-only and deliberately stays under the catch-all.)
+  app.use("/api/v1/market/candidates", async (c, next) => {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
+    return dualAuth(c, next, MARKET_QUERY_AUDIENCE);
   });
   // Note: /api/v1/stripe/webhook has NO auth middleware — Stripe calls it directly.
   // Verification is done via the webhook signature.

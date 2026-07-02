@@ -138,31 +138,31 @@ Optional additional checks:
 
 The `aud` field MUST contain exactly one of the canonical audience values. Tokens are valid only at the endpoint matching their audience. This prevents an attacker who intercepts a sync token from replaying it to submit tasks.
 
-| Audience                | Endpoint / Operation                               | Description                                                          |
-| ----------------------- | -------------------------------------------------- | -------------------------------------------------------------------- |
-| `sync`                  | WebSocket sync connection, HTTP sync endpoints     | Multi-device data synchronization                                    |
-| `device:auth`           | Ad-hoc authenticated relay reads                   | Per-device auth headers on relay calls                               |
-| `pair`                  | `POST /api/v1/pair/*`                              | Multi-device pairing flow                                            |
-| `rotate-key`            | `POST /api/v1/agents/{id}/rotate-key`              | Key rotation endpoint                                                |
-| `push:register`         | `POST /api/v1/agents/{id}/push/*`                  | Push-notification token registration                                 |
-| `task:submit`           | `POST /agent/{id}/task`                            | Submit a task for delegation                                         |
-| `task:query`            | `GET /agent/{id}/task/{taskId}`                    | Poll for task result                                                 |
-| `task:result`           | `POST /agent/{id}/task/{taskId}/result`            | Worker posts signed execution receipt                                |
-| `admin:query`           | `GET /api/v1/admin/*`, registry fallback reads     | Operator console + agent-registry queries                            |
-| `proposal`              | `/api/v1/proposals/*`                              | Collaborative proposal lifecycle                                     |
-| `receipts:read`         | `GET /api/v1/agents/{id}/receipts`                 | A motebit reading its own receipts                                   |
-| `market:listing`        | `GET /api/v1/agents/{id}/listing`, p2p-eligibility | Service-listing + eligibility reads                                  |
-| `market:query`          | `GET /api/v1/market/*`                             | Market discovery and candidate queries                               |
-| `credentials`           | `/api/v1/agents/{id}/credentials/*`                | Credential submit / verify / revoke                                  |
-| `credentials:present`   | `POST /api/v1/agents/{id}/presentation`            | Verifiable-presentation submission                                   |
-| `account:balance`       | `GET /api/v1/agents/{id}/balance`                  | Read virtual-account balance                                         |
-| `account:deposit`       | _(reserved — no endpoint)_                         | Reserved for a future funded deposit-initiation endpoint (see note)  |
-| `account:withdraw`      | `POST /api/v1/agents/{id}/withdraw`                | Withdraw request                                                     |
-| `account:withdrawals`   | `GET /api/v1/agents/{id}/withdrawals`              | List withdrawal history                                              |
-| `account:checkout`      | `POST /api/v1/agents/{id}/checkout`                | Stripe checkout session create                                       |
-| `browser-sandbox-grant` | `POST /api/v1/browser-sandbox/token`               | Motebit-signed sandbox grant request                                 |
-| `browser-sandbox`       | Sandbox dispatcher (relay-signed)                  | Relay-signed sandbox dispatcher token                                |
-| `runtime:attach`        | Local runtime-host socket only                     | Frontend-to-coordinator attach handshake (never accepted by a relay) |
+| Audience                | Endpoint / Operation                               | Description                                                                      |
+| ----------------------- | -------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `sync`                  | WebSocket sync connection, HTTP sync endpoints     | Multi-device data synchronization                                                |
+| `device:auth`           | Ad-hoc authenticated relay reads                   | Per-device auth headers on relay calls                                           |
+| `pair`                  | `POST /api/v1/pair/*`                              | Multi-device pairing flow                                                        |
+| `rotate-key`            | `POST /api/v1/agents/{id}/rotate-key`              | Key rotation endpoint                                                            |
+| `push:register`         | `POST /api/v1/agents/{id}/push/*`                  | Push-notification token registration                                             |
+| `task:submit`           | `POST /agent/{id}/task`                            | Submit a task for delegation                                                     |
+| `task:query`            | `GET /agent/{id}/task/{taskId}`                    | Poll for task result                                                             |
+| `task:result`           | `POST /agent/{id}/task/{taskId}/result`            | Worker posts signed execution receipt                                            |
+| `admin:query`           | `GET /api/v1/admin/*`, registry fallback reads     | Operator console + agent-registry queries                                        |
+| `proposal`              | `/api/v1/proposals/*`                              | Collaborative proposal lifecycle                                                 |
+| `receipts:read`         | `GET /api/v1/agents/{id}/receipts`                 | A motebit reading its own receipts                                               |
+| `market:listing`        | `GET /api/v1/agents/{id}/listing`, p2p-eligibility | Service-listing + eligibility reads                                              |
+| `market:query`          | `GET /api/v1/market/candidates`                    | Market candidate discovery (device-authable; `/market/revenue` is operator-only) |
+| `credentials`           | `/api/v1/agents/{id}/credentials/*`                | Credential submit / verify / revoke                                              |
+| `credentials:present`   | `POST /api/v1/agents/{id}/presentation`            | Verifiable-presentation submission                                               |
+| `account:balance`       | `GET /api/v1/agents/{id}/balance`                  | Read virtual-account balance                                                     |
+| `account:deposit`       | _(reserved — no endpoint)_                         | Reserved for a future funded deposit-initiation endpoint (see note)              |
+| `account:withdraw`      | `POST /api/v1/agents/{id}/withdraw`                | Withdraw request                                                                 |
+| `account:withdrawals`   | `GET /api/v1/agents/{id}/withdrawals`              | List withdrawal history                                                          |
+| `account:checkout`      | `POST /api/v1/agents/{id}/checkout`                | Stripe checkout session create                                                   |
+| `browser-sandbox-grant` | `POST /api/v1/browser-sandbox/token`               | Motebit-signed sandbox grant request                                             |
+| `browser-sandbox`       | Sandbox dispatcher (relay-signed)                  | Relay-signed sandbox dispatcher token                                            |
+| `runtime:attach`        | Local runtime-host socket only                     | Frontend-to-coordinator attach handshake (never accepted by a relay)             |
 
 This table mirrors the closed `TokenAudience` registry in `@motebit/protocol` (`packages/protocol/src/audience.ts`, `ALL_TOKEN_AUDIENCES`); the registry is the canonical membership. Earlier revisions of this table listed `register-device`, which never existed in the registry — device registration uses `device:auth`. `account:deposit` remains a registered audience but currently maps to no endpoint: the self-declared `POST /api/v1/agents/{id}/deposit` route was removed as a treasury-drain vector (it credited spendable balance from a client-supplied amount), and the audience is held reserved for a future _funded_ deposit-initiation endpoint. Balance is credited only by verified server-side funding (onchain deposit-detector, Stripe webhook).
 
