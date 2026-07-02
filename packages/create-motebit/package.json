@@ -55,7 +55,7 @@
     "motebit": "workspace:*",
     "tsup": "^8.0.0",
     "typescript": "^5.6.0",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.9"
   },
   "engines": {
     "node": ">=20"
