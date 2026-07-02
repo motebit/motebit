@@ -46,13 +46,13 @@
     "@motebit/voice": "workspace:*",
     "@motebit/wallet-solana": "workspace:*",
     "buffer": "^6.0.3",
-    "three": "^0.184.0"
+    "three": "^0.185.0"
   },
   "devDependencies": {
     "@noble/ed25519": "~3.1.0",
     "@noble/hashes": "^2.2.0",
     "@playwright/test": "^1.60.0",
-    "@types/three": "^0.170.0",
+    "@types/three": "^0.185.0",
     "@vitest/coverage-v8": "^4.1.8",
     "fake-indexeddb": "^6.0.0",
     "typescript": "^5.7.0",
