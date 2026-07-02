@@ -878,6 +878,12 @@ const GATES: ReadonlyArray<Gate> = [
       'every Vite browser surface reaching the Solana wallet stack (@motebit/wallet-solana → @solana/web3.js + @solana/spl-token) carries the Buffer polyfill. Those libraries reference Node\'s `Buffer` global at module-eval time; without the polyfill the wallet import throws `Buffer is not defined` at load, kills the module graph, and the surface boots to a blank canvas in the browser — dev AND production. Trigger: an app with BOTH a vite.config.ts (Vite browser surface — excludes the Node CLI and Metro-bundled mobile) AND @motebit/wallet-solana in deps must have all three parts: the `buffer` dep, the vite.config.ts `define: { global: "globalThis" }` + `buffer:` resolve alias, and a runtime `globalThis.Buffer = Buffer` assignment in src/ (imported first). Motivating drift 2026-06-20: apps/web + apps/desktop both shipped the polyfill; apps/spatial reached the same Solana graph but shipped NONE of it, so spatial crashed at load in any browser and nobody noticed (no test loaded it) — a silent sibling-boundary miss found while verifying the felt-interior spatial render. Invariant #129, added 2026-06-20',
     script: "check-browser-surface-buffer-polyfill",
   },
+  {
+    name: "check-credit-caller-allowlist",
+    defends:
+      "the permanent structural lock behind the treasury-drain fix: a virtual-account balance may be credited (`creditAccount(` / `.credit(` in `services/relay/src`) ONLY from an allowlist of verified-funding modules (deposit-detector onchain, Stripe checkout/webhook, task/federation settlement, allocation_release net-zero, the account-store wrapper, and free-credit's non-withdrawable grant). The removed self-declared `POST /deposit` route credited spendable+withdrawable balance from a client-supplied amount → self-declare→auto-settled-withdrawal free-money vector; deleting it closed the hole, this gate keeps it closed forever. A NEW credit call site outside the allowlist fails CI, forcing a reviewer to decide: verified funding, or does the credited balance need a withdrawal hold (the free-credit shape — `AccountStore.getUnspentGrantHold`)? Companion to the `/deposit`→404 regression test in virtual-accounts.test.ts. Invariant #135, added 2026-07-02",
+    script: "check-credit-caller-allowlist",
+  },
 ];
 
 interface Result {

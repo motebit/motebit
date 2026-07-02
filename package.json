@@ -95,6 +95,7 @@
     "check-surface-controller-adoption": "npx tsx scripts/check-surface-controller-adoption.ts",
     "check-property-test-floor": "npx tsx scripts/check-property-test-floor.ts",
     "check-loops-supervised": "npx tsx scripts/check-loops-supervised.ts",
+    "check-credit-caller-allowlist": "npx tsx scripts/check-credit-caller-allowlist.ts",
     "check-money-boundary": "npx tsx scripts/check-money-boundary.ts",
     "check-multihop-depth-single-site": "npx tsx scripts/check-multihop-depth-single-site.ts",
     "check-coverage-config-present": "npx tsx scripts/check-coverage-config-present.ts",

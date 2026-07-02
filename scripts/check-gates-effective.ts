@@ -2318,6 +2318,18 @@ export async function probeFetch(): Promise<unknown> {
         ),
       ),
   },
+  {
+    script: "check-credit-caller-allowlist",
+    proves:
+      "flags a balance-credit call site reintroduced outside the verified-funding allowlist — the treasury-drain shape (crediting spendable/withdrawable balance from an unreviewed, potentially client-supplied source, as the deleted /deposit route did). Probe injects a `creditAccount(...)` call into budget.ts (a non-allowlisted module); the gate must flag it. byte-identical restoration on cleanup.",
+    perturb: () =>
+      mutateFile(`services/relay/src/budget.ts`, (src) =>
+        src.replace(
+          'const logger = createLogger({ service: "budget" });',
+          `const logger = createLogger({ service: "budget" });\nfunction ${PROBE_PREFIX}rogue(db: unknown, m: string) {\n  creditAccount(db as never, m, 1_000_000, "deposit", null, "${PROBE_PREFIX}rogue");\n}`,
+        ),
+      ),
+  },
 ];
 
 /**
