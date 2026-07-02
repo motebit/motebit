@@ -3256,6 +3256,7 @@ export type {
   AccountWithdrawResult,
   AccountWithdrawalRecord,
   AccountWithdrawalStatus,
+  WithdrawalReceiptPayload,
 } from "./account-withdraw.js";
 
 // ── Migration (protocol-level) ────────────────────────────

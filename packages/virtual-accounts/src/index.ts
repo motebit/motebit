@@ -36,5 +36,9 @@ export {
   requestWithdrawal,
 } from "./withdrawals.js";
 
-export type { WithdrawalReceiptPayload } from "./signing.js";
-export { signWithdrawalReceipt } from "./signing.js";
+// The withdrawal-receipt sign/verify pair + payload type moved to the
+// crypto kernel (@motebit/crypto) and permissive floor (@motebit/protocol)
+// respectively. Re-exported here for backward compatibility with existing
+// consumers that import them from @motebit/virtual-accounts.
+export type { WithdrawalReceiptPayload } from "@motebit/protocol";
+export { signWithdrawalReceipt, verifyWithdrawalReceipt } from "@motebit/crypto";

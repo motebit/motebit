@@ -59,6 +59,11 @@
           "type": ["string", "null"],
           "description": "Populated when status is failed; else null."
         },
+        "relay_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The signing relay's MotebitId — a signed WithdrawalReceiptPayload field, present so the record is self-verifiable from the response alone."
+        },
         "relay_signature": {
           "type": ["string", "null"],
           "description": "Ed25519 signature over the completed withdrawal for offline verify; null until settled."
@@ -79,6 +84,7 @@
         "requested_at",
         "completed_at",
         "failure_reason",
+        "relay_id",
         "relay_signature",
         "relay_public_key"
       ],
@@ -149,6 +155,11 @@
               "type": ["string", "null"],
               "description": "Populated when status is failed; else null."
             },
+            "relay_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The signing relay's MotebitId — a signed WithdrawalReceiptPayload field, present so the record is self-verifiable from the response alone."
+            },
             "relay_signature": {
               "type": ["string", "null"],
               "description": "Ed25519 signature over the completed withdrawal for offline verify; null until settled."
@@ -169,6 +180,7 @@
             "requested_at",
             "completed_at",
             "failure_reason",
+            "relay_id",
             "relay_signature",
             "relay_public_key"
           ],

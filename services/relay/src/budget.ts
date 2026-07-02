@@ -6,7 +6,11 @@ import type { Context, Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { toCents, isWithdrawableRail } from "@motebit/protocol";
-import type { AccountBalanceResult, AccountWithdrawResult } from "@motebit/protocol";
+import type {
+  AccountBalanceResult,
+  AccountWithdrawResult,
+  AccountWithdrawalRecord,
+} from "@motebit/protocol";
 import { bytesToHex, hash as sha256Hash } from "@motebit/encryption";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
@@ -367,6 +371,10 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     const toWithdrawalResponse = <T extends { amount: number }>(w: T) => ({
       ...w,
       amount: fromMicro(w.amount),
+      // Stamp the relay's own identity so the record is self-verifiable:
+      // relay_id is a signed WithdrawalReceiptPayload field, so an auditor
+      // reading only this response can reconstruct the canonical bytes.
+      relay_id: relayIdentity.relayMotebitId,
     });
 
     if ("existing" in result) {
@@ -603,10 +611,14 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   /** @internal */
   app.get("/api/v1/agents/:motebitId/withdrawals", (c) => {
     const motebitId = c.req.param("motebitId");
-    const withdrawals = getWithdrawals(moteDb.db, motebitId, 50).map((w) => ({
-      ...w,
-      amount: fromMicro(w.amount),
-    }));
+    const withdrawals = getWithdrawals(moteDb.db, motebitId, 50).map(
+      (w) =>
+        ({
+          ...w,
+          amount: fromMicro(w.amount),
+          relay_id: relayIdentity.relayMotebitId,
+        }) satisfies AccountWithdrawalRecord,
+    );
     return c.json({ motebit_id: motebitId, withdrawals });
   });
 

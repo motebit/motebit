@@ -51,6 +51,31 @@ export type AccountWithdrawalStatus =
   | "failed"
   | "cancelled";
 
+/**
+ * The signed field set committed in a completed-withdrawal receipt — the
+ * canonical bytes `signWithdrawalReceipt` signs and `verifyWithdrawalReceipt`
+ * re-checks (both in `@motebit/crypto`). This is a SUBSET of the wire
+ * record: the relay signs the money-relevant facts (id, party, amount,
+ * currency, destination, payout reference, completion time, relay id),
+ * NOT the mutable lifecycle fields (status, requested_at, failure_reason).
+ *
+ * `amount` is decimal USD, matching the wire record. Signed only for
+ * COMPLETED withdrawals; a pending withdrawal has no receipt.
+ *
+ * Adding a field here is a wire-format change — the sign and verify paths
+ * live together in `@motebit/crypto` so the field set changes in one place.
+ */
+export interface WithdrawalReceiptPayload {
+  withdrawal_id: string;
+  motebit_id: string;
+  amount: number;
+  currency: string;
+  destination: string;
+  payout_reference: string;
+  completed_at: number;
+  relay_id: string;
+}
+
 /** Request body of `POST /api/v1/agents/{motebitId}/withdraw`. */
 export interface AccountWithdrawRequest {
   /** Positive decimal USD to withdraw. */
@@ -92,6 +117,13 @@ export interface AccountWithdrawalRecord {
   requested_at: number;
   completed_at: number | null;
   failure_reason: string | null;
+  /**
+   * The signing relay's `motebit_id`. Present so the record is
+   * self-verifiable: it is a field of the signed `WithdrawalReceiptPayload`,
+   * so without it an auditor reading only this response could not
+   * reconstruct the canonical bytes. Always the relay's own identity.
+   */
+  relay_id: string;
   /** Ed25519 signature over the completed withdrawal, for offline verify. */
   relay_signature: string | null;
   /** Hex relay public key for independent verification, or null. */

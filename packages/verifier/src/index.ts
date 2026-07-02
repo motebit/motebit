@@ -81,6 +81,12 @@ export {
   verifyCostAttestation,
   verifyInvoice,
 } from "@motebit/crypto";
+// Completed-withdrawal receipt verification — an external consumer with the
+// market-v1 §2.9 wire record can confirm a completed withdrawal offline,
+// through the pinned aggregate (never a crypto fork). See the withdrawal
+// arm of `check-signed-artifact-verifiers`.
+export { verifyWithdrawalReceipt } from "@motebit/crypto";
+export type { WithdrawalReceiptPayload } from "@motebit/protocol";
 export type {
   CostAttestationV1,
   InvoiceV1,

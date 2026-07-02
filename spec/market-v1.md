@@ -194,20 +194,21 @@ The response wraps the withdrawal lifecycle record. Amounts are decimal USD (§2
 
 `AccountWithdrawalRecord`:
 
-| Field              | Type           | Required | Description                                                                              |
-| ------------------ | -------------- | -------- | ---------------------------------------------------------------------------------------- |
-| `withdrawal_id`    | string         | yes      | Unique withdrawal identifier                                                             |
-| `motebit_id`       | string         | yes      | Account owner's `MotebitId`                                                              |
-| `amount`           | number         | yes      | Decimal USD                                                                              |
-| `currency`         | string         | yes      | ISO 4217 or token symbol                                                                 |
-| `destination`      | string         | yes      | Payout address, external ref, or `"pending"`                                             |
-| `status`           | string         | yes      | Lifecycle state: `pending` \| `processing` \| `completed` \| `failed` \| `cancelled`     |
-| `payout_reference` | string \| null | yes      | External payout id (tx hash, transfer id); `null` until settled                          |
-| `requested_at`     | number         | yes      | Epoch milliseconds of the request                                                        |
-| `completed_at`     | number \| null | yes      | Epoch milliseconds of settlement; `null` while unsettled                                 |
-| `failure_reason`   | string \| null | yes      | Populated when `status` is `failed`; else `null`                                         |
-| `relay_signature`  | string \| null | yes      | Ed25519 signature over the completed withdrawal for offline verify; `null` until settled |
-| `relay_public_key` | string \| null | yes      | Hex relay public key for independent verification; `null` until settled                  |
+| Field              | Type           | Required | Description                                                                                                       |
+| ------------------ | -------------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
+| `withdrawal_id`    | string         | yes      | Unique withdrawal identifier                                                                                      |
+| `motebit_id`       | string         | yes      | Account owner's `MotebitId`                                                                                       |
+| `amount`           | number         | yes      | Decimal USD                                                                                                       |
+| `currency`         | string         | yes      | ISO 4217 or token symbol                                                                                          |
+| `destination`      | string         | yes      | Payout address, external ref, or `"pending"`                                                                      |
+| `status`           | string         | yes      | Lifecycle state: `pending` \| `processing` \| `completed` \| `failed` \| `cancelled`                              |
+| `payout_reference` | string \| null | yes      | External payout id (tx hash, transfer id); `null` until settled                                                   |
+| `requested_at`     | number         | yes      | Epoch milliseconds of the request                                                                                 |
+| `completed_at`     | number \| null | yes      | Epoch milliseconds of settlement; `null` while unsettled                                                          |
+| `failure_reason`   | string \| null | yes      | Populated when `status` is `failed`; else `null`                                                                  |
+| `relay_id`         | string         | yes      | Signing relay's `MotebitId` — a signed-receipt field, present so the record self-verifies from the response alone |
+| `relay_signature`  | string \| null | yes      | Ed25519 signature over the completed withdrawal for offline verify; `null` until settled                          |
+| `relay_public_key` | string \| null | yes      | Hex relay public key for independent verification; `null` until settled                                           |
 
 The TypeScript types in `@motebit/protocol` (`AccountWithdrawResult`, `AccountWithdrawalRecord`) are the binding machine-readable form of these tables.
 

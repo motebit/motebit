@@ -53,6 +53,7 @@ import type { SkillSignature } from '@motebit/protocol';
 import type { StandingDelegation } from '@motebit/protocol';
 import type { SubjectBindingV1 } from '@motebit/protocol';
 import type { SuiteId } from '@motebit/protocol';
+import type { WithdrawalReceiptPayload } from '@motebit/protocol';
 import type { WitnessOmissionDispute } from '@motebit/protocol';
 
 // @public
@@ -1470,6 +1471,9 @@ export function signVerifiableCredential<T = Record<string, unknown>>(unsignedVC
 export function signVerifiablePresentation(unsignedVP: Omit<VerifiablePresentation, "proof">, privateKey: Uint8Array, publicKey: Uint8Array): Promise<VerifiablePresentation>;
 
 // @public
+export function signWithdrawalReceipt(payload: WithdrawalReceiptPayload, privateKey: Uint8Array): Promise<string>;
+
+// @public
 export function signWitnessOmissionDispute(body: Omit<WitnessOmissionDispute, "suite" | "signature">, privateKey: Uint8Array): Promise<WitnessOmissionDispute>;
 
 // @public
@@ -2011,6 +2015,9 @@ export function verifyVerifiablePresentation(vp: VerifiablePresentation): Promis
     valid: boolean;
     errors: string[];
 }>;
+
+// @public
+export function verifyWithdrawalReceipt(payload: WithdrawalReceiptPayload, signatureB64Url: string, publicKey: Uint8Array): Promise<boolean>;
 
 // @public
 export function verifyWitnessOmissionDispute(dispute: WitnessOmissionDispute, ctx: WitnessOmissionDisputeVerifyContext): Promise<WitnessOmissionDisputeVerifyResult>;

@@ -63,6 +63,7 @@ export interface AccountWithdrawalRecord {
     // (undocumented)
     motebit_id: string;
     payout_reference: string | null;
+    relay_id: string;
     relay_public_key: string | null;
     relay_signature: string | null;
     // (undocumented)
@@ -4625,6 +4626,26 @@ export interface WithdrawableGuestRail extends GuestRail {
     readonly supportsWithdraw: true;
     withdraw(motebitId: string, amount: number, currency: string, destination: string, idempotencyKey: string): Promise<WithdrawalResult>;
     withdrawBatch?(items: readonly BatchWithdrawalItem[]): Promise<BatchWithdrawalResult>;
+}
+
+// @public
+export interface WithdrawalReceiptPayload {
+    // (undocumented)
+    amount: number;
+    // (undocumented)
+    completed_at: number;
+    // (undocumented)
+    currency: string;
+    // (undocumented)
+    destination: string;
+    // (undocumented)
+    motebit_id: string;
+    // (undocumented)
+    payout_reference: string;
+    // (undocumented)
+    relay_id: string;
+    // (undocumented)
+    withdrawal_id: string;
 }
 
 // @public

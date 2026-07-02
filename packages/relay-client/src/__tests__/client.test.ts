@@ -162,6 +162,7 @@ describe("withdraw (validated tier, money-out)", () => {
       requested_at: 1_730_000_000_000,
       completed_at: null,
       failure_reason: null,
+      relay_id: "relay-a",
       relay_signature: null,
       relay_public_key: null,
     },

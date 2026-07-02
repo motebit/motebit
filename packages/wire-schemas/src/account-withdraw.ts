@@ -85,6 +85,12 @@ export const AccountWithdrawalRecordSchema = z
       .nullable()
       .describe("Epoch milliseconds of settlement; null while unsettled."),
     failure_reason: z.string().nullable().describe("Populated when status is failed; else null."),
+    relay_id: z
+      .string()
+      .min(1)
+      .describe(
+        "The signing relay's MotebitId — a signed WithdrawalReceiptPayload field, present so the record is self-verifiable from the response alone.",
+      ),
     relay_signature: z
       .string()
       .nullable()
