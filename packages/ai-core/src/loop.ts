@@ -707,6 +707,22 @@ export type AgenticChunk =
     }
   | {
       /**
+       * Interior reasoning — the model's `<thinking>` trace, carrier for
+       * `AIResponse.reasoning` (produced by `extractReasoningTags`). Interior
+       * cognition for the owner-facing `mind` register: mind-mode content is
+       * hidden on the slab plane by doctrine (`motebit-computer.md`) and
+       * "lives in chat" — surfaces render it as a CALM, opt-in, collapsed
+       * disclosure, never a loud panel and never the chat text itself (it
+       * stays stripped from the visible message). INTERIOR-ONLY: never synced,
+       * egressed, persisted to a shared surface, or sent to external AI — the
+       * `mind` contract's `observer:"self"` is the boundary. Emitted per model
+       * response (a turn may reason across several tool-call rounds).
+       */
+      type: "reasoning";
+      text: string;
+    }
+  | {
+      /**
        * Emitted when `options.deferMemoryFormation === true`. Carries the
        * candidates + relevantMemories snapshot the formation pass would
        * have consumed. The runtime catches this chunk and queues formation
@@ -1087,6 +1103,15 @@ export async function* runTurnStreaming(
           valid: narrationResult.valid,
         };
       }
+    }
+
+    // Interior reasoning → the owner-facing mind register (a calm, opt-in
+    // disclosure in chat; mind content is hidden on the slab plane by
+    // doctrine). No validation — this is the model's own cognition, rendered
+    // for the sovereign, not a claim about wire truth. Interior-only; absent
+    // reasoning emits no chunk (fail-closed → the disclosure never appears).
+    if (aiResponse.reasoning !== undefined && aiResponse.reasoning.trim() !== "") {
+      yield { type: "reasoning", text: aiResponse.reasoning };
     }
 
     // If no tool calls or no tool registry, exit the loop
