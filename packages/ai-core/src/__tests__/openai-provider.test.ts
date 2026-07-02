@@ -352,6 +352,30 @@ describe("OpenAIProvider", () => {
       expect(response.usage).toEqual({ input_tokens: 100, output_tokens: 50 });
     });
 
+    it("captures native message.reasoning_content into response.reasoning, never text", async () => {
+      mockFetchJson({
+        id: "x",
+        object: "chat.completion",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "The answer is 4.",
+              reasoning_content: "2 plus 2 carries nothing and equals 4",
+            },
+            finish_reason: "stop",
+          },
+        ],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      });
+      const provider = new OpenAIProvider(makeConfig());
+      const r = await provider.generate(makeContextPack());
+      expect(r.reasoning).toBe("2 plus 2 carries nothing and equals 4");
+      expect(r.text).toBe("The answer is 4.");
+      expect(r.text).not.toContain("carries nothing");
+    });
+
     it("parses tool_calls from message.tool_calls", async () => {
       mockFetchJson(
         mockChatCompletion("", [
@@ -407,6 +431,29 @@ describe("OpenAIProvider", () => {
       }
       expect(chunks).toEqual(["Hel", "lo ", "world"]);
       expect(final?.text).toBe("Hello world");
+    });
+
+    it("captures native reasoning_content deltas into response.reasoning, never text", async () => {
+      mockFetchStream([
+        { choices: [{ index: 0, delta: { reasoning_content: "weigh " } }] },
+        { choices: [{ index: 0, delta: { reasoning_content: "the options" } }] },
+        { choices: [{ index: 0, delta: { content: "The answer is A." } }] },
+        { choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+        "[DONE]",
+      ]);
+      const provider = new OpenAIProvider(makeConfig());
+      const text: string[] = [];
+      let final: AIResponse | undefined;
+      for await (const chunk of provider.generateStream(makeContextPack())) {
+        if (chunk.type === "text") text.push(chunk.text);
+        else if (chunk.type === "done") final = chunk.response;
+      }
+      // Native reasoning is captured for the mind register...
+      expect(final?.reasoning).toBe("weigh the options");
+      // ...and never leaks into the visible reply.
+      expect(text.join("")).toBe("The answer is A.");
+      expect(final?.text).toBe("The answer is A.");
+      expect(final?.text).not.toContain("weigh the options");
     });
 
     it("requests streaming with stream:true and stream_options.include_usage", async () => {

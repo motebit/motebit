@@ -338,6 +338,8 @@ interface AnthropicContentBlock {
   id?: string;
   name?: string;
   input?: Record<string, unknown>;
+  /** Extended-thinking block content (`type === "thinking"`). */
+  thinking?: string;
 }
 
 interface AnthropicResponse {
@@ -367,6 +369,8 @@ interface AnthropicSSEEvent {
     type: string;
     text?: string;
     partial_json?: string;
+    /** Extended-thinking streaming delta (`type === "thinking_delta"`). */
+    thinking?: string;
   };
   usage?: { output_tokens: number };
 }
@@ -534,6 +538,22 @@ export function extractReasoningTags(text: string): string | null {
     if (content !== "") parts.push(content);
   }
   return parts.length > 0 ? parts.join("\n\n") : null;
+}
+
+/**
+ * Merge the two interior-reasoning sources into `AIResponse.reasoning`:
+ * `native` is the model's NATIVE reasoning stream (Anthropic extended-thinking
+ * `thinking_delta` / `thinking` blocks; OpenAI-compat `reasoning_content`),
+ * accumulated raw off the wire; `tagged` is `extractReasoningTags` over the
+ * visible text (the `<thinking>`-tag convention). A model reasons via one
+ * mechanism or the other — rarely both — so this prefers native and appends
+ * tagged only if also present, returning `null` when neither produced anything
+ * (the fail-closed default: no reasoning → no field → no disclosure).
+ */
+export function mergeReasoning(native: string, tagged: string | null): string | null {
+  const n = native.trim();
+  if (n === "") return tagged;
+  return tagged ? `${n}\n\n${tagged}` : n;
 }
 
 // Action keywords → MotebitState field deltas
@@ -1080,6 +1100,7 @@ export class AnthropicProvider implements StreamingProvider {
     this.emitRoutingReason(res);
 
     let accumulated = "";
+    let nativeReasoning = "";
     const currentToolCalls: ToolCall[] = [];
     let activeToolId: string | undefined;
     let activeToolName: string | undefined;
@@ -1132,6 +1153,15 @@ export class AnthropicProvider implements StreamingProvider {
                 event.delta.partial_json !== ""
               ) {
                 activeToolJson += event.delta.partial_json;
+              } else if (
+                event.delta?.type === "thinking_delta" &&
+                event.delta.thinking != null &&
+                event.delta.thinking !== ""
+              ) {
+                // Native extended-thinking → interior reasoning for the `mind`
+                // register. Accumulated raw off the wire, never into `accumulated`
+                // (the visible text) — interior-only, and it never enters chat.
+                nativeReasoning += event.delta.thinking;
               }
             } else if (event.type === "content_block_stop") {
               if (
@@ -1169,6 +1199,7 @@ export class AnthropicProvider implements StreamingProvider {
     const stateUpdates = extractStateTags(accumulated);
     const taskStepNarration = extractNarrationTag(accumulated);
     const displayText = stripTags(accumulated);
+    const reasoning = mergeReasoning(nativeReasoning, extractReasoningTags(accumulated));
 
     yield {
       type: "done",
@@ -1182,6 +1213,7 @@ export class AnthropicProvider implements StreamingProvider {
           ? { usage: { input_tokens: inputTokens, output_tokens: outputTokens } }
           : {}),
         ...(taskStepNarration !== null ? { task_step_narration: taskStepNarration } : {}),
+        ...(reasoning !== null ? { reasoning } : {}),
       },
     };
   }
@@ -1365,6 +1397,13 @@ export class AnthropicProvider implements StreamingProvider {
     const stateUpdates = extractStateTags(rawText);
     const taskStepNarration = extractNarrationTag(rawText);
     const displayText = stripTags(rawText);
+    // Native extended-thinking blocks + the <thinking>-tag convention →
+    // interior reasoning for the `mind` register. Interior-only.
+    const nativeReasoning = data.content
+      .filter((block) => block.type === "thinking")
+      .map((block) => block.thinking ?? "")
+      .join("");
+    const reasoning = mergeReasoning(nativeReasoning, extractReasoningTags(rawText));
 
     return {
       text: displayText,
@@ -1374,6 +1413,7 @@ export class AnthropicProvider implements StreamingProvider {
       ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
       usage: data.usage,
       ...(taskStepNarration !== null ? { task_step_narration: taskStepNarration } : {}),
+      ...(reasoning !== null ? { reasoning } : {}),
     };
   }
 
