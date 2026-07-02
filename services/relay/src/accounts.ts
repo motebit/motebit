@@ -54,6 +54,7 @@ export {
   createWalletTable,
   SqliteAccountStore,
   sqliteAccountStoreFor,
+  FREE_CREDIT_REFERENCE_PREFIX,
 } from "./account-store-sqlite.js";
 export {
   createProofTable,

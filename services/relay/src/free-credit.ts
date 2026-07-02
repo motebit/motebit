@@ -22,10 +22,23 @@
  *      — the hard backstop on total give-away per day regardless of IP rotation.
  *
  * Best-effort: any failure returns "not granted" and never breaks token issuance.
+ *
+ * INFERENCE-ONLY, non-withdrawable. The grant is spendable on cloud inference
+ * (the proxy usage debit) but can never leave as cash: its unspent remainder is
+ * held from withdrawal by `AccountStore.getUnspentGrantHold` (=
+ * `max(0, Σ free-credit grants − Σ inference-spend)`), so a sybil cannot mint
+ * fresh motebits, collect grants, and withdraw them as USDC. The hold is
+ * withdrawal-only — spending is unaffected — and consumes the grant against
+ * real inference-spend first, leaving any real deposits fully withdrawable.
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
-import { getOrCreateAccount, creditAccount, toMicro } from "./accounts.js";
+import {
+  getOrCreateAccount,
+  creditAccount,
+  toMicro,
+  FREE_CREDIT_REFERENCE_PREFIX,
+} from "./accounts.js";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "free-credit" });
@@ -85,7 +98,7 @@ export function grantFreeCreditIfEligible(
   if (cfg.amountMicro <= 0) return { granted: false, reason: "disabled" };
 
   try {
-    const ref = `free-credit:${motebitId}`;
+    const ref = `${FREE_CREDIT_REFERENCE_PREFIX}${motebitId}`;
 
     // 1. One-time per motebit — the grant reference is unique per identity.
     const existing = db

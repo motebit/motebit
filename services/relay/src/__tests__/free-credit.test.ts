@@ -8,7 +8,14 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 import { grantFreeCreditIfEligible, type FreeCreditConfig } from "../free-credit.js";
-import { getAccountBalance, toMicro } from "../accounts.js";
+import {
+  getAccountBalance,
+  getAccountBalanceDetailed,
+  creditAccount,
+  debitSpendableAccount,
+  requestWithdrawal,
+  toMicro,
+} from "../accounts.js";
 
 const API_TOKEN = "test-token";
 const NOW = Date.UTC(2026, 5, 9, 12, 0, 0);
@@ -141,5 +148,74 @@ describe("POST /api/v1/agents/:motebitId/proxy-token — free credit lands in th
     });
     const body2 = (await res2.json()) as { balance: number };
     expect(body2.balance).toBe(toMicro(0.5));
+  });
+});
+
+// Free credit is INFERENCE-ONLY: spendable on cloud usage, never withdrawable
+// as cash. These drive the real SqliteAccountStore.getUnspentGrantHold.
+describe("free credit is not withdrawable (SqliteAccountStore.getUnspentGrantHold)", () => {
+  let relay: SyncRelay;
+  let db: import("@motebit/persistence").DatabaseDriver;
+
+  // Ample caps so a $5 grant is not denied by the (small) default CFG budget.
+  const GRANT: FreeCreditConfig = {
+    amountMicro: toMicro(5),
+    ipDailyCap: 100,
+    dailyBudgetMicro: toMicro(10_000),
+  };
+
+  beforeEach(async () => {
+    relay = await createTestRelay();
+    db = relay.moteDb.db;
+  });
+  afterEach(async () => {
+    await relay.close();
+  });
+
+  it("a pure free-credit balance is fully held from withdrawal", () => {
+    const m = "grant-only";
+    grantFreeCreditIfEligible(db, m, "1.1.1.1", { config: GRANT });
+    expect(getAccountBalance(db, m)?.balance).toBe(toMicro(5));
+
+    const detail = getAccountBalanceDetailed(db, m);
+    expect(detail.available_for_withdrawal).toBe(0);
+
+    // The withdrawal request itself is refused (null → 402 at the endpoint).
+    const r = requestWithdrawal(db, m, toMicro(1), "0xdead", "wd-1");
+    expect(r).toBeNull();
+    expect(getAccountBalance(db, m)?.balance).toBe(toMicro(5)); // untouched
+  });
+
+  it("inference spend (fee debit) consumes the grant, shrinking the hold", () => {
+    const m = "grant-spend";
+    grantFreeCreditIfEligible(db, m, "1.1.1.1", { config: GRANT });
+    // Spend $3 on inference — the proxy usage debit is a `fee` transaction.
+    debitSpendableAccount(db, m, toMicro(3), "fee", "proxy-1", "Cloud AI usage");
+    // Grant remainder = 5 − 3 = 2 held; balance = 2 → still nothing withdrawable.
+    expect(getAccountBalanceDetailed(db, m).available_for_withdrawal).toBe(0);
+    // Spend the rest — hold floors at 0, balance is 0 anyway.
+    debitSpendableAccount(db, m, toMicro(2), "fee", "proxy-2", "Cloud AI usage");
+    expect(getAccountBalanceDetailed(db, m).available_for_withdrawal).toBe(0);
+  });
+
+  it("real deposits are withdrawable alongside a free grant (grant spent first)", () => {
+    const m = "grant-plus-real";
+    grantFreeCreditIfEligible(db, m, "1.1.1.1", { config: GRANT });
+    // $10 of real, verified funding (deposit-detector shape: non-free reference).
+    creditAccount(db, m, toMicro(10), "deposit", "onchain:0xabc", "Verified deposit");
+    // balance $15, grant hold $5 → exactly $10 withdrawable.
+    expect(getAccountBalanceDetailed(db, m).available_for_withdrawal).toBe(toMicro(10));
+    const tooMuch = requestWithdrawal(db, m, toMicro(10) + 1, "0xdead", "wd-a");
+    expect(tooMuch).toBeNull();
+    const ok = requestWithdrawal(db, m, toMicro(10), "0xdead", "wd-b");
+    expect(ok).not.toBeNull();
+
+    // After inference spend, the grant hold shrinks and real money stays whole.
+    const m2 = "grant-plus-real-2";
+    grantFreeCreditIfEligible(db, m2, "2.2.2.2", { config: GRANT });
+    creditAccount(db, m2, toMicro(10), "deposit", "onchain:0xdef", "Verified deposit");
+    debitSpendableAccount(db, m2, toMicro(2), "fee", "proxy-3", "Cloud AI usage");
+    // balance $13, grant hold max(0, 5−2)=3 → $10 real still withdrawable.
+    expect(getAccountBalanceDetailed(db, m2).available_for_withdrawal).toBe(toMicro(10));
   });
 });
