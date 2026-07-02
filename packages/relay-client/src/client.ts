@@ -54,6 +54,26 @@ import {
   AgentResolutionResultSchema,
 } from "@motebit/wire-schemas";
 import { RelayClientError } from "./errors.js";
+import type { ZodType } from "zod";
+
+/**
+ * Parse a response body against a validated-tier wire schema, throwing a
+ * `RelayClientError(kind: "schema")` on mismatch — the single fail-closed
+ * enforcement point every validated method routes through, so a wrong shape
+ * can never be silently returned. Returns `unknown`; callers cast to the
+ * schema's protocol type (parity is guaranteed by wire-schemas' _TYPE_PARITY).
+ */
+function validate(schema: ZodType, body: unknown, path: string, label: string): unknown {
+  const parsed = schema.safeParse(body);
+  if (!parsed.success) {
+    throw new RelayClientError(
+      "schema",
+      path,
+      `${label} response failed wire-schema validation: ${parsed.error.message}`,
+    );
+  }
+  return parsed.data;
+}
 
 /** Device signing identity for audience-bound token minting. */
 export interface DeviceKeyAuth {
@@ -109,12 +129,21 @@ function isRetryable(status: number): boolean {
  * jti nonce for replay defense. `crypto.randomUUID` is absent on some
  * targets this package must reach (React Native without a WebCrypto
  * polyfill; browsers on insecure origins), so fall back to a
- * getRandomValues-derived hex nonce rather than hard-failing before
- * the first request.
+ * getRandomValues-derived hex nonce. If no Web Crypto is present at all,
+ * fail with a typed `RelayClientError` (not a raw TypeError) — a device-key
+ * signer cannot mint a replay-safe token without a CSPRNG, and the caller
+ * catches the same error shape as every other client failure.
  */
 function mintJti(): string {
-  const c = globalThis.crypto;
+  const c = globalThis.crypto as Crypto | undefined;
   if (typeof c?.randomUUID === "function") return c.randomUUID();
+  if (typeof c?.getRandomValues !== "function") {
+    throw new RelayClientError(
+      "auth",
+      "(token-mint)",
+      "no Web Crypto available to mint a replay-safe token nonce — provide a WebCrypto polyfill or use credentialSource/staticToken auth",
+    );
+  }
   const bytes = new Uint8Array(16);
   c.getRandomValues(bytes);
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
@@ -171,15 +200,7 @@ export class RelayClient {
     const body = await this.requestJson("GET", path, {
       retry: true,
     });
-    const parsed = AgentResolutionResultSchema.safeParse(body);
-    if (!parsed.success) {
-      throw new RelayClientError(
-        "schema",
-        path,
-        `discover response failed AgentResolutionResultSchema: ${parsed.error.message}`,
-      );
-    }
-    return parsed.data as AgentResolutionResult;
+    return validate(AgentResolutionResultSchema, body, path, "discover") as AgentResolutionResult;
   }
 
   /**
@@ -194,15 +215,7 @@ export class RelayClient {
       audience: ACCOUNT_BALANCE_AUDIENCE,
       retry: true,
     });
-    const parsed = AccountBalanceResultSchema.safeParse(body);
-    if (!parsed.success) {
-      throw new RelayClientError(
-        "schema",
-        path,
-        `balance response failed AccountBalanceResultSchema: ${parsed.error.message}`,
-      );
-    }
-    return parsed.data as AccountBalanceResult;
+    return validate(AccountBalanceResultSchema, body, path, "balance") as AccountBalanceResult;
   }
 
   /**
@@ -263,15 +276,7 @@ export class RelayClient {
       jsonBody: request,
       headers: { "Idempotency-Key": options.idempotencyKey },
     });
-    const parsed = AccountWithdrawResultSchema.safeParse(body);
-    if (!parsed.success) {
-      throw new RelayClientError(
-        "schema",
-        path,
-        `withdraw response failed AccountWithdrawResultSchema: ${parsed.error.message}`,
-      );
-    }
-    return parsed.data as AccountWithdrawResult;
+    return validate(AccountWithdrawResultSchema, body, path, "withdraw") as AccountWithdrawResult;
   }
 
   // ── Transport kernel ─────────────────────────────────────────────────

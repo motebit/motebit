@@ -359,6 +359,25 @@ describe("auth resolution: hardening", () => {
     expect(payload).not.toBeNull();
     expect(payload!.jti).toMatch(/^[0-9a-f]{32}$/);
   });
+
+  it("throws a typed kind=auth error when no Web Crypto is available to mint a nonce", async () => {
+    const keys = await generateKeypair();
+    const fetchMock = vi.fn(async () => jsonResponse(BALANCE_OK));
+    // Runtime with no CSPRNG at all — mintJti must fail closed with a typed
+    // RelayClientError, not a raw TypeError.
+    vi.stubGlobal("crypto", undefined);
+    try {
+      const client = makeClient(fetchMock as unknown as typeof fetch, {
+        auth: { deviceKey: { motebitId: "me", deviceId: "d", privateKey: keys.privateKey } },
+      });
+      const err = (await client.getBalance("m").catch((e: unknown) => e)) as RelayClientError;
+      expect(err).toBeInstanceOf(RelayClientError);
+      expect(err.kind).toBe("auth");
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe("transport kernel: errors and retry", () => {

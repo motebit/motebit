@@ -180,6 +180,7 @@ The response wraps the withdrawal lifecycle record. Amounts are decimal USD (§2
     "requested_at": 1730000000000,
     "completed_at": 1730000001000,
     "failure_reason": null,
+    "relay_id": "019530a1-7b2c-7000-8000-00000000rel",
     "relay_signature": "base64-ed25519-sig",
     "relay_public_key": "a1b2...64hex"
   }

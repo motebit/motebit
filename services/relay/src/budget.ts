@@ -24,6 +24,7 @@ import {
   signWithdrawalReceipt,
   failWithdrawal,
   getWithdrawals,
+  getWithdrawalById,
   getPendingWithdrawals,
   reconcileLedger,
   processStripeCheckout,
@@ -34,8 +35,26 @@ import {
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import Stripe from "stripe";
 import type { SettlementRailRegistry, StripeSettlementRail } from "@motebit/settlement-rails";
+import type { WithdrawalRequest } from "@motebit/virtual-accounts";
 
 const logger = createLogger({ service: "budget" });
+
+/**
+ * Map a ledger withdrawal row to the market-v1 §2.9 wire record: convert
+ * the micro-unit `amount` to decimal USD at the boundary and stamp the
+ * relay's own identity (`relay_id` is a signed `WithdrawalReceiptPayload`
+ * field, so its presence lets an auditor reconstruct the canonical bytes
+ * from the response alone). Single mapper for every withdrawal response
+ * surface — the POST result and the /withdrawals history — so a new
+ * surfaced field is added in one place, not two.
+ */
+function toWithdrawalRecord(w: WithdrawalRequest, relayId: string): AccountWithdrawalRecord {
+  return {
+    ...w,
+    amount: fromMicro(w.amount),
+    relay_id: relayId,
+  };
+}
 
 /**
  * Map a thrown error from a Stripe SDK call into a structured 502
@@ -260,15 +279,6 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       throw new HTTPException(402, { message: "Insufficient balance for withdrawal" });
     }
 
-    const toWithdrawalResponse = <T extends { amount: number }>(w: T) => ({
-      ...w,
-      amount: fromMicro(w.amount),
-      // Stamp the relay's own identity so the record is self-verifiable:
-      // relay_id is a signed WithdrawalReceiptPayload field, so an auditor
-      // reading only this response can reconstruct the canonical bytes.
-      relay_id: relayIdentity.relayMotebitId,
-    });
-
     if ("existing" in result) {
       logger.info("withdrawal.endpoint.idempotent", {
         correlationId,
@@ -278,7 +288,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       });
       const responseBody = {
         motebit_id: motebitId,
-        withdrawal: toWithdrawalResponse(result.existing),
+        withdrawal: toWithdrawalRecord(result.existing, relayIdentity.relayMotebitId),
         idempotent: true,
       } satisfies AccountWithdrawResult;
       completeIdempotency(
@@ -476,18 +486,19 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     // Doctrine: docs/doctrine/settlement-rails.md § "Lanes for external
     // readers" + the future `off-ramp-as-user-action.md`.
 
+    // On auto-settle, re-read the completed row so the response reflects the
+    // signature, payout_reference, completed_at, and status the settlement
+    // path just persisted — the DB is the single source of truth. Building
+    // from the stale pre-completion `result` would return a "completed"
+    // withdrawal with null signature, defeating offline self-verifiability.
+    const finalRecord = autoSettled
+      ? (getWithdrawalById(moteDb.db, result.withdrawal_id) ?? result)
+      : result;
     const responseBody = {
       motebit_id: motebitId,
-      withdrawal: toWithdrawalResponse(
-        autoSettled
-          ? {
-              ...result,
-              status: "completed" as const,
-            }
-          : result,
-      ),
       // `satisfies` binds the producer to the market-v1 §2.9 wire law at
       // compile time; runtime behavior unchanged.
+      withdrawal: toWithdrawalRecord(finalRecord, relayIdentity.relayMotebitId),
     } satisfies AccountWithdrawResult;
     completeIdempotency(
       moteDb.db,
@@ -503,13 +514,8 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   /** @internal */
   app.get("/api/v1/agents/:motebitId/withdrawals", (c) => {
     const motebitId = c.req.param("motebitId");
-    const withdrawals = getWithdrawals(moteDb.db, motebitId, 50).map(
-      (w) =>
-        ({
-          ...w,
-          amount: fromMicro(w.amount),
-          relay_id: relayIdentity.relayMotebitId,
-        }) satisfies AccountWithdrawalRecord,
+    const withdrawals = getWithdrawals(moteDb.db, motebitId, 50).map((w) =>
+      toWithdrawalRecord(w, relayIdentity.relayMotebitId),
     );
     return c.json({ motebit_id: motebitId, withdrawals });
   });

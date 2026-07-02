@@ -156,7 +156,7 @@ The `aud` field MUST contain exactly one of the canonical audience values. Token
 | `credentials`           | `/api/v1/agents/{id}/credentials/*`                | Credential submit / verify / revoke                                  |
 | `credentials:present`   | `POST /api/v1/agents/{id}/presentation`            | Verifiable-presentation submission                                   |
 | `account:balance`       | `GET /api/v1/agents/{id}/balance`                  | Read virtual-account balance                                         |
-| `account:deposit`       | `POST /api/v1/agents/{id}/deposit`                 | Deposit (Stripe / x402 / Solana)                                     |
+| `account:deposit`       | _(reserved — no endpoint)_                         | Reserved for a future funded deposit-initiation endpoint (see note)  |
 | `account:withdraw`      | `POST /api/v1/agents/{id}/withdraw`                | Withdraw request                                                     |
 | `account:withdrawals`   | `GET /api/v1/agents/{id}/withdrawals`              | List withdrawal history                                              |
 | `account:checkout`      | `POST /api/v1/agents/{id}/checkout`                | Stripe checkout session create                                       |
@@ -164,7 +164,7 @@ The `aud` field MUST contain exactly one of the canonical audience values. Token
 | `browser-sandbox`       | Sandbox dispatcher (relay-signed)                  | Relay-signed sandbox dispatcher token                                |
 | `runtime:attach`        | Local runtime-host socket only                     | Frontend-to-coordinator attach handshake (never accepted by a relay) |
 
-This table mirrors the closed `TokenAudience` registry in `@motebit/protocol` (`packages/protocol/src/audience.ts`, `ALL_TOKEN_AUDIENCES`); the registry is the canonical membership. Earlier revisions of this table listed `register-device`, which never existed in the registry — device registration uses `device:auth`.
+This table mirrors the closed `TokenAudience` registry in `@motebit/protocol` (`packages/protocol/src/audience.ts`, `ALL_TOKEN_AUDIENCES`); the registry is the canonical membership. Earlier revisions of this table listed `register-device`, which never existed in the registry — device registration uses `device:auth`. `account:deposit` remains a registered audience but currently maps to no endpoint: the self-declared `POST /api/v1/agents/{id}/deposit` route was removed as a treasury-drain vector (it credited spendable balance from a client-supplied amount), and the audience is held reserved for a future _funded_ deposit-initiation endpoint. Balance is credited only by verified server-side funding (onchain deposit-detector, Stripe webhook).
 
 Implementations MAY define additional audience values for custom endpoints. Custom values SHOULD use a namespaced format (e.g., `custom:my-endpoint`) to avoid collision with canonical values.
 

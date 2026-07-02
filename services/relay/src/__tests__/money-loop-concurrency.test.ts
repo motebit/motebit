@@ -101,11 +101,12 @@ describe("Money Loop Concurrency", () => {
   });
 
   // NOTE: the "10 concurrent deposits" test was removed with the self-declared
-  // `POST /deposit` route (treasury-drain vector). Concurrent credit atomicity is
-  // a store-level concern covered in virtual-accounts; concurrent-spend safety
-  // (the money-relevant invariant) is covered by the task-submission and
-  // settlement-credit concurrency tests below, plus the concurrent-withdrawal
-  // double-spend test that replaced the deposit/withdraw race.
+  // `POST /deposit` route (treasury-drain vector). Credit is add-only and carries
+  // no over-draw/double-spend exposure (only concurrent DEBIT does); credit
+  // summation correctness is covered sequentially in @motebit/virtual-accounts,
+  // and the money-relevant invariant — concurrent-spend safety — is covered by
+  // the task-submission and settlement-credit concurrency tests below plus the
+  // concurrent-withdrawal double-spend tests that replaced the deposit/withdraw race.
 
   it("10 concurrent task submissions from same delegator — no overdraft", async () => {
     const workerKp = await generateKeypair();
@@ -179,13 +180,17 @@ describe("Money Loop Concurrency", () => {
       }),
     ]);
 
-    const succeededMicro = (wd50.status === 200 ? 50 : 0) + (wd30.status === 200 ? 30 : 0);
-    // At most $50 can have been withdrawn — both succeeding ($80) would be a
+    const succeededDollars = (wd50.status === 200 ? 50 : 0) + (wd30.status === 200 ? 30 : 0);
+    // Upper bound: at most $50 can be withdrawn — both succeeding ($80) is a
     // double-spend against the treasury.
-    expect(succeededMicro).toBeLessThanOrEqual(50);
+    expect(succeededDollars).toBeLessThanOrEqual(50);
+    // Lower bound (liveness): SQLite serializes the writes, so whichever runs
+    // first is funded — at least the $30 must succeed. A bug that over-locks and
+    // wrongly rejects BOTH (succeeded=0) would otherwise pass silently.
+    expect(succeededDollars).toBeGreaterThanOrEqual(30);
 
     const balance = await getBalance(relay, agent.motebitId);
-    expect(balance).toBeCloseTo(50 - succeededMicro, 2);
+    expect(balance).toBeCloseTo(50 - succeededDollars, 2);
     expect(balance).toBeGreaterThanOrEqual(-0.001);
 
     const reconciliation = reconcileLedger(relay.moteDb.db);
@@ -284,7 +289,7 @@ describe("Money Loop Concurrency", () => {
     seedBalance(relay, agent.motebitId, 50.0);
 
     const results = await Promise.all(
-      Array.from({ length: 20 }, (_, i) =>
+      Array.from({ length: 20 }, async (_, i) =>
         relay.app.request(`/api/v1/agents/${agent.motebitId}/withdraw`, {
           method: "POST",
           headers: jsonAuthWithIdempotency(),
