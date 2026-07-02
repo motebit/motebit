@@ -771,6 +771,33 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
             break;
           }
 
+          case "reasoning": {
+            // Interior cognition made legible to the OWNER without cluttering
+            // the conversation. The `mind` register is hidden on the slab plane
+            // by doctrine and "lives in chat"; this is its calm, opt-in form —
+            // a collapsed <details> the sovereign can expand to feel the
+            // interior (`felt-interior.md`), never an always-open panel.
+            // INTERIOR-ONLY: rendered as ephemeral DOM, never added to
+            // `accumulated`, so it is not persisted to (or synced from) the
+            // conversation. `textContent` keeps the trace literal — no markdown,
+            // no HTML injection from model output.
+            if (bubble && chunk.text.trim() !== "") {
+              const details = document.createElement("details");
+              details.className = "chat-reasoning";
+              const summary = document.createElement("summary");
+              summary.className = "chat-reasoning-summary";
+              summary.textContent = "reasoning";
+              const body = document.createElement("div");
+              body.className = "chat-reasoning-body";
+              body.textContent = chunk.text;
+              details.appendChild(summary);
+              details.appendChild(body);
+              bubble.appendChild(details);
+              chatLog.scrollTop = chatLog.scrollHeight;
+            }
+            break;
+          }
+
           case "tool_status": {
             if (chunk.status === "calling") {
               showToolStatus(chunk.name, chunk.context);

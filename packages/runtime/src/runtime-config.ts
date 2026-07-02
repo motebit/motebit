@@ -398,6 +398,20 @@ export type StreamChunk =
       text: string;
       valid: boolean;
     }
+  | {
+      /**
+       * Interior reasoning — the model's `<thinking>` trace, carrier for
+       * `AIResponse.reasoning`. The `mind` register: mind-mode content is
+       * hidden on the slab plane by doctrine (`motebit-computer.md`) and
+       * "lives in chat" — surfaces render it as a CALM, opt-in, collapsed
+       * disclosure, never a loud panel and never the visible reply text.
+       * INTERIOR-ONLY: never synced, egressed, persisted to a shared surface,
+       * or sent to external AI (`mind` contract `observer:"self"`). Emitted at
+       * most once per model response; absent reasoning produces no chunk.
+       */
+      type: "reasoning";
+      text: string;
+    }
   | { type: "result"; result: TurnResult }
   | { type: "task_result"; receipt: ExecutionReceipt }
   | { type: "delegation_start"; server: string; tool: string; motebit_id?: string }

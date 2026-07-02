@@ -1499,6 +1499,60 @@ describe("runTurnStreaming — task_step_narration emission", () => {
   });
 });
 
+// The loop emits a `reasoning` chunk per model response when the provider's
+// `AIResponse.reasoning` (produced by `extractReasoningTags`) is non-empty —
+// the in-flight carrier for the interior `mind` register. Surfaces render it
+// as a calm, opt-in, collapsed disclosure in chat; it is never the chat text.
+// Fail-closed: no reasoning → no chunk → no disclosure. Doctrine:
+// `felt-interior.md` + `motebit-computer.md` § "Embodiment modes."
+describe("runTurnStreaming — reasoning emission", () => {
+  it("emits a reasoning chunk when the provider supplies interior reasoning", async () => {
+    const provider = makeMockProvider([
+      {
+        text: "Here is the answer.",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+        reasoning: "First weigh A vs B, then commit to A because it is cheaper.",
+      },
+    ]);
+    const deps = makeDepsWithProvider(provider);
+
+    const chunks: AgenticChunk[] = [];
+    for await (const chunk of runTurnStreaming(deps, "Which is better?")) {
+      chunks.push(chunk);
+    }
+
+    const reasoningChunks = chunks.filter((c) => c.type === "reasoning") as Array<{
+      type: "reasoning";
+      text: string;
+    }>;
+    expect(reasoningChunks).toHaveLength(1);
+    expect(reasoningChunks[0]!.text).toBe(
+      "First weigh A vs B, then commit to A because it is cheaper.",
+    );
+
+    // Interior-only: the reasoning is NOT the visible reply text.
+    const textChunks = chunks.filter((c) => c.type === "text") as Array<{ text: string }>;
+    const visible = textChunks.map((c) => c.text).join("");
+    expect(visible).not.toContain("weigh A vs B");
+  });
+
+  it("omits the chunk when no reasoning is supplied (the disclosure never appears)", async () => {
+    const provider = makeMockProvider([
+      { text: "Hello!", confidence: 0.8, memory_candidates: [], state_updates: {} },
+    ]);
+    const deps = makeDepsWithProvider(provider);
+
+    const chunks: AgenticChunk[] = [];
+    for await (const chunk of runTurnStreaming(deps, "Hi")) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.filter((c) => c.type === "reasoning")).toHaveLength(0);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // projectForAi pixel gate — sovereignty / sensitivity / consent composition
 // ---------------------------------------------------------------------------
