@@ -9,6 +9,7 @@
  */
 
 import { createSignedToken, secureErase } from "@motebit/encryption";
+import type { TokenAudience } from "@motebit/sdk";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig, type FullConfig } from "../config.js";
 import { loadActiveSigningKey } from "../identity.js";
@@ -102,7 +103,7 @@ export function getRelayUrl(config: CliConfig): string {
  */
 export async function getRelayAuthHeaders(
   config: CliConfig,
-  opts?: { aud?: string; json?: boolean },
+  opts?: { aud?: TokenAudience; json?: boolean },
 ): Promise<Record<string, string>> {
   const headers: Record<string, string> = {};
   if (opts?.json) headers["Content-Type"] = "application/json";

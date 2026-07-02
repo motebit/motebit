@@ -14,6 +14,7 @@
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import type { TokenAudience } from "@motebit/sdk";
 import { loadColdStartOptIn } from "./cold-start-optin";
 import type { MotebitRuntime } from "@motebit/runtime";
 import {
@@ -64,7 +65,7 @@ export interface SyncControllerDeps {
   getLocalEventStore: () => EventStoreAdapter | null;
   getKeyring: () => SecureStoreAdapter;
   getPrivKeyBytes: () => Promise<Uint8Array>;
-  createSyncToken: (aud?: string) => Promise<string>;
+  createSyncToken: (aud?: TokenAudience) => Promise<string>;
   /** Called after startSync to register a push token with the relay. */
   registerPushToken: (syncUrl: string) => Promise<void>;
   startPushLifecycle: () => void;
@@ -291,7 +292,7 @@ export class MobileSyncController {
         // poll) — the relay enforces aud binding (auth-token-v1 §5). Minting a
         // task:submit token for the /task/:id poll would 403 (audience
         // mismatch) if this surface ever served at onboarding. Matches web.
-        mintToken: async (audience: string) => this.deps.createSyncToken(audience),
+        mintToken: async (audience: TokenAudience) => this.deps.createSyncToken(audience),
         // Serving is opt-in; at onboarding the agent is not a worker, so the
         // completion poll could only time out. `auth_verified` (the security
         // pass) terminates immediately and sets the done-flag below.

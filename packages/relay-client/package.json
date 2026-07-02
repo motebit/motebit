@@ -1,0 +1,29 @@
+{
+  "name": "@motebit/relay-client",
+  "version": "0.0.0-private",
+  "license": "BUSL-1.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@motebit/crypto": "workspace:*",
+    "@motebit/protocol": "workspace:*",
+    "@motebit/sdk": "workspace:*",
+    "@motebit/wire-schemas": "workspace:*",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.8"
+  }
+}

@@ -134,6 +134,19 @@ export interface AccountStore {
    */
   getUnwithdrawableHold(motebitId: string): number;
 
+  /**
+   * Amount held back from WITHDRAWAL (but not from spending) because it is
+   * unspent promotional grant — the "free first taste of cloud" credit is
+   * spendable on inference yet must never leave as cash. Distinct from
+   * `getUnwithdrawableHold`: that hold is also non-spendable (dispute
+   * escrow); this one is spend-permitting and consulted only on the
+   * withdrawal path. Policy input — the store computes it (typically
+   * `max(0, Σ grant-credits − Σ inference-debits)`); the ledger functions
+   * consume the number without knowing what a "grant" is. Returns 0 when no
+   * grant is outstanding, so it is a no-op for accounts that never received one.
+   */
+  getUnspentGrantHold(motebitId: string): number;
+
   // ── Pending withdrawal aggregation (Rule 12 compound atomicity) ──
   /**
    * Atomically debit the virtual account AND insert a pending-withdrawal
@@ -202,6 +215,14 @@ export interface InMemoryAccountStoreOptions {
    * store has no concept of disputes and returns 0.
    */
   unwithdrawableHold?: (motebitId: string) => number;
+  /**
+   * Override `getUnspentGrantHold`. Tests that exercise the
+   * promotional-grant withdrawal restriction inject a function; by default
+   * the in-memory store has no concept of grants and returns 0. (The real
+   * behavior — `max(0, Σ grant-credits − Σ inference-debits)` — is exercised
+   * against `SqliteAccountStore` in the relay suite.)
+   */
+  unspentGrantHold?: (motebitId: string) => number;
   /** Override the sweep-config lookup. Default: null / null. */
   sweepConfig?: (motebitId: string) => {
     sweep_threshold: number | null;
@@ -215,6 +236,7 @@ export class InMemoryAccountStore implements AccountStore {
   private readonly withdrawals = new Map<string, WithdrawalRequest>();
   private readonly _now: () => number;
   private readonly _unwithdrawableHold: (motebitId: string) => number;
+  private readonly _unspentGrantHold: (motebitId: string) => number;
   private readonly _sweepConfig: (motebitId: string) => {
     sweep_threshold: number | null;
     settlement_address: string | null;
@@ -224,6 +246,7 @@ export class InMemoryAccountStore implements AccountStore {
   constructor(options: InMemoryAccountStoreOptions = {}) {
     this._now = options.now ?? (() => Date.now());
     this._unwithdrawableHold = options.unwithdrawableHold ?? (() => 0);
+    this._unspentGrantHold = options.unspentGrantHold ?? (() => 0);
     this._sweepConfig =
       options.sweepConfig ?? (() => ({ sweep_threshold: null, settlement_address: null }));
   }
@@ -473,6 +496,10 @@ export class InMemoryAccountStore implements AccountStore {
 
   getUnwithdrawableHold(motebitId: string): number {
     return this._unwithdrawableHold(motebitId);
+  }
+
+  getUnspentGrantHold(motebitId: string): number {
+    return this._unspentGrantHold(motebitId);
   }
 
   debitAndEnqueuePending(args: {

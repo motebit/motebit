@@ -9,7 +9,12 @@ import {
   signExecutionReceipt,
   bytesToHex,
 } from "@motebit/encryption";
-import { AUTH_HEADER, jsonAuthWithIdempotency, createTestRelay } from "./test-helpers.js";
+import {
+  AUTH_HEADER,
+  jsonAuthWithIdempotency,
+  createTestRelay,
+  seedBalance,
+} from "./test-helpers.js";
 
 // === Helpers ===
 
@@ -1310,11 +1315,7 @@ describe("Sync Relay — agent protocol", () => {
     // payment leg the test harness can't perform. Settlement credits are
     // funded by the allocation hold this deposit backs; an unfunded task is
     // (correctly) skipped fail-closed by the settlement funding claim.
-    await relay.app.request(`/api/v1/agents/${MOTEBIT_ID}/deposit`, {
-      method: "POST",
-      headers: jsonAuthWithIdempotency(),
-      body: JSON.stringify({ amount: 5.0, reference: `deposit-${crypto.randomUUID()}` }),
-    });
+    seedBalance(relay, MOTEBIT_ID, 5.0);
 
     // Submit task — x402 handles payment at HTTP layer, no max_budget needed
     const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
@@ -1527,11 +1528,7 @@ describe("Sync Relay — agent protocol", () => {
 
     // Fund the delegator — the refund path below must return this hold in
     // full (unfunded tasks skip settlement entirely, fail-closed).
-    await relay.app.request(`/api/v1/agents/${MOTEBIT_ID}/deposit`, {
-      method: "POST",
-      headers: jsonAuthWithIdempotency(),
-      body: JSON.stringify({ amount: 5.0, reference: `deposit-${crypto.randomUUID()}` }),
-    });
+    seedBalance(relay, MOTEBIT_ID, 5.0);
 
     // Submit task
     const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {

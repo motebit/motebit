@@ -8,6 +8,7 @@
  */
 
 import type { Hono } from "hono";
+import type { TokenAudience } from "@motebit/protocol";
 import type { createNodeWebSocket } from "@hono/node-ws";
 import type { WSContext } from "hono/ws";
 import type { EventStore } from "@motebit/event-log";
@@ -48,7 +49,7 @@ export interface WebSocketDeps {
     token: string,
     motebitId: string,
     identityManager: IdentityManager,
-    expectedAudience: string,
+    expectedAudience: TokenAudience,
     blacklistCheck?: (jti: string, motebitId: string) => boolean,
     agentRevokedCheck?: (motebitId: string) => boolean,
   ) => Promise<boolean>;

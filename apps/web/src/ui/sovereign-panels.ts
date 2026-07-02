@@ -6,6 +6,7 @@
 // web-specific affordances (Fund sovereign onramp, top-up hint).
 
 import type { WebContext } from "../types";
+import type { TokenAudience } from "@motebit/sdk";
 import { toMicro, ACCOUNT_BALANCE_AUDIENCE } from "@motebit/sdk";
 import { loadSyncUrl } from "../storage";
 import { fetchSolanaBalanceUsdc, openSovereignFundingFlow } from "./wallet-balance";
@@ -102,7 +103,7 @@ async function bootstrapAnchor(syncUrl: string): Promise<TransparencyAnchor | un
 // expects. Default stays `sync` (the general relay-state audience) for every
 // other path. Only canonical `TokenAudience` values appear here so
 // `check-audience-canonical` stays green.
-function audienceForPath(path: string): string {
+function audienceForPath(path: string): TokenAudience {
   if (path.includes("/balance")) return ACCOUNT_BALANCE_AUDIENCE;
   return "sync";
 }

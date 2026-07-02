@@ -908,8 +908,9 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
   // =========================================================================
 
   it("26. Market candidates endpoint returns Agent B as a scored candidate for web_search", async () => {
-    // /api/v1/market/candidates falls under the global /api/v1/* middleware which
-    // requires the master token (device signed tokens are not accepted here).
+    // /api/v1/market/candidates accepts a market:query device token OR the master
+    // token (dualAuth); market.test.ts covers the device-token path. Here the
+    // master token is fine.
     const res = await relay.app.request("/api/v1/market/candidates?capability=web_search", {
       method: "GET",
       headers: { Authorization: `Bearer ${RELAY_MASTER_TOKEN}` },

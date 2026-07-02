@@ -22,6 +22,7 @@ import {
   jsonAuthWithIdempotency,
   createTestRelay,
   createAgent,
+  seedBalance,
 } from "./test-helpers.js";
 
 async function registerWorker(relay: SyncRelay, motebitId: string): Promise<void> {
@@ -48,13 +49,7 @@ async function registerWorker(relay: SyncRelay, motebitId: string): Promise<void
 }
 
 async function deposit(relay: SyncRelay, motebitId: string, amount: number): Promise<number> {
-  const res = await relay.app.request(`/api/v1/agents/${motebitId}/deposit`, {
-    method: "POST",
-    headers: jsonAuthWithIdempotency(),
-    body: JSON.stringify({ amount, reference: `deposit-${crypto.randomUUID()}` }),
-  });
-  const body = (await res.json()) as { balance: number };
-  return body.balance;
+  return seedBalance(relay, motebitId, amount);
 }
 
 async function getBalance(relay: SyncRelay, motebitId: string): Promise<number> {

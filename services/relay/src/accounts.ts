@@ -54,6 +54,7 @@ export {
   createWalletTable,
   SqliteAccountStore,
   sqliteAccountStoreFor,
+  FREE_CREDIT_REFERENCE_PREFIX,
 } from "./account-store-sqlite.js";
 export {
   createProofTable,
@@ -255,4 +256,11 @@ export function getWithdrawals(
 
 export function getPendingWithdrawals(db: DatabaseDriver): WithdrawalRequest[] {
   return sqliteAccountStoreFor(db).getPendingWithdrawalsAdmin();
+}
+
+export function getWithdrawalById(
+  db: DatabaseDriver,
+  withdrawalId: string,
+): WithdrawalRequest | null {
+  return sqliteAccountStoreFor(db).getWithdrawalById(withdrawalId);
 }

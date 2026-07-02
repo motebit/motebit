@@ -56,17 +56,24 @@ export function requestWithdrawal(
     }
   }
 
-  // Dispute-window hold check: funds from recent settlements are not
-  // withdrawable until the 24-hour window elapses.
+  // Withdrawal holds: (1) dispute-window escrow — recent settlement credits
+  // not yet clear of the dispute window; (2) unspent promotional grant —
+  // "free first taste" credit is spendable on inference but never withdrawable
+  // as cash. Both are subtracted from the withdrawable amount; the grant hold
+  // is withdrawal-only (spending is unaffected — see `debitSpendable`, which
+  // consults only the dispute hold).
   const disputeHold = store.getUnwithdrawableHold(args.motebitId);
+  const grantHold = store.getUnspentGrantHold(args.motebitId);
   const account = store.getOrCreateAccount(args.motebitId);
-  if (account.balance - disputeHold < args.amountMicro) {
-    logger.info("withdrawal.dispute_window_hold", {
+  const available = account.balance - disputeHold - grantHold;
+  if (available < args.amountMicro) {
+    logger.info("withdrawal.hold_insufficient", {
       motebitId: args.motebitId,
       requestedAmount: args.amountMicro,
       balance: account.balance,
       disputeHold,
-      available: account.balance - disputeHold,
+      grantHold,
+      available,
     });
     return null;
   }
@@ -188,6 +195,7 @@ export function getAccountBalanceDetailed(
   const pendingW = store.getPendingWithdrawalsTotal(motebitId);
   const pendingA = store.getPendingAllocationsTotal(motebitId);
   const disputeHold = store.getUnwithdrawableHold(motebitId);
+  const grantHold = store.getUnspentGrantHold(motebitId);
   const sweep = store.getSweepConfig(motebitId);
 
   return {
@@ -195,8 +203,11 @@ export function getAccountBalanceDetailed(
     currency: account.currency,
     pending_withdrawals: pendingW,
     pending_allocations: pendingA,
+    // `dispute_window_hold` reports the escrow hold only; the grant hold is
+    // additionally netted out of `available_for_withdrawal` so a promotional
+    // grant never shows as withdrawable cash.
     dispute_window_hold: disputeHold,
-    available_for_withdrawal: Math.max(0, account.balance - disputeHold),
+    available_for_withdrawal: Math.max(0, account.balance - disputeHold - grantHold),
     sweep_threshold: sweep.sweep_threshold,
     settlement_address: sweep.settlement_address,
   };

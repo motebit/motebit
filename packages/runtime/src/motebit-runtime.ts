@@ -27,6 +27,7 @@ import type {
   MotebitId,
   DeletionCertificate,
 } from "@motebit/sdk";
+import type { TokenAudience } from "@motebit/protocol";
 import {
   signToolInvocationReceipt,
   hashToolPayload,
@@ -1536,7 +1537,7 @@ export class MotebitRuntime {
       deviceId?: string;
       routingStrategy?: "cost" | "quality" | "balanced";
       maxRetries?: number;
-      authToken?: string | ((audience?: string) => Promise<string>);
+      authToken?: string | ((audience?: TokenAudience) => Promise<string>);
       onDelegationFailure?: (
         step: import("@motebit/sdk").PlanStep,
         attempt: number,

@@ -9,7 +9,12 @@ import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
 import { generateKeypair, bytesToHex, signExecutionReceipt } from "@motebit/encryption";
 import { PLATFORM_FEE_RATE } from "@motebit/sdk";
-import { AUTH_HEADER, jsonAuthWithIdempotency, createTestRelay } from "./test-helpers.js";
+import {
+  AUTH_HEADER,
+  jsonAuthWithIdempotency,
+  createTestRelay,
+  seedBalance,
+} from "./test-helpers.js";
 
 /** Compute the gross price snapshot from a unit cost (same formula as relay). */
 function grossPrice(unitCost: number): number {
@@ -68,17 +73,8 @@ async function deposit(
   motebitId: string,
   amount: number,
 ): Promise<{ motebit_id: string; balance: number; transaction_id: string | null }> {
-  const res = await relay.app.request(`/api/v1/agents/${motebitId}/deposit`, {
-    method: "POST",
-    headers: jsonAuthWithIdempotency(),
-    body: JSON.stringify({ amount }),
-  });
-  expect(res.status).toBe(200);
-  return res.json() as Promise<{
-    motebit_id: string;
-    balance: number;
-    transaction_id: string | null;
-  }>;
+  const balance = seedBalance(relay, motebitId, amount);
+  return { motebit_id: motebitId, balance, transaction_id: "test-seed" };
 }
 
 async function getBalance(

@@ -60,6 +60,31 @@ describe("requestWithdrawal", () => {
     expect(store.getOrCreateAccount(ALICE).balance).toBe(1_000_000);
   });
 
+  it("returns null when the unspent-grant hold covers the balance", () => {
+    // Free-credit grant is spendable but never withdrawable: the whole
+    // seeded balance is held from withdrawal.
+    const store = new InMemoryAccountStore({
+      unspentGrantHold: () => 1_000_000,
+    });
+    store.credit(ALICE, 1_000_000, "deposit", "free-credit:motebit_alice", "grant");
+    const r = requestWithdrawal(store, { motebitId: ALICE, amountMicro: 500_000 });
+    expect(r).toBeNull();
+    expect(store.getOrCreateAccount(ALICE).balance).toBe(1_000_000);
+  });
+
+  it("allows withdrawal of real balance above the unspent-grant hold", () => {
+    // $5 held grant + $10 real → only the $10 real is withdrawable.
+    const store = new InMemoryAccountStore({
+      unspentGrantHold: () => 5_000_000,
+    });
+    store.credit(ALICE, 15_000_000, "deposit", "seed", "seed");
+    const tooMuch = requestWithdrawal(store, { motebitId: ALICE, amountMicro: 10_000_001 });
+    expect(tooMuch).toBeNull();
+    const ok = requestWithdrawal(store, { motebitId: ALICE, amountMicro: 10_000_000 });
+    if (!ok || "existing" in ok) throw new Error("expected success");
+    expect(store.getOrCreateAccount(ALICE).balance).toBe(5_000_000);
+  });
+
   it("returns the existing request on idempotency-key replay", () => {
     const store = seededStore(10_000_000);
     let id = 0;
@@ -223,5 +248,15 @@ describe("getAccountBalanceDetailed", () => {
     const store = new InMemoryAccountStore({ unwithdrawableHold: () => 999_000_000 });
     store.credit(ALICE, 100, "deposit", null, null);
     expect(getAccountBalanceDetailed(store, ALICE).available_for_withdrawal).toBe(0);
+  });
+
+  it("nets the unspent-grant hold out of available_for_withdrawal (grant not withdrawable)", () => {
+    const store = new InMemoryAccountStore({ unspentGrantHold: () => 4_000_000 });
+    store.credit(ALICE, 6_000_000, "deposit", "seed", null); // $5 grant + real, say
+    const detail = getAccountBalanceDetailed(store, ALICE);
+    // dispute_window_hold reports the escrow hold only (0 here); the grant hold
+    // is netted only out of available_for_withdrawal.
+    expect(detail.dispute_window_hold).toBe(0);
+    expect(detail.available_for_withdrawal).toBe(2_000_000);
   });
 });

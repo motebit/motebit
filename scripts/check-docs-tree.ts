@@ -25,6 +25,11 @@
  *   3. Every package's `[Ln]` tag equals its `LAYER` value in check-deps.ts.
  *   4. Every package's `Apache-2.0` tag matches `PERMISSIVE_PACKAGES` in check-deps.ts.
  *   5. Packages outside the layer DAG (github-action) carry `[—]`.
+ *   6. Every `scripts/*.ts` file the tree names exists on disk (one-directional:
+ *      the tree shows a representative sample, not all gates — but it must not
+ *      advertise gates that don't exist).
+ *   7. The "## Services" section's table names exactly the set of `services/`
+ *      directories — no phantom services, no omitted ones.
  *
  * This is the fourteenth synchronization invariant defense.
  *
@@ -46,7 +51,7 @@ const CHECK_DEPS_PATH = join(ROOT, "scripts/check-deps.ts");
 // check-deps.ts LAYER map.
 const STANDALONE_PACKAGES = new Set<string>(["github-action"]);
 
-type EntryKind = "app" | "package" | "service" | "spec";
+type EntryKind = "app" | "package" | "service" | "spec" | "script";
 
 interface TreeEntry {
   kind: EntryKind;
@@ -121,6 +126,7 @@ function parseTree(src: string): TreeEntry[] {
     `^${PREFIX}(?:├──|└──)\\s+([a-z0-9][a-z0-9-]*)\\/\\s+\\[([^\\]]+)\\]\\s*(.*)?$`,
   );
   const SPEC_RE = new RegExp(`^${PREFIX}(?:├──|└──)\\s+([a-z0-9-]+-v\\d+\\.md)\\b`);
+  const SCRIPT_RE = new RegExp(`^${PREFIX}(?:├──|└──)\\s+([a-z0-9][a-z0-9-]*\\.ts)\\b`);
 
   const entries: TreeEntry[] = [];
   let section: EntryKind | "ignore" | null = null;
@@ -140,7 +146,7 @@ function parseTree(src: string): TreeEntry[] {
               ? "service"
               : dir === "spec"
                 ? "spec"
-                : "ignore"; // scripts — documented but not validated here
+                : "script";
       continue;
     }
 
@@ -149,6 +155,12 @@ function parseTree(src: string): TreeEntry[] {
     if (section === "spec") {
       const sp = SPEC_RE.exec(line);
       if (sp) entries.push({ kind: "spec", name: sp[1], tags: [], line: i + 1 });
+      continue;
+    }
+
+    if (section === "script") {
+      const sc = SCRIPT_RE.exec(line);
+      if (sc) entries.push({ kind: "script", name: sc[1], tags: [], line: i + 1 });
       continue;
     }
 
@@ -183,6 +195,94 @@ function lsFiles(path: string, ext: string): Set<string> {
   return new Set(readdirSync(path).filter((n) => n.endsWith(ext) && !n.startsWith(".")));
 }
 
+/**
+ * Recursive basename collection — the tree may document nested scripts
+ * (e.g. `scripts/lib/gate-report.ts`) whose entries render as bare
+ * basenames; a non-recursive listing would false-fail them.
+ */
+function lsFileNamesRecursive(path: string, ext: string, out = new Set<string>()): Set<string> {
+  if (!existsSync(path)) return out;
+  for (const entry of readdirSync(path, { withFileTypes: true })) {
+    if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+    if (entry.isDirectory()) {
+      lsFileNamesRecursive(join(path, entry.name), ext, out);
+    } else if (entry.name.endsWith(ext)) {
+      out.add(entry.name);
+    }
+  }
+  return out;
+}
+
+// ── Services-table check ───────────────────────────────────────────────
+
+/**
+ * The "## Services" section's table must name exactly the set of
+ * services/ directories — no phantom services, no omitted ones.
+ * Backtick tokens in the "Services" column are the claim surface; the
+ * column is resolved from the header row by name so a column reorder
+ * cannot silently point the parser at prose text.
+ */
+function checkServicesTable(
+  mdxSrc: string,
+  servicesOnDisk: Set<string>,
+  findings: Finding[],
+  mdxRel: string,
+): void {
+  const sectionMatch = mdxSrc.match(/\n## Services\n([\s\S]*?)(?=\n## |$)/);
+  if (!sectionMatch) {
+    findings.push({
+      loc: mdxRel,
+      message: `could not find the "## Services" section — the services table is a gated sibling of services/`,
+    });
+    return;
+  }
+
+  const rows = sectionMatch[1].split("\n").filter((r) => r.startsWith("|"));
+  const headerRow = rows.find((r) => !/^\|[\s-|]+$/.test(r));
+  const headerCells = (headerRow ?? "").split("|").map((c) => c.trim().toLowerCase());
+  const servicesCol = headerCells.indexOf("services");
+  if (servicesCol === -1) {
+    findings.push({
+      loc: `${mdxRel} § Services`,
+      message: `could not find a "Services" column header in the services table — if the table format changed, update checkServicesTable in scripts/check-docs-tree.ts in the same PR`,
+    });
+    return;
+  }
+
+  const named = new Set<string>();
+  for (const row of rows) {
+    if (row === headerRow || /^\|[\s-|]+$/.test(row)) continue;
+    const servicesCell = row.split("|")[servicesCol] ?? "";
+    for (const tok of servicesCell.matchAll(/`([a-z0-9-]+)`/g)) {
+      named.add(tok[1]);
+    }
+  }
+  if (named.size === 0) {
+    findings.push({
+      loc: `${mdxRel} § Services`,
+      message: `found no backtick-quoted service names in the services table — if the table format changed, update checkServicesTable in scripts/check-docs-tree.ts in the same PR`,
+    });
+    return;
+  }
+
+  for (const name of named) {
+    if (!servicesOnDisk.has(name)) {
+      findings.push({
+        loc: `${mdxRel} § Services`,
+        message: `services table names \`${name}\` but services/${name} does not exist`,
+      });
+    }
+  }
+  for (const name of servicesOnDisk) {
+    if (!named.has(name)) {
+      findings.push({
+        loc: `services/${name}`,
+        message: `exists on disk but is missing from the services table in ${mdxRel} § Services`,
+      });
+    }
+  }
+}
+
 // ── Main ───────────────────────────────────────────────────────────────
 
 function main(): void {
@@ -198,6 +298,7 @@ function main(): void {
     packages: lsDirs(join(ROOT, "packages")),
     services: lsDirs(join(ROOT, "services")),
     specs: lsFiles(join(ROOT, "spec"), ".md"),
+    scripts: lsFileNamesRecursive(join(ROOT, "scripts"), ".ts"),
   };
 
   function byKind(kind: EntryKind): TreeEntry[] {
@@ -246,6 +347,19 @@ function main(): void {
       });
     }
   }
+
+  // Scripts are a representative sample in the tree — existence only, no
+  // completeness requirement (there are ~130 gates; the tree shows a handful).
+  for (const entry of byKind("script")) {
+    if (!fs.scripts.has(entry.name)) {
+      findings.push({
+        loc: `${mdxRel}:${entry.line}`,
+        message: `tree names script "${entry.name}" but scripts/${entry.name} does not exist — replace it with a real gate from scripts/`,
+      });
+    }
+  }
+
+  checkServicesTable(mdxSrc, fs.services, findings, mdxRel);
 
   // Validate package tags against check-deps.ts
   for (const entry of byKind("package")) {

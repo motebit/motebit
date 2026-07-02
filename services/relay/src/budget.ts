@@ -6,21 +6,25 @@ import type { Context, Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { toCents, isWithdrawableRail } from "@motebit/protocol";
+import type {
+  AccountBalanceResult,
+  AccountWithdrawResult,
+  AccountWithdrawalRecord,
+} from "@motebit/protocol";
 import { bytesToHex, hash as sha256Hash } from "@motebit/encryption";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
 import { persistFreeze } from "./freeze.js";
 import {
-  getOrCreateAccount,
   getAccountBalance,
   getAccountBalanceDetailed,
   getTransactions,
-  hasTransactionWithReference,
   requestWithdrawal,
   completeWithdrawal,
   signWithdrawalReceipt,
   failWithdrawal,
   getWithdrawals,
+  getWithdrawalById,
   getPendingWithdrawals,
   reconcileLedger,
   processStripeCheckout,
@@ -31,8 +35,26 @@ import {
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import Stripe from "stripe";
 import type { SettlementRailRegistry, StripeSettlementRail } from "@motebit/settlement-rails";
+import type { WithdrawalRequest } from "@motebit/virtual-accounts";
 
 const logger = createLogger({ service: "budget" });
+
+/**
+ * Map a ledger withdrawal row to the market-v1 §2.9 wire record: convert
+ * the micro-unit `amount` to decimal USD at the boundary and stamp the
+ * relay's own identity (`relay_id` is a signed `WithdrawalReceiptPayload`
+ * field, so its presence lets an auditor reconstruct the canonical bytes
+ * from the response alone). Single mapper for every withdrawal response
+ * surface — the POST result and the /withdrawals history — so a new
+ * surfaced field is added in one place, not two.
+ */
+function toWithdrawalRecord(w: WithdrawalRequest, relayId: string): AccountWithdrawalRecord {
+  return {
+    ...w,
+    amount: fromMicro(w.amount),
+    relay_id: relayId,
+  };
+}
 
 /**
  * Map a thrown error from a Stripe SDK call into a structured 502
@@ -151,120 +173,14 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   } = deps;
   const stripeRail = railRegistry?.get("stripe") as StripeSettlementRail | undefined;
 
-  // --- Deposit ---
-  /** @internal */
-  app.post("/api/v1/agents/:motebitId/deposit", async (c) => {
-    const motebitId = c.req.param("motebitId");
-    const correlationId = c.get("correlationId" as never) as string;
-
-    // Idempotency key required for financial operations
-    const idempotencyKey = c.req.header("Idempotency-Key");
-    if (!idempotencyKey) {
-      throw new HTTPException(400, {
-        message: "Idempotency-Key header is required for financial operations",
-      });
-    }
-
-    // Check idempotency before parsing body — replays skip all side effects
-    const idempCheck = checkIdempotency(moteDb.db, idempotencyKey, motebitId);
-    if (idempCheck.action === "replay") {
-      return c.json(
-        JSON.parse(idempCheck.body) as Record<string, unknown>,
-        idempCheck.status as 200,
-      );
-    }
-    if (idempCheck.action === "conflict") {
-      throw new HTTPException(409, {
-        message: "A request with this idempotency key is already being processed",
-      });
-    }
-
-    const body = await c.req.json<{
-      amount: number;
-      currency?: string;
-      reference?: string;
-      description?: string;
-    }>();
-
-    if (typeof body.amount !== "number" || body.amount <= 0) {
-      // Complete idempotency with error so retries don't re-process
-      const errBody = JSON.stringify({ error: "amount must be a positive number", status: 400 });
-      completeIdempotency(moteDb.db, idempotencyKey, motebitId, 400, errBody);
-      throw new HTTPException(400, { message: "amount must be a positive number" });
-    }
-
-    const amountMicro = toMicro(body.amount);
-
-    if (body.reference) {
-      if (hasTransactionWithReference(moteDb.db, motebitId, body.reference)) {
-        const account = getOrCreateAccount(moteDb.db, motebitId);
-        logger.info("account.deposit_idempotent", {
-          correlationId,
-          motebitId,
-          reference: body.reference,
-        });
-        const responseBody = {
-          motebit_id: motebitId,
-          balance: fromMicro(account.balance),
-          transaction_id: null,
-          idempotent: true,
-        };
-        completeIdempotency(
-          moteDb.db,
-          idempotencyKey,
-          motebitId,
-          200,
-          JSON.stringify(responseBody),
-        );
-        return c.json(responseBody);
-      }
-    }
-
-    let newBalance: number;
-    const txnId = crypto.randomUUID();
-    moteDb.db.exec("BEGIN");
-    try {
-      const account = getOrCreateAccount(moteDb.db, motebitId);
-      newBalance = account.balance + amountMicro;
-      const now = Date.now();
-      moteDb.db
-        .prepare("UPDATE relay_accounts SET balance = ?, updated_at = ? WHERE motebit_id = ?")
-        .run(newBalance, now, motebitId);
-      moteDb.db
-        .prepare(
-          `INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at) VALUES (?, ?, 'deposit', ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          txnId,
-          motebitId,
-          amountMicro,
-          newBalance,
-          body.reference ?? null,
-          body.description ?? null,
-          now,
-        );
-      moteDb.db.exec("COMMIT");
-    } catch (err) {
-      moteDb.db.exec("ROLLBACK");
-      throw new Error("Deposit failed", { cause: err });
-    }
-
-    logger.info("account.deposit", {
-      correlationId,
-      motebitId,
-      amount: body.amount,
-      amountMicro,
-      balanceAfter: newBalance,
-      reference: body.reference ?? null,
-    });
-    const responseBody = {
-      motebit_id: motebitId,
-      balance: fromMicro(newBalance),
-      transaction_id: txnId,
-    };
-    completeIdempotency(moteDb.db, idempotencyKey, motebitId, 200, JSON.stringify(responseBody));
-    return c.json(responseBody);
-  });
+  // NOTE: the self-declared `POST /api/v1/agents/:id/deposit` route was
+  // removed (2026-07-01). It credited spendable balance from a client-
+  // supplied amount under the account owner's own device token, with no
+  // funding-provenance check anywhere in the deposit→withdraw path — a
+  // treasury-drain vector (self-declare balance → auto-settled withdrawal).
+  // Balance is credited ONLY by verified funding: the onchain deposit-
+  // detector and the Stripe webhook, both via `creditAccount` server-side.
+  // Tests seed via `seedBalance` (test-helpers), not an HTTP money route.
 
   // --- Balance ---
   /** @internal */
@@ -283,7 +199,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         sweep_threshold: null,
         settlement_address: null,
         transactions: [],
-      });
+      } satisfies AccountBalanceResult);
     const detailed = getAccountBalanceDetailed(moteDb.db, motebitId);
     const transactions = getTransactions(moteDb.db, motebitId, 50).map((tx) => ({
       ...tx,
@@ -302,7 +218,10 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         detailed.sweep_threshold != null ? fromMicro(detailed.sweep_threshold) : null,
       settlement_address: detailed.settlement_address,
       transactions,
-    });
+      // `satisfies` binds the producer to the market-v1 §2.6 wire law at
+      // compile time — a field rename here breaks the build, not the
+      // clients. Runtime behavior unchanged (no strict parse on inbound).
+    } satisfies AccountBalanceResult);
   });
 
   // --- Withdraw ---
@@ -360,11 +279,6 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       throw new HTTPException(402, { message: "Insufficient balance for withdrawal" });
     }
 
-    const toWithdrawalResponse = <T extends { amount: number }>(w: T) => ({
-      ...w,
-      amount: fromMicro(w.amount),
-    });
-
     if ("existing" in result) {
       logger.info("withdrawal.endpoint.idempotent", {
         correlationId,
@@ -374,9 +288,9 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       });
       const responseBody = {
         motebit_id: motebitId,
-        withdrawal: toWithdrawalResponse(result.existing),
+        withdrawal: toWithdrawalRecord(result.existing, relayIdentity.relayMotebitId),
         idempotent: true,
-      };
+      } satisfies AccountWithdrawResult;
       completeIdempotency(
         moteDb.db,
         idempotencyKeyHeader,
@@ -572,17 +486,20 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     // Doctrine: docs/doctrine/settlement-rails.md § "Lanes for external
     // readers" + the future `off-ramp-as-user-action.md`.
 
+    // On auto-settle, re-read the completed row so the response reflects the
+    // signature, payout_reference, completed_at, and status the settlement
+    // path just persisted — the DB is the single source of truth. Building
+    // from the stale pre-completion `result` would return a "completed"
+    // withdrawal with null signature, defeating offline self-verifiability.
+    const finalRecord = autoSettled
+      ? (getWithdrawalById(moteDb.db, result.withdrawal_id) ?? result)
+      : result;
     const responseBody = {
       motebit_id: motebitId,
-      withdrawal: toWithdrawalResponse(
-        autoSettled
-          ? {
-              ...result,
-              status: "completed" as const,
-            }
-          : result,
-      ),
-    };
+      // `satisfies` binds the producer to the market-v1 §2.9 wire law at
+      // compile time; runtime behavior unchanged.
+      withdrawal: toWithdrawalRecord(finalRecord, relayIdentity.relayMotebitId),
+    } satisfies AccountWithdrawResult;
     completeIdempotency(
       moteDb.db,
       idempotencyKeyHeader,
@@ -597,10 +514,9 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   /** @internal */
   app.get("/api/v1/agents/:motebitId/withdrawals", (c) => {
     const motebitId = c.req.param("motebitId");
-    const withdrawals = getWithdrawals(moteDb.db, motebitId, 50).map((w) => ({
-      ...w,
-      amount: fromMicro(w.amount),
-    }));
+    const withdrawals = getWithdrawals(moteDb.db, motebitId, 50).map((w) =>
+      toWithdrawalRecord(w, relayIdentity.relayMotebitId),
+    );
     return c.json({ motebit_id: motebitId, withdrawals });
   });
 

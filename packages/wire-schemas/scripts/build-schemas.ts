@@ -17,6 +17,11 @@ import { format, resolveConfig } from "prettier";
 
 import { stampSchema } from "../src/spdx-stamp.js";
 import { buildAgentResolutionResultJsonSchema } from "../src/agent-resolution-result.js";
+import { buildAccountBalanceResultJsonSchema } from "../src/account-balance.js";
+import {
+  buildAccountWithdrawRequestJsonSchema,
+  buildAccountWithdrawResultJsonSchema,
+} from "../src/account-withdraw.js";
 import { buildAgentServiceListingJsonSchema } from "../src/agent-service-listing.js";
 import { buildAgentTaskJsonSchema } from "../src/agent-task.js";
 import { buildDelegationTokenJsonSchema } from "../src/delegation-token.js";
@@ -157,6 +162,9 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   },
   { filename: "agent-service-listing-v1.json", build: buildAgentServiceListingJsonSchema },
   { filename: "agent-resolution-result-v1.json", build: buildAgentResolutionResultJsonSchema },
+  { filename: "account-balance-result-v1.json", build: buildAccountBalanceResultJsonSchema },
+  { filename: "account-withdraw-request-v1.json", build: buildAccountWithdrawRequestJsonSchema },
+  { filename: "account-withdraw-result-v1.json", build: buildAccountWithdrawResultJsonSchema },
   { filename: "agent-task-v1.json", build: buildAgentTaskJsonSchema },
   { filename: "settlement-record-v1.json", build: buildSettlementRecordJsonSchema },
   { filename: "route-score-v1.json", build: buildRouteScoreJsonSchema },

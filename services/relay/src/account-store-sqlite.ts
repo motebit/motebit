@@ -27,6 +27,16 @@ import type {
 } from "@motebit/virtual-accounts";
 import { DISPUTE_WINDOW_MS } from "@motebit/virtual-accounts";
 
+/**
+ * Ledger `reference_id` prefix for promotional "free first taste" grants
+ * (`free-credit:<motebit_id>`). Written by `grantFreeCreditIfEligible`
+ * (free-credit.ts) and matched by `getUnspentGrantHold` below so the grant
+ * remainder is held from withdrawal. Centralized here — the neutral module
+ * both the producer and the hold consumer depend on — to avoid a
+ * free-credit.ts ↔ accounts.ts import cycle.
+ */
+export const FREE_CREDIT_REFERENCE_PREFIX = "free-credit:";
+
 /** Create virtual-account + transaction tables. Idempotent. */
 export function createAccountTables(db: DatabaseDriver): void {
   db.exec(`
@@ -496,6 +506,43 @@ export class SqliteAccountStore implements AccountStore {
       )
       .get(motebitId, cutoff) as { total: number };
     return row.total;
+  }
+
+  getUnspentGrantHold(motebitId: string): number {
+    // Unspent promotional-grant balance, held from withdrawal (not from
+    // spending): max(0, Σ grant credits − Σ inference-spend debits).
+    //
+    // - Grants are `deposit` rows with a `free-credit:<id>` reference (positive
+    //   amount), written by grantFreeCreditIfEligible.
+    // - Inference spend is the proxy usage debit — the ONLY producer of
+    //   `fee`-type account transactions (subscriptions.ts; settlement fees live
+    //   in relay_settlements, not as account rows), stored as a negative amount.
+    //
+    // Free credit is consumed by real inference-spend first, so once total
+    // inference spend ≥ total granted, the hold is zero and nothing is held.
+    // Allocation/settlement debits are deliberately NOT counted: they circle
+    // money internally (a self-delegation debit returns as settlement_credit),
+    // so counting them would let free credit launder into withdrawable balance.
+    if (!this.hasTables("relay_transactions")) return 0;
+    const granted = (
+      this.db
+        .prepare(
+          `SELECT COALESCE(SUM(amount), 0) AS total FROM relay_transactions
+           WHERE motebit_id = ? AND type = 'deposit' AND reference_id LIKE ?`,
+        )
+        .get(motebitId, `${FREE_CREDIT_REFERENCE_PREFIX}%`) as { total: number }
+    ).total;
+    if (granted <= 0) return 0;
+    // fee amounts are stored negative (debits) → negate the sum for magnitude.
+    const inferenceSpend = -(
+      this.db
+        .prepare(
+          `SELECT COALESCE(SUM(amount), 0) AS total FROM relay_transactions
+           WHERE motebit_id = ? AND type = 'fee'`,
+        )
+        .get(motebitId) as { total: number }
+    ).total;
+    return Math.max(0, granted - inferenceSpend);
   }
 
   debitAndEnqueuePending(args: {

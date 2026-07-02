@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
-import { generateKeypair, bytesToHex, signExecutionReceipt } from "@motebit/encryption";
+import {
+  generateKeypair,
+  bytesToHex,
+  signExecutionReceipt,
+  createSignedToken,
+} from "@motebit/encryption";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 
@@ -225,6 +230,91 @@ describe("Market — Candidates", () => {
     const body = (await res.json()) as { candidates: Array<{ motebit_id: string }> };
     expect(body.candidates.length).toBeGreaterThanOrEqual(1);
     expect(body.candidates.some((c) => c.motebit_id === motebitId)).toBe(true);
+  });
+
+  // A delegating agent (sovereign delegation / `motebit delegate`) discovers
+  // workers with its OWN `market:query` device token — it does not hold the
+  // operator master token. Before this was wired, /market/candidates fell under
+  // the master-only catch-all and 401'd every agent; server tests used the
+  // master token and client tests mocked fetch, so the mismatch stayed hidden.
+  it("GET /api/v1/market/candidates accepts a market:query DEVICE token (not just master)", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId, deviceId } = await createIdentityAndDevice(
+      relay,
+      bytesToHex(keypair.publicKey),
+    );
+    const deviceToken = await createSignedToken(
+      {
+        mid: motebitId,
+        did: deviceId,
+        iat: Date.now(),
+        exp: Date.now() + 5 * 60 * 1000,
+        jti: crypto.randomUUID(),
+        aud: "market:query",
+      },
+      keypair.privateKey,
+    );
+    const res = await relay.app.request("/api/v1/market/candidates?capability=web-search", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${deviceToken}` },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("GET /api/v1/market/candidates rejects a device token minted for a different audience", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId, deviceId } = await createIdentityAndDevice(
+      relay,
+      bytesToHex(keypair.publicKey),
+    );
+    // A `sync`-audience token must not be replayable against market discovery
+    // (cross-endpoint replay defense).
+    const wrongAudToken = await createSignedToken(
+      {
+        mid: motebitId,
+        did: deviceId,
+        iat: Date.now(),
+        exp: Date.now() + 5 * 60 * 1000,
+        jti: crypto.randomUUID(),
+        aud: "sync",
+      },
+      keypair.privateKey,
+    );
+    const res = await relay.app.request("/api/v1/market/candidates", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${wrongAudToken}` },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("GET /api/v1/market/revenue stays operator-only — a device token is rejected", async () => {
+    const keypair = await generateKeypair();
+    const { motebitId, deviceId } = await createIdentityAndDevice(
+      relay,
+      bytesToHex(keypair.publicKey),
+    );
+    const deviceToken = await createSignedToken(
+      {
+        mid: motebitId,
+        did: deviceId,
+        iat: Date.now(),
+        exp: Date.now() + 5 * 60 * 1000,
+        jti: crypto.randomUUID(),
+        aud: "market:query",
+      },
+      keypair.privateKey,
+    );
+    const res = await relay.app.request("/api/v1/market/revenue", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${deviceToken}` },
+    });
+    expect(res.status).toBe(401);
+    // Master token still works.
+    const ok = await relay.app.request("/api/v1/market/revenue", {
+      method: "GET",
+      headers: AUTH_HEADER,
+    });
+    expect(ok.status).toBe(200);
   });
 });
 

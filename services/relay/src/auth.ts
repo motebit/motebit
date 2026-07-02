@@ -1,5 +1,6 @@
 import { verifySignedToken, hexToBytes } from "@motebit/encryption";
 import { IdentityManager } from "@motebit/core-identity";
+import type { TokenAudience } from "@motebit/protocol";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "auth" });
@@ -93,12 +94,18 @@ export function parseTokenPayloadUnsafe(token: string): TokenPayload | null {
  *  Rejects tokens whose `aud` claim doesn't match `expectedAudience` (cross-endpoint replay prevention).
  *  Optional blacklistCheck callback rejects tokens whose jti appears in the token blacklist.
  *  Optional agentRevokedCheck callback rejects tokens for revoked agents.
+ *
+ *  `expectedAudience` is typed as `TokenAudience` (not `string`) so an
+ *  enforcement site naming an unregistered audience is a compile error —
+ *  the closed registry in `@motebit/protocol` is the canonical vocabulary,
+ *  and the line-based `check-audience-canonical` gate cannot see positional
+ *  args in multi-line calls. Structural beats lint here.
  */
 export async function verifySignedTokenForDevice(
   token: string,
   motebitId: string,
   identityManager: IdentityManager,
-  expectedAudience: string,
+  expectedAudience: TokenAudience,
   blacklistCheck?: (jti: string, motebitId: string) => boolean,
   agentRevokedCheck?: (motebitId: string) => boolean,
 ): Promise<boolean> {

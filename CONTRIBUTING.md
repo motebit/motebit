@@ -34,7 +34,7 @@ pnpm run test
 
 ```
 apps/        11 surfaces and supporting apps (web, cli, desktop, mobile, spatial, inspector, operator, identity, verify, docs, vscode)
-packages/    52 packages on a 7-layer DAG enforced by `pnpm check-deps`
+packages/    53 packages on a 7-layer DAG enforced by `pnpm check-deps`
 services/    9 backend services (1 relay + 2 molecules + 5 atoms + 1 glue)
 spec/        32 open specifications, each `motebit/<name>@1.0`
 ```

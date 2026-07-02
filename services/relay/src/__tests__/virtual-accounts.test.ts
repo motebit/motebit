@@ -4,6 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
+import { seedBalance } from "./test-helpers.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
 import {
   generateKeypair,
@@ -76,23 +77,10 @@ async function deposit(
   relay: SyncRelay,
   motebitId: string,
   amount: number,
-  reference?: string,
+  _reference?: string,
 ): Promise<{ motebit_id: string; balance: number; transaction_id: string | null }> {
-  const res = await relay.app.request(`/api/v1/agents/${motebitId}/deposit`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...AUTH_HEADER,
-      "Idempotency-Key": crypto.randomUUID(),
-    },
-    body: JSON.stringify({ amount, reference }),
-  });
-  expect(res.status).toBe(200);
-  return res.json() as Promise<{
-    motebit_id: string;
-    balance: number;
-    transaction_id: string | null;
-  }>;
+  const balance = seedBalance(relay, motebitId, amount);
+  return { motebit_id: motebitId, balance, transaction_id: "test-seed" };
 }
 
 async function getBalance(
@@ -131,10 +119,14 @@ describe("Virtual Accounts", () => {
     const keypair = await generateKeypair();
     const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
 
-    const result = await deposit(relay, motebitId, 10.5);
-    expect(result.motebit_id).toBe(motebitId);
-    expect(result.balance).toBe(10.5);
-    expect(result.transaction_id).toBeDefined();
+    await deposit(relay, motebitId, 10.5);
+    // Read back through the ledger (not the seed helper's return) so this
+    // verifies a real credit + persisted transaction row, not a tautology.
+    const balance = await getBalance(relay, motebitId);
+    expect(balance.motebit_id).toBe(motebitId);
+    expect(balance.balance).toBe(10.5);
+    expect(balance.transactions).toHaveLength(1);
+    expect(balance.transactions[0]!.amount).toBe(10.5);
   });
 
   it("deposit to existing account increments balance", async () => {
@@ -142,8 +134,12 @@ describe("Virtual Accounts", () => {
     const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
 
     await deposit(relay, motebitId, 10);
-    const result = await deposit(relay, motebitId, 5);
-    expect(result.balance).toBe(15);
+    await deposit(relay, motebitId, 5);
+    // Read back through the ledger — a real accumulated balance, not the
+    // seed helper's own return value.
+    const balance = await getBalance(relay, motebitId);
+    expect(balance.balance).toBe(15);
+    expect(balance.transactions).toHaveLength(2);
   });
 
   it("balance endpoint returns correct balance and transactions", async () => {
@@ -348,51 +344,28 @@ describe("Virtual Accounts", () => {
     });
   });
 
-  it("negative deposit rejected", async () => {
+  // NOTE: the self-declared `POST /deposit` route was removed (treasury-drain
+  // vector); its HTTP-layer tests — negative/zero-amount rejection,
+  // reference-idempotent dedup, requires-auth — went with the endpoint. Balance
+  // is credited only by verified server-side funding; tests seed via
+  // `seedBalance`. Amount-positivity and idempotency are covered on the
+  // surviving money-mutating endpoint (withdraw) in idempotency.test.ts.
+
+  it("POST /deposit is gone — no route mints balance from a client-supplied amount", async () => {
+    // Regression lock for the treasury-drain fix: re-adding a self-declared
+    // deposit route (client credits its own balance, then withdraws real
+    // funds) must fail this test. The route must not exist.
     const keypair = await generateKeypair();
     const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
-
     const res = await relay.app.request(`/api/v1/agents/${motebitId}/deposit`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...AUTH_HEADER,
-        "Idempotency-Key": crypto.randomUUID(),
-      },
-      body: JSON.stringify({ amount: -5 }),
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER, "Idempotency-Key": "x" },
+      body: JSON.stringify({ amount: 1_000_000 }),
     });
-    expect(res.status).toBe(400);
-  });
-
-  it("zero deposit rejected", async () => {
-    const keypair = await generateKeypair();
-    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
-
-    const res = await relay.app.request(`/api/v1/agents/${motebitId}/deposit`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...AUTH_HEADER,
-        "Idempotency-Key": crypto.randomUUID(),
-      },
-      body: JSON.stringify({ amount: 0 }),
-    });
-    expect(res.status).toBe(400);
-  });
-
-  it("double-deposit is idempotent if same reference_id", async () => {
-    const keypair = await generateKeypair();
-    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
-
-    const ref = `ext-payment-${crypto.randomUUID()}`;
-    const first = await deposit(relay, motebitId, 50, ref);
-    expect(first.balance).toBe(50);
-    expect(first.transaction_id).toBeDefined();
-
-    // Second deposit with same reference — idempotent
-    const second = await deposit(relay, motebitId, 50, ref);
-    expect(second.balance).toBe(50); // Unchanged
-    expect((second as Record<string, unknown>).idempotent).toBe(true);
+    expect(res.status).toBe(404);
+    // And balance stayed zero — nothing was minted.
+    const balance = await getBalance(relay, motebitId);
+    expect(balance.balance).toBe(0);
   });
 
   it("task submission with sufficient virtual balance succeeds", async () => {
@@ -645,15 +618,6 @@ describe("Virtual Accounts", () => {
     expect(platformFee).toBeGreaterThan(0);
     const creditTxn = workerBalance.transactions.find((t) => t.type === "settlement_credit");
     expect(creditTxn).toBeDefined();
-  });
-
-  it("deposit requires auth", async () => {
-    const res = await relay.app.request(`/api/v1/agents/some-agent/deposit`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
-      body: JSON.stringify({ amount: 10 }),
-    });
-    expect(res.status).toBe(401);
   });
 
   it("balance requires auth", async () => {

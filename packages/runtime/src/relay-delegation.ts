@@ -14,6 +14,7 @@
  */
 
 import type { ExecutionReceipt, IntentOrigin } from "@motebit/sdk";
+import type { TokenAudience } from "@motebit/protocol";
 import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/protocol";
 import {
   base58Encode,
@@ -145,7 +146,7 @@ export interface SubmitAndPollParams {
   /** Base URL of the relay. */
   syncUrl: string;
   /** Mints audience-scoped auth tokens. */
-  authToken: (audience?: string) => Promise<string>;
+  authToken: (audience?: TokenAudience) => Promise<string>;
   /** Task prompt to submit. */
   prompt: string;
   /** Capabilities the target agent must advertise. */
@@ -424,7 +425,7 @@ export interface SubmitP2pDelegationParams {
   /** Base URL of the relay. */
   syncUrl: string;
   /** Mints audience-scoped auth tokens. */
-  authToken: (audience?: string) => Promise<string>;
+  authToken: (audience?: TokenAudience) => Promise<string>;
   /** Task prompt to submit. */
   prompt: string;
   /**
@@ -642,7 +643,7 @@ export interface ResolveAndSubmitP2pDelegationParams {
   /** Base URL of the relay. */
   syncUrl: string;
   /** Mints audience-scoped auth tokens (the listing read needs `market:listing`). */
-  authToken: (audience?: string) => Promise<string>;
+  authToken: (audience?: TokenAudience) => Promise<string>;
   /** Task prompt to submit. */
   prompt: string;
   /** Capability the worker must advertise — used to discover + select + price. */
@@ -976,7 +977,7 @@ export interface SelectDelegationParams {
   /** Base URL of the relay. */
   syncUrl: string;
   /** Mints audience-scoped auth tokens. */
-  authToken: (audience?: string) => Promise<string>;
+  authToken: (audience?: TokenAudience) => Promise<string>;
   /** Task prompt to submit. */
   prompt: string;
   /**

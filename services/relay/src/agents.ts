@@ -3,6 +3,7 @@
  */
 
 import type { Hono, Context } from "hono";
+import type { TokenAudience } from "@motebit/protocol";
 import { HTTPException } from "hono/http-exception";
 import type { MotebitDatabase, DatabaseDriver } from "@motebit/persistence";
 import type { IdentityManager } from "@motebit/core-identity";
@@ -254,7 +255,7 @@ export interface AgentsDeps {
     token: string,
     motebitId: string,
     identityManager: IdentityManager,
-    expectedAudience: string,
+    expectedAudience: TokenAudience,
     blacklistCheck?: (jti: string, motebitId: string) => boolean,
     agentRevokedCheck?: (motebitId: string) => boolean,
   ) => Promise<boolean>;
@@ -591,7 +592,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
 
     // Determine expected audience from route path
     const path = c.req.path;
-    let agentAudience: string;
+    let agentAudience: TokenAudience;
     if (path.includes("/p2p-eligibility")) {
       // Caller-bound P2P pre-flight read — reuses the market:listing audience
       // the delegator client already mints (sibling of the listing price read).

@@ -11,13 +11,14 @@ import { bearerAuth } from "hono/bearer-auth";
 import { HTTPException } from "hono/http-exception";
 import type { IdentityManager } from "@motebit/core-identity";
 import {
+  type TokenAudience,
   TASK_SUBMIT_AUDIENCE,
   BROWSER_SANDBOX_GRANT_AUDIENCE,
-  ACCOUNT_DEPOSIT_AUDIENCE,
   ACCOUNT_BALANCE_AUDIENCE,
   ACCOUNT_WITHDRAW_AUDIENCE,
   ACCOUNT_WITHDRAWALS_AUDIENCE,
   ACCOUNT_CHECKOUT_AUDIENCE,
+  MARKET_QUERY_AUDIENCE,
 } from "@motebit/protocol";
 import { FixedWindowLimiter } from "./rate-limiter.js";
 import type { verifySignedTokenForDevice, parseTokenPayloadUnsafe } from "./auth.js";
@@ -152,7 +153,7 @@ export function createDualAuth(deps: MiddlewareDeps) {
   return async function dualAuth(
     c: Parameters<Parameters<Hono["use"]>[1]>[0],
     next: () => Promise<void>,
-    expectedAudience: string,
+    expectedAudience: TokenAudience,
   ): Promise<Response | void> {
     const authHeader = c.req.header("authorization");
     if (authHeader == null || !authHeader.startsWith("Bearer ")) {
@@ -296,8 +297,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   app.use("/api/v1/agents/:motebitId/graph", rl(readLimiter));
   app.use("/api/v1/agents/:motebitId/routing-explanation", rl(readLimiter));
 
-  // Virtual account endpoints (write: deposit/withdraw, read: balance/withdrawals)
-  app.use("/api/v1/agents/:motebitId/deposit", rl(writeLimiter));
+  // Virtual account endpoints (write: withdraw, read: balance/withdrawals)
   app.use("/api/v1/agents/:motebitId/withdraw", rl(writeLimiter));
   app.use("/api/v1/agents/:motebitId/balance", rl(readLimiter));
   app.use("/api/v1/agents/:motebitId/solvency-proof", rl(readLimiter));
@@ -503,6 +503,10 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
         // `/api/v1/onramp/` above. See `docs/doctrine/off-ramp-as-user-action.md`.
         c.req.path.startsWith("/api/v1/offramp/") ||
         c.req.path.startsWith("/api/v1/discover/") ||
+        // Market candidate discovery has its own dualAuth (market:query device
+        // token or master) above — agents discovering workers don't hold the
+        // master token. /api/v1/market/revenue is NOT carved out (operator-only).
+        c.req.path === "/api/v1/market/candidates" ||
         c.req.path.startsWith("/api/v1/allocations/") ||
         c.req.path.startsWith("/api/v1/disputes/") ||
         // Skills registry (spec/skills-registry-v1.md §5): permissive-by-
@@ -706,11 +710,10 @@ export function registerAuthMiddleware(deps: MiddlewareDeps): void {
   app.use("/agent/*/ledger/*", bearerAuth({ token: apiToken }));
   app.use("/agent/*/settlements", bearerAuth({ token: apiToken }));
 
-  // Auth middleware for virtual account routes — master token or signed device token
-  app.use("/api/v1/agents/*/deposit", async (c, next) => {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
-    return dualAuth(c, next, ACCOUNT_DEPOSIT_AUDIENCE);
-  });
+  // Auth middleware for virtual account routes — master token or signed device token.
+  // (The self-declared `/deposit` route was removed — treasury-drain vector; balance
+  // is credited only by verified server-side funding. `ACCOUNT_DEPOSIT_AUDIENCE`
+  // remains reserved in the registry for a future funded deposit-initiation endpoint.)
   app.use("/api/v1/agents/*/balance", async (c, next) => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
     return dualAuth(c, next, ACCOUNT_BALANCE_AUDIENCE);
@@ -737,6 +740,15 @@ export function registerAuthMiddleware(deps: MiddlewareDeps): void {
   app.use("/api/v1/agents/*/checkout", async (c, next) => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
     return dualAuth(c, next, ACCOUNT_CHECKOUT_AUDIENCE);
+  });
+  // Market candidate discovery is device-authable: a delegating agent (sovereign
+  // delegation / `motebit delegate`) calls it with its OWN `market:query` device
+  // token to find workers — it does not hold the operator master token. Carved
+  // out of the /api/v1/* master-only catch-all below. (`/api/v1/market/revenue`
+  // is operator-only and deliberately stays under the catch-all.)
+  app.use("/api/v1/market/candidates", async (c, next) => {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
+    return dualAuth(c, next, MARKET_QUERY_AUDIENCE);
   });
   // Note: /api/v1/stripe/webhook has NO auth middleware — Stripe calls it directly.
   // Verification is done via the webhook signature.

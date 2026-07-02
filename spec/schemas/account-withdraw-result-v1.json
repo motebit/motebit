@@ -1,0 +1,199 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/account-withdraw-result-v1.json",
+  "title": "AccountWithdrawResult (v1)",
+  "description": "Response of POST /api/v1/agents/{motebitId}/withdraw — the withdrawal lifecycle record in decimal USD. Non-terminal status is the fail-safe; finality is observed via status + payout_reference. See spec/market-v1.md §2.9.",
+  "type": "object",
+  "properties": {
+    "motebit_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Account owner's MotebitId."
+    },
+    "withdrawal": {
+      "type": "object",
+      "properties": {
+        "withdrawal_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique withdrawal identifier."
+        },
+        "motebit_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Account owner's MotebitId."
+        },
+        "amount": {
+          "type": "number",
+          "description": "Decimal USD."
+        },
+        "currency": {
+          "type": "string",
+          "minLength": 1,
+          "description": "ISO 4217 or token symbol."
+        },
+        "destination": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Payout address, external ref, or \"pending\" for manual resolution."
+        },
+        "status": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Withdrawal lifecycle state (pending | processing | completed | failed | cancelled). Readers MUST tolerate unknown values — the vocabulary evolves additively."
+        },
+        "payout_reference": {
+          "type": ["string", "null"],
+          "description": "External payout id (tx hash, transfer id); null until settled."
+        },
+        "requested_at": {
+          "type": "number",
+          "description": "Epoch milliseconds of the request."
+        },
+        "completed_at": {
+          "type": ["number", "null"],
+          "description": "Epoch milliseconds of settlement; null while unsettled."
+        },
+        "failure_reason": {
+          "type": ["string", "null"],
+          "description": "Populated when status is failed; else null."
+        },
+        "relay_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The signing relay's MotebitId — a signed WithdrawalReceiptPayload field, present so the record is self-verifiable from the response alone."
+        },
+        "relay_signature": {
+          "type": ["string", "null"],
+          "description": "Ed25519 signature over the completed withdrawal for offline verify; null until settled."
+        },
+        "relay_public_key": {
+          "type": ["string", "null"],
+          "description": "Hex relay public key for independent verification; null until settled."
+        }
+      },
+      "required": [
+        "withdrawal_id",
+        "motebit_id",
+        "amount",
+        "currency",
+        "destination",
+        "status",
+        "payout_reference",
+        "requested_at",
+        "completed_at",
+        "failure_reason",
+        "relay_id",
+        "relay_signature",
+        "relay_public_key"
+      ],
+      "additionalProperties": true,
+      "description": "The withdrawal lifecycle record."
+    },
+    "idempotent": {
+      "type": "boolean",
+      "description": "Present and true when the idempotency key matched a prior request."
+    }
+  },
+  "required": ["motebit_id", "withdrawal"],
+  "additionalProperties": true,
+  "definitions": {
+    "AccountWithdrawResult": {
+      "type": "object",
+      "properties": {
+        "motebit_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Account owner's MotebitId."
+        },
+        "withdrawal": {
+          "type": "object",
+          "properties": {
+            "withdrawal_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Unique withdrawal identifier."
+            },
+            "motebit_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Account owner's MotebitId."
+            },
+            "amount": {
+              "type": "number",
+              "description": "Decimal USD."
+            },
+            "currency": {
+              "type": "string",
+              "minLength": 1,
+              "description": "ISO 4217 or token symbol."
+            },
+            "destination": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Payout address, external ref, or \"pending\" for manual resolution."
+            },
+            "status": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Withdrawal lifecycle state (pending | processing | completed | failed | cancelled). Readers MUST tolerate unknown values — the vocabulary evolves additively."
+            },
+            "payout_reference": {
+              "type": ["string", "null"],
+              "description": "External payout id (tx hash, transfer id); null until settled."
+            },
+            "requested_at": {
+              "type": "number",
+              "description": "Epoch milliseconds of the request."
+            },
+            "completed_at": {
+              "type": ["number", "null"],
+              "description": "Epoch milliseconds of settlement; null while unsettled."
+            },
+            "failure_reason": {
+              "type": ["string", "null"],
+              "description": "Populated when status is failed; else null."
+            },
+            "relay_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The signing relay's MotebitId — a signed WithdrawalReceiptPayload field, present so the record is self-verifiable from the response alone."
+            },
+            "relay_signature": {
+              "type": ["string", "null"],
+              "description": "Ed25519 signature over the completed withdrawal for offline verify; null until settled."
+            },
+            "relay_public_key": {
+              "type": ["string", "null"],
+              "description": "Hex relay public key for independent verification; null until settled."
+            }
+          },
+          "required": [
+            "withdrawal_id",
+            "motebit_id",
+            "amount",
+            "currency",
+            "destination",
+            "status",
+            "payout_reference",
+            "requested_at",
+            "completed_at",
+            "failure_reason",
+            "relay_id",
+            "relay_signature",
+            "relay_public_key"
+          ],
+          "additionalProperties": true,
+          "description": "The withdrawal lifecycle record."
+        },
+        "idempotent": {
+          "type": "boolean",
+          "description": "Present and true when the idempotency key matched a prior request."
+        }
+      },
+      "required": ["motebit_id", "withdrawal"],
+      "additionalProperties": true
+    }
+  }
+}

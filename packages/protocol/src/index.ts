@@ -3243,6 +3243,22 @@ export type {
 
 export type { RelayMetadata, RelayMetadataPeer, AgentResolutionResult } from "./discovery.js";
 
+// Virtual-account balance read — the market-v1 §2 account state projected
+// across the HTTP boundary (decimal USD; conversion happens only at the
+// producer). See spec/market-v1.md §2.6–§2.7.
+export type { AccountBalanceResult, AccountBalanceTransaction } from "./account-balance.js";
+
+// Virtual-account withdrawal — the money-out request/response boundary
+// (decimal USD; auto-settle-or-pending, transmitter surface structurally
+// zero). See spec/market-v1.md §2.8–§2.9 + off-ramp-as-user-action.md.
+export type {
+  AccountWithdrawRequest,
+  AccountWithdrawResult,
+  AccountWithdrawalRecord,
+  AccountWithdrawalStatus,
+  WithdrawalReceiptPayload,
+} from "./account-withdraw.js";
+
 // ── Migration (protocol-level) ────────────────────────────
 // Agent migration between relays with identity continuity and trust portability.
 // motebit/migration@1.0.
@@ -3617,8 +3633,14 @@ export {
   ROTATE_KEY_AUDIENCE,
   PUSH_REGISTER_AUDIENCE,
   TASK_SUBMIT_AUDIENCE,
+  TASK_QUERY_AUDIENCE,
+  TASK_RESULT_AUDIENCE,
   ADMIN_QUERY_AUDIENCE,
   PROPOSAL_AUDIENCE,
+  MARKET_LISTING_AUDIENCE,
+  MARKET_QUERY_AUDIENCE,
+  CREDENTIALS_AUDIENCE,
+  CREDENTIALS_PRESENT_AUDIENCE,
   ACCOUNT_BALANCE_AUDIENCE,
   ACCOUNT_DEPOSIT_AUDIENCE,
   ACCOUNT_WITHDRAW_AUDIENCE,

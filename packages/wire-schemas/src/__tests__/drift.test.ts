@@ -27,6 +27,16 @@ import {
   buildAgentResolutionResultJsonSchema,
 } from "../agent-resolution-result.js";
 import {
+  buildAccountBalanceResultJsonSchema,
+  ACCOUNT_BALANCE_RESULT_SCHEMA_ID,
+} from "../account-balance.js";
+import {
+  buildAccountWithdrawRequestJsonSchema,
+  buildAccountWithdrawResultJsonSchema,
+  ACCOUNT_WITHDRAW_REQUEST_SCHEMA_ID,
+  ACCOUNT_WITHDRAW_RESULT_SCHEMA_ID,
+} from "../account-withdraw.js";
+import {
   AGENT_SERVICE_LISTING_SCHEMA_ID,
   buildAgentServiceListingJsonSchema,
 } from "../agent-service-listing.js";
@@ -302,6 +312,24 @@ const CASES: SchemaCase[] = [
     filename: "agent-resolution-result-v1.json",
     expectedId: AGENT_RESOLUTION_RESULT_SCHEMA_ID,
     build: buildAgentResolutionResultJsonSchema,
+  },
+  {
+    name: "account-balance-result-v1",
+    filename: "account-balance-result-v1.json",
+    expectedId: ACCOUNT_BALANCE_RESULT_SCHEMA_ID,
+    build: buildAccountBalanceResultJsonSchema,
+  },
+  {
+    name: "account-withdraw-request-v1",
+    filename: "account-withdraw-request-v1.json",
+    expectedId: ACCOUNT_WITHDRAW_REQUEST_SCHEMA_ID,
+    build: buildAccountWithdrawRequestJsonSchema,
+  },
+  {
+    name: "account-withdraw-result-v1",
+    filename: "account-withdraw-result-v1.json",
+    expectedId: ACCOUNT_WITHDRAW_RESULT_SCHEMA_ID,
+    build: buildAccountWithdrawResultJsonSchema,
   },
   {
     name: "agent-task-v1",

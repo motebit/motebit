@@ -1461,7 +1461,7 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
       // perturbation" — so the probe self-rots are visible.
       mutateFile("README.md", (src) =>
         src.replace(
-          "**52 packages across 7 architectural layers",
+          "**53 packages across 7 architectural layers",
           "**37 packages across 7 architectural layers",
         ),
       ),
@@ -2315,6 +2315,18 @@ export async function probeFetch(): Promise<unknown> {
         src.replace(
           /name: "trust", description: "What motebit holds/,
           `name: "trust_${PROBE_PREFIX}renamed", description: "What motebit holds`,
+        ),
+      ),
+  },
+  {
+    script: "check-credit-caller-allowlist",
+    proves:
+      "flags a balance-credit call site reintroduced outside the verified-funding allowlist — the treasury-drain shape (crediting spendable/withdrawable balance from an unreviewed, potentially client-supplied source, as the deleted /deposit route did). Probe injects a `creditAccount(...)` call into budget.ts (a non-allowlisted module); the gate must flag it. byte-identical restoration on cleanup.",
+    perturb: () =>
+      mutateFile(`services/relay/src/budget.ts`, (src) =>
+        src.replace(
+          'const logger = createLogger({ service: "budget" });',
+          `const logger = createLogger({ service: "budget" });\nfunction ${PROBE_PREFIX}rogue(db: unknown, m: string) {\n  creditAccount(db as never, m, 1_000_000, "deposit", null, "${PROBE_PREFIX}rogue");\n}`,
         ),
       ),
   },

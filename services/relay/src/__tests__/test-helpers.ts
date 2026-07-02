@@ -8,6 +8,7 @@ import { createSyncRelay } from "../index.js";
 import type { SyncRelay, SyncRelayConfig } from "../index.js";
 import { deriveSolanaAddress, SOLANA_MAINNET_CAIP2 } from "@motebit/wallet-solana";
 import { PLATFORM_FEE_RATE } from "@motebit/protocol";
+import { creditAccount, toMicro, fromMicro } from "../accounts.js";
 
 // === Auth constants ===
 
@@ -143,4 +144,29 @@ export function buildP2pPaymentProof(relay: SyncRelay, args: BuildP2pProofArgs):
     fee_to_address: p2pTreasuryAddress(relay),
     fee_amount_micro: gross - net,
   };
+}
+
+/**
+ * Seed a virtual-account balance directly through the ledger — the test
+ * replacement for the removed self-declared `POST /deposit` route.
+ *
+ * Tests seed state and then exercise spend/settle/withdraw logic; they must
+ * not depend on a production money-minting HTTP endpoint to do it. This
+ * credits via the same `creditAccount` primitive the real funding paths use
+ * (deposit-detector, Stripe webhook), so seeded balance is byte-identical to
+ * funded balance without the treasury-drain surface a client route exposed.
+ *
+ * `amount` is decimal USD (converted to micro-units at the boundary, exactly
+ * as the removed endpoint did).
+ */
+export function seedBalance(relay: SyncRelay, motebitId: string, amount: number): number {
+  const newBalanceMicro = creditAccount(
+    relay.moteDb.db,
+    motebitId,
+    toMicro(amount),
+    "deposit",
+    null,
+    "test seed",
+  );
+  return fromMicro(newBalanceMicro);
 }

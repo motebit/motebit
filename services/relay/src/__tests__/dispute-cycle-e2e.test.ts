@@ -23,6 +23,7 @@ import {
   jsonAuthWithIdempotency,
   createTestRelay,
   createAgent,
+  seedBalance,
 } from "./test-helpers.js";
 
 // Arc 3.5: both tests are relay-custody CROSS-AGENT fund-refund disputes — they
@@ -78,12 +79,7 @@ describe("Dispute Cycle E2E", () => {
     });
 
     // === STEP 1: DEPOSIT ===
-    const depositRes = await relay.app.request(`/api/v1/agents/${delegator.motebitId}/deposit`, {
-      method: "POST",
-      headers: jsonAuthWithIdempotency(),
-      body: JSON.stringify({ amount: 10.0, reference: "dispute-test" }),
-    });
-    expect(depositRes.status).toBe(200);
+    seedBalance(relay, delegator.motebitId, 10.0);
 
     // === STEP 2: DELEGATE ===
     const taskRes = await relay.app.request(`/agent/${worker.motebitId}/task`, {
@@ -273,11 +269,7 @@ describe("Dispute Cycle E2E", () => {
       }),
     });
 
-    await relay.app.request(`/api/v1/agents/${delegator.motebitId}/deposit`, {
-      method: "POST",
-      headers: jsonAuthWithIdempotency(),
-      body: JSON.stringify({ amount: 10.0, reference: "split-test" }),
-    });
+    seedBalance(relay, delegator.motebitId, 10.0);
 
     const taskRes = await relay.app.request(`/agent/${worker.motebitId}/task`, {
       method: "POST",

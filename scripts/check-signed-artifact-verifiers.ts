@@ -226,6 +226,11 @@ export const REGISTRY: Record<string, Classification> = {
   },
   // (migration family closed 2026-05-24 — moved to the verifier section above)
   SolvencyProof: { kind: "gap", note: "settlement-mode solvency proof; no verifier" },
+  AccountWithdrawalRecord: {
+    kind: "within",
+    verifier: "verifyWithdrawalReceipt",
+    note: "the market-v1 §2.9 wire record embeds relay_signature/relay_public_key over the WithdrawalReceiptPayload subset; a consumer reconstructs that payload from the record's fields (all present, incl. relay_id) and verifies with @motebit/crypto's verifyWithdrawalReceipt — the record is never passed standalone to the primitive.",
+  },
 
   // ── D: EXEMPT — a `signature` field that is not a cryptographic signature ─
   SovereignSendResult: {

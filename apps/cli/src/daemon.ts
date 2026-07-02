@@ -1,6 +1,7 @@
 // --- Daemon mode and MCP server mode ---
 
 import * as fs from "node:fs";
+import type { TokenAudience } from "@motebit/sdk";
 import * as path from "node:path";
 import {
   MotebitRuntime,
@@ -1642,7 +1643,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
           await new Promise((r) => setTimeout(r, 500));
 
           // Surface-provided token minter — the shared layer doesn't know about keys
-          const mintToken: MintToken = async (audience: string): Promise<string> => {
+          const mintToken: MintToken = async (audience: TokenAudience): Promise<string> => {
             if (servePrivateKey && fullConfigForServe.device_id) {
               return createSignedToken(
                 {

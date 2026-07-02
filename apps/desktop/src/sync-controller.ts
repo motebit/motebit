@@ -26,6 +26,7 @@
  */
 
 import type { MotebitRuntime } from "@motebit/runtime";
+import type { TokenAudience } from "@motebit/sdk";
 import {
   executeCommand,
   cmdSelfTest,
@@ -82,7 +83,7 @@ export interface SyncControllerDeps {
   getPlanStore: () => PlanStoreAdapter | TauriPlanStore | null;
   getLocalEventStore: () => EventStoreAdapter | null;
   getDeviceKeypair: (invoke: InvokeFn) => Promise<{ publicKey: string; privateKey: string } | null>;
-  createSyncToken: (privateKeyHex: string, aud?: string) => Promise<string>;
+  createSyncToken: (privateKeyHex: string, aud?: TokenAudience) => Promise<string>;
 }
 
 export class SyncController {
@@ -544,7 +545,8 @@ export class SyncController {
         // poll) — the relay enforces aud binding (auth-token-v1 §5). Minting a
         // task:submit token for the /task/:id poll would 403 (audience
         // mismatch) if this surface ever served at onboarding. Matches web.
-        mintToken: async (audience: string) => this.deps.createSyncToken(privateKeyHex, audience),
+        mintToken: async (audience: TokenAudience) =>
+          this.deps.createSyncToken(privateKeyHex, audience),
         // Serving is opt-in; at onboarding the agent is not a worker, so the
         // completion poll could only time out. `auth_verified` (the security
         // pass) terminates immediately and sets the done-flag below.

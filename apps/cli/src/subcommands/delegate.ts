@@ -16,6 +16,7 @@
  */
 
 import { openMotebitDatabase } from "@motebit/persistence";
+import type { TokenAudience } from "@motebit/sdk";
 import type { MotebitRuntime as MotebitRuntimeInstance } from "@motebit/runtime";
 import type { PlanStep, DelegatedStepResult, ExecutionReceipt } from "@motebit/sdk";
 import type { StepDelegationAdapter } from "@motebit/planner";
@@ -116,7 +117,7 @@ async function handleDelegatePlan(
 
   // Enable credential publishing to relay (sovereign trust → network trust bridge).
   // The relay is used for discovery; credentials published here feed the routing graph.
-  const authTokenFactory = async (aud = "task:submit"): Promise<string> => {
+  const authTokenFactory = async (aud: TokenAudience = "task:submit"): Promise<string> => {
     const h = await getRelayAuthHeaders(config, { aud, json: true });
     return (h["Authorization"] ?? "").replace("Bearer ", "");
   };
@@ -132,7 +133,7 @@ async function handleDelegatePlan(
   // Sovereign delegation: pay agents directly via Solana wallet (pattern 9.1)
   if (config.sovereign) {
     const sovereignAdapter = runtime.createSovereignDelegationAdapter(relayUrl, {
-      authToken: async (aud?: string) => {
+      authToken: async (aud?: TokenAudience) => {
         const h = await getRelayAuthHeaders(config, { aud: aud ?? "market:query", json: true });
         return (h["Authorization"] ?? "").replace("Bearer ", "");
       },

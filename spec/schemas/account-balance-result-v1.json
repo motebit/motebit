@@ -1,0 +1,229 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/account-balance-result-v1.json",
+  "title": "AccountBalanceResult (v1)",
+  "description": "Relay's response shape for GET /api/v1/agents/{motebitId}/balance — the market-v1 §2 virtual-account state in decimal USD, with the §2.7 transaction audit rows. See spec/market-v1.md §2.6.",
+  "type": "object",
+  "properties": {
+    "motebit_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Account owner's MotebitId."
+    },
+    "balance": {
+      "type": "number",
+      "description": "Available balance, decimal USD."
+    },
+    "currency": {
+      "type": "string",
+      "minLength": 1,
+      "description": "ISO 4217 or token symbol. Default \"USD\"."
+    },
+    "pending_withdrawals": {
+      "type": "number",
+      "description": "Decimal USD locked in not-yet-fired withdrawal requests."
+    },
+    "pending_allocations": {
+      "type": "number",
+      "description": "Decimal USD locked in active budget allocations (market-v1 §4)."
+    },
+    "dispute_window_hold": {
+      "type": "number",
+      "description": "Decimal USD held back by the dispute window (settlement-v1)."
+    },
+    "available_for_withdrawal": {
+      "type": "number",
+      "description": "Decimal USD the relay would actually release on requestWithdrawal now."
+    },
+    "sweep_threshold": {
+      "type": ["number", "null"],
+      "description": "Operator sweep threshold in decimal USD; null when unset."
+    },
+    "settlement_address": {
+      "type": ["string", "null"],
+      "description": "Agent's declared settlement address; null when undeclared."
+    },
+    "transactions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "transaction_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Unique transaction identifier."
+          },
+          "motebit_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Account owner's MotebitId."
+          },
+          "type": {
+            "type": "string",
+            "minLength": 1,
+            "description": "One of the market-v1 §2.2 transaction types (deposit, withdrawal, allocation_hold, allocation_release, settlement_debit, settlement_credit, fee, waiver). Readers MUST tolerate unknown values — the vocabulary evolves additively."
+          },
+          "amount": {
+            "type": "number",
+            "description": "Signed decimal USD. Credits positive, debits negative."
+          },
+          "balance_after": {
+            "type": "number",
+            "description": "Decimal USD balance after this transaction was applied."
+          },
+          "reference_id": {
+            "type": ["string", "null"],
+            "description": "External correlation id (deposit tx hash, allocation id, …); null when none."
+          },
+          "description": {
+            "type": ["string", "null"],
+            "description": "Human-readable annotation; null when none."
+          },
+          "created_at": {
+            "type": "number",
+            "description": "Epoch milliseconds."
+          }
+        },
+        "required": [
+          "transaction_id",
+          "motebit_id",
+          "type",
+          "amount",
+          "balance_after",
+          "reference_id",
+          "description",
+          "created_at"
+        ],
+        "additionalProperties": true
+      },
+      "description": "Most recent transactions, newest first; the reference relay caps at 50."
+    }
+  },
+  "required": [
+    "motebit_id",
+    "balance",
+    "currency",
+    "pending_withdrawals",
+    "pending_allocations",
+    "dispute_window_hold",
+    "available_for_withdrawal",
+    "sweep_threshold",
+    "settlement_address",
+    "transactions"
+  ],
+  "additionalProperties": true,
+  "definitions": {
+    "AccountBalanceResult": {
+      "type": "object",
+      "properties": {
+        "motebit_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Account owner's MotebitId."
+        },
+        "balance": {
+          "type": "number",
+          "description": "Available balance, decimal USD."
+        },
+        "currency": {
+          "type": "string",
+          "minLength": 1,
+          "description": "ISO 4217 or token symbol. Default \"USD\"."
+        },
+        "pending_withdrawals": {
+          "type": "number",
+          "description": "Decimal USD locked in not-yet-fired withdrawal requests."
+        },
+        "pending_allocations": {
+          "type": "number",
+          "description": "Decimal USD locked in active budget allocations (market-v1 §4)."
+        },
+        "dispute_window_hold": {
+          "type": "number",
+          "description": "Decimal USD held back by the dispute window (settlement-v1)."
+        },
+        "available_for_withdrawal": {
+          "type": "number",
+          "description": "Decimal USD the relay would actually release on requestWithdrawal now."
+        },
+        "sweep_threshold": {
+          "type": ["number", "null"],
+          "description": "Operator sweep threshold in decimal USD; null when unset."
+        },
+        "settlement_address": {
+          "type": ["string", "null"],
+          "description": "Agent's declared settlement address; null when undeclared."
+        },
+        "transactions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "transaction_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Unique transaction identifier."
+              },
+              "motebit_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Account owner's MotebitId."
+              },
+              "type": {
+                "type": "string",
+                "minLength": 1,
+                "description": "One of the market-v1 §2.2 transaction types (deposit, withdrawal, allocation_hold, allocation_release, settlement_debit, settlement_credit, fee, waiver). Readers MUST tolerate unknown values — the vocabulary evolves additively."
+              },
+              "amount": {
+                "type": "number",
+                "description": "Signed decimal USD. Credits positive, debits negative."
+              },
+              "balance_after": {
+                "type": "number",
+                "description": "Decimal USD balance after this transaction was applied."
+              },
+              "reference_id": {
+                "type": ["string", "null"],
+                "description": "External correlation id (deposit tx hash, allocation id, …); null when none."
+              },
+              "description": {
+                "type": ["string", "null"],
+                "description": "Human-readable annotation; null when none."
+              },
+              "created_at": {
+                "type": "number",
+                "description": "Epoch milliseconds."
+              }
+            },
+            "required": [
+              "transaction_id",
+              "motebit_id",
+              "type",
+              "amount",
+              "balance_after",
+              "reference_id",
+              "description",
+              "created_at"
+            ],
+            "additionalProperties": true
+          },
+          "description": "Most recent transactions, newest first; the reference relay caps at 50."
+        }
+      },
+      "required": [
+        "motebit_id",
+        "balance",
+        "currency",
+        "pending_withdrawals",
+        "pending_allocations",
+        "dispute_window_hold",
+        "available_for_withdrawal",
+        "sweep_threshold",
+        "settlement_address",
+        "transactions"
+      ],
+      "additionalProperties": true
+    }
+  }
+}

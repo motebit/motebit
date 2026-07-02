@@ -5,6 +5,7 @@
  */
 
 import type { Hono } from "hono";
+import type { TokenAudience } from "@motebit/protocol";
 import { HTTPException } from "hono/http-exception";
 import type { IdentityManager } from "@motebit/core-identity";
 
@@ -37,7 +38,7 @@ export interface PairingDeps {
     token: string,
     motebitId: string,
     identityManager: IdentityManager,
-    expectedAudience: string,
+    expectedAudience: TokenAudience,
     blacklistCheck?: (jti: string, motebitId: string) => boolean,
     agentRevokedCheck?: (motebitId: string) => boolean,
   ) => Promise<boolean>;

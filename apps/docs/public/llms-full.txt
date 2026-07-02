@@ -6186,7 +6186,7 @@ Source: https://docs.motebit.com/docs/operator/architecture
 
 Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **52 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 9 services · 32 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
+The shape is **53 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 9 services · 32 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
 <DiagramFigure
   src="protocol-stack"
@@ -6267,6 +6267,7 @@ motebit/
 │   ├── core-identity/         [L2]          UUID v7, multi-device, Ed25519 binding.
 │   ├── sync-engine/           [L2]          Multi-device sync. HTTP/WebSocket, conflict detection.
 │   ├── mcp-client/            [L2]          MCP stdio/HTTP client, credential sources, verifiers.
+│   ├── relay-client/          [L2]          Typed relay HTTP transport — wire-schema-validated bodies, audience-bound auth, one error shape.
 │   ├── identity-file/         [L2]          Generate/parse/verify motebit.md.
 │   │
 │   │   # Layer 3 — Lower composites
@@ -6346,7 +6347,7 @@ motebit/
     ├── check-suite-declared.ts              Every signed artifact declares a SuiteId.
     ├── check-suite-dispatch.ts              Primitive calls live only in suite-dispatch.ts.
     ├── check-dist-smoke.ts                  Every published bin executes --help in CI.
-    └── check-unused.ts                      External dependency hygiene (soft signal).
+    └── check-gates-effective.ts             Meta-gate: probes every gate into failure to prove it bites and emits a repair instruction.
 ```
 
 ## Layer rule
@@ -6417,16 +6418,16 @@ Nine services in four roles. All are reference implementations of the protocol s
 
 | Role          | Services                                                       | Pattern                                                                                                                                                            |
 | ------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Relay**     | `api`                                                          | The only function with a legitimate centralization premium — multi-device sync. Also: settlement, federation, discovery, 5-tier rate limiting, dispute resolution. |
+| **Relay**     | `relay`                                                        | The only function with a legitimate centralization premium — multi-device sync. Also: settlement, federation, discovery, 5-tier rate limiting, dispute resolution. |
 | **Molecules** | `research` ($0.25/report), `code-review` ($0.50/review)        | Agents that reason and compose other agents. Claude-powered. Emit signed delegation receipt chains as citation proof.                                              |
-| **Atoms**     | `web-search` ($0.05/request), `read-url`, `summarize`, `embed` | Stateless capability providers. Single-hop reference implementations of the delegation spec.                                                                       |
+| **Atoms**     | `web-search` ($0.05/request), `read-url`, `summarize`, `embed`, `browser-sandbox` | Capability providers. Single-hop reference implementations of the delegation spec; `browser-sandbox` is per-session rather than stateless.      |
 | **Glue**      | `proxy`                                                        | Vercel edge CORS proxy for the web app (Anthropic API, fetch, embed).                                                                                              |
 
 Every task settles through the relay or directly peer-to-peer. Relay-mediated: budget locked → execution → signed receipt → worker paid (5% fee). P2P: delegator sends USDC directly to the worker's wallet when trust is high enough — the same 5% fee rides along as a direct delegator→treasury leg in one atomic Solana transaction, so the relay records the audit but never custodies the funds.
 
 ## Specifications
 
-All twenty-nine specs (listed in the tree above) are Apache-2.0, published in `spec/`, and have working reference implementations in this repo. A third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required.
+All 32 specs (listed in the tree above) are Apache-2.0, published in `spec/`, and have working reference implementations in this repo. A third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required.
 
 The `motebit.md` identity file is the most-used entry point: any tool can verify one with `@motebit/crypto`, with or without the motebit runtime.
 

@@ -77,6 +77,7 @@ const LAYER: Record<string, number> = {
   "@motebit/core-identity": 2,
   "@motebit/sync-engine": 2,
   "@motebit/mcp-client": 2,
+  "@motebit/relay-client": 2,
   "@motebit/identity-file": 2,
   "@motebit/skills": 2,
 

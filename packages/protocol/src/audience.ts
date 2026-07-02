@@ -39,9 +39,18 @@
  *
  *   **Task routing**
  *     - `task:submit` — submitting a task to a peer via the relay
+ *     - `task:query` — polling a submitted task for its result
+ *     - `task:result` — a worker device posting a signed execution receipt
  *     - `admin:query` — admin-bound read paths (transparency, etc.)
  *     - `proposal` — collaborative proposal lifecycle
  *     - `receipts:read` — a motebit reading its OWN signed execution receipts
+ *
+ *   **Agent-registry reads (dynamic per-path middleware in `services/relay/src/agents.ts`)**
+ *     - `market:listing` — service-listing reads + the p2p-eligibility pre-flight
+ *     - `market:query` — market discovery / candidate queries (minted by
+ *       delegator clients today; relay-side audience enforcement pending)
+ *     - `credentials` — credential submit / verify / revoke paths
+ *     - `credentials:present` — verifiable-presentation submission
  *
  *   **Virtual accounts (the relay-mediated economic loop)**
  *     - `account:balance` — read balance
@@ -65,9 +74,15 @@ export type TokenAudience =
   | "rotate-key"
   | "push:register"
   | "task:submit"
+  | "task:query"
+  | "task:result"
   | "admin:query"
   | "proposal"
   | "receipts:read"
+  | "market:listing"
+  | "market:query"
+  | "credentials"
+  | "credentials:present"
   | "account:balance"
   | "account:deposit"
   | "account:withdraw"
@@ -102,6 +117,19 @@ export const PUSH_REGISTER_AUDIENCE: TokenAudience = "push:register";
 /** Submitting a task to a peer via the relay. */
 export const TASK_SUBMIT_AUDIENCE: TokenAudience = "task:submit";
 
+/**
+ * Polling a submitted task for its result
+ * (`GET /agent/{id}/task/{taskId}`). The submitter's token carries the
+ * submitter's own `mid` — the relay authorizes submitter-or-target.
+ */
+export const TASK_QUERY_AUDIENCE: TokenAudience = "task:query";
+
+/**
+ * A worker device posting its signed execution receipt
+ * (`POST /agent/{id}/task/{taskId}/result`).
+ */
+export const TASK_RESULT_AUDIENCE: TokenAudience = "task:result";
+
 /** Admin-bound read paths (transparency, etc.). */
 export const ADMIN_QUERY_AUDIENCE: TokenAudience = "admin:query";
 
@@ -111,10 +139,34 @@ export const PROPOSAL_AUDIENCE: TokenAudience = "proposal";
 /** A motebit reading its OWN signed execution receipts from the relay archive. */
 export const RECEIPTS_READ_AUDIENCE: TokenAudience = "receipts:read";
 
+/** Service-listing reads + the p2p-eligibility pre-flight (same delegator-minted token). */
+export const MARKET_LISTING_AUDIENCE: TokenAudience = "market:listing";
+
+/**
+ * Market discovery / candidate queries. Minted today by the planner's
+ * sovereign-delegation adapter and the CLI delegate flow; the market
+ * routes do not yet enforce an audience relay-side — registering the
+ * value closes the vocabulary, enforcement is a separate relay change.
+ */
+export const MARKET_QUERY_AUDIENCE: TokenAudience = "market:query";
+
+/** Credential submit / verify / revoke paths on the agent registry. */
+export const CREDENTIALS_AUDIENCE: TokenAudience = "credentials";
+
+/** Verifiable-presentation submission. */
+export const CREDENTIALS_PRESENT_AUDIENCE: TokenAudience = "credentials:present";
+
 /** Read virtual-account balance. */
 export const ACCOUNT_BALANCE_AUDIENCE: TokenAudience = "account:balance";
 
-/** Deposit endpoint (Stripe / x402 / Solana). */
+/**
+ * Reserved for a future FUNDED deposit-initiation endpoint. The former
+ * self-declared `POST /agents/:id/deposit` route (which credited spendable
+ * balance from a client-supplied amount) was removed as a treasury-drain
+ * vector — balance is credited only by verified server-side funding
+ * (onchain deposit-detector, Stripe webhook). This audience stays registered
+ * so a correct funded-deposit endpoint can adopt it without a wire change.
+ */
 export const ACCOUNT_DEPOSIT_AUDIENCE: TokenAudience = "account:deposit";
 
 /** Withdraw endpoint. */
@@ -167,9 +219,15 @@ export const ALL_TOKEN_AUDIENCES: readonly TokenAudience[] = Object.freeze([
   "rotate-key",
   "push:register",
   "task:submit",
+  "task:query",
+  "task:result",
   "admin:query",
   "proposal",
   "receipts:read",
+  "market:listing",
+  "market:query",
+  "credentials",
+  "credentials:present",
   "account:balance",
   "account:deposit",
   "account:withdraw",

@@ -10,6 +10,7 @@
 // at Layer 5 without promoting. See ./CLAUDE.md for rules.
 
 import { fromMicro } from "@motebit/protocol";
+import type { AccountBalanceResult, AccountBalanceTransaction } from "@motebit/protocol";
 
 // ── Response shapes (relay wire format) ───────────────────────────────
 
@@ -20,27 +21,15 @@ export interface CredentialEntry {
   issued_at: number;
 }
 
-export interface BalanceTransaction {
-  transaction_id: string;
-  type: string;
-  amount: number;
-  balance_after: number;
-  description: string | null;
-  created_at: number;
-}
+/**
+ * Wire truth lives in `@motebit/protocol` (`AccountBalanceTransaction`,
+ * market-v1 §2.7) — these aliases keep panels' historical names while
+ * killing the drifted local copy (its optionality had already diverged
+ * from the relay's actual always-present emission).
+ */
+export type BalanceTransaction = AccountBalanceTransaction;
 
-export interface BalanceResponse {
-  motebit_id: string;
-  balance: number;
-  currency: string;
-  transactions: BalanceTransaction[];
-  pending_withdrawals?: number;
-  pending_allocations?: number;
-  dispute_window_hold?: number;
-  available_for_withdrawal?: number;
-  sweep_threshold: number | null;
-  settlement_address: string | null;
-}
+export type BalanceResponse = AccountBalanceResult;
 
 export interface BudgetAllocation {
   allocation_id: string;

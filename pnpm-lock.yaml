@@ -217,6 +217,9 @@ importers:
       '@motebit/relay':
         specifier: workspace:*
         version: link:../../services/relay
+      '@motebit/relay-client':
+        specifier: workspace:*
+        version: link:../../packages/relay-client
       '@motebit/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
@@ -1753,6 +1756,34 @@ importers:
       '@motebit/state-vector':
         specifier: workspace:*
         version: link:../state-vector
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.8
+        version: 4.1.8(@types/node@22.19.11)(@vitest/coverage-v8@4.1.8)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@6.4.1(@types/node@22.19.11)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
+
+  packages/relay-client:
+    dependencies:
+      '@motebit/crypto':
+        specifier: workspace:*
+        version: link:../crypto
+      '@motebit/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@motebit/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      '@motebit/wire-schemas':
+        specifier: workspace:*
+        version: link:../wire-schemas
+      zod:
+        specifier: ^3.25.0
+        version: 3.25.76
     devDependencies:
       '@types/node':
         specifier: ^22.0.0

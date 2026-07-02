@@ -20,6 +20,79 @@ export const ACCOUNT_WITHDRAW_AUDIENCE: TokenAudience;
 export const ACCOUNT_WITHDRAWALS_AUDIENCE: TokenAudience;
 
 // @public
+export interface AccountBalanceResult {
+    available_for_withdrawal: number;
+    balance: number;
+    currency: string;
+    dispute_window_hold: number;
+    // (undocumented)
+    motebit_id: string;
+    pending_allocations: number;
+    pending_withdrawals: number;
+    settlement_address: string | null;
+    sweep_threshold: number | null;
+    transactions: AccountBalanceTransaction[];
+}
+
+// @public
+export interface AccountBalanceTransaction {
+    amount: number;
+    balance_after: number;
+    created_at: number;
+    // (undocumented)
+    description: string | null;
+    // (undocumented)
+    motebit_id: string;
+    // (undocumented)
+    reference_id: string | null;
+    // (undocumented)
+    transaction_id: string;
+    type: string;
+}
+
+// @public
+export interface AccountWithdrawalRecord {
+    amount: number;
+    // (undocumented)
+    completed_at: number | null;
+    // (undocumented)
+    currency: string;
+    destination: string;
+    // (undocumented)
+    failure_reason: string | null;
+    // (undocumented)
+    motebit_id: string;
+    payout_reference: string | null;
+    relay_id: string;
+    relay_public_key: string | null;
+    relay_signature: string | null;
+    // (undocumented)
+    requested_at: number;
+    status: string;
+    // (undocumented)
+    withdrawal_id: string;
+}
+
+// @public
+export type AccountWithdrawalStatus = "pending" | "processing" | "completed" | "failed" | "cancelled";
+
+// @public
+export interface AccountWithdrawRequest {
+    amount: number;
+    destination?: string;
+    idempotency_key?: string;
+}
+
+// @public
+export interface AccountWithdrawResult {
+    idempotent?: boolean;
+    // (undocumented)
+    motebit_id: string;
+    // (undocumented)
+    withdrawal: AccountWithdrawalRecord;
+}
+
+// @public
 export const ACCRUAL_KIND_MARKERS: Readonly<Record<AccrualKind, string>>;
 
 // @public
@@ -1128,6 +1201,12 @@ export interface CredentialChainAnchor {
     network: string;
     tx_hash: string;
 }
+
+// @public
+export const CREDENTIALS_AUDIENCE: TokenAudience;
+
+// @public
+export const CREDENTIALS_PRESENT_AUDIENCE: TokenAudience;
 
 // @public (undocumented)
 export interface CredentialStoreAdapter {
@@ -2342,6 +2421,12 @@ export type ListingId = Brand<string, "ListingId">;
 
 // @public
 export function mappedSemiring<T, U>(base: Semiring<T>, to: (t: T) => U, from: (u: U) => T): Semiring<U>;
+
+// @public
+export const MARKET_LISTING_AUDIENCE: TokenAudience;
+
+// @public
+export const MARKET_QUERY_AUDIENCE: TokenAudience;
 
 // @public (undocumented)
 export interface MarketConfig {
@@ -4017,6 +4102,12 @@ export interface SyncPlanStep {
 }
 
 // @public
+export const TASK_QUERY_AUDIENCE: TokenAudience;
+
+// @public
+export const TASK_RESULT_AUDIENCE: TokenAudience;
+
+// @public
 export const TASK_SUBMIT_AUDIENCE: TokenAudience;
 
 // @public
@@ -4026,7 +4117,7 @@ export type TaskShape = "quick" | "chat" | "reasoning" | "code" | "research" | "
 export function toCents(dollars: number): number;
 
 // @public
-export type TokenAudience = "sync" | "device:auth" | "pair" | "rotate-key" | "push:register" | "task:submit" | "admin:query" | "proposal" | "receipts:read" | "account:balance" | "account:deposit" | "account:withdraw" | "account:withdrawals" | "account:checkout" | "browser-sandbox-grant" | "browser-sandbox" | "runtime:attach";
+export type TokenAudience = "sync" | "device:auth" | "pair" | "rotate-key" | "push:register" | "task:submit" | "task:query" | "task:result" | "admin:query" | "proposal" | "receipts:read" | "market:listing" | "market:query" | "credentials" | "credentials:present" | "account:balance" | "account:deposit" | "account:withdraw" | "account:withdrawals" | "account:checkout" | "browser-sandbox-grant" | "browser-sandbox" | "runtime:attach";
 
 // @public
 export function toMicro(dollars: number): number;
@@ -4535,6 +4626,26 @@ export interface WithdrawableGuestRail extends GuestRail {
     readonly supportsWithdraw: true;
     withdraw(motebitId: string, amount: number, currency: string, destination: string, idempotencyKey: string): Promise<WithdrawalResult>;
     withdrawBatch?(items: readonly BatchWithdrawalItem[]): Promise<BatchWithdrawalResult>;
+}
+
+// @public
+export interface WithdrawalReceiptPayload {
+    // (undocumented)
+    amount: number;
+    // (undocumented)
+    completed_at: number;
+    // (undocumented)
+    currency: string;
+    // (undocumented)
+    destination: string;
+    // (undocumented)
+    motebit_id: string;
+    // (undocumented)
+    payout_reference: string;
+    // (undocumented)
+    relay_id: string;
+    // (undocumented)
+    withdrawal_id: string;
 }
 
 // @public

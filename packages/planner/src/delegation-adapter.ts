@@ -5,6 +5,7 @@ import type {
   CollaborativePlanProposal,
   ProposalResponse,
 } from "@motebit/sdk";
+import type { TokenAudience } from "@motebit/sdk";
 import type { StepDelegationAdapter } from "./plan-engine.js";
 
 export interface StepResult {
@@ -27,7 +28,7 @@ export interface RelayDelegationConfig {
    * Static auth token or an async factory that mints fresh tokens.
    * Use a factory for long-running daemons to avoid 5-minute expiry.
    */
-  authToken?: string | ((audience?: string) => Promise<string>);
+  authToken?: string | ((audience?: TokenAudience) => Promise<string>);
   sendRaw: (data: string) => void;
   onCustomMessage: (cb: (msg: { type: string; [key: string]: unknown }) => void) => () => void;
   /** Optional: returns agent's current exploration drive [0-1] from intelligence gradient, passed to relay for routing. */
@@ -48,7 +49,7 @@ export interface RelayDelegationConfig {
 export class RelayDelegationAdapter implements StepDelegationAdapter {
   constructor(private config: RelayDelegationConfig) {}
 
-  private async buildHeaders(audience?: string): Promise<Record<string, string>> {
+  private async buildHeaders(audience?: TokenAudience): Promise<Record<string, string>> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     const { authToken } = this.config;
     if (authToken != null && authToken !== "") {

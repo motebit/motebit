@@ -19,6 +19,8 @@ import {
   isScopeNarrowed,
   signBySuite,
   verifyBySuite,
+  ed25519Sign,
+  ed25519Verify,
   base58btcEncode,
 } from "./signing.js";
 
@@ -410,6 +412,7 @@ import type {
   SignableComputerSessionReceipt,
   ComputerSessionActionRecord,
   SettlementAsset,
+  WithdrawalReceiptPayload,
 } from "@motebit/protocol";
 
 /** The one suite ComputerSessionReceipts sign under today. */
@@ -3060,4 +3063,59 @@ export async function signCredentialBundle(
     privateKey,
   );
   return { ...withHash, signature: toBase64Url(sig) };
+}
+
+// ---------------------------------------------------------------------------
+// Withdrawal receipts
+// ---------------------------------------------------------------------------
+//
+// A completed withdrawal is a truth the relay asserts; per the relay's own
+// doctrine (services/relay/CLAUDE.md Rule 6) every such truth must be
+// independently verifiable without relay contact. The relay signs a fixed
+// `WithdrawalReceiptPayload` (the money-relevant facts) with its Ed25519
+// identity key and persists the signature + public key alongside the
+// withdrawal; an auditor reconstructs the canonical bytes and re-verifies.
+//
+// This pair uses raw Ed25519 over canonical JSON (no suite-dispatch, no
+// `suite` field) — the historical shape of the withdrawal receipt. Sign and
+// verify live together here so the committed field set changes in one place.
+
+/**
+ * Sign a completed-withdrawal receipt with the relay's Ed25519 private key.
+ * Returns the base64url-encoded signature. Moved here from
+ * `@motebit/virtual-accounts` (which re-exports it) so the sign/verify pair
+ * is co-located in the crypto kernel.
+ */
+export async function signWithdrawalReceipt(
+  payload: WithdrawalReceiptPayload,
+  privateKey: Uint8Array,
+): Promise<string> {
+  const canonical = canonicalJson(payload);
+  const message = new TextEncoder().encode(canonical);
+  const sig = await ed25519Sign(message, privateKey);
+  return toBase64Url(sig);
+}
+
+/**
+ * Verify a completed-withdrawal receipt: reconstruct the canonical bytes of
+ * `payload` and check `signatureB64Url` against the relay's `publicKey`.
+ * Returns `false` fail-closed on any decode or verification failure. The
+ * portable counterpart to `signWithdrawalReceipt` — a third party with the
+ * `WithdrawalReceiptPayload` fields (all present on the market-v1 §2.9 wire
+ * record, including `relay_id`), the `relay_signature`, and the
+ * `relay_public_key` can self-verify with `@motebit/crypto` alone.
+ */
+export async function verifyWithdrawalReceipt(
+  payload: WithdrawalReceiptPayload,
+  signatureB64Url: string,
+  publicKey: Uint8Array,
+): Promise<boolean> {
+  const canonical = canonicalJson(payload);
+  const message = new TextEncoder().encode(canonical);
+  try {
+    const sig = fromBase64Url(signatureB64Url);
+    return await ed25519Verify(sig, message, publicKey);
+  } catch {
+    return false;
+  }
 }
