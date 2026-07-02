@@ -499,6 +499,43 @@ export function extractNarrationTag(text: string): string | null {
 // → chrome` per `chrome-as-state-render.md` and
 // `goals-vs-tasks.md`).
 
+/**
+ * Producer for `AIResponse.reasoning` — the model's interior cognition
+ * (`<thinking>`), captured for the owner-facing `mind` embodiment organ
+ * (`render-engine` `EMBODIMENT_MODE_CONTRACTS.mind`: `source:"interior"`,
+ * `observer:"self"`, `consent:"always-permitted"`).
+ *
+ * Until now `<thinking>` was `stripTags`-ped out of the visible text and
+ * captured NOWHERE — the reasoning trace was destroyed before it could reach
+ * the one surface built to hold it. Stripping it from the mote-conversation
+ * register is correct-calm (interior cognition must not clutter the chat); but
+ * DESTROYING it starves the `mind` organ. This extractor is the missing
+ * producer: it captures what the strip discards, so the interior is legible to
+ * the OWNER without cluttering the conversation (`felt-interior.md` — "an
+ * interior the sovereign cannot feel is, to them, no interior").
+ *
+ * INTERIOR-ONLY. Unlike `task_step_narration` (a bounded chrome string) this is
+ * the full reasoning trace, and it is owner-facing by construction: it MUST NOT
+ * be synced, egressed, persisted to a shared surface, or sent to an external
+ * AI. The `mind` contract's `observer:"self"` is the boundary.
+ *
+ * Concatenates ALL `<thinking>` blocks in emission order (a turn may reason in
+ * several passes) — no length cap: the organ is interior, not the calm chrome
+ * strip. Returns `null` when the model emitted no reasoning (fail-closed: no
+ * interior cognition → no `reasoning` field → the organ renders empty), which
+ * keeps the field purely additive.
+ */
+export function extractReasoningTags(text: string): string | null {
+  const regex = /<thinking\s*>([\s\S]*?)<\/thinking\s*>/g;
+  const parts: string[] = [];
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const content = match[1]!.trim();
+    if (content !== "") parts.push(content);
+  }
+  return parts.length > 0 ? parts.join("\n\n") : null;
+}
+
 // Action keywords → MotebitState field deltas
 const ACTION_RULES: { pattern: RegExp; updates: Partial<MotebitState> }[] = [
   // Movement / proximity (allow words between verb and direction)

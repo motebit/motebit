@@ -34,6 +34,7 @@ import { buildSystemPromptCacheable } from "./prompt.js";
 import {
   extractMemoryTags,
   extractNarrationTag,
+  extractReasoningTags,
   extractStateTags,
   stripTags,
   fetchWithConnectionTimeout,
@@ -365,6 +366,10 @@ export class OpenAIProvider implements IntelligenceProvider {
     const memoryCandidates = extractMemoryTags(accumulated);
     const stateUpdates = extractStateTags(accumulated);
     const taskStepNarration = extractNarrationTag(accumulated);
+    // Capture interior reasoning BEFORE stripTags discards it. Interior-only —
+    // it never enters `displayText` (the chat register stays clean); it feeds
+    // the owner-facing `mind` organ. See `extractReasoningTags`.
+    const reasoning = extractReasoningTags(accumulated);
     const displayText = stripTags(accumulated);
 
     yield {
@@ -379,6 +384,7 @@ export class OpenAIProvider implements IntelligenceProvider {
           ? { usage: { input_tokens: inputTokens, output_tokens: outputTokens } }
           : {}),
         ...(taskStepNarration !== null ? { task_step_narration: taskStepNarration } : {}),
+        ...(reasoning !== null ? { reasoning } : {}),
       },
     };
   }
@@ -522,6 +528,9 @@ export class OpenAIProvider implements IntelligenceProvider {
     const memoryCandidates = extractMemoryTags(rawText);
     const stateUpdates = extractStateTags(rawText);
     const taskStepNarration = extractNarrationTag(rawText);
+    // Interior reasoning, captured before stripTags discards it (see the
+    // streaming path above + `extractReasoningTags`). Interior-only.
+    const reasoning = extractReasoningTags(rawText);
     const displayText = stripTags(rawText);
 
     const toolCalls: ToolCall[] = (choice?.message?.tool_calls ?? [])
@@ -539,6 +548,7 @@ export class OpenAIProvider implements IntelligenceProvider {
       state_updates: stateUpdates,
       ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
       ...(taskStepNarration !== null ? { task_step_narration: taskStepNarration } : {}),
+      ...(reasoning !== null ? { reasoning } : {}),
     };
 
     if (data.usage) {

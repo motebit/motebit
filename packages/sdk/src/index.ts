@@ -364,6 +364,25 @@ export interface AIResponse {
    * recedes to the empty register when absent.
    */
   task_step_narration?: string;
+  /**
+   * Interior reasoning — the model's own cognition trace (`<thinking>`),
+   * captured for the owner-facing `mind` embodiment organ (render-engine
+   * `EMBODIMENT_MODE_CONTRACTS.mind`: `source:"interior"`, `observer:"self"`,
+   * `consent:"always-permitted"`, `sensitivity:"all-tiers"`). Stripped from the
+   * visible `text` (interior cognition must not clutter the conversation), but
+   * — unlike before — no longer destroyed: the `mind` organ is the surface
+   * built to render it (`felt-interior.md`, maximum interiority made legible to
+   * the sovereign).
+   *
+   * INTERIOR-ONLY by contract: this is the full reasoning trace and it MUST NOT
+   * be synced, egressed, persisted to a shared surface, or sent to an external
+   * AI — the `mind` contract's `observer:"self"` is the boundary. Producer is
+   * `extractReasoningTags` in `@motebit/ai-core`.
+   *
+   * Optional. Absent when the model emitted no reasoning this turn (the organ
+   * renders empty).
+   */
+  reasoning?: string;
 }
 
 export interface IntelligenceProvider {
