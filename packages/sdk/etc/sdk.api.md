@@ -51,6 +51,7 @@ export interface AIResponse {
     confidence: number;
     // (undocumented)
     memory_candidates: MemoryCandidate[];
+    reasoning?: string;
     // (undocumented)
     state_updates: Partial<MotebitState>;
     task_step_narration?: string;
