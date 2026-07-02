@@ -1131,6 +1131,10 @@ export async function* runTurnStreaming(
       role: "assistant",
       content: aiResponse.text,
       tool_calls: aiResponse.tool_calls,
+      // Preserve extended-thinking blocks for the tool-use continuation request
+      // (Anthropic rejects the follow-up otherwise). Present only when extended
+      // thinking is enabled; undefined by default, so this is inert.
+      ...(aiResponse.thinking_blocks ? { thinking_blocks: aiResponse.thinking_blocks } : {}),
     };
     conversationHistory.push(assistantMsg);
 

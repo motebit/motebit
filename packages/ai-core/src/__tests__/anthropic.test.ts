@@ -7,7 +7,10 @@ import {
   actionsToStateUpdates,
   stripTags,
 } from "../index";
-import { __test_buildToolResultContentForAnthropic as toAnthropicContent } from "../core";
+import {
+  __test_buildToolResultContentForAnthropic as toAnthropicContent,
+  modelSupportsExtendedThinking,
+} from "../core";
 import type { AnthropicProviderConfig } from "../index";
 import { TrustMode, BatteryMode, SensitivityLevel } from "@motebit/sdk";
 import type { ContextPack, MotebitState } from "@motebit/sdk";
@@ -253,6 +256,30 @@ describe("actionsToStateUpdates", () => {
 // AnthropicProvider: Anthropic integration
 // ---------------------------------------------------------------------------
 
+describe("modelSupportsExtendedThinking", () => {
+  it("accepts Claude 3.7 Sonnet + Claude 4/5-family Sonnet/Opus", () => {
+    for (const m of [
+      "claude-3-7-sonnet-20250219",
+      "claude-sonnet-4-5-20250929",
+      "claude-sonnet-5",
+      "claude-opus-4-8",
+    ]) {
+      expect(modelSupportsExtendedThinking(m)).toBe(true);
+    }
+  });
+
+  it("rejects Haiku and pre-3.7 / non-Claude models (the 400 safety net)", () => {
+    for (const m of [
+      "claude-haiku-4-5-20251001",
+      "claude-3-5-sonnet-20241022",
+      "claude-3-opus-20240229",
+      "gpt-5.4-mini",
+    ]) {
+      expect(modelSupportsExtendedThinking(m)).toBe(false);
+    }
+  });
+});
+
 describe("AnthropicProvider Anthropic integration", () => {
   const config: AnthropicProviderConfig = {
     api_key: "test-api-key",
@@ -307,6 +334,106 @@ describe("AnthropicProvider Anthropic integration", () => {
     // ...and never leaks into the visible reply.
     expect(r.text).toBe("Here is the answer.");
     expect(r.text).not.toContain("weigh Y");
+  });
+
+  it("captures signature-bearing thinking blocks into response.thinking_blocks (round-trip)", async () => {
+    const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mockFn.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          id: "m",
+          type: "message",
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "deliberating", signature: "sig-abc" },
+            { type: "text", text: "Answer." },
+          ],
+          model: "claude-sonnet-4-5-20250929",
+          stop_reason: "end_turn",
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }),
+        { status: 200 },
+      ),
+    );
+    const r = await new AnthropicProvider(config).generate(makeContextPack());
+    expect(r.thinking_blocks).toEqual([{ thinking: "deliberating", signature: "sig-abc" }]);
+  });
+
+  describe("extended thinking request shaping", () => {
+    function bodyOf(): Record<string, unknown> {
+      const mock = getFetchMock();
+      const [, opts] = mock.mock.calls[0] as [string, RequestInit];
+      return JSON.parse(opts.body as string) as Record<string, unknown>;
+    }
+
+    it("is INERT by default — no thinking param, temperature preserved", async () => {
+      mockFetchSuccess("Hi");
+      await new AnthropicProvider(config).generate(makeContextPack());
+      const body = bodyOf();
+      expect(body.thinking).toBeUndefined();
+      expect(body.temperature).toBe(0.5);
+      expect(body.max_tokens).toBe(2048);
+    });
+
+    it("enables thinking, omits temperature, and bumps max_tokens above the budget when configured", async () => {
+      mockFetchSuccess("Hi");
+      await new AnthropicProvider({ ...config, extendedThinking: { budgetTokens: 4000 } }).generate(
+        makeContextPack(),
+      );
+      const body = bodyOf();
+      expect(body.thinking).toEqual({ type: "enabled", budget_tokens: 4000 });
+      expect(body.temperature).toBeUndefined();
+      expect(body.max_tokens as number).toBeGreaterThan(4000);
+    });
+
+    it("floors budget at 1024", async () => {
+      mockFetchSuccess("Hi");
+      await new AnthropicProvider({ ...config, extendedThinking: { budgetTokens: 10 } }).generate(
+        makeContextPack(),
+      );
+      expect((bodyOf().thinking as { budget_tokens: number }).budget_tokens).toBe(1024);
+    });
+
+    it("safety net: does NOT enable thinking on an unsupported model even when configured", async () => {
+      mockFetchSuccess("Hi");
+      await new AnthropicProvider({
+        ...config,
+        model: "claude-haiku-4-5-20251001",
+        extendedThinking: { budgetTokens: 2000 },
+      }).generate(makeContextPack());
+      expect(bodyOf().thinking).toBeUndefined();
+    });
+
+    it("preserves prior thinking blocks (signature first) in the assistant tool-use turn", async () => {
+      mockFetchSuccess("Hi");
+      await new AnthropicProvider({ ...config, extendedThinking: { budgetTokens: 2000 } }).generate(
+        makeContextPack({
+          user_message: "",
+          conversation_history: [
+            { role: "user", content: "do the thing" },
+            {
+              role: "assistant",
+              content: "on it",
+              tool_calls: [{ id: "t1", name: "run", args: {} }],
+              thinking_blocks: [{ thinking: "I should run the tool", signature: "sig-xyz" }],
+            },
+            { role: "tool", content: "ok", tool_call_id: "t1" },
+          ],
+        }),
+      );
+      const body = bodyOf();
+      const messages = body.messages as Array<{ role: string; content: unknown }>;
+      const assistant = messages.find((m) => m.role === "assistant")!;
+      const blocks = assistant.content as Array<{ type: string; signature?: string }>;
+      // Thinking block must be FIRST and carry its signature (Anthropic rejects
+      // a tool-use continuation otherwise).
+      expect(blocks[0]).toEqual({
+        type: "thinking",
+        thinking: "I should run the tool",
+        signature: "sig-xyz",
+      });
+      expect(blocks.some((b) => b.type === "tool_use")).toBe(true);
+    });
   });
 
   it("sends correct request body", async () => {
