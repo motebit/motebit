@@ -2,6 +2,8 @@
 
 import type { MotebitRuntime, ReflectionResult, RelayConfig } from "@motebit/runtime";
 import type { TokenAudience } from "@motebit/sdk";
+import { isTokenAudience } from "@motebit/sdk";
+import { RelayClient, RelayClientError } from "@motebit/relay-client";
 import { executeCommand } from "@motebit/runtime";
 import { narrateEconomicConsequences } from "@motebit/gradient";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
@@ -132,6 +134,33 @@ async function getRelayToken(
     );
   }
   return undefined;
+}
+
+/**
+ * Typed relay transport for the flows @motebit/relay-client covers
+ * (delegate submit/poll, balance). Auth bridges the CLI's existing
+ * master-token-or-device-key logic through the sdk `CredentialSource`
+ * contract: the client passes each method's registry audience as
+ * `scope`, and `getRelayToken` mints the audience-bound token — so the
+ * poll leg gets a `task:query` token instead of replaying the submit
+ * token (the relay rejects cross-audience replay), and submit carries
+ * the `Idempotency-Key` the relay requires. Remaining `relayFetch`
+ * sites migrate as the client grows methods (relay-client Inc 2+).
+ */
+function makeRelayClient(config: CliConfig, syncUrl: string, repl?: ReplContext): RelayClient {
+  return new RelayClient({
+    baseUrl: syncUrl,
+    auth: {
+      credentialSource: {
+        getCredential: async ({ scope }) =>
+          (await getRelayToken(
+            config,
+            repl,
+            scope != null && isTokenAudience(scope) ? scope : undefined,
+          )) ?? null,
+      },
+    },
+  });
 }
 
 /** Build relay request headers with auth. Optional content-type for POST/PUT. */
@@ -1625,33 +1654,30 @@ export async function handleSlashCommand(
         }
       }
 
-      const delegateHeaders = await makeRelayHeaders(config, repl, {
-        aud: "task:submit",
-        json: true,
-      });
+      // Typed relay transport: mints the correct audience per leg
+      // (task:submit for the POST, task:query for the poll — the relay
+      // rejects cross-audience replay) and carries the Idempotency-Key
+      // the relay requires on submission.
+      const relayClient = makeRelayClient(config, syncUrl!, repl);
 
       // Submit the task
       let taskId: string;
       try {
         console.log(`Delegating to ${targetMotebitId.slice(0, 12)}...`);
-        const submitResult = await relayFetch<{ task_id: string }>(
-          syncUrl!,
-          `/agent/${targetMotebitId}/task`,
-          {
-            method: "POST",
-            headers: delegateHeaders,
-            body: { prompt: delegatePrompt, submitted_by: repl.motebitId },
-          },
+        const submitResult = await relayClient.submitTask(
+          targetMotebitId,
+          { prompt: delegatePrompt, submitted_by: repl.motebitId },
+          { idempotencyKey: crypto.randomUUID() },
         );
-        if (!submitResult.ok) {
-          console.log(`Task submission failed (${submitResult.status}): ${submitResult.text}`);
-          break;
-        }
-        taskId = submitResult.data.task_id;
+        taskId = submitResult.task_id;
         console.log(`Task submitted: ${taskId.slice(0, 12)}...`);
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.log(`Task submission error: ${message}`);
+        if (err instanceof RelayClientError && err.kind === "http") {
+          console.log(`Task submission failed (${err.status}): ${err.body ?? ""}`);
+        } else {
+          const message = err instanceof Error ? err.message : String(err);
+          console.log(`Task submission error: ${message}`);
+        }
         break;
       }
 
@@ -1664,17 +1690,7 @@ export async function handleSlashCommand(
       for (let poll = 0; poll < MAX_POLLS; poll++) {
         await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
         try {
-          const pollResp = await fetch(`${syncUrl}/agent/${targetMotebitId}/task/${taskId}`, {
-            headers: delegateHeaders,
-          });
-          if (!pollResp.ok) {
-            // Task may not be ready yet — keep polling
-            continue;
-          }
-          const pollData = (await pollResp.json()) as {
-            task: { status: string };
-            receipt: ExecutionReceipt | null;
-          };
+          const pollData = await relayClient.getTask(targetMotebitId, taskId);
           if (pollData.receipt != null) {
             receipt = pollData.receipt;
             agentId = receipt.motebit_id;
@@ -1684,7 +1700,7 @@ export async function handleSlashCommand(
           if (poll === 0) process.stdout.write("Waiting");
           else process.stdout.write(".");
         } catch {
-          // Network hiccup — keep polling
+          // Not ready yet or network hiccup — keep polling
         }
       }
       if (receipt === null) {
@@ -2091,18 +2107,16 @@ export async function handleSlashCommand(
         break;
       }
       try {
-        const balHeaders = await makeRelayHeaders(config, repl);
-        const balResult = await relayFetch<{
-          balance: number;
-          currency: string;
-          transactions: Array<{ type: string; amount: number; created_at: string }>;
-        }>(balSyncUrl, `/api/v1/agents/${repl.motebitId}/balance`, { headers: balHeaders });
-        if (!balResult.ok) {
-          console.log(`Balance request failed (${balResult.status}): ${balResult.text}`);
-          break;
-        }
-        console.log(`\nBalance: $${balResult.data.balance.toFixed(2)} ${balResult.data.currency}`);
-        const recentTx = (balResult.data.transactions ?? []).slice(0, 5);
+        const balClient = makeRelayClient(config, balSyncUrl, repl);
+        const balData = await balClient.getBalance(repl.motebitId);
+        console.log(`\nBalance: $${balData.balance.toFixed(2)} ${balData.currency}`);
+        const recentTx = (
+          (balData.transactions ?? []) as Array<{
+            type: string;
+            amount: number;
+            created_at: string;
+          }>
+        ).slice(0, 5);
         if (recentTx.length > 0) {
           console.log("Recent:");
           for (const tx of recentTx) {

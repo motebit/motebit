@@ -217,6 +217,9 @@ importers:
       '@motebit/relay':
         specifier: workspace:*
         version: link:../../services/relay
+      '@motebit/relay-client':
+        specifier: workspace:*
+        version: link:../../packages/relay-client
       '@motebit/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime

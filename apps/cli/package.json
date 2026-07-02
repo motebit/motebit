@@ -99,6 +99,7 @@
     "@motebit/policy": "workspace:*",
     "@motebit/privacy-layer": "workspace:*",
     "@motebit/relay": "workspace:*",
+    "@motebit/relay-client": "workspace:*",
     "@motebit/runtime": "workspace:*",
     "@motebit/runtime-host": "workspace:*",
     "@motebit/sdk": "workspace:*",
