@@ -77,6 +77,12 @@ export {
   AGENT_RESOLUTION_RESULT_SCHEMA_ID,
   buildAgentResolutionResultJsonSchema,
 } from "./agent-resolution-result.js";
+export {
+  AccountBalanceResultSchema,
+  AccountBalanceTransactionSchema,
+  ACCOUNT_BALANCE_RESULT_SCHEMA_ID,
+  buildAccountBalanceResultJsonSchema,
+} from "./account-balance.js";
 export { AgentTaskSchema, AGENT_TASK_SCHEMA_ID, buildAgentTaskJsonSchema } from "./agent-task.js";
 export {
   SettlementRecordSchema,

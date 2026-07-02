@@ -3243,6 +3243,11 @@ export type {
 
 export type { RelayMetadata, RelayMetadataPeer, AgentResolutionResult } from "./discovery.js";
 
+// Virtual-account balance read — the market-v1 §2 account state projected
+// across the HTTP boundary (decimal USD; conversion happens only at the
+// producer). See spec/market-v1.md §2.6–§2.7.
+export type { AccountBalanceResult, AccountBalanceTransaction } from "./account-balance.js";
+
 // ── Migration (protocol-level) ────────────────────────────
 // Agent migration between relays with identity continuity and trust portability.
 // motebit/migration@1.0.

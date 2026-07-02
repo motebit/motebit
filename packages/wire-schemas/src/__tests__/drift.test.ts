@@ -27,6 +27,10 @@ import {
   buildAgentResolutionResultJsonSchema,
 } from "../agent-resolution-result.js";
 import {
+  buildAccountBalanceResultJsonSchema,
+  ACCOUNT_BALANCE_RESULT_SCHEMA_ID,
+} from "../account-balance.js";
+import {
   AGENT_SERVICE_LISTING_SCHEMA_ID,
   buildAgentServiceListingJsonSchema,
 } from "../agent-service-listing.js";
@@ -302,6 +306,12 @@ const CASES: SchemaCase[] = [
     filename: "agent-resolution-result-v1.json",
     expectedId: AGENT_RESOLUTION_RESULT_SCHEMA_ID,
     build: buildAgentResolutionResultJsonSchema,
+  },
+  {
+    name: "account-balance-result-v1",
+    filename: "account-balance-result-v1.json",
+    expectedId: ACCOUNT_BALANCE_RESULT_SCHEMA_ID,
+    build: buildAccountBalanceResultJsonSchema,
   },
   {
     name: "agent-task-v1",

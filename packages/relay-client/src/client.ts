@@ -33,7 +33,12 @@
  */
 
 import type { CredentialSource } from "@motebit/sdk";
-import type { AgentResolutionResult, AgentTask, ExecutionReceipt } from "@motebit/protocol";
+import type {
+  AccountBalanceResult,
+  AgentResolutionResult,
+  AgentTask,
+  ExecutionReceipt,
+} from "@motebit/protocol";
 import {
   type TokenAudience,
   ACCOUNT_BALANCE_AUDIENCE,
@@ -41,7 +46,7 @@ import {
   TASK_SUBMIT_AUDIENCE,
 } from "@motebit/protocol";
 import { createSignedToken } from "@motebit/crypto";
-import { AgentResolutionResultSchema } from "@motebit/wire-schemas";
+import { AccountBalanceResultSchema, AgentResolutionResultSchema } from "@motebit/wire-schemas";
 import { RelayClientError } from "./errors.js";
 
 /** Device signing identity for audience-bound token minting. */
@@ -109,25 +114,6 @@ function mintJti(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/**
- * Declared (unvalidated) shape of `GET /api/v1/agents/:id/balance`.
- * Amounts are decimal USD (the relay converts from micro-units at its
- * boundary via `fromMicro`). TODO(relay-client Inc 2): replace with the
- * wire-schemas contract once the account family is schema-bound.
- */
-export interface AccountBalance {
-  motebit_id: string;
-  balance: number;
-  currency: string;
-  pending_withdrawals: number;
-  pending_allocations: number;
-  dispute_window_hold: number;
-  available_for_withdrawal: number;
-  sweep_threshold: number | null;
-  settlement_address: string | null;
-  transactions: unknown[];
-}
-
 /** Declared shape of `POST /agent/:id/task` (submit). */
 export interface SubmitTaskRequest {
   prompt: string;
@@ -191,16 +177,26 @@ export class RelayClient {
   }
 
   /**
-   * `GET /api/v1/agents/:motebitId/balance`. Contract tier: DECLARED.
-   * Audience: `account:balance`.
+   * `GET /api/v1/agents/:motebitId/balance`. Contract tier: VALIDATED
+   * (`AccountBalanceResultSchema`, market-v1 §2.6). Audience:
+   * `account:balance`. All monetary fields are decimal USD — the relay
+   * converts from micro-units at its boundary; never convert again.
    */
-  async getBalance(motebitId: string): Promise<AccountBalance> {
+  async getBalance(motebitId: string): Promise<AccountBalanceResult> {
     const path = `/api/v1/agents/${encodeURIComponent(motebitId)}/balance`;
     const body = await this.requestJson("GET", path, {
       audience: ACCOUNT_BALANCE_AUDIENCE,
       retry: true,
     });
-    return body as AccountBalance;
+    const parsed = AccountBalanceResultSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new RelayClientError(
+        "schema",
+        path,
+        `balance response failed AccountBalanceResultSchema: ${parsed.error.message}`,
+      );
+    }
+    return parsed.data as AccountBalanceResult;
   }
 
   /**

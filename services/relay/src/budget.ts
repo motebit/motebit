@@ -6,6 +6,7 @@ import type { Context, Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { toCents, isWithdrawableRail } from "@motebit/protocol";
+import type { AccountBalanceResult } from "@motebit/protocol";
 import { bytesToHex, hash as sha256Hash } from "@motebit/encryption";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
@@ -283,7 +284,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         sweep_threshold: null,
         settlement_address: null,
         transactions: [],
-      });
+      } satisfies AccountBalanceResult);
     const detailed = getAccountBalanceDetailed(moteDb.db, motebitId);
     const transactions = getTransactions(moteDb.db, motebitId, 50).map((tx) => ({
       ...tx,
@@ -302,7 +303,10 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         detailed.sweep_threshold != null ? fromMicro(detailed.sweep_threshold) : null,
       settlement_address: detailed.settlement_address,
       transactions,
-    });
+      // `satisfies` binds the producer to the market-v1 §2.6 wire law at
+      // compile time — a field rename here breaks the build, not the
+      // clients. Runtime behavior unchanged (no strict parse on inbound).
+    } satisfies AccountBalanceResult);
   });
 
   // --- Withdraw ---

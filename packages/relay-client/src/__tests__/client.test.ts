@@ -24,6 +24,20 @@ const DISCOVER_OK = {
   ttl: 300,
 };
 
+/** A minimal valid AccountBalanceResult wire body (market-v1 §2.6). */
+const BALANCE_OK = {
+  motebit_id: "m",
+  balance: 0,
+  currency: "USD",
+  pending_withdrawals: 0,
+  pending_allocations: 0,
+  dispute_window_hold: 0,
+  available_for_withdrawal: 0,
+  sweep_threshold: null,
+  settlement_address: null,
+  transactions: [],
+};
+
 function makeClient(
   fetchImpl: typeof fetch,
   overrides: Partial<RelayClientConfig> = {},
@@ -74,7 +88,7 @@ describe("auth resolution", () => {
     const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
       const headers = (init?.headers ?? {}) as Record<string, string>;
       expect(headers["Authorization"]).toBe("Bearer cs-token");
-      return jsonResponse({ motebit_id: "m", balance: 0 });
+      return jsonResponse(BALANCE_OK);
     });
     const client = makeClient(fetchMock as unknown as typeof fetch, {
       auth: { credentialSource: { getCredential }, staticToken: "static-loses" },
@@ -92,7 +106,7 @@ describe("auth resolution", () => {
     const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
       const headers = (init?.headers ?? {}) as Record<string, string>;
       sentToken = headers["Authorization"]!.slice("Bearer ".length);
-      return jsonResponse({ motebit_id: "m", balance: 1 });
+      return jsonResponse({ ...BALANCE_OK, balance: 1 });
     });
     // Real clock — verifySignedToken enforces expiry against Date.now (ms),
     // so a pinned past epoch would mint an already-expired token.
@@ -125,7 +139,7 @@ describe("auth resolution", () => {
     const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
       const headers = (init?.headers ?? {}) as Record<string, string>;
       expect(headers["Authorization"]).toBe("Bearer master");
-      return jsonResponse({ motebit_id: "m", balance: 0 });
+      return jsonResponse(BALANCE_OK);
     });
     const client = makeClient(fetchMock as unknown as typeof fetch, {
       auth: { credentialSource: { getCredential: async () => null }, staticToken: "master" },
@@ -196,7 +210,7 @@ describe("auth resolution: hardening", () => {
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       const headers = (init?.headers ?? {}) as Record<string, string>;
       expect(headers["Authorization"]).toBe("Bearer fallback");
-      return jsonResponse({ motebit_id: "m", balance: 0 });
+      return jsonResponse(BALANCE_OK);
     });
     const client = makeClient(fetchMock as unknown as typeof fetch, {
       auth: {
@@ -218,7 +232,7 @@ describe("auth resolution: hardening", () => {
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       const headers = (init?.headers ?? {}) as Record<string, string>;
       tokens.push(headers["Authorization"]!.slice("Bearer ".length));
-      return jsonResponse({ motebit_id: "m", balance: 0 });
+      return jsonResponse(BALANCE_OK);
     });
     let nowMs = Date.now();
     const client = makeClient(fetchMock as unknown as typeof fetch, {
@@ -240,7 +254,7 @@ describe("auth resolution: hardening", () => {
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       const headers = (init?.headers ?? {}) as Record<string, string>;
       sentToken = headers["Authorization"]!.slice("Bearer ".length);
-      return jsonResponse({ motebit_id: "m", balance: 0 });
+      return jsonResponse(BALANCE_OK);
     });
     const realCrypto = globalThis.crypto;
     // Simulate a React Native / insecure-origin runtime: getRandomValues
@@ -276,7 +290,7 @@ describe("transport kernel: errors and retry", () => {
           text: () => Promise.reject(new Error("body torn down")),
         } as unknown as Response;
       }
-      return jsonResponse({ motebit_id: "m", balance: 7 });
+      return jsonResponse({ ...BALANCE_OK, balance: 7 });
     });
     const client = makeClient(fetchMock as unknown as typeof fetch, {
       auth: { staticToken: "t" },
@@ -311,7 +325,7 @@ describe("transport kernel: errors and retry", () => {
     const fetchMock = vi.fn(async () => {
       calls++;
       if (calls < 3) return new Response("boom", { status: 500 });
-      return jsonResponse({ motebit_id: "m", balance: 2 });
+      return jsonResponse({ ...BALANCE_OK, balance: 2 });
     });
     const client = makeClient(fetchMock as unknown as typeof fetch, {
       auth: { staticToken: "t" },
@@ -365,7 +379,7 @@ describe("transport kernel: errors and retry", () => {
     const fetchMock = vi.fn(async () => {
       calls++;
       if (calls === 1) throw new TypeError("fetch failed");
-      return jsonResponse({ motebit_id: "m", balance: 3 });
+      return jsonResponse({ ...BALANCE_OK, balance: 3 });
     });
     const client = makeClient(fetchMock as unknown as typeof fetch, {
       auth: { staticToken: "t" },

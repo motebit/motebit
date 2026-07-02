@@ -2110,13 +2110,7 @@ export async function handleSlashCommand(
         const balClient = makeRelayClient(config, balSyncUrl, repl);
         const balData = await balClient.getBalance(repl.motebitId);
         console.log(`\nBalance: $${balData.balance.toFixed(2)} ${balData.currency}`);
-        const recentTx = (
-          (balData.transactions ?? []) as Array<{
-            type: string;
-            amount: number;
-            created_at: string;
-          }>
-        ).slice(0, 5);
+        const recentTx = balData.transactions.slice(0, 5);
         if (recentTx.length > 0) {
           console.log("Recent:");
           for (const tx of recentTx) {

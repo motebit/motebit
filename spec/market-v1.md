@@ -43,15 +43,16 @@ Each agent has a virtual account on the relay, identified by `motebit_id`. Accou
 
 All balance changes are recorded as transactions. Each transaction records the balance after the operation, enabling full audit reconstruction.
 
-| Type                 | Direction | Description                                        |
-| -------------------- | --------- | -------------------------------------------------- |
-| `deposit`            | credit    | Funds deposited by agent or external payment.      |
-| `allocation_hold`    | debit     | Funds locked for a pending task.                   |
-| `allocation_release` | credit    | Surplus allocation returned after settlement.      |
-| `settlement_debit`   | debit     | Gross amount debited from delegator on settlement. |
-| `settlement_credit`  | credit    | Net amount credited to worker on settlement.       |
-| `withdrawal`         | debit     | Funds withdrawn to external address.               |
-| `fee`                | debit     | Platform fee extracted during settlement.          |
+| Type                 | Direction | Description                                                  |
+| -------------------- | --------- | ------------------------------------------------------------ |
+| `deposit`            | credit    | Funds deposited by agent or external payment.                |
+| `allocation_hold`    | debit     | Funds locked for a pending task.                             |
+| `allocation_release` | credit    | Surplus allocation returned after settlement.                |
+| `settlement_debit`   | debit     | Gross amount debited from delegator on settlement.           |
+| `settlement_credit`  | credit    | Net amount credited to worker on settlement.                 |
+| `withdrawal`         | debit     | Funds withdrawn to external address.                         |
+| `fee`                | debit     | Platform fee extracted during settlement.                    |
+| `waiver`             | credit    | Signed balance-waiver credit (see `BalanceWaiver` artifact). |
 
 ### 2.3 — Precision
 
@@ -70,6 +71,61 @@ SUM(all transaction amounts) = SUM(all account balances)
 ```
 
 A relay SHOULD run reconciliation checks periodically and MUST expose a reconciliation endpoint for auditors.
+
+### 2.6 — AccountBalanceResult
+
+#### Wire format (foundation law)
+
+Every implementation MUST emit and accept this exact JSON shape on the `GET /api/v1/agents/{motebitId}/balance` response boundary. Per §2.3, this is the one boundary where micro-units convert to decimal dollars: every monetary field below is decimal USD (JSON number), never micro-units, and only the producer converts. All fields are required — the reference relay emits the complete shape on both the account-exists and no-account-yet branches (the latter as zeros / nulls / empty array), so absence is never meaningful on this envelope.
+
+```json
+{
+  "motebit_id": "019530a1-7b2c-7000-8000-000000000042",
+  "balance": 12.5,
+  "currency": "USD",
+  "pending_withdrawals": 0,
+  "pending_allocations": 0.25,
+  "dispute_window_hold": 0.5,
+  "available_for_withdrawal": 11.75,
+  "sweep_threshold": null,
+  "settlement_address": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv",
+  "transactions": []
+}
+```
+
+| Field                      | Type           | Required | Description                                                                      |
+| -------------------------- | -------------- | -------- | -------------------------------------------------------------------------------- |
+| `motebit_id`               | string         | yes      | Account owner's `MotebitId`                                                      |
+| `balance`                  | number         | yes      | Available balance, decimal USD                                                   |
+| `currency`                 | string         | yes      | ISO 4217 or token symbol. Default `"USD"`                                        |
+| `pending_withdrawals`      | number         | yes      | Decimal USD locked in not-yet-fired withdrawal requests                          |
+| `pending_allocations`      | number         | yes      | Decimal USD locked in active budget allocations (§4)                             |
+| `dispute_window_hold`      | number         | yes      | Decimal USD held by the dispute window (settlement-v1)                           |
+| `available_for_withdrawal` | number         | yes      | Decimal USD the relay would release on `requestWithdrawal` now                   |
+| `sweep_threshold`          | number \| null | yes      | Operator sweep threshold in decimal USD; `null` when unset                       |
+| `settlement_address`       | string \| null | yes      | Agent's declared settlement address; `null` when undeclared                      |
+| `transactions`             | array          | yes      | Most recent `AccountBalanceTransaction` rows (§2.7), newest first; MAY be capped |
+
+The TypeScript type in `@motebit/protocol` (`AccountBalanceResult`) is the binding machine-readable form of this table.
+
+### 2.7 — AccountBalanceTransaction
+
+#### Wire format (foundation law)
+
+One §2.2 ledger transaction as it crosses the balance-read boundary — the audit record with `amount` / `balance_after` converted to decimal USD.
+
+| Field            | Type           | Required | Description                                                                                  |
+| ---------------- | -------------- | -------- | -------------------------------------------------------------------------------------------- |
+| `transaction_id` | string         | yes      | Unique transaction identifier                                                                |
+| `motebit_id`     | string         | yes      | Account owner's `MotebitId`                                                                  |
+| `type`           | string         | yes      | One of the §2.2 transaction types. Readers MUST tolerate unknown values (additive evolution) |
+| `amount`         | number         | yes      | Signed decimal USD; credits positive, debits negative                                        |
+| `balance_after`  | number         | yes      | Decimal USD balance after this transaction was applied                                       |
+| `reference_id`   | string \| null | yes      | External correlation id (deposit tx hash, allocation id, …); `null` when none                |
+| `description`    | string \| null | yes      | Human-readable annotation; `null` when none                                                  |
+| `created_at`     | number         | yes      | Epoch milliseconds                                                                           |
+
+The TypeScript type in `@motebit/protocol` (`AccountBalanceTransaction`) is the binding machine-readable form of this table.
 
 ---
 

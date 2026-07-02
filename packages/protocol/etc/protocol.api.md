@@ -20,6 +20,37 @@ export const ACCOUNT_WITHDRAW_AUDIENCE: TokenAudience;
 export const ACCOUNT_WITHDRAWALS_AUDIENCE: TokenAudience;
 
 // @public
+export interface AccountBalanceResult {
+    available_for_withdrawal: number;
+    balance: number;
+    currency: string;
+    dispute_window_hold: number;
+    // (undocumented)
+    motebit_id: string;
+    pending_allocations: number;
+    pending_withdrawals: number;
+    settlement_address: string | null;
+    sweep_threshold: number | null;
+    transactions: AccountBalanceTransaction[];
+}
+
+// @public
+export interface AccountBalanceTransaction {
+    amount: number;
+    balance_after: number;
+    created_at: number;
+    // (undocumented)
+    description: string | null;
+    // (undocumented)
+    motebit_id: string;
+    // (undocumented)
+    reference_id: string | null;
+    // (undocumented)
+    transaction_id: string;
+    type: string;
+}
+
+// @public
 export const ACCRUAL_KIND_MARKERS: Readonly<Record<AccrualKind, string>>;
 
 // @public

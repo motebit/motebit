@@ -3,7 +3,6 @@ export type {
   RelayClientConfig,
   RelayClientAuth,
   DeviceKeyAuth,
-  AccountBalance,
   SubmitTaskRequest,
   SubmitTaskResponse,
   TaskPollResponse,
