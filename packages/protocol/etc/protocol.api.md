@@ -51,6 +51,47 @@ export interface AccountBalanceTransaction {
 }
 
 // @public
+export interface AccountWithdrawalRecord {
+    amount: number;
+    // (undocumented)
+    completed_at: number | null;
+    // (undocumented)
+    currency: string;
+    destination: string;
+    // (undocumented)
+    failure_reason: string | null;
+    // (undocumented)
+    motebit_id: string;
+    payout_reference: string | null;
+    relay_public_key: string | null;
+    relay_signature: string | null;
+    // (undocumented)
+    requested_at: number;
+    status: string;
+    // (undocumented)
+    withdrawal_id: string;
+}
+
+// @public
+export type AccountWithdrawalStatus = "pending" | "processing" | "completed" | "failed" | "cancelled";
+
+// @public
+export interface AccountWithdrawRequest {
+    amount: number;
+    destination?: string;
+    idempotency_key?: string;
+}
+
+// @public
+export interface AccountWithdrawResult {
+    idempotent?: boolean;
+    // (undocumented)
+    motebit_id: string;
+    // (undocumented)
+    withdrawal: AccountWithdrawalRecord;
+}
+
+// @public
 export const ACCRUAL_KIND_MARKERS: Readonly<Record<AccrualKind, string>>;
 
 // @public

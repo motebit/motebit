@@ -127,6 +127,90 @@ One §2.2 ledger transaction as it crosses the balance-read boundary — the aud
 
 The TypeScript type in `@motebit/protocol` (`AccountBalanceTransaction`) is the binding machine-readable form of this table.
 
+### 2.8 — AccountWithdrawRequest
+
+`POST /api/v1/agents/{motebitId}/withdraw` is the money-out boundary of the virtual account. It debits the caller's balance and either auto-settles to a user-held wallet or parks as `pending` for operator resolution. Per the off-ramp doctrine, the relay is the native principal of its own on-chain transfer to the user's own address — its user-funds transmitter surface is structurally zero.
+
+#### Threat model & invariants (foundation law)
+
+Every conforming implementation MUST enforce all of the following. These are security-relevant, not conveniences:
+
+1. **Idempotency is mandatory.** The `Idempotency-Key` HTTP header is REQUIRED (missing ⇒ 400). A replay MUST return the original response with no re-debit. A request whose key matches a prior withdrawal returns that withdrawal with `idempotent: true`.
+2. **Positive amount.** `amount` MUST be a positive decimal-USD number. Non-positive ⇒ 400 with no state change.
+3. **Dispute-window hold.** The debit MUST respect the dispute-window hold (settlement-v1): funds from recent settlement credits are not withdrawable until the window elapses. Available balance below the requested amount ⇒ 402 with no state change.
+4. **Authorization.** The request MUST carry an `account:withdraw`-audience credential — the account owner's signed device token or the operator master token. A token minted for another audience MUST be rejected (cross-endpoint replay defense, auth-token-v1 §5).
+
+**Non-goal (explicit):** this request does NOT guarantee settlement completion. A `pending` or `processing` status is the fail-safe — the debit already holds the funds, so a settlement-rail failure strands the payout for admin resolution without double-spend risk. Settlement finality is observed via the response record's `status` and `payout_reference`, never assumed from a 200.
+
+#### Wire format (foundation law)
+
+```json
+{
+  "amount": 5.0,
+  "destination": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv",
+  "idempotency_key": "optional-body-level-key"
+}
+```
+
+| Field             | Type   | Required | Description                                                                                          |
+| ----------------- | ------ | -------- | ---------------------------------------------------------------------------------------------------- |
+| `amount`          | number | yes      | Positive decimal USD to withdraw                                                                     |
+| `destination`     | string | no       | Solana base58 (Path 0) or EVM 0x-hex (Path 1) payout address; omitted ⇒ manual/`pending`             |
+| `idempotency_key` | string | no       | Optional body-level key; when absent the required `Idempotency-Key` header is used (backward compat) |
+
+The TypeScript type in `@motebit/protocol` (`AccountWithdrawRequest`) is the binding machine-readable form of this table.
+
+### 2.9 — AccountWithdrawResult
+
+#### Wire format (foundation law)
+
+The response wraps the withdrawal lifecycle record. Amounts are decimal USD (§2.3 conversion at the producer).
+
+```json
+{
+  "motebit_id": "019530a1-7b2c-7000-8000-000000000042",
+  "withdrawal": {
+    "withdrawal_id": "019530a1-7b2c-7000-8000-0000000000w1",
+    "motebit_id": "019530a1-7b2c-7000-8000-000000000042",
+    "amount": 5.0,
+    "currency": "USD",
+    "destination": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv",
+    "status": "completed",
+    "payout_reference": "5Ub...solanaTxSig",
+    "requested_at": 1730000000000,
+    "completed_at": 1730000001000,
+    "failure_reason": null,
+    "relay_signature": "base64-ed25519-sig",
+    "relay_public_key": "a1b2...64hex"
+  }
+}
+```
+
+| Field        | Type    | Required | Description                                                         |
+| ------------ | ------- | -------- | ------------------------------------------------------------------- |
+| `motebit_id` | string  | yes      | Account owner's `MotebitId`                                         |
+| `withdrawal` | object  | yes      | The `AccountWithdrawalRecord` (fields below)                        |
+| `idempotent` | boolean | no       | Present and `true` when the idempotency key matched a prior request |
+
+`AccountWithdrawalRecord`:
+
+| Field              | Type           | Required | Description                                                                              |
+| ------------------ | -------------- | -------- | ---------------------------------------------------------------------------------------- |
+| `withdrawal_id`    | string         | yes      | Unique withdrawal identifier                                                             |
+| `motebit_id`       | string         | yes      | Account owner's `MotebitId`                                                              |
+| `amount`           | number         | yes      | Decimal USD                                                                              |
+| `currency`         | string         | yes      | ISO 4217 or token symbol                                                                 |
+| `destination`      | string         | yes      | Payout address, external ref, or `"pending"`                                             |
+| `status`           | string         | yes      | Lifecycle state: `pending` \| `processing` \| `completed` \| `failed` \| `cancelled`     |
+| `payout_reference` | string \| null | yes      | External payout id (tx hash, transfer id); `null` until settled                          |
+| `requested_at`     | number         | yes      | Epoch milliseconds of the request                                                        |
+| `completed_at`     | number \| null | yes      | Epoch milliseconds of settlement; `null` while unsettled                                 |
+| `failure_reason`   | string \| null | yes      | Populated when `status` is `failed`; else `null`                                         |
+| `relay_signature`  | string \| null | yes      | Ed25519 signature over the completed withdrawal for offline verify; `null` until settled |
+| `relay_public_key` | string \| null | yes      | Hex relay public key for independent verification; `null` until settled                  |
+
+The TypeScript types in `@motebit/protocol` (`AccountWithdrawResult`, `AccountWithdrawalRecord`) are the binding machine-readable form of these tables.
+
 ---
 
 ## 3. Service Listings

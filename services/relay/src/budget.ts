@@ -6,7 +6,7 @@ import type { Context, Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { toCents, isWithdrawableRail } from "@motebit/protocol";
-import type { AccountBalanceResult } from "@motebit/protocol";
+import type { AccountBalanceResult, AccountWithdrawResult } from "@motebit/protocol";
 import { bytesToHex, hash as sha256Hash } from "@motebit/encryption";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
@@ -380,7 +380,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         motebit_id: motebitId,
         withdrawal: toWithdrawalResponse(result.existing),
         idempotent: true,
-      };
+      } satisfies AccountWithdrawResult;
       completeIdempotency(
         moteDb.db,
         idempotencyKeyHeader,
@@ -586,7 +586,9 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
             }
           : result,
       ),
-    };
+      // `satisfies` binds the producer to the market-v1 §2.9 wire law at
+      // compile time; runtime behavior unchanged.
+    } satisfies AccountWithdrawResult;
     completeIdempotency(
       moteDb.db,
       idempotencyKeyHeader,

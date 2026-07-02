@@ -3248,6 +3248,16 @@ export type { RelayMetadata, RelayMetadataPeer, AgentResolutionResult } from "./
 // producer). See spec/market-v1.md §2.6–§2.7.
 export type { AccountBalanceResult, AccountBalanceTransaction } from "./account-balance.js";
 
+// Virtual-account withdrawal — the money-out request/response boundary
+// (decimal USD; auto-settle-or-pending, transmitter surface structurally
+// zero). See spec/market-v1.md §2.8–§2.9 + off-ramp-as-user-action.md.
+export type {
+  AccountWithdrawRequest,
+  AccountWithdrawResult,
+  AccountWithdrawalRecord,
+  AccountWithdrawalStatus,
+} from "./account-withdraw.js";
+
 // ── Migration (protocol-level) ────────────────────────────
 // Agent migration between relays with identity continuity and trust portability.
 // motebit/migration@1.0.

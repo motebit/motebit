@@ -148,6 +148,89 @@ describe("auth resolution", () => {
   });
 });
 
+describe("withdraw (validated tier, money-out)", () => {
+  const WITHDRAW_OK = {
+    motebit_id: "m",
+    withdrawal: {
+      withdrawal_id: "w-1",
+      motebit_id: "m",
+      amount: 5,
+      currency: "USD",
+      destination: "pending",
+      status: "pending",
+      payout_reference: null,
+      requested_at: 1_730_000_000_000,
+      completed_at: null,
+      failure_reason: null,
+      relay_signature: null,
+      relay_public_key: null,
+    },
+  };
+
+  it("POSTs with account:withdraw audience + Idempotency-Key and validates the result", async () => {
+    const keys = await generateKeypair();
+    let seenUrl = "";
+    let seenHeaders: Record<string, string> = {};
+    let seenBody = "";
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      seenUrl = url;
+      seenHeaders = (init?.headers ?? {}) as Record<string, string>;
+      seenBody = init?.body as string;
+      return jsonResponse(WITHDRAW_OK);
+    });
+    const client = makeClient(fetchMock as unknown as typeof fetch, {
+      auth: { deviceKey: { motebitId: "m", deviceId: "d", privateKey: keys.privateKey } },
+    });
+    const res = await client.withdraw(
+      "m",
+      { amount: 5, destination: "pending" },
+      { idempotencyKey: "wd-idem-1" },
+    );
+    expect(res.withdrawal.withdrawal_id).toBe("w-1");
+    expect(seenUrl).toBe(`${BASE}/api/v1/agents/m/withdraw`);
+    expect(seenHeaders["Idempotency-Key"]).toBe("wd-idem-1");
+    expect(JSON.parse(seenBody)).toEqual({ amount: 5, destination: "pending" });
+    const payload = await verifySignedToken(
+      seenHeaders["Authorization"]!.slice("Bearer ".length),
+      keys.publicKey,
+    );
+    expect(payload!.aud).toBe("account:withdraw");
+  });
+
+  it("maps insufficient balance to kind=http status=402", async () => {
+    const fetchMock = vi.fn(async () => new Response("Insufficient balance", { status: 402 }));
+    const client = makeClient(fetchMock as unknown as typeof fetch, {
+      auth: { staticToken: "t" },
+    });
+    const err = (await client
+      .withdraw("m", { amount: 999 }, { idempotencyKey: "k" })
+      .catch((e: unknown) => e)) as RelayClientError;
+    expect(err.kind).toBe("http");
+    expect(err.status).toBe(402);
+  });
+
+  it("does not retry the money-out POST on 500", async () => {
+    const fetchMock = vi.fn(async () => new Response("boom", { status: 500 }));
+    const client = makeClient(fetchMock as unknown as typeof fetch, {
+      auth: { staticToken: "t" },
+      maxRetries: 5,
+    });
+    await client.withdraw("m", { amount: 1 }, { idempotencyKey: "k" }).catch(() => undefined);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws kind=schema when the result is missing the withdrawal record", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ motebit_id: "m" }));
+    const client = makeClient(fetchMock as unknown as typeof fetch, {
+      auth: { staticToken: "t" },
+    });
+    const err = (await client
+      .withdraw("m", { amount: 1 }, { idempotencyKey: "k" })
+      .catch((e: unknown) => e)) as RelayClientError;
+    expect(err.kind).toBe("schema");
+  });
+});
+
 describe("task endpoints", () => {
   it("submitTask POSTs the body with Idempotency-Key and task:submit audience", async () => {
     const keys = await generateKeypair();

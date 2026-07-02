@@ -42,11 +42,17 @@ import type {
 import {
   type TokenAudience,
   ACCOUNT_BALANCE_AUDIENCE,
+  ACCOUNT_WITHDRAW_AUDIENCE,
   TASK_QUERY_AUDIENCE,
   TASK_SUBMIT_AUDIENCE,
 } from "@motebit/protocol";
+import type { AccountWithdrawRequest, AccountWithdrawResult } from "@motebit/protocol";
 import { createSignedToken } from "@motebit/crypto";
-import { AccountBalanceResultSchema, AgentResolutionResultSchema } from "@motebit/wire-schemas";
+import {
+  AccountBalanceResultSchema,
+  AccountWithdrawResultSchema,
+  AgentResolutionResultSchema,
+} from "@motebit/wire-schemas";
 import { RelayClientError } from "./errors.js";
 
 /** Device signing identity for audience-bound token minting. */
@@ -232,6 +238,40 @@ export class RelayClient {
       retry: true,
     });
     return body as TaskPollResponse;
+  }
+
+  /**
+   * `POST /api/v1/agents/:motebitId/withdraw` — the money-out debit.
+   * Contract tier: VALIDATED (`AccountWithdrawResultSchema`, market-v1
+   * §2.9). Audience: `account:withdraw`. The relay REQUIRES an
+   * `Idempotency-Key` header and re-debits nothing on replay, so the
+   * caller supplies a stable key per logical withdrawal. Not retried:
+   * a money-mutating POST must not auto-repeat on a transient failure
+   * (the caller re-issues with the same idempotency key if it chooses).
+   * Insufficient available balance surfaces as `RelayClientError` with
+   * `kind: "http"`, `status: 402`.
+   */
+  async withdraw(
+    motebitId: string,
+    request: AccountWithdrawRequest,
+    options: { idempotencyKey: string },
+  ): Promise<AccountWithdrawResult> {
+    const path = `/api/v1/agents/${encodeURIComponent(motebitId)}/withdraw`;
+    const body = await this.requestJson("POST", path, {
+      audience: ACCOUNT_WITHDRAW_AUDIENCE,
+      retry: false,
+      jsonBody: request,
+      headers: { "Idempotency-Key": options.idempotencyKey },
+    });
+    const parsed = AccountWithdrawResultSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new RelayClientError(
+        "schema",
+        path,
+        `withdraw response failed AccountWithdrawResultSchema: ${parsed.error.message}`,
+      );
+    }
+    return parsed.data as AccountWithdrawResult;
   }
 
   // ── Transport kernel ─────────────────────────────────────────────────

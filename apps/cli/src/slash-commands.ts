@@ -2151,29 +2151,29 @@ export async function handleSlashCommand(
       }
       const wdDest = wdParts[1] ?? undefined;
       try {
-        const wdHeaders = await makeRelayHeaders(config, repl, { json: true });
-        const wdBody: Record<string, unknown> = { amount: wdAmount };
-        if (wdDest) wdBody["destination"] = wdDest;
-        const wdResult = await relayFetch<{ withdrawal_id?: string }>(
-          wdSyncUrl,
-          `/api/v1/agents/${repl.motebitId}/withdraw`,
-          { method: "POST", headers: wdHeaders, body: wdBody },
+        const wdClient = makeRelayClient(config, wdSyncUrl, repl);
+        const wdResult = await wdClient.withdraw(
+          repl.motebitId,
+          { amount: wdAmount, ...(wdDest ? { destination: wdDest } : {}) },
+          { idempotencyKey: crypto.randomUUID() },
         );
-        if (!wdResult.ok) {
-          console.log(
-            wdResult.status === 402
-              ? "Insufficient balance."
-              : `Withdrawal failed (${wdResult.status}): ${wdResult.text}`,
-          );
-          break;
-        }
-        console.log(`Withdrawal of $${wdAmount.toFixed(2)} submitted.`);
-        if (wdResult.data.withdrawal_id != null && wdResult.data.withdrawal_id !== "") {
-          console.log(`  ID: ${wdResult.data.withdrawal_id}`);
+        const w = wdResult.withdrawal;
+        console.log(`Withdrawal of $${wdAmount.toFixed(2)} ${w.status}.`);
+        console.log(`  ID: ${w.withdrawal_id.slice(0, 12)}...`);
+        if (w.payout_reference != null && w.payout_reference !== "") {
+          console.log(`  Payout: ${w.payout_reference}`);
         }
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.log(`Withdrawal error: ${message}`);
+        if (err instanceof RelayClientError && err.kind === "http") {
+          console.log(
+            err.status === 402
+              ? "Insufficient balance."
+              : `Withdrawal failed (${err.status}): ${err.body ?? ""}`,
+          );
+        } else {
+          const message = err instanceof Error ? err.message : String(err);
+          console.log(`Withdrawal error: ${message}`);
+        }
       }
       break;
     }

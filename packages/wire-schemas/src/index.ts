@@ -83,6 +83,15 @@ export {
   ACCOUNT_BALANCE_RESULT_SCHEMA_ID,
   buildAccountBalanceResultJsonSchema,
 } from "./account-balance.js";
+export {
+  AccountWithdrawRequestSchema,
+  AccountWithdrawalRecordSchema,
+  AccountWithdrawResultSchema,
+  ACCOUNT_WITHDRAW_REQUEST_SCHEMA_ID,
+  ACCOUNT_WITHDRAW_RESULT_SCHEMA_ID,
+  buildAccountWithdrawRequestJsonSchema,
+  buildAccountWithdrawResultJsonSchema,
+} from "./account-withdraw.js";
 export { AgentTaskSchema, AGENT_TASK_SCHEMA_ID, buildAgentTaskJsonSchema } from "./agent-task.js";
 export {
   SettlementRecordSchema,
