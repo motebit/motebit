@@ -30,6 +30,7 @@
     "demo-anchor": "npx tsx scripts/demo-anchor.ts",
     "demo-migration": "npx tsx scripts/demo-migration.ts",
     "migrate-live": "npx tsx scripts/migrate-live.ts",
+    "validate-extended-thinking": "npx tsx scripts/validate-extended-thinking-live.ts",
     "typecheck": "turbo run typecheck",
     "lint": "turbo run lint",
     "lint:fix": "turbo run lint -- --fix",
