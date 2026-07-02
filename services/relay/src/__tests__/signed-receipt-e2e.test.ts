@@ -39,6 +39,7 @@ import {
   createTestRelay,
   createAgent,
   buildP2pPaymentProof,
+  seedBalance,
 } from "./test-helpers.js";
 import type { SyncRelay } from "../index.js";
 
@@ -77,15 +78,7 @@ async function registerWorker(
 }
 
 async function deposit(relay: SyncRelay, motebitId: string, amount: number): Promise<void> {
-  await relay.app.request(`/api/v1/agents/${motebitId}/deposit`, {
-    method: "POST",
-    headers: jsonAuthWithIdempotency(),
-    body: JSON.stringify({
-      amount,
-      reference: `deposit-${crypto.randomUUID()}`,
-      description: "test",
-    }),
-  });
+  seedBalance(relay, motebitId, amount);
 }
 
 async function openTask(

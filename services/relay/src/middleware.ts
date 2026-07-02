@@ -14,7 +14,6 @@ import {
   type TokenAudience,
   TASK_SUBMIT_AUDIENCE,
   BROWSER_SANDBOX_GRANT_AUDIENCE,
-  ACCOUNT_DEPOSIT_AUDIENCE,
   ACCOUNT_BALANCE_AUDIENCE,
   ACCOUNT_WITHDRAW_AUDIENCE,
   ACCOUNT_WITHDRAWALS_AUDIENCE,
@@ -297,8 +296,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   app.use("/api/v1/agents/:motebitId/graph", rl(readLimiter));
   app.use("/api/v1/agents/:motebitId/routing-explanation", rl(readLimiter));
 
-  // Virtual account endpoints (write: deposit/withdraw, read: balance/withdrawals)
-  app.use("/api/v1/agents/:motebitId/deposit", rl(writeLimiter));
+  // Virtual account endpoints (write: withdraw, read: balance/withdrawals)
   app.use("/api/v1/agents/:motebitId/withdraw", rl(writeLimiter));
   app.use("/api/v1/agents/:motebitId/balance", rl(readLimiter));
   app.use("/api/v1/agents/:motebitId/solvency-proof", rl(readLimiter));
@@ -707,11 +705,10 @@ export function registerAuthMiddleware(deps: MiddlewareDeps): void {
   app.use("/agent/*/ledger/*", bearerAuth({ token: apiToken }));
   app.use("/agent/*/settlements", bearerAuth({ token: apiToken }));
 
-  // Auth middleware for virtual account routes — master token or signed device token
-  app.use("/api/v1/agents/*/deposit", async (c, next) => {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
-    return dualAuth(c, next, ACCOUNT_DEPOSIT_AUDIENCE);
-  });
+  // Auth middleware for virtual account routes — master token or signed device token.
+  // (The self-declared `/deposit` route was removed — treasury-drain vector; balance
+  // is credited only by verified server-side funding. `ACCOUNT_DEPOSIT_AUDIENCE`
+  // remains reserved in the registry for a future funded deposit-initiation endpoint.)
   app.use("/api/v1/agents/*/balance", async (c, next) => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
     return dualAuth(c, next, ACCOUNT_BALANCE_AUDIENCE);

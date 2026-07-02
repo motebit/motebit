@@ -61,6 +61,7 @@ import {
   AUTH_HEADER as AUTH,
   jsonAuthWithIdempotency,
   buildP2pPaymentProof,
+  seedBalance,
 } from "./test-helpers.js";
 import type { SyncRelay } from "../index.js";
 
@@ -112,15 +113,7 @@ describe("Permissive-floor-only client — open-protocol proof", () => {
         pay_to_address: "0x1234567890abcdef1234567890abcdef12345678",
       }),
     });
-    await relay.app.request(`/api/v1/agents/${delegator.motebitId}/deposit`, {
-      method: "POST",
-      headers: jsonAuthWithIdempotency(),
-      body: JSON.stringify({
-        amount: 10.0,
-        reference: `deposit-${crypto.randomUUID()}`,
-        description: "test",
-      }),
-    });
+    seedBalance(relay, delegator.motebitId, 10.0);
 
     // ── Client step 2: submit a task ───────────────────────────────
     // The client POSTs a delegation request. Wire format is documented in

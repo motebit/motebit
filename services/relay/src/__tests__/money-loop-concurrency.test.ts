@@ -23,6 +23,7 @@ import {
   jsonAuthWithIdempotency,
   createTestRelay,
   createAgent,
+  seedBalance,
 } from "./test-helpers.js";
 
 async function registerWorker(relay: SyncRelay, motebitId: string): Promise<void> {
@@ -49,13 +50,7 @@ async function registerWorker(relay: SyncRelay, motebitId: string): Promise<void
 }
 
 async function deposit(relay: SyncRelay, motebitId: string, amount: number): Promise<number> {
-  const res = await relay.app.request(`/api/v1/agents/${motebitId}/deposit`, {
-    method: "POST",
-    headers: jsonAuthWithIdempotency(),
-    body: JSON.stringify({ amount, reference: `deposit-${crypto.randomUUID()}` }),
-  });
-  const body = (await res.json()) as { balance: number };
-  return body.balance;
+  return seedBalance(relay, motebitId, amount);
 }
 
 async function getBalance(relay: SyncRelay, motebitId: string): Promise<number> {
@@ -105,42 +100,12 @@ describe("Money Loop Concurrency", () => {
     await relay.close();
   });
 
-  it("10 concurrent deposits to same agent — final balance is exactly $10", async () => {
-    const agentKp = await generateKeypair();
-    const agent = await createAgent(relay, bytesToHex(agentKp.publicKey));
-
-    // Fire 10 deposits of $1 each simultaneously
-    const results = await Promise.all(
-      Array.from({ length: 10 }, async (_, i) =>
-        relay.app.request(`/api/v1/agents/${agent.motebitId}/deposit`, {
-          method: "POST",
-          headers: jsonAuthWithIdempotency(),
-          body: JSON.stringify({ amount: 1.0, reference: `concurrent-deposit-${i}` }),
-        }),
-      ),
-    );
-
-    // All should succeed
-    for (const res of results) {
-      expect(res.status).toBe(200);
-    }
-
-    // Final balance should be exactly $10
-    const balance = await getBalance(relay, agent.motebitId);
-    expect(balance).toBeCloseTo(10.0, 2);
-
-    // Exactly 10 deposit transactions
-    const txnCount = relay.moteDb.db
-      .prepare(
-        "SELECT COUNT(*) as count FROM relay_transactions WHERE motebit_id = ? AND type = 'deposit'",
-      )
-      .get(agent.motebitId) as { count: number };
-    expect(txnCount.count).toBe(10);
-
-    const reconciliation = reconcileLedger(relay.moteDb.db);
-    expect(reconciliation.consistent).toBe(true);
-    expect(reconciliation.errors).toHaveLength(0);
-  });
+  // NOTE: the "10 concurrent deposits" test was removed with the self-declared
+  // `POST /deposit` route (treasury-drain vector). Concurrent credit atomicity is
+  // a store-level concern covered in virtual-accounts; concurrent-spend safety
+  // (the money-relevant invariant) is covered by the task-submission and
+  // settlement-credit concurrency tests below, plus the concurrent-withdrawal
+  // double-spend test that replaced the deposit/withdraw race.
 
   it("10 concurrent task submissions from same delegator — no overdraft", async () => {
     const workerKp = await generateKeypair();
@@ -192,48 +157,35 @@ describe("Money Loop Concurrency", () => {
     expect(reconciliation.errors).toHaveLength(0);
   });
 
-  it("concurrent withdraw + deposit race — balance never negative", async () => {
+  it("concurrent withdrawals exceeding balance — no double-spend, never negative", async () => {
     const agentKp = await generateKeypair();
     const agent = await createAgent(relay, bytesToHex(agentKp.publicKey));
-    await deposit(relay, agent.motebitId, 50.0);
+    seedBalance(relay, agent.motebitId, 50.0);
 
-    // Simultaneously: deposit $30 and withdraw $50
-    const [depositRes, withdrawRes] = await Promise.all([
-      relay.app.request(`/api/v1/agents/${agent.motebitId}/deposit`, {
+    // Fire two withdrawals ($50 + $30 = $80) against a $50 balance
+    // simultaneously — the atomic debit must let at most a funded subset
+    // through; the pair can never both settle (that would over-draw the
+    // treasury), and balance must never go negative.
+    const [wd50, wd30] = await Promise.all([
+      relay.app.request(`/api/v1/agents/${agent.motebitId}/withdraw`, {
         method: "POST",
         headers: jsonAuthWithIdempotency(),
-        body: JSON.stringify({ amount: 30.0, reference: "race-deposit" }),
+        body: JSON.stringify({ amount: 50.0, destination: "0xWalletA", idempotency_key: "wd-50" }),
       }),
       relay.app.request(`/api/v1/agents/${agent.motebitId}/withdraw`, {
         method: "POST",
         headers: jsonAuthWithIdempotency(),
-        body: JSON.stringify({
-          amount: 50.0,
-          destination: "0xMyWallet",
-          idempotency_key: "race-withdraw",
-        }),
+        body: JSON.stringify({ amount: 30.0, destination: "0xWalletB", idempotency_key: "wd-30" }),
       }),
     ]);
 
-    expect(depositRes.status).toBe(200);
+    const succeededMicro = (wd50.status === 200 ? 50 : 0) + (wd30.status === 200 ? 30 : 0);
+    // At most $50 can have been withdrawn — both succeeding ($80) would be a
+    // double-spend against the treasury.
+    expect(succeededMicro).toBeLessThanOrEqual(50);
 
     const balance = await getBalance(relay, agent.motebitId);
-
-    if (withdrawRes.status === 200) {
-      // Withdraw succeeded: either deposit ran first (50+30=80, then -50=30)
-      // or withdraw ran first (50-50=0, then +30=30)
-      // Either way, final balance should be 30
-      expect(balance).toBeCloseTo(30.0, 2);
-    } else if (withdrawRes.status === 402) {
-      // Withdraw failed due to insufficient balance (shouldn't happen with $50 available)
-      // but if it did, balance = 50 + 30 = 80
-      expect(balance).toBeCloseTo(80.0, 2);
-    } else {
-      // Unexpected status
-      expect.unreachable(`Unexpected withdraw status: ${withdrawRes.status}`);
-    }
-
-    // Balance is never negative
+    expect(balance).toBeCloseTo(50 - succeededMicro, 2);
     expect(balance).toBeGreaterThanOrEqual(-0.001);
 
     const reconciliation = reconcileLedger(relay.moteDb.db);
@@ -322,25 +274,18 @@ describe("Money Loop Concurrency", () => {
     expect(reconciliation.errors).toHaveLength(0);
   });
 
-  it("rapid deposit-withdraw-deposit cycle — final balance consistent, never negative", async () => {
+  it("many concurrent withdrawals against seeded balance — consistent, never negative", async () => {
     const agentKp = await generateKeypair();
     const agent = await createAgent(relay, bytesToHex(agentKp.publicKey));
 
-    // Seed with initial balance so withdrawals have something to take
-    await deposit(relay, agent.motebitId, 100.0);
+    // Seed once, then fire 20 concurrent $5 withdrawals against $50 — only 10
+    // can be funded. The atomic debit must never over-draw or go negative,
+    // regardless of interleaving.
+    seedBalance(relay, agent.motebitId, 50.0);
 
-    // 20 operations: alternating deposit $10 and withdraw $5
-    const operations = Array.from({ length: 20 }, async (_, i) => {
-      if (i % 2 === 0) {
-        // Deposit $10
-        return relay.app.request(`/api/v1/agents/${agent.motebitId}/deposit`, {
-          method: "POST",
-          headers: jsonAuthWithIdempotency(),
-          body: JSON.stringify({ amount: 10.0, reference: `rapid-deposit-${i}` }),
-        });
-      } else {
-        // Withdraw $5
-        return relay.app.request(`/api/v1/agents/${agent.motebitId}/withdraw`, {
+    const results = await Promise.all(
+      Array.from({ length: 20 }, (_, i) =>
+        relay.app.request(`/api/v1/agents/${agent.motebitId}/withdraw`, {
           method: "POST",
           headers: jsonAuthWithIdempotency(),
           body: JSON.stringify({
@@ -348,52 +293,28 @@ describe("Money Loop Concurrency", () => {
             destination: "0xMyWallet",
             idempotency_key: `rapid-withdraw-${i}`,
           }),
-        });
-      }
-    });
+        }),
+      ),
+    );
 
-    const results = await Promise.all(operations);
-
-    // Count successes
-    let depositsSucceeded = 0;
     let withdrawalsSucceeded = 0;
-
-    for (let i = 0; i < results.length; i++) {
-      if (i % 2 === 0) {
-        // Deposits should always succeed
-        expect(results[i]!.status).toBe(200);
-        depositsSucceeded++;
+    for (const res of results) {
+      if (res.status === 200) {
+        withdrawalsSucceeded++;
       } else {
-        if (results[i]!.status === 200) {
-          withdrawalsSucceeded++;
-        } else {
-          // 402 is acceptable — insufficient balance
-          expect(results[i]!.status).toBe(402);
-        }
+        // 402 is the only acceptable non-success — insufficient balance.
+        expect(res.status).toBe(402);
       }
     }
 
-    // All 10 deposits should have succeeded
-    expect(depositsSucceeded).toBe(10);
+    // At most $50 of $5 withdrawals can be funded — no over-draw.
+    expect(withdrawalsSucceeded).toBeLessThanOrEqual(10);
 
-    // Final balance = 100 + (depositsSucceeded × 10) - (withdrawalsSucceeded × 5)
-    const expectedBalance = 100 + depositsSucceeded * 10 - withdrawalsSucceeded * 5;
     const balance = await getBalance(relay, agent.motebitId);
-    expect(balance).toBeCloseTo(expectedBalance, 2);
-
-    // Balance is never negative
+    expect(balance).toBeCloseTo(50 - withdrawalsSucceeded * 5, 2);
     expect(balance).toBeGreaterThanOrEqual(-0.001);
 
-    // Verify all deposit transactions exist
-    const depositTxns = relay.moteDb.db
-      .prepare(
-        "SELECT COUNT(*) as count FROM relay_transactions WHERE motebit_id = ? AND type = 'deposit'",
-      )
-      .get(agent.motebitId) as { count: number };
-    // 1 initial + 10 concurrent deposits
-    expect(depositTxns.count).toBe(11);
-
-    // Verify withdrawal transactions match succeeded count
+    // Withdrawal transaction rows match the succeeded count exactly.
     const withdrawalTxns = relay.moteDb.db
       .prepare(
         "SELECT COUNT(*) as count FROM relay_transactions WHERE motebit_id = ? AND type = 'withdrawal'",

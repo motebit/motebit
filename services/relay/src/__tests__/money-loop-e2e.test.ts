@@ -34,6 +34,7 @@ import {
   jsonAuthWithIdempotency,
   createTestRelay,
   createAgent,
+  seedBalance,
 } from "./test-helpers.js";
 
 describe("Money Loop E2E", () => {
@@ -76,17 +77,8 @@ describe("Money Loop E2E", () => {
     expect(listingRes.status).toBe(200);
 
     // === STEP 1: DEPOSIT ===
-    const depositRes = await relay.app.request(`/api/v1/agents/${agent.motebitId}/deposit`, {
-      method: "POST",
-      headers: jsonAuthWithIdempotency(),
-      body: JSON.stringify({
-        amount: 10.0,
-        reference: "initial-funding",
-        description: "Fund agent",
-      }),
-    });
-    expect(depositRes.status).toBe(200);
-    expect(((await depositRes.json()) as { balance: number }).balance).toBe(10.0);
+    const seededBalance = seedBalance(relay, agent.motebitId, 10.0);
+    expect(seededBalance).toBe(10.0);
 
     // === STEP 2: SELF-DELEGATE — submitted_by === worker → gate-exempt, relay settles ===
     const taskRes = await relay.app.request(`/agent/${agent.motebitId}/task`, {

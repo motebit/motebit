@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
+import { seedBalance } from "./test-helpers.js";
 import { checkIdempotency, completeIdempotency, cleanupIdempotencyKeys } from "../idempotency.js";
 
 const API_TOKEN = "test-token";
@@ -35,20 +36,13 @@ async function createAgent(relay: SyncRelay): Promise<string> {
   return motebit_id;
 }
 
-async function depositFunds(
-  relay: SyncRelay,
-  motebitId: string,
-  amount: number,
-  idempotencyKey?: string,
-): Promise<Response> {
-  return relay.app.request(`/api/v1/agents/${motebitId}/deposit`, {
-    method: "POST",
-    headers: {
-      ...JSON_AUTH,
-      ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
-    },
-    body: JSON.stringify({ amount }),
-  });
+/**
+ * Seed balance directly through the ledger (the self-declared `POST /deposit`
+ * route was removed — treasury-drain vector). Used only to fund accounts
+ * before exercising the withdraw idempotency contract below.
+ */
+function depositFunds(relay: SyncRelay, motebitId: string, amount: number): void {
+  seedBalance(relay, motebitId, amount);
 }
 
 // ── Unit tests: core idempotency functions ──────────────────────────────
@@ -162,50 +156,11 @@ describe("idempotency (HTTP endpoints)", () => {
     await relay.close();
   });
 
-  it("deposit: missing Idempotency-Key returns 400", async () => {
-    const res = await relay.app.request(`/api/v1/agents/${motebitId}/deposit`, {
-      method: "POST",
-      headers: JSON_AUTH,
-      body: JSON.stringify({ amount: 10.0 }),
-    });
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toContain("Idempotency-Key");
-  });
-
-  it("deposit: first request succeeds, replay returns cached response", async () => {
-    const idempKey = crypto.randomUUID();
-
-    // First request
-    const res1 = await depositFunds(relay, motebitId, 10.0, idempKey);
-    expect(res1.status).toBe(200);
-    const body1 = (await res1.json()) as { balance: number; transaction_id: string };
-    expect(body1.balance).toBe(10.0);
-    expect(body1.transaction_id).toBeTruthy();
-
-    // Replay with same key — should return cached response, NOT double-deposit
-    const res2 = await depositFunds(relay, motebitId, 10.0, idempKey);
-    expect(res2.status).toBe(200);
-    const body2 = (await res2.json()) as { balance: number; transaction_id: string };
-    // Replay should return the exact same response (balance=10, not 20)
-    expect(body2.balance).toBe(body1.balance);
-    expect(body2.transaction_id).toBe(body1.transaction_id);
-  });
-
-  it("deposit: different keys allow separate deposits", async () => {
-    const key1 = crypto.randomUUID();
-    const key2 = crypto.randomUUID();
-
-    const res1 = await depositFunds(relay, motebitId, 5.0, key1);
-    expect(res1.status).toBe(200);
-    const body1 = (await res1.json()) as { balance: number };
-    expect(body1.balance).toBe(5.0);
-
-    const res2 = await depositFunds(relay, motebitId, 5.0, key2);
-    expect(res2.status).toBe(200);
-    const body2 = (await res2.json()) as { balance: number };
-    expect(body2.balance).toBe(10.0);
-  });
+  // NOTE: deposit-endpoint idempotency tests were removed with the
+  // self-declared `POST /deposit` route (treasury-drain vector). The shared
+  // idempotency middleware they exercised is covered identically by the
+  // withdraw idempotency tests below (missing-key → 400, replay → cached) and
+  // the per-motebit key-scoping test at the end of this suite.
 
   it("withdraw: missing Idempotency-Key returns 400", async () => {
     const res = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
@@ -220,7 +175,7 @@ describe("idempotency (HTTP endpoints)", () => {
 
   it("withdraw: first request succeeds, replay returns cached response", async () => {
     // Fund the account first
-    await depositFunds(relay, motebitId, 20.0, crypto.randomUUID());
+    depositFunds(relay, motebitId, 20.0);
 
     const withdrawKey = crypto.randomUUID();
     const withdrawRequest = (key: string) =>
@@ -344,15 +299,22 @@ describe("idempotency (HTTP endpoints)", () => {
   it("same idempotency key for different agents are independent", async () => {
     const agent2 = await createAgent(relay);
     const sharedKey = crypto.randomUUID();
+    depositFunds(relay, motebitId, 10.0);
+    depositFunds(relay, agent2, 15.0);
 
-    // Deposit to agent 1
-    const res1 = await depositFunds(relay, motebitId, 10.0, sharedKey);
+    // Same withdraw key, different agents — idempotency is scoped per-motebit,
+    // so both proceed independently rather than the second replaying the first.
+    const withdraw = (id: string, amount: number) =>
+      relay.app.request(`/api/v1/agents/${id}/withdraw`, {
+        method: "POST",
+        headers: { ...JSON_AUTH, "Idempotency-Key": sharedKey },
+        body: JSON.stringify({ amount }),
+      });
+    const res1 = await withdraw(motebitId, 10.0);
     expect(res1.status).toBe(200);
-
-    // Same key, agent 2 — should proceed independently
-    const res2 = await depositFunds(relay, agent2, 15.0, sharedKey);
+    const res2 = await withdraw(agent2, 15.0);
     expect(res2.status).toBe(200);
-    const body2 = (await res2.json()) as { balance: number };
-    expect(body2.balance).toBe(15.0); // Not 10 (agent 1's amount)
+    const body2 = (await res2.json()) as { withdrawal: { amount: number } };
+    expect(body2.withdrawal.amount).toBe(15.0); // agent 2's own request, not a replay of agent 1
   });
 });

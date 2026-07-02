@@ -4,6 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
+import { seedBalance } from "./test-helpers.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
 import {
   generateKeypair,
@@ -76,23 +77,10 @@ async function deposit(
   relay: SyncRelay,
   motebitId: string,
   amount: number,
-  reference?: string,
+  _reference?: string,
 ): Promise<{ motebit_id: string; balance: number; transaction_id: string | null }> {
-  const res = await relay.app.request(`/api/v1/agents/${motebitId}/deposit`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...AUTH_HEADER,
-      "Idempotency-Key": crypto.randomUUID(),
-    },
-    body: JSON.stringify({ amount, reference }),
-  });
-  expect(res.status).toBe(200);
-  return res.json() as Promise<{
-    motebit_id: string;
-    balance: number;
-    transaction_id: string | null;
-  }>;
+  const balance = seedBalance(relay, motebitId, amount);
+  return { motebit_id: motebitId, balance, transaction_id: "test-seed" };
 }
 
 async function getBalance(
@@ -348,52 +336,12 @@ describe("Virtual Accounts", () => {
     });
   });
 
-  it("negative deposit rejected", async () => {
-    const keypair = await generateKeypair();
-    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
-
-    const res = await relay.app.request(`/api/v1/agents/${motebitId}/deposit`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...AUTH_HEADER,
-        "Idempotency-Key": crypto.randomUUID(),
-      },
-      body: JSON.stringify({ amount: -5 }),
-    });
-    expect(res.status).toBe(400);
-  });
-
-  it("zero deposit rejected", async () => {
-    const keypair = await generateKeypair();
-    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
-
-    const res = await relay.app.request(`/api/v1/agents/${motebitId}/deposit`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...AUTH_HEADER,
-        "Idempotency-Key": crypto.randomUUID(),
-      },
-      body: JSON.stringify({ amount: 0 }),
-    });
-    expect(res.status).toBe(400);
-  });
-
-  it("double-deposit is idempotent if same reference_id", async () => {
-    const keypair = await generateKeypair();
-    const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
-
-    const ref = `ext-payment-${crypto.randomUUID()}`;
-    const first = await deposit(relay, motebitId, 50, ref);
-    expect(first.balance).toBe(50);
-    expect(first.transaction_id).toBeDefined();
-
-    // Second deposit with same reference — idempotent
-    const second = await deposit(relay, motebitId, 50, ref);
-    expect(second.balance).toBe(50); // Unchanged
-    expect((second as Record<string, unknown>).idempotent).toBe(true);
-  });
+  // NOTE: the self-declared `POST /deposit` route was removed (treasury-drain
+  // vector); its HTTP-layer tests — negative/zero-amount rejection,
+  // reference-idempotent dedup, requires-auth — went with the endpoint. Balance
+  // is credited only by verified server-side funding; tests seed via
+  // `seedBalance`. Amount-positivity and idempotency are covered on the
+  // surviving money-mutating endpoint (withdraw) in idempotency.test.ts.
 
   it("task submission with sufficient virtual balance succeeds", async () => {
     // Set up a worker agent with a priced listing
@@ -645,15 +593,6 @@ describe("Virtual Accounts", () => {
     expect(platformFee).toBeGreaterThan(0);
     const creditTxn = workerBalance.transactions.find((t) => t.type === "settlement_credit");
     expect(creditTxn).toBeDefined();
-  });
-
-  it("deposit requires auth", async () => {
-    const res = await relay.app.request(`/api/v1/agents/some-agent/deposit`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
-      body: JSON.stringify({ amount: 10 }),
-    });
-    expect(res.status).toBe(401);
   });
 
   it("balance requires auth", async () => {

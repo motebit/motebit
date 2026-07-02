@@ -35,6 +35,7 @@ import {
   createTestRelay as _createTestRelay,
   createAgent,
   buildP2pPaymentProof,
+  seedBalance,
 } from "./test-helpers.js";
 
 const createTestRelay = () => _createTestRelay({ issueCredentials: true });
@@ -143,16 +144,7 @@ describe("Trust Flywheel E2E", () => {
     });
 
     // Fund delegator
-    const depositRes = await relay.app.request(`/api/v1/agents/${delegator.motebitId}/deposit`, {
-      method: "POST",
-      headers: jsonAuthWithIdempotency(),
-      body: JSON.stringify({
-        amount: 20.0,
-        reference: "flywheel-fund",
-        description: "Trust flywheel test",
-      }),
-    });
-    expect(depositRes.status).toBe(200);
+    seedBalance(relay, delegator.motebitId, 20.0);
 
     // === BEFORE: No trust records, no credentials ===
     const trustRowsBefore = relay.moteDb.db
@@ -341,15 +333,7 @@ describe("Trust Flywheel E2E", () => {
     });
 
     // Fund and self-delegate
-    await relay.app.request(`/api/v1/agents/${agent.motebitId}/deposit`, {
-      method: "POST",
-      headers: jsonAuthWithIdempotency(),
-      body: JSON.stringify({
-        amount: 10.0,
-        reference: "self-fund",
-        description: "Self-delegation test",
-      }),
-    });
+    seedBalance(relay, agent.motebitId, 10.0);
 
     // Submit task to self (submitted_by === worker)
     const taskRes = await relay.app.request(`/agent/${agent.motebitId}/task`, {

@@ -21,6 +21,7 @@ import {
   AUTH_HEADER,
   jsonAuthWithIdempotency,
   createTestRelay,
+  seedBalance,
 } from "./test-helpers.js";
 
 const MOTEBIT_ID = "test-mote";
@@ -936,11 +937,7 @@ describe("Delegation E2E", () => {
 
     // Fund the delegator — stands in for the x402 payment leg the harness
     // can't perform; unfunded tasks are skipped fail-closed at settlement.
-    await relay.app.request(`/api/v1/agents/${MOTEBIT_ID}/deposit`, {
-      method: "POST",
-      headers: jsonAuthWithIdempotency(),
-      body: JSON.stringify({ amount: 5.0, reference: `deposit-${crypto.randomUUID()}` }),
-    });
+    seedBalance(relay, MOTEBIT_ID, 5.0);
 
     // Submit task — x402 handles payment at HTTP layer
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
@@ -1025,11 +1022,7 @@ describe("Delegation E2E", () => {
     });
 
     // Fund the delegator — see the settlement-audit test above.
-    await relay.app.request(`/api/v1/agents/${MOTEBIT_ID}/deposit`, {
-      method: "POST",
-      headers: jsonAuthWithIdempotency(),
-      body: JSON.stringify({ amount: 5.0, reference: `deposit-${crypto.randomUUID()}` }),
-    });
+    seedBalance(relay, MOTEBIT_ID, 5.0);
 
     // Submit task
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {

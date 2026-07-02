@@ -16,11 +16,9 @@ import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
 import { persistFreeze } from "./freeze.js";
 import {
-  getOrCreateAccount,
   getAccountBalance,
   getAccountBalanceDetailed,
   getTransactions,
-  hasTransactionWithReference,
   requestWithdrawal,
   completeWithdrawal,
   signWithdrawalReceipt,
@@ -156,120 +154,14 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   } = deps;
   const stripeRail = railRegistry?.get("stripe") as StripeSettlementRail | undefined;
 
-  // --- Deposit ---
-  /** @internal */
-  app.post("/api/v1/agents/:motebitId/deposit", async (c) => {
-    const motebitId = c.req.param("motebitId");
-    const correlationId = c.get("correlationId" as never) as string;
-
-    // Idempotency key required for financial operations
-    const idempotencyKey = c.req.header("Idempotency-Key");
-    if (!idempotencyKey) {
-      throw new HTTPException(400, {
-        message: "Idempotency-Key header is required for financial operations",
-      });
-    }
-
-    // Check idempotency before parsing body — replays skip all side effects
-    const idempCheck = checkIdempotency(moteDb.db, idempotencyKey, motebitId);
-    if (idempCheck.action === "replay") {
-      return c.json(
-        JSON.parse(idempCheck.body) as Record<string, unknown>,
-        idempCheck.status as 200,
-      );
-    }
-    if (idempCheck.action === "conflict") {
-      throw new HTTPException(409, {
-        message: "A request with this idempotency key is already being processed",
-      });
-    }
-
-    const body = await c.req.json<{
-      amount: number;
-      currency?: string;
-      reference?: string;
-      description?: string;
-    }>();
-
-    if (typeof body.amount !== "number" || body.amount <= 0) {
-      // Complete idempotency with error so retries don't re-process
-      const errBody = JSON.stringify({ error: "amount must be a positive number", status: 400 });
-      completeIdempotency(moteDb.db, idempotencyKey, motebitId, 400, errBody);
-      throw new HTTPException(400, { message: "amount must be a positive number" });
-    }
-
-    const amountMicro = toMicro(body.amount);
-
-    if (body.reference) {
-      if (hasTransactionWithReference(moteDb.db, motebitId, body.reference)) {
-        const account = getOrCreateAccount(moteDb.db, motebitId);
-        logger.info("account.deposit_idempotent", {
-          correlationId,
-          motebitId,
-          reference: body.reference,
-        });
-        const responseBody = {
-          motebit_id: motebitId,
-          balance: fromMicro(account.balance),
-          transaction_id: null,
-          idempotent: true,
-        };
-        completeIdempotency(
-          moteDb.db,
-          idempotencyKey,
-          motebitId,
-          200,
-          JSON.stringify(responseBody),
-        );
-        return c.json(responseBody);
-      }
-    }
-
-    let newBalance: number;
-    const txnId = crypto.randomUUID();
-    moteDb.db.exec("BEGIN");
-    try {
-      const account = getOrCreateAccount(moteDb.db, motebitId);
-      newBalance = account.balance + amountMicro;
-      const now = Date.now();
-      moteDb.db
-        .prepare("UPDATE relay_accounts SET balance = ?, updated_at = ? WHERE motebit_id = ?")
-        .run(newBalance, now, motebitId);
-      moteDb.db
-        .prepare(
-          `INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at) VALUES (?, ?, 'deposit', ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          txnId,
-          motebitId,
-          amountMicro,
-          newBalance,
-          body.reference ?? null,
-          body.description ?? null,
-          now,
-        );
-      moteDb.db.exec("COMMIT");
-    } catch (err) {
-      moteDb.db.exec("ROLLBACK");
-      throw new Error("Deposit failed", { cause: err });
-    }
-
-    logger.info("account.deposit", {
-      correlationId,
-      motebitId,
-      amount: body.amount,
-      amountMicro,
-      balanceAfter: newBalance,
-      reference: body.reference ?? null,
-    });
-    const responseBody = {
-      motebit_id: motebitId,
-      balance: fromMicro(newBalance),
-      transaction_id: txnId,
-    };
-    completeIdempotency(moteDb.db, idempotencyKey, motebitId, 200, JSON.stringify(responseBody));
-    return c.json(responseBody);
-  });
+  // NOTE: the self-declared `POST /api/v1/agents/:id/deposit` route was
+  // removed (2026-07-01). It credited spendable balance from a client-
+  // supplied amount under the account owner's own device token, with no
+  // funding-provenance check anywhere in the deposit→withdraw path — a
+  // treasury-drain vector (self-declare balance → auto-settled withdrawal).
+  // Balance is credited ONLY by verified funding: the onchain deposit-
+  // detector and the Stripe webhook, both via `creditAccount` server-side.
+  // Tests seed via `seedBalance` (test-helpers), not an HTTP money route.
 
   // --- Balance ---
   /** @internal */

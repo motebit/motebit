@@ -159,7 +159,14 @@ export const CREDENTIALS_PRESENT_AUDIENCE: TokenAudience = "credentials:present"
 /** Read virtual-account balance. */
 export const ACCOUNT_BALANCE_AUDIENCE: TokenAudience = "account:balance";
 
-/** Deposit endpoint (Stripe / x402 / Solana). */
+/**
+ * Reserved for a future FUNDED deposit-initiation endpoint. The former
+ * self-declared `POST /agents/:id/deposit` route (which credited spendable
+ * balance from a client-supplied amount) was removed as a treasury-drain
+ * vector — balance is credited only by verified server-side funding
+ * (onchain deposit-detector, Stripe webhook). This audience stays registered
+ * so a correct funded-deposit endpoint can adopt it without a wire change.
+ */
 export const ACCOUNT_DEPOSIT_AUDIENCE: TokenAudience = "account:deposit";
 
 /** Withdraw endpoint. */

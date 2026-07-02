@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { SyncRelay } from "../index.js";
-import { AUTH_HEADER, jsonAuthWithIdempotency, createTestRelay } from "./test-helpers.js";
+import { AUTH_HEADER, createTestRelay, seedBalance } from "./test-helpers.js";
 
 const RELAY_SECRET = "test-relay-secret";
 
@@ -22,12 +22,7 @@ async function createIdentity(r: SyncRelay): Promise<string> {
 }
 
 async function deposit(r: SyncRelay, id: string, amount: number): Promise<void> {
-  const res = await r.app.request(`/api/v1/agents/${id}/deposit`, {
-    method: "POST",
-    headers: jsonAuthWithIdempotency(),
-    body: JSON.stringify({ amount }),
-  });
-  expect(res.status).toBe(200);
+  seedBalance(r, id, amount);
 }
 
 async function debitRequest(

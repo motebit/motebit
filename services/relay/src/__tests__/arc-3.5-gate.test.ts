@@ -22,6 +22,7 @@ import {
   buildP2pPaymentProof,
   JSON_AUTH,
   jsonAuthWithIdempotency,
+  seedBalance,
 } from "./test-helpers.js";
 
 const WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
@@ -111,11 +112,7 @@ describe("Arc 3.5 — TASK_P2P_PROOF_REQUIRED submission gate", () => {
 
   it("carve: self-delegation (submitted_by === worker) is accepted without a proof", async () => {
     await registerListedWorker(relay, worker.motebitId, 1.0);
-    await relay.app.request(`/api/v1/agents/${worker.motebitId}/deposit`, {
-      method: "POST",
-      headers: jsonAuthWithIdempotency(),
-      body: JSON.stringify({ amount: 5.0, reference: "fund" }),
-    });
+    seedBalance(relay, worker.motebitId, 5.0);
     const res = await relay.app.request(`/agent/${worker.motebitId}/task`, {
       method: "POST",
       headers: jsonAuthWithIdempotency(),
