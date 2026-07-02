@@ -27,6 +27,7 @@ import {
   Appearance,
   Alert,
 } from "react-native";
+import type { StyleProp, ViewStyle, TextStyle } from "react-native";
 import { WebView } from "react-native-webview";
 // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-member-access
 const Feather = require("@expo/vector-icons/Feather").default as React.ComponentType<{
@@ -91,6 +92,42 @@ interface ChatMessage {
   // present when this turn drew on a recalled memory; absent is the
   // fail-closed default (no attribution).
   accrualBasis?: import("@motebit/sdk").AccrualBasis;
+  // Interior reasoning — the model's `<thinking>` for this turn (the `mind`
+  // register), rendered as a calm, opt-in collapsed disclosure under the reply.
+  // INTERIOR-ONLY: local UI state, never persisted/synced. Absent when the model
+  // emitted no reasoning.
+  reasoning?: string;
+}
+
+// === Interior reasoning disclosure ===
+
+/**
+ * The `mind` register in mobile chat — mind-mode content is hidden on the slab
+ * plane by doctrine and "lives in chat". Calm, opt-in form: collapsed by
+ * default (no clutter), tapped to expand (`felt-interior.md`), muted + smaller
+ * than the reply. `text` is the interior trace, held only in UI state (never
+ * persisted/synced).
+ */
+function ReasoningDisclosure({
+  text,
+  containerStyle,
+  summaryStyle,
+  bodyStyle,
+}: {
+  text: string;
+  containerStyle: StyleProp<ViewStyle>;
+  summaryStyle: StyleProp<TextStyle>;
+  bodyStyle: StyleProp<TextStyle>;
+}): React.ReactElement {
+  const [open, setOpen] = useState(false);
+  return (
+    <View style={containerStyle}>
+      <TouchableOpacity onPress={() => setOpen((v) => !v)} activeOpacity={0.6}>
+        <Text style={summaryStyle}>{open ? "▾ reasoning" : "▸ reasoning"}</Text>
+      </TouchableOpacity>
+      {open ? <Text style={bodyStyle}>{text}</Text> : null}
+    </View>
+  );
 }
 
 // === App singleton ===
@@ -1117,6 +1154,14 @@ export default function App(): React.ReactElement {
                     {`↻ ${resolveAccrualAttribution(item.accrualBasis).text}`}
                   </Text>
                 ) : null}
+                {item.reasoning ? (
+                  <ReasoningDisclosure
+                    text={item.reasoning}
+                    containerStyle={ds.reasoning}
+                    summaryStyle={ds.reasoningSummary}
+                    bodyStyle={ds.reasoningBody}
+                  />
+                ) : null}
               </AnimatedBubble>
             );
           }}
@@ -1511,6 +1556,25 @@ function createDynamicStyles(c: ThemeColors) {
       fontStyle: "italic",
       color: c.assistantBubbleText,
       opacity: 0.7,
+    },
+    // Interior reasoning — the `mind` register. Muted, collapsed by default.
+    reasoning: {
+      marginTop: 8,
+      paddingTop: 6,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: c.assistantBubbleText,
+    },
+    reasoningSummary: {
+      fontSize: 12,
+      color: c.assistantBubbleText,
+      opacity: 0.5,
+    },
+    reasoningBody: {
+      marginTop: 6,
+      fontSize: 13,
+      lineHeight: 19,
+      color: c.assistantBubbleText,
+      opacity: 0.8,
     },
     systemText: {
       color: c.systemText,
