@@ -51,7 +51,7 @@
   "devDependencies": {
     "@noble/ed25519": "~3.1.0",
     "@noble/hashes": "^2.2.0",
-    "@playwright/test": "^1.60.0",
+    "@playwright/test": "^1.61.1",
     "@types/three": "^0.185.0",
     "@vitest/coverage-v8": "^4.1.9",
     "fake-indexeddb": "^6.0.0",
