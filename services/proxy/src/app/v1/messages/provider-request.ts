@@ -129,6 +129,32 @@ function assembleOpenAiCachedMessages(
   return out;
 }
 
+/**
+ * Server-side extended-thinking switch for the CLOUD path. The proxy
+ * reconstructs the Anthropic request body here, so a client-set `thinking`
+ * param would be dropped — this is the single place that can enable it for all
+ * cloud users. OFF by default: inert unless `MOTEBIT_EXTENDED_THINKING_BUDGET_TOKENS`
+ * is set to a positive integer. Returns the (floored) budget when enabled AND
+ * the model supports thinking, else null.
+ *
+ * The model gate mirrors `@motebit/ai-core`'s `modelSupportsExtendedThinking`
+ * (Claude 3.7 Sonnet + 4/5-family Sonnet/Opus; excludes Haiku/pre-3.7). It is
+ * inlined rather than imported: the proxy deliberately does NOT depend on
+ * ai-core (service boundary — CLAUDE.md "inline trivial utilities at layer
+ * boundaries"). Response streaming already passes `thinking_delta`/
+ * `signature_delta` through verbatim, and `messages` forward verbatim, so
+ * capture + tool-use signature preservation work end-to-end once enabled.
+ */
+const EXTENDED_THINKING_MIN_BUDGET_TOKENS = 1024;
+export function proxyExtendedThinkingBudget(model: string): number | null {
+  const raw = process.env.MOTEBIT_EXTENDED_THINKING_BUDGET_TOKENS;
+  if (raw == null || raw === "") return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (!/claude-(?:3-7-sonnet|(?:opus|sonnet)-(?:[4-9]|\d\d))/i.test(model)) return null;
+  return Math.max(EXTENDED_THINKING_MIN_BUDGET_TOKENS, Math.floor(n));
+}
+
 /** Build the provider-specific request. All providers receive the same logical input. */
 export function buildProviderRequest(
   provider: InferenceHost,
@@ -151,7 +177,31 @@ export function buildProviderRequest(
       : (body.max_tokens as number) || 4096;
 
   switch (provider) {
-    case "anthropic":
+    case "anthropic": {
+      const thinkingBudget = proxyExtendedThinkingBudget(model);
+      const anthropicBody: Record<string, unknown> = {
+        model,
+        messages: rawMessages,
+        // Structured system blocks carry `cache_control` so Anthropic caches
+        // the static prefix (~3K tokens: identity, behavior, injection
+        // defense) at 1/10th input cost. MUST be on a content block — the
+        // earlier top-level `cache_control` field was silently ignored, so the
+        // cloud path cached nothing. Tools pass through (the client marks the
+        // last tool cacheable).
+        system: systemToAnthropicBlocks(body.system),
+        // Thinking tokens count toward max_tokens, so reserve headroom above the
+        // budget when enabled; otherwise the client/cap value stands.
+        max_tokens: thinkingBudget != null ? Math.max(maxTokens, thinkingBudget + 4096) : maxTokens,
+        stream: true,
+        ...(body.tools != null ? { tools: body.tools } : {}),
+      };
+      if (thinkingBudget != null) {
+        // Extended thinking enabled server-side. `temperature` is OMITTED (the
+        // API rejects a custom temperature alongside thinking).
+        anthropicBody.thinking = { type: "enabled", budget_tokens: thinkingBudget };
+      } else {
+        anthropicBody.temperature = body.temperature;
+      }
       return {
         url: "https://api.anthropic.com/v1/messages",
         headers: {
@@ -159,22 +209,9 @@ export function buildProviderRequest(
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
         },
-        body: JSON.stringify({
-          model,
-          messages: rawMessages,
-          // Structured system blocks carry `cache_control` so Anthropic caches
-          // the static prefix (~3K tokens: identity, behavior, injection
-          // defense) at 1/10th input cost. MUST be on a content block — the
-          // earlier top-level `cache_control` field was silently ignored, so the
-          // cloud path cached nothing. Tools pass through (the client marks the
-          // last tool cacheable).
-          system: systemToAnthropicBlocks(body.system),
-          max_tokens: maxTokens,
-          temperature: body.temperature,
-          stream: true,
-          ...(body.tools != null ? { tools: body.tools } : {}),
-        }),
+        body: JSON.stringify(anthropicBody),
       };
+    }
 
     case "openai": {
       // Model-aware caching layout (mirrors ai-core OpenAIProvider): static
