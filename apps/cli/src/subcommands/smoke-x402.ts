@@ -29,6 +29,7 @@
  */
 
 import * as crypto from "node:crypto";
+import type { TokenAudience } from "@motebit/sdk";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -284,7 +285,7 @@ async function mintSignedToken(args: {
   motebitId: string;
   deviceId: string;
   privateKey: Uint8Array;
-  audience: string;
+  audience: TokenAudience;
 }): Promise<string> {
   return createSignedToken(
     {

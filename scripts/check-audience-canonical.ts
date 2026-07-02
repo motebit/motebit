@@ -27,7 +27,10 @@
  *   ✓  aud: "task:submit"                        // canonical literal
  *   ✓  aud: TASK_SUBMIT_AUDIENCE                 // typed constant
  *   ✓  aud: TokenAudience-typed variable         // already narrowed
- *   ✓  expectedAudience: string parameter        // verifier-side; flexible by design
+ *   ✓  expectedAudience: TokenAudience parameter // verifier-side; typed since the
+ *      relay hardening pass — a plain-string audience param at a verifier seam
+ *      reopens the positional-arg blindness this line-based gate cannot see.
+ *      Structural typing is the primary defense; this gate is the lint backstop.
  *
  * Adding an audience requires updating
  * `packages/protocol/src/audience.ts` (the union, the named constant,
@@ -71,6 +74,7 @@ const CANONICAL_AUDIENCES = new Set<string>([
   "proposal",
   "receipts:read",
   "market:listing",
+  "market:query",
   "credentials",
   "credentials:present",
   "account:balance",

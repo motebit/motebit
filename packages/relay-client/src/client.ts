@@ -78,9 +78,35 @@ export interface RelayClientConfig {
 /** Signed-token lifetime — matches the relay-side 5-minute convention. */
 const TOKEN_TTL_MS = 5 * 60 * 1000;
 
+/**
+ * Reuse a cached device-key token until this close to its expiry. The
+ * margin bounds the worst case where a token resolved at request start
+ * is carried through a capped-backoff retry sequence.
+ */
+const TOKEN_REUSE_MARGIN_MS = 60 * 1000;
+
+/** Ceiling on a single backoff delay — bounds total retry wall-clock so a
+ * pre-resolved token cannot silently expire mid-sequence. */
+const MAX_BACKOFF_MS = 10 * 1000;
+
 /** Transient statuses worth retrying on idempotent requests. */
 function isRetryable(status: number): boolean {
   return status >= 500 || status === 429 || status === 408;
+}
+
+/**
+ * jti nonce for replay defense. `crypto.randomUUID` is absent on some
+ * targets this package must reach (React Native without a WebCrypto
+ * polyfill; browsers on insecure origins), so fall back to a
+ * getRandomValues-derived hex nonce rather than hard-failing before
+ * the first request.
+ */
+function mintJti(): string {
+  const c = globalThis.crypto;
+  if (typeof c?.randomUUID === "function") return c.randomUUID();
+  const bytes = new Uint8Array(16);
+  c.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /**
@@ -145,7 +171,8 @@ export class RelayClient {
   /**
    * `GET /api/v1/discover/:motebitId` — federation-wide agent resolution.
    * Contract tier: VALIDATED (`AgentResolutionResultSchema`). Public
-   * endpoint — sends auth only if a credential resolves.
+   * endpoint (carved out of the relay's auth catch-all) — this method
+   * never sends credentials, regardless of configured auth.
    */
   async discover(motebitId: string): Promise<AgentResolutionResult> {
     const path = `/api/v1/discover/${encodeURIComponent(motebitId)}`;
@@ -274,9 +301,14 @@ export class RelayClient {
     for (let attempt = 0; attempt < attempts; attempt++) {
       try {
         const res = await this.fetchImpl(url, init);
-        if (res.ok || !retry || !isRetryable(res.status) || attempt === attempts - 1) {
+        // With retry=false, attempts is 1, so the last-attempt arm returns
+        // unconditionally — no separate !retry branch needed.
+        if (res.ok || !isRetryable(res.status) || attempt === attempts - 1) {
           return res;
         }
+        // Retrying: drain the abandoned body so the connection returns to
+        // the keep-alive pool (an unconsumed undici body pins its socket).
+        await res.text().catch(() => undefined);
       } catch (err: unknown) {
         lastNetworkError = err;
         if (attempt === attempts - 1) break;
@@ -294,34 +326,52 @@ export class RelayClient {
   }
 
   private backoff(attempt: number): Promise<void> {
-    const delay = this.retryBackoffMs * 2 ** attempt;
+    const delay = Math.min(this.retryBackoffMs * 2 ** attempt, MAX_BACKOFF_MS);
     return new Promise((resolve) => setTimeout(resolve, delay));
   }
 
+  /** Cached device-key tokens, one per audience, reused until near expiry. */
+  private readonly tokenCache = new Map<TokenAudience, { token: string; exp: number }>();
+
   private async resolveToken(audience: TokenAudience): Promise<string | null> {
     if (this.auth.credentialSource) {
-      const token = await this.auth.credentialSource.getCredential({
-        serverUrl: this.baseUrl,
-        scope: audience,
-      });
-      if (token != null && token !== "") return token;
+      // A throwing credential source falls through to the next tier rather
+      // than escaping as an untyped error — the configured fallback
+      // (deviceKey / staticToken) exists exactly for when the primary
+      // source is unavailable (locked keyring, vault outage).
+      try {
+        const token = await this.auth.credentialSource.getCredential({
+          serverUrl: this.baseUrl,
+          scope: audience,
+        });
+        if (token != null && token !== "") return token;
+      } catch {
+        // fall through to deviceKey / staticToken
+      }
     }
     if (this.auth.deviceKey) {
       // iat/exp are MILLISECOND epochs — the motebit signed-token convention
       // (deliberately not JWT's seconds): every existing minter uses
       // `Date.now() + ms` and `verifySignedToken` compares exp to Date.now().
+      const cached = this.tokenCache.get(audience);
       const iat = this.now();
-      return createSignedToken(
+      if (cached && cached.exp - TOKEN_REUSE_MARGIN_MS > iat) {
+        return cached.token;
+      }
+      const exp = iat + TOKEN_TTL_MS;
+      const token = await createSignedToken(
         {
           mid: this.auth.deviceKey.motebitId,
           did: this.auth.deviceKey.deviceId,
           iat,
-          exp: iat + TOKEN_TTL_MS,
-          jti: globalThis.crypto.randomUUID(),
+          exp,
+          jti: mintJti(),
           aud: audience,
         },
         this.auth.deviceKey.privateKey,
       );
+      this.tokenCache.set(audience, { token, exp });
+      return token;
     }
     if (this.auth.staticToken != null && this.auth.staticToken !== "") {
       return this.auth.staticToken;

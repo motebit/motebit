@@ -10,6 +10,7 @@ import {
   getOrPinRelayKey,
   verifyAgentCommandEnvelope,
 } from "@motebit/runtime";
+import type { TokenAudience } from "@motebit/sdk";
 import { createSolanaWalletRail, createSolanaMemoSubmitter } from "@motebit/wallet-solana";
 import type {
   StreamChunk,
@@ -3382,7 +3383,7 @@ export class UnbootedWebApp {
     for (const cb of this._syncStatusListeners) cb(status);
   }
 
-  async createSyncToken(aud: string = "sync"): Promise<string | null> {
+  async createSyncToken(aud: TokenAudience = "sync"): Promise<string | null> {
     const privateKeyHex = await this.keyStore.loadPrivateKey();
     if (privateKeyHex == null || privateKeyHex === "") return null;
 
@@ -3531,7 +3532,7 @@ export class UnbootedWebApp {
     const delegationAdapter = new RelayDelegationAdapter({
       syncUrl: relayUrl,
       motebitId: this._motebitId,
-      authToken: (audience?: string) =>
+      authToken: (audience?: TokenAudience) =>
         this.createSyncToken(audience ?? "sync").then((t) => t ?? ""),
       sendRaw: (data: string) => wsAdapter.sendRaw(data),
       onCustomMessage: (cb) => wsAdapter.onCustomMessage(cb),
@@ -3541,7 +3542,7 @@ export class UnbootedWebApp {
 
     // Enable interactive delegation — lets the AI transparently delegate
     // tasks to remote agents during conversation.
-    const delegationAuthToken = async (audience?: string) => {
+    const delegationAuthToken = async (audience?: TokenAudience) => {
       const aud = audience ?? "task:submit";
       const t = await this.createSyncToken(aud);
       return t ?? "";
@@ -3843,7 +3844,7 @@ export class UnbootedWebApp {
         // satisfy both endpoints — sending a task:submit token to the
         // /task/:id GET returns 403 (audience mismatch), exactly the
         // cross-endpoint-replay defense the spec defines.
-        mintToken: async (audience: string) => {
+        mintToken: async (audience: TokenAudience) => {
           const t = await this.createSyncToken(audience);
           return t ?? "";
         },
@@ -3899,7 +3900,7 @@ export class UnbootedWebApp {
     }
     const result = await cmdSelfTest(this.runtime, {
       relay: { relayUrl, authToken: token, motebitId: this._motebitId },
-      mintToken: async (audience: string) => (await this.createSyncToken(audience)) ?? "",
+      mintToken: async (audience: TokenAudience) => (await this.createSyncToken(audience)) ?? "",
       serving: this._serving,
       timeoutMs: 30_000,
     });

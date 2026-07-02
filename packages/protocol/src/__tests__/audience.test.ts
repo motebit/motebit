@@ -21,6 +21,7 @@ import {
   PROPOSAL_AUDIENCE,
   RECEIPTS_READ_AUDIENCE,
   MARKET_LISTING_AUDIENCE,
+  MARKET_QUERY_AUDIENCE,
   CREDENTIALS_AUDIENCE,
   CREDENTIALS_PRESENT_AUDIENCE,
   ACCOUNT_BALANCE_AUDIENCE,
@@ -35,8 +36,8 @@ import {
 } from "../audience.js";
 
 describe("ALL_TOKEN_AUDIENCES", () => {
-  it("has exactly the twenty-two registered entries", () => {
-    expect(ALL_TOKEN_AUDIENCES.length).toBe(22);
+  it("has exactly the twenty-three registered entries", () => {
+    expect(ALL_TOKEN_AUDIENCES.length).toBe(23);
   });
 
   it("enumerates every named constant exactly once", () => {
@@ -53,6 +54,7 @@ describe("ALL_TOKEN_AUDIENCES", () => {
       PROPOSAL_AUDIENCE,
       RECEIPTS_READ_AUDIENCE,
       MARKET_LISTING_AUDIENCE,
+      MARKET_QUERY_AUDIENCE,
       CREDENTIALS_AUDIENCE,
       CREDENTIALS_PRESENT_AUDIENCE,
       ACCOUNT_BALANCE_AUDIENCE,

@@ -7,6 +7,7 @@
  */
 
 import type { ExecutionReceipt, ToolRegistry } from "@motebit/sdk";
+import type { TokenAudience } from "@motebit/protocol";
 
 import { selectAndRunDelegation, type DelegationSettlement } from "./relay-delegation.js";
 import { fromMicro, RiskLevel, SideEffect } from "@motebit/protocol";
@@ -59,7 +60,7 @@ export interface InteractiveDelegationDeps {
 
 export interface InteractiveDelegationConfig {
   syncUrl: string;
-  authToken: (audience?: string) => Promise<string>;
+  authToken: (audience?: TokenAudience) => Promise<string>;
   timeoutMs?: number;
   routingStrategy?: "cost" | "quality" | "balanced";
   /**

@@ -11,6 +11,7 @@
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import type { TokenAudience } from "@motebit/sdk";
 import * as Notifications from "expo-notifications";
 import * as TaskManager from "expo-task-manager";
 import {
@@ -1946,7 +1947,7 @@ export class MobileApp {
     return bytes;
   }
 
-  async createSyncToken(aud: string = "sync"): Promise<string> {
+  async createSyncToken(aud: TokenAudience = "sync"): Promise<string> {
     const privKeyBytes = await this.getPrivKeyBytes();
 
     try {
@@ -2141,7 +2142,7 @@ export class MobileApp {
     }
     const result = await cmdSelfTest(this.runtime, {
       relay: { relayUrl: syncUrl, authToken: token, motebitId: this.motebitId },
-      mintToken: async (audience: string) => this.createSyncToken(audience),
+      mintToken: async (audience: TokenAudience) => this.createSyncToken(audience),
       serving: this.sync.isServing(),
       timeoutMs: 30_000,
     });

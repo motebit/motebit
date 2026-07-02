@@ -14,6 +14,7 @@
  */
 
 import type { PlanStep, DelegatedStepResult, ExecutionReceipt } from "@motebit/sdk";
+import type { TokenAudience } from "@motebit/sdk";
 import { TASK_SUBMIT_AUDIENCE } from "@motebit/sdk";
 import type { StepDelegationAdapter } from "./plan-engine.js";
 
@@ -23,7 +24,7 @@ export interface SovereignDelegationConfig {
   /** Relay URL for discovery only (no settlement flows through relay). */
   discoveryUrl: string;
   /** Static auth token or async factory for relay discovery calls. */
-  authToken?: string | ((audience?: string) => Promise<string>);
+  authToken?: string | ((audience?: TokenAudience) => Promise<string>);
   /** Local motebit ID. */
   motebitId: string;
   /** Device ID for auth token creation. */
@@ -85,7 +86,7 @@ interface DiscoveredCandidate {
 export class SovereignDelegationAdapter implements StepDelegationAdapter {
   constructor(private config: SovereignDelegationConfig) {}
 
-  private async buildHeaders(audience?: string): Promise<Record<string, string>> {
+  private async buildHeaders(audience?: TokenAudience): Promise<Record<string, string>> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     const { authToken } = this.config;
     if (authToken != null && authToken !== "") {

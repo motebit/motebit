@@ -1,6 +1,7 @@
 // --- REPL slash command handler ---
 
 import type { MotebitRuntime, ReflectionResult, RelayConfig } from "@motebit/runtime";
+import type { TokenAudience } from "@motebit/sdk";
 import { executeCommand } from "@motebit/runtime";
 import { narrateEconomicConsequences } from "@motebit/gradient";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
@@ -137,7 +138,7 @@ async function getRelayToken(
 async function makeRelayHeaders(
   config: CliConfig,
   repl?: ReplContext,
-  opts?: { aud?: string; json?: boolean },
+  opts?: { aud?: TokenAudience; json?: boolean },
 ): Promise<Record<string, string>> {
   const headers: Record<string, string> = {};
   if (opts?.json) headers["Content-Type"] = "application/json";

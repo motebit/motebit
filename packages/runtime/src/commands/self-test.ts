@@ -11,6 +11,7 @@
  */
 
 import type { MotebitRuntime } from "../index.js";
+import type { TokenAudience } from "@motebit/protocol";
 import type { CommandResult, RelayConfig } from "./types.js";
 
 /**
@@ -20,7 +21,7 @@ import type { CommandResult, RelayConfig } from "./types.js";
  *
  * Returns a bearer token string, or empty string if token minting is unavailable.
  */
-export type MintToken = (audience: string) => Promise<string>;
+export type MintToken = (audience: TokenAudience) => Promise<string>;
 
 export interface SelfTestConfig {
   relay: RelayConfig;

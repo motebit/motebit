@@ -21,6 +21,7 @@
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import type { TokenAudience } from "@motebit/sdk";
 import { AppState, type AppStateStatus } from "react-native";
 import * as Notifications from "expo-notifications";
 
@@ -28,7 +29,7 @@ const PUSH_TOKEN_KEY = "@motebit/push_token";
 
 export interface PushTokenManagerDeps {
   getDeviceId: () => string;
-  createSyncToken: (aud: string) => Promise<string>;
+  createSyncToken: (aud: TokenAudience) => Promise<string>;
   getSyncUrl: () => Promise<string | null>;
 }
 

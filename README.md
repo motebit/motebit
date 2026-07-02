@@ -234,7 +234,7 @@ The 11 Apache-2.0 packages are the permissive floor: a third party can build an 
 
 ## Architecture
 
-**53 packages across 7 architectural layers · 5 surfaces + 6 supporting apps · 1 relay + 2 molecule agents + 4 atom providers + 1 glue service.** A pnpm + Turborepo monorepo, TypeScript throughout. The dependency graph is layered and enforced by `pnpm check-deps` — layer violations break the build.
+**53 packages across 7 architectural layers · 5 surfaces + 6 supporting apps · 1 relay + 2 molecule agents + 5 atom providers + 1 glue service.** A pnpm + Turborepo monorepo, TypeScript throughout. The dependency graph is layered and enforced by `pnpm check-deps` — layer violations break the build.
 
 **The permissive / BSL split is algebra vs. judgment.** The Apache-2.0 protocol packages don't just export types — `@motebit/protocol` ships the semiring combinators, graph traversal, and trust composition math that define _how trust computes along a path_. The BSL `@motebit/semiring` package holds the judgment: _which_ semirings Motebit weights, _how_ it builds its live agent graph, _what_ "best path" means for this product. A competing relay can reuse the algebra, pick its own judgment, and still interoperate — because the foundation law lives on the permissive floor. The `check-spec-permissive-boundary` CI gate enforces this: every callable referenced in a spec must be exported from a permissive-floor package or explicitly waived as reference-implementation convention.
 

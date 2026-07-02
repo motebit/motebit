@@ -191,7 +191,101 @@ describe("task endpoints", () => {
   });
 });
 
+describe("auth resolution: hardening", () => {
+  it("a throwing credentialSource falls through to staticToken", async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      expect(headers["Authorization"]).toBe("Bearer fallback");
+      return jsonResponse({ motebit_id: "m", balance: 0 });
+    });
+    const client = makeClient(fetchMock as unknown as typeof fetch, {
+      auth: {
+        credentialSource: {
+          getCredential: async () => {
+            throw new Error("keyring locked");
+          },
+        },
+        staticToken: "fallback",
+      },
+    });
+    await client.getBalance("m");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("device-key tokens are cached per audience and reused until near expiry", async () => {
+    const keys = await generateKeypair();
+    const tokens: string[] = [];
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      tokens.push(headers["Authorization"]!.slice("Bearer ".length));
+      return jsonResponse({ motebit_id: "m", balance: 0 });
+    });
+    let nowMs = Date.now();
+    const client = makeClient(fetchMock as unknown as typeof fetch, {
+      now: () => nowMs,
+      auth: { deviceKey: { motebitId: "me", deviceId: "d", privateKey: keys.privateKey } },
+    });
+    await client.getBalance("m");
+    await client.getBalance("m");
+    expect(tokens[1]).toBe(tokens[0]);
+    // Advance past the reuse margin — a fresh token must be minted.
+    nowMs += 5 * 60 * 1000;
+    await client.getBalance("m");
+    expect(tokens[2]).not.toBe(tokens[0]);
+  });
+
+  it("mints a getRandomValues-derived jti when crypto.randomUUID is unavailable", async () => {
+    const keys = await generateKeypair();
+    let sentToken = "";
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      sentToken = headers["Authorization"]!.slice("Bearer ".length);
+      return jsonResponse({ motebit_id: "m", balance: 0 });
+    });
+    const realCrypto = globalThis.crypto;
+    // Simulate a React Native / insecure-origin runtime: getRandomValues
+    // present, randomUUID absent.
+    vi.stubGlobal("crypto", {
+      getRandomValues: realCrypto.getRandomValues.bind(realCrypto),
+      subtle: realCrypto.subtle,
+    });
+    try {
+      const client = makeClient(fetchMock as unknown as typeof fetch, {
+        auth: { deviceKey: { motebitId: "me", deviceId: "d", privateKey: keys.privateKey } },
+      });
+      await client.getBalance("m");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    const payload = await verifySignedToken(sentToken, keys.publicKey);
+    expect(payload).not.toBeNull();
+    expect(payload!.jti).toMatch(/^[0-9a-f]{32}$/);
+  });
+});
+
 describe("transport kernel: errors and retry", () => {
+  it("drains retryable response bodies, tolerating a body that throws", async () => {
+    let calls = 0;
+    const fetchMock = vi.fn(async () => {
+      calls++;
+      if (calls === 1) {
+        // A 500 whose body read rejects — the drain must swallow it.
+        return {
+          ok: false,
+          status: 500,
+          text: () => Promise.reject(new Error("body torn down")),
+        } as unknown as Response;
+      }
+      return jsonResponse({ motebit_id: "m", balance: 7 });
+    });
+    const client = makeClient(fetchMock as unknown as typeof fetch, {
+      auth: { staticToken: "t" },
+    });
+    const res = await client.getBalance("m");
+    expect(res.balance).toBe(7);
+    expect(calls).toBe(2);
+  });
+
   it("maps non-2xx to kind=http with status and body", async () => {
     const fetchMock = vi.fn(async () => new Response("nope", { status: 403 }));
     const client = makeClient(fetchMock as unknown as typeof fetch, {

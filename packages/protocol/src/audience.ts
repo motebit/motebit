@@ -47,6 +47,8 @@
  *
  *   **Agent-registry reads (dynamic per-path middleware in `services/relay/src/agents.ts`)**
  *     - `market:listing` — service-listing reads + the p2p-eligibility pre-flight
+ *     - `market:query` — market discovery / candidate queries (minted by
+ *       delegator clients today; relay-side audience enforcement pending)
  *     - `credentials` — credential submit / verify / revoke paths
  *     - `credentials:present` — verifiable-presentation submission
  *
@@ -78,6 +80,7 @@ export type TokenAudience =
   | "proposal"
   | "receipts:read"
   | "market:listing"
+  | "market:query"
   | "credentials"
   | "credentials:present"
   | "account:balance"
@@ -138,6 +141,14 @@ export const RECEIPTS_READ_AUDIENCE: TokenAudience = "receipts:read";
 
 /** Service-listing reads + the p2p-eligibility pre-flight (same delegator-minted token). */
 export const MARKET_LISTING_AUDIENCE: TokenAudience = "market:listing";
+
+/**
+ * Market discovery / candidate queries. Minted today by the planner's
+ * sovereign-delegation adapter and the CLI delegate flow; the market
+ * routes do not yet enforce an audience relay-side — registering the
+ * value closes the vocabulary, enforcement is a separate relay change.
+ */
+export const MARKET_QUERY_AUDIENCE: TokenAudience = "market:query";
 
 /** Credential submit / verify / revoke paths on the agent registry. */
 export const CREDENTIALS_AUDIENCE: TokenAudience = "credentials";
@@ -207,6 +218,7 @@ export const ALL_TOKEN_AUDIENCES: readonly TokenAudience[] = Object.freeze([
   "proposal",
   "receipts:read",
   "market:listing",
+  "market:query",
   "credentials",
   "credentials:present",
   "account:balance",

@@ -20,6 +20,7 @@
  */
 
 import { PairingClient } from "@motebit/sync-engine";
+import type { TokenAudience } from "@motebit/sdk";
 import type { PairingSession, PairingStatus } from "@motebit/sync-engine";
 import {
   generateX25519Keypair,
@@ -41,7 +42,7 @@ export interface PairingManagerDeps {
   /** Retrieve the device's Ed25519 private key hex for key transfer (Device A side). */
   getPrivKeyHex: () => Promise<string>;
   /** Create a short-lived signed auth token. Aud should be "device:auth". */
-  createSyncToken: (aud: string) => Promise<string>;
+  createSyncToken: (aud: TokenAudience) => Promise<string>;
   /** Write back motebitId + deviceId after a successful completePairing. */
   setIdentity: (motebitId: string, deviceId: string) => void;
   /** Update the in-memory public key after key transfer. */

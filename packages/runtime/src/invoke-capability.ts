@@ -12,6 +12,7 @@
  */
 
 import type { ExecutionReceipt, IntentOrigin } from "@motebit/sdk";
+import type { TokenAudience } from "@motebit/protocol";
 import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/protocol";
 
 import type { StreamChunk } from "./runtime-config.js";
@@ -43,7 +44,7 @@ export interface InvokeCapabilityDeps {
 
 export interface InvokeCapabilityConfig {
   syncUrl: string;
-  authToken: (audience?: string) => Promise<string>;
+  authToken: (audience?: TokenAudience) => Promise<string>;
   timeoutMs?: number;
   routingStrategy?: "cost" | "quality" | "balanced";
   /**

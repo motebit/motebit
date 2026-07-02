@@ -17,6 +17,7 @@ import {
   type CommandResult,
   type RelayConfig,
 } from "@motebit/runtime";
+import type { TokenAudience } from "@motebit/sdk";
 import { buildHardwareVerifiers } from "@motebit/verify";
 import { createSolanaWalletRail, createSolanaMemoSubmitter } from "@motebit/wallet-solana";
 import type { ProxyProviderConfig, ProxySessionAdapter } from "@motebit/runtime";
@@ -656,7 +657,8 @@ export class DesktopApp {
     }
     const result = await cmdSelfTest(this.runtime, {
       relay: { relayUrl: syncUrl, authToken: token, motebitId: this.motebitId },
-      mintToken: async (audience: string) => this.createSyncToken(keypair.privateKey, audience),
+      mintToken: async (audience: TokenAudience) =>
+        this.createSyncToken(keypair.privateKey, audience),
       serving: this.isServing(),
       timeoutMs: 30_000,
     });

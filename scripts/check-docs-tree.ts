@@ -195,6 +195,94 @@ function lsFiles(path: string, ext: string): Set<string> {
   return new Set(readdirSync(path).filter((n) => n.endsWith(ext) && !n.startsWith(".")));
 }
 
+/**
+ * Recursive basename collection — the tree may document nested scripts
+ * (e.g. `scripts/lib/gate-report.ts`) whose entries render as bare
+ * basenames; a non-recursive listing would false-fail them.
+ */
+function lsFileNamesRecursive(path: string, ext: string, out = new Set<string>()): Set<string> {
+  if (!existsSync(path)) return out;
+  for (const entry of readdirSync(path, { withFileTypes: true })) {
+    if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+    if (entry.isDirectory()) {
+      lsFileNamesRecursive(join(path, entry.name), ext, out);
+    } else if (entry.name.endsWith(ext)) {
+      out.add(entry.name);
+    }
+  }
+  return out;
+}
+
+// ── Services-table check ───────────────────────────────────────────────
+
+/**
+ * The "## Services" section's table must name exactly the set of
+ * services/ directories — no phantom services, no omitted ones.
+ * Backtick tokens in the "Services" column are the claim surface; the
+ * column is resolved from the header row by name so a column reorder
+ * cannot silently point the parser at prose text.
+ */
+function checkServicesTable(
+  mdxSrc: string,
+  servicesOnDisk: Set<string>,
+  findings: Finding[],
+  mdxRel: string,
+): void {
+  const sectionMatch = mdxSrc.match(/\n## Services\n([\s\S]*?)(?=\n## |$)/);
+  if (!sectionMatch) {
+    findings.push({
+      loc: mdxRel,
+      message: `could not find the "## Services" section — the services table is a gated sibling of services/`,
+    });
+    return;
+  }
+
+  const rows = sectionMatch[1].split("\n").filter((r) => r.startsWith("|"));
+  const headerRow = rows.find((r) => !/^\|[\s-|]+$/.test(r));
+  const headerCells = (headerRow ?? "").split("|").map((c) => c.trim().toLowerCase());
+  const servicesCol = headerCells.indexOf("services");
+  if (servicesCol === -1) {
+    findings.push({
+      loc: `${mdxRel} § Services`,
+      message: `could not find a "Services" column header in the services table — if the table format changed, update checkServicesTable in scripts/check-docs-tree.ts in the same PR`,
+    });
+    return;
+  }
+
+  const named = new Set<string>();
+  for (const row of rows) {
+    if (row === headerRow || /^\|[\s-|]+$/.test(row)) continue;
+    const servicesCell = row.split("|")[servicesCol] ?? "";
+    for (const tok of servicesCell.matchAll(/`([a-z0-9-]+)`/g)) {
+      named.add(tok[1]);
+    }
+  }
+  if (named.size === 0) {
+    findings.push({
+      loc: `${mdxRel} § Services`,
+      message: `found no backtick-quoted service names in the services table — if the table format changed, update checkServicesTable in scripts/check-docs-tree.ts in the same PR`,
+    });
+    return;
+  }
+
+  for (const name of named) {
+    if (!servicesOnDisk.has(name)) {
+      findings.push({
+        loc: `${mdxRel} § Services`,
+        message: `services table names \`${name}\` but services/${name} does not exist`,
+      });
+    }
+  }
+  for (const name of servicesOnDisk) {
+    if (!named.has(name)) {
+      findings.push({
+        loc: `services/${name}`,
+        message: `exists on disk but is missing from the services table in ${mdxRel} § Services`,
+      });
+    }
+  }
+}
+
 // ── Main ───────────────────────────────────────────────────────────────
 
 function main(): void {
@@ -210,7 +298,7 @@ function main(): void {
     packages: lsDirs(join(ROOT, "packages")),
     services: lsDirs(join(ROOT, "services")),
     specs: lsFiles(join(ROOT, "spec"), ".md"),
-    scripts: lsFiles(join(ROOT, "scripts"), ".ts"),
+    scripts: lsFileNamesRecursive(join(ROOT, "scripts"), ".ts"),
   };
 
   function byKind(kind: EntryKind): TreeEntry[] {
@@ -271,50 +359,7 @@ function main(): void {
     }
   }
 
-  // The "## Services" section's table must name exactly the services/ dirs.
-  // Backtick tokens in the Services column are the claim surface.
-  {
-    const sectionMatch = mdxSrc.match(/\n## Services\n([\s\S]*?)(?=\n## |$)/);
-    if (!sectionMatch) {
-      findings.push({
-        loc: mdxRel,
-        message: `could not find the "## Services" section — the services table is a gated sibling of services/`,
-      });
-    } else {
-      const named = new Set<string>();
-      for (const row of sectionMatch[1].split("\n")) {
-        if (!row.startsWith("|") || /^\|[\s-]+\|/.test(row)) continue;
-        const cells = row.split("|");
-        const servicesCell = cells[2] ?? "";
-        for (const tok of servicesCell.matchAll(/`([a-z0-9-]+)`/g)) {
-          named.add(tok[1]);
-        }
-      }
-      if (named.size === 0) {
-        findings.push({
-          loc: `${mdxRel} § Services`,
-          message: `found no backtick-quoted service names in the services table — if the table format changed, update the Services-section parser in scripts/check-docs-tree.ts in the same PR`,
-        });
-      } else {
-        for (const name of named) {
-          if (!fs.services.has(name)) {
-            findings.push({
-              loc: `${mdxRel} § Services`,
-              message: `services table names \`${name}\` but services/${name} does not exist`,
-            });
-          }
-        }
-        for (const name of fs.services) {
-          if (!named.has(name)) {
-            findings.push({
-              loc: `services/${name}`,
-              message: `exists on disk but is missing from the services table in ${mdxRel} § Services`,
-            });
-          }
-        }
-      }
-    }
-  }
+  checkServicesTable(mdxSrc, fs.services, findings, mdxRel);
 
   // Validate package tags against check-deps.ts
   for (const entry of byKind("package")) {

@@ -1461,7 +1461,7 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
       // perturbation" — so the probe self-rots are visible.
       mutateFile("README.md", (src) =>
         src.replace(
-          "**52 packages across 7 architectural layers",
+          "**53 packages across 7 architectural layers",
           "**37 packages across 7 architectural layers",
         ),
       ),
