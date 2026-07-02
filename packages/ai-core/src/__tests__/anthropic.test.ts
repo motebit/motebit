@@ -279,6 +279,36 @@ describe("AnthropicProvider Anthropic integration", () => {
       ? (system as SystemBlock[]).map((b) => b.text).join("\n\n")
       : String(system);
 
+  it("captures native extended-thinking blocks into response.reasoning, never text", async () => {
+    const mockFn = globalThis.fetch as ReturnType<typeof vi.fn>;
+    mockFn.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          id: "msg_test",
+          type: "message",
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "the user asked X, so I weigh Y then Z" },
+            { type: "text", text: "Here is the answer." },
+          ],
+          model: "claude-sonnet-4-5-20250929",
+          stop_reason: "end_turn",
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const provider = new AnthropicProvider(config);
+    const r = await provider.generate(makeContextPack({ user_message: "X?" }));
+    // Native thinking is captured for the mind register (closing the gap where
+    // the Anthropic provider dropped reasoning entirely)...
+    expect(r.reasoning).toBe("the user asked X, so I weigh Y then Z");
+    // ...and never leaks into the visible reply.
+    expect(r.text).toBe("Here is the answer.");
+    expect(r.text).not.toContain("weigh Y");
+  });
+
   it("sends correct request body", async () => {
     mockFetchSuccess("Hi");
 

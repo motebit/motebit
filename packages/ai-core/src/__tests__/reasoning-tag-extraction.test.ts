@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { extractReasoningTags, stripTags } from "../core.js";
+import { extractReasoningTags, mergeReasoning, stripTags } from "../core.js";
 
 describe("extractReasoningTags", () => {
   it("returns null when no <thinking> tag is present", () => {
@@ -62,5 +62,31 @@ describe("extractReasoningTags", () => {
     const visible = stripTags(raw);
     expect(visible).not.toContain("secret deliberation");
     expect(visible.trim()).toBe("Here is the answer.");
+  });
+});
+
+describe("mergeReasoning (native + tagged sources)", () => {
+  it("returns null when neither source produced reasoning (fail-closed)", () => {
+    expect(mergeReasoning("", null)).toBeNull();
+    expect(mergeReasoning("   ", null)).toBeNull();
+  });
+
+  it("uses native alone when only native reasoning is present", () => {
+    expect(mergeReasoning("native extended-thinking trace", null)).toBe(
+      "native extended-thinking trace",
+    );
+  });
+
+  it("uses tagged alone when only the <thinking>-tag source is present", () => {
+    expect(mergeReasoning("", "tagged trace")).toBe("tagged trace");
+    expect(mergeReasoning("  ", "tagged trace")).toBe("tagged trace");
+  });
+
+  it("prefers native, appending tagged, when both are present", () => {
+    expect(mergeReasoning("native part", "tagged part")).toBe("native part\n\ntagged part");
+  });
+
+  it("trims native whitespace before deciding presence", () => {
+    expect(mergeReasoning("  \n real \n ", null)).toBe("real");
   });
 });

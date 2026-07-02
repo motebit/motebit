@@ -35,6 +35,7 @@ import {
   extractMemoryTags,
   extractNarrationTag,
   extractReasoningTags,
+  mergeReasoning,
   extractStateTags,
   stripTags,
   fetchWithConnectionTimeout,
@@ -100,6 +101,13 @@ interface OpenAIMessage {
   tool_calls?: OpenAIToolCall[];
   tool_call_id?: string;
   name?: string;
+  /**
+   * Native reasoning trace on OpenAI-compatible reasoning models. DeepSeek and
+   * many local reasoning servers emit `reasoning_content`; some use `reasoning`.
+   * Captured into `AIResponse.reasoning` (interior-only), never `content`.
+   */
+  reasoning_content?: string | null;
+  reasoning?: string | null;
 }
 
 interface OpenAIChoice {
@@ -117,6 +125,9 @@ interface OpenAIChoice {
       };
     }>;
     role?: string;
+    /** Native reasoning stream (DeepSeek-style `reasoning_content`; some use `reasoning`). */
+    reasoning_content?: string | null;
+    reasoning?: string | null;
   };
   finish_reason?: string | null;
 }
@@ -284,6 +295,7 @@ export class OpenAIProvider implements IntelligenceProvider {
     }
 
     let accumulated = "";
+    let nativeReasoning = "";
     /** Tool calls indexed by `delta.tool_calls[i].index` from the stream. */
     const pending: Map<number, PendingToolCall> = new Map();
     let inputTokens = 0;
@@ -341,6 +353,14 @@ export class OpenAIProvider implements IntelligenceProvider {
             yield { type: "text", text: delta.content };
           }
 
+          // Native reasoning stream (reasoning models). Accumulated raw off the
+          // wire into interior reasoning, never into `accumulated`/`text` — it
+          // stays out of chat (interior-only, `mind` register).
+          const reasoningDelta = delta.reasoning_content ?? delta.reasoning;
+          if (reasoningDelta != null && reasoningDelta !== "") {
+            nativeReasoning += reasoningDelta;
+          }
+
           if (delta.tool_calls) {
             for (const tcDelta of delta.tool_calls) {
               const idx = tcDelta.index;
@@ -366,10 +386,10 @@ export class OpenAIProvider implements IntelligenceProvider {
     const memoryCandidates = extractMemoryTags(accumulated);
     const stateUpdates = extractStateTags(accumulated);
     const taskStepNarration = extractNarrationTag(accumulated);
-    // Capture interior reasoning BEFORE stripTags discards it. Interior-only —
-    // it never enters `displayText` (the chat register stays clean); it feeds
-    // the owner-facing `mind` organ. See `extractReasoningTags`.
-    const reasoning = extractReasoningTags(accumulated);
+    // Interior reasoning = native stream (reasoning models) merged with the
+    // <thinking>-tag convention. Interior-only — never enters `displayText`
+    // (the chat register stays clean); feeds the owner-facing `mind` organ.
+    const reasoning = mergeReasoning(nativeReasoning, extractReasoningTags(accumulated));
     const displayText = stripTags(accumulated);
 
     yield {
@@ -528,9 +548,10 @@ export class OpenAIProvider implements IntelligenceProvider {
     const memoryCandidates = extractMemoryTags(rawText);
     const stateUpdates = extractStateTags(rawText);
     const taskStepNarration = extractNarrationTag(rawText);
-    // Interior reasoning, captured before stripTags discards it (see the
-    // streaming path above + `extractReasoningTags`). Interior-only.
-    const reasoning = extractReasoningTags(rawText);
+    // Interior reasoning = native field (reasoning models) merged with the
+    // <thinking>-tag convention. Interior-only.
+    const nativeReasoning = choice?.message?.reasoning_content ?? choice?.message?.reasoning ?? "";
+    const reasoning = mergeReasoning(nativeReasoning, extractReasoningTags(rawText));
     const displayText = stripTags(rawText);
 
     const toolCalls: ToolCall[] = (choice?.message?.tool_calls ?? [])
