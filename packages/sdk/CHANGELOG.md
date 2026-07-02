@@ -1,5 +1,21 @@
 # @motebit/sdk Changelog
 
+## 2.3.0
+
+### Minor Changes
+
+- 2dd2b93: New `ThinkingBlock` type + optional `thinking_blocks` on `AIResponse` and the `assistant` `ConversationMessage` variant — the round-trip carrier for Anthropic extended-thinking blocks (with signatures), required to preserve a valid multi-turn tool-use conversation when thinking is enabled. Opaque and never rendered (distinct from `reasoning`, the display text); absent unless extended thinking is enabled, so inert for every other provider/config.
+- cae3028: `AIResponse` gains an optional `reasoning` field — the model's interior cognition (`<thinking>`), captured for the owner-facing `mind` embodiment organ (render-engine `EMBODIMENT_MODE_CONTRACTS.mind`, `source:"interior"`/`observer:"self"`). Previously the reasoning trace was stripped from the visible text and captured nowhere — destroyed before it could reach the surface built to render it. It stays stripped from the visible `text` (the chat register stays clean) and is INTERIOR-ONLY by contract: never synced, egressed, persisted to a shared surface, or sent to external AI. Additive and fail-closed — absent when the model emitted no reasoning. Increment 1 of the interior-cognition arc (`felt-interior.md`); the `mind`-organ render follows in Increment 2.
+
+### Patch Changes
+
+- Updated dependencies [74d2f67]
+- Updated dependencies [74d2f67]
+- Updated dependencies [74d2f67]
+- Updated dependencies [74d2f67]
+- Updated dependencies [74d2f67]
+  - @motebit/protocol@3.9.0
+
 ## 2.2.8
 
 ### Patch Changes
