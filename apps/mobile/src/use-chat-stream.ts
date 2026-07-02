@@ -57,6 +57,14 @@ export interface ChatStreamMessage {
   approvalResolved?: boolean;
   /** Full signed receipt for role === "receipt" messages. */
   receipt?: ExecutionReceipt;
+  /**
+   * Interior reasoning — the model's `<thinking>` trace for this turn (the
+   * `mind` register). Rendered as a calm, opt-in, collapsed disclosure under
+   * the assistant reply, never the reply itself. INTERIOR-ONLY: held in local
+   * UI state, never persisted or synced. Accumulated across the turn's
+   * reasoning rounds; absent when the model emitted no reasoning.
+   */
+  reasoning?: string;
 }
 
 export interface UseChatStreamDeps {
@@ -106,6 +114,7 @@ export function useChatStream(deps: UseChatStreamDeps): UseChatStreamResult {
   const consumeStream = useCallback(
     async (stream: AsyncGenerator<StreamChunk>) => {
       let assistantContent = "";
+      let assistantReasoning = "";
       const assistantId = crypto.randomUUID();
 
       // Add placeholder
@@ -127,6 +136,23 @@ export function useChatStream(deps: UseChatStreamDeps): UseChatStreamResult {
                 ),
               );
               pushTTSChunk(chunk.text);
+              break;
+
+            case "reasoning":
+              // Interior cognition for the owner-facing `mind` register —
+              // rendered as a calm, opt-in collapsed disclosure under the reply
+              // (App.tsx), never the reply text. Accumulate the turn's reasoning
+              // rounds. INTERIOR-ONLY: local UI state, never persisted/synced.
+              if (chunk.text.trim() !== "") {
+                assistantReasoning = assistantReasoning
+                  ? `${assistantReasoning}\n\n${chunk.text}`
+                  : chunk.text;
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === assistantId ? { ...m, reasoning: assistantReasoning } : m,
+                  ),
+                );
+              }
               break;
 
             case "tool_status":

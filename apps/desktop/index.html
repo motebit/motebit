@@ -358,6 +358,39 @@
         border: 1px solid var(--border-light);
         border-bottom-left-radius: 4px;
       }
+      /* Interior reasoning — the `mind` register in chat. Collapsed by
+         default (calm: no clutter), opt-in expand (felt-interior). Muted +
+         smaller than the reply so the conversation stays primary. */
+      .chat-reasoning {
+        margin-top: 8px;
+        border-top: 1px solid var(--border-light);
+        padding-top: 6px;
+        font-size: 0.85em;
+      }
+      .chat-reasoning-summary {
+        cursor: pointer;
+        color: var(--text-faint);
+        letter-spacing: 0.02em;
+        user-select: none;
+        list-style: none;
+      }
+      .chat-reasoning-summary::-webkit-details-marker {
+        display: none;
+      }
+      .chat-reasoning-summary::before {
+        content: "▸ ";
+        color: var(--text-faint);
+      }
+      .chat-reasoning[open] > .chat-reasoning-summary::before {
+        content: "▾ ";
+      }
+      .chat-reasoning-body {
+        margin-top: 6px;
+        color: var(--text-secondary);
+        white-space: pre-wrap;
+        word-break: break-word;
+        line-height: 1.5;
+      }
       .thinking-indicator {
         align-self: flex-start;
         display: flex;

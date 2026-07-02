@@ -1185,6 +1185,29 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
           te.textContent = stripPartialActionTag(accumulated);
           chatLog.scrollTop = chatLog.scrollHeight;
           callbacks.pushTTSChunk(chunk.text);
+        } else if (chunk.type === "reasoning") {
+          // Interior cognition made legible to the OWNER without cluttering the
+          // conversation. The `mind` register is hidden on the slab plane by
+          // doctrine and "lives in chat"; this is its calm, opt-in form — a
+          // collapsed <details> the sovereign can expand (`felt-interior.md`),
+          // never an always-open panel. INTERIOR-ONLY: ephemeral DOM, never
+          // added to `accumulated`, so it is not persisted/synced. `textContent`
+          // keeps the trace literal (no HTML injection from model output).
+          if (chunk.text.trim() !== "") {
+            const { bubble: rb } = ensureBubble();
+            const details = document.createElement("details");
+            details.className = "chat-reasoning";
+            const summary = document.createElement("summary");
+            summary.className = "chat-reasoning-summary";
+            summary.textContent = "reasoning";
+            const body = document.createElement("div");
+            body.className = "chat-reasoning-body";
+            body.textContent = chunk.text;
+            details.appendChild(summary);
+            details.appendChild(body);
+            rb.appendChild(details);
+            chatLog.scrollTop = chatLog.scrollHeight;
+          }
         } else if (chunk.type === "tool_status") {
           if (chunk.status === "calling") {
             removeThinkingIndicator(thinkingEl);
