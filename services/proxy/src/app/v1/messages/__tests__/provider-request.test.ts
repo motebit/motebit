@@ -5,9 +5,10 @@
  * latter — the prior bug that cached nothing). OpenAI-shaped upstreams get the
  * system flattened to a plain string.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import {
   buildProviderRequest,
+  proxyExtendedThinkingBudget,
   systemToText,
   systemToAnthropicBlocks,
   type SystemBlock,
@@ -221,5 +222,62 @@ describe("buildProviderRequest — local-server is not routable", () => {
     expect(() => buildProviderRequest("local-server", "", "m", anthropicBody("x"), 4096)).toThrow(
       /not routable through the proxy/,
     );
+  });
+});
+
+const THINK_ENV = "MOTEBIT_EXTENDED_THINKING_BUDGET_TOKENS";
+
+describe("extended-thinking switch (cloud path, off by default)", () => {
+  afterEach(() => {
+    delete process.env[THINK_ENV];
+  });
+
+  function anthropicBodyFor(model: string): Record<string, unknown> {
+    return { model, messages: [{ role: "user", content: "hi" }], system: "s", max_tokens: 2048 };
+  }
+
+  it("proxyExtendedThinkingBudget: null when unset / invalid / unsupported model; floors at 1024", () => {
+    expect(proxyExtendedThinkingBudget("claude-sonnet-4-5")).toBeNull(); // unset
+    process.env[THINK_ENV] = "0";
+    expect(proxyExtendedThinkingBudget("claude-sonnet-4-5")).toBeNull(); // non-positive
+    process.env[THINK_ENV] = "nope";
+    expect(proxyExtendedThinkingBudget("claude-sonnet-4-5")).toBeNull(); // non-numeric
+    process.env[THINK_ENV] = "3000";
+    expect(proxyExtendedThinkingBudget("claude-sonnet-4-5")).toBe(3000);
+    expect(proxyExtendedThinkingBudget("claude-haiku-4-5")).toBeNull(); // unsupported model
+    process.env[THINK_ENV] = "10";
+    expect(proxyExtendedThinkingBudget("claude-sonnet-4-5")).toBe(1024); // floored
+  });
+
+  it("is INERT by default — no thinking param, temperature preserved", () => {
+    const body = { ...anthropicBodyFor("claude-sonnet-4-5"), temperature: 0.5 };
+    const req = buildProviderRequest("anthropic", "sk", "claude-sonnet-4-5", body, 8192);
+    const out = JSON.parse(req.body) as Record<string, unknown>;
+    expect(out.thinking).toBeUndefined();
+    expect(out.temperature).toBe(0.5);
+  });
+
+  it("when enabled on a supporting model: adds thinking, omits temperature, bumps max_tokens", () => {
+    process.env[THINK_ENV] = "4000";
+    const body = { ...anthropicBodyFor("claude-sonnet-4-5"), temperature: 0.5 };
+    const req = buildProviderRequest("anthropic", "sk", "claude-sonnet-4-5", body, 8192);
+    const out = JSON.parse(req.body) as Record<string, unknown>;
+    expect(out.thinking).toEqual({ type: "enabled", budget_tokens: 4000 });
+    expect(out.temperature).toBeUndefined();
+    expect(out.max_tokens as number).toBeGreaterThan(4000);
+  });
+
+  it("safety net: does NOT enable on an unsupported model even when the env is set", () => {
+    process.env[THINK_ENV] = "4000";
+    const req = buildProviderRequest(
+      "anthropic",
+      "sk",
+      "claude-haiku-4-5",
+      { ...anthropicBodyFor("claude-haiku-4-5"), temperature: 0.5 },
+      8192,
+    );
+    const out = JSON.parse(req.body) as Record<string, unknown>;
+    expect(out.thinking).toBeUndefined();
+    expect(out.temperature).toBe(0.5);
   });
 });
