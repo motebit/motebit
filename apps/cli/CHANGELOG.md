@@ -1,5 +1,12 @@
 # motebit CLI Changelog
 
+## 1.6.2
+
+### Patch Changes
+
+- 74d2f67: The REPL delegate flow (submit → poll) and `/balance` now ride `@motebit/relay-client`, the typed relay transport. This fixes two live defects in the hand-rolled path: task submission previously sent no `Idempotency-Key` (the relay unconditionally rejects submission without one, HTTP 400), and the poll leg replayed the `task:submit`-audience token against the task-query route (audience mismatch → 403, silently swallowed by the poll loop until a 60s timeout for device-token users). The typed client mints the correct registry audience per leg and requires the idempotency key at the type level. Auth is unchanged: master token preferred, signed device token fallback, bridged through the sdk `CredentialSource` contract.
+- 74d2f67: Type-safety only, no behavior change: every audience parameter on the CLI's token-minting seams (`getRelayAuthHeaders`, delegate/daemon/self-test mint closures, x402 smoke helper) narrows from `string` to the closed `TokenAudience` registry union re-exported by `@motebit/sdk`. A typo'd or unregistered audience at any CLI signing site is now a compile error instead of a runtime 401. All previously minted values are registry members (including the newly registered `market:query`), so minted tokens are byte-identical.
+
 ## 1.6.1
 
 ### Patch Changes
