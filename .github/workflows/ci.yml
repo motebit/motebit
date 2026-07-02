@@ -24,7 +24,14 @@ env:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 20, not 15: the full monorepo `test:coverage` now completes at ~14–15 min
+    # on a cold cache (tests PASS, then the job is cancelled at the 15-min wall —
+    # a false red that cancelled #245's first run and every recent Dependabot PR).
+    # Concurrency is already pinned to the runner's core count (`--concurrency=4`
+    # below), so lowering it would only slow the suite; headroom is the lever.
+    # Precedent: the deploy jobs carry 30 for the same cold-build class. Revisit
+    # (make the suite faster / shard) if this trends toward the ceiling again.
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
