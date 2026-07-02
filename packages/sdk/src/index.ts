@@ -324,13 +324,40 @@ export interface SkillSelectorHook {
  */
 export type ConversationMessage =
   | { role: "user"; content: string; sensitivity?: SensitivityLevel }
-  | { role: "assistant"; content: string; tool_calls?: ToolCall[]; sensitivity?: SensitivityLevel }
+  | {
+      role: "assistant";
+      content: string;
+      tool_calls?: ToolCall[];
+      sensitivity?: SensitivityLevel;
+      /**
+       * Provider-native thinking blocks from this assistant turn, preserved for
+       * tool-use continuation (see `ThinkingBlock`). Present only when extended
+       * thinking is enabled; `buildMessages` re-emits them ahead of the turn's
+       * text/tool_use blocks. Inert (absent) by default.
+       */
+      thinking_blocks?: ThinkingBlock[];
+    }
   | { role: "tool"; content: string; tool_call_id: string; sensitivity?: SensitivityLevel };
 
 export interface ToolCall {
   id: string;
   name: string;
   args: Record<string, unknown>;
+}
+
+/**
+ * A provider-native reasoning block that must be round-tripped verbatim, with
+ * its cryptographic `signature`, for a multi-turn tool-use conversation to stay
+ * valid (Anthropic extended-thinking: when thinking is enabled and the assistant
+ * turn used a tool, the thinking block + signature MUST be preserved in the
+ * assistant message on the follow-up request, or the API rejects it). Distinct
+ * from `AIResponse.reasoning` (the display text): this is the opaque
+ * round-trip artifact, never rendered. Absent unless extended thinking is
+ * enabled (off by default), so it is inert for every other provider/config.
+ */
+export interface ThinkingBlock {
+  thinking: string;
+  signature: string;
 }
 
 export interface AIResponse {
@@ -383,6 +410,13 @@ export interface AIResponse {
    * renders empty).
    */
   reasoning?: string;
+  /**
+   * Provider-native thinking blocks (with signatures) for this turn, for
+   * tool-use continuation round-tripping (see `ThinkingBlock`). Opaque —
+   * NEVER rendered (that is `reasoning`). Present only when extended thinking
+   * is enabled; the loop carries them onto the assistant history message.
+   */
+  thinking_blocks?: ThinkingBlock[];
 }
 
 export interface IntelligenceProvider {

@@ -177,6 +177,18 @@ export interface AnthropicProviderConfig {
   /** Additional headers injected into every request (e.g. proxy auth tokens). */
   extra_headers?: Record<string, string>;
   /**
+   * Enable Anthropic extended thinking. OFF by default (undefined) — the entire
+   * feature is inert unless set, so behavior is byte-identical for existing
+   * deployments. When set, the request carries `thinking: { type: "enabled",
+   * budget_tokens }`, `temperature` is omitted (extended thinking requires the
+   * default), `max_tokens` is bumped above the budget, and thinking blocks are
+   * preserved across tool-use turns (`ThinkingBlock`). `budgetTokens` must be
+   * ≥ 1024. Only applied on models that support it (`modelSupportsExtendedThinking`);
+   * silently omitted otherwise so a mixed model fleet never 400s. The operator is
+   * responsible for validating cost/behavior on their model before enabling.
+   */
+  extendedThinking?: { budgetTokens: number };
+  /**
    * Fired when a response carries `X-Motebit-Routing-Reason`. The
    * motebit-cloud proxy emits this header alongside the proxied
    * Anthropic response to surface the auto-routing decision the
@@ -340,6 +352,8 @@ interface AnthropicContentBlock {
   input?: Record<string, unknown>;
   /** Extended-thinking block content (`type === "thinking"`). */
   thinking?: string;
+  /** Cryptographic signature of a thinking block — required to round-trip it. */
+  signature?: string;
 }
 
 interface AnthropicResponse {
@@ -371,6 +385,8 @@ interface AnthropicSSEEvent {
     partial_json?: string;
     /** Extended-thinking streaming delta (`type === "thinking_delta"`). */
     thinking?: string;
+    /** Signature streaming delta (`type === "signature_delta"`). */
+    signature?: string;
   };
   usage?: { output_tokens: number };
 }
@@ -554,6 +570,17 @@ export function mergeReasoning(native: string, tagged: string | null): string | 
   const n = native.trim();
   if (n === "") return tagged;
   return tagged ? `${n}\n\n${tagged}` : n;
+}
+
+/**
+ * Whether a model supports Anthropic extended thinking — the safety net that
+ * keeps a mixed model fleet from 400-ing when `extendedThinking` is configured.
+ * Extended thinking is a Claude 3.7 Sonnet + Claude 4/5-family (Sonnet/Opus)
+ * capability; Haiku and pre-3.7 models don't support it. Operator opt-in still
+ * gates the whole feature; this only prevents applying it where it's known-bad.
+ */
+export function modelSupportsExtendedThinking(model: string): boolean {
+  return /claude-(?:3-7-sonnet|(?:opus|sonnet)-(?:[4-9]|\d\d))/i.test(model);
 }
 
 // Action keywords → MotebitState field deltas
@@ -987,6 +1014,8 @@ export class AnthropicProvider implements StreamingProvider {
       body.tools = tools;
     }
 
+    this.applyExtendedThinking(body);
+
     const res = await fetchWithConnectionTimeout(
       `${baseUrl}/v1/messages`,
       {
@@ -1068,6 +1097,8 @@ export class AnthropicProvider implements StreamingProvider {
       body.tools = tools;
     }
 
+    this.applyExtendedThinking(body);
+
     const res = await fetchWithConnectionTimeout(
       `${baseUrl}/v1/messages`,
       {
@@ -1107,6 +1138,11 @@ export class AnthropicProvider implements StreamingProvider {
     let activeToolJson = "";
     let inputTokens = 0;
     let outputTokens = 0;
+    // Extended-thinking block assembly: text arrives as thinking_delta and the
+    // signature as signature_delta within one content block; both are pushed at
+    // content_block_stop for tool-use round-tripping.
+    const thinkingBlocks: Array<{ thinking: string; signature: string }> = [];
+    let currentThinking: { thinking: string; signature: string } | null = null;
 
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
@@ -1138,6 +1174,8 @@ export class AnthropicProvider implements StreamingProvider {
                 activeToolId = event.content_block.id;
                 activeToolName = event.content_block.name;
                 activeToolJson = "";
+              } else if (event.content_block?.type === "thinking") {
+                currentThinking = { thinking: "", signature: "" };
               }
             } else if (event.type === "content_block_delta") {
               if (
@@ -1162,6 +1200,13 @@ export class AnthropicProvider implements StreamingProvider {
                 // register. Accumulated raw off the wire, never into `accumulated`
                 // (the visible text) — interior-only, and it never enters chat.
                 nativeReasoning += event.delta.thinking;
+                if (currentThinking) currentThinking.thinking += event.delta.thinking;
+              } else if (
+                event.delta?.type === "signature_delta" &&
+                event.delta.signature != null &&
+                event.delta.signature !== ""
+              ) {
+                if (currentThinking) currentThinking.signature += event.delta.signature;
               }
             } else if (event.type === "content_block_stop") {
               if (
@@ -1184,6 +1229,11 @@ export class AnthropicProvider implements StreamingProvider {
                 activeToolId = undefined;
                 activeToolName = undefined;
                 activeToolJson = "";
+              } else if (currentThinking != null) {
+                // Close the thinking block. Only signature-bearing blocks are
+                // round-trippable (Anthropic requires the signature on replay).
+                if (currentThinking.signature !== "") thinkingBlocks.push(currentThinking);
+                currentThinking = null;
               }
             }
           } catch {
@@ -1214,6 +1264,7 @@ export class AnthropicProvider implements StreamingProvider {
           : {}),
         ...(taskStepNarration !== null ? { task_step_narration: taskStepNarration } : {}),
         ...(reasoning !== null ? { reasoning } : {}),
+        ...(thinkingBlocks.length > 0 ? { thinking_blocks: thinkingBlocks } : {}),
       },
     };
   }
@@ -1224,6 +1275,25 @@ export class AnthropicProvider implements StreamingProvider {
 
   extractMemoryCandidates(response: AIResponse): Promise<MemoryCandidate[]> {
     return Promise.resolve(response.memory_candidates);
+  }
+
+  /**
+   * Apply Anthropic extended thinking to the request body when configured AND
+   * the model supports it. Inert (no-op) otherwise — the whole feature is
+   * off-by-default. When applied: enables thinking with the configured budget,
+   * bumps `max_tokens` above the budget (thinking tokens count toward it, so the
+   * response needs headroom), and removes `temperature` (the API rejects a
+   * custom temperature alongside thinking). Thinking-block preservation across
+   * tool-use turns is handled in `buildMessages` + the loop.
+   */
+  private applyExtendedThinking(body: Record<string, unknown>): void {
+    const et = this.config.extendedThinking;
+    if (!et || !modelSupportsExtendedThinking(this.config.model)) return;
+    const budget = Math.max(1024, Math.floor(et.budgetTokens));
+    body.thinking = { type: "enabled", budget_tokens: budget };
+    const configured = typeof body.max_tokens === "number" ? body.max_tokens : 4096;
+    body.max_tokens = Math.max(configured, budget + 4096);
+    delete body.temperature;
   }
 
   private buildMessages(contextPack: ContextPack): Record<string, unknown>[] {
@@ -1259,6 +1329,13 @@ export class AnthropicProvider implements StreamingProvider {
         });
       } else if (msg.role === "assistant" && msg.tool_calls && msg.tool_calls.length > 0) {
         const contentBlocks: Record<string, unknown>[] = [];
+        // Extended thinking: preserved thinking blocks MUST come first (before
+        // text/tool_use) and carry their signature, or Anthropic rejects the
+        // tool-use continuation. Present only when extended thinking is enabled;
+        // absent by default, so this is a no-op for existing deployments.
+        for (const tb of msg.thinking_blocks ?? []) {
+          contentBlocks.push({ type: "thinking", thinking: tb.thinking, signature: tb.signature });
+        }
         if (msg.content) {
           contentBlocks.push({ type: "text", text: msg.content });
         }
@@ -1399,11 +1476,14 @@ export class AnthropicProvider implements StreamingProvider {
     const displayText = stripTags(rawText);
     // Native extended-thinking blocks + the <thinking>-tag convention →
     // interior reasoning for the `mind` register. Interior-only.
-    const nativeReasoning = data.content
-      .filter((block) => block.type === "thinking")
-      .map((block) => block.thinking ?? "")
-      .join("");
+    const thinkingContentBlocks = data.content.filter((block) => block.type === "thinking");
+    const nativeReasoning = thinkingContentBlocks.map((block) => block.thinking ?? "").join("");
     const reasoning = mergeReasoning(nativeReasoning, extractReasoningTags(rawText));
+    // Round-trippable thinking blocks (signature-bearing) for tool-use
+    // continuation. Only present when extended thinking is enabled.
+    const thinkingBlocks = thinkingContentBlocks
+      .filter((block) => block.signature != null && block.signature !== "")
+      .map((block) => ({ thinking: block.thinking ?? "", signature: block.signature! }));
 
     return {
       text: displayText,
@@ -1414,6 +1494,7 @@ export class AnthropicProvider implements StreamingProvider {
       usage: data.usage,
       ...(taskStepNarration !== null ? { task_step_narration: taskStepNarration } : {}),
       ...(reasoning !== null ? { reasoning } : {}),
+      ...(thinkingBlocks.length > 0 ? { thinking_blocks: thinkingBlocks } : {}),
     };
   }
 

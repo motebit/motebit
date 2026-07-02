@@ -471,6 +471,38 @@ describe("AnthropicProvider.generateStream", () => {
     expect(final?.text).not.toContain("<memory");
   });
 
+  it("captures streaming extended-thinking (thinking_delta + signature_delta) into reasoning + thinking_blocks, never text", async () => {
+    mockStreamFetchOnce([
+      { type: "content_block_start", content_block: { type: "thinking" } },
+      { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "let me weigh " } },
+      { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "the options" } },
+      { type: "content_block_delta", delta: { type: "signature_delta", signature: "sig-" } },
+      { type: "content_block_delta", delta: { type: "signature_delta", signature: "123" } },
+      { type: "content_block_stop" },
+      { type: "content_block_start", content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", delta: { type: "text_delta", text: "The answer is A." } },
+      { type: "content_block_stop" },
+      "[DONE]",
+    ]);
+    const provider = new AnthropicProvider(config);
+    const text: string[] = [];
+    let final: AIResponse | undefined;
+    for await (const c of provider.generateStream(makePack())) {
+      if (c.type === "text") text.push(c.text);
+      else final = c.response;
+    }
+    // Reasoning (display) captured...
+    expect(final?.reasoning).toBe("let me weigh the options");
+    // ...and the signature-bearing block preserved for tool-use round-trip...
+    expect(final?.thinking_blocks).toEqual([
+      { thinking: "let me weigh the options", signature: "sig-123" },
+    ]);
+    // ...and none of it leaks into the visible reply.
+    expect(text.join("")).toBe("The answer is A.");
+    expect(final?.text).toBe("The answer is A.");
+    expect(final?.text).not.toContain("weigh");
+  });
+
   it("accumulates tool-use arguments across input_json_delta events", async () => {
     mockStreamFetchOnce([
       {

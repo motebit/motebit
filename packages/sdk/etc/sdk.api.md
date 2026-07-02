@@ -57,6 +57,7 @@ export interface AIResponse {
     task_step_narration?: string;
     // (undocumented)
     text: string;
+    thinking_blocks?: ThinkingBlock[];
     // (undocumented)
     tool_calls?: ToolCall[];
     usage?: {
@@ -226,6 +227,7 @@ export type ConversationMessage = {
     content: string;
     tool_calls?: ToolCall[];
     sensitivity?: SensitivityLevel;
+    thinking_blocks?: ThinkingBlock[];
 } | {
     role: "tool";
     content: string;
@@ -844,6 +846,14 @@ export interface ThemeOption {
 
 // @public (undocumented)
 export type ThemePreference = "light" | "dark" | "system";
+
+// @public
+export interface ThinkingBlock {
+    // (undocumented)
+    signature: string;
+    // (undocumented)
+    thinking: string;
+}
 
 // @public (undocumented)
 export interface ToolCall {
