@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import { SensitivityLevel, type AccrualBasis } from "@motebit/sdk";
 
 // Mock @motebit/voice — chat.ts imports StreamingTTSQueue and WebSpeechTTSProvider.
@@ -69,12 +69,14 @@ beforeAll(() => {
 let renderMarkdown: (raw: string) => string;
 let formatErrorMessage: (msg: string) => string;
 let buildAccrualAttributionEl: (basis: AccrualBasis) => { className: string; textContent: string };
+let StreamingRenderer: typeof import("../ui/chat").StreamingRenderer;
 
 beforeAll(async () => {
   const mod = await import("../ui/chat");
   renderMarkdown = mod.renderMarkdown;
   formatErrorMessage = mod.formatErrorMessage;
   buildAccrualAttributionEl = mod.buildAccrualAttributionEl as typeof buildAccrualAttributionEl;
+  StreamingRenderer = mod.StreamingRenderer;
 });
 
 // ─── buildAccrualAttributionEl — the calm leverage-moment render (Inc 3) ───
@@ -299,5 +301,92 @@ describe("renderMarkdown", () => {
   it("handles only internal tags (stripped to empty)", () => {
     const result = renderMarkdown("<thinking>just thoughts</thinking>");
     expect(result).toBe("");
+  });
+});
+
+// ─── StreamingRenderer — the coalesced streaming paint (Cause C fix) ───
+// A controllable requestAnimationFrame: pushes queue a callback we fire by
+// hand, so we can assert exactly how many paints N pushes produce.
+describe("StreamingRenderer", () => {
+  let rafQueue: Array<() => void>;
+  let rafId: number;
+
+  function fakeEl(): { innerHTML: string } {
+    return { innerHTML: "" };
+  }
+
+  beforeEach(() => {
+    rafQueue = [];
+    rafId = 0;
+    vi.stubGlobal("requestAnimationFrame", (cb: () => void) => {
+      rafQueue.push(cb);
+      return ++rafId;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => {
+      // Single in-flight frame in these tests; drop the queue on cancel.
+      if (id === rafId) rafQueue = [];
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function drainFrame(): void {
+    const q = rafQueue;
+    rafQueue = [];
+    for (const cb of q) cb();
+  }
+
+  it("coalesces many pushes within one frame into a single paint (latest wins)", () => {
+    const r = new StreamingRenderer();
+    const el = fakeEl() as unknown as HTMLElement;
+    r.push(el, "a");
+    r.push(el, "ab");
+    r.push(el, "abc");
+    // Nothing painted until the frame fires — the O(n²) per-token path is gone.
+    expect(el.innerHTML).toBe("");
+    expect(rafQueue.length).toBe(1); // one scheduled frame, not three
+    drainFrame();
+    expect(el.innerHTML).toBe(renderMarkdown("abc")); // latest source only
+  });
+
+  it("runs the onPaint side-effect exactly once per coalesced frame", () => {
+    const r = new StreamingRenderer();
+    const el = fakeEl() as unknown as HTMLElement;
+    const onPaint = vi.fn();
+    r.push(el, "x", onPaint);
+    r.push(el, "xy", onPaint);
+    drainFrame();
+    expect(onPaint).toHaveBeenCalledTimes(1);
+  });
+
+  it("flush() paints the pending source immediately and cancels the frame", () => {
+    const r = new StreamingRenderer();
+    const el = fakeEl() as unknown as HTMLElement;
+    r.push(el, "final tokens");
+    r.flush();
+    expect(el.innerHTML).toBe(renderMarkdown("final tokens"));
+    // The scheduled frame was cancelled — draining must not double-paint.
+    expect(rafQueue.length).toBe(0);
+  });
+
+  it("flush() with nothing pending is a no-op", () => {
+    const r = new StreamingRenderer();
+    const el = fakeEl() as unknown as HTMLElement;
+    r.flush();
+    expect(el.innerHTML).toBe("");
+  });
+
+  it("schedules a fresh frame for pushes that arrive after a paint", () => {
+    const r = new StreamingRenderer();
+    const el = fakeEl() as unknown as HTMLElement;
+    r.push(el, "one");
+    drainFrame();
+    expect(el.innerHTML).toBe(renderMarkdown("one"));
+    r.push(el, "one two");
+    expect(rafQueue.length).toBe(1); // new frame scheduled, not stuck
+    drainFrame();
+    expect(el.innerHTML).toBe(renderMarkdown("one two"));
   });
 });

@@ -49,6 +49,57 @@ export function renderMarkdown(raw: string): string {
   );
 }
 
+/**
+ * Coalesces streaming markdown re-renders to one paint per animation frame.
+ *
+ * The naive path — `el.innerHTML = renderMarkdown(accumulated)` on every
+ * streamed token — is O(n²): each token re-parses and re-lays-out the entire
+ * growing message, and a fast token burst (on-device WebLLM, cached cloud
+ * replies) fires hundreds of synchronous reflows a second on the main thread.
+ * That is the lag felt while a reply streams, and it amplifies the GPU
+ * contention on the on-device path.
+ *
+ * Coalescing decouples token-arrival rate from DOM-render rate: tokens arriving
+ * within one frame collapse into a single markdown render + one DOM write + one
+ * scroll, capping re-renders at the display refresh rate. `flush()` forces the
+ * final paint at turn end so the last tokens (which may have landed mid-frame)
+ * are always shown. Markdown needs the whole string for correct parsing (a
+ * token can close a code fence or list), so each paint re-renders the full
+ * source — but at ~display-refresh rate, not once per token. TTS chunking is
+ * unaffected; only the DOM render coalesces.
+ */
+export class StreamingRenderer {
+  private frame: number | null = null;
+  private pending: { el: HTMLElement; source: string; onPaint?: () => void } | null = null;
+
+  push(el: HTMLElement, source: string, onPaint?: () => void): void {
+    this.pending = { el, source, onPaint };
+    if (this.frame === null) {
+      this.frame = requestAnimationFrame(() => {
+        this.frame = null;
+        this.paint();
+      });
+    }
+  }
+
+  /** Force the pending paint immediately (call at turn end). Idempotent. */
+  flush(): void {
+    if (this.frame !== null) {
+      cancelAnimationFrame(this.frame);
+      this.frame = null;
+    }
+    this.paint();
+  }
+
+  private paint(): void {
+    const p = this.pending;
+    if (p === null) return;
+    this.pending = null;
+    p.el.innerHTML = renderMarkdown(p.source);
+    p.onPaint?.();
+  }
+}
+
 // === Streaming TTS ===
 
 /**
@@ -724,6 +775,7 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
     let textEl: HTMLSpanElement | null = null;
     let accumulated = "";
     let firstChunkReceived = false;
+    const renderer = new StreamingRenderer();
     // Captured from the most recent delegation_complete that carried a full
     // signed receipt. Emerged as a spatial artifact after the result chunk
     // so the review text stays unopposed as the primary content; the receipt
@@ -765,8 +817,9 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
             }
 
             accumulated += chunk.text;
-            textEl!.innerHTML = renderMarkdown(accumulated);
-            chatLog.scrollTop = chatLog.scrollHeight;
+            renderer.push(textEl!, accumulated, () => {
+              chatLog.scrollTop = chatLog.scrollHeight;
+            });
             streamingTTS.push(chunk.text);
             break;
           }
@@ -847,8 +900,9 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
                   bubble.classList.add("visible");
                 }
                 accumulated += resumeChunk.text;
-                textEl!.innerHTML = renderMarkdown(accumulated);
-                chatLog.scrollTop = chatLog.scrollHeight;
+                renderer.push(textEl!, accumulated, () => {
+                  chatLog.scrollTop = chatLog.scrollHeight;
+                });
                 streamingTTS.push(resumeChunk.text);
               } else if (resumeChunk.type === "tool_status") {
                 if (resumeChunk.status === "calling")
@@ -956,11 +1010,17 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
           }
         }
       }
+      // Force the final coalesced paint so the last tokens (which may have
+      // landed mid-frame) are always shown before the turn settles.
+      renderer.flush();
       // Post-loop cleanup: unconditionally remove thinking indicator.
       // Covers all edge cases (tag-only responses, tool-only iterations,
       // early break, missing result chunk). Safe to call if already removed.
       removeThinkingIndicator(thinkingEl);
     } catch (err: unknown) {
+      // Flush before the empty-bubble check below reads textContent — a
+      // coalesced paint may still be pending when the error interrupts.
+      renderer.flush();
       removeThinkingIndicator(thinkingEl);
       const msg = err instanceof Error ? err.message : String(err);
       if (bubble && !textEl?.textContent) {
@@ -997,6 +1057,7 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
     let currentBubble: HTMLDivElement | null = null;
     let currentTextEl: HTMLSpanElement | null = null;
     let accumulated = "";
+    const renderer = new StreamingRenderer();
 
     try {
       for await (const chunk of ctx.app.executeGoal(goalId, goal)) {
@@ -1051,11 +1112,14 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
           case "step_chunk":
             if (chunk.chunk.type === "text" && currentTextEl) {
               accumulated += chunk.chunk.text;
-              currentTextEl.innerHTML = renderMarkdown(accumulated);
-              chatLog.scrollTop = chatLog.scrollHeight;
+              renderer.push(currentTextEl, accumulated, () => {
+                chatLog.scrollTop = chatLog.scrollHeight;
+              });
             }
             break;
           case "step_completed": {
+            // Paint this step's final text before its element is released.
+            renderer.flush();
             // Update the spatial artifact — mark this step done
             const planArtifact = document.querySelector(`#plan-step-${chunk.step.ordinal}`);
             if (planArtifact) planArtifact.classList.add("step-done");
@@ -1099,9 +1163,11 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
         }
       }
     } catch (err: unknown) {
+      renderer.flush();
       const msg = err instanceof Error ? err.message : String(err);
       addMessage("system", `Plan error: ${msg}`);
     } finally {
+      renderer.flush();
       setProcessing(false);
     }
   }
@@ -1139,6 +1205,7 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
     let textEl: HTMLSpanElement | null = null;
     let accumulated = "";
     let capturedReceipt: ExecutionReceipt | null = null;
+    const renderer = new StreamingRenderer();
 
     try {
       // A pinned `targetWorkerId` makes this a deterministic hire of THAT worker
@@ -1162,8 +1229,9 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
               bubble.classList.add("visible");
             }
             accumulated += chunk.text;
-            textEl!.innerHTML = renderMarkdown(accumulated);
-            chatLog.scrollTop = chatLog.scrollHeight;
+            renderer.push(textEl!, accumulated, () => {
+              chatLog.scrollTop = chatLog.scrollHeight;
+            });
             break;
           }
           case "delegation_complete": {
@@ -1189,6 +1257,7 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
       addMessage("system", `Delegation error: ${msg}`);
       return;
     } finally {
+      renderer.flush();
       setProcessing(false);
     }
 

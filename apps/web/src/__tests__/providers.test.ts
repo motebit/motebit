@@ -25,7 +25,12 @@ vi.mock("@motebit/ai-core/browser", async (importActual) => {
   };
 });
 
-import { checkWebGPU, createProvider, WebLLMProvider } from "../providers.js";
+import {
+  checkWebGPU,
+  createProvider,
+  WebLLMProvider,
+  isOnDeviceInferenceActive,
+} from "../providers.js";
 import type { ContextPack, AIResponse } from "@motebit/sdk";
 
 beforeEach(() => {
@@ -258,5 +263,39 @@ describe("WebLLMProvider", () => {
     const { final } = await drain(p);
     expect(final?.reasoning).toBeUndefined();
     expect(final?.text).toBe("Just a plain reply.");
+  });
+
+  // ── GPU-yield gauge (Cause A) ──────────────────────────────────────────
+  // The render loop reads isOnDeviceInferenceActive() to throttle the creature
+  // while WebGPU inference saturates the GPU. It must be raised for the whole
+  // drain and lowered on every exit path.
+
+  it("raises the GPU gauge during the inference drain and lowers it after", async () => {
+    const p = withEngine(new WebLLMProvider("m"), [
+      { choices: [{ delta: { content: "one " } }] },
+      { choices: [{ delta: { content: "two" } }] },
+    ]);
+    expect(isOnDeviceInferenceActive()).toBe(false); // idle before
+
+    let activeMidStream = false;
+    for await (const c of p.generateStream(ctx)) {
+      if (c.type === "text") activeMidStream = isOnDeviceInferenceActive();
+    }
+
+    expect(activeMidStream).toBe(true); // yielding while tokens flow
+    expect(isOnDeviceInferenceActive()).toBe(false); // restored at turn end
+  });
+
+  it("lowers the GPU gauge even when the consumer breaks early", async () => {
+    const p = withEngine(new WebLLMProvider("m"), [
+      { choices: [{ delta: { content: "a" } }] },
+      { choices: [{ delta: { content: "b" } }] },
+      { choices: [{ delta: { content: "c" } }] },
+    ]);
+    // Break after the first token — the generator's `finally` must still run.
+    for await (const c of p.generateStream(ctx)) {
+      if (c.type === "text") break;
+    }
+    expect(isOnDeviceInferenceActive()).toBe(false);
   });
 });

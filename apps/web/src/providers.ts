@@ -103,6 +103,36 @@ interface WebLLMModule {
  */
 const WEBLLM_CONTEXT_WINDOW_TOKENS = 16384;
 
+// ── On-device GPU-contention signal ─────────────────────────────────────────
+// WebLLM runs inference on WebGPU; the creature renders on WebGL/Three.js. Both
+// hit the one physical GPU, so during an on-device turn the creature's render
+// loop is starved for GPU time and stutters into a visible freeze that clears
+// only when generation ends. The render loop (main.ts) reads this gauge to
+// *yield* GPU time while inference runs — dropping the creature to a calm, low
+// cadence so it degrades intentionally instead of freezing. Fewer requested
+// frames means each one actually lands: smooth-but-slow, not stutter-then-jank.
+//
+// Only WebLLM raises it. Cloud and BYOK (and the local-server backend) are
+// network-bound and never contend for the local GPU. This is a rendering
+// concern, deliberately NOT the `responsive | tending | idle` presence state
+// machine: the motebit is `responsive` (actively answering a user turn) the
+// whole time — this only governs how hard the render loop draws. A depth
+// counter tolerates overlapping/nested turns.
+let onDeviceInferenceDepth = 0;
+
+/** True while an on-device (WebGPU) inference turn is saturating the GPU. */
+export function isOnDeviceInferenceActive(): boolean {
+  return onDeviceInferenceDepth > 0;
+}
+
+function beginOnDeviceInference(): void {
+  onDeviceInferenceDepth++;
+}
+
+function endOnDeviceInference(): void {
+  onDeviceInferenceDepth = Math.max(0, onDeviceInferenceDepth - 1);
+}
+
 export class WebLLMProvider implements StreamingProvider {
   private engine: WebLLMEngine | null = null;
   private worker: Worker | null = null;
@@ -110,6 +140,8 @@ export class WebLLMProvider implements StreamingProvider {
   private _temperature: number;
   private _maxTokens: number;
   private onProgress?: (text: string, progress: number) => void;
+  private onMainThreadFallback?: () => void;
+  private _mainThreadFallback = false;
 
   constructor(
     model: string,
@@ -117,12 +149,24 @@ export class WebLLMProvider implements StreamingProvider {
       temperature?: number;
       maxTokens?: number;
       onProgress?: (text: string, progress: number) => void;
+      onMainThreadFallback?: () => void;
     },
   ) {
     this._model = model;
     this._temperature = opts?.temperature ?? 0.7;
     this._maxTokens = opts?.maxTokens ?? 4096;
     this.onProgress = opts?.onProgress;
+    this.onMainThreadFallback = opts?.onMainThreadFallback;
+  }
+
+  /**
+   * True once the engine fell back to running inference on the main thread
+   * (no background worker on this browser). The main-thread path blocks all
+   * rendering during a turn — the render loop can't yield around it — so this
+   * is surfaced to the owner rather than silently frozen.
+   */
+  get usingMainThreadFallback(): boolean {
+    return this._mainThreadFallback;
   }
 
   get model(): string {
@@ -200,7 +244,15 @@ export class WebLLMProvider implements StreamingProvider {
       }
     }
 
-    // Fallback: main thread engine (blocks rendering but still works)
+    // Fallback: main thread engine. This blocks ALL rendering during a turn —
+    // the render loop's GPU-yield can't help because the main thread itself is
+    // held — so we surface it honestly (once) instead of leaving the owner with
+    // an unexplained freeze. See `docs/doctrine/surface-determinism.md`
+    // ("failures degrade honestly, not gracefully").
+    if (!this._mainThreadFallback) {
+      this._mainThreadFallback = true;
+      this.onMainThreadFallback?.();
+    }
     return webllm.CreateMLCEngine(
       this._model,
       { initProgressCallback: progressCb },
@@ -273,16 +325,25 @@ export class WebLLMProvider implements StreamingProvider {
 
     let accumulated = "";
     let nativeReasoning = "";
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta?.content;
-      if (delta) {
-        accumulated += delta;
-        yield { type: "text", text: delta };
+    // Raise the GPU-contention gauge for the duration of the WebGPU inference
+    // drain so the render loop yields GPU time (calm low-cadence creature)
+    // instead of freezing. `finally` lowers it even if the consumer breaks
+    // early — an async generator runs its `finally` when closed.
+    beginOnDeviceInference();
+    try {
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta?.content;
+        if (delta) {
+          accumulated += delta;
+          yield { type: "text", text: delta };
+        }
+        // Native reasoning stream (in-browser reasoning models). Interior-only —
+        // accumulated raw, never into `accumulated`/the visible text.
+        const reasoningDelta = chunk.choices[0]?.delta?.reasoning_content;
+        if (reasoningDelta) nativeReasoning += reasoningDelta;
       }
-      // Native reasoning stream (in-browser reasoning models). Interior-only —
-      // accumulated raw, never into `accumulated`/the visible text.
-      const reasoningDelta = chunk.choices[0]?.delta?.reasoning_content;
-      if (reasoningDelta) nativeReasoning += reasoningDelta;
+    } finally {
+      endOnDeviceInference();
     }
 
     const memoryCandidates = extractMemoryTags(accumulated);
@@ -423,6 +484,7 @@ function specToProvider(
       return new WebLLMProvider(spec.model, {
         temperature: spec.temperature,
         maxTokens: spec.maxTokens,
+        onMainThreadFallback: options.onMainThreadFallback,
       });
     case "apple-fm":
     case "mlx":
@@ -450,6 +512,18 @@ export interface ProviderOptions {
    * § "PR 4 — chrome narration of routing decisions".
    */
   onRoutingReason?: (reason: string) => void;
+
+  /**
+   * Fired once when the WebLLM (on-device) engine cannot start its
+   * background Web Worker and falls back to running inference on the
+   * main thread. That path hard-blocks the page — creature, input, and
+   * DOM all freeze while a turn generates — so surfacing it honestly is
+   * the "failures degrade honestly, not gracefully" contract: the owner
+   * is told the tab may pause and pointed at cloud/BYOK for smoothness,
+   * rather than left to experience an unexplained freeze. Only the
+   * `webllm` backend can raise it.
+   */
+  onMainThreadFallback?: () => void;
 }
 
 /**
