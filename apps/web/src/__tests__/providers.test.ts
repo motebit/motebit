@@ -5,20 +5,28 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock @motebit/ai-core/browser to avoid pulling in the full module
-vi.mock("@motebit/ai-core/browser", () => ({
-  AnthropicProvider: class MockAnthropicProvider {
-    constructor(public config: Record<string, unknown>) {}
-  },
-  OpenAIProvider: class MockOpenAIProvider {
-    constructor(public config: Record<string, unknown>) {}
-  },
-  DEFAULT_OLLAMA_URL: "http://127.0.0.1:11434",
-  extractMemoryTags: () => [],
-  extractStateTags: () => ({}),
-  stripTags: (s: string) => s,
-}));
+// Spread the REAL browser exports (pure, browser-safe tag/reasoning/prompt
+// helpers — needed so generateStream's capture runs for real), and stub only
+// the two heavy providers the config-inspection tests read `.config` off.
+vi.mock("@motebit/ai-core/browser", async (importActual) => {
+  const actual = await importActual<typeof import("@motebit/ai-core/browser")>();
+  return {
+    ...actual,
+    AnthropicProvider: class MockAnthropicProvider {
+      constructor(public config: Record<string, unknown>) {}
+    },
+    OpenAIProvider: class MockOpenAIProvider {
+      constructor(public config: Record<string, unknown>) {}
+    },
+    DEFAULT_OLLAMA_URL: "http://127.0.0.1:11434",
+    // Stubbed: orthogonal to reasoning capture, and the real one needs a full
+    // MotebitState. The tag/reasoning helpers above stay REAL.
+    buildSystemPrompt: () => "test system prompt",
+  };
+});
 
 import { checkWebGPU, createProvider, WebLLMProvider } from "../providers.js";
+import type { ContextPack, AIResponse } from "@motebit/sdk";
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -183,5 +191,72 @@ describe("WebLLMProvider", () => {
       typeof p.extractMemoryCandidates
     >[0];
     expect(await p.extractMemoryCandidates(response)).toEqual([]);
+  });
+
+  // Inject a mock MLC engine (getEngine returns a cached `engine`, bypassing the
+  // CDN import) so generateStream runs against scripted chunks.
+  function withEngine(p: WebLLMProvider, chunks: unknown[]): WebLLMProvider {
+    (p as unknown as { engine: unknown }).engine = {
+      chat: {
+        completions: {
+          create: () =>
+            Promise.resolve(
+              (async function* () {
+                for (const c of chunks) yield c;
+              })(),
+            ),
+        },
+      },
+    };
+    return p;
+  }
+
+  const ctx = {
+    user_message: "which is better?",
+    recent_events: [],
+    relevant_memories: [],
+    current_state: {},
+  } as unknown as ContextPack;
+
+  async function drain(p: WebLLMProvider): Promise<{ text: string; final?: AIResponse }> {
+    const text: string[] = [];
+    let final: AIResponse | undefined;
+    for await (const c of p.generateStream(ctx)) {
+      if (c.type === "text") text.push(c.text);
+      else final = c.response;
+    }
+    return { text: text.join(""), final };
+  }
+
+  it("captures native reasoning_content into response.reasoning, never the visible text", async () => {
+    const p = withEngine(new WebLLMProvider("deepseek-r1-distill"), [
+      { choices: [{ delta: { reasoning_content: "weigh " } }] },
+      { choices: [{ delta: { reasoning_content: "the options" } }] },
+      { choices: [{ delta: { content: "The answer is A." } }] },
+    ]);
+    const { text, final } = await drain(p);
+    expect(final?.reasoning).toBe("weigh the options");
+    expect(text).toBe("The answer is A.");
+    expect(final?.text).not.toContain("weigh");
+  });
+
+  it("captures <thinking> tags into reasoning and strips them from the done-response text", async () => {
+    const p = withEngine(new WebLLMProvider("m"), [
+      { choices: [{ delta: { content: "<thinking>tagged deliberation</thinking>Answer." } }] },
+    ]);
+    const { final } = await drain(p);
+    expect(final?.reasoning).toBe("tagged deliberation");
+    // Stripped from the done-response display text (streamed chunks are raw and
+    // stripped downstream at render, like every other provider).
+    expect(final?.text).toBe("Answer.");
+  });
+
+  it("omits reasoning when the model emits none (fail-closed → no disclosure)", async () => {
+    const p = withEngine(new WebLLMProvider("m"), [
+      { choices: [{ delta: { content: "Just a plain reply." } }] },
+    ]);
+    const { final } = await drain(p);
+    expect(final?.reasoning).toBeUndefined();
+    expect(final?.text).toBe("Just a plain reply.");
   });
 });
