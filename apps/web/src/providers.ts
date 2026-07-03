@@ -7,6 +7,8 @@ import {
   type StreamingProvider,
   extractMemoryTags,
   extractStateTags,
+  extractReasoningTags,
+  mergeReasoning,
   stripTags,
 } from "@motebit/ai-core/browser";
 import type { AIResponse, ContextPack, IntelligenceProvider, MemoryCandidate } from "@motebit/sdk";
@@ -48,7 +50,14 @@ interface WebLLMEngine {
         temperature?: number;
         max_tokens?: number;
         stream: boolean;
-      }): Promise<AsyncIterable<{ choices: Array<{ delta: { content?: string } }> }>>;
+        // `reasoning_content` is emitted by reasoning models (e.g. DeepSeek-R1
+        // distills) run in-browser via MLC/WebLLM — captured as interior
+        // reasoning, never into the visible content.
+      }): Promise<
+        AsyncIterable<{
+          choices: Array<{ delta: { content?: string; reasoning_content?: string } }>;
+        }>
+      >;
     };
   };
 }
@@ -218,16 +227,23 @@ export class WebLLMProvider implements StreamingProvider {
     const {
       extractMemoryTags: emt,
       extractStateTags: est,
+      extractReasoningTags: ert,
+      mergeReasoning: mr,
       stripTags: st,
     } = await import("@motebit/ai-core/browser");
     const memoryCandidates = emt(accumulated);
     const stateUpdates = est(accumulated);
     const displayText = st(accumulated);
+    // Tag-based reasoning only here — the generate() loop above accumulates
+    // text chunks, so native reasoning_content isn't available on this rare
+    // no-`done` fallback. Interior-only.
+    const reasoning = mr("", ert(accumulated));
     return {
       text: displayText,
       confidence: 0.7,
       memory_candidates: memoryCandidates,
       state_updates: stateUpdates,
+      ...(reasoning !== null ? { reasoning } : {}),
     };
   }
 
@@ -256,17 +272,26 @@ export class WebLLMProvider implements StreamingProvider {
     });
 
     let accumulated = "";
+    let nativeReasoning = "";
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta?.content;
       if (delta) {
         accumulated += delta;
         yield { type: "text", text: delta };
       }
+      // Native reasoning stream (in-browser reasoning models). Interior-only —
+      // accumulated raw, never into `accumulated`/the visible text.
+      const reasoningDelta = chunk.choices[0]?.delta?.reasoning_content;
+      if (reasoningDelta) nativeReasoning += reasoningDelta;
     }
 
     const memoryCandidates = extractMemoryTags(accumulated);
     const stateUpdates = extractStateTags(accumulated);
     const displayText = stripTags(accumulated);
+    // Interior reasoning = native stream merged with the <thinking>-tag
+    // convention — the same capture every other provider has, so in-browser
+    // on-device reasoning feeds the `mind` disclosure too. Interior-only.
+    const reasoning = mergeReasoning(nativeReasoning, extractReasoningTags(accumulated));
 
     yield {
       type: "done",
@@ -275,6 +300,7 @@ export class WebLLMProvider implements StreamingProvider {
         confidence: 0.7,
         memory_candidates: memoryCandidates,
         state_updates: stateUpdates,
+        ...(reasoning !== null ? { reasoning } : {}),
       },
     };
   }
