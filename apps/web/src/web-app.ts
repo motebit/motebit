@@ -1465,6 +1465,13 @@ export class UnbootedWebApp {
         this._routingNarration = reason;
         this.applyChromeToCurrentState();
       },
+      // On-device engine had to run inference on the main thread (no worker on
+      // this browser) — that hard-freezes the page during a turn. Surface it on
+      // the DOM event bus so the UI layer can warn the owner honestly; fired
+      // once, lazily, on the first turn that takes the fallback.
+      onMainThreadFallback: () => {
+        document.dispatchEvent(new CustomEvent("motebit:webllm-mainthread-fallback"));
+      },
     }) as StreamingProvider;
     this._currentProvider = provider;
     // BYOK auto-router opt-in (per-turn `dispatchByokRouting` consumer

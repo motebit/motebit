@@ -16,7 +16,7 @@ import { ProxySession } from "@motebit/runtime";
 import type { ProxyProviderConfig } from "@motebit/runtime";
 import { deriveInteriorColor } from "./ui/color-picker";
 import { initColorPicker } from "./ui/color-picker";
-import { WebLLMProvider, PROXY_BASE_URL } from "./providers";
+import { WebLLMProvider, PROXY_BASE_URL, isOnDeviceInferenceActive } from "./providers";
 import { cleanConversationHistory } from "./bootstrap";
 import { initChat, addMessage, showToast } from "./ui/chat";
 import { initSettings } from "./ui/settings";
@@ -287,6 +287,21 @@ const sovereignPanel = document.getElementById("sovereign-panel") as HTMLDivElem
 const capabilitiesPanelEl = document.getElementById("capabilities-panel") as HTMLDivElement;
 const activityPanelEl = document.getElementById("activity-panel") as HTMLDivElement;
 
+// Honest degradation for the on-device main-thread fallback: when WebLLM can't
+// run in a background worker on this browser, inference blocks the whole page
+// (creature + input freeze during a turn) and the render loop's GPU-yield can't
+// help. Tell the owner once, and point them at the smooth paths — rather than
+// leaving an unexplained freeze. Fired lazily on the first fallback turn.
+let webllmFallbackWarned = false;
+document.addEventListener("motebit:webllm-mainthread-fallback", () => {
+  if (webllmFallbackWarned) return;
+  webllmFallbackWarned = true;
+  addMessage(
+    "system",
+    "On-device is running without a background worker on this browser, so the page may pause while I think. For a smoother experience, switch to motebit cloud or your own key in Settings.",
+  );
+});
+
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if (activityPanelEl.classList.contains("open")) {
@@ -433,12 +448,24 @@ async function bootstrap(): Promise<void> {
   onResize();
 
   // Animation loop
-  let lastTime = 0;
+  // While on-device (WebGPU) inference saturates the GPU, throttle the creature
+  // to a calm ~12fps instead of fighting inference for every frame — asking for
+  // fewer frames means each requested one actually lands, so the creature reads
+  // as smooth-but-slow ("thinking inward") rather than frozen-then-janky. Only
+  // WebLLM raises the gauge; cloud/BYOK render full-rate. Not a presence change
+  // — the motebit is `responsive` throughout; this only governs draw cadence.
+  // `deltaTime` is always the real elapsed time since the last *draw*, so
+  // animation advances at correct wall-clock speed regardless of cadence.
+  const ON_DEVICE_YIELD_FPS = 12;
+  let lastRender = 0;
   const loop = (timestamp: number): void => {
     const time = timestamp / 1000;
-    const deltaTime = lastTime === 0 ? 1 / 60 : time - lastTime;
-    lastTime = time;
-    app.renderFrame(deltaTime, time);
+    const minInterval = isOnDeviceInferenceActive() ? 1 / ON_DEVICE_YIELD_FPS : 0;
+    if (time - lastRender >= minInterval) {
+      const deltaTime = lastRender === 0 ? 1 / 60 : time - lastRender;
+      lastRender = time;
+      app.renderFrame(deltaTime, time);
+    }
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);
