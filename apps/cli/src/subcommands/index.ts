@@ -39,6 +39,13 @@ export {
   handleGoalRemove,
   handleGoalSetEnabled,
 } from "./goals.js";
+export {
+  handleGrantCreate,
+  handleGrantList,
+  handleGrantShow,
+  handleGrantRevoke,
+  createGrantPresenter,
+} from "./grant.js";
 export { handleId } from "./id.js";
 export { handleInit } from "./init.js";
 export { handleLedger } from "./ledger.js";
