@@ -42,12 +42,15 @@ export {
   StandingDelegationSchema,
   DelegationRevocationSchema,
   SubjectBindingV1Schema,
+  SpendCeilingV1Schema,
   STANDING_DELEGATION_SCHEMA_ID,
   DELEGATION_REVOCATION_SCHEMA_ID,
   SUBJECT_BINDING_SCHEMA_ID,
+  SPEND_CEILING_SCHEMA_ID,
   buildStandingDelegationJsonSchema,
   buildDelegationRevocationJsonSchema,
   buildSubjectBindingV1JsonSchema,
+  buildSpendCeilingV1JsonSchema,
 } from "./standing-delegation.js";
 export {
   CostAttestationV1Schema,

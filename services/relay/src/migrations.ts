@@ -1812,4 +1812,42 @@ export const relayMigrations: Migration[] = [
       );
     },
   },
+  {
+    version: 39,
+    name: "delegation_revocations",
+    up: (db) => {
+      // Delegation-revocation CACHE (standing-delegation@1.0 §5/§6 D2) — the
+      // relay half of grant revocation, needed before autonomous money moves
+      // under a standing grant (Inc 3a of the money-execution arc; checkpoint
+      // D4). Each row is a DELEGATOR-signed `DelegationRevocation` — a
+      // sovereign artifact, unlike `relay_agent_revocations` whose records the
+      // RELAY signs (the operator de-list power; different trust domain,
+      // sibling table on purpose).
+      //
+      // The signed artifact is canonical; this table is a cache, never the
+      // authority. `record_json` stores the byte-identical canonical record
+      // (the relay_receipts.receipt_json discipline) so consumers re-verify
+      // exactly what the delegator signed. Idempotent on `signature` (Ed25519
+      // is deterministic — same body + key ⇒ same signature). `received_at`
+      // is the relay's receipt clock: incremental pollers filter on it, so a
+      // backdated signer-asserted `revoked_at` cannot hide a record.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_delegation_revocations (
+          id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+          grant_id             TEXT NOT NULL,
+          delegator_id         TEXT NOT NULL,
+          delegator_public_key TEXT NOT NULL,
+          revoked_at           INTEGER NOT NULL,
+          suite                TEXT NOT NULL,
+          signature            TEXT NOT NULL UNIQUE,
+          record_json          TEXT NOT NULL,
+          received_at          INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_delegation_revocations_grant
+          ON relay_delegation_revocations(grant_id);
+        CREATE INDEX IF NOT EXISTS idx_delegation_revocations_received
+          ON relay_delegation_revocations(received_at);
+      `);
+    },
+  },
 ];

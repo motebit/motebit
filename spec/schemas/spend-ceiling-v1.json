@@ -1,0 +1,81 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/spend-ceiling-v1.json",
+  "title": "SpendCeilingV1 (v1)",
+  "description": "The delegator's signed autonomous-spend ceiling (standing-delegation@1.2) — the HOW-MUCH a StandingDelegation authorizes, carried in the grant's signed body as a cryptographic commitment. Integer micro-units, USD-denominated (1 USD = 1,000,000). Absent from a grant ⇒ no autonomous money (fail-closed `ceiling_absent`). See spec/standing-delegation-v1.md §3.3.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "motebit.spend-ceiling.v1",
+      "description": "This ceiling's own type tag (in-body domain separation)."
+    },
+    "cumulative_limit_micro": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Max cumulative spend (integer micro-USD) within one rolling window. Requires `window_ms`. A SET value of 0 denies all positive spend on this dimension."
+    },
+    "per_counterparty_limit_micro": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Max spend (integer micro-USD) to any single canonical counterparty within one window. Requires `window_ms`."
+    },
+    "max_action_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Max number of money actions within one window. Requires `window_ms`."
+    },
+    "lifetime_limit_micro": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Max cumulative spend (integer micro-USD) over the grant's ENTIRE life — never reset by a window roll. The offline-meaningful total bound (paired with the grant's `expires_at`)."
+    },
+    "window_ms": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "description": "Rolling window length in ms. Required (> 0) when any per-window limit is set."
+    }
+  },
+  "required": ["schema"],
+  "additionalProperties": false,
+  "definitions": {
+    "SpendCeilingV1": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "motebit.spend-ceiling.v1",
+          "description": "This ceiling's own type tag (in-body domain separation)."
+        },
+        "cumulative_limit_micro": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Max cumulative spend (integer micro-USD) within one rolling window. Requires `window_ms`. A SET value of 0 denies all positive spend on this dimension."
+        },
+        "per_counterparty_limit_micro": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Max spend (integer micro-USD) to any single canonical counterparty within one window. Requires `window_ms`."
+        },
+        "max_action_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Max number of money actions within one window. Requires `window_ms`."
+        },
+        "lifetime_limit_micro": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Max cumulative spend (integer micro-USD) over the grant's ENTIRE life — never reset by a window roll. The offline-meaningful total bound (paired with the grant's `expires_at`)."
+        },
+        "window_ms": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Rolling window length in ms. Required (> 0) when any per-window limit is set."
+        }
+      },
+      "required": ["schema"],
+      "additionalProperties": false
+    }
+  }
+}

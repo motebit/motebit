@@ -28,7 +28,12 @@
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
-import type { StandingDelegation, DelegationRevocation, SubjectBindingV1 } from "@motebit/protocol";
+import type {
+  StandingDelegation,
+  DelegationRevocation,
+  SubjectBindingV1,
+  SpendCeilingV1,
+} from "@motebit/protocol";
 
 import { assembleJsonSchemaFor } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
@@ -40,6 +45,8 @@ export const DELEGATION_REVOCATION_SCHEMA_ID =
   "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/delegation-revocation-v1.json";
 export const SUBJECT_BINDING_SCHEMA_ID =
   "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/subject-binding-v1.json";
+export const SPEND_CEILING_SCHEMA_ID =
+  "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/spend-ceiling-v1.json";
 
 const HEX_PUBLIC_KEY_PATTERN = /^[0-9a-f]{64}$/;
 const HEX_SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -73,6 +80,61 @@ export const SubjectBindingV1Schema = z
       .describe(
         "`hex(SHA-256(canonicalJson(detached artifact)))`, 64 lowercase. Recompute from the artifact as received so JSON whitespace can't break the match.",
       ),
+  })
+  .strict();
+
+/**
+ * The delegator's signed autonomous-spend ceiling (standing-delegation@1.2).
+ * Rides in the grant's signed body — the HOW-MUCH as a cryptographic
+ * commitment. Limits are integer micro-units, USD-denominated (1 USD =
+ * 1,000,000; pinned by spec prose — a new asset model is a new `schema`
+ * literal). Absent from a grant ⇒ NO autonomous money (`ceiling_absent`,
+ * fail-closed). Semantic sufficiency (at least one total bound; `window_ms`
+ * with per-window limits) is the blast-radius evaluator's law, not a shape
+ * constraint — the schema constrains each field, the enforcer denies
+ * insufficient combinations.
+ */
+export const SpendCeilingV1Schema = z
+  .object({
+    schema: z
+      .literal("motebit.spend-ceiling.v1")
+      .describe("This ceiling's own type tag (in-body domain separation)."),
+    cumulative_limit_micro: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe(
+        "Max cumulative spend (integer micro-USD) within one rolling window. Requires `window_ms`. A SET value of 0 denies all positive spend on this dimension.",
+      ),
+    per_counterparty_limit_micro: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe(
+        "Max spend (integer micro-USD) to any single canonical counterparty within one window. Requires `window_ms`.",
+      ),
+    max_action_count: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe("Max number of money actions within one window. Requires `window_ms`."),
+    lifetime_limit_micro: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe(
+        "Max cumulative spend (integer micro-USD) over the grant's ENTIRE life — never reset by a window roll. The offline-meaningful total bound (paired with the grant's `expires_at`).",
+      ),
+    window_ms: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe("Rolling window length in ms. Required (> 0) when any per-window limit is set."),
   })
   .strict();
 
@@ -117,6 +179,9 @@ export const StandingDelegationSchema = z
       ),
     subject_binding: SubjectBindingV1Schema.optional().describe(
       "Optional (standing-delegation@1.1). Digest-binds the resolved subject-scope artifact this grant's authority reaches; part of the signed body, so the delegator's signature covers the resolved scope. Absent ⇒ a @1.0 grant with no signed resolved scope (higher-assurance consumers MUST fail closed). NOT the capability `scope`.",
+    ),
+    spend_ceiling: SpendCeilingV1Schema.optional().describe(
+      "Optional (standing-delegation@1.2). The delegator's signed autonomous-spend ceiling — the HOW-MUCH this grant authorizes, as a cryptographic commitment (part of the signed body). Absent ⇒ the grant authorizes NO autonomous money (enforcers deny `ceiling_absent`, fail-closed) — a @1.0/@1.1 grant verifies unchanged and simply cannot move money.",
     ),
     cadence_ms: z
       .number()
@@ -187,6 +252,18 @@ export const DelegationRevocationSchema = z
 type InferredStanding = z.infer<typeof StandingDelegationSchema>;
 type InferredRevocation = z.infer<typeof DelegationRevocationSchema>;
 type InferredSubjectBinding = z.infer<typeof SubjectBindingV1Schema>;
+type InferredSpendCeiling = z.infer<typeof SpendCeilingV1Schema>;
+
+type _SpendCeilingForward = ParityForward<SpendCeilingV1, InferredSpendCeiling>;
+type _SpendCeilingReverse = ParityReverse<SpendCeilingV1, InferredSpendCeiling>;
+
+export const _SPEND_CEILING_TYPE_PARITY: {
+  forward: _SpendCeilingForward;
+  reverse: _SpendCeilingReverse;
+} = {
+  forward: true,
+  reverse: true,
+};
 
 type _SubjectBindingForward = ParityForward<SubjectBindingV1, InferredSubjectBinding>;
 type _SubjectBindingReverse = ParityReverse<SubjectBindingV1, InferredSubjectBinding>;
@@ -249,6 +326,20 @@ export function buildSubjectBindingV1JsonSchema(): Record<string, unknown> {
     title: "SubjectBindingV1 (v1)",
     description:
       "Generic subject-scope binding (standing-delegation@1.1). Digest-binds a detached, vertically-typed scope artifact so a StandingDelegation's delegator signature reaches the EXACT resolved subjects. Unsigned — authority is the enclosing grant's signature over `digest`. `digest_method` is a HASH method (jcs-sha256-hex), NOT a signature suite. See spec/standing-delegation-v1.md §3.2.",
+  });
+}
+
+export function buildSpendCeilingV1JsonSchema(): Record<string, unknown> {
+  const raw = zodToJsonSchema(SpendCeilingV1Schema, {
+    name: "SpendCeilingV1",
+    $refStrategy: "root",
+    target: "jsonSchema7",
+  }) as Record<string, unknown>;
+  return assembleJsonSchemaFor("SpendCeilingV1", raw, {
+    $id: SPEND_CEILING_SCHEMA_ID,
+    title: "SpendCeilingV1 (v1)",
+    description:
+      "The delegator's signed autonomous-spend ceiling (standing-delegation@1.2) — the HOW-MUCH a StandingDelegation authorizes, carried in the grant's signed body as a cryptographic commitment. Integer micro-units, USD-denominated (1 USD = 1,000,000). Absent from a grant ⇒ no autonomous money (fail-closed `ceiling_absent`). See spec/standing-delegation-v1.md §3.3.",
   });
 }
 

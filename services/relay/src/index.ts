@@ -166,6 +166,7 @@ import { registerTaskRoutes, TASK_TTL_MS } from "./tasks.js";
 import { ExpoPushAdapter } from "./push-adapter.js";
 import { TaskQueue } from "./task-queue.js";
 import { registerCommandRoutes, handleCommandResponse } from "./command-route.js";
+import { registerDelegationRevocationRoutes } from "./delegation-revocations.js";
 import Stripe from "stripe";
 import {
   SettlementRailRegistry,
@@ -1301,6 +1302,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // --- Command endpoint (unified remote execution) ---
   registerCommandRoutes({ app, db: moteDb.db, connections, logger });
+
+  // --- Delegation-revocation cache (standing-delegation §5; signed artifacts,
+  // relay is cache-not-authority) ---
+  registerDelegationRevocationRoutes({ app, db: moteDb.db });
 
   // --- Federation background loops ---
 

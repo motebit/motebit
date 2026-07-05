@@ -315,6 +315,47 @@ export interface SubjectBindingV1 {
 }
 
 /**
+ * The delegator's signed autonomous-spend ceiling (standing-delegation@1.2) —
+ * the HOW-MUCH a standing grant authorizes, as a cryptographic commitment.
+ * Rides in the grant's signed body, so the delegator's signature covers it;
+ * an enforcer MUST take its ceiling from a VERIFIED grant, never from local
+ * config (the ceiling is authority, and authority comes only from signed
+ * artifacts — memory-never-confers-authority applied to money).
+ *
+ * Every limit is in integer micro-units, **USD-denominated** (1 USD =
+ * 1,000,000) — the denomination is pinned by spec prose, not a field; a
+ * future non-USD asset is a new agility axis (a new `schema` literal), never
+ * a silent reinterpretation of these numbers. Absent ⇒ the grant authorizes
+ * NO autonomous money (enforcers deny `ceiling_absent`, fail-closed) — so a
+ * @1.0/@1.1 grant cannot move money, and adding this field is additive.
+ *
+ * Semantics (enforced by the blast-radius evaluator, `@motebit/policy`):
+ * at least one of `cumulative_limit_micro` / `lifetime_limit_micro` MUST be
+ * set or the ceiling authorizes nothing; a SET limit of `0` denies all
+ * positive spend on that dimension; per-window limits require `window_ms`.
+ * These ceilings bind the trusted-runtime/online path — offline, the binding
+ * bounds are the grant's `expires_at` and counterparty-side enforcement
+ * (see spec §3.3 threat model).
+ */
+export interface SpendCeilingV1 {
+  /** This ceiling's own type tag (in-body domain separation). A new
+   *  denomination/asset model is a NEW literal, never a silent change. */
+  schema: "motebit.spend-ceiling.v1";
+  /** Max cumulative spend (micro-USD) within one rolling window. Requires `window_ms`. */
+  cumulative_limit_micro?: number;
+  /** Max spend (micro-USD) to any single canonical counterparty within one window. Requires `window_ms`. */
+  per_counterparty_limit_micro?: number;
+  /** Max number of money actions within one window. Requires `window_ms`. */
+  max_action_count?: number;
+  /** Max cumulative spend (micro-USD) over the grant's ENTIRE life — never
+   *  reset by a window roll. The offline-meaningful total bound (paired with
+   *  the grant's `expires_at`). */
+  lifetime_limit_micro?: number;
+  /** Rolling window length in ms. Required (> 0) when any per-window limit is set. */
+  window_ms?: number;
+}
+
+/**
  * A standing (open-ended-feeling, cadence-scoped, revocable) delegation grant.
  * Unlike a {@link DelegationToken} — which authorizes ONE act and is short-lived
  * by invariant — a StandingDelegation authorizes its holder to MINT short-lived
@@ -354,6 +395,15 @@ export interface StandingDelegation {
    * SUBJECTS, the `scope` field names the permitted CAPABILITIES.
    */
   subject_binding?: SubjectBindingV1;
+  /**
+   * Optional (standing-delegation@1.2). The delegator's signed autonomous-spend
+   * ceiling (see {@link SpendCeilingV1}) — the HOW-MUCH this grant authorizes.
+   * Part of the signed body. Absent ⇒ the grant authorizes NO autonomous money
+   * (blast-radius enforcers deny `ceiling_absent`, fail-closed) — which is what
+   * makes this field additive: a @1.0/@1.1 grant verifies unchanged and simply
+   * cannot move money.
+   */
+  spend_ceiling?: SpendCeilingV1;
   /** Authorized minimum firing interval (ms). Enforced at mint/relay time, not by single-token verify. */
   cadence_ms: number;
   issued_at: number;
