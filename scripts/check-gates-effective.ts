@@ -2126,6 +2126,16 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-ceiling-from-grant",
+    proves:
+      "flags an unsanctioned blast-radius enforcement call site — the drift class where a new consumer calls evaluateBlastRadius/tryConsume directly with a config-sourced or hand-built ceiling instead of routing through createMoneyMeter (whose ceiling provably comes from the verified grant's signed spend_ceiling via spendCeilingFromGrant — spec/standing-delegation-v1.md §3.3 rule 2). Probe plants a production file under packages/runtime/src that calls evaluateBlastRadius with an inline literal ceiling; assertion 3 must fire with the route-through-createMoneyMeter repair. writeFixture-and-delete (no real file mutated).",
+    perturb: () =>
+      writeFixture(
+        `packages/runtime/src/${PROBE_PREFIX}ceiling_bypass.ts`,
+        'import { evaluateBlastRadius, freshGrantSpendState } from "@motebit/policy";\nexport const probe = () =>\n  evaluateBlastRadius({ lifetime_limit_micro: 1 }, freshGrantSpendState("g", 0), { amount_micro: 1, counterparty: "x" }, 0, 0);\n',
+      ),
+  },
+  {
     script: "check-local-tool-gated",
     proves:
       "flags the invokeLocalTool policy-gate bypass reopening — the surface-authority keystone that a local-tool affordance routes through the same gate as the AI loop (finding h). Drift class: a refactor that drops the `this.policy.validate(` call (or moves the tool execution ahead of it) silently restores the direct `toolRegistry.execute` bypass that signed a receipt for an ungated side-effect. Probe neutralizes the validate call inside motebit-runtime.ts (`this.policy.validate(` → `this.policy.__novalidate(`) so the method-scoped marker scan no longer finds it; assertion 1 must fire. byte-identical restoration via mutateFile.",

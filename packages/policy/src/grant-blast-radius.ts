@@ -167,6 +167,24 @@ export function canonicalizeCounterparty(raw: string): string | null {
 }
 
 /**
+ * Extract a `MoneyAction` from an R4 tool call's raw args — fail-closed and
+ * deliberately narrow. Only the EXPLICIT wire shape is recognized:
+ * `amount_micro` (positive safe integer) + `counterparty` (non-empty string).
+ * No heuristics, no `amount`/`to`/`recipient` guessing — a money tool that
+ * wants to auto-execute under a standing grant must declare its money facts
+ * in this exact shape, or the dispatch AND-composition denies it as
+ * unmeterable (a tool whose spend the enforcer cannot see must not move
+ * money without a human). Returns `null` when the shape is absent/invalid.
+ */
+export function extractMoneyAction(args: Record<string, unknown>): MoneyAction | null {
+  const amount = args["amount_micro"];
+  const counterparty = args["counterparty"];
+  if (typeof amount !== "number" || !Number.isSafeInteger(amount) || amount <= 0) return null;
+  if (typeof counterparty !== "string" || counterparty.trim().length === 0) return null;
+  return { amount_micro: amount, counterparty };
+}
+
+/**
  * Extract the enforcer ceiling from a grant's signed `spend_ceiling`
  * (standing-delegation@1.2) — the ONLY sanctioned source of a
  * `GrantSpendCeiling` (spec §3.3 rule 2: the ceiling MUST come from a VERIFIED

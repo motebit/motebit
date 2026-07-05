@@ -769,6 +769,11 @@ export async function createRuntime(
     {
       motebitId,
       mcpServers,
+      // Persistent blast-radius accumulator — load-bearing for the money
+      // meter's LIFETIME ceiling (an in-memory accumulator re-arms the
+      // delegator's total bound on every restart). The CLI hosts the
+      // canonical local runtime, so it always wires the durable store.
+      grantSpendStore: moteDb.grantSpendStore,
       policy: {
         operatorMode: config.operator,
         pathAllowList: config.allowedPaths,
