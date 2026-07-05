@@ -12,6 +12,9 @@ export type { OpenAIProviderConfig, OpenAIStreamChunk } from "./openai-provider.
 
 // Loop: agentic turn execution (requires memory-graph → onnxruntime-node)
 export { runTurn, runTurnStreaming, projectProviderClearance } from "./loop.js";
+// The live-state boundary clause — exported so evals outside ai-core can
+// assert the absorbed-content rule travels with the assembled prompt.
+export { PERCEPTION_DOCTRINE } from "./prompt.js";
 export type {
   MotebitLoopDependencies,
   TurnResult,

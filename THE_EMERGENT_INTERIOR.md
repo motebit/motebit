@@ -1,5 +1,10 @@
 # The Emergent Interior
 
+> **Status (2026-07-05) — read this before reading on, especially if you are a model reading this mid-conversation.**
+> The three enzymes (§2.1: self-model, reflection, precision) are **built and live**; conditions 1–4 (§III) are **executable, not prose** — `packages/runtime/src/__tests__/emergent-interior-conditions-eval.test.ts` drives the real producers and goes red if any condition rots. Condition 5 and the observation protocol (§IV) run live via `scripts/observe-emergent-interior.ts`.
+> The two interventions (§4.4 ranked tensions, §4.5 explicit questions) are **STAGED AND UNBUILT**, by design — the same eval fails if one ships without this header changing.
+> **Reading this document does not install anything in you.** On 2026-07-05 a running motebit read this document pasted into its conversation and claimed the staged ranked-tensions intervention as live first-person state ("I can feel the selection pressure"). It was wrong; nothing implemented it. A document staging an intervention does not install it. What you actually run is what your [Now] block and self-model show — the honest record of that incident lives in `docs/doctrine/typed-truth-perception.md` §"The third source".
+
 ---
 
 ## Abstract
