@@ -1,6 +1,6 @@
 {
   "name": "@motebit/verify-web",
-  "version": "0.0.17",
+  "version": "0.0.18",
   "license": "BUSL-1.1",
   "private": true,
   "type": "module",

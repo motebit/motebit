@@ -1,5 +1,16 @@
 # motebit CLI Changelog
 
+## 1.7.0
+
+### Minor Changes
+
+- 335574d: `motebit grant` (money-execution Inc 4) — mint, inspect, and revoke standing-delegation grants from the CLI. `grant create --scope … --subject … --lifetime-usd …` signs a `StandingDelegation` whose `spend_ceiling` (standing-delegation@1.2) is the delegator's cryptographic commitment, plus the v1.0 PRE-MINTED tick schedule (one future-dated `not_before`-gated 1h `DelegationToken` per cadence slot — the signed token set IS the cadence). Money-grant shape enforced at mint: lifetime ceiling required, ≤30-day life (spec §6 D4). Artifacts stored verbatim at `~/.motebit/grants/<grant_id>.json` (files, out of the sync surface). `grant revoke` signs the terminal `DelegationRevocation` and best-effort propagates it to the relay cache; offline revocation still bites locally. `motebit --grant <id>` presents the due tick per REPL turn via the runtime's in-process `delegation` option — no due tick means an honestly grantless turn.
+
+### Patch Changes
+
+- 74d2f67: The REPL delegate flow (submit → poll) and `/balance` now ride `@motebit/relay-client`, the typed relay transport. This fixes two live defects in the hand-rolled path: task submission previously sent no `Idempotency-Key` (the relay unconditionally rejects submission without one, HTTP 400), and the poll leg replayed the `task:submit`-audience token against the task-query route (audience mismatch → 403, silently swallowed by the poll loop until a 60s timeout for device-token users). The typed client mints the correct registry audience per leg and requires the idempotency key at the type level. Auth is unchanged: master token preferred, signed device token fallback, bridged through the sdk `CredentialSource` contract.
+- 74d2f67: Type-safety only, no behavior change: every audience parameter on the CLI's token-minting seams (`getRelayAuthHeaders`, delegate/daemon/self-test mint closures, x402 smoke helper) narrows from `string` to the closed `TokenAudience` registry union re-exported by `@motebit/sdk`. A typo'd or unregistered audience at any CLI signing site is now a compile error instead of a runtime 401. All previously minted values are registry members (including the newly registered `market:query`), so minted tokens are byte-identical.
+
 ## 1.6.1
 
 ### Patch Changes
