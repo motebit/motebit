@@ -70,6 +70,18 @@ export {
   signDelegation,
   verifyDelegation,
   verifyDelegationChain,
+  // Standing delegation (standing-delegation@1.0-@1.2) — the grant that
+  // mints per-tick tokens, its terminal revocation, and the
+  // tick-against-grant verifier. Surfaced here so apps (which import
+  // @motebit/encryption, never @motebit/crypto directly — the
+  // check-app-primitives doctrine) can mint, present, and revoke grants;
+  // the `motebit grant` CLI (money-execution Inc 4) is the first consumer.
+  signStandingDelegation,
+  verifyStandingDelegation,
+  verifyTokenAgainstGrant,
+  signDelegationRevocation,
+  verifyDelegationRevocation,
+  findGrantRevocation,
   signSettlement,
   verifySettlement,
   SETTLEMENT_RECORD_SUITE,
@@ -128,6 +140,8 @@ export {
   type KnownKeys,
   type ReceiptChainEntry,
   type DelegationToken,
+  type StandingDelegation,
+  type DelegationRevocation,
   type SettlementRecord,
   type KeySuccessionRecord,
   type SignableCollaborativeReceipt,
@@ -258,6 +272,9 @@ export type {
   HorizonWitness,
   FederationGraphAnchor,
   MerkleInclusionProof,
+  // Standing-delegation@1.2 spend ceiling — the delegator's signed
+  // autonomous-money bound (money-execution Inc 4: the grant CLI mints it).
+  SpendCeilingV1,
 } from "@motebit/protocol";
 export {
   MAX_RETENTION_DAYS_BY_SENSITIVITY,

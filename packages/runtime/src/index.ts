@@ -348,6 +348,11 @@ export type {
 // Doctrine: docs/doctrine/memory-never-confers-authority.md.
 export { verifyGrantForTurn } from "./grant-verifier.js";
 export type { VerifiedGrant } from "./grant-verifier.js";
+// The R4 AND-composition's enforcer half — the only sanctioned
+// composition of the blast-radius enforcer with live dispatch
+// (gate check-ceiling-from-grant, #136).
+export { createMoneyMeter } from "./money-meter.js";
+export type { MoneyMeter, MeterVerdict } from "./money-meter.js";
 
 // Remote command ingress verification — re-exported from
 // @motebit/crypto for the surfaces (apps consume the product

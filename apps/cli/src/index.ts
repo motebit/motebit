@@ -40,6 +40,11 @@ import {
   handleDoctor,
   handleExport,
   handleVerify,
+  handleGrantCreate,
+  handleGrantList,
+  handleGrantShow,
+  handleGrantRevoke,
+  createGrantPresenter,
   handleGoalAdd,
   handleGoalList,
   handleGoalOutcomes,
@@ -354,6 +359,23 @@ async function main(): Promise<void> {
       await handleGoalSetEnabled(config, true);
     } else {
       console.error("Usage: motebit goal [add|list|outcomes|remove|pause|resume]");
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (subcommand === "grant") {
+    const grantCmd = config.positionals[1];
+    if (grantCmd === "create") {
+      await handleGrantCreate(config);
+    } else if (grantCmd === "list") {
+      handleGrantList();
+    } else if (grantCmd === "show") {
+      handleGrantShow(config.positionals[2]);
+    } else if (grantCmd === "revoke") {
+      await handleGrantRevoke(config.positionals[2]);
+    } else {
+      console.error("Usage: motebit grant [create|list|show|revoke]");
       process.exit(1);
     }
     return;
@@ -847,6 +869,19 @@ async function main(): Promise<void> {
     console.log();
   }
 
+  // Standing-grant presentation (`motebit --grant <id>`): artifacts are
+  // loaded once; each turn presents the currently-due pre-minted tick.
+  // The runtime derives (or refuses) authority per turn — a null
+  // presentation is an honestly grantless turn, never an error.
+  const grantPresenter = config.grant != null ? await createGrantPresenter(config.grant) : null;
+  if (grantPresenter != null) {
+    console.log(
+      dim(
+        `  [standing grant ${grantPresenter.grantId} presented per turn — R4 money clears only within its signed ceiling]`,
+      ),
+    );
+  }
+
   const prompt = (): void => {
     readInput(promptColor("you>") + " ").then(
       (line) => void handleLine(line),
@@ -907,9 +942,17 @@ async function main(): Promise<void> {
         console.log();
       } else {
         writeOutput("\n" + promptColor("mote>") + " ");
-        await consumeStream(runtime.sendMessageStreaming(trimmed, chatRunId), runtime, {
-          voice: voiceController,
-        });
+        const grantOptions = grantPresenter?.delegationForTurn() ?? undefined;
+        if (grantPresenter != null && grantOptions == null) {
+          console.log(dim("  [no grant tick due this turn — running grantless]"));
+        }
+        await consumeStream(
+          runtime.sendMessageStreaming(trimmed, chatRunId, grantOptions),
+          runtime,
+          {
+            voice: voiceController,
+          },
+        );
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);

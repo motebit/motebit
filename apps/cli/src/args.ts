@@ -41,6 +41,15 @@ export interface CliConfig {
   reason: string | undefined;
   destination: string | undefined;
   capability: string | undefined;
+  /** `grant create` minting flags + the chat `--grant` presentation id. */
+  scope: string | undefined;
+  subject: string | undefined;
+  lifetimeUsd: string | undefined;
+  windowUsd: string | undefined;
+  windowHours: string | undefined;
+  days: string | undefined;
+  cadenceHours: string | undefined;
+  grant: string | undefined;
   target: string | undefined;
   budget: string | undefined;
   price: string | undefined;
@@ -170,6 +179,17 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       // skill_consent_granted). String type so we can keep the union
       // in TS without parseArgs caring; the handler validates.
       "event-type": { type: "string" },
+      // `motebit grant create` — standing-delegation minting flags
+      // (money-execution Inc 4; spec/standing-delegation-v1.md §3.3, §6 D4).
+      scope: { type: "string" },
+      subject: { type: "string" },
+      "lifetime-usd": { type: "string" },
+      "window-usd": { type: "string" },
+      "window-hours": { type: "string" },
+      days: { type: "string" },
+      "cadence-hours": { type: "string" },
+      // Chat: present a stored standing grant each turn (in-process only).
+      grant: { type: "string" },
       version: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -243,6 +263,14 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     reason: values.reason,
     destination: values.destination,
     capability: values.capability,
+    scope: values.scope,
+    subject: values.subject,
+    lifetimeUsd: values["lifetime-usd"],
+    windowUsd: values["window-usd"],
+    windowHours: values["window-hours"],
+    days: values.days,
+    cadenceHours: values["cadence-hours"],
+    grant: values.grant,
     target: values.target,
     budget: values.budget,
     price: values.price,
@@ -436,6 +464,13 @@ Commands:
     --plan                    Decompose into multi-step plan, delegate each to specialists
     --sovereign               Pay agents directly via Solana wallet (no relay settlement)
     --pay-new-agents          Allow paid P2P delegation to agents with no trust history (cold-start opt-in; default off)
+  grant create --scope <caps> --subject <s> --lifetime-usd <n>  Mint a standing-delegation grant
+    --days <n>                Grant lifetime in days (default 7, max 30 — money grants live short)
+    --cadence-hours <n>       Tick cadence (default 24); ticks are pre-minted, 1h each
+    --window-usd <n>          Optional per-window spend cap (with --window-hours, default 24)
+  grant list                List stored grants (state, subject, ceiling)
+  grant show <id>           Show a grant + its tick schedule
+  grant revoke <id>         Sign the terminal revocation + propagate to the relay cache
   withdraw <amount> [--destination <addr>]  Request a withdrawal
   approvals list            List approval queue items
   approvals show <id>       Show approval detail

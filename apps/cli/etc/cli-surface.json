@@ -29,6 +29,7 @@
       "remove",
       "resume"
     ],
+    "grant": [],
     "id": [],
     "init": [],
     "ledger": [],
@@ -87,7 +88,15 @@
       "type": "string"
     },
     {
+      "name": "cadence-hours",
+      "type": "string"
+    },
+    {
       "name": "capability",
+      "type": "string"
+    },
+    {
+      "name": "days",
       "type": "string"
     },
     {
@@ -135,6 +144,10 @@
       "default": false
     },
     {
+      "name": "grant",
+      "type": "string"
+    },
+    {
       "name": "help",
       "type": "boolean",
       "default": false,
@@ -148,6 +161,10 @@
       "name": "json",
       "type": "boolean",
       "default": false
+    },
+    {
+      "name": "lifetime-usd",
+      "type": "string"
     },
     {
       "name": "limit",
@@ -240,6 +257,10 @@
       "type": "string"
     },
     {
+      "name": "scope",
+      "type": "string"
+    },
+    {
       "name": "self-test",
       "type": "boolean",
       "default": false
@@ -260,6 +281,10 @@
       "name": "sovereign",
       "type": "boolean",
       "default": false
+    },
+    {
+      "name": "subject",
+      "type": "string"
     },
     {
       "name": "sync-token",
@@ -300,6 +325,14 @@
     },
     {
       "name": "wall-clock",
+      "type": "string"
+    },
+    {
+      "name": "window-hours",
+      "type": "string"
+    },
+    {
+      "name": "window-usd",
       "type": "string"
     }
   ],
