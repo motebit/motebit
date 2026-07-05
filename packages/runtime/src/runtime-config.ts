@@ -18,7 +18,7 @@ import type {
 import type { SovereignWalletRail } from "@motebit/protocol";
 import type { RenderAdapter } from "@motebit/render-engine/spec";
 import type { StreamingProvider } from "@motebit/ai-core";
-import type { PolicyConfig, MemoryGovernanceConfig } from "@motebit/policy";
+import type { PolicyConfig, MemoryGovernanceConfig, GrantSpendStore } from "@motebit/policy";
 
 /**
  * Default task router config for planning operations.
@@ -89,6 +89,16 @@ export interface PlatformAdapters {
 
 export interface RuntimeConfig {
   motebitId: string;
+  /**
+   * Grant spend accumulator backing the money meter (the R4
+   * AND-composition's enforcer half — `money-meter.ts`). Defaults to the
+   * in-memory store, whose accumulators reset on process restart — the
+   * per-window and LIFETIME ceilings then re-arm from zero. Deployments
+   * that wire live autonomous money MUST inject the persistent store
+   * (`SqliteGrantSpendStore`, `@motebit/persistence`) so the lifetime
+   * bound survives restarts; the CLI runtime factory does.
+   */
+  grantSpendStore?: GrantSpendStore;
   /**
    * Device identifier stamped on every artifact this runtime signs —
    * `ExecutionReceipt`, `ToolInvocationReceipt`, sovereign payment

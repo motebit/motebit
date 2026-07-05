@@ -887,6 +887,20 @@ export interface TurnContext {
     grant_id: string;
     /** Unix ms at which verification completed. */
     verified_at: number;
+    /**
+     * The verified tick token's signed `issued_at` — the monotonic replay
+     * nonce for the blast-radius enforcer (one tick meters at most one
+     * money action). Signature-derived by the sole producer; absent on
+     * pre-@1.2 producers.
+     */
+    token_issued_at?: number;
+    /**
+     * The verified grant's signed `spend_ceiling` (standing-delegation@1.2),
+     * copied verbatim by the sole producer from the artifact it verified —
+     * the only path a ceiling may take to the dispatch enforcer (spec §3.3
+     * rule 2). Absent ⇒ no ceiling ⇒ `ceiling_absent` deny, no money moves.
+     */
+    spend_ceiling?: SpendCeilingV1;
   };
 }
 

@@ -123,6 +123,7 @@
     "check-agent-revocation-reason-canonical": "npx tsx scripts/check-agent-revocation-reason-canonical.ts",
     "check-memory-source-canonical": "npx tsx scripts/check-memory-source-canonical.ts",
     "check-money-authority": "npx tsx scripts/check-money-authority.ts",
+    "check-ceiling-from-grant": "npx tsx scripts/check-ceiling-from-grant.ts",
     "check-local-tool-gated": "npx tsx scripts/check-local-tool-gated.ts",
     "check-runtime-host-election": "npx tsx scripts/check-runtime-host-election.ts",
     "check-sigil-renderer-parity": "npx tsx scripts/check-sigil-renderer-parity.ts",

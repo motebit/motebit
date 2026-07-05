@@ -219,7 +219,15 @@ import type {
 } from "@motebit/planner";
 import type { PlanStoreAdapter } from "@motebit/planner";
 import type { DeviceCapability } from "@motebit/sdk";
-import { PolicyGate, MemoryGovernor, ChainedAuditSink, classifyTool } from "@motebit/policy";
+import {
+  PolicyGate,
+  MemoryGovernor,
+  ChainedAuditSink,
+  classifyTool,
+  InMemoryGrantSpendStore,
+} from "@motebit/policy";
+import { createMoneyMeter, type MoneyMeter } from "./money-meter.js";
+import { verifyGrantForTurn } from "./grant-verifier.js";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
 import { base58Encode } from "@motebit/protocol";
 import type {
@@ -422,6 +430,8 @@ export class MotebitRuntime {
    */
   private _currentTypedIntent: UserActionAttestation | null = null;
   policy: PolicyGate;
+  /** R4 money meter (AND-composition enforcer half) — see money-meter.ts. */
+  private moneyMeter: MoneyMeter;
   memoryGovernor: MemoryGovernor;
 
   private renderer: RenderAdapter;
@@ -792,6 +802,12 @@ export class MotebitRuntime {
     }
     this.policy = new PolicyGate(config.policy, this.toolAuditSink);
     this.memoryGovernor = new MemoryGovernor(config.memoryGovernance);
+    // Money meter — the enforcer half of the R4 AND-composition
+    // (money-meter.ts). Built unconditionally so a grant-cleared R4 call
+    // is ALWAYS metered; the in-memory default resets on restart (see
+    // RuntimeConfig.grantSpendStore — live-money deployments inject the
+    // persistent SqliteGrantSpendStore).
+    this.moneyMeter = createMoneyMeter(config.grantSpendStore ?? new InMemoryGrantSpendStore());
 
     // Restore saved state
     if (this.stateSnapshot) {
@@ -2276,7 +2292,25 @@ export class MotebitRuntime {
        * always require live approval. Doctrine:
        * `docs/doctrine/memory-never-confers-authority.md`.
        */
-      verifiedGrant?: { grant_id: string; verified_at: number };
+      verifiedGrant?: NonNullable<import("@motebit/protocol").TurnContext["verifiedGrant"]>;
+      /**
+       * Standing-delegation PRESENTATION — the ingress callers actually
+       * use: present the signed ARTIFACTS (per-tick token + grant +
+       * held revocations), never authority. The runtime derives
+       * `verifiedGrant` in-process via `verifyGrantForTurn` (the sole
+       * producer, `check-money-authority`); a failed verification
+       * degrades to a grantless turn (R4 requires live approval), it
+       * never throws. Takes precedence over a directly-passed
+       * `verifiedGrant`. Note the wire boundary: `runtime-host`
+       * safe-options forwards NEITHER field, so remote frontends can
+       * present nothing — standing authority enters only through
+       * in-process callers holding real artifacts.
+       */
+      delegation?: {
+        token: import("@motebit/protocol").DelegationToken;
+        grant: import("@motebit/protocol").StandingDelegation;
+        revocations?: readonly import("@motebit/protocol").DelegationRevocation[];
+      };
     },
   ): AsyncGenerator<StreamChunk> {
     // Privacy doctrine gate. See `assertSensitivityPermitsAiCall` /
@@ -2331,6 +2365,19 @@ export class MotebitRuntime {
       const selectedSkills = await this.resolveSkillsForTurn(text);
       await this.emitSkillLoadEvents(selectedSkills, runId);
 
+      // Standing-delegation presentation → verification. Artifacts in,
+      // authority derived — only the sole producer mints verifiedGrant.
+      // Fail-open to NO grant (never to authority): a failed verification
+      // just means R4 stays behind live approval this turn.
+      const presentedGrant =
+        options?.delegation != null
+          ? await verifyGrantForTurn(
+              options.delegation.token,
+              options.delegation.grant,
+              options.delegation.revocations ?? [],
+            )
+          : null;
+
       const stream = runTurnStreaming(clearedLoopDeps, text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
@@ -2341,7 +2388,7 @@ export class MotebitRuntime {
         agentCapabilities,
         precisionContext: selfAwareness || undefined,
         delegationScope: options?.delegationScope,
-        verifiedGrant: options?.verifiedGrant,
+        verifiedGrant: presentedGrant ?? options?.verifiedGrant,
         firstConversation: this._isFirstConversation || undefined,
         deferMemoryFormation: this._deferMemoryFormation,
         selectedSkills,
@@ -3532,6 +3579,11 @@ export class MotebitRuntime {
         // AI loop. See toolless-loop-regression.test.ts.
         tools: this.wrapToolRegistryForSensitivity(this.scopedToolRegistry),
         policyGate: this.policy,
+        // R4 AND-composition: the loop invokes this before executing any
+        // grant-cleared R4_MONEY tool. Fail-closed in the loop when
+        // absent — wiring it here is what makes metered auto-money
+        // possible at all.
+        meterMoneyAction: this.moneyMeter,
         memoryGovernor: this.memoryGovernor,
         consolidationProvider,
         // Memory-candidate sensitivity floor. The loop reads this at
