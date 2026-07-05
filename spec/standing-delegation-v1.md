@@ -120,6 +120,10 @@ SpendCeilingV1 {
 
 All `*_micro` limits are integer micro-units, **USD-denominated** (1 USD = 1,000,000; zero floating point on the money path). The denomination is pinned by this prose: a future non-USD asset model is a NEW `schema` literal (an agility-axis append), never a silent reinterpretation of these numbers. Non-negative integers only; a SET limit of `0` denies all positive spend on that dimension (deny-all, not allow-all).
 
+Every numeric field is bounded at **2^53 − 1** (`maximum: 9007199254740991` in the committed schema): JCS (RFC 8785) serializes numbers per ECMAScript, so a larger integer does not survive canonicalization faithfully — a delegator-chosen limit above the bound could produce different signed bytes across implementations. The "Requires `window_ms`" clauses above are SHAPE law, enforced by the committed schema via draft-07 `dependencies` (a per-window limit without `window_ms` is malformed, not merely inert); rule 3's at-least-one-total-bound below remains ENFORCEMENT law (a bare ceiling is well-formed and authorizes nothing).
+
+**"Canonical counterparty" is consumer-local runtime law, by design.** `per_counterparty_limit_micro` buckets spend by a canonicalized destination, and the canonicalization is deliberately NOT interop law: under the trusted-runtime threat model the spend accumulator is runtime-local, so cross-runtime comparability of per-counterparty buckets would be a false import — two enforcers holding separate accumulators already enforce separately. Each consumer MUST canonicalize consistently with itself (or an adversary mints sub-limits by varying encodings of one destination); the reference canonicalization is `canonicalizeCounterparty` in `@motebit/policy` (EVM hex lowercased per EIP-55 case-insensitivity; case-sensitive forms such as base58 trimmed only; empty ⇒ invalid, denied).
+
 The `SpendCeilingV1` type in `@motebit/protocol` is the binding machine-readable form; `StandingDelegationSchema` in `@motebit/wire-schemas` carries it as the optional `spend_ceiling` and `spec/schemas/spend-ceiling-v1.json` is the committed standalone schema.
 
 #### Verification and enforcement (foundation law)
