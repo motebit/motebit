@@ -52,6 +52,50 @@ const HEX_PUBLIC_KEY_PATTERN = /^[0-9a-f]{64}$/;
 const HEX_SHA256_PATTERN = /^[0-9a-f]{64}$/;
 
 /**
+ * JCS interop ceiling on every SpendCeilingV1 numeric (agency review,
+ * 2026-07-05): RFC 8785 serializes numbers per ECMAScript, so an integer
+ * above 2^53−1 does not survive canonicalization faithfully — a larger
+ * delegator-chosen limit could produce different signed bytes across
+ * implementations. Pinning `maximum` costs nothing (a $9-billion ceiling
+ * is not a bound anyone meets honestly) and buys byte-stable signatures.
+ */
+const MAX_SAFE_JCS_INT = 9_007_199_254_740_991;
+
+/**
+ * §3.3 wire-format shape law, enforced in BOTH validators (agency review):
+ * every per-window limit "Requires `window_ms`". The zod side enforces it
+ * here (superRefine); the committed JSON Schema enforces it via draft-07
+ * `dependencies` injected by the emitters below — the two validators must
+ * never disagree about what the wire format forbids. Deliberately NOT
+ * enforced: rule 3's at-least-one-total-bound — that is enforcement law
+ * (a bare ceiling is well-formed-but-authorizes-nothing), not shape law.
+ */
+const PER_WINDOW_FIELDS = [
+  "cumulative_limit_micro",
+  "per_counterparty_limit_micro",
+  "max_action_count",
+] as const;
+
+const SPEND_CEILING_WINDOW_DEPENDENCIES: Record<string, string[]> = Object.fromEntries(
+  PER_WINDOW_FIELDS.map((f) => [f, ["window_ms"]]),
+);
+
+/** Inject the window `dependencies` at a ceiling-shaped schema node,
+ *  failing loud if the emitter's structure drifted from expectation. */
+function injectWindowDependencies(node: unknown, where: string): void {
+  if (
+    node == null ||
+    typeof node !== "object" ||
+    (node as Record<string, unknown>)["properties"] == null
+  ) {
+    throw new Error(
+      `spend-ceiling dependencies injection: no ceiling-shaped node at ${where} — the zod-to-json-schema output shape changed, fix the emitter in packages/wire-schemas/src/standing-delegation.ts`,
+    );
+  }
+  (node as Record<string, unknown>)["dependencies"] = SPEND_CEILING_WINDOW_DEPENDENCIES;
+}
+
+/**
  * Generic subject-scope binding (standing-delegation@1.1). Digest-binds a
  * detached, vertically-typed scope artifact so the delegator's signature reaches
  * the EXACT resolved subjects. Unsigned by construction — authority is the
@@ -103,40 +147,59 @@ export const SpendCeilingV1Schema = z
       .number()
       .int()
       .nonnegative()
+      .max(MAX_SAFE_JCS_INT)
       .optional()
       .describe(
-        "Max cumulative spend (integer micro-USD) within one rolling window. Requires `window_ms`. A SET value of 0 denies all positive spend on this dimension.",
+        "Max cumulative spend (integer micro-USD, ≤ 2^53−1 for JCS number fidelity) within one rolling window. Requires `window_ms`. A SET value of 0 denies all positive spend on this dimension.",
       ),
     per_counterparty_limit_micro: z
       .number()
       .int()
       .nonnegative()
+      .max(MAX_SAFE_JCS_INT)
       .optional()
       .describe(
-        "Max spend (integer micro-USD) to any single canonical counterparty within one window. Requires `window_ms`.",
+        "Max spend (integer micro-USD, ≤ 2^53−1) to any single canonical counterparty within one window. Requires `window_ms`. Counterparty canonicalization is consumer-local runtime law (spec §3.3).",
       ),
     max_action_count: z
       .number()
       .int()
       .nonnegative()
+      .max(MAX_SAFE_JCS_INT)
       .optional()
-      .describe("Max number of money actions within one window. Requires `window_ms`."),
+      .describe("Max number of money actions within one window (≤ 2^53−1). Requires `window_ms`."),
     lifetime_limit_micro: z
       .number()
       .int()
       .nonnegative()
+      .max(MAX_SAFE_JCS_INT)
       .optional()
       .describe(
-        "Max cumulative spend (integer micro-USD) over the grant's ENTIRE life — never reset by a window roll. The offline-meaningful total bound (paired with the grant's `expires_at`).",
+        "Max cumulative spend (integer micro-USD, ≤ 2^53−1) over the grant's ENTIRE life — never reset by a window roll. The offline-meaningful total bound (paired with the grant's `expires_at`).",
       ),
     window_ms: z
       .number()
       .int()
       .positive()
+      .max(MAX_SAFE_JCS_INT)
       .optional()
-      .describe("Rolling window length in ms. Required (> 0) when any per-window limit is set."),
+      .describe(
+        "Rolling window length in ms (≤ 2^53−1). Required (> 0) when any per-window limit is set.",
+      ),
   })
-  .strict();
+  .strict()
+  .superRefine((ceiling, ctx) => {
+    if (ceiling.window_ms !== undefined) return;
+    for (const field of PER_WINDOW_FIELDS) {
+      if (ceiling[field] !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [field],
+          message: `${field} requires window_ms (spec/standing-delegation-v1.md §3.3 wire format)`,
+        });
+      }
+    }
+  });
 
 export const StandingDelegationSchema = z
   .object({
@@ -307,12 +370,29 @@ export function buildStandingDelegationJsonSchema(): Record<string, unknown> {
     $refStrategy: "root",
     target: "jsonSchema7",
   }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("StandingDelegation", raw, {
+  const assembled = assembleJsonSchemaFor("StandingDelegation", raw, {
     $id: STANDING_DELEGATION_SCHEMA_ID,
     title: "StandingDelegation (v1)",
     description:
       "Signed, revocable standing grant authorizing minting short-lived per-tick DelegationTokens within a fixed scope ceiling and cadence. Canonicalization: JCS (RFC 8785). Signature: Ed25519 over canonicalJson(body minus signature), base64url. See spec/standing-delegation-v1.md.",
   });
+  // The embedded spend_ceiling copies carry the same §3.3 window
+  // dependencies as the standalone schema — the grant schema must refuse
+  // what the wire format forbids, same as spend-ceiling-v1.json.
+  const props = assembled["properties"] as Record<string, unknown> | undefined;
+  injectWindowDependencies(
+    props?.["spend_ceiling"],
+    "standing-delegation-v1.json properties.spend_ceiling",
+  );
+  const defs = assembled["definitions"] as Record<string, unknown> | undefined;
+  const defProps = (defs?.["StandingDelegation"] as Record<string, unknown> | undefined)?.[
+    "properties"
+  ] as Record<string, unknown> | undefined;
+  injectWindowDependencies(
+    defProps?.["spend_ceiling"],
+    "standing-delegation-v1.json definitions.StandingDelegation.properties.spend_ceiling",
+  );
+  return assembled;
 }
 
 export function buildSubjectBindingV1JsonSchema(): Record<string, unknown> {
@@ -335,12 +415,16 @@ export function buildSpendCeilingV1JsonSchema(): Record<string, unknown> {
     $refStrategy: "root",
     target: "jsonSchema7",
   }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("SpendCeilingV1", raw, {
+  const assembled = assembleJsonSchemaFor("SpendCeilingV1", raw, {
     $id: SPEND_CEILING_SCHEMA_ID,
     title: "SpendCeilingV1 (v1)",
     description:
-      "The delegator's signed autonomous-spend ceiling (standing-delegation@1.2) — the HOW-MUCH a StandingDelegation authorizes, carried in the grant's signed body as a cryptographic commitment. Integer micro-units, USD-denominated (1 USD = 1,000,000). Absent from a grant ⇒ no autonomous money (fail-closed `ceiling_absent`). See spec/standing-delegation-v1.md §3.3.",
+      "The delegator's signed autonomous-spend ceiling (standing-delegation@1.2) — the HOW-MUCH a StandingDelegation authorizes, carried in the grant's signed body as a cryptographic commitment. Integer micro-units, USD-denominated (1 USD = 1,000,000), each ≤ 2^53−1 for JCS number fidelity. Per-window limits require `window_ms` (enforced via `dependencies`). Absent from a grant ⇒ no autonomous money (fail-closed `ceiling_absent`). See spec/standing-delegation-v1.md §3.3.",
   });
+  injectWindowDependencies(assembled, "spend-ceiling-v1.json root");
+  const defs = assembled["definitions"] as Record<string, unknown> | undefined;
+  injectWindowDependencies(defs?.["SpendCeilingV1"], "spend-ceiling-v1.json definitions");
+  return assembled;
 }
 
 export function buildDelegationRevocationJsonSchema(): Record<string, unknown> {

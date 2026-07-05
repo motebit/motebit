@@ -3,7 +3,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/spend-ceiling-v1.json",
   "title": "SpendCeilingV1 (v1)",
-  "description": "The delegator's signed autonomous-spend ceiling (standing-delegation@1.2) — the HOW-MUCH a StandingDelegation authorizes, carried in the grant's signed body as a cryptographic commitment. Integer micro-units, USD-denominated (1 USD = 1,000,000). Absent from a grant ⇒ no autonomous money (fail-closed `ceiling_absent`). See spec/standing-delegation-v1.md §3.3.",
+  "description": "The delegator's signed autonomous-spend ceiling (standing-delegation@1.2) — the HOW-MUCH a StandingDelegation authorizes, carried in the grant's signed body as a cryptographic commitment. Integer micro-units, USD-denominated (1 USD = 1,000,000), each ≤ 2^53−1 for JCS number fidelity. Per-window limits require `window_ms` (enforced via `dependencies`). Absent from a grant ⇒ no autonomous money (fail-closed `ceiling_absent`). See spec/standing-delegation-v1.md §3.3.",
   "type": "object",
   "properties": {
     "schema": {
@@ -14,27 +14,32 @@
     "cumulative_limit_micro": {
       "type": "integer",
       "minimum": 0,
-      "description": "Max cumulative spend (integer micro-USD) within one rolling window. Requires `window_ms`. A SET value of 0 denies all positive spend on this dimension."
+      "maximum": 9007199254740991,
+      "description": "Max cumulative spend (integer micro-USD, ≤ 2^53−1 for JCS number fidelity) within one rolling window. Requires `window_ms`. A SET value of 0 denies all positive spend on this dimension."
     },
     "per_counterparty_limit_micro": {
       "type": "integer",
       "minimum": 0,
-      "description": "Max spend (integer micro-USD) to any single canonical counterparty within one window. Requires `window_ms`."
+      "maximum": 9007199254740991,
+      "description": "Max spend (integer micro-USD, ≤ 2^53−1) to any single canonical counterparty within one window. Requires `window_ms`. Counterparty canonicalization is consumer-local runtime law (spec §3.3)."
     },
     "max_action_count": {
       "type": "integer",
       "minimum": 0,
-      "description": "Max number of money actions within one window. Requires `window_ms`."
+      "maximum": 9007199254740991,
+      "description": "Max number of money actions within one window (≤ 2^53−1). Requires `window_ms`."
     },
     "lifetime_limit_micro": {
       "type": "integer",
       "minimum": 0,
-      "description": "Max cumulative spend (integer micro-USD) over the grant's ENTIRE life — never reset by a window roll. The offline-meaningful total bound (paired with the grant's `expires_at`)."
+      "maximum": 9007199254740991,
+      "description": "Max cumulative spend (integer micro-USD, ≤ 2^53−1) over the grant's ENTIRE life — never reset by a window roll. The offline-meaningful total bound (paired with the grant's `expires_at`)."
     },
     "window_ms": {
       "type": "integer",
       "exclusiveMinimum": 0,
-      "description": "Rolling window length in ms. Required (> 0) when any per-window limit is set."
+      "maximum": 9007199254740991,
+      "description": "Rolling window length in ms (≤ 2^53−1). Required (> 0) when any per-window limit is set."
     }
   },
   "required": ["schema"],
@@ -51,31 +56,46 @@
         "cumulative_limit_micro": {
           "type": "integer",
           "minimum": 0,
-          "description": "Max cumulative spend (integer micro-USD) within one rolling window. Requires `window_ms`. A SET value of 0 denies all positive spend on this dimension."
+          "maximum": 9007199254740991,
+          "description": "Max cumulative spend (integer micro-USD, ≤ 2^53−1 for JCS number fidelity) within one rolling window. Requires `window_ms`. A SET value of 0 denies all positive spend on this dimension."
         },
         "per_counterparty_limit_micro": {
           "type": "integer",
           "minimum": 0,
-          "description": "Max spend (integer micro-USD) to any single canonical counterparty within one window. Requires `window_ms`."
+          "maximum": 9007199254740991,
+          "description": "Max spend (integer micro-USD, ≤ 2^53−1) to any single canonical counterparty within one window. Requires `window_ms`. Counterparty canonicalization is consumer-local runtime law (spec §3.3)."
         },
         "max_action_count": {
           "type": "integer",
           "minimum": 0,
-          "description": "Max number of money actions within one window. Requires `window_ms`."
+          "maximum": 9007199254740991,
+          "description": "Max number of money actions within one window (≤ 2^53−1). Requires `window_ms`."
         },
         "lifetime_limit_micro": {
           "type": "integer",
           "minimum": 0,
-          "description": "Max cumulative spend (integer micro-USD) over the grant's ENTIRE life — never reset by a window roll. The offline-meaningful total bound (paired with the grant's `expires_at`)."
+          "maximum": 9007199254740991,
+          "description": "Max cumulative spend (integer micro-USD, ≤ 2^53−1) over the grant's ENTIRE life — never reset by a window roll. The offline-meaningful total bound (paired with the grant's `expires_at`)."
         },
         "window_ms": {
           "type": "integer",
           "exclusiveMinimum": 0,
-          "description": "Rolling window length in ms. Required (> 0) when any per-window limit is set."
+          "maximum": 9007199254740991,
+          "description": "Rolling window length in ms (≤ 2^53−1). Required (> 0) when any per-window limit is set."
         }
       },
       "required": ["schema"],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "dependencies": {
+        "cumulative_limit_micro": ["window_ms"],
+        "per_counterparty_limit_micro": ["window_ms"],
+        "max_action_count": ["window_ms"]
+      }
     }
+  },
+  "dependencies": {
+    "cumulative_limit_micro": ["window_ms"],
+    "per_counterparty_limit_micro": ["window_ms"],
+    "max_action_count": ["window_ms"]
   }
 }
