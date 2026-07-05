@@ -4,7 +4,11 @@
  * this device, but authority fields must never be assertable over the
  * socket: `verifiedGrant` may only be produced by `verifyGrantForTurn`
  * from signed artifacts
- * (docs/doctrine/memory-never-confers-authority.md), and
+ * (docs/doctrine/memory-never-confers-authority.md), the
+ * standing-delegation `delegation` PRESENTATION (artifacts the runtime
+ * would verify in-process) is likewise refused — standing authority
+ * over a machine's runtime enters only through in-process callers
+ * holding real artifacts, never an attached frontend — and
  * `userActionAttestation` must originate from a real local user
  * action. Hosts wire these into their chat/invoke seams; anything not
  * explicitly allowlisted is dropped.

@@ -30,6 +30,20 @@ describe("pickSafeChatOptions", () => {
     expect(picked).not.toHaveProperty("goalContext");
   });
 
+  it("strips the standing-delegation PRESENTATION too — artifacts enter only in-process", () => {
+    // `delegation` is artifacts-not-authority (the runtime verifies it),
+    // but the wire boundary still refuses it: standing authority over a
+    // machine's runtime is presented by in-process callers holding real
+    // artifacts, never by an attached frontend over the socket. Money-
+    // execution Inc 3b; spec/standing-delegation-v1.md §3.3.
+    const picked = pickSafeChatOptions({
+      delegation: { token: { grant_id: "g-1" }, grant: { grant_id: "g-1" }, revocations: [] },
+      delegationScope: "scope:x",
+    });
+    expect(picked).toEqual({ delegationScope: "scope:x" });
+    expect(picked).not.toHaveProperty("delegation");
+  });
+
   it("ignores wrong-typed values rather than forwarding them", () => {
     expect(pickSafeChatOptions({ delegationScope: 42, suppressHistory: "yes" })).toEqual({});
   });
