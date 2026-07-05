@@ -2212,3 +2212,112 @@ describe("R4 money metering — the AND-composition (gate-allow ∧ meter-allow)
     expect(meterCalls).toBe(0);
   });
 });
+
+describe("late-bound money metering (moneyBinding: 'late')", () => {
+  const lateGate = {
+    filterTools: (t: ToolDefinition[]) => t,
+    createTurnContext: () => ({
+      turnId: "t",
+      toolCallCount: 0,
+      turnStartMs: 0,
+      costAccumulated: 0,
+      verifiedGrant: { grant_id: "grant-1", verified_at: 1, token_issued_at: 100 },
+    }),
+    validate: () => ({ allowed: true, requiresApproval: false }),
+    classify: () => ({
+      risk: 4,
+      dataClass: "private",
+      sideEffect: "irreversible",
+      requiresApproval: false,
+    }),
+    recordToolCall: (ctx: unknown) => ctx,
+    sanitizeAndCheck: (result: ToolResult) => ({
+      result,
+      injectionDetected: false,
+      injectionPatterns: [],
+    }),
+    sanitizeResult: (result: ToolResult) => result,
+    logInjection: () => undefined,
+  };
+
+  const lateRegistry = () =>
+    makeMockToolRegistry(
+      new Map([
+        [
+          "delegate_paid",
+          {
+            def: {
+              name: "delegate_paid",
+              description: "Paid delegation — spend materializes at quote time",
+              inputSchema: { type: "object", properties: {} },
+              moneyBinding: "late" as const,
+            },
+            result: { ok: true },
+          },
+        ],
+      ]),
+    );
+
+  async function runLateTurn(extraDeps: Record<string, unknown>, gate: unknown = lateGate) {
+    const provider = makeMockProvider([
+      {
+        text: "Delegating.",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+        tool_calls: [{ id: "tc_late", name: "delegate_paid", args: { prompt: "do work" } }],
+      },
+      { text: "Done.", confidence: 0.8, memory_candidates: [], state_updates: {} },
+    ]);
+    const deps = {
+      ...makeDepsWithProvider(provider, lateRegistry()),
+      policyGate: gate,
+      ...extraDeps,
+    } as unknown as SensitivityCleared<MotebitLoopDependencies>;
+    let result:
+      | { toolCallsDenied?: number; toolCallsSucceeded: number; toolCallsBlocked: number }
+      | undefined;
+    for await (const chunk of runTurnStreaming(deps, "delegate this")) {
+      if (chunk.type === "result") {
+        result = (chunk as { type: "result"; result: NonNullable<typeof result> }).result;
+      }
+    }
+    return result!;
+  }
+
+  it("executes a grant-cleared late-bound tool WITHOUT args-metering (rail meters instead)", async () => {
+    let meterCalls = 0;
+    const result = await runLateTurn({
+      meterMoneyAction: async () => {
+        meterCalls++;
+        return { allowed: false, denial: "would_have_denied_args_metering" };
+      },
+    });
+    expect(result.toolCallsSucceeded).toBe(1);
+    expect(meterCalls).toBe(0); // late binding: the loop never args-meters
+  });
+
+  it("still denies a late-bound tool when NO meter is wired (meter_absent — rail could not enforce)", async () => {
+    const result = await runLateTurn({});
+    expect(result.toolCallsDenied).toBe(1);
+    expect(result.toolCallsSucceeded).toBe(0);
+  });
+
+  it("still denies a late-bound tool when the turn carries NO grant (grant_absent)", async () => {
+    const grantlessGate = {
+      ...lateGate,
+      createTurnContext: () => ({
+        turnId: "t",
+        toolCallCount: 0,
+        turnStartMs: 0,
+        costAccumulated: 0,
+      }),
+    };
+    const result = await runLateTurn(
+      { meterMoneyAction: async () => ({ allowed: true }) },
+      grantlessGate,
+    );
+    expect(result.toolCallsDenied).toBe(1);
+    expect(result.toolCallsSucceeded).toBe(0);
+  });
+});

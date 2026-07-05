@@ -166,6 +166,46 @@ const ALLOWED_CALLERS = new Set([PRODUCER, METER, STORE]);
   }
 }
 
+// === 4. The rail seam is bound only through the metering wrapper =====
+// Late-bound money tools (`ToolDefinition.moneyBinding: "late"`) rely on
+// the RAIL to enforce the ceiling — the loop admits them on declaration.
+// That is only sound if the runtime never hands the raw wallet payment
+// builder to the delegation manager: it must compose through
+// `wrapP2pPaymentWithMeter` (money-meter.ts), which refuses the broadcast
+// on deny.
+{
+  const runtime = readFile("packages/runtime/src/motebit-runtime.ts");
+  if (runtime === null) {
+    fail("could not read packages/runtime/src/motebit-runtime.ts — update this gate");
+  } else {
+    if (!runtime.includes("wrapP2pPaymentWithMeter(")) {
+      fail(
+        `packages/runtime/src/motebit-runtime.ts no longer composes the payment builder ` +
+          `through wrapP2pPaymentWithMeter( — a late-bound money tool would then move ` +
+          `UNMETERED money under a standing grant. Route the SovereignWalletRail's ` +
+          `buildP2pPayment through wrapP2pPaymentWithMeter in ` +
+          `packages/runtime/src/money-meter.ts before handing it to the delegation manager.`,
+      );
+    }
+    if (runtime.includes("buildP2pPayment: rawBuildP2pPayment")) {
+      fail(
+        `packages/runtime/src/motebit-runtime.ts hands the RAW wallet payment builder ` +
+          `through (buildP2pPayment: rawBuildP2pPayment) — the metering wrapper is bypassed. ` +
+          `Fix: bind only the wrapP2pPaymentWithMeter( composition ` +
+          `(packages/runtime/src/money-meter.ts).`,
+      );
+    }
+  }
+  const meter = readFile(METER);
+  if (meter !== null && !meter.includes("export function wrapP2pPaymentWithMeter")) {
+    fail(
+      `${METER} no longer exports wrapP2pPaymentWithMeter — the sanctioned rail-seam ` +
+        `composition for late-bound money tools. Restore it or update this gate alongside ` +
+        `the doctrine.`,
+    );
+  }
+}
+
 if (failed) {
   process.exit(1);
 }

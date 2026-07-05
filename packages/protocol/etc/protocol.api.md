@@ -4172,6 +4172,7 @@ export interface ToolDefinition {
     // (undocumented)
     inputSchema: Record<string, unknown>;
     mode?: ToolMode;
+    moneyBinding?: "args" | "late";
     // (undocumented)
     name: string;
     outbound?: boolean;

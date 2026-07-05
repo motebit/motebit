@@ -226,7 +226,7 @@ import {
   classifyTool,
   InMemoryGrantSpendStore,
 } from "@motebit/policy";
-import { createMoneyMeter, type MoneyMeter } from "./money-meter.js";
+import { createMoneyMeter, wrapP2pPaymentWithMeter, type MoneyMeter } from "./money-meter.js";
 import { verifyGrantForTurn } from "./grant-verifier.js";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
 import { base58Encode } from "@motebit/protocol";
@@ -432,6 +432,15 @@ export class MotebitRuntime {
   policy: PolicyGate;
   /** R4 money meter (AND-composition enforcer half) — see money-meter.ts. */
   private moneyMeter: MoneyMeter;
+  /**
+   * The current turn's verified standing authority (null between turns
+   * and on grantless turns). Set only from `verifyGrantForTurn`'s output
+   * (or the loop-threaded verifiedGrant option), read by the rail seam
+   * for late-bound metering, cleared unconditionally in the turn finally.
+   */
+  private _activeTurnGrant: NonNullable<
+    import("@motebit/protocol").TurnContext["verifiedGrant"]
+  > | null = null;
   memoryGovernor: MemoryGovernor;
 
   private renderer: RenderAdapter;
@@ -2377,6 +2386,12 @@ export class MotebitRuntime {
               options.delegation.revocations ?? [],
             )
           : null;
+      // The active turn's standing authority, readable by the rail seam
+      // (wrapP2pPaymentWithMeter reads it at broadcast time — late-bound
+      // metering). Single-turn by construction (_isProcessing guard);
+      // cleared in this method's finally so authority never outlives the
+      // turn that verified it.
+      this._activeTurnGrant = presentedGrant ?? options?.verifiedGrant ?? null;
 
       const stream = runTurnStreaming(clearedLoopDeps, text, {
         conversationHistory: trimmed,
@@ -2387,7 +2402,13 @@ export class MotebitRuntime {
         knownAgents,
         agentCapabilities,
         precisionContext: selfAwareness || undefined,
-        delegationScope: options?.delegationScope,
+        // A grant-presented turn is scope-bounded by the SIGNED capability
+        // ceiling: tools outside `grant.scope` are denied by the policy
+        // gate's delegation-scope machinery. An explicit delegationScope
+        // option still narrows further; it never widens past the grant.
+        delegationScope:
+          options?.delegationScope ??
+          (presentedGrant != null ? options?.delegation?.grant.scope : undefined),
         verifiedGrant: presentedGrant ?? options?.verifiedGrant,
         firstConversation: this._isFirstConversation || undefined,
         deferMemoryFormation: this._deferMemoryFormation,
@@ -2441,6 +2462,10 @@ export class MotebitRuntime {
       // catch a stale grant — so we clear here unconditionally,
       // including on the catch-block rethrow.
       this._currentTypedIntent = null;
+      // Standing authority dies with the turn too — the rail seam
+      // (wrapP2pPaymentWithMeter) must never see a grant from a turn
+      // that already ended.
+      this._activeTurnGrant = null;
       // Return presence to idle so the next idle-tick can fire. enterIdle
       // is unconditional here — if a cycle is still unwinding, its
       // finally's exitTending will see mode!=tending and no-op.
@@ -4640,10 +4665,20 @@ export class MotebitRuntime {
     // configured) so a paid cross-agent `delegate_to_agent` call can settle
     // peer-to-peer — mirrors enableInvokeCapability. The surface supplies the
     // pinned `relayPublicKey` in `config`; both together enable the P2P path.
-    const buildP2pPayment = this._solanaWallet?.buildP2pPayment?.bind(this._solanaWallet);
+    //
+    // The raw wallet method NEVER passes through: it is bound only via the
+    // metering wrapper, which enforces the standing grant's signed ceiling
+    // at the last point before broadcast (late-bound metering; gate
+    // `check-ceiling-from-grant`). Human-approved turns carry no grant and
+    // pass unmetered — the human is that path's authorizer.
+    const rawBuildP2pPayment = this._solanaWallet?.buildP2pPayment?.bind(this._solanaWallet);
+    const buildP2pPayment = rawBuildP2pPayment
+      ? wrapP2pPaymentWithMeter(rawBuildP2pPayment, () => this._activeTurnGrant, this.moneyMeter)
+      : undefined;
     this.interactiveDelegation.enable({
       ...config,
       ...(buildP2pPayment ? { buildP2pPayment } : {}),
+      getActiveGrantId: () => this._activeTurnGrant?.grant_id ?? null,
     });
   }
 
