@@ -25,7 +25,12 @@
  * invariant.
  */
 
-import type { StandingDelegation, DelegationToken, DelegationRevocation } from "@motebit/protocol";
+import type {
+  StandingDelegation,
+  DelegationToken,
+  DelegationRevocation,
+  SpendCeilingV1,
+} from "@motebit/protocol";
 import {
   verifyStandingDelegation,
   verifyTokenAgainstGrant,
@@ -35,6 +40,25 @@ import {
 export interface VerifiedGrant {
   grant_id: string;
   verified_at: number;
+  /**
+   * The verified tick token's signed `issued_at` — the monotonic replay
+   * nonce the blast-radius enforcer consumes (`high_water_nonce`). One
+   * tick token meters at most ONE money action: a second action under the
+   * same token replays the nonce and is denied. Signature-derived: this
+   * value comes from the token the chain just verified, never from args.
+   */
+  token_issued_at: number;
+  /**
+   * The verified grant's signed `spend_ceiling` (standing-delegation@1.2),
+   * copied verbatim from the artifact this verification proved. Carrying
+   * it here is what lets the dispatch seam enforce spend against the
+   * DELEGATOR'S commitment without re-holding the grant — and since this
+   * module is the only `verifiedGrant` producer (`check-money-authority`),
+   * the ceiling provably originates from a verified signed body (spec
+   * §3.3 rule 2). Absent ⇒ the grant carries no ceiling ⇒ enforcers deny
+   * `ceiling_absent` and no money moves.
+   */
+  spend_ceiling?: SpendCeilingV1;
 }
 
 /**
@@ -64,5 +88,10 @@ export async function verifyGrantForTurn(
   const tokenResult = await verifyTokenAgainstGrant(token, grant, { now, isRevoked });
   if (!tokenResult.valid) return null;
 
-  return { grant_id: grant.grant_id, verified_at: now };
+  return {
+    grant_id: grant.grant_id,
+    verified_at: now,
+    token_issued_at: token.issued_at,
+    ...(grant.spend_ceiling !== undefined ? { spend_ceiling: grant.spend_ceiling } : {}),
+  };
 }

@@ -4354,6 +4354,8 @@ export interface TurnContext {
     verifiedGrant?: {
         grant_id: string;
         verified_at: number;
+        token_issued_at?: number;
+        spend_ceiling?: SpendCeilingV1;
     };
 }
 

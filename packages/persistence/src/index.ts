@@ -38,7 +38,16 @@ import { computeDecayedConfidence } from "@motebit/memory-graph";
 import type { IdentityStorage, DeviceRegistration } from "@motebit/core-identity";
 import type { AuditLogAdapter } from "@motebit/privacy-layer";
 import type { ToolAuditEntry, PolicyDecision } from "@motebit/sdk";
-import type { AuditLogSink, AuditStatsSince } from "@motebit/policy";
+import type {
+  AuditLogSink,
+  AuditStatsSince,
+  GrantSpendStore,
+  GrantSpendCeiling,
+  GrantSpendState,
+  MoneyAction,
+  BlastRadiusDecision,
+} from "@motebit/policy";
+import { evaluateBlastRadius, freshGrantSpendState } from "@motebit/policy";
 
 // === Schema ===
 
@@ -2776,6 +2785,117 @@ export class SqliteCredentialStore {
 
 // === Factory ===
 
+/**
+ * Persistent `GrantSpendStore` — the durable blast-radius accumulator the
+ * money meter consumes (`@motebit/runtime` money-meter.ts). Persistence is
+ * load-bearing for the LIFETIME ceiling: the in-memory reference store
+ * re-arms the delegator's total bound on every process restart.
+ *
+ * Atomicity: the interface contract (`@motebit/policy` grant-blast-radius)
+ * is a SINGLE atomic check-and-commit. Achieved here by running
+ * read → `evaluateBlastRadius` → write inside one `driver.transaction`
+ * (synchronous under better-sqlite3; savepoint-composable), so two
+ * concurrent money actions cannot both pass a ceiling check before either
+ * commits.
+ */
+export class SqliteGrantSpendStore implements GrantSpendStore {
+  private stmtGet: PreparedStatement;
+  private stmtPut: PreparedStatement;
+
+  constructor(private readonly driver: DatabaseDriver) {
+    this.stmtGet = driver.prepare(`SELECT * FROM grant_spend_state WHERE grant_id = ?`);
+    this.stmtPut = driver.prepare(
+      `INSERT OR REPLACE INTO grant_spend_state
+       (grant_id, window_started_at, window_spent_micro, window_action_count,
+        per_counterparty_json, lifetime_spent_micro, high_water_nonce)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+  }
+
+  tryConsume(input: {
+    grant_id: string;
+    ceiling: GrantSpendCeiling;
+    action: MoneyAction;
+    nonce: number;
+    now: number;
+  }): Promise<BlastRadiusDecision> {
+    const decision = this.driver.transaction(() => {
+      const row = this.stmtGet.get(input.grant_id) as
+        | {
+            grant_id: string;
+            window_started_at: number;
+            window_spent_micro: number;
+            window_action_count: number;
+            per_counterparty_json: string;
+            lifetime_spent_micro: number;
+            high_water_nonce: number;
+          }
+        | undefined;
+      const state: GrantSpendState =
+        row === undefined
+          ? freshGrantSpendState(input.grant_id, input.now)
+          : {
+              grant_id: row.grant_id,
+              window_started_at: row.window_started_at,
+              window_spent_micro: row.window_spent_micro,
+              window_action_count: row.window_action_count,
+              per_counterparty_micro: JSON.parse(row.per_counterparty_json) as Record<
+                string,
+                number
+              >,
+              lifetime_spent_micro: row.lifetime_spent_micro,
+              high_water_nonce: row.high_water_nonce,
+            };
+      const evaluated = evaluateBlastRadius(
+        input.ceiling,
+        state,
+        input.action,
+        input.nonce,
+        input.now,
+      );
+      if (evaluated.decision.allowed && evaluated.nextState) {
+        const next = evaluated.nextState;
+        this.stmtPut.run(
+          next.grant_id,
+          next.window_started_at,
+          next.window_spent_micro,
+          next.window_action_count,
+          JSON.stringify(next.per_counterparty_micro),
+          next.lifetime_spent_micro,
+          next.high_water_nonce,
+        );
+      }
+      return evaluated.decision;
+    });
+    return Promise.resolve(decision);
+  }
+
+  /** Test/inspection helper — current accumulator for a grant, if any. */
+  peek(grantId: string): GrantSpendState | undefined {
+    const row = this.stmtGet.get(grantId) as
+      | {
+          grant_id: string;
+          window_started_at: number;
+          window_spent_micro: number;
+          window_action_count: number;
+          per_counterparty_json: string;
+          lifetime_spent_micro: number;
+          high_water_nonce: number;
+        }
+      | undefined;
+    if (row === undefined) return undefined;
+    return {
+      grant_id: row.grant_id,
+      window_started_at: row.window_started_at,
+      window_spent_micro: row.window_spent_micro,
+      window_action_count: row.window_action_count,
+      per_counterparty_micro: JSON.parse(row.per_counterparty_json) as Record<string, number>,
+      lifetime_spent_micro: row.lifetime_spent_micro,
+      high_water_nonce: row.high_water_nonce,
+    };
+  }
+}
+
 export interface MotebitDatabase {
   db: DatabaseDriver;
   eventStore: SqliteEventStore;
@@ -2804,6 +2924,7 @@ export interface MotebitDatabase {
   settlementStore: SqliteSettlementStore;
   latencyStatsStore: SqliteLatencyStatsStore;
   credentialStore: SqliteCredentialStore;
+  grantSpendStore: SqliteGrantSpendStore;
   close(): void;
 }
 
@@ -2839,6 +2960,7 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   const settlementStore = new SqliteSettlementStore(driver);
   const latencyStatsStore = new SqliteLatencyStatsStore(driver);
   const credentialStore = new SqliteCredentialStore(driver);
+  const grantSpendStore = new SqliteGrantSpendStore(driver);
 
   return {
     db: driver,
@@ -2861,6 +2983,7 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     settlementStore,
     latencyStatsStore,
     credentialStore,
+    grantSpendStore,
     close() {
       driver.close();
     },

@@ -91,6 +91,7 @@ import {
   AllocationError,
   TaskError,
 } from "./errors.js";
+import { listRevokedGrantIds } from "./delegation-revocations.js";
 
 const logger = createLogger({ service: "tasks" });
 
@@ -140,6 +141,12 @@ export type TaskQueueEntry = {
   };
   /** Target agent for p2p tasks (pinned routing). */
   target_agent?: string;
+  /**
+   * Standing-delegation grant the task was declared under (checkpoint D4).
+   * Persisted for audit lineage; the acceptance-time revocation fence
+   * already ran when this entry exists. Advisory id, never authority.
+   */
+  grant_id?: string;
 };
 
 // Platform fee rate is no longer a module-level variable. It lives in the
@@ -1752,6 +1759,16 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
        * `trust_as_economic_membrane` memory.
        */
       delegator_acknowledges_no_history_risk?: boolean;
+      /**
+       * Standing-delegation grant this task executes under (checkpoint
+       * D4). OPTIONAL and advisory-shaped on the wire — a bare id, not
+       * the signed artifacts; the runtime's `verifyGrantForTurn` is the
+       * cryptographic gate. Declaring it buys the submitter the relay's
+       * acceptance-time revocation fence: a task under a grant the
+       * relay's delegation-revocation cache shows revoked is refused
+       * BEFORE any budget hold commits.
+       */
+      grant_id?: string;
       /** P2P: onchain payment proof (triggers p2p settlement mode). */
       payment_proof?: {
         tx_hash: string;
@@ -1810,6 +1827,28 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         `invocation_origin must be one of: ${VALID_INVOCATION_ORIGINS.join(", ")}`,
         400,
       );
+    }
+
+    // Standing-delegation revocation fence (checkpoint D4). Cache-based,
+    // not cryptographic — the runtime's verifyGrantForTurn is the
+    // cryptographic gate; this is the coordinator refusing to ACCEPT (and
+    // therefore to hold money for) work under authority it can already
+    // see is withdrawn. The cache is never the authority (§6 D2): an
+    // un-cached revocation still bites at the runtime. Mid-flight
+    // revocations (arriving after acceptance, before receipt) are not
+    // re-fenced in v1 — the hold was committed under then-unrevoked
+    // authority; online latency is bounded by this acceptance check.
+    if (body.grant_id != null) {
+      if (typeof body.grant_id !== "string" || body.grant_id.trim() === "") {
+        throw new TaskError("TASK_INVALID_INPUT", "grant_id must be a non-empty string", 400);
+      }
+      if (listRevokedGrantIds(moteDb.db).has(body.grant_id)) {
+        throw new TaskError(
+          "TASK_GRANT_REVOKED",
+          "Standing grant is revoked — task refused at acceptance (delegation-revocation cache)",
+          403,
+        );
+      }
     }
 
     const taskId = crypto.randomUUID();
@@ -2119,6 +2158,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       settlement_mode: settlementMode,
       p2p_payment_proof: p2pPaymentProof,
       target_agent: body.target_agent,
+      grant_id: body.grant_id,
     });
 
     logger.info("task.submitted", {

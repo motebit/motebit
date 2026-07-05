@@ -2077,3 +2077,138 @@ describe("withStageTimeout — onDuration", () => {
     await expect(withStageTimeout("test_stage", 1000, Promise.resolve(42))).resolves.toBe(42);
   });
 });
+
+describe("R4 money metering — the AND-composition (gate-allow ∧ meter-allow)", () => {
+  // A gate that CLEARS an R4 tool without approval — only possible in
+  // production when the turn carries a verifiedGrant (step 8b). The loop
+  // must then refuse to execute unless the injected money meter allows.
+  const grantClearedGate = {
+    filterTools: (t: ToolDefinition[]) => t,
+    createTurnContext: () => ({
+      turnId: "t",
+      toolCallCount: 0,
+      turnStartMs: 0,
+      costAccumulated: 0,
+      verifiedGrant: {
+        grant_id: "grant-1",
+        verified_at: 1,
+        token_issued_at: 100,
+        spend_ceiling: { schema: "motebit.spend-ceiling.v1" as const, lifetime_limit_micro: 5 },
+      },
+    }),
+    validate: () => ({ allowed: true, requiresApproval: false }),
+    classify: () => ({
+      risk: 4,
+      dataClass: "private",
+      sideEffect: "irreversible",
+      requiresApproval: false,
+    }),
+    recordToolCall: (ctx: unknown) => ctx,
+    sanitizeAndCheck: (result: ToolResult) => ({
+      result,
+      injectionDetected: false,
+      injectionPatterns: [],
+    }),
+    sanitizeResult: (result: ToolResult) => result,
+    logInjection: () => undefined,
+  };
+
+  const payRegistry = () =>
+    makeMockToolRegistry(
+      new Map([
+        [
+          "pay_invoice",
+          {
+            def: {
+              name: "pay_invoice",
+              description: "Pay an invoice",
+              inputSchema: { type: "object", properties: {} },
+            },
+            result: { ok: true },
+          },
+        ],
+      ]),
+    );
+
+  const payTurn = {
+    text: "Paying.",
+    confidence: 0.8,
+    memory_candidates: [],
+    state_updates: {},
+    tool_calls: [
+      { id: "tc_pay", name: "pay_invoice", args: { amount_micro: 1, counterparty: "addr" } },
+    ],
+  };
+
+  async function runPayTurn(extraDeps: Record<string, unknown>) {
+    const provider = makeMockProvider([
+      payTurn,
+      { text: "Done.", confidence: 0.8, memory_candidates: [], state_updates: {} },
+    ]);
+    const deps = {
+      ...makeDepsWithProvider(provider, payRegistry()),
+      policyGate: grantClearedGate,
+      ...extraDeps,
+    } as unknown as SensitivityCleared<MotebitLoopDependencies>;
+    let result:
+      | { toolCallsDenied?: number; toolCallsSucceeded: number; toolCallsBlocked: number }
+      | undefined;
+    for await (const chunk of runTurnStreaming(deps, "pay the invoice")) {
+      if (chunk.type === "result") {
+        result = (chunk as { type: "result"; result: NonNullable<typeof result> }).result;
+      }
+    }
+    return result!;
+  }
+
+  it("denies a grant-cleared R4 call when NO meter is wired (fail-closed, meter_absent)", async () => {
+    const result = await runPayTurn({});
+    expect(result.toolCallsDenied).toBe(1);
+    expect(result.toolCallsSucceeded).toBe(0);
+  });
+
+  it("denies when the meter denies (enforcer verdict blocks execution)", async () => {
+    const result = await runPayTurn({
+      meterMoneyAction: async () => ({ allowed: false, denial: "cumulative_exceeded" }),
+    });
+    expect(result.toolCallsDenied).toBe(1);
+    expect(result.toolCallsSucceeded).toBe(0);
+  });
+
+  it("executes when the meter allows — and the meter received the grant + raw args", async () => {
+    const seen: unknown[] = [];
+    const result = await runPayTurn({
+      meterMoneyAction: async (grant: unknown, tool: unknown, args: unknown) => {
+        seen.push(grant, tool, args);
+        return { allowed: true };
+      },
+    });
+    expect(result.toolCallsSucceeded).toBe(1);
+    expect(result.toolCallsDenied ?? 0).toBe(0);
+    expect(seen[0]).toMatchObject({ grant_id: "grant-1", token_issued_at: 100 });
+    expect(seen[1]).toBe("pay_invoice");
+    expect(seen[2]).toMatchObject({ amount_micro: 1, counterparty: "addr" });
+  });
+
+  it("does not consult the meter for sub-R4 tools", async () => {
+    let meterCalls = 0;
+    const subR4Gate = {
+      ...grantClearedGate,
+      classify: () => ({
+        risk: 2,
+        dataClass: "private",
+        sideEffect: "reversible",
+        requiresApproval: false,
+      }),
+    };
+    const result = await runPayTurn({
+      policyGate: subR4Gate,
+      meterMoneyAction: async () => {
+        meterCalls++;
+        return { allowed: false, denial: "should_not_be_consulted" };
+      },
+    });
+    expect(result.toolCallsSucceeded).toBe(1);
+    expect(meterCalls).toBe(0);
+  });
+});

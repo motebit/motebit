@@ -13,7 +13,7 @@ import type {
   ConversationMessage,
   AccrualBasis,
 } from "@motebit/sdk";
-import { EventType, SensitivityLevel, rankSensitivity } from "@motebit/sdk";
+import { EventType, SensitivityLevel, RiskLevel, rankSensitivity } from "@motebit/sdk";
 import type { SensitivityCleared } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import type { MemoryGraph, ConsolidationProvider } from "@motebit/memory-graph";
@@ -403,6 +403,22 @@ export interface MotebitLoopDependencies {
   provider: StreamingProvider;
   tools?: ToolRegistry;
   policyGate?: LoopPolicyGate;
+  /**
+   * Money meter for standing-authority auto-execution — the enforcer half
+   * of the R4 AND-composition (gate-allow ∧ meter-allow). Implemented by
+   * the runtime (`createMoneyMeter` in `@motebit/runtime`) over the grant
+   * blast-radius enforcer; the loop only invokes it. An R4_MONEY call that
+   * reaches execution WITHOUT `requiresApproval` can only be grant-cleared
+   * (policy-gate step 8b), so its spend MUST be metered against the
+   * delegator's signed ceiling first. Fail-closed: a missing meter,
+   * missing grant, or meter deny blocks the call — unmetered money never
+   * moves. Spec: `spec/standing-delegation-v1.md` §3.3.
+   */
+  meterMoneyAction?: (
+    verifiedGrant: NonNullable<TurnContext["verifiedGrant"]>,
+    toolName: string,
+    args: Record<string, unknown>,
+  ) => Promise<{ allowed: boolean; denial?: string }>;
   memoryGovernor?: LoopMemoryGovernor;
   consolidationProvider?: ConsolidationProvider;
   /**
@@ -555,7 +571,7 @@ export interface TurnOptions {
    * standing-authority invariant can clear R4 auto-execution.
    * Doctrine: `docs/doctrine/memory-never-confers-authority.md`.
    */
-  verifiedGrant?: { grant_id: string; verified_at: number };
+  verifiedGrant?: NonNullable<TurnContext["verifiedGrant"]>;
   /** First conversation ever — no prior history exists. */
   firstConversation?: boolean;
   /** System-triggered generation — goes into system prompt, not user message. */
@@ -1191,6 +1207,46 @@ export async function* runTurnStreaming(
             content: JSON.stringify({ ok: false, error: "Awaiting approval" }),
           });
           continue;
+        }
+
+        // Standing-authority money metering — the R4 AND-composition.
+        // Reaching here without `requiresApproval` on an R4_MONEY tool is
+        // only possible grant-cleared (policy-gate step 8b), so the spend
+        // must pass the blast-radius meter before execution. Fail-closed
+        // on every absence: no meter, no grant, or a deny ⇒ the call is
+        // refused as a governance deny, never executed unmetered.
+        {
+          const profile = deps.policyGate.classify(toolDef);
+          if (profile.risk >= RiskLevel.R4_MONEY) {
+            const grant = turnCtx.verifiedGrant;
+            const verdict =
+              grant != null && deps.meterMoneyAction != null
+                ? await deps.meterMoneyAction(grant, toolCall.name, toolCall.args)
+                : {
+                    allowed: false,
+                    denial: grant == null ? "grant_absent" : "meter_absent",
+                  };
+            if (!verdict.allowed) {
+              toolCallsBlocked++;
+              toolCallsDenied++;
+              const reason = `Money action denied by grant blast-radius meter: ${verdict.denial ?? "denied"}`;
+              yield {
+                type: "tool_status",
+                name: toolCall.name,
+                status: "done",
+                result: reason,
+                tool_call_id: toolCall.id,
+                mode: toolDef.embodimentMode,
+                slabProjection: toolDef.slabProjection,
+              };
+              conversationHistory.push({
+                role: "tool",
+                tool_call_id: toolCall.id,
+                content: JSON.stringify({ ok: false, error: reason }),
+              });
+              continue;
+            }
+          }
         }
 
         // Allowed — execute and record

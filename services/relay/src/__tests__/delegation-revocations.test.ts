@@ -18,7 +18,12 @@ import {
   type DelegationRevocation,
 } from "@motebit/crypto";
 import { listRevokedGrantIds } from "../delegation-revocations.js";
-import { createTestRelay } from "./test-helpers.js";
+import {
+  createTestRelay,
+  createAgent,
+  JSON_AUTH,
+  jsonAuthWithIdempotency,
+} from "./test-helpers.js";
 
 type Kp = { publicKey: Uint8Array; privateKey: Uint8Array };
 
@@ -149,5 +154,72 @@ describe("delegation-revocation cache", () => {
 
     const revoked = listRevokedGrantIds(relay.moteDb.db);
     expect(revoked).toEqual(new Set(["grant-1", "grant-2"]));
+  });
+});
+
+describe("acceptance-time revocation fence (checkpoint D4)", () => {
+  let relay: SyncRelay;
+
+  beforeEach(async () => {
+    relay = await createTestRelay();
+  });
+
+  afterEach(async () => {
+    await relay.close();
+  });
+
+  async function registerWorker(motebitId: string): Promise<void> {
+    await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify({
+        motebit_id: motebitId,
+        endpoint_url: "http://localhost:9999/mcp",
+        capabilities: ["web_search"],
+      }),
+    });
+  }
+
+  async function submitTask(motebitId: string, grantId?: string) {
+    return relay.app.request(`/agent/${motebitId}/task`, {
+      method: "POST",
+      headers: jsonAuthWithIdempotency(),
+      body: JSON.stringify({
+        prompt: "do the daily research",
+        ...(grantId !== undefined ? { grant_id: grantId } : {}),
+      }),
+    });
+  }
+
+  it("refuses a task declared under a REVOKED grant before any hold commits (403)", async () => {
+    const alice = await generateKeypair();
+    const worker = await createAgent(relay, bytesToHex(alice.publicKey));
+    await registerWorker(worker.motebitId);
+    await post(relay, await makeRevocation(alice, "grant-money-1"));
+
+    const res = await submitTask(worker.motebitId, "grant-money-1");
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error?: string; code?: string };
+    expect(JSON.stringify(body)).toContain("REVOKED");
+  });
+
+  it("accepts a task under an unrevoked grant and a grantless task unchanged", async () => {
+    const alice = await generateKeypair();
+    const worker = await createAgent(relay, bytesToHex(alice.publicKey));
+    await registerWorker(worker.motebitId);
+    await post(relay, await makeRevocation(alice, "some-other-grant"));
+
+    const ok = await submitTask(worker.motebitId, "grant-money-1");
+    expect(ok.status).toBe(201);
+    const bare = await submitTask(worker.motebitId);
+    expect(bare.status).toBe(201);
+  });
+
+  it("rejects a malformed grant_id (400)", async () => {
+    const alice = await generateKeypair();
+    const worker = await createAgent(relay, bytesToHex(alice.publicKey));
+    await registerWorker(worker.motebitId);
+    const res = await submitTask(worker.motebitId, "   ");
+    expect(res.status).toBe(400);
   });
 });

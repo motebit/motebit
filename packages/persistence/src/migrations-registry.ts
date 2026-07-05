@@ -374,4 +374,26 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE memory_nodes ADD COLUMN source_turn_id TEXT",
     ],
   },
+  {
+    version: 41,
+    description: "grant_spend_state — persistent blast-radius accumulator (money-execution Inc 3b)",
+    statements: [
+      // Per-grant cumulative-spend accumulator backing SqliteGrantSpendStore
+      // (the persistent GrantSpendStore the money meter consumes). One row
+      // per grant_id; window fields reset on roll, lifetime_spent_micro and
+      // high_water_nonce never do (packages/policy grant-blast-radius.ts).
+      // Persistence is load-bearing for the LIFETIME ceiling: an in-memory
+      // accumulator re-arms the delegator's total bound on every restart.
+      // Local private state — never crosses a wire (not interop law).
+      `CREATE TABLE IF NOT EXISTS grant_spend_state (
+        grant_id TEXT PRIMARY KEY,
+        window_started_at INTEGER NOT NULL,
+        window_spent_micro INTEGER NOT NULL,
+        window_action_count INTEGER NOT NULL,
+        per_counterparty_json TEXT NOT NULL DEFAULT '{}',
+        lifetime_spent_micro INTEGER NOT NULL,
+        high_water_nonce INTEGER NOT NULL
+      )`,
+    ],
+  },
 ];
