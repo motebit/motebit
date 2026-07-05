@@ -19,11 +19,13 @@ import {
   evaluateBlastRadius,
   freshGrantSpendState,
   canonicalizeCounterparty,
+  spendCeilingFromGrant,
   InMemoryGrantSpendStore,
   type GrantSpendCeiling,
   type GrantSpendState,
   type MoneyAction,
 } from "../grant-blast-radius";
+import type { SpendCeilingV1 } from "@motebit/protocol";
 
 const M = 1_000_000; // 1 USD in micro-units
 const GID = "grant-1";
@@ -284,5 +286,62 @@ describe("grant blast-radius — atomic store (the decomposition RACE)", () => {
     });
     expect(first.allowed).toBe(true);
     expect(replay.denial).toBe("replay");
+  });
+});
+
+describe("spendCeilingFromGrant — the wire→enforcer seam (@1.2)", () => {
+  const WIRE: SpendCeilingV1 = {
+    schema: "motebit.spend-ceiling.v1",
+    lifetime_limit_micro: 5 * M,
+    cumulative_limit_micro: 1 * M,
+    per_counterparty_limit_micro: 1 * M,
+    max_action_count: 3,
+    window_ms: 86_400_000,
+  };
+
+  it("returns null when the grant carries no ceiling (@1.0/@1.1 ⇒ no autonomous money)", () => {
+    expect(spendCeilingFromGrant({})).toBeNull();
+    expect(spendCeilingFromGrant({ spend_ceiling: undefined })).toBeNull();
+  });
+
+  it("maps every limit field explicitly and drops the wire `schema` tag", () => {
+    const ceiling = spendCeilingFromGrant({ spend_ceiling: WIRE });
+    expect(ceiling).toEqual({
+      lifetime_limit_micro: 5 * M,
+      cumulative_limit_micro: 1 * M,
+      per_counterparty_limit_micro: 1 * M,
+      max_action_count: 3,
+      window_ms: 86_400_000,
+    });
+    expect(ceiling).not.toHaveProperty("schema");
+  });
+
+  it("omits unset dimensions rather than materializing undefined keys", () => {
+    const ceiling = spendCeilingFromGrant({
+      spend_ceiling: { schema: "motebit.spend-ceiling.v1", lifetime_limit_micro: 2 * M },
+    });
+    expect(ceiling).toEqual({ lifetime_limit_micro: 2 * M });
+    expect(Object.keys(ceiling ?? {})).toEqual(["lifetime_limit_micro"]);
+  });
+
+  it("a limit-less wire ceiling maps to {} and the evaluator denies ceiling_absent (fail-closed composition)", () => {
+    const ceiling = spendCeilingFromGrant({
+      spend_ceiling: { schema: "motebit.spend-ceiling.v1" },
+    });
+    expect(ceiling).toEqual({});
+    const r = evaluateBlastRadius(ceiling!, freshGrantSpendState(GID, T0), act(1), 0, T0);
+    expect(r.decision.allowed).toBe(false);
+    expect(r.decision.denial).toBe("ceiling_absent");
+  });
+
+  it("a signed wire ceiling drives real enforcement end-to-end (allow within, deny beyond)", () => {
+    const ceiling = spendCeilingFromGrant({ spend_ceiling: WIRE })!;
+    const s0 = freshGrantSpendState(GID, T0);
+    const first = evaluateBlastRadius(ceiling, s0, act(1), 0, T0);
+    expect(first.decision.allowed).toBe(true);
+    // Second $1 in the same window exceeds cumulative_limit_micro ($1/window).
+    const second = evaluateBlastRadius(ceiling, first.nextState!, act(1), 1, T0 + 1);
+    expect(second.decision.allowed).toBe(false);
+    expect(second.decision.denial).toBe("cumulative_exceeded");
   });
 });

@@ -51,6 +51,8 @@
  * the wire shape against the published `StandingDelegation` artifact.
  */
 
+import type { StandingDelegation } from "@motebit/protocol";
+
 /**
  * The cumulative ceiling a grant authorizes. Fail-closed: a money grant MUST bound
  * total exposure, so at least one of `cumulative_limit_micro` / `lifetime_limit_micro`
@@ -162,6 +164,40 @@ export function canonicalizeCounterparty(raw: string): string | null {
   if (t.length === 0) return null;
   if (/^0x[0-9a-fA-F]{40}$/.test(t)) return t.toLowerCase();
   return t;
+}
+
+/**
+ * Extract the enforcer ceiling from a grant's signed `spend_ceiling`
+ * (standing-delegation@1.2) — the ONLY sanctioned source of a
+ * `GrantSpendCeiling` (spec §3.3 rule 2: the ceiling MUST come from a VERIFIED
+ * grant, never local config — authority comes only from signed artifacts).
+ *
+ * The caller MUST pass a grant that already verified (`verifyGrantForTurn` /
+ * `verifyStandingDelegation`) — this function maps shape, it does not verify.
+ * Returns `null` when the grant carries no ceiling: a @1.0/@1.1 grant
+ * authorizes NO autonomous money, and callers feed the null through as
+ * `{}` ⇒ `ceiling_absent` denial (or refuse earlier). Fields are mapped
+ * explicitly — a future wire field never leaks into enforcement semantics
+ * silently.
+ */
+export function spendCeilingFromGrant(
+  grant: Pick<StandingDelegation, "spend_ceiling">,
+): GrantSpendCeiling | null {
+  const wire = grant.spend_ceiling;
+  if (wire == null) return null;
+  return {
+    ...(wire.cumulative_limit_micro !== undefined
+      ? { cumulative_limit_micro: wire.cumulative_limit_micro }
+      : {}),
+    ...(wire.per_counterparty_limit_micro !== undefined
+      ? { per_counterparty_limit_micro: wire.per_counterparty_limit_micro }
+      : {}),
+    ...(wire.max_action_count !== undefined ? { max_action_count: wire.max_action_count } : {}),
+    ...(wire.lifetime_limit_micro !== undefined
+      ? { lifetime_limit_micro: wire.lifetime_limit_micro }
+      : {}),
+    ...(wire.window_ms !== undefined ? { window_ms: wire.window_ms } : {}),
+  };
 }
 
 const deny = (denial: BlastRadiusDenial): BlastRadiusEvaluation => ({

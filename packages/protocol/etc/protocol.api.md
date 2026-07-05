@@ -3848,6 +3848,16 @@ export interface SovereignWalletRail extends SovereignRail {
 }
 
 // @public
+export interface SpendCeilingV1 {
+    cumulative_limit_micro?: number;
+    lifetime_limit_micro?: number;
+    max_action_count?: number;
+    per_counterparty_limit_micro?: number;
+    schema: "motebit.spend-ceiling.v1";
+    window_ms?: number;
+}
+
+// @public
 export interface StandingDelegation {
     cadence_ms: number;
     // (undocumented)
@@ -3864,6 +3874,7 @@ export interface StandingDelegation {
     not_before: number | null;
     scope: string;
     signature: string;
+    spend_ceiling?: SpendCeilingV1;
     subject: string;
     subject_binding?: SubjectBindingV1;
     suite: "motebit-jcs-ed25519-b64-v1";

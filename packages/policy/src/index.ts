@@ -7,6 +7,7 @@ export {
   evaluateBlastRadius,
   freshGrantSpendState,
   canonicalizeCounterparty,
+  spendCeilingFromGrant,
   InMemoryGrantSpendStore,
 } from "./grant-blast-radius.js";
 export type {

@@ -40,6 +40,7 @@ async function makeGrant(
       scope: over.scope ?? "web_search,summarize",
       subject: over.subject ?? "research:thesis=acme",
       ...(over.subject_binding !== undefined ? { subject_binding: over.subject_binding } : {}),
+      ...(over.spend_ceiling !== undefined ? { spend_ceiling: over.spend_ceiling } : {}),
       cadence_ms: over.cadence_ms ?? 24 * HOUR,
       issued_at: over.issued_at ?? now,
       not_before: over.not_before ?? null,
@@ -488,5 +489,66 @@ describe("subject_binding (@1.1)", () => {
     );
     expect(r.valid).toBe(false);
     expect(r.error).toContain("digest_method");
+  });
+});
+
+describe("spend_ceiling (standing-delegation@1.2)", () => {
+  const CEILING: SpendCeilingV1 = {
+    schema: "motebit.spend-ceiling.v1",
+    lifetime_limit_micro: 5_000_000, // $5 lifetime
+    cumulative_limit_micro: 1_000_000, // $1 per window
+    window_ms: 24 * HOUR,
+  };
+
+  it("round-trips a grant carrying a signed spend ceiling", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob, { spend_ceiling: CEILING });
+    expect(grant.spend_ceiling).toEqual(CEILING);
+    expect(await verifyStandingDelegation(grant)).toBe(true);
+  });
+
+  it("rejects a tampered ceiling — the ceiling is the delegator's commitment", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob, { spend_ceiling: CEILING });
+    const widened: StandingDelegation = {
+      ...grant,
+      spend_ceiling: { ...CEILING, lifetime_limit_micro: 5_000_000_000 },
+    };
+    expect(await verifyStandingDelegation(widened)).toBe(false);
+  });
+
+  it("rejects a ceiling STRIPPED from a signed grant (downgrade to no-money is still tamper)", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob, { spend_ceiling: CEILING });
+    const { spend_ceiling: _stripped, ...rest } = grant;
+    expect(await verifyStandingDelegation(rest as StandingDelegation)).toBe(false);
+  });
+
+  it("rejects a ceiling GRAFTED onto a grant signed without one", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob);
+    const grafted: StandingDelegation = { ...grant, spend_ceiling: CEILING };
+    expect(await verifyStandingDelegation(grafted)).toBe(false);
+  });
+
+  it("a @1.0/@1.1 grant (no ceiling) verifies unchanged — the field is additive", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob);
+    expect(grant.spend_ceiling).toBeUndefined();
+    expect(await verifyStandingDelegation(grant)).toBe(true);
+  });
+
+  it("per-tick tokens verify identically against a ceiling-carrying grant", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const grant = await makeGrant(alice, bob, { spend_ceiling: CEILING });
+    const tick = await mintTick(grant, alice, bob);
+    const r = await verifyTokenAgainstGrant(tick, grant);
+    expect(r.valid).toBe(true);
   });
 });

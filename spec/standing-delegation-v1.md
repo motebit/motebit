@@ -40,6 +40,7 @@ StandingDelegation {
   scope:                string   // Comma-separated capability CEILING, or "*". Per-tick tokens narrow within. Grammar per market-v1 §12.3.
   subject:              string   // Human-meaningful binding (e.g. "research:thesis=acme-q3"). Opaque to verify.
   subject_binding?:     SubjectBindingV1  // OPTIONAL (@1.1). Digest-binds the resolved subject-scope artifact (§3.2). Part of the signed body. NOT the capability `scope`.
+  spend_ceiling?:       SpendCeilingV1    // OPTIONAL (@1.2). The delegator's signed autonomous-spend ceiling (§3.3). Part of the signed body. Absent ⇒ NO autonomous money (fail-closed).
   cadence_ms:           number   // Authorized minimum firing interval (ms). A mint/relay rate limit; NOT a single-token verify rule.
   issued_at:            number   // Unix ms
   not_before:           number | null  // Optional activation delay. Null ⇒ active from issued_at.
@@ -100,6 +101,38 @@ The `SubjectBindingV1` type in `@motebit/protocol` is the binding machine-readab
 
 **Authority vs. completeness — a layer boundary.** This binding is AUTHORITY only: it proves which subjects the delegator authorized. It does NOT assert that every authorized subject was _evaluated_. Generic delegation is subset-shaped — an executed act narrows within the authorized ceiling (`executed ⊆ authorized`). A _monitor promise_, by contrast, means "evaluate every named leg," which is equality (`attempted == signed`). That completeness rule is **NOT** a property of this generic binding; it belongs to the monitor receipt profile built on top (the `motebit.monitor-scope.v1` consumer profile), which MUST require every signed subject be attempted before emitting a `revalidated`/`revised` verdict, with per-subject coverage deciding `verified` vs `incomplete`. Keeping completeness out of the generic primitive is what lets a non-monitoring vertical reuse `subject_binding` unchanged.
 
+### 3.3 — SpendCeiling (autonomous-money ceiling, @1.2)
+
+A grant's `scope` names WHAT capabilities the delegate may exercise; nothing in @1.0/@1.1 names HOW MUCH money those capabilities may move autonomously. An enforcer whose ceiling comes from local configuration proves only "the runtime was configured thus," never "the delegator authorized this exposure" — the same gap `subject_binding` closed for resolved subjects, applied to money. `standing-delegation@1.2` closes it with an OPTIONAL `spend_ceiling` that rides in the signed body, making the ceiling the delegator's cryptographic commitment.
+
+#### Wire format (foundation law)
+
+```
+SpendCeilingV1 {
+  schema:                        string  // "motebit.spend-ceiling.v1" — this ceiling's own type tag (in-body domain separation)
+  cumulative_limit_micro?:       number  // Max cumulative spend within one rolling window. Requires window_ms.
+  per_counterparty_limit_micro?: number  // Max spend to any single canonical counterparty within one window. Requires window_ms.
+  max_action_count?:             number  // Max number of money actions within one window. Requires window_ms.
+  lifetime_limit_micro?:         number  // Max cumulative spend over the grant's ENTIRE life — never reset by a window roll.
+  window_ms?:                    number  // Rolling window length in ms. Required (> 0) when any per-window limit is set.
+}
+```
+
+All `*_micro` limits are integer micro-units, **USD-denominated** (1 USD = 1,000,000; zero floating point on the money path). The denomination is pinned by this prose: a future non-USD asset model is a NEW `schema` literal (an agility-axis append), never a silent reinterpretation of these numbers. Non-negative integers only; a SET limit of `0` denies all positive spend on that dimension (deny-all, not allow-all).
+
+The `SpendCeilingV1` type in `@motebit/protocol` is the binding machine-readable form; `StandingDelegationSchema` in `@motebit/wire-schemas` carries it as the optional `spend_ceiling` and `spec/schemas/spend-ceiling-v1.json` is the committed standalone schema.
+
+#### Verification and enforcement (foundation law)
+
+`spend_ceiling`, when present, is signature-covered by §3.1 item 4 (the body canonicalization includes it) — AUTHORITY over the ceiling needs no extra verification step. Enforcement is the consumer's runtime law:
+
+1. **Absence is fail-closed.** A grant with no `spend_ceiling` authorizes NO autonomous money movement (`ceiling_absent`). A @1.0/@1.1 grant therefore verifies unchanged and simply cannot move money — which is what makes this field additive.
+2. **The ceiling MUST be taken from a VERIFIED grant, never from local configuration.** A runtime that evaluates spend against any ceiling other than the one in the delegator-signed body has substituted its own authority for the delegator's (memory-never-confers-authority, applied to money).
+3. **Sufficiency: at least one total bound.** A ceiling setting neither `cumulative_limit_micro` nor `lifetime_limit_micro` authorizes nothing (denied `ceiling_absent`) — a money grant MUST bound total exposure.
+4. **Accumulation is cumulative, never per-turn.** Enforcers MUST evaluate the running sum across all actions under the grant (windowed and lifetime), or a large payment decomposes into many small ones.
+
+**Threat model (honest scope).** These ceilings bind the **trusted-runtime / online path**: an honest-but-fallible runtime (bug, runaway loop, prompt injection that does not compromise the signing key or the spend accumulator), or a trusted coordinator holding the accumulator at the settlement checkpoint. They are **NOT an offline guarantee** — a key- or store-compromised delegate tallies its own accumulator and simply does not commit. Offline, the binding bounds are the grant's `expires_at` (§6 D1/D4), what each counterparty independently enforces against tokens it sees, and rail-level rate caps (`settlement-v1` § Onchain spending limits). Deployments SHOULD therefore route autonomous money through a coordinator that re-verifies the grant (including revocation, §5) at settlement time.
+
 ## 4. Per-tick tokens
 
 A `DelegationToken` (delegation@1.0) gains two OPTIONAL fields, `grant_id` and `not_before`. `grant_id` absent ⇒ a standalone single-act delegation (today's semantics — backward compatible); present ⇒ this token is one tick of a `StandingDelegation`. `not_before` (Unix ms) absent ⇒ active from `issued_at`; present ⇒ the token is invalid before it (verifiers reject when `now < not_before`). Both are additive and replay-compatible; 1.0 tokens verify identically.
@@ -147,12 +180,20 @@ The `DelegationRevocation` type in `@motebit/protocol` is the binding machine-re
 - A `DelegationRevocation` is **authoritative over a grant** only when `grant_id` matches AND `delegator_public_key` equals that grant's `delegator_public_key`. A well-formed signature alone proves the statement, not the authority — `verifyDelegationRevocation` checks the signature; the caller checks the grant binding. `@motebit/crypto` `findGrantRevocation` does all three (grant_id match, key match, signature) over a candidate set and is the canonical consumer-side check; matching `grant_id` alone is the foot-gun it forecloses.
 - The signed revocation is the **canonical source of truth**. Relays MAY maintain a deny-list cache (analogous to the `auth-token-v1 §8.1` jti deny-list) and SHOULD propagate revocations on the same signed, append-only feed as agent/credential revocations, under the same revocation horizon — but a relay-asserted boolean is never the authority (self-attesting-system doctrine).
 
+#### Routes (foundation law)
+
+The relay-cache routes below are the binding cross-implementation contract for revocation propagation. The artifact is the security boundary on both: submission verifies the revocation's own signature (that IS the auth — anyone MAY propagate a revocation), and the cache read is public (a consumer building its `isRevoked` seam holds no relay token).
+
+- `POST /api/v1/delegations/revocations` — submit a signed `DelegationRevocation` (the §5.1 artifact verbatim). Recorded only after `verifyDelegationRevocation` passes; idempotent on the signature. An invalid signature is rejected fail-closed.
+- `GET /api/v1/delegations/revocations` — read the cache incrementally via the optional `since=<ms>` query parameter. `since` filters on the relay's receipt clock (`received_at`, returned as `next_since`), never the signer-asserted `revoked_at`, so a backdated revocation cannot hide from a poller. Records are served verbatim; the response is a cache projection (§6 D2), not a relay assertion.
+
 ## 6. Conventions
 
 - **D1 — Grant lifetime.** `expires_at` is long-but-finite and renewable; implementations SHOULD NOT issue open-ended grants. Recommended max: 90 days; the delegate renews by re-signing before expiry. Rationale: revocation propagation is bounded (a feed horizon), so authority that outlives revocation reachability is unsafe — a finite grant auto-dies if propagation ever fails, while preserving an "until revoked" experience via silent renewal.
 - **D2 — Revocation source of truth** is the signed `DelegationRevocation` (offline-verifiable); the relay deny-list is a cache, not the authority.
 - **D3 — Revocation is terminal** in v1 (no unrevoke). Pausing a standing monitor is a scheduler concern (stop firing ticks), not a grant-state change.
 - **Token lifetime** (`max_token_ttl_ms`): SHOULD be ≤ the delegation@1.0 token maximum (24h); 1h recommended.
+- **D4 — Money-grant lifetime.** A grant carrying a `spend_ceiling` SHOULD use a lifetime well below the D1 maximum: 7–30 days renewable recommended, `max_token_ttl_ms` 1h. Rationale: against a malicious offline delegate the real revocation ceiling is `expires_at`, not token TTL (a local signer manufactures fresh short-TTL ticks from stale standing authority) — so a money grant's worst-case offline exposure is deliberately (short lifetime × signed ceiling): a bounded, priced number.
 
 ## 7. Relationship to Other Specs
 

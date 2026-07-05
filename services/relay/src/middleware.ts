@@ -286,6 +286,11 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   // artifact-verified class as credentials/submit — no new audience.
   app.use("/api/v1/agents/:motebitId/bond", rl(writeLimiter));
 
+  // Delegation-revocation cache: submit is write-rate (signed-artifact
+  // ingestion, the bond class); the cache read shares the same path, so the
+  // stricter write tier covers both methods.
+  app.use("/api/v1/delegations/revocations", rl(writeLimiter));
+
   // Read endpoints: discover, credentials, capabilities, listings (60 req/min)
   app.use("/api/v1/agents/discover", rl(readLimiter));
   app.use("/api/v1/agents/:motebitId/credentials", rl(readLimiter));
@@ -513,7 +518,14 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
         // signature on submit, public-read on discover/resolve. The submit
         // handler verifies the envelope signature itself — that IS the auth
         // (mirrors /api/v1/devices/register-self above).
-        c.req.path.startsWith("/api/v1/skills/")
+        c.req.path.startsWith("/api/v1/skills/") ||
+        // Delegation-revocation cache (standing-delegation §5/§6 D2):
+        // permissive-by-signature on submit — the DelegationRevocation is a
+        // delegator-signed sovereign artifact and the handler verifies it
+        // (that IS the auth; anyone MAY propagate a revocation) — and
+        // public-read on the cache, same anchor-proof-class rationale: a
+        // consumer building its `isRevoked` seam holds no relay token.
+        c.req.path === "/api/v1/delegations/revocations"
       ) {
         await next();
         return;

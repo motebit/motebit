@@ -134,9 +134,11 @@ import {
   STANDING_DELEGATION_SCHEMA_ID,
   DELEGATION_REVOCATION_SCHEMA_ID,
   SUBJECT_BINDING_SCHEMA_ID,
+  SPEND_CEILING_SCHEMA_ID,
   buildStandingDelegationJsonSchema,
   buildDelegationRevocationJsonSchema,
   buildSubjectBindingV1JsonSchema,
+  buildSpendCeilingV1JsonSchema,
 } from "../standing-delegation.js";
 import {
   COST_ATTESTATION_SCHEMA_ID,
@@ -276,6 +278,12 @@ const CASES: SchemaCase[] = [
     filename: "subject-binding-v1.json",
     expectedId: SUBJECT_BINDING_SCHEMA_ID,
     build: buildSubjectBindingV1JsonSchema,
+  },
+  {
+    name: "spend-ceiling-v1",
+    filename: "spend-ceiling-v1.json",
+    expectedId: SPEND_CEILING_SCHEMA_ID,
+    build: buildSpendCeilingV1JsonSchema,
   },
   {
     name: "cost-attestation-v1",
