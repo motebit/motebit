@@ -9,7 +9,11 @@
  * authorizes nothing.
  */
 import { describe, it, expect } from "vitest";
-import { SpendCeilingV1Schema, StandingDelegationSchema } from "../standing-delegation.js";
+import {
+  SpendCeilingV1Schema,
+  StandingDelegationSchema,
+  injectWindowDependencies,
+} from "../standing-delegation.js";
 
 const BASE = { schema: "motebit.spend-ceiling.v1" as const };
 const MAX_SAFE = 9_007_199_254_740_991;
@@ -93,5 +97,23 @@ describe("SpendCeilingV1 shape law", () => {
       spend_ceiling: { ...BASE, cumulative_limit_micro: 1, window_ms: 1000 },
     });
     expect(good.success).toBe(true);
+  });
+});
+
+describe("injectWindowDependencies — the structure-drift alarm", () => {
+  it("injects at a ceiling-shaped node", () => {
+    const node: Record<string, unknown> = { properties: { window_ms: {} } };
+    injectWindowDependencies(node, "test");
+    expect(node["dependencies"]).toEqual({
+      cumulative_limit_micro: ["window_ms"],
+      per_counterparty_limit_micro: ["window_ms"],
+      max_action_count: ["window_ms"],
+    });
+  });
+
+  it("fails loud on every non-ceiling-shaped input (null, non-object, missing properties)", () => {
+    for (const bad of [null, undefined, "x", 42, {}]) {
+      expect(() => injectWindowDependencies(bad, "somewhere")).toThrow(/somewhere/);
+    }
   });
 });

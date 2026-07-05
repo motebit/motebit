@@ -81,8 +81,10 @@ const SPEND_CEILING_WINDOW_DEPENDENCIES: Record<string, string[]> = Object.fromE
 );
 
 /** Inject the window `dependencies` at a ceiling-shaped schema node,
- *  failing loud if the emitter's structure drifted from expectation. */
-function injectWindowDependencies(node: unknown, where: string): void {
+ *  failing loud if the emitter's structure drifted from expectation.
+ *  Exported for the shape-law test suite (the throw arms are the
+ *  structure-drift alarm and must stay covered). */
+export function injectWindowDependencies(node: unknown, where: string): void {
   if (
     node == null ||
     typeof node !== "object" ||
