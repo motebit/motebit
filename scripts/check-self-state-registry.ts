@@ -236,6 +236,36 @@ function scan(): Violation[] {
     }
   }
 
+  // The boundary clause itself — the rule that makes the whole registry
+  // honest. Three sources must stay named in PERCEPTION_DOCTRINE: the
+  // design block (what you ARE), [Now] (what is TRUE), and absorbed
+  // conversation content (what is POSSIBLE — never self-state). The
+  // third was added 2026-07-05 after a live confabulation: a motebit
+  // read a pasted doctrine doc staging an UNBUILT intervention and
+  // claimed it first-person ("ranked tensions… I can feel it"). A
+  // budget-pressure prompt trim that drops these markers silently
+  // reopens that channel — so they are locked here, beside the facets
+  // they govern. Doctrine: docs/doctrine/typed-truth-perception.md
+  // §"The third source".
+  const BOUNDARY_MARKERS: readonly string[] = [
+    "boundary of your live self-knowledge",
+    "content absorbed through the conversation",
+    "A document staging an intervention does not install it",
+  ];
+  for (const marker of BOUNDARY_MARKERS) {
+    if (!promptSource.includes(marker)) {
+      violations.push({
+        key: "(boundary clause)",
+        reason: `live-state boundary marker missing from ${PROMPT}: "${marker}"`,
+        remediation:
+          `Restore the live-state boundary clause in PERCEPTION_DOCTRINE (packages/ai-core/src/prompt.ts) — ` +
+          `all three self-description sources must stay named (design block / [Now] / absorbed content), ` +
+          `per docs/doctrine/typed-truth-perception.md §"The third source" and the falsifier in ` +
+          `packages/ai-core/src/__tests__/live-state-boundary.test.ts.`,
+      });
+    }
+  }
+
   return violations;
 }
 
