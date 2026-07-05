@@ -1,5 +1,0 @@
----
-"@motebit/protocol": minor
----
-
-`AccountWithdrawRequest` / `AccountWithdrawResult` / `AccountWithdrawalRecord` (+ documented `AccountWithdrawalStatus` union) — the wire format of the money-out boundary `POST /api/v1/agents/{motebitId}/withdraw`, specified as market-v1 §2.8/§2.9 with committed JSON Schemas and a first-class threat-model section (idempotency mandatory, positive amount, dispute-window hold, `account:withdraw` authorization; non-goal: a 200 is not settlement finality — a `pending` status is the fail-safe). Amounts are decimal USD (§2.3 conversion at the producer). `status` is typed `string` on the wire for additive forward-compat, matching the `AccountBalanceTransaction.type` discipline. The reference relay's producer binds via `satisfies`; `@motebit/relay-client` gains a validated `withdraw()` method. The `POST /deposit` endpoint is deliberately NOT specified in this increment — it records a self-declared balance credit, and naming a "deposit wire format" without describing it alongside the onchain deposit-detector path would risk implying verified funds.
