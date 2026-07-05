@@ -155,6 +155,12 @@ export interface SubmitAndPollParams {
   routingStrategy?: "cost" | "quality" | "balanced";
   /** Invocation provenance — signature-bound on the resulting receipt. */
   invocationOrigin?: IntentOrigin;
+  /**
+   * Standing-grant id this delegation executes under (advisory on the
+   * wire, never authority). Attached so the relay's acceptance-time
+   * revocation fence engages (`TASK_GRANT_REVOKED` before any hold).
+   */
+  grantId?: string;
   /** Upper bound on end-to-end wait. Default 120s (matches delegate_to_agent). */
   timeoutMs?: number;
   /** Structured logger. */
@@ -275,6 +281,9 @@ export async function submitAndPollDelegation(
     }
     if (params.invocationOrigin) {
       body.invocation_origin = params.invocationOrigin;
+    }
+    if (params.grantId != null) {
+      body.grant_id = params.grantId;
     }
 
     const resp = await fetch(`${params.syncUrl}/agent/${params.motebitId}/task`, {
@@ -422,6 +431,12 @@ async function pollForReceipt(args: PollForReceiptArgs): Promise<DelegationResul
 export interface SubmitP2pDelegationParams {
   /** The delegator's identity (submitter / owner of the task). */
   motebitId: string;
+  /**
+   * Standing-grant id this delegation executes under (advisory on the
+   * wire, never authority) — engages the relay's acceptance-time
+   * revocation fence.
+   */
+  grantId?: string;
   /** Base URL of the relay. */
   syncUrl: string;
   /** Mints audience-scoped auth tokens. */
@@ -546,6 +561,11 @@ export async function submitP2pDelegation(
     if (params.invocationOrigin) {
       body.invocation_origin = params.invocationOrigin;
     }
+    // Standing-grant fence: the relay refuses acceptance under a revoked
+    // grant (TASK_GRANT_REVOKED) — advisory id, never authority.
+    if (params.grantId != null) {
+      body.grant_id = params.grantId;
+    }
 
     const resp = await fetch(`${params.syncUrl}/agent/${params.motebitId}/task`, {
       method: "POST",
@@ -638,6 +658,8 @@ const fail = (code: DelegationErrorCode, message: string, status?: number): Dele
 });
 
 export interface ResolveAndSubmitP2pDelegationParams {
+  /** Standing-grant id (advisory; engages the relay revocation fence). */
+  grantId?: string;
   /** The delegator's identity (submitter / owner of the task). */
   motebitId: string;
   /** Base URL of the relay. */
@@ -965,6 +987,7 @@ export async function resolveAndSubmitP2pDelegation(
     ...(params.acknowledgeNoHistoryRisk === true ? { acknowledgeNoHistoryRisk: true } : {}),
     paymentProof: proof,
     ...(params.invocationOrigin ? { invocationOrigin: params.invocationOrigin } : {}),
+    ...(params.grantId != null ? { grantId: params.grantId } : {}),
     ...(params.timeoutMs != null ? { timeoutMs: params.timeoutMs } : {}),
     logger: params.logger,
     ...(params.signal ? { signal: params.signal } : {}),
@@ -972,6 +995,12 @@ export async function resolveAndSubmitP2pDelegation(
 }
 
 export interface SelectDelegationParams {
+  /**
+   * Standing-grant id the current turn executes under (advisory wire
+   * field for the relay's revocation fence; the metered rail seam is
+   * the enforcement). Threaded to BOTH submit paths.
+   */
+  grantId?: string;
   /** The delegator's identity (submitter / owner of the task). */
   motebitId: string;
   /** Base URL of the relay. */
@@ -1081,6 +1110,7 @@ export async function selectAndRunDelegation(
       buildP2pPayment: params.buildP2pPayment,
       ...(params.acknowledgeNoHistoryRisk === true ? { acknowledgeNoHistoryRisk: true } : {}),
       ...(params.invocationOrigin ? { invocationOrigin: params.invocationOrigin } : {}),
+      ...(params.grantId != null ? { grantId: params.grantId } : {}),
       ...(params.timeoutMs != null ? { timeoutMs: params.timeoutMs } : {}),
       logger: params.logger,
       ...(params.signal ? { signal: params.signal } : {}),
@@ -1113,6 +1143,7 @@ export async function selectAndRunDelegation(
     ...(params.requiredCapabilities ? { requiredCapabilities: params.requiredCapabilities } : {}),
     ...(params.routingStrategy ? { routingStrategy: params.routingStrategy } : {}),
     ...(params.invocationOrigin ? { invocationOrigin: params.invocationOrigin } : {}),
+    ...(params.grantId != null ? { grantId: params.grantId } : {}),
     ...(params.timeoutMs != null ? { timeoutMs: params.timeoutMs } : {}),
     logger: params.logger,
     ...(params.signal ? { signal: params.signal } : {}),

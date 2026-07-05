@@ -88,6 +88,16 @@ export interface InteractiveDelegationConfig {
    * `InvokeCapabilityConfig.acknowledgeNoHistoryRisk`.
    */
   acknowledgeNoHistoryRisk?: boolean | (() => boolean);
+  /**
+   * The current turn's verified standing-grant id (null between turns and
+   * on grantless turns) — read fresh per delegation so the relay's
+   * acceptance-time revocation fence engages: a task submitted under a
+   * grant the relay's delegation-revocation cache shows revoked is
+   * refused BEFORE any hold commits (`TASK_GRANT_REVOKED`). Advisory id
+   * on the wire, never authority; the runtime's verifier and the metered
+   * rail seam are the cryptographic gates.
+   */
+  getActiveGrantId?: () => string | null;
 }
 
 // === Manager ===
@@ -215,6 +225,15 @@ export class InteractiveDelegationManager {
         riskHint: config.buildP2pPayment
           ? { risk: RiskLevel.R4_MONEY, sideEffect: SideEffect.IRREVERSIBLE }
           : { risk: RiskLevel.R2_WRITE, sideEffect: SideEffect.REVERSIBLE },
+        // The spend is LATE-BOUND: the amount materializes at quote
+        // resolution inside execution, not in the tool args — so the
+        // loop's AND-composition admits a grant-cleared call on
+        // grant+meter presence, and the metered rail seam
+        // (wrapP2pPaymentWithMeter, which the runtime binds as
+        // `buildP2pPayment`) enforces the signed ceiling at the last
+        // point before broadcast. Only meaningful with a payment rail;
+        // harmless without one (the tool is R2 and never meters).
+        ...(config.buildP2pPayment ? { moneyBinding: "late" as const } : {}),
       },
       async (args: Record<string, unknown>) => {
         const prompt = args.prompt as string;
@@ -230,6 +249,10 @@ export class InteractiveDelegationManager {
             ? config.acknowledgeNoHistoryRisk()
             : config.acknowledgeNoHistoryRisk;
 
+        // Read the active grant id fresh per call — the relay's
+        // acceptance-time revocation fence keys on it.
+        const grantId = config.getActiveGrantId?.() ?? null;
+
         const result = await selectAndRunDelegation({
           motebitId,
           syncUrl: config.syncUrl,
@@ -240,6 +263,7 @@ export class InteractiveDelegationManager {
           ...(config.relayPublicKey != null ? { relayPublicKey: config.relayPublicKey } : {}),
           ...(ack === true ? { acknowledgeNoHistoryRisk: true } : {}),
           ...(config.routingStrategy ? { routingStrategy: config.routingStrategy } : {}),
+          ...(grantId != null ? { grantId } : {}),
           invocationOrigin: "ai-loop",
           ...(timeoutMs != null ? { timeoutMs } : {}),
           logger,

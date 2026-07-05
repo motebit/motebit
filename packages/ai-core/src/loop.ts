@@ -1215,13 +1215,23 @@ export async function* runTurnStreaming(
         // must pass the blast-radius meter before execution. Fail-closed
         // on every absence: no meter, no grant, or a deny ⇒ the call is
         // refused as a governance deny, never executed unmetered.
+        //
+        // `moneyBinding: "late"` tools (spend materializes inside
+        // execution, e.g. a delegation quote) still require grant + meter
+        // PRESENCE here, but the metering itself happens at the rail seam
+        // — the runtime binds the payment builder only through
+        // `wrapP2pPaymentWithMeter` (gate `check-ceiling-from-grant`),
+        // which refuses the broadcast on deny. The loop's passage is a
+        // declaration check; the rail's refusal is the enforcement.
         {
           const profile = deps.policyGate.classify(toolDef);
           if (profile.risk >= RiskLevel.R4_MONEY) {
             const grant = turnCtx.verifiedGrant;
             const verdict =
               grant != null && deps.meterMoneyAction != null
-                ? await deps.meterMoneyAction(grant, toolCall.name, toolCall.args)
+                ? toolDef.moneyBinding === "late"
+                  ? { allowed: true }
+                  : await deps.meterMoneyAction(grant, toolCall.name, toolCall.args)
                 : {
                     allowed: false,
                     denial: grant == null ? "grant_absent" : "meter_absent",

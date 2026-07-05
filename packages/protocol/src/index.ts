@@ -1029,6 +1029,27 @@ export interface ToolDefinition {
    * further without breaking existing consumers).
    */
   slabProjection?: "none" | "tool_call";
+  /**
+   * When this tool's money facts become known — the R4 metering axis
+   * (standing-delegation §3.3; the loop's gate-allow ∧ meter-allow
+   * AND-composition):
+   *
+   * - `"args"` (default when absent): the spend is declared in the tool
+   *   call's own args (`amount_micro` + `counterparty`), so the loop
+   *   meters BEFORE execution and denies unmeterable calls.
+   * - `"late"`: the spend materializes inside execution (e.g. a
+   *   delegation quote resolved after worker discovery). The loop still
+   *   requires a verified grant + a wired meter to let a grant-cleared
+   *   call proceed, but the metering itself happens at the RAIL seam —
+   *   the runtime binds the payment builder only through the metering
+   *   wrapper (`wrapP2pPaymentWithMeter`, gate `check-ceiling-from-grant`),
+   *   which refuses the broadcast on deny. Declaring `"late"` without
+   *   rail-seam metering is the drift that gate exists to catch.
+   *
+   * Closed literal union, additions backward compatible — same
+   * discipline as `slabProjection`.
+   */
+  moneyBinding?: "args" | "late";
 }
 
 export interface ToolResult {
