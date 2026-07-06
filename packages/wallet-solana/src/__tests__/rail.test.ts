@@ -18,6 +18,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const { swapUsdcToSolMock } = vi.hoisted(() => ({ swapUsdcToSolMock: vi.fn() }));
 vi.mock("../jupiter.js", () => ({
   swapUsdcToSol: swapUsdcToSolMock,
+  // rail.ts statically imports the gas-floor constant from the same
+  // module (single-source since the swapSolToUsdc mirror landed) — the
+  // mock must carry it or every rail test fails at import time.
+  GAS_FLOOR_LAMPORTS: 5_000_000n,
 }));
 
 import {

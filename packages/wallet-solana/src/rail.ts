@@ -31,7 +31,7 @@ export type SendResult = SendUsdcResult;
  * Minimum SOL balance in lamports to consider gas sufficient.
  * 5_000_000 lamports = 0.005 SOL ≈ enough for ~1000 transactions.
  */
-const GAS_FLOOR_LAMPORTS = 5_000_000n;
+import { GAS_FLOOR_LAMPORTS } from "./jupiter.js";
 
 /**
  * Amount of USDC micro-units to swap for gas when the floor is breached.
@@ -122,6 +122,31 @@ export class SolanaWalletRail implements SovereignWalletRail {
       // (it will fail with insufficient gas, but that's the honest state)
       return false;
     }
+  }
+
+  /**
+   * Owner-invoked SOL → USDC swap — the funding-side half of wallet
+   * homeostasis (the owner may fund with whatever asset landed; the
+   * wallet normalizes toward working capital). Delegates to the Jupiter
+   * adapter, which enforces the gas floor fail-closed. Exposed for the
+   * `wallet swap` deterministic affordance; NOT called autonomously
+   * (autonomous posture normalization is deferred-with-trigger and
+   * would ride the standing-grant meter).
+   */
+  async swapSolToUsdc(solLamports: bigint): Promise<import("./jupiter.js").JupiterSwapResult> {
+    if (!this.web3Adapter) {
+      throw new Error(
+        "swap unavailable: this rail was constructed without a web3 adapter (createSolanaWalletRail provides one).",
+      );
+    }
+    const { swapSolToUsdc } = await import("./jupiter.js");
+    return swapSolToUsdc(
+      solLamports,
+      this.web3Adapter.getKeypair(),
+      this.web3Adapter.getConnection(),
+      this.web3Adapter.getCommitment(),
+      this.web3Adapter.getUsdcMint(),
+    );
   }
 
   /**

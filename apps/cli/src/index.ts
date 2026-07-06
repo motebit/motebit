@@ -83,6 +83,7 @@ import {
   handleMigrateKeyring,
   handleWithdraw,
   handleWallet,
+  handleWalletSwap,
   handleSkillsInstall,
   handleSkillsAudit,
   handleSkillsList,
@@ -162,6 +163,10 @@ async function main(): Promise<void> {
   }
 
   if (subcommand === "wallet") {
+    if (config.positionals[1] === "swap") {
+      await handleWalletSwap(config.positionals[2], { rpcUrl: config.solanaRpcUrl });
+      return;
+    }
     await handleWallet({
       rpcUrl: config.solanaRpcUrl,
       addressOnly: config.walletAddressOnly,

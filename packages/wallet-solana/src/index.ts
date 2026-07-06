@@ -46,7 +46,12 @@ export {
   InvalidSolanaAddressError,
 } from "./constants.js";
 
-export { swapUsdcToSol, type JupiterSwapResult } from "./jupiter.js";
+export {
+  swapUsdcToSol,
+  swapSolToUsdc,
+  GAS_FLOOR_LAMPORTS,
+  type JupiterSwapResult,
+} from "./jupiter.js";
 
 export {
   SolanaMemoSubmitter,

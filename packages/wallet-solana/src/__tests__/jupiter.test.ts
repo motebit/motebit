@@ -12,7 +12,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { Keypair, Connection, VersionedTransaction } from "@solana/web3.js";
 
-import { swapUsdcToSol } from "../jupiter.js";
+import { swapUsdcToSol, swapSolToUsdc } from "../jupiter.js";
 
 const ZERO_SEED = new Uint8Array(32);
 
@@ -164,5 +164,80 @@ describe("swapUsdcToSol", () => {
     const { keypair, connection } = makeKeypairAndConnection();
     await expect(swapUsdcToSol(20_000n, keypair, connection)).rejects.toThrow();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("swapSolToUsdc — the funding-side mirror", () => {
+  it("REFUSES a swap that would breach the gas floor — the wallet never metabolizes its last fuel", async () => {
+    const { keypair, connection } = makeKeypairAndConnection();
+    // Wallet holds 0.006 SOL; swapping 0.002 would leave 0.004 < floor.
+    vi.spyOn(connection, "getBalance").mockResolvedValue(6_000_000);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(swapSolToUsdc(2_000_000n, keypair, connection)).rejects.toThrow(/gas floor/);
+    expect(fetchMock).not.toHaveBeenCalled(); // refused BEFORE any quote — no side effects
+  });
+
+  it("names the max swappable amount in the refusal (a refusal that teaches)", async () => {
+    const { keypair, connection } = makeKeypairAndConnection();
+    vi.spyOn(connection, "getBalance").mockResolvedValue(6_000_000);
+    vi.stubGlobal("fetch", vi.fn());
+
+    await expect(swapSolToUsdc(2_000_000n, keypair, connection)).rejects.toThrow(
+      /max swappable 1000000 lamports/,
+    );
+  });
+
+  it("quotes SOL→USDC with the 1% slippage bound and surfaces quote failures", async () => {
+    const { keypair, connection } = makeKeypairAndConnection();
+    vi.spyOn(connection, "getBalance").mockResolvedValue(100_000_000); // 0.1 SOL — plenty
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 503 });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(swapSolToUsdc(10_000_000n, keypair, connection)).rejects.toThrow(
+      /Jupiter quote failed: HTTP 503/,
+    );
+    const quoteUrl = new URL(fetchMock.mock.calls[0]![0] as string);
+    expect(quoteUrl.searchParams.get("inputMint")).toBe(
+      "So11111111111111111111111111111111111111112",
+    );
+    expect(quoteUrl.searchParams.get("outputMint")).toBe(
+      "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    );
+    expect(quoteUrl.searchParams.get("amount")).toBe("10000000");
+    expect(quoteUrl.searchParams.get("slippageBps")).toBe("100");
+  });
+
+  it("signs and submits the Jupiter transaction, returning amounts both ways", async () => {
+    const { keypair, connection } = makeKeypairAndConnection();
+    vi.spyOn(connection, "getBalance").mockResolvedValue(100_000_000);
+    const fakeTx = { sign: vi.fn(), serialize: vi.fn().mockReturnValue(new Uint8Array([1])) };
+    vi.spyOn(VersionedTransaction, "deserialize").mockReturnValue(fakeTx as never);
+    vi.spyOn(connection, "sendRawTransaction").mockResolvedValue("sig-mirror");
+    vi.spyOn(connection, "getLatestBlockhash").mockResolvedValue({
+      blockhash: "h",
+      lastValidBlockHeight: 1,
+    } as never);
+    vi.spyOn(connection, "confirmTransaction").mockResolvedValue({ value: { err: null } } as never);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ outAmount: "1500000" }), // $1.50 out
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ swapTransaction: Buffer.from([1, 2, 3]).toString("base64") }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await swapSolToUsdc(10_000_000n, keypair, connection);
+    expect(fakeTx.sign).toHaveBeenCalledWith([keypair]);
+    expect(result).toEqual({
+      signature: "sig-mirror",
+      inputAmount: 10_000_000n,
+      outputAmount: 1_500_000n,
+    });
   });
 });

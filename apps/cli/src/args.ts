@@ -416,6 +416,7 @@ Commands:
   wallet                    Show your sovereign Solana wallet (address, USDC balance)
     --solana-rpc-url <url>    Solana RPC endpoint (default: mainnet-beta public RPC)
     --address-only            Skip the balance query (address-only)
+  wallet swap <sol>         Convert SOL → USDC working capital (Jupiter; gas floor enforced)
   doctor                    Check system readiness (Node, SQLite, config)
   export [--output <dir>]   Export identity bundle (motebit.md, credentials, budget, gradient)
     --all                   Include sensitive memories (medical/financial/secret) in export
