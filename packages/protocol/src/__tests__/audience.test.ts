@@ -29,6 +29,7 @@ import {
   ACCOUNT_WITHDRAW_AUDIENCE,
   ACCOUNT_WITHDRAWALS_AUDIENCE,
   ACCOUNT_CHECKOUT_AUDIENCE,
+  PROXY_TOKEN_AUDIENCE,
   BROWSER_SANDBOX_GRANT_AUDIENCE,
   BROWSER_SANDBOX_AUDIENCE,
   RUNTIME_ATTACH_AUDIENCE,
@@ -36,8 +37,8 @@ import {
 } from "../audience.js";
 
 describe("ALL_TOKEN_AUDIENCES", () => {
-  it("has exactly the twenty-three registered entries", () => {
-    expect(ALL_TOKEN_AUDIENCES.length).toBe(23);
+  it("has exactly the twenty-four registered entries", () => {
+    expect(ALL_TOKEN_AUDIENCES.length).toBe(24);
   });
 
   it("enumerates every named constant exactly once", () => {
@@ -62,6 +63,7 @@ describe("ALL_TOKEN_AUDIENCES", () => {
       ACCOUNT_WITHDRAW_AUDIENCE,
       ACCOUNT_WITHDRAWALS_AUDIENCE,
       ACCOUNT_CHECKOUT_AUDIENCE,
+      PROXY_TOKEN_AUDIENCE,
       BROWSER_SANDBOX_GRANT_AUDIENCE,
       BROWSER_SANDBOX_AUDIENCE,
       RUNTIME_ATTACH_AUDIENCE,
