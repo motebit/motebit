@@ -620,6 +620,15 @@ export type AgenticChunk =
       result?: unknown;
       context?: string;
       /**
+       * Owner-facing typed residual of a policy/meter refusal — WHAT
+       * authority is missing, as data, so the surface renders the exact
+       * repair. Rides ONLY this surface channel: the model-visible
+       * history push carries the coarse `reason` string alone (a precise
+       * residual is a boundary oracle — see AuthorityDelta's asymmetry
+       * invariant in @motebit/protocol).
+       */
+      missing_authority?: import("@motebit/sdk").AuthorityDelta;
+      /**
        * Stable identifier for this tool call — assigned by the model and
        * carried on both the "calling" and "done" chunks for the same
        * invocation. Lets downstream consumers (e.g. the runtime streaming
@@ -1191,6 +1200,10 @@ export async function* runTurnStreaming(
             tool_call_id: toolCall.id,
             mode: toolDef.embodimentMode,
             slabProjection: toolDef.slabProjection,
+            // Owner channel only — the history push below stays coarse.
+            ...(decision.missing_authority != null
+              ? { missing_authority: decision.missing_authority }
+              : {}),
           };
           conversationHistory.push({
             role: "tool",
