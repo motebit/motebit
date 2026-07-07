@@ -1,5 +1,14 @@
 # @motebit/crypto-appattest
 
+## 1.0.26
+
+### Patch Changes
+
+- Updated dependencies [e651f19]
+- Updated dependencies [052cfbd]
+  - @motebit/protocol@3.10.0
+  - @motebit/crypto@3.16.0
+
 ## 1.0.25
 
 ### Patch Changes

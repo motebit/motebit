@@ -1,6 +1,0 @@
----
-"@motebit/protocol": minor
-"motebit": minor
----
-
-`AuthorityDelta` — every refusal a typed, owner-facing repair instruction. The protocol gains the closed residual type (missing scope, required-vs-posture risk, requires-verified-grant, spend overage in micro, window unlock time, quorum shortfall, terminal states) with two load-bearing invariants documented on the type: ASYMMETRY (owner surfaces get precision; model-visible channels carry only the coarse reason — a precise residual is a boundary oracle aimed at the one party who can mint the difference) and PREDICTOR-NEVER-AUTHORITY (the delta describes refusals; the gate and meter remain the sole enforcers). `PolicyDecision.missing_authority` extends additively. The policy gate populates it at every deny/raise site from a single producer module; the blast-radius evaluator emits exact spend overages and window-unlock times; the ai-core tool_status stream chunk (surface channel) carries it while the conversation-history push stays coarse — pinned by a leak test over every context pack the model receives; the CLI renders the exact repair owner-side. Constructors, not an algebra: composition helpers wait for a third consumer needing to compose authorities, per rule-of-three.
