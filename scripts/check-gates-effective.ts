@@ -1214,6 +1214,21 @@ export const __probeOnlyPrivateDeprecation = 1;
       ),
   },
   {
+    script: "check-agent-route-auth",
+    proves:
+      "flags an agent-route auth gap: removing the registerAgentAuthMiddleware call from index.ts leaves every /api/v1/agents/:id/* route uncovered — the exact shape of the 2026-07-07 listing-write vuln (a route registered into the middleware gap). The gate must exit non-zero with the missing-middleware repair.",
+    perturb: () =>
+      // Rename the middleware call token in index.ts so the gate sees no
+      // registerAgentAuthMiddleware install (mwCall === -1). Textual scan;
+      // cleanup restores verbatim, no build needed.
+      mutateFile("services/relay/src/index.ts", (src) =>
+        src.replace(
+          "registerAgentAuthMiddleware({",
+          "registerAgentAuthMiddleware_PROBE_DISABLED({",
+        ),
+      ),
+  },
+  {
     script: "check-admin-route-auth",
     proves:
       'flags an `/api/v1/admin/*` route registered in services/relay/src/ that has no matching `app.use("...", bearerAuth(...))` registration in middleware.ts — the route would ship wide open, same shape as the /api/v1/admin/transparency seam fixed manually in 2560472b',

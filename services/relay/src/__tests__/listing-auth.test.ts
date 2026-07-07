@@ -118,3 +118,61 @@ describe("service-listing route auth (regression lock for the 2026-07-07 orderin
     expect(res.status).toBe(401);
   });
 });
+
+/**
+ * Sibling-sweep lock (2026-07-07): the same middleware-ordering bug the
+ * listing routes had also left credentials/trust-graph routes registered
+ * before the auth middleware. The fix hoists the middleware early
+ * (registerAgentAuthMiddleware, ordering-independent). These pin that the
+ * previously-open routes now fail closed, and that the deliberate public
+ * carve-outs stay open.
+ */
+describe("sibling-sweep: previously-bypassing agent routes now fail closed", () => {
+  let relay: SyncRelay;
+  beforeEach(async () => {
+    relay = await createTestRelay();
+  });
+  afterEach(() => {
+    relay.moteDb.db.close();
+  });
+
+  it("POST revoke-credential with no token is rejected (was: unauth mutation)", async () => {
+    const a = await seedAgent(relay);
+    const res = await relay.app.request(`/api/v1/agents/${a.motebitId}/revoke-credential`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential_id: "cred-x" }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("GET trust-closure / graph / routing-explanation with no token are rejected", async () => {
+    const a = await seedAgent(relay);
+    for (const path of ["trust-closure", "graph", "routing-explanation"]) {
+      const res = await relay.app.request(`/api/v1/agents/${a.motebitId}/${path}`, {
+        method: "GET",
+      });
+      expect(res.status, `${path} must fail closed`).toBe(401);
+    }
+  });
+
+  it("credentials/submit stays permissive-by-signature (deliberate carve-out, no 401)", async () => {
+    const a = await seedAgent(relay);
+    const res = await relay.app.request(`/api/v1/agents/${a.motebitId}/credentials/submit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    // The handler runs (verifies the envelope signature itself) — it may
+    // reject the empty body with 400, but MUST NOT 401 on missing bearer.
+    expect(res.status).not.toBe(401);
+  });
+
+  it("GET credentials stays public-read (deliberate carve-out pending the privacy decision)", async () => {
+    const a = await seedAgent(relay);
+    const res = await relay.app.request(`/api/v1/agents/${a.motebitId}/credentials`, {
+      method: "GET",
+    });
+    expect(res.status).not.toBe(401);
+  });
+});

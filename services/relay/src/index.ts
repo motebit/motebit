@@ -160,7 +160,7 @@ import { registerBudgetRoutes } from "./budget.js";
 import { startSweepLoop } from "./sweep.js";
 import { startBatchWithdrawalLoop, getPendingWithdrawalsSummary } from "./batch-withdrawals.js";
 import { LoopSupervisor, superviseInterval } from "./loop-supervisor.js";
-import { registerAgentRoutes } from "./agents.js";
+import { registerAgentRoutes, registerAgentAuthMiddleware } from "./agents.js";
 import { createFederationCallbacks } from "./federation-callbacks.js";
 import { registerTaskRoutes, TASK_TTL_MS } from "./tasks.js";
 import { ExpoPushAdapter } from "./push-adapter.js";
@@ -797,6 +797,23 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     logger,
     onCommandResponse: handleCommandResponse,
     isDraining: () => draining,
+  });
+
+  // --- Agent-route auth (installed BEFORE any /api/v1/agents/:id/* route
+  // registers — sync-routes' hardware-attestation is the first). Coverage is
+  // ordering-independent: the 2026-07-07 listing-write vuln was a route
+  // registered before this middleware, so it never wrapped it. Public /
+  // self-authenticating routes are the explicit PUBLIC_AGENT_ROUTES set; the
+  // drift gate check-agent-route-auth locks that no agent route can register
+  // into the gap again. ---
+  registerAgentAuthMiddleware({
+    app,
+    apiToken,
+    identityManager,
+    parseTokenPayloadUnsafe,
+    verifySignedTokenForDevice,
+    isTokenBlacklisted,
+    isAgentRevoked,
   });
 
   // --- Sync routes (HTTP fallback, device registration, identity CRUD) ---
