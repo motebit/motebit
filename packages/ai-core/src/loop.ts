@@ -336,7 +336,10 @@ function pixelOmittedDirective(
  * through structural typing.
  */
 export interface LoopPolicyGate {
-  filterTools(tools: ToolDefinition[]): ToolDefinition[];
+  filterTools(
+    tools: ToolDefinition[],
+    ctx?: { verifiedGrant?: unknown; delegationScope?: string },
+  ): ToolDefinition[];
   validate(tool: ToolDefinition, args: Record<string, unknown>, ctx: TurnContext): PolicyDecision;
   classify(tool: ToolDefinition): ToolRiskProfile;
   sanitizeResult(result: ToolResult, toolName: string): ToolResult;
@@ -966,8 +969,6 @@ export async function* runTurnStreaming(
   // 3. Pack context and stream from provider (agentic loop)
   const currentState = stateEngine.getState();
   const rawToolDefs = deps.tools ? deps.tools.list() : undefined;
-  const toolDefs =
-    rawToolDefs && deps.policyGate ? deps.policyGate.filterTools(rawToolDefs) : rawToolDefs;
 
   let turnCtx = deps.policyGate?.createTurnContext(options?.runId);
   if (turnCtx && options?.delegationScope !== undefined) {
@@ -976,6 +977,15 @@ export async function* runTurnStreaming(
   if (turnCtx && options?.verifiedGrant !== undefined) {
     turnCtx = { ...turnCtx, verifiedGrant: options.verifiedGrant };
   }
+
+  // Offering is filtered AFTER the turn context is final: a verified
+  // in-scope grant extends the offering to R4_MONEY (policy-gate
+  // filterTools, decided 2026-07-07) — filtering before the grant landed
+  // in ctx made grant-covered money tools invisible to the model.
+  const toolDefs =
+    rawToolDefs && deps.policyGate
+      ? deps.policyGate.filterTools(rawToolDefs, turnCtx)
+      : rawToolDefs;
 
   const conversationHistory: ConversationMessage[] = [...(options?.conversationHistory ?? [])];
 

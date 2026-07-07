@@ -175,7 +175,10 @@ export class PolicyGate {
    * Filter tools to only those visible in the current mode.
    * This is what gets sent to the model in the ContextPack.
    */
-  filterTools(tools: ToolDefinition[]): ToolDefinition[] {
+  filterTools(
+    tools: ToolDefinition[],
+    ctx?: Pick<TurnContext, "verifiedGrant" | "delegationScope">,
+  ): ToolDefinition[] {
     const maxRisk = this.getEffectiveMaxRisk();
 
     return tools.filter((tool) => {
@@ -187,8 +190,39 @@ export class PolicyGate {
 
       // Risk check
       const profile = this.classify(tool);
-      return isToolAllowed(profile, maxRisk);
+      if (isToolAllowed(profile, maxRisk)) return true;
+
+      // Standing-authority extension of the OFFERING (decided 2026-07-07,
+      // the ceremony blocker: with the payment rail wired,
+      // delegate_to_agent classifies R4_MONEY and default governance
+      // filtered it out of the model's tool list entirely — the signed
+      // grant changed nothing about what could even be SEEN). A turn
+      // carrying a VERIFIED grant offers grant-covered tools up to
+      // R4_MONEY. Bounds that still hold: deny/allow lists above,
+      // `denyAbove` (a hard ceiling the grant never overrides), the
+      // scope fence at validate step 2, and the meter at the rail.
+      // Doctrine: docs/doctrine/memory-never-confers-authority.md —
+      // "a signed grant or a live human tap"; the grant IS the signed
+      // artifact.
+      return (
+        ctx?.verifiedGrant != null &&
+        this.grantCoversTool(ctx, tool.name) &&
+        profile.risk <= RiskLevel.R4_MONEY &&
+        (this.config.denyAbove === undefined || profile.risk <= this.config.denyAbove)
+      );
     });
+  }
+
+  /**
+   * Is `toolName` inside the turn's delegated scope? The scope string is
+   * set BY the runtime FROM the verified grant's signed `scope` field at
+   * presentation (never model output) — same set semantics as the
+   * validate-step-2 fence.
+   */
+  private grantCoversTool(ctx: Pick<TurnContext, "delegationScope">, toolName: string): boolean {
+    if (ctx.delegationScope === undefined) return false;
+    const scopeSet = parseScopeSet(ctx.delegationScope);
+    return scopeSet.has("*") || scopeSet.has(toolName);
   }
 
   // === Validation ===
@@ -399,6 +433,28 @@ export class PolicyGate {
     // Gate: check-money-authority.
     if (profile.risk >= RiskLevel.R4_MONEY && !needsApproval && ctx.verifiedGrant == null) {
       needsApproval = true;
+    }
+
+    // 8c. The disjunct's other half (decided 2026-07-07): a VERIFIED
+    // in-scope standing grant IS the R4 authorizer — "a signed grant or
+    // a live human tap" (memory-never-confers-authority.md), implemented
+    // as an OR at last. Strictly narrower than every lowering path 8b
+    // subordinates: it requires the cryptographically verified grant
+    // (produced only by the dispatch-layer verifier from signed
+    // artifacts) AND the tool inside the grant's SIGNED scope. It runs
+    // AFTER the denyAbove hard-deny (which already returned — the grant
+    // never overrides a hard ceiling) and cannot be reached by trust
+    // levels, memory, or config alone. Enforcement downstream is
+    // unchanged: the blast-radius meter + rail wrapper bound every
+    // spend to the grant's signed ceiling; the tick nonce bounds
+    // frequency; revocation is terminal.
+    if (
+      needsApproval &&
+      profile.risk >= RiskLevel.R4_MONEY &&
+      ctx.verifiedGrant != null &&
+      this.grantCoversTool(ctx, tool.name)
+    ) {
+      needsApproval = false;
     }
 
     // 9. Multi-party approval quorum — attach quorum metadata when configured
