@@ -3,6 +3,7 @@ import type { MotebitPersonalityConfig } from "@motebit/ai-core";
 import { deriveSyncEncryptionKey, createSignedToken } from "@motebit/encryption";
 import { connectMcpServers } from "@motebit/mcp-client";
 import { formatBodyAwareness } from "@motebit/ai-core";
+import { providerAcceptsModel } from "@motebit/sdk";
 import { parseCliArgs, printHelp, printVersion, printBanner, trimHistory } from "./args.js";
 import type { CliConfig } from "./args.js";
 import { loadFullConfig, extractPersonality, persistMotebitPublicKeys } from "./config.js";
@@ -437,7 +438,30 @@ async function main(): Promise<void> {
     personalityConfig.default_model !== "" &&
     !process.argv.includes("--model")
   ) {
-    config.model = personalityConfig.default_model;
+    // Config residue yields politely: a default_model from a previous
+    // provider era must not ride along onto a different provider (the
+    // 2026-07-06 "anthropic · llama3.2:latest" pairing — pre-flight
+    // admission per intelligence-pluggability-contract). The per-provider
+    // parse-time default already sits on config.model; keep it and say so.
+    if (providerAcceptsModel(config.provider, personalityConfig.default_model)) {
+      config.model = personalityConfig.default_model;
+    } else {
+      console.log(
+        dim(
+          `  [config default_model "${personalityConfig.default_model}" belongs to another provider; using ${config.model} for ${config.provider}]`,
+        ),
+      );
+    }
+  }
+  // An EXPLICIT contradiction fails loud at startup, naming both — never
+  // deferred to an opaque first-call API error.
+  if (process.argv.includes("--model") && !providerAcceptsModel(config.provider, config.model)) {
+    console.error(
+      `Model "${config.model}" does not belong to provider "${config.provider}" — ` +
+        `pick a matching pair (e.g. --provider anthropic --model claude-sonnet-4-6), ` +
+        `or drop --model to use the provider's default.`,
+    );
+    process.exit(1);
   }
   if (fullConfig.max_tokens != null && !process.argv.includes("--max-tokens")) {
     config.maxTokens = fullConfig.max_tokens;
