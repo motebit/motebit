@@ -423,3 +423,15 @@ describe("SolanaWalletRail.buildP2pPayment", () => {
     expect(sendUsdcBatch).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("SolanaWalletRail.swapSolToUsdc — the owner-invoked funding-side swap", () => {
+  it("throws honestly when the rail has no web3 adapter", async () => {
+    const adapter: SolanaRpcAdapter = {
+      getSolBalance: async () => 0n,
+      getUsdcBalance: async () => 0n,
+      sendUsdc: async () => ({ signature: "x" }) as never,
+    } as never;
+    const rail = new SolanaWalletRail(adapter, { autoGas: false });
+    await expect(rail.swapSolToUsdc(1_000_000n)).rejects.toThrow(/without a web3 adapter/);
+  });
+});
