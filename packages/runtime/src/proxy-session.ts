@@ -80,9 +80,7 @@ export async function fetchProxyToken(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...(authToken != null && authToken !== ""
-          ? { Authorization: `Bearer ${authToken}` }
-          : {}),
+        ...(authToken != null && authToken !== "" ? { Authorization: `Bearer ${authToken}` } : {}),
       },
     });
     if (!res.ok) return null;
