@@ -626,20 +626,33 @@ describe("SlabController — mode contract anomaly detection", () => {
     expect(contractWarns).toHaveLength(0);
   });
 
-  it("warns on peer_viewport dissolution (typical lifecycle is rest → detach)", () => {
+  it("peer_viewport dissolution is contract-legal — a completed delegation dissolves (widened 2026-07-07)", () => {
+    // The first live metered delegation logged this exact warning on
+    // every completion; the warning's own "contract-widening candidate"
+    // hypothesis was correct (dissolve is one of the slab's three end
+    // states — motebit-computer.md). The anomaly detector's coverage
+    // moves to a mode whose contract still excludes dissolution below.
     const { ctrl, warns } = makeWithSpy();
     ctrl.openItem({ id: "p1", kind: "delegation", payload: {} }); // delegation → peer_viewport mode
-    ctrl.dismissItem("p1"); // → dissolving (force-dissolve via dismiss bypasses detach policy)
+    ctrl.dismissItem("p1"); // → dissolving
+    const contractWarns = warns.filter((w) => w.message.includes("contract lifecycleDefaults"));
+    expect(contractWarns).toHaveLength(0);
+  });
+
+  it("warns on virtual_browser dissolution (its contract admits rest → detach only)", () => {
+    const { ctrl, warns } = makeWithSpy();
+    ctrl.openItem({ id: "p1v", kind: "fetch", mode: "virtual_browser", payload: {} });
+    ctrl.dismissItem("p1v"); // → dissolving, outside virtual_browser's defaults
     const contractWarns = warns.filter((w) => w.message.includes("contract lifecycleDefaults"));
     expect(contractWarns).toHaveLength(1);
     const warning = contractWarns[0]!;
-    expect(warning.message).toContain("peer_viewport");
+    expect(warning.message).toContain("virtual_browser");
     expect(warning.message).toContain("dissolving");
     expect(warning.context).toMatchObject({
-      itemId: "p1",
-      mode: "peer_viewport",
+      itemId: "p1v",
+      mode: "virtual_browser",
       phase: "dissolving",
-      kind: "delegation",
+      kind: "fetch",
     });
     expect(warning.context?.allowedDefaults).toEqual(["resting", "detached"]);
   });
@@ -686,10 +699,10 @@ describe("SlabController — mode contract anomaly detection", () => {
     // phases the mode actually admits per contract — without it, the
     // warning is "you did something wrong" without context.
     const { ctrl, warns } = makeWithSpy();
-    ctrl.openItem({ id: "p3", kind: "delegation", payload: {} });
+    ctrl.openItem({ id: "p3", kind: "fetch", mode: "virtual_browser", payload: {} });
     ctrl.dismissItem("p3");
     const warning = warns.find((w) => w.message.includes("contract lifecycleDefaults"));
     expect(warning?.context?.allowedDefaults).toEqual(["resting", "detached"]);
-    expect(warning?.context?.mode).toBe("peer_viewport");
+    expect(warning?.context?.mode).toBe("virtual_browser");
   });
 });
