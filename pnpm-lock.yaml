@@ -105,6 +105,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@3.25.76)
+      '@motebit/state-export-client':
+        specifier: workspace:*
+        version: link:../../packages/state-export-client
       '@noble/curves':
         specifier: ^2.2.0
         version: 2.2.0
