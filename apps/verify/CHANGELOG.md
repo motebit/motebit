@@ -1,5 +1,12 @@
 # @motebit/verify-web
 
+## 0.0.19
+
+### Patch Changes
+
+- @motebit/crypto@3.16.0
+- @motebit/state-export-client@0.5.16
+
 ## 0.0.18
 
 ### Patch Changes
