@@ -77,8 +77,7 @@ const FILES = [
   "sync-routes",
   "command-route",
 ];
-const AGENT_ROUTE_RE =
-  /app\.(get|post|put|delete|patch)\(\s*["'`]\/api\/v1\/agents\/:[A-Za-z]/;
+const AGENT_ROUTE_RE = /app\.(get|post|put|delete|patch)\(\s*["'`]\/api\/v1\/agents\/:[A-Za-z]/;
 
 // Map registerX function name -> whether its source file declares agent routes.
 const declaringRegisterFns = new Map<string, string>(); // fnName -> file

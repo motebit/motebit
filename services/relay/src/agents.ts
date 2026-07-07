@@ -733,7 +733,6 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
   // (called before any agent-subpath route file registers). See its
   // definition below and its call site in index.ts.
 
-
   // GET /api/v1/agents/:motebitId/receipts — a motebit's OWN execution-receipt
   // history (top-level tasks, newest first). Gated by the /api/v1/agents/* auth
   // middleware on the `receipts:read` audience; the handler additionally enforces

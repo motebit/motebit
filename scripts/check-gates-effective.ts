@@ -1222,7 +1222,10 @@ export const __probeOnlyPrivateDeprecation = 1;
       // registerAgentAuthMiddleware install (mwCall === -1). Textual scan;
       // cleanup restores verbatim, no build needed.
       mutateFile("services/relay/src/index.ts", (src) =>
-        src.replace("registerAgentAuthMiddleware({", "registerAgentAuthMiddleware_PROBE_DISABLED({"),
+        src.replace(
+          "registerAgentAuthMiddleware({",
+          "registerAgentAuthMiddleware_PROBE_DISABLED({",
+        ),
       ),
   },
   {
