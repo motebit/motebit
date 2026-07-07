@@ -103,6 +103,13 @@ client IP is read for rate limiting (in-memory FixedWindowLimiter, no DB) and in
 
 ## Third-party processors
 
+### npm registry
+
+- **Role**: release witness source (services/relay/src/release-witness.ts). The relay fetches PUBLIC package metadata and tarballs for the `motebit` package to sign the release witness served at /.well-known/motebit-releases.json. Read-only observation: no user, agent, or operator data is transmitted — the request itself (relay IP, user-agent) is the only signal npm receives.
+- **Data shared**: none (public registry reads only; requester IP visible to npm as with any HTTP fetch)
+- **Jurisdiction**: United States (npm, Inc. / GitHub / Microsoft)
+- **DPA / terms**: https://docs.npmjs.com/policies/privacy
+
 ### Stripe
 
 - **Role**: fiat payment processor

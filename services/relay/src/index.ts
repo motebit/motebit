@@ -932,6 +932,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const { registerRetentionManifestRoutes } = await import("./retention-manifest.js");
   await registerRetentionManifestRoutes({ app, relayIdentity, db: moteDb.db });
 
+  // --- Release witness (self-attesting-system doctrine, artifact layer) ---
+  // Signed observation of the npm registry at /.well-known/motebit-releases.json:
+  // tarball integrity + per-file bundle hash, in the transparency-declaration
+  // envelope (same pinned-key verification path). `motebit verify-release`
+  // closes the loop: an installed CLI hashes its own bytes against this.
+  const { registerReleaseWitnessRoutes } = await import("./release-witness.js");
+  registerReleaseWitnessRoutes({ app, relayIdentity });
+
   // --- Skills registry routes (skills-registry-v1.md) ---
   const { registerSkillRegistryRoutes, createSkillRegistryTables, parseFeaturedSubmitters } =
     await import("./skill-registry.js");
