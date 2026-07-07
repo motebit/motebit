@@ -45,6 +45,7 @@ export {
   handleGrantShow,
   handleGrantRevoke,
   createGrantPresenter,
+  loadStoredGrant,
 } from "./grant.js";
 export { handleId } from "./id.js";
 export { handleInit } from "./init.js";

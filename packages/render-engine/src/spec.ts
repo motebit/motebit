@@ -630,7 +630,13 @@ export const EMBODIMENT_MODE_CONTRACTS = {
     source: "peer-receipt",
     consent: "signed-delegation",
     sensitivity: "tier-bounded-by-source",
-    lifecycleDefaults: ["resting", "detached"],
+    // "dissolving" added 2026-07-07: a completed delegation dissolves —
+    // dissolution is one of the slab's three end states (dissolve /
+    // rest / detach, docs/doctrine/motebit-computer.md) and the FIRST
+    // live metered delegation logged the contract warning on every
+    // completion (the warning's own "contract-widening candidate" was
+    // right). A peer's finished work has no claim to rest on the slab.
+    lifecycleDefaults: ["dissolving", "resting", "detached"],
   },
 } as const satisfies Record<EmbodimentMode, EmbodimentModeContract>;
 
