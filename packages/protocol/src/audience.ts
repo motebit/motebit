@@ -58,6 +58,9 @@
  *     - `account:withdraw` — withdraw endpoint
  *     - `account:withdrawals` — list withdrawals
  *     - `account:checkout` — Stripe checkout session create
+ *     - `proxy:token` — mint a cloud-inference billing token (carries the
+ *       agent's balance); least-privilege audience so a generic read
+ *       token cannot be replayed to mint a spending credential
  *
  *   **Browser-sandbox dispatcher token (relay-mediated auth)**
  *     - `browser-sandbox-grant` — motebit→relay grant request
@@ -88,6 +91,7 @@ export type TokenAudience =
   | "account:withdraw"
   | "account:withdrawals"
   | "account:checkout"
+  | "proxy:token"
   | "browser-sandbox-grant"
   | "browser-sandbox"
   | "runtime:attach";
@@ -177,6 +181,7 @@ export const ACCOUNT_WITHDRAWALS_AUDIENCE: TokenAudience = "account:withdrawals"
 
 /** Stripe checkout session create. */
 export const ACCOUNT_CHECKOUT_AUDIENCE: TokenAudience = "account:checkout";
+export const PROXY_TOKEN_AUDIENCE: TokenAudience = "proxy:token";
 
 /**
  * Audience for the motebit-signed grant request to the relay's
@@ -233,6 +238,7 @@ export const ALL_TOKEN_AUDIENCES: readonly TokenAudience[] = Object.freeze([
   "account:withdraw",
   "account:withdrawals",
   "account:checkout",
+  "proxy:token",
   "browser-sandbox-grant",
   "browser-sandbox",
   "runtime:attach",

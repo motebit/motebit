@@ -985,6 +985,11 @@ export class DesktopApp {
           })
           .catch(() => {});
       },
+      mintAuthToken: async (): Promise<string | null> => {
+        const keypair = await this.getDeviceKeypair(invoke);
+        if (keypair === null) return null;
+        return this.createSyncToken(keypair.privateKey, "proxy:token");
+      },
       onProviderReady: (config: ProxyProviderConfig) => {
         this._proxyConfig = config;
       },

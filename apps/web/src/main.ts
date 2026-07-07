@@ -356,6 +356,7 @@ const proxySession = new ProxySession(
       saveBalance(data.balanceUsd);
     },
     clearToken: () => clearProxyToken(),
+    mintAuthToken: () => app.createSyncToken("proxy:token"),
     onProviderReady: (proxyConfig: ProxyProviderConfig) => {
       const config: ProviderConfig = {
         mode: "motebit-cloud",

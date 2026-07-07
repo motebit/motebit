@@ -853,6 +853,7 @@ export class MobileApp {
         this._proxyTokenCache = null;
         void AsyncStorage.removeItem(MobileApp.PROXY_TOKEN_KEY).catch(() => {});
       },
+      mintAuthToken: () => this.createSyncToken("proxy:token"),
       onProviderReady: (config: ProxyProviderConfig) => {
         this._proxyConfig = config;
         // Route semantic embedding through the proxy's /v1/embed

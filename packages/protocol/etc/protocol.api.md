@@ -4141,7 +4141,7 @@ export type TaskShape = "quick" | "chat" | "reasoning" | "code" | "research" | "
 export function toCents(dollars: number): number;
 
 // @public
-export type TokenAudience = "sync" | "device:auth" | "pair" | "rotate-key" | "push:register" | "task:submit" | "task:query" | "task:result" | "admin:query" | "proposal" | "receipts:read" | "market:listing" | "market:query" | "credentials" | "credentials:present" | "account:balance" | "account:deposit" | "account:withdraw" | "account:withdrawals" | "account:checkout" | "browser-sandbox-grant" | "browser-sandbox" | "runtime:attach";
+export type TokenAudience = "sync" | "device:auth" | "pair" | "rotate-key" | "push:register" | "task:submit" | "task:query" | "task:result" | "admin:query" | "proposal" | "receipts:read" | "market:listing" | "market:query" | "credentials" | "credentials:present" | "account:balance" | "account:deposit" | "account:withdraw" | "account:withdrawals" | "account:checkout" | "proxy:token" | "browser-sandbox-grant" | "browser-sandbox" | "runtime:attach";
 
 // @public
 export function toMicro(dollars: number): number;
