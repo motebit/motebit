@@ -2321,3 +2321,146 @@ describe("late-bound money metering (moneyBinding: 'late')", () => {
     expect(result.toolCallsSucceeded).toBe(0);
   });
 });
+
+describe("AuthorityDelta asymmetry — owner channel precise, model channel coarse", () => {
+  it("a denial's missing_authority rides the tool_status chunk and NEVER reaches the provider", async () => {
+    // The security invariant of @motebit/protocol's AuthorityDelta: a
+    // precise residual is a boundary oracle ("you need exactly X and
+    // $0.40 more") — a perfectly optimized social-engineering script
+    // aimed at the one party who can mint the difference. The surface
+    // chunk (owner-facing) carries the delta; the conversation history
+    // the model sees carries only the coarse reason string.
+    const denyingGate = {
+      filterTools: (t: ToolDefinition[]) => t,
+      createTurnContext: () => ({
+        turnId: "t",
+        toolCallCount: 0,
+        turnStartMs: 0,
+        costAccumulated: 0,
+      }),
+      validate: (tool: ToolDefinition) =>
+        tool.name === "send_money"
+          ? {
+              allowed: false,
+              requiresApproval: false,
+              reason: "outside delegated scope",
+              missing_authority: { missing_scope: ["send_money"], spend_overage_micro: 400_000 },
+            }
+          : { allowed: true, requiresApproval: false },
+      classify: (tool: ToolDefinition) =>
+        tool.name === "send_money"
+          ? { risk: 4, dataClass: "private", sideEffect: "irreversible", requiresApproval: true }
+          : { risk: 0, dataClass: "public", sideEffect: "none", requiresApproval: false },
+      recordToolCall: (ctx: unknown) => ctx,
+      sanitizeAndCheck: (result: ToolResult) => ({
+        result,
+        injectionDetected: false,
+        injectionPatterns: [],
+      }),
+      sanitizeResult: (result: ToolResult) => result,
+      logInjection: () => undefined,
+    };
+
+    const toolRegistry = makeMockToolRegistry(
+      new Map([
+        [
+          "send_money",
+          {
+            def: {
+              name: "send_money",
+              description: "Send money",
+              inputSchema: { type: "object", properties: { to: { type: "string" } } },
+            },
+            result: { ok: true },
+          },
+        ],
+        [
+          "noop",
+          {
+            def: {
+              name: "noop",
+              description: "No-op",
+              inputSchema: { type: "object", properties: {} },
+            },
+            result: { ok: true },
+          },
+        ],
+      ]),
+    );
+
+    // Capture every context pack the model actually receives.
+    const seenPacks: unknown[] = [];
+    const responses: AIResponse[] = [
+      {
+        text: "",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+        // The denied money call PLUS a benign allowed call — so the turn
+        // is not all-blocked and the loop makes a second provider call
+        // whose history contains the denial the model actually sees.
+        tool_calls: [
+          { id: "c1", name: "send_money", args: { to: "x" } },
+          { id: "c2", name: "noop", args: {} },
+        ],
+      } as never,
+      { text: "ok", confidence: 0.8, memory_candidates: [], state_updates: {} } as never,
+    ];
+    let callIndex = 0;
+    const provider: StreamingProvider = {
+      model: "test-model",
+      setModel: vi.fn(),
+      async generate(pack: ContextPack): Promise<AIResponse> {
+        seenPacks.push(pack);
+        const r = responses[callIndex] ?? responses[responses.length - 1]!;
+        callIndex++;
+        return r;
+      },
+      async *generateStream(pack: ContextPack) {
+        seenPacks.push(pack);
+        const r = responses[callIndex] ?? responses[responses.length - 1]!;
+        callIndex++;
+        if (r.text) yield { type: "text" as const, text: r.text };
+        yield { type: "done" as const, response: r };
+      },
+      estimateConfidence: () => Promise.resolve(0.8),
+      extractMemoryCandidates: (r: AIResponse) => Promise.resolve(r.memory_candidates),
+    };
+
+    const deps = {
+      ...makeDeps(),
+      provider,
+      tools: toolRegistry,
+      policyGate: denyingGate,
+    } as unknown as SensitivityCleared<MotebitLoopDependencies>;
+
+    let chunkDelta: unknown;
+    for await (const chunk of runTurnStreaming(deps, "send money to x")) {
+      if (
+        chunk.type === "tool_status" &&
+        chunk.status === "done" &&
+        (chunk as { missing_authority?: unknown }).missing_authority != null
+      ) {
+        chunkDelta = (chunk as { missing_authority?: unknown }).missing_authority;
+      }
+    }
+
+    // Owner channel: the precise residual arrived on the surface chunk.
+    expect(chunkDelta).toEqual({ missing_scope: ["send_money"], spend_overage_micro: 400_000 });
+
+    // Model channel: NOTHING the provider ever received contains the
+    // residual — string-level check over every serialized pack so a leak
+    // through ANY field fails loud.
+    expect(seenPacks.length).toBeGreaterThanOrEqual(2);
+    // The second call's pack must contain the COARSE reason (the model
+    // is taught) …
+    const later = JSON.stringify(seenPacks.slice(1));
+    expect(later).toContain("outside delegated scope");
+    // … and no pack, ever, contains the residual.
+    for (const pack of seenPacks) {
+      const raw = JSON.stringify(pack);
+      expect(raw).not.toContain("missing_authority");
+      expect(raw).not.toContain("400000");
+    }
+  });
+});

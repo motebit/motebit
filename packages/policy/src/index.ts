@@ -65,6 +65,15 @@ export type { AuditEntry, AuditChainStore } from "./audit-chain.js";
 
 // Re-export SDK types and enums used in the policy API
 export { RiskLevel, DataClass, SideEffect } from "@motebit/protocol";
+export {
+  scopeDelta,
+  postureDelta,
+  grantRequiredDelta,
+  spendOverageDelta,
+  quorumShortfallDelta,
+  terminalDelta,
+} from "./authority-delta.js";
+export type { AuthorityDelta } from "@motebit/protocol";
 export type {
   ToolRiskProfile,
   PolicyDecision,

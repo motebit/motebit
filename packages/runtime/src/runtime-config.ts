@@ -329,6 +329,14 @@ export type StreamChunk =
       result?: unknown;
       context?: string;
       /**
+       * Owner-facing typed residual of a policy/meter refusal (WHAT
+       * authority is missing, as data). Pass-through from ai-core's
+       * tool_status chunk; rides ONLY this surface channel — the
+       * model-visible history carries the coarse reason string alone.
+       * See `AuthorityDelta` in @motebit/protocol.
+       */
+      missing_authority?: import("@motebit/protocol").AuthorityDelta;
+      /**
        * Embodiment mode the slab item should stamp when this tool's
        * activity lands on the slab. Sourced from
        * `ToolDefinition.embodimentMode` at the registration site,

@@ -847,6 +847,52 @@ export interface ApprovalQuorum {
   risk_floor?: string;
 }
 
+/**
+ * The typed residual of a refused (or approval-raised) authority check —
+ * WHAT is missing, as data, so owner surfaces can render the exact
+ * repair instruction ("mint the difference") instead of prose.
+ *
+ * Two invariants, both load-bearing:
+ *
+ * ASYMMETRY — the delta is OWNER-FACING. Model-visible channels (tool
+ * results pushed into conversation history) carry only the coarse
+ * `reason` string: a precise residual is a boundary oracle, and
+ * "you need exactly publish.external and $0.40 more" is also a
+ * perfectly optimized social-engineering script aimed at the one party
+ * who can mint the difference. Owner surfaces (stream chunks, audit
+ * log, pre-flight) get precision; the model keeps today's actionable
+ * category, never the oracle.
+ *
+ * PREDICTOR, NEVER AUTHORITY — the delta describes a boundary's
+ * refusal; it never participates in allowing anything. The gate and
+ * the money meter remain the sole enforcement authorities.
+ *
+ * Closed field set (extend by registry-append discipline, never by a
+ * generic effect-algebra parameter). Sibling of `Semiring` on the
+ * algebra floor: the semiring answers "which path is best"; the delta
+ * answers "what authority is missing". Money is integer micro-units
+ * (`number`, wire-safe) per the repo money model.
+ */
+export interface AuthorityDelta {
+  /** Scope entries the delegated scope lacks (e.g. the denied tool name). */
+  missing_scope?: string[];
+  /** The action's risk level. */
+  required_risk?: RiskLevel;
+  /** The ceiling the governance posture permits (deny threshold or max risk). */
+  posture_ceiling?: RiskLevel;
+  /** R4 without a verified standing grant: the missing authority IS a grant
+   *  (or a live human approval) — memory-never-confers-authority. */
+  requires_verified_grant?: true;
+  /** Micro-USD by which the attempted spend exceeds remaining ceiling. */
+  spend_overage_micro?: number;
+  /** Epoch ms when the next authority window opens (tick schedule). */
+  not_before?: number;
+  /** Approvals still needed to meet the configured quorum. */
+  quorum_shortfall?: number;
+  /** Terminal states: no residual exists; re-mint is the only repair. */
+  terminal?: "revoked" | "expired";
+}
+
 export interface PolicyDecision {
   allowed: boolean;
   requiresApproval: boolean;
@@ -854,6 +900,9 @@ export interface PolicyDecision {
   budgetRemaining?: { calls: number; timeMs: number; cost: number };
   /** When quorum is required, contains the quorum metadata. */
   quorum?: { required: number; approvers: string[]; collected: string[] };
+  /** Owner-facing typed residual of a refusal/raise. See `AuthorityDelta`
+   *  for the asymmetry + predictor invariants. */
+  missing_authority?: AuthorityDelta;
 }
 
 export interface TurnContext {

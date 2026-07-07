@@ -5,6 +5,7 @@ import { formatBodyAwareness } from "@motebit/ai-core";
 import { action, meta, warn, dim, prompt as promptColor } from "./colors.js";
 import { writeOutput, askQuestion } from "./terminal.js";
 import { archiveReceipt, renderReceipt } from "./receipt.js";
+import { renderAuthorityDelta } from "./authority-delta-render.js";
 import type { VoiceController } from "./voice.js";
 
 // Animated dots: cycles .  → .. → ... while a tool call is in flight.
@@ -44,6 +45,19 @@ export async function consumeStream(
         break;
 
       case "tool_status":
+        // Owner-facing authority residual — render the exact repair even
+        // for delegation tools (the delta rides only this surface channel;
+        // the model saw the coarse reason). See AuthorityDelta invariants.
+        if (chunk.status === "done" && chunk.missing_authority != null) {
+          if (stopAnimation) {
+            stopAnimation();
+            stopAnimation = null;
+          }
+          for (const line of renderAuthorityDelta(chunk.name, chunk.missing_authority)) {
+            writeOutput(meta(line) + "\n");
+          }
+          break;
+        }
         // Delegation tools are announced by delegation_start/delegation_complete instead
         if (chunk.name === "delegate_to_agent") break;
         if (chunk.status === "calling") {

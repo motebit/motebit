@@ -12,6 +12,12 @@ import { classifyTool, isToolAllowed } from "./risk-model.js";
 import { BudgetEnforcer } from "./budget.js";
 import type { BudgetConfig } from "./budget.js";
 import { RedactionEngine } from "./redaction.js";
+import {
+  scopeDelta,
+  postureDelta,
+  grantRequiredDelta,
+  quorumShortfallDelta,
+} from "./authority-delta.js";
 import { ContentSanitizer } from "./sanitizer.js";
 import { AuditLogger } from "./audit.js";
 import type { AuditLogSink } from "./audit.js";
@@ -255,6 +261,7 @@ export class PolicyGate {
           allowed: false,
           requiresApproval: false,
           reason: `Tool "${tool.name}" is outside delegated scope "${ctx.delegationScope}"`,
+          missing_authority: scopeDelta(tool.name),
         };
         this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision, ctx.runId);
         return decision;
@@ -272,6 +279,7 @@ export class PolicyGate {
           allowed: false,
           requiresApproval: false,
           reason: `Tool "${tool.name}" risk ${RiskLevel[profile.risk]} exceeds deny threshold ${RiskLevel[this.config.denyAbove!]}`,
+          missing_authority: postureDelta(profile.risk, this.config.denyAbove!),
         };
         this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision, ctx.runId);
         return decision;
@@ -283,6 +291,7 @@ export class PolicyGate {
           allowed: false,
           requiresApproval: false,
           reason: `Tool "${tool.name}" requires risk level ${RiskLevel[profile.risk]} but max allowed is ${RiskLevel[maxRisk]}. Enable Operator Mode for higher-risk tools.`,
+          missing_authority: postureDelta(profile.risk, maxRisk),
         };
         this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision, ctx.runId);
         return decision;
@@ -473,6 +482,21 @@ export class PolicyGate {
       }
     }
 
+    // Owner-facing residual for a RAISED (not denied) decision: what
+    // authority would let this auto-execute. Single producer module;
+    // grant-required takes precedence over quorum shortfall (the grant
+    // is the deeper missing artifact). Model-visible channels never
+    // carry this — see AuthorityDelta's asymmetry invariant.
+    // R4 pending approval without a verified grant: the missing authority
+    // IS a grant (or the live tap) — true whether the band or 8b raised
+    // it. Otherwise a pending quorum names its shortfall.
+    const raiseDelta =
+      profile.risk >= RiskLevel.R4_MONEY && ctx.verifiedGrant == null
+        ? grantRequiredDelta(profile.risk)
+        : quorumMeta != null
+          ? quorumShortfallDelta(quorumMeta.required - quorumMeta.collected.length)
+          : undefined;
+
     const decision: PolicyDecision = {
       allowed: true,
       requiresApproval: needsApproval,
@@ -482,6 +506,7 @@ export class PolicyGate {
         cost: budgetResult.remaining.cost,
       },
       ...(quorumMeta ? { quorum: quorumMeta } : {}),
+      ...(needsApproval && raiseDelta != null ? { missing_authority: raiseDelta } : {}),
     };
 
     this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision, ctx.runId);

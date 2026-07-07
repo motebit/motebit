@@ -588,6 +588,18 @@ export interface AuditStatsSince {
 }
 
 // @public
+export interface AuthorityDelta {
+    missing_scope?: string[];
+    not_before?: number;
+    posture_ceiling?: RiskLevel;
+    quorum_shortfall?: number;
+    required_risk?: RiskLevel;
+    requires_verified_grant?: true;
+    spend_overage_micro?: number;
+    terminal?: "revoked" | "expired";
+}
+
+// @public
 export interface BalanceWaiver {
     motebit_id: string;
     signature: string;
@@ -2965,6 +2977,7 @@ export interface PolicyDecision {
         timeMs: number;
         cost: number;
     };
+    missing_authority?: AuthorityDelta;
     quorum?: {
         required: number;
         approvers: string[];

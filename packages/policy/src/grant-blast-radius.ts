@@ -123,6 +123,12 @@ export interface BlastRadiusDecision {
   readonly allowed: boolean;
   /** Present iff `!allowed`. The first dimension that denied. */
   readonly denial?: BlastRadiusDenial;
+  /** Owner-facing typed residual of the denial (spend overage / window
+   *  unlock time). Model-visible channels carry only the denial code —
+   *  see `AuthorityDelta` in @motebit/protocol for the asymmetry
+   *  invariant. Absent when no residual exists (structural denials
+   *  like invalid_amount, replay without a known schedule). */
+  readonly missing_authority?: import("@motebit/protocol").AuthorityDelta;
   /** Headroom remaining after this action would commit (telemetry/UI). Present iff allowed. */
   readonly remaining?: {
     readonly cumulative_micro?: number;
@@ -218,8 +224,11 @@ export function spendCeilingFromGrant(
   };
 }
 
-const deny = (denial: BlastRadiusDenial): BlastRadiusEvaluation => ({
-  decision: { allowed: false, denial },
+const deny = (
+  denial: BlastRadiusDenial,
+  missing_authority?: import("@motebit/protocol").AuthorityDelta,
+): BlastRadiusEvaluation => ({
+  decision: { allowed: false, denial, ...(missing_authority ? { missing_authority } : {}) },
 });
 
 /**
@@ -280,20 +289,32 @@ export function evaluateBlastRadius(
   }
 
   // 8. Ceilings — lifetime first (strongest bound), then window dimensions.
+  const windowUnlock =
+    hasWindowLimit && windowMs > 0 ? { not_before: windowStartedAt + windowMs } : {};
   if (ceiling.lifetime_limit_micro !== undefined && newLifetime > ceiling.lifetime_limit_micro) {
-    return deny("lifetime_exceeded");
+    // Lifetime never rolls: the only repair is a new grant with the overage.
+    return deny("lifetime_exceeded", {
+      spend_overage_micro: newLifetime - ceiling.lifetime_limit_micro,
+    });
   }
   if (ceiling.cumulative_limit_micro !== undefined && newWindow > ceiling.cumulative_limit_micro) {
-    return deny("cumulative_exceeded");
+    // Window rolls: the overage AND when headroom returns.
+    return deny("cumulative_exceeded", {
+      spend_overage_micro: newWindow - ceiling.cumulative_limit_micro,
+      ...windowUnlock,
+    });
   }
   if (
     ceiling.per_counterparty_limit_micro !== undefined &&
     newCp > ceiling.per_counterparty_limit_micro
   ) {
-    return deny("per_counterparty_exceeded");
+    return deny("per_counterparty_exceeded", {
+      spend_overage_micro: newCp - ceiling.per_counterparty_limit_micro,
+      ...windowUnlock,
+    });
   }
   if (ceiling.max_action_count !== undefined && windowActions + 1 > ceiling.max_action_count) {
-    return deny("action_count_exceeded");
+    return deny("action_count_exceeded", windowUnlock.not_before ? windowUnlock : undefined);
   }
 
   // 9. Allowed — produce the committed state + remaining headroom.
