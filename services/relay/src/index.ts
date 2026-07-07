@@ -1186,8 +1186,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   registerTrustGraphRoutes({ app, moteDb, taskRouter });
 
   // --- Listings & market routes ---
-  registerListingsRoutes({ app, moteDb, taskRouter });
-
   // --- Collaborative proposal routes ---
   registerProposalRoutes({ app, moteDb, connections });
 
@@ -1307,6 +1305,21 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     isTokenBlacklisted,
     isAgentRevoked,
   });
+
+  // --- Service listings + market queries ---
+  // MUST register AFTER registerAgentRoutes: the listing routes
+  // (`/api/v1/agents/:id/listing`) are covered by the `/api/v1/agents/*`
+  // auth middleware that registerAgentRoutes installs, and Hono applies
+  // middleware only to routes registered after it. Registered earlier,
+  // GET/POST listing ran UNAUTHENTICATED — the POST handler's
+  // caller===:motebitId guard reads `callerMotebitId` which only the
+  // middleware sets, so it silently no-op'd, leaving `pay_to_address`
+  // (the settlement destination read by getAgentPricing) writable for
+  // any agent by anyone. The regression test in listings.test.ts locks
+  // the no-token→401 / wrong-agent→403 behavior so ordering can't
+  // re-break it. (market/candidates + market/revenue carry their own
+  // early-registered middleware, unaffected by this move.)
+  registerListingsRoutes({ app, moteDb, taskRouter });
 
   // --- Command endpoint (unified remote execution) ---
   registerCommandRoutes({ app, db: moteDb.db, connections, logger });
