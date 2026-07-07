@@ -18,6 +18,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const { swapUsdcToSolMock } = vi.hoisted(() => ({ swapUsdcToSolMock: vi.fn() }));
 vi.mock("../jupiter.js", () => ({
   swapUsdcToSol: swapUsdcToSolMock,
+  // rail.ts statically imports the gas-floor constant from the same
+  // module (single-source since the swapSolToUsdc mirror landed) — the
+  // mock must carry it or every rail test fails at import time.
+  GAS_FLOOR_LAMPORTS: 5_000_000n,
 }));
 
 import {
@@ -417,5 +421,17 @@ describe("SolanaWalletRail.buildP2pPayment", () => {
 
     expect(getSolBalance).toHaveBeenCalled();
     expect(sendUsdcBatch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("SolanaWalletRail.swapSolToUsdc — the owner-invoked funding-side swap", () => {
+  it("throws honestly when the rail has no web3 adapter", async () => {
+    const adapter: SolanaRpcAdapter = {
+      getSolBalance: async () => 0n,
+      getUsdcBalance: async () => 0n,
+      sendUsdc: async () => ({ signature: "x" }) as never,
+    } as never;
+    const rail = new SolanaWalletRail(adapter, { autoGas: false });
+    await expect(rail.swapSolToUsdc(1_000_000n)).rejects.toThrow(/without a web3 adapter/);
   });
 });

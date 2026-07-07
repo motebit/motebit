@@ -164,3 +164,53 @@ export type LocalServerSuggestedModel = (typeof LOCAL_SERVER_SUGGESTED_MODELS)[n
  */
 export type OllamaSuggestedModel = LocalServerSuggestedModel;
 export type ProxyModel = (typeof PROXY_MODELS)[number];
+
+// === Provider ↔ model coherence ===
+//
+// Born live, 2026-07-06: `--provider anthropic` with a config-resident
+// `default_model: llama3.2:latest` composed an Anthropic provider around
+// an Ollama model id — the banner printed the illegal pairing and the
+// failure deferred to the first API call. The intelligence-pluggability
+// contract's first commitment is PRE-FLIGHT admission: the selected
+// model must fit the selected provider BEFORE any turn runs. These two
+// helpers are that check's canonical home (the registry already knows
+// the vendors).
+
+/** Best-effort vendor attribution for a model id. Registry membership
+ *  first, then naming-signature heuristics for ids the registry hasn't
+ *  caught up to (new dated releases must not brick startup — an
+ *  `"unknown"` verdict is deliberately permissive). */
+export function modelVendorHint(
+  model: string,
+): "anthropic" | "openai" | "google" | "deepseek" | "groq" | "local" | "unknown" {
+  const m = model.trim().toLowerCase();
+  if ((ANTHROPIC_MODELS as readonly string[]).includes(m)) return "anthropic";
+  if ((OPENAI_MODELS as readonly string[]).includes(m)) return "openai";
+  if ((GOOGLE_MODELS as readonly string[]).includes(m)) return "google";
+  if ((DEEPSEEK_MODELS as readonly string[]).includes(m)) return "deepseek";
+  if ((GROQ_MODELS as readonly string[]).includes(m)) return "groq";
+  if (m.startsWith("claude")) return "anthropic";
+  if (m.startsWith("gpt-") || /^o[0-9]/.test(m)) return "openai";
+  if (m.startsWith("gemini")) return "google";
+  if (m.startsWith("deepseek")) return "deepseek";
+  // Ollama-style tags and the common local families.
+  if (m.includes(":") || /^(llama|mistral|qwen|phi|gemma|smollm)/.test(m)) return "local";
+  return "unknown";
+}
+
+/**
+ * Pre-flight admission: may `model` be served by `provider`?
+ * Permissive where honesty demands it — `local-server` runs whatever the
+ * user's server hosts, the proxy routes multiple vendors, and an
+ * `"unknown"` vendor hint never blocks (the registry lags new releases).
+ * It answers `false` only for a KNOWN cross-vendor mismatch — exactly
+ * the class that fails opaquely at the API otherwise.
+ */
+export function providerAcceptsModel(provider: string, model: string): boolean {
+  if (provider === "local-server" || provider === "ollama") return true;
+  const hint = modelVendorHint(model);
+  if (hint === "unknown") return true;
+  if (provider === "proxy") return hint === "anthropic" || hint === "openai" || hint === "google";
+  if (provider === "groq") return hint === "groq" || hint === "local"; // groq serves open models
+  return hint === provider;
+}

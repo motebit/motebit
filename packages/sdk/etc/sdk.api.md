@@ -587,6 +587,9 @@ export interface MlxProviderSpec {
 }
 
 // @public
+export function modelVendorHint(model: string): "anthropic" | "openai" | "google" | "deepseek" | "groq" | "local" | "unknown";
+
+// @public
 export interface MotebitCloudProviderConfig {
     baseUrl?: string;
     // (undocumented)
@@ -678,6 +681,9 @@ export interface PrecisionWeights {
     retrievalPrecision: number;
     selfTrust: number;
 }
+
+// @public
+export function providerAcceptsModel(provider: string, model: string): boolean;
 
 // @public
 export type ProviderMode = "on-device" | "motebit-cloud" | "byok";
