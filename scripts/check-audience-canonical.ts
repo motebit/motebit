@@ -82,6 +82,7 @@ const CANONICAL_AUDIENCES = new Set<string>([
   "account:withdraw",
   "account:withdrawals",
   "account:checkout",
+  "proxy:token",
   "browser-sandbox-grant",
   "browser-sandbox",
   "runtime:attach",

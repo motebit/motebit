@@ -541,6 +541,22 @@ export class SpatialApp {
           // localStorage unavailable
         }
       },
+      mintAuthToken: async (): Promise<string | null> => {
+        if (this._privKeyBytes == null || this.motebitId == null || this.deviceId == null) {
+          return null;
+        }
+        return createSignedToken(
+          {
+            mid: this.motebitId,
+            did: this.deviceId,
+            iat: Date.now(),
+            exp: Date.now() + 5 * 60 * 1000,
+            jti: crypto.randomUUID(),
+            aud: "proxy:token",
+          },
+          this._privKeyBytes,
+        );
+      },
       onProviderReady: (config: ProxyProviderConfig) => {
         this._proxyConfig = config;
       },

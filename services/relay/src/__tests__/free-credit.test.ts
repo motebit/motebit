@@ -16,8 +16,45 @@ import {
   requestWithdrawal,
   toMicro,
 } from "../accounts.js";
+// eslint-disable-next-line no-restricted-imports -- test needs direct crypto
+import { generateKeypair, bytesToHex } from "@motebit/crypto";
+// eslint-disable-next-line no-restricted-imports -- test mints its own bearer token
+import { createSignedToken } from "@motebit/encryption";
 
 const API_TOKEN = "test-token";
+
+/** Register an identity + device and mint a proxy:token-audience token for it.
+ *  The proxy-token mint route is caller===:motebitId authed (2026-07-07). */
+async function seedAgentWithProxyToken(
+  relay: SyncRelay,
+): Promise<{ motebitId: string; authHeader: Record<string, string> }> {
+  const kp = await generateKeypair();
+  const jsonAuth = { "Content-Type": "application/json", Authorization: `Bearer ${API_TOKEN}` };
+  const idRes = await relay.app.request("/identity", {
+    method: "POST",
+    headers: jsonAuth,
+    body: JSON.stringify({ owner_id: `owner-${crypto.randomUUID()}` }),
+  });
+  const { motebit_id } = (await idRes.json()) as { motebit_id: string };
+  const devRes = await relay.app.request("/device/register", {
+    method: "POST",
+    headers: jsonAuth,
+    body: JSON.stringify({ motebit_id, device_name: "T", public_key: bytesToHex(kp.publicKey) }),
+  });
+  const { device_id } = (await devRes.json()) as { device_id: string };
+  const token = await createSignedToken(
+    {
+      mid: motebit_id,
+      did: device_id,
+      iat: Date.now(),
+      exp: Date.now() + 5 * 60 * 1000,
+      jti: crypto.randomUUID(),
+      aud: "proxy:token",
+    },
+    kp.privateKey,
+  );
+  return { motebitId: motebit_id, authHeader: { Authorization: `Bearer ${token}` } };
+}
 const NOW = Date.UTC(2026, 5, 9, 12, 0, 0);
 
 // Small, explicit config so the caps are easy to hit in tests.
@@ -132,9 +169,10 @@ describe("POST /api/v1/agents/:motebitId/proxy-token — free credit lands in th
   });
 
   it("a fresh motebit's first proxy-token carries the granted balance", async () => {
-    const motebitId = crypto.randomUUID();
+    const { motebitId, authHeader } = await seedAgentWithProxyToken(relay);
     const res = await relay.app.request(`/api/v1/agents/${motebitId}/proxy-token`, {
       method: "POST",
+      headers: authHeader,
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { balance: number; balance_usd: number; models: string[] };
@@ -145,9 +183,27 @@ describe("POST /api/v1/agents/:motebitId/proxy-token — free credit lands in th
     // Idempotent: a second token request does not double-grant.
     const res2 = await relay.app.request(`/api/v1/agents/${motebitId}/proxy-token`, {
       method: "POST",
+      headers: authHeader,
     });
     const body2 = (await res2.json()) as { balance: number };
     expect(body2.balance).toBe(toMicro(0.5));
+  });
+
+  it("proxy-token mint is caller-authed — no token 401, another agent's token 403", async () => {
+    // The 2026-07-07 fix: unauth mint let anyone spend another agent's cloud
+    // credit. The token carries balance, so minting is caller===:motebitId.
+    const { motebitId } = await seedAgentWithProxyToken(relay);
+    const noAuth = await relay.app.request(`/api/v1/agents/${motebitId}/proxy-token`, {
+      method: "POST",
+    });
+    expect(noAuth.status).toBe(401);
+
+    const attacker = await seedAgentWithProxyToken(relay);
+    const crossed = await relay.app.request(`/api/v1/agents/${motebitId}/proxy-token`, {
+      method: "POST",
+      headers: attacker.authHeader,
+    });
+    expect(crossed.status).toBe(403);
   });
 });
 

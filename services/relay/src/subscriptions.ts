@@ -10,6 +10,7 @@
  */
 
 import type { Hono } from "hono";
+import { HTTPException } from "hono/http-exception";
 import Stripe from "stripe";
 import type { DatabaseDriver } from "@motebit/persistence";
 import { canonicalJson, sign, toBase64Url } from "@motebit/encryption";
@@ -147,6 +148,17 @@ export function registerProxyTokenRoutes(
   /** @internal */
   app.post("/api/v1/agents/:motebitId/proxy-token", async (c) => {
     const motebitId = c.req.param("motebitId");
+
+    // Caller must control THIS motebit: the proxy-token carries the agent's
+    // balance and authorizes cloud-inference spend against it, so minting is
+    // caller===:motebitId (the `/api/v1/agents/*` middleware verified a
+    // proxy:token-audience device token and set callerMotebitId; the master
+    // token leaves it undefined = operator-allowed). Closes the 2026-07-07
+    // unauth-mint exposure (anyone could mint any agent's billing token).
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+    if (callerMotebitId !== undefined && callerMotebitId !== motebitId) {
+      throw new HTTPException(403, { message: "Cannot mint another agent's proxy token" });
+    }
 
     // Activation: grant a fresh motebit its one-time free "first taste" credit
     // (inert unless MOTEBIT_FREE_CREDIT_USD is set; one-time + per-IP + global-

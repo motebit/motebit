@@ -341,17 +341,6 @@ export const PUBLIC_AGENT_ROUTES: ReadonlyArray<{
       "security backlog; carved explicit (not silently open) meanwhile.",
   },
   {
-    match: (p, m) => p.endsWith("/proxy-token") && m === "POST",
-    reason:
-      "proxy-token (POST): mints a cloud-inference billing token carrying " +
-      "the agent's balance. KNOWN EXPOSURE (was always open — registered " +
-      "before any agent middleware): unauth mint lets a caller spend another " +
-      "agent's cloud credit. MUST become caller===:motebitId authed; " +
-      "deferred only because the runtime client's token-send must be verified " +
-      "first (breaking cloud billing is worse than the capped exposure). " +
-      "Tracked HIGH in the security backlog — carved explicit meanwhile.",
-  },
-  {
     match: (p, m) => p.endsWith("/credentials") && m === "GET",
     reason:
       "credentials (GET): public-read of verifiable attestations — VCs are " +
@@ -425,6 +414,8 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
       agentAudience = "credentials";
     } else if (path.includes("/presentation")) {
       agentAudience = "credentials:present";
+    } else if (path.includes("/proxy-token")) {
+      agentAudience = "proxy:token";
     } else if (path.includes("/receipts")) {
       agentAudience = "receipts:read";
     } else {

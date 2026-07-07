@@ -40,6 +40,16 @@ export interface ProxySessionAdapter {
   clearToken(): void;
   /** Called when a new provider config should be applied. */
   onProviderReady(config: ProxyProviderConfig): void;
+  /**
+   * Mint a signed device-auth token bound to this motebit, for the
+   * `proxy:token` audience. The proxy-token mint route (relay) is
+   * caller===:motebitId authed — the token proves the caller controls
+   * this agent, so no one can mint a billing token carrying another
+   * agent's balance. Optional for source-compat: a surface that omits
+   * it makes an unauthenticated request (the relay rejects it — the
+   * surface must wire this to reach cloud inference).
+   */
+  mintAuthToken?(): Promise<string | null>;
 }
 
 /** Provider config that the surface uses to connect. */
@@ -63,11 +73,17 @@ export const DEFAULT_PROXY_BASE_URL = "https://api.motebit.com";
 export async function fetchProxyToken(
   syncUrl: string,
   motebitId: string,
+  authToken?: string | null,
 ): Promise<ProxyTokenData | null> {
   try {
     const res = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/proxy-token`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(authToken != null && authToken !== ""
+          ? { Authorization: `Bearer ${authToken}` }
+          : {}),
+      },
     });
     if (!res.ok) return null;
     const data = (await res.json()) as {
@@ -134,7 +150,8 @@ export class ProxySession {
 
     // Refresh if expired or expiring within 60 seconds
     if (!token || token.expiresAt < Date.now() + 60_000) {
-      const fresh = await fetchProxyToken(syncUrl, motebitId);
+      const authToken = this.adapter.mintAuthToken ? await this.adapter.mintAuthToken() : null;
+      const fresh = await fetchProxyToken(syncUrl, motebitId, authToken);
       if (fresh) {
         token = fresh;
         this.adapter.saveToken(token);
@@ -166,7 +183,8 @@ export class ProxySession {
     const motebitId = this.adapter.getMotebitId();
     if (!syncUrl || !motebitId) return;
 
-    const token = await fetchProxyToken(syncUrl, motebitId);
+    const authToken = this.adapter.mintAuthToken ? await this.adapter.mintAuthToken() : null;
+    const token = await fetchProxyToken(syncUrl, motebitId, authToken);
     if (!token) return;
 
     this.adapter.saveToken(token);
