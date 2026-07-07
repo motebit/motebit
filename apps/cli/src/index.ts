@@ -948,7 +948,12 @@ async function main(): Promise<void> {
     if (trimmed === "quit" || trimmed === "exit") {
       writeOutput("Goodbye!\n");
       await shutdown();
-      return;
+      // Mirror the SIGINT path: exit explicitly. Waiting for the event
+      // loop to drain leaves a zombie REPL holding the terminal whenever
+      // any live handle remains (the sovereign rail's RPC connection, an
+      // MCP socket) — observed 2026-07-07: "Goodbye!" printed, process
+      // survived, terminal unusable until a new window.
+      process.exit(0);
     }
 
     if (trimmed === "") {
