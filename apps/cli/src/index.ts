@@ -4,6 +4,7 @@ import { deriveSyncEncryptionKey, createSignedToken } from "@motebit/encryption"
 import { connectMcpServers } from "@motebit/mcp-client";
 import { formatBodyAwareness } from "@motebit/ai-core";
 import { providerAcceptsModel } from "@motebit/sdk";
+import { createSolanaWalletRail } from "@motebit/wallet-solana";
 import { parseCliArgs, printHelp, printVersion, printBanner, trimHistory } from "./args.js";
 import type { CliConfig } from "./args.js";
 import { loadFullConfig, extractPersonality, persistMotebitPublicKeys } from "./config.js";
@@ -668,6 +669,22 @@ async function main(): Promise<void> {
       : {}),
   }));
 
+  // The sovereign Solana rail — identity key IS the wallet. Constructed
+  // here (the one place the decrypted seed exists) and injected; the
+  // runtime wraps its payment builder in the money meter at delegation
+  // enable. Without the seed (unsigned/degraded sessions) the rail is
+  // absent and paid delegation degrades to relay-mode honestly.
+  const solanaWallet =
+    privateKeyBytes !== undefined
+      ? createSolanaWalletRail({
+          rpcUrl:
+            config.solanaRpcUrl ??
+            process.env["SOLANA_RPC_URL"] ??
+            "https://api.mainnet-beta.solana.com",
+          identitySeed: privateKeyBytes,
+        })
+      : undefined;
+
   // Create runtime with tools, policy, MCP config
   const { runtime, moteDb } = await createRuntime(
     config,
@@ -676,6 +693,7 @@ async function main(): Promise<void> {
     mcpServers,
     personalityConfig,
     syncEncKey,
+    solanaWallet,
   );
   runtimeRef.current = runtime;
 
@@ -785,6 +803,11 @@ async function main(): Promise<void> {
           // to a no-history worker (else relay-mode). Shared by both the chat
           // (delegate_to_agent) and deterministic (invokeCapability) paths.
           ...(config.payNewAgents ? { acknowledgeNoHistoryRisk: true } : {}),
+          // The PINNED relay operator key (motebit register, TOFU over the
+          // signed transparency declaration). With the sovereign rail
+          // present, this is what unlocks the P2P path — the treasury
+          // address derives FROM the pin, never from a fetched response.
+          ...(fullConfig.relay_public_key ? { relayPublicKey: fullConfig.relay_public_key } : {}),
         };
         runtime.enableInteractiveDelegation(delegationCfg);
         runtime.enableInvokeCapability(delegationCfg);
@@ -798,6 +821,7 @@ async function main(): Promise<void> {
               ? { routingStrategy: config.routingStrategy }
               : {}),
             ...(config.payNewAgents ? { acknowledgeNoHistoryRisk: true } : {}),
+            ...(fullConfig.relay_public_key ? { relayPublicKey: fullConfig.relay_public_key } : {}),
           };
           runtime.enableInteractiveDelegation(delegationCfg);
           runtime.enableInvokeCapability(delegationCfg);

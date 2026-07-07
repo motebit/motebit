@@ -1,0 +1,5 @@
+---
+"motebit": minor
+---
+
+The last seam of the first-metered-dollar path: the CLI now wires the sovereign Solana rail and the PINNED relay key into the runtime. (1) `createRuntime` accepts and threads `solanaWallet`; the REPL constructs the rail from the decrypted identity seed — its presence is what makes `delegate_to_agent` a real money tool (R4 hint, late-bound metering, wrapped P2P payment builder). (2) `motebit register` pins the relay operator's public key trust-on-first-use from the SIGNED transparency declaration, verified via the canonical `@motebit/state-export-client` verifier; a later mismatch fails loud (a relay that changes identity is never silently re-trusted); fetch failure warns without failing registration. (3) The REPL threads the pinned key into the delegation config — the treasury address derives FROM the pin, never from a fetched response at payment time. Discovered live 2026-07-07: every layer of the metering stack was sound and unreachable — delegation registered as R2 (no rail ⇒ no R4 hint), and relay-mode paid delegation 402'd in a retry loop.

@@ -11,6 +11,7 @@
  */
 
 import { createSignedToken, secureErase } from "@motebit/encryption";
+import { verifyTransparencyDeclaration } from "@motebit/state-export-client";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig, saveFullConfig } from "../config.js";
 import { loadActiveSigningKey, IdentityKeyError } from "../identity.js";
@@ -139,6 +140,79 @@ export async function handleRegister(config: CliConfig): Promise<void> {
     );
   }
 
+  await pinRelayKey(syncUrl, fullConfig);
+
   // Erase temporary private key bytes
   if (privateKeyBytes) secureErase(privateKeyBytes);
+}
+
+/**
+ * Pin the relay operator's public key (trust-on-first-use). The P2P
+ * delegation path derives the treasury address FROM this pin — never
+ * from a fetched response at payment time — so the pin is the trust
+ * root for every fee leg this motebit ever pays. Source: the relay's
+ * SIGNED transparency declaration, self-consistency-verified via the
+ * canonical `@motebit/state-export-client` verifier (hash + signature
+ * against the key the declaration itself carries).
+ *
+ * Three outcomes, deliberately asymmetric:
+ *  - unpinned + verified  → pin + say so
+ *  - pinned + MISMATCH    → FAIL LOUD (exit 1): a relay that changed
+ *    identity must be re-pinned deliberately (verify out-of-band,
+ *    remove relay_public_key from config, re-register) — never silently
+ *  - fetch/verify failure → warn only; registration already succeeded,
+ *    but P2P delegation stays unavailable until pinned
+ *
+ * Exported for tests.
+ */
+export async function pinRelayKey(
+  syncUrl: string,
+  fullConfig: ReturnType<typeof loadFullConfig>,
+): Promise<void> {
+  // The mismatch exit lives OUTSIDE the try: the catch below exists to
+  // soften NETWORK failures only — a pin mismatch must never be
+  // swallowed by the same net (found by the fail-loud test, whose
+  // simulated exit was caught here in v1).
+  let mismatch: { declared: string; pinned: string } | null = null;
+  try {
+    const declRes = await fetch(`${syncUrl}/.well-known/motebit-transparency.json`);
+    if (!declRes.ok) throw new Error(`HTTP ${declRes.status}`);
+    const declaration = (await declRes.json()) as Parameters<
+      typeof verifyTransparencyDeclaration
+    >[0];
+    const verdict = await verifyTransparencyDeclaration(declaration);
+    if (!verdict.ok) {
+      console.warn(
+        `Warning: relay transparency declaration failed verification (${verdict.reason}) — ` +
+          `relay key NOT pinned; P2P delegation unavailable until it verifies.`,
+      );
+      return;
+    }
+    const declaredKey = declaration.relay_public_key;
+    const pinned = fullConfig.relay_public_key;
+    if (pinned != null && pinned !== "" && pinned !== declaredKey) {
+      mismatch = { declared: declaredKey, pinned };
+    } else if (pinned == null || pinned === "") {
+      fullConfig.relay_public_key = declaredKey;
+      saveFullConfig(fullConfig);
+      console.log(
+        `Pinned relay key ${declaredKey.slice(0, 12)}… (verified signed transparency declaration)`,
+      );
+    }
+  } catch (err) {
+    console.warn(
+      `Warning: could not fetch the relay transparency declaration ` +
+        `(${err instanceof Error ? err.message : String(err)}) — relay key not pinned; ` +
+        `re-run \`motebit register\` online to enable P2P delegation.`,
+    );
+  }
+  if (mismatch != null) {
+    console.error(
+      `PIN MISMATCH: this relay now declares key ${mismatch.declared.slice(0, 12)}… but your ` +
+        `config pins ${mismatch.pinned.slice(0, 12)}…. A relay that changes identity must be ` +
+        `re-pinned deliberately: verify out-of-band, then remove relay_public_key from ` +
+        `~/.motebit/config.json and re-run register. Refusing to overwrite.`,
+    );
+    process.exit(1);
+  }
 }

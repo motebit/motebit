@@ -742,6 +742,7 @@ export async function createRuntime(
   mcpServers: McpServerConfig[],
   personalityConfig?: MotebitPersonalityConfig,
   encKey?: Uint8Array,
+  solanaWallet?: import("@motebit/runtime").RuntimeConfig["solanaWallet"],
 ): Promise<{ runtime: MotebitRuntime; moteDb: MotebitDatabase }> {
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
@@ -774,6 +775,13 @@ export async function createRuntime(
       // delegator's total bound on every restart). The CLI hosts the
       // canonical local runtime, so it always wires the durable store.
       grantSpendStore: moteDb.grantSpendStore,
+      // The sovereign Solana rail, constructed by the caller from the
+      // decrypted identity seed. Its presence is what makes
+      // delegate_to_agent a REAL money tool: R4 risk hint, late-bound
+      // metering, and the wrapped P2P payment builder all key on it
+      // (enableInteractiveDelegation). Absent ⇒ delegation degrades to
+      // relay-mode honestly.
+      ...(solanaWallet ? { solanaWallet } : {}),
       policy: {
         operatorMode: config.operator,
         pathAllowList: config.allowedPaths,

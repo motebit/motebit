@@ -49,6 +49,17 @@ export interface FullConfig {
   default_provider?: PersistedPersonalityProvider;
   default_model?: string;
   /**
+   * The relay operator's Ed25519 public key (hex), PINNED at `motebit
+   * register` after self-consistency verification of the relay's signed
+   * transparency declaration (trust-on-first-use — the same TOFU root
+   * `@motebit/state-export-client` uses). Consumed by the P2P delegation
+   * path (treasury derived FROM this pin, never from a fetched response)
+   * and by receipt/anchor verification. A later mismatch at register
+   * time fails loud: a relay that changes identity must be re-pinned
+   * deliberately, never silently.
+   */
+  relay_public_key?: string;
+  /**
    * Canonical three-mode provider config. Populated on load from legacy fields
    * if missing. Persisted alongside `default_provider` so older CLI versions
    * still understand the file.
