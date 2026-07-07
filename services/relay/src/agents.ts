@@ -263,6 +263,191 @@ export interface AgentsDeps {
   isAgentRevoked: (motebitId: string) => boolean;
 }
 
+/** Subset of AgentsDeps the auth middleware needs. */
+export interface AgentAuthMiddlewareDeps {
+  app: Hono;
+  apiToken?: string;
+  identityManager: IdentityManager;
+  parseTokenPayloadUnsafe: AgentsDeps["parseTokenPayloadUnsafe"];
+  verifySignedTokenForDevice: AgentsDeps["verifySignedTokenForDevice"];
+  isTokenBlacklisted: AgentsDeps["isTokenBlacklisted"];
+  isAgentRevoked: AgentsDeps["isAgentRevoked"];
+}
+
+/**
+ * Explicitly PUBLIC (or self-authenticating) `/api/v1/agents/*` routes —
+ * the ONLY paths the auth middleware waves through. Every other
+ * agent-subpath route MUST authenticate. Kept as a named, exported set
+ * so the drift gate (check-agent-route-auth) can assert that every
+ * registered agent route is either covered by this middleware or listed
+ * here — no silent third state. A route landing here is a deliberate,
+ * reviewed decision, never an accident of registration order (the
+ * 2026-07-07 listing-write vuln).
+ */
+export const PUBLIC_AGENT_ROUTES: ReadonlyArray<{
+  match: (path: string, method: string) => boolean;
+  reason: string;
+}> = [
+  {
+    match: (p) => p === "/api/v1/agents/bootstrap",
+    reason: "bootstrap: fresh-identity registration, own rate limiter",
+  },
+  {
+    match: (p, m) => p.endsWith("/succession") && m === "GET",
+    reason: "succession: public key-lineage verification (CLAUDE.md rule 6)",
+  },
+  {
+    match: (p, m) => p === "/api/v1/agents/discover" && m === "GET",
+    reason: "discover: agents must find each other without pre-existing auth",
+  },
+  {
+    match: (p, m) => p === "/api/v1/agents/revocations" && m === "GET",
+    reason: "revocations: operator's signed, verifiable moderation history",
+  },
+  {
+    match: (p) => p.endsWith("/credentials/submit"),
+    reason:
+      "credentials/submit: permissive-by-signature — the self-verifying " +
+      "envelope IS the auth (spec/credential-v1.md); no bearer token by design",
+  },
+  {
+    match: (p, m) => /\/devices\/[^/]+\/hardware-attestation$/.test(p) && m === "POST",
+    reason:
+      "hardware-attestation: self-authenticating — the request is signed " +
+      "under the device's identity key and verified in-handler (sibling of " +
+      "credentials/submit + register-self); no bearer token by design",
+  },
+  {
+    match: (p, m) => p.endsWith("/debit") && m === "POST",
+    reason:
+      "debit: internal service-to-service auth via the x-relay-secret " +
+      "header (subscriptions.ts), verified in-handler — not a user bearer " +
+      "token. Correct permanent carve-out.",
+  },
+  {
+    match: (p, m) => p.endsWith("/solvency-proof") && m === "GET",
+    reason:
+      "solvency-proof: public verification primitive by design — a " +
+      "counterparty checks an agent can cover an amount BEFORE transacting, " +
+      "which requires no pre-existing auth (sibling of succession).",
+  },
+  {
+    match: (p, m) => p.endsWith("/settlements") && m === "GET",
+    reason:
+      "settlements (GET): financial settlement history. CURRENTLY OPEN " +
+      "(was registered before the pre-fix middleware). PENDING DECISION: " +
+      "owner-private (like receipts, caller===:motebitId) vs public-audit — " +
+      "needs client-auth reconciliation before enforcing. Tracked in the " +
+      "security backlog; carved explicit (not silently open) meanwhile.",
+  },
+  {
+    match: (p, m) => p.endsWith("/proxy-token") && m === "POST",
+    reason:
+      "proxy-token (POST): mints a cloud-inference billing token carrying " +
+      "the agent's balance. KNOWN EXPOSURE (was always open — registered " +
+      "before any agent middleware): unauth mint lets a caller spend another " +
+      "agent's cloud credit. MUST become caller===:motebitId authed; " +
+      "deferred only because the runtime client's token-send must be verified " +
+      "first (breaking cloud billing is worse than the capped exposure). " +
+      "Tracked HIGH in the security backlog — carved explicit meanwhile.",
+  },
+  {
+    match: (p, m) => p.endsWith("/credentials") && m === "GET",
+    reason:
+      "credentials (GET): public-read of verifiable attestations — VCs are " +
+      "designed to be presentable/verifiable. PENDING DECISION: if these " +
+      "become owner-private, reconcile the divergent client audiences " +
+      "(web/mobile=sync, cli=admin:query, desktop/inspector=master) and " +
+      "wire apps/spatial loadCredentials to send a token before enforcing.",
+  },
+  {
+    match: (p, m) => p.endsWith("/presentation") && m === "POST",
+    reason:
+      "presentation (POST): generates a shareable Verifiable Presentation " +
+      "from an agent's attestations. Same public-attestation rationale + " +
+      "pending owner-private decision as credentials (GET).",
+  },
+];
+
+/**
+ * Install the `/api/v1/agents/*` auth middleware. Registered EARLY (index.ts,
+ * right after registerAuthMiddleware) so it wraps EVERY agent-subpath route
+ * regardless of which file registers it — coverage is guaranteed by
+ * ordering-independence, not by hoping each route file registers late enough
+ * (the registration-order class that produced the 2026-07-07 unauthenticated
+ * listing-write vuln). Public routes are the explicit PUBLIC_AGENT_ROUTES set.
+ */
+export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void {
+  const {
+    app,
+    apiToken,
+    identityManager,
+    parseTokenPayloadUnsafe,
+    verifySignedTokenForDevice,
+    isTokenBlacklisted,
+    isAgentRevoked,
+  } = deps;
+
+  app.use("/api/v1/agents/*", async (c, next) => {
+    const path = c.req.path;
+    const method = c.req.method;
+
+    // Explicit public / self-authenticating carve-outs.
+    if (PUBLIC_AGENT_ROUTES.some((r) => r.match(path, method))) {
+      await next();
+      return;
+    }
+
+    const authHeader = c.req.header("authorization");
+    if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+      throw new HTTPException(401, { message: "Missing auth token" });
+    }
+    const token = authHeader.slice(7);
+
+    // Master token bypass (operator).
+    if (apiToken != null && apiToken !== "" && token === apiToken) {
+      await next();
+      return;
+    }
+
+    const claims = parseTokenPayloadUnsafe(token);
+    if (!claims?.mid) {
+      throw new HTTPException(401, { message: "Invalid token" });
+    }
+
+    // Expected audience by route family.
+    let agentAudience: TokenAudience;
+    if (path.includes("/p2p-eligibility")) {
+      agentAudience = "market:listing";
+    } else if (path.includes("/listing")) {
+      agentAudience = "market:listing";
+    } else if (path.includes("/credentials")) {
+      agentAudience = "credentials";
+    } else if (path.includes("/presentation")) {
+      agentAudience = "credentials:present";
+    } else if (path.includes("/receipts")) {
+      agentAudience = "receipts:read";
+    } else {
+      agentAudience = "admin:query";
+    }
+
+    const valid = await verifySignedTokenForDevice(
+      token,
+      claims.mid,
+      identityManager,
+      agentAudience,
+      isTokenBlacklisted,
+      isAgentRevoked,
+    );
+    if (!valid) {
+      throw new HTTPException(401, { message: "Token verification failed" });
+    }
+
+    c.set("callerMotebitId" as never, claims.mid as never);
+    await next();
+  });
+}
+
 export function registerAgentRoutes(deps: AgentsDeps): void {
   const {
     app,
@@ -544,91 +729,10 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
 
   // === Agent Discovery Registry ===
 
-  // Auth middleware for agent registry routes
-  app.use("/api/v1/agents/*", async (c, next) => {
-    // Bootstrap is unauthenticated — handled by its own rate limiter
-    if (c.req.path === "/api/v1/agents/bootstrap") {
-      await next();
-      return;
-    }
+  // Agent-route auth is installed EARLY by registerAgentAuthMiddleware
+  // (called before any agent-subpath route file registers). See its
+  // definition below and its call site in index.ts.
 
-    // Succession chain is publicly readable — any third party can verify key lineage
-    if (c.req.path.endsWith("/succession") && c.req.method === "GET") {
-      await next();
-      return;
-    }
-
-    // Discovery is publicly readable — agents need to find each other without pre-existing auth
-    if (c.req.path === "/api/v1/agents/discover" && c.req.method === "GET") {
-      await next();
-      return;
-    }
-
-    // The revocations feed is publicly readable — it is the operator's
-    // signed, auditable moderation history; anyone may fetch it and verify
-    // each record against the pinned relay key (CLAUDE.md rule 6).
-    if (c.req.path === "/api/v1/agents/revocations" && c.req.method === "GET") {
-      await next();
-      return;
-    }
-
-    const authHeader = c.req.header("authorization");
-    if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-      throw new HTTPException(401, { message: "Missing auth token" });
-    }
-    const token = authHeader.slice(7);
-
-    // Master token bypass
-    if (apiToken != null && apiToken !== "" && token === apiToken) {
-      await next();
-      return;
-    }
-
-    // Parse token to get motebitId, then verify
-    const claims = parseTokenPayloadUnsafe(token);
-    if (!claims?.mid) {
-      throw new HTTPException(401, { message: "Invalid token" });
-    }
-
-    // Determine expected audience from route path
-    const path = c.req.path;
-    let agentAudience: TokenAudience;
-    if (path.includes("/p2p-eligibility")) {
-      // Caller-bound P2P pre-flight read — reuses the market:listing audience
-      // the delegator client already mints (sibling of the listing price read).
-      agentAudience = "market:listing";
-    } else if (path.includes("/listing")) {
-      agentAudience = "market:listing";
-    } else if (path.includes("/credentials")) {
-      agentAudience = "credentials";
-    } else if (path.includes("/presentation")) {
-      agentAudience = "credentials:present";
-    } else if (path.includes("/receipts")) {
-      // A motebit reading its OWN archived execution receipts. The handler
-      // additionally enforces callerMotebitId === :motebitId so a valid token
-      // for one motebit cannot enumerate another's history.
-      agentAudience = "receipts:read";
-    } else {
-      // register, heartbeat, deregister, discover, agent info
-      agentAudience = "admin:query";
-    }
-
-    const valid = await verifySignedTokenForDevice(
-      token,
-      claims.mid,
-      identityManager,
-      agentAudience,
-      isTokenBlacklisted,
-      isAgentRevoked,
-    );
-    if (!valid) {
-      throw new HTTPException(401, { message: "Token verification failed" });
-    }
-
-    // Store caller identity for route handlers
-    c.set("callerMotebitId" as never, claims.mid as never);
-    await next();
-  });
 
   // GET /api/v1/agents/:motebitId/receipts — a motebit's OWN execution-receipt
   // history (top-level tasks, newest first). Gated by the /api/v1/agents/* auth

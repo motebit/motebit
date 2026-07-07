@@ -591,6 +591,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-doctrine-references",
   },
   {
+    name: "check-agent-route-auth",
+    defends:
+      "every `/api/v1/agents/:id/*` route the relay registers is covered by the hoisted agent-route auth middleware (`registerAgentAuthMiddleware`, called in index.ts before ANY agent-subpath route file), never silently open. The 2026-07-07 listing-write vuln was exactly this class: `registerListingsRoutes` registered `POST /api/v1/agents/:id/listing` before the auth middleware, so Hono never wrapped it and an attacker could overwrite any agent's `pay_to_address` (the settlement destination) unauthenticated. The fix hoists the middleware first (ordering-independent coverage); this gate fails if any `registerX` whose file declares an agent route is called before `registerAgentAuthMiddleware`, or if the middleware call is missing. Deliberately-public / self-authenticating routes are the exported `PUBLIC_AGENT_ROUTES` set in `agents.ts` (reviewed, not accidental) — the ONLY exemption path. Adding an agent route: register it after the middleware (automatic if index.ts order is preserved) or, if genuinely public/self-auth, add a `PUBLIC_AGENT_ROUTES` entry with a reason.",
+    script: "check-agent-route-auth",
+  },
+  {
     name: "check-audience-canonical",
     defends:
       'every `aud: "<literal>"`, `aud === "<literal>"`, `aud !== "<literal>"`, `createSyncToken("<literal>")`, and `createCallerToken("<literal>")` site in `packages/`, `services/`, `apps/` carries a literal that is a member of the closed `TokenAudience` registry in `@motebit/protocol/src/audience.ts` (the canonical membership lives in `ALL_TOKEN_AUDIENCES` — the sibling-alignment check keeps the gate mirror honest, so no count is restated here). Pre-registry, a signing-site typo (`aud: "task:sumbit"`) was a runtime 401 at the verifier — same fail-loud semantics, but the only signal was the wire round-trip; the doctrine in `services/relay/CLAUDE.md` Rule 5 listed six audiences while code used fifteen. Closure pattern, same as `SuiteId` (`check-suite-declared` + `check-suite-dispatch`): closed protocol-level registry + drift gate that asks role questions, not instance questions. Sibling-alignment check verifies `CANONICAL_AUDIENCES` mirrors `ALL_TOKEN_AUDIENCES`; a registry update without a gate update is itself a CI failure. Adding an audience: union entry + named constant + `ALL_TOKEN_AUDIENCES` + `CANONICAL_AUDIENCES` in this gate + doctrine update at `services/relay/CLAUDE.md` Rule 5.',
