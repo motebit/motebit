@@ -111,7 +111,7 @@ export async function handleVerifyRelease(options: { bundlePath?: string } = {})
   console.log(`    sha256      ${selfHash}`);
   if (release.git_head != null) console.log(`    git_head    ${release.git_head}`);
   console.log(
-    `    signed by   ${witness.relay_public_key.slice(0, 12)}… ${pinned ? "(your pinned relay key)" : "(TOFU — run \`motebit register\` to pin)"}`,
+    `    signed by   ${witness.relay_public_key.slice(0, 12)}… ${pinned ? "(your pinned relay key)" : "(TOFU — run motebit register to pin)"}`,
   );
   console.log(`    declared    ${new Date(witness.declared_at).toISOString()}`);
 }
