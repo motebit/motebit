@@ -162,6 +162,12 @@ export async function handleExport(config: CliConfig): Promise<void> {
 
   // Relay-dependent exports
   const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"];
+  // Credentials are owner-private per route: GET /credentials needs the
+  // `credentials` audience, POST /presentation the `credentials:present`
+  // audience. Mint both (per-call signed tokens are cheap).
+  const credHeaders = await getRelayAuthHeaders(config, { aud: "credentials" });
+  const vpHeaders = await getRelayAuthHeaders(config, { aud: "credentials:present" });
+  // Other relay reads below (e.g. /budget) keep the default admin:query.
   const headers = await getRelayAuthHeaders(config);
   const baseUrl = syncUrl ? syncUrl.replace(/\/$/, "") : null;
 
@@ -173,7 +179,7 @@ export async function handleExport(config: CliConfig): Promise<void> {
     // 3. Credentials
     const credResult = await fetchRelayJson(
       `${baseUrl}/api/v1/agents/${motebitId}/credentials`,
-      headers,
+      credHeaders,
     );
     if (credResult.ok) {
       const credBody = credResult.data as {
@@ -190,7 +196,7 @@ export async function handleExport(config: CliConfig): Promise<void> {
     // 4. Presentation (signed VP bundle)
     const vpResult = await fetchRelayJson(
       `${baseUrl}/api/v1/agents/${motebitId}/presentation`,
-      headers,
+      vpHeaders,
       "POST",
     );
     if (vpResult.ok) {

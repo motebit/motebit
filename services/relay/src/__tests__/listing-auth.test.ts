@@ -168,11 +168,60 @@ describe("sibling-sweep: previously-bypassing agent routes now fail closed", () 
     expect(res.status).not.toBe(401);
   });
 
-  it("GET credentials stays public-read (deliberate carve-out pending the privacy decision)", async () => {
-    const a = await seedAgent(relay);
-    const res = await relay.app.request(`/api/v1/agents/${a.motebitId}/credentials`, {
+  it("GET credentials is now OWNER-PRIVATE — no token 401, another agent 403, own 200", async () => {
+    // Flipped 2026-07-07 (Daniel's decision): credentials became
+    // owner-private (caller===:motebitId) under the `credentials` audience.
+    const victim = await seedAgent(relay);
+    const noAuth = await relay.app.request(`/api/v1/agents/${victim.motebitId}/credentials`, {
       method: "GET",
     });
-    expect(res.status).not.toBe(401);
+    expect(noAuth.status).toBe(401);
+
+    const attacker = await seedAgent(relay);
+    const attackerToken = await mintToken(
+      attacker.motebitId,
+      attacker.deviceId,
+      attacker.privateKey,
+      "credentials",
+    );
+    const crossed = await relay.app.request(`/api/v1/agents/${victim.motebitId}/credentials`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${attackerToken}` },
+    });
+    expect(crossed.status).toBe(403);
+
+    const ownToken = await mintToken(
+      victim.motebitId,
+      victim.deviceId,
+      victim.privateKey,
+      "credentials",
+    );
+    const own = await relay.app.request(`/api/v1/agents/${victim.motebitId}/credentials`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${ownToken}` },
+    });
+    expect(own.status).toBe(200);
+  });
+
+  it("POST presentation is owner-private — no token 401, another agent 403", async () => {
+    const victim = await seedAgent(relay);
+    const noAuth = await relay.app.request(`/api/v1/agents/${victim.motebitId}/presentation`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(noAuth.status).toBe(401);
+
+    const attacker = await seedAgent(relay);
+    const attackerToken = await mintToken(
+      attacker.motebitId,
+      attacker.deviceId,
+      attacker.privateKey,
+      "credentials:present",
+    );
+    const crossed = await relay.app.request(`/api/v1/agents/${victim.motebitId}/presentation`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${attackerToken}` },
+    });
+    expect(crossed.status).toBe(403);
   });
 });

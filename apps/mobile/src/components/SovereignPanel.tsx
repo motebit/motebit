@@ -14,6 +14,7 @@ import {
   Linking,
 } from "react-native";
 import type { MobileApp } from "../mobile-app";
+import type { TokenAudience } from "@motebit/sdk";
 import { useTheme, type ThemeColors } from "../theme";
 import {
   createSovereignController,
@@ -94,6 +95,15 @@ async function bootstrapAnchor(syncUrl: string): Promise<TransparencyAnchor | un
   }
 }
 
+// Owner-private credential routes (2026-07-07) need their least-privilege
+// audience so a sync token can't read/present another agent's credentials.
+// Mirror of web's audienceForPath.
+function audienceForPath(path: string): TokenAudience {
+  if (path.includes("/presentation")) return "credentials:present";
+  if (path.includes("/credentials")) return "credentials";
+  return "sync";
+}
+
 // Mobile's sync URL comes from AsyncStorage (async). The adapter's `syncUrl`
 // getter is synchronous, so we cache the URL in a ref and prime it in the
 // effect before calling refresh().
@@ -111,7 +121,7 @@ function createMobileAdapter(
     async fetch(path: string, init?: SovereignFetchInit) {
       const syncUrl = syncUrlRef.current;
       if (!syncUrl) throw new Error("No relay URL configured");
-      const token = await app.createSyncToken();
+      const token = await app.createSyncToken(audienceForPath(path));
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
         ...(init?.headers ?? {}),
