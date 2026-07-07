@@ -21,8 +21,15 @@ const SOL_MINT = "So11111111111111111111111111111111111111112";
 /** USDC mint (mainnet). */
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
-/** Jupiter V6 API base URL. */
-const JUPITER_API = "https://quote-api.jup.ag/v6";
+/**
+ * Jupiter Swap API base URL. The original `quote-api.jup.ag/v6` was
+ * sunset by Jupiter (connection-refused as of 2026-07 — discovered when
+ * the first LIVE swap failed with "fetch failed"; the ensureGas
+ * direction had the same dead URL, dormant because its failures are
+ * swallowed by design). `lite-api.jup.ag/swap/v1` is the current free
+ * tier; same quote/swap shapes.
+ */
+const JUPITER_API = "https://lite-api.jup.ag/swap/v1";
 
 export interface JupiterSwapResult {
   /** Transaction signature. */
