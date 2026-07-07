@@ -5,6 +5,7 @@ import { connectMcpServers } from "@motebit/mcp-client";
 import { formatBodyAwareness } from "@motebit/ai-core";
 import { providerAcceptsModel } from "@motebit/sdk";
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
+import { preflightGrant, renderPreflight } from "./grant-preflight.js";
 import { parseCliArgs, printHelp, printVersion, printBanner, trimHistory } from "./args.js";
 import type { CliConfig } from "./args.js";
 import { loadFullConfig, extractPersonality, persistMotebitPublicKeys } from "./config.js";
@@ -47,6 +48,7 @@ import {
   handleGrantShow,
   handleGrantRevoke,
   createGrantPresenter,
+  loadStoredGrant,
   handleGoalAdd,
   handleGoalList,
   handleGoalOutcomes,
@@ -933,6 +935,21 @@ async function main(): Promise<void> {
         `  [standing grant ${grantPresenter.grantId} presented per turn — R4 money clears only within its signed ceiling]`,
       ),
     );
+    // Pre-flight: walk the whole authorization chain the first money turn
+    // will need and TEACH any blocker now (gate-repair-instructions
+    // extended to the product). Advisory only — the verifier/gate/meter
+    // remain the authorities; this predicts, the boundary decides.
+    const storedForPreflight = loadStoredGrant(grantPresenter.grantId);
+    if (storedForPreflight != null) {
+      const pf = await preflightGrant({
+        stored: storedForPreflight,
+        now: Date.now(),
+        fullConfig,
+        hasRail: solanaWallet !== undefined,
+        ...(solanaWallet !== undefined ? { getBalanceMicro: () => solanaWallet.getBalance() } : {}),
+      });
+      for (const line of renderPreflight(pf, dim)) console.log(line);
+    }
   }
 
   const prompt = (): void => {
