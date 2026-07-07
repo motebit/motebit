@@ -79,3 +79,4 @@ export {
 export { handleVerify } from "./verify.js";
 export { handleVerifyWire, isVerifyKind } from "./verify-wire.js";
 export { handleWallet, handleWalletSwap } from "./wallet.js";
+export { handleVerifyRelease } from "./verify-release.js";

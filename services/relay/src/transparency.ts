@@ -173,6 +173,15 @@ export const DECLARATION_CONTENT = {
   ],
   third_party_processors: [
     {
+      name: "npm registry",
+      role: "release witness source (services/relay/src/release-witness.ts). The relay fetches PUBLIC package metadata and tarballs for the `motebit` package to sign the release witness served at /.well-known/motebit-releases.json. Read-only observation: no user, agent, or operator data is transmitted — the request itself (relay IP, user-agent) is the only signal npm receives.",
+      data_shared: [
+        "none (public registry reads only; requester IP visible to npm as with any HTTP fetch)",
+      ],
+      jurisdiction: "United States (npm, Inc. / GitHub / Microsoft)",
+      data_processing_terms: "https://docs.npmjs.com/policies/privacy",
+    },
+    {
       name: "Stripe",
       role: "fiat payment processor",
       data_shared: ["email", "payment method (held by Stripe)", "subscription metadata"],

@@ -52,6 +52,7 @@
     "verify": [
       "identity"
     ],
+    "verify-release": [],
     "wallet": [],
     "withdraw": []
   },

@@ -88,6 +88,7 @@ import {
   handleWithdraw,
   handleWallet,
   handleWalletSwap,
+  handleVerifyRelease,
   handleSkillsInstall,
   handleSkillsAudit,
   handleSkillsList,
@@ -163,6 +164,11 @@ async function main(): Promise<void> {
 
   if (subcommand === "id") {
     handleId();
+    return;
+  }
+
+  if (subcommand === "verify-release") {
+    await handleVerifyRelease();
     return;
   }
 

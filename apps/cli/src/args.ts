@@ -417,6 +417,7 @@ Commands:
     --solana-rpc-url <url>    Solana RPC endpoint (default: mainnet-beta public RPC)
     --address-only            Skip the balance query (address-only)
   wallet swap <sol>         Convert SOL → USDC working capital (Jupiter; gas floor enforced)
+  verify-release            Verify this binary's bytes against the operator's signed witness
   doctor                    Check system readiness (Node, SQLite, config)
   export [--output <dir>]   Export identity bundle (motebit.md, credentials, budget, gradient)
     --all                   Include sensitive memories (medical/financial/secret) in export

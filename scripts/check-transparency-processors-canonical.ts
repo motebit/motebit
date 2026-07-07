@@ -79,6 +79,10 @@ const MOTEBIT_OWNED_HOSTS: ReadonlySet<string> = new Set([
 const HOSTNAME_TO_PROCESSOR: Record<string, string> = {
   // AI inference (via services/proxy when motebit-cloud routes)
   "api.anthropic.com": "Anthropic",
+  // Release witness (services/relay/src/release-witness.ts) — read-only
+  // fetch of PUBLIC package metadata + tarballs; nothing user-derived
+  // is transmitted.
+  "registry.npmjs.org": "npm registry",
   "api.openai.com": "OpenAI",
   "generativelanguage.googleapis.com": "Google (Generative Language API)",
   "api.groq.com": "Groq",
