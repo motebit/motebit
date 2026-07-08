@@ -1,0 +1,86 @@
+# Living conformance for the archetype slate (docs/doctrine/agent-archetypes.md §4).
+#
+# Daily scheduled run exercises staging END TO END with a PAID devnet P2P
+# delegation per molecule — free delegation to a priced agent is structurally
+# impossible (Arc 3.5), and that's correct: the probe pays like any stranger,
+# no allowlist. Promotion staging → prod is gated on
+# scripts/check-promotion-ready.ts reading THIS workflow's scheduled-run
+# history (5 consecutive greens), then a human dispatches the promote job
+# (protected by the production environment's required reviewers).
+#
+# Secrets (staging environment):
+#   STG_AUTH_TOKEN            relay bearer for discover/task reads
+#   PROBE_DELEGATOR_ID        dedicated probe identity (controls nothing else)
+#   PROBE_DELEGATOR_SEED_HEX  probe's Solana seed — devnet-funded only
+#   STG_SOLANA_RPC_URL        devnet RPC matching the staging relay's verifier
+name: Archetype conformance
+
+on:
+  schedule:
+    - cron: "17 14 * * *" # daily, staging, paid devnet
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Which relay to probe"
+        type: choice
+        options: [staging, prod-presence-only]
+        default: staging
+
+concurrency:
+  group: archetype-conformance
+  cancel-in-progress: false
+
+jobs:
+  conformance:
+    if: ${{ github.event_name == 'schedule' || inputs.target == 'staging' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: staging
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v4
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @motebit/verifier... --filter @motebit/runtime... --filter @motebit/wallet-solana... build
+      - name: Probe the staging slate (paid devnet P2P)
+        run: npx tsx scripts/archetype-conformance.ts
+        env:
+          RELAY_URL: https://motebit-sync-stg.fly.dev
+          AUTH_TOKEN: ${{ secrets.STG_AUTH_TOKEN }}
+          DELEGATE: "1"
+          DELEGATOR_MOTEBIT_ID: ${{ secrets.PROBE_DELEGATOR_ID }}
+          DELEGATOR_SEED_HEX: ${{ secrets.PROBE_DELEGATOR_SEED_HEX }}
+          SOLANA_RPC_URL: ${{ secrets.STG_SOLANA_RPC_URL }}
+          SOLANA_USDC_MINT: 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU # devnet USDC
+      - name: Alert on failure (pinned issue thread)
+        if: failure()
+        run: |
+          gh issue list --label archetype-conformance --state open --json number --jq '.[0].number' > /tmp/issue || true
+          N=$(cat /tmp/issue)
+          BODY="Scheduled conformance FAILED: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [ -n "$N" ]; then gh issue comment "$N" --body "$BODY"; else gh issue create --title "Archetype conformance failing" --label archetype-conformance --body "$BODY"; fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  prod-presence:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.target == 'prod-presence-only' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v4
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @motebit/verifier... build
+      - name: Presence probe against prod (no funds move)
+        run: npx tsx scripts/archetype-conformance.ts
+        env:
+          RELAY_URL: https://relay.motebit.com
+          AUTH_TOKEN: ${{ secrets.PROD_AUTH_TOKEN }}
