@@ -1,5 +1,12 @@
 # motebit CLI Changelog
 
+## 1.8.1
+
+### Patch Changes
+
+- 70579a2: CLI credential reads (`motebit credentials`, `motebit export`) now send the least-privilege `credentials` / `credentials:present` audience tokens the relay requires for the newly owner-private credential + presentation routes.
+  - @motebit/state-export-client@0.5.17
+
 ## 1.8.0
 
 ### Minor Changes
