@@ -205,7 +205,10 @@ export const EvalAttestationSchema = z
           .optional()
           .describe("Content addresses of the subject artifacts the measurement consumed."),
       })
-      .strict(),
+      .strict()
+      .describe(
+        "The measured party (subject ≠ signer is the category law; subject MAY equal issuer as the self-issued floor).",
+      ),
     issuer: z
       .object({
         motebit_id: z.string().min(1).describe("The measuring party — the SIGNER."),
@@ -214,7 +217,8 @@ export const EvalAttestationSchema = z
           .regex(/^[0-9a-f]{64}$/i, "issuer public key MUST be 32-byte hex Ed25519")
           .describe("Issuer's Ed25519 public key, lowercase hex — self-describing."),
       })
-      .strict(),
+      .strict()
+      .describe("The measuring party — the SIGNER; its key is embedded self-describingly."),
     issued_at: z.number().int().describe("Unix ms — when the measurement was signed."),
     expires_at: z
       .number()

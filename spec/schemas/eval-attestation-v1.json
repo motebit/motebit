@@ -45,7 +45,8 @@
         }
       },
       "required": ["motebit_id"],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "The measured party (subject ≠ signer is the category law; subject MAY equal issuer as the self-issued floor)."
     },
     "issuer": {
       "type": "object",
@@ -62,7 +63,8 @@
         }
       },
       "required": ["motebit_id", "public_key"],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "The measuring party — the SIGNER; its key is embedded self-describingly."
     },
     "issued_at": {
       "type": "integer",
@@ -429,7 +431,8 @@
             }
           },
           "required": ["motebit_id"],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "The measured party (subject ≠ signer is the category law; subject MAY equal issuer as the self-issued floor)."
         },
         "issuer": {
           "type": "object",
@@ -446,7 +449,8 @@
             }
           },
           "required": ["motebit_id", "public_key"],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "The measuring party — the SIGNER; its key is embedded self-describingly."
         },
         "issued_at": {
           "type": "integer",
