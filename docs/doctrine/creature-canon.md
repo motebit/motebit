@@ -12,7 +12,7 @@ This memo holds the rules. The numbers live in exactly one place: the canonical 
 
 ## What is frozen — the identity layer
 
-The 2026-05-17 visual-truth audit ([`docs/doctrine/audits/2026-05-17-liquescent-visual-truth.md`](audits/2026-05-17-liquescent-visual-truth.md)) closed the identity layer. Its preserve list is canon: body transmission and IOR (the face-magnification signature), eye size / color / roughness (held-interior presence), the catch-light concept (aliveness), smile geometry (produces the emergent Meniscus Smile), interior eye placement, and the Rayleigh breathing eigenmode. Proposals against these are evaluated under [`attention-is-directional.md`](attention-is-directional.md)'s three questions and rejected if they flatten attention, animate the back, or remove the emergent oblique character.
+The 2026-05-17 visual-truth audit ([`docs/doctrine/audits/2026-05-17-liquescent-visual-truth.md`](audits/2026-05-17-liquescent-visual-truth.md)) closed the identity layer. Its preserve list is canon: body transmission and IOR (the face-magnification signature), eye size / color / roughness (held-interior presence), the catch-light concept (aliveness), smile geometry (produces the emergent Motebit Smirk), interior eye placement, and the Rayleigh breathing eigenmode. Proposals against these are evaluated under [`attention-is-directional.md`](attention-is-directional.md)'s three questions and rejected if they flatten attention, animate the back, or remove the emergent oblique character.
 
 Frozen means _frozen at the identity layer_. Composition, lighting integration, state choreography, and framing are the craft layer — legitimately tunable, on evidence, through the proof contract below.
 
@@ -24,7 +24,7 @@ Six named poses, defined once in `CANONICAL_CAMERA` and consumed by every surfac
 | --------------- | ---------------------------------------------------------------- |
 | `front`         | The identity view — the default framing every surface boots into |
 | `three_quarter` | Depth view — magnification gradient across the curvature         |
-| `oblique`       | The Meniscus Smile view — the emergent in-between expression     |
+| `oblique`       | The Motebit Smirk view — the emergent in-between expression      |
 | `profile`       | Shell view — the body as boundary                                |
 | `back`          | The quiet view — correctly faceless; the being faces elsewhere   |
 | `hero`          | The product shot — marketing, docs hero, social preview          |
@@ -66,11 +66,11 @@ The body is ~94% transmissive: **it is made of its environment.** A dark environ
 
 **Status (2026-07-07): passed.** `ENV_DARK` was redesigned in place as the designed night (moon key panel, moonlit horizon band, cool fill) and its golden frames (`front-resting-dark`, `front-thinking-dark`) show the face, catch-lights, material character, and interior glow legibly. The web surface's environment now follows the UI theme; mobile already switched via settings. The original near-black `ENV_DARK` was the proof of the criterion — the body read dead in it, exactly as the material predicts.
 
-## The Meniscus Smile
+## The Motebit Smirk
 
-At in-between angles the smile's meniscus curvature interacts with the body's refraction to produce an expression that is not visible straight-on and is not coded anywhere — it is what the geometry and the material do together. This is the face's emergent eigenmode, the same shape as the breathing mode (DROPLET §VI): the physics produces the behavior without being instructed.
+At in-between angles the smile's meniscus curvature interacts with the body's refraction to produce an expression that is not visible straight-on and is not coded anywhere — it is what the geometry and the material do together. The mouth itself is a symmetric meniscus arc (DROPLET §IV Law 4, "the meniscus of mood"); the smirk's asymmetry exists only in projection, at oblique view. This is the face's emergent eigenmode, the same shape as the breathing mode (DROPLET §VI): the physics produces the behavior without being instructed. Preserve-listed: do not flatten it, do not make it visible from every angle, do not replace it with a coded expression.
 
-Formerly named "the Motebit Smirk"; renamed 2026-07-07 — a smirk is smug, and smug is the one register a trust-holding body cannot afford. The mechanism is unchanged and remains preserve-listed: do not flatten it, do not make it visible from every angle, do not replace it with a coded expression. The name now derives from the same physics as the feature (DROPLET §IV Law 4: "the meniscus of mood").
+**Naming (deliberated and affirmed 2026-07-07).** Two alternatives were tried against live renders the same day and retired: "the Meniscus Smile" (over-claims — the oblique percept is not a smile) and "the Sidelong" (abstains — names the viewing condition and teaches nothing). "Motebit Smirk" won on percept honesty (the render reads wry, knowing, private — colloquially a smirk), on ownability (a proper-noun compound carrying the brand; the quirk users discover and name to each other), and because the register risk lives in the render, not the word. The pinned reading is canon: **knowing, never smug — the look of an entity holding something for you, never a look at your expense.** If a render ever drifts toward contempt, that is a golden-frame regression to fix at the state layer, not a reason to rename. User-facing prose for the front expression stays "subtle curved smile" (the trade-dress language in [`TRADEMARK.md`](../../TRADEMARK.md)); "the Motebit Smirk" names the oblique emergent character specifically.
 
 ## Artifact zero
 

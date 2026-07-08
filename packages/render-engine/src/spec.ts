@@ -74,7 +74,7 @@ export interface CanonicalCameraPose {
 // Orbit poses share the front pose's radius (0.85 in the xz-plane) and
 // eye height, rotated about the lookAt point. The named angles mirror
 // docs/doctrine/attention-is-directional.md's regimes: 0° identity,
-// 35° depth, 60° Meniscus Smile, 90° shell, 180° quiet.
+// 35° depth, 60° Motebit Smirk, 90° shell, 180° quiet.
 export const CANONICAL_CAMERA: Record<CanonicalCameraName, CanonicalCameraPose> = {
   front: { fov: 45, position: [0, 0.02, 0.92], lookAt: [0, -0.015, 0] },
   three_quarter: { fov: 45, position: [0.528, 0.02, 0.754], lookAt: [0, -0.015, 0] },
