@@ -42,4 +42,4 @@ The archetypes exist to be copied. Their molecule recipes are ordinary repo code
 
 ## Drift defense
 
-The conformance harness is `scripts/archetype-conformance.ts` (scheduled by `archetype-conformance.yml`; the daily staging run is a PAID devnet P2P delegation per molecule — no probe allowlist); promotion readiness is `scripts/check-promotion-ready.ts` reading that workflow's own scheduled-run history (5 consecutive greens; thin history reads not-ready by design). The static slate-parity gate (deploy SLATE × conformance ARCHETYPES × the docs gallery table) lands with the docs gallery and will be cited here then.
+The conformance harness is `scripts/archetype-conformance.ts` (scheduled by `archetype-conformance.yml`; the daily staging run is a PAID devnet P2P delegation per molecule — no probe allowlist); promotion readiness is `scripts/check-promotion-ready.ts` reading that workflow's own scheduled-run history (5 consecutive greens; thin history reads not-ready by design). The static slate-parity gate is `check-archetype-slate` (deploy `SLATE` × conformance `ARCHETYPES` × the docs gallery table — one vocabulary, three surfaces, same commit).

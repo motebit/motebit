@@ -3,6 +3,7 @@
   "pages": [
     "quickstart",
     "first-service-agent",
+    "agent-archetypes",
     "stability",
     "local-testing",
     "identity-standard",
