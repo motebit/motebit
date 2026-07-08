@@ -12,7 +12,7 @@ The motebit's liquescent body refracts, attenuates, breathes, and holds from eve
 | Interior volume        | Yes          | The body always has depth                                                                      |
 | Glow / interior warmth | Yes          | Internal energy fills the volume; visible through the body from any angle                      |
 | Face / eyes / smile    | **No**       | The face expresses attention; attention has direction                                          |
-| Motebit Smirk          | Transitional | Emerges at oblique angles from refraction × meniscus; not painted everywhere                   |
+| Meniscus Smile         | Transitional | Emerges at oblique angles from refraction × meniscus; not painted everywhere                   |
 | Back view              | No face      | The back is quieter because the being faces elsewhere                                          |
 
 ## Implementation — geometric, not shader-based
@@ -28,7 +28,7 @@ The body's omnidirectional `MeshPhysicalMaterial` (transmission `0.94`, IOR `1.2
 
 - **0° front** — full face magnification; the doctrine identity. The face appears melted-and-held inside the body by surface tension
 - **30° 3/4** — face partially transmitted; magnification gradient across the body curvature
-- **60° side** — one eye partially visible; emergent **Motebit Smirk** from refraction × meniscus interaction
+- **60° side** — one eye partially visible; emergent **Meniscus Smile** from refraction × meniscus interaction
 - **90°+ profile** — face mostly occluded; body shows as shell with refraction
 - **180° back** — no face visible; body shows as pure boundary
 
@@ -43,7 +43,7 @@ These violate the doctrine and should be rejected when proposed:
 - **Back-view eye glow / "soft eyes visible from behind"** — destroys attentional direction. If attention is omnidirectional, the being has no front.
 - **"Fixing" the back because it feels empty** — the back is correctly quiet. The being is facing elsewhere. Adding back-features is the wrong response to the empty reading.
 - **Optimizing toward shell-only calmness as the hero target** — removes the interior face that makes the body alive. Shell-alone is diagnostic, never identity.
-- **Making the Motebit Smirk visible from every angle** — removes the emergent-from-physics character. The smirk is supposed to emerge from refraction at oblique view; making it always-on flattens it into a coded expression rather than an optical signature.
+- **Making the Meniscus Smile visible from every angle** — removes the emergent-from-physics character. It is supposed to emerge from refraction at oblique view; making it always-on flattens it into a coded expression rather than an optical signature.
 
 ## Why this matters
 
@@ -59,15 +59,15 @@ This is doctrine-load-bearing. Future proposals that touch the face's rendering 
 
 1. Does this require attention to be omnidirectional? (anti-pattern — reject)
 2. Does this require the back to express attention? (anti-pattern — reject)
-3. Does this remove the emergent oblique-angle smirk? (anti-pattern — reject)
+3. Does this remove the emergent oblique-angle Meniscus Smile? (anti-pattern — reject)
 
 If a proposal does none of these, it may proceed. If a proposal does any of these, it violates this doctrine.
 
-## The Motebit Smirk as emergent feature
+## The Meniscus Smile as emergent feature
 
-The smile + body curvature produce a smirk character at in-between angles that's not visible from straight-on. The smirk emerges from optics — smile's meniscus curvature interacting with body's IOR refraction at oblique view. It is not coded; it is what the geometry + material produce together.
+The smile + body curvature produce an emergent smile character at in-between angles that's not visible from straight-on. It emerges from optics — smile's meniscus curvature interacting with body's IOR refraction at oblique view. It is not coded; it is what the geometry + material produce together. (Formerly "the Motebit Smirk"; renamed 2026-07-07 — a smirk is smug, the wrong register for a trust-holding body. See [`creature-canon.md`](creature-canon.md).)
 
-This is the same shape as the breathing eigenmode (DROPLET §VI.1) — the body's physics produces the right behavior without being instructed. The Motebit Smirk is the face's equivalent: an emergent expressive character from refractive interaction. Preserve.
+This is the same shape as the breathing eigenmode (DROPLET §VI.1) — the body's physics produces the right behavior without being instructed. The Meniscus Smile is the face's equivalent: an emergent expressive character from refractive interaction. Preserve.
 
 ## The visual audit's lesson
 
