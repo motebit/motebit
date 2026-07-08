@@ -11,6 +11,7 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
+      testIgnore: /golden/,
       use: {
         ...devices["Desktop Chrome"],
         // These are UI smoke tests — they exercise the settings panel, chat
@@ -21,10 +22,49 @@ export default defineConfig({
         // can crash ("Target page/context has been closed") — a flaky gate that
         // can't tell a real break from a GPU hiccup. Disabling it makes the
         // suite deterministic and ~4x faster (15 tests, ~7s) with zero loss of
-        // coverage (the creature render is not e2e-asserted; a dedicated
-        // GPU-enabled render test would be a separate project).
+        // coverage (the creature render is asserted by the dedicated `golden`
+        // project below, which enables WebGL via SwiftShader).
         launchOptions: {
           args: ["--disable-gpu", "--disable-webgl", "--disable-software-rasterizer"],
+        },
+      },
+    },
+    {
+      // Golden-frame visual regression (docs/doctrine/creature-canon.md
+      // §proof contract). Renders the creature deterministically at the
+      // canonical pose × performance matrix and diffs the canvas against
+      // committed reference frames.
+      //
+      // SwiftShader (CPU rasterizer) makes the output a pure function of
+      // the Chromium build — no GPU variance. Reference frames are
+      // linux-only and CI-authoritative: darwin snapshots from local runs
+      // are gitignored personal baselines. Two sanctioned update paths —
+      // see the `golden:update` script (Playwright container) or copy the
+      // CI failure artifact's -actual.png files. A @playwright/test
+      // version bump can legitimately shift SwiftShader output — refresh
+      // goldens in the same PR.
+      name: "golden",
+      testMatch: /golden\/.*\.spec\.ts/,
+      retries: 0, // a flaky golden frame is signal, not noise
+      snapshotPathTemplate: "{testDir}/golden/__screenshots__/{arg}-{platform}{ext}",
+      expect: {
+        toHaveScreenshot: {
+          maxDiffPixelRatio: 0.01,
+          threshold: 0.2,
+          animations: "disabled",
+        },
+      },
+      use: {
+        viewport: { width: 640, height: 640 },
+        deviceScaleFactor: 1,
+        launchOptions: {
+          args: [
+            "--use-gl=angle",
+            "--use-angle=swiftshader",
+            "--enable-unsafe-swiftshader",
+            "--force-color-profile=srgb",
+            "--hide-scrollbars",
+          ],
         },
       },
     },

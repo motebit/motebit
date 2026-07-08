@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TrustMode, type RenderSpec } from "@motebit/sdk";
-import { CANONICAL_SPEC } from "./spec.js";
+import { CANONICAL_SPEC, CANONICAL_CAMERA } from "./spec.js";
 import type {
   RenderAdapter,
   RenderFrame,
@@ -12,6 +12,7 @@ import type {
   SlabBodyRegister,
   SlabItemSpec,
   SlabItemHandle,
+  CanonicalCameraPose,
 } from "./spec.js";
 import { ArtifactManager } from "./artifacts.js";
 import { SlabManager } from "./slab.js";
@@ -19,6 +20,7 @@ import { SpatialSlabManager } from "./slab-spatial.js";
 import {
   createCreature,
   createCreatureState,
+  createBlinkState,
   animateCreature,
   disposeCreature,
   createEnvironmentMap,
@@ -120,14 +122,17 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.scene.environment = envMap;
     this.scene.background = envMap;
 
+    // Camera numbers live in one place — the creature canon
+    // (docs/doctrine/creature-canon.md; check-creature-canon).
+    const pose = CANONICAL_CAMERA.front;
     this.camera = new THREE.PerspectiveCamera(
-      45,
+      pose.fov,
       canvas.clientWidth / canvas.clientHeight,
       0.1,
       10,
     );
-    this.camera.position.set(0, 0.02, 0.85);
-    this.camera.lookAt(0, -0.015, 0);
+    this.camera.position.set(...pose.position);
+    this.camera.lookAt(...pose.lookAt);
 
     // === Creature ===
     this.creatureRefs = createCreature(this.scene);
@@ -360,10 +365,47 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
-    this.controls.target.set(0, -0.015, 0);
+    const target = CANONICAL_CAMERA.front.lookAt;
+    this.controls.target.set(...target);
     this.controls.minDistance = 0.3;
     this.controls.maxDistance = 3.0;
     this.controls.update();
+  }
+
+  /**
+   * Move the camera to a canonical pose (docs/doctrine/creature-canon.md).
+   * Used by the golden-frame harness and by any surface that needs a
+   * named framing (docs hero, capture tooling) without re-encoding
+   * camera literals.
+   */
+  setCameraPose(pose: CanonicalCameraPose): void {
+    if (!this.camera) return;
+    this.camera.fov = pose.fov;
+    this.camera.position.set(...pose.position);
+    this.camera.lookAt(...pose.lookAt);
+    this.camera.updateProjectionMatrix();
+    if (this.controls) {
+      this.controls.target.set(...pose.lookAt);
+      this.controls.update();
+    }
+  }
+
+  /**
+   * Enable or disable autonomous blinking. Blink scheduling is the one
+   * source of nondeterminism in the render path (random intervals);
+   * the golden-frame harness disables it before the first render so a
+   * pinned time renders a pinned frame. Re-enabling reseeds the
+   * schedule.
+   */
+  setBlinkEnabled(enabled: boolean): void {
+    if (enabled) {
+      this.creatureState.blinkState = createBlinkState();
+    } else {
+      this.creatureState.blinkState.blinkStart = -1;
+      this.creatureState.blinkState.nextBlinkAt = Infinity;
+      this.creatureState.blinkState.doubleBlink = false;
+      this.creatureState.blinkState.secondBlinkPending = false;
+    }
   }
 
   /**

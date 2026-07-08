@@ -177,6 +177,14 @@ jobs:
       - name: Run E2E smoke tests
         run: pnpm --filter @motebit/web test:e2e --project=chromium
 
+      # Golden-frame visual regression (docs/doctrine/creature-canon.md
+      # §proof contract). WebGL via SwiftShader — deterministic CPU
+      # rasterization; reference frames are linux-only and CI-authoritative.
+      # On intentional visual changes, refresh via the failure artifact's
+      # -actual.png files or `pnpm --filter @motebit/web golden:update`.
+      - name: Run golden-frame visual regression
+        run: pnpm --filter @motebit/web test:e2e --project=golden
+
       - name: Upload failure screenshots
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

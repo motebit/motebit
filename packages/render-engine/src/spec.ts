@@ -1,10 +1,10 @@
-import type {
-  BehaviorCues,
-  RenderSpec,
-  GeometrySpec,
-  MaterialSpec,
-  LightingSpec,
+import {
   TrustMode,
+  type BehaviorCues,
+  type RenderSpec,
+  type GeometrySpec,
+  type MaterialSpec,
+  type LightingSpec,
 } from "@motebit/sdk";
 
 // === Canonical Render Spec ===
@@ -47,6 +47,164 @@ export const CANONICAL_SPEC: RenderSpec = {
   material: CANONICAL_MATERIAL,
   lighting: CANONICAL_LIGHTING,
 };
+
+// === Creature Canon — camera poses and named performances ===
+//
+// docs/doctrine/creature-canon.md: the doctrine holds the rules, these
+// constants hold the numbers — prose never restates a tunable value.
+// Every render surface consumes CANONICAL_CAMERA instead of re-encoding
+// camera literals (the drift class that produced the mobile tone-mapping
+// divergence), and the golden-frame harness renders the pose ×
+// performance matrix deterministically. Enforced by check-creature-canon.
+
+export type CanonicalCameraName =
+  | "front"
+  | "three_quarter"
+  | "oblique"
+  | "profile"
+  | "back"
+  | "hero";
+
+export interface CanonicalCameraPose {
+  readonly fov: number;
+  readonly position: readonly [number, number, number];
+  readonly lookAt: readonly [number, number, number];
+}
+
+// Orbit poses share the front pose's radius (0.85 in the xz-plane) and
+// eye height, rotated about the lookAt point. The named angles mirror
+// docs/doctrine/attention-is-directional.md's regimes: 0° identity,
+// 35° depth, 60° Meniscus Smile, 90° shell, 180° quiet.
+export const CANONICAL_CAMERA: Record<CanonicalCameraName, CanonicalCameraPose> = {
+  front: { fov: 45, position: [0, 0.02, 0.85], lookAt: [0, -0.015, 0] },
+  three_quarter: { fov: 45, position: [0.488, 0.02, 0.696], lookAt: [0, -0.015, 0] },
+  oblique: { fov: 45, position: [0.736, 0.02, 0.425], lookAt: [0, -0.015, 0] },
+  profile: { fov: 45, position: [0.85, 0.02, 0], lookAt: [0, -0.015, 0] },
+  back: { fov: 45, position: [0, 0.02, -0.85], lookAt: [0, -0.015, 0] },
+  hero: { fov: 40, position: [0.12, 0.06, 0.7], lookAt: [0, -0.01, 0] },
+};
+
+export type PerformanceName =
+  | "resting"
+  | "tending"
+  | "listening"
+  | "thinking"
+  | "speaking"
+  | "guarded";
+
+export interface CanonicalPerformance {
+  readonly cues: BehaviorCues;
+  readonly trustMode: TrustMode;
+  readonly interiorColor: InteriorColor | null;
+  readonly listening: boolean;
+  /**
+   * Pinned scene time (seconds). Every motion term is a pure function of
+   * time (breathe, sag, drift, iridescence oscillation), so pinning time
+   * pins the frame. Listening pins t = 0.25 to catch the 1 Hz
+   * iridescence oscillation at its peak.
+   */
+  readonly time: number;
+}
+
+// A performance is a rehearsed signature, not a parameter range. Values
+// are derived from the shipped cue producers (behavior-engine baselines,
+// the runtime's tending modulation, the glow threshold in creature.ts)
+// so each frame is a state the live body actually inhabits.
+export const CANONICAL_PERFORMANCES: Record<PerformanceName, CanonicalPerformance> = {
+  resting: {
+    cues: {
+      hover_distance: 0.4,
+      drift_amplitude: 0.02,
+      glow_intensity: 0.3,
+      eye_dilation: 0.3,
+      smile_curvature: 0,
+      speaking_activity: 0,
+    },
+    trustMode: TrustMode.Full,
+    interiorColor: null,
+    listening: false,
+    time: 1.25,
+  },
+  tending: {
+    cues: {
+      hover_distance: 0.5,
+      drift_amplitude: 0.015,
+      glow_intensity: 0.26,
+      eye_dilation: 0.35,
+      smile_curvature: 0.05,
+      speaking_activity: 0,
+    },
+    trustMode: TrustMode.Full,
+    interiorColor: null,
+    listening: false,
+    time: 1.25,
+  },
+  listening: {
+    cues: {
+      hover_distance: 0.3,
+      drift_amplitude: 0.02,
+      glow_intensity: 0.3,
+      eye_dilation: 0.45,
+      smile_curvature: 0,
+      speaking_activity: 0,
+    },
+    trustMode: TrustMode.Full,
+    interiorColor: null,
+    listening: true,
+    time: 0.25,
+  },
+  thinking: {
+    cues: {
+      hover_distance: 0.25,
+      drift_amplitude: 0.025,
+      glow_intensity: 0.75,
+      eye_dilation: 0.5,
+      smile_curvature: 0,
+      speaking_activity: 0,
+    },
+    trustMode: TrustMode.Full,
+    interiorColor: null,
+    listening: false,
+    time: 1.25,
+  },
+  speaking: {
+    cues: {
+      hover_distance: 0.3,
+      drift_amplitude: 0.02,
+      glow_intensity: 0.5,
+      eye_dilation: 0.4,
+      smile_curvature: 0.15,
+      speaking_activity: 1,
+    },
+    trustMode: TrustMode.Full,
+    interiorColor: null,
+    listening: false,
+    time: 1.25,
+  },
+  guarded: {
+    cues: {
+      hover_distance: 0.5,
+      drift_amplitude: 0.015,
+      glow_intensity: 0.3,
+      eye_dilation: 0.3,
+      smile_curvature: 0,
+      speaking_activity: 0,
+    },
+    trustMode: TrustMode.Guarded,
+    interiorColor: null,
+    listening: false,
+    time: 1.25,
+  },
+};
+
+/** One frame of the golden matrix: pose × performance × environment. */
+export interface GoldenFrameSpec {
+  readonly camera: CanonicalCameraName;
+  readonly performance: PerformanceName;
+  readonly environment: "light" | "dark";
+  /** Optional trust override for variants (e.g. the Minimal-suppression frame). */
+  readonly trustMode?: TrustMode;
+}
 
 // === Render Adapter Interface ===
 

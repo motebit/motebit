@@ -1229,6 +1229,22 @@ export const __probeOnlyPrivateDeprecation = 1;
       ),
   },
   {
+    script: "check-creature-canon",
+    proves:
+      "flags a surface that re-encodes the canonical creature camera as literals instead of consuming CANONICAL_CAMERA — the hand-copied-scene drift class that produced mobile's tone-mapping divergence. Swapping the webview's canon consumption back to the pre-canon position literal must exit non-zero with the replace-the-literal repair.",
+    perturb: () =>
+      // Reintroduce the pre-canon camera literal in mobile's WebView scene.
+      // The MotebitRE.CANONICAL_CAMERA token stays present (the pose const
+      // above survives), so the gate's literal check is what bites —
+      // textual scan, cleanup restores verbatim, no build needed.
+      mutateFile("apps/mobile/src/creature-webview.ts", (src) =>
+        src.replace(
+          "camera.position.set(...pose.position);",
+          "camera.position.set(0, 0.02, 0.85);",
+        ),
+      ),
+  },
+  {
     script: "check-admin-route-auth",
     proves:
       'flags an `/api/v1/admin/*` route registered in services/relay/src/ that has no matching `app.use("...", bearerAuth(...))` registration in middleware.ts — the route would ship wide open, same shape as the /api/v1/admin/transparency seam fixed manually in 2560472b',

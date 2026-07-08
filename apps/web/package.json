@@ -14,7 +14,8 @@
     "lint": "eslint src/",
     "clean": "rm -rf dist .turbo *.tsbuildinfo",
     "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e:ui": "playwright test --ui",
+    "golden:update": "docker run --rm -v \"$PWD/../..\":/work -w /work mcr.microsoft.com/playwright:v1.60.0-noble bash -c 'corepack enable && pnpm install --frozen-lockfile && pnpm --filter @motebit/web build && pnpm --filter @motebit/web exec playwright test --project=golden --update-snapshots'"
   },
   "dependencies": {
     "@motebit/ai-core": "workspace:*",

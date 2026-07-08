@@ -63,8 +63,12 @@ ${MOTEBIT_RE_BUNDLE}
 // === Scene Setup ===
 const canvas = document.getElementById('c');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.2;
+// NeutralToneMapping @ 1.0 — matches ThreeJSAdapter (web/desktop/spatial).
+// Mobile previously drifted on ACESFilmic @ 1.2, rendering the same body
+// hotter and desaturated relative to every other surface. One body, one
+// tone mapper. See packages/render-engine/src/adapter.ts init().
+renderer.toneMapping = THREE.NeutralToneMapping;
+renderer.toneMappingExposure = 1.0;
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight, false);
 
@@ -73,9 +77,12 @@ let envMap = MotebitRE.createEnvironmentMap(renderer, MotebitRE.ENV_LIGHT);
 scene.environment = envMap;
 scene.background = envMap;
 
-const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 10);
-camera.position.set(0, 0.02, 0.85);
-camera.lookAt(0, -0.015, 0);
+// Camera numbers live in one place — the creature canon
+// (docs/doctrine/creature-canon.md; check-creature-canon).
+const pose = MotebitRE.CANONICAL_CAMERA.front;
+const camera = new THREE.PerspectiveCamera(pose.fov, window.innerWidth / window.innerHeight, 0.1, 10);
+camera.position.set(...pose.position);
+camera.lookAt(...pose.lookAt);
 
 // Lighting — complements the environment map. Not in the creature package
 // because each surface tunes its own lighting balance.
@@ -95,7 +102,7 @@ scene.add(rimLight);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
-controls.target.set(0, -0.015, 0);
+controls.target.set(...pose.lookAt);
 controls.minDistance = 0.3;
 controls.maxDistance = 3.0;
 

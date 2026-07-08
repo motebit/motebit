@@ -149,6 +149,14 @@ export default defineConfig({
     // unavoidable cost on first paint.
     chunkSizeWarningLimit: 900,
     rollupOptions: {
+      // Two entries: the app, and the golden-frame visual-regression
+      // harness (docs/doctrine/creature-canon.md §proof contract). The
+      // harness ships in the same dist so the CI web-build artifact +
+      // preview server serve it at /golden.html with zero extra plumbing.
+      input: {
+        main: resolve("index.html"),
+        golden: resolve("golden.html"),
+      },
       // Externalize Node-only MCP SDK paths and their transitive Node deps.
       // The MCP SDK ships transports for both client and server roles, and
       // several of them statically pull `node:stream`, `node:http`, or the

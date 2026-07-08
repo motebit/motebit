@@ -87,3 +87,7 @@ services/*/data/
 # devnet rehearsal local state (keys + mint — devnet-only, valueless, but never commit)
 .devnet-rehearsal/
 .quickstart-check.mts
+
+# Golden-frame darwin snapshots — local personal baselines only; linux
+# frames in __screenshots__ are the CI-authoritative committed references.
+apps/web/e2e/golden/__screenshots__/*-darwin.png

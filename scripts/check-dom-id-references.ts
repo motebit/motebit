@@ -257,14 +257,22 @@ function main(): void {
 
   for (const appDir of APPS_WITH_HTML) {
     const appPath = join(ROOT, appDir);
-    const htmlPath = join(appPath, "index.html");
     const srcPath = join(appPath, "src");
 
-    if (!existsSync(htmlPath)) continue;
+    // All root-level *.html entries — vite multi-page apps declare ids in
+    // secondary entries too (apps/web's golden.html harness page, added
+    // with the creature canon), not just index.html.
+    const htmlPaths = existsSync(appPath)
+      ? readdirSync(appPath)
+          .filter((f) => f.endsWith(".html"))
+          .map((f) => join(appPath, f))
+      : [];
+
+    if (htmlPaths.length === 0) continue;
     if (!existsSync(srcPath) || !statSync(srcPath).isDirectory()) continue;
 
     scannedApps++;
-    const htmlIds = collectHtmlIds(htmlPath);
+    const htmlIds = new Set<string>(htmlPaths.flatMap((p) => [...collectHtmlIds(p)]));
     const tsFiles = walkTsFiles(srcPath);
     const tsAssignedIds = collectTsDeclaredIds(tsFiles);
     const waivers = allowlist[appDir] ?? {};
@@ -280,7 +288,7 @@ function main(): void {
           loc: `${relative(ROOT, ref.file)}:${ref.line}`,
           message:
             `${ref.kind}("${ref.id}") in ${appDir} has no matching id. ` +
-            `Expected an \`id="${ref.id}"\` attribute in ${appDir}/index.html, ` +
+            `Expected an \`id="${ref.id}"\` attribute in one of ${appDir}'s root *.html entries, ` +
             `or a \`.id = "${ref.id}"\` / \`setAttribute("id", "${ref.id}")\` ` +
             `assignment in ${appDir}/src. If the id is constructed dynamically ` +
             `in a way this probe can't see, add it to ` +
