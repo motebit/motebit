@@ -62,7 +62,9 @@ The body is ~94% transmissive: **it is made of its environment.** A dark environ
 
 - A dark preset ships only as a **designed night** — dark sky with a real key light (moon), cool horizon glow, enough structure for transmission and speculars to carry the body.
 - Acceptance is proof, not preference: the dark preset's golden frames must show the face, the material character, and the breathing legibly.
-- Until a dark preset passes, surfaces pin the light environment. A live creature in a slightly-wrong-temperature world beats a dead creature in a matching one. This is a decided constraint, not an oversight.
+- If no dark preset passes, surfaces pin the light environment. A live creature in a slightly-wrong-temperature world beats a dead creature in a matching one.
+
+**Status (2026-07-07): passed.** `ENV_DARK` was redesigned in place as the designed night (moon key panel, moonlit horizon band, cool fill) and its golden frames (`front-resting-dark`, `front-thinking-dark`) show the face, catch-lights, material character, and interior glow legibly. The web surface's environment now follows the UI theme; mobile already switched via settings. The original near-black `ENV_DARK` was the proof of the criterion — the body read dead in it, exactly as the material predicts.
 
 ## The Meniscus Smile
 

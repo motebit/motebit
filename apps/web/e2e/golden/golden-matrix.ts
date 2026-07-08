@@ -49,8 +49,10 @@ export const GOLDEN_MATRIX: readonly GoldenFrameSpec[] = [
   // The product shot
   { camera: "hero", performance: "resting", environment: "light" },
   { camera: "hero", performance: "thinking", environment: "light" },
-  // Dark-environment path
+  // Dark-environment path — the designed night's acceptance surface
+  // (creature-canon.md: face, material character, breathing must read)
   { camera: "front", performance: "resting", environment: "dark" },
+  { camera: "front", performance: "thinking", environment: "dark" },
   // Minimal-trust structural suppression
   { camera: "front", performance: "guarded", environment: "light", trustMode: TrustMode.Minimal },
 ];

@@ -145,13 +145,23 @@ export const ENV_DEFAULT: EnvironmentPreset = {
   groundPanel: [0.3, 0.25, 0.2],
 };
 
+// A DESIGNED night, not a darkened room (creature-canon.md "dark
+// environment acceptance criterion"). The body is ~94% transmissive — it
+// is made of its environment, and the previous near-black preset gave it
+// nothing to transmit or reflect: the creature read dead. This night
+// keeps the luminance structure the material needs: a bright cool moon
+// key panel, a moonlit horizon band, blue fill — dark in register,
+// legible in body. Acceptance is the dark golden frames (face, material
+// character, breathing must read).
 export const ENV_DARK: EnvironmentPreset = {
-  zenith: [0.02, 0.02, 0.04],
-  horizon: [0.04, 0.03, 0.03],
-  ground: [0.02, 0.02, 0.02],
-  sun: [2.0, 1.8, 1.5],
-  fill: [0.3, 0.4, 0.8],
-  groundPanel: [0.08, 0.06, 0.05],
+  zenith: [0.012, 0.02, 0.06],
+  horizon: [0.1, 0.13, 0.24],
+  ground: [0.015, 0.018, 0.032],
+  sun: [3.2, 3.6, 4.4],
+  fill: [0.22, 0.28, 0.55],
+  groundPanel: [0.05, 0.06, 0.11],
+  coolTint: [0.75, 0.85, 1.15],
+  warmTint: [1.0, 0.98, 0.92],
 };
 
 export const ENV_LIGHT: EnvironmentPreset = {

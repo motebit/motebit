@@ -272,10 +272,21 @@ activityPanel.openIfRouted();
 
 // === Theme ===
 
-// Side-effect: sets up theme toggle + data-theme attribute.
-// Liquescentia (3D environment) is always ENV_LIGHT — glass needs
-// chromatic variation to refract. Dark mode only changes UI chrome.
-void initTheme(false);
+// Side-effect: sets up theme toggle + data-theme attribute, and keeps the
+// 3D environment in the same time of day as the chrome (dark theme = the
+// designed-night ENV_DARK; light = ENV_LIGHT). The callback fires once
+// immediately (renderer not yet initialized — safe no-op; app.init applies
+// the effective theme itself) and again on every user/OS theme change.
+// Doctrine: docs/doctrine/creature-canon.md "dark environment acceptance
+// criterion" — the night preset shipped only after its golden frames
+// proved the body legible.
+void initTheme(false, undefined, (effective) => {
+  if (effective === "dark") {
+    app.setDarkEnvironment();
+  } else {
+    app.setLightEnvironment();
+  }
+});
 
 // === Escape Key Handler ===
 
@@ -436,7 +447,7 @@ async function autoInitWebLLM(model: string = DEFAULT_WEBLLM_MODEL): Promise<voi
 }
 
 async function bootstrap(): Promise<void> {
-  await app.init(canvas!);
+  await app.init(canvas!, document.documentElement.dataset.theme === "dark" ? "dark" : "light");
 
   // Initialize IDB storage, migration, and runtime
   await app.bootstrap();
