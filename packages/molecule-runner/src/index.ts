@@ -403,6 +403,9 @@ export async function runMolecule(
   // 6. Start server
   const serverCfg: ServiceServerConfig = {
     name: `${config.serviceName}-${identity.motebitId.slice(0, 8)}`,
+    // The human display name flows to registration metadata.display_name —
+    // the self-asserted claim Discover cards render (trust-graph §3).
+    ...(config.displayName != null ? { displayName: config.displayName } : {}),
     port: config.port,
     motebitType: "service",
     onStart: (port, toolCount) => {

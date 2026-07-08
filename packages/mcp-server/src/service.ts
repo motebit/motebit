@@ -398,6 +398,13 @@ export function wireServerDeps(
 export interface ServiceServerConfig {
   /** Server name (default: motebit-service-<id>). */
   name?: string;
+  /**
+   * Human display name registered as `metadata.display_name` — the
+   * self-asserted claim Discover cards render in claim framing
+   * (docs/doctrine/agents-as-first-person-trust-graph.md §3). Distinct
+   * from `name`, which stays the machine server-name/description default.
+   */
+  displayName?: string;
   /** MCP transport port. */
   port: number;
   /** Require bearer token for incoming connections. */
@@ -522,7 +529,13 @@ export async function startServiceServer(
       public_key: deps.publicKeyHex ?? "",
       endpoint_url: endpointUrl,
       capabilities: toolNames,
-      metadata: { name: serverName },
+      metadata: {
+        name: serverName,
+        // Self-asserted display name — a discovery-time CLAIM, never a
+        // verified handle (trust-graph doctrine §3). Rides the registry's
+        // free-form metadata; queryLocalAgents surfaces it to Discover.
+        ...(config.displayName != null ? { display_name: config.displayName } : {}),
+      },
       // Settlement fields are written ONLY by the register route (the relay's
       // PATCH /sweep-config sets address but not modes), so they MUST travel in
       // this body or a service can never become P2P-capable. Sent only when

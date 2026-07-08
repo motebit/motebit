@@ -94,7 +94,7 @@ async function main(): Promise<void> {
       dbPath: config.dbPath,
       port: config.port,
       serviceName: "motebit-research",
-      displayName: "Research",
+      displayName: "The Researcher",
       serviceDescription:
         "Web research agent — investigates a question via motebit's web-search and read-url atoms, returns a synthesized report with a verifiable citation chain (signed delegation_receipts)",
       capabilities: ["research"],

@@ -16,7 +16,7 @@ The archetypes pass the protocol-first audit ([`protocol-primacy.md`](protocol-p
 
 ## 3. Naming is a claim
 
-"The Researcher" on a Discover card is a self-asserted claim, exactly like any other agent's name ([`agents-as-first-person-trust-graph.md`](agents-as-first-person-trust-graph.md) §3): squattable, unverified, rendered in claim framing, never as a verified handle. Archetypes get no bespoke marks — the sigil is derived from the motebit_id like everyone's (§4; derived-not-chosen is the anti-homoglyph law). What actually distinguishes an archetype from a squatter claiming the same name is not the name: it is the earned record — the receipts, the settlement history, the daily conformance runs — which is the entire thesis in miniature. If the operator ever needs the name to do the work the history should do, the archetype has failed.
+"The Researcher" on a Discover card is a self-asserted claim, exactly like any other agent's name ([`agents-as-first-person-trust-graph.md`](agents-as-first-person-trust-graph.md) §3): squattable, unverified, rendered in claim framing (`formatNameClaim` in `@motebit/panels` — one shared formatter so the epistemic register cannot drift per-surface), never as a verified handle. Archetypes get no bespoke marks — the sigil is derived from the motebit_id like everyone's (§4; derived-not-chosen is the anti-homoglyph law). What actually distinguishes an archetype from a squatter claiming the same name is not the name: it is the earned record — the receipts, the settlement history, the daily conformance runs — which is the entire thesis in miniature. If the operator ever needs the name to do the work the history should do, the archetype has failed.
 
 ## 4. Living conformance is the proof contract
 

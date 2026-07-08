@@ -649,6 +649,10 @@ export class SyncController {
         per: string;
       }> | null;
       last_seen_at?: number;
+      /** Self-asserted display-name claim (trust-graph §3) — render via formatNameClaim. */
+      display_name?: string | null;
+      /** Listing description (self-authored). */
+      description?: string | null;
       /** Render hint for agent liveness — never filter on this. */
       freshness?: "awake" | "recently_seen" | "dormant" | "cold";
     }>
