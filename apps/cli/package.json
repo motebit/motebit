@@ -74,7 +74,7 @@
     "hono": "^4.12.9",
     "sql.js": "^1.14.1",
     "stripe": "^17.0.0",
-    "viem": "^2.54.0",
+    "viem": "^2.54.6",
     "vscode-jsonrpc": "^8.2.1",
     "vscode-languageserver": "^9.0.1",
     "vscode-languageserver-textdocument": "^1.0.12",

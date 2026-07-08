@@ -37,7 +37,7 @@
     "@motebit/wallet-solana": "workspace:*",
     "@ricky0123/vad-web": "^0.0.30",
     "buffer": "^6.0.3",
-    "three": "^0.185.0"
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@types/three": "^0.185.0",
