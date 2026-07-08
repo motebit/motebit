@@ -1,0 +1,38 @@
+name: Deploy auditor
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/auditor/**"
+      - "packages/**"
+      - ".github/workflows/deploy-auditor.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-auditor
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: superfly/flyctl-actions/setup-flyctl@63da3ecc5e2793b98a3f2519b3d75d4f4c11cec2 # v1.5
+
+      # The service self-bootstraps its identity from the persistent /data
+      # volume on first boot — no out-of-band ceremony. Required one-time
+      # setup before the first deploy (scripts/deploy-archetype-slate.ts
+      # automates this for the staging slate):
+      #   fly apps create motebit-auditor
+      #   fly volumes create auditor_data --size 1 --region sjc
+      #   fly secrets set MOTEBIT_RELAY_URL=... \
+      #                   MOTEBIT_SYNC_URL=... MOTEBIT_API_TOKEN=... \
+      #                   MOTEBIT_PUBLIC_URL=...
+      # (No LLM key — the Auditor is deliberately LLM-free; pure verification.)
+      - name: Deploy to Fly.io
+        run: flyctl deploy --config services/auditor/fly.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
