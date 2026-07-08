@@ -47,6 +47,7 @@ import {
   type BootstrapKeyStore,
 } from "@motebit/core-identity";
 import { createSignedToken, secureErase } from "@motebit/encryption";
+import type { TokenAudience } from "@motebit/sdk";
 import { generate as generateIdentityFile } from "@motebit/identity-file";
 import type {
   MotebitState,
@@ -263,6 +264,29 @@ export class SpatialApp {
   // and exportIdentity also reads privKeyBytes for motebit.md generation.
   private tokenFactory: (() => Promise<string>) | null = null;
   private _privKeyBytes: Uint8Array | null = null;
+
+  /**
+   * Mint a signed device-auth token bound to this motebit, for a given
+   * audience. Public so surface code (app.ts loadCredentials) can
+   * authenticate owner-private relay reads (credentials became
+   * caller===:motebitId-authed 2026-07-07). Returns null before the
+   * identity is unlocked. Sibling of the sync-controller's tokenFactory
+   * (which is hardcoded to `sync`).
+   */
+  async createSyncToken(aud: TokenAudience = "sync"): Promise<string | null> {
+    if (this._privKeyBytes == null || this.motebitId === "spatial-local") return null;
+    return createSignedToken(
+      {
+        mid: this.motebitId,
+        did: this.deviceId,
+        iat: Date.now(),
+        exp: Date.now() + 5 * 60 * 1000,
+        jti: crypto.randomUUID(),
+        aud,
+      },
+      this._privKeyBytes,
+    );
+  }
   private _planStore: IdbPlanStore | null = null;
   private _pendingApprovalResolve: ((approved: boolean) => void) | null = null;
 

@@ -1071,7 +1071,13 @@ async function loadCredentials(): Promise<void> {
   if (!settings.relayUrl || !settings.showNetwork) return;
 
   try {
-    const resp = await fetch(`${settings.relayUrl}/api/v1/agents/${app.motebitId}/credentials`);
+    // Credentials are owner-private (caller===:motebitId, 2026-07-07): send a
+    // credentials-audience device token. Null before identity unlock → skip.
+    const token = await app.createSyncToken("credentials");
+    if (token == null) return;
+    const resp = await fetch(`${settings.relayUrl}/api/v1/agents/${app.motebitId}/credentials`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
     if (!resp.ok) return;
     const data = (await resp.json()) as {
       credentials?: Array<{

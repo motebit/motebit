@@ -105,6 +105,12 @@ async function bootstrapAnchor(syncUrl: string): Promise<TransparencyAnchor | un
 // `check-audience-canonical` stays green.
 function audienceForPath(path: string): TokenAudience {
   if (path.includes("/balance")) return ACCOUNT_BALANCE_AUDIENCE;
+  // Owner-private credential routes (2026-07-07): mint the least-privilege
+  // audience the relay enforces so a sync token can't read/present another
+  // agent's credentials. Presentation before credentials — /presentation
+  // also contains no "/credentials" substring, but order-guard anyway.
+  if (path.includes("/presentation")) return "credentials:present";
+  if (path.includes("/credentials")) return "credentials";
   return "sync";
 }
 

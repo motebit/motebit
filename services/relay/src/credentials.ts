@@ -295,6 +295,14 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
   /** @spec motebit/credential@1.0 */
   app.get("/api/v1/agents/:motebitId/credentials", (c) => {
     const mid = asMotebitId(c.req.param("motebitId"));
+    // Owner-private (2026-07-07): an agent's credentials are its own. The
+    // `/api/v1/agents/*` middleware verified a `credentials`-audience device
+    // token and set callerMotebitId; enforce caller===:motebitId here (the
+    // operator master token leaves callerMotebitId undefined = allowed).
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+    if (callerMotebitId !== undefined && callerMotebitId !== mid) {
+      throw new HTTPException(403, { message: "Cannot read another agent's credentials" });
+    }
     const typeFilter = c.req.query("type");
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
 
@@ -332,6 +340,14 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
   /** @spec motebit/credential@1.0 */
   app.post("/api/v1/agents/:motebitId/presentation", async (c) => {
     const mid = asMotebitId(c.req.param("motebitId"));
+    // Owner-private (2026-07-07): a Verifiable Presentation exposes the
+    // agent's own credentials — leaving it public would defeat the
+    // credentials-GET privacy above. `credentials:present`-audience device
+    // token; caller===:motebitId (master token = operator-allowed).
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+    if (callerMotebitId !== undefined && callerMotebitId !== mid) {
+      throw new HTTPException(403, { message: "Cannot present another agent's credentials" });
+    }
     const typeFilter = c.req.query("type");
     const limit = Math.min(parseInt(c.req.query("limit") ?? "100", 10) || 100, 500);
 

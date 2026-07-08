@@ -334,27 +334,12 @@ export const PUBLIC_AGENT_ROUTES: ReadonlyArray<{
   {
     match: (p, m) => p.endsWith("/settlements") && m === "GET",
     reason:
-      "settlements (GET): financial settlement history. CURRENTLY OPEN " +
-      "(was registered before the pre-fix middleware). PENDING DECISION: " +
-      "owner-private (like receipts, caller===:motebitId) vs public-audit — " +
-      "needs client-auth reconciliation before enforcing. Tracked in the " +
-      "security backlog; carved explicit (not silently open) meanwhile.",
-  },
-  {
-    match: (p, m) => p.endsWith("/credentials") && m === "GET",
-    reason:
-      "credentials (GET): public-read of verifiable attestations — VCs are " +
-      "designed to be presentable/verifiable. PENDING DECISION: if these " +
-      "become owner-private, reconcile the divergent client audiences " +
-      "(web/mobile=sync, cli=admin:query, desktop/inspector=master) and " +
-      "wire apps/spatial loadCredentials to send a token before enforcing.",
-  },
-  {
-    match: (p, m) => p.endsWith("/presentation") && m === "POST",
-    reason:
-      "presentation (POST): generates a shareable Verifiable Presentation " +
-      "from an agent's attestations. Same public-attestation rationale + " +
-      "pending owner-private decision as credentials (GET).",
+      "settlements (GET): owner-private financial history, but enforced by " +
+      "its OWN dedicated dualAuth(account:balance) in middleware.ts (same " +
+      "class as /balance) + the handler's first-person own-id check. This " +
+      "agent-middleware carve-out DEFERS to that dualAuth — removing it would " +
+      "double-wrap the route (admin:query here vs account:balance there) and " +
+      "conflict. Not public: account:balance-authed, caller===:motebitId.",
   },
 ];
 

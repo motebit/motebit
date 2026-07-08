@@ -693,7 +693,8 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
 
   it("18. Relay issues AgentReputationCredential to B after successful receipt", async () => {
     const tokenASubmit = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA, "task:submit");
-    const tokenACreds = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA, "credentials");
+    // Owner-private (2026-07-07): B's credential is read by B, not A.
+    const tokenBCreds = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB, "credentials");
 
     // B is already in the agent registry (from test 7). Connect B's device.
     const bWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
@@ -746,7 +747,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
     // Retrieve credentials from the relay's credential store
     const credsRes = await relay.app.request(`/api/v1/agents/${motebitIdB}/credentials`, {
       method: "GET",
-      headers: { Authorization: `Bearer ${tokenACreds}` },
+      headers: { Authorization: `Bearer ${tokenBCreds}` },
     });
     expect(credsRes.status).toBe(200);
     const credsBody = (await credsRes.json()) as {
@@ -775,12 +776,14 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
   });
 
   it("19. Public credential verification endpoint validates B's reputation credential", async () => {
-    const tokenA = await makeSignedToken(motebitIdA, relayDeviceIdA, keypairA, "credentials");
+    // B reads its OWN reputation credential (owner-private); the /credentials/verify
+    // endpoint below is public and verifies the resulting VC regardless of caller.
+    const tokenBCred = await makeSignedToken(motebitIdB, relayDeviceIdB, keypairB, "credentials");
 
     // Fetch the credential
     const credsRes = await relay.app.request(`/api/v1/agents/${motebitIdB}/credentials`, {
       method: "GET",
-      headers: { Authorization: `Bearer ${tokenA}` },
+      headers: { Authorization: `Bearer ${tokenBCred}` },
     });
     const credsBody = (await credsRes.json()) as {
       credentials: Array<{ credential: Record<string, unknown> }>;
