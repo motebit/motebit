@@ -2,6 +2,8 @@
 
 Signed evaluation artifacts are an attestation, not a receipt. This memo names the category split so future contributors don't re-litigate whether an `EvalReceipt` should join the [three-type receipt family](receipts-unified.md), and records the trigger for promoting the deferred protocol primitive when a real consumer arrives.
 
+> **Status (2026-07-08): promotion trigger fired — the primitive ships.** See [§Promotion](#promotion-2026-07-08) below. The deferral sections are kept as the historical record of the discipline that sequenced it.
+
 ## The category split
 
 The three existing receipt types — `ExecutionReceipt`, `ToolInvocationReceipt`, `ContentArtifactManifest` — share one structural property beyond their JCS + Ed25519 + suite-dispatch envelope: **the signer is the actor**. The agent signs its own task completion. The agent signs its own tool calls. The producer signs its own bundle assembly. Subject = signer in every case; the receipt is first-person provenance — _"I did this thing, here is the proof."_
@@ -30,6 +32,14 @@ Ship `EvalAttestation` (in `@motebit/protocol`, with the eight-artifact closed r
 4. A second implementation (Rust, Go, …) wants to consume evals and the wire format needs cross-language stability.
 
 Until one of those triggers fires, evals stay internal to CI as test-suite artifacts under existing package surfaces.
+
+## Promotion (2026-07-08)
+
+**Trigger #1 fired.** The archetype arc ([`agent-archetypes.md`](agent-archetypes.md)) ships the Auditor — a first-party marketplace service whose deliverable is a signed measurement of _another_ motebit (identity binding, succession, revocation, receipt spot-checks, bond integrity, solvency), transported over the relay's standard task path. That is verbatim the trigger-1 sentence: a second motebit emitting a signed eval against another motebit, with a transport needing the wire shape to be canonical. Trigger #2 fires with it — the Auditor is fee-bearing.
+
+The primitive ships as this memo promised: the EvalAttestation wire type in `@motebit/protocol` with a closed eval-kind registry under the eight-artifact treatment ([`registry-pattern-canonical.md`](registry-pattern-canonical.md)), signing/verification laws in `@motebit/crypto` (subject ≠ signer carried structurally; the verify law establishes "this issuer said this about this subject" and deliberately never the truth of the measurement), a zod wire schema with a committed JSON Schema, and re-exports through `@motebit/verifier` so external consumers never reach past the aggregator. Each measurement embeds the per-axis verification verdict whole — no top-level pass/fail boolean, the same no-silent-true discipline as the verdict vocabulary itself.
+
+**What was NOT built:** the `@motebit/evals` runner sketched in "What ships now" below. The Auditor is consumer #1 of the wire shape; composing the in-repo test suites into signed-eval producers remains future work with its own consumer test. Promotion of the envelope is not a mandate to build issuers.
 
 ## What ships now
 
