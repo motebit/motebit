@@ -1322,6 +1322,17 @@ export class SlabManager {
 
   /** Called after WebGL render each frame — syncs CSS overlay. */
   render(scene: THREE.Scene, camera: THREE.Camera): void {
+    // An empty CSS3D layer is not free: its perspective + matrix3d camera
+    // container is a preserve-3d compositing plane that follows the
+    // camera, and at oblique camera poses that plane intersects the WebGL
+    // canvas layer — Chromium's plane-intersection sorting then paints a
+    // stair-stepped, color-unmanaged patch at the frame edge (the "blue
+    // blob"; creature-canon.md artifact-zero, caught by the golden-frame
+    // harness). The layer may exist only while the slab has something to
+    // show; recessed slab ⇒ no 3D compositing context at all.
+    const active = this.stageAnchor.visible;
+    this.css3dRenderer.domElement.style.display = active ? "" : "none";
+    if (!active) return;
     this.css3dRenderer.render(scene, camera);
   }
 

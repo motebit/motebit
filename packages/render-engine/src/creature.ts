@@ -19,6 +19,14 @@ import type { RenderFrame, InteriorColor, AudioReactivity } from "./spec.js";
 export const BODY_R = 0.14;
 export const EYE_R = 0.035;
 
+// Interior glow core (creature-canon.md "interior glow is an interior
+// structure"; DROPLET §6.4). The glow energy splits between the interior
+// core (carries it) and the body's surface emissive (subordinated rim
+// support so the limb doesn't die where the fresnel core falls off).
+export const CORE_R = BODY_R * 0.62;
+export const GLOW_SURFACE_RATIO = 0.15;
+export const GLOW_CORE_GAIN = 1.6;
+
 // === Organic Noise ===
 // Sum of incommensurate sinusoids → quasi-periodic, non-repeating.
 // Reads as "suspended in a medium" rather than "programmed oscillation."
@@ -157,21 +165,36 @@ export const ENV_LIGHT: EnvironmentPreset = {
   coolTint: [0.68, 0.88, 1.3],
 };
 
-export function createEnvironmentMap(
-  renderer: THREE.WebGLRenderer,
-  preset: EnvironmentPreset = ENV_DEFAULT,
-): THREE.Texture {
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  const envScene = new THREE.Scene();
+export interface EnvironmentMapOptions {
+  /**
+   * Include the sun / fill / ground light panels. Default true — the
+   * ILLUMINATION variant the body reflects and refracts. Pass false for
+   * the BACKDROP variant: same sky gradient, no panels — light fixtures
+   * must never appear as floating shapes in the visible sky
+   * (creature-canon.md artifact-zero; the panels exist to light the
+   * body, not to be seen).
+   */
+  includeLightPanels?: boolean;
+}
 
-  const skyGeo = new THREE.SphereGeometry(5, 64, 32);
+/**
+ * The sky-gradient shader — one definition serving both projections of the
+ * world: baked into the PMREM illumination map (raw output; PMREM owns the
+ * color pipeline) and rendered live as the visible backdrop dome
+ * (`forDisplay: true` appends the renderer's tonemapping/colorspace
+ * chunks so the dome matches every other material on screen).
+ */
+function createSkyMaterial(
+  preset: EnvironmentPreset,
+  opts?: { forDisplay?: boolean },
+): THREE.ShaderMaterial {
   const z = preset.zenith,
     h = preset.horizon,
     g = preset.ground;
   const hasSpectral = preset.warmTint && preset.coolTint;
   const w = preset.warmTint ?? [1, 1, 1],
     c = preset.coolTint ?? [1, 1, 1];
-  const skyMat = new THREE.ShaderMaterial({
+  return new THREE.ShaderMaterial({
     side: THREE.BackSide,
     uniforms: {},
     vertexShader: `
@@ -198,8 +221,21 @@ export function createEnvironmentMap(
         ${
           hasSpectral
             ? `
-        float azimuth = atan(dir.z, dir.x) / 3.14159;
-        float warmFactor = azimuth * 0.5 + 0.5;
+        // Continuous azimuth factor — cos(azimuth) via dir.x over the
+        // horizontal radius. The previous atan(dir.z, dir.x)/pi form had a
+        // branch cut at the -x meridian (warmFactor snapped 1 -> 0 across
+        // one texel), painting a hard vertical warm/cool seam into the
+        // visible background. Artifact-zero: a pixel discontinuity in the
+        // medium is a defect by definition (creature-canon.md). Warm side
+        // faces +x, matching the sun panel at (3, 3, 2).
+        float warmFactor = dir.x / max(length(dir.xz), 1e-4) * 0.5 + 0.5;
+        // Azimuth is degenerate at the poles — every azimuth converges on
+        // one texel, so an undamped tint pinches into a visible patch at
+        // the zenith. Fade the tint to neutral as the horizontal radius
+        // vanishes; the chromatic field lives at the horizon, where the
+        // gradient carries it.
+        float azWeight = smoothstep(0.0, 0.45, length(dir.xz));
+        warmFactor = mix(0.5, warmFactor, azWeight);
         vec3 warm = vec3(${w[0]}, ${w[1]}, ${w[2]});
         vec3 cool = vec3(${c[0]}, ${c[1]}, ${c[2]});
         color *= mix(cool, warm, warmFactor);
@@ -207,46 +243,99 @@ export function createEnvironmentMap(
             : ""
         }
         gl_FragColor = vec4(color, 1.0);
+        ${
+          opts?.forDisplay
+            ? `
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+        `
+            : ""
+        }
       }
     `,
   });
+}
+
+/**
+ * The visible sky as WORLD GEOMETRY — a dome around the scene carrying the
+ * same gradient shader the illumination map bakes (minus light panels).
+ * Rendering the PMREM texture as `scene.background` had two artifact
+ * classes the dome closes (creature-canon.md artifact-zero): the light
+ * panels floated in the visible sky, and the baked cubemap's resolution /
+ * transmission-pass interactions leaked stair-stepped patches at the
+ * frame edge. One shader, two projections — the world cannot drift from
+ * the light that illuminates the body.
+ */
+export function createBackdropDome(preset: EnvironmentPreset = ENV_DEFAULT): THREE.Mesh {
+  const geo = new THREE.SphereGeometry(8, 64, 32);
+  const mat = createSkyMaterial(preset, { forDisplay: true });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.name = "backdrop-dome";
+  mesh.renderOrder = -1;
+  return mesh;
+}
+
+export function createEnvironmentMap(
+  renderer: THREE.WebGLRenderer,
+  preset: EnvironmentPreset = ENV_DEFAULT,
+  options?: EnvironmentMapOptions,
+): THREE.Texture {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const envScene = new THREE.Scene();
+
+  const skyGeo = new THREE.SphereGeometry(5, 64, 32);
+  const skyMat = createSkyMaterial(preset);
   envScene.add(new THREE.Mesh(skyGeo, skyMat));
 
-  const sunMat = new THREE.MeshBasicMaterial({
-    color: new THREE.Color(...preset.sun),
-    side: THREE.DoubleSide,
-  });
-  const sunPanel = new THREE.Mesh(new THREE.CircleGeometry(0.85, 32), sunMat);
-  sunPanel.position.set(3, 3, 2);
-  sunPanel.lookAt(0, 0, 0);
-  envScene.add(sunPanel);
+  const panelMats: THREE.MeshBasicMaterial[] = [];
+  if (options?.includeLightPanels !== false) {
+    const sunMat = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(...preset.sun),
+      side: THREE.DoubleSide,
+    });
+    const sunPanel = new THREE.Mesh(new THREE.CircleGeometry(0.85, 32), sunMat);
+    sunPanel.position.set(3, 3, 2);
+    sunPanel.lookAt(0, 0, 0);
+    envScene.add(sunPanel);
+    panelMats.push(sunMat);
 
-  const fillMat = new THREE.MeshBasicMaterial({
-    color: new THREE.Color(...preset.fill),
-    side: THREE.DoubleSide,
-  });
-  const fillPanel = new THREE.Mesh(new THREE.CircleGeometry(1.1, 32), fillMat);
-  fillPanel.position.set(-2.5, 2, -1);
-  fillPanel.lookAt(0, 0, 0);
-  envScene.add(fillPanel);
+    const fillMat = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(...preset.fill),
+      side: THREE.DoubleSide,
+    });
+    const fillPanel = new THREE.Mesh(new THREE.CircleGeometry(1.1, 32), fillMat);
+    fillPanel.position.set(-2.5, 2, -1);
+    fillPanel.lookAt(0, 0, 0);
+    envScene.add(fillPanel);
+    panelMats.push(fillMat);
 
-  const groundMat = new THREE.MeshBasicMaterial({
-    color: new THREE.Color(...preset.groundPanel),
-    side: THREE.DoubleSide,
-  });
-  const groundPanel = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), groundMat);
-  groundPanel.position.set(0, -3, 0);
-  groundPanel.rotation.x = Math.PI / 2;
-  envScene.add(groundPanel);
+    const groundMat = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(...preset.groundPanel),
+      side: THREE.DoubleSide,
+    });
+    const groundPanel = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), groundMat);
+    groundPanel.position.set(0, -3, 0);
+    groundPanel.rotation.x = Math.PI / 2;
+    envScene.add(groundPanel);
+    panelMats.push(groundMat);
+  }
 
   const envMap = pmrem.fromScene(envScene, 0, 0.1, 100).texture;
 
   skyGeo.dispose();
   skyMat.dispose();
-  sunMat.dispose();
-  fillMat.dispose();
-  groundMat.dispose();
+  for (const m of panelMats) m.dispose();
   pmrem.dispose();
+
+  // NOTE: renders issued in the SAME TASK as PMREM generation paint a
+  // corrupted patch at the frame edge (untonemapped, stair-stepped; one
+  // presented frame long). Neither renderer.resetState() nor an immediate
+  // synchronous re-render cures it — only a render issued after the next
+  // presented frame (requestAnimationFrame) is clean. Continuous rAF loops
+  // (every app surface) self-heal on the next tick; single-frame capture
+  // paths must await one rAF between environment swap and the captured
+  // render (the golden harness does — see apps/web/src/golden-main.ts).
+  // (creature-canon.md artifact-zero; caught by the golden-frame harness.)
 
   return envMap;
 }
@@ -257,6 +346,8 @@ export interface CreatureRefs {
   group: THREE.Group;
   bodyMesh: THREE.Mesh;
   bodyMaterial: THREE.MeshPhysicalMaterial;
+  coreMesh: THREE.Mesh;
+  coreMaterial: THREE.ShaderMaterial;
   leftEye: THREE.Group;
   rightEye: THREE.Group;
   smileMesh: THREE.Mesh;
@@ -289,6 +380,70 @@ function createBody(): { mesh: THREE.Mesh; material: THREE.MeshPhysicalMaterial 
   return { mesh, material: mat };
 }
 
+/**
+ * The interior glow core — internal energy as an interior STRUCTURE the
+ * transmissive body refracts, the same architectural move as the eyes
+ * (creature-canon.md "interior glow is an interior structure"). Replaces
+ * the previous approach of driving the body's surface emissive alone,
+ * which washed the whole shell flat and erased the depth cues exactly
+ * when the creature should look most alive.
+ *
+ * Inverse-fresnel falloff: bright where the core's surface faces the
+ * camera, dark at its limb — a soft luminous ball, magnified by the
+ * body's IOR the way the eyes are.
+ */
+function createGlowCore(): { mesh: THREE.Mesh; material: THREE.ShaderMaterial } {
+  // Falloff is per-fragment; low tessellation is invisible.
+  const geo = new THREE.SphereGeometry(CORE_R, 24, 16);
+  const mat = new THREE.ShaderMaterial({
+    uniforms: {
+      uColor: { value: new THREE.Color(0.8, 0.85, 1.0) },
+      uIntensity: { value: 0.0 },
+      uFalloff: { value: 2.0 },
+    },
+    vertexShader: `
+      varying vec3 vNormal;
+      varying vec3 vViewDir;
+      void main() {
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        vNormal = normalMatrix * normal;
+        vViewDir = -mvPosition.xyz;
+        gl_Position = projectionMatrix * mvPosition;
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uColor;
+      uniform float uIntensity;
+      uniform float uFalloff;
+      varying vec3 vNormal;
+      varying vec3 vViewDir;
+      void main() {
+        float core = pow(max(dot(normalize(vNormal), normalize(vViewDir)), 0.0), uFalloff);
+        gl_FragColor = vec4(uColor * uIntensity * core, 1.0);
+      }
+    `,
+    // transparent MUST stay false: three.js's transmission pass renders
+    // only the OPAQUE render list into the buffer the body refracts —
+    // a transparent-list core would be invisible through the body. The
+    // additive blend still applies (only transparent:false + NormalBlending
+    // collapses to no blending). Locked by unit test.
+    transparent: false,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    depthTest: true,
+    side: THREE.FrontSide,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  // Center of mass just behind the eye plane (eyes at z = 0.08) so the
+  // face always reads as in front of the light.
+  mesh.position.set(0, 0, -0.01);
+  // Draws first in the opaque list; the eyes (renderOrder 1) then paint
+  // over it depth-tested, so interior structures correctly occlude the
+  // glow. Body 2, catch-lights 3 — unchanged.
+  mesh.renderOrder = 0;
+  return { mesh, material: mat };
+}
+
 function createEye(): THREE.Group {
   const group = new THREE.Group();
 
@@ -297,6 +452,13 @@ function createEye(): THREE.Group {
     color: 0x080808,
     roughness: 0.05,
     metalness: 0.0,
+    // One highlight language (creature-canon.md): the two painted
+    // catch-lights are the eyes' primary highlights. Full-strength env
+    // reflection off this glossy material added a second, asymmetric
+    // language (the env sun panel smeared one eye white while the other
+    // showed only the catch-lights). Subordinated, not zeroed — a faint
+    // env response keeps the eye material sitting in the same world.
+    envMapIntensity: 0.2,
     polygonOffset: true,
     polygonOffsetFactor: 1,
     polygonOffsetUnits: 1,
@@ -357,6 +519,11 @@ export function createCreature(parent: THREE.Group | THREE.Scene): CreatureRefs 
   const body = createBody();
   group.add(body.mesh);
 
+  // Parented under the body mesh so the core inherits breathe/sag squash —
+  // the energy fills the volume that exists this frame.
+  const core = createGlowCore();
+  body.mesh.add(core.mesh);
+
   const leftEye = createEye();
   leftEye.position.set(-0.055, 0.015, 0.08);
   group.add(leftEye);
@@ -373,11 +540,17 @@ export function createCreature(parent: THREE.Group | THREE.Scene): CreatureRefs 
     group,
     bodyMesh: body.mesh,
     bodyMaterial: body.material,
+    coreMesh: core.mesh,
+    coreMaterial: core.material,
     leftEye,
     rightEye,
     smileMesh,
   };
 }
+
+// Scratch color for the per-frame soul-glow lerp — module scope so
+// animateCreature allocates nothing per frame.
+const _glowColorTarget = new THREE.Color();
 
 // === Animation ===
 
@@ -516,13 +689,28 @@ export function animateCreature(
   );
   refs.bodyMaterial.attenuationColor.lerp(tintTarget, 1 - Math.exp(-2.0 * dt));
 
-  // Interior luminosity — zero at rest, visible only during processing
-  // Minimal trust: suppress interior glow entirely
+  // Interior luminosity — zero at rest, visible only during processing.
+  // Minimal trust: suppress interior glow entirely.
+  //
+  // The energy is an interior STRUCTURE (creature-canon.md): the additive
+  // glow core carries it (magnified through the body's IOR like the eyes),
+  // while the surface emissive is subordinated to a rim-support term so
+  // the limb doesn't read dead where the core's fresnel falls off. The
+  // glow COLOR follows the soul color every frame, lerped at the same
+  // rate as the attenuation tint above.
   const trustGlowScale = state.trustMode === TrustMode.Minimal ? 0 : 1;
   const baseGlowIntensity = state.interiorColor?.glowIntensity ?? 0;
-  refs.bodyMaterial.emissiveIntensity =
+  const glowLevel =
     Math.max(baseGlowIntensity, Math.max(0, cues.glow_intensity - 0.4) * 0.6 + audioGlow) *
     trustGlowScale;
+  refs.bodyMaterial.emissiveIntensity = glowLevel * GLOW_SURFACE_RATIO;
+  const coreUniforms = refs.coreMaterial.uniforms;
+  (coreUniforms.uIntensity as { value: number }).value = glowLevel * GLOW_CORE_GAIN;
+  const glowRGB = state.interiorColor?.glow ?? [0.8, 0.85, 1.0];
+  _glowColorTarget.setRGB(glowRGB[0], glowRGB[1], glowRGB[2]);
+  const coreColor = (coreUniforms.uColor as { value: THREE.Color }).value;
+  coreColor.lerp(_glowColorTarget, 1 - Math.exp(-2.0 * dt));
+  refs.bodyMaterial.emissive.copy(coreColor);
 
   // Iridescence — transients shimmer the liquescent surface
   // Active listening: subtle ~1Hz oscillation (visual recording light)
@@ -581,6 +769,8 @@ export function animateCreature(
 export function disposeCreature(refs: CreatureRefs): void {
   refs.bodyMesh.geometry.dispose();
   refs.bodyMaterial.dispose();
+  refs.coreMesh.geometry.dispose();
+  refs.coreMaterial.dispose();
 
   const disposeMeshes = (group: THREE.Group) => {
     group.traverse((child) => {

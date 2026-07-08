@@ -24,8 +24,11 @@ import {
   animateCreature,
   disposeCreature,
   createEnvironmentMap,
+  createBackdropDome,
   ENV_LIGHT,
   ENV_DARK,
+  ENV_DEFAULT,
+  type EnvironmentPreset,
   type CreatureRefs,
   type CreatureState,
 } from "./creature.js";
@@ -88,6 +91,7 @@ export class ThreeJSAdapter implements RenderAdapter {
   private controls: OrbitControls | null = null;
   private artifactManager: ArtifactManager | null = null;
   private slab: SlabManager | null = null;
+  private backdropDome: THREE.Mesh | null = null;
 
   init(target: unknown): Promise<void> {
     if (typeof HTMLCanvasElement === "undefined" || !(target instanceof HTMLCanvasElement)) {
@@ -118,9 +122,7 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
 
     this.scene = new THREE.Scene();
-    const envMap = createEnvironmentMap(this.renderer);
-    this.scene.environment = envMap;
-    this.scene.background = envMap;
+    this.applyEnvironment(ENV_DEFAULT);
 
     // Camera numbers live in one place — the creature canon
     // (docs/doctrine/creature-canon.md; check-creature-canon).
@@ -317,19 +319,48 @@ export class ThreeJSAdapter implements RenderAdapter {
   }
 
   setDarkEnvironment(): void {
-    if (this.scene && this.renderer) {
-      const darkEnv = createEnvironmentMap(this.renderer, ENV_DARK);
-      this.scene.environment = darkEnv;
-      this.scene.background = darkEnv;
-    }
+    this.applyEnvironment(ENV_DARK);
   }
 
   setLightEnvironment(): void {
-    if (this.scene && this.renderer) {
-      const lightEnv = createEnvironmentMap(this.renderer, ENV_LIGHT);
-      this.scene.environment = lightEnv;
-      this.scene.background = lightEnv;
+    this.applyEnvironment(ENV_LIGHT);
+  }
+
+  /**
+   * One world, two projections of it: the ILLUMINATION map (with the
+   * sun/fill/ground light panels) drives reflection and refraction on the
+   * body; the visible sky is the backdrop DOME — the same gradient shader
+   * as world geometry, no panels. Rendering the PMREM as scene.background
+   * had two artifact classes (creature-canon.md artifact-zero): light
+   * fixtures floating in the sky, and stair-stepped patches painted by
+   * renders issued too close to PMREM generation.
+   *
+   * Environments are cached per preset: PMREM generation runs once per
+   * preset per adapter lifetime. Repeated theme switches were previously
+   * re-generating (and leaking) the maps every time — and any render
+   * landing near a fresh PMREM generation can paint a corrupted
+   * frame-edge patch (see the NOTE in createEnvironmentMap), so swaps
+   * after the first are pure texture/mesh assignment.
+   */
+  private envCache = new Map<EnvironmentPreset, { envMap: THREE.Texture; dome: THREE.Mesh }>();
+
+  private applyEnvironment(preset: EnvironmentPreset): void {
+    if (!this.scene || !this.renderer) return;
+    let entry = this.envCache.get(preset);
+    if (!entry) {
+      entry = {
+        envMap: createEnvironmentMap(this.renderer, preset),
+        dome: createBackdropDome(preset),
+      };
+      this.envCache.set(preset, entry);
     }
+    this.scene.environment = entry.envMap;
+    if (this.backdropDome && this.backdropDome !== entry.dome) {
+      this.scene.remove(this.backdropDome);
+    }
+    this.backdropDome = entry.dome;
+    this.scene.add(entry.dome);
+    this.scene.background = null;
   }
 
   setInteriorColor(color: InteriorColor): void {

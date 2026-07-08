@@ -76,11 +76,11 @@ export interface CanonicalCameraPose {
 // docs/doctrine/attention-is-directional.md's regimes: 0° identity,
 // 35° depth, 60° Meniscus Smile, 90° shell, 180° quiet.
 export const CANONICAL_CAMERA: Record<CanonicalCameraName, CanonicalCameraPose> = {
-  front: { fov: 45, position: [0, 0.02, 0.85], lookAt: [0, -0.015, 0] },
-  three_quarter: { fov: 45, position: [0.488, 0.02, 0.696], lookAt: [0, -0.015, 0] },
-  oblique: { fov: 45, position: [0.736, 0.02, 0.425], lookAt: [0, -0.015, 0] },
-  profile: { fov: 45, position: [0.85, 0.02, 0], lookAt: [0, -0.015, 0] },
-  back: { fov: 45, position: [0, 0.02, -0.85], lookAt: [0, -0.015, 0] },
+  front: { fov: 45, position: [0, 0.02, 0.92], lookAt: [0, -0.015, 0] },
+  three_quarter: { fov: 45, position: [0.528, 0.02, 0.754], lookAt: [0, -0.015, 0] },
+  oblique: { fov: 45, position: [0.797, 0.02, 0.46], lookAt: [0, -0.015, 0] },
+  profile: { fov: 45, position: [0.92, 0.02, 0], lookAt: [0, -0.015, 0] },
+  back: { fov: 45, position: [0, 0.02, -0.92], lookAt: [0, -0.015, 0] },
   hero: { fov: 40, position: [0.12, 0.06, 0.7], lookAt: [0, -0.01, 0] },
 };
 

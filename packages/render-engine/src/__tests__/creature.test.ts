@@ -24,6 +24,9 @@ import {
   ENV_LIGHT,
   BODY_R,
   EYE_R,
+  CORE_R,
+  GLOW_SURFACE_RATIO,
+  GLOW_CORE_GAIN,
   type CreatureRefs,
   type BlinkState,
 } from "../creature.js";
@@ -273,6 +276,12 @@ describe("createEnvironmentMap", () => {
     tex.dispose();
   });
 
+  it("builds the backdrop variant (no light panels) without throwing", () => {
+    const tex = createEnvironmentMap(fakeRenderer(), ENV_LIGHT, { includeLightPanels: false });
+    expect(tex).toBeInstanceOf(THREE.Texture);
+    tex.dispose();
+  });
+
   it("builds light preset (spectral warm/cool tint branch)", () => {
     const tex = createEnvironmentMap(fakeRenderer(), ENV_LIGHT);
     expect(tex).toBeDefined();
@@ -321,6 +330,23 @@ describe("createCreature", () => {
     expect(refs.bodyMaterial.ior).toBeCloseTo(1.22, 5);
     expect(refs.bodyMaterial.roughness).toBe(0.0);
     expect(refs.bodyMaterial.iridescence).toBeGreaterThan(0);
+    disposeCreature(refs);
+  });
+
+  it("interior glow core is an opaque-list additive child of the body", () => {
+    const scene = new THREE.Scene();
+    const refs = createCreature(scene);
+    expect(refs.bodyMesh.children).toContain(refs.coreMesh);
+    // transparent MUST be false — three.js's transmission pass renders only
+    // the opaque render list into the buffer the body refracts; a
+    // transparent-list core would silently vanish through the body. This is
+    // the flag lock; the golden-frame harness locks the rendered outcome.
+    expect(refs.coreMaterial.transparent).toBe(false);
+    expect(refs.coreMaterial.blending).toBe(THREE.AdditiveBlending);
+    expect(refs.coreMaterial.depthWrite).toBe(false);
+    expect(refs.coreMesh.renderOrder).toBe(0);
+    const geo = refs.coreMesh.geometry as THREE.SphereGeometry;
+    expect(geo.parameters.radius).toBeCloseTo(CORE_R, 5);
     disposeCreature(refs);
   });
 });
@@ -406,6 +432,51 @@ describe("animateCreature", () => {
       );
     }
     expect(refs.bodyMaterial.emissiveIntensity).toBe(0);
+    // The interior glow core is suppressed with it — Minimal trust zeroes
+    // the whole interior-luminosity structure, not just the surface term.
+    expect((refs.coreMaterial.uniforms.uIntensity as { value: number }).value).toBe(0);
+  });
+
+  it("splits active glow between the interior core and a subordinated surface emissive", () => {
+    const state = createCreatureState();
+    for (let i = 0; i < 100; i++) {
+      animateCreature(
+        refs,
+        state,
+        defaultFrame({
+          time: i * 0.016,
+          delta_time: 0.016,
+          cues: {
+            hover_distance: 0.4,
+            drift_amplitude: 0.02,
+            glow_intensity: 1.0,
+            eye_dilation: 0.3,
+            smile_curvature: 0,
+            speaking_activity: 0,
+          },
+        }),
+      );
+    }
+    const coreIntensity = (refs.coreMaterial.uniforms.uIntensity as { value: number }).value;
+    expect(coreIntensity).toBeGreaterThan(0);
+    expect(refs.bodyMaterial.emissiveIntensity).toBeGreaterThan(0);
+    // Ratio test — robust to retunes of the shared glow formula: the split
+    // itself is the invariant (core carries, surface supports).
+    expect(refs.bodyMaterial.emissiveIntensity / coreIntensity).toBeCloseTo(
+      GLOW_SURFACE_RATIO / GLOW_CORE_GAIN,
+      5,
+    );
+  });
+
+  it("lerps the glow color toward the soul color on core and surface together", () => {
+    const state = createCreatureState();
+    state.interiorColor = { tint: [1, 0.3, 0.3], glow: [1, 0.2, 0.2] };
+    for (let i = 0; i < 500; i++) {
+      animateCreature(refs, state, defaultFrame({ time: i * 0.016, delta_time: 0.016 }));
+    }
+    const coreColor = (refs.coreMaterial.uniforms.uColor as { value: THREE.Color }).value;
+    expect(coreColor.r).toBeGreaterThan(coreColor.g);
+    expect(refs.bodyMaterial.emissive.r).toBeGreaterThan(refs.bodyMaterial.emissive.g);
   });
 
   it("applies audio reactivity (non-null branch)", () => {

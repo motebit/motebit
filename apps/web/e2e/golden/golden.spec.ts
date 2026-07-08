@@ -17,13 +17,20 @@ test.describe("creature golden frames", () => {
       await page.waitForFunction(() => window.goldenReady === true, undefined, {
         timeout: 20_000,
       });
-      await page.evaluate(
+      const dataUrl = await page.evaluate(
         async (s) => window.renderGoldenFrame(s),
         // GoldenFrameSpec is plain JSON (TrustMode is a string enum) —
         // serializes across the page boundary losslessly.
         spec,
       );
-      await expect(page.locator("#golden-canvas")).toHaveScreenshot(`${name}.png`);
+      // The frame is read straight from the WebGL framebuffer
+      // (canvas.toDataURL in the same task as the render) — never from a
+      // compositor screenshot. The CDP screenshot path composites the
+      // page, and Chromium's canvas compositing can paint stair-stepped,
+      // color-unmanaged patches at some camera poses that are NOT in the
+      // rendered pixels. Golden frames assert what the renderer drew.
+      const png = Buffer.from(dataUrl.split(",")[1], "base64");
+      expect(png).toMatchSnapshot(`${name}.png`);
     });
   }
 });

@@ -73,9 +73,14 @@ renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight, false);
 
 const scene = new THREE.Scene();
+// One world, two projections (creature-canon.md artifact-zero): the
+// illumination map (with light panels) drives the body's reflections;
+// the visible sky is the backdrop DOME — same gradient shader as world
+// geometry, no panels, no baked-cubemap frame-edge artifacts.
 let envMap = MotebitRE.createEnvironmentMap(renderer, MotebitRE.ENV_LIGHT);
+let backdropDome = MotebitRE.createBackdropDome(MotebitRE.ENV_LIGHT);
 scene.environment = envMap;
-scene.background = envMap;
+scene.add(backdropDome);
 
 // Camera numbers live in one place — the creature canon
 // (docs/doctrine/creature-canon.md; check-creature-canon).
@@ -142,7 +147,11 @@ window.__onMessage = function(msg) {
       if (envMap) envMap.dispose();
       envMap = MotebitRE.createEnvironmentMap(renderer, preset);
       scene.environment = envMap;
-      scene.background = envMap;
+      scene.remove(backdropDome);
+      backdropDome.geometry.dispose();
+      backdropDome.material.dispose();
+      backdropDome = MotebitRE.createBackdropDome(preset);
+      scene.add(backdropDome);
       break;
     }
     case 'setInteriorColor':

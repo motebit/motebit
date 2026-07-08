@@ -48,10 +48,12 @@ export default defineConfig({
       retries: 0, // a flaky golden frame is signal, not noise
       snapshotPathTemplate: "{testDir}/golden/__screenshots__/{arg}-{platform}{ext}",
       expect: {
-        toHaveScreenshot: {
+        // Golden frames are read straight from the WebGL framebuffer
+        // (canvas.toDataURL) and compared as binary snapshots — never via
+        // compositor screenshots (see golden.spec.ts).
+        toMatchSnapshot: {
           maxDiffPixelRatio: 0.01,
           threshold: 0.2,
-          animations: "disabled",
         },
       },
       use: {

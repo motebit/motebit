@@ -29,7 +29,14 @@ import {
 
 declare global {
   interface Window {
-    renderGoldenFrame: (spec: GoldenFrameSpec) => Promise<void>;
+    /**
+     * Renders one canonical frame and returns it as a PNG data URL read
+     * straight from the WebGL framebuffer (canvas.toDataURL in the same
+     * task as the render — the buffer is valid pre-present). Bypasses the
+     * compositor and the CDP screenshot path entirely: OS/driver
+     * compositing artifacts cannot reach the captured bytes.
+     */
+    renderGoldenFrame: (spec: GoldenFrameSpec) => Promise<string>;
     goldenReady: boolean;
   }
 }
@@ -41,7 +48,7 @@ if (!(canvas instanceof HTMLCanvasElement)) {
 
 const adapter = new ThreeJSAdapter();
 
-window.renderGoldenFrame = async (spec: GoldenFrameSpec): Promise<void> => {
+window.renderGoldenFrame = async (spec: GoldenFrameSpec): Promise<string> => {
   const perf = CANONICAL_PERFORMANCES[spec.performance];
 
   // Blink off BEFORE any render — createCreatureState seeds a random
@@ -63,14 +70,55 @@ window.renderGoldenFrame = async (spec: GoldenFrameSpec): Promise<void> => {
 
   // Two-call settle: snap the smoothers, then render the frozen frame.
   adapter.render({ cues: perf.cues, time: perf.time, delta_time: 100 });
+
+  // One PRESENTED frame between environment generation and the captured
+  // render: renders issued before the first present after PMREM generation
+  // paint a corrupted frame-edge patch (see the NOTE in
+  // createEnvironmentMap). The settle frame above absorbs it. Double-rAF:
+  // a single rAF fires BEFORE the pending paint — only the second tick is
+  // guaranteed to run after a real present.
+  await new Promise<void>((resolveFrame) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolveFrame());
+    });
+  });
+
   adapter.render({ cues: perf.cues, time: perf.time, delta_time: 0 });
 
-  // Let the compositor present the frame before Playwright screenshots.
-  await new Promise<void>((resolveFrame) => {
-    requestAnimationFrame(() => resolveFrame());
-  });
+  // Read the framebuffer NOW — same task as the render, before the
+  // browser presents/clears the drawing buffer (no preserveDrawingBuffer
+  // needed). This is the captured golden frame.
+  return canvas.toDataURL("image/png");
 };
 
-void adapter.init(canvas).then(() => {
+// Debug handle for harness diagnostics (scene inspection from Playwright).
+// Not part of the golden contract; tests must use renderGoldenFrame only.
+(window as unknown as Record<string, unknown>).__goldenAdapter = adapter;
+
+void adapter.init(canvas).then(async () => {
+  // Pre-warm both environments and flush several presented frames BEFORE
+  // any capture: PMREM generation corrupts renders issued near it (see the
+  // NOTE in createEnvironmentMap), and the adapter caches environments per
+  // preset — so every renderGoldenFrame env swap after this point is pure
+  // texture assignment, nowhere near a PMREM run.
+  const idleCues = {
+    hover_distance: 0.4,
+    drift_amplitude: 0.02,
+    glow_intensity: 0.3,
+    eye_dilation: 0.3,
+    smile_curvature: 0,
+    speaking_activity: 0,
+  };
+  adapter.setBlinkEnabled(false);
+  for (const env of ["dark", "light"] as const) {
+    if (env === "dark") adapter.setDarkEnvironment();
+    else adapter.setLightEnvironment();
+    for (let i = 0; i < 3; i++) {
+      adapter.render({ cues: idleCues, time: 1.25, delta_time: 0 });
+      await new Promise<void>((r) => {
+        requestAnimationFrame(() => r());
+      });
+    }
+  }
   window.goldenReady = true;
 });
