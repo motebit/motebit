@@ -51,7 +51,7 @@ function createResearchHandler(getResearchConfig: () => ResearchConfig): ToolHan
     try {
       const result = await research(question, getResearchConfig());
       log(
-        `research complete: ${result.report.length} chars, ${result.search_count} searches, ${result.fetch_count} fetches, ${result.delegation_receipts.length} receipts`,
+        `research complete: ${result.report.length} chars, ${result.search_count} searches, ${result.fetch_count} fetches, ${result.delegation_receipts.length} receipts, report_cost_estimate_usd=${result.cost_estimate_usd.toFixed(4)}`,
       );
       return {
         ok: true,
@@ -86,7 +86,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const unitCost = parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.25");
+  // Default covers worst-case sonnet inference (~$0.26–0.42/report at the
+  // 8-tool-call cap) — the per-report cost_estimate_usd log is the tuning
+  // signal before any prod price change.
+  const unitCost = parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.50");
 
   await runMolecule(
     {

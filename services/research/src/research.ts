@@ -63,6 +63,13 @@ export type SignedReceipt = ExecutionReceipt;
 export interface ResearchResult {
   /** Synthesized report text (markdown). */
   report: string;
+  /**
+   * Operator-side inference-cost estimate (USD) summed from Anthropic
+   * `response.usage` across the loop — the number MOTEBIT_UNIT_COST must
+   * clear for the archetype's economics to be honest (operator-funded
+   * inference is priced into the task, never sold as intelligence).
+   */
+  cost_estimate_usd: number;
   /** Signed receipts from every delegated call, in execution order. The verifiable citation chain. */
   delegation_receipts: SignedReceipt[];
   /**
@@ -247,6 +254,12 @@ export async function research(question: string, config: ResearchConfig): Promis
     const delegationReceipts: SignedReceipt[] = [];
     const citations: Citation[] = [];
     let recallSelfCount = 0;
+    // claude-sonnet-4-6 list pricing per million tokens; estimate only —
+    // logged per report so the operator can tune MOTEBIT_UNIT_COST.
+    const USD_PER_M_INPUT = 3;
+    const USD_PER_M_OUTPUT = 15;
+    let inputTokens = 0;
+    let outputTokens = 0;
     let searchCount = 0;
     let fetchCount = 0;
     let toolCallCount = 0;
@@ -404,6 +417,10 @@ export async function research(question: string, config: ResearchConfig): Promis
         messages,
       });
 
+      // Optional-chained: unit-test mocks omit usage; the live API always sends it.
+      inputTokens += response.usage?.input_tokens ?? 0;
+      outputTokens += response.usage?.output_tokens ?? 0;
+
       const toolUses = response.content.filter(
         (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
       );
@@ -415,6 +432,8 @@ export async function research(question: string, config: ResearchConfig): Promis
           .join("\n");
         return {
           report,
+          cost_estimate_usd:
+            (inputTokens * USD_PER_M_INPUT + outputTokens * USD_PER_M_OUTPUT) / 1e6,
           delegation_receipts: delegationReceipts,
           citations,
           recall_self_count: recallSelfCount,
@@ -440,6 +459,8 @@ export async function research(question: string, config: ResearchConfig): Promis
         "\n\nNote: tool budget exhausted. Synthesize a report from what you've already gathered.",
       messages,
     });
+    inputTokens += finalResponse.usage?.input_tokens ?? 0;
+    outputTokens += finalResponse.usage?.output_tokens ?? 0;
     const report = finalResponse.content
       .filter((b): b is Anthropic.TextBlock => b.type === "text")
       .map((b) => b.text)
@@ -447,6 +468,7 @@ export async function research(question: string, config: ResearchConfig): Promis
 
     return {
       report,
+      cost_estimate_usd: (inputTokens * USD_PER_M_INPUT + outputTokens * USD_PER_M_OUTPUT) / 1e6,
       delegation_receipts: delegationReceipts,
       citations,
       recall_self_count: recallSelfCount,
