@@ -26,6 +26,7 @@ import type { DisputeAppeal } from '@motebit/protocol';
 import type { DisputeEvidence } from '@motebit/protocol';
 import type { DisputeRequest } from '@motebit/protocol';
 import type { DisputeResolution } from '@motebit/protocol';
+import type { EvalAttestation } from '@motebit/protocol';
 import type { EvidenceProvenance } from '@motebit/protocol';
 import type { EvidenceRef } from '@motebit/protocol';
 import type { ExecutionReceipt as ExecutionReceipt_2 } from '@motebit/protocol';
@@ -482,6 +483,12 @@ export function ed25519Verify(signature: Uint8Array, message: Uint8Array, public
 
 // @public
 export function encodeSecureEnclaveReceiptForTest(bodyBytes: Uint8Array, sigBytes: Uint8Array): string;
+
+// @public
+export const EVAL_ATTESTATION_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+// @public
+export const EVAL_KINDS_MIRROR: readonly string[];
 
 export { EvidenceProvenance }
 
@@ -1365,6 +1372,9 @@ export interface SignedTokenPayload {
 }
 
 // @public
+export function signEvalAttestation(body: Omit<EvalAttestation, "signature" | "suite">, issuerPrivateKey: Uint8Array): Promise<EvalAttestation>;
+
+// @public
 export function signExecutionReceipt<T extends Omit<SignableReceipt, "signature" | "suite">>(receipt: T, privateKey: Uint8Array, publicKey?: Uint8Array): Promise<T & {
     suite: typeof EXECUTION_RECEIPT_SUITE;
     signature: string;
@@ -1790,6 +1800,16 @@ export function verifyDisputeRequest(request: DisputeRequest, filerPublicKey: Ui
 
 // @public
 export function verifyDisputeResolution(resolution: DisputeResolution, adjudicatorPublicKey: Uint8Array, peerKeys?: Map<string, Uint8Array>): Promise<boolean>;
+
+// @public
+export function verifyEvalAttestation(attestation: EvalAttestation): Promise<VerifyEvalAttestationResult>;
+
+// @public
+export interface VerifyEvalAttestationResult {
+    readonly reason?: "unsupported_suite" | "unknown_eval_kind" | "empty_results" | "malformed_public_key" | "malformed_signature" | "signature_invalid";
+    // (undocumented)
+    readonly valid: boolean;
+}
 
 // @public
 export function verifyEvidenceProvenance(bytes: Uint8Array, provenance: EvidenceProvenance, opts?: {

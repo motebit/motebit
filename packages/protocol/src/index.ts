@@ -3540,6 +3540,14 @@ export type {
   VerificationVerdict,
 } from "./verification-verdict.js";
 
+// EvalAttestation — the signed third-party-measurement artifact (subject ≠
+// signer; docs/doctrine/evals-as-attestations.md, promoted 2026-07-08).
+// EvalKind is the eleventh registered closed registry; per-check names stay
+// free-form (issuer catalogs). Envelope law in @motebit/crypto
+// (sign/verifyEvalAttestation); measurement truth deliberately out of scope.
+export type { EvalKind, EvalResult, EvalAttestation } from "./eval-attestation.js";
+export { ALL_EVAL_KINDS, isEvalKind } from "./eval-attestation.js";
+
 // Merkle tree-hash version registry — the agility axis for leaf/node domain
 // separation (RFC 6962 §2.1). Separate from `SuiteId` (signature recipe): this
 // names the tree-hash recipe that builds the root the signature commits to. A

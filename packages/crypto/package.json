@@ -52,8 +52,9 @@
   },
   "motebit": {
     "implements": [
-      "spec/identity-v1.md",
-      "spec/credential-v1.md"
+      "spec/credential-v1.md",
+      "spec/eval-attestation-v1.md",
+      "spec/identity-v1.md"
     ]
   },
   "scripts": {

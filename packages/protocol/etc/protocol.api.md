@@ -389,6 +389,9 @@ export const ALL_CONTENT_ARTIFACT_TYPES: readonly ContentArtifactType[];
 export const ALL_DIGEST_ALGORITHMS: readonly DigestAlgorithm[];
 
 // @public
+export const ALL_EVAL_KINDS: readonly EvalKind[];
+
+// @public
 export const ALL_EVENT_TYPES: readonly EventType[];
 
 // @public
@@ -1640,6 +1643,47 @@ export interface Edge<T> {
 // @public
 export const EMPTY_FEDERATION_GRAPH_ANCHOR: FederationGraphAnchor;
 
+// @public
+export interface EvalAttestation {
+    readonly as_of: {
+        readonly timestamp_ms: number;
+        readonly anchor?: {
+            readonly chain: string;
+            readonly slot?: number;
+            readonly height?: number;
+        };
+    };
+    readonly attestation_id: string;
+    readonly eval_kind: EvalKind;
+    readonly evidence?: readonly EvidenceRef[];
+    readonly expires_at?: number;
+    readonly invocation?: {
+        readonly task_id?: string;
+        readonly relay_task_id?: string;
+    };
+    readonly issued_at: number;
+    readonly issuer: {
+        readonly motebit_id: string;
+        readonly public_key: string;
+    };
+    readonly results: readonly EvalResult[];
+    readonly signature: string;
+    readonly subject: {
+        readonly motebit_id: string;
+        readonly artifact_digests?: readonly DigestRef[];
+    };
+    readonly suite: "motebit-jcs-ed25519-b64-v1";
+}
+
+// @public
+export type EvalKind = "verification_audit";
+
+// @public
+export interface EvalResult {
+    readonly check: string;
+    readonly verdict: VerificationVerdict;
+}
+
 // @public (undocumented)
 export interface EventFilter {
     // (undocumented)
@@ -2318,6 +2362,9 @@ export function isDepositableRail(rail: GuestRail): rail is DepositableGuestRail
 
 // @public (undocumented)
 export function isDigestAlgorithm(s: string): s is DigestAlgorithm;
+
+// @public
+export function isEvalKind(value: unknown): value is EvalKind;
 
 // @public
 export function isEventType(value: unknown): value is EventType;

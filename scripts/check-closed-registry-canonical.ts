@@ -223,6 +223,24 @@ const REGISTERED_REGISTRIES: ReadonlyArray<RegisteredRegistry> = [
     doctrinePaths: ["docs/doctrine/registry-pattern-canonical.md"],
   },
   {
+    // Eleventh registered registry — the EvalAttestation measurement-family
+    // discriminator (docs/doctrine/evals-as-attestations.md, promoted
+    // 2026-07-08). Union + array + guard share eval-attestation.ts; the
+    // per-registry gate additionally locks the crypto-side
+    // EVAL_KINDS_MIRROR (fourth site) and scans emit sites.
+    sourceFile: "packages/protocol/src/eval-attestation.ts",
+    toolingFile: "packages/protocol/src/eval-attestation.ts",
+    typeName: "EvalKind",
+    arrayName: "ALL_EVAL_KINDS",
+    guardName: "isEvalKind",
+    gatePath: "scripts/check-eval-kind-canonical.ts",
+    gateName: "check-eval-kind-canonical",
+    doctrinePaths: [
+      "docs/doctrine/registry-pattern-canonical.md",
+      "docs/doctrine/evals-as-attestations.md",
+    ],
+  },
+  {
     name: "MerkleTreeVersion",
     // Eighth registered registry — the RFC 6962 §2.1 leaf/node
     // domain-separation agility axis. Single-file source = tooling

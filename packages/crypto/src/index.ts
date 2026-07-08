@@ -2694,6 +2694,13 @@ export type {
   VerifyContentArtifactResult,
 } from "./content-artifact.js";
 export {
+  signEvalAttestation,
+  verifyEvalAttestation,
+  EVAL_ATTESTATION_SUITE,
+  EVAL_KINDS_MIRROR,
+} from "./eval-attestation.js";
+export type { VerifyEvalAttestationResult } from "./eval-attestation.js";
+export {
   computeCredentialLeaf,
   verifyCredentialAnchor,
   verifyRevocationAnchor,
