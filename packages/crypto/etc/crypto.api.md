@@ -6,6 +6,7 @@
 
 import type { AdjudicatorVote } from '@motebit/protocol';
 import type { ApprovalDecision } from '@motebit/protocol';
+import type { AuthorityVerdict } from '@motebit/protocol';
 import type { BalanceWaiver } from '@motebit/protocol';
 import type { BondCommitment } from '@motebit/protocol';
 import type { ComputerSessionActionRecord } from '@motebit/protocol';
@@ -34,6 +35,8 @@ import type { GoalExecutionManifest } from '@motebit/protocol';
 import type { HardwareAttestationClaim } from '@motebit/protocol';
 import type { HorizonWitness } from '@motebit/protocol';
 import type { HorizonWitnessRequestBody } from '@motebit/protocol';
+import type { IdentityBindingVerdict } from '@motebit/protocol';
+import type { IntegrityVerdict } from '@motebit/protocol';
 import type { InvoiceV1 } from '@motebit/protocol';
 import type { InvoiceVerdict } from '@motebit/protocol';
 import type { MerkleTreeVersion } from '@motebit/protocol';
@@ -42,7 +45,11 @@ import type { MigrationRequest } from '@motebit/protocol';
 import type { MigrationToken } from '@motebit/protocol';
 import type { ProjectionClass } from '@motebit/protocol';
 import type { RelayMetadata } from '@motebit/protocol';
+import type { RepairInstruction } from '@motebit/protocol';
 import type { RetentionManifest } from '@motebit/protocol';
+import type { RevocationFreshness } from '@motebit/protocol';
+import type { RevocationStatus } from '@motebit/protocol';
+import type { RevocationVerdict } from '@motebit/protocol';
 import type { SettlementAsset } from '@motebit/protocol';
 import type { SettlementRecord } from '@motebit/protocol';
 import type { SignableComputerSessionReceipt } from '@motebit/protocol';
@@ -53,6 +60,9 @@ import type { SkillSignature } from '@motebit/protocol';
 import type { StandingDelegation } from '@motebit/protocol';
 import type { SubjectBindingV1 } from '@motebit/protocol';
 import type { SuiteId } from '@motebit/protocol';
+import type { TemporalBasis } from '@motebit/protocol';
+import type { VerdictSubject } from '@motebit/protocol';
+import type { VerificationVerdict } from '@motebit/protocol';
 import type { WithdrawalReceiptPayload } from '@motebit/protocol';
 import type { WitnessOmissionDispute } from '@motebit/protocol';
 
@@ -144,8 +154,7 @@ export type ArtifactType = VerifyResult["type"];
 // @public
 export type AttestationPlatform = HardwareAttestationClaim["platform"];
 
-// @public
-export type AuthorityVerdict = "valid" | "expired" | "not_yet_valid" | "insufficient" | "unknown";
+export { AuthorityVerdict }
 
 // @public
 export const BALANCE_WAIVER_SUITE: "motebit-jcs-ed25519-b64-v1";
@@ -737,8 +746,7 @@ export function hexPublicKeyToDidKey(hexPublicKey: string): string;
 // @public (undocumented)
 export function hexToBytes(hex: string): Uint8Array;
 
-// @public
-export type IdentityBindingVerdict = "sovereign" | "anchored" | "pinned" | "unverified" | "invalid";
+export { IdentityBindingVerdict }
 
 // @public
 export interface IdentityLogInclusionProof {
@@ -770,8 +778,7 @@ export interface IdentityVerifyResult extends BaseResult {
     type: "identity";
 }
 
-// @public
-export type IntegrityVerdict = "verified" | "invalid";
+export { IntegrityVerdict }
 
 export { InvoiceV1 }
 
@@ -1027,14 +1034,7 @@ export interface ReceiptVerifyResult extends BaseResult {
     type: "receipt";
 }
 
-// @public
-export interface RepairInstruction {
-    axis: "integrity" | "identityBinding" | "authority" | "revocation";
-    canonical?: string;
-    code: string;
-    fix: string;
-    summary: string;
-}
+export { RepairInstruction }
 
 // @public (undocumented)
 export interface ReputationCredentialSubject {
@@ -1094,30 +1094,11 @@ export interface RevocationAnchorVerifyResult {
     valid: boolean;
 }
 
-// @public
-export interface RevocationFreshness {
-    // (undocumented)
-    asOf: {
-        timestamp_ms?: number;
-        anchor?: {
-            chain: string;
-            slot?: number;
-            height?: number;
-        };
-    };
-    // (undocumented)
-    basis: "asserted" | "stapled" | "ledger";
-}
+export { RevocationFreshness }
 
-// @public
-export type RevocationStatus = "fresh" | "stale" | "unchecked" | "revoked";
+export { RevocationStatus }
 
-// @public (undocumented)
-export interface RevocationVerdict {
-    freshness?: RevocationFreshness;
-    // (undocumented)
-    status: RevocationStatus;
-}
+export { RevocationVerdict }
 
 // @public
 export const SETTLEMENT_RECORD_SUITE: "motebit-jcs-ed25519-b64-v1";
@@ -1597,8 +1578,7 @@ export interface SuccessionRecord {
     timestamp: number;
 }
 
-// @public
-export type TemporalBasis = "clockless" | "local_clock" | "ledger_anchored";
+export { TemporalBasis }
 
 // @public (undocumented)
 export function toBase64Url(data: Uint8Array): string;
@@ -1646,8 +1626,7 @@ export interface UnknownVerifyResult extends BaseResult {
     valid: false;
 }
 
-// @public
-export type VerdictSubject = ArtifactType | "delegation_token";
+export { VerdictSubject }
 
 // @public (undocumented)
 export interface VerifiableCredential<T = Record<string, unknown>> {
@@ -1696,23 +1675,7 @@ export interface VerificationError {
     path?: string;
 }
 
-// @public (undocumented)
-export interface VerificationVerdict {
-    // (undocumented)
-    authority: AuthorityVerdict;
-    // (undocumented)
-    evidenceBasis: readonly EvidenceRef[];
-    // (undocumented)
-    identityBinding: IdentityBindingVerdict;
-    // (undocumented)
-    integrity: IntegrityVerdict;
-    repair?: RepairInstruction;
-    // (undocumented)
-    revocation: RevocationVerdict;
-    // (undocumented)
-    temporalBasis: TemporalBasis;
-    type: VerdictSubject;
-}
+export { VerificationVerdict }
 
 // @public
 export function verify(artifact: unknown, options?: VerifyOptions): Promise<VerifyResult>;

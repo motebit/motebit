@@ -3522,6 +3522,24 @@ export {
   isProjectionClass,
 } from "./evidence-provenance.js";
 
+// Structured verification-verdict vocabulary — graduated from @motebit/crypto
+// (2026-07-08, EvalAttestation arc): protocol is the closed verdict
+// vocabulary's home, EvalAttestation embeds whole verdicts per measurement,
+// and wire-schemas needs the shape for its zod parity block. Crypto
+// re-exports these type-only and keeps the ArtifactType-containment assert.
+export type {
+  IntegrityVerdict,
+  IdentityBindingVerdict,
+  AuthorityVerdict,
+  RevocationStatus,
+  TemporalBasis,
+  RevocationFreshness,
+  RevocationVerdict,
+  RepairInstruction,
+  VerdictSubject,
+  VerificationVerdict,
+} from "./verification-verdict.js";
+
 // Merkle tree-hash version registry — the agility axis for leaf/node domain
 // separation (RFC 6962 §2.1). Separate from `SuiteId` (signature recipe): this
 // names the tree-hash recipe that builds the root the signature commits to. A

@@ -600,6 +600,9 @@ export interface AuthorityDelta {
 }
 
 // @public
+export type AuthorityVerdict = "valid" | "expired" | "not_yet_valid" | "insufficient" | "unknown";
+
+// @public
 export interface BalanceWaiver {
     motebit_id: string;
     signature: string;
@@ -2197,6 +2200,9 @@ export interface HorizonWitnessRequestBody {
 }
 
 // @public
+export type IdentityBindingVerdict = "sovereign" | "anchored" | "pinned" | "unverified" | "invalid";
+
+// @public
 export interface IdentityGuardian {
     established_at: string;
     organization?: string;
@@ -2236,6 +2242,9 @@ export interface InjectionWarning {
     // (undocumented)
     structuralFlags?: string[];
 }
+
+// @public
+export type IntegrityVerdict = "verified" | "invalid";
 
 // @public
 export type IntentOrigin = "user-tap" | "ai-loop" | "scheduled" | "agent-to-agent";
@@ -3209,6 +3218,15 @@ export interface RelayMetadataPeer {
 // @public
 export const ReliabilitySemiring: Semiring<number>;
 
+// @public
+export interface RepairInstruction {
+    axis: "integrity" | "identityBinding" | "authority" | "revocation";
+    canonical?: string;
+    code: string;
+    fix: string;
+    summary: string;
+}
+
 // @public (undocumented)
 export interface ReputationCredentialSubject {
     // (undocumented)
@@ -3289,6 +3307,31 @@ export interface RetentionStoreDeclaration {
     readonly shape: RetentionShapeDeclaration;
     readonly store_id: string;
     readonly store_name: string;
+}
+
+// @public
+export interface RevocationFreshness {
+    // (undocumented)
+    asOf: {
+        timestamp_ms?: number;
+        anchor?: {
+            chain: string;
+            slot?: number;
+            height?: number;
+        };
+    };
+    // (undocumented)
+    basis: "asserted" | "stapled" | "ledger";
+}
+
+// @public
+export type RevocationStatus = "fresh" | "stale" | "unchecked" | "revoked";
+
+// @public (undocumented)
+export interface RevocationVerdict {
+    freshness?: RevocationFreshness;
+    // (undocumented)
+    status: RevocationStatus;
 }
 
 // @public (undocumented)
@@ -4138,6 +4181,9 @@ export const TASK_SUBMIT_AUDIENCE: TokenAudience;
 export type TaskShape = "quick" | "chat" | "reasoning" | "code" | "research" | "creative" | "math";
 
 // @public
+export type TemporalBasis = "clockless" | "local_clock" | "ledger_anchored";
+
+// @public
 export function toCents(dollars: number): number;
 
 // @public
@@ -4607,6 +4653,27 @@ export const VC_TYPE_REPUTATION = "AgentReputationCredential";
 
 // @public (undocumented)
 export const VC_TYPE_TRUST = "AgentTrustCredential";
+
+// @public
+export type VerdictSubject = "identity" | "receipt" | "tool-invocation" | "credential" | "presentation" | "skill" | "unknown" | "delegation_token" | "succession" | "revocation" | "bond_commitment" | "solvency_proof";
+
+// @public
+export interface VerificationVerdict {
+    // (undocumented)
+    authority: AuthorityVerdict;
+    // (undocumented)
+    evidenceBasis: readonly EvidenceRef[];
+    // (undocumented)
+    identityBinding: IdentityBindingVerdict;
+    // (undocumented)
+    integrity: IntegrityVerdict;
+    repair?: RepairInstruction;
+    // (undocumented)
+    revocation: RevocationVerdict;
+    // (undocumented)
+    temporalBasis: TemporalBasis;
+    type: VerdictSubject;
+}
 
 // @public
 export interface VoteRequest {
