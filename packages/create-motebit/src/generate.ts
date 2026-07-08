@@ -98,7 +98,7 @@ function generateUUIDv7(): string {
  * offline for ids minted this way.
  */
 async function deriveSovereignMotebitId(publicKey: Uint8Array): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", publicKey));
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(publicKey)));
   const b = digest.slice(0, 16);
   b[6] = 0x80 | (b[6]! & 0x0f); // version 8 (RFC 9562, vendor-specific)
   b[8] = 0x80 | (b[8]! & 0x3f); // variant 10b
@@ -151,7 +151,7 @@ async function deriveKey(
     ["deriveBits"],
   );
   const bits = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
+    { name: "PBKDF2", salt: new Uint8Array(salt), iterations, hash: "SHA-256" },
     keyMaterial,
     256,
   );
@@ -163,8 +163,14 @@ async function encrypt(
   key: Uint8Array,
 ): Promise<{ ciphertext: Uint8Array; nonce: Uint8Array; tag: Uint8Array }> {
   const nonce = generateNonce();
-  const cryptoKey = await crypto.subtle.importKey("raw", key, "AES-GCM", false, ["encrypt"]);
-  const result = await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, cryptoKey, plaintext);
+  const cryptoKey = await crypto.subtle.importKey("raw", new Uint8Array(key), "AES-GCM", false, [
+    "encrypt",
+  ]);
+  const result = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: new Uint8Array(nonce) },
+    cryptoKey,
+    new Uint8Array(plaintext),
+  );
   const resultArray = new Uint8Array(result);
   // AES-GCM appends a 16-byte tag
   const ciphertext = resultArray.slice(0, resultArray.length - 16);
@@ -179,12 +185,14 @@ export async function decrypt(
   payload: { ciphertext: Uint8Array; nonce: Uint8Array; tag: Uint8Array },
   key: Uint8Array,
 ): Promise<Uint8Array> {
-  const cryptoKey = await crypto.subtle.importKey("raw", key, "AES-GCM", false, ["decrypt"]);
+  const cryptoKey = await crypto.subtle.importKey("raw", new Uint8Array(key), "AES-GCM", false, [
+    "decrypt",
+  ]);
   const combined = new Uint8Array(payload.ciphertext.length + payload.tag.length);
   combined.set(payload.ciphertext);
   combined.set(payload.tag, payload.ciphertext.length);
   const result = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: payload.nonce },
+    { name: "AES-GCM", iv: new Uint8Array(payload.nonce) },
     cryptoKey,
     combined,
   );

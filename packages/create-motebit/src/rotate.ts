@@ -140,7 +140,7 @@ async function deriveKey(
     ["deriveBits"],
   );
   const bits = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
+    { name: "PBKDF2", salt: new Uint8Array(salt), iterations, hash: "SHA-256" },
     keyMaterial,
     256,
   );
@@ -152,8 +152,14 @@ async function encrypt(
   key: Uint8Array,
 ): Promise<{ ciphertext: Uint8Array; nonce: Uint8Array; tag: Uint8Array }> {
   const nonce = generateNonce();
-  const cryptoKey = await crypto.subtle.importKey("raw", key, "AES-GCM", false, ["encrypt"]);
-  const result = await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, cryptoKey, plaintext);
+  const cryptoKey = await crypto.subtle.importKey("raw", new Uint8Array(key), "AES-GCM", false, [
+    "encrypt",
+  ]);
+  const result = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: new Uint8Array(nonce) },
+    cryptoKey,
+    new Uint8Array(plaintext),
+  );
   const resultArray = new Uint8Array(result);
   const ciphertext = resultArray.slice(0, resultArray.length - 16);
   const tag = resultArray.slice(resultArray.length - 16);
