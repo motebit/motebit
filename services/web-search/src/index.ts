@@ -349,7 +349,8 @@ async function main(): Promise<void> {
               { capability: "read_url", unit_cost: unitCost, currency: "USD", per: "request" },
             ],
             sla: { max_latency_ms: 30_000, availability_guarantee: 0.99 },
-            description: `motebit-web-search-${motebitId.slice(0, 8)}`,
+            description:
+              "Web search atom: query the live web (Tavily, Brave, DuckDuckGo provider chain) and fetch pages, each result bound into a signed execution receipt.",
           }),
       };
     },

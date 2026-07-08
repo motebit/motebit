@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 #
+# DEPRECATED (2026-07-08, archetype arc): this is the original two-service
+# manual ceremony. It predates service identity self-bootstrap (it prompts
+# for MOTEBIT_PRIVATE_KEY_HEX) and still references the removed
+# `POST /api/v1/agents/:id/deposit` admin route, so step 5 cannot work
+# against a current relay. Use `scripts/deploy-archetype-slate.ts` for the
+# full marketplace slate (atoms + molecules, staging or prod). Kept for the
+# relay-deploy walkthrough it documents; do not run end-to-end.
+#
 # deploy-money-loop.sh — Deploy relay + web-search service, run the first money loop.
 #
 # Prerequisites:

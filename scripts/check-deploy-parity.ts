@@ -240,16 +240,25 @@ function main(): void {
     // deps; transitive optional-of-workspace-dep drops. Direct declaration
     // is the single mechanism that guarantees the binding reaches the
     // runtime image.
+    //
+    // The trigger set includes @motebit/molecule-runner: every molecule
+    // service opens a Motebit database through the runner's persistence
+    // dependency, so the transitive drop hits them identically — the
+    // 2026-07-08 archetype-arc review found all five marketplace services
+    // exposed this way while only the relay (direct persistence dep) was
+    // covered.
     const pkgJsonPath = join(serviceDir, "package.json");
     if (existsSync(pkgJsonPath)) {
       const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf-8")) as {
         dependencies?: Record<string, string>;
       };
       const deps = pkg.dependencies ?? {};
-      if ("@motebit/persistence" in deps && !("better-sqlite3" in deps)) {
+      const persistenceCarriers = ["@motebit/persistence", "@motebit/molecule-runner"];
+      const carrier = persistenceCarriers.find((c) => c in deps);
+      if (carrier != null && !("better-sqlite3" in deps)) {
         violations.push({
           service: svc,
-          detail: `${relative(ROOT, pkgJsonPath)} depends on @motebit/persistence but does not declare "better-sqlite3" directly — \`pnpm deploy --prod\` will drop the native binding (it's an optionalDependency of persistence for the CLI scaffold's sql.js fallback path) and the running service will silently degrade to sql.js (WAL disabled, full-file rewrites on a 1s debounce). Add \`"better-sqlite3": "^12.0.0"\` to this service's dependencies`,
+          detail: `${relative(ROOT, pkgJsonPath)} depends on ${carrier} (a @motebit/persistence carrier) but does not declare "better-sqlite3" directly — \`pnpm deploy --prod\` will drop the native binding (it's an optionalDependency of persistence for the CLI scaffold's sql.js fallback path) and the running service will silently degrade to sql.js (WAL disabled, full-file rewrites on a 1s debounce). Add \`"better-sqlite3": "^12.0.0"\` to this service's dependencies`,
         });
       }
     }

@@ -204,10 +204,11 @@ async function main(): Promise<void> {
           Promise.resolve({
             capabilities: ["research"],
             pricing: [
-              { capability: "research", unit_cost: unitCost, currency: "USD", per: "report" },
+              { capability: "research", unit_cost: unitCost, currency: "USD", per: "task" },
             ],
             sla: { max_latency_ms: 120_000, availability_guarantee: 0.95 },
-            description: `motebit-research-${motebitId.slice(0, 8)}`,
+            description:
+              "Research with receipts: composes web-search and read-url atoms, returns a cited report whose every web claim carries a content digest you can re-verify. The delegation chain arrives as nested signed receipts.",
           }),
       };
     },
