@@ -1,0 +1,47 @@
+# Staging variant — the archetype slate deploys here first; promotion to the
+# prod app is gated on consecutive green conformance runs
+# (docs/doctrine/agent-archetypes.md §4). Same shape as fly.toml with the
+# staging app name; secrets (MOTEBIT_SYNC_URL -> the staging relay, etc.)
+# are set per-app by scripts/deploy-archetype-slate.ts.
+app = "motebit-auditor-stg"
+primary_region = "sjc"
+kill_signal = "SIGINT"
+kill_timeout = 5
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  MOTEBIT_PORT = "3600"
+  MOTEBIT_DB_PATH = "/data/auditor.db"
+  MOTEBIT_DATA_DIR = "/data"
+
+[http_service]
+  internal_port = 3600
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 100
+    soft_limit = 80
+
+  [[http_service.checks]]
+    interval = "15s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/health"
+    protocol = "http"
+    timeout = "2s"
+
+[mounts]
+  source = "auditor_data"
+  destination = "/data"
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1

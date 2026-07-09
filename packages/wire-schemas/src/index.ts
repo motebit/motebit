@@ -350,3 +350,13 @@ export {
   WITNESS_SOLICITATION_RESPONSE_SCHEMA_ID,
   buildWitnessSolicitationResponseJsonSchema,
 } from "./witness-omission-dispute.js";
+
+export {
+  EvalAttestationSchema,
+  EvalResultSchema,
+  VerificationVerdictSchema,
+  RepairInstructionSchema,
+  RevocationVerdictSchema,
+  EVAL_ATTESTATION_SCHEMA_ID,
+  buildEvalAttestationJsonSchema,
+} from "./eval-attestation.js";

@@ -51,7 +51,7 @@ function createResearchHandler(getResearchConfig: () => ResearchConfig): ToolHan
     try {
       const result = await research(question, getResearchConfig());
       log(
-        `research complete: ${result.report.length} chars, ${result.search_count} searches, ${result.fetch_count} fetches, ${result.delegation_receipts.length} receipts`,
+        `research complete: ${result.report.length} chars, ${result.search_count} searches, ${result.fetch_count} fetches, ${result.delegation_receipts.length} receipts, report_cost_estimate_usd=${result.cost_estimate_usd.toFixed(4)}`,
       );
       return {
         ok: true,
@@ -86,7 +86,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const unitCost = parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.25");
+  // Default covers worst-case sonnet inference (~$0.26–0.42/report at the
+  // 8-tool-call cap) — the per-report cost_estimate_usd log is the tuning
+  // signal before any prod price change.
+  const unitCost = parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.50");
 
   await runMolecule(
     {
@@ -94,7 +97,7 @@ async function main(): Promise<void> {
       dbPath: config.dbPath,
       port: config.port,
       serviceName: "motebit-research",
-      displayName: "Research",
+      displayName: "The Researcher",
       serviceDescription:
         "Web research agent — investigates a question via motebit's web-search and read-url atoms, returns a synthesized report with a verifiable citation chain (signed delegation_receipts)",
       capabilities: ["research"],
@@ -204,10 +207,11 @@ async function main(): Promise<void> {
           Promise.resolve({
             capabilities: ["research"],
             pricing: [
-              { capability: "research", unit_cost: unitCost, currency: "USD", per: "report" },
+              { capability: "research", unit_cost: unitCost, currency: "USD", per: "task" },
             ],
             sla: { max_latency_ms: 120_000, availability_guarantee: 0.95 },
-            description: `motebit-research-${motebitId.slice(0, 8)}`,
+            description:
+              "Research with receipts: composes web-search and read-url atoms, returns a cited report whose every web claim carries a content digest you can re-verify. The delegation chain arrives as nested signed receipts.",
           }),
       };
     },

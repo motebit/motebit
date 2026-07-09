@@ -15,6 +15,7 @@ import { AgentSigilMark } from "./agent-sigil";
 import {
   createAgentsController,
   formatHardwarePlatform,
+  formatNameClaim,
   formatLatency,
   economicForPeer,
   formatPeerEconomics,
@@ -401,6 +402,16 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
                       <LatencyReadout latency_stats={item.latency_stats} styles={styles} />
                     </View>
                   </View>
+                  {/* Self-asserted name + description — CLAIMS, never verified
+                      handles (trust-graph §3); formatNameClaim clamps. */}
+                  {item.display_name != null && item.display_name.trim().length > 0 && (
+                    <Text style={styles.nameClaim}>{formatNameClaim(item.display_name)}</Text>
+                  )}
+                  {item.description != null && item.description.trim().length > 0 && (
+                    <Text style={styles.agentDesc} numberOfLines={2}>
+                      {item.description.trim().slice(0, 200)}
+                    </Text>
+                  )}
                   {item.capabilities.length > 0 && (
                     <View style={styles.capsRow}>
                       {item.capabilities.map((cap) => {
@@ -510,6 +521,18 @@ function createStyles(c: ThemeColors) {
       fontSize: 13,
       fontWeight: "600",
       fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    },
+    nameClaim: {
+      color: c.textPrimary,
+      fontSize: 13,
+      fontStyle: "italic",
+      marginTop: 4,
+    },
+    agentDesc: {
+      color: c.textSecondary,
+      fontSize: 12,
+      lineHeight: 16,
+      marginTop: 2,
     },
     trustBadge: {
       borderWidth: 1,

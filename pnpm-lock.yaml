@@ -2310,6 +2310,43 @@ importers:
         specifier: ^4.1.10
         version: 4.1.10(@types/node@22.19.11)(@vitest/coverage-v8@4.1.10)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@8.1.3(@types/node@22.19.11)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
 
+  services/auditor:
+    dependencies:
+      '@motebit/molecule-runner':
+        specifier: workspace:*
+        version: link:../../packages/molecule-runner
+      '@motebit/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+      '@motebit/state-export-client':
+        specifier: workspace:*
+        version: link:../../packages/state-export-client
+      '@motebit/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
+      '@motebit/verifier':
+        specifier: workspace:*
+        version: link:../../packages/verifier
+      better-sqlite3:
+        specifier: ^12.11.1
+        version: 12.11.1
+    devDependencies:
+      '@motebit/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
+      tsx:
+        specifier: ^4.22.4
+        version: 4.22.4
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@types/node@22.19.11)(@vitest/coverage-v8@4.1.10)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@8.1.3(@types/node@22.19.11)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
+
   services/browser-sandbox:
     dependencies:
       '@hono/node-server':
@@ -2364,6 +2401,9 @@ importers:
       '@motebit/tools':
         specifier: workspace:*
         version: link:../../packages/tools
+      better-sqlite3:
+        specifier: ^12.11.1
+        version: 12.11.1
     devDependencies:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
@@ -2460,6 +2500,9 @@ importers:
       '@motebit/tools':
         specifier: workspace:*
         version: link:../../packages/tools
+      better-sqlite3:
+        specifier: ^12.11.1
+        version: 12.11.1
     devDependencies:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
@@ -2618,6 +2661,9 @@ importers:
       '@motebit/tools':
         specifier: workspace:*
         version: link:../../packages/tools
+      better-sqlite3:
+        specifier: ^12.11.1
+        version: 12.11.1
     devDependencies:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
@@ -2661,6 +2707,9 @@ importers:
       '@motebit/tools':
         specifier: workspace:*
         version: link:../../packages/tools
+      better-sqlite3:
+        specifier: ^12.11.1
+        version: 12.11.1
     devDependencies:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
@@ -2701,6 +2750,9 @@ importers:
       '@motebit/tools':
         specifier: workspace:*
         version: link:../../packages/tools
+      better-sqlite3:
+        specifier: ^12.11.1
+        version: 12.11.1
     devDependencies:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
@@ -13588,7 +13640,7 @@ snapshots:
       '@jest/schemas': 29.6.3
       '@types/istanbul-lib-coverage': 2.0.6
       '@types/istanbul-reports': 3.0.4
-      '@types/node': 26.0.1
+      '@types/node': 22.19.11
       '@types/yargs': 17.0.35
       chalk: 4.1.2
 
@@ -15972,6 +16024,7 @@ snapshots:
   '@types/node@26.0.1':
     dependencies:
       undici-types: 8.3.0
+    optional: true
 
   '@types/prop-types@15.7.15': {}
 
@@ -16219,7 +16272,7 @@ snapshots:
       obug: 2.1.3
       std-env: 4.1.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.10(@types/node@22.19.11)(@vitest/coverage-v8@4.1.10)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@8.1.3(@types/node@22.19.11)(esbuild@0.27.3)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
+      vitest: 4.1.10(@types/node@26.0.1)(@vitest/coverage-v8@4.1.10)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@8.1.3(@types/node@26.0.1)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
 
   '@vitest/expect@4.1.10':
     dependencies:
@@ -16915,7 +16968,7 @@ snapshots:
 
   chrome-launcher@0.15.2:
     dependencies:
-      '@types/node': 26.0.1
+      '@types/node': 22.19.11
       escape-string-regexp: 4.0.0
       is-wsl: 2.2.0
       lighthouse-logger: 1.4.2
@@ -19003,7 +19056,7 @@ snapshots:
   jest-util@29.7.0:
     dependencies:
       '@jest/types': 29.6.3
-      '@types/node': 26.0.1
+      '@types/node': 22.19.11
       chalk: 4.1.2
       ci-info: 3.9.0
       graceful-fs: 4.2.11
@@ -19020,7 +19073,7 @@ snapshots:
 
   jest-worker@29.7.0:
     dependencies:
-      '@types/node': 26.0.1
+      '@types/node': 22.19.11
       jest-util: 29.7.0
       merge-stream: 2.0.0
       supports-color: 8.1.1
@@ -22158,7 +22211,8 @@ snapshots:
 
   undici-types@7.28.0: {}
 
-  undici-types@8.3.0: {}
+  undici-types@8.3.0:
+    optional: true
 
   unicode-canonical-property-names-ecmascript@2.0.1: {}
 

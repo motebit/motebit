@@ -200,7 +200,8 @@ async function main(): Promise<void> {
               { capability: "review_pr", unit_cost: unitCost, currency: "USD", per: "review" },
             ],
             sla: { max_latency_ms: 60_000, availability_guarantee: 0.95 },
-            description: `motebit-code-review-${motebitId.slice(0, 8)}`,
+            description:
+              "Code review molecule: fetches a public PR patch through the read-url atom and returns structured review findings under a signed receipt with the fetch receipt nested.",
           }),
       };
     },

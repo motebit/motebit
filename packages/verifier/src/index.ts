@@ -156,3 +156,40 @@ export {
 // an injected, app-owned seam, so a present projection with no resolver fails
 // closed). Paired with the verdict's `EvidenceRef.provenance` above.
 export { verifyEvidenceProvenance } from "@motebit/crypto";
+
+// The public-verification-surface laws (widened 2026-07-08 for the Auditor
+// archetype — services consume ONLY this aggregator, never @motebit/crypto
+// directly, per check-service-primitives; the consume-never-fork contract
+// extends to every law an auditor composes). NOT auto-detected — each is
+// verified explicitly against artifacts the caller fetched:
+//   - verifySovereignBinding: the identity rung law (motebit_id commits to
+//     the genesis key; offline, no operator).
+//   - verifyKeySuccession / verifySuccessionChain: key-lineage laws over the
+//     self-signed succession chain a relay serves publicly.
+//   - verifyBondCommitment: the anti-sybil address-binding + self-signature
+//     law (bonded_address MUST equal the bonded key's Solana address).
+//   - verifyMerkleInclusion: RFC 6962-shaped inclusion proofs (settlement
+//     anchors, identity-transparency bundles).
+export {
+  verifySovereignBinding,
+  verifyKeySuccession,
+  verifySuccessionChain,
+  verifyBondCommitment,
+  verifyMerkleInclusion,
+} from "@motebit/crypto";
+
+// EvalAttestation — the signed third-party-measurement artifact the Auditor
+// issues (subject ≠ signer; docs/doctrine/evals-as-attestations.md, promoted
+// 2026-07-08; spec/eval-attestation-v1.md). The sign side is re-exported for
+// issuer services (the signRequestEnvelope precedent); the verify law
+// establishes "this issuer said this about this subject" and deliberately
+// never measurement truth / issuer authority / key→id binding / freshness —
+// consumers re-check the cited evidence via verifyEvidenceProvenance and the
+// verdict producers above.
+export {
+  signEvalAttestation,
+  verifyEvalAttestation,
+  EVAL_ATTESTATION_SUITE,
+} from "@motebit/crypto";
+export type { VerifyEvalAttestationResult } from "@motebit/crypto";
+export type { EvalAttestation, EvalResult, EvalKind } from "@motebit/protocol";

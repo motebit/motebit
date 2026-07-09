@@ -26,6 +26,7 @@ export {
   collectCapabilities,
   scoreHardwareAttestation,
   formatHardwarePlatform,
+  formatNameClaim,
   formatLatency,
   shortMotebitId,
   agentDisplayLabel,

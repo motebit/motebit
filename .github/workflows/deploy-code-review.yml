@@ -27,8 +27,10 @@ jobs:
       # setup before the first deploy:
       #   fly apps create motebit-code-review
       #   fly volumes create code_review_data --size 1 --region sjc
-      #   fly secrets set ANTHROPIC_API_KEY=... GITHUB_TOKEN=... \
+      #   fly secrets set ANTHROPIC_API_KEY=... \
       #                   MOTEBIT_SYNC_URL=... MOTEBIT_API_TOKEN=...
+      # (No GITHUB_TOKEN — the service fetches public PR patches through
+      # the read-url atom; private repos are unsupported by design.)
       - name: Deploy to Fly.io
         run: flyctl deploy --config services/code-review/fly.toml --remote-only
         env:

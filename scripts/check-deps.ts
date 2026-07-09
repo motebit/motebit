@@ -250,6 +250,13 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     // closed registry per docs/doctrine/registry-pattern-canonical.md.
     // Same shape as `isSettlementMode`.
     "isAgentRevocationReason",
+    // Eval-kind vocabulary — pure type guard over the frozen
+    // `ALL_EVAL_KINDS` array (EvalAttestation measurement families).
+    // The eleventh registered closed registry per
+    // docs/doctrine/registry-pattern-canonical.md; the fail-closed
+    // wire-intake consumer is verifyEvalAttestation in @motebit/crypto.
+    // Same shape as `isSettlementMode`.
+    "isEvalKind",
     // Memory-source provenance vocabulary — pure type guard over the
     // frozen `ALL_MEMORY_SOURCES` array. The tenth registered closed
     // registry per docs/doctrine/registry-pattern-canonical.md.

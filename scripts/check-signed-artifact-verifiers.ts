@@ -116,6 +116,11 @@ export const REGISTRY: Record<string, Classification> = {
   // enforces the anti-sybil address binding in addition to the signature —
   // locked by check-bond-address-binding.
   BondCommitment: { kind: "verifier", verifier: "verifyBondCommitment" },
+  // EvalAttestation — the signed third-party-measurement artifact (subject
+  // ≠ signer; docs/doctrine/evals-as-attestations.md, promoted 2026-07-08).
+  // Self-describing issuer key; the envelope law deliberately excludes
+  // measurement truth / issuer authority / key→id binding.
+  EvalAttestation: { kind: "verifier", verifier: "verifyEvalAttestation" },
   DisputeAppeal: { kind: "verifier", verifier: "verifyDisputeAppeal" },
   DisputeEvidence: { kind: "verifier", verifier: "verifyDisputeEvidence" },
   DisputeRequest: { kind: "verifier", verifier: "verifyDisputeRequest" },

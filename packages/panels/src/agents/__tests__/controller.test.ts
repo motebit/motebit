@@ -19,6 +19,7 @@ import {
   type AgentsFetchAdapter,
   type DiscoveredAgent,
   type SortKey,
+  formatNameClaim,
 } from "../controller.js";
 
 // ── Mock adapter ──────────────────────────────────────────────────────
@@ -396,5 +397,21 @@ describe("formatLatency helper", () => {
   it("rounds avg to integer milliseconds below 1000ms", () => {
     expect(formatLatency({ avg_ms: 87.4, p95_ms: 90, sample_count: 3 })).toBe("87ms");
     expect(formatLatency({ avg_ms: 87.6, p95_ms: 90, sample_count: 3 })).toBe("88ms");
+  });
+});
+
+describe("formatNameClaim", () => {
+  it("frames the self-asserted name as a claim, never a verified handle", () => {
+    expect(formatNameClaim("The Researcher")).toBe("claims \u201cThe Researcher\u201d");
+  });
+
+  it("clamps client-side — federated peers don't cap", () => {
+    const long = "x".repeat(200);
+    const out = formatNameClaim(long);
+    expect(out.length).toBeLessThanOrEqual("claims \u201c\u201d".length + 64);
+  });
+
+  it("trims surrounding whitespace before framing", () => {
+    expect(formatNameClaim("  The Auditor  ")).toBe("claims \u201cThe Auditor\u201d");
   });
 });

@@ -5,7 +5,7 @@ description: Monorepo structure, enforced layers, services, specs, and data flow
 
 Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **53 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 9 services · 32 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
+The shape is **53 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 10 services · 33 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
 <DiagramFigure
   src="protocol-stack"
@@ -119,6 +119,7 @@ motebit/
 │   ├── relay/                 [relay]       Sync, settlement, federation, discovery, disputes.
 │   ├── research/              [molecule]    $0.25/report. Claude + web search, signed citation chain.
 │   ├── code-review/           [molecule]    $0.50/review. Claude-powered, signed receipts.
+│   ├── auditor/               [molecule]    $0.05/audit. LLM-free — measures an agent's public verification surface, signs an eval attestation.
 │   ├── web-search/            [atom]        $0.05/request. Single-hop + multi-hop delegation proof.
 │   ├── read-url/              [atom]        Minimal read-url service. Second hop in multi-hop proof.
 │   ├── summarize/             [atom]        Conversation summarization.
@@ -126,7 +127,7 @@ motebit/
 │   ├── browser-sandbox/       [atom]        Playwright-driven Chromium for the virtual_browser embodiment — second computer-use-v1 producer.
 │   └── proxy/                 [glue]        Vercel edge CORS proxy for the web app.
 │
-├── spec/                      # 32 open specifications, each motebit/<name>@1.0
+├── spec/                      # 33 open specifications, each motebit/<name>@1.0
 │   ├── identity-v1.md                       motebit.md format, signing, multi-device, guardian, succession.
 │   ├── execution-ledger-v1.md               Timeline, signed manifests, receipt structure.
 │   ├── relay-federation-v1.md               Peering, discovery, cross-relay routing, circuit breaker.
@@ -158,7 +159,8 @@ motebit/
 │   ├── skills-v1.md                         agentskills.io-compatible procedural-knowledge files with motebit-namespaced extensions for cryptographic provenance, sensitivity-tiered loading, and HA gating.
 │   ├── skills-registry-v1.md                Relay-hosted index of submitted skill envelopes. Permissive submit, curated discovery, content-addressed identity, consumer-side re-verification.
 │   ├── bond-v1.md                           Agent's own sovereign capital as an anti-sybil staked signal — self-signed proof-of-funds, RPC-verified never custodied; address bound to identity. Phase 1: signal, not recourse.
-│   └── evidence-provenance-v1.md            Re-verifiable provenance on a verdict's EvidenceRef — a content-addressed verbatim span in a primary record; the byte-determinism conformance requirement for projection recipes. Verifiable-locality from signatures to evidence.
+│   ├── evidence-provenance-v1.md            Re-verifiable provenance on a verdict's EvidenceRef — a content-addressed verbatim span in a primary record; the byte-determinism conformance requirement for projection recipes. Verifiable-locality from signatures to evidence.
+│   └── eval-attestation-v1.md               Signed third-party measurement (subject ≠ signer) — per-axis verdicts embedded whole, closed EvalKind intake, envelope law only; the Auditor archetype's deliverable.
 │
 └── scripts/                   # Drift-defense CI gates
     ├── check-deps.ts                        Layer DAG enforcement. Source of truth for L0–L6.
@@ -233,12 +235,12 @@ Every structured-data module registers its kind via `registerSpatialDataModule<K
 
 ## Services
 
-Nine services in four roles. All are reference implementations of the protocol specs — swappable by anyone running a compliant alternative.
+Ten services in four roles. All are reference implementations of the protocol specs — swappable by anyone running a compliant alternative.
 
 | Role          | Services                                                       | Pattern                                                                                                                                                            |
 | ------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Relay**     | `relay`                                                        | The only function with a legitimate centralization premium — multi-device sync. Also: settlement, federation, discovery, 5-tier rate limiting, dispute resolution. |
-| **Molecules** | `research` ($0.25/report), `code-review` ($0.50/review)        | Agents that reason and compose other agents. Claude-powered. Emit signed delegation receipt chains as citation proof.                                              |
+| **Molecules** | `research` ($0.25/report), `code-review` ($0.50/review), `auditor` ($0.05/audit) | Agents that reason and compose. `research`/`code-review` are Claude-powered and emit signed delegation receipt chains; `auditor` is LLM-free — it measures another agent's public verification surface and signs an eval attestation (subject ≠ signer).          |
 | **Atoms**     | `web-search` ($0.05/request), `read-url`, `summarize`, `embed`, `browser-sandbox` | Capability providers. Single-hop reference implementations of the delegation spec; `browser-sandbox` is per-session rather than stateless.      |
 | **Glue**      | `proxy`                                                        | Vercel edge CORS proxy for the web app (Anthropic API, fetch, embed).                                                                                              |
 
@@ -246,7 +248,7 @@ Every task settles through the relay or directly peer-to-peer. Relay-mediated: b
 
 ## Specifications
 
-All 32 specs (listed in the tree above) are Apache-2.0, published in `spec/`, and have working reference implementations in this repo. A third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required.
+All 33 specs (listed in the tree above) are Apache-2.0, published in `spec/`, and have working reference implementations in this repo. A third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required.
 
 The `motebit.md` identity file is the most-used entry point: any tool can verify one with `@motebit/crypto`, with or without the motebit runtime.
 

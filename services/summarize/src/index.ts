@@ -152,6 +152,18 @@ async function main(): Promise<void> {
       return {
         toolRegistry: registry,
         handleAgentTask,
+        // Published listing — without this the relay auto-creates a default
+        // whose description is the machine-generated server name. Discovery
+        // UIs read description (agent-service-listing schema), so the fleet
+        // publishes real copy.
+        getServiceListing: () =>
+          Promise.resolve({
+            capabilities: ["summarize_search"],
+            pricing: [],
+            sla: { max_latency_ms: 60_000, availability_guarantee: 0.95 },
+            description:
+              "Summarize atom: delegates a web search and condenses the results, returning the summary with the search's signed receipt nested in its own.",
+          }),
         // summarize_search is read-only — no R3 approval default needed.
         // Minimal policy preserves original semantics (the previous
         // hand-rolled boot passed {} as policy overrides).
