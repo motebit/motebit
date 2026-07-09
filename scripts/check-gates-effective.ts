@@ -2169,6 +2169,15 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-home-seed-basis",
+    proves:
+      "flags the home seed's live-accessor coupling breaking — the assembly site answering a config key from something other than its named live accessor (a cached boolean, a constant, a hand-authored bit). Probe rewrites the `relay` key's live syncStatus comparison to a constant true; assertion 2 must fire. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile(`apps/web/src/web-app.ts`, (src) =>
+        src.replace('relay: this._syncStatus === "connected",', "relay: true,"),
+      ),
+  },
+  {
     script: "check-money-authority",
     proves:
       "flags the R4 standing-authority block disappearing from policy-gate.ts — the invariant that an R4_MONEY tool call never auto-executes without a verified standing-delegation grant. Drift class: a refactor that deletes or inverts the grant check (or reorders it ahead of the trust-level switch) silently re-opens 'Trusted caller auto-executes money'. Probe inverts the null-check (`== null` → `!= null`) so the gate's ordered marker regex no longer matches; assertion 1 must fire. byte-identical restoration via mutateFile.",
