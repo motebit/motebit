@@ -200,6 +200,17 @@ export class ArtifactManager {
 
   /** Called every frame after WebGL render to sync CSS overlay positions. */
   render(scene: THREE.Scene, camera: THREE.Camera): void {
+    // An empty overlay is not free: a positioned layer stacked over the
+    // WebGL canvas forces the compositor to split the canvas into a
+    // different tiling path, which can paint a stair-stepped,
+    // color-unmanaged patch at the frame edge at some camera poses (the
+    // "blue blob"; creature-canon.md artifact-zero, caught by the
+    // golden-frame harness — sibling of the recessed-slab CSS3D guard in
+    // slab.ts). The layer may exist only while there are artifacts to
+    // show.
+    const active = this.artifacts.size > 0;
+    this.css2dRenderer.domElement.style.display = active ? "" : "none";
+    if (!active) return;
     this.css2dRenderer.render(scene, camera);
   }
 

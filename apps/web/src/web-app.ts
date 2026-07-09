@@ -501,10 +501,18 @@ export class UnbootedWebApp {
   // thrash the panel through 3 list re-reads.
   private _goalsRefreshQueued = false;
 
-  async init(canvas: HTMLCanvasElement): Promise<void> {
+  async init(canvas: HTMLCanvasElement, initialTheme: "light" | "dark" = "light"): Promise<void> {
     try {
       await this.renderer.init(canvas);
-      this.renderer.setLightEnvironment();
+      // One world, two times of day: the environment follows the UI theme
+      // (dark theme = the designed-night ENV_DARK — a moonlit sky the
+      // transmissive body stays legible in, per creature-canon.md's dark
+      // environment acceptance criterion; proven by the dark golden frames).
+      if (initialTheme === "dark") {
+        this.renderer.setDarkEnvironment();
+      } else {
+        this.renderer.setLightEnvironment();
+      }
       this.renderer.enableOrbitControls();
     } catch {
       // WebGL unavailable (headless browser, low-end device).

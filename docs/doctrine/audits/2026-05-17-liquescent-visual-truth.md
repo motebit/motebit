@@ -1,5 +1,7 @@
 # Liquescent visual truth audit — 2026-05-17
 
+> **Naming note (2026-07-07):** the name "the Motebit Smirk" was re-examined against live renders ("the Meniscus Smile" and "the Sidelong" were tried and retired the same day) and **affirmed as canon** — the deliberation and the pinned reading (knowing, never smug) live in [`creature-canon.md`](../creature-canon.md).
+
 Reads the rendered body against the corrected doctrine (body is liquescent, glass-physics borrowed for optical traits only; one body, one material). Three passes — the framing inverts at pass 3.
 
 **Pass evolution:**
