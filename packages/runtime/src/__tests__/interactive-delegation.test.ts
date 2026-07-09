@@ -204,6 +204,86 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
     expect(runtime.getToolRegistry().has("delegate_to_agent")).toBe(true);
   });
 
+  it("registers discover_agents beside delegate_to_agent (grounded discovery, one pass)", () => {
+    const runtime = new MotebitRuntime(
+      { motebitId: "alice-001", tickRateHz: 0 },
+      createAdapters(createMockProvider()),
+    );
+    runtime.enableInteractiveDelegation({
+      syncUrl: "https://mock-relay.test",
+      authToken: async () => "test-token",
+    });
+    const tools = runtime.getToolRegistry();
+    expect(tools.has("discover_agents")).toBe(true);
+    const def = tools.list().find((t) => t.name === "discover_agents");
+    // The description carries the epistemic contract: live-only, claims-not-handles.
+    expect(def?.description).toContain("RIGHT NOW");
+    expect(def?.description).toContain("never answer roster questions");
+    expect(def?.mode).toBe("api");
+    expect(def?.outbound).toBe(true);
+  });
+
+  it("discover_agents returns the LIVE roster stamped roster_source: live_relay_read", async () => {
+    const runtime = new MotebitRuntime(
+      { motebitId: "alice-001", tickRateHz: 0 },
+      createAdapters(createMockProvider()),
+    );
+    runtime.enableInteractiveDelegation({
+      syncUrl: "https://mock-relay.test",
+      authToken: async () => "test-token",
+    });
+
+    mockFetchHandler = async (url: string, init?: RequestInit) => {
+      if (url.includes("/api/v1/agents/discover")) {
+        expect((init?.headers as Record<string, string>)?.Authorization).toBe("Bearer test-token");
+        return new Response(
+          JSON.stringify({
+            agents: [
+              {
+                motebit_id: "worker-1",
+                capabilities: ["web_search"],
+                display_name: "The Researcher",
+                description: "Web research with a verifiable citation chain",
+                pricing: [
+                  { capability: "web_search", unit_cost: 0.05, currency: "USD", per: "task" },
+                ],
+                freshness: "awake",
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response("not found", { status: 404 });
+    };
+
+    const result = await runtime.getToolRegistry().execute("discover_agents", {});
+    expect(result.ok).toBe(true);
+    const parsed = JSON.parse(result.data as string);
+    expect(parsed.roster_source).toBe("live_relay_read");
+    expect(parsed.agent_count).toBe(1);
+    // display_name surfaces as claimed_name — the claim framing travels
+    // into the model's context (trust-graph §3).
+    expect(parsed.agents[0].claimed_name).toBe("The Researcher");
+    expect(parsed.agents[0].motebit_id).toBe("worker-1");
+    expect(parsed.agents[0].pricing[0].unit_cost).toBe(0.05);
+  });
+
+  it("discover_agents fails closed on a relay error — no reconstructed roster", async () => {
+    const runtime = new MotebitRuntime(
+      { motebitId: "alice-001", tickRateHz: 0 },
+      createAdapters(createMockProvider()),
+    );
+    runtime.enableInteractiveDelegation({
+      syncUrl: "https://mock-relay.test",
+      authToken: async () => "test-token",
+    });
+    mockFetchHandler = async () => new Response("nope", { status: 503 });
+    const result = await runtime.getToolRegistry().execute("discover_agents", {});
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("HTTP 503");
+  });
+
   it("submits task to relay and returns result on successful delegation", async () => {
     const provider = createMockProvider();
     const runtime = new MotebitRuntime(

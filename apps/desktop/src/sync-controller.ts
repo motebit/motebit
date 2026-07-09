@@ -589,6 +589,8 @@ export class SyncController {
       "list_events",
       "self_reflect",
       "delegate_to_agent",
+      // Local meta-tool (the live roster read) — never a sellable capability.
+      "discover_agents",
     ]);
     const tools = runtime.getToolRegistry().list();
     const capabilities = tools

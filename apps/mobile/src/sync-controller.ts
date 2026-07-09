@@ -131,6 +131,8 @@ export class MobileSyncController {
       "recall_memories",
       "list_events",
       "delegate_to_agent",
+      // Local meta-tool (the live roster read) — never a sellable capability.
+      "discover_agents",
     ]);
     const tools = runtime.getToolRegistry().list();
     const capabilities = tools

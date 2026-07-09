@@ -214,6 +214,11 @@ export class InteractiveDelegationManager {
         // medical/financial/secret AND the configured provider is not
         // sovereign.
         outbound: true,
+        // api-tier per the hybrid-engine structural preference. Inline
+        // registration escapes check-tool-modes' literal scan (it only
+        // sweeps exported Definition consts) — tagged here so the registry
+        // sort still prefers it over pixel-tier fallbacks.
+        mode: "api",
         // Risk classification is explicit, never inferred: with a
         // payment rail configured, a paid delegation settles real money
         // onchain (R4_MONEY, irreversible) — the name/description
@@ -286,16 +291,125 @@ export class InteractiveDelegationManager {
         // Surface the settlement fact so the model reports payment truthfully
         // (it previously narrated "settlement isn't active" on a paid run). The
         // worker's answer stays primary; the payment is a labeled footnote.
+        // The worker's identity is a second footnote — witnessed 2026-07-09 in
+        // prod: the model could not say WHO it had delegated to, because this
+        // result never carried it. The receipt's signer is the ground truth.
         const workerResult = result.receipt.result ?? "Task completed (no result text)";
         const settlementNote = formatSettlementNote(result.settlement);
+        const workerNote = `[delegated_to: ${result.receipt.motebit_id}]`;
+        const footnotes = [workerNote, ...(settlementNote ? [settlementNote] : [])].join("\n");
         return {
           ok: true,
-          data: settlementNote ? `${workerResult}\n\n${settlementNote}` : workerResult,
+          data: `${workerResult}\n\n${footnotes}`,
         };
       },
     );
 
-    // Re-wire loop deps so the tool is visible to the agentic loop
+    // discover_agents — the LIVE roster read, registered beside
+    // delegate_to_agent so every surface that enables delegation gets
+    // grounded discovery in the same pass. Exists because of a witnessed
+    // 2026-07-09 prod failure: asked "who's discoverable right now?", the
+    // model answered from the committed self-knowledge corpus (the repo's
+    // marketplace description — wrong roster, stale pricing) because no
+    // tool exposed the relay's actual directory to the loop. Typed-truth
+    // discipline (docs/doctrine/typed-truth-perception.md): the result
+    // carries `roster_source: "live_relay_read"` and the prompt teaches
+    // that roster questions are answerable ONLY from this field — corpus
+    // recall is design-shape, never current state.
+    const DISCOVER_TOOL = "discover_agents";
+    if (!this.deps.toolRegistry.has(DISCOVER_TOOL)) {
+      this.deps.toolRegistry.register(
+        {
+          name: DISCOVER_TOOL,
+          description:
+            "List the agents discoverable on the connected relay RIGHT NOW — the live directory read. " +
+            "Use whenever the user asks who is available, what agents exist, what delegation costs, " +
+            "or before choosing a delegation target. Names are self-asserted claims, never verified " +
+            "handles. This is the ONLY source for the current roster; never answer roster questions " +
+            "from memory or self-description.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              capability: {
+                type: "string",
+                description:
+                  "Optional capability filter (e.g. 'research'). Omit for the full roster.",
+              },
+            },
+            required: [],
+          },
+          // Same outbound boundary as web_search — a network read that
+          // reveals the question being asked, nothing more. Read-class.
+          outbound: true,
+          mode: "api",
+          riskHint: { risk: RiskLevel.R0_READ, sideEffect: SideEffect.NONE },
+        },
+        async (args: Record<string, unknown>) => {
+          const capability = typeof args.capability === "string" ? args.capability : undefined;
+          try {
+            const token = await config.authToken();
+            const url = new URL(`${config.syncUrl}/api/v1/agents/discover`);
+            if (capability != null && capability.length > 0) {
+              url.searchParams.set("capability", capability);
+            }
+            const resp = await fetch(url.toString(), {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            if (!resp.ok) {
+              return { ok: false, error: `discover read failed: HTTP ${resp.status}` };
+            }
+            const body = (await resp.json()) as {
+              agents?: Array<{
+                motebit_id: string;
+                capabilities: string[];
+                display_name?: string | null;
+                description?: string | null;
+                pricing?: Array<{
+                  capability: string;
+                  unit_cost: number;
+                  currency: string;
+                  per: string;
+                }> | null;
+                freshness?: string;
+                trust_level?: string;
+                settlement_modes?: string | null;
+              }>;
+            };
+            const agents = (body.agents ?? []).map((a) => ({
+              motebit_id: a.motebit_id,
+              // A self-asserted CLAIM (agents-as-first-person-trust-graph §3)
+              // — surfaced under that name so the model inherits the framing.
+              ...(a.display_name != null && a.display_name.length > 0
+                ? { claimed_name: a.display_name }
+                : {}),
+              ...(a.description != null && a.description.length > 0
+                ? { description: a.description }
+                : {}),
+              capabilities: a.capabilities,
+              ...(a.pricing != null && a.pricing.length > 0 ? { pricing: a.pricing } : {}),
+              ...(a.freshness != null ? { freshness: a.freshness } : {}),
+              ...(a.trust_level != null ? { trust_level: a.trust_level } : {}),
+              ...(a.settlement_modes != null ? { settlement_modes: a.settlement_modes } : {}),
+            }));
+            return {
+              ok: true,
+              data: JSON.stringify({
+                roster_source: "live_relay_read",
+                relay: config.syncUrl,
+                as_of_ms: Date.now(),
+                agent_count: agents.length,
+                agents,
+              }),
+            };
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return { ok: false, error: `discover read failed: ${msg}` };
+          }
+        },
+      );
+    }
+
+    // Re-wire loop deps so the tools are visible to the agentic loop
     this.deps.wireLoopDeps();
   }
 
