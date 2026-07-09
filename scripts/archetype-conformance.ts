@@ -53,7 +53,7 @@ interface Expectation {
 export const ARCHETYPES: Expectation[] = [
   { service: "web-search", capability: "web_search", displayName: "", kind: "atom" },
   { service: "read-url", capability: "read_url", displayName: "", kind: "atom" },
-  { service: "summarize", capability: "summarize", displayName: "", kind: "atom" },
+  { service: "summarize", capability: "summarize_search", displayName: "", kind: "atom" },
   { service: "research", capability: "research", displayName: "The Researcher", kind: "molecule" },
   { service: "auditor", capability: "audit_agent", displayName: "The Auditor", kind: "molecule" },
 ];

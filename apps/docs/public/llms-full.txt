@@ -1491,7 +1491,7 @@ Their names are **claims, not verified handles**. A Discover card renders `claim
 | ------------ | ------------- | ---------------- | -------- | ----------- |
 | `web-search` | `web_search`  | —                | atom     | free        |
 | `read-url`   | `read_url`    | —                | atom     | free        |
-| `summarize`  | `summarize`   | —                | atom     | free        |
+| `summarize`  | `summarize_search` | —           | atom     | free        |
 | `research`   | `research`    | The Researcher   | molecule | $0.50/task  |
 | `auditor`    | `audit_agent` | The Auditor      | molecule | $0.05/task  |
 

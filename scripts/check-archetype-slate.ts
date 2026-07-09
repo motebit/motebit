@@ -82,9 +82,37 @@ function parseGalleryTable(src: string): SlateRow[] {
   return rows;
 }
 
+/**
+ * The capabilities a service actually advertises, read from its
+ * `capabilities: [...]` array in `services/<name>/src/index.ts`. Returns
+ * null when the source can't be read (the parity checks still run — this
+ * is an additive reality check, not a hard dependency).
+ */
+function serviceAdvertisedCapabilities(service: string): string[] | null {
+  let src: string;
+  try {
+    src = readFileSync(resolve(ROOT, `services/${service}/src/index.ts`), "utf8");
+  } catch {
+    return null;
+  }
+  // Union every `capabilities: [...]` array (config + getServiceListing),
+  // EXCLUDING `required_capabilities:` (inner-delegation args, not what the
+  // service itself advertises). A service may list its caps in more than
+  // one place; the union is what discovery sees.
+  const caps = new Set<string>();
+  const arrayPattern = /(?<!required_)capabilities:\s*\[([^\]]*)\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = arrayPattern.exec(src)) !== null) {
+    const q = /"([^"]+)"/g;
+    let mm: RegExpExecArray | null;
+    while ((mm = q.exec(m[1] ?? "")) !== null) caps.add(mm[1] as string);
+  }
+  return caps.size > 0 ? [...caps] : null;
+}
+
 function main(): void {
   console.log(
-    "▸ check-archetype-slate — deploy SLATE × conformance ARCHETYPES × docs gallery table three-way parity",
+    "▸ check-archetype-slate — deploy SLATE × conformance ARCHETYPES × docs gallery table three-way parity + service-reality check",
   );
 
   const deploy = parseDeploySlate(read("scripts/deploy-archetype-slate.ts"));
@@ -131,6 +159,19 @@ function main(): void {
       violations.push(
         `  ${svc}: display-name drift — conformance "${c.displayName}" vs gallery "${g.displayName}"`,
       );
+    }
+    // SERVICE-REALITY drift — the capability the slate routes on must be
+    // one the SERVICE actually advertises. The three declarations agreeing
+    // with each other is not enough (they all agreed on "summarize" while
+    // the service advertised "summarize_search", so discover-by-capability
+    // found nothing and the deployed slate was silently un-discoverable).
+    if (d != null) {
+      const advertised = serviceAdvertisedCapabilities(svc);
+      if (advertised != null && !advertised.includes(d)) {
+        violations.push(
+          `  ${svc}: slate capability "${d}" is not advertised by services/${svc}/src/index.ts (it advertises: ${advertised.map((a) => `"${a}"`).join(", ")})`,
+        );
+      }
     }
   }
 
