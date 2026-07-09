@@ -7,6 +7,8 @@ The slab is the motebit's **workstation, rendered as a liquescent plane** beside
 
 First-person here doesn't mean watching live (AI is faster than human perception, most of the time); it means inhabiting the agent's view of the work it has been doing. The agent's eye, hand, and mind, made into a workstation you can see and touch.
 
+**The three organs carry three truth-grades, and the render must never flatten them.** The eye shows _typed perception_ (every field provenance-marked — [`typed-truth-perception.md`](typed-truth-perception.md)); the hand shows _receipted acts_ (signed, offline-verifiable); the mind shows _validated narration_ — a model's account of its own reasoning, the weakest truth-grade in the system, admitted to the slab only because `task_step_narration` is a dishonesty-narration-class field with an explicit producer AND validator (the only field class that needs both). Rendering mind-pane text with the visual authority of receipted acts would launder confabulation as mechanism — the one way this taxonomy rots from engineering into decoration. (The organ words are an index over typed structures, never load-bearing themselves; the sibling entry-law lives in [`sensorium.md`](sensorium.md), a deliberately different axis — display taxonomy here, entry discipline there.)
+
 ## What it is
 
 A liquescent plane floating to the right of the motebit. Sibling to **constellation** (clusters of related records), **artifact** (detached, persistent outputs), **chat bubble** (ephemeral conversational messages). It is not a panel, not a window, not a HUD. It has a meniscus, not a frame; no titlebar, no close button, no scrollbar chrome.
