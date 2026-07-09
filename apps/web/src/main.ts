@@ -231,6 +231,15 @@ const slashCommands = initSlashCommands(ctx, {
 });
 chatAPI.setSlashCommands(slashCommands);
 
+// Slab home-register tile routes — typed CustomEvents from the derived
+// capability-seed's tap handlers (web-app.ts dispatchHomeTileAction);
+// each maps to the SAME opener the slash commands use, so a tile and a
+// slash command are one affordance in two positions (surface-determinism:
+// deterministic route, never a synthesized prompt).
+document.addEventListener("motebit:home-open-goals", () => gatedPanels.openGoals());
+document.addEventListener("motebit:home-open-agents", () => gatedPanels.openAgents());
+document.addEventListener("motebit:home-open-setup", () => settings.open());
+
 const chatInput = document.getElementById("chat-input") as HTMLInputElement;
 initKeyboard({
   focusInput: () => chatInput.focus(),
