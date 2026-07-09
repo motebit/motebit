@@ -81,6 +81,9 @@ export interface GatedPanelsAPI {
   openMemory(auditNodeIds?: Map<string, string>): void;
   openGoals(): void;
   openAgents(): void;
+  /** Open the relay popover (the top-center cloud affordance) — the
+   *  connect-a-relay surface the slab home register routes to. */
+  openSync(): void;
   closeAll(): void;
 }
 
@@ -1591,6 +1594,14 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
     }
   }
 
+  /** Idempotent open — the slab home register's connect-a-relay chip
+   *  routes HERE (the relay popover IS the connect affordance; generic
+   *  Settings is the wrong register for an instance-wiring action). */
+  function openSync(): void {
+    if (!syncPopup.classList.contains("open")) toggleSync();
+    syncRelayUrl.focus();
+  }
+
   syncStatusEl.addEventListener("click", toggleSync);
 
   // Close sync popup on outside click
@@ -1612,5 +1623,5 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
     syncPopup.classList.remove("open");
   }
 
-  return { openMemory, openGoals, openAgents, closeAll };
+  return { openMemory, openGoals, openAgents, openSync, closeAll };
 }

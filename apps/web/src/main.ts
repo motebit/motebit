@@ -238,7 +238,17 @@ chatAPI.setSlashCommands(slashCommands);
 // deterministic route, never a synthesized prompt).
 document.addEventListener("motebit:home-open-goals", () => gatedPanels.openGoals());
 document.addEventListener("motebit:home-open-agents", () => gatedPanels.openAgents());
-document.addEventListener("motebit:home-open-setup", () => settings.open());
+document.addEventListener("motebit:home-open-setup", (e) => {
+  const key = (e as CustomEvent<{ key?: string }>).detail?.key;
+  // Route to the affordance-of-record for each dependency: the relay
+  // popover IS the connect-a-relay surface (same popover the top-center
+  // cloud button opens); the mind lives in Settings.
+  if (key === "relay") {
+    gatedPanels.openSync();
+  } else {
+    settings.open();
+  }
+});
 // Rest-ingress ask route — USER-AUTHORED free text from the slab's
 // resting ingress line, sent through the exact same path as the chat
 // box (handleSend with a text override). Address-me in a second
