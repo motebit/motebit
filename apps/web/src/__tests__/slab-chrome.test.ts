@@ -78,12 +78,23 @@ describe("renderSlabChrome — matrix shape", () => {
 describe("renderSlabChrome — cell routing", () => {
   const machine = makeMockMachine();
 
-  it("user × virtual_browser delegates to cobrowse chrome (URL input + nav arrows preserved)", () => {
+  it("user × virtual_browser (ENTERED — committed URL) delegates to cobrowse chrome with URL input + nav arrows", () => {
     const el = renderSlabChrome({ kind: "user" }, "virtual_browser", machine, {
       forwardEvent: async () => ({ outcome: "forwarded", audit: { kind: "click" } }) as never,
+      currentUrl: "https://example.com",
     });
     expect(el?.querySelector(".cobrowse-chrome-url-input")).not.toBeNull();
     expect(el?.querySelector(".cobrowse-chrome-btn-back")).not.toBeNull();
+  });
+
+  it("user × virtual_browser AT REST delegates to the de-browsered rest cell (ingress + watermark, no browser chrome)", () => {
+    const el = renderSlabChrome({ kind: "user" }, "virtual_browser", machine, {
+      forwardEvent: async () => ({ outcome: "forwarded", audit: { kind: "click" } }) as never,
+      homeIngress: { mode: "go_only", onAsk: () => {} },
+    });
+    expect(el?.querySelector(".cobrowse-chrome-rest-ingress")).not.toBeNull();
+    expect(el?.querySelector(".cobrowse-chrome-anywhere")).not.toBeNull();
+    expect(el?.querySelector(".cobrowse-chrome-btn-back")).toBeNull();
   });
 
   it("handoff_pending × virtual_browser delegates to cobrowse chrome (Grant/Deny preserved)", () => {

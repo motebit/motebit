@@ -239,6 +239,16 @@ chatAPI.setSlashCommands(slashCommands);
 document.addEventListener("motebit:home-open-goals", () => gatedPanels.openGoals());
 document.addEventListener("motebit:home-open-agents", () => gatedPanels.openAgents());
 document.addEventListener("motebit:home-open-setup", () => settings.open());
+// Rest-ingress ask route — USER-AUTHORED free text from the slab's
+// resting ingress line, sent through the exact same path as the chat
+// box (handleSend with a text override). Address-me in a second
+// position; the text is the user's own, never a synthesized prompt.
+document.addEventListener("motebit:home-ask", (e) => {
+  const text = (e as CustomEvent<{ text?: string }>).detail?.text;
+  if (typeof text === "string" && text.trim().length > 0) {
+    void chatAPI.handleSend(text);
+  }
+});
 
 const chatInput = document.getElementById("chat-input") as HTMLInputElement;
 initKeyboard({

@@ -3095,6 +3095,17 @@ export class UnbootedWebApp {
       // `_persistedCookies` cache is populated by the cookies arc's
       // lazy-load gate on first session open and stays warm.
       trustHeld: urlHasTrustHeld(this._currentBrowserUrl, this._persistedCookies),
+      // Rest-cell ingress honesty (motebit-computer.md §home): the mode
+      // derives from the SAME live accessor as the seed's `mind` bit —
+      // a bare motebit's ingress says "go somewhere", never offering a
+      // chat that cannot think. onAsk carries USER-AUTHORED text to the
+      // normal chat send path (address-me, not a synthesized prompt).
+      homeIngress: {
+        mode: (this.runtime?.isAIReady ?? false) ? ("ask_or_go" as const) : ("go_only" as const),
+        onAsk: (text: string) => {
+          document.dispatchEvent(new CustomEvent("motebit:home-ask", { detail: { text } }));
+        },
+      },
       taskStepNarration: this._taskStepNarration,
       // PR 4 of the auto-routing arc — second narration source the
       // chrome absorbs. Populated by the BYOK / on-device auto-

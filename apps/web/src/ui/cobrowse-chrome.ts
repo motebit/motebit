@@ -174,6 +174,19 @@ export interface RenderCoBrowseChromeOpts {
    */
   readonly currentUrl?: string | null;
   /**
+   * The home-register ingress contract, present when the slab rests
+   * (user control + no committed URL). Derived from the home seed's
+   * `ingressMode` (slab-home-model.ts): `ask_or_go` when a mind is
+   * wired, `go_only` for a bare motebit — the ingress copy never
+   * promises a chat that cannot think. `onAsk` routes USER-AUTHORED
+   * free text to the normal chat send path (the user wrote it — this
+   * is address-me, not a synthesized prompt).
+   */
+  readonly homeIngress?: {
+    readonly mode: "ask_or_go" | "go_only";
+    readonly onAsk: (text: string) => void;
+  };
+  /**
    * Phase 2 of the trust-accumulation visibility arc — when true,
    * motebit holds persisted cookies for the host of `currentUrl`.
    * The chrome renders a calm "trust held" pip between the mark and
@@ -222,9 +235,109 @@ export function renderCoBrowseChrome(
   // Normalize `null` → `undefined` for the slot builders so their
   // signatures don't have to accept both shapes.
   const forwardEvent = opts.forwardEvent ?? undefined;
+  // The REST cell — user control with no committed URL. De-browsered:
+  // one breathing ingress line, no URL input, no history buttons, no
+  // waiting chip; "Anywhere." rides as the chrome's watermark backdrop
+  // (motebit-computer.md §home — the watermark soul is the CHROME's
+  // backdrop, never the body; the capability-seed is the body). The
+  // browser chrome belongs to the ENTERED eye register only.
+  const rest = state.kind === "user" && isAtRest(opts.currentUrl ?? null);
+  if (rest) {
+    strip.style.position = "relative";
+    strip.appendChild(buildAnywhereWatermark());
+    strip.appendChild(buildRestIngress(forwardEvent, opts.homeIngress));
+    return strip;
+  }
   strip.appendChild(buildMiddle(state, forwardEvent, opts.currentUrl ?? null));
   strip.appendChild(buildTrail(state, machine, forwardEvent));
   return strip;
+}
+
+/** No committed URL ⇒ the slab rests on the home register. */
+function isAtRest(currentUrl: string | null): boolean {
+  return currentUrl == null || currentUrl === "" || currentUrl === "about:blank";
+}
+
+/**
+ * "Anywhere." — the watermark soul as the chrome's backdrop: a
+ * workstation word ("I can take you anywhere"), low-opacity,
+ * non-interactive, behind the ingress line.
+ */
+function buildAnywhereWatermark(): HTMLSpanElement {
+  const mark = document.createElement("span");
+  mark.className = "cobrowse-chrome-anywhere";
+  mark.textContent = "Anywhere.";
+  mark.style.position = "absolute";
+  mark.style.right = "14px";
+  mark.style.top = "50%";
+  mark.style.transform = "translateY(-50%)";
+  mark.style.fontSize = "13px";
+  mark.style.fontWeight = "300";
+  mark.style.letterSpacing = "-0.01em";
+  mark.style.color = "rgba(14, 22, 40, 0.14)";
+  mark.style.userSelect = "none";
+  mark.style.pointerEvents = "none";
+  return mark;
+}
+
+/**
+ * URL-shaped test for the rest ingress's routing split. Deliberately
+ * permissive on the URL side (a false "URL" navigates to a 404 the
+ * user can read; a false "ask" would silently swallow a navigation).
+ */
+function looksLikeUrl(raw: string): boolean {
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return true;
+  if (raw.includes(" ")) return false;
+  return raw.includes(".") || raw === "localhost" || raw.startsWith("localhost:");
+}
+
+/**
+ * The rest ingress — ONE quiet line, the slab's single ready signal at
+ * rest. Enter routes by shape (the F2 split): URL-shaped → navigate;
+ * free text with a mind → the chat send path (user-authored text —
+ * address-me, never a synthesized prompt); free text without a mind →
+ * a calm inline hint, never a fake think.
+ */
+function buildRestIngress(
+  forwardEvent: ForwardEventFn | undefined,
+  homeIngress: RenderCoBrowseChromeOpts["homeIngress"],
+): HTMLInputElement {
+  const mode = homeIngress?.mode ?? "go_only";
+  const placeholder = mode === "ask_or_go" ? "ask me · or go somewhere" : "go somewhere";
+  const noopForward: ForwardEventFn = () =>
+    Promise.resolve({ outcome: "not_in_control" } as unknown as UserInputForwardResult);
+  const input = buildUrlInput(forwardEvent ?? noopForward, null, {
+    placeholder,
+    submit: (raw) => {
+      if (looksLikeUrl(raw)) {
+        const url = normalizeUrl(raw);
+        void forwardEvent?.({ kind: "navigate", url }).catch((err: unknown) => {
+          // eslint-disable-next-line no-console -- fail-soft, same shape as the entered-cell input
+          console.warn("rest-ingress navigate forward threw", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+        input.blur();
+        return;
+      }
+      if (mode === "ask_or_go" && homeIngress != null) {
+        homeIngress.onAsk(raw);
+        input.value = "";
+        input.blur();
+        return;
+      }
+      // go_only + free text: the honest sentence, calmly, in place.
+      // Never a fake think — the motebit has no mind to answer with.
+      input.value = "";
+      const prior = input.placeholder;
+      input.placeholder = "I need a mind for that — connect one in Settings";
+      window.setTimeout(() => {
+        input.placeholder = prior;
+      }, 4000);
+    },
+  });
+  input.classList.add("cobrowse-chrome-rest-ingress");
+  return input;
 }
 
 /**
@@ -636,7 +749,15 @@ function formatUrlForDisplay(url: string): string {
   return url.replace(/^https?:\/\//i, "");
 }
 
-function buildUrlInput(forwardEvent: ForwardEventFn, currentUrl: string | null): HTMLInputElement {
+function buildUrlInput(
+  forwardEvent: ForwardEventFn,
+  currentUrl: string | null,
+  overrides?: {
+    readonly placeholder?: string;
+    /** Replaces the default Enter behavior (normalize → navigate). */
+    readonly submit?: (raw: string) => void;
+  },
+): HTMLInputElement {
   const input = document.createElement("input");
   input.className = "cobrowse-chrome-middle cobrowse-chrome-url-input";
   input.type = "url";
@@ -647,7 +768,7 @@ function buildUrlInput(forwardEvent: ForwardEventFn, currentUrl: string | null):
   // the URL input is the slab's empty affordance. Two paths: type
   // a URL into the chrome, or ask motebit in chat. Same surface,
   // two grammars, one calm prompt.
-  input.placeholder = "type a URL · or ask motebit";
+  input.placeholder = overrides?.placeholder ?? "type a URL · or ask motebit";
   // Pre-populate with the current URL — Chrome / Safari / Firefox
   // all show the current URL in the address bar by default; users
   // expect to see where they are. Edit-to-navigate replaces the
@@ -744,6 +865,10 @@ function buildUrlInput(forwardEvent: ForwardEventFn, currentUrl: string | null):
     e.preventDefault();
     const raw = input.value.trim();
     if (raw.length === 0) return;
+    if (overrides?.submit) {
+      overrides.submit(raw);
+      return;
+    }
     const url = normalizeUrl(raw);
     void forwardEvent({ kind: "navigate", url }).catch((err: unknown) => {
       // eslint-disable-next-line no-console -- fail-soft default; surface logger wiring follows the same shape as cobrowse-input-capture
