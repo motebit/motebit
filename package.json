@@ -123,6 +123,7 @@
     "check-settlement-mode-canonical": "npx tsx scripts/check-settlement-mode-canonical.ts",
     "check-eval-kind-canonical": "npx tsx scripts/check-eval-kind-canonical.ts",
     "check-archetype-slate": "npx tsx scripts/check-archetype-slate.ts",
+    "check-home-seed-basis": "npx tsx scripts/check-home-seed-basis.ts",
     "check-merkle-tree-hash-canonical": "npx tsx scripts/check-merkle-tree-hash-canonical.ts",
     "check-agent-revocation-reason-canonical": "npx tsx scripts/check-agent-revocation-reason-canonical.ts",
     "check-memory-source-canonical": "npx tsx scripts/check-memory-source-canonical.ts",

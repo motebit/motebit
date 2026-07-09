@@ -16,7 +16,7 @@
  *   - History-button dispatch on click (parameter-less wire events).
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { ControlState, UserInputEvent } from "@motebit/sdk";
 import type { CoBrowseControlMachine, UserInputForwardResult } from "@motebit/runtime";
 
@@ -153,7 +153,10 @@ describe("renderCoBrowseChrome — state structure", () => {
   it("user state: mark + URL input + ← → ⟳ trail + motebit-waiting chip", () => {
     const { machine } = makeMockMachine();
     const { fwd } = makeForwardEvent();
-    const el = renderCoBrowseChrome({ kind: "user" }, machine, { forwardEvent: fwd });
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      forwardEvent: fwd,
+      currentUrl: "https://example.com",
+    });
     expect(el.classList.contains("cobrowse-chrome-user")).toBe(true);
     expect(el.querySelector(".cobrowse-chrome-mark")).not.toBeNull();
     expect(el.querySelector(".cobrowse-chrome-url-input")).not.toBeNull();
@@ -216,7 +219,9 @@ describe("renderCoBrowseChrome — state structure", () => {
 
   it("strip is always present — no null return on any state", () => {
     const { machine } = makeMockMachine();
-    expect(renderCoBrowseChrome({ kind: "user" }, machine, {})).toBeInstanceOf(HTMLElement);
+    expect(
+      renderCoBrowseChrome({ kind: "user" }, machine, { currentUrl: "https://example.com" }),
+    ).toBeInstanceOf(HTMLElement);
     expect(renderCoBrowseChrome({ kind: "motebit" }, machine, {})).toBeInstanceOf(HTMLElement);
     expect(
       renderCoBrowseChrome(
@@ -252,7 +257,10 @@ describe("renderCoBrowseChrome — slab-coherent chrome surround", () => {
   it("user state has slab-coherent material — low-alpha tint, heavy backdrop blur, no full border, no shadow", () => {
     const { machine } = makeMockMachine();
     const { fwd } = makeForwardEvent();
-    const el = renderCoBrowseChrome({ kind: "user" }, machine, { forwardEvent: fwd });
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      forwardEvent: fwd,
+      currentUrl: "https://example.com",
+    });
     // Low-alpha background (slab-coherent) — alpha 0.0X, not 0.8/0.9.
     expect(el.style.background).toMatch(/rgba\(\s*\d+,\s*\d+,\s*\d+\s*,\s*0\.0\d/);
     // Heavy backdrop blur — the vibrancy register that occludes
@@ -322,7 +330,10 @@ describe("renderCoBrowseChrome — slab-coherent chrome surround", () => {
       { kind: "paused", previousDriver: "user" },
     ];
     for (const state of states) {
-      const el = renderCoBrowseChrome(state, machine, { forwardEvent: fwd });
+      const el = renderCoBrowseChrome(state, machine, {
+        forwardEvent: fwd,
+        currentUrl: "https://example.com",
+      });
       expect(el.querySelector(".cobrowse-chrome-mark")).not.toBeNull();
       // Middle slot — either an input (user), empty spacer (motebit),
       // or caption (handoff_pending / paused). At least one of the
@@ -387,7 +398,10 @@ describe("renderCoBrowseChrome — surface-determinism", () => {
   it("motebit-waiting chip click dispatches motebit:cobrowse-back — single mechanism shared with /back", () => {
     const { machine } = makeMockMachine();
     const { fwd } = makeForwardEvent();
-    const el = renderCoBrowseChrome({ kind: "user" }, machine, { forwardEvent: fwd });
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      forwardEvent: fwd,
+      currentUrl: "https://example.com",
+    });
     const chip = el.querySelector(
       ".cobrowse-chrome-motebit-waiting-chip",
     ) as HTMLButtonElement | null;
@@ -408,7 +422,10 @@ describe("renderCoBrowseChrome — surface-determinism", () => {
   it("motebit-waiting chip is a button with explicit aria-label (platform semantics, assistive-tech legible)", () => {
     const { machine } = makeMockMachine();
     const { fwd } = makeForwardEvent();
-    const el = renderCoBrowseChrome({ kind: "user" }, machine, { forwardEvent: fwd });
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      forwardEvent: fwd,
+      currentUrl: "https://example.com",
+    });
     const chip = el.querySelector(".cobrowse-chrome-motebit-waiting-chip");
     expect(chip?.tagName).toBe("BUTTON");
     expect(chip?.getAttribute("aria-label")).toContain("Hand back to motebit");
@@ -510,7 +527,10 @@ describe("renderCoBrowseChrome — user state input wiring", () => {
   it("Enter on URL input dispatches navigate with normalized URL", async () => {
     const { machine } = makeMockMachine();
     const { fwd, events } = makeForwardEvent();
-    const el = renderCoBrowseChrome({ kind: "user" }, machine, { forwardEvent: fwd });
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      forwardEvent: fwd,
+      currentUrl: "https://example.com",
+    });
     const input = el.querySelector(".cobrowse-chrome-url-input") as HTMLInputElement;
     input.value = "example.com";
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
@@ -528,7 +548,10 @@ describe("renderCoBrowseChrome — user state input wiring", () => {
   it("empty URL input is a no-op on Enter", async () => {
     const { machine } = makeMockMachine();
     const { fwd, events } = makeForwardEvent();
-    const el = renderCoBrowseChrome({ kind: "user" }, machine, { forwardEvent: fwd });
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      forwardEvent: fwd,
+      currentUrl: "https://example.com",
+    });
     const input = el.querySelector(".cobrowse-chrome-url-input") as HTMLInputElement;
     input.value = "  ";
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
@@ -539,7 +562,10 @@ describe("renderCoBrowseChrome — user state input wiring", () => {
   it("non-Enter keys do NOT dispatch navigate", async () => {
     const { machine } = makeMockMachine();
     const { fwd, events } = makeForwardEvent();
-    const el = renderCoBrowseChrome({ kind: "user" }, machine, { forwardEvent: fwd });
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      forwardEvent: fwd,
+      currentUrl: "https://example.com",
+    });
     const input = el.querySelector(".cobrowse-chrome-url-input") as HTMLInputElement;
     input.value = "example.com";
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
@@ -550,7 +576,10 @@ describe("renderCoBrowseChrome — user state input wiring", () => {
   it("URL input keydown stops propagation (no leak into Chromium key forwarder)", () => {
     const { machine } = makeMockMachine();
     const { fwd } = makeForwardEvent();
-    const el = renderCoBrowseChrome({ kind: "user" }, machine, { forwardEvent: fwd });
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      forwardEvent: fwd,
+      currentUrl: "https://example.com",
+    });
     const input = el.querySelector(".cobrowse-chrome-url-input") as HTMLInputElement;
     let documentSawKey = false;
     document.body.appendChild(el);
@@ -569,7 +598,10 @@ describe("renderCoBrowseChrome — user state input wiring", () => {
   it("← button dispatches { kind: 'back' }", async () => {
     const { machine } = makeMockMachine();
     const { fwd, events } = makeForwardEvent();
-    const el = renderCoBrowseChrome({ kind: "user" }, machine, { forwardEvent: fwd });
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      forwardEvent: fwd,
+      currentUrl: "https://example.com",
+    });
     const btn = el.querySelector(".cobrowse-chrome-btn-back") as HTMLButtonElement;
     btn.click();
     await Promise.resolve();
@@ -579,7 +611,10 @@ describe("renderCoBrowseChrome — user state input wiring", () => {
   it("→ button dispatches { kind: 'forward' }", async () => {
     const { machine } = makeMockMachine();
     const { fwd, events } = makeForwardEvent();
-    const el = renderCoBrowseChrome({ kind: "user" }, machine, { forwardEvent: fwd });
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      forwardEvent: fwd,
+      currentUrl: "https://example.com",
+    });
     const btn = el.querySelector(".cobrowse-chrome-btn-forward") as HTMLButtonElement;
     btn.click();
     await Promise.resolve();
@@ -589,7 +624,10 @@ describe("renderCoBrowseChrome — user state input wiring", () => {
   it("↻ button dispatches { kind: 'reload' }", async () => {
     const { machine } = makeMockMachine();
     const { fwd, events } = makeForwardEvent();
-    const el = renderCoBrowseChrome({ kind: "user" }, machine, { forwardEvent: fwd });
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      forwardEvent: fwd,
+      currentUrl: "https://example.com",
+    });
     const btn = el.querySelector(".cobrowse-chrome-btn-reload") as HTMLButtonElement;
     btn.click();
     await Promise.resolve();
@@ -626,6 +664,7 @@ describe("renderCoBrowseChrome — chrome-1b sensitivity ring", () => {
     const { machine } = makeMockMachine();
     // SensitivityLevel.None at runtime — value "none".
     const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      currentUrl: "https://example.com",
       sensitivity: "none" as import("@motebit/sdk").SensitivityLevel,
     });
     expect(el.querySelector(".cobrowse-chrome-mark-ring")).toBeNull();
@@ -634,6 +673,7 @@ describe("renderCoBrowseChrome — chrome-1b sensitivity ring", () => {
   it("renders no ring at sensitivity personal (too common to mark permanently)", () => {
     const { machine } = makeMockMachine();
     const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      currentUrl: "https://example.com",
       sensitivity: "personal" as import("@motebit/sdk").SensitivityLevel,
     });
     expect(el.querySelector(".cobrowse-chrome-mark-ring")).toBeNull();
@@ -642,6 +682,7 @@ describe("renderCoBrowseChrome — chrome-1b sensitivity ring", () => {
   it("renders a warm-coral ring at sensitivity medical", () => {
     const { machine } = makeMockMachine();
     const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      currentUrl: "https://example.com",
       sensitivity: "medical" as import("@motebit/sdk").SensitivityLevel,
     });
     const ring = el.querySelector(".cobrowse-chrome-mark-ring-medical") as HTMLElement;
@@ -653,6 +694,7 @@ describe("renderCoBrowseChrome — chrome-1b sensitivity ring", () => {
   it("renders a muted-green ring at sensitivity financial", () => {
     const { machine } = makeMockMachine();
     const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      currentUrl: "https://example.com",
       sensitivity: "financial" as import("@motebit/sdk").SensitivityLevel,
     });
     const ring = el.querySelector(".cobrowse-chrome-mark-ring-financial") as HTMLElement;
@@ -664,6 +706,7 @@ describe("renderCoBrowseChrome — chrome-1b sensitivity ring", () => {
   it("renders a cool-gray ring at sensitivity secret", () => {
     const { machine } = makeMockMachine();
     const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      currentUrl: "https://example.com",
       sensitivity: "secret" as import("@motebit/sdk").SensitivityLevel,
     });
     const ring = el.querySelector(".cobrowse-chrome-mark-ring-secret") as HTMLElement;
@@ -675,6 +718,7 @@ describe("renderCoBrowseChrome — chrome-1b pixel-consent eye", () => {
   it("renders no eye glyph when consent is denied (calm default)", () => {
     const { machine } = makeMockMachine();
     const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      currentUrl: "https://example.com",
       pixelConsent: "denied",
     });
     expect(el.querySelector(".cobrowse-chrome-mark-eye")).toBeNull();
@@ -683,6 +727,7 @@ describe("renderCoBrowseChrome — chrome-1b pixel-consent eye", () => {
   it("renders the eye glyph when consent is session (granted)", () => {
     const { machine } = makeMockMachine();
     const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      currentUrl: "https://example.com",
       pixelConsent: "session",
     });
     const eye = el.querySelector(".cobrowse-chrome-mark-eye") as HTMLElement;
@@ -694,6 +739,7 @@ describe("renderCoBrowseChrome — chrome-1b pixel-consent eye", () => {
   it("composes ring + eye when both elevated state and granted consent are present", () => {
     const { machine } = makeMockMachine();
     const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      currentUrl: "https://example.com",
       sensitivity: "medical" as import("@motebit/sdk").SensitivityLevel,
       pixelConsent: "session",
     });
@@ -826,7 +872,9 @@ describe("animateMarkForReceipt — fires on a mark element", () => {
 describe("renderCoBrowseChrome — defensive guards", () => {
   it("user state without forwardEvent: no URL input, no nav arrows (still renders strip)", () => {
     const { machine } = makeMockMachine();
-    const el = renderCoBrowseChrome({ kind: "user" }, machine, {});
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      currentUrl: "https://example.com",
+    });
     expect(el).toBeInstanceOf(HTMLElement);
     expect(el.querySelector(".cobrowse-chrome-url-input")).toBeNull();
     expect(el.querySelector(".cobrowse-chrome-btn-back")).toBeNull();
@@ -858,6 +906,7 @@ describe("renderCoBrowseChrome — trust-held pip (Phase 2 trust-visibility)", (
   it("renders the pip when trustHeld: true", () => {
     const { machine } = makeMockMachine();
     const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      currentUrl: "https://example.com",
       trustHeld: true,
     });
     expect(el.querySelector(".cobrowse-chrome-trust-pip")).not.toBeNull();
@@ -866,6 +915,7 @@ describe("renderCoBrowseChrome — trust-held pip (Phase 2 trust-visibility)", (
   it("does NOT render the pip when trustHeld: false", () => {
     const { machine } = makeMockMachine();
     const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      currentUrl: "https://example.com",
       trustHeld: false,
     });
     expect(el.querySelector(".cobrowse-chrome-trust-pip")).toBeNull();
@@ -873,7 +923,9 @@ describe("renderCoBrowseChrome — trust-held pip (Phase 2 trust-visibility)", (
 
   it("does NOT render the pip when trustHeld is omitted (calm default)", () => {
     const { machine } = makeMockMachine();
-    const el = renderCoBrowseChrome({ kind: "user" }, machine, {});
+    const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      currentUrl: "https://example.com",
+    });
     expect(el.querySelector(".cobrowse-chrome-trust-pip")).toBeNull();
   });
 
@@ -881,6 +933,7 @@ describe("renderCoBrowseChrome — trust-held pip (Phase 2 trust-visibility)", (
     const { machine } = makeMockMachine();
     const { fwd } = makeForwardEvent();
     const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      currentUrl: "https://example.com",
       forwardEvent: fwd,
       trustHeld: true,
     });
@@ -899,6 +952,7 @@ describe("renderCoBrowseChrome — trust-held pip (Phase 2 trust-visibility)", (
   it("pip uses the motebit interior color tint when provided", () => {
     const { machine } = makeMockMachine();
     const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      currentUrl: "https://example.com",
       trustHeld: true,
       interiorColor: {
         tint: [0.39, 0.59, 0.78], // rgb(99, 150, 199)
@@ -914,6 +968,7 @@ describe("renderCoBrowseChrome — trust-held pip (Phase 2 trust-visibility)", (
   it("pip falls back to a neutral tint when interior color is absent", () => {
     const { machine } = makeMockMachine();
     const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      currentUrl: "https://example.com",
       trustHeld: true,
     });
     const pip = el.querySelector(".cobrowse-chrome-trust-pip") as HTMLElement;
@@ -925,6 +980,7 @@ describe("renderCoBrowseChrome — trust-held pip (Phase 2 trust-visibility)", (
   it("pip is calm — subtle opacity, no border, no label, no chip register", () => {
     const { machine } = makeMockMachine();
     const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      currentUrl: "https://example.com",
       trustHeld: true,
     });
     const pip = el.querySelector(".cobrowse-chrome-trust-pip") as HTMLElement;
@@ -940,6 +996,7 @@ describe("renderCoBrowseChrome — trust-held pip (Phase 2 trust-visibility)", (
   it("pip is aria-hidden — /trust slash command is the accessible counterpart", () => {
     const { machine } = makeMockMachine();
     const el = renderCoBrowseChrome({ kind: "user" }, machine, {
+      currentUrl: "https://example.com",
       trustHeld: true,
     });
     const pip = el.querySelector(".cobrowse-chrome-trust-pip");
@@ -961,5 +1018,80 @@ describe("renderCoBrowseChrome — trust-held pip (Phase 2 trust-visibility)", (
         `pip should render for state ${state.kind}`,
       ).not.toBeNull();
     }
+  });
+});
+
+// ── The REST cell — de-browsered chrome (motebit-computer.md §home) ────
+
+describe("renderCoBrowseChrome — rest cell (user control, no committed URL)", () => {
+  it("rest: one ingress line + Anywhere watermark; NO url input, NO nav arrows, NO waiting chip", () => {
+    const { machine } = makeMockMachine();
+    const { fwd } = makeForwardEvent();
+    const strip = renderCoBrowseChrome({ kind: "user" }, machine, { forwardEvent: fwd });
+    expect(strip.querySelector(".cobrowse-chrome-rest-ingress")).not.toBeNull();
+    expect(strip.querySelector(".cobrowse-chrome-anywhere")?.textContent).toBe("Anywhere.");
+    expect(
+      strip.querySelector(".cobrowse-chrome-url-input:not(.cobrowse-chrome-rest-ingress)"),
+    ).toBeNull();
+    expect(strip.querySelector(".cobrowse-chrome-motebit-waiting-chip")).toBeNull();
+    expect(strip.textContent).not.toContain("←");
+    expect(strip.textContent).not.toContain("→");
+  });
+
+  it("about:blank is also at rest", () => {
+    const { machine } = makeMockMachine();
+    const strip = renderCoBrowseChrome({ kind: "user" }, machine, {
+      currentUrl: "about:blank",
+    });
+    expect(strip.querySelector(".cobrowse-chrome-rest-ingress")).not.toBeNull();
+  });
+
+  it("ingress copy is honest: ask_or_go with a mind, go_only without — never a chat that pretends to think", () => {
+    const { machine } = makeMockMachine();
+    const withMind = renderCoBrowseChrome({ kind: "user" }, machine, {
+      homeIngress: { mode: "ask_or_go", onAsk: vi.fn() },
+    }).querySelector<HTMLInputElement>(".cobrowse-chrome-rest-ingress");
+    expect(withMind?.placeholder).toBe("ask me · or go somewhere");
+    const bare = renderCoBrowseChrome({ kind: "user" }, machine, {
+      homeIngress: { mode: "go_only", onAsk: vi.fn() },
+    }).querySelector<HTMLInputElement>(".cobrowse-chrome-rest-ingress");
+    expect(bare?.placeholder).toBe("go somewhere");
+  });
+
+  it("routing split: URL-shaped input navigates; free text with a mind routes to onAsk", async () => {
+    const { machine } = makeMockMachine();
+    const { fwd, events } = makeForwardEvent();
+    const onAsk = vi.fn();
+    const strip = renderCoBrowseChrome({ kind: "user" }, machine, {
+      forwardEvent: fwd,
+      homeIngress: { mode: "ask_or_go", onAsk },
+    });
+    const input = strip.querySelector<HTMLInputElement>(".cobrowse-chrome-rest-ingress")!;
+
+    input.value = "news.ycombinator.com";
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await Promise.resolve();
+    expect(events.some((e) => e.kind === "navigate")).toBe(true);
+    expect(onAsk).not.toHaveBeenCalled();
+
+    input.value = "what's interesting in agent research";
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(onAsk).toHaveBeenCalledWith("what's interesting in agent research");
+  });
+
+  it("go_only free text: calm inline hint, no navigate, no ask — honest degradation", () => {
+    const { machine } = makeMockMachine();
+    const { fwd, events } = makeForwardEvent();
+    const onAsk = vi.fn();
+    const strip = renderCoBrowseChrome({ kind: "user" }, machine, {
+      forwardEvent: fwd,
+      homeIngress: { mode: "go_only", onAsk },
+    });
+    const input = strip.querySelector<HTMLInputElement>(".cobrowse-chrome-rest-ingress")!;
+    input.value = "hello there";
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(events).toHaveLength(0);
+    expect(onAsk).not.toHaveBeenCalled();
+    expect(input.placeholder).toContain("connect one in Settings");
   });
 });

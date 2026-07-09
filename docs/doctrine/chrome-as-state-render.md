@@ -39,11 +39,11 @@ Three coordinated commitments:
 
 **`user × *` family** (cobrowse entered; collapses to 3-4 meaningful cells):
 
-| cell                     | register content                                                                                     |
-| ------------------------ | ---------------------------------------------------------------------------------------------------- |
-| `user × virtual_browser` | editable URL bar + nav buttons + small "motebit is watching" indicator; the cobrowser register today |
-| `user × shared_gaze`     | "you're driving your screen, motebit is observing"; mostly cosmetic since the gaze flow is one-way   |
-| `user × desktop_drive`   | "you're at your desktop"; effectively no slab chrome (the desktop IS the surface)                    |
+| cell                     | register content                                                                                                                                                                                                                                                                  |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `user × virtual_browser` | ENTERED (committed URL): editable URL bar + nav buttons + "motebit waiting" chip. AT REST (no committed URL): the de-browsered cell — one honest ingress line + `Anywhere.` watermark backdrop; the browser chrome belongs to the entered mode only (`motebit-computer.md` §home) |
+| `user × shared_gaze`     | "you're driving your screen, motebit is observing"; mostly cosmetic since the gaze flow is one-way                                                                                                                                                                                |
+| `user × desktop_drive`   | "you're at your desktop"; effectively no slab chrome (the desktop IS the surface)                                                                                                                                                                                                 |
 
 `user × mind`, `user × tool_result`, `user × peer_viewport` collapse — there's nothing for the user to drive in those embodiments.
 
@@ -79,7 +79,7 @@ Display: event-driven, not constantly-displayed. When motebit is actively doing 
 
 **`user` register — cobrowse mode entered.**
 
-The cobrowser-shaped chrome that ships today, but as an _entered mode_ not the persistent default. Editable URL bar, nav buttons, click/scroll route to the page, motebit's role becomes assistant-on-standby. Includes a small indicator that motebit is watching (so the user knows they're not alone, and that motebit will narrate when they hand back).
+The cobrowser-shaped chrome as an _entered mode_ — realized 2026-07-09: the rest cell (no committed URL) renders one ingress line + watermark, and the editable URL bar / nav buttons / "motebit waiting" chip rotate in only once a URL commits. Click/scroll route to the page, motebit's role becomes assistant-on-standby; the waiting chip is both the presence indicator and the hand-back affordance.
 
 **`handoff_pending` register — control transition requested.**
 

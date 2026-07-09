@@ -24,11 +24,8 @@ import {
   renderDetachArtifact as renderSlabDetachArtifact,
   releaseLiveBrowserItem,
 } from "./ui/slab-items";
-import {
-  buildSlabHomeView,
-  computeSlabHomeAffordances,
-  type SlabHomeAffordance,
-} from "./ui/slab-home.js";
+import { buildSlabHomeView } from "./ui/slab-home.js";
+import { deriveHomeSeed, type HomeSeedInputs, type HomeTileAction } from "./ui/slab-home-model.js";
 import { animateMarkForReceipt } from "./ui/cobrowse-chrome";
 import { renderSlabChrome } from "./ui/slab-chrome";
 import { urlHasTrustHeld } from "./cookie-host-match.js";
@@ -1512,8 +1509,14 @@ export class UnbootedWebApp {
     if (this.runtime) {
       this.runtime.setProvider(provider);
     }
-  }
 
+    // The mind bit flipped while the slab rests on home → re-derive the
+    // seed (ingress copy moves go_only → ask_or_go; the connect-a-mind
+    // chip recedes). Same trigger discipline as setSyncStatus.
+    if (this._onHomeRegister || this._homeOverlayActive) {
+      this.mountHomeViewIntoBodySlot();
+    }
+  }
   disconnectProvider(): void {
     // No direct "unset provider" on runtime — reconnect with a different one
   }
@@ -2710,25 +2713,63 @@ export class UnbootedWebApp {
     return `#${hex(tint[0])}${hex(tint[1])}${hex(tint[2])}`;
   }
 
-  private async getSlabHomeAffordances(): Promise<SlabHomeAffordance[]> {
+  /**
+   * Navigate-audit rows for the home seed's resumption basis — cached
+   * after the first read and appended-to in `emitUserInputAudit`, so a
+   * home mount never re-scans the full forwarded-input history (every
+   * click/key/scroll appends a row; only navigates matter here).
+   */
+  private _homeNavCache: Array<{ payload: UserInputForwardedPayload; timestamp: number }> | null =
+    null;
+
+  private async getHomeNavigateEvents(): Promise<
+    Array<{ payload: UserInputForwardedPayload; timestamp: number }>
+  > {
+    if (this._homeNavCache != null) return this._homeNavCache;
     if (!this.runtime) return [];
     try {
       const events = await this.runtime.events.query({
         motebit_id: this._motebitId,
         event_types: [EventType.UserInputForwarded],
       });
-      // Type-narrow each event's payload to the audit shape we need.
-      const typed = events
+      this._homeNavCache = events
         .map((e) => ({
           payload: e.payload as unknown as UserInputForwardedPayload,
           timestamp: e.timestamp,
         }))
         .filter((e) => e.payload?.detail?.kind === "navigate");
-      return computeSlabHomeAffordances(typed);
+      return this._homeNavCache;
     } catch {
-      // Audit-log read fault is non-fatal — empty home register.
+      // Audit-log read fault is non-fatal — empty resumption basis.
       return [];
     }
+  }
+
+  /**
+   * Assemble the home-seed inputs — every config key answered from a
+   * LIVE runtime accessor, never a cached or authored bit ("derive the
+   * seed; never author it"; the accessor coupling is anchored by
+   * check-home-seed-basis):
+   *   mind     ← runtime.isAIReady          (loop deps wired — a real gate)
+   *   relay    ← syncStatus === "connected"
+   *   computer ← computerRegistration != null (env-gated at boot)
+   */
+  private async buildHomeSeedInputs(): Promise<HomeSeedInputs> {
+    const navigateEvents = await this.getHomeNavigateEvents();
+    return {
+      identity: { motebitId: this._motebitId },
+      config: {
+        mind: this.runtime?.isAIReady ?? false,
+        relay: this._syncStatus === "connected",
+        computer: this.computerRegistration != null,
+      },
+      toolNames:
+        this.runtime
+          ?.getToolRegistry()
+          .list()
+          .map((t) => t.name) ?? [],
+      navigateEvents,
+    };
   }
 
   /**
@@ -2836,38 +2877,69 @@ export class UnbootedWebApp {
   private mountHomeViewIntoBodySlot(): void {
     const handle = this.liveBrowserHandle;
     if (!handle) return;
-    void this.getSlabHomeAffordances().then((affordances) => {
+    void this.buildHomeSeedInputs().then((inputs) => {
       // Re-check the handle + slot-visibility — the user may have
       // dismissed, navigated, or blurred-out during the await window.
       if (this.liveBrowserHandle !== handle) return;
       if (!this._onHomeRegister && !this._homeOverlayActive) return;
-      const view = buildSlabHomeView(affordances, {
-        onAffordanceTap: (aff) => {
-          const targetUrl = `${aff.scheme}://${aff.host}`;
-          // Synchronous overlay exit BEFORE dispatch — closes the
-          // race with the URL-input's deferred blur handler. The
-          // click handler already holds the affordance in closure,
-          // so removing the tile button from the DOM doesn't
-          // interrupt the running handler; the dispatch proceeds
-          // normally and the URL-state update path lands on resolve.
-          // Idempotent: blur's setTimeout(0) fires later but
-          // exitHomeOverlay's early-return on !_homeOverlayActive
-          // makes it a no-op. Also forces the URL input to blur so
-          // the input's focused state doesn't survive the navigate
-          // (matches Apple's commit-then-defocus pattern).
-          if (this._homeOverlayActive) {
-            this.exitHomeOverlay();
-            this.liveBrowserHandle?.element.querySelector("input")?.blur();
-          }
-          void this.liveBrowserForwardEvent?.({
-            kind: "navigate",
-            url: targetUrl,
-          });
-        },
+      const seed = deriveHomeSeed(inputs);
+      const view = buildSlabHomeView(seed, {
+        onTileAction: (action) => this.dispatchHomeTileAction(action),
         soulTint: this._interiorColor ? this.tintToHex(this._interiorColor.tint) : undefined,
       });
       handle.bodySlot.replaceChildren(view);
     });
+  }
+
+  /**
+   * Typed tile dispatch — each action kind routes to its deterministic
+   * seam; no handler carries free text (the action union is promptless
+   * by construction, surface-determinism shape-enforced):
+   *   navigate      → the live-browser forwardEvent path (as the old
+   *                   affordance tap did)
+   *   focus_ingress → the chrome strip's ingress (CustomEvent the
+   *                   chrome module listens for; falls back to focusing
+   *                   the strip's input directly)
+   *   open_goals / open_agents / open_setup → typed document
+   *                   CustomEvents wired in main.ts to the panel/
+   *                   settings openers (the motebit:open-activity
+   *                   precedent)
+   */
+  private dispatchHomeTileAction(action: HomeTileAction): void {
+    switch (action.kind) {
+      case "navigate": {
+        // Synchronous overlay exit BEFORE dispatch — closes the race
+        // with the URL-input's deferred blur handler (see the original
+        // affordance-tap comment; behavior preserved).
+        if (this._homeOverlayActive) {
+          this.exitHomeOverlay();
+          this.liveBrowserHandle?.element.querySelector("input")?.blur();
+        }
+        void this.liveBrowserForwardEvent?.({ kind: "navigate", url: action.url });
+        break;
+      }
+      case "focus_ingress": {
+        const input =
+          this.liveBrowserHandle?.controlBandSlot.querySelector<HTMLInputElement>("input");
+        if (input) {
+          input.focus();
+        } else {
+          document.dispatchEvent(new CustomEvent("motebit:home-focus-ingress"));
+        }
+        break;
+      }
+      case "open_goals":
+        document.dispatchEvent(new CustomEvent("motebit:home-open-goals"));
+        break;
+      case "open_agents":
+        document.dispatchEvent(new CustomEvent("motebit:home-open-agents"));
+        break;
+      case "open_setup":
+        document.dispatchEvent(
+          new CustomEvent("motebit:home-open-setup", { detail: { key: action.key } }),
+        );
+        break;
+    }
   }
 
   /**
@@ -3023,6 +3095,17 @@ export class UnbootedWebApp {
       // `_persistedCookies` cache is populated by the cookies arc's
       // lazy-load gate on first session open and stays warm.
       trustHeld: urlHasTrustHeld(this._currentBrowserUrl, this._persistedCookies),
+      // Rest-cell ingress honesty (motebit-computer.md §home): the mode
+      // derives from the SAME live accessor as the seed's `mind` bit —
+      // a bare motebit's ingress says "go somewhere", never offering a
+      // chat that cannot think. onAsk carries USER-AUTHORED text to the
+      // normal chat send path (address-me, not a synthesized prompt).
+      homeIngress: {
+        mode: (this.runtime?.isAIReady ?? false) ? ("ask_or_go" as const) : ("go_only" as const),
+        onAsk: (text: string) => {
+          document.dispatchEvent(new CustomEvent("motebit:home-ask", { detail: { text } }));
+        },
+      },
       taskStepNarration: this._taskStepNarration,
       // PR 4 of the auto-routing arc — second narration source the
       // chrome absorbs. Populated by the BYOK / on-device auto-
@@ -3117,6 +3200,12 @@ export class UnbootedWebApp {
         await events.appendWithClock(entry);
       } else {
         await events.append({ ...entry, version_clock: 0 });
+      }
+      // Keep the home seed's resumption cache warm — navigates are the
+      // only rows it reads, so appending here means the next home mount
+      // never re-scans the full forwarded-input history.
+      if (payload.detail?.kind === "navigate" && this._homeNavCache != null) {
+        this._homeNavCache.push({ payload, timestamp: payload.timestamp });
       }
     } catch {
       // Audit-sink fault is non-fatal — the input has already
@@ -3394,8 +3483,15 @@ export class UnbootedWebApp {
   }
 
   private setSyncStatus(status: WebSyncStatus): void {
+    const changed = this._syncStatus !== status;
     this._syncStatus = status;
     for (const cb of this._syncStatusListeners) cb(status);
+    // Config-state changed while the slab rests on home → re-derive the
+    // seed (a relay connecting mid-rest surfaces Find-an-agent; a
+    // disconnect recedes it — the mirror stays live, never stale).
+    if (changed && (this._onHomeRegister || this._homeOverlayActive)) {
+      this.mountHomeViewIntoBodySlot();
+    }
   }
 
   async createSyncToken(aud: TokenAudience = "sync"): Promise<string | null> {

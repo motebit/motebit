@@ -12,10 +12,10 @@
  *      is the architectural primitive; every surface that mounts a
  *      slab dispatches against the full matrix shape.
  *   2. SLAB_SURFACES is the closed inventory of surfaces that own a
- *      dispatcher. Web (PR 1, 2026-05-12) was the first; mobile (PR 2,
- *      2026-05-13) is the second. Spatial AR-glasses chrome and
- *      desktop chrome are deferred — no slab dispatcher exists there
- *      yet.
+ *      dispatcher. Web (PR 1, 2026-05-12), mobile (PR 2, 2026-05-13),
+ *      spatial (PR 3, 2026-05-13) — three registered surfaces below.
+ *      Desktop chrome remains deferred — no slab dispatcher exists
+ *      there yet.
  *   3. CONTROL_STATES + DEFERRED_EMBODIMENT_MODES are the closed
  *      inventories of cells the dispatcher must STRUCTURALLY name in
  *      source. Every control state appears in some switch / case;

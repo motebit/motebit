@@ -2,34 +2,37 @@
  * @vitest-environment jsdom
  *
  * Slab home view — doctrine-locking invariants for the body's
- * READY-state surface.
+ * READY-state surface, now rendering the DERIVED capability-seed
+ * (motebit-computer.md §home: "derive the seed; never author it").
  *
- * The home view is where forward-framed affordances (signed-receipt-
- * informed launchpads) live, NOT where past records list. This test
- * suite pins the architectural contract:
- *
- *   1. Affordances are forward-framed ("Continue google.com"), never
- *      chronological ("Recent: 5 sessions" / dates).
- *   2. Empty-empty register returns an empty wrapper — no decorative
- *      mark, no caption (chrome strip already has the call-to-action).
- *   3. Dedup is by host (most-recent engagement wins per host).
- *   4. Audit-redacted "unknown" hosts are filtered out (noise, not
- *      affordance).
- *   5. Tap dispatch fires the affordance handler with the typed
- *      affordance (forward action, never a record open).
- *
- * Lock #1 + #2 are the doctrine bind to records-vs-acts.md (body
- * shows acts) and intent-gated-slab.md (empty IS empty in the
- * calm-software register).
+ * Locks:
+ *   1. Tiles are forward-framed acts, never chronological records.
+ *   2. Empty-empty is UNREPRESENTABLE — the intrinsic identity floor
+ *      guarantees content at N=0; the "Anywhere." watermark belongs to
+ *      the chrome backdrop, never the body.
+ *   3. Dedup/redaction behavior of the resumption basis is preserved.
+ *   4. Tap dispatch fires the typed promptless action.
+ *   5. Setup chips render only while unmet (recede is structural).
  */
 
 import { describe, it, expect, vi } from "vitest";
-import {
-  buildSlabHomeView,
-  computeSlabHomeAffordances,
-  type SlabHomeAffordance,
-} from "../ui/slab-home.js";
+import { buildSlabHomeView, computeSlabHomeAffordances } from "../ui/slab-home.js";
+import { deriveHomeSeed, type HomeSeedInputs, type HomeConfigKey } from "../ui/slab-home-model.js";
 import type { UserInputForwardedPayload } from "@motebit/sdk";
+
+const TEST_ID = "0197f000-0000-7000-8000-0000000000aa";
+
+function seedInputs(overrides: {
+  config?: Partial<Record<HomeConfigKey, boolean>>;
+  events?: Array<{ payload: UserInputForwardedPayload; timestamp: number }>;
+}): HomeSeedInputs {
+  return {
+    identity: { motebitId: TEST_ID },
+    config: { mind: true, relay: true, computer: true, ...overrides.config },
+    toolNames: ["web_search"],
+    navigateEvents: overrides.events ?? [],
+  };
+}
 
 function makeNavigateEvent(
   host: string,
@@ -157,123 +160,88 @@ describe("computeSlabHomeAffordances — dedup by host, sort by recency, top N",
   });
 });
 
-describe("buildSlabHomeView — calm Apple-grade tile shape, forward-framed only", () => {
-  it("renders the 'Anywhere.' watermark for the empty-empty register — calm intentional floor, not absence", () => {
-    // Doctrine: empty-empty is the first-time-user impression, and
-    // "pure empty glass" can read as broken / loading to users who
-    // haven't internalized the calm-software register. A single
-    // forward-framed watermark fixes that — reads as design, not
-    // absence. Complements the chrome strip's mechanism-framed
-    // placeholder ("type a URL · or ask motebit"): two registers,
-    // one calm intent. No grid, no card outlines.
-    const root = buildSlabHomeView([], { onAffordanceTap: vi.fn() });
-    const watermark = root.querySelector(".slab-home-watermark");
-    expect(watermark).not.toBeNull();
-    expect(watermark?.textContent).toBe("Anywhere.");
-    // No tile grid — empty-empty must NOT show card outlines
-    // (Apple's "broken-container" failure mode).
-    expect(root.querySelector(".slab-home-affordance")).toBeNull();
+describe("buildSlabHomeView — renders the derived seed; empty-empty unrepresentable", () => {
+  it("N=0 renders the intrinsic identity floor + capability tiles — never an empty body, never a body watermark", () => {
+    const seed = deriveHomeSeed(seedInputs({}));
+    const root = buildSlabHomeView(seed, { onTileAction: vi.fn() });
+    // The identity mark is present at absolute zero.
+    expect(root.querySelector(".slab-home-identity")).not.toBeNull();
+    // The intrinsic floor guarantees at least one tile ("Set a goal").
+    const tiles = root.querySelectorAll(".slab-home-affordance");
+    expect(tiles.length).toBeGreaterThan(0);
+    // "Anywhere." is the CHROME's watermark backdrop, never body content.
+    expect(root.querySelector(".slab-home-watermark")).toBeNull();
+    expect(root.textContent).not.toContain("Anywhere.");
   });
 
-  it("renders forward-framed tiles — verb is 'Continue', host is the legible center, no chronological labels", () => {
-    const affordances: SlabHomeAffordance[] = [
-      { id: "aff-google.com", host: "google.com", scheme: "https", lastEngagedAt: 1 },
-      {
-        id: "aff-news.ycombinator.com",
-        host: "news.ycombinator.com",
-        scheme: "https",
-        lastEngagedAt: 2,
-      },
-    ];
-    const root = buildSlabHomeView(affordances, { onAffordanceTap: vi.fn() });
-    const tiles = root.querySelectorAll(".slab-home-affordance");
-    expect(tiles).toHaveLength(2);
-
-    // Each tile is forward-framed — verb + host, never a date or
-    // "Recent" header.
-    Array.from(tiles).forEach((tile) => {
+  it("renders forward-framed resumption tiles — verb + host, never chronological labels", () => {
+    const seed = deriveHomeSeed(
+      seedInputs({
+        events: [makeNavigateEvent("google.com", 1), makeNavigateEvent("news.ycombinator.com", 2)],
+      }),
+    );
+    const root = buildSlabHomeView(seed, { onTileAction: vi.fn() });
+    const resumption = root.querySelectorAll('[data-layer="resumption"]');
+    expect(resumption).toHaveLength(2);
+    Array.from(resumption).forEach((tile) => {
       expect(tile.textContent).toContain("Continue");
-      // Doctrine lock: no chronological framing on the body. If a
-      // future change adds "yesterday at 3pm" to the tile, this
-      // assertion catches it.
       expect(tile.textContent).not.toMatch(/yesterday|ago|recent|history/i);
     });
-    // Hosts appear as the legible center label.
-    const texts = Array.from(tiles).map((t) => t.textContent);
+    const texts = Array.from(resumption).map((t) => t.textContent);
     expect(texts.some((t) => t?.includes("google.com"))).toBe(true);
     expect(texts.some((t) => t?.includes("news.ycombinator.com"))).toBe(true);
   });
 
-  it("tile tap fires onAffordanceTap with the typed affordance — forward dispatch, never a record-open", () => {
+  it("tile tap fires onTileAction with the typed promptless action", () => {
     const handler = vi.fn();
-    const aff: SlabHomeAffordance = {
-      id: "aff-apple.com",
-      host: "apple.com",
-      scheme: "https",
-      lastEngagedAt: 1,
-    };
-    const root = buildSlabHomeView([aff], { onAffordanceTap: handler });
-    const tile = root.querySelector(".slab-home-affordance") as HTMLButtonElement;
+    const seed = deriveHomeSeed(seedInputs({ events: [makeNavigateEvent("apple.com", 1)] }));
+    const root = buildSlabHomeView(seed, { onTileAction: handler });
+    const tile = root.querySelector('[data-host="apple.com"]') as HTMLButtonElement;
     expect(tile).not.toBeNull();
     tile.click();
-    expect(handler).toHaveBeenCalledWith(aff);
+    expect(handler).toHaveBeenCalledWith({ kind: "navigate", url: "https://apple.com" });
   });
 
-  it("renders a favicon img for each tile — visual identity dominates string parsing", () => {
-    // Apple lesson: Spotlight, Dock, Watch smart-stack lead with
-    // icons. A favicon makes tiles scannable; without it, the only
-    // differentiator between tiles is text and the surface reads
-    // as a database list. Lock the img element on each tile so a
-    // regression that drops it hits CI.
-    const aff: SlabHomeAffordance = {
-      id: "aff-apple.com",
-      host: "apple.com",
-      scheme: "https",
-      lastEngagedAt: 1,
-    };
-    const root = buildSlabHomeView([aff], { onAffordanceTap: vi.fn() });
-    const tile = root.querySelector(".slab-home-affordance");
-    const favicon = tile?.querySelector("img");
+  it("renders a favicon img on resumption tiles only — capability tiles stay text-quiet", () => {
+    const seed = deriveHomeSeed(seedInputs({ events: [makeNavigateEvent("apple.com", 1)] }));
+    const root = buildSlabHomeView(seed, { onTileAction: vi.fn() });
+    const resumptionTile = root.querySelector('[data-host="apple.com"]');
+    const favicon = resumptionTile?.querySelector("img");
     expect(favicon).not.toBeNull();
-    // Source the privacy-respecting DuckDuckGo favicon service —
-    // no API key, no tracking, host-keyed lookup.
     expect(favicon?.src).toContain("icons.duckduckgo.com");
-    expect(favicon?.src).toContain("apple.com");
-    // Lazy + async-decoded so the favicon fetch doesn't block tile
-    // paint when the home view first mounts.
     expect(favicon?.loading).toBe("lazy");
+    const intrinsic = root.querySelector('[data-layer="intrinsic"]');
+    expect(intrinsic?.querySelector("img")).toBeNull();
   });
 
-  it("uses the soul tint when provided — tile glass composes with slab transmission, not a hard white card", () => {
-    const aff: SlabHomeAffordance = {
-      id: "aff-x.com",
-      host: "x.com",
-      scheme: "https",
-      lastEngagedAt: 1,
-    };
-    // Distinctive hex so we can find it in the inline style.
-    const root = buildSlabHomeView([aff], {
-      onAffordanceTap: vi.fn(),
-      soulTint: "#c08040",
-    });
+  it("setup chips render while unmet and are structurally absent when wired", () => {
+    const bare = deriveHomeSeed(seedInputs({ config: { mind: false, relay: false } }));
+    const bareRoot = buildSlabHomeView(bare, { onTileAction: vi.fn() });
+    expect(bareRoot.querySelectorAll(".slab-home-setup")).toHaveLength(2);
+
+    const wired = deriveHomeSeed(seedInputs({}));
+    const wiredRoot = buildSlabHomeView(wired, { onTileAction: vi.fn() });
+    expect(wiredRoot.querySelectorAll(".slab-home-setup")).toHaveLength(0);
+  });
+
+  it("setup chip tap dispatches open_setup with its key", () => {
+    const handler = vi.fn();
+    const seed = deriveHomeSeed(seedInputs({ config: { mind: false } }));
+    const root = buildSlabHomeView(seed, { onTileAction: handler });
+    const chip = root.querySelector('[data-setup="setup-mind"]') as HTMLButtonElement;
+    expect(chip).not.toBeNull();
+    chip.click();
+    expect(handler).toHaveBeenCalledWith({ kind: "open_setup", key: "mind" });
+  });
+
+  it("uses the soul tint — tile glass composes with slab transmission", () => {
+    const seed = deriveHomeSeed(seedInputs({}));
+    const root = buildSlabHomeView(seed, { onTileAction: vi.fn(), soulTint: "#c08040" });
     const tile = root.querySelector(".slab-home-affordance") as HTMLButtonElement;
     expect(tile.style.background).toContain("rgba(192, 128, 64");
   });
 
-  it("breathes at the slab's 0.3 Hz rhythm when Element.animate is available — tile group inherits the body's sympathetic register", () => {
-    // The home view's opacity pulses at 0.3 Hz to lock the calm
-    // rhythm. Sibling of the slab body's eigenmode breathing.
-    //
-    // jsdom doesn't implement Element.animate; the builder degrades
-    // gracefully (no animation, but tiles still render). Install a
-    // stub so we can assert the timing parameters we'd pass in a
-    // real browser.
-    const aff: SlabHomeAffordance = {
-      id: "aff-a.com",
-      host: "a.com",
-      scheme: "https",
-      lastEngagedAt: 1,
-    };
+  it("breathes at the slab's 0.3 Hz rhythm when Element.animate is available", () => {
     const stubAnimate = vi.fn((_keyframes: unknown, options: KeyframeAnimationOptions) => ({
       effect: { getComputedTiming: () => options } as unknown as AnimationEffect,
     }));
@@ -281,10 +249,9 @@ describe("buildSlabHomeView — calm Apple-grade tile shape, forward-framed only
     const original = proto.animate;
     proto.animate = stubAnimate as never;
     try {
-      buildSlabHomeView([aff], { onAffordanceTap: vi.fn() });
+      buildSlabHomeView(deriveHomeSeed(seedInputs({})), { onTileAction: vi.fn() });
       expect(stubAnimate).toHaveBeenCalledOnce();
       const [, options] = stubAnimate.mock.calls[0]!;
-      // 0.3 Hz → 1000 / 0.3 ≈ 3333 ms per cycle.
       expect(options.duration).toBeCloseTo(1000 / 0.3, 0);
       expect(options.iterations).toBe(Infinity);
     } finally {

@@ -231,6 +231,35 @@ const slashCommands = initSlashCommands(ctx, {
 });
 chatAPI.setSlashCommands(slashCommands);
 
+// Slab home-register tile routes — typed CustomEvents from the derived
+// capability-seed's tap handlers (web-app.ts dispatchHomeTileAction);
+// each maps to the SAME opener the slash commands use, so a tile and a
+// slash command are one affordance in two positions (surface-determinism:
+// deterministic route, never a synthesized prompt).
+document.addEventListener("motebit:home-open-goals", () => gatedPanels.openGoals());
+document.addEventListener("motebit:home-open-agents", () => gatedPanels.openAgents());
+document.addEventListener("motebit:home-open-setup", (e) => {
+  const key = (e as CustomEvent<{ key?: string }>).detail?.key;
+  // Route to the affordance-of-record for each dependency: the relay
+  // popover IS the connect-a-relay surface (same popover the top-center
+  // cloud button opens); the mind lives in Settings.
+  if (key === "relay") {
+    gatedPanels.openSync();
+  } else {
+    settings.open();
+  }
+});
+// Rest-ingress ask route — USER-AUTHORED free text from the slab's
+// resting ingress line, sent through the exact same path as the chat
+// box (handleSend with a text override). Address-me in a second
+// position; the text is the user's own, never a synthesized prompt.
+document.addEventListener("motebit:home-ask", (e) => {
+  const text = (e as CustomEvent<{ text?: string }>).detail?.text;
+  if (typeof text === "string" && text.trim().length > 0) {
+    void chatAPI.handleSend(text);
+  }
+});
+
 const chatInput = document.getElementById("chat-input") as HTMLInputElement;
 initKeyboard({
   focusInput: () => chatInput.focus(),

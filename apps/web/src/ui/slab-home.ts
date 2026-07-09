@@ -1,368 +1,293 @@
 /**
- * Slab home view — the body's READY-state surface.
+ * Slab home view — the body's READY-state surface, rendering the DERIVED
+ * capability-seed (`slab-home-model.ts`).
  *
- * Mounted into `LiveBrowserElementHandle.bodySlot` when the cloud
- * Chromium has no real URL active (cold-start, post-dismiss, or
- * `about:blank`). The home view renders forward-framed affordances
- * — calm Apple-grade glass tiles surfaced from the motebit's past
- * signed activity, framed as the next act.
+ * Doctrine (`motebit-computer.md` §home):
+ *   - The seed is derived, never authored — this module renders a
+ *     `HomeSeed`; it constructs no tiles of its own.
+ *   - Intrinsic floor: the identity mark (key-derived sigil + short
+ *     motebit_id) is present at absolute zero — the metabolic principle
+ *     as the home floor.
+ *   - A few soul-tinted invitations, breathing; never a launcher grid.
+ *   - Setup affordances render as whisper chips and are structurally
+ *     absent once wired (they never reach the seed).
+ *   - Empty-empty is unrepresentable: the intrinsic floor guarantees at
+ *     least one tile, so the old "Anywhere." body branch is gone —
+ *     "Anywhere." lives in the chrome as the watermark backdrop
+ *     (cobrowse-chrome.ts), not in the body.
+ *   - `records-vs-acts.md` — tiles are ACT-framed launchpads (forward
+ *     verbs); the same signed records populate panels as records.
  *
- * Doctrine:
- *   - `motebit-computer.md` §"What appears on the slab" — the slab
- *     surfaces what the motebit is, has been, or could be attending
- *     to. The home view is the "could be" register.
- *   - `records-vs-acts.md` — body shows acts, panels hold records.
- *     Home tiles are ACT-framed launchpads (forward verbs), not
- *     record listings. Past sessions inform; the user FEELS forward.
- *   - `intent-gated-slab.md` — empty IS READY. The empty-empty
- *     state (no affordances yet) is pure slab interior, no body
- *     content; the chrome strip's "type a URL · or ask motebit"
- *     placeholder is the canonical first-time-user affordance.
- *
- * Why forward-framed (not "Recent X"): a record-framed list belongs
- * in a panel, where it can be browsed/searched/audited at leisure.
- * The slab body is for acts. The same signed receipts that populate
- * the panel as records also drive these tiles — same data, two
- * surfaces, two reading registers (records-as-records vs records-
- * as-resumption).
+ * Privacy note (operator-transparency register): resumption tiles fetch
+ * favicons from `icons.duckduckgo.com` — the one third-party read the
+ * resting face performs, disclosing the (already path-redacted) visited
+ * hosts to that service. Named in `motebit-computer.md` §home; a
+ * cache/proxy is deferred-with-trigger (first privacy review).
  */
 
-import type { UserInputForwardedPayload } from "@motebit/sdk";
+import { deriveAgentSigil } from "@motebit/sdk";
+import { shortMotebitId } from "@motebit/panels";
+import { sigilToSvg } from "../identity-sigil-svg.js";
+import type { HomeSeed, HomeTile, HomeTileAction } from "./slab-home-model.js";
+
+export type { SlabHomeAffordance } from "./slab-home-model.js";
+export { computeSlabHomeAffordances } from "./slab-home-model.js";
 
 /**
- * A forward-framed launchpad shown on the slab home view. The TILE
- * means "I would like to go here next" — even though the DATA is
- * informed by past affinity (which navigate events appeared in the
- * audit log, ordered by recency).
- *
- * The audit log redacts paths and queries by design (only scheme +
- * host survive — see `co-browse.ts` §"URL-redacted navigate detail"),
- * which is exactly the right coarseness for resumption: tiles point
- * to sites, not specific pages. Privacy-aligned by the same redaction
- * that protects browser-history-like audit data.
- */
-export interface SlabHomeAffordance {
-  /** Stable id derived from host for dedup. */
-  readonly id: string;
-  /** Hostname (e.g., `google.com`). */
-  readonly host: string;
-  /** URL scheme (e.g., `https`). */
-  readonly scheme: string;
-  /** Last engagement timestamp — used for sorting; NOT displayed. */
-  readonly lastEngagedAt: number;
-}
-
-const MAX_AFFORDANCES = 4;
-
-/**
- * Canonicalize a hostname for tile dedup. Three normalizations:
- *
- *   1. Lowercase — case-insensitive equality.
- *   2. Strip leading `www.` — `www.google.com` and `google.com`
- *      collapse to one tile.
- *   3. Reject hosts without a dot — `"gmail"` (TLD-less typo from
- *      the URL bar) collapses out entirely; only real hostnames or
- *      IP/loopback addresses survive. Returns null for rejects so
- *      the caller can drop the affordance.
- *
- * Why dedup matters at the home register: Apple's Spotlight never
- * shows the same destination twice, and the moment a user sees
- * `gmail` + `gmail.com` adjacent the surface reads as algorithmically-
- * unfinished — trust in the home view's intelligence drops in a way
- * that's hard to recover. Cheap to fix here, load-bearing on perception.
- */
-function canonicalizeHost(host: string): string | null {
-  const lower = host.toLowerCase().trim();
-  if (lower === "" || lower === "unknown") return null;
-  const stripped = lower.startsWith("www.") ? lower.slice(4) : lower;
-  // Bare hosts without a dot are typos (`"gmail"`) OR localhost/IP
-  // edge cases. localhost has its own dot-free form; an IPv4 literal
-  // always has dots; IPv6 in brackets has colons. Allowing only
-  // `localhost` and dotted forms catches the typo case cleanly.
-  if (stripped === "localhost") return stripped;
-  if (!stripped.includes(".")) return null;
-  return stripped;
-}
-
-/**
- * Compute the slab home affordances from a list of audit events.
- * Pure function — surface filters its event log for navigate events
- * and hands the typed payloads here. Dedups by canonical host (most-
- * recent engagement per canonical host wins, leading `www.` stripped,
- * TLD-less typos rejected), returns the top N sorted by recency.
- *
- * Caller is responsible for restricting the input to the motebit's
- * own events (the audit log is per-motebit by construction; this
- * function doesn't re-filter on motebit_id).
- */
-export function computeSlabHomeAffordances(
-  events: ReadonlyArray<{ payload: UserInputForwardedPayload; timestamp: number }>,
-  maxAffordances: number = MAX_AFFORDANCES,
-): SlabHomeAffordance[] {
-  // Walk events from newest to oldest, picking the first occurrence
-  // of each canonical host. Discards collapse into one tile per
-  // destination, with the recency timestamp from the latest
-  // engagement.
-  const seen = new Map<string, SlabHomeAffordance>();
-  const sorted = [...events].sort((a, b) => b.timestamp - a.timestamp);
-  for (const ev of sorted) {
-    const detail = ev.payload.detail;
-    if (detail.kind !== "navigate") continue;
-    const canonical = canonicalizeHost(detail.host);
-    if (canonical == null) continue;
-    if (seen.has(canonical)) continue;
-    seen.set(canonical, {
-      id: `aff-${canonical}`,
-      host: canonical,
-      scheme: detail.scheme === "unknown" ? "https" : detail.scheme,
-      lastEngagedAt: ev.timestamp,
-    });
-    if (seen.size >= maxAffordances) break;
-  }
-  return [...seen.values()];
-}
-
-/**
- * Build the slab home view's DOM. Returns the root element ready
- * to be mounted into `LiveBrowserElementHandle.bodySlot` and the
- * tap handler the surface wires to the chrome's navigation flow.
- *
- * Empty-empty register: when `affordances` is empty, returns an
- * empty wrapper. The slab's interior glass shows through; the
- * chrome strip's placeholder is the only first-time-user affordance.
- * "Empty IS empty" per the calm-software discipline — no decorative
- * mark, no redundant caption (the chrome already says "type a URL ·
- * or ask motebit").
- *
- * The visual register is Apple-grade glass tiles:
- *   - Soul-tinted translucent background composing with the slab's
- *     transmission shader (no hard-stop white card on white slab)
- *   - Forward verb in lighter weight + host in heavier weight —
- *     reads as "Continue google.com," not as a chronological entry
- *   - Subtle hover lift (translateY + opacity) — calm, not snappy
- *   - 0.3 Hz sympathetic breathing on the tile group's opacity —
- *     same rhythm as the slab body itself
+ * Typed tile dispatch — the surface wires each action kind to its
+ * deterministic route (navigate → forwardEvent; panel opens → typed
+ * CustomEvents; focus_ingress → chrome ingress focus). No handler
+ * receives free text; the action union is promptless by construction.
  */
 export interface SlabHomeViewOptions {
-  /** Fires when the user taps a tile. Surface dispatches to nav. */
-  readonly onAffordanceTap: (affordance: SlabHomeAffordance) => void;
-  /**
-   * Soul tint — the same color the creature/slab use, so tile glass
-   * shares the slab's chromatic family. Hex string (e.g., "#a9b8d0").
-   */
+  readonly onTileAction: (action: HomeTileAction) => void;
+  /** Soul tint shared with the creature/slab (hex, e.g. "#a9b8d0"). */
   readonly soulTint?: string;
 }
 
-export function buildSlabHomeView(
-  affordances: ReadonlyArray<SlabHomeAffordance>,
-  opts: SlabHomeViewOptions,
-): HTMLElement {
+export function buildSlabHomeView(seed: HomeSeed, opts: SlabHomeViewOptions): HTMLElement {
   const root = document.createElement("div");
   root.className = "slab-home-view";
+  root.style.display = "flex";
+  root.style.flexDirection = "column";
+  root.style.alignItems = "center";
+  root.style.justifyContent = "center";
+  root.style.gap = "14px";
+  root.style.width = "100%";
 
-  // Empty-empty register — first-time user, no history yet, no
-  // tiles to surface. The "right floor" is a single forward-framed
-  // watermark, soul-tinted, breathing at 0.3 Hz: reads as
-  // intentional design, not absence. Pure-empty-glass alternative
-  // can scan as "broken / loading" to users who haven't internalized
-  // the calm-software register yet; one word fixes that without
-  // adding chrome.
-  //
-  // Word choice: "Anywhere." with the period. Forward-framed (the
-  // slab is ready for any destination), complementary to the chrome
-  // strip's mechanism-framed "type a URL · or ask motebit" — chrome
-  // tells you HOW, watermark tells you the SHAPE of where you can
-  // go. Two registers, one calm intent.
-  if (affordances.length === 0) {
-    const watermark = document.createElement("div");
-    watermark.className = "slab-home-watermark";
-    watermark.textContent = "Anywhere.";
-    watermark.style.fontSize = "22px";
-    watermark.style.fontWeight = "300";
-    watermark.style.letterSpacing = "-0.01em";
-    watermark.style.color = "rgba(14, 22, 40, 0.32)";
-    watermark.style.fontFamily = "inherit";
-    watermark.style.userSelect = "none";
-    watermark.style.pointerEvents = "none";
-    root.appendChild(watermark);
-    // Sympathetic 0.3 Hz breathing on the watermark's opacity, same
-    // rhythm the tile grid uses below — even in empty-empty, the
-    // slab breathes with the body.
-    if (typeof root.animate === "function") {
-      const breathing = root.animate([{ opacity: 0.7 }, { opacity: 1 }, { opacity: 0.7 }], {
-        duration: 1000 / 0.3,
-        iterations: Infinity,
-        easing: "ease-in-out",
-      });
-      (root as HTMLElement & { __slabHomeBreathing?: Animation }).__slabHomeBreathing = breathing;
+  // ── Intrinsic identity floor — present at absolute zero ─────────────
+  // Key-derived sigil (recognition-not-proof; parity-gated derivation
+  // from @motebit/sdk) + short motebit_id in whisper register. This is
+  // the slab at rest saying what this motebit IS before what it can do.
+  root.appendChild(buildIdentityMark(seed.identity.motebitId));
+
+  // ── The seed cluster — one loose breathing flex group, never a grid ──
+  const cluster = document.createElement("div");
+  cluster.className = "slab-home-cluster";
+  cluster.style.display = "flex";
+  cluster.style.flexWrap = "wrap";
+  cluster.style.gap = "10px";
+  cluster.style.padding = "0 20px";
+  cluster.style.maxWidth = "92%";
+  cluster.style.justifyContent = "center";
+  cluster.style.alignContent = "center";
+
+  const mainTiles = seed.tiles.filter((t) => t.layer !== "setup");
+  const setupTiles = seed.tiles.filter((t) => t.layer === "setup");
+
+  for (const tile of mainTiles) {
+    cluster.appendChild(buildTile(tile, opts));
+  }
+  root.appendChild(cluster);
+
+  // ── Setup whisper chips — the honest first move, receding once wired ─
+  // (they are absent from the seed when wired — structural, not hidden).
+  if (setupTiles.length > 0) {
+    const setupRow = document.createElement("div");
+    setupRow.className = "slab-home-setup-row";
+    setupRow.style.display = "flex";
+    setupRow.style.gap = "14px";
+    setupRow.style.marginTop = "2px";
+    for (const tile of setupTiles) {
+      setupRow.appendChild(buildSetupChip(tile, opts));
     }
-    return root;
+    root.appendChild(setupRow);
   }
 
-  // Grid container — tiles laid out responsively to the slab body's
-  // available width. flex-wrap so 4 tiles fit on a wide slab, 2 on
-  // a narrower one. Gap matches the slab's substrate breathing
-  // amplitude — same rhythm at the layout level.
-  const grid = document.createElement("div");
-  grid.style.display = "flex";
-  grid.style.flexWrap = "wrap";
-  grid.style.gap = "10px";
-  grid.style.padding = "16px 20px";
-  grid.style.maxWidth = "92%";
-  grid.style.justifyContent = "center";
-  grid.style.alignContent = "center";
-
-  for (const aff of affordances) {
-    const tile = buildAffordanceTile(aff, opts);
-    grid.appendChild(tile);
-  }
-
-  root.appendChild(grid);
-  // Sympathetic breathing on the whole home view at 0.3 Hz — inherits
-  // the slab body's rhythm so the tiles feel like content embedded in
-  // the substrate, not a layer adjacent to it. Uses Web Animations
-  // API rather than CSS @keyframes so disposal is trivial (the
-  // element going out of scope cancels the animation).
-  //
-  // Guard for jsdom + ancient browsers without `Element.animate` —
-  // the home view still renders; it just doesn't breathe in test
-  // environments. The animation contract is browser-only.
+  // Sympathetic 0.3 Hz breathing on the whole home view — the slab
+  // body's rhythm; content embedded in the substrate, never adjacent.
+  // Guarded for jsdom (renders without breathing in tests).
   if (typeof root.animate === "function") {
     const breathing = root.animate([{ opacity: 0.88 }, { opacity: 1 }, { opacity: 0.88 }], {
       duration: 1000 / 0.3,
       iterations: Infinity,
       easing: "ease-in-out",
     });
-    // Park reference on the element for test introspection / dispose.
     (root as HTMLElement & { __slabHomeBreathing?: Animation }).__slabHomeBreathing = breathing;
   }
 
   return root;
 }
 
-/** Tile material registers — rest + hover. Centralized so the
- *  hover/leave handlers and the initial paint share one source.
- *  Substrate-bubble character: lower bg alpha + heavier backdrop
- *  blur than a card. Reads as content RISING THROUGH the slab,
- *  not sitting on top of it. */
+/** The identity floor: 22px sigil + short id, whisper register. */
+function buildIdentityMark(motebitId: string): HTMLElement {
+  const mark = document.createElement("div");
+  mark.className = "slab-home-identity";
+  mark.style.display = "flex";
+  mark.style.alignItems = "center";
+  mark.style.gap = "8px";
+  mark.style.userSelect = "none";
+  mark.style.pointerEvents = "none";
+  mark.style.opacity = "0.55";
+
+  const sigilHolder = document.createElement("span");
+  sigilHolder.style.width = "22px";
+  sigilHolder.style.height = "22px";
+  sigilHolder.style.display = "inline-flex";
+  try {
+    const sigil = deriveAgentSigil(motebitId);
+    sigilHolder.innerHTML = sigilToSvg(sigil, { size: 22 });
+  } catch {
+    // A malformed id renders no mark rather than a wrong one —
+    // recognition-not-proof degrades to absence, never to fabrication.
+  }
+  mark.appendChild(sigilHolder);
+
+  const id = document.createElement("span");
+  id.textContent = shortMotebitId(motebitId);
+  id.style.fontSize = "11px";
+  id.style.fontFamily = "ui-monospace, monospace";
+  id.style.letterSpacing = "0.02em";
+  id.style.color = "rgba(14, 22, 40, 0.55)";
+  mark.appendChild(id);
+
+  return mark;
+}
+
+/** Tile material registers — substrate-bubble character: content RISING
+ *  THROUGH the slab, not a card sitting on it. */
 const TILE_BG_REST_ALPHA = 0.12;
 const TILE_BG_HOVER_ALPHA = 0.22;
 const TILE_RING_REST_ALPHA = 0.22;
 const TILE_RING_HOVER_ALPHA = 0.36;
 const TILE_BLUR = "blur(32px) saturate(1.6)";
 
-function buildAffordanceTile(aff: SlabHomeAffordance, opts: SlabHomeViewOptions): HTMLElement {
-  const tile = document.createElement("button");
-  tile.type = "button";
-  tile.className = "slab-home-affordance";
-  tile.dataset.host = aff.host;
-  tile.setAttribute("aria-label", `Continue ${aff.host}`);
+function buildTile(tile: HomeTile, opts: SlabHomeViewOptions): HTMLElement {
+  const el = document.createElement("button");
+  el.type = "button";
+  el.className = "slab-home-affordance";
+  el.dataset.layer = tile.layer;
+  if (tile.subject != null) el.dataset.host = tile.subject;
+  el.setAttribute("aria-label", tile.subject != null ? `${tile.verb} ${tile.subject}` : tile.verb);
 
-  // Substrate-bubble tile. Soul-tinted translucent background at
-  // lower alpha + heavier backdrop blur composes with the slab's
-  // transmission shader so the tile reads as a substrate-bubble
-  // RISING THROUGH the slab rather than a card SITTING ON it.
-  // Doctrine bind: "content embeds INTO the slab's typed slots,
-  // never adjacent" (intent-gated-slab.md). The materiality
-  // delta from "card" → "bubble" is the difference between
-  // close-but-not-exact and exactly-the-doctrine.
   const soulTint = opts.soulTint ?? "#a9b8d0";
-  tile.style.appearance = "none";
-  tile.style.border = "none";
-  tile.style.outline = "none";
-  tile.style.cursor = "pointer";
-  tile.style.padding = "12px 16px";
-  tile.style.minWidth = "180px";
-  tile.style.borderRadius = "14px";
-  tile.style.background = hexToRgba(soulTint, TILE_BG_REST_ALPHA);
-  tile.style.backdropFilter = TILE_BLUR;
-  // Webkit needs the prefixed property for Safari < 18.
-  tile.style.setProperty("-webkit-backdrop-filter", TILE_BLUR);
-  tile.style.boxShadow = `inset 0 0 0 0.5px ${hexToRgba(soulTint, TILE_RING_REST_ALPHA)}`;
-  tile.style.color = "rgba(14, 22, 40, 0.92)";
-  tile.style.transition =
-    "transform 220ms ease, background-color 220ms ease, box-shadow 220ms ease";
-  tile.style.display = "flex";
-  tile.style.flexDirection = "column";
-  tile.style.alignItems = "flex-start";
-  tile.style.gap = "4px";
-  tile.style.textAlign = "left";
-  tile.style.fontFamily = "inherit";
-  tile.style.pointerEvents = "auto";
+  el.style.appearance = "none";
+  el.style.border = "none";
+  el.style.outline = "none";
+  el.style.cursor = "pointer";
+  el.style.padding = "12px 16px";
+  el.style.minWidth = "150px";
+  el.style.borderRadius = "14px";
+  el.style.background = hexToRgba(soulTint, TILE_BG_REST_ALPHA);
+  el.style.backdropFilter = TILE_BLUR;
+  el.style.setProperty("-webkit-backdrop-filter", TILE_BLUR);
+  el.style.boxShadow = `inset 0 0 0 0.5px ${hexToRgba(soulTint, TILE_RING_REST_ALPHA)}`;
+  el.style.color = "rgba(14, 22, 40, 0.92)";
+  el.style.transition = "transform 220ms ease, background-color 220ms ease, box-shadow 220ms ease";
+  el.style.display = "flex";
+  el.style.flexDirection = "column";
+  el.style.alignItems = "flex-start";
+  el.style.gap = "4px";
+  el.style.textAlign = "left";
+  el.style.fontFamily = "inherit";
+  el.style.pointerEvents = "auto";
 
-  // Favicon row — 18px image at top-left, ahead of the verb. Visual
-  // identity dominates string parsing — Spotlight, Dock, Watch
-  // smart-stack all lead with iconography; a favicon makes scanning
-  // instant and ties the home to the web's visual language without
-  // compromising the slab's glass character. Source: DuckDuckGo's
-  // privacy-respecting favicon service — no API key, no tracking,
-  // returns the host's actual favicon. On 404 / network fail the
-  // img hides itself; tile stays legible via the host string alone
-  // (graceful degradation).
-  const favicon = document.createElement("img");
-  favicon.alt = "";
-  favicon.width = 18;
-  favicon.height = 18;
-  favicon.loading = "lazy";
-  favicon.decoding = "async";
-  favicon.referrerPolicy = "no-referrer";
-  favicon.src = `https://icons.duckduckgo.com/ip3/${aff.host}.ico`;
-  favicon.style.width = "18px";
-  favicon.style.height = "18px";
-  favicon.style.borderRadius = "4px";
-  favicon.style.marginBottom = "2px";
-  favicon.addEventListener("error", () => {
-    favicon.style.display = "none";
-  });
-  tile.appendChild(favicon);
+  // Resumption tiles keep their favicon identity row (see the module
+  // header's privacy note); capability tiles are text-only — quieter.
+  if (tile.layer === "resumption" && tile.subject != null) {
+    const favicon = document.createElement("img");
+    favicon.alt = "";
+    favicon.width = 18;
+    favicon.height = 18;
+    favicon.loading = "lazy";
+    favicon.decoding = "async";
+    favicon.referrerPolicy = "no-referrer";
+    favicon.src = `https://icons.duckduckgo.com/ip3/${tile.subject}.ico`;
+    favicon.style.width = "18px";
+    favicon.style.height = "18px";
+    favicon.style.borderRadius = "4px";
+    favicon.style.marginBottom = "2px";
+    favicon.addEventListener("error", () => {
+      favicon.style.display = "none";
+    });
+    el.appendChild(favicon);
+  }
 
-  // Verb row — light weight, muted, small-caps. Acts as a TYPE
-  // INDICATOR (this is a forward-framing model) rather than a
-  // button label — present enough to teach the register, small
-  // enough to whisper. Don't drop this.
-  const verb = document.createElement("span");
-  verb.textContent = "Continue";
-  verb.style.fontSize = "11px";
-  verb.style.fontWeight = "400";
-  verb.style.letterSpacing = "0.04em";
-  verb.style.textTransform = "uppercase";
-  verb.style.opacity = "0.6";
-  tile.appendChild(verb);
+  if (tile.subject != null) {
+    // Two-row form: whispered verb + legible subject ("Continue" / host).
+    const verb = document.createElement("span");
+    verb.textContent = tile.verb;
+    verb.style.fontSize = "11px";
+    verb.style.fontWeight = "400";
+    verb.style.letterSpacing = "0.04em";
+    verb.style.textTransform = "uppercase";
+    verb.style.opacity = "0.6";
+    el.appendChild(verb);
 
-  // Host row — heavier weight, the legible center of the tile.
-  const host = document.createElement("span");
-  host.textContent = aff.host;
-  host.style.fontSize = "15px";
-  host.style.fontWeight = "500";
-  host.style.letterSpacing = "-0.01em";
-  tile.appendChild(host);
+    const subject = document.createElement("span");
+    subject.textContent = tile.subject;
+    subject.style.fontSize = "15px";
+    subject.style.fontWeight = "500";
+    subject.style.letterSpacing = "-0.01em";
+    el.appendChild(subject);
+  } else {
+    // One-row form: the forward verb IS the tile ("Set a goal").
+    const verb = document.createElement("span");
+    verb.textContent = tile.verb;
+    verb.style.fontSize = "14px";
+    verb.style.fontWeight = "450";
+    verb.style.letterSpacing = "-0.005em";
+    el.appendChild(verb);
+  }
 
-  // Hover register — gentle lift + brighter background. Apple's
-  // typical 220ms ease-out, no snap. Calm, not snappy.
-  tile.addEventListener("mouseenter", () => {
-    tile.style.transform = "translateY(-1px)";
-    tile.style.background = hexToRgba(soulTint, TILE_BG_HOVER_ALPHA);
-    tile.style.boxShadow = `inset 0 0 0 0.5px ${hexToRgba(soulTint, TILE_RING_HOVER_ALPHA)}`;
+  el.addEventListener("mouseenter", () => {
+    el.style.transform = "translateY(-1px)";
+    el.style.background = hexToRgba(soulTint, TILE_BG_HOVER_ALPHA);
+    el.style.boxShadow = `inset 0 0 0 0.5px ${hexToRgba(soulTint, TILE_RING_HOVER_ALPHA)}`;
   });
-  tile.addEventListener("mouseleave", () => {
-    tile.style.transform = "";
-    tile.style.background = hexToRgba(soulTint, TILE_BG_REST_ALPHA);
-    tile.style.boxShadow = `inset 0 0 0 0.5px ${hexToRgba(soulTint, TILE_RING_REST_ALPHA)}`;
+  el.addEventListener("mouseleave", () => {
+    el.style.transform = "";
+    el.style.background = hexToRgba(soulTint, TILE_BG_REST_ALPHA);
+    el.style.boxShadow = `inset 0 0 0 0.5px ${hexToRgba(soulTint, TILE_RING_REST_ALPHA)}`;
   });
-  tile.addEventListener("mousedown", () => {
-    tile.style.transform = "translateY(0) scale(0.98)";
-    tile.style.transition = "transform 60ms ease";
+  el.addEventListener("mousedown", () => {
+    el.style.transform = "translateY(0) scale(0.98)";
+    el.style.transition = "transform 60ms ease";
   });
-  tile.addEventListener("mouseup", () => {
-    tile.style.transition =
+  el.addEventListener("mouseup", () => {
+    el.style.transition =
       "transform 220ms ease, background-color 220ms ease, box-shadow 220ms ease";
   });
 
-  tile.addEventListener("click", () => {
-    opts.onAffordanceTap(aff);
+  el.addEventListener("click", () => {
+    opts.onTileAction(tile.action);
   });
 
-  return tile;
+  return el;
+}
+
+/** Setup affordance — text-only whisper chip; calm, never a nag. */
+function buildSetupChip(tile: HomeTile, opts: SlabHomeViewOptions): HTMLElement {
+  const chip = document.createElement("button");
+  chip.type = "button";
+  chip.className = "slab-home-setup";
+  chip.dataset.setup = tile.id;
+  chip.textContent = tile.verb.toLowerCase();
+  chip.setAttribute("aria-label", tile.verb);
+  chip.style.appearance = "none";
+  chip.style.border = "none";
+  chip.style.outline = "none";
+  chip.style.background = "transparent";
+  chip.style.cursor = "pointer";
+  chip.style.padding = "4px 8px";
+  chip.style.fontSize = "12px";
+  chip.style.fontFamily = "inherit";
+  chip.style.letterSpacing = "0.01em";
+  chip.style.color = "rgba(14, 22, 40, 0.48)";
+  chip.style.textDecoration = "underline";
+  chip.style.textDecorationColor = "rgba(14, 22, 40, 0.18)";
+  chip.style.textUnderlineOffset = "3px";
+  chip.style.transition = "color 220ms ease";
+  chip.addEventListener("mouseenter", () => {
+    chip.style.color = "rgba(14, 22, 40, 0.78)";
+  });
+  chip.addEventListener("mouseleave", () => {
+    chip.style.color = "rgba(14, 22, 40, 0.48)";
+  });
+  chip.addEventListener("click", () => {
+    opts.onTileAction(tile.action);
+  });
+  return chip;
 }
 
 function hexToRgba(hex: string, alpha: number): string {

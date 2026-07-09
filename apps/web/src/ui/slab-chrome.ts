@@ -56,6 +56,11 @@ export interface SlabChromeOpts {
   readonly pixelConsent?: PixelConsentState;
   readonly currentUrl?: string | null;
   readonly trustHeld?: boolean;
+  /** Home-register ingress contract — threaded to the cobrowse chrome's rest cell. */
+  readonly homeIngress?: {
+    readonly mode: "ask_or_go" | "go_only";
+    readonly onAsk: (text: string) => void;
+  };
   /**
    * Task-step narration the loop validated this turn. Consumed by the
    * `motebit × virtual_browser` register as the chrome's content.
@@ -165,6 +170,7 @@ function renderVirtualBrowserChrome(
     pixelConsent: opts.pixelConsent,
     currentUrl: opts.currentUrl ?? null,
     trustHeld: opts.trustHeld,
+    ...(opts.homeIngress ? { homeIngress: opts.homeIngress } : {}),
   });
 }
 

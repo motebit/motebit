@@ -690,7 +690,10 @@ export interface ChatCallbacks {
 }
 
 export interface ChatAPI {
-  handleSend(): Promise<void>;
+  /** Send a chat message — `textOverride` lets a second address-me
+   *  position (the slab's rest ingress) route user-authored text
+   *  through the exact same path as the chat box. */
+  handleSend(textOverride?: string): Promise<void>;
   /** Voice-initiated send: processes through runtime with TTS response, no chat bubbles. */
   handleVoiceSend(transcript: string): Promise<void>;
   /** Register slash command handler so Enter key executes commands. */
