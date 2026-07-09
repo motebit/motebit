@@ -65,7 +65,16 @@ export function createRecallSelfHandler(
             `${i + 1}. [${h.source} · ${h.title} · score=${h.score.toFixed(2)}]\n${h.content}`,
         )
         .join("\n\n---\n\n");
-      return { ok: true, data: formatted };
+      // Live-vs-committed boundary marker (typed-truth discipline): every
+      // recall_self result is the COMMITTED self-description corpus — the
+      // repo's account of its own design — never live runtime or network
+      // state. Witnessed 2026-07-09: a corpus marketplace chunk was recited
+      // as the current relay roster. The banner makes the provenance
+      // unmissable at the dispatch layer, not just in the prompt.
+      const banner =
+        "[SELF_DESCRIPTION — committed repo corpus: design + intent, not live state. " +
+        "For the current agent roster use discover_agents; for runtime state read the [Now] block.]";
+      return { ok: true, data: `${banner}\n\n${formatted}` };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       return { ok: false, error: `Interior recall error: ${msg}` };

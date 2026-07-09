@@ -101,6 +101,12 @@ const DOCTRINE_PATH = "docs/doctrine/runtime-invariants-over-prompt-rules.md";
  *     teaches the model to use it. Doctrine: memory-architecture.md.
  *
  *   - 65 → 67 (2026-06-01): the live-self-knowledge boundary (+2).
+ *   - 67 → 68 (2026-07-09): the live-roster boundary (+1) — A-grade,
+ *     runtime-backed: the discover_agents tool + roster_source typed-truth
+ *     field shipped first (registered in check-typed-truth-perception);
+ *     the clause teaches READING the field, it does not substitute for it.
+ *     Kills the witnessed prod failure of reciting the self-knowledge
+ *     corpus's marketplace chunk as the live relay directory.
  *     Both A-grade (runtime-backed by the `[Now]` block + gated by
  *     check-self-state-registry). (1) The memory self-state clause —
  *     teaches the AI to ground "are you forming memories?" in the
@@ -118,7 +124,7 @@ const DOCTRINE_PATH = "docs/doctrine/runtime-invariants-over-prompt-rules.md";
  *     check-self-state-registry. Doctrine: typed-truth-perception.md +
  *     runtime-invariants-over-prompt-rules.md.
  */
-const BASELINE = 67;
+const BASELINE = 68;
 
 function countRuleClauses(source: string): number {
   let count = 0;

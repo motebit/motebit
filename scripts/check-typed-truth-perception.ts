@@ -242,6 +242,14 @@ const TYPED_TRUTH_FIELDS: ReadonlyArray<TypedTruthField> = [
       "Pixel-consent gate: stripped bytes carry a reason field so the AI describes the gate honestly instead of inferring from missing image content. Transparency-class: a logging signal about runtime behavior, not a closing-claim contradiction.",
   },
   {
+    field: "roster_source",
+    class: "transparency",
+    promptText: "roster_source",
+    dispatchSources: ["packages/runtime/src/interactive-delegation.ts"],
+    notes:
+      "The live-vs-committed provenance stamp on discover_agents results (roster_source: 'live_relay_read'). Kills the witnessed 2026-07-09 prod failure: asked 'who's discoverable right now?', the model recited the self-knowledge corpus's marketplace chunk (repo design — wrong roster, stale pricing) because no tool grounded the question. The prompt clause makes the field the ONLY admissible source for roster answers; recall_self output carries a sibling [SELF_DESCRIPTION] banner at its own dispatch layer (packages/tools/src/builtins/recall-self.ts). First non-browser typed-truth field — the discipline generalizes past perception to any question where committed self-description can masquerade as live state.",
+  },
+  {
     field: "slow_load",
     class: "dishonesty-transient",
     promptText: "slow_load",
