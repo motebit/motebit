@@ -32,7 +32,25 @@ jobs:
       #                   MOTEBIT_SYNC_URL=... MOTEBIT_API_TOKEN=... \
       #                   MOTEBIT_PUBLIC_URL=...
       # (No LLM key — the Auditor is deliberately LLM-free; pure verification.)
+      # The prod app deliberately does not exist until the archetype slate
+      # promotes (5 consecutive green scheduled conformance runs —
+      # scripts/check-promotion-ready.ts). Skipping cleanly keeps this
+      # workflow green-but-honest pre-promotion instead of failing red on
+      # every main push that touches packages/** (red-noise trains people
+      # to ignore red).
+      - name: Check prod app exists
+        id: appcheck
+        run: |
+          if flyctl status -a motebit-auditor > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::motebit-auditor not provisioned yet — promotion is conformance-gated (check-promotion-ready). Skipping deploy."
+          fi
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       - name: Deploy to Fly.io
+        if: steps.appcheck.outputs.exists == 'true'
         run: flyctl deploy --config services/auditor/fly.toml --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
