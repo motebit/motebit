@@ -45,7 +45,26 @@ export const FRESHNESS_DORMANT_MS = 24 * 60 * 60 * 1000; // asleep but wakeable
 
 export type AgentFreshness = "awake" | "recently_seen" | "dormant" | "cold";
 
-export function computeFreshness(lastSeenAt: number, now: number): AgentFreshness {
+export /**
+ * Pull the self-asserted display name out of registration metadata.
+ * Trimmed + capped server-side (64 chars) so a hostile registration can't
+ * bloat discover responses; render-side framing (claim, never a verified
+ * handle) is the surfaces' job per agents-as-first-person-trust-graph §3.
+ */
+function extractDisplayName(metadataJson: string | null): string | null {
+  if (metadataJson == null || metadataJson.length === 0) return null;
+  try {
+    const meta = JSON.parse(metadataJson) as Record<string, unknown>;
+    const name = meta["display_name"];
+    if (typeof name !== "string") return null;
+    const trimmed = name.trim();
+    return trimmed.length > 0 ? trimmed.slice(0, 64) : null;
+  } catch {
+    return null;
+  }
+}
+
+function computeFreshness(lastSeenAt: number, now: number): AgentFreshness {
   const ageMs = now - lastSeenAt;
   if (ageMs < FRESHNESS_AWAKE_MS) return "awake";
   if (ageMs < FRESHNESS_RECENT_MS) return "recently_seen";
@@ -749,13 +768,14 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
       string,
       Array<{ capability: string; unit_cost: number; currency: string; per: string }>
     >();
+    const descriptionByAgent = new Map<string, string>();
     if (ids.length > 0) {
       const placeholders = ids.map(() => "?").join(",");
       const listingRows = db
         .prepare(
-          `SELECT motebit_id, pricing FROM relay_service_listings WHERE motebit_id IN (${placeholders})`,
+          `SELECT motebit_id, pricing, description FROM relay_service_listings WHERE motebit_id IN (${placeholders})`,
         )
-        .all(...ids) as Array<{ motebit_id: string; pricing: string }>;
+        .all(...ids) as Array<{ motebit_id: string; pricing: string; description: string | null }>;
       for (const lr of listingRows) {
         try {
           const parsed = JSON.parse(lr.pricing) as Array<{
@@ -767,6 +787,12 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
           listingByAgent.set(lr.motebit_id, parsed);
         } catch {
           // Malformed listing — skip; agent will appear with pricing=null
+        }
+        // Listing description — "Used in discovery UIs" per the
+        // agent-service-listing schema; server-side cap keeps a hostile
+        // listing from bloating every discover response.
+        if (lr.description != null && lr.description.trim().length > 0) {
+          descriptionByAgent.set(lr.motebit_id, lr.description.trim().slice(0, 200));
         }
       }
     }
@@ -790,6 +816,13 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
         // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- DB row field is untyped
         metadata: r.metadata ? (JSON.parse(r.metadata as string) as Record<string, unknown>) : null,
         pricing: listingByAgent.get(id) ?? null,
+        // Self-asserted display name (registration metadata) + listing
+        // description, surfaced top-level so every surface adapter gets
+        // them without parsing metadata. Both are CLAIMS (trust-graph §3)
+        // — capped server-side; federated peers on older code simply omit
+        // them (additive-optional).
+        display_name: extractDisplayName(r.metadata as string | null),
+        description: descriptionByAgent.get(id) ?? null,
         settlement_address: (r.settlement_address as string | null) ?? null,
         settlement_modes: (r.settlement_modes as string | null) ?? null,
         last_seen_at: lastSeen,

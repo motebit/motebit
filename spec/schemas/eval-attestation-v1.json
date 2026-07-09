@@ -1,0 +1,780 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/eval-attestation-v1.json",
+  "title": "EvalAttestation (v1)",
+  "description": "The signed third-party-measurement artifact. Envelope law: verifyEvalAttestation in @motebit/crypto — establishes 'this issuer said this about this subject', never measurement truth.",
+  "type": "object",
+  "properties": {
+    "attestation_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "UUIDv7, issuer-generated."
+    },
+    "eval_kind": {
+      "type": "string",
+      "enum": ["verification_audit"],
+      "description": "Measurement family — closed EvalKind registry; a consumer that cannot interpret the family fails closed."
+    },
+    "subject": {
+      "type": "object",
+      "properties": {
+        "motebit_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The measured party. MAY equal the issuer's (self-issued floor)."
+        },
+        "artifact_digests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "algorithm": {
+                "type": "string",
+                "enum": ["sha-256"]
+              },
+              "value": {
+                "type": "string",
+                "pattern": "^[0-9a-f]+$"
+              }
+            },
+            "required": ["algorithm", "value"],
+            "additionalProperties": false
+          },
+          "description": "Content addresses of the subject artifacts the measurement consumed."
+        }
+      },
+      "required": ["motebit_id"],
+      "additionalProperties": false,
+      "description": "The measured party (subject ≠ signer is the category law; subject MAY equal issuer as the self-issued floor)."
+    },
+    "issuer": {
+      "type": "object",
+      "properties": {
+        "motebit_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The measuring party — the SIGNER."
+        },
+        "public_key": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Issuer's Ed25519 public key, lowercase hex — self-describing."
+        }
+      },
+      "required": ["motebit_id", "public_key"],
+      "additionalProperties": false,
+      "description": "The measuring party — the SIGNER; its key is embedded self-describingly."
+    },
+    "issued_at": {
+      "type": "integer",
+      "description": "Unix ms — when the measurement was signed."
+    },
+    "expires_at": {
+      "type": "integer",
+      "description": "Optional issuer-declared staleness bound. Carried, consumer-policied; the verify law does NOT enforce it."
+    },
+    "as_of": {
+      "type": "object",
+      "properties": {
+        "timestamp_ms": {
+          "type": "integer",
+          "description": "Wall-clock ms the public evidence reads were performed."
+        },
+        "anchor": {
+          "type": "object",
+          "properties": {
+            "chain": {
+              "type": "string",
+              "minLength": 1
+            },
+            "slot": {
+              "type": "integer"
+            },
+            "height": {
+              "type": "integer"
+            }
+          },
+          "required": ["chain"],
+          "additionalProperties": false,
+          "description": "Deterministic chain anchor consulted during the reads, when any."
+        }
+      },
+      "required": ["timestamp_ms"],
+      "additionalProperties": false,
+      "description": "The evidence-read basis — an attestation says what was true AS-OF, never timelessly."
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "check": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Measurement identifier — free-form snake_case BY CONVENTION (issuer-owned check catalog); the embedded verdict carries the interop-law values."
+          },
+          "verdict": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "identity",
+                  "receipt",
+                  "tool-invocation",
+                  "credential",
+                  "presentation",
+                  "skill",
+                  "unknown",
+                  "delegation_token",
+                  "succession",
+                  "revocation",
+                  "bond_commitment",
+                  "solvency_proof"
+                ],
+                "description": "What the verdict is about (the closed VerdictSubject union)."
+              },
+              "integrity": {
+                "type": "string",
+                "enum": ["verified", "invalid"],
+                "description": "Did the signature verify over canonical bytes?"
+              },
+              "identityBinding": {
+                "type": "string",
+                "enum": ["sovereign", "anchored", "pinned", "unverified", "invalid"],
+                "description": "The identity-binding rung — how strongly the key is bound to the motebit_id."
+              },
+              "authority": {
+                "type": "string",
+                "enum": ["valid", "expired", "not_yet_valid", "insufficient", "unknown"],
+                "description": "Whether the authority covering the action holds. `unknown` is never a pass."
+              },
+              "revocation": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": ["fresh", "stale", "unchecked", "revoked"],
+                    "description": "Revocation status. `unchecked` NEVER reads as \"not revoked\"."
+                  },
+                  "freshness": {
+                    "type": "object",
+                    "properties": {
+                      "basis": {
+                        "type": "string",
+                        "enum": ["asserted", "stapled", "ledger"],
+                        "description": "Evidence-grade ladder, weakest to strongest. The verdict carries the basis; the consumer holds the tolerance."
+                      },
+                      "asOf": {
+                        "type": "object",
+                        "properties": {
+                          "timestamp_ms": {
+                            "type": "integer",
+                            "description": "Wall-clock ms the revocation set was current as of, when known."
+                          },
+                          "anchor": {
+                            "type": "object",
+                            "properties": {
+                              "chain": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "slot": {
+                                "type": "integer"
+                              },
+                              "height": {
+                                "type": "integer"
+                              }
+                            },
+                            "required": ["chain"],
+                            "additionalProperties": false,
+                            "description": "Deterministic chain anchor the set was current as of, when known."
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": ["basis", "asOf"],
+                    "additionalProperties": false,
+                    "description": "Present when `status` derives from a freshness basis."
+                  }
+                },
+                "required": ["status"],
+                "additionalProperties": false,
+                "description": "The revocation axis: status plus how that status was established."
+              },
+              "temporalBasis": {
+                "type": "string",
+                "enum": ["clockless", "local_clock", "ledger_anchored"],
+                "description": "The temporal basis time-dependent axes were evaluated against."
+              },
+              "evidenceBasis": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Free-form snake_case evidence category (issuer convention)."
+                    },
+                    "ref": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Pointer to the evidence (a digest, a key id, a revocation root)."
+                    },
+                    "provenance": {
+                      "type": "object",
+                      "properties": {
+                        "digest": {
+                          "type": "object",
+                          "properties": {
+                            "algorithm": {
+                              "type": "string",
+                              "enum": ["sha-256"],
+                              "description": "Content-digest hash algorithm — `sha-256` today; agile by registry append."
+                            },
+                            "value": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]+$",
+                              "description": "Lowercase hex digest of the RAW, independently-obtainable bytes under `algorithm`."
+                            }
+                          },
+                          "required": ["algorithm", "value"],
+                          "additionalProperties": false,
+                          "description": "Content address of the raw primary-record bytes a third party can independently fetch — NEVER the projected text."
+                        },
+                        "projection": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Opaque, app-owned projection recipe id (e.g. agency.html-text.v1). Absent ⇒ the span is located over the raw bytes directly; present ⇒ a re-verifier applies the consumer-injected recipe, else fails closed (projection_unresolved)."
+                        },
+                        "projectionClass": {
+                          "type": "string",
+                          "enum": ["spec-reproducible", "tool-pinned"],
+                          "description": "Assurance class of a present projection: `spec-reproducible` (§7 — independently reimplementable from spec, the default) or `tool-pinned` (§7-tool — reproducible only by running the recipe's content-addressed pinned tool). ABSENT ⇒ spec-reproducible (the weaker class is opt-in). Carried, NOT verified by the law — the consumer policies on it."
+                        },
+                        "span": {
+                          "type": "string",
+                          "description": "The verbatim span asserted PRESENT in projection(bytes) — the law's subject."
+                        },
+                        "locator": {
+                          "type": "object",
+                          "properties": {
+                            "start": {
+                              "type": "integer"
+                            },
+                            "end": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": ["start", "end"],
+                          "additionalProperties": false,
+                          "description": "Advisory locator narrowing where the span sits. NOT load-bearing — the law is exact-substring presence, never a second thing a re-verifier must reproduce."
+                        },
+                        "binding": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Opaque resolved-identity reference (a motebit_id or a domain token the consumer resolves). CARRIED, NOT verified by the law — issuer authority is app-layer."
+                        }
+                      },
+                      "required": ["digest", "span"],
+                      "additionalProperties": false,
+                      "description": "Optional re-verifiable provenance — digest over raw bytes + verbatim span (evidence-provenance-v1)."
+                    }
+                  },
+                  "required": ["kind", "ref"],
+                  "additionalProperties": false,
+                  "description": "A reference to the evidence an axis or attestation was established from."
+                },
+                "description": "The evidence each axis was established from."
+              },
+              "repair": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Stable, machine-readable reason code (e.g. \"revocation.unchecked\")."
+                  },
+                  "axis": {
+                    "type": "string",
+                    "enum": ["integrity", "identityBinding", "authority", "revocation"],
+                    "description": "Which axis failed."
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "One-line human summary of what's wrong."
+                  },
+                  "canonical": {
+                    "type": "string",
+                    "description": "The canonical source of truth to consult or fix, when applicable."
+                  },
+                  "fix": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The concrete next step to establish the axis."
+                  }
+                },
+                "required": ["code", "axis", "summary", "fix"],
+                "additionalProperties": false,
+                "description": "Present whenever any axis is not passing; absent only on a clean pass."
+              }
+            },
+            "required": [
+              "type",
+              "integrity",
+              "identityBinding",
+              "authority",
+              "revocation",
+              "temporalBasis",
+              "evidenceBasis"
+            ],
+            "additionalProperties": false,
+            "description": "The structured per-axis verification verdict — DELIBERATELY no top-level `valid` boolean; a consumer branches on the axis it depends on."
+          }
+        },
+        "required": ["check", "verdict"],
+        "additionalProperties": false,
+        "description": "One named measurement inside an attestation."
+      },
+      "minItems": 1,
+      "description": "The measurements. Non-empty — an attestation that measured nothing is rejected."
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/EvalAttestation/properties/results/items/properties/verdict/properties/evidenceBasis/items"
+      },
+      "description": "Attestation-level evidence — unsigned observations that informed the audit but are not measurements."
+    },
+    "invocation": {
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "relay_task_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "description": "Cross-reference into the issuer's execution ledger."
+    },
+    "suite": {
+      "type": "string",
+      "const": "motebit-jcs-ed25519-b64-v1",
+      "description": "Pinned signature suite (JCS + Ed25519 + base64url)."
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Ed25519 over canonicalJson({...attestation minus signature}), base64url."
+    }
+  },
+  "required": [
+    "attestation_id",
+    "eval_kind",
+    "subject",
+    "issuer",
+    "issued_at",
+    "as_of",
+    "results",
+    "suite",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "definitions": {
+    "EvalAttestation": {
+      "type": "object",
+      "properties": {
+        "attestation_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "UUIDv7, issuer-generated."
+        },
+        "eval_kind": {
+          "type": "string",
+          "enum": ["verification_audit"],
+          "description": "Measurement family — closed EvalKind registry; a consumer that cannot interpret the family fails closed."
+        },
+        "subject": {
+          "type": "object",
+          "properties": {
+            "motebit_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The measured party. MAY equal the issuer's (self-issued floor)."
+            },
+            "artifact_digests": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "algorithm": {
+                    "type": "string",
+                    "enum": ["sha-256"]
+                  },
+                  "value": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]+$"
+                  }
+                },
+                "required": ["algorithm", "value"],
+                "additionalProperties": false
+              },
+              "description": "Content addresses of the subject artifacts the measurement consumed."
+            }
+          },
+          "required": ["motebit_id"],
+          "additionalProperties": false,
+          "description": "The measured party (subject ≠ signer is the category law; subject MAY equal issuer as the self-issued floor)."
+        },
+        "issuer": {
+          "type": "object",
+          "properties": {
+            "motebit_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The measuring party — the SIGNER."
+            },
+            "public_key": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "description": "Issuer's Ed25519 public key, lowercase hex — self-describing."
+            }
+          },
+          "required": ["motebit_id", "public_key"],
+          "additionalProperties": false,
+          "description": "The measuring party — the SIGNER; its key is embedded self-describingly."
+        },
+        "issued_at": {
+          "type": "integer",
+          "description": "Unix ms — when the measurement was signed."
+        },
+        "expires_at": {
+          "type": "integer",
+          "description": "Optional issuer-declared staleness bound. Carried, consumer-policied; the verify law does NOT enforce it."
+        },
+        "as_of": {
+          "type": "object",
+          "properties": {
+            "timestamp_ms": {
+              "type": "integer",
+              "description": "Wall-clock ms the public evidence reads were performed."
+            },
+            "anchor": {
+              "type": "object",
+              "properties": {
+                "chain": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "slot": {
+                  "type": "integer"
+                },
+                "height": {
+                  "type": "integer"
+                }
+              },
+              "required": ["chain"],
+              "additionalProperties": false,
+              "description": "Deterministic chain anchor consulted during the reads, when any."
+            }
+          },
+          "required": ["timestamp_ms"],
+          "additionalProperties": false,
+          "description": "The evidence-read basis — an attestation says what was true AS-OF, never timelessly."
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "check": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Measurement identifier — free-form snake_case BY CONVENTION (issuer-owned check catalog); the embedded verdict carries the interop-law values."
+              },
+              "verdict": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "identity",
+                      "receipt",
+                      "tool-invocation",
+                      "credential",
+                      "presentation",
+                      "skill",
+                      "unknown",
+                      "delegation_token",
+                      "succession",
+                      "revocation",
+                      "bond_commitment",
+                      "solvency_proof"
+                    ],
+                    "description": "What the verdict is about (the closed VerdictSubject union)."
+                  },
+                  "integrity": {
+                    "type": "string",
+                    "enum": ["verified", "invalid"],
+                    "description": "Did the signature verify over canonical bytes?"
+                  },
+                  "identityBinding": {
+                    "type": "string",
+                    "enum": ["sovereign", "anchored", "pinned", "unverified", "invalid"],
+                    "description": "The identity-binding rung — how strongly the key is bound to the motebit_id."
+                  },
+                  "authority": {
+                    "type": "string",
+                    "enum": ["valid", "expired", "not_yet_valid", "insufficient", "unknown"],
+                    "description": "Whether the authority covering the action holds. `unknown` is never a pass."
+                  },
+                  "revocation": {
+                    "type": "object",
+                    "properties": {
+                      "status": {
+                        "type": "string",
+                        "enum": ["fresh", "stale", "unchecked", "revoked"],
+                        "description": "Revocation status. `unchecked` NEVER reads as \"not revoked\"."
+                      },
+                      "freshness": {
+                        "type": "object",
+                        "properties": {
+                          "basis": {
+                            "type": "string",
+                            "enum": ["asserted", "stapled", "ledger"],
+                            "description": "Evidence-grade ladder, weakest to strongest. The verdict carries the basis; the consumer holds the tolerance."
+                          },
+                          "asOf": {
+                            "type": "object",
+                            "properties": {
+                              "timestamp_ms": {
+                                "type": "integer",
+                                "description": "Wall-clock ms the revocation set was current as of, when known."
+                              },
+                              "anchor": {
+                                "type": "object",
+                                "properties": {
+                                  "chain": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "slot": {
+                                    "type": "integer"
+                                  },
+                                  "height": {
+                                    "type": "integer"
+                                  }
+                                },
+                                "required": ["chain"],
+                                "additionalProperties": false,
+                                "description": "Deterministic chain anchor the set was current as of, when known."
+                              }
+                            },
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": ["basis", "asOf"],
+                        "additionalProperties": false,
+                        "description": "Present when `status` derives from a freshness basis."
+                      }
+                    },
+                    "required": ["status"],
+                    "additionalProperties": false,
+                    "description": "The revocation axis: status plus how that status was established."
+                  },
+                  "temporalBasis": {
+                    "type": "string",
+                    "enum": ["clockless", "local_clock", "ledger_anchored"],
+                    "description": "The temporal basis time-dependent axes were evaluated against."
+                  },
+                  "evidenceBasis": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Free-form snake_case evidence category (issuer convention)."
+                        },
+                        "ref": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Pointer to the evidence (a digest, a key id, a revocation root)."
+                        },
+                        "provenance": {
+                          "type": "object",
+                          "properties": {
+                            "digest": {
+                              "type": "object",
+                              "properties": {
+                                "algorithm": {
+                                  "type": "string",
+                                  "enum": ["sha-256"],
+                                  "description": "Content-digest hash algorithm — `sha-256` today; agile by registry append."
+                                },
+                                "value": {
+                                  "type": "string",
+                                  "pattern": "^[0-9a-f]+$",
+                                  "description": "Lowercase hex digest of the RAW, independently-obtainable bytes under `algorithm`."
+                                }
+                              },
+                              "required": ["algorithm", "value"],
+                              "additionalProperties": false,
+                              "description": "Content address of the raw primary-record bytes a third party can independently fetch — NEVER the projected text."
+                            },
+                            "projection": {
+                              "type": "string",
+                              "minLength": 1,
+                              "description": "Opaque, app-owned projection recipe id (e.g. agency.html-text.v1). Absent ⇒ the span is located over the raw bytes directly; present ⇒ a re-verifier applies the consumer-injected recipe, else fails closed (projection_unresolved)."
+                            },
+                            "projectionClass": {
+                              "type": "string",
+                              "enum": ["spec-reproducible", "tool-pinned"],
+                              "description": "Assurance class of a present projection: `spec-reproducible` (§7 — independently reimplementable from spec, the default) or `tool-pinned` (§7-tool — reproducible only by running the recipe's content-addressed pinned tool). ABSENT ⇒ spec-reproducible (the weaker class is opt-in). Carried, NOT verified by the law — the consumer policies on it."
+                            },
+                            "span": {
+                              "type": "string",
+                              "description": "The verbatim span asserted PRESENT in projection(bytes) — the law's subject."
+                            },
+                            "locator": {
+                              "type": "object",
+                              "properties": {
+                                "start": {
+                                  "type": "integer"
+                                },
+                                "end": {
+                                  "type": "integer"
+                                }
+                              },
+                              "required": ["start", "end"],
+                              "additionalProperties": false,
+                              "description": "Advisory locator narrowing where the span sits. NOT load-bearing — the law is exact-substring presence, never a second thing a re-verifier must reproduce."
+                            },
+                            "binding": {
+                              "type": "string",
+                              "minLength": 1,
+                              "description": "Opaque resolved-identity reference (a motebit_id or a domain token the consumer resolves). CARRIED, NOT verified by the law — issuer authority is app-layer."
+                            }
+                          },
+                          "required": ["digest", "span"],
+                          "additionalProperties": false,
+                          "description": "Optional re-verifiable provenance — digest over raw bytes + verbatim span (evidence-provenance-v1)."
+                        }
+                      },
+                      "required": ["kind", "ref"],
+                      "additionalProperties": false,
+                      "description": "A reference to the evidence an axis or attestation was established from."
+                    },
+                    "description": "The evidence each axis was established from."
+                  },
+                  "repair": {
+                    "type": "object",
+                    "properties": {
+                      "code": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Stable, machine-readable reason code (e.g. \"revocation.unchecked\")."
+                      },
+                      "axis": {
+                        "type": "string",
+                        "enum": ["integrity", "identityBinding", "authority", "revocation"],
+                        "description": "Which axis failed."
+                      },
+                      "summary": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "One-line human summary of what's wrong."
+                      },
+                      "canonical": {
+                        "type": "string",
+                        "description": "The canonical source of truth to consult or fix, when applicable."
+                      },
+                      "fix": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "The concrete next step to establish the axis."
+                      }
+                    },
+                    "required": ["code", "axis", "summary", "fix"],
+                    "additionalProperties": false,
+                    "description": "Present whenever any axis is not passing; absent only on a clean pass."
+                  }
+                },
+                "required": [
+                  "type",
+                  "integrity",
+                  "identityBinding",
+                  "authority",
+                  "revocation",
+                  "temporalBasis",
+                  "evidenceBasis"
+                ],
+                "additionalProperties": false,
+                "description": "The structured per-axis verification verdict — DELIBERATELY no top-level `valid` boolean; a consumer branches on the axis it depends on."
+              }
+            },
+            "required": ["check", "verdict"],
+            "additionalProperties": false,
+            "description": "One named measurement inside an attestation."
+          },
+          "minItems": 1,
+          "description": "The measurements. Non-empty — an attestation that measured nothing is rejected."
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EvalAttestation/properties/results/items/properties/verdict/properties/evidenceBasis/items"
+          },
+          "description": "Attestation-level evidence — unsigned observations that informed the audit but are not measurements."
+        },
+        "invocation": {
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "relay_task_id": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false,
+          "description": "Cross-reference into the issuer's execution ledger."
+        },
+        "suite": {
+          "type": "string",
+          "const": "motebit-jcs-ed25519-b64-v1",
+          "description": "Pinned signature suite (JCS + Ed25519 + base64url)."
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Ed25519 over canonicalJson({...attestation minus signature}), base64url."
+        }
+      },
+      "required": [
+        "attestation_id",
+        "eval_kind",
+        "subject",
+        "issuer",
+        "issued_at",
+        "as_of",
+        "results",
+        "suite",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "description": "The signed third-party-measurement artifact. Envelope law: verifyEvalAttestation in @motebit/crypto — establishes 'this issuer said this about this subject', never measurement truth."
+    }
+  }
+}

@@ -119,7 +119,22 @@ async function main(): Promise<void> {
         };
       };
 
-      return { toolRegistry: registry, handleAgentTask };
+      return {
+        toolRegistry: registry,
+        handleAgentTask,
+        // Published listing — without this the relay auto-creates a default
+        // whose description is the machine-generated server name. Discovery
+        // UIs read description (agent-service-listing schema), so the fleet
+        // publishes real copy.
+        getServiceListing: () =>
+          Promise.resolve({
+            capabilities: ["read_url"],
+            pricing: [],
+            sla: { max_latency_ms: 30_000, availability_guarantee: 0.95 },
+            description:
+              "Read-URL atom: fetches a page and returns its text with a content digest of the raw bytes, so downstream citations stay re-verifiable to the primary record.",
+          }),
+      };
     },
   );
 

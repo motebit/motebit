@@ -52,6 +52,7 @@ import {
   EVIDENCE_PROVENANCE_SCHEMA_ID,
   buildEvidenceProvenanceJsonSchema,
 } from "../evidence-provenance.js";
+import { EVAL_ATTESTATION_SCHEMA_ID, buildEvalAttestationJsonSchema } from "../eval-attestation.js";
 import {
   CREDENTIAL_ANCHOR_BATCH_SCHEMA_ID,
   CREDENTIAL_ANCHOR_PROOF_SCHEMA_ID,
@@ -751,6 +752,12 @@ const CASES: SchemaCase[] = [
     filename: "evidence-provenance-v1.json",
     expectedId: EVIDENCE_PROVENANCE_SCHEMA_ID,
     build: buildEvidenceProvenanceJsonSchema,
+  },
+  {
+    name: "eval-attestation-v1",
+    filename: "eval-attestation-v1.json",
+    expectedId: EVAL_ATTESTATION_SCHEMA_ID,
+    build: buildEvalAttestationJsonSchema,
   },
 ];
 

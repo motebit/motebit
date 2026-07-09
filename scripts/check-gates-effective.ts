@@ -2148,6 +2148,27 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-eval-kind-canonical",
+    proves:
+      "flags the EvalKind four-way lock breaking — the crypto-side EVAL_KINDS_MIRROR rotated without the protocol registry (or vice versa). The mirror exists because crypto keeps zero runtime monorepo deps, so verifyEvalAttestation's fail-closed intake cannot import ALL_EVAL_KINDS; the gate is what keeps the duplication honest. Probe corrupts the mirror's single member; the gate must surface the four-way alignment violation. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile(`packages/crypto/src/eval-attestation.ts`, (src) =>
+        src.replace(
+          'EVAL_KINDS_MIRROR: readonly string[] = Object.freeze(["verification_audit"])',
+          'EVAL_KINDS_MIRROR: readonly string[] = Object.freeze(["verification_audlt"])',
+        ),
+      ),
+  },
+  {
+    script: "check-archetype-slate",
+    proves:
+      "flags the archetype slate drifting across its three declaration surfaces — a display name changed in the conformance probe without the docs gallery (or a service dropped from one surface). Probe corrupts the Auditor's displayName in ARCHETYPES; the gate must surface the display-name drift against the gallery table. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile(`scripts/archetype-conformance.ts`, (src) =>
+        src.replace('displayName: "The Auditor"', 'displayName: "The Auditer"'),
+      ),
+  },
+  {
     script: "check-money-authority",
     proves:
       "flags the R4 standing-authority block disappearing from policy-gate.ts — the invariant that an R4_MONEY tool call never auto-executes without a verified standing-delegation grant. Drift class: a refactor that deletes or inverts the grant check (or reorders it ahead of the trust-level switch) silently re-opens 'Trusted caller auto-executes money'. Probe inverts the null-check (`== null` → `!= null`) so the gate's ordered marker regex no longer matches; assertion 1 must fire. byte-identical restoration via mutateFile.",

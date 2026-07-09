@@ -362,6 +362,13 @@ export async function runMolecule(
   const dbDir = dirname(absDbPath);
   if (!existsSyncFn(dbDir)) mkdirSyncFn(dbDir, { recursive: true });
   const db = await openDb(absDbPath);
+  // Driver identity in boot logs — a silent sql.js fallback (native
+  // better-sqlite3 binding dropped by `pnpm deploy --prod`) is otherwise
+  // invisible until WAL-less durability bites. check-deploy-parity rule 4
+  // makes the drop structural; this line makes it observable in fly logs.
+  // Optional chain: test adapters inject stub databases without a driver.
+  const driverName = (db as { db?: { driverName?: string } }).db?.driverName ?? "unknown";
+  log(`Database open: ${absDbPath} (driver: ${driverName})`);
 
   // 3. Build molecule-specific pieces
   const molecule = await build(identity);
@@ -396,6 +403,9 @@ export async function runMolecule(
   // 6. Start server
   const serverCfg: ServiceServerConfig = {
     name: `${config.serviceName}-${identity.motebitId.slice(0, 8)}`,
+    // The human display name flows to registration metadata.display_name —
+    // the self-asserted claim Discover cards render (trust-graph §3).
+    ...(config.displayName != null ? { displayName: config.displayName } : {}),
     port: config.port,
     motebitType: "service",
     onStart: (port, toolCount) => {

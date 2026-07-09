@@ -242,21 +242,21 @@ The 11 Apache-2.0 packages are the permissive floor: a third party can build an 
 
 **Surfaces** ([`apps/`](apps/)) — Five user-facing (`web`, `cli`, `desktop`, `mobile`, `spatial`) and four supporting (`admin` dashboard, `identity` viewer, `docs` site, `vscode` extension).
 
-**Marketplace** ([`services/`](services/)) — 9 services in four roles:
+**Marketplace** ([`services/`](services/)) — 10 services in four roles:
 
 - **The relay** — `api` (sync, settlement, federation, 5-tier rate limiting, the only piece with legitimate centralization)
-- **Molecules** — agents that reason and compose other agents: `research` ($0.25/report, Claude + web search with cryptographic citation chain), `code-review` ($0.50/review, Claude-powered)
+- **Molecules** — agents that reason and compose other agents: `research` (Claude + web search with cryptographic citation chain), `code-review` (Claude-powered), `auditor` ($0.05/audit, LLM-free — measures another agent's public verification surface and signs the result as an eval attestation)
 - **Atoms** — stateless capability providers anyone can wrap: `web-search` ($0.05/request), `read-url`, `summarize`, `embed`
 - **Glue** — `proxy` (Vercel edge CORS for the web app)
 
-**Protocol** ([`spec/`](spec/)) — 32 open specifications, each `motebit/<name>@1.0`: `identity`, `execution-ledger`, `relay-federation`, `relay-transparency`, `market`, `credential`, `settlement`, `auth-token`, `signed-request-envelope`, `credential-anchor`, `delegation`, `standing-delegation`, `discovery`, `migration`, `seed-escrow`, `dispute`, `agent-settlement-anchor`, `consolidation-receipt`, `consolidation-mutation-manifest`, `device-self-registration`, `goal-lifecycle`, `memory-delta`, `plan-lifecycle`, `computer-use`, `agent-mcp-surface`, `proposals`, `skills`, `skills-registry`, `agent-revocation`, `bond`, `evidence-provenance`, `settlement-invoice`. All have a working reference implementation in this repo.
+**Protocol** ([`spec/`](spec/)) — 33 open specifications, each `motebit/<name>@1.0`: `identity`, `execution-ledger`, `relay-federation`, `relay-transparency`, `market`, `credential`, `settlement`, `auth-token`, `signed-request-envelope`, `credential-anchor`, `delegation`, `standing-delegation`, `discovery`, `migration`, `seed-escrow`, `dispute`, `agent-settlement-anchor`, `consolidation-receipt`, `consolidation-mutation-manifest`, `device-self-registration`, `goal-lifecycle`, `memory-delta`, `plan-lifecycle`, `computer-use`, `agent-mcp-surface`, `proposals`, `skills`, `skills-registry`, `agent-revocation`, `bond`, `evidence-provenance`, `settlement-invoice`, `eval-attestation`. All have a working reference implementation in this repo.
 
 → Full directory tree, package-by-package descriptions, layer-by-layer breakdown, and data flow: **[docs.motebit.com/docs/operator/architecture](https://docs.motebit.com/docs/operator/architecture)**.
 
 ## Specification
 
 > [!NOTE]
-> **Motebit is a protocol first.** All [32 specs](spec/) (Apache-2.0) have a working reference implementation in this repo, and a third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required. The `motebit.md` identity file is an [open standard](spec/identity-v1.md) verifiable by any tool, with or without the motebit runtime.
+> **Motebit is a protocol first.** All [33 specs](spec/) (Apache-2.0) have a working reference implementation in this repo, and a third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required. The `motebit.md` identity file is an [open standard](spec/identity-v1.md) verifiable by any tool, with or without the motebit runtime.
 
 A `motebit.md` is YAML frontmatter signed with Ed25519:
 
@@ -307,7 +307,7 @@ pnpm run lint          # Lint all packages
 
 12 packages publish to npm — 11 Apache-2.0 (the permissive floor) and 1 BSL-1.1 (the `motebit` reference runtime). They version independently on their own merit (`updateInternalDependencies: "patch"`, no fixed or linked groups). Breaking changes to a package's public surface require a major bump on that package.
 
-The 60 workspace-private packages — `@motebit/runtime`, `@motebit/relay`, `@motebit/ai-core`, `@motebit/memory-graph`, `@motebit/policy`, `@motebit/sync-engine`, and the rest of the interior machinery — exist for source organization and do not publish independently. They carry a sentinel version `0.0.0-private` so the absence of a semver claim is explicit at the source: the only stability promises this repo makes live on the 12 published packages above.
+The 61 workspace-private packages — `@motebit/runtime`, `@motebit/relay`, `@motebit/ai-core`, `@motebit/memory-graph`, `@motebit/policy`, `@motebit/sync-engine`, and the rest of the interior machinery — exist for source organization and do not publish independently. They carry a sentinel version `0.0.0-private` so the absence of a semver claim is explicit at the source: the only stability promises this repo makes live on the 12 published packages above.
 
 The Apache-2.0 protocol packages (`@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`) promise wire-format and type stability independently, gated by `check-api-surface`.
 
@@ -315,7 +315,7 @@ The Apache-2.0 protocol packages (`@motebit/protocol`, `@motebit/sdk`, `@motebit
 
 The **permissive floor** is Apache-2.0 licensed — use it freely, build on it, implement the spec in any language, with an explicit patent grant from every contributor:
 
-- [`spec/`](spec/) — 32 open specs (full list in [Architecture](#architecture))
+- [`spec/`](spec/) — 33 open specs (full list in [Architecture](#architecture))
 - [`packages/protocol/`](packages/protocol/) — network protocol types (identity, receipts, credentials, delegation, settlement, trust algebra)
 - [`packages/crypto/`](packages/crypto/) — sign and verify every Motebit artifact, cryptosuite-agile (zero runtime dependencies)
 - [`packages/sdk/`](packages/sdk/) — developer contract (stable types, adapter interfaces, governance config)
@@ -345,7 +345,7 @@ The **state a relay accumulates** — trust graph, federation routing, signed ex
 
 - [motebit.com](https://motebit.com) — meet the creature
 - [Documentation](https://docs.motebit.com) — guides, architecture, API reference
-- [Specifications](spec/) — 32 open specs (Apache-2.0)
+- [Specifications](spec/) — 33 open specs (Apache-2.0)
 - [npm](https://www.npmjs.com/org/motebit) — published packages
 - [Discussions](https://github.com/motebit/motebit/discussions) — questions, ideas, show & tell
 - [Bug reports](https://github.com/motebit/motebit/issues/new?template=bug_report.yml) — found something broken? let us know

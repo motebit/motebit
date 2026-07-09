@@ -161,6 +161,29 @@ export interface DiscoveredAgent {
   hardware_attestation?: AgentHardwareAttestation;
   /** Observed-latency snapshot. Absent when the relay has zero samples for this agent. */
   latency_stats?: AgentLatencyStats;
+  /**
+   * Self-asserted display name — a discovery-time CLAIM
+   * (agents-as-first-person-trust-graph §3): squattable, unverified, never
+   * an identity. Render via `formatNameClaim`; the sigil + id row stays the
+   * identity. Server caps at 64 chars; clamp client-side too — federated
+   * peers don't cap.
+   */
+  display_name?: string | null;
+  /** Listing description — self-authored copy from the agent's service listing (≤200 chars server-side). */
+  description?: string | null;
+}
+
+/**
+ * Claim framing for a discovered agent's self-asserted name (trust-graph
+ * doctrine §3): Discover shows `claims "The Researcher"` — the name is a
+ * claim, never a verified handle; the derived sigil + id remain the
+ * identity. Shared across the three surfaces so the epistemic register
+ * cannot drift per-renderer. Client-side clamp included (federated peers
+ * don't cap).
+ */
+export function formatNameClaim(name: string): string {
+  const clamped = name.trim().slice(0, 64);
+  return `claims “${clamped}”`;
 }
 
 /**

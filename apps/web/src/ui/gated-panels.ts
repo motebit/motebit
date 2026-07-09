@@ -23,6 +23,7 @@ import {
   createMemoryController,
   classifyCertainty,
   formatHardwarePlatform,
+  formatNameClaim,
   formatLatency,
   shortMotebitId,
   trustAuraClass,
@@ -1384,6 +1385,21 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
       item.className = "panel-list-card agent-item";
 
       item.appendChild(renderAgentIdentity({ fullId: agent.motebit_id }));
+
+      // Self-asserted name + description — CLAIMS, never verified handles
+      // (trust-graph §3). textContent only; formatNameClaim clamps.
+      if (agent.display_name != null && agent.display_name.trim().length > 0) {
+        const claim = document.createElement("div");
+        claim.className = "agent-name-claim";
+        claim.textContent = formatNameClaim(agent.display_name);
+        item.appendChild(claim);
+      }
+      if (agent.description != null && agent.description.trim().length > 0) {
+        const desc = document.createElement("div");
+        desc.className = "agent-desc";
+        desc.textContent = agent.description.trim().slice(0, 200);
+        item.appendChild(desc);
+      }
 
       if (agent.capabilities.length > 0) {
         const priceByCapability = new Map<string, PricingEntry>();

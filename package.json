@@ -121,6 +121,8 @@
     "check-closed-registry-canonical": "npx tsx scripts/check-closed-registry-canonical.ts",
     "check-event-type-canonical": "npx tsx scripts/check-event-type-canonical.ts",
     "check-settlement-mode-canonical": "npx tsx scripts/check-settlement-mode-canonical.ts",
+    "check-eval-kind-canonical": "npx tsx scripts/check-eval-kind-canonical.ts",
+    "check-archetype-slate": "npx tsx scripts/check-archetype-slate.ts",
     "check-merkle-tree-hash-canonical": "npx tsx scripts/check-merkle-tree-hash-canonical.ts",
     "check-agent-revocation-reason-canonical": "npx tsx scripts/check-agent-revocation-reason-canonical.ts",
     "check-memory-source-canonical": "npx tsx scripts/check-memory-source-canonical.ts",
