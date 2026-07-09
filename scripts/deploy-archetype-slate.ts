@@ -96,7 +96,7 @@ export const SLATE: SlateService[] = [
     config: (t) => `services/summarize/${t === "prod" ? "fly.toml" : "fly.staging.toml"}`,
     volume: "summarize_data",
     kind: "atom",
-    capability: "summarize",
+    capability: "summarize_search",
     secrets: (ctx) => ({
       MOTEBIT_SYNC_URL: ctx.relayUrl,
       MOTEBIT_API_TOKEN: ctx.apiToken,
@@ -280,7 +280,7 @@ async function main(): Promise<void> {
       console.log("\ncapturing atom motebit_ids from the relay…");
       await new Promise((r) => setTimeout(r, 15_000));
       const found = await discoverByCapability(RELAY_URL, apiToken);
-      for (const cap of ["web_search", "read_url", "summarize"]) {
+      for (const cap of ["web_search", "read_url", "summarize_search"]) {
         const agent = found.get(cap);
         if (agent) {
           ctx.atomIds.set(cap, agent.motebit_id);
