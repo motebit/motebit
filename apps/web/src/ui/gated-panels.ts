@@ -1596,10 +1596,18 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
 
   /** Idempotent open — the slab home register's connect-a-relay chip
    *  routes HERE (the relay popover IS the connect affordance; generic
-   *  Settings is the wrong register for an instance-wiring action). */
+   *  Settings is the wrong register for an instance-wiring action).
+   *
+   *  Deferred to the next frame: the chip's own click is still bubbling
+   *  when this runs, and the document-level outside-click closer below
+   *  would see the just-opened popover + an outside target and shut it
+   *  the same tick. Opening after the triggering click finishes
+   *  propagating sidesteps the race. */
   function openSync(): void {
-    if (!syncPopup.classList.contains("open")) toggleSync();
-    syncRelayUrl.focus();
+    requestAnimationFrame(() => {
+      if (!syncPopup.classList.contains("open")) toggleSync();
+      syncRelayUrl.focus();
+    });
   }
 
   syncStatusEl.addEventListener("click", toggleSync);
