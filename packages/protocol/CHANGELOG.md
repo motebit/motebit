@@ -1,5 +1,20 @@
 # @motebit/protocol
 
+## 3.12.0
+
+### Minor Changes
+
+- e5d09c9: Promote `EvalAttestation` — the signed third-party-measurement artifact (subject ≠ signer; `docs/doctrine/evals-as-attestations.md` trigger #1 fired: the Auditor archetype is consumer #1).
+  - `@motebit/protocol`: `EvalAttestation` / `EvalResult` wire types; `EvalKind` closed registry (eleventh registered registry — `ALL_EVAL_KINDS`, `isEvalKind`; single member `verification_audit`). Each result embeds a whole per-axis `VerificationVerdict` — no flattened booleans.
+  - `@motebit/crypto`: `signEvalAttestation` / `verifyEvalAttestation` (JCS + Ed25519 + base64url under the pinned `EVAL_ATTESTATION_SUITE`). The verify law establishes "this issuer said this about this subject" and deliberately never measurement truth, issuer authority, key→id binding, or freshness; subject == issuer is valid (self-issued floor). Fail-closed structured reasons incl. closed-registry `unknown_eval_kind` intake via the crypto-side `EVAL_KINDS_MIRROR` (zero-runtime-deps discipline; four-way locked by `check-eval-kind-canonical`).
+  - `@motebit/wire-schemas`: `EvalAttestationSchema` (+ `EvalResultSchema`, `VerificationVerdictSchema`, `RepairInstructionSchema`, `RevocationVerdictSchema`) with committed JSON Schema `spec/schemas/eval-attestation-v1.json`; spec `spec/eval-attestation-v1.md`; conformance corpus `spec/conformance/eval-attestation/`.
+  - `@motebit/verifier`: re-exports the EvalAttestation family and widens the aggregator with the public-verification-surface laws an auditor composes (`verifySovereignBinding`, `verifyKeySuccession`, `verifySuccessionChain`, `verifyBondCommitment`, `verifyMerkleInclusion`) — services consume only the aggregator, never `@motebit/crypto` directly.
+  - `@motebit/sdk`: the new protocol types ride the existing star re-export.
+
+- e5d09c9: Graduate the structured verification-verdict vocabulary (`IntegrityVerdict`, `IdentityBindingVerdict`, `AuthorityVerdict`, `RevocationStatus`, `RevocationFreshness`, `RevocationVerdict`, `TemporalBasis`, `RepairInstruction`, `VerdictSubject`, `VerificationVerdict`) from `@motebit/crypto` to `@motebit/protocol` — the closed verdict vocabulary's home, and the prerequisite for `EvalAttestation` (which embeds whole verdicts per measurement and whose wire schema can only see protocol).
+
+  `@motebit/crypto` re-exports every name type-only, so its public surface is name-identical (the `EvidenceRef` graduation precedent); a compile-time `ArtifactType extends VerdictSubject` assert locks the two packages against drift. `VerdictSubject` is restated in protocol as an explicit closed literal union and widened additively with four new measurement subjects: `succession`, `revocation`, `bond_commitment`, `solvency_proof`. Consumers with exhaustive switches over `VerdictSubject` should add arms for the new members; no existing values changed.
+
 ## 3.11.0
 
 ### Minor Changes
