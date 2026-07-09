@@ -32,7 +32,6 @@ import { SensitivityLevel } from "@motebit/protocol";
 import {
   generateKeypair,
   verify,
-  hash,
   ed25519Sign,
   ed25519Verify,
   createSignedToken,
@@ -80,7 +79,6 @@ import {
   base58btcEncode,
   hexToBytes,
   bytesToHex,
-  hash,
   signComputerSessionReceipt,
   verifyComputerSessionReceipt,
   hashComputerSessionActions,
