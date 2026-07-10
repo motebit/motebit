@@ -56,6 +56,12 @@ export const ARCHETYPES: Expectation[] = [
   { service: "summarize", capability: "summarize_search", displayName: "", kind: "atom" },
   { service: "research", capability: "research", displayName: "The Researcher", kind: "molecule" },
   { service: "auditor", capability: "audit_agent", displayName: "The Auditor", kind: "molecule" },
+  {
+    service: "clerk",
+    capability: "execute_delegation",
+    displayName: "The Clerk",
+    kind: "molecule",
+  },
 ];
 
 const RELAY_URL = (process.env["RELAY_URL"] ?? "https://motebit-sync-stg.fly.dev").replace(
@@ -331,6 +337,75 @@ async function checkAuditor(
   }
 }
 
+async function checkClerk(
+  agent: DiscoveredWireAgent,
+  researcher: DiscoveredWireAgent | undefined,
+): Promise<void> {
+  if (!researcher) {
+    record("clerk: paid delegation", "FAIL", "no Researcher for the Clerk to sub-delegate to");
+    return;
+  }
+  // The delegator pays the CLERK for an execute_delegation task; the Clerk then
+  // runs its OWN metered sub-delegation to the Researcher under its self-grant.
+  // On staging the Clerk runs DRY_RUN=1, so that inner spend is metered but not
+  // broadcast — the outer receipt is real, the inner settlement is dry.
+  const request = JSON.stringify({
+    capability: "research",
+    prompt: "What is the RFC 8785 JSON Canonicalization Scheme?",
+  });
+  let receipt: Record<string, unknown>;
+  try {
+    receipt = await delegatePaid(agent.motebit_id, "execute_delegation", request);
+  } catch (err) {
+    record("clerk: paid delegation", "FAIL", err instanceof Error ? err.message : String(err));
+    return;
+  }
+  record("clerk: paid delegation", "PASS");
+  await verifyReceiptTree("clerk", receipt);
+
+  try {
+    const status = String(receipt["status"] ?? "");
+    const payload = JSON.parse(String(receipt["result"] ?? "{}")) as {
+      ok?: boolean;
+      dry_run?: boolean;
+      code?: string;
+      settlement?: { mode?: string } | null;
+    };
+    // A completed grant-authorized spend: ok:true with settlement facts. On the
+    // dry-run staging slate it is a metered-not-broadcast settlement; live it
+    // nests the worker's receipt (delegation_receipts).
+    if (payload.ok === true) {
+      record(
+        "clerk: granted spend authorized",
+        "PASS",
+        payload.dry_run ? "dry-run (metered, not broadcast)" : "live settlement",
+      );
+      record(
+        "clerk: settlement present",
+        payload.settlement?.mode != null ||
+          (receipt["delegation_receipts"] as unknown[] | undefined)?.length
+          ? "PASS"
+          : "WARN",
+        "no settlement facts on the outcome",
+      );
+    } else {
+      // A refusal is a VALID conformance outcome (fail-closed) — it must be a
+      // signed ok:false receipt carrying only a denial CODE, never an overage.
+      record(
+        "clerk: refusal is a signed denial code",
+        status === "failed" &&
+          typeof payload.code === "string" &&
+          !JSON.stringify(payload).includes("micro")
+          ? "PASS"
+          : "FAIL",
+        `code=${payload.code ?? "?"}`,
+      );
+    }
+  } catch (err) {
+    record("clerk: result payload", "FAIL", err instanceof Error ? err.message : String(err));
+  }
+}
+
 async function main(): Promise<void> {
   console.log(
     `archetype-conformance — relay=${RELAY_URL} delegate=${DELEGATE ? "PAID" : "presence-only"}\n`,
@@ -342,9 +417,11 @@ async function main(): Promise<void> {
   if (DELEGATE) {
     const researcher = bySlate.get("research");
     const auditor = bySlate.get("auditor");
+    const clerk = bySlate.get("clerk");
     let researchReceipt: Record<string, unknown> | null = null;
     if (researcher) researchReceipt = await checkResearcher(researcher);
     if (auditor) await checkAuditor(auditor, researcher, researchReceipt);
+    if (clerk) await checkClerk(clerk, researcher);
   }
 
   const fails = ledger.filter((l) => l.grade === "FAIL");

@@ -1,6 +1,6 @@
 {
-  "name": "@motebit/molecule-runner",
-  "version": "0.0.0-private",
+  "name": "@motebit/clerk",
+  "version": "0.0.0",
   "license": "BUSL-1.1",
   "private": true,
   "type": "module",
@@ -8,6 +8,8 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -b",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
@@ -15,17 +17,13 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@motebit/crypto": "workspace:*",
-    "@motebit/mcp-server": "workspace:*",
-    "@motebit/memory-graph": "workspace:*",
-    "@motebit/persistence": "workspace:*",
-    "@motebit/runtime": "workspace:*",
-    "@motebit/sdk": "workspace:*",
+    "@motebit/molecule-runner": "workspace:*",
     "@motebit/tools": "workspace:*",
-    "@motebit/wallet-solana": "workspace:*"
+    "better-sqlite3": "^12.11.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "tsx": "^4.22.4",
     "typescript": "^5.6.0",
     "vitest": "^4.1.10"
   }

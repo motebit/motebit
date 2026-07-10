@@ -190,9 +190,89 @@ function fail(message: string): void {
   }
 }
 
+// === 4. The deterministic granted-spend path re-composes the R4 AND =====
+// `MotebitRuntime.executeGrantedDelegation` is the human-absent money path
+// (the Clerk archetype). It inherits ONLY the rail-seam meter — which
+// fail-OPENS on a null grant (money-meter.ts) — so it MUST re-add the layers
+// the AI loop composes: fail-CLOSED grant verification, a scope check, and a
+// meter-wrapped builder (never the raw wallet method). This assertion locks
+// all three so a refactor cannot quietly turn the sharpest money path into a
+// bypass. Doctrine: docs/doctrine/agent-archetypes.md §6.
+{
+  const source = readFile("packages/runtime/src/motebit-runtime.ts");
+  if (source === null) {
+    fail("could not read packages/runtime/src/motebit-runtime.ts");
+  } else {
+    const startIdx = source.indexOf("async executeGrantedDelegation(");
+    if (startIdx === -1) {
+      fail(
+        "motebit-runtime.ts no longer defines `executeGrantedDelegation` — the deterministic " +
+          "granted-spend path. If it was renamed, update this gate to match; if removed, remove " +
+          "the Clerk archetype's spend seam too. docs/doctrine/agent-archetypes.md §6.",
+      );
+    } else {
+      // Bound the scan to the method body — the next 2-space-indented method
+      // boundary after the signature (arrow callbacks inside are deeper-indented,
+      // so `\n  name(` matches only a sibling method). Robust to reordering: a
+      // fixed-anchor slice could run to EOF and wrongly count another method's
+      // raw wallet reference.
+      const afterSig = startIdx + "async executeGrantedDelegation(".length;
+      const rel = source.slice(afterSig).search(/\n {2}[A-Za-z_$][\w$]*\(/);
+      const body =
+        rel === -1
+          ? source.slice(startIdx, startIdx + 12000)
+          : source.slice(startIdx, afterSig + rel);
+      const requirements: Array<{ re: RegExp; miss: string }> = [
+        {
+          re: /const presentedGrant = await verifyGrantForTurn\(/,
+          miss: "must verify the grant via the sole producer verifyGrantForTurn",
+        },
+        {
+          re: /if \(presentedGrant == null\) return \{ ok: false, code: "requires_verified_grant" \}/,
+          miss: 'must FAIL CLOSED on a null grant (`return { ok: false, code: "requires_verified_grant" }`) — the meter fail-opens on null, so this path cannot',
+        },
+        {
+          re: /this\.policy\.validate\(/,
+          miss: "must re-run the policy gate's scope check via this.policy.validate (the meter never checks scope)",
+        },
+        {
+          re: /return \{ ok: false, code: "missing_scope" \}/,
+          miss: 'must refuse an out-of-scope grant (`return { ok: false, code: "missing_scope" }`)',
+        },
+        {
+          re: /const buildP2pPayment = wrapP2pPaymentWithMeter\(/,
+          miss: "must route the live broadcast through a meter-wrapped builder (wrapP2pPaymentWithMeter), never the raw wallet method",
+        },
+      ];
+      for (const { re, miss } of requirements) {
+        if (!re.test(body)) {
+          fail(
+            `executeGrantedDelegation ${miss}. This is the human-absent R4 path; dropping any ` +
+              "layer of the gate ∧ presence ∧ meter AND is a money-safety regression. " +
+              "docs/doctrine/agent-archetypes.md §6, docs/doctrine/memory-never-confers-authority.md.",
+          );
+        }
+      }
+      // The raw wallet method may appear ONLY as the first argument of the
+      // meter wrapper (bound into rawBuild). Any other pass-through of
+      // `_solanaWallet.buildP2pPayment` in this method would bypass metering.
+      const rawRefs = (body.match(/_solanaWallet\??\.buildP2pPayment/g) ?? []).length;
+      if (rawRefs > 1) {
+        fail(
+          "executeGrantedDelegation references the raw `_solanaWallet.buildP2pPayment` more than " +
+            "once — the only sanctioned use is binding it INTO wrapP2pPaymentWithMeter. A second " +
+            "reference risks a metering bypass. check-ceiling-from-grant is the sibling guard.",
+        );
+      }
+    }
+  }
+}
+
 if (failed) {
   process.exit(1);
 }
 console.log(
-  "✓ check-money-authority: R4 standing-authority block present + ordered after the trust switch; delegate_to_agent declares explicit riskHint (R4 on payment rail); verifiedGrant has a single audited producer.",
+  "✓ check-money-authority: R4 standing-authority block present + ordered after the trust switch; " +
+    "delegate_to_agent declares explicit riskHint (R4 on payment rail); verifiedGrant has a single " +
+    "audited producer; executeGrantedDelegation re-composes the R4 AND (fail-closed verify + scope + meter-wrapped builder).",
 );

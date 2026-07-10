@@ -1,0 +1,58 @@
+name: Deploy clerk
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/clerk/**"
+      - "packages/**"
+      - ".github/workflows/deploy-clerk.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-clerk
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master
+
+      # The service self-bootstraps its identity from the persistent /data
+      # volume on first boot — no out-of-band ceremony. Required one-time
+      # setup before the first deploy (scripts/deploy-archetype-slate.ts
+      # automates this for the staging slate):
+      #   fly apps create motebit-clerk
+      #   fly volumes create clerk_data --size 1 --region sjc
+      #   fly secrets set MOTEBIT_SYNC_URL=... MOTEBIT_API_TOKEN=... \
+      #                   MOTEBIT_SOLANA_RPC_URL=... MOTEBIT_RELAY_PUBLIC_KEY=... \
+      #                   MOTEBIT_PUBLIC_URL=... DRY_RUN=1
+      # DRY_RUN=1 is the fail-safe default — the whole metered spine runs at
+      # hard-zero. Flipping to live money (DRY_RUN=0) is a deliberate operator
+      # step, never in this workflow.
+      # The prod app deliberately does not exist until the archetype slate
+      # promotes (5 consecutive green scheduled conformance runs —
+      # scripts/check-promotion-ready.ts). Skipping cleanly keeps this
+      # workflow green-but-honest pre-promotion instead of failing red on
+      # every main push that touches packages/** (red-noise trains people
+      # to ignore red).
+      - name: Check prod app exists
+        id: appcheck
+        run: |
+          if flyctl status -a motebit-clerk > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::motebit-clerk not provisioned yet — promotion is conformance-gated (check-promotion-ready). Skipping deploy."
+          fi
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      - name: Deploy to Fly.io
+        if: steps.appcheck.outputs.exists == 'true'
+        run: flyctl deploy --config services/clerk/fly.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

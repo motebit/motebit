@@ -242,10 +242,10 @@ The 11 Apache-2.0 packages are the permissive floor: a third party can build an 
 
 **Surfaces** ([`apps/`](apps/)) — Five user-facing (`web`, `cli`, `desktop`, `mobile`, `spatial`) and four supporting (`admin` dashboard, `identity` viewer, `docs` site, `vscode` extension).
 
-**Marketplace** ([`services/`](services/)) — 10 services in four roles:
+**Marketplace** ([`services/`](services/)) — 11 services in four roles:
 
 - **The relay** — `api` (sync, settlement, federation, 5-tier rate limiting, the only piece with legitimate centralization)
-- **Molecules** — agents that reason and compose other agents: `research` (Claude + web search with cryptographic citation chain), `code-review` (Claude-powered), `auditor` ($0.05/audit, LLM-free — measures another agent's public verification surface and signs the result as an eval attestation)
+- **Molecules** — agents that reason and compose other agents: `research` (Claude + web search with cryptographic citation chain), `code-review` (Claude-powered), `auditor` ($0.05/audit, LLM-free — measures another agent's public verification surface and signs the result as an eval attestation), `clerk` ($0.05/task — the money-execution pole: a metered R4 spend under a self-issued signed grant, fail-closed, dry-run-first)
 - **Atoms** — stateless capability providers anyone can wrap: `web-search` ($0.05/request), `read-url`, `summarize`, `embed`
 - **Glue** — `proxy` (Vercel edge CORS for the web app)
 
@@ -307,7 +307,7 @@ pnpm run lint          # Lint all packages
 
 12 packages publish to npm — 11 Apache-2.0 (the permissive floor) and 1 BSL-1.1 (the `motebit` reference runtime). They version independently on their own merit (`updateInternalDependencies: "patch"`, no fixed or linked groups). Breaking changes to a package's public surface require a major bump on that package.
 
-The 61 workspace-private packages — `@motebit/runtime`, `@motebit/relay`, `@motebit/ai-core`, `@motebit/memory-graph`, `@motebit/policy`, `@motebit/sync-engine`, and the rest of the interior machinery — exist for source organization and do not publish independently. They carry a sentinel version `0.0.0-private` so the absence of a semver claim is explicit at the source: the only stability promises this repo makes live on the 12 published packages above.
+The 62 workspace-private packages — `@motebit/runtime`, `@motebit/relay`, `@motebit/ai-core`, `@motebit/memory-graph`, `@motebit/policy`, `@motebit/sync-engine`, and the rest of the interior machinery — exist for source organization and do not publish independently. They carry a sentinel version `0.0.0-private` so the absence of a semver claim is explicit at the source: the only stability promises this repo makes live on the 12 published packages above.
 
 The Apache-2.0 protocol packages (`@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto`) promise wire-format and type stability independently, gated by `check-api-surface`.
 

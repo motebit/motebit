@@ -33,7 +33,7 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent. The inte
 
 - [Quickstart: Sign & Verify a Receipt](https://docs.motebit.com/docs/developer/quickstart): The shortest correct Motebit integration — mint a signed ExecutionReceipt and verify it offline. No relay, no account, no LLM.
 - [Your First Service Agent](https://docs.motebit.com/docs/developer/first-service-agent): Build a service agent that provides a custom tool to other agents via the motebit delegation protocol.
-- [Agent Archetypes](https://docs.motebit.com/docs/developer/agent-archetypes): The first-party molecules — the Researcher and the Auditor — as forkable blueprints, plus how to verify what they produce.
+- [Agent Archetypes](https://docs.motebit.com/docs/developer/agent-archetypes): The first-party molecules — the Researcher, the Auditor, and the Clerk — as forkable blueprints, plus how to verify what they produce.
 - [Stability & going to production](https://docs.motebit.com/docs/developer/stability): What you can build on, how motebit guarantees it (CI gates that break the build on an unannounced API change), and the checklist before you ship.
 - [Local Testing](https://docs.motebit.com/docs/developer/local-testing): Run a local relay, register agents, submit tasks, and test the full delegation loop on your machine.
 - [Identity Standard](https://docs.motebit.com/docs/developer/identity-standard): Create and verify motebit.md agent identity files — the motebit/identity@1.0 specification.
