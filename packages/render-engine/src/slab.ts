@@ -88,9 +88,15 @@ export type { DetachArtifactHandler } from "./slab-core.js";
  * the plane's right edge sat past the viewport; cards mounted on
  * the outer slots clipped out of view on narrower windows.
  */
-const SLAB_OFFSET_X = 0.38; // right of creature (meters)
-const SLAB_OFFSET_Y = 0.0; // creature eye level
-const SLAB_OFFSET_Z = -0.02; // just behind creature's front face
+// Exported so the bite-geometry lock (`slab-bite.test.ts`) can assert the
+// creature↔computer joint — the "bite crescent" signature — is a designed
+// constant, not emergent. The offsets are creature-LOCAL (the slab group is a
+// child of the creature group, slab.ts `creatureGroup.add(this.group)`), so
+// this geometry is pose-invariant: every camera that sees the front hemisphere
+// sees the same crescent. docs/doctrine/creature-canon.md.
+export const SLAB_OFFSET_X = 0.38; // right of creature (meters)
+export const SLAB_OFFSET_Y = 0.0; // creature eye level
+export const SLAB_OFFSET_Z = -0.02; // just behind creature's front face
 const SLAB_TILT_X = -0.22; // ~12.5° forward (radians)
 const SLAB_TILT_Y = -0.09; // ~5° yaw toward creature (radians) — doctrine
 
@@ -102,7 +108,7 @@ const SLAB_TILT_Y = -0.09; // ~5° yaw toward creature (radians) — doctrine
  * and scope (body-adjacent display surfaces in the droplet/material
  * family).
  */
-const SLAB_WIDTH = 0.54;
+export const SLAB_WIDTH = 0.54;
 const SLAB_HEIGHT = SLAB_WIDTH / GOLDEN_RATIO;
 
 /**
@@ -145,7 +151,7 @@ const SLAB_CORNER_RADIUS = Math.min(SLAB_WIDTH, SLAB_HEIGHT) * 0.28;
  * geometry depth in place first so the perceptual register
  * changes.
  */
-const SLAB_THICKNESS = 0.04;
+export const SLAB_THICKNESS = 0.04;
 
 /**
  * CSS3DObject pixel→world scale. The stage div is sized in CSS pixels
