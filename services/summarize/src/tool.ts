@@ -20,14 +20,30 @@ export const summarizeSearchDefinition: ToolDefinition = {
 
 /**
  * Create the summarize_search handler that delegates to web-search via MCP.
+ *
+ * `ensureConnected` (optional) establishes the web-search link lazily on
+ * the first invocation — the delegating service registers at boot and
+ * connects to its dependency on the task path, so an unreachable
+ * web-search fails THIS call rather than crashing the service. Covers
+ * both the relay `handleAgentTask` path and any direct tool invocation.
  */
 export function createSummarizeSearchHandler(
   webSearchAdapter: McpClientAdapter,
+  ensureConnected?: () => Promise<void>,
 ): (args: Record<string, unknown>) => Promise<ToolResult> {
   return async (args: Record<string, unknown>): Promise<ToolResult> => {
     const rawQuery = args["query"];
     const query = typeof rawQuery === "string" ? rawQuery : "";
     if (!query) return { ok: false, error: "Missing query parameter" };
+
+    if (ensureConnected != null) {
+      try {
+        await ensureConnected();
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: `web-search unreachable: ${msg}` };
+      }
+    }
 
     // Delegate to web-search's motebit_task (qualified name: serverName__toolName)
     const qualifiedName = `${webSearchAdapter.serverName}__motebit_task`;

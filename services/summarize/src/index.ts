@@ -67,18 +67,37 @@ export { summarizeSearchDefinition, createSummarizeSearchHandler } from "./tool.
 async function main(): Promise<void> {
   const config = loadConfig();
 
-  // Upstream MCP client connects BEFORE the runner boots so handler
-  // registration can close over the adapter. Connection is cheap and
-  // failure should be loud (the service cannot function without
-  // web-search reachable).
+  // Upstream MCP client is created here but connected LAZILY — on the
+  // first task, not at boot. Eager `await connect()` before runMolecule
+  // meant a slow or unreachable web-search crashed the process before its
+  // HTTP server ever started, so the service never registered and the Fly
+  // machine flapped (health-check critical). A delegating service that
+  // can't reach its dependency should fail the TASK loudly, not the
+  // BOOT — the same lazy-per-task pattern `services/research` uses.
+  // McpClientAdapter.connect() is idempotent; a small in-flight guard
+  // coalesces concurrent tasks and lets a transient failure retry on the
+  // next task instead of poisoning the service.
   const webSearchAdapter = new McpClientAdapter({
     name: "web-search",
     transport: "http",
     url: `${config.webSearchUrl}/mcp`,
     ...(config.webSearchAuthToken ? { authToken: config.webSearchAuthToken } : {}),
   });
-  await webSearchAdapter.connect();
-  log(`Connected to web-search at ${config.webSearchUrl}`);
+  let connecting: Promise<void> | null = null;
+  const ensureWebSearchConnected = async (): Promise<void> => {
+    // Reuse an in-flight connect; on failure clear the guard so the next
+    // task retries rather than awaiting a permanently-rejected promise.
+    if (connecting == null) {
+      connecting = webSearchAdapter.connect().then(
+        () => log(`Connected to web-search at ${config.webSearchUrl}`),
+        (err: unknown) => {
+          connecting = null;
+          throw err;
+        },
+      );
+    }
+    return connecting;
+  };
 
   await runMolecule(
     {
@@ -98,7 +117,10 @@ async function main(): Promise<void> {
       const { motebitId, publicKey, privateKey } = identity;
 
       const registry = new InMemoryToolRegistry();
-      registry.register(summarizeSearchDefinition, createSummarizeSearchHandler(webSearchAdapter));
+      registry.register(
+        summarizeSearchDefinition,
+        createSummarizeSearchHandler(webSearchAdapter, ensureWebSearchConnected),
+      );
 
       const handleAgentTask = async function* (
         prompt: string,
@@ -109,6 +131,9 @@ async function main(): Promise<void> {
 
         let result: ToolResult;
         try {
+          // Lazy connect is owned by the handler (createSummarizeSearchHandler)
+          // so BOTH this relay-task path and any direct tool call establish
+          // the web-search link on demand.
           result = await registry.execute("summarize_search", { query: prompt });
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
