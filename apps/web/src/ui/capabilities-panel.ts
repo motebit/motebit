@@ -200,7 +200,19 @@ export function initCapabilitiesPanel(ctx: WebContext): CapabilitiesPanelAPI {
     void refresh();
   }
 
+  // Teardown for an in-flight sensitive-skill consent modal. Set while the
+  // modal is open (showConsentModal below), cleared when it resolves. The
+  // consent modal is a child of THIS panel's install flow — it must never
+  // outlive the panel. Without this, closing the panel (close button,
+  // backdrop, or browser Back) left the "Install Sensitive Skill?" modal +
+  // its full-screen backdrop floating over plain chat with a dangling
+  // pending promise (prod #293). Calling it fail-closed DECLINES the
+  // pending install (consistent with the fail-closed default for sensitive
+  // skills at showConsentModal's markup-missing branch).
+  let dismissActiveConsent: (() => void) | null = null;
+
   function close(): void {
+    dismissActiveConsent?.();
     panel.classList.remove("open");
     backdrop.classList.remove("open");
     detail.style.display = "none";
@@ -823,6 +835,7 @@ export function initCapabilitiesPanel(ctx: WebContext): CapabilitiesPanelAPI {
         consentCancel.removeEventListener("click", onCancel);
         consentBackdrop.removeEventListener("click", onCancel);
         document.removeEventListener("keydown", onKeydown);
+        dismissActiveConsent = null;
       };
       const onApprove = (): void => {
         cleanup();
@@ -832,6 +845,11 @@ export function initCapabilitiesPanel(ctx: WebContext): CapabilitiesPanelAPI {
         cleanup();
         resolve(false);
       };
+      // Panel-teardown escape hatch: if the panel closes (button, backdrop,
+      // browser Back) while this modal is open, close() / popstate call this
+      // to tear the modal down and DECLINE the install fail-closed — the
+      // modal can never outlive the flow that owns it.
+      dismissActiveConsent = onCancel;
       const onKeydown = (e: KeyboardEvent): void => {
         if (e.key === "Escape") {
           e.stopPropagation();
@@ -872,6 +890,9 @@ export function initCapabilitiesPanel(ctx: WebContext): CapabilitiesPanelAPI {
 
   window.addEventListener("popstate", () => {
     if (!window.location.pathname.startsWith(CAPABILITIES_ROUTE_PREFIX)) {
+      // Browser Back off the panel route — same teardown as close():
+      // the in-flight consent modal must not survive the panel.
+      dismissActiveConsent?.();
       panel.classList.remove("open");
       backdrop.classList.remove("open");
       detail.style.display = "none";
