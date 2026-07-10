@@ -770,6 +770,17 @@ export class SlabManager {
     this.stageEl = createContainerElement();
     this.stageAnchor = new CSS3DObject(this.stageEl);
     this.stageEl.style.pointerEvents = "none";
+    // The computer's INTERFACE is forward-facing, like the face
+    // (attention-is-directional). Cull the CSS3D content from behind so an
+    // orbit past the front hemisphere reads the liquescent body of the
+    // computer — never its UI mirrored through the transmissive back pane.
+    // The back pane keeps its transmissive optical character (one body, one
+    // material); this is what keeps the back CLEAN instead of "broken".
+    // docs/doctrine/motebit-computer.md, docs/doctrine/liquescentia-as-substrate.md.
+    this.stageEl.style.backfaceVisibility = "hidden";
+    (
+      this.stageEl.style as CSSStyleDeclaration & { webkitBackfaceVisibility?: string }
+    ).webkitBackfaceVisibility = "hidden";
 
     // Stage at z=0, same plane as the WebGL screen mesh. Chrome and
     // content compose as ONE window plane suspended in the volume.
@@ -1094,6 +1105,12 @@ export class SlabManager {
     spec.element.style.transform = "scale(0)";
     spec.element.style.transformOrigin = "center center";
     spec.element.style.opacity = "0";
+    // Forward-facing interface — culled from behind so the orbit never shows a
+    // mounted card mirrored through the glass (see the stage backface note).
+    spec.element.style.backfaceVisibility = "hidden";
+    (
+      spec.element.style as CSSStyleDeclaration & { webkitBackfaceVisibility?: string }
+    ).webkitBackfaceVisibility = "hidden";
 
     // `.dataset` may be absent in headless tests — read defensively.
     const slabHidden =
