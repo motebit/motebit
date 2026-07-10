@@ -22,7 +22,12 @@ import { InMemoryToolRegistry } from "@motebit/tools";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { createInMemoryStorage } from "@motebit/runtime";
 import type { MoleculeConfig, MoleculeRunnerAdapters } from "../index.js";
-import { defaultCreateRuntime, defaultLog, runMolecule } from "../index.js";
+import {
+  defaultCreateRuntime,
+  defaultCreateMoneyRuntime,
+  defaultLog,
+  runMolecule,
+} from "../index.js";
 import { deriveSolanaAddress } from "@motebit/wallet-solana";
 
 // ---------------------------------------------------------------------------
@@ -254,6 +259,175 @@ describe("runMolecule", () => {
     expect(serverCfg.port).toBe(cfg.port);
     expect(serverCfg.motebitType).toBe("service");
     expect(String(serverCfg.name)).toContain("motebit-test-mot_test");
+  });
+
+  it("no moneyExecution ⇒ builder's spend arg is undefined (back-compat)", async () => {
+    const adapters = baseAdapters();
+    let receivedSpend: unknown = "sentinel";
+    const build = vi.fn((_identity, spend) => {
+      receivedSpend = spend;
+      return { toolRegistry: new InMemoryToolRegistry() };
+    });
+    await runMolecule(baseConfig(), build, adapters);
+    expect(receivedSpend).toBeUndefined();
+  });
+
+  it("moneyExecution ⇒ self-issues a self-grant + exposes a spend handle that drives executeGrantedDelegation", async () => {
+    const adapters = baseAdapters();
+    // Stub the money runtime: record the granted-delegation call, return a canned result.
+    const execCalls: unknown[] = [];
+    const moneyRuntime = {
+      ...fakeRuntime(),
+      executeGrantedDelegation: async (p: unknown) => {
+        execCalls.push(p);
+        return { ok: true, dryRun: true, settlement: { mode: "p2p", paidMicro: 50_000 } };
+      },
+    };
+    adapters.createMoneyRuntime = () => moneyRuntime as never;
+
+    const cfg: MoleculeConfig = {
+      ...baseConfig(),
+      syncUrl: "https://mock-relay.test",
+      moneyExecution: {
+        solanaRpcUrl: "https://rpc.test",
+        relayPublicKeyHex: "07".repeat(32),
+        spendCeiling: { schema: "motebit.spend-ceiling.v1", lifetime_limit_micro: 1_000_000 },
+      },
+    };
+
+    let handle: { heldGrant: unknown; spend: (p: unknown) => Promise<unknown> } | undefined;
+    const build = vi.fn((_identity, spend) => {
+      handle = spend as typeof handle;
+      return { toolRegistry: new InMemoryToolRegistry() };
+    });
+
+    await runMolecule(cfg, build, adapters);
+
+    expect(handle).toBeDefined();
+    // The held grant is a SELF-grant (delegator == delegate) with the committed ceiling.
+    const grant = handle!.heldGrant as Record<string, unknown>;
+    expect(grant.delegator_public_key).toBe(grant.delegate_public_key);
+    expect(grant.delegator_id).toBe(grant.delegate_id);
+    expect(grant.scope).toBe("delegate_to_agent");
+    expect((grant.spend_ceiling as Record<string, unknown>).lifetime_limit_micro).toBe(1_000_000);
+    expect(grant.signature).toBeDefined();
+
+    // spend() mints a fresh tick under the grant and drives executeGrantedDelegation.
+    const result = await handle!.spend({ capability: "research", prompt: "survey", dryRun: true });
+    expect(result).toEqual({
+      ok: true,
+      dryRun: true,
+      settlement: { mode: "p2p", paidMicro: 50_000 },
+    });
+    expect(execCalls).toHaveLength(1);
+    // Branch: omitting dryRun ⇒ the option is not forwarded (undefined, not false).
+    await handle!.spend({ capability: "research", prompt: "again" });
+    expect((execCalls[1] as Record<string, unknown>).dryRun).toBeUndefined();
+    const call = execCalls[0] as {
+      capability: string;
+      dryRun: boolean;
+      delegation: { grant: unknown; token: Record<string, unknown> };
+    };
+    expect(call.capability).toBe("research");
+    expect(call.dryRun).toBe(true);
+    expect(call.delegation.grant).toBe(grant); // same self-grant threaded through
+    const token = call.delegation.token;
+    expect(token.grant_id).toBe(grant.grant_id);
+    expect(token.signature).toBeDefined();
+  });
+
+  it("defaultCreateMoneyRuntime builds a real runtime with the granted-spend primitive + R4 delegation", () => {
+    const cfg: MoleculeConfig = {
+      ...baseConfig(),
+      syncUrl: "https://mock-relay.test",
+      moneyExecution: {
+        solanaRpcUrl: "https://rpc.test",
+        relayPublicKeyHex: "07".repeat(32),
+        spendCeiling: { schema: "motebit.spend-ceiling.v1", lifetime_limit_micro: 1_000_000 },
+      },
+    };
+    const runtime = defaultCreateMoneyRuntime(
+      fakeIdentity(),
+      createInMemoryStorage(),
+      new InMemoryToolRegistry(),
+      {},
+      cfg,
+      undefined as never, // grantSpendStore ⇒ runtime falls back to InMemory
+    ) as unknown as {
+      executeGrantedDelegation: unknown;
+      getToolRegistry: () => { get: (n: string) => { riskHint?: { risk?: number } } | undefined };
+      stop?: () => void;
+    };
+
+    // The deterministic granted-spend primitive is present…
+    expect(typeof runtime.executeGrantedDelegation).toBe("function");
+    // …and the metered delegation path was enabled with a wallet, so
+    // delegate_to_agent is registered R4_MONEY (the scope-check needs it).
+    const def = runtime.getToolRegistry().get("delegate_to_agent");
+    expect(def?.riskHint?.risk).toBe(4);
+    runtime.stop?.();
+
+    // Branch: absent syncUrl ⇒ falls back to "" without throwing.
+    const rt2 = defaultCreateMoneyRuntime(
+      fakeIdentity(),
+      createInMemoryStorage(),
+      new InMemoryToolRegistry(),
+      {},
+      { ...cfg, syncUrl: undefined },
+      undefined as never,
+    ) as unknown as { stop?: () => void };
+    rt2.stop?.();
+  });
+
+  it("defaultCreateMoneyRuntime without moneyExecution throws (misuse guard)", () => {
+    expect(() =>
+      defaultCreateMoneyRuntime(
+        fakeIdentity(),
+        createInMemoryStorage(),
+        new InMemoryToolRegistry(),
+        {},
+        baseConfig(),
+        undefined as never,
+      ),
+    ).toThrow(/without moneyExecution/);
+  });
+
+  it("moneyExecution: two spends mint DISTINCT tick tokens (no nonce replay)", async () => {
+    const adapters = baseAdapters();
+    const tokens: unknown[] = [];
+    const moneyRuntime = {
+      ...fakeRuntime(),
+      executeGrantedDelegation: async (p: { delegation: { token: unknown } }) => {
+        tokens.push(p.delegation.token);
+        return { ok: true, dryRun: true, settlement: { mode: "p2p" } };
+      },
+    };
+    adapters.createMoneyRuntime = () => moneyRuntime as never;
+    const cfg: MoleculeConfig = {
+      ...baseConfig(),
+      syncUrl: "https://mock-relay.test",
+      moneyExecution: {
+        solanaRpcUrl: "https://rpc.test",
+        relayPublicKeyHex: "07".repeat(32),
+        spendCeiling: { schema: "motebit.spend-ceiling.v1", lifetime_limit_micro: 1_000_000 },
+      },
+    };
+    let handle: { spend: (p: unknown) => Promise<unknown> } | undefined;
+    await runMolecule(
+      cfg,
+      (_id, spend) => {
+        handle = spend as typeof handle;
+        return { toolRegistry: new InMemoryToolRegistry() };
+      },
+      adapters,
+    );
+
+    await handle!.spend({ capability: "research", prompt: "a", dryRun: true });
+    // Nudge the clock so the second tick's issued_at differs.
+    await new Promise((r) => setTimeout(r, 2));
+    await handle!.spend({ capability: "research", prompt: "b", dryRun: true });
+    const [t0, t1] = tokens as Array<Record<string, unknown>>;
+    expect(t0!.signature).not.toBe(t1!.signature);
   });
 
   it("P2P settlement: advertises a derived address + modes ONLY when MOTEBIT_SETTLEMENT_MODES is set", async () => {

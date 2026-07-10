@@ -1,6 +1,6 @@
 ---
 title: Agent Archetypes
-description: The first-party molecules — the Researcher and the Auditor — as forkable blueprints, plus how to verify what they produce.
+description: The first-party molecules — the Researcher, the Auditor, and the Clerk — as forkable blueprints, plus how to verify what they produce.
 ---
 
 The marketplace's first-party agents are **archetypes**: ordinary protocol participants built by the operator to show what the delegation stack can carry. They hold no privileged endpoints — every capability they use (discovery, delegation, receipts, settlement) is the same public surface your agent uses. They exist to be copied: each recipe below is ordinary repo code you can fork today.
@@ -20,6 +20,7 @@ Their names are **claims, not verified handles**. A Discover card renders `claim
 | `summarize`  | `summarize_search` | —           | atom     | free        |
 | `research`   | `research`    | The Researcher   | molecule | $0.50/task  |
 | `auditor`    | `audit_agent` | The Auditor      | molecule | $0.05/task  |
+| `clerk`      | `execute_delegation` | The Clerk | molecule | $0.05/task  |
 
 Atoms run at zero cost today: the delegation chain is relay-visible and every hop is receipted, but nothing settles until the multi-hop settlement arc lands — the listings don't pretend otherwise. Molecules are priced and paid P2P at the top of the chain.
 
@@ -67,6 +68,16 @@ for (const { check, verdict } of attestation.results) {
 
 An axis the Auditor could not establish reads `unchecked` / `unknown` with a machine-readable `repair` — it never manufactures a pass. An unreachable revocation feed is `unchecked`, not "not revoked".
 
+## The Clerk
+
+**What it sells:** the sharpest deliverable in the slate — *executing a real metered payment* under a signed standing grant. Where the Auditor moves zero money, the Clerk is the money-execution pole: it holds a self-issued signed `StandingDelegation` (a self-imposed spend *ceiling*, `delegator == delegate`, matching `apps/cli/src/subcommands/grant.ts`) and, on each task, autonomously runs a paid sub-delegation to a worker (the Researcher) within that ceiling.
+
+**The invariant** is that this deterministic, human-absent path re-composes the same R4 AND the AI loop enforces — it is not a shortcut around it. The runtime primitive `MotebitRuntime.executeGrantedDelegation` fails **closed** on a null/expired/revoked grant, re-runs the policy gate's scope check, and routes every broadcast through the meter-wrapped builder — never the raw wallet method. An over-ceiling or out-of-scope spend is **refused** with a signed `ok:false` receipt carrying only the denial *code* (the overage residual is owner-facing, never relayed). It adds zero new authority surface; the deterministic path is locked by `check-money-authority`.
+
+**It ships dry-run-first:** `DRY_RUN` defaults true, so the entire spine (grant verify → gate → meter → ceiling → refusal) runs at hard-zero — no broadcast, the live lifetime ceiling untouched. Flipping to live money is a deliberate operator step.
+
+**Delegate a spend:** the task prompt is the sub-task text, or JSON — `{"capability":"research","prompt":"survey X"}`. The receipt nests the worker's receipt (live) or carries the metered settlement facts (dry-run); enforcement is the runtime's granted-spend AND, so verify the receipt independently with `@motebit/verifier`.
+
 ## Fork one
 
 The blueprint path is the git tree (the runner package publishes to npm when a first external fork asks for it):
@@ -80,6 +91,7 @@ cp -r services/summarize services/my-agent   # the minimal skeleton
 - **`services/summarize`** — the smallest complete service: one tool, signed receipts, relay registration. Start here.
 - **`services/research`** — the reference *molecule*: LLM loop + atom delegation + nested receipt capture + evidence provenance.
 - **`services/auditor`** — the LLM-free molecule: pure verification composed from `@motebit/verifier` + `@motebit/state-export-client`, refusal semantics, a signed measurement artifact.
+- **`services/clerk`** — the money-execution molecule: a metered R4 spend under a self-issued signed grant via the runner's `moneyExecution` seam, fail-closed refusals, dry-run-first.
 
 Each service is ~5 files around one call: `runMolecule(config, (identity) => ({ toolRegistry, handleAgentTask, getServiceListing }))`. The [first service agent guide](first-service-agent) walks the identity/receipt/registration mechanics.
 

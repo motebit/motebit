@@ -87,6 +87,19 @@ export type DelegationErrorCode =
    * confirmed-but-rejected proof.
    */
   | "payment_broadcast_failed"
+  /**
+   * Pre-flight, BEFORE broadcast. The grant blast-radius meter refused the
+   * spend against the verified standing grant's signed ceiling (over-ceiling,
+   * nonce replay, or an unmeterable action) — the metered builder threw a
+   * `MoneyMeterDeniedError` before any funds moved. The specific
+   * `BlastRadiusDenial` code rides in `DelegationError.denial`. Distinct from
+   * `payment_broadcast_failed` (the broadcast itself failing): the meter
+   * deliberately blocked an authorized-but-out-of-bounds spend. Only reachable
+   * on the metered deterministic path (`executeGrantedDelegation`) or a
+   * grant-carrying loop turn; a raw-builder path (human-tap `invokeCapability`)
+   * has no meter and cannot produce this.
+   */
+  | "money_meter_denied"
   /** Pre-flight. Trust below the capability's threshold. */
   | "trust_threshold_unmet"
   /** Pre-flight. No agent advertises the capability. */
@@ -110,6 +123,14 @@ export interface DelegationError {
   retryAfterSeconds?: number;
   /** HTTP status code when applicable. */
   status?: number;
+  /**
+   * The blast-radius meter's specific `BlastRadiusDenial` code, set ONLY on
+   * `code: "money_meter_denied"`. The denial *code* is the whole owner-safe
+   * residual — the `spend_overage_micro` quantity is an owner-facing oracle
+   * (`grant-blast-radius.ts`) and is deliberately NOT carried here, so this
+   * field is safe to relay in a signed refusal receipt.
+   */
+  denial?: string;
 }
 
 /**
@@ -139,6 +160,18 @@ export interface DelegationSettlement {
 export type DelegationResult =
   | { ok: true; receipt: ExecutionReceipt; taskId: string; settlement?: DelegationSettlement }
   | { ok: false; error: DelegationError };
+
+/**
+ * Result of `MotebitRuntime.executeGrantedDelegation` — the deterministic
+ * granted-spend path. Distinct from `DelegationResult` because the dry-run
+ * branch has NO worker receipt (no worker ran) and a refusal carries only a
+ * denial CODE (the owner-safe residual), never the overage quantity or an
+ * `AuthorityDelta`.
+ */
+export type GrantedDelegationResult =
+  | { ok: true; dryRun: true; settlement: DelegationSettlement }
+  | { ok: true; dryRun: false; receipt: ExecutionReceipt; settlement?: DelegationSettlement }
+  | { ok: false; code: string };
 
 export interface SubmitAndPollParams {
   /** This motebit's identity (the submitter/owner of the task). */
@@ -652,7 +685,14 @@ function hexToBytes(hex: string): Uint8Array {
   return out;
 }
 
-const fail = (code: DelegationErrorCode, message: string, status?: number): DelegationResult => ({
+// Returns the shared error variant (not the wide DelegationResult) so it is
+// assignable to every *Result type whose failure branch is { ok:false; error }
+// — including ResolveP2pPaymentRequestResult.
+const fail = (
+  code: DelegationErrorCode,
+  message: string,
+  status?: number,
+): { ok: false; error: DelegationError } => ({
   ok: false,
   error: status != null ? { code, message, status } : { code, message },
 });
@@ -741,17 +781,52 @@ export interface ResolveAndSubmitP2pDelegationParams {
  * relay-custody path. Discovery is a public read; the listing read is
  * `market:listing`-audience authed.
  */
-export async function resolveAndSubmitP2pDelegation(
-  params: ResolveAndSubmitP2pDelegationParams,
-): Promise<DelegationResult> {
-  const { syncUrl, capability, motebitId } = params;
+export interface ResolveP2pPaymentRequestParams {
+  /** The delegator's identity (submitter / owner of the task). */
+  motebitId: string;
+  /** Base URL of the relay. */
+  syncUrl: string;
+  /** Mints audience-scoped auth tokens (the listing read needs `market:listing`). */
+  authToken: (audience?: TokenAudience) => Promise<string>;
+  /** Capability the worker must advertise — used to discover + select + price. */
+  capability: string;
+  /** Pin discovery to a SPECIFIC worker (fail-closed; never substitutes). */
+  targetWorkerId?: string;
+  /** Cold-start acknowledgment for a new delegator↔worker pair. */
+  acknowledgeNoHistoryRisk?: boolean;
+  /** The relay's PINNED Ed25519 public key (hex) — treasury derives from THIS. */
+  relayPublicKeyHex: string;
+  /** Abort early. */
+  signal?: AbortSignal;
+}
 
-  if (params.buildP2pPayment == null) {
-    return fail(
-      "no_sovereign_rail",
-      "Paid direct delegation needs a sovereign wallet rail that can build an atomic payment.",
-    );
-  }
+export type ResolveP2pPaymentRequestResult =
+  | {
+      ok: true;
+      /** The fully-priced atomic payment legs, ready to broadcast (or meter). */
+      paymentRequest: SovereignP2pPaymentRequest;
+      /** The selected worker's motebit_id — the submit target. */
+      workerMotebitId: string;
+      /** The selected worker's settlement address (the meter counterparty). */
+      workerAddress: string;
+    }
+  | { ok: false; error: DelegationError };
+
+/**
+ * Resolve a P2P delegation's fully-priced payment request WITHOUT broadcasting
+ * or submitting — discovery, pinned-treasury derivation, fee model, pricing,
+ * and (single-operator) the pre-broadcast eligibility pre-flight. Extracted so
+ * the two consumers share ONE discovery/pricing implementation: the live path
+ * (`resolveAndSubmitP2pDelegation`, which then broadcasts + submits) and the
+ * metered DRY-RUN path (`MotebitRuntime.executeGrantedDelegation`, which runs
+ * the grant blast-radius meter over this `paymentRequest` and stops — no
+ * broadcast, no submit, no fabricated receipt). A single resolver means the
+ * dry-run meters the EXACT amount a live spend would.
+ */
+export async function resolveP2pPaymentRequest(
+  params: ResolveP2pPaymentRequestParams,
+): Promise<ResolveP2pPaymentRequestResult> {
+  const { syncUrl, capability, motebitId } = params;
 
   // 1. Treasury from the PINNED relay key — the trust root, never fetched.
   let treasuryAddress: string;
@@ -958,12 +1033,57 @@ export async function resolveAndSubmitP2pDelegation(
     };
   }
 
+  return {
+    ok: true,
+    paymentRequest,
+    workerMotebitId: worker.motebit_id,
+    workerAddress: worker.settlement_address,
+  };
+}
+
+export async function resolveAndSubmitP2pDelegation(
+  params: ResolveAndSubmitP2pDelegationParams,
+): Promise<DelegationResult> {
+  if (params.buildP2pPayment == null) {
+    return fail(
+      "no_sovereign_rail",
+      "Paid direct delegation needs a sovereign wallet rail that can build an atomic payment.",
+    );
+  }
+
+  // 1–3. Discover + price the worker into a ready-to-broadcast payment request.
+  const resolved = await resolveP2pPaymentRequest({
+    motebitId: params.motebitId,
+    syncUrl: params.syncUrl,
+    authToken: params.authToken,
+    capability: params.capability,
+    relayPublicKeyHex: params.relayPublicKeyHex,
+    ...(params.targetWorkerId != null ? { targetWorkerId: params.targetWorkerId } : {}),
+    ...(params.acknowledgeNoHistoryRisk === true ? { acknowledgeNoHistoryRisk: true } : {}),
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
+  if (!resolved.ok) return { ok: false, error: resolved.error };
+
   // 4. Broadcast the atomic payment ONCE. A throw here means nothing settled on
   //    the relay — the proof is never submitted without a confirmed payment.
   let proof: P2pPaymentProof;
   try {
-    proof = await params.buildP2pPayment(paymentRequest);
+    proof = await params.buildP2pPayment(resolved.paymentRequest);
   } catch (err: unknown) {
+    // The grant blast-radius meter (wrapP2pPaymentWithMeter) throws BEFORE
+    // broadcast on an over-ceiling / replay / unmeterable spend. Surface the
+    // typed denial code — owner-safe (the overage quantity never rides here).
+    if (err instanceof Error && err.name === "MoneyMeterDeniedError") {
+      const denial = (err as { denial?: string }).denial;
+      return {
+        ok: false,
+        error: {
+          code: "money_meter_denied",
+          message: err.message,
+          ...(denial != null ? { denial } : {}),
+        },
+      };
+    }
     // wallet-solana surfaces a funds shortfall as InsufficientUsdcBalanceError.
     if (err instanceof Error && err.name === "InsufficientUsdcBalanceError") {
       return fail("insufficient_balance", err.message);
@@ -976,14 +1096,14 @@ export async function resolveAndSubmitP2pDelegation(
 
   // 5. Submit the pre-built proof (retry-safe; never re-broadcasts).
   return submitP2pDelegation({
-    motebitId,
-    syncUrl,
+    motebitId: params.motebitId,
+    syncUrl: params.syncUrl,
     authToken: params.authToken,
     prompt: params.prompt,
-    targetWorkerId: worker.motebit_id,
+    targetWorkerId: resolved.workerMotebitId,
     // The relay needs the capability to locate + price a federated worker on its
     // operator; pinned via the same capability used for discovery.
-    requiredCapabilities: [capability],
+    requiredCapabilities: [params.capability],
     ...(params.acknowledgeNoHistoryRisk === true ? { acknowledgeNoHistoryRisk: true } : {}),
     paymentProof: proof,
     ...(params.invocationOrigin ? { invocationOrigin: params.invocationOrigin } : {}),

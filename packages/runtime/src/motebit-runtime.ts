@@ -228,6 +228,11 @@ import {
 } from "@motebit/policy";
 import { createMoneyMeter, wrapP2pPaymentWithMeter, type MoneyMeter } from "./money-meter.js";
 import { verifyGrantForTurn } from "./grant-verifier.js";
+import {
+  resolveAndSubmitP2pDelegation,
+  resolveP2pPaymentRequest,
+  type GrantedDelegationResult,
+} from "./relay-delegation.js";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
 import { base58Encode } from "@motebit/protocol";
 import type {
@@ -528,6 +533,27 @@ export class MotebitRuntime {
    * `getSolanaAddress`, `getSolanaBalance`, and `sendUsdc`.
    */
   private _solanaWallet: SovereignWalletRail | null = null;
+  /**
+   * Relay coordinates for the deterministic granted-spend path
+   * (`executeGrantedDelegation`), stashed when `enableInteractiveDelegation`
+   * is called with a pinned relay key. Null until then — a granted spend with
+   * no coordinates fails closed (`sync_not_enabled`). The pinned hex key is the
+   * treasury trust root; the auth-token minter is the same audience-scoped
+   * minter the AI-loop delegation path uses.
+   */
+  private _grantedSpendCoords: {
+    syncUrl: string;
+    authToken: (audience?: import("@motebit/protocol").TokenAudience) => Promise<string>;
+    relayPublicKeyHex: string;
+    /**
+     * Cold-start opt-in for a new delegator↔worker pair — resolved fresh per
+     * spend (a function reflects a live toggle). Without threading this to the
+     * granted-spend path, a fresh molecule's FIRST paid delegation to a
+     * no-history worker fail-closes `p2p_ineligible` at the pre-flight — the
+     * archetype's own happy path (Clerk↔Researcher) would never settle.
+     */
+    acknowledgeNoHistoryRisk?: boolean | (() => boolean);
+  } | null = null;
   /**
    * Sovereign receipt exchange transport. Null when no transport is
    * configured — in that state, the runtime can still send USDC via
@@ -4680,6 +4706,181 @@ export class MotebitRuntime {
       ...(buildP2pPayment ? { buildP2pPayment } : {}),
       getActiveGrantId: () => this._activeTurnGrant?.grant_id ?? null,
     });
+    // Stash the relay coordinates the deterministic granted-spend path needs
+    // (executeGrantedDelegation) — only when a pinned relay key is present, as
+    // the P2P treasury derives from it. One source of relay coords for both the
+    // loop path (above) and the granted-spend path.
+    if (config.relayPublicKey != null) {
+      this._grantedSpendCoords = {
+        syncUrl: config.syncUrl,
+        authToken: config.authToken,
+        relayPublicKeyHex: config.relayPublicKey,
+        ...(config.acknowledgeNoHistoryRisk != null
+          ? { acknowledgeNoHistoryRisk: config.acknowledgeNoHistoryRisk }
+          : {}),
+      };
+    }
+  }
+
+  /**
+   * Execute a paid sub-delegation autonomously under a signed standing grant —
+   * the DETERMINISTIC (human-absent) money path that a first-party spending
+   * molecule (the Clerk archetype) drives. Unlike the AI loop (whose R4 spend
+   * is authorized by a live human approval or a grant-carrying turn) and
+   * `invokeCapability` (a user tap IS the human authorizer, so it uses the RAW
+   * builder), this path has no human — so it re-composes the FULL R4 AND the
+   * loop enforces, fail-CLOSED:
+   *
+   *   1. serialize under `_isProcessing` — the rail seam trusts `_activeTurnGrant`
+   *      only because turns are single-by-construction;
+   *   2. verify the grant via the SOLE producer `verifyGrantForTurn` — a null
+   *      result (absent / expired / revoked / malformed) REFUSES, no broadcast
+   *      (the exact inverse of the loop's fail-OPEN-to-no-grant, safe there only
+   *      because a live human backstops that path);
+   *   3. re-run the policy gate's scope check (`this.policy.validate` with the
+   *      grant's SIGNED scope) — the meter enforces the ceiling but never scope;
+   *   4. route the broadcast through the meter-wrapped builder
+   *      (`wrapP2pPaymentWithMeter`), NEVER the raw wallet method.
+   *
+   * `dryRun` exercises 1–3 and the blast-radius meter (over-ceiling / replay
+   * refuse with the `BlastRadiusDenial` code) against a THROWAWAY in-memory
+   * store, then stops before any broadcast or submit — so a fake spend cannot
+   * poison the live lifetime ceiling and no funds move (no wallet required).
+   * Refusals carry only the denial CODE; the `spend_overage_micro` residual is
+   * owner-facing and never relayed. Adds zero new authority surface; locked by
+   * the `check-money-authority` deterministic-path assertion.
+   */
+  async executeGrantedDelegation(params: {
+    capability: string;
+    prompt: string;
+    delegation: {
+      token: import("@motebit/protocol").DelegationToken;
+      grant: import("@motebit/protocol").StandingDelegation;
+      revocations?: readonly import("@motebit/protocol").DelegationRevocation[];
+    };
+    dryRun?: boolean;
+  }): Promise<GrantedDelegationResult> {
+    const coords = this._grantedSpendCoords;
+    if (coords == null) return { ok: false, code: "sync_not_enabled" };
+    const delegateToolDef = this.toolRegistry.get("delegate_to_agent");
+    if (delegateToolDef == null) return { ok: false, code: "sync_not_enabled" };
+
+    if (this._isProcessing) throw new Error("Already processing a message");
+    this._isProcessing = true;
+    try {
+      // 2. Verify — the sole producer of a verified grant. Null ⇒ fail CLOSED.
+      const presentedGrant = await verifyGrantForTurn(
+        params.delegation.token,
+        params.delegation.grant,
+        params.delegation.revocations ?? [],
+      );
+      if (presentedGrant == null) return { ok: false, code: "requires_verified_grant" };
+
+      // 3. Scope — reuse the shipped gate's scope fence (step 2) against the
+      //    grant's SIGNED scope; the meter never checks scope, only the ceiling.
+      //    Gate on `allowed` only (denylist + scope + denyAbove hard ceiling):
+      //    `requiresApproval` is the LOOP's human-in-the-loop signal, and this
+      //    is the deterministic path where the grant replaces the human and the
+      //    meter — not an approval — enforces the bound. A verified in-scope R4
+      //    grant clears step 8c so `allowed` is true; out-of-scope trips step 2.
+      const decision = this.policy.validate(
+        delegateToolDef,
+        { prompt: params.prompt, required_capabilities: [params.capability] },
+        {
+          ...this.policy.createTurnContext(),
+          verifiedGrant: presentedGrant,
+          delegationScope: params.delegation.grant.scope,
+        },
+      );
+      if (!decision.allowed) return { ok: false, code: "missing_scope" };
+
+      // Standing authority for the metered rail seam — set only AFTER scope
+      // clears; cleared in finally so it never outlives this call.
+      this._activeTurnGrant = presentedGrant;
+
+      // Cold-start opt-in — resolved fresh (a function reflects a live toggle).
+      // Threaded to BOTH the dry-run pre-flight and the live broadcast, else a
+      // no-history worker fail-closes p2p_ineligible before anything settles.
+      const ack =
+        typeof coords.acknowledgeNoHistoryRisk === "function"
+          ? coords.acknowledgeNoHistoryRisk()
+          : coords.acknowledgeNoHistoryRisk;
+
+      // 4a. DRY-RUN: resolve + meter against a THROWAWAY store, then stop
+      //     before any broadcast/submit. No wallet needed — nothing broadcasts.
+      if (params.dryRun === true) {
+        const resolved = await resolveP2pPaymentRequest({
+          motebitId: this.motebitId,
+          syncUrl: coords.syncUrl,
+          authToken: coords.authToken,
+          capability: params.capability,
+          relayPublicKeyHex: coords.relayPublicKeyHex,
+          ...(ack === true ? { acknowledgeNoHistoryRisk: true } : {}),
+        });
+        if (!resolved.ok) return { ok: false, code: resolved.error.code };
+        const req = resolved.paymentRequest;
+        const totalOutflowMicro =
+          req.amountMicro + req.feeAmountMicro + (req.executorFeeAmountMicro ?? 0);
+        const dryMeter = createMoneyMeter(new InMemoryGrantSpendStore());
+        const verdict = await dryMeter(presentedGrant, "p2p_payment", {
+          amount_micro: totalOutflowMicro,
+          counterparty: resolved.workerAddress,
+        });
+        if (!verdict.allowed) return { ok: false, code: verdict.denial ?? "money_meter_denied" };
+        return {
+          ok: true,
+          dryRun: true,
+          settlement: {
+            mode: "p2p",
+            paidMicro: req.amountMicro,
+            feeMicro: req.feeAmountMicro + (req.executorFeeAmountMicro ?? 0),
+          },
+        };
+      }
+
+      // 4b. LIVE: broadcast through the meter-wrapped builder (never the raw
+      //     wallet method — that would bypass the ceiling and trip
+      //     check-ceiling-from-grant), then submit through the shared spine.
+      const rawBuild = this._solanaWallet?.buildP2pPayment?.bind(this._solanaWallet);
+      if (rawBuild == null) return { ok: false, code: "no_sovereign_rail" };
+      const buildP2pPayment = wrapP2pPaymentWithMeter(
+        rawBuild,
+        () => this._activeTurnGrant,
+        this.moneyMeter,
+      );
+      const result = await resolveAndSubmitP2pDelegation({
+        motebitId: this.motebitId,
+        syncUrl: coords.syncUrl,
+        authToken: coords.authToken,
+        relayPublicKeyHex: coords.relayPublicKeyHex,
+        prompt: params.prompt,
+        capability: params.capability,
+        buildP2pPayment,
+        grantId: presentedGrant.grant_id,
+        invocationOrigin: "agent-to-agent",
+        ...(ack === true ? { acknowledgeNoHistoryRisk: true } : {}),
+        logger: this._logger,
+      });
+      if (!result.ok) {
+        // Refusal honesty: a meter denial surfaces its BlastRadius CODE only
+        // (never the overage); any other failure surfaces its closed code.
+        const code =
+          result.error.code === "money_meter_denied"
+            ? (result.error.denial ?? "money_meter_denied")
+            : result.error.code;
+        return { ok: false, code };
+      }
+      return {
+        ok: true,
+        dryRun: false,
+        receipt: result.receipt,
+        ...(result.settlement ? { settlement: result.settlement } : {}),
+      };
+    } finally {
+      // Standing authority dies with the call — never leaks to a later turn.
+      this._activeTurnGrant = null;
+      this._isProcessing = false;
+    }
   }
 
   /**

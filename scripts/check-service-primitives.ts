@@ -43,7 +43,15 @@ const ROOT = resolve(__dirname, "..");
 // ── Scanned services ─────────────────────────────────────────────────────
 // Motebit-shaped services that MUST route protocol plumbing through helpers.
 // Add a new service here when it adopts the mcp-server scaffold.
-const SERVICES = ["auditor", "code-review", "read-url", "summarize", "web-search", "research"];
+const SERVICES = [
+  "auditor",
+  "clerk",
+  "code-review",
+  "read-url",
+  "summarize",
+  "web-search",
+  "research",
+];
 
 // ── Forbidden package imports ────────────────────────────────────────────
 // Map of @motebit/* import specifier → "why it's forbidden + what to use".

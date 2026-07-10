@@ -318,13 +318,17 @@ export {
 export {
   selectAndRunDelegation,
   resolveAndSubmitP2pDelegation,
+  resolveP2pPaymentRequest,
   submitP2pDelegation,
 } from "./relay-delegation.js";
 export type {
   SelectDelegationParams,
   ResolveAndSubmitP2pDelegationParams,
+  ResolveP2pPaymentRequestParams,
+  ResolveP2pPaymentRequestResult,
   SubmitP2pDelegationParams,
   DelegationResult,
+  GrantedDelegationResult,
   DelegationError,
   DelegationErrorCode,
 } from "./relay-delegation.js";

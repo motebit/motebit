@@ -49,7 +49,14 @@ import type {
 import { openMotebitDatabase } from "@motebit/persistence";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { MotebitRuntime, NullRenderer } from "@motebit/runtime";
-import type { PolicyConfig, StorageAdapters } from "@motebit/runtime";
+import type { PolicyConfig, StorageAdapters, GrantedDelegationResult } from "@motebit/runtime";
+import { signStandingDelegation, signDelegation, createSignedToken } from "@motebit/crypto";
+import type {
+  StandingDelegation,
+  DelegationToken,
+  SpendCeilingV1,
+  TokenAudience,
+} from "@motebit/sdk";
 import { embedText as defaultEmbedText } from "@motebit/memory-graph";
 import type { ToolRegistry } from "@motebit/tools";
 
@@ -161,6 +168,52 @@ export interface MoleculeConfig {
   apiToken?: string;
   /** Externally-reachable URL the relay advertises for routing. */
   publicUrl?: string;
+
+  /**
+   * Money-execution seam — opt-in. When present, the molecule becomes a
+   * SPENDING molecule (the Clerk archetype): the runner constructs the runtime
+   * with a sovereign Solana rail over the molecule's OWN wallet, the persistent
+   * grant-spend store, an R4-permitting policy, and the metered delegation
+   * path; self-issues a signed standing grant (a self-imposed spend ceiling —
+   * `delegator == delegate`, matching the shipped `grant.ts` path); and exposes
+   * a `spend` handle to the builder. Absent ⇒ no money seam (back-compatible).
+   * The `dryRun` posture is per-CALL (`spend({ dryRun })`), not here — the
+   * primitive isolates a dry run to a throwaway store, so the live Sqlite
+   * accumulator is never touched by a dry run regardless of this config.
+   */
+  moneyExecution?: {
+    /** Solana RPC for the sovereign wallet rail (the molecule's own funds). */
+    solanaRpcUrl: string;
+    /** The relay operator's PINNED Ed25519 public key (hex) — P2P treasury root. */
+    relayPublicKeyHex: string;
+    /** The self-imposed signed spend ceiling this molecule commits to. */
+    spendCeiling: SpendCeilingV1;
+    /** Grant lifetime from issue, ms (default 90 days). */
+    grantTtlMs?: number;
+  };
+}
+
+/**
+ * The spend handle a money molecule (the Clerk) receives as the builder's
+ * second argument. Thin passthrough to the runtime's metered granted-spend
+ * primitive — the service never imports `@motebit/runtime` internals or signs
+ * anything itself.
+ */
+export interface MoleculeSpendHandle {
+  /** The self-issued signed grant this molecule spends under (its signed ceiling). */
+  heldGrant: StandingDelegation;
+  /**
+   * Execute a paid sub-delegation under the held grant. Mints a FRESH per-tick
+   * token per call (unique `issued_at`, else the meter nonce replays), then
+   * drives `MotebitRuntime.executeGrantedDelegation` — which re-composes the
+   * full R4 AND fail-closed. `dryRun` exercises verify + scope + meter without
+   * broadcasting or touching the live ceiling.
+   */
+  spend(params: {
+    capability: string;
+    prompt: string;
+    dryRun?: boolean;
+  }): Promise<GrantedDelegationResult>;
 }
 
 /**
@@ -204,6 +257,22 @@ export interface MoleculeRunnerAdapters {
     policyOverrides: Partial<PolicyConfig>,
   ) => RunnerRuntime;
   /**
+   * Override money-runtime construction (used only when `config.moneyExecution`
+   * is set). Default: `defaultCreateMoneyRuntime` — a runtime with a sovereign
+   * Solana rail, the persistent grant-spend store, an R4-permitting policy, and
+   * the metered delegation path enabled. Tests inject a stub exposing
+   * `executeGrantedDelegation` + `init`/`stop` to exercise the spend seam
+   * without a wallet or relay.
+   */
+  createMoneyRuntime?: (
+    identity: BootstrapAndEmitIdentityResult,
+    storage: StorageAdapters,
+    toolRegistry: ToolRegistry,
+    policyOverrides: Partial<PolicyConfig>,
+    config: MoleculeConfig,
+    grantSpendStore: unknown,
+  ) => RunnerRuntime;
+  /**
    * Override local embed function. Default: `embedText` from @motebit/memory-graph.
    * Pass `null` to disable memory embedding entirely (no queryMemories/storeMemory
    * synthetic tools).
@@ -238,6 +307,12 @@ export interface MoleculeRunnerAdapters {
  */
 export type MoleculeBuilder = (
   identity: BootstrapAndEmitIdentityResult,
+  /**
+   * The spend handle — present ONLY when `config.moneyExecution` is set (a
+   * money molecule). Undefined for ordinary molecules. Back-compatible: a
+   * one-argument builder ignores it.
+   */
+  spend?: MoleculeSpendHandle,
 ) => MoleculeBuild | Promise<MoleculeBuild>;
 
 // ---------------------------------------------------------------------------
@@ -312,6 +387,141 @@ const DEFAULT_POLICY_OVERRIDES: Partial<PolicyConfig> = {
 };
 
 // ---------------------------------------------------------------------------
+// Money-execution seam (the Clerk archetype)
+// ---------------------------------------------------------------------------
+
+/**
+ * The LOCAL tool a paid sub-delegation exercises — the self-grant's scope must
+ * cover it, and the runtime's scope fence checks THIS name (not the remote
+ * capability, which is metered by amount). Matches interactive-delegation.ts.
+ */
+const DELEGATE_TOOL = "delegate_to_agent";
+const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
+const TICK_TTL_MS = 60 * 60 * 1000; // 1h, ≤ grant.max_token_ttl_ms
+
+/**
+ * Self-issue the molecule's signed standing grant — a signed, self-imposed
+ * spend ceiling (`delegator == delegate == this molecule`, matching the shipped
+ * `apps/cli/src/subcommands/grant.ts` self-grant shape). This is the crypto-
+ * honest form of autonomy: because ticks are delegator-signed
+ * (`verifyTokenAgainstGrant`), only a self-grant lets the holder mint its own
+ * ticks. The owner's control is the wallet balance + this ceiling.
+ */
+export async function selfIssueGrant(
+  identity: BootstrapAndEmitIdentityResult,
+  money: NonNullable<MoleculeConfig["moneyExecution"]>,
+): Promise<StandingDelegation> {
+  const now = Date.now();
+  return signStandingDelegation(
+    {
+      grant_id: `clerk-self-grant:${identity.motebitId}`,
+      delegator_id: identity.motebitId,
+      delegator_public_key: identity.publicKeyHex,
+      delegate_id: identity.motebitId,
+      delegate_public_key: identity.publicKeyHex,
+      scope: DELEGATE_TOOL,
+      subject: "market:self-funded-delegation",
+      cadence_ms: 0, // no minimum firing interval for interactive spend
+      issued_at: now,
+      not_before: null,
+      expires_at: now + (money.grantTtlMs ?? NINETY_DAYS_MS),
+      max_token_ttl_ms: TICK_TTL_MS,
+      spend_ceiling: money.spendCeiling,
+    },
+    identity.privateKey,
+  );
+}
+
+/** Mint a FRESH per-tick token under the self-grant (unique issued_at). */
+export async function mintTick(
+  grant: StandingDelegation,
+  identity: BootstrapAndEmitIdentityResult,
+): Promise<DelegationToken> {
+  const now = Date.now();
+  return signDelegation(
+    {
+      delegator_id: grant.delegator_id,
+      delegator_public_key: grant.delegator_public_key,
+      delegate_id: grant.delegate_id,
+      delegate_public_key: grant.delegate_public_key,
+      scope: grant.scope,
+      issued_at: now,
+      expires_at: now + TICK_TTL_MS,
+      grant_id: grant.grant_id,
+    },
+    identity.privateKey,
+  );
+}
+
+/**
+ * An audience-scoped relay token minter bound to this molecule's identity —
+ * the same short-lived device-signed token shape the CLI uses
+ * (`apps/cli/src/index.ts`). Extracted so it is unit-testable without a relay.
+ */
+export function makeAuthTokenMinter(
+  identity: BootstrapAndEmitIdentityResult,
+): (audience?: TokenAudience) => Promise<string> {
+  const did = identity.deviceId;
+  const pk = identity.privateKey;
+  return async (audience: TokenAudience = "task:submit"): Promise<string> => {
+    const now = Date.now();
+    return createSignedToken(
+      {
+        mid: identity.motebitId,
+        did,
+        iat: now,
+        exp: now + 5 * 60 * 1000,
+        jti: crypto.randomUUID(),
+        aud: audience,
+      },
+      pk,
+    );
+  };
+}
+
+/**
+ * Default money-runtime factory: a `MotebitRuntime` with the molecule's own
+ * sovereign Solana rail, the persistent grant-spend store (so the lifetime
+ * ceiling survives restart), an R4-permitting policy (so the metered R4 spend
+ * is admitted — the grant + meter bound it), and the metered delegation path
+ * enabled with an audience-scoped token minter + the pinned relay key.
+ */
+export function defaultCreateMoneyRuntime(
+  identity: BootstrapAndEmitIdentityResult,
+  storage: StorageAdapters,
+  tools: ToolRegistry,
+  policyOverrides: Partial<PolicyConfig>,
+  config: MoleculeConfig,
+  grantSpendStore: unknown,
+): RunnerRuntime {
+  const money = config.moneyExecution;
+  if (money == null) throw new Error("defaultCreateMoneyRuntime called without moneyExecution");
+  const wallet = createSolanaWalletRail({
+    rpcUrl: money.solanaRpcUrl,
+    identitySeed: identity.privateKey,
+  });
+  const runtime = new MotebitRuntime(
+    {
+      motebitId: identity.motebitId,
+      // R4-permitting: the grant + blast-radius meter enforce the bound, not
+      // an approval prompt (there is no human in a molecule). denyAbove never
+      // overridden below R4 or the self-grant could never clear step 8c.
+      policy: { ...policyOverrides, denyAbove: RiskLevel.R4_MONEY },
+      solanaWallet: wallet,
+      grantSpendStore: grantSpendStore as never,
+    },
+    { storage, renderer: new NullRenderer(), tools },
+  );
+  runtime.enableInteractiveDelegation({
+    syncUrl: config.syncUrl ?? "",
+    authToken: makeAuthTokenMinter(identity),
+    relayPublicKey: money.relayPublicKeyHex,
+    acknowledgeNoHistoryRisk: true,
+  });
+  return runtime as unknown as RunnerRuntime;
+}
+
+// ---------------------------------------------------------------------------
 // runMolecule — the entrypoint services call
 // ---------------------------------------------------------------------------
 
@@ -370,15 +580,52 @@ export async function runMolecule(
   const driverName = (db as { db?: { driverName?: string } }).db?.driverName ?? "unknown";
   log(`Database open: ${absDbPath} (driver: ${driverName})`);
 
-  // 3. Build molecule-specific pieces
-  const molecule = await build(identity);
+  // 3. Build molecule-specific pieces. A money molecule (moneyExecution set)
+  //    receives a spend handle whose runtime ref is filled AFTER construction —
+  //    the builder closes over it; its task handlers deref it at task time
+  //    (long after the runtime exists), closing the chicken-and-egg.
+  const runtimeRef: { current: RunnerRuntime | null } = { current: null };
+  let spend: MoleculeSpendHandle | undefined;
+  if (config.moneyExecution) {
+    const heldGrant = await selfIssueGrant(identity, config.moneyExecution);
+    spend = {
+      heldGrant,
+      spend: async ({ capability, prompt, dryRun }) => {
+        const rt = runtimeRef.current;
+        const exec = rt?.executeGrantedDelegation;
+        if (typeof exec !== "function") return { ok: false, code: "sync_not_enabled" };
+        const token = await mintTick(heldGrant, identity);
+        return (exec as (p: unknown) => Promise<GrantedDelegationResult>).call(rt, {
+          capability,
+          prompt,
+          delegation: { token, grant: heldGrant },
+          ...(dryRun != null ? { dryRun } : {}),
+        });
+      },
+    };
+    log(`Money seam: self-grant ${heldGrant.grant_id} (signed ceiling; dry-run is per-call)`);
+  }
+  const molecule = await build(identity, spend);
 
   // 4. Storage + runtime
   const storage = assembleStorageAdapters(db);
   const policyOverrides = molecule.policyOverrides ?? DEFAULT_POLICY_OVERRIDES;
-  const createRuntime = adapters.createRuntime ?? defaultCreateRuntime;
-
-  const runtime = createRuntime(identity, storage, molecule.toolRegistry, policyOverrides);
+  let runtime: RunnerRuntime;
+  if (config.moneyExecution) {
+    const makeMoney = adapters.createMoneyRuntime ?? defaultCreateMoneyRuntime;
+    runtime = makeMoney(
+      identity,
+      storage,
+      molecule.toolRegistry,
+      policyOverrides,
+      config,
+      db.grantSpendStore,
+    );
+  } else {
+    const createRuntime = adapters.createRuntime ?? defaultCreateRuntime;
+    runtime = createRuntime(identity, storage, molecule.toolRegistry, policyOverrides);
+  }
+  runtimeRef.current = runtime;
   await runtime.init();
   log(`Runtime initialized (${config.serviceName})`);
 

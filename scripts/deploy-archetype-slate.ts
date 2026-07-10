@@ -152,6 +152,29 @@ export const SLATE: SlateService[] = [
       MOTEBIT_SETTLEMENT_MODES: "relay,p2p",
     }),
   },
+  {
+    name: "clerk",
+    app: (t) => (t === "prod" ? "motebit-clerk" : "motebit-clerk-stg"),
+    config: (t) => `services/clerk/${t === "prod" ? "fly.toml" : "fly.staging.toml"}`,
+    volume: "clerk_data",
+    kind: "molecule",
+    capability: "execute_delegation",
+    secrets: (ctx) => ({
+      MOTEBIT_SYNC_URL: ctx.relayUrl,
+      MOTEBIT_API_TOKEN: ctx.apiToken,
+      MOTEBIT_UNIT_COST: "0.05",
+      MOTEBIT_SETTLEMENT_MODES: "relay,p2p",
+      // DRY-RUN-FIRST: the whole metered spine runs at hard-zero (no broadcast,
+      // live ceiling untouched). Flipping to live money is a deliberate,
+      // ratified operator step — set DRY_RUN=0 out of band, never here.
+      DRY_RUN: "1",
+      MOTEBIT_CLERK_CEILING_MICRO: process.env["MOTEBIT_CLERK_CEILING_MICRO"] ?? "1000000",
+      // The sovereign rail (own funds) + the PINNED relay treasury root —
+      // passed through from the deploy environment (never hardcoded).
+      MOTEBIT_SOLANA_RPC_URL: process.env["MOTEBIT_SOLANA_RPC_URL"] ?? "",
+      MOTEBIT_RELAY_PUBLIC_KEY: process.env["MOTEBIT_RELAY_PUBLIC_KEY"] ?? "",
+    }),
+  },
 ];
 
 function sh(cmd: string, args: string[]): string {

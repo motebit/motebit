@@ -1538,6 +1538,9 @@ importers:
 
   packages/molecule-runner:
     dependencies:
+      '@motebit/crypto':
+        specifier: workspace:*
+        version: link:../crypto
       '@motebit/mcp-server':
         specifier: workspace:*
         version: link:../mcp-server
@@ -2370,6 +2373,31 @@ importers:
       puppeteer-extra-plugin-stealth:
         specifier: ^2.11.2
         version: 2.11.2(playwright-extra@4.3.6(playwright-core@1.61.1)(playwright@1.60.0))
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
+      tsx:
+        specifier: ^4.22.4
+        version: 4.22.4
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@types/node@22.19.11)(@vitest/coverage-v8@4.1.10)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@8.1.3(@types/node@22.19.11)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
+
+  services/clerk:
+    dependencies:
+      '@motebit/molecule-runner':
+        specifier: workspace:*
+        version: link:../../packages/molecule-runner
+      '@motebit/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
+      better-sqlite3:
+        specifier: ^12.11.1
+        version: 12.11.1
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
