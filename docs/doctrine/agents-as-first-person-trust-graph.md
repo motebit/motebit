@@ -51,6 +51,25 @@ sybil-resistance are tightly coupled here — both lean on refusing the global s
 — but sybil-resistance is that conjunction, not the single move. See
 [`security-boundaries.md`](security-boundaries.md).
 
+**Witnessed in the wild (2026-07-09).** Setting up the archetype-slate conformance
+probe, we needed devnet test tokens; the Solana faucet denied the request with
+_"GitHub account has too few public repos."_ That gate is the exact anti-pattern
+this doc refuses, in miniature: a **global, transitive, context-free reputation
+score** — computed by a third party (GitHub), in an unrelated context (open-source
+contribution), transferred wholesale as authority in a different context (test
+tokens). It fails in both directions, which is the signature of the wrong shape: it
+false-negatives the population it should serve (a builder working on _private_
+product has few public repos — the metric is anti-correlated with serious building)
+while a motivated sybil clears it by forking ten repos in five minutes. A gate that
+inconveniences legit users without stopping determined ones is score-inflation's
+worst case. The first-person shape is the fix by construction: a faucet built on
+this model would meter by the wallet's own on-faucet history (a local, pairwise,
+non-transitive edge — "has _this_ wallet abused _this_ faucet"), so a fresh wallet
+earns its rate limit the way a fresh agent earns trust, costly and non-forgeable,
+instead of importing a squatter-friendly global proxy. The importable global score
+is convenient precisely because it is portable — and portable is exactly what makes
+it farmable.
+
 The graph the semiring ranks
 ([`packages/semiring/src/agent-network.ts`](../../packages/semiring/src/agent-network.ts))
 is an **ego graph**: a star of edges from `self → each known peer`, plus
