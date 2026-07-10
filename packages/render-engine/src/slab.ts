@@ -411,6 +411,18 @@ export class SlabManager {
   private readonly stageAnchor: CSS3DObject;
   private readonly stageEl: HTMLDivElement;
   private readonly css3dRenderer: CSS3DRenderer;
+  /**
+   * The interface's base opacity from the membrane (set in `update`), before
+   * the render-loop facing fade is applied — so `render` can modulate by camera
+   * angle without re-deriving the membrane term.
+   */
+  private _stageBaseOpacity = 0;
+  // Scratch vectors for the front-facing fade (allocated once, reused per frame).
+  private readonly _slabWorldPos = new THREE.Vector3();
+  private readonly _slabWorldQuat = new THREE.Quaternion();
+  private readonly _slabForward = new THREE.Vector3();
+  private readonly _camWorldPos = new THREE.Vector3();
+  private readonly _viewDir = new THREE.Vector3();
   /** Per-id renderer state — DOM element + per-render flags. */
   private readonly elements = new Map<string, ManagedElement>();
   private readonly core: SlabCore;
@@ -1340,7 +1352,8 @@ export class SlabManager {
     // plane reaches MEMBRANE_OPACITY (the empty-register floor) — at
     // or above that, the chrome reads as content on the membrane; below
     // it, chrome fades proportionally with the membrane leaving.
-    this.stageEl.style.opacity = String(Math.min(1, frame.planeVisibility / MEMBRANE_OPACITY));
+    this._stageBaseOpacity = Math.min(1, frame.planeVisibility / MEMBRANE_OPACITY);
+    this.stageEl.style.opacity = String(this._stageBaseOpacity);
   }
 
   /** Called after WebGL render each frame — syncs CSS overlay. */
@@ -1356,6 +1369,24 @@ export class SlabManager {
     const active = this.stageAnchor.visible;
     this.css3dRenderer.domElement.style.display = active ? "" : "none";
     if (!active) return;
+
+    // Fade the DOM interface by how squarely the slab faces the camera. The
+    // computer's interface is forward-facing (attention-is-directional); as the
+    // camera orbits past the front hemisphere it fades to the liquescent body,
+    // never showing the UI mirrored through the transmissive back pane. The
+    // WebGL glass meshes stay — the body reads as itself from every angle; only
+    // the interface turns away. (This facing fade is the deterministic path;
+    // CSS3D backface-visibility is unreliable across the chrome strip + items.)
+    this.group.getWorldPosition(this._slabWorldPos);
+    this.group.getWorldQuaternion(this._slabWorldQuat);
+    this._slabForward.set(0, 0, 1).applyQuaternion(this._slabWorldQuat);
+    camera.getWorldPosition(this._camWorldPos);
+    this._viewDir.copy(this._camWorldPos).sub(this._slabWorldPos).normalize();
+    // dot: 1 head-on, 0 edge-on, <0 behind. Full across the front hemisphere,
+    // smooth fade to 0 in the last sliver before edge-on so the back is clean.
+    const facing = THREE.MathUtils.smoothstep(this._slabForward.dot(this._viewDir), 0, 0.2);
+    this.stageEl.style.opacity = String(this._stageBaseOpacity * facing);
+
     this.css3dRenderer.render(scene, camera);
   }
 
