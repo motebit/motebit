@@ -95,12 +95,23 @@ export const SLATE: SlateService[] = [
     app: (t) => (t === "prod" ? "motebit-summarize" : "motebit-summarize-stg"),
     config: (t) => `services/summarize/${t === "prod" ? "fly.toml" : "fly.staging.toml"}`,
     volume: "summarize_data",
+    // A DELEGATING atom — summarize_search connects to web-search on boot
+    // (services/summarize/src/index.ts: `await webSearchAdapter.connect()`,
+    // loud failure by design). It reads WEB_SEARCH_URL and defaults to
+    // localhost, so it MUST be wired to the deployed web-search host or the
+    // process exits before registering (the un-discoverable failure caught
+    // on the first staging deploy). Kept in the atom phase — it delegates
+    // to a fixed host, not a market-discovered target, so it needs no
+    // atom-id capture.
     kind: "atom",
     capability: "summarize_search",
     secrets: (ctx) => ({
       MOTEBIT_SYNC_URL: ctx.relayUrl,
       MOTEBIT_API_TOKEN: ctx.apiToken,
       MOTEBIT_UNIT_COST: "0",
+      WEB_SEARCH_URL: ctx.appHost(
+        TARGET === "prod" ? "motebit-web-search" : "motebit-web-search-stg",
+      ),
     }),
   },
   {
