@@ -886,6 +886,22 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
               chunk.risk_level,
               chunk.quorum,
             );
+            // Seal the pre-gate bubble before resuming. The approval gate is
+            // a turn boundary: the pre-gate narration and the post-gate
+            // response are DISTINCT assistant messages (separated by the
+            // tool_use/tool_result the gate wraps). Without this reset the
+            // resume loop's `if (!bubble)` guard sees the still-live pre-gate
+            // bubble and appends the post-gate text into it — the two fuse
+            // into one bubble ("…report to you right now?The delegation call
+            // hit an approval gate…", witnessed in prod #292). Flush paints
+            // the pre-gate bubble's final coalesced content into its OWN
+            // textEl, then nulling forces a fresh bubble for the resume;
+            // clearing `accumulated` stops post-gate text concatenating onto
+            // the pre-gate string.
+            renderer.flush();
+            bubble = null;
+            textEl = null;
+            accumulated = "";
             // Resume the stream after approval decision
             for await (const resumeChunk of ctx.app.resolveApprovalVote(
               approved,

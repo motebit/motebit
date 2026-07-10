@@ -609,6 +609,98 @@ describe("Skills panel — full lifecycle on web (IDB-backed)", () => {
     expect(installed.length).toBe(0);
   });
 
+  it("closing the panel mid-consent tears down the modal and declines fail-closed (#293)", async () => {
+    const { envelope, body } = await buildBundle("consent-orphan-skill", "medical");
+    const dbName = `panel-orphan-${crypto.randomUUID()}`;
+    const db = await openMotebitDB(dbName);
+    const registry = new SkillRegistry(new IdbSkillStorageAdapter(db));
+
+    const submitter = "did:key:zTestSubmitter";
+    const submittedAt = Date.now();
+    const listing: SkillRegistryListing = {
+      entries: [
+        {
+          submitter_motebit_id: submitter,
+          name: envelope.skill.name,
+          version: envelope.skill.version,
+          content_hash: envelope.skill.content_hash,
+          description: envelope.manifest.description,
+          sensitivity: "medical",
+          platforms: envelope.manifest.platforms ?? ["macos"],
+          signature_public_key: envelope.signature.public_key,
+          submitted_at: submittedAt,
+          featured: true,
+        },
+      ],
+      total: 1,
+      limit: 100,
+      offset: 0,
+    };
+    const bundle: SkillRegistryBundle = {
+      submitter_motebit_id: submitter,
+      envelope,
+      body: bytesToBase64(body),
+      files: {},
+      submitted_at: submittedAt,
+      featured: true,
+    };
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("/api/v1/skills/discover")) {
+        return new Response(JSON.stringify(listing), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes(`/api/v1/skills/${encodeURIComponent(submitter)}/`)) {
+        return new Response(JSON.stringify(bundle), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const ctx: WebContext = {
+      app: { getSkillRegistry: () => registry, getSkillAuditSink: () => null } as unknown as WebApp,
+      getConfig: () => null,
+      setConfig: () => undefined,
+      addMessage: () => undefined,
+      showToast: () => undefined,
+      bootstrapProxy: () => Promise.resolve(false),
+    };
+    const api = initCapabilitiesPanel(ctx);
+    api.open();
+    const list = document.getElementById("skills-list") as HTMLDivElement;
+    await waitFor(() => {
+      expect(list.querySelectorAll(".skill-row-browse").length).toBe(1);
+    });
+    list
+      .querySelector<HTMLButtonElement>('.skill-row-browse button[data-action="install"]')!
+      .click();
+
+    const modal = document.getElementById("skills-consent-modal");
+    const modalBackdrop = document.getElementById("skills-consent-backdrop");
+    await waitFor(() => {
+      expect(modal?.classList.contains("open")).toBe(true);
+    });
+
+    // Close the PANEL while the consent modal is still open — the exact
+    // orphaning path from prod #293 (previously the modal + its full-screen
+    // backdrop survived over plain chat with a dangling pending promise).
+    api.close();
+
+    await waitFor(async () => {
+      // The modal and its backdrop are torn down with the panel...
+      expect(modal?.classList.contains("open")).toBe(false);
+      expect(modalBackdrop?.classList.contains("open")).toBe(false);
+      // ...and the install is DECLINED fail-closed — no skill installed.
+      const installed = await registry.list();
+      expect(installed.length).toBe(0);
+    });
+  });
+
   it("personal-tier install skips consent prompt entirely", async () => {
     // Sensitivity below the consent threshold flows straight into install
     // — important counter-test so the gate doesn't false-trigger on
