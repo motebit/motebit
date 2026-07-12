@@ -316,6 +316,15 @@ export interface RenderAdapter {
   /** Clear every slab item immediately (no dissolution animation). */
   clearSlabItems?(): void;
   /**
+   * Mount (or clear with `null`) the identity face on the slab's BACK —
+   * the surface-rendered mark (sigil + id) crossfaded in as the camera
+   * orbits behind. Front = what it does; back = whose it is. The surface
+   * owns the pixels (params-not-pixels); the renderer only mounts and
+   * crossfades them. Only back-bearing flat slabs implement it; spatial
+   * and headless adapters omit it.
+   */
+  setSlabBackPlate?(element: HTMLElement | null): void;
+  /**
    * Hold the empty slab open. Items always make the plane visible
    * regardless of this flag; `setSlabVisible` only governs the
    * empty-state behavior: `true` keeps the plane open when no items

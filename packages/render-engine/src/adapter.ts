@@ -232,6 +232,16 @@ export class ThreeJSAdapter implements RenderAdapter {
     return this.slab?.addItem(spec);
   }
 
+  /**
+   * Mount the identity face on the slab's back — the surface-rendered mark
+   * (sigil + id), crossfaded in as the camera orbits behind. Pass null to
+   * clear. Only the flat SlabManager has a back; spatial / headless no-op.
+   */
+  setSlabBackPlate(element: HTMLElement | null): void {
+    const slab = this.slab;
+    if (slab instanceof SlabManager) slab.setBackPlate(element);
+  }
+
   dissolveSlabItem(id: string): Promise<void> {
     return this.slab?.dissolveItem(id) ?? Promise.resolve();
   }
