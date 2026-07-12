@@ -281,10 +281,7 @@ export interface ActiveSigningKey {
 }
 
 export type IdentityKeyErrorKind =
-  | "missing"
-  | "decrypt-failed"
-  | "malformed-private-key"
-  | "public-key-mismatch";
+  "missing" | "decrypt-failed" | "malformed-private-key" | "public-key-mismatch";
 
 /**
  * Structured failure for `loadActiveSigningKey`. Each kind carries an

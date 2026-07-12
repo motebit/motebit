@@ -313,13 +313,7 @@ export type UserInputRejectionReason =
  * @alpha
  */
 export type CharacterClass =
-  | "letter"
-  | "digit"
-  | "punct"
-  | "whitespace"
-  | "control"
-  | "modifier"
-  | "unknown";
+  "letter" | "digit" | "punct" | "whitespace" | "control" | "modifier" | "unknown";
 
 /**
  * Semantic role of a key for audit purposes. Coarser-grained than
@@ -328,14 +322,7 @@ export type CharacterClass =
  * @alpha
  */
 export type KeyRole =
-  | "enter"
-  | "tab"
-  | "escape"
-  | "backspace"
-  | "arrow"
-  | "shortcut"
-  | "printable"
-  | "unknown";
+  "enter" | "tab" | "escape" | "backspace" | "arrow" | "shortcut" | "printable" | "unknown";
 
 /**
  * Per-kind audit detail. The wire-format `UserInputEvent` is

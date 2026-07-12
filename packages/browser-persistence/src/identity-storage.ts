@@ -13,8 +13,7 @@ export class IdbIdentityStorage implements IdentityStorage {
   async load(motebitId: string): Promise<MotebitIdentity | null> {
     const tx = this.db.transaction("identities", "readonly");
     const result = (await idbRequest(tx.objectStore("identities").get(motebitId))) as
-      | MotebitIdentity
-      | undefined;
+      MotebitIdentity | undefined;
     return result ?? null;
   }
 
@@ -34,8 +33,7 @@ export class IdbIdentityStorage implements IdentityStorage {
   async loadDevice(deviceId: string): Promise<DeviceRegistration | null> {
     const tx = this.db.transaction("devices", "readonly");
     const result = (await idbRequest(tx.objectStore("devices").get(deviceId))) as
-      | DeviceRegistration
-      | undefined;
+      DeviceRegistration | undefined;
     return result ?? null;
   }
 

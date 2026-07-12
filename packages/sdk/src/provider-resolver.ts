@@ -158,10 +158,7 @@ export function canonicalVendorBaseUrl(vendor: ByokVendor): string {
  * job is reduced to a transport switch + class construction.
  */
 export type ProviderSpec =
-  | CloudProviderSpec
-  | WebLLMProviderSpec
-  | AppleFoundationModelsSpec
-  | MlxProviderSpec;
+  CloudProviderSpec | WebLLMProviderSpec | AppleFoundationModelsSpec | MlxProviderSpec;
 
 /**
  * Cloud HTTP provider — used for Anthropic, OpenAI, Google (via OpenAI-compat),

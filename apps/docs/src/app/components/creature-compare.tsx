@@ -85,8 +85,7 @@ function CreatureCanvas({ config }: { config: CreatureConfig }) {
       disposed = true;
       if (animId !== undefined) cancelAnimationFrame(animId);
       const cleanup = (canvas as unknown as Record<string, unknown>).__cleanup as
-        | (() => void)
-        | undefined;
+        (() => void) | undefined;
       if (cleanup) cleanup();
     };
   }, [config]);

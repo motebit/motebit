@@ -61,11 +61,7 @@ export interface InnerReceiptVerification {
 }
 
 export type InnerReceiptVerificationFailureReason =
-  | "malformed_json"
-  | "missing_public_key"
-  | "signature_invalid"
-  | "delegation_failed"
-  | "unknown";
+  "malformed_json" | "missing_public_key" | "signature_invalid" | "delegation_failed" | "unknown";
 
 /** Aggregate result for the whole `signed_receipts` array on a v1.1 ledger body. */
 export interface InnerReceiptsVerification {

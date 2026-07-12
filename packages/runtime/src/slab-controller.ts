@@ -122,8 +122,7 @@ export type ArtifactKindForDetach = "text" | "code" | "plan" | "memory" | "recei
 
 /** The policy decision returned by `detachPolicy`. */
 export type DetachDecision =
-  | { action: "detach"; artifactKind: ArtifactKindForDetach }
-  | { action: "dissolve" };
+  { action: "detach"; artifactKind: ArtifactKindForDetach } | { action: "dissolve" };
 
 export type DetachPolicy = (item: SlabItem, outcome: SlabItemOutcome) => DetachDecision;
 

@@ -1016,8 +1016,7 @@ export async function handleReceiptIngestion(
         : (moteDb.db
             .prepare("SELECT * FROM relay_allocations WHERE task_id = ? AND status = 'locked'")
             .get(taskId) as
-            | { allocation_id: string; amount_locked: number; motebit_id: string }
-            | undefined);
+            { allocation_id: string; amount_locked: number; motebit_id: string } | undefined);
 
       const fallbackUnitCost = isP2pTask ? 0 : getListingUnitCost(moteDb, receipt.motebit_id);
       const grossAmount =
@@ -1421,8 +1420,7 @@ export async function handleReceiptIngestion(
           "SELECT trust_level, successful_forwards, failed_forwards FROM relay_peers WHERE peer_relay_id = ?",
         )
         .get(entry.origin_relay) as
-        | { trust_level: string; successful_forwards: number; failed_forwards: number }
-        | undefined;
+        { trust_level: string; successful_forwards: number; failed_forwards: number } | undefined;
 
       if (peerRow) {
         const isSuccess = receipt.status === "completed";
@@ -2599,8 +2597,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           const callerGuardianRow = moteDb.db
             .prepare("SELECT guardian_public_key FROM agent_registry WHERE motebit_id = ?")
             .get(callerMotebitId ?? motebitId) as
-            | { guardian_public_key: string | null }
-            | undefined;
+            { guardian_public_key: string | null } | undefined;
 
           const ranked = explainedRankCandidates(
             asMotebitId(callerMotebitId ?? motebitId),

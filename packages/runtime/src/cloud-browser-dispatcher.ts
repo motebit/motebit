@@ -94,8 +94,7 @@ export interface CloudBrowserDispatcherOptions {
    * encryption; Phase 3 adds the `/cookies grant` consent gate.
    */
   readonly getInitialCookies?: () =>
-    | Promise<readonly PersistentCookieWire[]>
-    | readonly PersistentCookieWire[];
+    Promise<readonly PersistentCookieWire[]> | readonly PersistentCookieWire[];
   /**
    * Phase 1 of the persistent user_data_dir arc — companion to
    * `getInitialCookies`. Invoked on `dispose` with the cookies the
@@ -221,11 +220,9 @@ export class CloudBrowserDispatcher implements ComputerPlatformDispatcher {
   private cloudSessionId: string | null = null;
 
   private readonly getInitialCookies:
-    | (() => Promise<readonly PersistentCookieWire[]> | readonly PersistentCookieWire[])
-    | null;
+    (() => Promise<readonly PersistentCookieWire[]> | readonly PersistentCookieWire[]) | null;
   private readonly onCookiesPersisted:
-    | ((cookies: readonly PersistentCookieWire[]) => void | Promise<void>)
-    | null;
+    ((cookies: readonly PersistentCookieWire[]) => void | Promise<void>) | null;
 
   constructor(opts: CloudBrowserDispatcherOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, "");

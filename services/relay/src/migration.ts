@@ -109,8 +109,7 @@ function getActiveMigration(
       "SELECT token_id, state, expires_at FROM relay_migrations WHERE motebit_id = ? AND state NOT IN ('departed', 'cancelled') AND expires_at > ? LIMIT 1",
     )
     .get(motebitId, Date.now()) as
-    | { token_id: string; state: MigrationState; expires_at: number }
-    | undefined;
+    { token_id: string; state: MigrationState; expires_at: number } | undefined;
 }
 
 function updateMigrationState(db: DatabaseDriver, tokenId: string, state: MigrationState): void {
@@ -257,8 +256,7 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
         "SELECT public_key, registered_at, last_heartbeat FROM agent_registry WHERE motebit_id = ?",
       )
       .get(motebitId) as
-      | { public_key: string; registered_at: number; last_heartbeat: number }
-      | undefined;
+      { public_key: string; registered_at: number; last_heartbeat: number } | undefined;
 
     // Trust data — successful/failed tasks
     let taskStats: { successful: number; failed: number } | undefined;

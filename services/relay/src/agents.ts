@@ -942,8 +942,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       existingAgent.public_key !== publicKey
     ) {
       const succession = (body as Record<string, unknown>).succession as
-        | KeySuccessionRecord
-        | undefined;
+        KeySuccessionRecord | undefined;
       if (!succession) {
         throw new HTTPException(400, {
           message: "Public key differs from stored key — succession record required",
@@ -1036,11 +1035,9 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // key, an attacker cannot claim an organization's guardian key.
     let guardianPublicKey: string | undefined;
     const claimedGuardianKey = (body as Record<string, unknown>).guardian_public_key as
-      | string
-      | undefined;
+      string | undefined;
     const guardianAttestation = (body as Record<string, unknown>).guardian_attestation as
-      | string
-      | undefined;
+      string | undefined;
 
     if (claimedGuardianKey) {
       if (!guardianAttestation) {
@@ -1079,11 +1076,9 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // Validate + normalize settlement fields
     const VALID_SETTLEMENT_MODES = new Set(["relay", "p2p"]);
     const rawSettlementAddress = (body as Record<string, unknown>).settlement_address as
-      | string
-      | undefined;
+      string | undefined;
     const rawSettlementModes = (body as Record<string, unknown>).settlement_modes as
-      | string
-      | undefined;
+      string | undefined;
 
     // Reject empty string (truthy but useless)
     const settlementAddress =
@@ -1116,8 +1111,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
 
     // Validate sweep_threshold: integer micro-units, must be positive
     const rawSweepThreshold = (body as Record<string, unknown>).sweep_threshold as
-      | number
-      | undefined;
+      number | undefined;
     let sweepThreshold: number | null = null;
     if (rawSweepThreshold !== undefined && rawSweepThreshold !== null) {
       if (!Number.isInteger(rawSweepThreshold) || rawSweepThreshold < 0) {

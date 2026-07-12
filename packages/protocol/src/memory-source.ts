@@ -34,11 +34,7 @@
  *   cycle from an episodic cluster (carries `PartOf` edges to members).
  */
 export type MemorySource =
-  | "user_stated"
-  | "agent_inferred"
-  | "tool_derived"
-  | "peer_agent"
-  | "consolidation_derived";
+  "user_stated" | "agent_inferred" | "tool_derived" | "peer_agent" | "consolidation_derived";
 
 /**
  * Canonical iteration order over `MemorySource`, frozen. The single

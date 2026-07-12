@@ -35,8 +35,7 @@ const MIGRATIONS_TABLE = `
 export function getSchemaVersion(db: DatabaseDriver): number {
   db.exec(MIGRATIONS_TABLE);
   const row = db.prepare("SELECT MAX(version) as version FROM relay_schema_migrations").get() as
-    | { version: number | null }
-    | undefined;
+    { version: number | null } | undefined;
   return row?.version ?? 0;
 }
 

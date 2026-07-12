@@ -67,8 +67,7 @@ export interface OpenAIProviderConfig {
 
 /** Streaming chunk emitted by `generateStream`. */
 export type OpenAIStreamChunk =
-  | { type: "text"; text: string }
-  | { type: "done"; response: AIResponse };
+  { type: "text"; text: string } | { type: "done"; response: AIResponse };
 
 /**
  * Internal representation of a tool call being assembled across SSE chunks.

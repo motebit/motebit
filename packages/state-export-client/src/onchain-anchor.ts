@@ -65,10 +65,7 @@ export type OnchainAnchorResult =
     };
 
 export type OnchainAnchorFailureReason =
-  | "rpc_failed"
-  | "no_anchor_found"
-  | "anchor_hash_mismatch"
-  | "malformed_memo";
+  "rpc_failed" | "no_anchor_found" | "anchor_hash_mismatch" | "malformed_memo";
 
 interface RpcResponse<T> {
   jsonrpc: "2.0";

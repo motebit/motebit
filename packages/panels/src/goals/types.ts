@@ -40,12 +40,7 @@ export type GoalMode = "recurring" | "once";
  * axis, or close the goal).
  */
 export type GoalStatus =
-  | "active"
-  | "paused"
-  | "suspended"
-  | "completed"
-  | "failed"
-  | "budget_exhausted";
+  "active" | "paused" | "suspended" | "completed" | "failed" | "budget_exhausted";
 
 /**
  * The client-facing goal shape. Matches what renderers subscribe to across

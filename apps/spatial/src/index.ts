@@ -32,12 +32,7 @@ export interface SpatialAnchor {
 // === Body-Relative Positioning ===
 
 export type BodyReference =
-  | "head"
-  | "shoulder_right"
-  | "shoulder_left"
-  | "chest"
-  | "hand_right"
-  | "hand_left";
+  "head" | "shoulder_right" | "shoulder_left" | "chest" | "hand_right" | "hand_left";
 
 export interface BodyRelativePosition {
   /** Offset from body center, normalized */

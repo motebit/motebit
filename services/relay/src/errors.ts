@@ -44,9 +44,7 @@ export class AuthenticationError extends RelayError {
 export class AuthorizationError extends RelayError {
   constructor(
     code:
-      | "AUTHZ_DEVICE_NOT_AUTHORIZED"
-      | "AUTHZ_NOT_TASK_PARTICIPANT"
-      | "AUTHZ_INVALID_CREDENTIALS",
+      "AUTHZ_DEVICE_NOT_AUTHORIZED" | "AUTHZ_NOT_TASK_PARTICIPANT" | "AUTHZ_INVALID_CREDENTIALS",
     message: string,
     options?: ErrorOptions,
   ) {

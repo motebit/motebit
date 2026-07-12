@@ -120,8 +120,7 @@ export interface SkillsPanelAdapter {
  *   registry (phase 4.5).
  */
 export type SkillsInstallSource =
-  | { kind: "directory"; path: string }
-  | { kind: "url"; url: string };
+  { kind: "directory"; path: string } | { kind: "url"; url: string };
 
 // ── State ─────────────────────────────────────────────────────────────
 

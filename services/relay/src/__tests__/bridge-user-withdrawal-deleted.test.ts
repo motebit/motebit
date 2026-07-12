@@ -111,8 +111,7 @@ describe("Bridge user-withdrawal path — structural deletion", () => {
         "SELECT status, payout_reference, completed_at FROM relay_withdrawals WHERE motebit_id = ? ORDER BY requested_at DESC LIMIT 1",
       )
       .get("user-weird-dest") as
-      | { status: string; payout_reference: string | null; completed_at: number | null }
-      | undefined;
+      { status: string; payout_reference: string | null; completed_at: number | null } | undefined;
     expect(row).toBeDefined();
     // The doctrinal-correct outcome: no path matched, withdrawal stays
     // pending for admin resolution. Funds remain held by

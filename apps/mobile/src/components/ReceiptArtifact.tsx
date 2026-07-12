@@ -30,10 +30,7 @@ interface ReceiptArtifactProps {
 }
 
 type VerifyState =
-  | { kind: "pending" }
-  | { kind: "verified" }
-  | { kind: "failed-task" }
-  | { kind: "unverified" };
+  { kind: "pending" } | { kind: "verified" } | { kind: "failed-task" } | { kind: "unverified" };
 
 export function ReceiptArtifact({ receipt }: ReceiptArtifactProps): React.ReactElement {
   const colors = useTheme();

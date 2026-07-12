@@ -114,8 +114,7 @@ describe("horizon — self-witnessed (empty-anchor) round trip", () => {
         "SELECT cert_signature, store_id, witness_count FROM relay_horizon_certs WHERE cert_signature = ?",
       )
       .get(result.cert.signature) as
-      | { cert_signature: string; store_id: string; witness_count: number }
-      | undefined;
+      { cert_signature: string; store_id: string; witness_count: number } | undefined;
     expect(row).toBeDefined();
     expect(row?.store_id).toBe("relay_revocation_events");
     expect(row?.witness_count).toBe(0);

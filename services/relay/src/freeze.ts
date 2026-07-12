@@ -36,8 +36,7 @@ export function createRelayConfigTable(db: DatabaseDriver): void {
 export function loadFreezeState(db: DatabaseDriver): FreezeState {
   try {
     const row = db.prepare("SELECT value FROM relay_config WHERE key = ?").get("freeze_state") as
-      | { value: string }
-      | undefined;
+      { value: string } | undefined;
 
     if (!row) {
       return { frozen: false, reason: null };

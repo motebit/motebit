@@ -263,8 +263,7 @@ export function jsonSchemaToZodShape(
 ): Record<string, z.ZodTypeAny> {
   const shape: Record<string, z.ZodTypeAny> = {};
   const properties = inputSchema["properties"] as
-    | Record<string, Record<string, unknown>>
-    | undefined;
+    Record<string, Record<string, unknown>> | undefined;
   if (!properties) return shape;
 
   const required = (inputSchema["required"] as string[] | undefined) ?? [];

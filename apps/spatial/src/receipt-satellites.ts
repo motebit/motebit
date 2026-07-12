@@ -42,11 +42,7 @@ export const RECEIPT_SATELLITES_MODULE = registerSpatialDataModule({
 });
 
 export type ReceiptVerifyState =
-  | "pending"
-  | "verified"
-  | "integrity-only"
-  | "task-failed"
-  | "failed";
+  "pending" | "verified" | "integrity-only" | "task-failed" | "failed";
 
 const BASE_RADIUS_M = 0.26;
 const RADIUS_STEP_M = 0.03;

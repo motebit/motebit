@@ -57,8 +57,7 @@ function parseGovernanceFromConfig(parsed: Record<string, unknown>): GovernanceC
   const canonical = parsed.governance as Partial<GovernanceConfig> | undefined;
   const legacyPreset = parsed.approval_preset as string | undefined;
   const legacyMemory = parsed.memory_governance as
-    | { persistence_threshold?: number; reject_secrets?: boolean }
-    | undefined;
+    { persistence_threshold?: number; reject_secrets?: boolean } | undefined;
   const legacyBudget = parsed.budget as { maxCallsPerTurn?: number } | undefined;
 
   if (canonical == null && legacyPreset == null && legacyMemory == null && legacyBudget == null) {

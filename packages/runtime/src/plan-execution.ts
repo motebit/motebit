@@ -253,8 +253,7 @@ export class PlanExecutionManager {
           (e) => e.type === "step_delegated" && e.payload.step_id === s.step_id,
         );
         const routingChoice = delegatedEvent?.payload.routing_choice as
-          | NonNullable<ExecutionStepSummary["delegation"]>["routing_choice"]
-          | undefined;
+          NonNullable<ExecutionStepSummary["delegation"]>["routing_choice"] | undefined;
 
         summary.delegation = {
           task_id: s.delegation_task_id,

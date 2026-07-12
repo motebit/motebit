@@ -241,8 +241,7 @@ function executeRelaySideCommand(
           "SELECT balance, pending_allocations, currency FROM virtual_accounts WHERE motebit_id = ?",
         )
         .get(motebitId) as
-        | { balance: number; pending_allocations: number; currency: string }
-        | undefined;
+        { balance: number; pending_allocations: number; currency: string } | undefined;
       if (!row) return { summary: "No account found." };
       return {
         summary: `Balance: ${row.balance} ${row.currency ?? "USDC"}. Pending: ${row.pending_allocations ?? 0}`,

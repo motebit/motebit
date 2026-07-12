@@ -550,8 +550,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         "SELECT * FROM relay_withdrawals WHERE withdrawal_id = ? AND status IN ('pending', 'processing')",
       )
       .get(withdrawalId) as
-      | { motebit_id: string; amount: number; currency: string; destination: string }
-      | undefined;
+      { motebit_id: string; amount: number; currency: string; destination: string } | undefined;
     if (!withdrawal)
       throw new HTTPException(404, { message: "Withdrawal not found or already completed/failed" });
 

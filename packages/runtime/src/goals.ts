@@ -56,12 +56,7 @@ import type { EventStore } from "@motebit/event-log";
 
 /** Status values a `getGoalStatus` resolver may return; `null` means the goal is unknown to the resolver. */
 export type GoalLifecycleStatus =
-  | "active"
-  | "paused"
-  | "completed"
-  | "failed"
-  | "budget_exhausted"
-  | null;
+  "active" | "paused" | "completed" | "failed" | "budget_exhausted" | null;
 
 // ── Budget check ──────────────────────────────────────────────────────────
 //
