@@ -25,6 +25,7 @@ import {
   releaseLiveBrowserItem,
 } from "./ui/slab-items";
 import { buildSlabHomeView } from "./ui/slab-home.js";
+import { buildIdentityFace } from "./ui/identity-face.js";
 import { deriveHomeSeed, type HomeSeedInputs, type HomeTileAction } from "./ui/slab-home-model.js";
 import { animateMarkForReceipt } from "./ui/cobrowse-chrome";
 import { renderSlabChrome } from "./ui/slab-chrome";
@@ -816,6 +817,16 @@ export class UnbootedWebApp {
         }
       },
     });
+
+    // Mount the identity face on the slab's back — the sovereign's mark, shown
+    // as the camera orbits behind (front = what it does, back = whose it is).
+    // Static per identity; set once here, now that the slab (renderer.init) and
+    // the id are both ready. The render-engine crossfades it in by camera angle.
+    // DOM-gated: headless bootstrap (node tests, workers) has no document and
+    // no visible back to dress.
+    if (this._motebitId && typeof document !== "undefined") {
+      this.renderer.setSlabBackPlate(buildIdentityFace(this._motebitId));
+    }
 
     // Register web-safe tools
     this.registerWebTools();

@@ -410,6 +410,18 @@ export class SlabManager {
    */
   private readonly stageAnchor: CSS3DObject;
   private readonly stageEl: HTMLDivElement;
+  /**
+   * Identity face — a second CSS3D stage on the BACK of the slab (rotated to
+   * face outward, so its content reads correctly from behind rather than
+   * mirrored). Holds the web-provided identity mark (sigil + id). Crossfaded
+   * with the front interface by the same camera-facing dot: orbit front→back
+   * and the interface dissolves as the identity blooms. Front = what it does;
+   * back = whose it is. The web owns the pixels (params-not-pixels); this only
+   * mounts + crossfades them. docs/doctrine/motebit-computer.md.
+   */
+  private readonly backStageAnchor: CSS3DObject;
+  private readonly backStageEl: HTMLDivElement;
+  private _hasBackPlate = false;
   private readonly css3dRenderer: CSS3DRenderer;
   /**
    * The interface's base opacity from the membrane (set in `update`), before
@@ -782,17 +794,10 @@ export class SlabManager {
     this.stageEl = createContainerElement();
     this.stageAnchor = new CSS3DObject(this.stageEl);
     this.stageEl.style.pointerEvents = "none";
-    // The computer's INTERFACE is forward-facing, like the face
-    // (attention-is-directional). Cull the CSS3D content from behind so an
-    // orbit past the front hemisphere reads the liquescent body of the
-    // computer — never its UI mirrored through the transmissive back pane.
-    // The back pane keeps its transmissive optical character (one body, one
-    // material); this is what keeps the back CLEAN instead of "broken".
-    // docs/doctrine/motebit-computer.md, docs/doctrine/liquescentia-as-substrate.md.
-    this.stageEl.style.backfaceVisibility = "hidden";
-    (
-      this.stageEl.style as CSSStyleDeclaration & { webkitBackfaceVisibility?: string }
-    ).webkitBackfaceVisibility = "hidden";
+    // The interface is forward-facing (attention-is-directional); the
+    // render-loop facing fade (see `render`) hides it as the camera orbits
+    // past the front hemisphere, so the back never shows the UI mirrored
+    // through the transmissive pane. One mechanism, not CSS backface culling.
 
     // Stage at z=0, same plane as the WebGL screen mesh. Chrome and
     // content compose as ONE window plane suspended in the volume.
@@ -804,6 +809,21 @@ export class SlabManager {
     // building, not a panel.
     this.stageAnchor.scale.set(STAGE_PIXEL_TO_WORLD, STAGE_PIXEL_TO_WORLD, 1);
     this.group.add(this.stageAnchor);
+
+    // Identity face — a second stage on the BACK, rotated π about Y so it faces
+    // outward (-Z): its content then reads UPRIGHT + non-mirrored from behind
+    // (a front-facing stage viewed from behind is exactly what mirrored). Same
+    // pixel→world scale; empty until the surface sets a back plate. Crossfaded
+    // to 0 from the front by the render-loop facing dot, so it never competes
+    // with the interface.
+    this.backStageEl = createContainerElement();
+    this.backStageAnchor = new CSS3DObject(this.backStageEl);
+    this.backStageEl.style.pointerEvents = "none";
+    this.backStageEl.style.opacity = "0";
+    this.backStageAnchor.position.set(0, 0, -SLAB_THICKNESS / 2);
+    this.backStageAnchor.rotation.y = Math.PI;
+    this.backStageAnchor.scale.set(STAGE_PIXEL_TO_WORLD, STAGE_PIXEL_TO_WORLD, 1);
+    this.group.add(this.backStageAnchor);
 
     this.css3dRenderer = new CSS3DRenderer();
     this.css3dRenderer.setSize(container.clientWidth, container.clientHeight);
@@ -1117,12 +1137,6 @@ export class SlabManager {
     spec.element.style.transform = "scale(0)";
     spec.element.style.transformOrigin = "center center";
     spec.element.style.opacity = "0";
-    // Forward-facing interface — culled from behind so the orbit never shows a
-    // mounted card mirrored through the glass (see the stage backface note).
-    spec.element.style.backfaceVisibility = "hidden";
-    (
-      spec.element.style as CSSStyleDeclaration & { webkitBackfaceVisibility?: string }
-    ).webkitBackfaceVisibility = "hidden";
 
     // `.dataset` may be absent in headless tests — read defensively.
     const slabHidden =
@@ -1382,12 +1396,35 @@ export class SlabManager {
     this._slabForward.set(0, 0, 1).applyQuaternion(this._slabWorldQuat);
     camera.getWorldPosition(this._camWorldPos);
     this._viewDir.copy(this._camWorldPos).sub(this._slabWorldPos).normalize();
-    // dot: 1 head-on, 0 edge-on, <0 behind. Full across the front hemisphere,
-    // smooth fade to 0 in the last sliver before edge-on so the back is clean.
-    const facing = THREE.MathUtils.smoothstep(this._slabForward.dot(this._viewDir), 0, 0.2);
+    // dot: 1 head-on, 0 edge-on, <0 behind. Interface is full across the front
+    // hemisphere and fades out in the last sliver before edge-on; the identity
+    // face is the INVERSE — gone from the front, blooming in as the camera
+    // crosses to the back. One dot drives both halves of the crossfade. At the
+    // pure side profile both are ~0: clean edge-on glass between the two faces.
+    const dot = this._slabForward.dot(this._viewDir);
+    const facing = THREE.MathUtils.smoothstep(dot, 0, 0.2);
     this.stageEl.style.opacity = String(this._stageBaseOpacity * facing);
+    const backFacing = THREE.MathUtils.smoothstep(-dot, 0, 0.2);
+    this.backStageEl.style.opacity = String(
+      this._hasBackPlate ? this._stageBaseOpacity * backFacing : 0,
+    );
 
     this.css3dRenderer.render(scene, camera);
+  }
+
+  /**
+   * Mount (or clear) the identity face on the slab's back — the web-rendered
+   * mark (sigil + short id). The surface owns the pixels (`sigilToSvg`,
+   * params-not-pixels); this only mounts them on the back stage, where the
+   * render-loop facing crossfade blooms them in as the viewer orbits behind.
+   * Pass `null` to clear.
+   */
+  setBackPlate(element: HTMLElement | null): void {
+    if (typeof this.backStageEl.replaceChildren === "function") {
+      if (element) this.backStageEl.replaceChildren(element);
+      else this.backStageEl.replaceChildren();
+    }
+    this._hasBackPlate = element != null;
   }
 
   resize(width: number, height: number): void {
