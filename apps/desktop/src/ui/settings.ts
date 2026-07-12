@@ -513,12 +513,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   document.querySelectorAll<HTMLButtonElement>(".byok-provider-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const vendor = btn.dataset.byok as
-        | "anthropic"
-        | "openai"
-        | "google"
-        | "deepseek"
-        | "groq"
-        | undefined;
+        "anthropic" | "openai" | "google" | "deepseek" | "groq" | undefined;
       if (vendor == null) return;
       activeByokVendor = vendor;
       document.querySelectorAll<HTMLButtonElement>(".byok-provider-btn").forEach((b) => {

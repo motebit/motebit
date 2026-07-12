@@ -139,8 +139,7 @@ export class SqliteAccountStore implements AccountStore {
   getAccount(motebitId: string): VirtualAccount | null {
     return (
       (this.db.prepare("SELECT * FROM relay_accounts WHERE motebit_id = ?").get(motebitId) as
-        | VirtualAccount
-        | undefined) ?? null
+        VirtualAccount | undefined) ?? null
     );
   }
 
@@ -383,8 +382,7 @@ export class SqliteAccountStore implements AccountStore {
   getWithdrawalById(id: string): WithdrawalRequest | null {
     return (
       (this.db.prepare("SELECT * FROM relay_withdrawals WHERE withdrawal_id = ?").get(id) as
-        | WithdrawalRequest
-        | undefined) ?? null
+        WithdrawalRequest | undefined) ?? null
     );
   }
 
@@ -465,8 +463,7 @@ export class SqliteAccountStore implements AccountStore {
         "SELECT sweep_threshold, settlement_address FROM agent_registry WHERE motebit_id = ?",
       )
       .get(motebitId) as
-      | { sweep_threshold: number | null; settlement_address: string | null }
-      | undefined;
+      { sweep_threshold: number | null; settlement_address: string | null } | undefined;
     return row ?? { sweep_threshold: null, settlement_address: null };
   }
 

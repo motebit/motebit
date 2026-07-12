@@ -36,13 +36,11 @@ function baseAdapter(overrides: Partial<SovereignFetchAdapter> = {}): SovereignF
 
 describe("sovereign controller — state-export verification wiring", () => {
   it("routes goals through verifiedFetch and records 'verified' status", async () => {
-    const verifiedFetch = vi.fn(
-      async (_path: string): Promise<VerifiedFetchResult> => ({
-        ok: true,
-        json: { goals: [COMPLETED_GOAL] },
-        verification: "verified",
-      }),
-    );
+    const verifiedFetch = vi.fn(async (_path: string): Promise<VerifiedFetchResult> => ({
+      ok: true,
+      json: { goals: [COMPLETED_GOAL] },
+      verification: "verified",
+    }));
     const ctrl = createSovereignController(baseAdapter({ verifiedFetch }));
 
     await ctrl.refresh();

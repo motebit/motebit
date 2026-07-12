@@ -52,14 +52,7 @@ export const PRESET_COLORS: Record<string, string> = {
 // === Intelligence ===
 
 export type ProviderType =
-  | "local-server"
-  | "anthropic"
-  | "openai"
-  | "google"
-  | "deepseek"
-  | "groq"
-  | "proxy"
-  | "on-device";
+  "local-server" | "anthropic" | "openai" | "google" | "deepseek" | "groq" | "proxy" | "on-device";
 
 /**
  * Re-export the canonical type name under a shorter local alias so the

@@ -545,11 +545,7 @@ export type RetentionShapeDeclaration =
  * these exact strings with the manifest's `RetentionStoreDeclaration.store_id`.
  */
 export type RuntimeStoreId =
-  | "memory"
-  | "event_log"
-  | "conversation_messages"
-  | "tool_audit"
-  | "skill_audit";
+  "memory" | "event_log" | "conversation_messages" | "tool_audit" | "skill_audit";
 
 /**
  * Canonical registry: `RuntimeStoreId` → declared `RetentionShape`.

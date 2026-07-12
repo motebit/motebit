@@ -299,8 +299,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
         const pubBytes = didKeyToPublicKey(issuerDid);
         const pubHex = bytesToHex(pubBytes);
         const row = issuerTrustStmt.get(callerMotebitId, pubHex) as
-          | { trust_level: string }
-          | undefined;
+          { trust_level: string } | undefined;
         if (!row) return 0.1;
         return trustLevelToScore(row.trust_level as AgentTrustLevel);
       } catch {

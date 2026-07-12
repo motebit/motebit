@@ -43,9 +43,7 @@ export interface AndroidKeystoreMintResult {
  * fleet but real on managed enterprise devices.
  */
 export type AndroidKeystoreFailureReason =
-  | "not_supported"
-  | "permission_denied"
-  | "platform_blocked";
+  "not_supported" | "permission_denied" | "platform_blocked";
 
 export interface ExpoAndroidKeystoreModuleEvents {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- required by Expo EventsMap constraint

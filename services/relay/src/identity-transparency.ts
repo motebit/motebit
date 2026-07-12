@@ -122,8 +122,7 @@ export async function buildIdentityBindingBundle(
       "SELECT public_key, registered_at, guardian_public_key FROM agent_registry WHERE motebit_id = ?",
     )
     .get(motebitId) as
-    | { public_key: string; registered_at: number; guardian_public_key: string | null }
-    | undefined;
+    { public_key: string; registered_at: number; guardian_public_key: string | null } | undefined;
   if (!agent) return null;
 
   let anchored: AnchoredInclusion | null = null;

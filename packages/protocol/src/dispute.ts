@@ -12,24 +12,14 @@ import type { MerkleInclusionProof } from "./retention-policy.js";
 
 /** Dispute lifecycle states. Terminal states (final, expired) are irreversible. */
 export type DisputeState =
-  | "opened"
-  | "evidence"
-  | "arbitration"
-  | "resolved"
-  | "appealed"
-  | "final"
-  | "expired";
+  "opened" | "evidence" | "arbitration" | "resolved" | "appealed" | "final" | "expired";
 
 /** Dispute resolution outcome. */
 export type DisputeOutcome = "upheld" | "overturned" | "split";
 
 /** Dispute category (§4.2). */
 export type DisputeCategory =
-  | "quality"
-  | "non_payment"
-  | "receipt_invalid"
-  | "unauthorized"
-  | "other";
+  "quality" | "non_payment" | "receipt_invalid" | "unauthorized" | "other";
 
 /** Fund action resulting from dispute resolution (§7.2). */
 export type DisputeFundAction = "release_to_worker" | "refund_to_delegator" | "split";
@@ -333,8 +323,7 @@ export interface WitnessOmissionAlternativePeeringEvidence {
 
 /** Discriminated evidence union — exactly one shape per dispute. */
 export type WitnessOmissionEvidence =
-  | WitnessOmissionInclusionProofEvidence
-  | WitnessOmissionAlternativePeeringEvidence;
+  WitnessOmissionInclusionProofEvidence | WitnessOmissionAlternativePeeringEvidence;
 
 /**
  * Witness-omission dispute — files within 24h of `cert.issued_at`

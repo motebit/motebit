@@ -32,11 +32,9 @@ export class WebSpeechSTTProvider implements STTProvider {
     const win = typeof window !== "undefined" ? window : undefined;
     this._ctor =
       ((win as unknown as Record<string, unknown> | undefined)?.SpeechRecognition as
-        | SpeechRecognitionCtor
-        | undefined) ??
+        SpeechRecognitionCtor | undefined) ??
       ((win as unknown as Record<string, unknown> | undefined)?.webkitSpeechRecognition as
-        | SpeechRecognitionCtor
-        | undefined) ??
+        SpeechRecognitionCtor | undefined) ??
       null;
   }
 

@@ -357,8 +357,7 @@ export interface YamlDiagnostic {
 }
 
 export type ParseResult =
-  | { ok: true; data: MotebitYamlV1 }
-  | { ok: false; diagnostics: YamlDiagnostic[] };
+  { ok: true; data: MotebitYamlV1 } | { ok: false; diagnostics: YamlDiagnostic[] };
 
 /**
  * Format one diagnostic as a single line. Callers (e.g., `motebit up`) print

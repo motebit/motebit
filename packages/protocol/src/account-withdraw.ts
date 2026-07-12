@@ -45,11 +45,7 @@
  * `WithdrawalStatus` is this exact set.
  */
 export type AccountWithdrawalStatus =
-  | "pending"
-  | "processing"
-  | "completed"
-  | "failed"
-  | "cancelled";
+  "pending" | "processing" | "completed" | "failed" | "cancelled";
 
 /**
  * The signed field set committed in a completed-withdrawal receipt — the

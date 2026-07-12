@@ -207,9 +207,7 @@ The envelope is a content-addressed wrapper for distribution and install:
     "version": "1.0.0",
     "content_hash": "sha256:abc123..."
   },
-  "manifest": {
-    /* parsed frontmatter object */
-  },
+  "manifest": {/* parsed frontmatter object */},
   "body_hash": "sha256:def456...",
   "files": [
     { "path": "scripts/run.sh", "hash": "sha256:..." },

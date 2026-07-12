@@ -55,12 +55,7 @@ import { lookupKeyRevocation, type KeyRevocationLookupOptions } from "./key-revo
  * the producer claim must NOT be trusted. It overrides every other status.
  */
 export type ReceiptBindingStatus =
-  | "revoked"
-  | "sovereign"
-  | "anchored"
-  | "pinned"
-  | "integrity-only"
-  | "unverified";
+  "revoked" | "sovereign" | "anchored" | "pinned" | "integrity-only" | "unverified";
 
 export type ReceiptDocumentFailureReason =
   | "malformed_json"

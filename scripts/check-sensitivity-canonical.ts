@@ -149,10 +149,7 @@ interface Violation {
   readonly consumer?: string;
   readonly file: string;
   readonly kind:
-    | "sibling_alignment"
-    | "missing_file"
-    | "missing_level_literal"
-    | "missing_algebra_import";
+    "sibling_alignment" | "missing_file" | "missing_level_literal" | "missing_algebra_import";
   readonly detail?: string;
 }
 

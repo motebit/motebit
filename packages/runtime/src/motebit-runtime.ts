@@ -562,8 +562,7 @@ export class MotebitRuntime {
    * the trust loop the same way relay-mediated receipts do.
    */
   private _receiptExchange:
-    | import("./sovereign-receipt-exchange.js").SovereignReceiptExchangeAdapter
-    | null = null;
+    import("./sovereign-receipt-exchange.js").SovereignReceiptExchangeAdapter | null = null;
   private credentialManager!: CredentialManager;
   private credentialStore: import("@motebit/sdk").CredentialStoreAdapter | null = null;
   private planExecution!: PlanExecutionManager;
@@ -592,8 +591,7 @@ export class MotebitRuntime {
    * the per-call audit trail the user sees while the motebit works.
    */
   private _onToolInvocation:
-    | ((receipt: import("@motebit/crypto").SignableToolInvocationReceipt) => void)
-    | null;
+    ((receipt: import("@motebit/crypto").SignableToolInvocationReceipt) => void) | null;
   /**
    * Live activity sink for slab items in virtual_browser mode and
    * any other surface that needs the raw args/result alongside the
@@ -603,8 +601,7 @@ export class MotebitRuntime {
   private _onToolActivity: ((event: import("./streaming.js").ToolActivityEvent) => void) | null;
   /** Surface sink for signed human-consent decisions (the "approve" band artifact). */
   private _onApprovalDecision:
-    | ((decision: import("@motebit/crypto").ApprovalDecision) => void)
-    | null;
+    ((decision: import("@motebit/crypto").ApprovalDecision) => void) | null;
   /**
    * receipts-1 — in-memory buffer of recent signed
    * `ToolInvocationReceipt`s, capped at `RECEIPTS_BUFFER_CAP`.
@@ -3339,8 +3336,7 @@ export class MotebitRuntime {
       // stored beside the receipt. Built only when the cycle formed something
       // — a pure-prune cycle has no detail to cover.
       let mutationManifest:
-        | Awaited<ReturnType<typeof signConsolidationMutationManifest>>
-        | undefined;
+        Awaited<ReturnType<typeof signConsolidationMutationManifest>> | undefined;
       if (cycleResult.formedMutations.length > 0) {
         const commitments: ConsolidationMutationCommitment[] = await Promise.all(
           cycleResult.formedMutations.map(async (m) => ({

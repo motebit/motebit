@@ -354,8 +354,7 @@ export class IdentityManager {
 
     // Map memory_governance config → identity-file memory fields
     const memGov = configData.memory_governance as
-      | { persistence_threshold?: number; reject_secrets?: boolean }
-      | undefined;
+      { persistence_threshold?: number; reject_secrets?: boolean } | undefined;
     const memory = {
       confidence_threshold: memGov?.persistence_threshold ?? 0.3,
       half_life_days: 7,

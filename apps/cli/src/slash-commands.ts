@@ -183,8 +183,7 @@ function parseSub(args: string): { sub: string; rest: string } {
 }
 
 type RelayResult<T> =
-  | { ok: true; data: T; status: number }
-  | { ok: false; status: number; text: string };
+  { ok: true; data: T; status: number } | { ok: false; status: number; text: string };
 
 /** Fetch from relay with standardized error handling. Strips trailing slashes from baseUrl. */
 async function relayFetch<T>(

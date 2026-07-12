@@ -257,8 +257,7 @@ export interface RegisterWebComputerToolOptions {
    * Phase 3 adds `/cookies grant` consent gate + revoke UI.
    */
   readonly getInitialCookies?: () =>
-    | Promise<readonly PersistentCookieWire[]>
-    | readonly PersistentCookieWire[];
+    Promise<readonly PersistentCookieWire[]> | readonly PersistentCookieWire[];
   /**
    * Companion to `getInitialCookies` — invoked on session-dispose
    * with the cookies the sandbox returned. The caller (WebApp)

@@ -158,12 +158,7 @@ export { createProvider, WebLLMProvider };
 const LEGACY_MOTEBIT_ID_KEY = "motebit-web-id";
 
 export type WebSyncStatus =
-  | "offline"
-  | "connecting"
-  | "connected"
-  | "syncing"
-  | "error"
-  | "disconnected";
+  "offline" | "connecting" | "connected" | "syncing" | "error" | "disconnected";
 
 export class UnbootedWebApp {
   private renderer = new ThreeJSAdapter();
@@ -249,8 +244,7 @@ export class UnbootedWebApp {
    * (denied with `session_unavailable`). Mounted ONCE per WebApp.
    */
   private liveBrowserForwardEvent:
-    | ((event: UserInputEvent) => Promise<UserInputForwardResult>)
-    | null = null;
+    ((event: UserInputEvent) => Promise<UserInputForwardResult>) | null = null;
   /**
    * Cloud-browser session currently attached to the shell, or `null`
    * when no session is live. Set by `attachSessionToLiveBrowser`,
@@ -1597,9 +1591,7 @@ export class UnbootedWebApp {
     const presetGov = APPROVAL_PRESET_CONFIGS[presetKey] ?? APPROVAL_PRESET_CONFIGS.balanced!;
     const governance = {
       trust_mode: (presetKey === "autonomous" ? "full" : "guarded") as
-        | "full"
-        | "guarded"
-        | "minimal",
+        "full" | "guarded" | "minimal",
       max_risk_auto: RISK_NAMES[presetGov.requireApprovalAbove]!,
       require_approval_above: RISK_NAMES[presetGov.requireApprovalAbove]!,
       deny_above: RISK_NAMES[presetGov.denyAbove]!,

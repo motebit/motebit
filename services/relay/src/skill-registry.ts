@@ -223,8 +223,7 @@ export function registerSkillRegistryRoutes(deps: SkillRegistryDeps): void {
         "SELECT content_hash, submitted_at FROM relay_skill_registry WHERE submitter_motebit_id = ? AND name = ? AND version = ?",
       )
       .get(submitterMotebitId, envelope.skill.name, envelope.skill.version) as
-      | { content_hash: string; submitted_at: number }
-      | undefined;
+      { content_hash: string; submitted_at: number } | undefined;
     if (existing && existing.content_hash !== envelope.skill.content_hash) {
       throw new HTTPException(409, {
         message: `version_immutable: ${submitterMotebitId}/${envelope.skill.name}@${envelope.skill.version} already exists with content_hash ${existing.content_hash}`,
@@ -330,8 +329,7 @@ export function registerSkillRegistryRoutes(deps: SkillRegistryDeps): void {
       "FROM relay_skill_registry" + (where.length ? ` WHERE ${where.join(" AND ")}` : "");
 
     const totalRow = db.prepare(`SELECT COUNT(*) as cnt ${baseSql}`).get(...params) as
-      | { cnt: number }
-      | undefined;
+      { cnt: number } | undefined;
     let total = totalRow?.cnt ?? 0;
 
     const rows = db

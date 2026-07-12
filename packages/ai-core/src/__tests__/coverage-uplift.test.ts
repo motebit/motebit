@@ -1048,8 +1048,7 @@ describe("runTurnStreaming — policy gate paths", () => {
     const chunks: AgenticChunk[] = [];
     for await (const c of runTurnStreaming(deps, "do danger")) chunks.push(c);
     const done = chunks.find((c) => c.type === "tool_status" && c.status === "done") as
-      | { result?: unknown }
-      | undefined;
+      { result?: unknown } | undefined;
     expect(done?.result).toBe("no thanks");
     const result = chunks.find((c) => c.type === "result") as {
       type: "result";
@@ -1118,8 +1117,7 @@ describe("runTurnStreaming — policy gate paths", () => {
     const chunks: AgenticChunk[] = [];
     for await (const c of runTurnStreaming(deps, "do hidden")) chunks.push(c);
     const blocked = chunks.find((c) => c.type === "tool_status" && c.status === "done") as
-      | { result?: unknown }
-      | undefined;
+      { result?: unknown } | undefined;
     expect(blocked?.result).toBe("Tool not available");
   });
 
@@ -1210,8 +1208,7 @@ describe("runTurnStreaming — policy gate paths", () => {
     const chunks: AgenticChunk[] = [];
     for await (const c of runTurnStreaming(deps, "fetch harmful")) chunks.push(c);
     const done = chunks.find((c) => c.type === "tool_status" && c.status === "done") as
-      | { result?: unknown }
-      | undefined;
+      { result?: unknown } | undefined;
     expect(String(done?.result)).toMatch(/Injection detected/);
     expect(logs.length).toBeGreaterThan(0);
     const result = chunks.find((c) => c.type === "result") as {
@@ -1332,8 +1329,7 @@ describe("runTurnStreaming — policy gate paths", () => {
     const chunks: AgenticChunk[] = [];
     for await (const c of runTurnStreaming(deps, "search something")) chunks.push(c);
     const warn = chunks.find((c) => c.type === "injection_warning") as
-      | { type: "injection_warning"; patterns: string[] }
-      | undefined;
+      { type: "injection_warning"; patterns: string[] } | undefined;
     expect(warn).toBeDefined();
     expect(warn?.patterns).toContain("ignore-instructions");
   });
@@ -2087,8 +2083,7 @@ describe("toolContext (indirect — via tool_status context field)", () => {
       const chunks: AgenticChunk[] = [];
       for await (const c of runTurnStreaming(deps, "go")) chunks.push(c);
       const calling = chunks.find((c) => c.type === "tool_status" && c.status === "calling") as
-        | { type: "tool_status"; context?: string }
-        | undefined;
+        { type: "tool_status"; context?: string } | undefined;
       expect(calling).toBeDefined();
       if (expected instanceof RegExp) {
         expect(calling!.context).toMatch(expected);
@@ -2133,8 +2128,7 @@ describe("toolContext (indirect — via tool_status context field)", () => {
     const chunks: AgenticChunk[] = [];
     for await (const c of runTurnStreaming(deps, "go")) chunks.push(c);
     const calling = chunks.find((c) => c.type === "tool_status" && c.status === "calling") as
-      | { type: "tool_status"; context?: string }
-      | undefined;
+      { type: "tool_status"; context?: string } | undefined;
     expect(calling).toBeDefined();
     expect(calling!.context).toBeUndefined();
   });

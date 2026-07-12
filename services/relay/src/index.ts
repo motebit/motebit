@@ -517,8 +517,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
           state: data.state as string,
           amount: data.amount as string,
           receipt: data.receipt as
-            | { sourceTxHash?: string; destinationTxHash?: string }
-            | undefined,
+            { sourceTxHash?: string; destinationTxHash?: string } | undefined,
           source: data.source as { paymentRail: string } | undefined,
           destination: data.destination as { paymentRail: string } | undefined,
         };
@@ -534,8 +533,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
           state: data.state as string,
           amount: data.amount as string,
           receipt: data.receipt as
-            | { sourceTxHash?: string; destinationTxHash?: string }
-            | undefined,
+            { sourceTxHash?: string; destinationTxHash?: string } | undefined,
           source: data.source as { paymentRail: string } | undefined,
           destination: data.destination as { paymentRail: string } | undefined,
         };
@@ -1404,8 +1402,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
               "SELECT allocation_id, motebit_id, amount_locked FROM relay_allocations WHERE task_id = ?",
             )
             .get(retry.task_id) as
-            | { allocation_id: string; motebit_id: string; amount_locked: number }
-            | undefined;
+            { allocation_id: string; motebit_id: string; amount_locked: number } | undefined;
           if (!alloc) {
             moteDb.db.exec("ROLLBACK");
             return;

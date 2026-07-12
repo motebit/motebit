@@ -94,13 +94,7 @@ export type InferenceHost = "anthropic" | "openai" | "google" | "groq" | "local-
  * Closed registry — adding a lab requires a model entry citing it.
  */
 export type ModelLab =
-  | "anthropic"
-  | "openai"
-  | "google"
-  | "meta"
-  | "mistral"
-  | "microsoft"
-  | "alibaba";
+  "anthropic" | "openai" | "google" | "meta" | "mistral" | "microsoft" | "alibaba";
 
 /**
  * Legal locus of the host. Reflective of physical/legal reality,

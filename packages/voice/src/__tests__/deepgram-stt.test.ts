@@ -80,8 +80,7 @@ class MockSourceNode extends MockAudioNode {}
 
 class MockScriptProcessor extends MockAudioNode {
   onaudioprocess:
-    | ((ev: { inputBuffer: { getChannelData: (c: number) => Float32Array } }) => void)
-    | null = null;
+    ((ev: { inputBuffer: { getChannelData: (c: number) => Float32Array } }) => void) | null = null;
 }
 
 class MockGainNode extends MockAudioNode {

@@ -348,8 +348,7 @@ export async function decrypt(payload: EncryptedPayload, key: Uint8Array): Promi
 /** Default PBKDF2 iterations. Override via MOTEBIT_PBKDF2_ITERATIONS for tests. */
 const DEFAULT_PBKDF2_ITERATIONS = (() => {
   const proc = (globalThis as Record<string, unknown>).process as
-    | { env: Record<string, string | undefined> }
-    | undefined;
+    { env: Record<string, string | undefined> } | undefined;
   if (!proc?.env) return 600_000;
   const override = proc.env["MOTEBIT_PBKDF2_ITERATIONS"];
   if (!override) return 600_000;
