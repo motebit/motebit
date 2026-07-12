@@ -59,12 +59,7 @@ import type { InvokeFn, TauriConversationStore, TauriPlanStore } from "./tauri-s
 import { loadColdStartOptIn } from "./cold-start-optin.js";
 
 export type SyncIndicatorStatus =
-  | "disconnected"
-  | "connecting"
-  | "connected"
-  | "syncing"
-  | "conflict"
-  | "error";
+  "disconnected" | "connecting" | "connected" | "syncing" | "conflict" | "error";
 
 export interface SyncStatusEvent {
   status: SyncIndicatorStatus;

@@ -141,14 +141,7 @@ export type { ApprovalPresetConfig } from "@motebit/sdk";
  * on load so existing installs continue to work.
  */
 export type MobileProvider =
-  | "local-server"
-  | "anthropic"
-  | "openai"
-  | "google"
-  | "deepseek"
-  | "groq"
-  | "proxy"
-  | "on-device";
+  "local-server" | "anthropic" | "openai" | "google" | "deepseek" | "groq" | "proxy" | "on-device";
 
 /** On-device backend sub-selector. `"local-server"` is for users running their own LAN server. */
 export type MobileLocalBackend = "apple-fm" | "mlx" | "local-server";

@@ -58,12 +58,7 @@ export const CANONICAL_SPEC: RenderSpec = {
 // performance matrix deterministically. Enforced by check-creature-canon.
 
 export type CanonicalCameraName =
-  | "front"
-  | "three_quarter"
-  | "oblique"
-  | "profile"
-  | "back"
-  | "hero";
+  "front" | "three_quarter" | "oblique" | "profile" | "back" | "hero";
 
 export interface CanonicalCameraPose {
   readonly fov: number;
@@ -85,12 +80,7 @@ export const CANONICAL_CAMERA: Record<CanonicalCameraName, CanonicalCameraPose> 
 };
 
 export type PerformanceName =
-  | "resting"
-  | "tending"
-  | "listening"
-  | "thinking"
-  | "speaking"
-  | "guarded";
+  "resting" | "tending" | "listening" | "thinking" | "speaking" | "guarded";
 
 export interface CanonicalPerformance {
   readonly cues: BehaviorCues;
@@ -531,12 +521,7 @@ export type SlabItemKind =
  *     federation. Signed delegation + trust graph.
  */
 export type EmbodimentMode =
-  | "mind"
-  | "tool_result"
-  | "virtual_browser"
-  | "shared_gaze"
-  | "desktop_drive"
-  | "peer_viewport";
+  "mind" | "tool_result" | "virtual_browser" | "shared_gaze" | "desktop_drive" | "peer_viewport";
 
 /**
  * Sensible default mapping from `SlabItemKind` to `EmbodimentMode`.
@@ -641,13 +626,7 @@ export function normalizeEmbodimentMode(
  *   - `gone` — item no longer on the slab; no further transitions.
  */
 export type SlabItemPhase =
-  | "emerging"
-  | "active"
-  | "resting"
-  | "pinching"
-  | "detached"
-  | "dissolving"
-  | "gone";
+  "emerging" | "active" | "resting" | "pinching" | "detached" | "dissolving" | "gone";
 
 // === Embodiment Mode Contract ============================================
 //

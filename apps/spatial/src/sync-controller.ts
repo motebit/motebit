@@ -55,12 +55,7 @@ import {
 import type { SpatialNetworkSettings } from "./spatial-app";
 
 type InternalSyncStatus =
-  | "disconnected"
-  | "connecting"
-  | "connected"
-  | "syncing"
-  | "error"
-  | "conflict";
+  "disconnected" | "connecting" | "connected" | "syncing" | "error" | "conflict";
 
 const HEARTBEAT_INTERVAL_MS = 5 * 60_000; // 5 minutes
 

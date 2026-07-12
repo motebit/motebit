@@ -144,9 +144,7 @@ export interface ByokProviderConfig {
 
 /** Union of all three modes. Surfaces persist this shape. */
 export type UnifiedProviderConfig =
-  | OnDeviceProviderConfig
-  | MotebitCloudProviderConfig
-  | ByokProviderConfig;
+  OnDeviceProviderConfig | MotebitCloudProviderConfig | ByokProviderConfig;
 
 // === Migration ===
 //

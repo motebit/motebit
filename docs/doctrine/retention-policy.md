@@ -103,8 +103,7 @@ type DeletionCertificate =
   | {
       kind: "append_only_horizon";
       subject:
-        | { kind: "motebit"; motebit_id: MotebitId }
-        | { kind: "operator"; operator_id: string };
+        { kind: "motebit"; motebit_id: MotebitId } | { kind: "operator"; operator_id: string };
       store_id: string;
       horizon_ts: number;
       witnessed_by: {

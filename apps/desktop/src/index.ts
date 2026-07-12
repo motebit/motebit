@@ -168,13 +168,7 @@ export interface TauriCommands {
  * transparently so existing installs continue to work.
  */
 export type DesktopProvider =
-  | "anthropic"
-  | "local-server"
-  | "openai"
-  | "google"
-  | "deepseek"
-  | "groq"
-  | "proxy";
+  "anthropic" | "local-server" | "openai" | "google" | "deepseek" | "groq" | "proxy";
 
 export interface DesktopAIConfig {
   provider: DesktopProvider;

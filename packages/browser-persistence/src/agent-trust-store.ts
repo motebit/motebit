@@ -44,8 +44,7 @@ export class IdbAgentTrustStore implements AgentTrustStoreAdapter {
     const tx = this.db.transaction("agent_trust", "readwrite");
     const store = tx.objectStore("agent_trust");
     const existing = (await idbRequest(store.get([motebitId, remoteMotebitId]))) as
-      | AgentTrustRecord
-      | undefined;
+      AgentTrustRecord | undefined;
     if (!existing) return;
     existing.trust_level = level;
     store.put(existing);

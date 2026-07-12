@@ -124,10 +124,7 @@ interface Violation {
   readonly surface: string;
   readonly file: string;
   readonly kind:
-    | "missing_file"
-    | "missing_entry"
-    | "missing_control_state"
-    | "missing_deferred_mode";
+    "missing_file" | "missing_entry" | "missing_control_state" | "missing_deferred_mode";
   readonly cell?: string;
 }
 

@@ -1436,8 +1436,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     const peer = db
       .prepare("SELECT * FROM relay_peers WHERE peer_relay_id = ? AND state = 'pending'")
       .get(relay_id) as
-      | { peer_relay_id: string; public_key: string; nonce: string | null }
-      | undefined;
+      { peer_relay_id: string; public_key: string; nonce: string | null } | undefined;
     if (!peer) throw new HTTPException(404, { message: "No pending peer found for this relay_id" });
     if (!peer.nonce) throw new HTTPException(400, { message: "No nonce stored for this peer" });
 
@@ -1930,8 +1929,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     checkPeerLimit(relay_id);
 
     const peer = db.prepare("SELECT * FROM relay_peers WHERE peer_relay_id = ?").get(relay_id) as
-      | { peer_relay_id: string; public_key: string }
-      | undefined;
+      { peer_relay_id: string; public_key: string } | undefined;
     if (!peer) throw new HTTPException(404, { message: "Peer not found" });
 
     const valid = await verify(

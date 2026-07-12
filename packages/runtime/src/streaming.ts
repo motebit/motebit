@@ -390,8 +390,7 @@ export class StreamingManager {
             // When the full signed receipt is present (motebit_task), also forward it so
             // callers (e.g. the web receipt artifact) can render and verify the chain.
             let receiptSummary:
-              | { task_id: string; status: string; tools_used: string[] }
-              | undefined;
+              { task_id: string; status: string; tools_used: string[] } | undefined;
             let fullReceipt: import("@motebit/sdk").ExecutionReceipt | undefined;
             if (chunk.result != null && typeof chunk.result === "object") {
               const r = chunk.result as Record<string, unknown>;

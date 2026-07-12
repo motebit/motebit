@@ -267,8 +267,7 @@ export interface ImportedIdentityMetadata {
 }
 
 export type ImportIdentityResult =
-  | { valid: true; metadata: ImportedIdentityMetadata }
-  | { valid: false; reason: string };
+  { valid: true; metadata: ImportedIdentityMetadata } | { valid: false; reason: string };
 
 /**
  * Build the minimal `ImportedIdentityMetadata` for a **seed-only restore** —

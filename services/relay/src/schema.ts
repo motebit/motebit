@@ -35,8 +35,7 @@ export function createRelaySchema(db: DatabaseDriver): {
 
   function isTokenBlacklisted(jti: string, _motebitId: string): boolean {
     const row = db.prepare("SELECT 1 FROM relay_token_blacklist WHERE jti = ?").get(jti) as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
     return row !== undefined;
   }
   function isAgentRevoked(motebitId: string): boolean {

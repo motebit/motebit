@@ -14,13 +14,7 @@ import { bold, dim, cyan, green, command } from "./colors.js";
  * and silently normalized at parse time.
  */
 export type CliProvider =
-  | "anthropic"
-  | "openai"
-  | "google"
-  | "groq"
-  | "deepseek"
-  | "local-server"
-  | "proxy";
+  "anthropic" | "openai" | "google" | "groq" | "deepseek" | "local-server" | "proxy";
 
 export interface CliConfig {
   provider: CliProvider;

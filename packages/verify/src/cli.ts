@@ -90,11 +90,7 @@ const APPROVAL_DECISION_SUBCOMMAND = "approval-decision";
 
 interface ParsedArgs {
   readonly mode:
-    | "verify"
-    | "verify-content-artifact"
-    | "verify-approval-decision"
-    | "help"
-    | "version";
+    "verify" | "verify-content-artifact" | "verify-approval-decision" | "help" | "version";
   readonly file?: string;
   readonly json: boolean;
   readonly expectedType?: ArtifactType;

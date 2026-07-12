@@ -10,13 +10,7 @@
 
 /** Migration lifecycle states. Terminal states are irreversible. */
 export type MigrationState =
-  | "idle"
-  | "initiated"
-  | "attesting"
-  | "exporting"
-  | "settling"
-  | "departed"
-  | "cancelled";
+  "idle" | "initiated" | "attesting" | "exporting" | "settling" | "departed" | "cancelled";
 
 // === Migration Initiation (§4) ===
 

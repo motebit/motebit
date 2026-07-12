@@ -549,8 +549,7 @@ describe("SlabManager — screencast WebGL texture (v1.3 → texture register)",
       mgr as unknown as { group: { children: Array<{ name?: string; visible?: boolean }> } }
     ).group;
     const mesh = group.children.find((c) => c.name === "slab-screen") as unknown as
-      | { visible: boolean; material: { map: unknown; needsUpdate: boolean } }
-      | undefined;
+      { visible: boolean; material: { map: unknown; needsUpdate: boolean } } | undefined;
     return mesh ?? null;
   }
 

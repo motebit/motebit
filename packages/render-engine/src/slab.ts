@@ -960,9 +960,7 @@ export class SlabManager {
     // JS-heap and self-cleaning — no close method, no-ops through
     // the typeof check.
     const prev = this.screenTexture.image as
-      | (ImageBitmap & { close?: () => void })
-      | HTMLImageElement
-      | null;
+      (ImageBitmap & { close?: () => void }) | HTMLImageElement | null;
     if (prev != null && "close" in prev && typeof prev.close === "function") {
       prev.close();
     }
@@ -1020,9 +1018,7 @@ export class SlabManager {
     // and keeps the single-source-of-truth discipline.
     if (this.screenTexture != null) {
       const bitmap = this.screenTexture.image as
-        | (ImageBitmap & { close?: () => void })
-        | HTMLImageElement
-        | null;
+        (ImageBitmap & { close?: () => void }) | HTMLImageElement | null;
       if (bitmap != null && "close" in bitmap && typeof bitmap.close === "function") {
         bitmap.close();
       }

@@ -174,8 +174,7 @@ describe("McpClientAdapter — HTTP transport", () => {
 
     expect(mockHttpTransport).toHaveBeenCalledTimes(1);
     const transportOpts = mockHttpTransport.mock.calls[0]![1] as
-      | { fetch?: (url: string | URL, init?: RequestInit) => Promise<Response> }
-      | undefined;
+      { fetch?: (url: string | URL, init?: RequestInit) => Promise<Response> } | undefined;
     expect(transportOpts?.fetch).toBeTypeOf("function");
   });
 });

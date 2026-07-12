@@ -255,17 +255,15 @@ function resolveParams(over: Record<string, unknown> = {}) {
     prompt: "summarize",
     capability: "web_search",
     relayPublicKeyHex: PINNED_HEX,
-    buildP2pPayment: vi.fn(
-      async (req: SovereignP2pPaymentRequest): Promise<P2pPaymentProof> => ({
-        tx_hash: "p2p-tx",
-        chain: "solana",
-        network: "solana:x",
-        to_address: req.workerAddress,
-        amount_micro: req.amountMicro,
-        fee_to_address: req.treasuryAddress,
-        fee_amount_micro: req.feeAmountMicro,
-      }),
-    ),
+    buildP2pPayment: vi.fn(async (req: SovereignP2pPaymentRequest): Promise<P2pPaymentProof> => ({
+      tx_hash: "p2p-tx",
+      chain: "solana",
+      network: "solana:x",
+      to_address: req.workerAddress,
+      amount_micro: req.amountMicro,
+      fee_to_address: req.treasuryAddress,
+      fee_amount_micro: req.feeAmountMicro,
+    })),
     logger: { warn: vi.fn() },
     ...over,
   };
@@ -638,17 +636,15 @@ describe("selectAndRunDelegation", () => {
   });
 
   const buildProof = () =>
-    vi.fn(
-      async (req: SovereignP2pPaymentRequest): Promise<P2pPaymentProof> => ({
-        tx_hash: "p2p-tx",
-        chain: "solana",
-        network: "solana:x",
-        to_address: req.workerAddress,
-        amount_micro: req.amountMicro,
-        fee_to_address: req.treasuryAddress,
-        fee_amount_micro: req.feeAmountMicro,
-      }),
-    );
+    vi.fn(async (req: SovereignP2pPaymentRequest): Promise<P2pPaymentProof> => ({
+      tx_hash: "p2p-tx",
+      chain: "solana",
+      network: "solana:x",
+      to_address: req.workerAddress,
+      amount_micro: req.amountMicro,
+      fee_to_address: req.treasuryAddress,
+      fee_amount_micro: req.feeAmountMicro,
+    }));
 
   const baseSelect = () => ({
     motebitId: "alice",

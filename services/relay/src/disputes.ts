@@ -165,8 +165,7 @@ export function createDisputeTables(db: DatabaseDriver): void {
 
 function getDispute(db: DatabaseDriver, disputeId: string) {
   return db.prepare("SELECT * FROM relay_disputes WHERE dispute_id = ?").get(disputeId) as
-    | Record<string, unknown>
-    | undefined;
+    Record<string, unknown> | undefined;
 }
 
 /**
@@ -219,8 +218,7 @@ function tryFinalizeIfWindowExpired(
       "SELECT fund_action, split_ratio FROM relay_dispute_resolutions WHERE dispute_id = ? AND round = 1",
     )
     .get(dispute.dispute_id as string) as
-    | { fund_action: DisputeFundAction; split_ratio: number }
-    | undefined;
+    { fund_action: DisputeFundAction; split_ratio: number } | undefined;
   if (!resolution) {
     // Defensive: state=resolved without resolution row should not be
     // reachable, but if it is, log + skip rather than crash. The next
@@ -360,8 +358,7 @@ interface ResolveData {
  * attempt — caller surfaces 202 to client, /resolve poll later.
  */
 type ResolveOutcome =
-  | { kind: "resolved"; data: ResolveData }
-  | { kind: "deferred"; orchestration: OrchestrationRow };
+  { kind: "resolved"; data: ResolveData } | { kind: "deferred"; orchestration: OrchestrationRow };
 
 // === §6.2 Federation Orchestrator ===
 //
@@ -916,8 +913,7 @@ export async function runDeferredOrchestrationCycle(deps: {
     const dispute = db
       .prepare("SELECT dispute_id, body_json, filer_role FROM relay_disputes WHERE dispute_id = ?")
       .get(item.dispute_id) as
-      | { dispute_id: string; body_json: string; filer_role: string | null }
-      | undefined;
+      { dispute_id: string; body_json: string; filer_role: string | null } | undefined;
     if (!dispute) {
       // Dispute row pruned (retention); the orphan orchestration row
       // would block forever otherwise. Mark it timed_out so it stops
@@ -1100,8 +1096,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
           "SELECT settlement_id, task_id, motebit_id FROM relay_settlements WHERE task_id = ? AND settlement_mode = 'p2p'",
         )
         .get(req.task_id) as
-        | { settlement_id: string; task_id: string; motebit_id: string }
-        | undefined;
+        { settlement_id: string; task_id: string; motebit_id: string } | undefined;
 
       if (!p2pSettlement) {
         throw new HTTPException(404, { message: "Allocation not found" });
