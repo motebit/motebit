@@ -39,6 +39,12 @@ importers:
       '@microsoft/api-extractor':
         specifier: ^7.58.7
         version: 7.58.7(@types/node@26.0.1)
+      '@motebit/runtime':
+        specifier: workspace:*
+        version: link:packages/runtime
+      '@motebit/verifier':
+        specifier: workspace:*
+        version: link:packages/verifier
       '@motebit/wallet-solana':
         specifier: workspace:*
         version: link:packages/wallet-solana
