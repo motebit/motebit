@@ -212,7 +212,9 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # cooldown for github-actions supports only default-days — the semver-*
+    # keys are invalid here and an invalid config stops Dependabot processing
+    # (caught by the dependabot-api validation check on PR #291).
     cooldown:
       default-days: 5
-      semver-major-days: 14
     open-pull-requests-limit: 5
