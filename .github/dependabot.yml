@@ -13,6 +13,35 @@ updates:
       default-days: 7
       semver-minor-days: 7
       semver-major-days: 21
+    # Majors we have already decided against — each ignore names its release
+    # condition; none is "never". Without these, dependabot re-opens the same
+    # rejected PR every weekly run. Full rationale lives in the closing
+    # comments of #234 / #235 / #238 / #239 / #240.
+    ignore:
+      # docs/doctrine/foundational-tool-adoption.md: TypeScript pinned ^5.9 —
+      # TS 6.0 was adopted and reverted (upstream @typescript-eslint/TS-6 bug
+      # broke typed-linting in ~19 packages). Remove on the doctrine's named
+      # re-evaluation trigger.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      # @types/node majors track the Node runtime actually in use (22 today).
+      # Bump the types major together with the runtime major, deliberately.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # eslint 9+ forces the flat-config migration — a foundational-tool
+      # adoption arc (same doctrine as TypeScript). eslint 8 is EOL, so this
+      # arc should be scheduled deliberately; remove the ignore when it is.
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
+      # pnpm.overrides caps @hono/node-server at <2.0.0. A manifest-only major
+      # bump would claim 2.x while 1.x actually installs (manifest-vs-installed
+      # drift, see #240). Remove together with the override.
+      - dependency-name: "@hono/node-server"
+        update-types: ["version-update:semver-major"]
+      # jsdom 29 requires undici 7; pnpm.overrides caps undici at <7.0.0
+      # (see #239). Remove together with the undici override bump.
+      - dependency-name: "jsdom"
+        update-types: ["version-update:semver-major"]
     # Grouping strategy: isolate blast radius.
     #
     # Crypto deps are security-critical — any compromise undermines the thesis,
