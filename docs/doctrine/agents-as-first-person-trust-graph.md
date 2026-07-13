@@ -70,6 +70,27 @@ instead of importing a squatter-friendly global proxy. The importable global sco
 is convenient precisely because it is portable — and portable is exactly what makes
 it farmable.
 
+**The full gauntlet (2026-07-12).** Three days later the same probe wallet had
+walked every alternative, and the survey is worth recording because each gate is a
+_different_ global-score heuristic failing the same legitimate newcomer. The
+official faucet: a dry commons (shared pool, per-IP rationing — no notion of who
+you are at all, so the honest and the farmers drain it together). The web faucet:
+the GitHub repo-count score above. `devnetfaucet.org`: membership in a curated
+ecosystem _registry_ plus a human vouching queue — the central-authority naming
+model this doc's petname section refuses, applied to twenty cents of test tokens.
+QuickNode: hold real mainnet SOL — anti-sybil via wealth, the one gate that
+actually works and the one that concedes the point, because it prices identity
+instead of earning it. And the elegant failure: the proof-of-work faucet is
+genuinely permissionless — 1.9M devnet SOL sitting in an open pool, take what you
+can mine — except submitting a mining transaction costs fee dust you can only get
+from the gates above. Permissionless access, bootstrap-gated by the very system it
+exists to bypass: the cold-start circularity in one tool. Resolution, for the
+record: the operator sent the probe **one real dollar** as balance collateral —
+identity established not by any of the four reputation proxies but by a costly,
+non-forgeable, first-person act. Which is this doc's thesis, demonstrated by the
+adversary's own tooling: when every imported score fails, what still works is a
+pairwise stake someone actually paid.
+
 The graph the semiring ranks
 ([`packages/semiring/src/agent-network.ts`](../../packages/semiring/src/agent-network.ts))
 is an **ego graph**: a star of edges from `self → each known peer`, plus
