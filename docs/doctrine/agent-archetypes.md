@@ -26,6 +26,38 @@ An archetype's quality claim is not a badge; it is the fact that a scheduled adv
 
 The Researcher runs on the operator's inference key. This sits squarely inside the never-sell-intelligence line: what the archetype sells is a _verifiable work product_ — a report whose every web claim carries a content digest re-checkable to the primary record, under a signed receipt tree. Intelligence is a metabolized input (THE_METABOLIC_PRINCIPLE: absorb solved problems), priced into the task's `unit_cost` as overhead alongside compute and bandwidth. The Auditor is the sharper statement of the same principle: it needs no LLM at all, because its product is pure verification — the most motebit-native deliverable possible. Economics stay honest about today's rails: paid delegation is P2P-at-the-top-of-chain; atom hops inside the archetype fleet run at zero cost until the multi-hop settlement arc lands ([`off-ramp-as-user-action.md`](off-ramp-as-user-action.md) names the deferred topology) — the receipts flow either way, and nothing pretends to settle what doesn't.
 
+**Cost-indexed pricing (2026-07-13).** A `unit_cost` is a derivation, never a mood
+— three rules and a floor, so every listed price traces to a number someone can
+re-check:
+
+1. **Atoms price at 1–2× marginal cost.** The API economy already ran the price
+   discovery: commodity web search clears at ~\$0.001–0.01/query, page reads at
+   ~\$0.001–0.005. An agent economy is a price-taker's market by construction —
+   auto-routing (`f(TaskShape × ProviderCapability × Constraints)`) comparison-
+   shops every task, so a commodity atom listed above its comps simply never
+   routes. (Atom prices activate with the multi-hop settlement arc; ~\$0.002–0.01.)
+2. **Molecules price at inference-cost-plus-thin.** Never-sell-intelligence makes
+   the token bill a passed-through input, not a margin source — the business is
+   the relay's 5% and the accumulated history, so molecule margin stays thin and
+   honest (research \$0.25 against ~\$0.17–0.20 of Sonnet-class inference+search;
+   \$0.05-class on a Haiku-class model). Corollary: prices are **model-indexed and
+   deflate with inference** (~10×/year and holding) — repricing is routine
+   maintenance, not an event.
+3. **Verification prices at near-zero, never zero.** Attestation volume is the
+   moat's raw input — every audit mints an `EvalAttestation` and a settlement row
+   — so the Auditor (and the Clerk's flat execution fee) price at the floor
+   (\$0.01) to make the behavior reflexive. Never \$0: a free task mints no
+   settlement and no dispute-grade history, and exits the paid path entirely.
+   Cheap-but-settled beats free for the thesis.
+
+**The floor:** a Solana P2P settle costs the delegator ~\$0.0005–0.001 in tx fees,
+so per-task prices below ~\$0.002 spend more on settlement than on work — that
+regime belongs to the batching/streaming arc, not to lower list prices. Integer
+micro-units carry 100× more deflation headroom (\$0.002 = 2,000 micro; its 5% fee
+= 100 micro). Canonical prices live in `scripts/deploy-archetype-slate.ts`
+(`MOTEBIT_UNIT_COST`) with service-code defaults matching; the gallery table and
+architecture tree are display siblings.
+
 ## 6. The Clerk — the money-execution pole
 
 The Auditor's deliverable is pure verification with zero money; the Clerk is its opposite pole — the archetype whose deliverable _is_ moving money. It is the product-facing proof of the R4 spine: where AGT and Hermes stop at informing, the Clerk **acts under a grant**. It holds a signed `StandingDelegation` — a _self-issued_ grant, matching the shipped standing-delegation path (`apps/cli/src/subcommands/grant.ts`: `delegator == delegate`, the holder mints its own per-tick tokens, verified by `verifyTokenAgainstGrant`). That is the crypto-honest shape of autonomy: a cross-party grant would need the granter to sign every tick, which is no longer autonomous. So the Clerk's grant is a signed, self-imposed spend _ceiling_ over its own operator-funded wallet ([`memory-never-confers-authority.md`](memory-never-confers-authority.md): a signed grant is authority; a self-signed spend-bound is deterministic signed authority, not a trust claim — the meter, not the signature, is what constrains). On each task it self-mints a fresh per-tick token and executes a paid sub-delegation to the Researcher within the grant's _signed_ ceiling — no per-action human tap. The owner's control is expressed through what it funds the wallet with and the ceiling it deploys; a _cross-party_ operator-signed grant (the operator authorizing each tick over its OWN funds) is the stricter, non-autonomous variant, deferred with the marketplace-grant-transport arc.

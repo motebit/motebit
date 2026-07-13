@@ -26,8 +26,8 @@
  * Economics posture (agent-archetypes.md §5): atoms run at unit_cost 0
  * (zero-cost carve-out — the delegation chain is relay-visible and
  * receipted, nothing settles until the multi-hop settlement arc);
- * molecules are priced (research $0.50 incl. operator inference, auditor
- * $0.05 LLM-free) and settle P2P-at-top-of-chain.
+ * molecules are priced cost-indexed (research $0.25 incl. operator inference, auditor
+ * $0.01 LLM-free, clerk $0.01) and settle P2P-at-top-of-chain.
  */
 
 import { execFileSync } from "node:child_process";
@@ -124,7 +124,7 @@ export const SLATE: SlateService[] = [
     secrets: (ctx) => ({
       MOTEBIT_SYNC_URL: ctx.relayUrl,
       MOTEBIT_API_TOKEN: ctx.apiToken,
-      MOTEBIT_UNIT_COST: "0.50",
+      MOTEBIT_UNIT_COST: "0.25",
       MOTEBIT_SETTLEMENT_MODES: "relay,p2p",
       ANTHROPIC_API_KEY: process.env["ANTHROPIC_API_KEY"] ?? "",
       MOTEBIT_WEB_SEARCH_URL: `${ctx.appHost(TARGET === "prod" ? "motebit-web-search" : "motebit-web-search-stg")}/mcp`,
@@ -148,7 +148,7 @@ export const SLATE: SlateService[] = [
       MOTEBIT_SYNC_URL: ctx.relayUrl,
       MOTEBIT_API_TOKEN: ctx.apiToken,
       MOTEBIT_RELAY_URL: ctx.relayUrl,
-      MOTEBIT_UNIT_COST: "0.05",
+      MOTEBIT_UNIT_COST: "0.01",
       MOTEBIT_SETTLEMENT_MODES: "relay,p2p",
     }),
   },
@@ -162,7 +162,7 @@ export const SLATE: SlateService[] = [
     secrets: (ctx) => ({
       MOTEBIT_SYNC_URL: ctx.relayUrl,
       MOTEBIT_API_TOKEN: ctx.apiToken,
-      MOTEBIT_UNIT_COST: "0.05",
+      MOTEBIT_UNIT_COST: "0.01",
       MOTEBIT_SETTLEMENT_MODES: "relay,p2p",
       // DRY-RUN-FIRST: the whole metered spine runs at hard-zero (no broadcast,
       // live ceiling untouched). Flipping to live money is a deliberate,

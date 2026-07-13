@@ -92,7 +92,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const unitCost = parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.50");
+  const unitCost = parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.20");
 
   await runMolecule(
     {
