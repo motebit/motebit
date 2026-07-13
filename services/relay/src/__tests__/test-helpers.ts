@@ -8,7 +8,18 @@ import { createSyncRelay } from "../index.js";
 import type { SyncRelay, SyncRelayConfig } from "../index.js";
 import { deriveSolanaAddress, SOLANA_MAINNET_CAIP2 } from "@motebit/wallet-solana";
 import { PLATFORM_FEE_RATE } from "@motebit/protocol";
-import { creditAccount, toMicro, fromMicro } from "../accounts.js";
+import type { AgentTask } from "@motebit/sdk";
+import { AgentTaskStatus, asMotebitId, asAllocationId, asGoalId } from "@motebit/sdk";
+import { allocateBudget, computeGrossAmount } from "@motebit/market";
+import { TaskQueue } from "../task-queue.js";
+import {
+  creditAccount,
+  debitSpendableAccount,
+  getAccountBalance,
+  computeDisputeWindowHold,
+  toMicro,
+  fromMicro,
+} from "../accounts.js";
 
 // === Auth constants ===
 
@@ -169,4 +180,123 @@ export function seedBalance(relay: SyncRelay, motebitId: string, amount: number)
     "test seed",
   );
   return fromMicro(newBalanceMicro);
+}
+
+// === x402-paid submission harness ===
+//
+// After the Arc 3.5 gate, the only cross-agent relay-custody settlement the
+// submission route still creates is the x402-paid one — and `x402TxHash` is
+// set exclusively by the real `onAfterSettle` payment hook behind an external
+// facilitator, so that branch cannot be driven end-to-end from the harness.
+// This helper seeds the exact state a successful x402-paid submission leaves
+// behind (a byte-faithful mirror of the x402 branch in `tasks.ts` — queue
+// entry with `x402_tx_hash`, auto-deposit credit, risk-buffered allocation
+// hold + `relay_allocations` 'locked' row) so tests can drive the REAL
+// receipt → settlement → dispute → withdrawal path over live routes. Only
+// the facilitator round-trip is faked; every ledger mutation goes through
+// the same primitives production uses. Sibling of `seedBalance` (ledger
+// seeding) and `buildP2pPaymentProof` (proof construction).
+//
+// TaskQueue is write-through SQLite (no in-memory cache), so a second
+// instance over the same db is visible to the relay's route handlers.
+
+/** A format-plausible fake x402 (EVM) transaction hash. */
+export function fakeX402TxHash(): string {
+  let s = "0x";
+  for (let i = 0; i < 64; i++) s += "0123456789abcdef"[Math.floor(Math.random() * 16)];
+  return s;
+}
+
+export interface SeedX402PaidTaskArgs {
+  /** The worker (target agent) — must be registered with a priced listing. */
+  workerId: string;
+  /** The delegator (submitter). */
+  delegatorId: string;
+  prompt: string;
+  /** The worker's listing unit_cost in decimal USD (net to worker). */
+  unitCostUsd: number;
+  /** Override the x402 tx hash; defaults to a fresh `fakeX402TxHash()`. */
+  txHash?: string;
+}
+
+/**
+ * Seed an x402-paid direct delegation at the point submission leaves it:
+ * pending task in the durable queue (with `x402_tx_hash`), the delegator's
+ * x402 auto-deposit, and the locked budget allocation. Returns the task_id;
+ * POST the signed receipt to `/agent/:worker/task/:taskId/result` to drive
+ * the real relay-custody settlement.
+ */
+export function seedX402PaidTask(relay: SyncRelay, args: SeedX402PaidTaskArgs): string {
+  const db = relay.moteDb.db;
+  const taskId = crypto.randomUUID();
+  const now = Date.now();
+  const txHash = args.txHash ?? fakeX402TxHash();
+
+  // Mirror: unitCostAtSubmission → gross price snapshot (tasks.ts submission).
+  const priceSnapshot = toMicro(computeGrossAmount(args.unitCostUsd, PLATFORM_FEE_RATE));
+
+  const task: AgentTask = {
+    task_id: taskId,
+    motebit_id: asMotebitId(args.workerId),
+    prompt: args.prompt,
+    submitted_at: now,
+    submitted_by: args.delegatorId,
+    status: AgentTaskStatus.Pending,
+  };
+
+  new TaskQueue(db).set(taskId, {
+    task,
+    expiresAt: now + 10 * 60 * 1000, // TASK_TTL_MS
+    submitted_by: args.delegatorId,
+    price_snapshot: priceSnapshot,
+    x402_tx_hash: txHash,
+    x402_network: X402_TEST_CONFIG.network,
+    settlement_mode: "relay",
+  });
+
+  // Mirror: x402 auto-deposit to the delegator's virtual account.
+  creditAccount(
+    db,
+    args.delegatorId,
+    priceSnapshot,
+    "deposit",
+    `x402-${taskId}`,
+    `x402 payment for task ${taskId}`,
+  );
+
+  // Mirror: risk-buffered allocation hold (spendable balance only).
+  const account = getAccountBalance(db, args.delegatorId);
+  const rawBalance = account?.balance ?? 0;
+  const escrowHold = computeDisputeWindowHold(db, args.delegatorId);
+  const virtualBalance = Math.max(0, rawBalance - escrowHold);
+
+  const allocation = allocateBudget(
+    {
+      goal_id: asGoalId(taskId),
+      candidate_motebit_id: asMotebitId(args.workerId),
+      estimated_cost: priceSnapshot,
+      currency: "USDC",
+      risk_factor: 1.0,
+    },
+    virtualBalance,
+    asAllocationId(`x402-${taskId}`),
+  );
+  if (!allocation) {
+    throw new Error("seedX402PaidTask: allocation failed — delegator balance below gross price");
+  }
+  allocation.amount_locked = Math.round(allocation.amount_locked);
+
+  debitSpendableAccount(
+    db,
+    args.delegatorId,
+    allocation.amount_locked,
+    "allocation_hold",
+    `x402-${taskId}`,
+    `Hold for task ${taskId} to ${args.workerId}`,
+  );
+  db.prepare(
+    "INSERT OR IGNORE INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, ?, 'locked', ?)",
+  ).run(`x402-${taskId}`, taskId, args.workerId, allocation.amount_locked, now);
+
+  return taskId;
 }
