@@ -2308,8 +2308,89 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         }
       | undefined;
 
+    // Phase 0: Pinned-local paid dispatch — the single-operator sibling of the
+    // `federatedP2pIntent` branch below. The delegator already discovered,
+    // priced, and PAID this specific local worker onchain (the 2-leg proof was
+    // validated above); ranking it against the market again is wrong in both
+    // directions — a zero-history pair ranks to composite 0 (task strands with
+    // the worker's money settled: the 2026-07-13 staging conformance failure),
+    // and a re-ranked winner could route the paid task to an agent the
+    // delegator never paid. Dispatch DIRECTLY to the pinned worker: WebSocket
+    // when connected, else HTTP MCP via its registered endpoint. No ranking,
+    // no federation, no fallback broadcast (Phases 1–4 are skipped via
+    // `pinnedLocalHandled` even when dispatch fails — a paid task must never
+    // fan out to a worker the delegator did not pay).
+    let pinnedLocalHandled = false;
+    if (settlementMode === "p2p" && body.target_agent != null && !federatedP2pIntent) {
+      pinnedLocalHandled = true;
+      const pinnedId = body.target_agent;
+      routingChoice = {
+        selected_agent: pinnedId,
+        composite_score: 1,
+        sub_scores: { pinned: 1 },
+        routing_paths: [[pinnedId]],
+        alternatives_considered: 0,
+      };
+      const pinnedPeers = connections.get(pinnedId);
+      if (pinnedPeers && pinnedPeers.length > 0) {
+        for (const peer of pinnedPeers) {
+          peer.ws.send(payload);
+        }
+        routed = true;
+        logger.info("task.p2p_pinned_dispatched", {
+          correlationId: taskId,
+          worker: pinnedId,
+          via: "websocket",
+        });
+      } else {
+        const pinnedReg = moteDb.db
+          .prepare(
+            "SELECT endpoint_url FROM agent_registry WHERE motebit_id = ? AND expires_at > ?",
+          )
+          .get(pinnedId, Date.now()) as { endpoint_url: string } | undefined;
+        if (pinnedReg?.endpoint_url?.trim()) {
+          void forwardTaskViaMcp(
+            pinnedReg.endpoint_url,
+            taskId,
+            body.prompt,
+            pinnedId,
+            taskQueue as Map<string, { task: { status: string }; receipt?: unknown }>,
+            logger,
+            apiToken,
+            async (receiptCandidate: ReceiptCandidate) => {
+              const mcpEntry = taskQueue.get(taskId);
+              if (!mcpEntry || mcpEntry.settled) return;
+              await handleReceiptIngestion(
+                receiptCandidate as unknown as ExecutionReceipt,
+                taskId,
+                mcpEntry.task.motebit_id,
+                mcpEntry,
+                ingestionDeps,
+              );
+            },
+          );
+          routed = true;
+          logger.info("task.p2p_pinned_dispatched", {
+            correlationId: taskId,
+            worker: pinnedId,
+            via: "mcp",
+            endpoint: pinnedReg.endpoint_url,
+          });
+        } else {
+          // Paid task with no reachable worker transport — leave queued (the
+          // worker may reconnect and claim within TTL) but say so LOUDLY:
+          // money has settled onchain and nothing is executing.
+          logger.error("task.p2p_pinned_unroutable", {
+            correlationId: taskId,
+            worker: pinnedId,
+            reason: "no WebSocket connection and no registered endpoint_url",
+          });
+        }
+      }
+    }
+
     // Phase 1: Scored routing — find best service agents from listings
-    if (requiredCaps.length > 0) {
+    if (!pinnedLocalHandled && requiredCaps.length > 0) {
       try {
         const { profiles, requirements } = taskRouter.buildCandidateProfiles(
           requiredCaps[0],
@@ -2716,6 +2797,16 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                     });
                   } else {
                     taskRouter.recordPeerForwardResult(peerEndpoint, false);
+                    // Loud, not silent: this rejection sets `federationAttempted`,
+                    // which suppresses every local fallback phase — an unlogged
+                    // branch here strands the task with zero forensic trail
+                    // (masked the 2026-07-13 staging conformance failure).
+                    logger.warn("task.forward_rejected", {
+                      correlationId: taskId,
+                      peerRelay: peerEndpoint,
+                      targetAgent: selId,
+                      status: resp.status,
+                    });
                   }
                 } catch (fwdErr) {
                   taskRouter.recordPeerForwardResult(peerEndpoint, false);
@@ -2779,7 +2870,9 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // Phase 2: Broadcast fallback — original behavior.
     // Skip if a federation forward was attempted (even if it timed out) — the peer relay
     // may have accepted the task, and broadcasting locally would cause double-execution.
-    if (!routed && !federationAttempted) {
+    // Also skip for pinned-local paid tasks (Phase 0): fan-out could execute the
+    // paid task on a worker the delegator never paid.
+    if (!pinnedLocalHandled && !routed && !federationAttempted) {
       const peers = connections.get(motebitId);
       if (peers) {
         for (const peer of peers) {
@@ -2795,7 +2888,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
 
     // Phase 3: HTTP MCP fallback — when no WebSocket routed the task,
     // find a registered agent with matching capabilities and forward via HTTP.
-    if (!routed && !federationAttempted && requiredCaps.length > 0) {
+    if (!pinnedLocalHandled && !routed && !federationAttempted && requiredCaps.length > 0) {
       const now = Date.now();
       const capFilter = requiredCaps[0]!;
       const httpCandidate = moteDb.db
@@ -2834,7 +2927,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // Phase 4: Push wake — when no WebSocket, no HTTP MCP, and no federation routed the task,
     // attempt to wake a mobile device via push notification. Fire-and-forget — the task stays
     // in queue regardless. The device will reconnect via WebSocket and claim the task.
-    if (!routed && !federationAttempted && pushAdapter) {
+    if (!pinnedLocalHandled && !routed && !federationAttempted && pushAdapter) {
       void attemptPushWake(motebitId, { pushAdapter, db: moteDb.db });
     }
 
