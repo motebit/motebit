@@ -23,21 +23,21 @@ import {
   jsonAuthWithIdempotency,
   createTestRelay,
   createAgent,
-  seedBalance,
+  seedX402PaidTask,
 } from "./test-helpers.js";
 
-// Arc 3.5: both tests are relay-custody CROSS-AGENT fund-refund disputes — they
-// deposit, settle a paid cross-agent task into relay custody, then dispute and
-// move funds (refund / split). The gate now requires P2P for paid cross-agent
-// delegation, so a cross-agent relay-custody settlement can no longer be created
-// to dispute (x402-paid relay settlements survive but aren't test-drivable; self-
-// delegation has no opposing party to dispute). The SURVIVING dispute form — a
-// P2P trust-layer complaint with NO fund movement — is covered by
-// `p2p-cycle-e2e.test.ts` ("p2p dispute creates trust-layer complaint with no
-// fund movement"). The relay-custody dispute-refund LOGIC is preserved in code
-// (still reachable for x402 settlements); these E2E tests are skipped until a
-// drivable cross-agent relay-custody path exists. See off-ramp-as-user-action.md
-// § "Arc 3.5".
+// Arc 3.5: both tests are relay-custody CROSS-AGENT fund-refund disputes over
+// the ONE surviving relay-custody form — the x402-PAID settlement. The gate
+// requires P2P for deposit-funded paid delegation, so the tests drive the
+// x402 shape: `seedX402PaidTask` seeds the exact state a successful x402-paid
+// submission leaves behind (queue entry with x402_tx_hash + auto-deposit +
+// locked allocation — the facilitator round-trip is the only faked step,
+// since `x402TxHash` is set exclusively by the real `onAfterSettle` payment
+// hook), then everything downstream is REAL and route-driven: receipt
+// ingestion → signed relay settlement → dispute window hold → dispute filing
+// → resolution fund movement → withdrawal → ledger reconciliation. The P2P
+// trust-layer complaint form (no fund movement) is covered by
+// `p2p-cycle-e2e.test.ts`. See off-ramp-as-user-action.md § "Arc 3.5".
 describe("Dispute Cycle E2E", () => {
   let relay: SyncRelay;
 
@@ -49,7 +49,7 @@ describe("Dispute Cycle E2E", () => {
     await relay.close();
   });
 
-  it.skip("settle → hold blocks → dispute → resolve refund → delegator withdraws", async () => {
+  it("settle → hold blocks → dispute → resolve refund → delegator withdraws", async () => {
     // === SETUP ===
     const workerKp = await generateKeypair();
     const delegatorKp = await generateKeypair();
@@ -78,21 +78,13 @@ describe("Dispute Cycle E2E", () => {
       }),
     });
 
-    // === STEP 1: DEPOSIT ===
-    seedBalance(relay, delegator.motebitId, 10.0);
-
-    // === STEP 2: DELEGATE ===
-    const taskRes = await relay.app.request(`/agent/${worker.motebitId}/task`, {
-      method: "POST",
-      headers: jsonAuthWithIdempotency(),
-      body: JSON.stringify({
-        prompt: "search for something",
-        submitted_by: delegator.motebitId,
-        required_capabilities: ["web_search"],
-      }),
+    // === STEPS 1+2: x402-PAID SUBMISSION (seeded — see header) ===
+    const taskId = seedX402PaidTask(relay, {
+      workerId: worker.motebitId,
+      delegatorId: delegator.motebitId,
+      prompt: "search for something",
+      unitCostUsd: 1.0,
     });
-    expect(taskRes.status).toBe(201);
-    const { task_id: taskId } = (await taskRes.json()) as { task_id: string };
 
     // === STEP 3: RECEIPT + SETTLEMENT ===
     const enc = new TextEncoder();
@@ -184,12 +176,25 @@ describe("Dispute Cycle E2E", () => {
     expect(disputeRes.status).toBe(200);
     const { dispute_id: disputeId } = (await disputeRes.json()) as { dispute_id: string };
 
-    // === STEP 6: DISPUTE HOLD RELEASES WITHDRAWAL HOLD ===
-    // After dispute is filed, the dispute owns the lock. Window hold should be 0.
+    // === STEP 6: HOLD PERSISTS THROUGH THE DISPUTE ===
+    // The escrow hold is a UNION of (24h window open) OR (active dispute
+    // references the task) — filing a dispute must NOT release the funds,
+    // or the worker could withdraw mid-dispute and defeat the claw-back
+    // (dispute-v1.md §7.5; the pre-2026-06 predicate had exactly that bug).
     const workerBal2 = (await (
       await relay.app.request(`/api/v1/agents/${worker.motebitId}/balance`, { headers: AUTH })
     ).json()) as { dispute_window_hold: number };
-    expect(workerBal2.dispute_window_hold).toBe(0);
+    expect(workerBal2.dispute_window_hold).toBe(workerEarnings);
+
+    const blockedMidDispute = await relay.app.request(
+      `/api/v1/agents/${worker.motebitId}/withdraw`,
+      {
+        method: "POST",
+        headers: jsonAuthWithIdempotency(),
+        body: JSON.stringify({ amount: workerEarnings, destination: "pending" }),
+      },
+    );
+    expect(blockedMidDispute.status).toBe(402);
 
     // === STEP 7: RESOLVE DISPUTE — REFUND TO DELEGATOR ===
     const resolveRes = await relay.app.request(`/api/v1/disputes/${disputeId}/resolve`, {
@@ -241,7 +246,7 @@ describe("Dispute Cycle E2E", () => {
     expect(reconciliation.errors).toHaveLength(0);
   });
 
-  it.skip("settle → dispute → resolve split → both parties credited", async () => {
+  it("settle → dispute → resolve split → both parties credited", async () => {
     // === SETUP (same as above) ===
     const workerKp = await generateKeypair();
     const delegatorKp = await generateKeypair();
@@ -269,19 +274,13 @@ describe("Dispute Cycle E2E", () => {
       }),
     });
 
-    seedBalance(relay, delegator.motebitId, 10.0);
-
-    const taskRes = await relay.app.request(`/agent/${worker.motebitId}/task`, {
-      method: "POST",
-      headers: jsonAuthWithIdempotency(),
-      body: JSON.stringify({
-        prompt: "do work",
-        submitted_by: delegator.motebitId,
-        required_capabilities: ["web_search"],
-      }),
+    // x402-paid submission (seeded — see header)
+    const taskId = seedX402PaidTask(relay, {
+      workerId: worker.motebitId,
+      delegatorId: delegator.motebitId,
+      prompt: "do work",
+      unitCostUsd: 2.0,
     });
-    expect(taskRes.status).toBe(201);
-    const { task_id: taskId } = (await taskRes.json()) as { task_id: string };
 
     const enc = new TextEncoder();
     const receipt = await signExecutionReceipt(
@@ -365,26 +364,40 @@ describe("Dispute Cycle E2E", () => {
       .run(Date.now() - 25 * 60 * 60 * 1000, disputeId);
     await relay.app.request(`/api/v1/disputes/${disputeId}`, { headers: AUTH });
 
-    // Both parties should have settlement_credit transactions from the split
+    // Post-settlement split redistributes by CLAW-BACK (dispute-v1.md §7.4,
+    // the mint fix): the worker already holds the full net, so it KEEPS its
+    // 60% share (no second credit — crediting it would mint money) and is
+    // debited the delegator's 40%, which moves to the delegator as a
+    // settlement_credit. Both legs reference the dispute.
     const workerBal = (await (
       await relay.app.request(`/api/v1/agents/${worker.motebitId}/balance`, { headers: AUTH })
-    ).json()) as { transactions: Array<{ type: string; amount: number; reference_id: string }> };
+    ).json()) as {
+      balance: number;
+      transactions: Array<{ type: string; amount: number; reference_id: string }>;
+    };
 
     const delegatorBal = (await (
       await relay.app.request(`/api/v1/agents/${delegator.motebitId}/balance`, { headers: AUTH })
-    ).json()) as { transactions: Array<{ type: string; amount: number; reference_id: string }> };
+    ).json()) as {
+      balance: number;
+      transactions: Array<{ type: string; amount: number; reference_id: string }>;
+    };
 
-    const workerSplit = workerBal.transactions.find(
-      (t) => t.type === "settlement_credit" && t.reference_id === disputeId,
+    const workerClawback = workerBal.transactions.find(
+      (t) => t.type === "settlement_debit" && t.reference_id === disputeId,
     );
     const delegatorSplit = delegatorBal.transactions.find(
       (t) => t.type === "settlement_credit" && t.reference_id === disputeId,
     );
 
-    expect(workerSplit).toBeDefined();
+    expect(workerClawback).toBeDefined();
     expect(delegatorSplit).toBeDefined();
-    // Worker gets 60%, delegator gets 40%
-    expect(workerSplit!.amount).toBeGreaterThan(delegatorSplit!.amount);
+    // The claw-back and the refund are the same funds: one debit, one credit.
+    expect(-workerClawback!.amount).toBe(delegatorSplit!.amount);
+    // Worker retains 60% of the net, delegator receives 40%.
+    expect(workerBal.balance).toBeGreaterThan(delegatorBal.balance);
+    expect(workerBal.balance).toBeGreaterThan(0);
+    expect(delegatorSplit!.amount).toBeGreaterThan(0);
 
     // Ledger reconciles
     expect(reconcileLedger(relay.moteDb.db).consistent).toBe(true);
