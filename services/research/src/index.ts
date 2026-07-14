@@ -89,7 +89,7 @@ async function main(): Promise<void> {
   // Default covers worst-case sonnet inference (~$0.26–0.42/report at the
   // 8-tool-call cap) — the per-report cost_estimate_usd log is the tuning
   // signal before any prod price change.
-  const unitCost = parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.50");
+  const unitCost = parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.25");
 
   await runMolecule(
     {

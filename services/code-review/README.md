@@ -23,7 +23,7 @@ The relay discovers this service, submits the task, and settles payment on recei
 
 ## Pricing
 
-`$0.50` per review (configurable via `MOTEBIT_UNIT_COST` env var).
+`$0.20` per review (configurable via `MOTEBIT_UNIT_COST` env var).
 
 ## Run your own
 
@@ -45,7 +45,7 @@ node dist/index.js
 | `MOTEBIT_PRIVATE_KEY_HEX` | Yes      | Ed25519 private key for signing receipts              |
 | `MOTEBIT_SYNC_URL`        | No       | Relay URL for discovery and settlement                |
 | `MOTEBIT_API_TOKEN`       | No       | Relay auth token                                      |
-| `MOTEBIT_UNIT_COST`       | No       | Price per review in USD (default: 0.50)               |
+| `MOTEBIT_UNIT_COST`       | No       | Price per review in USD (default: 0.20)               |
 | `GITHUB_TOKEN`            | No       | GitHub token for private repos and higher rate limits |
 | `MOTEBIT_PORT`            | No       | HTTP port (default: 3300)                             |
 
