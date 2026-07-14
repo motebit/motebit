@@ -70,6 +70,50 @@ instead of importing a squatter-friendly global proxy. The importable global sco
 is convenient precisely because it is portable — and portable is exactly what makes
 it farmable.
 
+**The full gauntlet (2026-07-12).** Three days later the same probe wallet had
+walked every alternative, and the survey is worth recording because each gate is a
+_different_ global-score heuristic failing the same legitimate newcomer. The
+official faucet: a dry commons (shared pool, per-IP rationing — no notion of who
+you are at all, so the honest and the farmers drain it together). The web faucet:
+the GitHub repo-count score above. `devnetfaucet.org`: membership in a curated
+ecosystem _registry_ plus a human vouching queue — the central-authority naming
+model this doc's petname section refuses, applied to twenty cents of test tokens.
+QuickNode: hold real mainnet SOL — the one gate that actually works, because it
+bottoms out in the right primitive (a costly, non-forgeable signal; every real
+anti-sybil scheme does), and the one worth dissecting, because it takes that
+primitive in exactly the wrong shape. `balanceOf(wallet) >= X` is a global,
+memoryless, unbound threshold: nothing binds the capital to an identity (the same
+0.05 SOL hops serially across a hundred wallets, gate-passing each), nothing is at
+risk (the toll is refundable, so it is a credential, not a commitment), no history
+accrues (ten years of good citizenship never lowers the bar; abuse never raises
+it), and there is no earning path (a broke honest newcomer has no move, forever —
+capital is all there ever is). Contrast the commitment-bond shape
+([`commitment-bond.md`](commitment-bond.md)): stake bound to the identity key
+(`bonded_address == deriveSolanaAddress(bonded_public_key)` — one pot cannot back
+many identities), re-verified at accept-time, composing as a _reduced cold-start
+bar_ alongside earned interaction history — a toll paid once that decays as
+receipts take over. The failure is not pricing identity at cold-start; a costly
+signal is the only correct move when no history channel exists. The failure is
+that pricing is all there ever is. And the elegant failure: the proof-of-work faucet is
+genuinely permissionless — 1.9M devnet SOL sitting in an open pool, take what you
+can mine — except submitting a mining transaction costs fee dust you can only get
+from the gates above. Permissionless access, bootstrap-gated by the very system it
+exists to bypass: the cold-start circularity in one tool. Resolution, for the
+record (2026-07-13, ~2am): the operator parked **~0.13 SOL of real mainnet
+capital (≈$10)** on a wallet he controlled, and the wealth gate opened. The
+instructive detail is that the price of identity turned out to be _published_:
+QuickNode documents 0.05 SOL as the exact mainnet balance that makes you a
+person — the first attempt, one real dollar, was refused not for being capital
+but for being _insufficient_ capital, against a posted price list. Personhood as
+a tariff schedule is the global-score anti-pattern in its most honest form: at
+least this gate tells you the number. The staked capital is the same
+costly-signal primitive this doc endorses at cold-start, when no history channel
+exists yet — that is the thesis in one act: every _imported_ score failed, and
+what worked was capital someone actually staked. The wrong shape and the right
+one part ways only afterward — the wealth gate stays a memoryless toll forever
+(refundable, unbound, re-charged per 12-hour drip), while the first-person shape
+uses that stake as the _first edge_ and lets receipts take over.
+
 The graph the semiring ranks
 ([`packages/semiring/src/agent-network.ts`](../../packages/semiring/src/agent-network.ts))
 is an **ego graph**: a star of edges from `self → each known peer`, plus
