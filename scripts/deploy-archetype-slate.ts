@@ -73,6 +73,7 @@ export const SLATE: SlateService[] = [
     secrets: (ctx) => ({
       MOTEBIT_SYNC_URL: ctx.relayUrl,
       MOTEBIT_API_TOKEN: ctx.apiToken,
+      MOTEBIT_AUTH_TOKEN: ctx.apiToken, // inbound MCP-forward auth (mcp-server reads this, not API_TOKEN)
       MOTEBIT_UNIT_COST: "0",
       BRAVE_API_KEY: process.env["BRAVE_API_KEY"] ?? "",
     }),
@@ -87,6 +88,7 @@ export const SLATE: SlateService[] = [
     secrets: (ctx) => ({
       MOTEBIT_SYNC_URL: ctx.relayUrl,
       MOTEBIT_API_TOKEN: ctx.apiToken,
+      MOTEBIT_AUTH_TOKEN: ctx.apiToken, // inbound MCP-forward auth (mcp-server reads this, not API_TOKEN)
       MOTEBIT_UNIT_COST: "0",
     }),
   },
@@ -108,6 +110,7 @@ export const SLATE: SlateService[] = [
     secrets: (ctx) => ({
       MOTEBIT_SYNC_URL: ctx.relayUrl,
       MOTEBIT_API_TOKEN: ctx.apiToken,
+      MOTEBIT_AUTH_TOKEN: ctx.apiToken, // inbound MCP-forward auth (mcp-server reads this, not API_TOKEN)
       MOTEBIT_UNIT_COST: "0",
       WEB_SEARCH_URL: ctx.appHost(
         TARGET === "prod" ? "motebit-web-search" : "motebit-web-search-stg",
@@ -124,6 +127,7 @@ export const SLATE: SlateService[] = [
     secrets: (ctx) => ({
       MOTEBIT_SYNC_URL: ctx.relayUrl,
       MOTEBIT_API_TOKEN: ctx.apiToken,
+      MOTEBIT_AUTH_TOKEN: ctx.apiToken, // inbound MCP-forward auth (mcp-server reads this, not API_TOKEN)
       MOTEBIT_UNIT_COST: "0.25",
       MOTEBIT_SETTLEMENT_MODES: "relay,p2p",
       ANTHROPIC_API_KEY: process.env["ANTHROPIC_API_KEY"] ?? "",
@@ -147,6 +151,7 @@ export const SLATE: SlateService[] = [
     secrets: (ctx) => ({
       MOTEBIT_SYNC_URL: ctx.relayUrl,
       MOTEBIT_API_TOKEN: ctx.apiToken,
+      MOTEBIT_AUTH_TOKEN: ctx.apiToken, // inbound MCP-forward auth (mcp-server reads this, not API_TOKEN)
       MOTEBIT_RELAY_URL: ctx.relayUrl,
       MOTEBIT_UNIT_COST: "0.01",
       MOTEBIT_SETTLEMENT_MODES: "relay,p2p",
@@ -162,6 +167,7 @@ export const SLATE: SlateService[] = [
     secrets: (ctx) => ({
       MOTEBIT_SYNC_URL: ctx.relayUrl,
       MOTEBIT_API_TOKEN: ctx.apiToken,
+      MOTEBIT_AUTH_TOKEN: ctx.apiToken, // inbound MCP-forward auth (mcp-server reads this, not API_TOKEN)
       MOTEBIT_UNIT_COST: "0.01",
       MOTEBIT_SETTLEMENT_MODES: "relay,p2p",
       // DRY-RUN-FIRST: the whole metered spine runs at hard-zero (no broadcast,
