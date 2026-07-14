@@ -998,6 +998,25 @@ export async function forwardTaskViaMcp(
       // the MCP server is ready. 10s was too tight for cold start + TLS + init.
       signal: AbortSignal.timeout(30000),
     });
+    // Fail LOUD on a non-2xx init (auth 401, cold-start 503, …). Without this
+    // the handshake sails on through `notifications/initialized` and
+    // `tools/call`, `parseMcpResponse` returns null, and the function returns
+    // with NO receipt and NO log — the exact silent-swallow that masked the
+    // 2026-07-13 conformance auth failure (worker's MOTEBIT_AUTH_TOKEN unset ⇒
+    // no inbound verifier ⇒ 401 on every forward) for hours. A paid task's
+    // dispatch failure must always leave a trail.
+    if (!initResp.ok) {
+      const detail = await initResp.text().catch(() => "");
+      logger.warn("task.mcp_forward_failed", {
+        correlationId: taskId,
+        agent: agentId,
+        endpoint: mcpEndpoint,
+        step: "initialize",
+        status: initResp.status,
+        detail: detail.slice(0, 200),
+      });
+      return;
+    }
     const sessionId = initResp.headers.get("mcp-session-id");
     if (sessionId) mcpHeaders["Mcp-Session-Id"] = sessionId;
 
@@ -1021,6 +1040,19 @@ export async function forwardTaskViaMcp(
       }),
       signal: AbortSignal.timeout(120000),
     });
+
+    if (!taskResp.ok) {
+      const detail = await taskResp.text().catch(() => "");
+      logger.warn("task.mcp_forward_failed", {
+        correlationId: taskId,
+        agent: agentId,
+        endpoint: mcpEndpoint,
+        step: "tools/call",
+        status: taskResp.status,
+        detail: detail.slice(0, 200),
+      });
+      return;
+    }
 
     // Step 4: Parse JSON-RPC response (SSE or plain JSON)
     const mcpResult = await parseMcpResponse(taskResp, 2);
