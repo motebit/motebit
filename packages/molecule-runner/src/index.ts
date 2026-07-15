@@ -609,7 +609,19 @@ export async function runMolecule(
 
   // 4. Storage + runtime
   const storage = assembleStorageAdapters(db);
-  const policyOverrides = molecule.policyOverrides ?? DEFAULT_POLICY_OVERRIDES;
+  // MERGE the molecule's overrides ONTO the R3 baseline — never replace it.
+  // `?? DEFAULT` was a footgun: a molecule passing a partial or EMPTY object
+  // (`policyOverrides: {}`, which several services copy-pasted) is defined, so
+  // `??` kept it and dropped `denyAbove: R3_EXECUTE` → default R1_DRAFT → the
+  // relay-forwarded `motebit_task` (always R3) DENIED, and the service silently
+  // never executes a paid task (the 2026-07-15 Auditor conformance failure:
+  // "requires R3_EXECUTE but max allowed is R1_DRAFT"). The baseline is a
+  // floor every task-receiving molecule needs; a molecule can still RAISE
+  // denyAbove (e.g. the Clerk's R4 money path) by setting it explicitly.
+  const policyOverrides: Partial<PolicyConfig> = {
+    ...DEFAULT_POLICY_OVERRIDES,
+    ...molecule.policyOverrides,
+  };
   let runtime: RunnerRuntime;
   if (config.moneyExecution) {
     const makeMoney = adapters.createMoneyRuntime ?? defaultCreateMoneyRuntime;
