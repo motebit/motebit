@@ -300,3 +300,67 @@ export function seedX402PaidTask(relay: SyncRelay, args: SeedX402PaidTaskArgs): 
 
   return taskId;
 }
+
+// === P2P sub-task seeding (multi-hop-as-P2P) ===
+//
+// A p2p sub-hop is a real `POST /agent/C/task` the sub-delegator submits with a
+// payment_proof (it paid the worker onchain from its OWN wallet before
+// submitting — the Clerk's move). This helper seeds the exact post-submission
+// queue state — a durable entry with `settlement_mode: "p2p"` + the proof + a
+// price snapshot — WITHOUT driving the eligibility gate (which isn't what the
+// multi-hop settlement tests exercise; the p2p-cycle tests already cover it).
+// A parent receipt that nests this sub-task's receipt then drives
+// `settleSubReceipt`, which writes the audit-only p2p settlement row. Books NO
+// relay allocation (a p2p hop moves money onchain) — the sibling of
+// `seedX402PaidTask`'s relay-custody seeding, for the p2p lane.
+
+export interface SeedP2pSubTaskArgs {
+  /** The worker (sub-agent) executing this hop — must be registered (device key resolvable). */
+  workerId: string;
+  /** The sub-delegator that submitted + paid this hop. */
+  delegatorId: string;
+  prompt: string;
+  /** The worker's listing unit_cost in decimal USD (net to worker). */
+  unitCostUsd: number;
+  /** The worker's Solana settlement address (the proof's `to_address`). */
+  workerAddress: string;
+}
+
+/**
+ * Seed a p2p-submitted sub-task at the point submission leaves it: a durable
+ * queue entry with `settlement_mode: "p2p"`, a format-valid `payment_proof`
+ * (net + fee legs), and a price snapshot so the sub-hop reads as paid. Returns
+ * the task_id — use it as the sub-receipt's `relay_task_id`.
+ */
+export function seedP2pSubTask(relay: SyncRelay, args: SeedP2pSubTaskArgs): string {
+  const db = relay.moteDb.db;
+  const taskId = crypto.randomUUID();
+  const now = Date.now();
+  const netMicro = toMicro(args.unitCostUsd);
+  const proof = buildP2pPaymentProof(relay, {
+    workerAddress: args.workerAddress,
+    unitCostMicro: netMicro,
+  });
+
+  const task: AgentTask = {
+    task_id: taskId,
+    motebit_id: asMotebitId(args.workerId),
+    prompt: args.prompt,
+    submitted_at: now,
+    submitted_by: args.delegatorId,
+    status: AgentTaskStatus.Pending,
+  };
+
+  new TaskQueue(db).set(taskId, {
+    task,
+    expiresAt: now + 10 * 60 * 1000, // TASK_TTL_MS
+    submitted_by: args.delegatorId,
+    // Price snapshot > 0 so the sub-hop reads as paid (settleSubReceipt's
+    // subGross gate); the settled AMOUNT comes from the proof, not this.
+    price_snapshot: toMicro(computeGrossAmount(args.unitCostUsd, PLATFORM_FEE_RATE)),
+    settlement_mode: "p2p",
+    p2p_payment_proof: proof,
+  });
+
+  return taskId;
+}
