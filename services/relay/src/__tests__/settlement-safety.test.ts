@@ -23,11 +23,11 @@ import type { MotebitId, DeviceId } from "@motebit/sdk";
 import {
   AUTH_HEADER as AUTH,
   JSON_AUTH,
-  jsonAuthWithIdempotency,
   createTestRelay,
   createAgent,
-  seedBalance,
+  seedP2pSubTask,
 } from "./test-helpers.js";
+import { toMicro } from "../accounts.js";
 
 // === Part A helpers ===
 
@@ -84,33 +84,6 @@ function insertRetry(
 }
 
 // === Part B helpers ===
-
-async function registerWorker(relay: SyncRelay, motebitId: string, unitCost = 1.0): Promise<void> {
-  await relay.app.request("/api/v1/agents/register", {
-    method: "POST",
-    headers: JSON_AUTH,
-    body: JSON.stringify({
-      motebit_id: motebitId,
-      endpoint_url: "http://localhost:3200/mcp",
-      capabilities: ["web_search"],
-    }),
-  });
-  await relay.app.request(`/api/v1/agents/${motebitId}/listing`, {
-    method: "POST",
-    headers: JSON_AUTH,
-    body: JSON.stringify({
-      capabilities: ["web_search"],
-      pricing: [{ capability: "web_search", unit_cost: unitCost, currency: "USD", per: "task" }],
-      sla: { max_latency_ms: 5000, availability_guarantee: 0.99 },
-      description: "Web search service",
-      pay_to_address: "0x1234567890abcdef1234567890abcdef12345678",
-    }),
-  });
-}
-
-async function deposit(relay: SyncRelay, motebitId: string, amount: number): Promise<number> {
-  return seedBalance(relay, motebitId, amount);
-}
 
 // === Part A: Retry Exhaustion Refund ===
 
@@ -353,16 +326,16 @@ describe("Refund double-spend prevention", () => {
 
 // === Part B: Recursive Multi-Hop Settlement ===
 
-// Arc 3.5: these two tests exercise allocation-funded relay-custody multi-hop
-// (each hop A→B, B→C, C→D is a paid cross-agent task submission). The gate now
-// rejects paid cross-agent submission without a P2P proof, so the relay-custody
-// multi-hop chain can no longer be submitted this way. Re-enabling multi-hop via
-// P2P sub-payments (the sub-delegator funds the next hop from its own wallet) is
-// the deferred "multi-hop-as-P2P" arc named in off-ramp-as-user-action.md
-// § "Arc 3.5". The recursive `settleSubReceipt` logic these tests cover is
-// preserved in code; they are skipped (not deleted) until that arc rewrites them
-// with P2P sub-payments. See also services/relay/CLAUDE.md rule 8.
-describe("Recursive Multi-Hop Settlement", () => {
+// Multi-hop-as-P2P (Increment 1): these tests drive p2p sub-hops — each hop is a
+// task the sub-delegator paid onchain from its OWN wallet and submitted with a
+// payment_proof (seeded via seedP2pSubTask). A single top-level receipt carrying
+// the nested chain drives settleSubReceipt, which now writes an AUDIT-ONLY p2p
+// settlement row per hop (no relay custody, no virtual-account credit). See
+// docs/doctrine/off-ramp-as-user-action.md § "Multi-hop-as-P2P — Increment 1"
+// and services/relay/CLAUDE.md rule 8.
+const WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
+
+describe("Recursive Multi-Hop Settlement (p2p)", () => {
   let relay: SyncRelay;
 
   beforeEach(async () => {
@@ -373,8 +346,7 @@ describe("Recursive Multi-Hop Settlement", () => {
     await relay.close();
   });
 
-  it.skip("settles three-level delegation chain (A delegates to B, B delegates to C, C delegates to D)", async () => {
-    // Setup: 4 agents — A (delegator), B (intermediate), C (intermediate), D (leaf worker)
+  it("settles a three-level p2p chain (A→B→C→D) as audit-only p2p rows", async () => {
     const kpA = await generateKeypair();
     const kpB = await generateKeypair();
     const kpC = await generateKeypair();
@@ -385,61 +357,34 @@ describe("Recursive Multi-Hop Settlement", () => {
     const agentC = await createAgent(relay, bytesToHex(kpC.publicKey));
     const agentD = await createAgent(relay, bytesToHex(kpD.publicKey));
 
-    // Register B, C, D as workers
-    await registerWorker(relay, agentB.motebitId, 2.0);
-    await registerWorker(relay, agentC.motebitId, 1.5);
-    await registerWorker(relay, agentD.motebitId, 1.0);
-
-    // Fund A
-    await deposit(relay, agentA.motebitId, 100.0);
-
-    // A submits task to B
-    const taskResAB = await relay.app.request(`/agent/${agentB.motebitId}/task`, {
-      method: "POST",
-      headers: jsonAuthWithIdempotency(),
-      body: JSON.stringify({
-        prompt: "search for motebit",
-        submitted_by: agentA.motebitId,
-        required_capabilities: ["web_search"],
-      }),
+    // Each hop: the sub-delegator paid its worker onchain from its own wallet.
+    const taskAB = seedP2pSubTask(relay, {
+      workerId: agentB.motebitId,
+      delegatorId: agentA.motebitId,
+      prompt: "search for motebit",
+      unitCostUsd: 2.0,
+      workerAddress: WORKER_ADDR,
     });
-    expect(taskResAB.status).toBe(201);
-    const taskAB = (await taskResAB.json()) as { task_id: string };
-
-    // B submits sub-task to C
-    await deposit(relay, agentB.motebitId, 50.0);
-    const taskResBC = await relay.app.request(`/agent/${agentC.motebitId}/task`, {
-      method: "POST",
-      headers: jsonAuthWithIdempotency(),
-      body: JSON.stringify({
-        prompt: "read url content",
-        submitted_by: agentB.motebitId,
-        required_capabilities: ["web_search"],
-      }),
+    const taskBC = seedP2pSubTask(relay, {
+      workerId: agentC.motebitId,
+      delegatorId: agentB.motebitId,
+      prompt: "read url content",
+      unitCostUsd: 1.5,
+      workerAddress: WORKER_ADDR,
     });
-    expect(taskResBC.status).toBe(201);
-    const taskBC = (await taskResBC.json()) as { task_id: string };
-
-    // C submits sub-task to D
-    await deposit(relay, agentC.motebitId, 50.0);
-    const taskResCD = await relay.app.request(`/agent/${agentD.motebitId}/task`, {
-      method: "POST",
-      headers: jsonAuthWithIdempotency(),
-      body: JSON.stringify({
-        prompt: "fetch page",
-        submitted_by: agentC.motebitId,
-        required_capabilities: ["web_search"],
-      }),
+    const taskCD = seedP2pSubTask(relay, {
+      workerId: agentD.motebitId,
+      delegatorId: agentC.motebitId,
+      prompt: "fetch page",
+      unitCostUsd: 1.0,
+      workerAddress: WORKER_ADDR,
     });
-    expect(taskResCD.status).toBe(201);
-    const taskCD = (await taskResCD.json()) as { task_id: string };
 
-    // D signs its receipt
     const enc = new TextEncoder();
     const receiptD = await signExecutionReceipt(
       {
-        task_id: taskCD.task_id,
-        relay_task_id: taskCD.task_id,
+        task_id: taskCD,
+        relay_task_id: taskCD,
         motebit_id: agentD.motebitId as unknown as MotebitId,
         device_id: "d-device" as unknown as DeviceId,
         submitted_at: Date.now() - 1000,
@@ -453,12 +398,10 @@ describe("Recursive Multi-Hop Settlement", () => {
       },
       kpD.privateKey,
     );
-
-    // C signs its receipt with D's receipt nested
     const receiptC = await signExecutionReceipt(
       {
-        task_id: taskBC.task_id,
-        relay_task_id: taskBC.task_id,
+        task_id: taskBC,
+        relay_task_id: taskBC,
         motebit_id: agentC.motebitId as unknown as MotebitId,
         device_id: "c-device" as unknown as DeviceId,
         submitted_at: Date.now() - 2000,
@@ -473,12 +416,10 @@ describe("Recursive Multi-Hop Settlement", () => {
       },
       kpC.privateKey,
     );
-
-    // B signs its receipt with C's receipt (which contains D's) nested
     const receiptB = await signExecutionReceipt(
       {
-        task_id: taskAB.task_id,
-        relay_task_id: taskAB.task_id,
+        task_id: taskAB,
+        relay_task_id: taskAB,
         motebit_id: agentB.motebitId as unknown as MotebitId,
         device_id: "b-device" as unknown as DeviceId,
         submitted_at: Date.now() - 3000,
@@ -494,86 +435,82 @@ describe("Recursive Multi-Hop Settlement", () => {
       kpB.privateKey,
     );
 
-    // Submit B's receipt to settle A→B task (triggers recursive settlement)
-    const resultRes = await relay.app.request(
-      `/agent/${agentB.motebitId}/task/${taskAB.task_id}/result`,
-      {
-        method: "POST",
-        headers: JSON_AUTH,
-        body: JSON.stringify(receiptB),
-      },
-    );
+    // One top-level receipt submission drives the whole chain.
+    const resultRes = await relay.app.request(`/agent/${agentB.motebitId}/task/${taskAB}/result`, {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify(receiptB),
+    });
     expect(resultRes.status).toBe(200);
 
-    // Verify B got paid (A→B settlement)
-    const balB = await relay.app.request(`/api/v1/agents/${agentB.motebitId}/balance`, {
-      headers: AUTH,
-    });
-    const bB = (await balB.json()) as { balance: number; transactions: Array<{ type: string }> };
-    const bSettlements = bB.transactions.filter((t) => t.type === "settlement_credit");
-    expect(bSettlements.length).toBeGreaterThanOrEqual(1);
+    // Every hop settled as an AUDIT-ONLY p2p row: settlement_mode='p2p', the net
+    // from the proof, a fee leg, and a tx hash — no relay custody.
+    const p2pRow = (taskId: string, agentId: string) =>
+      relay.moteDb.db
+        .prepare(
+          "SELECT settlement_mode, amount_settled, platform_fee, p2p_tx_hash FROM relay_settlements WHERE task_id = ? AND motebit_id = ?",
+        )
+        .get(taskId, agentId) as
+        | {
+            settlement_mode: string;
+            amount_settled: number;
+            platform_fee: number;
+            p2p_tx_hash: string | null;
+          }
+        | undefined;
 
-    // Verify C got paid (B→C settlement, recursively settled)
-    const balC = await relay.app.request(`/api/v1/agents/${agentC.motebitId}/balance`, {
-      headers: AUTH,
-    });
-    const bC = (await balC.json()) as { balance: number; transactions: Array<{ type: string }> };
-    const cSettlements = bC.transactions.filter((t) => t.type === "settlement_credit");
-    expect(cSettlements.length).toBeGreaterThanOrEqual(1);
+    for (const [taskId, agentId, net] of [
+      [taskAB, agentB.motebitId, toMicro(2.0)],
+      [taskBC, agentC.motebitId, toMicro(1.5)],
+      [taskCD, agentD.motebitId, toMicro(1.0)],
+    ] as const) {
+      const row = p2pRow(taskId, agentId);
+      expect(row).toBeDefined();
+      expect(row!.settlement_mode).toBe("p2p");
+      expect(row!.amount_settled).toBe(net);
+      expect(row!.platform_fee).toBeGreaterThan(0);
+      expect(row!.p2p_tx_hash).not.toBeNull();
+    }
 
-    // Verify D got paid (C→D settlement, recursively settled at depth 2)
-    const balD = await relay.app.request(`/api/v1/agents/${agentD.motebitId}/balance`, {
-      headers: AUTH,
-    });
-    const bD = (await balD.json()) as { balance: number; transactions: Array<{ type: string }> };
-    const dSettlements = bD.transactions.filter((t) => t.type === "settlement_credit");
-    expect(dSettlements.length).toBeGreaterThanOrEqual(1);
+    // P2P books NO virtual-account credit — money moved onchain.
+    for (const agentId of [agentB.motebitId, agentC.motebitId, agentD.motebitId]) {
+      const bal = (await (
+        await relay.app.request(`/api/v1/agents/${agentId}/balance`, { headers: AUTH })
+      ).json()) as { transactions: Array<{ type: string }> };
+      expect(bal.transactions.some((t) => t.type === "settlement_credit")).toBe(false);
+    }
   });
 
-  it.skip("stops recursive settlement at depth limit (>10)", async () => {
-    // This test verifies the depth guard by constructing a chain that would exceed depth 10.
-    // We build a chain of 12 agents: A→B→C→...→L (12 levels).
-    // The settlement should stop at depth 10, leaving the last 2 unsettled.
-    const agentCount = 13; // A + 12 workers (12 hops: A→B→C→...→M)
+  it("stops recursive p2p settlement at the depth limit (>10)", async () => {
+    const agentCount = 13; // A + 12 workers (12 hops: agent[0]→…→agent[12])
     const keypairs = await Promise.all(Array.from({ length: agentCount }, () => generateKeypair()));
     const agents = [];
-
     for (const kp of keypairs) {
       agents.push(await createAgent(relay, bytesToHex(kp.publicKey)));
     }
 
-    // Register all workers (index 1+) and fund all intermediaries
-    for (let i = 1; i < agentCount; i++) {
-      await registerWorker(relay, agents[i]!.motebitId, 0.5);
-      if (i < agentCount - 1) {
-        await deposit(relay, agents[i]!.motebitId, 100.0);
-      }
-    }
-    await deposit(relay, agents[0]!.motebitId, 200.0);
-
-    // Submit tasks for each hop: agent[i] → agent[i+1]
+    // Seed each hop agent[i]→agent[i+1] as a p2p sub-task (worker = agent[i+1]).
     const taskIds: string[] = [];
     for (let i = 0; i < agentCount - 1; i++) {
-      const taskRes = await relay.app.request(`/agent/${agents[i + 1]!.motebitId}/task`, {
-        method: "POST",
-        headers: jsonAuthWithIdempotency(),
-        body: JSON.stringify({
+      taskIds.push(
+        seedP2pSubTask(relay, {
+          workerId: agents[i + 1]!.motebitId,
+          delegatorId: agents[i]!.motebitId,
           prompt: `task-${i}`,
-          submitted_by: agents[i]!.motebitId,
-          required_capabilities: ["web_search"],
+          unitCostUsd: 0.5,
+          workerAddress: WORKER_ADDR,
         }),
-      });
-      expect(taskRes.status).toBe(201);
-      const body = (await taskRes.json()) as { task_id: string };
-      taskIds.push(body.task_id);
+      );
     }
 
-    // Build nested receipts from the bottom up
+    // Nest receipts bottom-up. agent[i] is the WORKER of taskIds[i-1], so its
+    // receipt is signed by keypairs[i] and bound to relay_task_id = taskIds[i-1].
     const enc = new TextEncoder();
+    // Leaf: agent[12], worker of taskIds[11].
     let currentReceipt = await signExecutionReceipt(
       {
-        task_id: taskIds[taskIds.length - 1]!,
-        relay_task_id: taskIds[taskIds.length - 1]!,
+        task_id: taskIds[agentCount - 2]!,
+        relay_task_id: taskIds[agentCount - 2]!,
         motebit_id: agents[agentCount - 1]!.motebitId as unknown as MotebitId,
         device_id: "leaf-device" as unknown as DeviceId,
         submitted_at: Date.now() - 1000,
@@ -582,19 +519,17 @@ describe("Recursive Multi-Hop Settlement", () => {
         result: "leaf result",
         tools_used: ["tool"],
         memories_formed: 0,
-        prompt_hash: await sha256(enc.encode(`task-${agentCount - 2}`)),
+        prompt_hash: await sha256(enc.encode("leaf")),
         result_hash: await sha256(enc.encode("leaf result")),
       },
       keypairs[agentCount - 1]!.privateKey,
     );
-
-    // Build receipts from bottom to top, nesting each in the parent.
-    // Loop from agent[agentCount-2] down to agent[2] — these are intermediate nodes.
+    // Intermediates agent[11]…agent[2]: each worker of taskIds[i-1], nests the child.
     for (let i = agentCount - 2; i >= 2; i--) {
       currentReceipt = await signExecutionReceipt(
         {
-          task_id: taskIds[i]!,
-          relay_task_id: taskIds[i]!,
+          task_id: taskIds[i - 1]!,
+          relay_task_id: taskIds[i - 1]!,
           motebit_id: agents[i]!.motebitId as unknown as MotebitId,
           device_id: `device-${i}` as unknown as DeviceId,
           submitted_at: Date.now() - (agentCount - i) * 1000,
@@ -603,15 +538,14 @@ describe("Recursive Multi-Hop Settlement", () => {
           result: `result-${i}`,
           tools_used: ["tool"],
           memories_formed: 0,
-          prompt_hash: await sha256(enc.encode(`task-${i - 1}`)),
+          prompt_hash: await sha256(enc.encode(`hop-${i}`)),
           result_hash: await sha256(enc.encode(`result-${i}`)),
           delegation_receipts: [currentReceipt],
         },
         keypairs[i]!.privateKey,
       );
     }
-
-    // Build agent[1]'s receipt for taskIds[0] (the A→B task) with the chain nested inside
+    // Top: agent[1], worker of taskIds[0] (the agent[0]→agent[1] task).
     currentReceipt = await signExecutionReceipt(
       {
         task_id: taskIds[0]!,
@@ -624,47 +558,32 @@ describe("Recursive Multi-Hop Settlement", () => {
         result: "top-result",
         tools_used: ["tool"],
         memories_formed: 0,
-        prompt_hash: await sha256(enc.encode("task-0")),
+        prompt_hash: await sha256(enc.encode("hop-1")),
         result_hash: await sha256(enc.encode("top-result")),
         delegation_receipts: [currentReceipt],
       },
       keypairs[1]!.privateKey,
     );
 
-    // Submit the top-level receipt (agent[1]'s receipt for task[0])
     const resultRes = await relay.app.request(
       `/agent/${agents[1]!.motebitId}/task/${taskIds[0]!}/result`,
-      {
-        method: "POST",
-        headers: JSON_AUTH,
-        body: JSON.stringify(currentReceipt),
-      },
+      { method: "POST", headers: JSON_AUTH, body: JSON.stringify(currentReceipt) },
     );
     expect(resultRes.status).toBe(200);
 
-    // Count how many agents got settlement credits.
-    // With depth limit 10, agents at index 1-11 should be settled (depth 1-10 in the recursion),
-    // but agent at index 12 (depth 11) should NOT be settled.
-    let settledCount = 0;
+    // agent[1] settles via the direct parent-P2P write; the recursion settles
+    // agent[2]…agent[11] (depths 1–10); agent[12] at depth 11 is blocked by the
+    // depth guard. Count agents with a p2p settlement row.
+    let p2pSettledCount = 0;
     for (let i = 1; i < agentCount; i++) {
-      const bal = await relay.app.request(`/api/v1/agents/${agents[i]!.motebitId}/balance`, {
-        headers: AUTH,
-      });
-      const body = (await bal.json()) as { transactions: Array<{ type: string }> };
-      const hasSettlement = body.transactions.some((t) => t.type === "settlement_credit");
-      if (hasSettlement) settledCount++;
+      const row = relay.moteDb.db
+        .prepare("SELECT 1 FROM relay_settlements WHERE motebit_id = ? AND settlement_mode = 'p2p'")
+        .get(agents[i]!.motebitId);
+      if (row != null) p2pSettledCount++;
     }
-
-    // The first 11 workers (depth 1-10 plus the top-level) should get settled,
-    // but the 12th (depth 11) should be blocked by depth limit.
-    // Top-level settlement (agent[1]) is not recursive — it's the direct receipt handler.
-    // The recursive function starts at depth=1 for delegation_receipts of agent[1].
-    // So depth limit 10 means: agent[2] through agent[11] get settled (depth 1-10),
-    // agent[12] at depth 11 gets blocked.
-    // Plus agent[1] gets settled by the direct (non-recursive) handler.
-    // Total settled: 1 (direct) + 10 (recursive) = 11 out of 12 workers.
-    expect(settledCount).toBeLessThan(agentCount - 1);
-    // At minimum, agents 1-11 should be settled
-    expect(settledCount).toBeGreaterThanOrEqual(10);
+    // 1 (direct) + 10 (recursive depths 1–10) = 11; agent[12] at depth 11 blocked.
+    expect(p2pSettledCount).toBe(11);
+    expect(p2pSettledCount).toBeLessThan(agentCount - 1);
+    expect(p2pSettledCount).toBeGreaterThanOrEqual(10);
   });
 });

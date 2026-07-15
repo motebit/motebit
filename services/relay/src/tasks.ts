@@ -689,20 +689,119 @@ export async function handleReceiptIngestion(
           return;
         }
 
-        // ARC-MARKER(multi-hop-as-P2P): we are about to perform the relay-mode
-        // multi-hop settlement WRITE — the deferred residual (services/relay/CLAUDE.md
-        // rule 8). Post Arc-3.5 (P2P-by-default gate, live 2026-05-17) a paid
-        // cross-agent sub-delegation is gated like any direct delegation, so this
-        // write is reachable only for (a) legacy nested settlements submitted
-        // before the cutoff and only now completing, or (b) the x402-paid carve-out
-        // (which `requiresP2pProof`'s own doc notes is not integration-drivable).
-        // It is instrumented LOUDLY rather than thrown: at ~8 days post-cutoff a
-        // legacy in-flight nested settlement can still legitimately land here, and
-        // a throw would regress exactly the state this residual was preserved for.
-        // The multi-hop-as-P2P arc INVERTS this marker to a hard throw when it
-        // replaces the branch wholesale. The error-level event name below is the
-        // metric (the relay's observability surface is structured logs, not a
-        // counter facility) — alerting keys on `multihop.settlement.relay_residual_fired`.
+        // === Multi-hop-as-P2P reconciliation: honor the sub-task's SUBMITTED
+        // settlement_mode ===
+        // A p2p-submitted sub-hop (B paid C onchain from its OWN wallet — net +
+        // fee legs — at sub-submission time, exactly the Clerk's move) settles as
+        // an AUDIT-ONLY p2p row, mirroring the parent-P2P write in
+        // handleReceiptIngestion. NO `creditAccount`, NO allocation claim: the
+        // money already moved onchain, so a relay credit would double-pay on top
+        // of the delegator's principal action. The p2p-verifier walks
+        // `transfers[]` on `p2p_tx_hash` and flips `pending → verified` once both
+        // legs match. This is the reconciliation the multi-hop-as-P2P arc names;
+        // the relay-mode branch below survives only for the same-party carve-out
+        // (self-delegation has no cross-party onchain payment to record) and
+        // legacy in-flight nested settlements. Doctrine:
+        // `docs/doctrine/off-ramp-as-user-action.md` § "Multi-hop-as-P2P — Increment 1".
+        if (subEntry.settlement_mode === "p2p") {
+          const subP2pProof = subEntry.p2p_payment_proof;
+          const subWorkerAmount = subP2pProof?.amount_micro ?? 0;
+          // Which fee leg funds THIS relay's treasury — mirror the parent-P2P
+          // rule: federated-executor hop uses `b_fee_amount_micro`, single-op
+          // uses `fee_amount_micro`.
+          const subIsFederatedExecutor = subEntry.origin_relay != null;
+          const subFeeAmount = subIsFederatedExecutor
+            ? (subP2pProof?.b_fee_amount_micro ?? 0)
+            : (subP2pProof?.fee_amount_micro ?? 0);
+          const subP2pGross = subWorkerAmount + subFeeAmount;
+          const subP2pFeeRate =
+            subP2pGross > 0 ? Math.round((subFeeAmount / subP2pGross) * 10000) / 10000 : 0;
+          const subP2pSettlementId = crypto.randomUUID();
+          const subP2pSettledAt = Date.now();
+
+          const signedSubP2p = await signSettlement(
+            {
+              settlement_id: subP2pSettlementId as never,
+              allocation_id: `p2p-${subRelayTaskId}` as never,
+              // Payee = the sub-agent that executed and was paid onchain.
+              motebit_id: sub.motebit_id,
+              receipt_hash: sub.result_hash ?? "",
+              ledger_hash: null,
+              amount_settled: subWorkerAmount,
+              platform_fee: subFeeAmount,
+              platform_fee_rate: subP2pFeeRate,
+              // Lane in the signed body — the relay's custody posture is
+              // committed-to, not derivable.
+              settlement_mode: "p2p",
+              status: "completed",
+              settled_at: subP2pSettledAt,
+              issuer_relay_id: relayIdentity.relayMotebitId,
+            },
+            relayIdentity.privateKey,
+          );
+
+          moteDb.db
+            .prepare(
+              `INSERT OR IGNORE INTO relay_settlements
+               (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
+                amount_settled, platform_fee, platform_fee_rate, status, settled_at,
+                settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id,
+                issuer_relay_id, suite, signature, record_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              subP2pSettlementId,
+              `p2p-${subRelayTaskId}`,
+              subRelayTaskId,
+              sub.motebit_id,
+              sub.result_hash ?? "",
+              subWorkerAmount,
+              subFeeAmount,
+              subP2pFeeRate,
+              "completed",
+              subP2pSettledAt,
+              "p2p",
+              subP2pProof?.tx_hash ?? null,
+              "pending",
+              subEntry.submitted_by ?? null,
+              signedSubP2p.issuer_relay_id,
+              signedSubP2p.suite,
+              signedSubP2p.signature,
+              canonicalJson(signedSubP2p),
+            );
+
+          logger.info("multihop.settlement.p2p_recorded", {
+            correlationId: parentTaskId,
+            subTaskId: subRelayTaskId,
+            subAgent: sub.motebit_id,
+            net: subWorkerAmount,
+            fee: subFeeAmount,
+            depth,
+          });
+
+          // Recurse into nested receipts, then done — the relay-mode residual
+          // write below is skipped for p2p sub-hops.
+          const nestedReceipts = sub.delegation_receipts ?? [];
+          for (const nested of nestedReceipts) {
+            await settleSubReceipt(nested, parentTaskId, depth + 1);
+          }
+          return;
+        }
+
+        // ARC-MARKER(multi-hop-as-P2P): the relay-mode multi-hop settlement WRITE.
+        // Multi-hop-as-P2P Increment 1 (2026-07-15) reconciled the p2p case ABOVE
+        // — a p2p-submitted sub-hop now settles as an audit-only p2p row and never
+        // reaches here. This branch is therefore the narrow CARVE-OUT residual:
+        // a same-party self-delegated sub-hop (no cross-party onchain payment to
+        // record) or a legacy in-flight nested settlement from before the p2p
+        // reconciliation. It is instrumented LOUDLY rather than thrown — a legacy
+        // nested settlement can still legitimately land here, and a throw would
+        // regress exactly the state this residual preserves. Inverting to a hard
+        // throw belongs to the later increment that makes direct delegation
+        // P2P-only; until then this write is correct for the carve-out. The
+        // error-level event name is the metric (structured logs, not a counter) —
+        // alerting keys on `multihop.settlement.relay_residual_fired`. Doctrine:
+        // `docs/doctrine/off-ramp-as-user-action.md` § "Multi-hop-as-P2P — Increment 1".
         logger.error("multihop.settlement.relay_residual_fired", {
           correlationId: parentTaskId,
           subTaskId: subRelayTaskId,
