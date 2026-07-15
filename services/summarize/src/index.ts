@@ -39,6 +39,9 @@ function loadConfig() {
     authToken: process.env["MOTEBIT_AUTH_TOKEN"],
     syncUrl: process.env["MOTEBIT_SYNC_URL"],
     apiToken: process.env["MOTEBIT_API_TOKEN"],
+    // Zero-cost atom until the multi-hop settlement arc; listed so the market
+    // renders it as priced (conformance "pricing listed").
+    unitCost: parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0"),
     /** Externally-reachable URL the relay advertises for routing. Must be
      *  set to the Fly hostname in production. */
     publicUrl: process.env["MOTEBIT_PUBLIC_URL"],
@@ -184,15 +187,27 @@ async function main(): Promise<void> {
         getServiceListing: () =>
           Promise.resolve({
             capabilities: ["summarize_search"],
-            pricing: [],
+            // List the capability's price (zero-cost atom until the multi-hop
+            // settlement arc) — a non-empty pricing array is what makes the
+            // service render as "priced"/discoverable in the market, matching
+            // the sibling atoms (web-search, read-url). An empty array read as
+            // "unpriced" and failed conformance.
+            pricing: [
+              {
+                capability: "summarize_search",
+                unit_cost: config.unitCost,
+                currency: "USD",
+                per: "task",
+              },
+            ],
             sla: { max_latency_ms: 60_000, availability_guarantee: 0.95 },
             description:
               "Summarize atom: delegates a web search and condenses the results, returning the summary with the search's signed receipt nested in its own.",
           }),
-        // summarize_search is read-only — no R3 approval default needed.
-        // Minimal policy preserves original semantics (the previous
-        // hand-rolled boot passed {} as policy overrides).
-        policyOverrides: {},
+        // No policyOverrides: inherit the R3 baseline so the relay-forwarded
+        // motebit_task executes. summarize_search is read-only, but the ceiling
+        // must cover task execution (an empty override silently dropped to
+        // R1_DRAFT — same footgun the Auditor hit).
         onStop: () => {
           void webSearchAdapter.disconnect().catch(() => {
             /* best-effort cleanup */

@@ -189,8 +189,10 @@ async function main(): Promise<void> {
       return {
         toolRegistry: registry,
         handleAgentTask,
-        // audit_agent is read-only — public network reads, no side effects.
-        policyOverrides: {},
+        // No policyOverrides: inherit the R3 baseline so the relay-forwarded
+        // motebit_task (R3) executes. audit_agent itself is read-only, but the
+        // ceiling must cover task execution — an empty override here used to
+        // silently drop to R1_DRAFT and deny every forwarded task.
         getServiceListing: () =>
           Promise.resolve({
             capabilities: ["audit_agent"],

@@ -761,6 +761,53 @@ describe("runMolecule", () => {
     expect(overrides.denyAbove).toBe(3);
   });
 
+  it("an EMPTY policyOverrides object still inherits the R3 baseline (not R1_DRAFT)", async () => {
+    // The 2026-07-15 Auditor bug: `policyOverrides: {}` is defined, so the old
+    // `?? DEFAULT` kept it and dropped denyAbove → R1_DRAFT → the R3
+    // relay-forwarded motebit_task was denied and no paid task ever executed.
+    // The floor-merge must fill the empty object with the R3 baseline.
+    const adapters = baseAdapters();
+    const createRuntime = vi.fn().mockImplementation(() => fakeRuntime());
+    adapters.createRuntime = createRuntime;
+
+    await runMolecule(
+      baseConfig(),
+      () => ({ toolRegistry: new InMemoryToolRegistry(), policyOverrides: {} }),
+      adapters,
+    );
+
+    const overrides = createRuntime.mock.calls[0]![3] as {
+      requireApprovalAbove: number;
+      denyAbove: number;
+    };
+    expect(overrides.requireApprovalAbove).toBe(3);
+    expect(overrides.denyAbove).toBe(3);
+  });
+
+  it("a partial policyOverrides raises denyAbove but keeps the baseline for unset keys", async () => {
+    // A task-receiving molecule that legitimately raises its ceiling (e.g. the
+    // Clerk to R4 money) must not lose requireApprovalAbove from the baseline.
+    const adapters = baseAdapters();
+    const createRuntime = vi.fn().mockImplementation(() => fakeRuntime());
+    adapters.createRuntime = createRuntime;
+
+    await runMolecule(
+      baseConfig(),
+      () => ({
+        toolRegistry: new InMemoryToolRegistry(),
+        policyOverrides: { denyAbove: 4 } as never,
+      }),
+      adapters,
+    );
+
+    const overrides = createRuntime.mock.calls[0]![3] as {
+      requireApprovalAbove: number;
+      denyAbove: number;
+    };
+    expect(overrides.denyAbove).toBe(4);
+    expect(overrides.requireApprovalAbove).toBe(3); // from the baseline
+  });
+
   it("build callback is awaited (supports async service assembly)", async () => {
     const adapters = baseAdapters();
     let resolved = false;
