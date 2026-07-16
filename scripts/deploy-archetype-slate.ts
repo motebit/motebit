@@ -23,11 +23,14 @@
  * Optional:
  *   RELAY_URL                override the target relay base URL
  *
- * Economics posture (agent-archetypes.md §5): atoms run at unit_cost 0
- * (zero-cost carve-out — the delegation chain is relay-visible and
- * receipted, nothing settles until the multi-hop settlement arc);
- * molecules are priced cost-indexed (research $0.25 incl. operator inference, auditor
- * $0.01 LLM-free, clerk $0.01) and settle P2P-at-top-of-chain.
+ * Economics posture (agent-archetypes.md §5): the multi-hop settlement arc
+ * landed (Inc 1/2), so atoms are now PRICED cost-indexed (web-search $0.003,
+ * read-url $0.002) and advertise p2p. The Researcher PAYS them P2P once its
+ * money seam is flipped (Inc 3b — fund its wallet + set MOTEBIT_SOLANA_RPC_URL
+ * + MOTEBIT_RELAY_PUBLIC_KEY); until that ratified live-money step it uses the
+ * free direct-MCP fallback (bindRelayBudget degrades on the paid-cross-agent
+ * gate). Molecules are priced cost-indexed (research $0.25 incl. operator
+ * inference, auditor $0.01 LLM-free, clerk $0.01) and settle P2P-at-top-of-chain.
  */
 
 import { execFileSync } from "node:child_process";
@@ -74,7 +77,15 @@ export const SLATE: SlateService[] = [
       MOTEBIT_SYNC_URL: ctx.relayUrl,
       MOTEBIT_API_TOKEN: ctx.apiToken,
       MOTEBIT_AUTH_TOKEN: ctx.apiToken, // inbound MCP-forward auth (mcp-server reads this, not API_TOKEN)
-      MOTEBIT_UNIT_COST: "0",
+      // Inc 3 — the multi-hop settlement arc landed (Inc 1/2), so the atoms are
+      // now PRICED market participants, not free riders. Cost-indexed: web
+      // search clears ~$0.001-0.01/query in the API economy; $0.003 = ~2x
+      // marginal, comfortably above the ~$0.001 Solana settle floor.
+      MOTEBIT_UNIT_COST: "0.003",
+      // Advertise p2p so a paying delegator (a flipped Researcher) can settle
+      // the hop P2P; the settlement address is derived from this atom's own
+      // identity key (molecule-runner). relay,p2p keeps relay-mode available.
+      MOTEBIT_SETTLEMENT_MODES: "relay,p2p",
       BRAVE_API_KEY: process.env["BRAVE_API_KEY"] ?? "",
     }),
   },
@@ -89,7 +100,11 @@ export const SLATE: SlateService[] = [
       MOTEBIT_SYNC_URL: ctx.relayUrl,
       MOTEBIT_API_TOKEN: ctx.apiToken,
       MOTEBIT_AUTH_TOKEN: ctx.apiToken, // inbound MCP-forward auth (mcp-server reads this, not API_TOKEN)
-      MOTEBIT_UNIT_COST: "0",
+      // Inc 3 — priced now the arc landed. $0.002 = ~2x a page-read's marginal
+      // cost, at the Solana settle floor (payment overhead is a known ceiling
+      // at this price — the batching arc is the lever below it, not a lower list).
+      MOTEBIT_UNIT_COST: "0.002",
+      MOTEBIT_SETTLEMENT_MODES: "relay,p2p",
     }),
   },
   {

@@ -23,5 +23,9 @@ export function loadConfig() {
      */
     authToken: process.env["MOTEBIT_AUTH_TOKEN"],
     publicUrl: process.env["MOTEBIT_PUBLIC_URL"],
+    // Inc 3 — priced now the multi-hop settlement arc landed. Listed so the
+    // atom is a payable market participant; a paying delegator settles the hop
+    // P2P. Default 0 (unpriced) keeps back-compat for a bare boot.
+    unitCost: parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0"),
   };
 }
