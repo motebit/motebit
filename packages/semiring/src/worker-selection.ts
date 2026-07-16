@@ -47,9 +47,77 @@
 import type { AgentTrustRecord, MotebitId } from "@motebit/protocol";
 import { AgentTrustLevel, trustLevelToScore, WeightedDigraph } from "@motebit/protocol";
 import { RouteWeightSemiring, rankReachableAgents, type RouteWeight } from "./agent-network.js";
+import { thompsonDraw } from "./thompson.js";
 
 /** Neutral latency assumed when the client-side discovery read carries none. */
 const DEFAULT_LATENCY_MS = 5000;
+
+/**
+ * Exploration turns pure exploitation (always hire the best-known) into a
+ * Bayesian bandit that occasionally tries a newcomer — the on-ramp that keeps
+ * the market from ossifying into incumbency lock-in. See
+ * docs/doctrine/exploration-as-market-vitality.md.
+ */
+export interface ExplorationConfig {
+  /**
+   * Deterministic seed for the Thompson draw. Derive it from SIGNED, recorded
+   * context — the delegation token's `jti` — so the exploration decision is
+   * reproducible and offline-verifiable ("this newcomer was tried because
+   * seed→draw beat the incumbent"), never a hidden `Math.random`.
+   */
+  seed: string;
+  /**
+   * Exploration strength ∈ [0,1]: 1 = full Thompson draw, 0 = posterior mean
+   * (pure exploit). The runtime scales this DOWN with delegation stakes — you
+   * explore where a bad pick is cheap, never on a high-value hop. Default 1.
+   */
+  strength?: number;
+}
+
+/**
+ * The categorical trust level as a WEAK Beta prior (pseudo-counts) on the
+ * latent "will this worker do a good job". Real task counts dominate within a
+ * few observations; the prior only nudges an unproven worker. UNKNOWN /
+ * FirstContact = uniform Beta(1,1) — the true newcomer, maximum uncertainty,
+ * the widest posterior and so the most exploration.
+ */
+function levelPrior(level: AgentTrustLevel | undefined): { a: number; b: number } {
+  switch (level) {
+    case AgentTrustLevel.Trusted:
+      return { a: 3, b: 1 };
+    case AgentTrustLevel.Verified:
+      return { a: 2, b: 1 };
+    default:
+      return { a: 1, b: 1 };
+  }
+}
+
+/**
+ * Counts saturate: past this many observations the posterior is already tight,
+ * and capping bounds the sampler's O(α+β) work. Mirrors the volume-saturation
+ * ethos in `@motebit/policy`'s reputation score.
+ */
+const COUNT_CAP = 100;
+
+/**
+ * The unified quality signal in explore mode: build the Beta posterior from the
+ * level-prior + capped task counts, Thompson-draw θ̃ seeded per (context,
+ * worker), and blend toward the mean by `strength` (strength 0 ⇒ pure mean,
+ * pure exploit). A newcomer's wide Beta(1,1) draws high often enough to earn a
+ * shot; an incumbent's tight posterior almost always wins; a repeat-failer's
+ * posterior collapses toward 0. The exploration budget IS the posterior — there
+ * is no fixed rate to farm.
+ */
+function exploratoryQuality(c: RankableWorker, explore: ExplorationConfig): number {
+  const prior = levelPrior(c.trustRecord?.trust_level);
+  const alpha = prior.a + Math.min(c.trustRecord?.successful_tasks ?? 0, COUNT_CAP);
+  const beta = prior.b + Math.min(c.trustRecord?.failed_tasks ?? 0, COUNT_CAP);
+  const mean = alpha / (alpha + beta);
+  const strength = explore.strength ?? 1;
+  if (strength <= 0) return mean;
+  const draw = thompsonDraw(alpha, beta, `${explore.seed}|${c.motebit_id}`);
+  return mean + strength * (draw - mean);
+}
 
 /**
  * A capability-admissible candidate to rank. The caller is responsible for the
@@ -113,21 +181,31 @@ function reliabilityOf(record: AgentTrustRecord | null): number {
 export function rankWorkers(
   selfId: MotebitId,
   candidates: readonly RankableWorker[],
-  opts?: { weights?: WorkerSelectionWeights },
+  opts?: { weights?: WorkerSelectionWeights; explore?: ExplorationConfig },
 ): WorkerRanking[] {
   const weights = opts?.weights ?? DEFAULT_WEIGHTS;
+  const explore = opts?.explore;
 
   const graph = new WeightedDigraph(RouteWeightSemiring);
   graph.addNode(selfId);
   for (const c of candidates) {
     // Blocked: excluded entirely (matches buildAgentGraph's annihilation).
     if (c.trustRecord?.trust_level === AgentTrustLevel.Blocked) continue;
-    const trust = trustLevelToScore(c.trustRecord?.trust_level ?? AgentTrustLevel.Unknown);
+    // In explore mode, trust and reliability COLLAPSE into one Thompson-drawn
+    // quality posterior (they were always two views of one latent quality), so
+    // both axes carry the same draw — the composite counts it with the combined
+    // trust+reliability weight, no weight remapping needed. In exploit mode they
+    // stay separate exactly as shipped (backward-compatible when `explore` is
+    // absent).
+    const trust = explore
+      ? exploratoryQuality(c, explore)
+      : trustLevelToScore(c.trustRecord?.trust_level ?? AgentTrustLevel.Unknown);
+    const reliability = explore ? trust : reliabilityOf(c.trustRecord);
     graph.setEdge(selfId, c.motebit_id, {
       trust,
       cost: c.unitCost ?? 0,
       latency: DEFAULT_LATENCY_MS,
-      reliability: reliabilityOf(c.trustRecord),
+      reliability,
       regulatory_risk: 0,
     });
   }
@@ -155,7 +233,7 @@ export function rankWorkers(
 export function selectWorker(
   selfId: MotebitId,
   candidates: readonly RankableWorker[],
-  opts?: { weights?: WorkerSelectionWeights },
+  opts?: { weights?: WorkerSelectionWeights; explore?: ExplorationConfig },
 ): WorkerRanking | null {
   return rankWorkers(selfId, candidates, opts)[0] ?? null;
 }
