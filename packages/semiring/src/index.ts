@@ -55,6 +55,10 @@ export {
   projectGraph,
 } from "./agent-network.js";
 
+// ── First-person worker selection (BSL) ───────────────────────────
+export type { RankableWorker, WorkerRanking, WorkerSelectionWeights } from "./worker-selection.js";
+export { rankWorkers, selectWorker } from "./worker-selection.js";
+
 // ── Intent Disambiguation (BSL) ───────────────────────────────────
 export type {
   DisambiguationSignal,

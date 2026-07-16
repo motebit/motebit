@@ -697,6 +697,21 @@ const fail = (
   error: status != null ? { code, message, status } : { code, message },
 });
 
+/**
+ * Injected first-person worker selector. Given the capability-admissible
+ * candidates — already past the HARD gates (advertises the capability
+ * P2P-eligibly, declares a settlement address, is not self, satisfies any pin)
+ * — returns the `motebit_id` to hire, ranked by the CALLER's own trust ledger,
+ * or null to defer to the first admissible. It is an ORDERING, never a gate: a
+ * pinned delegation bypasses it entirely, and the seam only consults it when
+ * more than one candidate survives. Absent ⇒ today's first-eligible behavior.
+ * Wired by the runtime over its `agent_trust` store; see
+ * docs/doctrine/first-person-worker-routing.md.
+ */
+export type WorkerSelector = (
+  candidates: ReadonlyArray<{ motebit_id: string; unitCost?: number }>,
+) => Promise<string | null> | string | null;
+
 export interface ResolveAndSubmitP2pDelegationParams {
   /** Standing-grant id (advisory; engages the relay revocation fence). */
   grantId?: string;
@@ -717,6 +732,12 @@ export interface ResolveAndSubmitP2pDelegationParams {
    * result is `no_routing` (fail closed — never substitute another worker).
    */
   targetWorkerId?: string;
+  /**
+   * First-person ranker for the UNPINNED case — chooses among the admissible
+   * candidates by the caller's own trust (see {@link WorkerSelector}). Absent
+   * ⇒ first-eligible in discovery order. Ignored when `targetWorkerId` is set.
+   */
+  selectWorker?: WorkerSelector;
   /**
    * Cold-start acknowledgment for a new delegator↔worker pair — forwarded to
    * `submitP2pDelegation`. See its doc: without it the relay's single-op P2P
@@ -792,6 +813,8 @@ export interface ResolveP2pPaymentRequestParams {
   capability: string;
   /** Pin discovery to a SPECIFIC worker (fail-closed; never substitutes). */
   targetWorkerId?: string;
+  /** First-person ranker for the UNPINNED case (see {@link WorkerSelector}). */
+  selectWorker?: WorkerSelector;
   /** Cold-start acknowledgment for a new delegator↔worker pair. */
   acknowledgeNoHistoryRisk?: boolean;
   /** The relay's PINNED Ed25519 public key (hex) — treasury derives from THIS. */
@@ -872,7 +895,9 @@ export async function resolveP2pPaymentRequest(
         pricing?: Array<{ capability?: string; unit_cost?: number }> | null;
       }>;
     };
-    const candidate = (data.agents ?? []).find((a) => {
+    // HARD gates: not self, declares a settlement address, advertises p2p, and
+    // — when pinned — is exactly that worker. These filter WHO is eligible.
+    const admissible = (data.agents ?? []).filter((a) => {
       if (a.motebit_id === motebitId || a.settlement_address == null) return false;
       // Pinned hire: only the worker the user tapped is eligible — never
       // substitute another candidate for the same capability.
@@ -882,6 +907,31 @@ export async function resolveP2pPaymentRequest(
         : String(a.settlement_modes ?? "").split(",");
       return modes.includes("p2p");
     });
+
+    // ORDER among the admissible. A pin already narrowed the set to that one
+    // worker (deterministic override — never re-ranked). Unpinned with an
+    // injected first-person selector: rank by the caller's OWN trust ledger and
+    // hire the best (docs/doctrine/first-person-worker-routing.md). The selector
+    // is never a gate — a null/unmatched result or an absent selector falls back
+    // to the first admissible (discovery order), today's behavior. Only worth
+    // ranking when more than one candidate survives the gates.
+    let candidate = admissible[0];
+    if (params.targetWorkerId == null && params.selectWorker != null && admissible.length > 1) {
+      const priceFor = (a: (typeof admissible)[number]): number | undefined =>
+        (a.pricing ?? []).find((p) => p.capability === capability)?.unit_cost ??
+        (a.pricing ?? [])[0]?.unit_cost ??
+        undefined;
+      const chosenId = await params.selectWorker(
+        admissible.map((a) => {
+          const unitCost = priceFor(a);
+          return { motebit_id: a.motebit_id, ...(unitCost != null ? { unitCost } : {}) };
+        }),
+      );
+      if (chosenId != null) {
+        const chosen = admissible.find((a) => a.motebit_id === chosenId);
+        if (chosen != null) candidate = chosen;
+      }
+    }
     if (candidate?.settlement_address == null) {
       return fail(
         "no_routing",
@@ -1059,6 +1109,7 @@ export async function resolveAndSubmitP2pDelegation(
     capability: params.capability,
     relayPublicKeyHex: params.relayPublicKeyHex,
     ...(params.targetWorkerId != null ? { targetWorkerId: params.targetWorkerId } : {}),
+    ...(params.selectWorker != null ? { selectWorker: params.selectWorker } : {}),
     ...(params.acknowledgeNoHistoryRisk === true ? { acknowledgeNoHistoryRisk: true } : {}),
     ...(params.signal ? { signal: params.signal } : {}),
   });
