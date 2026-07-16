@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { mulberry32, hashSeed, sampleBeta, thompsonDraw } from "../thompson.js";
 
+// Frozen golden draws for (alpha, beta, "golden|worker"). Regenerate ONLY on a
+// deliberate sampler/hash/PRNG change (and bump the doctrine if the wire meaning
+// shifts). A silent change to any of the three flips these.
+const GOLDEN_1_1 = 0.3765928461969469;
+const GOLDEN_3_2 = 0.47044044034342714;
+const GOLDEN_21_1 = 0.9655266211849993;
+
 describe("mulberry32 — seeded PRNG", () => {
   it("is deterministic: same seed → same sequence", () => {
     const a = mulberry32(12345);
@@ -98,5 +105,25 @@ describe("thompsonDraw — the auditable one-shot draw", () => {
     // If the stream ever yields exactly 0, -ln is guarded to stay finite; two
     // equal gammas ⇒ 0.5, never NaN/Infinity.
     expect(sampleBeta(1, 1, () => 0)).toBe(0.5);
+  });
+
+  it("fails closed on invalid Beta shapes (non-integer, zero, negative, non-finite)", () => {
+    const rng = mulberry32(1);
+    expect(() => sampleBeta(0, 1, rng)).toThrow(/positive integer shapes/);
+    expect(() => sampleBeta(1, 0, rng)).toThrow(/positive integer shapes/);
+    expect(() => sampleBeta(-3, 1, rng)).toThrow(/positive integer shapes/);
+    expect(() => sampleBeta(2.5, 1, rng)).toThrow(/positive integer shapes/);
+    expect(() => sampleBeta(Number.NaN, 1, rng)).toThrow(/positive integer shapes/);
+    expect(() => sampleBeta(Number.POSITIVE_INFINITY, 1, rng)).toThrow(/positive integer shapes/);
+  });
+
+  it("golden vector — pins the exact draw for a fixed (alpha,beta,seed) across versions", () => {
+    // Same-process determinism is not the same as cross-version identity: if the
+    // sampler, hash, or PRNG changes, these frozen values change and the test
+    // catches it. (It does NOT guarantee cross-ENGINE identity — Math.log may
+    // differ in the last ULP; that caveat is documented in the doctrine.)
+    expect(thompsonDraw(1, 1, "golden|worker")).toBeCloseTo(GOLDEN_1_1, 12);
+    expect(thompsonDraw(3, 2, "golden|worker")).toBeCloseTo(GOLDEN_3_2, 12);
+    expect(thompsonDraw(21, 1, "golden|worker")).toBeCloseTo(GOLDEN_21_1, 12);
   });
 });

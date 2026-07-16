@@ -108,21 +108,51 @@ const COUNT_CAP = 100;
  */
 const BOND_EXPLORE_BOOST = 2;
 
+/** Clamp exploration strength to its documented [0,1] domain; non-finite ⇒ 0 (no exploration). */
+function clampStrength(x: number): number {
+  return Number.isFinite(x) ? Math.min(1, Math.max(0, x)) : 0;
+}
+
+/**
+ * Cap the TOTAL observed evidence at `COUNT_CAP` while PRESERVING the success/
+ * failure ratio (integer-quantized — the Beta sampler needs integer shapes).
+ *
+ * Capping each side INDEPENDENTLY (an earlier version's bug) collapses the
+ * posterior once both sides exceed the cap: a 1000/101 worker (mean ≈ 0.9) and
+ * a 100/1000 worker (mean ≈ 0.09) would both saturate to (100,100) ≈ 0.5,
+ * erasing the very ratio the posterior expresses. Scaling both by
+ * `CAP/(s+f)` bounds the pseudocount (so the posterior stays wide enough to
+ * keep exploring) without distorting the ratio.
+ */
+function cappedCounts(successful: number, failed: number): { s: number; f: number } {
+  const s0 = Math.max(0, Math.floor(successful));
+  const f0 = Math.max(0, Math.floor(failed));
+  const total = s0 + f0;
+  if (total <= COUNT_CAP) return { s: s0, f: f0 };
+  const s = Math.round((s0 * COUNT_CAP) / total);
+  return { s, f: COUNT_CAP - s };
+}
+
 /**
  * The unified quality signal in explore mode: build the Beta posterior from the
- * level-prior + capped task counts, Thompson-draw θ̃ seeded per (context,
- * worker), and blend toward the mean by the effective `strength` (0 ⇒ pure
- * mean, pure exploit). A newcomer's wide Beta(1,1) draws high often enough to
- * earn a shot; an incumbent's tight posterior almost always wins; a
- * repeat-failer's posterior collapses toward 0. The exploration budget IS the
- * posterior — there is no fixed rate to farm.
+ * level-prior + ratio-preserving capped task counts, Thompson-draw θ̃ seeded
+ * per (context, worker), and blend toward the mean by the effective `strength`.
+ * A newcomer's wide Beta(1,1) draws high often enough to earn a shot; an
+ * incumbent's tight posterior almost always wins; a repeat-failer's posterior
+ * collapses toward 0. Callers reach this only when `strength > 0` (rankWorkers
+ * routes strength-0 to the pure-exploit path); the internal guard is belt-and-
+ * suspenders for direct callers.
  */
 function exploratoryQuality(c: RankableWorker, explore: ExplorationConfig): number {
   const prior = levelPrior(c.trustRecord?.trust_level);
-  const alpha = prior.a + Math.min(c.trustRecord?.successful_tasks ?? 0, COUNT_CAP);
-  const beta = prior.b + Math.min(c.trustRecord?.failed_tasks ?? 0, COUNT_CAP);
+  const { s, f } = cappedCounts(
+    c.trustRecord?.successful_tasks ?? 0,
+    c.trustRecord?.failed_tasks ?? 0,
+  );
+  const alpha = prior.a + s;
+  const beta = prior.b + f;
   const mean = alpha / (alpha + beta);
-  const base = explore.strength ?? 1;
+  const base = clampStrength(explore.strength ?? 1);
   const strength = c.bonded ? Math.min(1, base * BOND_EXPLORE_BOOST) : base;
   if (strength <= 0) return mean;
   const draw = thompsonDraw(alpha, beta, `${explore.seed}|${c.motebit_id}`);
@@ -204,7 +234,15 @@ export function rankWorkers(
   opts?: { weights?: WorkerSelectionWeights; explore?: ExplorationConfig },
 ): WorkerRanking[] {
   const weights = opts?.weights ?? DEFAULT_WEIGHTS;
-  const explore = opts?.explore;
+  // Exploration is ACTIVE only when a config is present AND its base strength is
+  // positive. A base strength of 0 (a high-stakes hop, per the runtime's stakes
+  // ramp) — and a bond can only RAISE strength, never lift 0 — routes to the
+  // exact pure-exploit ranking below, so `{ explore: { strength: 0 } }` is
+  // behaviourally identical to no-explore, not a distinct Bayesian-mean path.
+  const explore =
+    opts?.explore != null && clampStrength(opts.explore.strength ?? 1) > 0
+      ? opts.explore
+      : undefined;
 
   const graph = new WeightedDigraph(RouteWeightSemiring);
   graph.addNode(selfId);
@@ -216,7 +254,7 @@ export function rankWorkers(
     // both axes carry the same draw — the composite counts it with the combined
     // trust+reliability weight, no weight remapping needed. In exploit mode they
     // stay separate exactly as shipped (backward-compatible when `explore` is
-    // absent).
+    // absent OR base strength is 0).
     const trust = explore
       ? exploratoryQuality(c, explore)
       : trustLevelToScore(c.trustRecord?.trust_level ?? AgentTrustLevel.Unknown);
