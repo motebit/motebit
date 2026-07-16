@@ -186,6 +186,16 @@ export interface MoleculeConfig {
     solanaRpcUrl: string;
     /** The relay operator's PINNED Ed25519 public key (hex) — P2P treasury root. */
     relayPublicKeyHex: string;
+    /**
+     * The USDC SPL mint the sovereign rail transacts in. MUST match the network
+     * behind `solanaRpcUrl` and the relay's configured settlement mint — the
+     * wallet rail reads its own balance against THIS mint before broadcasting,
+     * so a devnet molecule left on the mainnet-USDC default reads an empty ATA
+     * and fails every live hop with `insufficient_balance`. Omit only for
+     * mainnet (the rail defaults to mainnet USDC). Set to the devnet USDC mint
+     * on devnet/staging.
+     */
+    usdcMint?: string;
     /** The self-imposed signed spend ceiling this molecule commits to. */
     spendCeiling: SpendCeilingV1;
     /** Grant lifetime from issue, ms (default 90 days). */
@@ -506,6 +516,10 @@ export function defaultCreateMoneyRuntime(
   const wallet = createSolanaWalletRail({
     rpcUrl: money.solanaRpcUrl,
     identitySeed: identity.privateKey,
+    // Match the rail's mint to the network — else a devnet molecule reads the
+    // (empty) mainnet-USDC ATA and every live hop fails `insufficient_balance`.
+    // Undefined passes through to the rail's mainnet-USDC default.
+    usdcMint: money.usdcMint,
   });
   const runtime = new MotebitRuntime(
     {
@@ -731,9 +745,18 @@ export async function runMolecule(
   ) {
     const minMicro = BigInt(process.env.MOTEBIT_SWEEP_MIN_MICRO ?? "10000"); // $0.01 floor
     const intervalMs = Number(process.env.MOTEBIT_SWEEP_INTERVAL_MS ?? `${30 * 60 * 1000}`); // 30 min
+    // Same mint-must-match-network rule as the money rail above: on devnet the
+    // sweep rail must read the devnet-USDC ATA, not the mainnet default. Empty
+    // or unset → undefined → the rail's mainnet-USDC default. Read here (a
+    // covered boot line) so the fallback construction below stays branch-free.
+    const sweepUsdcMint = process.env.MOTEBIT_SOLANA_USDC_MINT?.trim() || undefined;
     const wallet =
       adapters.createSweepWallet?.(sweepRpcUrl, identity.privateKey) ??
-      createSolanaWalletRail({ rpcUrl: sweepRpcUrl, identitySeed: identity.privateKey });
+      createSolanaWalletRail({
+        rpcUrl: sweepRpcUrl,
+        identitySeed: identity.privateKey,
+        usdcMint: sweepUsdcMint,
+      });
     const doSweep = async (): Promise<void> => {
       try {
         const r = await sweepWalletRail(wallet, sweepAddress, minMicro);

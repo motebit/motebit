@@ -26,6 +26,10 @@ export function loadConfig() {
     // atoms are priced). The molecule's identity key IS the Solana wallet seed.
     solanaRpcUrl: process.env["MOTEBIT_SOLANA_RPC_URL"] ?? null,
     relayPublicKey: process.env["MOTEBIT_RELAY_PUBLIC_KEY"] ?? null,
+    // USDC SPL mint for the sovereign wallet rail — MUST match the network
+    // behind MOTEBIT_SOLANA_RPC_URL (devnet USDC on staging). Absent ⇒ the rail
+    // defaults to mainnet USDC (only correct on a mainnet deployment).
+    solanaUsdcMint: process.env["MOTEBIT_SOLANA_USDC_MINT"] ?? null,
     // Lifetime spend ceiling for the self-issued grant (micro-USD). Default $1.
     ceilingMicro: parseInt(process.env["MOTEBIT_RESEARCH_CEILING_MICRO"] ?? "1000000", 10),
   };
