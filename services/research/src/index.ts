@@ -105,8 +105,26 @@ async function main(): Promise<void> {
       ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
       ...(config.apiToken != null ? { apiToken: config.apiToken } : {}),
       ...(config.publicUrl != null ? { publicUrl: config.publicUrl } : {}),
+      // Inc 2b — paid sub-delegation seam, opt-in via env. When BOTH the Solana
+      // RPC and the pinned relay key are set, the Researcher pays priced atoms
+      // P2P from its own wallet under a self-issued grant; absent ⇒ no spend
+      // handle ⇒ the free direct-MCP path (today). The atoms are still $0, so
+      // even with this set the P2P attempt degrades to direct (worker_not_payable)
+      // until Inc 3 prices them.
+      ...(config.solanaRpcUrl != null && config.relayPublicKey != null
+        ? {
+            moneyExecution: {
+              solanaRpcUrl: config.solanaRpcUrl,
+              relayPublicKeyHex: config.relayPublicKey,
+              spendCeiling: {
+                schema: "motebit.spend-ceiling.v1" as const,
+                lifetime_limit_micro: config.ceilingMicro,
+              },
+            },
+          }
+        : {}),
     },
-    (identity) => {
+    (identity, spend) => {
       const { motebitId, deviceId, publicKey, privateKey } = identity;
 
       // Build the ResearchConfig the handler/research turn will use.
@@ -127,6 +145,26 @@ async function main(): Promise<void> {
           ? { webSearchTargetId: config.webSearchTargetId }
           : {}),
         ...(config.readUrlTargetId != null ? { readUrlTargetId: config.readUrlTargetId } : {}),
+        // Inc 2b — thread the money runtime's spend handle as the paid
+        // sub-delegation seam (present only when moneyExecution was wired above).
+        // The research turn attempts P2P for priced atoms and reads the atom's
+        // receipt from the granted-delegation result.
+        ...(spend != null
+          ? {
+              paidSubDelegate: async (p: {
+                capability: string;
+                prompt: string;
+                targetWorkerId?: string;
+              }) => {
+                const r = await spend.spend(p);
+                if (!r.ok) return { ok: false as const, code: r.code };
+                // The research turn never dry-runs, so the live variant carries
+                // the atom's receipt; the dry-run variant is unreachable here.
+                if (r.dryRun) return { ok: true as const };
+                return { ok: true as const, receipt: r.receipt as unknown as ExecutionReceipt };
+              },
+            }
+          : {}),
       };
 
       const registry = new InMemoryToolRegistry();

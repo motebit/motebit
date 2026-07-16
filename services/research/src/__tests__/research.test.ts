@@ -176,6 +176,175 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
     });
   });
 
+  // === Inc 2b: paid sub-delegation (priced atom → P2P, unpriced → direct) ===
+
+  it("Inc 2b: a priced atom is paid via paidSubDelegate; its receipt chains, the direct adapter is NOT called", async () => {
+    const paidReceipt = makeReceipt({
+      task_id: "paid-search-1",
+      motebit_id: "web-search-agent",
+      result: JSON.stringify([{ title: "R", url: "https://a.example.com" }]),
+      signature: "sig-paid-1",
+    });
+    const ws = new StubAtomAdapter([]); // direct path must NOT be taken
+    const ru = new StubAtomAdapter([]);
+    const paidCalls: Array<{ capability: string; targetWorkerId?: string }> = [];
+
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [
+          { type: "tool_use", id: "tu-1", name: "motebit_web_search", input: { query: "q" } },
+        ],
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Synthesized." }] });
+
+    const result = await research("question", {
+      ...baseConfig,
+      webSearchTargetId: "web-search-agent",
+      adapterFactory: makeFactory(
+        new Map([
+          ["web-search", ws],
+          ["read-url", ru],
+        ]),
+      ),
+      paidSubDelegate: async (p) => {
+        paidCalls.push({ capability: p.capability, targetWorkerId: p.targetWorkerId });
+        return { ok: true, receipt: paidReceipt };
+      },
+    });
+
+    expect(result.search_count).toBe(1);
+    expect(result.delegation_receipts).toHaveLength(1);
+    expect(result.delegation_receipts[0]!.signature).toBe("sig-paid-1");
+    // The paid seam was used, pinning the atom by motebit_id + capability.
+    expect(paidCalls).toEqual([{ capability: "web_search", targetWorkerId: "web-search-agent" }]);
+    // The free direct-MCP path was NOT taken.
+    expect(ws.calls).toHaveLength(0);
+  });
+
+  it("Inc 2b: an unpriced atom (worker_not_payable) falls back to the direct MCP call", async () => {
+    const directReceipt = makeReceipt({
+      task_id: "direct-1",
+      motebit_id: "web-search-agent",
+      result: JSON.stringify([{ title: "R", url: "https://a.example.com" }]),
+      signature: "sig-direct-1",
+    });
+    const ws = new StubAtomAdapter([directReceipt]);
+    const ru = new StubAtomAdapter([]);
+
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [
+          { type: "tool_use", id: "tu-1", name: "motebit_web_search", input: { query: "q" } },
+        ],
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Synthesized." }] });
+
+    const result = await research("question", {
+      ...baseConfig,
+      webSearchTargetId: "web-search-agent",
+      adapterFactory: makeFactory(
+        new Map([
+          ["web-search", ws],
+          ["read-url", ru],
+        ]),
+      ),
+      paidSubDelegate: async () => ({ ok: false, code: "worker_not_payable" }),
+    });
+
+    expect(result.search_count).toBe(1);
+    expect(result.delegation_receipts[0]!.signature).toBe("sig-direct-1");
+    // Fell back to the direct adapter (the atom is free).
+    expect(ws.calls).toHaveLength(1);
+  });
+
+  it("Inc 2b: a real payment failure (money_meter_denied) errors the tool and does NOT do the work for free", async () => {
+    const ws = new StubAtomAdapter([makeReceipt({ result: "x", signature: "s" })]); // must NOT be used
+    const ru = new StubAtomAdapter([]);
+
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [
+          { type: "tool_use", id: "tu-1", name: "motebit_web_search", input: { query: "q" } },
+        ],
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Gave up." }] });
+
+    const result = await research("question", {
+      ...baseConfig,
+      webSearchTargetId: "web-search-agent",
+      adapterFactory: makeFactory(
+        new Map([
+          ["web-search", ws],
+          ["read-url", ru],
+        ]),
+      ),
+      paidSubDelegate: async () => ({ ok: false, code: "money_meter_denied" }),
+    });
+
+    // No free work: the direct adapter was never called, no receipt chained.
+    expect(ws.calls).toHaveLength(0);
+    expect(result.delegation_receipts).toHaveLength(0);
+    expect(result.search_count).toBe(0);
+  });
+
+  it("Inc 2b: a paid failure with NO code is treated as a real failure (unknown), not a fallback", async () => {
+    const ws = new StubAtomAdapter([makeReceipt({ result: "x", signature: "s" })]); // must NOT be used
+    const ru = new StubAtomAdapter([]);
+
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [
+          { type: "tool_use", id: "tu-1", name: "motebit_web_search", input: { query: "q" } },
+        ],
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Gave up." }] });
+
+    const result = await research("question", {
+      ...baseConfig,
+      webSearchTargetId: "web-search-agent",
+      adapterFactory: makeFactory(
+        new Map([
+          ["web-search", ws],
+          ["read-url", ru],
+        ]),
+      ),
+      paidSubDelegate: async () => ({ ok: false }), // no code ⇒ unknown ⇒ real failure
+    });
+
+    expect(ws.calls).toHaveLength(0);
+    expect(result.delegation_receipts).toHaveLength(0);
+    expect(result.search_count).toBe(0);
+  });
+
+  it("Inc 2b: a paid ok WITHOUT a receipt errors the tool (defensive — never chain a phantom edge)", async () => {
+    const ws = new StubAtomAdapter([makeReceipt({ result: "x", signature: "s" })]); // must NOT be used
+    const ru = new StubAtomAdapter([]);
+
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [
+          { type: "tool_use", id: "tu-1", name: "motebit_web_search", input: { query: "q" } },
+        ],
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Gave up." }] });
+
+    const result = await research("question", {
+      ...baseConfig,
+      webSearchTargetId: "web-search-agent",
+      adapterFactory: makeFactory(
+        new Map([
+          ["web-search", ws],
+          ["read-url", ru],
+        ]),
+      ),
+      paidSubDelegate: async () => ({ ok: true }), // ok but no receipt
+    });
+
+    expect(ws.calls).toHaveLength(0);
+    expect(result.delegation_receipts).toHaveLength(0);
+    expect(result.search_count).toBe(0);
+  });
+
   it("chains a single fetch receipt", async () => {
     const receipt = makeReceipt({
       task_id: "fetch-1",
