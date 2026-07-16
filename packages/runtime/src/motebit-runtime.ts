@@ -360,6 +360,27 @@ const DEFAULT_PROACTIVE_CATCH_UP_MAX_AGE_MS = 60 * 60 * 1000;
 // tool name) lives in `./tool-policy.ts`. See that file for the
 // doctrine mapping; this module is a consumer.
 
+/** Below this per-hop cost (USD), explore at full strength — a bad pick is nearly free. */
+const EXPLORE_STAKES_FLOOR_USD = 0.1;
+/** At/above this per-hop cost (USD), pure exploit — a dollar hop is worth getting right. */
+const EXPLORE_STAKES_CEIL_USD = 1.0;
+
+/**
+ * Map a delegation hop's monetary stakes to exploration strength ∈ [0,1]:
+ * full exploration below ~$0.10 (micro-priced capabilities), ramping linearly
+ * to pure exploit by ~$1.00. "Explore where mistakes are cheap" — you buy
+ * information about a newcomer where a bad pick barely costs anything, and never
+ * gamble a high-value hop on an unproven worker. See
+ * docs/doctrine/exploration-as-market-vitality.md § "Explore where mistakes are cheap".
+ */
+export function explorationStrengthForStakes(costUsd: number): number {
+  if (!(costUsd > EXPLORE_STAKES_FLOOR_USD)) return 1; // ≤ floor (or NaN/negative) → full explore
+  if (costUsd >= EXPLORE_STAKES_CEIL_USD) return 0;
+  return (
+    1 - (costUsd - EXPLORE_STAKES_FLOOR_USD) / (EXPLORE_STAKES_CEIL_USD - EXPLORE_STAKES_FLOOR_USD)
+  );
+}
+
 export class MotebitRuntime {
   readonly motebitId: string;
   readonly state: StateVectorEngine;
@@ -4812,13 +4833,23 @@ export class MotebitRuntime {
           ? coords.acknowledgeNoHistoryRisk()
           : coords.acknowledgeNoHistoryRisk;
 
-      // First-person worker ranking (docs/doctrine/first-person-worker-routing.md).
-      // For an UNPINNED delegation, rank the capability-admissible candidates by
-      // THIS molecule's own trust ledger — accumulated pairwise trust + completed-
-      // task reliability — and hire the best, instead of the relay's arbitrary
-      // discovery order. A pinned delegation keeps its deterministic override
-      // (selector left undefined). Threaded to BOTH the dry-run and live paths so
-      // the metered pre-flight prices the same worker the live broadcast pays.
+      // First-person worker ranking (docs/doctrine/first-person-worker-routing.md
+      // + exploration-as-market-vitality.md). For an UNPINNED delegation, rank the
+      // capability-admissible candidates by THIS molecule's own trust ledger —
+      // accumulated pairwise trust + completed-task reliability — and hire the
+      // best, instead of the relay's arbitrary discovery order. A pinned
+      // delegation keeps its deterministic override (selector left undefined).
+      // Threaded to BOTH the dry-run and live paths so the metered pre-flight
+      // prices the same worker the live broadcast pays.
+      //
+      // Exploration (the newcomer on-ramp): the ranking is a Thompson draw over
+      // each worker's Beta posterior, so a newcomer occasionally earns a first
+      // shot instead of being frozen out by an incumbent. The draw is seeded from
+      // the tick token's Ed25519 SIGNATURE — unique per turn and a recorded,
+      // signed artifact — so the choice is reproducible offline from the token,
+      // never a hidden `Math.random`. Strength scales DOWN with the hop's stakes:
+      // explore freely on micro-priced hops, pure-exploit on dollar-scale ones.
+      const exploreSeed = params.delegation.token.signature;
       const selectWorker: WorkerSelector | undefined =
         params.targetWorkerId != null
           ? undefined
@@ -4830,7 +4861,27 @@ export class MotebitRuntime {
                   ...(c.unitCost != null ? { unitCost: c.unitCost } : {}),
                 })),
               );
-              return selectWorkerByTrust(this.motebitId, rankable)?.motebit_id ?? null;
+              // Representative stakes = the cheapest admissible option (what a
+              // cost-aware pick leans toward). Explore where a bad pick is cheap.
+              const repCostUsd = Math.min(...rankable.map((r) => r.unitCost ?? 0));
+              const strength = explorationStrengthForStakes(repCostUsd);
+              const exploitTop = selectWorkerByTrust(this.motebitId, rankable);
+              const winner = selectWorkerByTrust(this.motebitId, rankable, {
+                explore: { seed: exploreSeed, strength },
+              });
+              if (winner != null) {
+                // Surface the "why" — the sub-hop routing decision, including
+                // whether exploration overrode the exploit-favorite (the honest
+                // "why the newcomer got tried" signal).
+                this._logger.warn("routing.worker_selected", {
+                  selected: winner.motebit_id,
+                  candidates: rankable.length,
+                  strength: Number(strength.toFixed(3)),
+                  explored: exploitTop != null && winner.motebit_id !== exploitTop.motebit_id,
+                  quality: Number(winner.route.trust.toFixed(3)),
+                });
+              }
+              return winner?.motebit_id ?? null;
             };
 
       // 4a. DRY-RUN: resolve + meter against a THROWAWAY store, then stop
