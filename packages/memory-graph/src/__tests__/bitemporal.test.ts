@@ -31,6 +31,12 @@ const SCORING: ScoringConfig = {
 };
 const EMB = [1, 0, 0, 0, 0, 0, 0, 0];
 
+// Injected embedder for the supersede path — deterministic and instant, so
+// these tests never lazy-load the ~90MB ONNX model (which under a starved CI
+// runner blows the timeout). The real embedText path stays covered by
+// index.test.ts.
+const fastEmbed = async (): Promise<number[]> => EMB;
+
 function makeNode(id: string, validFrom: number, validUntil: number | null): MemoryNode {
   return {
     node_id: id,
@@ -137,7 +143,7 @@ describe("supersession is invalidation-with-provenance + emits validity on the w
       captured.push(e as (typeof captured)[number]);
       return origAppend(e);
     };
-    const graph = new MemoryGraph(storage, eventStore, "m");
+    const graph = new MemoryGraph(storage, eventStore, "m", undefined, fastEmbed);
 
     const cand = (content: string): AttributedMemoryCandidate => ({
       content,
@@ -223,7 +229,13 @@ describe("supersede intervals abut EXACTLY under clock jitter (no temporal hole 
   it("consolidateAndForm UPDATE: new.valid_from === old.valid_until (no gap)", async () => {
     await withJumpingClock(async () => {
       const storage = new InMemoryMemoryStorage();
-      const graph = new MemoryGraph(storage, new EventStore(new InMemoryEventStore()), "m");
+      const graph = new MemoryGraph(
+        storage,
+        new EventStore(new InMemoryEventStore()),
+        "m",
+        undefined,
+        fastEmbed,
+      );
       const a = await graph.formMemory(cand("home=Paris"), EMB);
       const provider: ConsolidationProvider = {
         classify: () =>
@@ -243,7 +255,13 @@ describe("supersede intervals abut EXACTLY under clock jitter (no temporal hole 
   it("supersedeMemoryByNodeId: new.valid_from === old.valid_until (no overlap)", async () => {
     await withJumpingClock(async () => {
       const storage = new InMemoryMemoryStorage();
-      const graph = new MemoryGraph(storage, new EventStore(new InMemoryEventStore()), "m");
+      const graph = new MemoryGraph(
+        storage,
+        new EventStore(new InMemoryEventStore()),
+        "m",
+        undefined,
+        fastEmbed,
+      );
       const a = await graph.formMemory(cand("home=Paris"), EMB);
       const newId = await graph.supersedeMemoryByNodeId(a.node_id, "home=Lyon", "moved");
       const aAfter = (await storage.getNode(a.node_id))!;
