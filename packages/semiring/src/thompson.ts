@@ -64,6 +64,15 @@ function gammaInt(k: number, rng: () => number): number {
  * Deterministic given `rng`.
  */
 export function sampleBeta(alpha: number, beta: number, rng: () => number): number {
+  // Fail closed on invalid shapes: `gammaInt` (sum of k exponentials) is only
+  // correct for positive INTEGER k — a non-integer or non-positive shape would
+  // silently return a wrong draw. The routing path always passes integers
+  // (prior + capped counts), so this only fires on external misuse.
+  if (!Number.isInteger(alpha) || !Number.isInteger(beta) || alpha < 1 || beta < 1) {
+    throw new RangeError(
+      `sampleBeta requires positive integer shapes; got alpha=${alpha}, beta=${beta}`,
+    );
+  }
   const ga = gammaInt(alpha, rng);
   const gb = gammaInt(beta, rng);
   return ga / (ga + gb);

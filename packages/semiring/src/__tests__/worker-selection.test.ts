@@ -143,23 +143,96 @@ describe("selectWorker — first-person worker selection", () => {
     expect(wins).toBeLessThan(150); // …but exploitation dominates (incumbent > 50%)
   });
 
-  it("one failure shrinks the newcomer's shots (self-correcting)", () => {
-    const fresh = newcomerWins(cand("fresh", null, 0.003), 300, 1);
+  it("one failure shrinks the newcomer's shots (self-correcting) — SAME id, only the record differs", () => {
+    // Both candidates use the id "nc" so the seed stream (${seed}|nc) is
+    // identical — the ONLY variable is the posterior, not a different pseudorandom
+    // stream. (An earlier version used different ids and confounded the two.)
+    const fresh = newcomerWins(cand("nc", null, 0.003), 300, 1);
     const failedOnce = newcomerWins(
-      cand("failed", record("failed", AgentTrustLevel.Unknown, 0, 1), 0.003),
+      cand("nc", record("nc", AgentTrustLevel.Unknown, 0, 1), 0.003),
       300,
       1,
     );
     expect(failedOnce).toBeLessThan(fresh);
   });
 
-  it("a repeat-failer (sybil signature) collapses toward never-picked — un-farmable", () => {
-    const sybil = newcomerWins(
-      cand("sybil", record("sybil", AgentTrustLevel.Unknown, 0, 20), 0.003),
+  it("a repeat-failer collapses toward never-picked (per-identity posterior decay, NOT swarm resistance)", () => {
+    // What this proves: ONE identity that keeps failing stops being explored.
+    // What it does NOT prove: resistance to a SWARM of fresh identities (see the
+    // swarm test below — that is bounded by the bond's capital cost, not the
+    // posterior). Naming it honestly.
+    const failer = newcomerWins(
+      cand("nc", record("nc", AgentTrustLevel.Unknown, 0, 20), 0.003),
       300,
       1,
     );
-    expect(sybil).toBeLessThan(9); // < 3% — the posterior, not a budget, is the limit
+    expect(failer).toBeLessThan(9); // ~<3% per identity
+  });
+
+  it("a SWARM of fresh identities is NOT posterior-resistant — the bond, not the draw, bounds it", () => {
+    // Adversarial honesty: each fresh identity wins ~4% against a strong
+    // incumbent, so P(at least one of N wins) grows with N. The posterior bounds
+    // a repeat-failer, NOT a swarm of throwaways. The economic bound is the bond
+    // (real capital per identity); the primitive cannot and does not claim
+    // otherwise. This test PINS that reality so no future edit overclaims it.
+    const winsForIdentity = (id: string) => newcomerWins(cand(id, null, 0.003), 120, 1);
+    const swarm = [winsForIdentity("nc-a"), winsForIdentity("nc-b"), winsForIdentity("nc-c")];
+    // Across a handful of distinct fresh identities, at least one gets real shots
+    // — exactly the un-farmable-only-with-a-bond point.
+    expect(swarm.reduce((a, b) => a + b, 0)).toBeGreaterThan(winsForIdentity("nc-a"));
+  });
+
+  it("evidence cap PRESERVES the success/failure ratio (a high-volume worker is not collapsed to ~0.5)", () => {
+    // The bug this guards: capping successes and failures INDEPENDENTLY would send
+    // a 1000/101 worker (true mean ≈ 0.9) and a 100/1000 worker (≈ 0.09) both to
+    // ~0.5. A great high-volume worker must still beat an unproven newcomer.
+    let greatWins = 0;
+    for (let i = 0; i < 300; i++) {
+      const pick = selectWorker(
+        SELF,
+        [
+          cand("newcomer", null, 0.003),
+          cand("great", record("great", AgentTrustLevel.Trusted, 1000, 101), 0.003),
+        ],
+        { explore: { seed: `cap-${i}`, strength: 1 } },
+      );
+      if (pick?.motebit_id === "great") greatWins++;
+    }
+    expect(greatWins).toBeGreaterThan(270); // ~0.9 posterior wins the vast majority
+  });
+
+  it("strength 0 with an explore config ranks IDENTICALLY to no explore config (pure exploit)", () => {
+    // #3: `{ explore: { strength: 0 } }` must equal the shipped exploit ranking,
+    // not a distinct Bayesian-mean path. Same candidate set, same winner + score.
+    const cands = [
+      cand("a", record("a", AgentTrustLevel.Verified, 5, 1), 0.003),
+      cand("b", record("b", AgentTrustLevel.Trusted, 20, 0), 0.005),
+      cand("c", null, 0.001),
+    ];
+    const exploit = rankWorkers(SELF, cands);
+    const strengthZero = rankWorkers(SELF, cands, { explore: { seed: "x", strength: 0 } });
+    expect(strengthZero.map((r) => r.motebit_id)).toEqual(exploit.map((r) => r.motebit_id));
+    expect(strengthZero[0]!.score).toBe(exploit[0]!.score);
+  });
+
+  it("clamps out-of-range strength (>1, negative, NaN) instead of extrapolating past the posterior", () => {
+    // strength > 1 would blend BEYOND the draw; NaN/negative must not explore.
+    const cands = [
+      cand("nc", null, 0.003),
+      cand("inc", record("inc", AgentTrustLevel.Trusted, 20, 0), 0.003),
+    ];
+    // NaN ⇒ no exploration ⇒ same as strength 0 (incumbent wins deterministically).
+    expect(
+      selectWorker(SELF, cands, { explore: { seed: "s", strength: Number.NaN } })?.motebit_id,
+    ).toBe("inc");
+    expect(selectWorker(SELF, cands, { explore: { seed: "s", strength: -1 } })?.motebit_id).toBe(
+      "inc",
+    );
+    // strength 5 is clamped to 1 ⇒ identical to strength 1 (no extrapolation).
+    const clamped = selectWorker(SELF, cands, { explore: { seed: "s", strength: 5 } });
+    const atOne = selectWorker(SELF, cands, { explore: { seed: "s", strength: 1 } });
+    expect(clamped?.motebit_id).toBe(atOne?.motebit_id);
+    expect(clamped?.score).toBe(atOne?.score);
   });
 
   it("more strength ⇒ more exploration (monotone in the knob the runtime scales by stakes)", () => {
