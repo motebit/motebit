@@ -56,8 +56,16 @@ export {
 } from "./agent-network.js";
 
 // ── First-person worker selection (BSL) ───────────────────────────
-export type { RankableWorker, WorkerRanking, WorkerSelectionWeights } from "./worker-selection.js";
+export type {
+  RankableWorker,
+  WorkerRanking,
+  WorkerSelectionWeights,
+  ExplorationConfig,
+} from "./worker-selection.js";
 export { rankWorkers, selectWorker } from "./worker-selection.js";
+
+// ── Seeded Thompson-sampling primitives (BSL) ─────────────────────
+export { mulberry32, hashSeed, sampleBeta, thompsonDraw } from "./thompson.js";
 
 // ── Intent Disambiguation (BSL) ───────────────────────────────────
 export type {
