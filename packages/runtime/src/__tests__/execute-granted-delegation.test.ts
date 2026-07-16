@@ -22,13 +22,14 @@ import {
   signStandingDelegation,
   signDelegationRevocation,
 } from "@motebit/crypto";
-import { RiskLevel } from "@motebit/protocol";
+import { RiskLevel, AgentTrustLevel } from "@motebit/protocol";
 import type {
   DelegationToken,
   StandingDelegation,
   SovereignWalletRail,
   SovereignP2pPaymentRequest,
   P2pPaymentProof,
+  AgentTrustRecord,
 } from "@motebit/protocol";
 
 type Kp = { publicKey: Uint8Array; privateKey: Uint8Array };
@@ -272,6 +273,105 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
 
     // The pinned worker is not discoverable/eligible → fail-closed, never pays.
     expect(result.ok).toBe(false);
+  });
+
+  it("unpinned ⇒ ranks candidates by the molecule's OWN trust ledger and hires the trusted worker", async () => {
+    // First-person worker routing (docs/doctrine/first-person-worker-routing.md):
+    // with NO pin, the molecule chooses among admissible candidates using its own
+    // agent_trust records — the accumulated interior drawn upon. Alice is listed
+    // SECOND (so first-in-discovery-order would pick Bob), but this molecule has
+    // completed 20/20 tasks with her, so she wins. Proves the real runtime closure
+    // (trust store → selectWorker), not just the injected-seam unit tests.
+    const ALICE_ADDR = "AliceWorkerAddr2222222222222222222222222222";
+    const operator = await generateKeypair();
+    const clerk = await generateKeypair();
+    const grant = await makeGrant(operator, clerk);
+    const token = await mintTick(grant, operator);
+
+    const storage = createInMemoryStorage();
+    await (
+      storage.agentTrustStore as { setAgentTrust: (r: AgentTrustRecord) => Promise<void> }
+    ).setAgentTrust({
+      motebit_id: "clerk-001",
+      remote_motebit_id: "alice-worker",
+      trust_level: AgentTrustLevel.Trusted,
+      first_seen_at: NOW - 100 * HOUR,
+      last_seen_at: NOW,
+      interaction_count: 20,
+      successful_tasks: 20,
+      failed_tasks: 0,
+    });
+
+    const { wallet, buildP2pPayment } = mockWallet(async (r) => ({
+      tx_hash: "tx",
+      chain: "solana",
+      network: "solana:x",
+      to_address: r.workerAddress,
+      amount_micro: r.amountMicro,
+      fee_to_address: r.treasuryAddress,
+      fee_amount_micro: r.feeAmountMicro,
+    }));
+
+    const runtime = new MotebitRuntime(
+      {
+        motebitId: "clerk-001",
+        tickRateHz: 0,
+        policy: { requireApprovalAbove: RiskLevel.R1_DRAFT, denyAbove: RiskLevel.R4_MONEY },
+        solanaWallet: wallet,
+      },
+      { ...createAdapters(), storage },
+    );
+    runtime.enableInteractiveDelegation({
+      syncUrl: "https://mock-relay.test",
+      authToken: async () => "test-token",
+      relayPublicKey: PINNED_HEX,
+      buildP2pPayment,
+      acknowledgeNoHistoryRisk: true,
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/api/v1/agents/discover"))
+          return jsonResponse({
+            agents: [
+              // Bob is listed FIRST but unknown to this molecule.
+              {
+                motebit_id: "bob-worker",
+                settlement_address: WORKER_ADDR,
+                settlement_modes: "p2p",
+                pricing: [{ capability: "research", unit_cost: 0.05 }],
+              },
+              // Alice is listed SECOND but trusted (20/20 completed).
+              {
+                motebit_id: "alice-worker",
+                settlement_address: ALICE_ADDR,
+                settlement_modes: "p2p",
+                pricing: [{ capability: "research", unit_cost: 0.05 }],
+              },
+            ],
+          });
+        if (url.includes("/p2p-eligibility")) return jsonResponse({ allowed: true });
+        if (url.includes("/listing"))
+          return jsonResponse({ pricing: [{ capability: "research", unit_cost: 0.05 }] });
+        if (url.endsWith("/task")) return jsonResponse({ task_id: "t1" }, 201);
+        if (url.includes("/task/"))
+          return jsonResponse({ task: { status: "completed" }, receipt: fakeReceipt() });
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    await runtime.executeGrantedDelegation({
+      capability: "research",
+      prompt: "survey the topic",
+      delegation: { token, grant },
+      dryRun: false,
+    });
+
+    // The broadcast paid ALICE (trusted, listed second) — not first-listed Bob.
+    expect(buildP2pPayment).toHaveBeenCalled();
+    expect(buildP2pPayment.mock.calls[0]![0].workerAddress).toBe(ALICE_ADDR);
+    vi.unstubAllGlobals();
   });
 
   it("null grant (revoked) ⇒ fail-closed, requires_verified_grant, no broadcast", async () => {

@@ -428,6 +428,117 @@ describe("resolveAndSubmitP2pDelegation", () => {
     expect(params.buildP2pPayment).not.toHaveBeenCalled();
   });
 
+  // ── First-person worker selection (unpinned ranking) ──────────────────────
+  const twoCandidates = () =>
+    discoverOk([
+      { motebit_id: "carol", settlement_address: "CarolAddr", settlement_modes: "p2p" }, // first
+      { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p,relay" },
+    ]);
+
+  it("unpinned + selector → hires the ranked worker, not the first candidate", async () => {
+    const params = resolveParams({ selectWorker: () => "bob" });
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: twoCandidates(),
+        listing: listingOk([{ capability: "web_search", unit_cost: 0.5 }]),
+        submit: () => jsonResponse(400, { code: "TASK_P2P_FEE_AMOUNT_MISMATCH" }),
+      }),
+    );
+    await resolveAndSubmitP2pDelegation(params);
+    const build = params.buildP2pPayment as ReturnType<typeof vi.fn>;
+    const req = build.mock.calls[0]![0] as SovereignP2pPaymentRequest;
+    expect(req.workerAddress).toBe("BobAddr"); // ranked winner, not first-candidate Carol
+  });
+
+  it("unpinned + selector returns null → falls back to the first admissible (never a gate)", async () => {
+    const params = resolveParams({ selectWorker: () => null });
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: twoCandidates(),
+        listing: listingOk([{ capability: "web_search", unit_cost: 0.5 }]),
+        submit: () => jsonResponse(400, { code: "TASK_P2P_FEE_AMOUNT_MISMATCH" }),
+      }),
+    );
+    await resolveAndSubmitP2pDelegation(params);
+    const build = params.buildP2pPayment as ReturnType<typeof vi.fn>;
+    const req = build.mock.calls[0]![0] as SovereignP2pPaymentRequest;
+    expect(req.workerAddress).toBe("CarolAddr"); // first admissible
+  });
+
+  it("a pinned delegation bypasses the selector entirely", async () => {
+    const selectWorker = vi.fn(() => "carol");
+    const params = resolveParams({ targetWorkerId: "bob", selectWorker });
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: twoCandidates(),
+        listing: listingOk([{ capability: "web_search", unit_cost: 0.5 }]),
+        submit: () => jsonResponse(400, { code: "TASK_P2P_FEE_AMOUNT_MISMATCH" }),
+      }),
+    );
+    await resolveAndSubmitP2pDelegation(params);
+    expect(selectWorker).not.toHaveBeenCalled();
+    const build = params.buildP2pPayment as ReturnType<typeof vi.fn>;
+    const req = build.mock.calls[0]![0] as SovereignP2pPaymentRequest;
+    expect(req.workerAddress).toBe("BobAddr"); // the pin, not the selector's Carol
+  });
+
+  it("does not consult the selector when only one candidate is admissible", async () => {
+    const selectWorker = vi.fn(() => "bob");
+    const params = resolveParams({ selectWorker });
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p" },
+        ]),
+        listing: listingOk([{ capability: "web_search", unit_cost: 0.5 }]),
+        submit: () => jsonResponse(400, { code: "TASK_P2P_FEE_AMOUNT_MISMATCH" }),
+      }),
+    );
+    await resolveAndSubmitP2pDelegation(params);
+    expect(selectWorker).not.toHaveBeenCalled(); // nothing to rank
+    const build = params.buildP2pPayment as ReturnType<typeof vi.fn>;
+    expect((build.mock.calls[0]![0] as SovereignP2pPaymentRequest).workerAddress).toBe("BobAddr");
+  });
+
+  it("passes each candidate's capability unit_cost to the selector", async () => {
+    let received: ReadonlyArray<{ motebit_id: string; unitCost?: number }> = [];
+    const selectWorker = vi.fn((c: ReadonlyArray<{ motebit_id: string; unitCost?: number }>) => {
+      received = c;
+      return "bob";
+    });
+    const params = resolveParams({ selectWorker });
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          {
+            motebit_id: "carol",
+            settlement_address: "CarolAddr",
+            settlement_modes: "p2p",
+            pricing: [{ capability: "web_search", unit_cost: 0.9 }],
+          },
+          {
+            motebit_id: "bob",
+            settlement_address: "BobAddr",
+            settlement_modes: "p2p",
+            pricing: [{ capability: "web_search", unit_cost: 0.4 }],
+          },
+        ]),
+        listing: listingOk([{ capability: "web_search", unit_cost: 0.4 }]),
+        submit: () => jsonResponse(400, { code: "TASK_P2P_FEE_AMOUNT_MISMATCH" }),
+      }),
+    );
+    await resolveAndSubmitP2pDelegation(params);
+    expect(received).toEqual([
+      { motebit_id: "carol", unitCost: 0.9 },
+      { motebit_id: "bob", unitCost: 0.4 },
+    ]);
+  });
+
   it("pre-flight ineligible → p2p_ineligible WITHOUT broadcasting (no funds move)", async () => {
     // The money-safety guard: the relay's /p2p-eligibility read (BEFORE the
     // broadcast) reports the pair ineligible (e.g. cold-start without the ack),

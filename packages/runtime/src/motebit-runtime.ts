@@ -232,6 +232,7 @@ import {
   resolveAndSubmitP2pDelegation,
   resolveP2pPaymentRequest,
   type GrantedDelegationResult,
+  type WorkerSelector,
 } from "./relay-delegation.js";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
 import { base58Encode } from "@motebit/protocol";
@@ -252,7 +253,7 @@ import { SecretRedactingProvider } from "./secret-redacting-provider.js";
 import { CredentialManager } from "./credential-manager.js";
 import { readLatestHardwareAttestationClaim } from "./hardware-attestation-projection.js";
 import { readLatencyStats } from "./latency-stats-projection.js";
-import { scoreAttestation } from "@motebit/semiring";
+import { scoreAttestation, selectWorker as selectWorkerByTrust } from "@motebit/semiring";
 import { PlanExecutionManager } from "./plan-execution.js";
 import { createGoalsEmitter, type GoalsEmitter, type GoalLifecycleStatus } from "./goals.js";
 import { createMemoryFormationQueue, type MemoryFormationQueue } from "./memory-formation-queue.js";
@@ -4811,6 +4812,27 @@ export class MotebitRuntime {
           ? coords.acknowledgeNoHistoryRisk()
           : coords.acknowledgeNoHistoryRisk;
 
+      // First-person worker ranking (docs/doctrine/first-person-worker-routing.md).
+      // For an UNPINNED delegation, rank the capability-admissible candidates by
+      // THIS molecule's own trust ledger — accumulated pairwise trust + completed-
+      // task reliability — and hire the best, instead of the relay's arbitrary
+      // discovery order. A pinned delegation keeps its deterministic override
+      // (selector left undefined). Threaded to BOTH the dry-run and live paths so
+      // the metered pre-flight prices the same worker the live broadcast pays.
+      const selectWorker: WorkerSelector | undefined =
+        params.targetWorkerId != null
+          ? undefined
+          : async (candidates) => {
+              const rankable = await Promise.all(
+                candidates.map(async (c) => ({
+                  motebit_id: c.motebit_id,
+                  trustRecord: await this.getAgentTrust(c.motebit_id),
+                  ...(c.unitCost != null ? { unitCost: c.unitCost } : {}),
+                })),
+              );
+              return selectWorkerByTrust(this.motebitId, rankable)?.motebit_id ?? null;
+            };
+
       // 4a. DRY-RUN: resolve + meter against a THROWAWAY store, then stop
       //     before any broadcast/submit. No wallet needed — nothing broadcasts.
       if (params.dryRun === true) {
@@ -4821,6 +4843,7 @@ export class MotebitRuntime {
           capability: params.capability,
           relayPublicKeyHex: coords.relayPublicKeyHex,
           ...(params.targetWorkerId != null ? { targetWorkerId: params.targetWorkerId } : {}),
+          ...(selectWorker != null ? { selectWorker } : {}),
           ...(ack === true ? { acknowledgeNoHistoryRisk: true } : {}),
         });
         if (!resolved.ok) return { ok: false, code: resolved.error.code };
@@ -4865,6 +4888,7 @@ export class MotebitRuntime {
         grantId: presentedGrant.grant_id,
         invocationOrigin: "agent-to-agent",
         ...(params.targetWorkerId != null ? { targetWorkerId: params.targetWorkerId } : {}),
+        ...(selectWorker != null ? { selectWorker } : {}),
         ...(ack === true ? { acknowledgeNoHistoryRisk: true } : {}),
         logger: this._logger,
       });
