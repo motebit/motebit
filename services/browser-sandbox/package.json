@@ -18,10 +18,10 @@
     "browser:install": "npx playwright install chromium"
   },
   "dependencies": {
-    "@hono/node-server": "^1.19.12",
+    "@hono/node-server": "^1.19.14",
     "@motebit/crypto": "workspace:*",
     "@motebit/protocol": "workspace:*",
-    "hono": "^4.6.0",
+    "hono": "^4.12.28",
     "playwright-core": "^1.61.1",
     "playwright-extra": "^4.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2"
