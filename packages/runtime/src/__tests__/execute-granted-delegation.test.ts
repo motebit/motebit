@@ -12,6 +12,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
+import { explorationStrengthForStakes } from "../motebit-runtime.js";
 import type { PlatformAdapters, StreamChunk } from "../index";
 import type { StreamingProvider } from "@motebit/ai-core";
 import type { AIResponse, ContextPack } from "@motebit/sdk";
@@ -275,13 +276,17 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     expect(result.ok).toBe(false);
   });
 
-  it("unpinned ⇒ ranks candidates by the molecule's OWN trust ledger and hires the trusted worker", async () => {
+  it("unpinned HIGH-STAKES ⇒ pure-exploit ranks by the molecule's OWN trust ledger, hires the trusted worker", async () => {
     // First-person worker routing (docs/doctrine/first-person-worker-routing.md):
     // with NO pin, the molecule chooses among admissible candidates using its own
     // agent_trust records — the accumulated interior drawn upon. Alice is listed
     // SECOND (so first-in-discovery-order would pick Bob), but this molecule has
     // completed 20/20 tasks with her, so she wins. Proves the real runtime closure
     // (trust store → selectWorker), not just the injected-seam unit tests.
+    //
+    // Priced at $1.50/hop — ABOVE the exploration stakes ceiling — so exploration
+    // is off (strength 0) and this is a DETERMINISTIC pure-exploit hire. The
+    // low-stakes exploration path is covered separately below.
     const ALICE_ADDR = "AliceWorkerAddr2222222222222222222222222222";
     const operator = await generateKeypair();
     const clerk = await generateKeypair();
@@ -340,20 +345,20 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
                 motebit_id: "bob-worker",
                 settlement_address: WORKER_ADDR,
                 settlement_modes: "p2p",
-                pricing: [{ capability: "research", unit_cost: 0.05 }],
+                pricing: [{ capability: "research", unit_cost: 1.5 }],
               },
               // Alice is listed SECOND but trusted (20/20 completed).
               {
                 motebit_id: "alice-worker",
                 settlement_address: ALICE_ADDR,
                 settlement_modes: "p2p",
-                pricing: [{ capability: "research", unit_cost: 0.05 }],
+                pricing: [{ capability: "research", unit_cost: 1.5 }],
               },
             ],
           });
         if (url.includes("/p2p-eligibility")) return jsonResponse({ allowed: true });
         if (url.includes("/listing"))
-          return jsonResponse({ pricing: [{ capability: "research", unit_cost: 0.05 }] });
+          return jsonResponse({ pricing: [{ capability: "research", unit_cost: 1.5 }] });
         if (url.endsWith("/task")) return jsonResponse({ task_id: "t1" }, 201);
         if (url.includes("/task/"))
           return jsonResponse({ task: { status: "completed" }, receipt: fakeReceipt() });
@@ -371,6 +376,105 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     // The broadcast paid ALICE (trusted, listed second) — not first-listed Bob.
     expect(buildP2pPayment).toHaveBeenCalled();
     expect(buildP2pPayment.mock.calls[0]![0].workerAddress).toBe(ALICE_ADDR);
+    vi.unstubAllGlobals();
+  });
+
+  it("unpinned LOW-STAKES ⇒ exploration engaged at full strength (the newcomer on-ramp is live)", async () => {
+    // docs/doctrine/exploration-as-market-vitality.md: a cheap hop ($0.003, below
+    // the stakes floor) explores at full strength — a newcomer can earn a first
+    // shot. We don't assert WHO wins (a seeded Thompson draw, covered
+    // deterministically in @motebit/semiring); we assert the runtime WIRED
+    // exploration — the routing decision is surfaced with strength 1 over BOTH
+    // candidates, seeded from the signed tick token.
+    const ALICE_ADDR = "AliceWorkerAddr2222222222222222222222222222";
+    const operator = await generateKeypair();
+    const clerk = await generateKeypair();
+    const grant = await makeGrant(operator, clerk);
+    const token = await mintTick(grant, operator);
+    const logger = { warn: vi.fn() };
+
+    const storage = createInMemoryStorage();
+    await (
+      storage.agentTrustStore as { setAgentTrust: (r: AgentTrustRecord) => Promise<void> }
+    ).setAgentTrust({
+      motebit_id: "clerk-001",
+      remote_motebit_id: "alice-worker",
+      trust_level: AgentTrustLevel.Trusted,
+      first_seen_at: NOW - 100 * HOUR,
+      last_seen_at: NOW,
+      interaction_count: 20,
+      successful_tasks: 20,
+      failed_tasks: 0,
+    });
+
+    const { wallet, buildP2pPayment } = mockWallet(async (r) => ({
+      tx_hash: "tx",
+      chain: "solana",
+      network: "solana:x",
+      to_address: r.workerAddress,
+      amount_micro: r.amountMicro,
+      fee_to_address: r.treasuryAddress,
+      fee_amount_micro: r.feeAmountMicro,
+    }));
+
+    const runtime = new MotebitRuntime(
+      {
+        motebitId: "clerk-001",
+        tickRateHz: 0,
+        policy: { requireApprovalAbove: RiskLevel.R1_DRAFT, denyAbove: RiskLevel.R4_MONEY },
+        solanaWallet: wallet,
+        logger,
+      },
+      { ...createAdapters(), storage },
+    );
+    runtime.enableInteractiveDelegation({
+      syncUrl: "https://mock-relay.test",
+      authToken: async () => "test-token",
+      relayPublicKey: PINNED_HEX,
+      buildP2pPayment,
+      acknowledgeNoHistoryRisk: true,
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/api/v1/agents/discover"))
+          return jsonResponse({
+            agents: [
+              {
+                motebit_id: "bob-worker",
+                settlement_address: WORKER_ADDR,
+                settlement_modes: "p2p",
+                pricing: [{ capability: "research", unit_cost: 0.003 }],
+              },
+              {
+                motebit_id: "alice-worker",
+                settlement_address: ALICE_ADDR,
+                settlement_modes: "p2p",
+                pricing: [{ capability: "research", unit_cost: 0.003 }],
+              },
+            ],
+          });
+        if (url.includes("/p2p-eligibility")) return jsonResponse({ allowed: true });
+        if (url.includes("/listing"))
+          return jsonResponse({ pricing: [{ capability: "research", unit_cost: 0.003 }] });
+        if (url.endsWith("/task")) return jsonResponse({ task_id: "t1" }, 201);
+        if (url.includes("/task/"))
+          return jsonResponse({ task: { status: "completed" }, receipt: fakeReceipt() });
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    await runtime.executeGrantedDelegation({
+      capability: "research",
+      prompt: "survey",
+      delegation: { token, grant },
+      dryRun: false,
+    });
+
+    const decision = logger.warn.mock.calls.find((c) => c[0] === "routing.worker_selected");
+    expect(decision).toBeDefined();
+    expect(decision![1]).toMatchObject({ candidates: 2, strength: 1 });
     vi.unstubAllGlobals();
   });
 
@@ -581,6 +685,29 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     const settled = await Promise.allSettled([first, second]);
     const rejected = settled.filter((s) => s.status === "rejected");
     expect(rejected.length).toBe(1);
+  });
+});
+
+describe("explorationStrengthForStakes — explore where mistakes are cheap", () => {
+  it("full exploration at/below the floor (micro-priced hops)", () => {
+    expect(explorationStrengthForStakes(0)).toBe(1);
+    expect(explorationStrengthForStakes(0.003)).toBe(1);
+    expect(explorationStrengthForStakes(0.1)).toBe(1); // at the floor
+  });
+
+  it("pure exploit at/above the ceiling (dollar-scale hops)", () => {
+    expect(explorationStrengthForStakes(1.0)).toBe(0); // at the ceiling
+    expect(explorationStrengthForStakes(2.5)).toBe(0);
+  });
+
+  it("ramps linearly between floor and ceiling", () => {
+    expect(explorationStrengthForStakes(0.55)).toBeCloseTo(0.5, 5); // midpoint
+    expect(explorationStrengthForStakes(0.325)).toBeCloseTo(0.75, 5);
+  });
+
+  it("degenerate inputs (NaN / negative) fail safe to full exploration", () => {
+    expect(explorationStrengthForStakes(Number.NaN)).toBe(1);
+    expect(explorationStrengthForStakes(-5)).toBe(1);
   });
 });
 
