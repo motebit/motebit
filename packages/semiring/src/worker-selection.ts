@@ -100,20 +100,30 @@ function levelPrior(level: AgentTrustLevel | undefined): { a: number; b: number 
 const COUNT_CAP = 100;
 
 /**
+ * A verified commitment bond multiplies exploration strength (capped at 1) — a
+ * bonded newcomer is sampled harder, so it earns its shot sooner. Multiplicative
+ * so it respects the stakes floor: `strength 0` (a high-value hop) stays 0 even
+ * when bonded — a bond buys PRIORITY, never a pass onto a job where exploring is
+ * expensive, and never a quality boost.
+ */
+const BOND_EXPLORE_BOOST = 2;
+
+/**
  * The unified quality signal in explore mode: build the Beta posterior from the
  * level-prior + capped task counts, Thompson-draw θ̃ seeded per (context,
- * worker), and blend toward the mean by `strength` (strength 0 ⇒ pure mean,
- * pure exploit). A newcomer's wide Beta(1,1) draws high often enough to earn a
- * shot; an incumbent's tight posterior almost always wins; a repeat-failer's
- * posterior collapses toward 0. The exploration budget IS the posterior — there
- * is no fixed rate to farm.
+ * worker), and blend toward the mean by the effective `strength` (0 ⇒ pure
+ * mean, pure exploit). A newcomer's wide Beta(1,1) draws high often enough to
+ * earn a shot; an incumbent's tight posterior almost always wins; a
+ * repeat-failer's posterior collapses toward 0. The exploration budget IS the
+ * posterior — there is no fixed rate to farm.
  */
 function exploratoryQuality(c: RankableWorker, explore: ExplorationConfig): number {
   const prior = levelPrior(c.trustRecord?.trust_level);
   const alpha = prior.a + Math.min(c.trustRecord?.successful_tasks ?? 0, COUNT_CAP);
   const beta = prior.b + Math.min(c.trustRecord?.failed_tasks ?? 0, COUNT_CAP);
   const mean = alpha / (alpha + beta);
-  const strength = explore.strength ?? 1;
+  const base = explore.strength ?? 1;
+  const strength = c.bonded ? Math.min(1, base * BOND_EXPLORE_BOOST) : base;
   if (strength <= 0) return mean;
   const draw = thompsonDraw(alpha, beta, `${explore.seed}|${c.motebit_id}`);
   return mean + strength * (draw - mean);
@@ -132,6 +142,16 @@ export interface RankableWorker {
   trustRecord: AgentTrustRecord | null;
   /** The worker's unit_cost for the requested capability, USD. Absent ⇒ treated as free (0). */
   unitCost?: number;
+  /**
+   * Whether this candidate posts a verified commitment bond. In EXPLORE mode a
+   * bond raises exploration PRIORITY — a bonded newcomer is sampled harder, so
+   * it earns its first shot sooner — and, because a bond costs real sovereign
+   * capital, it bounds a sybil SWARM (many throwaway identities each drawing a
+   * job). It never touches the quality estimate: skin-in-the-game signals "I
+   * won't rug you", never "I'm good at the task". Ignored in pure-exploit
+   * ranking. See docs/doctrine/exploration-as-market-vitality.md.
+   */
+  bonded?: boolean;
 }
 
 /** A ranked worker: its composite score and the `route` weight that produced it (the "why"). */
