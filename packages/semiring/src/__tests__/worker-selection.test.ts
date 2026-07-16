@@ -186,6 +186,44 @@ describe("selectWorker — first-person worker selection", () => {
     expect(verifiedWins).toBeGreaterThan(150);
   });
 
+  it("a commitment bond buys a FASTER shot — a bonded newcomer explores more than an unbonded one", () => {
+    // In the CONTESTED zone — a moderate incumbent (not an overwhelming star) at
+    // moderate stakes (strength 0.6, where the ×2 boost isn't clipped) — the bond
+    // is what lets a newcomer explore enough to compete. Same empty history for
+    // both: the bond lifts priority, never the posterior.
+    const moderate = () =>
+      cand("incumbent", record("incumbent", AgentTrustLevel.Verified, 3, 1), 0.003);
+    const winsFor = (nc: RankableWorker) => {
+      let w = 0;
+      for (let i = 0; i < 300; i++) {
+        const pick = selectWorker(SELF, [moderate(), nc], {
+          explore: { seed: `b${i}`, strength: 0.6 },
+        });
+        if (pick?.motebit_id === nc.motebit_id) w++;
+      }
+      return w;
+    };
+    const plain = winsFor(cand("plain", null, 0.003));
+    const bonded = winsFor({
+      motebit_id: "bonded",
+      trustRecord: null,
+      unitCost: 0.003,
+      bonded: true,
+    });
+    expect(bonded).toBeGreaterThan(plain);
+  });
+
+  it("the bond is priority, not a quality pass — at strength 0 (high stakes) it never displaces the incumbent", () => {
+    // A bond must not buy a newcomer onto a high-value hop where exploring is
+    // expensive: the multiplicative boost respects the stakes floor (0 stays 0).
+    const bonded = newcomerWins(
+      { motebit_id: "bonded", trustRecord: null, unitCost: 0.003, bonded: true },
+      200,
+      0,
+    );
+    expect(bonded).toBe(0);
+  });
+
   it("is reproducible: the same seed yields the same hire (offline-auditable)", () => {
     const cands = [incumbent(), cand("newcomer", null, 0.003)];
     const a = selectWorker(SELF, cands, { explore: { seed: "jti-fixed", strength: 1 } });
