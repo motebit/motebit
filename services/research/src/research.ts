@@ -383,7 +383,12 @@ export async function research(question: string, config: ResearchConfig): Promis
       // `paidSubDelegate` is absent unless the money seam is wired, so this is
       // dormant (today's direct path) until the atoms are priced.
       let receipt: SignedReceipt | undefined;
+      // Observability — the sub-hop path is otherwise invisible from outside;
+      // log which lane fires (paid P2P vs free direct MCP) and, on fallback,
+      // the exact not-payable code. Same "make the silent decision loud"
+      // discipline as the relay's mcp-forward logging.
       if (config.paidSubDelegate != null && targetId != null) {
+        console.log(`[research] sub-hop: attempting P2P cap=${capabilityHint} target=${targetId}`);
         const paid = await config.paidSubDelegate({
           capability: capabilityHint,
           prompt,
@@ -391,6 +396,7 @@ export async function research(question: string, config: ResearchConfig): Promis
         });
         if (paid.ok) {
           if (paid.receipt == null) {
+            console.log(`[research] sub-hop: paid ok but NO receipt cap=${capabilityHint}`);
             return {
               type: "tool_result",
               tool_use_id: tu.id,
@@ -398,19 +404,32 @@ export async function research(question: string, config: ResearchConfig): Promis
               is_error: true,
             };
           }
+          console.log(`[research] sub-hop: PAID P2P cap=${capabilityHint}`);
           receipt = paid.receipt;
           delegationReceipts.push(receipt);
         } else if (!NOT_PAYABLE_CODES.has(paid.code ?? "")) {
           // A real payment failure (ceiling/grant/auth) — never silently do the
           // work for free; surface the closed code to the loop.
+          console.log(
+            `[research] sub-hop: paid FAILED cap=${capabilityHint} code=${paid.code ?? "unknown"}`,
+          );
           return {
             type: "tool_result",
             tool_use_id: tu.id,
             content: `paid delegation to ${tu.name} refused (${paid.code ?? "unknown"})`,
             is_error: true,
           };
+        } else {
+          // Not P2P-payable (unpriced atom / no route) → fall through to direct
+          // MCP. `paid.code` is guaranteed a not-payable code here (it passed
+          // NOT_PAYABLE_CODES.has above).
+          console.log(
+            `[research] sub-hop: fallback DIRECT cap=${capabilityHint} code=${paid.code}`,
+          );
         }
-        // else: not P2P-payable (unpriced atom) → fall through to direct MCP.
+      } else {
+        // No paid seam (money env unset) or no pinned target → free direct MCP.
+        console.log(`[research] sub-hop: DIRECT (no paid seam) cap=${capabilityHint}`);
       }
 
       if (receipt == null) {
