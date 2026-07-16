@@ -6,6 +6,9 @@ import type { ConsolidationProvider, ConsolidationDecision } from "./consolidati
 import { shouldPromote, buildPromotionPayload } from "./promotion.js";
 import { buildMemoryIndex as buildMemoryIndexFn } from "./memory-index.js";
 import type { EventStore } from "@motebit/event-log";
+// Local import for the default embedder (the `export … from` below only
+// re-exports for consumers; it does not bring the name into this module scope).
+import { embedText } from "./embeddings.js";
 
 export {
   embedText,
@@ -614,6 +617,15 @@ export class MemoryGraph {
     private eventStore: EventStore,
     private motebitId: string,
     scoringConfig?: Partial<ScoringConfig>,
+    /**
+     * Text embedder for internal re-embedding (the supersede rewrite embeds new
+     * content, which callers pass as a string, not a vector). Defaults to the
+     * model-backed `embedText`. Injectable — adapter-everywhere — so a test can
+     * supply a fast deterministic embedder instead of lazy-loading the ~90MB
+     * ONNX model, which otherwise makes `supersedeMemoryByNodeId` a
+     * contention-flaky unit test (a 30s+ model load under a starved CI runner).
+     */
+    private embed: (text: string) => Promise<number[]> = embedText,
   ) {
     this.scoringConfig = { ...DEFAULT_SCORING_CONFIG, ...scoringConfig };
   }
@@ -1316,9 +1328,9 @@ export class MemoryGraph {
 
     // Embed the new content so retrieval works against the replacement
     // immediately. Sensitivity + memory_type inherit from the old node —
-    // the rewrite is a correction, not a re-classification.
-    const { embedText } = await import("./embeddings.js");
-    const embedding = await embedText(newContent);
+    // the rewrite is a correction, not a re-classification. Uses the injected
+    // embedder (defaults to the model-backed `embedText`).
+    const embedding = await this.embed(newContent);
 
     // Stamp once, BEFORE forming the new node, so the new node's `valid_from`
     // equals the old node's `valid_until` exactly — intervals abut with no
