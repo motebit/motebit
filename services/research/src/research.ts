@@ -387,12 +387,18 @@ export async function research(question: string, config: ResearchConfig): Promis
       // log which lane fires (paid P2P vs free direct MCP) and, on fallback,
       // the exact not-payable code. Same "make the silent decision loud"
       // discipline as the relay's mcp-forward logging.
-      if (config.paidSubDelegate != null && targetId != null) {
-        console.log(`[research] sub-hop: attempting P2P cap=${capabilityHint} target=${targetId}`);
+      if (config.paidSubDelegate != null) {
+        // Attempt paid P2P for any PRICED capability — pinned to `targetId` when
+        // one is configured, otherwise UNPINNED so the runtime's first-person
+        // ranker chooses among the discovered providers (the market). A
+        // not-payable code still falls through to direct MCP below.
+        console.log(
+          `[research] sub-hop: attempting P2P cap=${capabilityHint}${targetId ? ` target=${targetId}` : " (ranked)"}`,
+        );
         const paid = await config.paidSubDelegate({
           capability: capabilityHint,
           prompt,
-          targetWorkerId: targetId,
+          ...(targetId != null ? { targetWorkerId: targetId } : {}),
         });
         if (paid.ok) {
           if (paid.receipt == null) {
@@ -428,7 +434,7 @@ export async function research(question: string, config: ResearchConfig): Promis
           );
         }
       } else {
-        // No paid seam (money env unset) or no pinned target → free direct MCP.
+        // No paid seam (money env unset) → free direct MCP.
         console.log(`[research] sub-hop: DIRECT (no paid seam) cap=${capabilityHint}`);
       }
 

@@ -4950,6 +4950,16 @@ export class MotebitRuntime {
           result.error.code === "money_meter_denied"
             ? (result.error.denial ?? "money_meter_denied")
             : result.error.code;
+        // Operator-side observability: the CALLER gets a bare code (refusal
+        // honesty), but the operator needs the message to debug a failed hop.
+        // A meter denial still redacts its message (overage never leaks).
+        this._logger.warn("delegation.paid_failed", {
+          code,
+          capability: params.capability,
+          ...(result.error.code !== "money_meter_denied" && "message" in result.error
+            ? { message: result.error.message }
+            : {}),
+        });
         return { ok: false, code };
       }
       return {

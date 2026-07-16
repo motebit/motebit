@@ -203,7 +203,18 @@ export function extractMotebitIdFromPath(path: string): string | null {
   return match ? match[1]! : null;
 }
 
-function getListingUnitCost(moteDb: MotebitDatabase, agentId: string): number {
+/**
+ * The listing unit_cost an agent charges. When `capability` is given, price THAT
+ * capability (a delegation is for one capability); otherwise sum all capabilities
+ * (legacy behavior, correct only for single-capability agents). Summing a
+ * multi-capability agent — a web-search+read-url atom — over-charges a
+ * single-capability hop, so the P2P sub-hop path always passes the capability.
+ */
+export function getListingUnitCost(
+  moteDb: MotebitDatabase,
+  agentId: string,
+  capability?: string,
+): number {
   const row = moteDb.db
     .prepare(
       "SELECT pricing FROM relay_service_listings WHERE motebit_id = ? ORDER BY updated_at DESC LIMIT 1",
@@ -212,6 +223,9 @@ function getListingUnitCost(moteDb: MotebitDatabase, agentId: string): number {
   if (!row) return 0;
   try {
     const pricing = JSON.parse(row.pricing) as CapabilityPrice[];
+    if (capability != null) {
+      return pricing.find((p) => p.capability === capability)?.unit_cost ?? 0;
+    }
     return pricing.reduce((sum, p) => sum + (p.unit_cost ?? 0), 0);
   } catch {
     return 0;
@@ -1973,10 +1987,25 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     const submittedBy = callerMotebitId ?? body.submitted_by;
 
     // Snapshot the listing price at submission time so the settlement audit
-    // matches what x402 actually charged. If the agent updates pricing between
-    // submission and receipt delivery, the snapshot ensures consistency.
+    // matches what the delegator actually paid. Price against the WORKER, not
+    // the URL agent: a P2P proof submission carries `target_agent` (the worker)
+    // and POSTs to the DELEGATOR's own endpoint, so `motebitId` (the URL) is the
+    // delegator here — pricing by it would validate the hop against the
+    // delegator's own listing (e.g. a $0.25 researcher paying a $0.003 atom
+    // would be checked against $0.25). And price the SPECIFIC capability the
+    // delegation pins, not the sum of the worker's listings. A non-P2P task has
+    // no `target_agent` and prices the URL agent (the worker) as before.
     // unit_cost is in dollars from the listing JSON. Convert to micro-units for accounting.
-    const unitCostAtSubmission = getListingUnitCost(moteDb, motebitId);
+    const isP2pProofSubmission =
+      typeof body.target_agent === "string" && body.target_agent.length > 0;
+    const pricingAgent = isP2pProofSubmission ? (body.target_agent as string) : motebitId;
+    const pricingCapability =
+      isP2pProofSubmission &&
+      Array.isArray(body.required_capabilities) &&
+      body.required_capabilities.length === 1
+        ? String(body.required_capabilities[0])
+        : undefined;
+    const unitCostAtSubmission = getListingUnitCost(moteDb, pricingAgent, pricingCapability);
     const priceSnapshot =
       unitCostAtSubmission > 0
         ? toMicro(computeGrossAmount(unitCostAtSubmission, platformFeeRate)) // gross in micro-units
@@ -2144,7 +2173,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         if (unitCostMicro != null && proof.amount_micro !== unitCostMicro) {
           throw new TaskError(
             "TASK_P2P_AMOUNT_MISMATCH",
-            `Payment amount ${proof.amount_micro} does not match expected ${priceSnapshot}`,
+            // Report the NET worker-leg amount the check actually compares against
+            // (`unitCostMicro`), not the gross `priceSnapshot` — the earlier
+            // message showed the gross and misled the diagnosis.
+            `Payment worker-leg amount ${proof.amount_micro} does not match expected ${unitCostMicro} for capability "${pricingCapability ?? "?"}"`,
             400,
           );
         }

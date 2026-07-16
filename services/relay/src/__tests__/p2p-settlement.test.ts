@@ -9,6 +9,7 @@ import type { SyncRelay } from "../index.js";
 import { generateKeypair, bytesToHex, signDisputeRequest } from "@motebit/encryption";
 import { SOLANA_MAINNET_CAIP2 } from "@motebit/wallet-solana";
 import { evaluateSettlementEligibility } from "../task-routing.js";
+import { getListingUnitCost } from "../tasks.js";
 import { deriveSovereignMotebitId } from "@motebit/crypto";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 
@@ -501,5 +502,71 @@ describe("P2P disputes (trust-layer)", () => {
       body: JSON.stringify(signed),
     });
     expect(res.status).toBe(404);
+  });
+});
+
+describe("getListingUnitCost — capability-aware pricing (the multi-hop sub-hop fix)", () => {
+  let relay: SyncRelay;
+  beforeEach(async () => {
+    relay = await createTestRelay({ enableDeviceAuth: false });
+  });
+  afterEach(async () => {
+    await relay.close();
+  });
+
+  function seedListing(
+    motebitId: string,
+    pricing: Array<{ capability: string; unit_cost: number }>,
+  ) {
+    relay.moteDb.db
+      .prepare(
+        `INSERT INTO relay_service_listings
+         (listing_id, motebit_id, capabilities, pricing, sla_max_latency_ms, sla_availability, description, pay_to_address, regulatory_risk, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        `lst-${motebitId}`,
+        motebitId,
+        JSON.stringify(pricing.map((p) => p.capability)),
+        JSON.stringify(pricing),
+        5000,
+        0.99,
+        "",
+        null,
+        null,
+        Date.now(),
+      );
+  }
+
+  it("prices the SPECIFIC capability, not the SUM of a multi-capability agent's listings", () => {
+    // A web-search+read-url atom: summing (the pre-fix bug) would price a
+    // read_url hop at 0.005, not 0.002.
+    seedListing("atom", [
+      { capability: "web_search", unit_cost: 0.003 },
+      { capability: "read_url", unit_cost: 0.002 },
+    ]);
+    expect(getListingUnitCost(relay.moteDb, "atom", "read_url")).toBe(0.002);
+    expect(getListingUnitCost(relay.moteDb, "atom", "web_search")).toBe(0.003);
+    // No capability ⇒ legacy sum (correct only for single-capability agents).
+    expect(getListingUnitCost(relay.moteDb, "atom")).toBeCloseTo(0.005, 6);
+  });
+
+  it("prices the WORKER's capability, never the delegator's — a $0.25 researcher paying a $0.003 atom is $0.003", () => {
+    // The bug: a P2P sub-hop was priced against the URL agent (the DELEGATOR),
+    // so a $0.25 researcher paying a $0.003 atom was checked against $0.25.
+    seedListing("researcher", [{ capability: "research", unit_cost: 0.25 }]);
+    seedListing("atom", [
+      { capability: "web_search", unit_cost: 0.003 },
+      { capability: "read_url", unit_cost: 0.002 },
+    ]);
+    // Pricing the WORKER (atom) for the pinned capability — NOT the delegator's $0.25.
+    expect(getListingUnitCost(relay.moteDb, "atom", "web_search")).toBe(0.003);
+    expect(getListingUnitCost(relay.moteDb, "researcher", "research")).toBe(0.25);
+  });
+
+  it("returns 0 for an unknown agent or a capability the agent does not list", () => {
+    seedListing("atom", [{ capability: "web_search", unit_cost: 0.003 }]);
+    expect(getListingUnitCost(relay.moteDb, "atom", "read_url")).toBe(0); // not listed
+    expect(getListingUnitCost(relay.moteDb, "ghost", "web_search")).toBe(0); // no listing
   });
 });
