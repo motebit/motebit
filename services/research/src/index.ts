@@ -116,6 +116,10 @@ async function main(): Promise<void> {
             moneyExecution: {
               solanaRpcUrl: config.solanaRpcUrl,
               relayPublicKeyHex: config.relayPublicKey,
+              // Match the wallet rail's USDC mint to the network behind the RPC
+              // (devnet on staging) — else the balance pre-check reads the empty
+              // mainnet-USDC ATA and every hop fails `insufficient_balance`.
+              ...(config.solanaUsdcMint != null ? { usdcMint: config.solanaUsdcMint } : {}),
               spendCeiling: {
                 schema: "motebit.spend-ceiling.v1" as const,
                 lifetime_limit_micro: config.ceilingMicro,

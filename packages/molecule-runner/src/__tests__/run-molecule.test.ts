@@ -468,8 +468,12 @@ describe("runMolecule", () => {
   it("SPEND sweep: env-gated; on boot sweeps the identity wallet to MOTEBIT_SWEEP_ADDRESS", async () => {
     const prevAddr = process.env.MOTEBIT_SWEEP_ADDRESS;
     const prevRpc = process.env.MOTEBIT_SOLANA_RPC_URL;
+    const prevMint = process.env.MOTEBIT_SOLANA_USDC_MINT;
     const DEST = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
     try {
+      // Devnet mint set → the sweep rail's mint read resolves to it (covers the
+      // present-and-non-empty branch of the network-mint plumbing).
+      process.env.MOTEBIT_SOLANA_USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
       const send = vi.fn().mockResolvedValue({ signature: "sweep-sig" });
       const createSweepWallet = vi.fn(() => ({
         isAvailable: vi.fn().mockResolvedValue(true),
@@ -536,6 +540,8 @@ describe("runMolecule", () => {
       else process.env.MOTEBIT_SWEEP_ADDRESS = prevAddr;
       if (prevRpc == null) delete process.env.MOTEBIT_SOLANA_RPC_URL;
       else process.env.MOTEBIT_SOLANA_RPC_URL = prevRpc;
+      if (prevMint == null) delete process.env.MOTEBIT_SOLANA_USDC_MINT;
+      else process.env.MOTEBIT_SOLANA_USDC_MINT = prevMint;
       delete process.env.MOTEBIT_SWEEP_INTERVAL_MS;
       delete process.env.MOTEBIT_SWEEP_MIN_MICRO;
     }
