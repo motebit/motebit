@@ -111,7 +111,41 @@ export interface ResearchConfig {
    * without spinning up a real MCP server.
    */
   adapterFactory?: AdapterFactory;
+  /**
+   * Inc 2b — the paid sub-delegation seam. Supplied by the money runtime (the
+   * molecule-runner spend handle) when the service boots with `moneyExecution`
+   * wired. ABSENT ⇒ every atom hop uses the free direct-MCP path (today's
+   * behavior), so this is dormant until the money seam is enabled. When
+   * present, a PRICED atom is paid P2P (the relay coordinates the hop and earns
+   * its fee); an unpriced atom falls back to direct MCP.
+   */
+  paidSubDelegate?: PaidSubDelegate;
 }
+
+/** Result of a paid P2P sub-delegation attempt (Inc 2b). */
+export interface PaidSubDelegateResult {
+  ok: boolean;
+  /** The sub-worker's signed execution receipt (present on `ok`). */
+  receipt?: SignedReceipt;
+  /** Failure code when `!ok` (e.g. `worker_not_payable`, `money_meter_denied`). */
+  code?: string;
+}
+
+/**
+ * Pay a priced atom P2P from this molecule's own wallet, under its self-issued
+ * grant. A `worker_not_payable` / `no_routing` / `p2p_ineligible` result means
+ * the atom is not P2P-payable (unpriced / no settlement mode) and the caller
+ * falls back to direct MCP; any OTHER failure is a real payment error and is
+ * surfaced — the turn never silently does the work for free.
+ */
+export type PaidSubDelegate = (params: {
+  capability: string;
+  prompt: string;
+  targetWorkerId?: string;
+}) => Promise<PaidSubDelegateResult>;
+
+/** Codes that mean "this atom is not set up for P2P" → fall back to direct MCP. */
+const NOT_PAYABLE_CODES = new Set(["worker_not_payable", "no_routing", "p2p_ineligible"]);
 
 /** Minimal interface the research turn needs from an mcp-client adapter. */
 export interface AtomAdapter {
@@ -339,31 +373,72 @@ export async function research(question: string, config: ResearchConfig): Promis
         };
       }
 
-      const relayTaskId = await bindRelayBudget(config, prompt, capabilityHint, targetId);
-      const args: Record<string, unknown> = { prompt };
-      if (relayTaskId != null) args.relay_task_id = relayTaskId;
-
-      const result = await adapter.executeTool(qualified, args);
-      // McpClientAdapter captures any motebit-shaped receipt during executeTool.
-      // Drain immediately so receipt order matches the dispatch order.
-      const fresh = adapter.getAndResetDelegationReceipts();
-      delegationReceipts.push(...fresh);
+      // Every web tool dispatch counts against the runaway-cost cap, success or
+      // failure, on either the paid or the free path.
       toolCallCount++;
 
-      if (!result.ok || fresh.length === 0) {
-        return {
-          type: "tool_result",
-          tool_use_id: tu.id,
-          content: `delegation to ${tu.name} failed for "${prompt.slice(0, 80)}"`,
-          is_error: true,
-        };
+      // Inc 2b: a PRICED atom is paid P2P (this molecule pays the atom onchain
+      // from its own wallet under its self-grant — the relay coordinates the hop
+      // and earns its fee); a free/unpriced atom uses the direct MCP call.
+      // `paidSubDelegate` is absent unless the money seam is wired, so this is
+      // dormant (today's direct path) until the atoms are priced.
+      let receipt: SignedReceipt | undefined;
+      if (config.paidSubDelegate != null && targetId != null) {
+        const paid = await config.paidSubDelegate({
+          capability: capabilityHint,
+          prompt,
+          targetWorkerId: targetId,
+        });
+        if (paid.ok) {
+          if (paid.receipt == null) {
+            return {
+              type: "tool_result",
+              tool_use_id: tu.id,
+              content: `paid delegation to ${tu.name} returned no receipt`,
+              is_error: true,
+            };
+          }
+          receipt = paid.receipt;
+          delegationReceipts.push(receipt);
+        } else if (!NOT_PAYABLE_CODES.has(paid.code ?? "")) {
+          // A real payment failure (ceiling/grant/auth) — never silently do the
+          // work for free; surface the closed code to the loop.
+          return {
+            type: "tool_result",
+            tool_use_id: tu.id,
+            content: `paid delegation to ${tu.name} refused (${paid.code ?? "unknown"})`,
+            is_error: true,
+          };
+        }
+        // else: not P2P-payable (unpriced atom) → fall through to direct MCP.
+      }
+
+      if (receipt == null) {
+        const relayTaskId = await bindRelayBudget(config, prompt, capabilityHint, targetId);
+        const args: Record<string, unknown> = { prompt };
+        if (relayTaskId != null) args.relay_task_id = relayTaskId;
+
+        const result = await adapter.executeTool(qualified, args);
+        // McpClientAdapter captures any motebit-shaped receipt during executeTool.
+        // Drain immediately so receipt order matches the dispatch order.
+        const fresh = adapter.getAndResetDelegationReceipts();
+        delegationReceipts.push(...fresh);
+
+        if (!result.ok || fresh.length === 0) {
+          return {
+            type: "tool_result",
+            tool_use_id: tu.id,
+            content: `delegation to ${tu.name} failed for "${prompt.slice(0, 80)}"`,
+            is_error: true,
+          };
+        }
+        receipt = fresh[fresh.length - 1]!;
       }
 
       if (tu.name === "motebit_web_search") searchCount++;
       else fetchCount++;
 
       // The receipt is the cryptographic edge; its `result` is what Claude reads.
-      const receipt = fresh[fresh.length - 1]!;
       const resultText = receiptResultText(receipt);
 
       // Only read_url hits become citations — bare search results are

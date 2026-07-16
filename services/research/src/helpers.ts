@@ -21,5 +21,12 @@ export function loadConfig() {
     readUrlTargetId: process.env["MOTEBIT_READ_URL_TARGET_ID"],
     /** Maximum total tool calls (search + fetch combined) per research turn. */
     maxToolCalls: parseInt(process.env["MOTEBIT_MAX_TOOL_CALLS"] ?? "8", 10),
+    // Inc 2b — paid sub-delegation money seam. Both must be set to pay atoms
+    // P2P; absent ⇒ atom hops use the free direct-MCP path (dormant until the
+    // atoms are priced). The molecule's identity key IS the Solana wallet seed.
+    solanaRpcUrl: process.env["MOTEBIT_SOLANA_RPC_URL"] ?? null,
+    relayPublicKey: process.env["MOTEBIT_RELAY_PUBLIC_KEY"] ?? null,
+    // Lifetime spend ceiling for the self-issued grant (micro-USD). Default $1.
+    ceilingMicro: parseInt(process.env["MOTEBIT_RESEARCH_CEILING_MICRO"] ?? "1000000", 10),
   };
 }
