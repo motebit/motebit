@@ -221,6 +221,50 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
     expect(ws.calls).toHaveLength(0);
   });
 
+  it("Inc 3: UNPINNED — a priced atom is still paid, WITHOUT a target (the runtime ranks the market)", async () => {
+    const paidReceipt = makeReceipt({
+      task_id: "paid-search-2",
+      motebit_id: "ranked-agent",
+      result: JSON.stringify([{ title: "R", url: "https://a.example.com" }]),
+      signature: "sig-paid-2",
+    });
+    const ws = new StubAtomAdapter([]);
+    const ru = new StubAtomAdapter([]);
+    const paidCalls: Array<{ capability: string; targetWorkerId?: string }> = [];
+
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [
+          { type: "tool_use", id: "tu-1", name: "motebit_web_search", input: { query: "q" } },
+        ],
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Synthesized." }] });
+
+    const result = await research("question", {
+      ...baseConfig,
+      // NO webSearchTargetId — unpinned: the paid seam is still attempted, and the
+      // runtime's first-person ranker chooses among discovered providers.
+      adapterFactory: makeFactory(
+        new Map([
+          ["web-search", ws],
+          ["read-url", ru],
+        ]),
+      ),
+      paidSubDelegate: async (p) => {
+        paidCalls.push({ capability: p.capability, targetWorkerId: p.targetWorkerId });
+        return { ok: true, receipt: paidReceipt };
+      },
+    });
+
+    expect(result.delegation_receipts).toHaveLength(1);
+    expect(result.delegation_receipts[0]!.signature).toBe("sig-paid-2");
+    // The paid seam ran with NO pinned target — the market ranks.
+    expect(paidCalls).toHaveLength(1);
+    expect(paidCalls[0]!.capability).toBe("web_search");
+    expect(paidCalls[0]!.targetWorkerId).toBeUndefined();
+    expect(ws.calls).toHaveLength(0);
+  });
+
   it("Inc 2b: an unpriced atom (worker_not_payable) falls back to the direct MCP call", async () => {
     const directReceipt = makeReceipt({
       task_id: "direct-1",
