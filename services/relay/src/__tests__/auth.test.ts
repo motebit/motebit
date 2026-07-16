@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { parseTokenPayloadUnsafe } from "../auth.js";
+import { generateKeypair, createSignedToken, bytesToHex } from "@motebit/crypto";
+import type { IdentityManager } from "@motebit/core-identity";
+import type { TokenAudience } from "@motebit/protocol";
+import { parseTokenPayloadUnsafe, verifySignedTokenForDevice } from "../auth.js";
 
 /** Encode a payload object into the base64.signature format expected by parseTokenPayloadUnsafe. */
 function makeToken(payload: unknown): string {
@@ -114,5 +117,124 @@ describe("parseTokenPayloadUnsafe", () => {
   it("returns null for string payload", () => {
     const b64 = btoa('"just a string"');
     expect(parseTokenPayloadUnsafe(`${b64}.sig`)).toBeNull();
+  });
+});
+
+describe("verifySignedTokenForDevice — agent-registry sibling fallback", () => {
+  const mid = "motebit-molecule-1";
+  const did = "device-molecule-1";
+
+  /** IdentityManager whose device store has no row for anyone (service-mode caller). */
+  const noDeviceIM = {
+    loadDeviceById: async () => null,
+  } as unknown as IdentityManager;
+
+  /** IdentityManager with a device row carrying the given public key. */
+  function deviceIM(publicKeyHex: string): IdentityManager {
+    return {
+      loadDeviceById: async () => ({ public_key: publicKeyHex }),
+    } as unknown as IdentityManager;
+  }
+
+  async function mintToken(privateKey: Uint8Array, aud: TokenAudience = "market:listing") {
+    // exp is compared against Date.now() (ms) in verifySignedToken — use ms.
+    const now = Date.now();
+    return createSignedToken(
+      { mid, did, iat: now, exp: now + 300_000, jti: "jti-molecule-1", aud },
+      privateKey,
+    );
+  }
+
+  it("rejects a service-mode molecule's token WITHOUT the fallback (reproduces the bug)", async () => {
+    const kp = await generateKeypair();
+    const token = await mintToken(kp.privateKey);
+    // No device row, no agentKeyLookup → the pre-fix behavior: silent 401.
+    const ok = await verifySignedTokenForDevice(token, mid, noDeviceIM, "market:listing");
+    expect(ok).toBe(false);
+  });
+
+  it("accepts the same token WITH the agent-registry fallback", async () => {
+    const kp = await generateKeypair();
+    const token = await mintToken(kp.privateKey);
+    const lookup = (m: string) => (m === mid ? bytesToHex(kp.publicKey) : null);
+    const ok = await verifySignedTokenForDevice(
+      token,
+      mid,
+      noDeviceIM,
+      "market:listing",
+      undefined,
+      undefined,
+      lookup,
+    );
+    expect(ok).toBe(true);
+  });
+
+  it("still rejects a wrong-audience token even via the fallback", async () => {
+    const kp = await generateKeypair();
+    const token = await mintToken(kp.privateKey, "task:submit");
+    const lookup = (m: string) => (m === mid ? bytesToHex(kp.publicKey) : null);
+    const ok = await verifySignedTokenForDevice(
+      token,
+      mid,
+      noDeviceIM,
+      "market:listing",
+      undefined,
+      undefined,
+      lookup,
+    );
+    expect(ok).toBe(false);
+  });
+
+  it("still rejects a revoked agent before consulting the fallback", async () => {
+    const kp = await generateKeypair();
+    const token = await mintToken(kp.privateKey);
+    const lookup = (m: string) => (m === mid ? bytesToHex(kp.publicKey) : null);
+    const ok = await verifySignedTokenForDevice(
+      token,
+      mid,
+      noDeviceIM,
+      "market:listing",
+      undefined,
+      () => true, // agentRevokedCheck → revoked
+      lookup,
+    );
+    expect(ok).toBe(false);
+  });
+
+  it("rejects a token signed by a key that is NOT the registry key (forged)", async () => {
+    const real = await generateKeypair();
+    const forger = await generateKeypair();
+    const token = await mintToken(forger.privateKey);
+    // Registry holds the REAL key; the token was signed by the forger.
+    const lookup = (m: string) => (m === mid ? bytesToHex(real.publicKey) : null);
+    const ok = await verifySignedTokenForDevice(
+      token,
+      mid,
+      noDeviceIM,
+      "market:listing",
+      undefined,
+      undefined,
+      lookup,
+    );
+    expect(ok).toBe(false);
+  });
+
+  it("prefers the device store when a device row exists (fallback not consulted)", async () => {
+    const kp = await generateKeypair();
+    const token = await mintToken(kp.privateKey);
+    // Device row has the right key; lookup would throw if consulted — proving precedence.
+    const lookup = () => {
+      throw new Error("agentKeyLookup must not be consulted when a device row exists");
+    };
+    const ok = await verifySignedTokenForDevice(
+      token,
+      mid,
+      deviceIM(bytesToHex(kp.publicKey)),
+      "market:listing",
+      undefined,
+      undefined,
+      lookup,
+    );
+    expect(ok).toBe(true);
   });
 });

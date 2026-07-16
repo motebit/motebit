@@ -634,6 +634,38 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     }, {}),
   });
 
+  // Service-mode motebits (molecules) register into `agent_registry`, not the
+  // device store, so their signed tokens (market:listing, task:submit, …) have
+  // no device row to verify against. This db-backed lookup gives
+  // `verifySignedTokenForDevice` the agent-registry sibling fallback (see
+  // auth.ts); bound once here and injected at every auth site so a service-mode
+  // caller is verified uniformly rather than 401'd on the routes that happen to
+  // omit the fallback.
+  const agentRegistryKeyLookup = (mid: string): string | null => {
+    const row = moteDb.db
+      .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+      .get(mid) as { public_key?: string } | undefined;
+    return row?.public_key ?? null;
+  };
+  const verifySignedTokenForDeviceWithFallback: typeof verifySignedTokenForDevice = (
+    token,
+    mid,
+    im,
+    aud,
+    blacklistCheck,
+    agentRevokedCheck,
+    agentKeyLookup,
+  ) =>
+    verifySignedTokenForDevice(
+      token,
+      mid,
+      im,
+      aud,
+      blacklistCheck,
+      agentRevokedCheck,
+      agentKeyLookup ?? agentRegistryKeyLookup,
+    );
+
   // --- Middleware (rate limiting, CORS, security headers, auth, error handling, health) ---
   const { allLimiters, wsLimiter } = registerMiddleware({
     app,
@@ -645,7 +677,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     getFreezeReason,
     isTokenBlacklisted,
     isAgentRevoked,
-    verifySignedTokenForDevice,
+    verifySignedTokenForDevice: verifySignedTokenForDeviceWithFallback,
     parseTokenPayloadUnsafe,
     getShuttingDown: config.getShuttingDown,
     getConnectionCount: () => getConnectionCount(),
@@ -790,7 +822,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     wsLimiter,
     isTokenBlacklisted,
     isAgentRevoked,
-    verifySignedTokenForDevice,
+    verifySignedTokenForDevice: verifySignedTokenForDeviceWithFallback,
     parseTokenPayloadUnsafe,
     logger,
     onCommandResponse: handleCommandResponse,
@@ -809,7 +841,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     apiToken,
     identityManager,
     parseTokenPayloadUnsafe,
-    verifySignedTokenForDevice,
+    verifySignedTokenForDevice: verifySignedTokenForDeviceWithFallback,
     isTokenBlacklisted,
     isAgentRevoked,
   });
@@ -833,7 +865,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     getFreezeReason,
     isTokenBlacklisted,
     isAgentRevoked,
-    verifySignedTokenForDevice,
+    verifySignedTokenForDevice: verifySignedTokenForDeviceWithFallback,
     parseTokenPayloadUnsafe,
   });
 
@@ -1178,7 +1210,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     apiToken,
     identityManager,
     parseTokenPayloadUnsafe,
-    verifySignedTokenForDevice,
+    verifySignedTokenForDevice: verifySignedTokenForDeviceWithFallback,
     isTokenBlacklisted,
     isAgentRevoked,
   });
@@ -1316,7 +1348,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     federationConfig,
     federationQueryCache,
     parseTokenPayloadUnsafe,
-    verifySignedTokenForDevice,
+    verifySignedTokenForDevice: verifySignedTokenForDeviceWithFallback,
     isTokenBlacklisted,
     isAgentRevoked,
   });
@@ -1740,7 +1772,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     maxTasksPerSubmitter: MAX_TASKS_PER_SUBMITTER,
     x402Config: x402Config,
     parseTokenPayloadUnsafe,
-    verifySignedTokenForDevice,
+    verifySignedTokenForDevice: verifySignedTokenForDeviceWithFallback,
     isTokenBlacklisted,
     isAgentRevoked,
     platformFeeRate,
