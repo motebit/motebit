@@ -213,6 +213,13 @@ export interface MoleculeSpendHandle {
     capability: string;
     prompt: string;
     dryRun?: boolean;
+    /**
+     * Pin the sub-worker by `motebit_id` (a delegating molecule that already
+     * knows its atom, e.g. the Researcher's `MOTEBIT_WEB_SEARCH_TARGET_ID`)
+     * instead of letting discovery pick by capability. Narrows discovery only;
+     * an ineligible pinned worker fails closed (`worker_not_payable`).
+     */
+    targetWorkerId?: string;
   }): Promise<GrantedDelegationResult>;
 }
 
@@ -590,7 +597,7 @@ export async function runMolecule(
     const heldGrant = await selfIssueGrant(identity, config.moneyExecution);
     spend = {
       heldGrant,
-      spend: async ({ capability, prompt, dryRun }) => {
+      spend: async ({ capability, prompt, dryRun, targetWorkerId }) => {
         const rt = runtimeRef.current;
         const exec = rt?.executeGrantedDelegation;
         if (typeof exec !== "function") return { ok: false, code: "sync_not_enabled" };
@@ -600,6 +607,7 @@ export async function runMolecule(
           prompt,
           delegation: { token, grant: heldGrant },
           ...(dryRun != null ? { dryRun } : {}),
+          ...(targetWorkerId != null ? { targetWorkerId } : {}),
         });
       },
     };

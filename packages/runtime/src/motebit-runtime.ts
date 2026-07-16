@@ -4755,6 +4755,15 @@ export class MotebitRuntime {
       revocations?: readonly import("@motebit/protocol").DelegationRevocation[];
     };
     dryRun?: boolean;
+    /**
+     * Pin the sub-worker instead of letting discovery pick by capability. A
+     * delegating molecule that already knows its atom's `motebit_id` (e.g. the
+     * Researcher's `MOTEBIT_WEB_SEARCH_TARGET_ID`) pins it here. Narrows
+     * discovery only — the grant / scope / meter checks are unchanged, so this
+     * adds no authority surface; an ineligible pinned worker fails closed
+     * (`worker_not_payable`).
+     */
+    targetWorkerId?: string;
   }): Promise<GrantedDelegationResult> {
     const coords = this._grantedSpendCoords;
     if (coords == null) return { ok: false, code: "sync_not_enabled" };
@@ -4811,6 +4820,7 @@ export class MotebitRuntime {
           authToken: coords.authToken,
           capability: params.capability,
           relayPublicKeyHex: coords.relayPublicKeyHex,
+          ...(params.targetWorkerId != null ? { targetWorkerId: params.targetWorkerId } : {}),
           ...(ack === true ? { acknowledgeNoHistoryRisk: true } : {}),
         });
         if (!resolved.ok) return { ok: false, code: resolved.error.code };
@@ -4854,6 +4864,7 @@ export class MotebitRuntime {
         buildP2pPayment,
         grantId: presentedGrant.grant_id,
         invocationOrigin: "agent-to-agent",
+        ...(params.targetWorkerId != null ? { targetWorkerId: params.targetWorkerId } : {}),
         ...(ack === true ? { acknowledgeNoHistoryRisk: true } : {}),
         logger: this._logger,
       });

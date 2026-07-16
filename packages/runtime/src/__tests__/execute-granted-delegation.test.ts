@@ -231,6 +231,49 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     }
   });
 
+  it("pins the sub-worker via targetWorkerId ⇒ discovery honors the pin (happy path)", async () => {
+    // Inc 2: a delegating molecule (the Researcher) pins its atom by motebit_id
+    // instead of letting discovery pick by capability. The pin narrows discovery;
+    // grant / scope / meter are unchanged.
+    const operator = await generateKeypair();
+    const clerk = await generateKeypair();
+    const grant = await makeGrant(operator, clerk);
+    const token = await mintTick(grant, operator);
+    const runtime = clerkRuntime();
+
+    const result = await runtime.executeGrantedDelegation({
+      capability: "research",
+      prompt: "survey the topic",
+      delegation: { token, grant },
+      dryRun: true,
+      targetWorkerId: "bob-worker", // matches the discovery mock
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok && result.dryRun) {
+      expect(result.settlement.paidMicro).toBe(50_000);
+    }
+  });
+
+  it("a targetWorkerId discovery cannot match ⇒ fail-closed, no settlement", async () => {
+    const operator = await generateKeypair();
+    const clerk = await generateKeypair();
+    const grant = await makeGrant(operator, clerk);
+    const token = await mintTick(grant, operator);
+    const runtime = clerkRuntime();
+
+    const result = await runtime.executeGrantedDelegation({
+      capability: "research",
+      prompt: "survey the topic",
+      delegation: { token, grant },
+      dryRun: true,
+      targetWorkerId: "ghost-worker", // discovery only knows bob-worker
+    });
+
+    // The pinned worker is not discoverable/eligible → fail-closed, never pays.
+    expect(result.ok).toBe(false);
+  });
+
   it("null grant (revoked) ⇒ fail-closed, requires_verified_grant, no broadcast", async () => {
     const operator = await generateKeypair();
     const clerk = await generateKeypair();

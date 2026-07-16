@@ -334,6 +334,13 @@ describe("runMolecule", () => {
     const token = call.delegation.token;
     expect(token.grant_id).toBe(grant.grant_id);
     expect(token.signature).toBeDefined();
+    // Branch: omitting targetWorkerId ⇒ not forwarded (delegate-by-capability).
+    expect((execCalls[0] as Record<string, unknown>).targetWorkerId).toBeUndefined();
+
+    // Branch: a pinned targetWorkerId (Inc 2 — the Researcher pins its atom) is
+    // forwarded verbatim to executeGrantedDelegation.
+    await handle!.spend({ capability: "research", prompt: "pinned", targetWorkerId: "atom-xyz" });
+    expect((execCalls[2] as Record<string, unknown>).targetWorkerId).toBe("atom-xyz");
   });
 
   it("defaultCreateMoneyRuntime builds a real runtime with the granted-spend primitive + R4 delegation", () => {
