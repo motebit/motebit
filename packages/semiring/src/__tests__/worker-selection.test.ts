@@ -321,3 +321,136 @@ describe("selectWorker — first-person worker selection", () => {
     expect(winner?.motebit_id).toBe("cheap-unknown");
   });
 });
+
+describe("selectWorker — capability-scoped competence (anti-bleed)", () => {
+  // A record whose competence is bucketed per capability. The pairwise
+  // trust_level is the SAME for both workers below (a relationship), so the only
+  // thing that can distinguish them for a given capability is the per-capability
+  // history — which is exactly what the scoping reads.
+  function withCaps(
+    remoteId: string,
+    level: AgentTrustLevel,
+    caps: Record<string, { successful_tasks: number; failed_tasks: number }>,
+  ): AgentTrustRecord {
+    let successful = 0;
+    let failed = 0;
+    for (const v of Object.values(caps)) {
+      successful += v.successful_tasks;
+      failed += v.failed_tasks;
+    }
+    return {
+      motebit_id: SELF,
+      remote_motebit_id: asMotebitId(remoteId),
+      trust_level: level,
+      first_seen_at: Date.now() - 86_400_000,
+      last_seen_at: Date.now(),
+      interaction_count: successful + failed,
+      successful_tasks: successful, // the aggregate stays consistent with the buckets
+      failed_tasks: failed,
+      capability_stats: caps,
+    };
+  }
+
+  // Two workers with IDENTICAL aggregate history (10/0 each) and the same trust
+  // level, but MIRRORED per-capability: the reader is proven at read_url and cold
+  // at web_search; the searcher is the reverse. Ids chosen so the searcher wins
+  // the deterministic tie-break alphabetically — so a flip to the reader can only
+  // come from capability scoping, never from the id sort.
+  const reader = withCaps("z-reader", AgentTrustLevel.Verified, {
+    read_url: { successful_tasks: 10, failed_tasks: 0 },
+    web_search: { successful_tasks: 0, failed_tasks: 0 },
+  });
+  const searcher = withCaps("a-searcher", AgentTrustLevel.Verified, {
+    web_search: { successful_tasks: 10, failed_tasks: 0 },
+    read_url: { successful_tasks: 0, failed_tasks: 0 },
+  });
+
+  it("without a capability, the two tie on aggregate and the id tie-break wins (the bleed)", () => {
+    // Capability-blind: both look identical (10/0 aggregate, same level), so the
+    // deterministic tie-break picks the alphabetically-first id. The reader's
+    // read_url expertise is invisible — this is the cross-capability bleed.
+    const winner = selectWorker(SELF, [cand("z-reader", reader), cand("a-searcher", searcher)]);
+    expect(winner?.motebit_id).toBe("a-searcher");
+  });
+
+  it("scoping to read_url flips the winner to the worker actually proven at read_url", () => {
+    const winner = selectWorker(SELF, [cand("z-reader", reader), cand("a-searcher", searcher)], {
+      capability: "read_url",
+    });
+    expect(winner?.motebit_id).toBe("z-reader");
+  });
+
+  it("scoping to web_search picks the searcher — symmetric, no cross-capability bleed", () => {
+    const winner = selectWorker(SELF, [cand("z-reader", reader), cand("a-searcher", searcher)], {
+      capability: "web_search",
+    });
+    expect(winner?.motebit_id).toBe("a-searcher");
+  });
+
+  it("a rich web_search history does NOT lift a worker that is cold at read_url", () => {
+    // The searcher (10/0 web_search, 0/0 read_url) must not out-rank a worker with
+    // real read_url success when read_url is the capability — its web_search
+    // competence is scoped away, so it reads as cold-at-read_url (0.5).
+    const provenReader = withCaps("proven-reader", AgentTrustLevel.Verified, {
+      read_url: { successful_tasks: 8, failed_tasks: 0 },
+    });
+    const winner = selectWorker(
+      SELF,
+      [cand("proven-reader", provenReader), cand("a-searcher", searcher)],
+      { capability: "read_url" },
+    );
+    expect(winner?.motebit_id).toBe("proven-reader");
+  });
+
+  it("an absent bucket reads as cold-at-this-capability, never the aggregate (no fallback bleed)", () => {
+    // A worker with NO capability_stats at all but a rich aggregate must not ride
+    // that aggregate for a specific capability — the whole point of the scoping.
+    const aggregateOnly: AgentTrustRecord = {
+      motebit_id: SELF,
+      remote_motebit_id: asMotebitId("aggregate-only"),
+      trust_level: AgentTrustLevel.Verified,
+      first_seen_at: Date.now() - 86_400_000,
+      last_seen_at: Date.now(),
+      interaction_count: 20,
+      successful_tasks: 20,
+      failed_tasks: 0,
+      // no capability_stats
+    };
+    const scopedReliability = selectWorker(SELF, [cand("aggregate-only", aggregateOnly)], {
+      capability: "read_url",
+    });
+    const blindReliability = selectWorker(SELF, [cand("aggregate-only", aggregateOnly)]);
+    // Capability-scoped read yields a LOWER score than the capability-blind read,
+    // because scoped sees 0/0 (cold) where blind sees 20/0 (proven).
+    expect(scopedReliability!.score).toBeLessThan(blindReliability!.score);
+  });
+
+  it("explore mode scopes the posterior too — a worker cold at the capability draws from Beta(prior), not its aggregate", () => {
+    // Same mirrored pair; in explore mode the reliability posterior is built from
+    // the capability bucket. Over many seeds, scoping to read_url makes the reader
+    // (proven at read_url) win far more than the searcher (cold at read_url),
+    // whereas capability-blind they'd be interchangeable.
+    let readerWins = 0;
+    for (let i = 0; i < 200; i++) {
+      const pick = selectWorker(SELF, [cand("z-reader", reader), cand("a-searcher", searcher)], {
+        capability: "read_url",
+        explore: { seed: `s${i}`, strength: 1 },
+      });
+      if (pick?.motebit_id === "z-reader") readerWins++;
+    }
+    expect(readerWins).toBeGreaterThan(120); // proven-at-read_url wins the clear majority
+  });
+
+  it("backward-compatible: no capability opt is byte-identical to the aggregate path", () => {
+    // A record with capability_stats but ranked WITHOUT a capability uses the
+    // aggregate counts — the scoping is opt-in, never a silent behavior change.
+    const r = withCaps("w", AgentTrustLevel.Verified, {
+      read_url: { successful_tasks: 5, failed_tasks: 1 },
+      web_search: { successful_tasks: 3, failed_tasks: 0 },
+    });
+    const scored = selectWorker(SELF, [cand("w", r)]);
+    // Aggregate is 8/1 → reliability (1+8)/(2+9) = 9/11. Assert the reliability
+    // axis of the route reflects the aggregate, not a bucket.
+    expect(scored!.route.reliability).toBeCloseTo(9 / 11, 6);
+  });
+});

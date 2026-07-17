@@ -100,10 +100,64 @@ export interface AgentTrustDeps {
  * (including Trusted), not a precondition for it. Unverified receipts never move trust.
  * See trust-graph-longitudinal-eval.test.ts for the measured ladder.
  */
+/**
+ * Resolve the single capability this receipt's work should be attributed to for
+ * per-capability competence, or undefined when it can't be pinned down. An
+ * explicit capability (threaded from the delegation call site that knows it)
+ * wins; otherwise fall back to the receipt's `delegated_scope` ONLY when it
+ * names exactly one capability. A wildcard (`*`), a multi-capability list, or an
+ * absent scope resolves to undefined — we attribute per-capability competence
+ * only when the capability is unambiguous, never guess. Unattributable work
+ * still updates the aggregate counts; it simply skips the bucket.
+ */
+function resolveTaskCapability(
+  explicit: string | undefined,
+  receipt: ExecutionReceipt,
+): string | undefined {
+  if (explicit != null && explicit !== "" && explicit !== "*") return explicit;
+  const scope = receipt.delegated_scope;
+  if (scope == null || scope === "" || scope === "*") return undefined;
+  const parts = scope
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return parts.length === 1 ? parts[0] : undefined;
+}
+
+/**
+ * Return a NEW capability_stats map with the resolved capability's bucket
+ * incremented (immutable — never mutate the stored record's nested object). A
+ * null capability leaves the map untouched (aggregate-only attribution).
+ */
+function bumpCapabilityStats(
+  existing: AgentTrustRecord["capability_stats"],
+  capability: string | undefined,
+  effectiveSuccess: boolean,
+  effectiveFailure: boolean,
+): AgentTrustRecord["capability_stats"] {
+  if (capability == null) return existing;
+  const prev = existing?.[capability] ?? { successful_tasks: 0, failed_tasks: 0 };
+  return {
+    ...(existing ?? {}),
+    [capability]: {
+      successful_tasks: prev.successful_tasks + (effectiveSuccess ? 1 : 0),
+      failed_tasks: prev.failed_tasks + (effectiveFailure ? 1 : 0),
+    },
+  };
+}
+
 export async function bumpTrustFromReceipt(
   deps: AgentTrustDeps,
   receipt: ExecutionReceipt,
   verified: boolean,
+  /**
+   * The capability the delegated work fulfilled, when the caller knows it (the
+   * first-person routing path threads `params.capability`). Scopes competence to
+   * this capability (docs/doctrine/first-person-worker-routing.md); when absent
+   * it is derived from a single-capability `delegated_scope`, else only the
+   * aggregate counts update. Never widens authority — pure observation.
+   */
+  capability?: string,
 ): Promise<void> {
   const {
     motebitId,
@@ -141,12 +195,22 @@ export async function bumpTrustFromReceipt(
   const effectiveSuccess = taskSucceeded && resultQuality >= 0.2;
   const effectiveFailure = taskFailed || (taskSucceeded && resultQuality < 0.2);
 
+  // The capability to attribute this work to (competence is per-skill). Undefined
+  // ⇒ aggregate-only, no bucket touched.
+  const taskCapability = resolveTaskCapability(capability, receipt);
+
   if (existing != null) {
     // Quality EMA update
     const alpha = 0.3;
     const prevQuality = existing.avg_quality ?? 1.0;
     const newQuality = alpha * resultQuality + (1 - alpha) * prevQuality;
 
+    const nextCapabilityStats = bumpCapabilityStats(
+      existing.capability_stats,
+      taskCapability,
+      effectiveSuccess,
+      effectiveFailure,
+    );
     const updated: AgentTrustRecord = {
       ...existing,
       last_seen_at: now,
@@ -155,6 +219,7 @@ export async function bumpTrustFromReceipt(
       failed_tasks: (existing.failed_tasks ?? 0) + (effectiveFailure ? 1 : 0),
       avg_quality: newQuality,
       quality_sample_count: (existing.quality_sample_count ?? 0) + 1,
+      ...(nextCapabilityStats != null ? { capability_stats: nextCapabilityStats } : {}),
     };
     // Evaluate trust level transition (promotion or demotion)
     const newLevel = evaluateTrustTransition(updated);
@@ -342,6 +407,12 @@ export async function bumpTrustFromReceipt(
     }
   } else {
     // First interaction — create at FirstContact
+    const firstCapabilityStats = bumpCapabilityStats(
+      undefined,
+      taskCapability,
+      effectiveSuccess,
+      effectiveFailure,
+    );
     const record: AgentTrustRecord = {
       motebit_id: motebitId,
       remote_motebit_id: remoteMotebitId,
@@ -353,6 +424,7 @@ export async function bumpTrustFromReceipt(
       failed_tasks: effectiveFailure ? 1 : 0,
       avg_quality: resultQuality,
       quality_sample_count: 1,
+      ...(firstCapabilityStats != null ? { capability_stats: firstCapabilityStats } : {}),
     };
     await agentTrustStore.setAgentTrust(record);
     agentGraph.invalidate();

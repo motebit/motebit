@@ -2360,9 +2360,39 @@ interface AgentTrustRow {
   failed_tasks: number;
   notes: string | null;
   petname: string | null;
+  capability_stats: string | null;
+}
+
+/**
+ * Parse the `capability_stats` JSON column defensively: absent/blank/malformed
+ * ⇒ undefined (no per-capability history), never a throw. Only well-shaped
+ * `{cap: {successful_tasks, failed_tasks}}` entries survive — a corrupt blob
+ * degrades to capability-agnostic ranking, it does not crash the read path.
+ */
+function parseCapabilityStats(
+  raw: string | null,
+): Record<string, { successful_tasks: number; failed_tasks: number }> | undefined {
+  if (raw == null || raw === "") return undefined;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed == null || typeof parsed !== "object") return undefined;
+    const out: Record<string, { successful_tasks: number; failed_tasks: number }> = {};
+    for (const [cap, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (v == null || typeof v !== "object") continue;
+      const s = (v as { successful_tasks?: unknown }).successful_tasks;
+      const f = (v as { failed_tasks?: unknown }).failed_tasks;
+      if (typeof s === "number" && typeof f === "number") {
+        out[cap] = { successful_tasks: s, failed_tasks: f };
+      }
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function rowToAgentTrust(row: AgentTrustRow): AgentTrustRecord {
+  const capabilityStats = parseCapabilityStats(row.capability_stats);
   return {
     motebit_id: row.motebit_id,
     remote_motebit_id: row.remote_motebit_id,
@@ -2375,6 +2405,7 @@ function rowToAgentTrust(row: AgentTrustRow): AgentTrustRecord {
     failed_tasks: row.failed_tasks ?? 0,
     notes: row.notes ?? undefined,
     petname: row.petname ?? undefined,
+    ...(capabilityStats != null ? { capability_stats: capabilityStats } : {}),
   };
 }
 
@@ -2390,8 +2421,8 @@ export class SqliteAgentTrustStore {
     );
     this.stmtSet = db.prepare(
       `INSERT OR REPLACE INTO agent_trust
-       (motebit_id, remote_motebit_id, trust_level, public_key, first_seen_at, last_seen_at, interaction_count, successful_tasks, failed_tasks, notes, petname)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (motebit_id, remote_motebit_id, trust_level, public_key, first_seen_at, last_seen_at, interaction_count, successful_tasks, failed_tasks, notes, petname, capability_stats)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtList = db.prepare(
       `SELECT * FROM agent_trust WHERE motebit_id = ? ORDER BY last_seen_at DESC`,
@@ -2423,6 +2454,9 @@ export class SqliteAgentTrustStore {
       record.failed_tasks ?? 0,
       record.notes ?? null,
       record.petname ?? null,
+      record.capability_stats != null && Object.keys(record.capability_stats).length > 0
+        ? JSON.stringify(record.capability_stats)
+        : null,
     );
   }
 

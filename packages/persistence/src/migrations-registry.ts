@@ -396,4 +396,19 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       )`,
     ],
   },
+  {
+    version: 42,
+    description: "agent_trust.capability_stats — per-capability competence counts",
+    statements: [
+      // AgentTrustRecord gained an optional `capability_stats` map: per-capability
+      // successful/failed counts so first-person routing scopes competence to the
+      // capability being hired (docs/doctrine/first-person-worker-routing.md).
+      // The pairwise trust_level (a relationship) stays capability-agnostic; only
+      // the success/fail counts split by capability. Additive nullable JSON column
+      // ({capability: {successful_tasks, failed_tasks}}); NULL ⇒ no per-capability
+      // history yet. Local private state — never on the wire (the .strict()
+      // TrustCredentialSubject carries only the aggregate counts).
+      "ALTER TABLE agent_trust ADD COLUMN capability_stats TEXT",
+    ],
+  },
 ];

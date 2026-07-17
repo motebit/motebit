@@ -32,10 +32,23 @@ This is **not** the auto-routing primitive of [`auto-routing-as-protocol-primiti
 Three axes, one signal each:
 
 - **trust** = the earned categorical level (`trustLevelToScore`), with a **0.1 cold-start floor** so an UNKNOWN-but-capable worker is still hireable — you cannot have earned trust before you have worked together.
-- **reliability** = Beta-binomial success rate (Laplace prior α=β=1) — the **continuous accumulation lever**: each successful task lifts a worker above an untried one without waiting for a categorical promotion. Inlined rather than importing `@motebit/policy`'s scalar `computeReputationScore` (which collapses success+volume+recency into one number) — here each axis stays separate so the composite weights can trade them off. Same prior, same intent.
+- **reliability** = Beta-binomial success rate (Laplace prior α=β=1) — the **continuous accumulation lever**: each successful task lifts a worker above an untried one without waiting for a categorical promotion. Inlined rather than importing `@motebit/policy`'s scalar `computeReputationScore` (which collapses success+volume+recency into one number) — here each axis stays separate so the composite weights can trade them off. Same prior, same intent. **Scoped per capability** — see "Competence is a skill" below.
 - **cost** = the worker's `unit_cost` for the capability. `rankReachableAgents` normalizes cost as `1/(1+cost)`, which is nearly flat below ~$0.10 — so at micro-price scale cost is deliberately a **weak** tiebreaker (you don't drop a trusted worker to save a fraction of a cent); it only dominates across dollar-scale gaps.
 
 Default weights are trust-dominant (`0.5 trust / 0.3 reliability / 0.2 cost`), overridable per caller — the "swap the semiring to change what _best_ means" lever.
+
+## Competence is a skill; the relationship is not
+
+The categorical **trust level** and the **reliability counts** answer two different questions, and only one of them is capability-specific:
+
+- The trust _level_ (`unknown → first_contact → verified → trusted`, and `blocked`) is a **pairwise relationship** — "do I trust this agent at all; is it a throwaway I should freeze out." That correctly spans capabilities: it is the sybil-resistance edge and the cold-start floor, earned once with an agent, not re-earned per skill.
+- The success/fail **counts** are **competence**, which is per-skill: being reliable at `web_search` says nothing about `read_url`. Pooling them lets a proven `web_search` provider free-ride into `read_url` hires it has never done — a cross-capability bleed observed live (one atom serving two capabilities inflating both from one).
+
+So the posterior is scoped by its natural grain. `AgentTrustRecord.capability_stats` (`{capability: {successful_tasks, failed_tasks}}`, local-only, never on the wire) buckets the counts per capability; the pairwise `trust_level` stays capability-agnostic and sets the **weak prior** (`levelPrior`). Hiring for capability X reads only X's bucket — a worker rich at `web_search` but cold at `read_url` starts `read_url` at the uncertain 0.5, with a small relationship head-start from the level prior, and must earn `read_url` reliability on its own. Absent a bucket the posterior reads **cold-at-this-capability, never the aggregate** — that fallback is exactly the bleed the scoping removes. Threaded as `selectWorker(self, candidates, { capability })`; with no capability it uses the aggregate counts, byte-identical to the pre-scoping default. `competenceCounts` in `worker-selection.ts`.
+
+## The write side: the ledger the selector reads is actually filled
+
+Ranking is only real if the counts accumulate. A completed paid sub-hop (`executeGrantedDelegation`) now feeds the molecule's own ledger: on a verified worker receipt it calls `bumpTrustFromReceipt(receipt, true, capability)`, crediting the **direct** counterparty it chose and paid (never a laundered sub-sub-worker — the ego-star rule of [`agents-as-first-person-trust-graph.md`](agents-as-first-person-trust-graph.md)) and landing the success in that capability's bucket. Verify-before-bump: the receipt must self-verify against its own embedded `public_key` (the same self-verifiable discipline as the sovereign-receipt path) or it earns no credit — an unverifiable receipt never fabricates a trust edge. Best-effort: a bump failure never fails the delegation.
 
 ## What this increment did NOT do (deferred, with triggers)
 

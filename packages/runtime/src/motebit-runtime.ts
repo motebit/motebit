@@ -4348,8 +4348,18 @@ export class MotebitRuntime {
     };
   }
 
-  async bumpTrustFromReceipt(receipt: ExecutionReceipt, verified: boolean): Promise<void> {
-    return _bumpTrustFromReceipt(this.trustDeps, receipt, verified);
+  async bumpTrustFromReceipt(
+    receipt: ExecutionReceipt,
+    verified: boolean,
+    /**
+     * The capability the delegated work fulfilled, when the caller knows it —
+     * scopes per-capability competence in the first-person routing ledger
+     * (docs/doctrine/first-person-worker-routing.md). Absent ⇒ derived from a
+     * single-capability `delegated_scope`, else aggregate-only.
+     */
+    capability?: string,
+  ): Promise<void> {
+    return _bumpTrustFromReceipt(this.trustDeps, receipt, verified, capability);
   }
 
   async recordAgentInteraction(
@@ -4865,8 +4875,14 @@ export class MotebitRuntime {
               // cost-aware pick leans toward). Explore where a bad pick is cheap.
               const repCostUsd = Math.min(...rankable.map((r) => r.unitCost ?? 0));
               const strength = explorationStrengthForStakes(repCostUsd);
-              const exploitTop = selectWorkerByTrust(this.motebitId, rankable);
+              // Scope the reliability posterior to the capability being hired:
+              // competence is a skill, so a worker's `web_search` history does not
+              // inflate its `read_url` estimate. The pairwise trust level (the
+              // relationship) still speaks through the prior.
+              const capability = params.capability;
+              const exploitTop = selectWorkerByTrust(this.motebitId, rankable, { capability });
               const winner = selectWorkerByTrust(this.motebitId, rankable, {
+                capability,
                 explore: { seed: exploreSeed, strength },
               });
               if (winner != null) {
@@ -4875,6 +4891,7 @@ export class MotebitRuntime {
                 // "why the newcomer got tried" signal).
                 this._logger.warn("routing.worker_selected", {
                   selected: winner.motebit_id,
+                  capability,
                   candidates: rankable.length,
                   strength: Number(strength.toFixed(3)),
                   explored: exploitTop != null && winner.motebit_id !== exploitTop.motebit_id,
@@ -4962,6 +4979,32 @@ export class MotebitRuntime {
         });
         return { ok: false, code };
       }
+      // Accumulate first-person trust in the worker we just hired — the write
+      // side of first-person routing, without which the selector above reads a
+      // ledger nothing ever fills (every hire would see the cold-start floor).
+      // The worker is our DIRECT counterparty (we chose, paid, and got its
+      // receipt), so this is a legitimate first-person edge, never a laundered
+      // sub-sub-worker (docs/doctrine/agents-as-first-person-trust-graph.md).
+      // Scope the competence to `params.capability` so a worker's skill at one
+      // capability doesn't inflate its estimate at another. Verify against the
+      // receipt's OWN embedded public key first — the same self-verifiable
+      // discipline as the sovereign-receipt path; an unverifiable receipt earns
+      // no trust credit. Best-effort: a bump failure never fails the delegation.
+      try {
+        const workerReceipt = result.receipt;
+        if (workerReceipt.public_key != null && workerReceipt.public_key !== "") {
+          const valid = await verifyExecutionReceipt(
+            workerReceipt,
+            hexToBytes(workerReceipt.public_key),
+          );
+          if (valid) await this.bumpTrustFromReceipt(workerReceipt, true, params.capability);
+        }
+      } catch (err) {
+        this._logger.warn("routing.trust_bump_skipped", {
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      }
+
       return {
         ok: true,
         dryRun: false,
