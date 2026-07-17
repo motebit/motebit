@@ -559,6 +559,83 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
     expect(result.signature).toBe("sigErr");
     expect(result.slot).toBe(99);
   });
+
+  // ── Blockhash-expiry retry (the devnet flake that resets the promotion clock) ──
+  it("retries with a FRESH blockhash on 'block height exceeded' and succeeds", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    getAccountMock
+      .mockResolvedValueOnce({ amount: 10_000_000n }) // balance
+      .mockResolvedValueOnce({ amount: 0n }); // dest exists
+    const blockhashSpy = vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 100,
+    });
+    const sendSpy = vi
+      .spyOn(conn, "sendRawTransaction")
+      .mockResolvedValueOnce("sigExpired")
+      .mockResolvedValue("sigFresh");
+    vi.spyOn(conn, "confirmTransaction")
+      // First attempt: the blockhash expired before confirmation (the flake).
+      .mockRejectedValueOnce(new Error("Signature sigExpired has expired: block height exceeded."))
+      // Retry with a fresh blockhash lands.
+      .mockResolvedValue({ context: { slot: 51 }, value: { err: null } });
+
+    const result = await adapter.sendUsdc({
+      toAddress: validBase58Address(),
+      microAmount: 1_000_000n,
+    });
+    // The retry settled — and on the fresh signature, never the expired one.
+    expect(result).toEqual({ signature: "sigFresh", slot: 51, confirmed: true });
+    // A FRESH blockhash was fetched for the retry (not a re-send of the dead tx).
+    expect(blockhashSpy).toHaveBeenCalledTimes(2);
+    expect(sendSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives up after BROADCAST_MAX_ATTEMPTS when the expiry never clears", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    getAccountMock
+      .mockResolvedValueOnce({ amount: 10_000_000n })
+      .mockResolvedValueOnce({ amount: 0n });
+    const blockhashSpy = vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 100,
+    });
+    vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sig");
+    const confirmSpy = vi
+      .spyOn(conn, "confirmTransaction")
+      .mockRejectedValue(new Error("Signature sig has expired: block height exceeded."));
+
+    await expect(
+      adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n }),
+    ).rejects.toThrow("block height exceeded");
+    // Bounded: exactly 3 attempts, no infinite loop against a wedged cluster.
+    expect(blockhashSpy).toHaveBeenCalledTimes(3);
+    expect(confirmSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("does NOT retry a non-expiry error — a confirmation timeout may still land (no double-spend)", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    getAccountMock
+      .mockResolvedValueOnce({ amount: 10_000_000n })
+      .mockResolvedValueOnce({ amount: 0n });
+    const blockhashSpy = vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 100,
+    });
+    vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sig");
+    vi.spyOn(conn, "confirmTransaction").mockRejectedValue(
+      new Error("Transaction was not confirmed in 30.00 seconds"),
+    );
+
+    await expect(
+      adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n }),
+    ).rejects.toThrow("not confirmed");
+    // Single-shot: a timeout is NOT the known-safe retry (the tx might land).
+    expect(blockhashSpy).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ── sendUsdcBatch ─────────────────────────────────────────────────────────
@@ -662,6 +739,36 @@ describe("Web3JsRpcAdapter.sendUsdcBatch", () => {
     expect(results[8]!.ok).toBe(false);
     expect(results[8]!.reason).toBe("prior chunk failed");
     expect(results[8]!.signature).toBeNull();
+  });
+
+  it("the atomic multi-output P2P tx retries with a fresh blockhash on expiry (the conformance flake)", async () => {
+    // This is exactly the failure that reset the promotion clock: the 2-leg
+    // (worker + treasury) atomic P2P payment expired before confirmation. It must
+    // rebuild with a fresh blockhash and settle both legs in ONE new tx.
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    getAccountMock.mockImplementation(async () => ({ amount: 10_000_000n }));
+    const blockhashSpy = vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 200,
+    });
+    vi.spyOn(conn, "sendRawTransaction")
+      .mockResolvedValueOnce("sigExpired")
+      .mockResolvedValue("sigFresh");
+    vi.spyOn(conn, "confirmTransaction")
+      .mockRejectedValueOnce(new Error("Signature sigExpired has expired: block height exceeded."))
+      .mockResolvedValue({ context: { slot: 210 }, value: { err: null } });
+
+    const results = await adapter.sendUsdcBatch([
+      { toAddress: validBase58Address(), microAmount: 3000n }, // worker leg
+      { toAddress: validBase58Address(), microAmount: 158n }, // treasury fee leg
+    ]);
+    // Both legs settled atomically on the fresh signature.
+    expect(results).toEqual([
+      { ok: true, signature: "sigFresh", slot: 210, reason: null },
+      { ok: true, signature: "sigFresh", slot: 210, reason: null },
+    ]);
+    expect(blockhashSpy).toHaveBeenCalledTimes(2);
   });
 
   it("aborts the batch when an invalid mid-batch address is encountered", async () => {
