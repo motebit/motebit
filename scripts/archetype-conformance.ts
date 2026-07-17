@@ -14,7 +14,10 @@
  *      allowlist, the probe pays like any stranger).
  *        - The Researcher: fixed question → signed receipt →
  *          verifyReceiptVerdict fail-closed → every nested atom receipt
- *          verified → citation receipt_task_id ⊆ nested task_ids →
+ *          verified → the self-attested `sub_settlements` prove the atoms
+ *          were PAID P2P (external atom work ⇒ ≥1 p2p hop with an onchain
+ *          tx_hash, else FAIL — a molecule may never do atom work for free) →
+ *          citation receipt_task_id ⊆ nested task_ids →
  *          EvidenceProvenance STRUCTURAL violations FAIL; byte re-fetch
  *          drift WARNs (live pages move — honest split).
  *        - The Auditor: audits the Researcher (the self-referential
@@ -230,6 +233,38 @@ async function checkResearcher(
   }
   record("research: paid delegation", "PASS");
   await verifyReceiptTree("research", receipt);
+
+  // The multi-hop-as-P2P invariant: a molecule that did external atom work MUST
+  // have PAID for it P2P — never silently for free. Read the self-attested money
+  // facts (`sub_settlements`, stamped by the molecule with mode + onchain tx) and
+  // the work counters from the SAME signed payload. The gate:
+  //   external atom work happened  ⇒  ≥1 p2p sub-hop with an onchain tx_hash.
+  // Gating on work-done (not "always ≥1") keeps it non-flaky: a pure-interior
+  // recall answer legitimately settles nothing. This closes the exact regression
+  // #333 fixed — research dropping to free direct-MCP would keep the receipt tree
+  // verifying while paying no one; here that is a hard FAIL.
+  try {
+    const settlePayload = JSON.parse(String(receipt["result"] ?? "{}")) as {
+      sub_settlements?: Array<{ mode?: string; tx_hash?: string; capability?: string }>;
+      search_count?: number;
+      fetch_count?: number;
+    };
+    const externalWork = (settlePayload.search_count ?? 0) + (settlePayload.fetch_count ?? 0);
+    const p2pHops = (settlePayload.sub_settlements ?? []).filter(
+      (s) => s.mode === "p2p" && typeof s.tx_hash === "string" && s.tx_hash.length > 0,
+    );
+    record(
+      "research: atoms paid P2P (multi-hop settles)",
+      p2pHops.length > 0 ? "PASS" : externalWork > 0 ? "FAIL" : "WARN",
+      `${p2pHops.length} p2p sub-hop(s) [${p2pHops.map((s) => s.capability ?? "?").join(",")}], external work=${externalWork}`,
+    );
+  } catch (err) {
+    record(
+      "research: atoms paid P2P (multi-hop settles)",
+      "FAIL",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 
   // Citation chain: parse the result payload, cross-check receipt_task_id
   // and run the structural provenance discipline.

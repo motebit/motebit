@@ -73,6 +73,13 @@ export interface ResearchResult {
   /** Signed receipts from every delegated call, in execution order. The verifiable citation chain. */
   delegation_receipts: SignedReceipt[];
   /**
+   * The money fact per PAID sub-hop, in execution order — the self-attested
+   * proof that the atoms were paid P2P (not silently done for free). Empty when
+   * no atom hop settled (unpriced atoms / no money seam / free direct-MCP
+   * fallback). Distinct from `delegation_receipts`, which a free hop also fills.
+   */
+  sub_settlements: SubHopSettlement[];
+  /**
    * One citation per tool call that produced source content (interior recall
    * or URL fetch; bare web_search hits are not cited — only content actually
    * read is). Citation.source discriminates interior (self-attested, no
@@ -127,8 +134,44 @@ export interface PaidSubDelegateResult {
   ok: boolean;
   /** The sub-worker's signed execution receipt (present on `ok`). */
   receipt?: SignedReceipt;
+  /**
+   * The money fact of the hop — mirrored from the runtime's `DelegationSettlement`
+   * (`mode`/`txHash`/`paidMicro`/`feeMicro`). Present when a paid hop actually
+   * settled so the molecule can self-attest what it paid its atom. Kept in the
+   * runtime's camelCase field names because it is passed straight through from
+   * the granted-delegation result; the molecule maps it to `SubHopSettlement`
+   * for its signed wire payload.
+   */
+  settlement?: {
+    mode: "p2p" | "relay";
+    txHash?: string;
+    paidMicro?: number;
+    feeMicro?: number;
+  };
   /** Failure code when `!ok` (e.g. `worker_not_payable`, `money_meter_denied`). */
   code?: string;
+}
+
+/**
+ * The self-attested money fact of one sub-hop, stamped into the molecule's
+ * signed receipt payload so "I paid my atom P2P" is verifiable offline (and the
+ * `tx_hash` re-checkable onchain) — never inferred from the mere presence of a
+ * nested receipt (a FREE direct-MCP hop also produces one). This is what makes
+ * the multi-hop-as-P2P thesis self-attesting rather than a stdout log.
+ */
+export interface SubHopSettlement {
+  /** The capability the atom served (e.g. `web_search`, `read_url`). */
+  capability: string;
+  /** The atom receipt's `task_id` — links this settlement to `delegation_receipts`. */
+  task_id?: string;
+  /** `p2p` = paid onchain in the molecule's atomic tx; `relay` = relay-ledger settlement. */
+  mode: "p2p" | "relay";
+  /** Onchain transaction signature (P2P only) — an auditor resolves it to the transfer. */
+  tx_hash?: string;
+  /** Micro-units paid to the atom, net of fee (P2P only). */
+  paid_micro?: number;
+  /** Platform fee in micro-units (P2P only). */
+  fee_micro?: number;
 }
 
 /**
@@ -286,6 +329,7 @@ export async function research(question: string, config: ResearchConfig): Promis
   try {
     const messages: Anthropic.MessageParam[] = [{ role: "user", content: question }];
     const delegationReceipts: SignedReceipt[] = [];
+    const subSettlements: SubHopSettlement[] = [];
     const citations: Citation[] = [];
     let recallSelfCount = 0;
     // claude-sonnet-4-6 list pricing per million tokens; estimate only —
@@ -413,6 +457,24 @@ export async function research(question: string, config: ResearchConfig): Promis
           console.log(`[research] sub-hop: PAID P2P cap=${capabilityHint}`);
           receipt = paid.receipt;
           delegationReceipts.push(receipt);
+          // Self-attest the money fact: stamp the hop's settlement (mode + onchain
+          // tx) into the molecule's receipt so "I paid my atom P2P" is verifiable
+          // from signed bytes, never inferred from the receipt's mere presence
+          // (the free path below also pushes a receipt). Absent settlement ⇒ omit;
+          // the assertion is presence-of-p2p, so a missing fact never fabricates one.
+          if (paid.settlement != null) {
+            const atomTaskId = (receipt as { task_id?: unknown }).task_id;
+            subSettlements.push({
+              capability: capabilityHint,
+              ...(typeof atomTaskId === "string" ? { task_id: atomTaskId } : {}),
+              mode: paid.settlement.mode,
+              ...(paid.settlement.txHash != null ? { tx_hash: paid.settlement.txHash } : {}),
+              ...(paid.settlement.paidMicro != null
+                ? { paid_micro: paid.settlement.paidMicro }
+                : {}),
+              ...(paid.settlement.feeMicro != null ? { fee_micro: paid.settlement.feeMicro } : {}),
+            });
+          }
         } else if (!NOT_PAYABLE_CODES.has(paid.code ?? "")) {
           // A real payment failure (ceiling/grant/auth) — never silently do the
           // work for free; surface the closed code to the loop.
@@ -535,6 +597,7 @@ export async function research(question: string, config: ResearchConfig): Promis
           cost_estimate_usd:
             (inputTokens * USD_PER_M_INPUT + outputTokens * USD_PER_M_OUTPUT) / 1e6,
           delegation_receipts: delegationReceipts,
+          sub_settlements: subSettlements,
           citations,
           recall_self_count: recallSelfCount,
           search_count: searchCount,
@@ -570,6 +633,7 @@ export async function research(question: string, config: ResearchConfig): Promis
       report,
       cost_estimate_usd: (inputTokens * USD_PER_M_INPUT + outputTokens * USD_PER_M_OUTPUT) / 1e6,
       delegation_receipts: delegationReceipts,
+      sub_settlements: subSettlements,
       citations,
       recall_self_count: recallSelfCount,
       search_count: searchCount,
