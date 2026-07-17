@@ -59,6 +59,7 @@ function createResearchHandler(getResearchConfig: () => ResearchConfig): ToolHan
           question,
           report: result.report,
           delegation_receipts: result.delegation_receipts,
+          sub_settlements: result.sub_settlements,
           search_count: result.search_count,
           fetch_count: result.fetch_count,
         }),
@@ -165,7 +166,15 @@ async function main(): Promise<void> {
                 // The research turn never dry-runs, so the live variant carries
                 // the atom's receipt; the dry-run variant is unreachable here.
                 if (r.dryRun) return { ok: true as const };
-                return { ok: true as const, receipt: r.receipt as unknown as ExecutionReceipt };
+                // Surface the money fact so the molecule can self-attest the paid
+                // hop in its signed receipt (mode + onchain tx) — the runtime
+                // populated it from the payment proof; dropping it here is what
+                // left the multi-hop-P2P claim un-self-attesting.
+                return {
+                  ok: true as const,
+                  receipt: r.receipt as unknown as ExecutionReceipt,
+                  ...(r.settlement != null ? { settlement: r.settlement } : {}),
+                };
               },
             }
           : {}),
@@ -205,6 +214,11 @@ async function main(): Promise<void> {
             data: JSON.stringify({
               report: r.report,
               citations: r.citations,
+              // The self-attested money facts of the paid atom hops — signed into
+              // this receipt so a verifier confirms the molecule paid its atoms
+              // P2P (mode + onchain tx) from bytes alone, and the conformance
+              // probe FAILS if external atom work happened for free.
+              sub_settlements: r.sub_settlements,
               recall_self_count: r.recall_self_count,
               search_count: r.search_count,
               fetch_count: r.fetch_count,

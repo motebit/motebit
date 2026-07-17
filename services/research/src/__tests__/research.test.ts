@@ -208,7 +208,11 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
       ),
       paidSubDelegate: async (p) => {
         paidCalls.push({ capability: p.capability, targetWorkerId: p.targetWorkerId });
-        return { ok: true, receipt: paidReceipt };
+        return {
+          ok: true,
+          receipt: paidReceipt,
+          settlement: { mode: "p2p", txHash: "tx-abc", paidMicro: 2000, feeMicro: 100 },
+        };
       },
     });
 
@@ -219,6 +223,18 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
     expect(paidCalls).toEqual([{ capability: "web_search", targetWorkerId: "web-search-agent" }]);
     // The free direct-MCP path was NOT taken.
     expect(ws.calls).toHaveLength(0);
+    // Self-attested money fact: the molecule records the paid hop (mode + onchain
+    // tx + amounts, linked to the atom receipt) so its P2P claim is verifiable.
+    expect(result.sub_settlements).toEqual([
+      {
+        capability: "web_search",
+        task_id: "paid-search-1",
+        mode: "p2p",
+        tx_hash: "tx-abc",
+        paid_micro: 2000,
+        fee_micro: 100,
+      },
+    ]);
   });
 
   it("Inc 3: UNPINNED — a priced atom is still paid, WITHOUT a target (the runtime ranks the market)", async () => {
@@ -252,7 +268,7 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
       ),
       paidSubDelegate: async (p) => {
         paidCalls.push({ capability: p.capability, targetWorkerId: p.targetWorkerId });
-        return { ok: true, receipt: paidReceipt };
+        return { ok: true, receipt: paidReceipt, settlement: { mode: "p2p", txHash: "tx-ranked" } };
       },
     });
 
@@ -263,6 +279,91 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
     expect(paidCalls[0]!.capability).toBe("web_search");
     expect(paidCalls[0]!.targetWorkerId).toBeUndefined();
     expect(ws.calls).toHaveLength(0);
+    // A P2P hop with an onchain tx is self-attested even when unpinned — this is
+    // exactly the fact conformance asserts to prove the market settled.
+    expect(result.sub_settlements).toEqual([
+      { capability: "web_search", task_id: "paid-search-2", mode: "p2p", tx_hash: "tx-ranked" },
+    ]);
+  });
+
+  it("records a relay-mode sub-hop with only the fields present (no onchain tx) — it does NOT count as a p2p hop", async () => {
+    // A paid hop that settled via the relay ledger carries `mode: "relay"` and no
+    // onchain facts; a receipt may also lack a task_id. The molecule records the
+    // minimal fact truthfully (every optional field omitted when absent), and the
+    // conformance filter (mode==="p2p" && tx_hash) correctly excludes it.
+    const relayReceipt = makeReceipt({
+      task_id: undefined as unknown as string,
+      motebit_id: "relay-settled-agent",
+      result: JSON.stringify([{ title: "R", url: "https://a.example.com" }]),
+      signature: "sig-relay-1",
+    });
+    const ws = new StubAtomAdapter([]);
+    const ru = new StubAtomAdapter([]);
+
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [
+          { type: "tool_use", id: "tu-1", name: "motebit_web_search", input: { query: "q" } },
+        ],
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Synthesized." }] });
+
+    const result = await research("question", {
+      ...baseConfig,
+      webSearchTargetId: "relay-settled-agent",
+      adapterFactory: makeFactory(
+        new Map([
+          ["web-search", ws],
+          ["read-url", ru],
+        ]),
+      ),
+      paidSubDelegate: async () => ({
+        ok: true,
+        receipt: relayReceipt,
+        settlement: { mode: "relay" },
+      }),
+    });
+
+    // Minimal fact: mode only, no task_id / tx_hash / amounts (all omitted, not null).
+    expect(result.sub_settlements).toEqual([{ capability: "web_search", mode: "relay" }]);
+  });
+
+  it("a paid hop that reports no settlement chains its receipt but records no sub-settlement", async () => {
+    // Backward-compat: a spend handle that returns ok+receipt but omits the
+    // settlement fact. The receipt still chains; sub_settlements stays empty (a
+    // missing fact is never fabricated into a p2p claim).
+    const paidReceipt = makeReceipt({
+      task_id: "paid-nofact-1",
+      motebit_id: "web-search-agent",
+      result: JSON.stringify([{ title: "R", url: "https://a.example.com" }]),
+      signature: "sig-nofact-1",
+    });
+    const ws = new StubAtomAdapter([]);
+    const ru = new StubAtomAdapter([]);
+
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [
+          { type: "tool_use", id: "tu-1", name: "motebit_web_search", input: { query: "q" } },
+        ],
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Synthesized." }] });
+
+    const result = await research("question", {
+      ...baseConfig,
+      webSearchTargetId: "web-search-agent",
+      adapterFactory: makeFactory(
+        new Map([
+          ["web-search", ws],
+          ["read-url", ru],
+        ]),
+      ),
+      paidSubDelegate: async () => ({ ok: true, receipt: paidReceipt }),
+    });
+
+    expect(result.delegation_receipts).toHaveLength(1);
+    expect(result.delegation_receipts[0]!.signature).toBe("sig-nofact-1");
+    expect(result.sub_settlements).toEqual([]);
   });
 
   it("Inc 2b: an unpriced atom (worker_not_payable) falls back to the direct MCP call", async () => {
@@ -299,6 +400,11 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
     expect(result.delegation_receipts[0]!.signature).toBe("sig-direct-1");
     // Fell back to the direct adapter (the atom is free).
     expect(ws.calls).toHaveLength(1);
+    // The negative case the conformance guardrail catches: external atom work
+    // happened (search_count=1) but NOTHING settled P2P. `sub_settlements` is
+    // empty — so a molecule that regressed to free direct-MCP for a PRICED atom
+    // would be detectable, not silently green. (Here the atom is genuinely free.)
+    expect(result.sub_settlements).toEqual([]);
   });
 
   it("Inc 2b: a real payment failure (money_meter_denied) errors the tool and does NOT do the work for free", async () => {
