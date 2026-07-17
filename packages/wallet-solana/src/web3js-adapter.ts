@@ -18,7 +18,14 @@
  * different domain — both are Ed25519 public keys.
  */
 
-import { Connection, Keypair, PublicKey, Transaction, type Commitment } from "@solana/web3.js";
+import {
+  Connection,
+  Keypair,
+  PublicKey,
+  Transaction,
+  type TransactionInstruction,
+  type Commitment,
+} from "@solana/web3.js";
 import { base58Encode } from "@motebit/protocol";
 
 /**
@@ -75,6 +82,33 @@ import {
  * and derive this from a small registry.
  */
 const ASSET_NAME_USDC = "USDC";
+
+/**
+ * Broadcast attempts before giving up. A Solana transaction is signed over a
+ * recent blockhash that expires after ~151 blocks (~60-90s); on a slow or
+ * congested cluster (devnet especially) the confirmation can miss that window,
+ * surfacing as a `TransactionExpiredBlockheightExceededError` ("... has expired:
+ * block height exceeded"). Bounded so a genuinely-down RPC still fails fast.
+ */
+const BROADCAST_MAX_ATTEMPTS = 3;
+
+/**
+ * True only for the AUTHORITATIVE permanent-expiry signal: the transaction's
+ * blockhash passed its `lastValidBlockHeight` without confirming, so it was NOT
+ * and can NEVER be included. That is the one broadcast failure known safe to
+ * retry — a rebuild with a fresh blockhash produces a NEW signature the expired
+ * one can never race, so there is no double-spend window.
+ *
+ * Deliberately NOT a generic "expired"/"timeout" match: a confirmation TIMEOUT
+ * ("was not confirmed in N seconds") means the transaction may still land, so
+ * re-broadcasting it WOULD risk a double-spend. Match the message string
+ * (web3.js's `TransactionExpiredBlockheightExceededError`) rather than
+ * `instanceof` to stay resilient across web3.js minor versions.
+ */
+function isBlockhashExpiry(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes("block height exceeded");
+}
 
 export interface Web3JsRpcAdapterConfig {
   rpcUrl: string;
@@ -186,8 +220,8 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
     const sourceAta = await getAssociatedTokenAddress(this.mint, this.keypair.publicKey);
     const destAta = await getAssociatedTokenAddress(this.mint, recipient);
 
-    // 4. Build the transaction. Auto-create destination ATA if missing.
-    const tx = new Transaction();
+    // 4. Build the instructions. Auto-create destination ATA if missing.
+    const instructions: TransactionInstruction[] = [];
 
     let destExists = false;
     try {
@@ -197,7 +231,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
       if (!(err instanceof TokenAccountNotFoundError)) throw err;
     }
     if (!destExists) {
-      tx.add(
+      instructions.push(
         createAssociatedTokenAccountInstruction(
           this.keypair.publicKey, // payer
           destAta,
@@ -207,30 +241,62 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
       );
     }
 
-    tx.add(createTransferInstruction(sourceAta, destAta, this.keypair.publicKey, args.microAmount));
-
-    // 5. Fetch a recent blockhash and sign.
-    const latest = await this.connection.getLatestBlockhash(this.commitment);
-    tx.recentBlockhash = latest.blockhash;
-    tx.feePayer = this.keypair.publicKey;
-    tx.sign(this.keypair);
-
-    // 6. Submit and wait for confirmation.
-    const signature = await this.connection.sendRawTransaction(tx.serialize());
-    const confirmation = await this.connection.confirmTransaction(
-      {
-        signature,
-        blockhash: latest.blockhash,
-        lastValidBlockHeight: latest.lastValidBlockHeight,
-      },
-      this.commitment,
+    instructions.push(
+      createTransferInstruction(sourceAta, destAta, this.keypair.publicKey, args.microAmount),
     );
 
-    return {
-      signature,
-      slot: confirmation.context.slot,
-      confirmed: confirmation.value.err === null,
-    };
+    // 5-6. Fetch a fresh blockhash, sign, submit, confirm — retrying with a new
+    // blockhash on the (safe) permanent-expiry flake. See signSendConfirm.
+    return this.signSendConfirm(instructions);
+  }
+
+  /**
+   * Build a transaction from `instructions`, sign it over a FRESH recent
+   * blockhash, broadcast, and await confirmation — retrying with a new blockhash
+   * on a `TransactionExpiredBlockheightExceededError` (the permanent-expiry
+   * flake). Each attempt rebuilds the transaction from the instructions so no
+   * stale blockhash/signature state carries over; the expired attempt can never
+   * land (`isBlockhashExpiry`), so the retry cannot double-spend. Any non-expiry
+   * error propagates immediately (conservative — only the known-safe failure is
+   * retried).
+   */
+  private async signSendConfirm(
+    instructions: readonly TransactionInstruction[],
+  ): Promise<SendUsdcResult> {
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= BROADCAST_MAX_ATTEMPTS; attempt++) {
+      try {
+        const tx = new Transaction();
+        for (const ix of instructions) tx.add(ix);
+        const latest = await this.connection.getLatestBlockhash(this.commitment);
+        tx.recentBlockhash = latest.blockhash;
+        tx.feePayer = this.keypair.publicKey;
+        tx.sign(this.keypair);
+
+        const signature = await this.connection.sendRawTransaction(tx.serialize());
+        const confirmation = await this.connection.confirmTransaction(
+          {
+            signature,
+            blockhash: latest.blockhash,
+            lastValidBlockHeight: latest.lastValidBlockHeight,
+          },
+          this.commitment,
+        );
+        return {
+          signature,
+          slot: confirmation.context.slot,
+          confirmed: confirmation.value.err === null,
+        };
+      } catch (err) {
+        lastErr = err;
+        // Retry ONLY the authoritative permanent-expiry, and only with attempts
+        // left. A fresh blockhash is the fix; the expired tx can never race it.
+        if (attempt < BROADCAST_MAX_ATTEMPTS && isBlockhashExpiry(err)) continue;
+        throw err;
+      }
+    }
+    // Unreachable: the loop returns on success or throws on the final attempt.
+    throw lastErr;
   }
 
   /**
@@ -275,7 +341,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
       }
 
       try {
-        const tx = new Transaction();
+        const instructions: TransactionInstruction[] = [];
         const sourceAta = await getAssociatedTokenAddress(this.mint, this.keypair.publicKey);
 
         for (let i = start; i < end; i++) {
@@ -296,7 +362,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
             if (!(err instanceof TokenAccountNotFoundError)) throw err;
           }
           if (!destExists) {
-            tx.add(
+            instructions.push(
               createAssociatedTokenAccountInstruction(
                 this.keypair.publicKey,
                 destAta,
@@ -305,36 +371,23 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
               ),
             );
           }
-          tx.add(
+          instructions.push(
             createTransferInstruction(sourceAta, destAta, this.keypair.publicKey, item.microAmount),
           );
         }
 
-        const latest = await this.connection.getLatestBlockhash(this.commitment);
-        tx.recentBlockhash = latest.blockhash;
-        tx.feePayer = this.keypair.publicKey;
-        tx.sign(this.keypair);
-
-        const signature = await this.connection.sendRawTransaction(tx.serialize());
-        const confirmation = await this.connection.confirmTransaction(
-          {
-            signature,
-            blockhash: latest.blockhash,
-            lastValidBlockHeight: latest.lastValidBlockHeight,
-          },
-          this.commitment,
-        );
-
-        const ok = confirmation.value.err === null;
+        // Same fresh-blockhash retry as the single-leg path — the atomic P2P
+        // multi-output tx is exactly what the devnet expiry flake was killing.
+        const { signature, slot, confirmed } = await this.signSendConfirm(instructions);
         for (let i = start; i < end; i++) {
           results[i] = {
-            ok,
+            ok: confirmed,
             signature,
-            slot: confirmation.context.slot,
-            reason: ok ? null : "tx failed",
+            slot,
+            reason: confirmed ? null : "tx failed",
           };
         }
-        if (!ok) aborted = true;
+        if (!confirmed) aborted = true;
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         for (let i = start; i < end; i++) {
