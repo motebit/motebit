@@ -1,5 +1,13 @@
 # @motebit/crypto-webauthn
 
+## 1.0.29
+
+### Patch Changes
+
+- Updated dependencies [e2c06cd]
+  - @motebit/protocol@3.13.0
+  - @motebit/crypto@3.17.0
+
 ## 1.0.28
 
 ### Patch Changes
