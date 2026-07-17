@@ -321,6 +321,69 @@ describe("MotebitRuntime bumpTrustFromReceipt", () => {
     // ...the buried sub-worker earns NOTHING from me — it never witnessed me, I never witnessed it.
     expect(await trustStore.getAgentTrust("test-mote", "sybil-C")).toBeNull();
   });
+
+  // ── Per-capability competence (first-person-worker-routing.md) ──
+  it("an explicit capability accumulates its own bucket, leaving other capabilities cold", async () => {
+    await runtime.bumpTrustFromReceipt(fakeReceipt("atom-1"), true, "web_search");
+    await runtime.bumpTrustFromReceipt(fakeReceipt("atom-1"), true, "web_search");
+    const record = await trustStore.getAgentTrust("test-mote", "atom-1");
+    // Aggregate still accrues (the relationship + the wire credential)...
+    expect(record!.successful_tasks).toBe(2);
+    // ...and the capability bucket accrues in parallel; read_url stays absent (cold).
+    expect(record!.capability_stats).toEqual({
+      web_search: { successful_tasks: 2, failed_tasks: 0 },
+    });
+  });
+
+  it("two capabilities from the same peer accumulate independently (no bleed)", async () => {
+    await runtime.bumpTrustFromReceipt(fakeReceipt("atom-1"), true, "web_search");
+    await runtime.bumpTrustFromReceipt(fakeReceipt("atom-1"), true, "web_search");
+    await runtime.bumpTrustFromReceipt(fakeReceipt("atom-1"), true, "read_url");
+    const record = await trustStore.getAgentTrust("test-mote", "atom-1");
+    expect(record!.successful_tasks).toBe(3); // aggregate = sum
+    expect(record!.capability_stats).toEqual({
+      web_search: { successful_tasks: 2, failed_tasks: 0 },
+      read_url: { successful_tasks: 1, failed_tasks: 0 },
+    });
+  });
+
+  it("derives the capability from a single-capability delegated_scope when none is passed explicitly", async () => {
+    await runtime.bumpTrustFromReceipt(
+      { ...fakeReceipt("atom-1"), delegated_scope: "read_url" },
+      true,
+    );
+    const record = await trustStore.getAgentTrust("test-mote", "atom-1");
+    expect(record!.capability_stats).toEqual({
+      read_url: { successful_tasks: 1, failed_tasks: 0 },
+    });
+  });
+
+  it("attributes nothing per-capability for a wildcard or multi-capability scope (aggregate only)", async () => {
+    await runtime.bumpTrustFromReceipt({ ...fakeReceipt("wild"), delegated_scope: "*" }, true);
+    await runtime.bumpTrustFromReceipt(
+      { ...fakeReceipt("multi"), delegated_scope: "web_search,read_url" },
+      true,
+    );
+    const wild = await trustStore.getAgentTrust("test-mote", "wild");
+    const multi = await trustStore.getAgentTrust("test-mote", "multi");
+    // Aggregate accrues; no bucket is fabricated when the capability is ambiguous.
+    expect(wild!.successful_tasks).toBe(1);
+    expect(wild!.capability_stats).toBeUndefined();
+    expect(multi!.successful_tasks).toBe(1);
+    expect(multi!.capability_stats).toBeUndefined();
+  });
+
+  it("records a per-capability FAILURE in the right bucket", async () => {
+    await runtime.bumpTrustFromReceipt(
+      { ...fakeReceipt("flaky"), status: "failed", result: "" },
+      true,
+      "read_url",
+    );
+    const record = await trustStore.getAgentTrust("test-mote", "flaky");
+    expect(record!.capability_stats).toEqual({
+      read_url: { successful_tasks: 0, failed_tasks: 1 },
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

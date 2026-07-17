@@ -100,6 +100,35 @@ function levelPrior(level: AgentTrustLevel | undefined): { a: number; b: number 
 const COUNT_CAP = 100;
 
 /**
+ * The success/fail counts that feed the reliability posterior, scoped to the
+ * capability being hired when one is given.
+ *
+ * Competence is a SKILL, not a relationship: being reliable at `web_search`
+ * says nothing about `read_url`. So when `capability` is set we read ONLY that
+ * capability's bucket — a worker with a rich `web_search` history but no
+ * `read_url` history is cold at `read_url` (0/0 ⇒ the uncertain 0.5 posterior),
+ * exactly as if it were a newcomer for that skill. Crucially we do NOT fall
+ * back to the aggregate when the bucket is absent: that fallback is precisely
+ * the cross-capability bleed this scoping exists to remove. The pairwise
+ * relationship still speaks — through the categorical `trust_level` prior
+ * (`levelPrior`), which is capability-agnostic by design.
+ *
+ * With no `capability` (capability-blind callers, and the pre-scoping default)
+ * this returns the aggregate counts — behavior is byte-identical to before.
+ */
+function competenceCounts(
+  record: AgentTrustRecord | null,
+  capability?: string,
+): { successful: number; failed: number } {
+  if (!record) return { successful: 0, failed: 0 };
+  if (capability != null) {
+    const bucket = record.capability_stats?.[capability];
+    return { successful: bucket?.successful_tasks ?? 0, failed: bucket?.failed_tasks ?? 0 };
+  }
+  return { successful: record.successful_tasks ?? 0, failed: record.failed_tasks ?? 0 };
+}
+
+/**
  * A verified commitment bond multiplies exploration strength (capped at 1) — a
  * bonded newcomer is sampled harder, so it earns its shot sooner. Multiplicative
  * so it respects the stakes floor: `strength 0` (a high-value hop) stays 0 even
@@ -143,12 +172,14 @@ function cappedCounts(successful: number, failed: number): { s: number; f: numbe
  * routes strength-0 to the pure-exploit path); the internal guard is belt-and-
  * suspenders for direct callers.
  */
-function exploratoryQuality(c: RankableWorker, explore: ExplorationConfig): number {
+function exploratoryQuality(
+  c: RankableWorker,
+  explore: ExplorationConfig,
+  capability?: string,
+): number {
   const prior = levelPrior(c.trustRecord?.trust_level);
-  const { s, f } = cappedCounts(
-    c.trustRecord?.successful_tasks ?? 0,
-    c.trustRecord?.failed_tasks ?? 0,
-  );
+  const counts = competenceCounts(c.trustRecord, capability);
+  const { s, f } = cappedCounts(counts.successful, counts.failed);
   const alpha = prior.a + s;
   const beta = prior.b + f;
   const mean = alpha / (alpha + beta);
@@ -216,10 +247,9 @@ const DEFAULT_WEIGHTS: WorkerSelectionWeights = {
  * number — here each axis stays separate so the composite weights can trade
  * them off. Same prior, same intent.
  */
-function reliabilityOf(record: AgentTrustRecord | null): number {
+function reliabilityOf(record: AgentTrustRecord | null, capability?: string): number {
   if (!record) return 0.5;
-  const successful = record.successful_tasks ?? 0;
-  const failed = record.failed_tasks ?? 0;
+  const { successful, failed } = competenceCounts(record, capability);
   return (1 + successful) / (2 + successful + failed);
 }
 
@@ -231,9 +261,13 @@ function reliabilityOf(record: AgentTrustRecord | null): number {
 export function rankWorkers(
   selfId: MotebitId,
   candidates: readonly RankableWorker[],
-  opts?: { weights?: WorkerSelectionWeights; explore?: ExplorationConfig },
+  opts?: { weights?: WorkerSelectionWeights; explore?: ExplorationConfig; capability?: string },
 ): WorkerRanking[] {
   const weights = opts?.weights ?? DEFAULT_WEIGHTS;
+  // Scope the reliability posterior to the capability being hired (competence is
+  // a skill, not a relationship). Absent ⇒ the aggregate counts, byte-identical
+  // to pre-scoping behavior. See competenceCounts + first-person-worker-routing.
+  const capability = opts?.capability;
   // Exploration is ACTIVE only when a config is present AND its base strength is
   // positive. A base strength of 0 (a high-stakes hop, per the runtime's stakes
   // ramp) — and a bond can only RAISE strength, never lift 0 — routes to the
@@ -256,9 +290,9 @@ export function rankWorkers(
     // stay separate exactly as shipped (backward-compatible when `explore` is
     // absent OR base strength is 0).
     const trust = explore
-      ? exploratoryQuality(c, explore)
+      ? exploratoryQuality(c, explore, capability)
       : trustLevelToScore(c.trustRecord?.trust_level ?? AgentTrustLevel.Unknown);
-    const reliability = explore ? trust : reliabilityOf(c.trustRecord);
+    const reliability = explore ? trust : reliabilityOf(c.trustRecord, capability);
     graph.setEdge(selfId, c.motebit_id, {
       trust,
       cost: c.unitCost ?? 0,
@@ -291,7 +325,7 @@ export function rankWorkers(
 export function selectWorker(
   selfId: MotebitId,
   candidates: readonly RankableWorker[],
-  opts?: { weights?: WorkerSelectionWeights; explore?: ExplorationConfig },
+  opts?: { weights?: WorkerSelectionWeights; explore?: ExplorationConfig; capability?: string },
 ): WorkerRanking | null {
   return rankWorkers(selfId, candidates, opts)[0] ?? null;
 }

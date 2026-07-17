@@ -257,6 +257,128 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     }
   });
 
+  it("live success ⇒ accumulates first-person trust in the hired worker, scoped to the capability", async () => {
+    // The WRITE side of first-person routing: a completed paid sub-hop must feed
+    // the molecule's OWN ledger so future hires can rank on it — otherwise the
+    // selector reads a ledger nothing fills. Verify-before-bump: only a receipt
+    // that self-verifies against its embedded public_key earns credit, and the
+    // competence lands in the capability's bucket (not just the aggregate).
+    const operator = await generateKeypair();
+    const clerk = await generateKeypair();
+    const worker = await generateKeypair();
+    const grant = await makeGrant(operator, clerk);
+    const token = await mintTick(grant, operator);
+    const { signExecutionReceipt } = await import("@motebit/encryption");
+
+    // A REAL self-verifiable worker receipt (embeds public_key + a valid
+    // signature), the shape buildServiceReceipt produces. Long result clears the
+    // quality gate so it counts as a success.
+    const workerReceipt = (await signExecutionReceipt(
+      {
+        task_id: "t1",
+        motebit_id: "bob-worker",
+        device_id: "d",
+        submitted_at: NOW - 2000,
+        completed_at: NOW,
+        status: "completed",
+        result: "A".repeat(400),
+        tools_used: [],
+        memories_formed: 0,
+        prompt_hash: "a".repeat(64),
+        result_hash: "b".repeat(64),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      worker.privateKey,
+      worker.publicKey,
+    )) as unknown as Record<string, unknown>;
+
+    const { wallet } = mockWallet(async (r) => ({
+      tx_hash: "tx",
+      chain: "solana",
+      network: "solana:x",
+      to_address: r.workerAddress,
+      amount_micro: r.amountMicro,
+      fee_to_address: r.treasuryAddress,
+      fee_amount_micro: r.feeAmountMicro,
+    }));
+    const runtime = clerkRuntime(wallet);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/api/v1/agents/discover"))
+          return jsonResponse({
+            agents: [
+              {
+                motebit_id: "bob-worker",
+                settlement_address: WORKER_ADDR,
+                settlement_modes: "p2p",
+                pricing: [{ capability: "research", unit_cost: 0.05 }],
+              },
+            ],
+          });
+        if (url.includes("/p2p-eligibility")) return jsonResponse({ allowed: true });
+        if (url.includes("/listing"))
+          return jsonResponse({ pricing: [{ capability: "research", unit_cost: 0.05 }] });
+        if (url.endsWith("/task")) return jsonResponse({ task_id: "t1" }, 201);
+        if (url.includes("/task/"))
+          return jsonResponse({ task: { status: "completed" }, receipt: workerReceipt });
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    const result = await runtime.executeGrantedDelegation({
+      capability: "research",
+      prompt: "survey the topic",
+      delegation: { token, grant },
+      dryRun: false,
+      targetWorkerId: "bob-worker",
+    });
+    vi.unstubAllGlobals();
+
+    expect(result.ok).toBe(true);
+    const trust = await runtime.getAgentTrust("bob-worker");
+    expect(trust).not.toBeNull();
+    expect(trust!.successful_tasks).toBe(1); // aggregate accrues
+    // ...and the competence lands in the `research` bucket, not smeared across all.
+    expect(trust!.capability_stats).toEqual({
+      research: { successful_tasks: 1, failed_tasks: 0 },
+    });
+  });
+
+  it("live success with an UNVERIFIABLE receipt (no embedded key) earns NO trust credit", async () => {
+    // Honesty gate: a receipt we cannot verify against its own key must not
+    // fabricate a trust edge. fakeReceipt() has signature:"sig" and no
+    // public_key ⇒ the bump is skipped, the ledger stays empty.
+    const operator = await generateKeypair();
+    const clerk = await generateKeypair();
+    const grant = await makeGrant(operator, clerk);
+    const token = await mintTick(grant, operator);
+    const { wallet } = mockWallet(async (r) => ({
+      tx_hash: "tx",
+      chain: "solana",
+      network: "solana:x",
+      to_address: r.workerAddress,
+      amount_micro: r.amountMicro,
+      fee_to_address: r.treasuryAddress,
+      fee_amount_micro: r.feeAmountMicro,
+    }));
+    const runtime = clerkRuntime(wallet);
+    vi.stubGlobal("fetch", vi.fn(relayFetch()));
+
+    const result = await runtime.executeGrantedDelegation({
+      capability: "research",
+      prompt: "survey the topic",
+      delegation: { token, grant },
+      dryRun: false,
+      targetWorkerId: "bob-worker",
+    });
+    vi.unstubAllGlobals();
+
+    expect(result.ok).toBe(true);
+    expect(await runtime.getAgentTrust("bob-worker")).toBeNull();
+  });
+
   it("a targetWorkerId discovery cannot match ⇒ fail-closed, no settlement", async () => {
     const operator = await generateKeypair();
     const clerk = await generateKeypair();

@@ -147,6 +147,26 @@ export interface AgentTrustRecord {
   /** Number of quality samples collected. */
   quality_sample_count?: number;
   /**
+   * Per-capability competence counts, keyed by capability string. The pairwise
+   * `trust_level` is a RELATIONSHIP (do I trust this agent at all; is it
+   * blocked) and correctly spans capabilities; competence is a SKILL and does
+   * NOT — being reliable at `web_search` says nothing about `read_url`. So the
+   * routing posterior scopes its success/fail counts here per capability while
+   * the categorical level (the sybil-resistance edge + cold-start floor) stays
+   * pairwise. The top-level `successful_tasks`/`failed_tasks` remain the
+   * capability-agnostic aggregate (the wire credential, capability-blind
+   * callers); this map is the refinement first-person routing reads.
+   *
+   * Local-only, never on the wire (like `petname`) — a peer's per-capability
+   * history is the caller's private observation, and the `.strict()`
+   * `TrustCredentialSubject` projection carries only the aggregate. Absent ⇒ no
+   * per-capability history yet (the posterior falls back to cold-at-this-
+   * capability, NOT to the aggregate — that fallback is what would reintroduce
+   * the cross-capability bleed). See
+   * `docs/doctrine/first-person-worker-routing.md`.
+   */
+  capability_stats?: Record<string, { successful_tasks: number; failed_tasks: number }>;
+  /**
    * Most-recent verified hardware-attestation snapshot about the remote
    * agent. Projected from the latest peer-issued `AgentTrustCredential`
    * in the credential store at read time — never persisted on

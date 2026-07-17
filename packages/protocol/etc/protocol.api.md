@@ -330,6 +330,10 @@ export enum AgentTrustLevel {
 // @public (undocumented)
 export interface AgentTrustRecord {
     avg_quality?: number;
+    capability_stats?: Record<string, {
+        successful_tasks: number;
+        failed_tasks: number;
+    }>;
     // (undocumented)
     failed_tasks?: number;
     // (undocumented)

@@ -126,6 +126,43 @@ describe("SqliteAgentTrustStore", () => {
     expect(found!.petname).toBeUndefined();
   });
 
+  it("round-trips per-capability competence counts (JSON column)", async () => {
+    await moteDb.agentTrustStore.setAgentTrust(
+      makeRecord({
+        capability_stats: {
+          web_search: { successful_tasks: 12, failed_tasks: 1 },
+          read_url: { successful_tasks: 0, failed_tasks: 0 },
+        },
+      }),
+    );
+    const found = await moteDb.agentTrustStore.getAgentTrust("mote-local", "mote-remote-1");
+    expect(found!.capability_stats).toEqual({
+      web_search: { successful_tasks: 12, failed_tasks: 1 },
+      read_url: { successful_tasks: 0, failed_tasks: 0 },
+    });
+  });
+
+  it("stores absent capability_stats as NULL and reads it back undefined", async () => {
+    await moteDb.agentTrustStore.setAgentTrust(makeRecord());
+    const found = await moteDb.agentTrustStore.getAgentTrust("mote-local", "mote-remote-1");
+    expect(found!.capability_stats).toBeUndefined();
+  });
+
+  it("treats an empty capability_stats map as NULL (never a stored empty blob)", async () => {
+    await moteDb.agentTrustStore.setAgentTrust(makeRecord({ capability_stats: {} }));
+    const found = await moteDb.agentTrustStore.getAgentTrust("mote-local", "mote-remote-1");
+    expect(found!.capability_stats).toBeUndefined();
+  });
+
+  it("clears capability_stats when the record is re-set without it", async () => {
+    await moteDb.agentTrustStore.setAgentTrust(
+      makeRecord({ capability_stats: { web_search: { successful_tasks: 3, failed_tasks: 0 } } }),
+    );
+    await moteDb.agentTrustStore.setAgentTrust(makeRecord({ capability_stats: undefined }));
+    const found = await moteDb.agentTrustStore.getAgentTrust("mote-local", "mote-remote-1");
+    expect(found!.capability_stats).toBeUndefined();
+  });
+
   it("can block an agent", async () => {
     await moteDb.agentTrustStore.setAgentTrust(
       makeRecord({
