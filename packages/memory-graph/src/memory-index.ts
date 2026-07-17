@@ -32,6 +32,7 @@
 import type { MemoryNode, MemoryEdge } from "@motebit/sdk";
 import { MEMORY_SOURCE_MARKERS, MEMORY_SOURCE_MARKER_UNKNOWN } from "@motebit/sdk";
 import { computeDecayedConfidence } from "./index.js";
+import { isValidAt } from "./retrieval.js";
 
 /**
  * Target byte budget for the rendered index. Defaults to 2 KB — small
@@ -121,7 +122,14 @@ export function rankIndexEntries(
 ): MemoryIndexEntry[] {
   const o = resolveOptions(options);
 
-  const liveNodes = nodes.filter((n) => !n.tombstoned);
+  // The index is the agent's always-loaded view of what it CURRENTLY believes,
+  // so it must exclude both deleted nodes (tombstoned) AND invalidated ones —
+  // a belief superseded by either the consolidation UPDATE path or the
+  // `rewrite_memory` tool has `valid_until` set and must not resurface in the
+  // system prompt. Filter by the same `isValidAt` predicate every retrieval lens
+  // uses, never by the tombstone flag alone (which misses live-but-superseded
+  // nodes and once masked this leak only because the tool path over-tombstoned).
+  const liveNodes = nodes.filter((n) => !n.tombstoned && isValidAt(n, o.nowMs));
   const edgeCounts = new Map<string, number>();
   for (const edge of edges) {
     edgeCounts.set(edge.source_id, (edgeCounts.get(edge.source_id) ?? 0) + 1);

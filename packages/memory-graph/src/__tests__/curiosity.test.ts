@@ -66,6 +66,23 @@ describe("findCuriosityTargets", () => {
     expect(results[0]!.curiosityScore).toBeGreaterThan(0);
   });
 
+  it("does NOT get curious about an invalidated (superseded) belief — it's settled, not open", () => {
+    const now = Date.now();
+    // Same decaying shape that WOULD be a curiosity target, but superseded
+    // (valid_until in the past, not tombstoned). A revised belief is settled
+    // history — re-investigating it is wasted proactive work.
+    const superseded = makeNode({
+      content: "fact the user already corrected",
+      confidence: 0.8,
+      created_at: now - 25 * DAY,
+      last_accessed: now - 25 * DAY,
+      half_life: HALF_LIFE,
+      valid_from: now - 25 * DAY,
+      valid_until: now - DAY,
+    });
+    expect(findCuriosityTargets([superseded])).toEqual([]);
+  });
+
   it("ranks by curiosityScore descending", () => {
     const now = Date.now();
     // Node A: older, more decayed

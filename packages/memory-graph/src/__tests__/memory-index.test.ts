@@ -65,6 +65,33 @@ describe("rankIndexEntries — scoring and ordering", () => {
     expect(entries.map((e) => e.node.node_id)).toEqual(["live-1"]);
   });
 
+  it("excludes invalidated (superseded) nodes — the index shows CURRENT beliefs only", () => {
+    // A belief superseded by either the consolidation UPDATE path or the
+    // rewrite_memory tool has `valid_until` set but is NOT tombstoned. It must
+    // not resurface in the always-loaded index, or the agent sees a stale belief
+    // every turn. Filtering by tombstone alone (the old behavior) missed this.
+    const current = makeNode({ node_id: "current-1" as NodeId, content: "lives in SF" });
+    const superseded = makeNode({
+      node_id: "superseded-1" as NodeId,
+      content: "lived in NYC",
+      valid_from: NOW - 100_000,
+      valid_until: NOW - 10_000, // invalidated 10s ago, still live (not tombstoned)
+    });
+
+    const entries = rankIndexEntries([current, superseded], [], { nowMs: NOW });
+    expect(entries.map((e) => e.node.node_id)).toEqual(["current-1"]);
+  });
+
+  it("keeps a still-valid node whose interval is open (valid_until null)", () => {
+    const openValid = makeNode({
+      node_id: "open-1" as NodeId,
+      valid_from: NOW - 100_000,
+      valid_until: null,
+    });
+    const entries = rankIndexEntries([openValid], [], { nowMs: NOW });
+    expect(entries.map((e) => e.node.node_id)).toEqual(["open-1"]);
+  });
+
   it("classifies certainty by decayed confidence", () => {
     const absolute = makeNode({ node_id: "a-1" as NodeId, confidence: 0.98 });
     const confident = makeNode({ node_id: "c-1" as NodeId, confidence: 0.8 });

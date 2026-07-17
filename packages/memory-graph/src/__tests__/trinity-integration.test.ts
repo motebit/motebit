@@ -241,14 +241,14 @@ describe("Memory Trinity — end-to-end composition", () => {
     expect(notFound).toEqual({ kind: "not_found" });
   });
 
-  it("superseding a non-existent or tombstoned node throws a usable error", async () => {
+  it("superseding a non-existent or already-superseded node throws a usable error", async () => {
     await expect(
       graph.supersedeMemoryByNodeId("not-a-real-node", "whatever", "testing"),
     ).rejects.toThrow(/No memory node/);
 
     const node = await graph.formMemory(
       {
-        content: "Will tombstone this",
+        content: "Will supersede this",
         confidence: 0.8,
         sensitivity: SensitivityLevel.None,
         source: "user_stated",
@@ -256,12 +256,17 @@ describe("Memory Trinity — end-to-end composition", () => {
       [0.1, 0.1, 0.1],
     );
 
-    // Supersede once — node gets tombstoned.
+    // Supersede once — the old node is INVALIDATED (valid_until set) but kept
+    // live, never tombstoned (history is preserved for as-of recall).
     await graph.supersedeMemoryByNodeId(node.node_id, "Replacement", "first");
+    const superseded = await graph.getNode(node.node_id);
+    expect(superseded!.tombstoned).toBe(false);
+    expect(superseded!.valid_until).not.toBeNull();
 
-    // Supersede again against the now-tombstoned node should fail cleanly.
+    // Superseding the now-invalidated node again should fail cleanly (you rewrite
+    // the CURRENT belief, not an already-closed interval).
     await expect(
       graph.supersedeMemoryByNodeId(node.node_id, "Second replacement", "second"),
-    ).rejects.toThrow(/already tombstoned/);
+    ).rejects.toThrow(/already superseded/);
   });
 });

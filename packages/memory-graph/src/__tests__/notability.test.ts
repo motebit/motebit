@@ -122,6 +122,19 @@ describe("rankNotableMemories", () => {
     expect(rankNotableMemories([a, b, c], edges, { nowMs: NOW })).toEqual([]);
   });
 
+  it("excludes an invalidated (superseded) node — notable is a current-beliefs claim", () => {
+    // A high-confidence isolated belief would normally rank (phantom axis), but
+    // once superseded (valid_until in the past, not tombstoned) it is settled
+    // history and must not resurface as notable.
+    const superseded = makeNode({
+      content: "used to believe this strongly",
+      confidence: 0.95,
+      valid_from: NOW - 100_000,
+      valid_until: NOW - 10_000,
+    });
+    expect(rankNotableMemories([superseded], [], { nowMs: NOW })).toEqual([]);
+  });
+
   it("ranks phantom certainties above connected nodes", () => {
     const isolated = makeNode({ content: "isolated belief", confidence: 0.95 });
     const connected1 = makeNode({ content: "connected 1" });

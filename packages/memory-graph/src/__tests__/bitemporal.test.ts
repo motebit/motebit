@@ -195,6 +195,48 @@ describe("supersession is invalidation-with-provenance + emits validity on the w
     const consolidated = captured.find((e) => e.event_type === EventType.MemoryConsolidated);
     expect(consolidated?.payload.superseded_valid_until).toBe(aAfter!.valid_until);
   });
+
+  it("the rewrite_memory TOOL path is invalidation-with-provenance too — as-of recall still reconstructs it", async () => {
+    // The untested divergence: `supersedeMemoryByNodeId` (the user-facing tool)
+    // used to TOMBSTONE the old node, so as-of recall could not reconstruct a
+    // tool-revised belief — while the consolidation UPDATE path (above) kept it
+    // live. This pins that both paths now behave identically.
+    const storage = new InMemoryMemoryStorage();
+    const eventStore = new EventStore(new InMemoryEventStore());
+    const graph = new MemoryGraph(storage, eventStore, "m", undefined, fastEmbed);
+
+    const a = await graph.formMemory(
+      {
+        content: "user lives in NYC",
+        source: "user_stated",
+        confidence: 0.9,
+        sensitivity: SensitivityLevel.None,
+        memory_type: MemoryType.Semantic,
+      },
+      EMB,
+    );
+    const newId = await graph.supersedeMemoryByNodeId(a.node_id, "user lives in SF", "user moved");
+
+    // Invalidated but PRESERVED — matches the consolidation path, not tombstoned.
+    const aAfter = await graph.getNode(a.node_id);
+    expect(aAfter!.tombstoned).toBe(false);
+    expect(typeof aAfter!.valid_until).toBe("number");
+
+    // History-inclusive recall STILL reaches the superseded belief. A tombstoned
+    // node is dropped by queryNodes' default filter, so this is the assertion the
+    // old behavior silently failed.
+    const withHistory = await graph.recallRelevant(EMB, {
+      includeExpired: true,
+      expandEdges: false,
+    });
+    expect(withHistory.map((n) => n.node_id)).toContain(a.node_id);
+
+    // Current recall shows only the new belief; the superseded one has expired.
+    const current = await graph.recallRelevant(EMB, { expandEdges: false });
+    const currentIds = current.map((n) => n.node_id);
+    expect(currentIds).toContain(newId);
+    expect(currentIds).not.toContain(a.node_id);
+  });
 });
 
 describe("supersede intervals abut EXACTLY under clock jitter (no temporal hole or overlap)", () => {
