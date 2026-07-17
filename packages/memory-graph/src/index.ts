@@ -157,6 +157,10 @@ export function findCuriosityTargets(
 
   for (const node of nodes) {
     if (node.tombstoned || node.pinned) continue;
+    // Don't get curious about a belief we've already revised: an invalidated
+    // (superseded) node is settled history, not an open question. Same
+    // current-beliefs invariant as the index / notability / retrieval lenses.
+    if (node.valid_until != null && node.valid_until <= now) continue;
     if (node.confidence < minOriginalConfidence) continue;
 
     const elapsed = now - node.created_at;
@@ -1308,14 +1312,24 @@ export class MemoryGraph {
    * consolidation LLM classifier because the agent has already
    * decided the rewrite is correct. Preserves the original
    * `memory_formed` event (append-only; §3.1) — the old node is
-   * tombstoned + marked `valid_until` now, a fresh node carries the
-   * new content, a Supersedes edge links them, and a
-   * `memory_consolidated` event with `action: "supersede"` is
-   * emitted for the sync layer.
+   * INVALIDATED (`valid_until` set to now) but kept LIVE, a fresh node
+   * carries the new content, a Supersedes edge links them, and a
+   * `memory_consolidated` event with `action: "supersede"` is emitted
+   * for the sync layer.
    *
-   * Returns the new node id. Throws when `oldNodeId` is unknown or
-   * already tombstoned — the tool handler turns that into a
-   * user-surface error.
+   * Invalidation-with-provenance, never destruction: the superseded
+   * node is NOT tombstoned, so as-of-`T` recall can still reconstruct
+   * what was believed inside `[valid_from, valid_until)` (doctrine
+   * `memory-architecture.md` invariant #2 — "history is preserved").
+   * This makes the one supersede mechanism identical to the
+   * consolidation `UPDATE` path, and matches what syncing peers apply
+   * (they close the interval via `superseded_valid_until`, they do not
+   * tombstone) — so a tool-superseded node no longer ends up tombstoned
+   * locally yet live on every peer.
+   *
+   * Returns the new node id. Throws when `oldNodeId` is unknown, already
+   * superseded (`valid_until` set), or tombstoned (deleted) — the tool
+   * handler turns that into a user-surface error.
    */
   async supersedeMemoryByNodeId(
     oldNodeId: string,
@@ -1325,6 +1339,11 @@ export class MemoryGraph {
     const oldNode = await this.storage.getNode(oldNodeId);
     if (!oldNode) throw new Error(`No memory node with id ${oldNodeId}`);
     if (oldNode.tombstoned) throw new Error(`Memory ${oldNodeId} is already tombstoned`);
+    // Guard against re-superseding an already-superseded belief — that would
+    // re-close an already-closed interval and orphan the intermediate node.
+    // (The tombstone flag used to cover this incidentally; now that supersession
+    // keeps the node live, guard on the interval directly.)
+    if (oldNode.valid_until != null) throw new Error(`Memory ${oldNodeId} is already superseded`);
 
     // Embed the new content so retrieval works against the replacement
     // immediately. Sensitivity + memory_type inherit from the old node —
@@ -1354,8 +1373,12 @@ export class MemoryGraph {
       now,
     );
 
+    // Invalidate the old belief WITHOUT tombstoning it: `valid_until` alone
+    // removes it from current recall (every lens filters `valid_until > now`),
+    // while keeping the node live so as-of recall inside its interval — and the
+    // Supersedes edge below — can still reach it. Tombstoning here (the prior
+    // bug) made it invisible to `queryNodes` and so silently unreconstructable.
     oldNode.valid_until = now;
-    oldNode.tombstoned = true;
     await this.storage.saveNode(oldNode);
 
     await this.link(newNode.node_id, oldNodeId, RT.Supersedes);

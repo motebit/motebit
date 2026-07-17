@@ -151,7 +151,13 @@ export function rankNotableMemories(
   options?: NotabilityOptions,
 ): NotableMemory[] {
   const o = resolve(options);
-  const live = nodes.filter((n) => !n.tombstoned);
+  // "Notable" is a claim about what the agent CURRENTLY holds, so exclude both
+  // deleted (tombstoned) and invalidated (superseded, `valid_until` passed)
+  // beliefs — a fact the user revised must not resurface as notable. Same
+  // current-beliefs invariant the memory index and retrieval lenses enforce.
+  const live = nodes.filter(
+    (n) => !n.tombstoned && (n.valid_until == null || n.valid_until > o.nowMs),
+  );
   const liveIds = new Set(live.map((n) => n.node_id));
   const nodeMap = new Map(live.map((n) => [n.node_id, n]));
 
