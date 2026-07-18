@@ -996,7 +996,7 @@ describe("recall_memories", () => {
     expect(result.data as string).toContain("[confidence=0.95]");
     expect(result.data as string).toContain("User likes TypeScript");
     expect(result.data as string).toContain("User prefers dark mode");
-    expect(searchFn).toHaveBeenCalledWith("user preferences", 5);
+    expect(searchFn).toHaveBeenCalledWith("user preferences", { limit: 5 });
   });
 
   it("respects custom limit", async () => {
@@ -1005,7 +1005,42 @@ describe("recall_memories", () => {
     const handler = createRecallMemoriesHandler(searchFn);
     await handler({ query: "test", limit: 3 });
 
-    expect(searchFn).toHaveBeenCalledWith("test", 3);
+    expect(searchFn).toHaveBeenCalledWith("test", { limit: 3 });
+  });
+
+  it("threads as_of (ISO date → ms) into the search options for point-in-time recall", async () => {
+    const searchFn = vi.fn().mockResolvedValue([{ content: "user lived in NYC", confidence: 0.9 }]);
+    const handler = createRecallMemoriesHandler(searchFn);
+    const result = await handler({ query: "where does the user live", as_of: "2026-06-01" });
+
+    expect(searchFn).toHaveBeenCalledWith("where does the user live", {
+      limit: 5,
+      asOf: Date.parse("2026-06-01"),
+    });
+    // Typed-truth framing: results are presented as HISTORICAL, not current fact.
+    expect(result.ok).toBe(true);
+    expect(result.data as string).toContain("As of 2026-06-01");
+    expect(result.data as string).toContain("you believed");
+    expect(result.data as string).toContain("superseded");
+  });
+
+  it("rejects an unparseable as_of date instead of silently recalling current beliefs", async () => {
+    const searchFn = vi.fn();
+    const handler = createRecallMemoriesHandler(searchFn);
+    const result = await handler({ query: "test", as_of: "last tuesday-ish" });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("Invalid as_of date");
+    expect(searchFn).not.toHaveBeenCalled();
+  });
+
+  it("as_of with no matching beliefs reports the point-in-time miss honestly", async () => {
+    const searchFn = vi.fn().mockResolvedValue([]);
+    const handler = createRecallMemoriesHandler(searchFn);
+    const result = await handler({ query: "anything", as_of: "2020-01-01" });
+
+    expect(result.ok).toBe(true);
+    expect(result.data as string).toContain("No memories were valid as of");
   });
 
   it("returns message when no memories found", async () => {

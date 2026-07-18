@@ -68,6 +68,7 @@ import { writeFileDefinition, createWriteFileHandler } from "./write-file.js";
 import { shellExecDefinition, createShellExecHandler } from "./shell-exec.js";
 import { undoWriteDefinition, createUndoWriteHandler } from "./undo-write.js";
 import { recallMemoriesDefinition, createRecallMemoriesHandler } from "./recall-memories.js";
+import type { RecallMemoriesOptions } from "./recall-memories.js";
 import {
   rewriteMemoryDefinition,
   createRewriteMemoryHandler,
@@ -92,7 +93,7 @@ export interface BuiltinToolOptions {
   searchProvider?: SearchProvider;
   memorySearchFn?: (
     query: string,
-    limit: number,
+    opts: RecallMemoriesOptions,
   ) => Promise<Array<{ content: string; confidence: number }>>;
   eventQueryFn?: (
     limit: number,
