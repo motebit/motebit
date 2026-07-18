@@ -352,10 +352,13 @@ export function buildToolRegistry(
   registry.register(readUrlDefinition, createReadUrlHandler());
 
   // Deferred handlers for memory/events (need runtime, which needs registry)
-  const memorySearchFn = async (query: string, limit: number) => {
+  const memorySearchFn = async (query: string, opts: { limit: number; asOf?: number }) => {
     if (!runtimeRef.current) return [];
     const queryEmbedding = await embedText(query);
-    const nodes = await runtimeRef.current.memory.recallRelevant(queryEmbedding, { limit });
+    const nodes = await runtimeRef.current.memory.recallRelevant(queryEmbedding, {
+      limit: opts.limit,
+      ...(opts.asOf != null ? { asOf: opts.asOf } : {}),
+    });
     return nodes.map((n) => ({ content: n.content, confidence: n.confidence }));
   };
   const eventQueryFn = async (limit: number, eventType?: string) => {

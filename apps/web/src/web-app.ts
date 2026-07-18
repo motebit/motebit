@@ -979,9 +979,12 @@ export class UnbootedWebApp {
     registerBrowserSafeBuiltins(registry, {
       searchProvider: new ProxySearchProvider(searchUrl),
       readUrlProxy: `${PROXY_BASE_URL}/v1/fetch`,
-      memorySearchFn: async (query, limit) => {
+      memorySearchFn: async (query, opts) => {
         const embedding = await embedText(query);
-        const nodes = await runtime.memory.recallRelevant(embedding, { limit });
+        const nodes = await runtime.memory.recallRelevant(embedding, {
+          limit: opts.limit,
+          ...(opts.asOf != null ? { asOf: opts.asOf } : {}),
+        });
         return nodes.map((n) => ({ content: n.content, confidence: n.confidence }));
       },
       eventQueryFn: async (limit, eventType) => {

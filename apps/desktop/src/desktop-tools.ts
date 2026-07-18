@@ -80,9 +80,12 @@ export function registerDesktopTools(
   registerBrowserSafeBuiltins(registry, {
     searchProvider,
     readUrlFetcher,
-    memorySearchFn: async (query, limit) => {
+    memorySearchFn: async (query, opts) => {
       const queryEmbedding = await embedText(query);
-      const nodes = await runtime.memory.recallRelevant(queryEmbedding, { limit });
+      const nodes = await runtime.memory.recallRelevant(queryEmbedding, {
+        limit: opts.limit,
+        ...(opts.asOf != null ? { asOf: opts.asOf } : {}),
+      });
       return nodes.map((n) => ({ content: n.content, confidence: n.confidence }));
     },
     eventQueryFn: async (limit, eventType) => {
