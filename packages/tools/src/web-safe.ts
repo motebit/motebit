@@ -12,7 +12,7 @@ import {
   recallMemoriesDefinition,
   createRecallMemoriesHandler,
 } from "./builtins/recall-memories.js";
-import type { RecallMemoriesOptions } from "./builtins/recall-memories.js";
+import type { RecallMemoriesOptions, RecallMemoriesResult } from "./builtins/recall-memories.js";
 import { currentTimeDefinition, createCurrentTimeHandler } from "./builtins/current-time.js";
 import { listEventsDefinition, createListEventsHandler } from "./builtins/list-events.js";
 import {
@@ -103,10 +103,7 @@ export interface BrowserSafeBuiltinOptions {
    * ATS/CORS gate. `readUrlProxy` still takes precedence when set.
    */
   readUrlFetcher?: ReadUrlFetcher;
-  memorySearchFn?: (
-    query: string,
-    opts: RecallMemoriesOptions,
-  ) => Promise<Array<{ content: string; confidence: number }>>;
+  memorySearchFn?: (query: string, opts: RecallMemoriesOptions) => Promise<RecallMemoriesResult[]>;
   eventQueryFn?: (
     limit: number,
     eventType?: string,

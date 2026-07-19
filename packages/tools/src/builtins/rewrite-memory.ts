@@ -33,8 +33,10 @@ export const rewriteMemoryDefinition: ToolDefinition = {
     "Use when you discover a previously-formed memory is wrong — the user corrected " +
     "something, a newer fact contradicts an older one, or you realize your prior " +
     "claim was mistaken. Pass the 8-char short node id shown in the memory index " +
-    "(the `[xxxxxxxx]` prefix). The original memory is tombstoned but preserved in " +
-    "the event log for audit.",
+    "(the `[xxxxxxxx]` prefix). The original memory is not destroyed — it is " +
+    "superseded (marked no longer current) but kept, so it drops out of current " +
+    "recall yet can still be reconstructed via `recall_memories` with `as_of` or " +
+    "`include_history`.",
   inputSchema: {
     type: "object",
     properties: {

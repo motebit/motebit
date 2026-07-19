@@ -68,7 +68,7 @@ import { writeFileDefinition, createWriteFileHandler } from "./write-file.js";
 import { shellExecDefinition, createShellExecHandler } from "./shell-exec.js";
 import { undoWriteDefinition, createUndoWriteHandler } from "./undo-write.js";
 import { recallMemoriesDefinition, createRecallMemoriesHandler } from "./recall-memories.js";
-import type { RecallMemoriesOptions } from "./recall-memories.js";
+import type { RecallMemoriesOptions, RecallMemoriesResult } from "./recall-memories.js";
 import {
   rewriteMemoryDefinition,
   createRewriteMemoryHandler,
@@ -91,10 +91,7 @@ export interface BuiltinToolOptions {
   /** Directory for write_file pre-write backups. */
   backupDir?: string;
   searchProvider?: SearchProvider;
-  memorySearchFn?: (
-    query: string,
-    opts: RecallMemoriesOptions,
-  ) => Promise<Array<{ content: string; confidence: number }>>;
+  memorySearchFn?: (query: string, opts: RecallMemoriesOptions) => Promise<RecallMemoriesResult[]>;
   eventQueryFn?: (
     limit: number,
     eventType?: string,
