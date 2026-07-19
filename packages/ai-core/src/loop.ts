@@ -14,6 +14,7 @@ import type {
   AccrualBasis,
 } from "@motebit/sdk";
 import { EventType, SensitivityLevel, RiskLevel, rankSensitivity } from "@motebit/sdk";
+import { CONTEXT_SAFE_SENSITIVITY as CANONICAL_CONTEXT_SAFE_SENSITIVITY } from "@motebit/sdk";
 import type { SensitivityCleared } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import type { MemoryGraph, ConsolidationProvider } from "@motebit/memory-graph";
@@ -885,7 +886,9 @@ export async function* runTurnStreaming(
   // stuck remote embed, or wedged memory graph must surface as a specific
   // `StageTimeoutError` in seconds rather than hang the turn silently. See
   // `STAGE_TIMEOUTS_MS` in core.ts for deadlines (single source of truth).
-  const CONTEXT_SAFE_SENSITIVITY = [SensitivityLevel.None, SensitivityLevel.Personal];
+  // The egress-safe tiers (< medical) — canonical, derived from the rank ceiling
+  // in @motebit/protocol so auto-injection and the recall tool share one source.
+  const CONTEXT_SAFE_SENSITIVITY = [...CANONICAL_CONTEXT_SAFE_SENSITIVITY];
 
   // Emptiness probe BEFORE the context batch. A brand-new / anonymous motebit
   // has no memory, so embedding the user message (~450ms remote call — the

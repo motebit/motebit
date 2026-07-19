@@ -3743,6 +3743,7 @@ export {
   maxSensitivity,
   sensitivityPermits,
   ALL_SENSITIVITY_LEVELS,
+  CONTEXT_SAFE_SENSITIVITY,
   isSensitivityLevel,
 } from "./sensitivity.js";
 export type { SensitivityCleared } from "./sensitivity.js";

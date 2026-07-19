@@ -1043,6 +1043,9 @@ export interface ConsolidationReceipt {
 // @public
 export type ContentArtifactType = "state-snapshot" | "memory-export" | "goal-list" | "conversation-list" | "conversation-messages" | "device-list" | "audit-trail" | "plan-list" | "plan-detail" | "gradient-history" | "sync-pull" | "execution-ledger" | "goal-result" | "settlement-summary";
 
+// @public
+export const CONTEXT_SAFE_SENSITIVITY: readonly SensitivityLevel[];
+
 // @alpha
 export type ControlHolder = "user" | "motebit";
 

@@ -153,6 +153,25 @@ export const ALL_SENSITIVITY_LEVELS: readonly SensitivityLevel[] = Object.freeze
 ] as SensitivityLevel[]);
 
 /**
+ * The sensitivity tiers whose content MAY cross to an EXTERNAL inference
+ * provider — everything strictly below the medical egress ceiling. `medical`,
+ * `financial`, and `secret` (rank ≥ medical) are excluded: per the root
+ * CLAUDE.md fail-closed-privacy invariant they NEVER reach external AI, only a
+ * sovereign (on-device) provider whose content never leaves the device.
+ *
+ * Derived from `rankSensitivity` rather than hardcoded, so the set can never
+ * drift from the ceiling — a future below-medical tier extends it automatically.
+ * This is the canonical form of the filter both the AI loop (auto-injected
+ * memory) and the runtime (the `recall_memories` tool) apply toward external
+ * providers; consumers MUST use it rather than re-listing `[none, personal]`.
+ */
+export const CONTEXT_SAFE_SENSITIVITY: readonly SensitivityLevel[] = Object.freeze(
+  ALL_SENSITIVITY_LEVELS.filter(
+    (l) => rankSensitivity(l) < rankSensitivity("medical" as SensitivityLevel),
+  ),
+);
+
+/**
  * Type guard — narrows `unknown` to `SensitivityLevel`. Drift-gate-
  * driven literal scanners use this to validate values pulled from
  * wire-format payloads; consumers that derive sensitivity from

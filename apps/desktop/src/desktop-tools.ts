@@ -24,7 +24,6 @@
 import { SimpleToolRegistry } from "@motebit/runtime";
 import type { MotebitRuntime } from "@motebit/runtime";
 import type { EventType } from "@motebit/sdk";
-import { embedText } from "@motebit/memory-graph";
 import {
   registerBrowserSafeBuiltins,
   BraveSearchProvider,
@@ -80,19 +79,9 @@ export function registerDesktopTools(
   registerBrowserSafeBuiltins(registry, {
     searchProvider,
     readUrlFetcher,
-    memorySearchFn: async (query, opts) => {
-      const queryEmbedding = await embedText(query);
-      const nodes = await runtime.memory.recallRelevant(queryEmbedding, {
-        limit: opts.limit,
-        ...(opts.asOf != null ? { asOf: opts.asOf } : {}),
-        ...(opts.includeExpired ? { includeExpired: true } : {}),
-      });
-      return nodes.map((n) => ({
-        content: n.content,
-        confidence: n.confidence,
-        ...(n.valid_until != null ? { supersededAt: n.valid_until } : {}),
-      }));
-    },
+    // Recall routes through recallMemoriesForTool — the one place the
+    // sensitivity egress boundary is enforced (check-memory-tool-egress).
+    memorySearchFn: (query, opts) => runtime.recallMemoriesForTool(query, opts),
     eventQueryFn: async (limit, eventType) => {
       const events = await runtime.events.query({
         motebit_id: runtime.motebitId,
