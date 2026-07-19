@@ -984,8 +984,13 @@ export class UnbootedWebApp {
         const nodes = await runtime.memory.recallRelevant(embedding, {
           limit: opts.limit,
           ...(opts.asOf != null ? { asOf: opts.asOf } : {}),
+          ...(opts.includeExpired ? { includeExpired: true } : {}),
         });
-        return nodes.map((n) => ({ content: n.content, confidence: n.confidence }));
+        return nodes.map((n) => ({
+          content: n.content,
+          confidence: n.confidence,
+          ...(n.valid_until != null ? { supersededAt: n.valid_until } : {}),
+        }));
       },
       eventQueryFn: async (limit, eventType) => {
         const events = await runtime.events.query({

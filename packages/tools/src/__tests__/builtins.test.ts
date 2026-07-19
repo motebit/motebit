@@ -1043,6 +1043,50 @@ describe("recall_memories", () => {
     expect(result.data as string).toContain("No memories were valid as of");
   });
 
+  it("include_history threads includeExpired and labels current vs superseded per entry", async () => {
+    const supersededAt = Date.parse("2026-06-01");
+    const searchFn = vi.fn().mockResolvedValue([
+      { content: "user lives in SF", confidence: 0.9 }, // current (no supersededAt)
+      { content: "user lives in NYC", confidence: 0.9, supersededAt }, // superseded
+    ]);
+    const handler = createRecallMemoriesHandler(searchFn);
+    const result = await handler({ query: "where does the user live", include_history: true });
+
+    expect(searchFn).toHaveBeenCalledWith("where does the user live", {
+      limit: 5,
+      includeExpired: true,
+    });
+    expect(result.ok).toBe(true);
+    const data = result.data as string;
+    // Each entry disambiguated so a revised belief can't read as current fact.
+    expect(data).toContain("[current] [confidence=0.90] user lives in SF");
+    expect(data).toContain(
+      `[superseded ${new Date(supersededAt).toISOString()}] [confidence=0.90] user lives in NYC`,
+    );
+    expect(data).toContain("A [superseded] entry is NOT current fact");
+  });
+
+  it("current recall carries NO per-entry status label (only history mode does)", async () => {
+    const searchFn = vi.fn().mockResolvedValue([{ content: "user likes TS", confidence: 0.9 }]);
+    const handler = createRecallMemoriesHandler(searchFn);
+    const result = await handler({ query: "prefs" });
+    expect(result.data as string).not.toContain("[current]");
+    expect(result.data as string).not.toContain("[superseded");
+  });
+
+  it("rejects as_of + include_history together — they are different questions", async () => {
+    const searchFn = vi.fn();
+    const handler = createRecallMemoriesHandler(searchFn);
+    const result = await handler({
+      query: "test",
+      as_of: "2026-06-01",
+      include_history: true,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("Use as_of OR include_history");
+    expect(searchFn).not.toHaveBeenCalled();
+  });
+
   it("returns message when no memories found", async () => {
     const searchFn = vi.fn().mockResolvedValue([]);
 
