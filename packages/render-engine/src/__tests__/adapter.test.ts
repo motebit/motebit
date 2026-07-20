@@ -386,6 +386,25 @@ describe("ThreeJSAdapter (headless)", () => {
     adapter.render(defaultFrame({ delta_time: 0, time: 0 }));
   });
 
+  it("onFirstFrame does not fire until a real frame paints (headless never renders one)", async () => {
+    await adapter.init(null);
+    let fired = 0;
+    adapter.onFirstFrame(() => fired++);
+    // Headless render() short-circuits before painting (no WebGL context), so
+    // the signal must NOT fire — a loading placeholder would never wrongly clear.
+    adapter.render(defaultFrame());
+    adapter.render(defaultFrame());
+    expect(fired).toBe(0);
+  });
+
+  it("onFirstFrame registration is idempotent and safe to call repeatedly", async () => {
+    await adapter.init(null);
+    expect(() => {
+      adapter.onFirstFrame(() => {});
+      adapter.onFirstFrame(() => {});
+    }).not.toThrow();
+  });
+
   it("getCreatureGroup returns null headless (no creature refs)", async () => {
     await adapter.init(null);
     expect(adapter.getCreatureGroup()).toBeNull();

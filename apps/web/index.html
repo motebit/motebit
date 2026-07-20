@@ -605,6 +605,51 @@
         white-space: nowrap;
       }
 
+      /* Creature loading placeholder — a calm breath where the creature will
+         appear, faded out the instant the first WebGL frame paints
+         (renderer.onFirstFrame). The canvas shows only its clear color until the
+         creature's first frame compiles its shaders; this fills that window
+         calmly. No spinner — calm software. */
+      #creature-loading {
+        position: fixed;
+        inset: 0;
+        z-index: 5; /* above the canvas clear color, below the chat chrome */
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+        opacity: 1;
+        transition: opacity 0.9s ease;
+      }
+      #creature-loading.ready {
+        opacity: 0;
+      }
+      #creature-loading::before {
+        content: "";
+        width: 176px;
+        height: 176px;
+        border-radius: 50%;
+        background: radial-gradient(circle, var(--text-muted) 0%, transparent 62%);
+        opacity: 0.14;
+        animation: creature-breath 2.4s ease-in-out infinite;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #creature-loading::before {
+          animation: none;
+        }
+      }
+      @keyframes creature-breath {
+        0%,
+        100% {
+          transform: scale(0.92);
+          opacity: 0.1;
+        }
+        50% {
+          transform: scale(1.06);
+          opacity: 0.18;
+        }
+      }
+
       /* First-visit welcome overlay — sits between creature and chat input */
       #welcome-overlay {
         position: fixed;
@@ -7960,6 +8005,9 @@
   </head>
   <body>
     <canvas id="motebit-canvas"></canvas>
+    <!-- Calm placeholder shown until the creature's first WebGL frame paints;
+         faded out by main.ts via renderer.onFirstFrame. -->
+    <div id="creature-loading" aria-hidden="true"></div>
     <div id="toast-container"></div>
 
     <!-- Identity-divergence banner — shown when bootstrap detects that
