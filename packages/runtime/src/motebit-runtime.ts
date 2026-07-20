@@ -2824,7 +2824,15 @@ export class MotebitRuntime {
    * logic.
    */
   searchConversations(query: string, limit = 5) {
-    return this.conversation.searchHistory(query, limit);
+    // Provider-keyed egress ceiling — the same boundary `recallMemoriesForTool`
+    // applies, at the whole-message grain: an EXTERNAL provider searches only
+    // context-safe (< medical) messages, a SOVEREIGN (on-device) one searches
+    // every tier (the content never leaves the device). Fail-closed: an unset
+    // provider mode is non-sovereign, so it filters. Past transcripts may hold
+    // medical/financial/secret content the user typed on a sovereign session;
+    // this keeps that content from surfacing into an external one.
+    const sensitivityFilter = this.providerIsSovereign() ? undefined : CONTEXT_SAFE_SENSITIVITY;
+    return this.conversation.searchHistory(query, limit, sensitivityFilter);
   }
 
   /**

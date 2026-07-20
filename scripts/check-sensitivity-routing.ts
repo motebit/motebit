@@ -380,6 +380,24 @@ function checkRecallEgress(slices: MethodSlice[]): string[] {
     }
   }
 
+  // The `search_conversations` tool (Layer-3 transcript search) is the sibling
+  // egress surface: past transcripts carry a per-message `sensitivity`, so
+  // `searchConversations` must key its filter on the provider too (external ⇒
+  // context-safe messages only). The four surfaces already delegate to it.
+  const searchMethod = slices.find((s) => s.name === "searchConversations");
+  if (!searchMethod) {
+    violations.push(
+      "MotebitRuntime is missing `searchConversations` — the sanctioned backend for the search_conversations tool, which must apply the same provider-keyed message egress filter.",
+    );
+  } else {
+    const b = searchMethod.body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    if (!/providerIsSovereign/.test(b)) {
+      violations.push(
+        `searchConversations (lines ${searchMethod.startLine}–${searchMethod.endLine}) must key its message egress filter on the provider (external ⇒ context-safe tiers only) before passing it to \`searchHistory\` — no \`providerIsSovereign\` reference found, so a past medical/financial/secret transcript could reach an external provider.`,
+      );
+    }
+  }
+
   for (const s of MEMORY_RECALL_SURFACES) {
     const abs = resolve(ROOT, s.path);
     if (!existsSync(abs)) {

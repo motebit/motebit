@@ -483,7 +483,19 @@ export class ConversationManager {
    * CLI/desktop/mobile with SQLite is sync all the way down and needs
    * no preload.
    */
-  searchHistory(query: string, limit = 5): ReturnType<typeof searchConversationMessages> {
+  searchHistory(
+    query: string,
+    limit = 5,
+    /**
+     * Egress ceiling for the results. Present ⇒ an EXTERNAL provider: include
+     * only messages EXPLICITLY classified at one of these tiers; a message with
+     * a `null`/unknown tier or one ≥ medical is withheld (fail-closed), so a past
+     * transcript that may hold medical/financial/secret content never reaches
+     * external AI. Absent ⇒ a SOVEREIGN (on-device) provider: search every tier,
+     * the content never leaves the device. Owned by `runtime.searchConversations`.
+     */
+    sensitivityFilter?: readonly SensitivityLevel[],
+  ): ReturnType<typeof searchConversationMessages> {
     const { store } = this.deps;
     if (store == null) return [];
     const convos = store.listConversations(this.deps.motebitId);
@@ -492,6 +504,12 @@ export class ConversationManager {
       const msgs = store.loadMessages(c.conversationId);
       for (const m of msgs) {
         if (m.role !== "user" && m.role !== "assistant") continue;
+        if (
+          sensitivityFilter != null &&
+          (m.sensitivity == null || !sensitivityFilter.includes(m.sensitivity))
+        ) {
+          continue;
+        }
         messages.push({
           conversationId: c.conversationId,
           role: m.role,
