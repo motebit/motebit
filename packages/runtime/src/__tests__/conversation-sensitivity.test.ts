@@ -398,3 +398,67 @@ describe("ConversationManager — read-side trimmed() filter by effective tier",
     expect(cm.trimmed()).toHaveLength(2);
   });
 });
+
+describe("ConversationManager.searchHistory — sensitivity egress filter (read side)", () => {
+  // The read-side complement of the write-side floor above: past transcripts
+  // carry a per-message tier, and search_conversations must not surface a
+  // medical/financial/secret message toward an external provider.
+  const MSGS: Array<{ role: string; content: string; sensitivity?: SensitivityLevel }> = [
+    { role: "user", content: "the auth refactor plan", sensitivity: SensitivityLevel.Personal },
+    { role: "user", content: "my auth token is sk-secret", sensitivity: SensitivityLevel.Secret },
+    { role: "user", content: "auth diagnosis lisinopril", sensitivity: SensitivityLevel.Medical },
+    { role: "user", content: "auth legacy note unclassified", sensitivity: undefined },
+  ];
+
+  function seededStore(): ConversationStoreAdapter {
+    return {
+      ...makeCapturingStore(),
+      listConversations: () => [
+        {
+          conversationId: "conv-1",
+          startedAt: 0,
+          lastActiveAt: 0,
+          title: null,
+          messageCount: MSGS.length,
+          summary: null,
+        },
+      ],
+      loadMessages: () =>
+        MSGS.map((m, i) => ({
+          messageId: `m-${i}`,
+          conversationId: "conv-1",
+          motebitId: "mb-1",
+          role: m.role,
+          content: m.content,
+          toolCalls: null,
+          toolCallId: null,
+          createdAt: i,
+          tokenEstimate: 0,
+          sensitivity: m.sensitivity,
+        })),
+    } as ConversationStoreAdapter;
+  }
+
+  it("an external filter withholds ≥medical AND unclassified (null-tier) messages", () => {
+    const cm = new ConversationManager(makeDeps(makeCapturingStore(), { store: seededStore() }));
+    const contents = cm
+      .searchHistory("auth", 10, [SensitivityLevel.None, SensitivityLevel.Personal])
+      .map((h) => h.content);
+    expect(contents).toContain("the auth refactor plan"); // personal — safe
+    expect(contents).not.toContain("my auth token is sk-secret"); // secret withheld
+    expect(contents).not.toContain("auth diagnosis lisinopril"); // medical withheld
+    expect(contents.some((c) => c.includes("legacy note"))).toBe(false); // null → fail-closed
+  });
+
+  it("no filter (sovereign on-device) searches every tier", () => {
+    const cm = new ConversationManager(makeDeps(makeCapturingStore(), { store: seededStore() }));
+    const contents = cm.searchHistory("auth", 10).map((h) => h.content);
+    expect(contents).toEqual(
+      expect.arrayContaining([
+        "the auth refactor plan",
+        "my auth token is sk-secret",
+        "auth diagnosis lisinopril",
+      ]),
+    );
+  });
+});

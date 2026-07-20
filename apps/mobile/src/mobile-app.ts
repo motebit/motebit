@@ -75,7 +75,7 @@ import { dispatchByokRouting } from "@motebit/policy";
 import type { AgentTask, ExecutionReceipt } from "@motebit/sdk";
 import type { PairingSession, PairingStatus } from "@motebit/sync-engine";
 import type { MotebitState, BehaviorCues, MemoryNode } from "@motebit/sdk";
-import { computeDecayedConfidence, embedText, setRemoteEmbedUrl } from "@motebit/memory-graph";
+import { computeDecayedConfidence, setRemoteEmbedUrl } from "@motebit/memory-graph";
 import {
   registerBrowserSafeBuiltins,
   DuckDuckGoSearchProvider,
@@ -1154,19 +1154,9 @@ export class MobileApp {
 
     registerBrowserSafeBuiltins(registry, {
       searchProvider: new DuckDuckGoSearchProvider(),
-      memorySearchFn: async (query, opts) => {
-        const queryEmbedding = await embedText(query);
-        const nodes = await runtime.memory.recallRelevant(queryEmbedding, {
-          limit: opts.limit,
-          ...(opts.asOf != null ? { asOf: opts.asOf } : {}),
-          ...(opts.includeExpired ? { includeExpired: true } : {}),
-        });
-        return nodes.map((n) => ({
-          content: n.content,
-          confidence: n.confidence,
-          ...(n.valid_until != null ? { supersededAt: n.valid_until } : {}),
-        }));
-      },
+      // Recall routes through recallMemoriesForTool — the one place the
+      // sensitivity egress boundary is enforced (check-memory-tool-egress).
+      memorySearchFn: (query, opts) => runtime.recallMemoriesForTool(query, opts),
       eventQueryFn: async (limit, eventType) => {
         const filter: EventFilter = { motebit_id: runtime.motebitId, limit };
         if (eventType != null && eventType !== "") {

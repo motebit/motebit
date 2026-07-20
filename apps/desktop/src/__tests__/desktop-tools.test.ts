@@ -16,11 +16,15 @@ import { registerDesktopTools } from "../desktop-tools";
 function makeRuntime(overrides: Record<string, unknown> = {}): any {
   return {
     motebitId: "motebit-1",
+    // The recall tool now routes through the runtime's provider-aware
+    // recallMemoriesForTool (the sensitivity egress boundary) rather than
+    // calling memory.recallRelevant directly. See check-sensitivity-routing.
+    recallMemoriesForTool: vi.fn(async () => [
+      { content: "memory 1", confidence: 0.8 },
+      { content: "memory 2", confidence: 0.6 },
+    ]),
     memory: {
-      recallRelevant: vi.fn(async () => [
-        { content: "memory 1", confidence: 0.8 },
-        { content: "memory 2", confidence: 0.6 },
-      ]),
+      recallRelevant: vi.fn(async () => []),
     },
     events: {
       query: vi.fn(async () => [
@@ -99,12 +103,13 @@ describe("registerDesktopTools", () => {
     await computer?.dispose();
   });
 
-  it("recall_memories handler calls runtime.memory.recallRelevant", async () => {
+  it("recall_memories handler routes through runtime.recallMemoriesForTool (the egress boundary)", async () => {
     const registry = new SimpleToolRegistry();
     const runtime = makeRuntime();
     registerDesktopTools(registry, runtime);
     const result = await registry.execute("recall_memories", { query: "q", limit: 5 });
-    expect(runtime.memory.recallRelevant).toHaveBeenCalled();
+    expect(runtime.recallMemoriesForTool).toHaveBeenCalled();
+    expect(runtime.memory.recallRelevant).not.toHaveBeenCalled();
     expect(result.ok).toBe(true);
   });
 

@@ -116,7 +116,7 @@ import {
   createRecallSelfHandler,
 } from "@motebit/tools/web-safe";
 import { querySelfKnowledge } from "@motebit/self-knowledge";
-import { embedText, setRemoteEmbedUrl } from "@motebit/memory-graph";
+import { setRemoteEmbedUrl } from "@motebit/memory-graph";
 import { CursorPresence } from "./cursor-presence";
 import { createProvider, WebLLMProvider, PROXY_BASE_URL } from "./providers";
 import type { ProviderConfig } from "./storage";
@@ -979,19 +979,9 @@ export class UnbootedWebApp {
     registerBrowserSafeBuiltins(registry, {
       searchProvider: new ProxySearchProvider(searchUrl),
       readUrlProxy: `${PROXY_BASE_URL}/v1/fetch`,
-      memorySearchFn: async (query, opts) => {
-        const embedding = await embedText(query);
-        const nodes = await runtime.memory.recallRelevant(embedding, {
-          limit: opts.limit,
-          ...(opts.asOf != null ? { asOf: opts.asOf } : {}),
-          ...(opts.includeExpired ? { includeExpired: true } : {}),
-        });
-        return nodes.map((n) => ({
-          content: n.content,
-          confidence: n.confidence,
-          ...(n.valid_until != null ? { supersededAt: n.valid_until } : {}),
-        }));
-      },
+      // Recall routes through recallMemoriesForTool — the one place the
+      // sensitivity egress boundary is enforced (check-sensitivity-routing).
+      memorySearchFn: (query, opts) => runtime.recallMemoriesForTool(query, opts),
       eventQueryFn: async (limit, eventType) => {
         const events = await runtime.events.query({
           motebit_id: runtime.motebitId,

@@ -339,6 +339,88 @@ function checkToolWrapPresent(src: string): string | null {
   return null;
 }
 
+/**
+ * Surfaces that wire the `recall_memories` tool's search backend. Each must
+ * route through the runtime's `recallMemoriesForTool` — the ONE place the
+ * sensitivity egress ceiling is applied to explicit recall. A hand-rolled
+ * `memory.recallRelevant` closure omits `sensitivityFilter`, and `undefined`
+ * disables filtering end-to-end, so a stored medical/financial/secret memory
+ * would reach an external provider on a `none`-tier session. That exact bypass
+ * shipped on all four surfaces (fixed by centralizing here); this gate keeps it
+ * from silently returning.
+ */
+const MEMORY_RECALL_SURFACES: ReadonlyArray<{ surface: string; path: string }> = [
+  { surface: "cli", path: "apps/cli/src/runtime-factory.ts" },
+  { surface: "web", path: "apps/web/src/web-app.ts" },
+  { surface: "desktop", path: "apps/desktop/src/desktop-tools.ts" },
+  { surface: "mobile", path: "apps/mobile/src/mobile-app.ts" },
+];
+
+/**
+ * Recall-tool egress check. Two parts: (1) the centralized
+ * `recallMemoriesForTool` on MotebitRuntime must gate the recall on the
+ * provider (`providerIsSovereign` decides the `sensitivityFilter`); (2) every
+ * surface wiring `memorySearchFn` must route through it, never a raw
+ * `recallRelevant` closure.
+ */
+function checkRecallEgress(slices: MethodSlice[]): string[] {
+  const violations: string[] = [];
+
+  const method = slices.find((s) => s.name === "recallMemoriesForTool");
+  if (!method) {
+    violations.push(
+      "MotebitRuntime is missing `recallMemoriesForTool` — the single sanctioned backend for the recall_memories tool. Surfaces must not hand-roll a `memory.recallRelevant` recall closure, which would omit the sensitivity egress filter.",
+    );
+  } else {
+    const b = method.body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    if (!/providerIsSovereign/.test(b) || !/sensitivityFilter/.test(b)) {
+      violations.push(
+        `recallMemoriesForTool (lines ${method.startLine}–${method.endLine}) must key the recall's \`sensitivityFilter\` on the provider (external ⇒ CONTEXT_SAFE_SENSITIVITY only; sovereign ⇒ all tiers). Found providerIsSovereign=${/providerIsSovereign/.test(b)}, sensitivityFilter=${/sensitivityFilter/.test(b)}.`,
+      );
+    }
+  }
+
+  // The `search_conversations` tool (Layer-3 transcript search) is the sibling
+  // egress surface: past transcripts carry a per-message `sensitivity`, so
+  // `searchConversations` must key its filter on the provider too (external ⇒
+  // context-safe messages only). The four surfaces already delegate to it.
+  const searchMethod = slices.find((s) => s.name === "searchConversations");
+  if (!searchMethod) {
+    violations.push(
+      "MotebitRuntime is missing `searchConversations` — the sanctioned backend for the search_conversations tool, which must apply the same provider-keyed message egress filter.",
+    );
+  } else {
+    const b = searchMethod.body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    if (!/providerIsSovereign/.test(b)) {
+      violations.push(
+        `searchConversations (lines ${searchMethod.startLine}–${searchMethod.endLine}) must key its message egress filter on the provider (external ⇒ context-safe tiers only) before passing it to \`searchHistory\` — no \`providerIsSovereign\` reference found, so a past medical/financial/secret transcript could reach an external provider.`,
+      );
+    }
+  }
+
+  for (const s of MEMORY_RECALL_SURFACES) {
+    const abs = resolve(ROOT, s.path);
+    if (!existsSync(abs)) {
+      violations.push(`${s.surface}: recall-wiring file missing at ${s.path}`);
+      continue;
+    }
+    const src = readFileSync(abs, "utf-8");
+    const idx = src.indexOf("memorySearchFn");
+    if (idx === -1) continue; // surface doesn't wire recall — nothing to gate
+    const window = src.slice(idx, idx + 500);
+    if (!/recallMemoriesForTool/.test(window)) {
+      violations.push(
+        `${s.surface} (${s.path}): \`memorySearchFn\` does not route through \`runtime.recallMemoriesForTool\` — a hand-rolled recall closure omits the sensitivity egress filter (medical/financial/secret would reach an external provider).`,
+      );
+    } else if (/\.recallRelevant\s*\(/.test(window)) {
+      violations.push(
+        `${s.surface} (${s.path}): \`memorySearchFn\` calls \`recallRelevant\` directly — recall for the tool must go through \`recallMemoriesForTool\`, which owns the egress filter.`,
+      );
+    }
+  }
+  return violations;
+}
+
 function main(): void {
   if (!existsSync(TARGET)) {
     console.error(`✗ check-sensitivity-routing: target file missing: ${TARGET}`);
@@ -364,9 +446,13 @@ function main(): void {
   const affordanceViolations = checkSurfaceAffordances();
   violations.push(...affordanceViolations);
 
+  // Recall-tool egress — the explicit recall_memories path must apply the same
+  // provider-keyed sensitivity ceiling the auto-injection path does.
+  violations.push(...checkRecallEgress(slices));
+
   if (violations.length === 0) {
     console.log(
-      `✓ check-sensitivity-routing: AI-call entries (runTurn / runTurnStreaming / direct provider.generate) gate on \`assertSensitivityPermitsAiCall\`, the tool registry is wrapped via \`wrapToolRegistryForSensitivity\`, and every registered surface (${SURFACE_AFFORDANCES.map((s) => s.surface).join(", ")}) exposes \`/sensitivity\` routed through the canonical runtime setter.\n`,
+      `✓ check-sensitivity-routing: AI-call entries (runTurn / runTurnStreaming / direct provider.generate) gate on \`assertSensitivityPermitsAiCall\`, the tool registry is wrapped via \`wrapToolRegistryForSensitivity\`, every registered surface (${SURFACE_AFFORDANCES.map((s) => s.surface).join(", ")}) exposes \`/sensitivity\` routed through the canonical runtime setter, and every surface routes recall_memories through \`recallMemoriesForTool\` (provider-keyed egress ceiling).\n`,
     );
     return;
   }
@@ -377,7 +463,7 @@ function main(): void {
     console.error(`  ${v}\n`);
   }
   console.error(
-    'Per CLAUDE.md privacy doctrine ("Medical/financial/secret never reach external AI"), the gate has three load-bearing pieces:\n  1. Every runtime AI-call entry MUST call `this.assertSensitivityPermitsAiCall()` before invoking runTurn / runTurnStreaming OR a direct `provider.generate*` call. Housekeeping completions (title generation, summarization, classification) feed user-authored text straight to the provider, so they take the same gate as a turn.\n  2. The runtime\'s tool registry MUST be wrapped through `wrapToolRegistryForSensitivity` so outbound tools (web_search, read_url, delegate_to_agent, MCP) fail-close on high-sensitivity sessions.\n  3. Every user-facing surface with chat/slash dispatch MUST expose `/sensitivity` routed through `runtime.setSessionSensitivity` / `getSessionSensitivity` — without this affordance, the gate is enforced in code but unreachable from any user action.\n\nAll three together close the doctrine end-to-end: enforcement at the boundary + a path for users to actually trip the gate.\n',
+    'Per CLAUDE.md privacy doctrine ("Medical/financial/secret never reach external AI"), the gate has three load-bearing pieces:\n  1. Every runtime AI-call entry MUST call `this.assertSensitivityPermitsAiCall()` before invoking runTurn / runTurnStreaming OR a direct `provider.generate*` call. Housekeeping completions (title generation, summarization, classification) feed user-authored text straight to the provider, so they take the same gate as a turn.\n  2. The runtime\'s tool registry MUST be wrapped through `wrapToolRegistryForSensitivity` so outbound tools (web_search, read_url, delegate_to_agent, MCP) fail-close on high-sensitivity sessions.\n  3. Every user-facing surface with chat/slash dispatch MUST expose `/sensitivity` routed through `runtime.setSessionSensitivity` / `getSessionSensitivity` — without this affordance, the gate is enforced in code but unreachable from any user action.\n  4. The explicit `recall_memories` tool MUST route through `runtime.recallMemoriesForTool`, which applies the same provider-keyed egress ceiling (external ⇒ context-safe tiers only). A hand-rolled `memory.recallRelevant` closure omits `sensitivityFilter` and would return medical/financial/secret memories toward an external provider.\n\nAll four together close the doctrine end-to-end: enforcement at the boundary (turn calls, tool dispatch, AND explicit recall) + a path for users to actually trip the gate.\n',
   );
   process.exit(1);
 }

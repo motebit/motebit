@@ -10,7 +10,6 @@ import {
   createRelayCapabilitiesFetcher,
 } from "@motebit/runtime";
 import { buildHardwareVerifiers } from "@motebit/verify";
-import { embedText } from "@motebit/memory-graph";
 import type { StorageAdapters } from "@motebit/runtime";
 import { AnthropicProvider, OpenAIProvider } from "@motebit/ai-core";
 import type { StreamingProvider, MotebitPersonalityConfig } from "@motebit/ai-core";
@@ -351,23 +350,15 @@ export function buildToolRegistry(
   registry.register(webSearchDefinition, createWebSearchHandler(searchProvider));
   registry.register(readUrlDefinition, createReadUrlHandler());
 
-  // Deferred handlers for memory/events (need runtime, which needs registry)
+  // Deferred handlers for memory/events (need runtime, which needs registry).
+  // Recall routes through the runtime's `recallMemoriesForTool` — the one place
+  // the sensitivity egress boundary is enforced (see check-memory-tool-egress).
   const memorySearchFn = async (
     query: string,
     opts: { limit: number; asOf?: number; includeExpired?: boolean },
   ) => {
     if (!runtimeRef.current) return [];
-    const queryEmbedding = await embedText(query);
-    const nodes = await runtimeRef.current.memory.recallRelevant(queryEmbedding, {
-      limit: opts.limit,
-      ...(opts.asOf != null ? { asOf: opts.asOf } : {}),
-      ...(opts.includeExpired ? { includeExpired: true } : {}),
-    });
-    return nodes.map((n) => ({
-      content: n.content,
-      confidence: n.confidence,
-      ...(n.valid_until != null ? { supersededAt: n.valid_until } : {}),
-    }));
+    return runtimeRef.current.recallMemoriesForTool(query, opts);
   };
   const eventQueryFn = async (limit: number, eventType?: string) => {
     if (!runtimeRef.current) return [];

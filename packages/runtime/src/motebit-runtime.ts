@@ -44,6 +44,7 @@ import {
   AgentTrustLevel,
   SensitivityLevel,
   rankSensitivity,
+  CONTEXT_SAFE_SENSITIVITY,
   RiskLevel,
 } from "@motebit/sdk";
 import type { SensitivityCleared } from "@motebit/sdk";
@@ -165,6 +166,7 @@ import {
   MemoryGraph,
   buildConsolidationPrompt,
   parseConsolidationResponse,
+  embedText,
 } from "@motebit/memory-graph";
 import type {
   ConsolidationProvider,
@@ -379,6 +381,23 @@ export function explorationStrengthForStakes(costUsd: number): number {
   return (
     1 - (costUsd - EXPLORE_STAKES_FLOOR_USD) / (EXPLORE_STAKES_CEIL_USD - EXPLORE_STAKES_FLOOR_USD)
   );
+}
+
+/** Options accepted by {@link MotebitRuntime.recallMemoriesForTool} — the
+ *  `recall_memories` tool's search backend. Mirrors `@motebit/tools`'
+ *  `RecallMemoriesOptions` structurally (the runtime does not depend on tools). */
+export interface ToolRecallOptions {
+  limit: number;
+  asOf?: number;
+  includeExpired?: boolean;
+}
+
+/** One recalled memory as the `recall_memories` tool consumes it. `supersededAt`
+ *  (a node's `valid_until`) is present iff the belief has been invalidated. */
+export interface ToolRecallResult {
+  content: string;
+  confidence: number;
+  supersededAt?: number;
 }
 
 export class MotebitRuntime {
@@ -2805,7 +2824,15 @@ export class MotebitRuntime {
    * logic.
    */
   searchConversations(query: string, limit = 5) {
-    return this.conversation.searchHistory(query, limit);
+    // Provider-keyed egress ceiling — the same boundary `recallMemoriesForTool`
+    // applies, at the whole-message grain: an EXTERNAL provider searches only
+    // context-safe (< medical) messages, a SOVEREIGN (on-device) one searches
+    // every tier (the content never leaves the device). Fail-closed: an unset
+    // provider mode is non-sovereign, so it filters. Past transcripts may hold
+    // medical/financial/secret content the user typed on a sovereign session;
+    // this keeps that content from surfacing into an external one.
+    const sensitivityFilter = this.providerIsSovereign() ? undefined : CONTEXT_SAFE_SENSITIVITY;
+    return this.conversation.searchHistory(query, limit, sensitivityFilter);
   }
 
   /**
@@ -4159,6 +4186,42 @@ export class MotebitRuntime {
    */
   private providerIsSovereign(): boolean {
     return this._providerMode === "on-device";
+  }
+
+  /**
+   * The `recall_memories` tool's search backend — the ONE sanctioned path for
+   * the agent's explicit memory recall, so the egress boundary lives here and
+   * cannot be forgotten per-surface (it was, on all four; that leak is what this
+   * method closes). Surfaces wire it as `memorySearchFn` instead of hand-rolling
+   * a `memory.recallRelevant` closure.
+   *
+   * The load-bearing privacy invariant (root CLAUDE.md — "medical/financial/
+   * secret never reach external AI") is enforced here by keying the sensitivity
+   * ceiling on the provider: an EXTERNAL provider gets only `CONTEXT_SAFE_
+   * SENSITIVITY` (< medical), so a stored medical/financial/secret memory is
+   * never returned toward it; a SOVEREIGN (on-device) provider recalls every
+   * tier, because that content never leaves the device. Fail-closed: an unset
+   * provider mode is non-sovereign, so it also gets the filtered set.
+   *
+   * Embeds, recalls (threading the bi-temporal `asOf` / `includeExpired` modes),
+   * and maps to the tool's result shape (`supersededAt` from `valid_until`).
+   */
+  async recallMemoriesForTool(query: string, opts: ToolRecallOptions): Promise<ToolRecallResult[]> {
+    const queryEmbedding = await embedText(query);
+    const nodes = await this.memory.recallRelevant(queryEmbedding, {
+      limit: opts.limit,
+      ...(opts.asOf != null ? { asOf: opts.asOf } : {}),
+      ...(opts.includeExpired ? { includeExpired: true } : {}),
+      // Egress ceiling: undefined ⇒ no filter (sovereign, all tiers stay local);
+      // otherwise restrict to the context-safe tiers before anything can reach
+      // an external provider.
+      ...(this.providerIsSovereign() ? {} : { sensitivityFilter: [...CONTEXT_SAFE_SENSITIVITY] }),
+    });
+    return nodes.map((n) => ({
+      content: n.content,
+      confidence: n.confidence,
+      ...(n.valid_until != null ? { supersededAt: n.valid_until } : {}),
+    }));
   }
 
   /**
