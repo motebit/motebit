@@ -83,6 +83,12 @@ export class ThreeJSAdapter implements RenderAdapter {
   private initialized = false;
   private creatureRefs: CreatureRefs | null = null;
   private creatureState: CreatureState = createCreatureState();
+  /** Fired once, after the creature's FIRST frame actually paints — the signal a
+   *  surface uses to fade out its loading placeholder. `render()` is what pays
+   *  the WebGL shader-compile cost, so this is the honest "creature is visible"
+   *  moment, not `init()` (which builds the scene but paints nothing). */
+  private firstFrameFired = false;
+  private firstFrameCallback: (() => void) | null = null;
 
   private renderer: THREE.WebGLRenderer | null = null;
   private scene: THREE.Scene | null = null;
@@ -168,7 +174,33 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.scene.add(rim);
 
     this.initialized = true;
+
+    // Pre-warm the GPU: compile the creature + slab shaders NOW, off the first
+    // render frame, so the first paint doesn't stall on shader compilation (the
+    // dominant cost of a cold WebGL first frame). Fire-and-forget — it runs in
+    // parallel with the surface's async bootstrap; the render loop simply hits
+    // warm shaders once it starts. Guarded because older Three or a headless
+    // stub may lack compileAsync.
+    if (typeof this.renderer.compileAsync === "function") {
+      void this.renderer.compileAsync(this.scene, this.camera).catch(() => {
+        // Pre-warm is an optimization, never a correctness dependency — a
+        // compile hiccup just means the first frame compiles lazily as before.
+      });
+    }
     return Promise.resolve();
+  }
+
+  /**
+   * Register a one-shot callback fired when the creature's first frame paints.
+   * If the first frame has already rendered, the callback runs synchronously —
+   * a late subscriber never misses the signal.
+   */
+  onFirstFrame(callback: () => void): void {
+    if (this.firstFrameFired) {
+      callback();
+      return;
+    }
+    this.firstFrameCallback = callback;
   }
 
   render(frame: RenderFrame): void {
@@ -179,6 +211,16 @@ export class ThreeJSAdapter implements RenderAdapter {
 
     if (this.controls) this.controls.update();
     this.renderer.render(this.scene, this.camera);
+
+    // The creature is now on screen — fire the one-shot first-frame signal so a
+    // surface can fade out its loading placeholder. AFTER render(), not before:
+    // this line runs once the pixels exist.
+    if (!this.firstFrameFired) {
+      this.firstFrameFired = true;
+      const cb = this.firstFrameCallback;
+      this.firstFrameCallback = null;
+      cb?.();
+    }
 
     // Spatial canvas: update artifact animations and sync CSS overlay
     if (this.artifactManager) {

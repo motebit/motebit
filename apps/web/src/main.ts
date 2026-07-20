@@ -478,6 +478,23 @@ async function autoInitWebLLM(model: string = DEFAULT_WEBLLM_MODEL): Promise<voi
 async function bootstrap(): Promise<void> {
   await app.init(canvas!, document.documentElement.dataset.theme === "dark" ? "dark" : "light");
 
+  // Fade the calm loading placeholder the instant the creature's first WebGL
+  // frame paints — the honest "creature is visible" moment (init() builds the
+  // scene but paints nothing; the first render() pays the shader-compile cost).
+  // A safety timeout guarantees the placeholder never hangs if WebGL fails.
+  const creatureLoading = document.getElementById("creature-loading");
+  if (creatureLoading) {
+    let revealed = false;
+    const reveal = (): void => {
+      if (revealed) return;
+      revealed = true;
+      creatureLoading.classList.add("ready");
+      window.setTimeout(() => creatureLoading.remove(), 1000);
+    };
+    app.getRenderer().onFirstFrame(reveal);
+    window.setTimeout(reveal, 12000);
+  }
+
   // Initialize IDB storage, migration, and runtime
   await app.bootstrap();
 
