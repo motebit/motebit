@@ -22,7 +22,9 @@ import {
   signDelegation,
   signStandingDelegation,
   signDelegationRevocation,
+  verifyRoutingTranscript,
 } from "@motebit/crypto";
+import { recomputeRoutingDecision } from "@motebit/semiring";
 import { RiskLevel, AgentTrustLevel } from "@motebit/protocol";
 import type {
   DelegationToken,
@@ -499,6 +501,121 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     expect(buildP2pPayment).toHaveBeenCalled();
     expect(buildP2pPayment.mock.calls[0]![0].workerAddress).toBe(ALICE_ADDR);
     vi.unstubAllGlobals();
+  });
+
+  it("a ranked paid hire MINTS a signed routing-decision transcript that verifies on both rungs", async () => {
+    // Inc 3 of docs/doctrine/routing-decision-transcript.md: the producer at
+    // the WorkerSelector seam. Same deterministic two-candidate hire as above,
+    // with the delegator's signing keys wired — the runtime must freeze the
+    // basis from the REAL ranking pass, sign it, and retain it. Both rungs are
+    // then checked: integrity (verifyRoutingTranscript) and faithfulness
+    // (recomputeRoutingDecision) — the accept-on-proof loop closed end to end.
+    const ALICE_ADDR = "AliceWorkerAddr2222222222222222222222222222";
+    const operator = await generateKeypair();
+    const clerk = await generateKeypair();
+    const grant = await makeGrant(operator, clerk);
+    const token = await mintTick(grant, operator);
+
+    const storage = createInMemoryStorage();
+    await (
+      storage.agentTrustStore as { setAgentTrust: (r: AgentTrustRecord) => Promise<void> }
+    ).setAgentTrust({
+      motebit_id: "clerk-001",
+      remote_motebit_id: "alice-worker",
+      trust_level: AgentTrustLevel.Trusted,
+      first_seen_at: NOW - 100 * HOUR,
+      last_seen_at: NOW,
+      interaction_count: 20,
+      successful_tasks: 20,
+      failed_tasks: 0,
+    });
+
+    const { wallet, buildP2pPayment } = mockWallet(async (r) => ({
+      tx_hash: "tx",
+      chain: "solana",
+      network: "solana:x",
+      to_address: r.workerAddress,
+      amount_micro: r.amountMicro,
+      fee_to_address: r.treasuryAddress,
+      fee_amount_micro: r.feeAmountMicro,
+    }));
+
+    const runtime = new MotebitRuntime(
+      {
+        motebitId: "clerk-001",
+        tickRateHz: 0,
+        policy: { requireApprovalAbove: RiskLevel.R1_DRAFT, denyAbove: RiskLevel.R4_MONEY },
+        solanaWallet: wallet,
+        signingKeys: { privateKey: clerk.privateKey, publicKey: clerk.publicKey },
+      },
+      { ...createAdapters(), storage },
+    );
+    runtime.enableInteractiveDelegation({
+      syncUrl: "https://mock-relay.test",
+      authToken: async () => "test-token",
+      relayPublicKey: PINNED_HEX,
+      buildP2pPayment,
+      acknowledgeNoHistoryRisk: true,
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/api/v1/agents/discover"))
+          return jsonResponse({
+            agents: [
+              {
+                motebit_id: "bob-worker",
+                settlement_address: WORKER_ADDR,
+                settlement_modes: "p2p",
+                pricing: [{ capability: "research", unit_cost: 1.5 }],
+              },
+              {
+                motebit_id: "alice-worker",
+                settlement_address: ALICE_ADDR,
+                settlement_modes: "p2p",
+                pricing: [{ capability: "research", unit_cost: 1.5 }],
+              },
+            ],
+          });
+        if (url.includes("/p2p-eligibility")) return jsonResponse({ allowed: true });
+        if (url.includes("/listing"))
+          return jsonResponse({ pricing: [{ capability: "research", unit_cost: 1.5 }] });
+        if (url.endsWith("/task")) return jsonResponse({ task_id: "t1" }, 201);
+        if (url.includes("/task/"))
+          return jsonResponse({ task: { status: "completed" }, receipt: fakeReceipt() });
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    await runtime.executeGrantedDelegation({
+      capability: "research",
+      prompt: "survey the topic",
+      delegation: { token, grant },
+      dryRun: false,
+    });
+    vi.unstubAllGlobals();
+
+    const transcripts = runtime.getRecentRoutingTranscripts();
+    expect(transcripts).toHaveLength(1);
+    const t = transcripts[0]!;
+    expect(t.winner_motebit_id).toBe("alice-worker");
+    expect(t.capability).toBe("research");
+    expect(t.delegator_motebit_id).toBe("clerk-001");
+    expect(t.seed).toBe(token.signature); // seed provenance = the signed tick
+    expect(t.candidates).toHaveLength(2);
+    // Rung 1 — integrity: the delegator committed to this decision record.
+    expect(await verifyRoutingTranscript(t)).toEqual({ valid: true });
+    // Rung 2 — faithfulness: the recorded winner follows from the frozen inputs.
+    expect(recomputeRoutingDecision(t)).toEqual({
+      consistent: true,
+      recomputed_winner: "alice-worker",
+    });
+    // Tamper — the record is not editable after the fact.
+    expect(await verifyRoutingTranscript({ ...t, explored: !t.explored })).toEqual({
+      valid: false,
+      reason: "signature_invalid",
+    });
   });
 
   it("unpinned LOW-STAKES ⇒ exploration engaged at full strength (the newcomer on-ramp is live)", async () => {
