@@ -174,6 +174,14 @@ async function main(): Promise<void> {
                   ok: true as const,
                   receipt: r.receipt as unknown as ExecutionReceipt,
                   ...(r.settlement != null ? { settlement: r.settlement } : {}),
+                  ...(r.routingTranscript != null
+                    ? {
+                        routingTranscript: r.routingTranscript as unknown as Record<
+                          string,
+                          unknown
+                        >,
+                      }
+                    : {}),
                 };
               },
             }
@@ -219,6 +227,10 @@ async function main(): Promise<void> {
               // P2P (mode + onchain tx) from bytes alone, and the conformance
               // probe FAILS if external atom work happened for free.
               sub_settlements: r.sub_settlements,
+              // The delegator-signed routing transcripts of the ranked paid
+              // hops — the "why this worker won" record, verifiable on both
+              // rungs by anyone holding this signed receipt.
+              routing_transcripts: r.routing_transcripts,
               recall_self_count: r.recall_self_count,
               search_count: r.search_count,
               fetch_count: r.fetch_count,

@@ -165,6 +165,7 @@
     "check-disambiguation-primitives": "npx tsx scripts/check-disambiguation-primitives.ts",
     "check-panel-controllers": "npx tsx scripts/check-panel-controllers.ts",
     "check-consolidation-primitives": "npx tsx scripts/check-consolidation-primitives.ts",
+    "check-routing-transcript-emission": "npx tsx scripts/check-routing-transcript-emission.ts",
     "check-tool-modes": "npx tsx scripts/check-tool-modes.ts",
     "check-mode-contract-readers": "npx tsx scripts/check-mode-contract-readers.ts",
     "check-drop-handlers": "npx tsx scripts/check-drop-handlers.ts",
@@ -207,7 +208,8 @@
     "tsx": "^4.23.0",
     "turbo": "^2.10.3",
     "typescript": "^5.9.0",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "@motebit/semiring": "workspace:*"
   },
   "pnpm": {
     "overrides": {

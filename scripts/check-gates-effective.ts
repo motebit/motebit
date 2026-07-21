@@ -146,6 +146,17 @@ function mutateFile(relativePath: string, mutate: (src: string) => string): () =
 
 const PROBES: ReadonlyArray<Probe> = [
   {
+    script: "check-routing-transcript-emission",
+    proves:
+      "flags the runtime WorkerSelector seam quietly dropping the produced-basis emitter (a refactor back to bare selectWorker stops minting transcripts and turns the probe's verify-if-present assertion silently vacuous)",
+    perturb: () =>
+      // Rename the call so the seam no longer routes through the emitter.
+      // The gate scans textually; cleanup restores verbatim.
+      mutateFile("packages/runtime/src/motebit-runtime.ts", (src) =>
+        src.split("rankWorkersWithBasis(").join("rankWorkersWithBasisPROBE("),
+      ),
+  },
+  {
     script: "check-surface-controller-adoption",
     proves:
       "flags a surface that re-forks an extracted controller locally instead of consuming it — here, the mobile MCP-manager adapter losing its `@motebit/surface-kit` import (the re-fork signature)",

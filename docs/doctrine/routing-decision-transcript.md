@@ -35,11 +35,11 @@ The exploration doctrine deferred this artifact with the trigger "the first cons
 
 ## Increments
 
-- **Inc 0 (this doc)** — shape settled: receipt-family, dispute-scoped disclosure, bond as prerequisite.
-- **Inc 1 — bond-in-discovery (prerequisite).** The relay's discover surface carries a verified-bond signal per candidate; the runtime closure joins it into `RankableWorker.bonded`. Closes the standing bond-live-wiring deferral; the sybil-swarm bound goes live on real hops.
-- **Inc 2 — type + law.** `RoutingDecisionTranscript` in `@motebit/protocol` (+ wire-schemas), sign/verify in `@motebit/crypto`, a verifier arm in `@motebit/verifier`. Closed shapes, suite-dispatched, per [`registry-pattern-canonical.md`](registry-pattern-canonical.md) where a vocabulary closes.
-- **Inc 3 — producer.** Minted at the runtime's `WorkerSelector` seam on every ranked (and pinned) paid hire; the transcript digest is bound into the sub-hop's `ExecutionReceipt` so the paid act commits to the choice that caused it; local retention per retention policy.
-- **Inc 4 — proof contract.** The conformance probe verifies the transcript of its own delegation's routing; a drift gate holds producer coverage (a ranked paid hire without a transcript is a red build, not a log line).
+- **Inc 0 (this doc) — SHIPPED** (#345): shape settled — receipt-family, dispute-scoped disclosure, bond as prerequisite.
+- **Inc 1 — bond-in-discovery (prerequisite) — SHIPPED** (#347). The relay's discover surface carries a verified-bond signal per candidate; the runtime closure joins it into `RankableWorker.bonded`. Closes the standing bond-live-wiring deferral; the sybil-swarm bound goes live on real hops.
+- **Inc 2 — type + law — SHIPPED** (#348; `spec/routing-transcript-v1.md`, spec #34, 12-case conformance corpus). `RoutingDecisionTranscript` in `@motebit/protocol` (+ wire-schemas), sign/verify in `@motebit/crypto`, a verifier arm in `@motebit/verifier`. Closed shapes, suite-dispatched, per [`registry-pattern-canonical.md`](registry-pattern-canonical.md) where a vocabulary closes.
+- **Inc 3 — producer — SHIPPED** (#349 + the Inc 4 egress). Minted at the runtime's `WorkerSelector` seam on every ranked (and pinned) paid hire; the transcript digest is bound into the sub-hop's `ExecutionReceipt` so the paid act commits to the choice that caused it; local retention per retention policy.
+- **Inc 4 — proof contract — SHIPPED.** The conformance probe verifies the transcript of its own delegation's routing; a drift gate holds producer coverage (a ranked paid hire without a transcript is a red build, not a log line).
 
 ## Deferred, with triggers
 

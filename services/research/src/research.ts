@@ -80,6 +80,14 @@ export interface ResearchResult {
    */
   sub_settlements: SubHopSettlement[];
   /**
+   * The delegator-signed routing-decision transcripts of the ranked paid
+   * hops, in execution order — self-attested into the molecule's signed
+   * receipt payload alongside `sub_settlements` so "the winner won on merit"
+   * is verifiable from bytes (integrity + faithfulness rungs), never the
+   * operator's word. Empty when every hop was pinned/sole-candidate/free.
+   */
+  routing_transcripts: Record<string, unknown>[];
+  /**
    * One citation per tool call that produced source content (interior recall
    * or URL fetch; bare web_search hits are not cited — only content actually
    * read is). Citation.source discriminates interior (self-attested, no
@@ -148,6 +156,13 @@ export interface PaidSubDelegateResult {
     paidMicro?: number;
     feeMicro?: number;
   };
+  /**
+   * The delegator-signed routing-decision transcript for THIS hire's ranked
+   * selection (docs/doctrine/routing-decision-transcript.md Inc 4) — passed
+   * straight through from the granted-delegation result. Absent on pinned
+   * hires and when the runtime has no signing key. Reveals, never authorizes.
+   */
+  routingTranscript?: Record<string, unknown>;
   /** Failure code when `!ok` (e.g. `worker_not_payable`, `money_meter_denied`). */
   code?: string;
 }
@@ -330,6 +345,7 @@ export async function research(question: string, config: ResearchConfig): Promis
     const messages: Anthropic.MessageParam[] = [{ role: "user", content: question }];
     const delegationReceipts: SignedReceipt[] = [];
     const subSettlements: SubHopSettlement[] = [];
+    const routingTranscripts: Record<string, unknown>[] = [];
     const citations: Citation[] = [];
     let recallSelfCount = 0;
     // claude-sonnet-4-6 list pricing per million tokens; estimate only —
@@ -462,6 +478,9 @@ export async function research(question: string, config: ResearchConfig): Promis
           // from signed bytes, never inferred from the receipt's mere presence
           // (the free path below also pushes a receipt). Absent settlement ⇒ omit;
           // the assertion is presence-of-p2p, so a missing fact never fabricates one.
+          if (paid.routingTranscript != null) {
+            routingTranscripts.push(paid.routingTranscript);
+          }
           if (paid.settlement != null) {
             const atomTaskId = (receipt as { task_id?: unknown }).task_id;
             subSettlements.push({
@@ -598,6 +617,7 @@ export async function research(question: string, config: ResearchConfig): Promis
             (inputTokens * USD_PER_M_INPUT + outputTokens * USD_PER_M_OUTPUT) / 1e6,
           delegation_receipts: delegationReceipts,
           sub_settlements: subSettlements,
+          routing_transcripts: routingTranscripts,
           citations,
           recall_self_count: recallSelfCount,
           search_count: searchCount,
@@ -634,6 +654,7 @@ export async function research(question: string, config: ResearchConfig): Promis
       cost_estimate_usd: (inputTokens * USD_PER_M_INPUT + outputTokens * USD_PER_M_OUTPUT) / 1e6,
       delegation_receipts: delegationReceipts,
       sub_settlements: subSettlements,
+      routing_transcripts: routingTranscripts,
       citations,
       recall_self_count: recallSelfCount,
       search_count: searchCount,

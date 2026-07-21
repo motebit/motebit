@@ -212,6 +212,7 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
           ok: true,
           receipt: paidReceipt,
           settlement: { mode: "p2p", txHash: "tx-abc", paidMicro: 2000, feeMicro: 100 },
+          routingTranscript: { winner_motebit_id: "web-search-agent", signature: "sig-t1" },
         };
       },
     });
@@ -234,6 +235,12 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
         paid_micro: 2000,
         fee_micro: 100,
       },
+    ]);
+    // The routing transcript egresses beside the money fact (Inc 4): the
+    // molecule self-attests WHY this worker won, verifiable on both rungs by
+    // anyone holding the signed receipt.
+    expect(result.routing_transcripts).toEqual([
+      { winner_motebit_id: "web-search-agent", signature: "sig-t1" },
     ]);
   });
 
