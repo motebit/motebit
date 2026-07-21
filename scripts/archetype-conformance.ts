@@ -41,7 +41,9 @@ import {
   verifyReceiptVerdict,
   verifyEvalAttestation,
   verifyEvidenceProvenance,
+  verifyRoutingTranscript,
 } from "@motebit/verifier";
+import { recomputeRoutingDecision } from "@motebit/semiring";
 import type { EvalAttestation } from "@motebit/protocol";
 
 interface Expectation {
@@ -261,6 +263,52 @@ async function checkResearcher(
   } catch (err) {
     record(
       "research: atoms paid P2P (multi-hop settles)",
+      "FAIL",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+
+  // Routing-decision transcripts (docs/doctrine/routing-decision-transcript.md
+  // Inc 4 — the arc's accept-on-proof close): when the molecule self-attested
+  // transcripts of its ranked paid hires, each MUST verify on BOTH rungs —
+  // integrity (the delegator committed to this decision record) and
+  // faithfulness (the recorded winner recomputes from the frozen inputs).
+  // "The newcomer won on merit" as a checkable sentence, not the operator's
+  // word. Presence is verify-if-present: a pinned or sole-candidate hop
+  // legitimately ranks nothing (the selector is consulted only when >1
+  // admissible candidate survives), so absence alone is a WARN-with-count,
+  // never a FAIL — the emission drift gate holds the producer structurally.
+  try {
+    const tPayload = JSON.parse(String(receipt["result"] ?? "{}")) as {
+      routing_transcripts?: Array<Record<string, unknown>>;
+      sub_settlements?: Array<{ mode?: string }>;
+    };
+    const transcripts = tPayload.routing_transcripts ?? [];
+    let bothRungs = 0;
+    const failures: string[] = [];
+    for (const t of transcripts) {
+      const integrity = await verifyRoutingTranscript(t as never);
+      if (!integrity.valid) {
+        failures.push(`integrity:${integrity.reason ?? "?"}`);
+        continue;
+      }
+      const faith = recomputeRoutingDecision(t as never);
+      if (!faith.consistent) {
+        failures.push(`faithfulness:${faith.reason ?? "?"}`);
+        continue;
+      }
+      bothRungs++;
+    }
+    record(
+      "research: routing transcripts verify (both rungs)",
+      failures.length > 0 ? "FAIL" : transcripts.length > 0 ? "PASS" : "WARN",
+      transcripts.length > 0
+        ? `${bothRungs}/${transcripts.length} transcript(s) verified${failures.length > 0 ? ` [${failures.join(",")}]` : ""}`
+        : "no transcripts (pinned/sole-candidate hops rank nothing)",
+    );
+  } catch (err) {
+    record(
+      "research: routing transcripts verify (both rungs)",
       "FAIL",
       err instanceof Error ? err.message : String(err),
     );

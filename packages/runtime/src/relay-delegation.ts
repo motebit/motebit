@@ -170,7 +170,20 @@ export type DelegationResult =
  */
 export type GrantedDelegationResult =
   | { ok: true; dryRun: true; settlement: DelegationSettlement }
-  | { ok: true; dryRun: false; receipt: ExecutionReceipt; settlement?: DelegationSettlement }
+  | {
+      ok: true;
+      dryRun: false;
+      receipt: ExecutionReceipt;
+      settlement?: DelegationSettlement;
+      /**
+       * The signed routing-decision transcript minted for THIS hire's ranked
+       * selection (docs/doctrine/routing-decision-transcript.md Inc 4 — the
+       * egress a molecule self-attests into its own receipt, the
+       * `sub_settlements` shape). Absent on pinned hires and when no signing
+       * key is wired. Reveals, never authorizes.
+       */
+      routingTranscript?: import("@motebit/protocol").RoutingDecisionTranscript;
+    }
   | { ok: false; code: string };
 
 export interface SubmitAndPollParams {

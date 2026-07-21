@@ -453,6 +453,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-panel-controllers",
   },
   {
+    name: "check-routing-transcript-emission",
+    defends:
+      "every ranked paid hire mints a signed RoutingDecisionTranscript that egresses to the molecule's receipt and is verified by the conformance probe on both rungs — the producer (rankWorkersWithBasis + signRoutingTranscript at the runtime WorkerSelector seam), the GrantedDelegationResult egress field, the research receipt embed, and the probe's integrity+faithfulness assertion are one chain; dropping any link makes the verify-if-present probe silently vacuous (docs/doctrine/routing-decision-transcript.md Inc 3/4, added 2026-07-21 closing the arc: a hire you can prove, not just replay)",
+    script: "check-routing-transcript-emission",
+  },
+  {
     name: "check-consolidation-primitives",
     defends:
       "the four-phase consolidation cycle (orient + gather + consolidate + prune — clusters episodic memories, summarizes them via the LLM, forms semantic memories, tombstones the cluster sources) lives in packages/runtime/src/consolidation-cycle.ts; runtime consumers call runtime.consolidationCycle(); inline reinvention is forbidden (invariant #34, added 2026-04-20 alongside the unification of runHousekeeping + proactiveAction:'reflect' into one cycle — extends the protocol-primitive doctrine to proactive-interior judgment and prevents the third copy of the autoDream-shape loop from emerging in a new shape)",
