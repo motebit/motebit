@@ -54,6 +54,7 @@
     "implements": [
       "spec/credential-v1.md",
       "spec/eval-attestation-v1.md",
+      "spec/routing-transcript-v1.md",
       "spec/identity-v1.md"
     ]
   },

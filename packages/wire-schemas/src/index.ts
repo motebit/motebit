@@ -360,3 +360,10 @@ export {
   EVAL_ATTESTATION_SCHEMA_ID,
   buildEvalAttestationJsonSchema,
 } from "./eval-attestation.js";
+
+export {
+  RoutingDecisionTranscriptSchema,
+  TranscriptCandidateSchema,
+  ROUTING_TRANSCRIPT_SCHEMA_ID,
+  buildRoutingTranscriptJsonSchema,
+} from "./routing-transcript.js";

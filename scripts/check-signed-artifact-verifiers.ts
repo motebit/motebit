@@ -121,6 +121,12 @@ export const REGISTRY: Record<string, Classification> = {
   // Self-describing issuer key; the envelope law deliberately excludes
   // measurement truth / issuer authority / key→id binding.
   EvalAttestation: { kind: "verifier", verifier: "verifyEvalAttestation" },
+  // RoutingDecisionTranscript — the routing arc's proof artifact (subject =
+  // signer, receipt-family; docs/doctrine/routing-decision-transcript.md).
+  // verifyRoutingTranscript is the INTEGRITY rung; decision faithfulness is
+  // recomputeRoutingDecision in @motebit/semiring (source-available, pinned
+  // by algorithm_version) — deliberately outside the permissive floor.
+  RoutingDecisionTranscript: { kind: "verifier", verifier: "verifyRoutingTranscript" },
   DisputeAppeal: { kind: "verifier", verifier: "verifyDisputeAppeal" },
   DisputeEvidence: { kind: "verifier", verifier: "verifyDisputeEvidence" },
   DisputeRequest: { kind: "verifier", verifier: "verifyDisputeRequest" },

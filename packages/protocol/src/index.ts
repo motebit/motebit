@@ -3568,6 +3568,15 @@ export type {
 export type { EvalKind, EvalResult, EvalAttestation } from "./eval-attestation.js";
 export { ALL_EVAL_KINDS, isEvalKind } from "./eval-attestation.js";
 
+// RoutingDecisionTranscript — the routing arc's proof artifact: a hire you can
+// prove, not just replay (docs/doctrine/routing-decision-transcript.md, Inc 2).
+// Receipt-family (subject = signer — the delegator signs its own act of
+// choosing). Integrity law in @motebit/crypto (sign/verifyRoutingTranscript);
+// the faithfulness rung (decision recomputation) lives with the ranking
+// judgment in @motebit/semiring, pinned by `algorithm_version`.
+export type { TranscriptCandidate, RoutingDecisionTranscript } from "./routing-transcript.js";
+export { ROUTING_TRANSCRIPT_SPEC_ID } from "./routing-transcript.js";
+
 // Merkle tree-hash version registry — the agility axis for leaf/node domain
 // separation (RFC 6962 §2.1). Separate from `SuiteId` (signature recipe): this
 // names the tree-hash recipe that builds the root the signature commits to. A

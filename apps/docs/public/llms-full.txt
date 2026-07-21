@@ -6291,7 +6291,7 @@ Source: https://docs.motebit.com/docs/operator/architecture
 
 Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **53 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 11 services · 33 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
+The shape is **53 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 11 services · 34 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
 <DiagramFigure
   src="protocol-stack"
@@ -6414,7 +6414,7 @@ motebit/
 │   ├── browser-sandbox/       [atom]        Playwright-driven Chromium for the virtual_browser embodiment — second computer-use-v1 producer.
 │   └── proxy/                 [glue]        Vercel edge CORS proxy for the web app.
 │
-├── spec/                      # 33 open specifications, each motebit/<name>@1.0
+├── spec/                      # 34 open specifications, each motebit/<name>@1.0
 │   ├── identity-v1.md                       motebit.md format, signing, multi-device, guardian, succession.
 │   ├── execution-ledger-v1.md               Timeline, signed manifests, receipt structure.
 │   ├── relay-federation-v1.md               Peering, discovery, cross-relay routing, circuit breaker.
@@ -6447,7 +6447,8 @@ motebit/
 │   ├── skills-registry-v1.md                Relay-hosted index of submitted skill envelopes. Permissive submit, curated discovery, content-addressed identity, consumer-side re-verification.
 │   ├── bond-v1.md                           Agent's own sovereign capital as an anti-sybil staked signal — self-signed proof-of-funds, RPC-verified never custodied; address bound to identity. Phase 1: signal, not recourse.
 │   ├── evidence-provenance-v1.md            Re-verifiable provenance on a verdict's EvidenceRef — a content-addressed verbatim span in a primary record; the byte-determinism conformance requirement for projection recipes. Verifiable-locality from signatures to evidence.
-│   └── eval-attestation-v1.md               Signed third-party measurement (subject ≠ signer) — per-axis verdicts embedded whole, closed EvalKind intake, envelope law only; the Auditor archetype's deliverable.
+│   ├── eval-attestation-v1.md               Signed third-party measurement (subject ≠ signer) — per-axis verdicts embedded whole, closed EvalKind intake, envelope law only; the Auditor archetype's deliverable.
+│   └── routing-transcript-v1.md             Signed routing-decision transcript (subject = signer, receipt-family) — the frozen candidate set, posterior reads and draws, and decision parameters behind a paid hire; integrity + recomputable faithfulness, two rungs.
 │
 └── scripts/                   # Drift-defense CI gates
     ├── check-deps.ts                        Layer DAG enforcement. Source of truth for L0–L6.
@@ -6535,7 +6536,7 @@ Every task settles through the relay or directly peer-to-peer. Relay-mediated: b
 
 ## Specifications
 
-All 33 specs (listed in the tree above) are Apache-2.0, published in `spec/`, and have working reference implementations in this repo. A third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required.
+All 34 specs (listed in the tree above) are Apache-2.0, published in `spec/`, and have working reference implementations in this repo. A third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required.
 
 The `motebit.md` identity file is the most-used entry point: any tool can verify one with `@motebit/crypto`, with or without the motebit runtime.
 

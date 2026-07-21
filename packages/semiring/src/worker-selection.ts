@@ -44,7 +44,12 @@
  * (surface-determinism — a routing decision must be reproducible).
  */
 
-import type { AgentTrustRecord, MotebitId } from "@motebit/protocol";
+import type {
+  AgentTrustRecord,
+  MotebitId,
+  RoutingDecisionTranscript,
+  TranscriptCandidate,
+} from "@motebit/protocol";
 import { AgentTrustLevel, trustLevelToScore, WeightedDigraph } from "@motebit/protocol";
 import { RouteWeightSemiring, rankReachableAgents, type RouteWeight } from "./agent-network.js";
 import { thompsonDraw } from "./thompson.js";
@@ -177,6 +182,23 @@ function exploratoryQuality(
   explore: ExplorationConfig,
   capability?: string,
 ): number {
+  return exploratoryQualityDetail(c, explore, capability).quality;
+}
+
+/**
+ * The full exploratory-quality computation with its intermediate values
+ * exposed — the (α, β) posterior actually sampled and the θ̃ actually drawn.
+ * `exploratoryQuality` is the thin ranking-path view; the transcript basis
+ * emitter (`rankWorkersWithBasis`) freezes these intermediates so the decision
+ * is recomputable offline (docs/doctrine/routing-decision-transcript.md —
+ * produced-basis: the transcript's numbers come from the code path that made
+ * the decision, never a reconstruction).
+ */
+function exploratoryQualityDetail(
+  c: RankableWorker,
+  explore: ExplorationConfig,
+  capability?: string,
+): { quality: number; alpha: number; beta: number; theta?: number } {
   const prior = levelPrior(c.trustRecord?.trust_level);
   const counts = competenceCounts(c.trustRecord, capability);
   const { s, f } = cappedCounts(counts.successful, counts.failed);
@@ -185,9 +207,9 @@ function exploratoryQuality(
   const mean = alpha / (alpha + beta);
   const base = clampStrength(explore.strength ?? 1);
   const strength = c.bonded ? Math.min(1, base * BOND_EXPLORE_BOOST) : base;
-  if (strength <= 0) return mean;
+  if (strength <= 0) return { quality: mean, alpha, beta };
   const draw = thompsonDraw(alpha, beta, `${explore.seed}|${c.motebit_id}`);
-  return mean + strength * (draw - mean);
+  return { quality: mean + strength * (draw - mean), alpha, beta, theta: draw };
 }
 
 /**
@@ -328,4 +350,237 @@ export function selectWorker(
   opts?: { weights?: WorkerSelectionWeights; explore?: ExplorationConfig; capability?: string },
 ): WorkerRanking | null {
   return rankWorkers(selfId, candidates, opts)[0] ?? null;
+}
+
+/**
+ * The ranking-implementation version a transcript is recomputable under
+ * (docs/doctrine/routing-decision-transcript.md — the version tag is
+ * load-bearing, not decorative: determinism is same-version; a change to the
+ * scoring, the prior mapping, the cap rule, the seed composition, or the
+ * sampler is a version bump here, never a silent edit).
+ */
+export const WORKER_SELECTION_ALGORITHM_VERSION = "motebit-worker-selection@1";
+
+/**
+ * The unsigned decision portion of a `RoutingDecisionTranscript` — what the
+ * selection code path FREEZES at decision time (produced-basis: minted by the
+ * code that made the decision, never reconstructed). The runtime adds identity
+ * (`delegator_*`), `issued_at`, and the envelope (`spec`/`suite`/`signature`)
+ * and signs via `@motebit/crypto`'s `signRoutingTranscript`.
+ */
+export type RoutingDecisionBasis = Pick<
+  RoutingDecisionTranscript,
+  | "capability"
+  | "candidates"
+  | "seed"
+  | "strength"
+  | "weights"
+  | "count_cap"
+  | "bond_explore_boost"
+  | "default_latency_ms"
+  | "algorithm_version"
+  | "winner_motebit_id"
+  | "explored"
+>;
+
+/**
+ * Rank AND freeze: the produced-basis emitter for the routing-decision
+ * transcript. Runs the exact `rankWorkers` path for the outcome, and freezes
+ * per-candidate the inputs the ranking actually consumed — the axis values,
+ * and in explore mode the (α, β) posterior sampled and the θ̃ drawn — plus the
+ * decision parameters that are otherwise internal constants of this module.
+ *
+ * `basis` is null exactly when `winner` is null (no admissible candidates —
+ * nothing was decided, so nothing is transcribed). `explored` compares the
+ * explore winner against the same-inputs pure-exploit favorite, mirroring the
+ * runtime's Inc 3 "did the draw override the incumbent" signal.
+ */
+export function rankWorkersWithBasis(
+  selfId: MotebitId,
+  candidates: readonly RankableWorker[],
+  opts?: { weights?: WorkerSelectionWeights; explore?: ExplorationConfig; capability?: string },
+): { winner: WorkerRanking | null; basis: RoutingDecisionBasis | null } {
+  const weights = opts?.weights ?? DEFAULT_WEIGHTS;
+  const capability = opts?.capability;
+  const explore =
+    opts?.explore != null && clampStrength(opts.explore.strength ?? 1) > 0
+      ? opts.explore
+      : undefined;
+
+  const ranking = rankWorkers(selfId, candidates, opts);
+  const winner = ranking[0] ?? null;
+  if (winner == null) return { winner: null, basis: null };
+
+  // Freeze the admissible (non-blocked) candidates' consumed inputs, in
+  // ranked order — the same order the composite produced.
+  const rankIndex = new Map(ranking.map((r, i) => [r.motebit_id, i]));
+  const frozen: TranscriptCandidate[] = candidates
+    .filter((c) => c.trustRecord?.trust_level !== AgentTrustLevel.Blocked)
+    .map((c): TranscriptCandidate => {
+      const shared = {
+        motebit_id: c.motebit_id,
+        ...(c.unitCost != null ? { unit_cost: c.unitCost } : {}),
+        ...(c.bonded === true ? { bonded: true as const } : {}),
+      };
+      if (explore) {
+        const d = exploratoryQualityDetail(c, explore, capability);
+        return {
+          ...shared,
+          trust_axis: d.quality,
+          reliability_axis: d.quality,
+          alpha: d.alpha,
+          beta: d.beta,
+          ...(d.theta != null ? { theta: d.theta } : {}),
+        };
+      }
+      return {
+        ...shared,
+        trust_axis: trustLevelToScore(c.trustRecord?.trust_level ?? AgentTrustLevel.Unknown),
+        reliability_axis: reliabilityOf(c.trustRecord, capability),
+      };
+    })
+    .sort(
+      (a, b) =>
+        (rankIndex.get(a.motebit_id) ?? Number.MAX_SAFE_INTEGER) -
+        (rankIndex.get(b.motebit_id) ?? Number.MAX_SAFE_INTEGER),
+    );
+
+  const exploitTop = explore
+    ? (rankWorkers(selfId, candidates, {
+        ...(opts?.weights != null ? { weights: opts.weights } : {}),
+        ...(capability != null ? { capability } : {}),
+      })[0] ?? null)
+    : winner;
+
+  return {
+    winner,
+    basis: {
+      capability: capability ?? "",
+      candidates: frozen,
+      seed: opts?.explore?.seed ?? "",
+      strength: explore ? clampStrength(explore.strength ?? 1) : 0,
+      weights: {
+        trust: weights.trust,
+        reliability: weights.reliability,
+        cost: weights.cost,
+        latency: weights.latency,
+      },
+      count_cap: COUNT_CAP,
+      bond_explore_boost: BOND_EXPLORE_BOOST,
+      default_latency_ms: DEFAULT_LATENCY_MS,
+      algorithm_version: WORKER_SELECTION_ALGORITHM_VERSION,
+      winner_motebit_id: winner.motebit_id,
+      explored:
+        explore != null && exploitTop != null && winner.motebit_id !== exploitTop.motebit_id,
+    },
+  };
+}
+
+/** Outcome of the faithfulness rung, with a structured reason for audit logging. */
+export interface RecomputeRoutingDecisionResult {
+  readonly consistent: boolean;
+  readonly reason?:
+    | "unsupported_algorithm_version"
+    | "empty_candidates"
+    | "theta_mismatch"
+    | "axis_mismatch"
+    | "winner_mismatch";
+  /** The winner the recomputation produced (present whenever ranking ran). */
+  readonly recomputed_winner?: string;
+}
+
+/**
+ * The FAITHFULNESS rung of transcript verification
+ * (docs/doctrine/routing-decision-transcript.md): recompute the decision from
+ * the transcript's frozen inputs and check the recorded outcome follows. Two
+ * checkable steps:
+ *
+ *  1. The draw chain — for each candidate carrying a posterior, re-derive
+ *     θ̃ = Beta(α, β) seeded by `${seed}|${motebit_id}` and the blended
+ *     quality, and match them against the recorded `theta` / axis values. A
+ *     transcript whose recorded draw does not reproduce is lying about its
+ *     randomness.
+ *  2. The composite — rebuild the ranking graph from the frozen axis values ×
+ *     the recorded weights (ties broken by `motebit_id` ascending, exactly as
+ *     the live ranker) and check the recorded winner is the recomputed winner.
+ *
+ * Deliberately NOT checked: the signature (the integrity rung —
+ * `verifyRoutingTranscript` in `@motebit/crypto`), the truth of the frozen
+ * posteriors (reads of the delegator's private ledger), and the `explored`
+ * flag (informative — its exploit-side comparison inputs are not frozen).
+ * Same-version determinism only: an `algorithm_version` this implementation
+ * does not speak is rejected, never guessed at.
+ */
+export function recomputeRoutingDecision(
+  basis: RoutingDecisionBasis,
+): RecomputeRoutingDecisionResult {
+  if (basis.algorithm_version !== WORKER_SELECTION_ALGORITHM_VERSION) {
+    return { consistent: false, reason: "unsupported_algorithm_version" };
+  }
+  // Rebind through the declared type: `Array.isArray` would narrow the
+  // readonly array to `any[]` and poison every downstream member access.
+  const candidates: readonly TranscriptCandidate[] = Array.isArray(basis.candidates)
+    ? basis.candidates
+    : [];
+  if (candidates.length === 0) {
+    return { consistent: false, reason: "empty_candidates" };
+  }
+
+  // Step 1 — the draw chain, for candidates that carry a posterior.
+  for (const c of candidates) {
+    if (c.alpha == null || c.beta == null) continue;
+    const mean = c.alpha / (c.alpha + c.beta);
+    const eff =
+      c.bonded === true
+        ? Math.min(1, clampStrength(basis.strength) * basis.bond_explore_boost)
+        : clampStrength(basis.strength);
+    if (eff > 0) {
+      let draw: number;
+      try {
+        draw = thompsonDraw(c.alpha, c.beta, `${basis.seed}|${c.motebit_id}`);
+      } catch {
+        return { consistent: false, reason: "theta_mismatch" };
+      }
+      if (c.theta !== draw) {
+        return { consistent: false, reason: "theta_mismatch" };
+      }
+      const quality = mean + eff * (draw - mean);
+      if (c.trust_axis !== quality || c.reliability_axis !== quality) {
+        return { consistent: false, reason: "axis_mismatch" };
+      }
+    } else if (c.trust_axis !== mean || c.reliability_axis !== mean) {
+      return { consistent: false, reason: "axis_mismatch" };
+    }
+  }
+
+  // Step 2 — the composite ranking from the frozen axes.
+  const root = "transcript:recompute" as MotebitId;
+  const graph = new WeightedDigraph(RouteWeightSemiring);
+  graph.addNode(root);
+  for (const c of candidates) {
+    graph.setEdge(root, c.motebit_id, {
+      trust: c.trust_axis,
+      cost: c.unit_cost ?? 0,
+      latency: basis.default_latency_ms,
+      reliability: c.reliability_axis,
+      regulatory_risk: 0,
+    });
+  }
+  const ranked = rankReachableAgents(graph, root, {
+    trust: basis.weights.trust,
+    cost: basis.weights.cost,
+    latency: basis.weights.latency,
+    reliability: basis.weights.reliability,
+    regulatory_risk: 0,
+  }).sort((a, b) => b.score - a.score || (a.motebit_id < b.motebit_id ? -1 : 1));
+
+  const recomputed = ranked[0]?.motebit_id;
+  if (recomputed !== basis.winner_motebit_id) {
+    return {
+      consistent: false,
+      reason: "winner_mismatch",
+      ...(recomputed != null ? { recomputed_winner: recomputed } : {}),
+    };
+  }
+  return { consistent: true, recomputed_winner: recomputed };
 }

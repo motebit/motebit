@@ -54,6 +54,10 @@ import {
 } from "../evidence-provenance.js";
 import { EVAL_ATTESTATION_SCHEMA_ID, buildEvalAttestationJsonSchema } from "../eval-attestation.js";
 import {
+  ROUTING_TRANSCRIPT_SCHEMA_ID,
+  buildRoutingTranscriptJsonSchema,
+} from "../routing-transcript.js";
+import {
   CREDENTIAL_ANCHOR_BATCH_SCHEMA_ID,
   CREDENTIAL_ANCHOR_PROOF_SCHEMA_ID,
   buildCredentialAnchorBatchJsonSchema,
@@ -758,6 +762,12 @@ const CASES: SchemaCase[] = [
     filename: "eval-attestation-v1.json",
     expectedId: EVAL_ATTESTATION_SCHEMA_ID,
     build: buildEvalAttestationJsonSchema,
+  },
+  {
+    name: "routing-transcript-v1",
+    filename: "routing-transcript-v1.json",
+    expectedId: ROUTING_TRANSCRIPT_SCHEMA_ID,
+    build: buildRoutingTranscriptJsonSchema,
   },
 ];
 

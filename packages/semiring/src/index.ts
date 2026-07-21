@@ -61,8 +61,16 @@ export type {
   WorkerRanking,
   WorkerSelectionWeights,
   ExplorationConfig,
+  RoutingDecisionBasis,
+  RecomputeRoutingDecisionResult,
 } from "./worker-selection.js";
-export { rankWorkers, selectWorker } from "./worker-selection.js";
+export {
+  rankWorkers,
+  selectWorker,
+  rankWorkersWithBasis,
+  recomputeRoutingDecision,
+  WORKER_SELECTION_ALGORITHM_VERSION,
+} from "./worker-selection.js";
 
 // ── Seeded Thompson-sampling primitives (BSL) ─────────────────────
 export { mulberry32, hashSeed, sampleBeta, thompsonDraw } from "./thompson.js";
