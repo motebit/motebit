@@ -539,6 +539,49 @@ describe("resolveAndSubmitP2pDelegation", () => {
     ]);
   });
 
+  it("passes the relay's verified-bond signal to the selector — and only an explicit true", async () => {
+    // The discover response's `bonded` (relay-RPC-verified backing) reaches the
+    // selector as an exploration-priority input. Absent, null, or false attach
+    // nothing — the flag asserts a verified fact or stays silent, so a peer
+    // cannot talk its way into bond priority with a falsy-but-present field.
+    let received: ReadonlyArray<{ motebit_id: string; unitCost?: number; bonded?: boolean }> = [];
+    const selectWorker = vi.fn(
+      (c: ReadonlyArray<{ motebit_id: string; unitCost?: number; bonded?: boolean }>) => {
+        received = c;
+        return "bob";
+      },
+    );
+    const params = resolveParams({ selectWorker });
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          {
+            motebit_id: "carol",
+            settlement_address: "CarolAddr",
+            settlement_modes: "p2p",
+            bonded: true,
+          },
+          {
+            motebit_id: "bob",
+            settlement_address: "BobAddr",
+            settlement_modes: "p2p",
+            bonded: null, // home relay explicitly unknown — must NOT become a flag
+          },
+          { motebit_id: "dave", settlement_address: "DaveAddr", settlement_modes: "p2p" },
+        ]),
+        listing: listingOk([{ capability: "web_search", unit_cost: 0.5 }]),
+        submit: () => jsonResponse(400, { code: "TASK_P2P_FEE_AMOUNT_MISMATCH" }),
+      }),
+    );
+    await resolveAndSubmitP2pDelegation(params);
+    expect(received).toEqual([
+      { motebit_id: "carol", bonded: true },
+      { motebit_id: "bob" },
+      { motebit_id: "dave" },
+    ]);
+  });
+
   it("pre-flight ineligible → p2p_ineligible WITHOUT broadcasting (no funds move)", async () => {
     // The money-safety guard: the relay's /p2p-eligibility read (BEFORE the
     // broadcast) reports the pair ineligible (e.g. cold-start without the ack),
