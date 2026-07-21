@@ -19,6 +19,7 @@ import {
   enrichWithCallerTrust,
   enrichWithHardwareAttestation,
   enrichWithLatencyStats,
+  enrichWithBondStatus,
 } from "../agents.js";
 
 interface DiscoveredAgent {
@@ -31,12 +32,14 @@ interface DiscoveredAgent {
   interaction_count?: number;
   hardware_attestation?: { platform: string; key_exported?: boolean; score: number };
   latency_stats?: { avg_ms: number; p95_ms: number; sample_count: number };
+  bonded?: boolean;
 }
 
 type EnricherInput = Record<string, unknown> & {
   motebit_id: string;
   hardware_attestation?: { platform: string; key_exported?: boolean; score: number };
   latency_stats?: { avg_ms: number; p95_ms: number; sample_count: number };
+  bonded?: boolean;
 };
 
 function insertTrustCredential(
@@ -578,6 +581,104 @@ describe("GET /api/v1/agents/discover — marketplace enrichment", () => {
     expect(target!.latency_stats).toBeDefined();
     expect(target!.latency_stats!.avg_ms).toBe(250);
     expect(target!.latency_stats!.sample_count).toBe(1);
+  });
+
+  // === verified-bond signal (exploration-priority input, never a gate) ===
+
+  function insertBond(
+    db: import("@motebit/persistence").DatabaseDriver,
+    opts: {
+      bond_id: string;
+      motebit_id: string;
+      backing_state?: "pending" | "backed" | "underbacked";
+      expires_at?: number;
+    },
+  ): void {
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO relay_bond_commitments
+        (bond_id, motebit_id, bonded_address, bonded_public_key, bond_amount_micro,
+         asset, chain, issued_at, expires_at, suite, signature, commitment_json,
+         backing_state, backed_amount_micro, last_checked_at, recorded_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      opts.bond_id,
+      opts.motebit_id,
+      "BondAddr1111111111111111111111111111111111",
+      "aa".repeat(32),
+      5_000_000,
+      "usdc",
+      "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+      now,
+      opts.expires_at ?? now + 86_400_000,
+      "motebit-jcs-ed25519-b64-v1",
+      "sig",
+      "{}",
+      opts.backing_state ?? "pending",
+      opts.backing_state === "backed" ? 5_000_000 : null,
+      opts.backing_state != null && opts.backing_state !== "pending" ? now : null,
+      now,
+    );
+  }
+
+  it("/api/v1/agents/discover surfaces bonded=true for an agent with a live BACKED bond", async () => {
+    const kp = await generateKeypair();
+    await registerAgent(relay, "bonded-agent", bytesToHex(kp.publicKey));
+    insertBond(relay.moteDb.db, {
+      bond_id: "bond-1",
+      motebit_id: "bonded-agent",
+      backing_state: "backed",
+    });
+
+    const res = await relay.app.request("/api/v1/agents/discover");
+    const { agents } = (await res.json()) as { agents: DiscoveredAgent[] };
+    const target = agents.find((a) => a.motebit_id === "bonded-agent");
+    expect(target).toBeDefined();
+    expect(target!.bonded).toBe(true);
+  });
+
+  it("pending / underbacked / expired bonds attach NOTHING — the signal asserts a verified fact or stays silent", async () => {
+    const now = Date.now();
+    for (const [id, state, expires] of [
+      ["pending-agent", "pending", undefined],
+      ["underbacked-agent", "underbacked", undefined],
+      ["expired-agent", "backed", now - 1_000],
+    ] as const) {
+      const kp = await generateKeypair();
+      await registerAgent(relay, id, bytesToHex(kp.publicKey));
+      insertBond(relay.moteDb.db, {
+        bond_id: `bond-${id}`,
+        motebit_id: id,
+        backing_state: state,
+        ...(expires != null ? { expires_at: expires } : {}),
+      });
+    }
+
+    const res = await relay.app.request("/api/v1/agents/discover");
+    const { agents } = (await res.json()) as { agents: DiscoveredAgent[] };
+    for (const id of ["pending-agent", "underbacked-agent", "expired-agent"]) {
+      const target = agents.find((a) => a.motebit_id === id);
+      expect(target).toBeDefined();
+      expect(target!.bonded).toBeUndefined();
+    }
+  });
+
+  it("enrichWithBondStatus preserves peer-provided bonded on federated agents", () => {
+    // Same federation-passthrough rule as the HA + latency enrichers: the
+    // home relay's bond table is authoritative for agents that bonded there.
+    const enriched = enrichWithBondStatus(
+      [{ motebit_id: "fed-bonded-agent", capabilities: ["x"], bonded: true } as EnricherInput],
+      relay.moteDb.db,
+    );
+    expect(enriched[0]!.bonded).toBe(true);
+  });
+
+  it("enrichWithBondStatus attaches nothing for agents with no bond row", () => {
+    const enriched = enrichWithBondStatus(
+      [{ motebit_id: "no-bond-agent", capabilities: ["x"] } as EnricherInput],
+      relay.moteDb.db,
+    );
+    expect(enriched[0]!.bonded).toBeUndefined();
   });
 
   it("revoked agent is filtered out even if freshness would be awake", async () => {

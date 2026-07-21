@@ -4932,6 +4932,11 @@ export class MotebitRuntime {
                   motebit_id: c.motebit_id,
                   trustRecord: await this.getAgentTrust(c.motebit_id),
                   ...(c.unitCost != null ? { unitCost: c.unitCost } : {}),
+                  // Relay-verified commitment bond → exploration PRIORITY
+                  // (a faster shot, never a quality score — the sybil-swarm
+                  // bound of docs/doctrine/exploration-as-market-vitality.md
+                  // Inc 2, live on real hops now that discovery surfaces it).
+                  ...(c.bonded === true ? { bonded: true } : {}),
                 })),
               );
               // Representative stakes = the cheapest admissible option (what a
@@ -4959,6 +4964,7 @@ export class MotebitRuntime {
                   strength: Number(strength.toFixed(3)),
                   explored: exploitTop != null && winner.motebit_id !== exploitTop.motebit_id,
                   quality: Number(winner.route.trust.toFixed(3)),
+                  bonded: rankable.find((r) => r.motebit_id === winner.motebit_id)?.bonded === true,
                 });
               }
               return winner?.motebit_id ?? null;

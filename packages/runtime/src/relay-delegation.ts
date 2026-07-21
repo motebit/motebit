@@ -709,7 +709,7 @@ const fail = (
  * docs/doctrine/first-person-worker-routing.md.
  */
 export type WorkerSelector = (
-  candidates: ReadonlyArray<{ motebit_id: string; unitCost?: number }>,
+  candidates: ReadonlyArray<{ motebit_id: string; unitCost?: number; bonded?: boolean }>,
 ) => Promise<string | null> | string | null;
 
 export interface ResolveAndSubmitP2pDelegationParams {
@@ -893,6 +893,9 @@ export async function resolveP2pPaymentRequest(
         settlement_modes?: string | string[] | null;
         source_relay_public_key?: string | null;
         pricing?: Array<{ capability?: string; unit_cost?: number }> | null;
+        /** Relay-verified commitment bond (backing RPC-confirmed) — an
+         * exploration-PRIORITY signal for the selector, never a gate. */
+        bonded?: boolean | null;
       }>;
     };
     // HARD gates: not self, declares a settlement address, advertises p2p, and
@@ -924,7 +927,11 @@ export async function resolveP2pPaymentRequest(
       const chosenId = await params.selectWorker(
         admissible.map((a) => {
           const unitCost = priceFor(a);
-          return { motebit_id: a.motebit_id, ...(unitCost != null ? { unitCost } : {}) };
+          return {
+            motebit_id: a.motebit_id,
+            ...(unitCost != null ? { unitCost } : {}),
+            ...(a.bonded === true ? { bonded: true } : {}),
+          };
         }),
       );
       if (chosenId != null) {

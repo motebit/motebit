@@ -236,6 +236,55 @@ export function enrichWithLatencyStats<T extends Record<string, unknown> & { mot
   });
 }
 
+/**
+ * Layer the verified-bond signal onto each agent in a discover result list.
+ *
+ * `bonded: true` means the agent has a live (non-expired) `BondCommitment`
+ * whose backing the relay's RPC verifier loop has confirmed onchain
+ * (`backing_state = 'backed'` — balance ≥ committed at last read). `pending`
+ * (never yet checked) and `underbacked` attach nothing: the signal asserts a
+ * verified fact or stays silent, never an unverified claim.
+ *
+ * This is a routing-PRIORITY input, never a gate and never recourse
+ * (docs/doctrine/commitment-bond.md — the bond is an anti-sybil signal;
+ * spec/bond-v1.md §7 surface honesty). The consumer is the delegator's
+ * first-person worker selector, where a verified bond lifts a newcomer's
+ * EXPLORATION priority (docs/doctrine/exploration-as-market-vitality.md
+ * Inc 2 — a faster shot, never a quality score). Money-admission keeps its
+ * own accept-time re-verification in `evaluateSettlementEligibility`; this
+ * cached projection never feeds it.
+ *
+ * Sibling of `enrichWithHardwareAttestation` / `enrichWithLatencyStats`,
+ * closing the same self-attesting-system gap: a routing input the selector
+ * weighs must be visible to the party it routes. Federation merge passes
+ * through unchanged — an agent already carrying `bonded` from its home
+ * relay keeps it (that relay's bond table is the authoritative one for
+ * agents we've never seen bond locally).
+ */
+export function enrichWithBondStatus<T extends Record<string, unknown> & { motebit_id: string }>(
+  agents: T[],
+  db: DatabaseDriver,
+  nowMs: number = Date.now(),
+): T[] {
+  if (agents.length === 0) return agents;
+  const placeholders = agents.map(() => "?").join(",");
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT motebit_id
+         FROM relay_bond_commitments
+        WHERE motebit_id IN (${placeholders})
+          AND expires_at > ?
+          AND backing_state = 'backed'`,
+    )
+    .all(...agents.map((a) => a.motebit_id), nowMs) as Array<{ motebit_id: string }>;
+  if (rows.length === 0) return agents;
+  const backed = new Set(rows.map((r) => r.motebit_id));
+  return agents.map((a) => {
+    if (a.bonded != null) return a; // peer-provided bond status wins for federated agents
+    return backed.has(a.motebit_id) ? { ...a, bonded: true } : a;
+  });
+}
+
 export interface AgentsDeps {
   app: Hono;
   moteDb: MotebitDatabase;
@@ -1368,7 +1417,8 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       );
       const withHa = enrichWithHardwareAttestation(enriched, moteDb.db);
       const withLatency = enrichWithLatencyStats(withHa, moteDb.db);
-      return c.json({ agents: withLatency });
+      const withBond = enrichWithBondStatus(withLatency, moteDb.db);
+      return c.json({ agents: withBond });
     }
 
     // Forward to active peers
@@ -1446,6 +1496,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     );
     const withHa = enrichWithHardwareAttestation(final, moteDb.db);
     const withLatency = enrichWithLatencyStats(withHa, moteDb.db);
+    const withBond = enrichWithBondStatus(withLatency, moteDb.db);
 
     // Attach the hosting peer's relay public key to each DIRECT-peer candidate
     // (source_relay matches one of our active relay_peers). A federated-P2P
@@ -1456,7 +1507,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // candidates (source_relay is not a direct peer) get nothing: federated P2P
     // is validated only against direct peers, so the client must not attempt it.
     const peerKeyById = new Map(peers.map((p) => [p.peer_relay_id, p.public_key]));
-    const withPeerKey = withLatency.map((agent) => {
+    const withPeerKey = withBond.map((agent) => {
       const sourceRelay = agent.source_relay as string | undefined;
       const peerKey = sourceRelay != null ? peerKeyById.get(sourceRelay) : undefined;
       return peerKey != null ? { ...agent, source_relay_public_key: peerKey } : agent;
