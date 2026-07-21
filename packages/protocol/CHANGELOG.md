@@ -1,5 +1,15 @@
 # @motebit/protocol
 
+## 3.14.0
+
+### Minor Changes
+
+- e50d388: Add `CONTEXT_SAFE_SENSITIVITY` — the canonical set of sensitivity tiers whose content may cross to an external inference provider (everything below the medical egress ceiling: `none`, `personal`).
+
+  Derived from `rankSensitivity` so it can never drift from the ceiling, it is the single source of truth for the "medical/financial/secret never reach external AI" filter that both the AI loop (auto-injected memory) and the runtime (the `recall_memories` tool) apply toward external providers, replacing per-site re-listing of `[none, personal]`.
+
+- 8548351: RoutingDecisionTranscript — the routing arc's proof artifact (spec/routing-transcript-v1.md, motebit/routing-transcript@1.0). Additive: protocol gains the RoutingDecisionTranscript and TranscriptCandidate types plus ROUTING_TRANSCRIPT_SPEC_ID; crypto gains signRoutingTranscript / verifyRoutingTranscript (the integrity rung — suite, spec, winner-membership, signature over JCS-canonical bytes, fail-closed typed reasons); the verifier re-exports both plus the types. The faithfulness rung (decision recomputation under the pinned algorithm_version) ships in source-available @motebit/semiring, deliberately outside the permissive floor.
+
 ## 3.13.0
 
 ### Minor Changes

@@ -1,5 +1,21 @@
 # motebit CLI Changelog
 
+## 1.9.0
+
+### Minor Changes
+
+- 7d0476b: As-of memory recall — the `recall_memories` tool gains an optional `as_of` (ISO date) parameter to reconstruct what the agent believed at a past point in time.
+
+  Bi-temporal recall was already in the memory graph but unreachable by the agent. Passing `as_of` now filters memories to those valid `[valid_from, valid_until)` around that instant, and the result is framed as a historical snapshot (superseded beliefs are reported as past belief, never current fact). Omitting `as_of` is unchanged current recall. An unparseable date is a hard error rather than a silent fall-back to current recall.
+
+- 319ff57: History memory recall — the `recall_memories` tool gains an optional `include_history` flag to return every version of a belief at once (current and since-superseded), each labelled.
+
+  Completes the bi-temporal recall surface alongside `as_of`. Where `as_of` gives a point-in-time snapshot, `include_history` returns all versions with a per-entry `[current]` / `[superseded <date>]` label so a revised belief can never be read as current fact; the two modes are mutually exclusive. Also corrects the `rewrite_memory` tool description: a superseded memory is no longer described as "tombstoned" — it is kept and reconstructable via `as_of` / `include_history`, matching the actual (non-destructive) supersede behavior.
+
+### Patch Changes
+
+- @motebit/state-export-client@0.5.20
+
 ## 1.8.3
 
 ### Patch Changes
