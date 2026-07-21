@@ -1,0 +1,618 @@
+{
+  "schema": "motebit.routing-transcript-corpus.v1",
+  "spec": "motebit/routing-transcript@1.0",
+  "cases": [
+    {
+      "name": "clean",
+      "check": "integrity",
+      "description": "A well-formed transcript verifies. Establishes ONLY 'this delegator committed to this decision record' — faithfulness is the semiring rung.",
+      "input": {
+        "transcript": {
+          "spec": "motebit/routing-transcript@1.0",
+          "delegator_motebit_id": "0197f000-0000-7000-8000-0000000000d1",
+          "delegator_public_key": "c050c5637a44fa8629fff3cccce2300cb362a63d99d95fc54145266f4332445a",
+          "issued_at": 1753056000000,
+          "capability": "web_search",
+          "candidates": [
+            {
+              "motebit_id": "0197f000-0000-7000-8000-0000000000b0",
+              "unit_cost": 0.05,
+              "trust_axis": 0.9661396215468546,
+              "reliability_axis": 0.9661396215468546,
+              "alpha": 2,
+              "beta": 1,
+              "theta": 0.9661396215468546
+            },
+            {
+              "motebit_id": "0197f000-0000-7000-8000-0000000000c0",
+              "unit_cost": 0.03,
+              "bonded": true,
+              "trust_axis": 0.5210230828203711,
+              "reliability_axis": 0.5210230828203711,
+              "alpha": 1,
+              "beta": 1,
+              "theta": 0.5210230828203711
+            }
+          ],
+          "seed": "fixed-tick-signature-0001",
+          "strength": 1,
+          "weights": {
+            "trust": 0.5,
+            "reliability": 0.3,
+            "cost": 0.2,
+            "latency": 0
+          },
+          "count_cap": 100,
+          "bond_explore_boost": 2,
+          "default_latency_ms": 5000,
+          "algorithm_version": "motebit-worker-selection@1",
+          "winner_motebit_id": "0197f000-0000-7000-8000-0000000000b0",
+          "explored": false,
+          "suite": "motebit-jcs-ed25519-b64-v1",
+          "signature": "0_SPIZk8MD1m3d2fZs9zqH8K-hon5uxbM3K4kbRFCB3YUV6zYU-IgJeeQVEaO7H98EuTptEK7shgERNNlKSBAg"
+        }
+      },
+      "expected": {
+        "valid": true
+      }
+    },
+    {
+      "name": "pinned",
+      "check": "integrity",
+      "description": "A pinned hire mints a trivial transcript: the pin recorded as the reason, sole candidate, no draw.",
+      "input": {
+        "transcript": {
+          "spec": "motebit/routing-transcript@1.0",
+          "delegator_motebit_id": "0197f000-0000-7000-8000-0000000000d1",
+          "delegator_public_key": "c050c5637a44fa8629fff3cccce2300cb362a63d99d95fc54145266f4332445a",
+          "issued_at": 1753056000000,
+          "capability": "web_search",
+          "candidates": [
+            {
+              "motebit_id": "0197f000-0000-7000-8000-0000000000b0",
+              "unit_cost": 0.05,
+              "trust_axis": 0.9661396215468546,
+              "reliability_axis": 0.9661396215468546,
+              "alpha": 2,
+              "beta": 1,
+              "theta": 0.9661396215468546
+            }
+          ],
+          "seed": "fixed-tick-signature-0001",
+          "strength": 0,
+          "weights": {
+            "trust": 0.5,
+            "reliability": 0.3,
+            "cost": 0.2,
+            "latency": 0
+          },
+          "count_cap": 100,
+          "bond_explore_boost": 2,
+          "default_latency_ms": 5000,
+          "algorithm_version": "motebit-worker-selection@1",
+          "winner_motebit_id": "0197f000-0000-7000-8000-0000000000b0",
+          "explored": false,
+          "pinned": true,
+          "suite": "motebit-jcs-ed25519-b64-v1",
+          "signature": "7RaZSi5WLFz2a3bRv2yPh2P8KyhFJDk3dTfnG5f2WFbUBDtfNQTz2iZRQs9A-AV0dFT3sCKt8xihnee1KQzZDQ"
+        }
+      },
+      "expected": {
+        "valid": true
+      }
+    },
+    {
+      "name": "tampered-winner",
+      "check": "integrity",
+      "description": "Substituting another frozen candidate as winner breaks the signature (the transcript commits to the outcome).",
+      "input": {
+        "transcript": {
+          "spec": "motebit/routing-transcript@1.0",
+          "delegator_motebit_id": "0197f000-0000-7000-8000-0000000000d1",
+          "delegator_public_key": "c050c5637a44fa8629fff3cccce2300cb362a63d99d95fc54145266f4332445a",
+          "issued_at": 1753056000000,
+          "capability": "web_search",
+          "candidates": [
+            {
+              "motebit_id": "0197f000-0000-7000-8000-0000000000b0",
+              "unit_cost": 0.05,
+              "trust_axis": 0.9661396215468546,
+              "reliability_axis": 0.9661396215468546,
+              "alpha": 2,
+              "beta": 1,
+              "theta": 0.9661396215468546
+            },
+            {
+              "motebit_id": "0197f000-0000-7000-8000-0000000000c0",
+              "unit_cost": 0.03,
+              "bonded": true,
+              "trust_axis": 0.5210230828203711,
+              "reliability_axis": 0.5210230828203711,
+              "alpha": 1,
+              "beta": 1,
+              "theta": 0.5210230828203711
+            }
+          ],
+          "seed": "fixed-tick-signature-0001",
+          "strength": 1,
+          "weights": {
+            "trust": 0.5,
+            "reliability": 0.3,
+            "cost": 0.2,
+            "latency": 0
+          },
+          "count_cap": 100,
+          "bond_explore_boost": 2,
+          "default_latency_ms": 5000,
+          "algorithm_version": "motebit-worker-selection@1",
+          "winner_motebit_id": "0197f000-0000-7000-8000-0000000000c0",
+          "explored": false,
+          "suite": "motebit-jcs-ed25519-b64-v1",
+          "signature": "0_SPIZk8MD1m3d2fZs9zqH8K-hon5uxbM3K4kbRFCB3YUV6zYU-IgJeeQVEaO7H98EuTptEK7shgERNNlKSBAg"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "reason": "signature_invalid"
+      }
+    },
+    {
+      "name": "winner-outside-set",
+      "check": "integrity",
+      "description": "A winner not in the frozen candidate set is structurally dishonest — rejected before any crypto.",
+      "input": {
+        "transcript": {
+          "spec": "motebit/routing-transcript@1.0",
+          "delegator_motebit_id": "0197f000-0000-7000-8000-0000000000d1",
+          "delegator_public_key": "c050c5637a44fa8629fff3cccce2300cb362a63d99d95fc54145266f4332445a",
+          "issued_at": 1753056000000,
+          "capability": "web_search",
+          "candidates": [
+            {
+              "motebit_id": "0197f000-0000-7000-8000-0000000000b0",
+              "unit_cost": 0.05,
+              "trust_axis": 0.9661396215468546,
+              "reliability_axis": 0.9661396215468546,
+              "alpha": 2,
+              "beta": 1,
+              "theta": 0.9661396215468546
+            },
+            {
+              "motebit_id": "0197f000-0000-7000-8000-0000000000c0",
+              "unit_cost": 0.03,
+              "bonded": true,
+              "trust_axis": 0.5210230828203711,
+              "reliability_axis": 0.5210230828203711,
+              "alpha": 1,
+              "beta": 1,
+              "theta": 0.5210230828203711
+            }
+          ],
+          "seed": "fixed-tick-signature-0001",
+          "strength": 1,
+          "weights": {
+            "trust": 0.5,
+            "reliability": 0.3,
+            "cost": 0.2,
+            "latency": 0
+          },
+          "count_cap": 100,
+          "bond_explore_boost": 2,
+          "default_latency_ms": 5000,
+          "algorithm_version": "motebit-worker-selection@1",
+          "winner_motebit_id": "mallory",
+          "explored": false,
+          "suite": "motebit-jcs-ed25519-b64-v1",
+          "signature": "0_SPIZk8MD1m3d2fZs9zqH8K-hon5uxbM3K4kbRFCB3YUV6zYU-IgJeeQVEaO7H98EuTptEK7shgERNNlKSBAg"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "reason": "winner_not_in_candidates"
+      }
+    },
+    {
+      "name": "unsupported-suite",
+      "check": "integrity",
+      "description": "Unknown suite rejects fail-closed (crypto CLAUDE.md rule 3).",
+      "input": {
+        "transcript": {
+          "spec": "motebit/routing-transcript@1.0",
+          "delegator_motebit_id": "0197f000-0000-7000-8000-0000000000d1",
+          "delegator_public_key": "c050c5637a44fa8629fff3cccce2300cb362a63d99d95fc54145266f4332445a",
+          "issued_at": 1753056000000,
+          "capability": "web_search",
+          "candidates": [
+            {
+              "motebit_id": "0197f000-0000-7000-8000-0000000000b0",
+              "unit_cost": 0.05,
+              "trust_axis": 0.9661396215468546,
+              "reliability_axis": 0.9661396215468546,
+              "alpha": 2,
+              "beta": 1,
+              "theta": 0.9661396215468546
+            },
+            {
+              "motebit_id": "0197f000-0000-7000-8000-0000000000c0",
+              "unit_cost": 0.03,
+              "bonded": true,
+              "trust_axis": 0.5210230828203711,
+              "reliability_axis": 0.5210230828203711,
+              "alpha": 1,
+              "beta": 1,
+              "theta": 0.5210230828203711
+            }
+          ],
+          "seed": "fixed-tick-signature-0001",
+          "strength": 1,
+          "weights": {
+            "trust": 0.5,
+            "reliability": 0.3,
+            "cost": 0.2,
+            "latency": 0
+          },
+          "count_cap": 100,
+          "bond_explore_boost": 2,
+          "default_latency_ms": 5000,
+          "algorithm_version": "motebit-worker-selection@1",
+          "winner_motebit_id": "0197f000-0000-7000-8000-0000000000b0",
+          "explored": false,
+          "suite": "motebit-mldsa44-v1",
+          "signature": "0_SPIZk8MD1m3d2fZs9zqH8K-hon5uxbM3K4kbRFCB3YUV6zYU-IgJeeQVEaO7H98EuTptEK7shgERNNlKSBAg"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "reason": "unsupported_suite"
+      }
+    },
+    {
+      "name": "unsupported-spec",
+      "check": "integrity",
+      "description": "Unknown wire-format version rejects fail-closed, never guessed at.",
+      "input": {
+        "transcript": {
+          "spec": "motebit/routing-transcript@2.0",
+          "delegator_motebit_id": "0197f000-0000-7000-8000-0000000000d1",
+          "delegator_public_key": "c050c5637a44fa8629fff3cccce2300cb362a63d99d95fc54145266f4332445a",
+          "issued_at": 1753056000000,
+          "capability": "web_search",
+          "candidates": [
+            {
+              "motebit_id": "0197f000-0000-7000-8000-0000000000b0",
+              "unit_cost": 0.05,
+              "trust_axis": 0.9661396215468546,
+              "reliability_axis": 0.9661396215468546,
+              "alpha": 2,
+              "beta": 1,
+              "theta": 0.9661396215468546
+            },
+            {
+              "motebit_id": "0197f000-0000-7000-8000-0000000000c0",
+              "unit_cost": 0.03,
+              "bonded": true,
+              "trust_axis": 0.5210230828203711,
+              "reliability_axis": 0.5210230828203711,
+              "alpha": 1,
+              "beta": 1,
+              "theta": 0.5210230828203711
+            }
+          ],
+          "seed": "fixed-tick-signature-0001",
+          "strength": 1,
+          "weights": {
+            "trust": 0.5,
+            "reliability": 0.3,
+            "cost": 0.2,
+            "latency": 0
+          },
+          "count_cap": 100,
+          "bond_explore_boost": 2,
+          "default_latency_ms": 5000,
+          "algorithm_version": "motebit-worker-selection@1",
+          "winner_motebit_id": "0197f000-0000-7000-8000-0000000000b0",
+          "explored": false,
+          "suite": "motebit-jcs-ed25519-b64-v1",
+          "signature": "0_SPIZk8MD1m3d2fZs9zqH8K-hon5uxbM3K4kbRFCB3YUV6zYU-IgJeeQVEaO7H98EuTptEK7shgERNNlKSBAg"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "reason": "unsupported_spec"
+      }
+    },
+    {
+      "name": "empty-candidates",
+      "check": "integrity",
+      "description": "A decision among nobody is not a decision.",
+      "input": {
+        "transcript": {
+          "spec": "motebit/routing-transcript@1.0",
+          "delegator_motebit_id": "0197f000-0000-7000-8000-0000000000d1",
+          "delegator_public_key": "c050c5637a44fa8629fff3cccce2300cb362a63d99d95fc54145266f4332445a",
+          "issued_at": 1753056000000,
+          "capability": "web_search",
+          "candidates": [],
+          "seed": "fixed-tick-signature-0001",
+          "strength": 1,
+          "weights": {
+            "trust": 0.5,
+            "reliability": 0.3,
+            "cost": 0.2,
+            "latency": 0
+          },
+          "count_cap": 100,
+          "bond_explore_boost": 2,
+          "default_latency_ms": 5000,
+          "algorithm_version": "motebit-worker-selection@1",
+          "winner_motebit_id": "0197f000-0000-7000-8000-0000000000b0",
+          "explored": false,
+          "suite": "motebit-jcs-ed25519-b64-v1",
+          "signature": "0_SPIZk8MD1m3d2fZs9zqH8K-hon5uxbM3K4kbRFCB3YUV6zYU-IgJeeQVEaO7H98EuTptEK7shgERNNlKSBAg"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "reason": "empty_candidates"
+      }
+    },
+    {
+      "name": "malformed-public-key",
+      "check": "integrity",
+      "description": "Delegator key must be 64 lowercase hex chars.",
+      "input": {
+        "transcript": {
+          "spec": "motebit/routing-transcript@1.0",
+          "delegator_motebit_id": "0197f000-0000-7000-8000-0000000000d1",
+          "delegator_public_key": "nothex",
+          "issued_at": 1753056000000,
+          "capability": "web_search",
+          "candidates": [
+            {
+              "motebit_id": "0197f000-0000-7000-8000-0000000000b0",
+              "unit_cost": 0.05,
+              "trust_axis": 0.9661396215468546,
+              "reliability_axis": 0.9661396215468546,
+              "alpha": 2,
+              "beta": 1,
+              "theta": 0.9661396215468546
+            },
+            {
+              "motebit_id": "0197f000-0000-7000-8000-0000000000c0",
+              "unit_cost": 0.03,
+              "bonded": true,
+              "trust_axis": 0.5210230828203711,
+              "reliability_axis": 0.5210230828203711,
+              "alpha": 1,
+              "beta": 1,
+              "theta": 0.5210230828203711
+            }
+          ],
+          "seed": "fixed-tick-signature-0001",
+          "strength": 1,
+          "weights": {
+            "trust": 0.5,
+            "reliability": 0.3,
+            "cost": 0.2,
+            "latency": 0
+          },
+          "count_cap": 100,
+          "bond_explore_boost": 2,
+          "default_latency_ms": 5000,
+          "algorithm_version": "motebit-worker-selection@1",
+          "winner_motebit_id": "0197f000-0000-7000-8000-0000000000b0",
+          "explored": false,
+          "suite": "motebit-jcs-ed25519-b64-v1",
+          "signature": "0_SPIZk8MD1m3d2fZs9zqH8K-hon5uxbM3K4kbRFCB3YUV6zYU-IgJeeQVEaO7H98EuTptEK7shgERNNlKSBAg"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "reason": "malformed_public_key"
+      }
+    },
+    {
+      "name": "malformed-signature",
+      "check": "integrity",
+      "description": "Signature must be base64url of 64 bytes.",
+      "input": {
+        "transcript": {
+          "spec": "motebit/routing-transcript@1.0",
+          "delegator_motebit_id": "0197f000-0000-7000-8000-0000000000d1",
+          "delegator_public_key": "c050c5637a44fa8629fff3cccce2300cb362a63d99d95fc54145266f4332445a",
+          "issued_at": 1753056000000,
+          "capability": "web_search",
+          "candidates": [
+            {
+              "motebit_id": "0197f000-0000-7000-8000-0000000000b0",
+              "unit_cost": 0.05,
+              "trust_axis": 0.9661396215468546,
+              "reliability_axis": 0.9661396215468546,
+              "alpha": 2,
+              "beta": 1,
+              "theta": 0.9661396215468546
+            },
+            {
+              "motebit_id": "0197f000-0000-7000-8000-0000000000c0",
+              "unit_cost": 0.03,
+              "bonded": true,
+              "trust_axis": 0.5210230828203711,
+              "reliability_axis": 0.5210230828203711,
+              "alpha": 1,
+              "beta": 1,
+              "theta": 0.5210230828203711
+            }
+          ],
+          "seed": "fixed-tick-signature-0001",
+          "strength": 1,
+          "weights": {
+            "trust": 0.5,
+            "reliability": 0.3,
+            "cost": 0.2,
+            "latency": 0
+          },
+          "count_cap": 100,
+          "bond_explore_boost": 2,
+          "default_latency_ms": 5000,
+          "algorithm_version": "motebit-worker-selection@1",
+          "winner_motebit_id": "0197f000-0000-7000-8000-0000000000b0",
+          "explored": false,
+          "suite": "motebit-jcs-ed25519-b64-v1",
+          "signature": "!!!"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "reason": "malformed_signature"
+      }
+    },
+    {
+      "name": "consistent",
+      "check": "faithfulness",
+      "description": "An honestly-frozen basis recomputes: the draw chain reproduces and the composite yields the recorded winner.",
+      "input": {
+        "basis": {
+          "capability": "web_search",
+          "candidates": [
+            {
+              "motebit_id": "0197f000-0000-7000-8000-0000000000b0",
+              "unit_cost": 0.05,
+              "trust_axis": 0.9661396215468546,
+              "reliability_axis": 0.9661396215468546,
+              "alpha": 2,
+              "beta": 1,
+              "theta": 0.9661396215468546
+            },
+            {
+              "motebit_id": "0197f000-0000-7000-8000-0000000000c0",
+              "unit_cost": 0.03,
+              "bonded": true,
+              "trust_axis": 0.5210230828203711,
+              "reliability_axis": 0.5210230828203711,
+              "alpha": 1,
+              "beta": 1,
+              "theta": 0.5210230828203711
+            }
+          ],
+          "seed": "fixed-tick-signature-0001",
+          "strength": 1,
+          "weights": {
+            "trust": 0.5,
+            "reliability": 0.3,
+            "cost": 0.2,
+            "latency": 0
+          },
+          "count_cap": 100,
+          "bond_explore_boost": 2,
+          "default_latency_ms": 5000,
+          "algorithm_version": "motebit-worker-selection@1",
+          "winner_motebit_id": "0197f000-0000-7000-8000-0000000000b0",
+          "explored": false
+        }
+      },
+      "expected": {
+        "consistent": true,
+        "recomputed_winner": "0197f000-0000-7000-8000-0000000000b0"
+      }
+    },
+    {
+      "name": "theta-tampered",
+      "check": "faithfulness",
+      "description": "A transcript that lies about its randomness is caught: the recorded draw does not reproduce from (alpha, beta, seed).",
+      "input": {
+        "basis": {
+          "capability": "web_search",
+          "candidates": [
+            {
+              "motebit_id": "0197f000-0000-7000-8000-0000000000b0",
+              "unit_cost": 0.05,
+              "trust_axis": 0.9661396215468546,
+              "reliability_axis": 0.9661396215468546,
+              "alpha": 2,
+              "beta": 1,
+              "theta": 0.999999
+            },
+            {
+              "motebit_id": "0197f000-0000-7000-8000-0000000000c0",
+              "unit_cost": 0.03,
+              "bonded": true,
+              "trust_axis": 0.5210230828203711,
+              "reliability_axis": 0.5210230828203711,
+              "alpha": 1,
+              "beta": 1,
+              "theta": 0.5210230828203711
+            }
+          ],
+          "seed": "fixed-tick-signature-0001",
+          "strength": 1,
+          "weights": {
+            "trust": 0.5,
+            "reliability": 0.3,
+            "cost": 0.2,
+            "latency": 0
+          },
+          "count_cap": 100,
+          "bond_explore_boost": 2,
+          "default_latency_ms": 5000,
+          "algorithm_version": "motebit-worker-selection@1",
+          "winner_motebit_id": "0197f000-0000-7000-8000-0000000000b0",
+          "explored": false
+        }
+      },
+      "expected": {
+        "consistent": false,
+        "reason": "theta_mismatch"
+      }
+    },
+    {
+      "name": "winner-substituted",
+      "check": "faithfulness",
+      "description": "A substituted winner is caught by recomputation even with untouched inputs (the composite disagrees).",
+      "input": {
+        "basis": {
+          "capability": "web_search",
+          "candidates": [
+            {
+              "motebit_id": "0197f000-0000-7000-8000-0000000000b0",
+              "unit_cost": 0.05,
+              "trust_axis": 0.9661396215468546,
+              "reliability_axis": 0.9661396215468546,
+              "alpha": 2,
+              "beta": 1,
+              "theta": 0.9661396215468546
+            },
+            {
+              "motebit_id": "0197f000-0000-7000-8000-0000000000c0",
+              "unit_cost": 0.03,
+              "bonded": true,
+              "trust_axis": 0.5210230828203711,
+              "reliability_axis": 0.5210230828203711,
+              "alpha": 1,
+              "beta": 1,
+              "theta": 0.5210230828203711
+            }
+          ],
+          "seed": "fixed-tick-signature-0001",
+          "strength": 1,
+          "weights": {
+            "trust": 0.5,
+            "reliability": 0.3,
+            "cost": 0.2,
+            "latency": 0
+          },
+          "count_cap": 100,
+          "bond_explore_boost": 2,
+          "default_latency_ms": 5000,
+          "algorithm_version": "motebit-worker-selection@1",
+          "winner_motebit_id": "0197f000-0000-7000-8000-0000000000c0",
+          "explored": false
+        }
+      },
+      "expected": {
+        "consistent": false,
+        "reason": "winner_mismatch",
+        "recomputed_winner": "0197f000-0000-7000-8000-0000000000b0"
+      }
+    }
+  ]
+}

@@ -36,7 +36,7 @@ pnpm run test
 apps/        11 surfaces and supporting apps (web, cli, desktop, mobile, spatial, inspector, operator, identity, verify, docs, vscode)
 packages/    53 packages on a 7-layer DAG enforced by `pnpm check-deps`
 services/    11 backend services (1 relay + 4 molecules + 5 atoms + 1 glue)
-spec/        33 open specifications, each `motebit/<name>@1.0`
+spec/        34 open specifications, each `motebit/<name>@1.0`
 ```
 
 Full directory tree, package roles, and layer breakdown live in [`apps/docs/content/docs/operator/architecture.mdx`](apps/docs/content/docs/operator/architecture.mdx) (the canonical source — gated by `check-docs-tree`).

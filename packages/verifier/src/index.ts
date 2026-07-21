@@ -193,3 +193,21 @@ export {
 } from "@motebit/crypto";
 export type { VerifyEvalAttestationResult } from "@motebit/crypto";
 export type { EvalAttestation, EvalResult, EvalKind } from "@motebit/protocol";
+
+// RoutingDecisionTranscript — the routing arc's proof artifact: a hire you can
+// prove, not just replay (subject = signer — receipt-family;
+// docs/doctrine/routing-decision-transcript.md; spec/routing-transcript-v1.md).
+// This is the INTEGRITY rung only: "this delegator committed to this decision
+// record" — signature, shape, winner ∈ frozen candidate set. The FAITHFULNESS
+// rung (recomputing the decision from the frozen inputs) lives with the
+// ranking implementation in source-available @motebit/semiring
+// (recomputeRoutingDecision), pinned by the transcript's algorithm_version —
+// deliberately outside the permissive floor, which never carries the BSL
+// ranking judgment.
+export {
+  signRoutingTranscript,
+  verifyRoutingTranscript,
+  ROUTING_TRANSCRIPT_SUITE,
+} from "@motebit/crypto";
+export type { VerifyRoutingTranscriptResult } from "@motebit/crypto";
+export type { RoutingDecisionTranscript, TranscriptCandidate } from "@motebit/protocol";

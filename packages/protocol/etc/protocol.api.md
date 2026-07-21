@@ -3425,6 +3425,9 @@ export interface RouteScore {
 }
 
 // @public
+export const ROUTING_TRANSCRIPT_SPEC_ID = "motebit/routing-transcript@1.0";
+
+// @public
 export interface RoutingConstraint {
     readonly jurisdiction?: Jurisdiction;
     readonly maxInputCostPerMillion?: number;
@@ -3447,6 +3450,33 @@ export type RoutingDecision = {
     readonly kind: "deny";
     readonly reason: string;
 };
+
+// @public
+export interface RoutingDecisionTranscript {
+    readonly algorithm_version: string;
+    readonly bond_explore_boost: number;
+    readonly candidates: readonly TranscriptCandidate[];
+    readonly capability: string;
+    readonly count_cap: number;
+    readonly default_latency_ms: number;
+    readonly delegator_motebit_id: string;
+    readonly delegator_public_key: string;
+    readonly explored: boolean;
+    readonly issued_at: number;
+    readonly pinned?: true;
+    readonly seed: string;
+    readonly signature: string;
+    readonly spec: typeof ROUTING_TRANSCRIPT_SPEC_ID;
+    readonly strength: number;
+    readonly suite: "motebit-jcs-ed25519-b64-v1";
+    readonly weights: {
+        readonly trust: number;
+        readonly reliability: number;
+        readonly cost: number;
+        readonly latency: number;
+    };
+    readonly winner_motebit_id: string;
+}
 
 // @public
 export const RUNTIME_ATTACH_AUDIENCE: TokenAudience;
@@ -4365,6 +4395,18 @@ export interface ToolRiskProfile {
     risk: RiskLevel;
     // (undocumented)
     sideEffect: SideEffect;
+}
+
+// @public
+export interface TranscriptCandidate {
+    alpha?: number;
+    beta?: number;
+    bonded?: true;
+    motebit_id: string;
+    reliability_axis: number;
+    theta?: number;
+    trust_axis: number;
+    unit_cost?: number;
 }
 
 // @public

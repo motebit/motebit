@@ -1,0 +1,335 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/routing-transcript-v1.json",
+  "title": "RoutingDecisionTranscript (v1)",
+  "description": "Signed routing-decision transcript (subject = signer — receipt-family): the delegator's own record of why a worker won a paid hire. Freezes the admissible candidate set, per-candidate posterior reads and draws, and the decision parameters; integrity verified by verifyRoutingTranscript in @motebit/crypto, faithfulness recomputed by recomputeRoutingDecision in @motebit/semiring under the pinned algorithm_version. Spec: spec/routing-transcript-v1.md.",
+  "type": "object",
+  "properties": {
+    "spec": {
+      "type": "string",
+      "const": "motebit/routing-transcript@1.0",
+      "description": "Wire-format version discriminator."
+    },
+    "capability": {
+      "type": "string",
+      "description": "The capability hired for."
+    },
+    "delegator_motebit_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The delegator — the chooser and the signer (subject = signer)."
+    },
+    "delegator_public_key": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "The delegator's Ed25519 public key, lowercase hex."
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "motebit_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "unit_cost": {
+            "type": "number",
+            "minimum": 0
+          },
+          "bonded": {
+            "type": "boolean",
+            "const": true
+          },
+          "trust_axis": {
+            "type": "number"
+          },
+          "reliability_axis": {
+            "type": "number"
+          },
+          "alpha": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "beta": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "theta": {
+            "type": "number"
+          }
+        },
+        "required": ["motebit_id", "trust_axis", "reliability_axis"],
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "description": "The frozen admissible candidate set, in ranked order."
+    },
+    "seed": {
+      "type": "string",
+      "description": "Seed provenance: the tick token's Ed25519 signature — binds the transcript to the delegation turn; per-candidate draw seed is `${seed}|${motebit_id}`."
+    },
+    "strength": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Base exploration strength in [0,1], before any bond boost."
+    },
+    "weights": {
+      "type": "object",
+      "properties": {
+        "trust": {
+          "type": "number"
+        },
+        "reliability": {
+          "type": "number"
+        },
+        "cost": {
+          "type": "number"
+        },
+        "latency": {
+          "type": "number"
+        }
+      },
+      "required": ["trust", "reliability", "cost", "latency"],
+      "additionalProperties": false,
+      "description": "The composite weights the ranking consumed."
+    },
+    "count_cap": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "description": "Evidence cap applied to posterior counts (frozen ranker-internal literal)."
+    },
+    "bond_explore_boost": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Multiplicative bond exploration boost (frozen ranker-internal literal)."
+    },
+    "default_latency_ms": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Neutral latency (ms) assumed per candidate (frozen ranker-internal literal)."
+    },
+    "algorithm_version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The ranking-implementation version this transcript is recomputable under."
+    },
+    "winner_motebit_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The worker hired; MUST be a member of `candidates`."
+    },
+    "pinned": {
+      "type": "boolean",
+      "const": true,
+      "description": "Present (true) only when the hire was a pinned deterministic override — no draw ran."
+    },
+    "explored": {
+      "type": "boolean",
+      "description": "Whether the exploration draw overrode the exploit-favorite."
+    },
+    "issued_at": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Decision time, epoch milliseconds."
+    },
+    "suite": {
+      "type": "string",
+      "const": "motebit-jcs-ed25519-b64-v1",
+      "description": "Cryptosuite (pinned literal — new suites arrive as new transcript versions)."
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Ed25519 over the JCS-canonical transcript minus this field, base64url."
+    }
+  },
+  "required": [
+    "spec",
+    "capability",
+    "delegator_motebit_id",
+    "delegator_public_key",
+    "candidates",
+    "seed",
+    "strength",
+    "weights",
+    "count_cap",
+    "bond_explore_boost",
+    "default_latency_ms",
+    "algorithm_version",
+    "winner_motebit_id",
+    "explored",
+    "issued_at",
+    "suite",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "definitions": {
+    "RoutingDecisionTranscript": {
+      "type": "object",
+      "properties": {
+        "spec": {
+          "type": "string",
+          "const": "motebit/routing-transcript@1.0",
+          "description": "Wire-format version discriminator."
+        },
+        "capability": {
+          "type": "string",
+          "description": "The capability hired for."
+        },
+        "delegator_motebit_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The delegator — the chooser and the signer (subject = signer)."
+        },
+        "delegator_public_key": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "The delegator's Ed25519 public key, lowercase hex."
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "motebit_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "unit_cost": {
+                "type": "number",
+                "minimum": 0
+              },
+              "bonded": {
+                "type": "boolean",
+                "const": true
+              },
+              "trust_axis": {
+                "type": "number"
+              },
+              "reliability_axis": {
+                "type": "number"
+              },
+              "alpha": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              },
+              "beta": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              },
+              "theta": {
+                "type": "number"
+              }
+            },
+            "required": ["motebit_id", "trust_axis", "reliability_axis"],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "description": "The frozen admissible candidate set, in ranked order."
+        },
+        "seed": {
+          "type": "string",
+          "description": "Seed provenance: the tick token's Ed25519 signature — binds the transcript to the delegation turn; per-candidate draw seed is `${seed}|${motebit_id}`."
+        },
+        "strength": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Base exploration strength in [0,1], before any bond boost."
+        },
+        "weights": {
+          "type": "object",
+          "properties": {
+            "trust": {
+              "type": "number"
+            },
+            "reliability": {
+              "type": "number"
+            },
+            "cost": {
+              "type": "number"
+            },
+            "latency": {
+              "type": "number"
+            }
+          },
+          "required": ["trust", "reliability", "cost", "latency"],
+          "additionalProperties": false,
+          "description": "The composite weights the ranking consumed."
+        },
+        "count_cap": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Evidence cap applied to posterior counts (frozen ranker-internal literal)."
+        },
+        "bond_explore_boost": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Multiplicative bond exploration boost (frozen ranker-internal literal)."
+        },
+        "default_latency_ms": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Neutral latency (ms) assumed per candidate (frozen ranker-internal literal)."
+        },
+        "algorithm_version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The ranking-implementation version this transcript is recomputable under."
+        },
+        "winner_motebit_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The worker hired; MUST be a member of `candidates`."
+        },
+        "pinned": {
+          "type": "boolean",
+          "const": true,
+          "description": "Present (true) only when the hire was a pinned deterministic override — no draw ran."
+        },
+        "explored": {
+          "type": "boolean",
+          "description": "Whether the exploration draw overrode the exploit-favorite."
+        },
+        "issued_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Decision time, epoch milliseconds."
+        },
+        "suite": {
+          "type": "string",
+          "const": "motebit-jcs-ed25519-b64-v1",
+          "description": "Cryptosuite (pinned literal — new suites arrive as new transcript versions)."
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Ed25519 over the JCS-canonical transcript minus this field, base64url."
+        }
+      },
+      "required": [
+        "spec",
+        "capability",
+        "delegator_motebit_id",
+        "delegator_public_key",
+        "candidates",
+        "seed",
+        "strength",
+        "weights",
+        "count_cap",
+        "bond_explore_boost",
+        "default_latency_ms",
+        "algorithm_version",
+        "winner_motebit_id",
+        "explored",
+        "issued_at",
+        "suite",
+        "signature"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

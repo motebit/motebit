@@ -51,6 +51,7 @@ import type { RetentionManifest } from '@motebit/protocol';
 import type { RevocationFreshness } from '@motebit/protocol';
 import type { RevocationStatus } from '@motebit/protocol';
 import type { RevocationVerdict } from '@motebit/protocol';
+import type { RoutingDecisionTranscript } from '@motebit/protocol';
 import type { SettlementAsset } from '@motebit/protocol';
 import type { SettlementRecord } from '@motebit/protocol';
 import type { SignableComputerSessionReceipt } from '@motebit/protocol';
@@ -1108,6 +1109,12 @@ export { RevocationStatus }
 export { RevocationVerdict }
 
 // @public
+export const ROUTING_TRANSCRIPT_SPEC_MIRROR: "motebit/routing-transcript@1.0";
+
+// @public
+export const ROUTING_TRANSCRIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+// @public
 export const SETTLEMENT_RECORD_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 export { SettlementRecord }
@@ -1431,6 +1438,9 @@ export function signRequestEnvelope(payload: unknown, fields: {
     aud: string;
     nonce?: string;
 }, identityPrivateKey: Uint8Array): Promise<SignedRequestEnvelope>;
+
+// @public
+export function signRoutingTranscript(body: Omit<RoutingDecisionTranscript, "signature" | "suite">, delegatorPrivateKey: Uint8Array): Promise<RoutingDecisionTranscript>;
 
 // @public
 export function signSettlement(settlement: Omit<SettlementRecord, "signature" | "suite">, issuerPrivateKey: Uint8Array): Promise<SettlementRecord>;
@@ -1932,6 +1942,16 @@ export function verifyRevocationAnchor(proof: RevocationAnchorProof, revocationP
     tx_hash: string;
     expected_memo: string;
 }) => Promise<boolean>): Promise<RevocationAnchorVerifyResult>;
+
+// @public
+export function verifyRoutingTranscript(transcript: RoutingDecisionTranscript): Promise<VerifyRoutingTranscriptResult>;
+
+// @public
+export interface VerifyRoutingTranscriptResult {
+    readonly reason?: "unsupported_suite" | "unsupported_spec" | "empty_candidates" | "winner_not_in_candidates" | "malformed_public_key" | "malformed_signature" | "signature_invalid";
+    // (undocumented)
+    readonly valid: boolean;
+}
 
 // @public
 export function verifySettlement(settlement: SettlementRecord, issuerPublicKey: Uint8Array): Promise<boolean>;

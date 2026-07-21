@@ -2701,6 +2701,13 @@ export {
 } from "./eval-attestation.js";
 export type { VerifyEvalAttestationResult } from "./eval-attestation.js";
 export {
+  signRoutingTranscript,
+  verifyRoutingTranscript,
+  ROUTING_TRANSCRIPT_SUITE,
+  ROUTING_TRANSCRIPT_SPEC_MIRROR,
+} from "./routing-transcript.js";
+export type { VerifyRoutingTranscriptResult } from "./routing-transcript.js";
+export {
   computeCredentialLeaf,
   verifyCredentialAnchor,
   verifyRevocationAnchor,
