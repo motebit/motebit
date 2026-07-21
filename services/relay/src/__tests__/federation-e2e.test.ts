@@ -50,6 +50,23 @@ async function createFederatedRelay(endpointUrl: string, displayName: string): P
 }
 
 /**
+ * A relay with the explicit `requireDiscoverSignature: false` opt-out (the
+ * config-restorable tolerant path the 1.4 sunset left behind). Discover
+ * MECHANICS tests (loop prevention, dedup, hop limits, enrichment
+ * propagation, per-peer rate keying) run against this: they exercise the
+ * handler past the auth gate, and the harness deliberately does not expose
+ * relay private keys, so they cannot mint a valid peer signature. The
+ * signed/strict auth matrix is covered by Phase 3 (real signed fan-out) and
+ * Phase 3b (rejection paths).
+ */
+async function createTolerantRelay(endpointUrl: string, displayName: string): Promise<SyncRelay> {
+  return createTestRelay({
+    enableDeviceAuth: false,
+    federation: { endpointUrl, displayName, requireDiscoverSignature: false },
+  });
+}
+
+/**
  * Intercept globalThis.fetch so that relay-to-relay federation calls
  * (which use fetch internally) are routed to the correct Hono app.
  */
@@ -334,7 +351,7 @@ describe("Federation E2E", () => {
         public_key: string;
         did: string;
       };
-      expect(body.spec).toBe("motebit/relay-federation@1.3");
+      expect(body.spec).toBe("motebit/relay-federation@1.4");
       expect(body.relay_motebit_id).toMatch(/^relay-/);
       expect(body.public_key).toHaveLength(64); // 32 bytes hex
       expect(body.did).toMatch(/^did:key:z/);
@@ -676,24 +693,27 @@ describe("Federation E2E", () => {
     });
 
     it("handles POST /federation/v1/discover with loop prevention", async () => {
-      const idA = relayA.relayIdentity;
-
-      // Direct federation discover request with relay A already in visited set
-      const discoverRes = await relayA.app.request("/federation/v1/discover", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query: { capability: "anything" },
-          hop_count: 1,
-          max_hops: 3,
-          visited: [idA.relayMotebitId], // Already visited — loop!
-          query_id: crypto.randomUUID(),
-          origin_relay: "some-relay",
-        }),
-      });
-      expect(discoverRes.status).toBe(200);
-      const body = (await discoverRes.json()) as { agents: unknown[] };
-      expect(body.agents).toHaveLength(0);
+      const tolerant = await createTolerantRelay("http://loop.test:3011", "Loop");
+      try {
+        // Direct federation discover request with the relay already in visited set
+        const discoverRes = await tolerant.app.request("/federation/v1/discover", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: { capability: "anything" },
+            hop_count: 1,
+            max_hops: 3,
+            visited: [tolerant.relayIdentity.relayMotebitId], // Already visited — loop!
+            query_id: crypto.randomUUID(),
+            origin_relay: "some-relay",
+          }),
+        });
+        expect(discoverRes.status).toBe(200);
+        const body = (await discoverRes.json()) as { agents: unknown[] };
+        expect(body.agents).toHaveLength(0);
+      } finally {
+        await tolerant.close();
+      }
     });
 
     it("rejects max_hops > 3", async () => {
@@ -713,63 +733,68 @@ describe("Federation E2E", () => {
     });
 
     it("deduplicates queries by query_id", async () => {
-      await registerAgent(relayA, "dedup-agent", ["dedup-test"]);
+      const tolerant = await createTolerantRelay("http://dedup.test:3012", "Dedup");
+      try {
+        await registerAgent(tolerant, "dedup-agent", ["dedup-test"]);
 
-      const queryId = crypto.randomUUID();
+        const queryId = crypto.randomUUID();
+        const dedupBody = () =>
+          JSON.stringify({
+            query: { capability: "dedup-test" },
+            hop_count: 0,
+            max_hops: 2,
+            visited: [],
+            query_id: queryId,
+            origin_relay: "some-relay",
+          });
 
-      // First request — should return agents
-      const res1 = await relayA.app.request("/federation/v1/discover", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query: { capability: "dedup-test" },
-          hop_count: 0,
-          max_hops: 2,
-          visited: [],
-          query_id: queryId,
-          origin_relay: "some-relay",
-        }),
-      });
-      const body1 = (await res1.json()) as { agents: unknown[] };
-      expect(body1.agents.length).toBeGreaterThanOrEqual(1);
+        // First request — should return agents
+        const res1 = await tolerant.app.request("/federation/v1/discover", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: dedupBody(),
+        });
+        const body1 = (await res1.json()) as { agents: unknown[] };
+        expect(body1.agents.length).toBeGreaterThanOrEqual(1);
 
-      // Second request with same query_id — should return empty (deduped)
-      const res2 = await relayA.app.request("/federation/v1/discover", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query: { capability: "dedup-test" },
-          hop_count: 0,
-          max_hops: 2,
-          visited: [],
-          query_id: queryId,
-          origin_relay: "some-relay",
-        }),
-      });
-      const body2 = (await res2.json()) as { agents: unknown[] };
-      expect(body2.agents).toHaveLength(0);
+        // Second request with same query_id — should return empty (deduped)
+        const res2 = await tolerant.app.request("/federation/v1/discover", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: dedupBody(),
+        });
+        const body2 = (await res2.json()) as { agents: unknown[] };
+        expect(body2.agents).toHaveLength(0);
+      } finally {
+        await tolerant.close();
+      }
     });
 
     it("respects hop count limit", async () => {
-      await registerAgent(relayA, "hop-agent", ["hop-test"]);
+      const tolerant = await createTolerantRelay("http://hop.test:3013", "Hop");
+      try {
+        await registerAgent(tolerant, "hop-agent", ["hop-test"]);
 
-      // Request at hop_count = max_hops — should return local only, no forwarding
-      const res = await relayA.app.request("/federation/v1/discover", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query: { capability: "hop-test" },
-          hop_count: 3,
-          max_hops: 3,
-          visited: [],
-          query_id: crypto.randomUUID(),
-          origin_relay: "some-relay",
-        }),
-      });
-      expect(res.status).toBe(200);
-      const body = (await res.json()) as { agents: unknown[] };
-      // Should still return local matches
-      expect(body.agents.length).toBeGreaterThanOrEqual(1);
+        // Request at hop_count = max_hops — should return local only, no forwarding
+        const res = await tolerant.app.request("/federation/v1/discover", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: { capability: "hop-test" },
+            hop_count: 3,
+            max_hops: 3,
+            visited: [],
+            query_id: crypto.randomUUID(),
+            origin_relay: "some-relay",
+          }),
+        });
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { agents: unknown[] };
+        // Should still return local matches
+        expect(body.agents.length).toBeGreaterThanOrEqual(1);
+      } finally {
+        await tolerant.close();
+      }
     });
 
     // HA badge ship 4 — federation HA propagation. Closes the asymmetry
@@ -781,14 +806,15 @@ describe("Federation E2E", () => {
     // self-attesting-system doctrine ("every routing-input claim MUST be
     // visible to the user").
     it("propagates hardware_attestation across federation hops", async () => {
-      const agent = await registerAgent(relayA, "ha-fed-agent", ["ha-fed"]);
+      const tolerant = await createTolerantRelay("http://ha-fed.test:3014", "HaFed");
+      const agent = await registerAgent(tolerant, "ha-fed-agent", ["ha-fed"]);
 
       // Insert a peer-issued AgentTrustCredential carrying a verified
       // hardware_attestation claim about the local agent. Same shape as
       // /credentials/submit would persist after signature + revocation
       // checks (those filters are upstream of relay_credentials).
       const issuedAt = Date.now();
-      relayA.moteDb.db
+      tolerant.moteDb.db
         .prepare(
           `INSERT INTO relay_credentials
            (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at)
@@ -812,8 +838,8 @@ describe("Federation E2E", () => {
           issuedAt,
         );
 
-      // Simulate an inbound federation discover from a different relay.
-      const discoverRes = await relayA.app.request("/federation/v1/discover", {
+      // Simulate an inbound federation discover from a foreign relay.
+      const discoverRes = await tolerant.app.request("/federation/v1/discover", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -836,6 +862,7 @@ describe("Federation E2E", () => {
       expect(found).toBeDefined();
       expect(found!.hardware_attestation?.platform).toBe("secure_enclave");
       expect(found!.hardware_attestation?.score).toBe(1);
+      await tolerant.close();
     });
   });
 
@@ -844,7 +871,7 @@ describe("Federation E2E", () => {
   describe("Phase 3b: Discover per-hop signing", () => {
     // The POSITIVE signed path (sign → verify → 200) is exercised end-to-end by
     // the Phase 3 cross-relay tests above: relayA's fan-out/originating discover
-    // now routes through `signDiscoverBody`, and relayB verifies it. These tests
+    // routes through `signDiscoverBody`, and relayB verifies it. These tests
     // cover the REJECTION paths, which reject before (or regardless of) signature
     // validity, so a random signature suffices — the test harness intentionally
     // does not expose relay private keys.
@@ -903,7 +930,10 @@ describe("Federation E2E", () => {
       expect(res.status).toBe(403);
     });
 
-    it("tolerates an UNSIGNED discover under the default rollout window (200)", async () => {
+    it("rejects an UNSIGNED discover by DEFAULT since the 1.4 sunset (403)", async () => {
+      // Pre-1.4 this was the tolerant-rollout-window test (unsigned → 200).
+      // The 2026-07-21 sunset flipped the default strict; the tolerant path
+      // now requires the explicit opt-out below.
       await establishPeering(relayA, relayB);
       const res = await relayB.app.request("/federation/v1/discover", {
         method: "POST",
@@ -917,7 +947,35 @@ describe("Federation E2E", () => {
           origin_relay: "some-relay",
         }),
       });
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(403);
+    });
+
+    it("tolerates an UNSIGNED discover under an EXPLICIT requireDiscoverSignature:false opt-out (200)", async () => {
+      const tolerant = await createTestRelay({
+        enableDeviceAuth: false,
+        federation: {
+          endpointUrl: "http://tolerant.test:3009",
+          displayName: "Tolerant",
+          requireDiscoverSignature: false,
+        },
+      });
+      try {
+        const res = await tolerant.app.request("/federation/v1/discover", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: { capability: "web-search", limit: 20 },
+            hop_count: 0,
+            max_hops: 1,
+            visited: [],
+            query_id: crypto.randomUUID(),
+            origin_relay: "some-relay",
+          }),
+        });
+        expect(res.status).toBe(200);
+      } finally {
+        await tolerant.close();
+      }
     });
 
     it("rejects an UNSIGNED discover once requireDiscoverSignature is on (403)", async () => {
@@ -2159,12 +2217,39 @@ describe("Federation E2E", () => {
     it("returns 429 for a rate-limited peer on federation endpoints", async () => {
       // Use discover endpoint which has 60 req/min per-IP limit (read tier)
       // to avoid hitting the IP limiter before the peer limiter.
-      // The per-peer limiter allows 30 req/min per relay_id.
-      const originRelay = `rate-test-origin-${crypto.randomUUID()}`;
+      // The per-peer limiter allows 30 req/min per relay_id, keyed on the
+      // verified sender when signed, else origin_relay. Since 1.4 the default
+      // rejects unsigned before the limiter, so per-origin keying isolation is
+      // exercised on an EXPLICITLY tolerant relay (the config-restorable path).
+      const tolerant = await createTestRelay({
+        enableDeviceAuth: false,
+        federation: {
+          endpointUrl: "http://tolerant-rate.test:3010",
+          displayName: "TolerantRate",
+          requireDiscoverSignature: false,
+        },
+      });
+      try {
+        const originRelay = `rate-test-origin-${crypto.randomUUID()}`;
 
-      // Send 30 discover requests from the same origin_relay
-      for (let i = 0; i < 30; i++) {
-        await relayA.app.request("/federation/v1/discover", {
+        // Send 30 discover requests from the same origin_relay
+        for (let i = 0; i < 30; i++) {
+          await tolerant.app.request("/federation/v1/discover", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              query: { capability: "anything" },
+              hop_count: 0,
+              max_hops: 2,
+              visited: [],
+              query_id: crypto.randomUUID(), // unique query_id to avoid dedup
+              origin_relay: originRelay,
+            }),
+          });
+        }
+
+        // 31st request from the same origin_relay should hit per-peer 429
+        const res = await tolerant.app.request("/federation/v1/discover", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -2172,41 +2257,29 @@ describe("Federation E2E", () => {
             hop_count: 0,
             max_hops: 2,
             visited: [],
-            query_id: crypto.randomUUID(), // unique query_id to avoid dedup
+            query_id: crypto.randomUUID(),
             origin_relay: originRelay,
           }),
         });
+        expect(res.status).toBe(429);
+
+        // A different origin_relay should still work
+        const res2 = await tolerant.app.request("/federation/v1/discover", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: { capability: "anything" },
+            hop_count: 0,
+            max_hops: 2,
+            visited: [],
+            query_id: crypto.randomUUID(),
+            origin_relay: `different-relay-${crypto.randomUUID()}`,
+          }),
+        });
+        expect(res2.status).not.toBe(429);
+      } finally {
+        await tolerant.close();
       }
-
-      // 31st request from the same origin_relay should hit per-peer 429
-      const res = await relayA.app.request("/federation/v1/discover", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query: { capability: "anything" },
-          hop_count: 0,
-          max_hops: 2,
-          visited: [],
-          query_id: crypto.randomUUID(),
-          origin_relay: originRelay,
-        }),
-      });
-      expect(res.status).toBe(429);
-
-      // A different origin_relay should still work
-      const res2 = await relayA.app.request("/federation/v1/discover", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query: { capability: "anything" },
-          hop_count: 0,
-          max_hops: 2,
-          visited: [],
-          query_id: crypto.randomUUID(),
-          origin_relay: `different-relay-${crypto.randomUUID()}`,
-        }),
-      });
-      expect(res2.status).not.toBe(429);
     });
   });
 });
