@@ -565,7 +565,7 @@ function aggregateVotes(
  * returns the federation-derived `FederationResolutionResult` for the
  * caller to sign + persist.
  *
- * @spec motebit/relay-federation@1.3 §16.1
+ * @spec motebit/relay-federation@1.4 §16.1
  * @spec motebit/dispute@1.0 §6.2 + §6.6 + §7.2
  */
 export async function orchestrateFederationResolution(

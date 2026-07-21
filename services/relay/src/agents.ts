@@ -13,7 +13,7 @@ import type { AgentTrustRecord, ExecutionReceipt, HardwareAttestationClaim } fro
 import { scoreAttestation } from "@motebit/market";
 import type { ConnectedDevice } from "./index.js";
 import type { RelayIdentity } from "./federation.js";
-import { insertRevocationEvent } from "./federation.js";
+import { insertRevocationEvent, signDiscoverBody } from "./federation.js";
 import type { TaskRouter } from "./task-routing.js";
 import { evaluateSettlementEligibility } from "./task-routing.js";
 import {
@@ -1382,19 +1382,29 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       )
       .all() as Array<{ peer_relay_id: string; endpoint_url: string; public_key: string }>;
 
+    // Originating hop: sign as sender_relay = this relay (== origin_relay
+    // here, since we're the query's origin) — the SAME per-hop sender
+    // authentication as task-routing's originating discover and the federation
+    // handler's re-forward (relay-federation@1.4 §4.1.1: unsigned rejects by
+    // default since the 2026-07-21 sunset). This fan-out was the missed THIRD
+    // sender — unsigned, masked until 1.4 by the tolerant pre-sunset default.
     const forwardPromises = peers.map(async (peer) => {
       try {
-        const resp = await fetch(`${peer.endpoint_url}/federation/v1/discover`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Correlation-ID": queryId },
-          body: JSON.stringify({
+        const discoverBody = await signDiscoverBody(
+          {
             query: { capability, motebit_id: motebitId, limit },
             hop_count: 0,
             max_hops: 3,
             visited,
             query_id: queryId,
             origin_relay: relayIdentity.relayMotebitId,
-          }),
+          },
+          relayIdentity,
+        );
+        const resp = await fetch(`${peer.endpoint_url}/federation/v1/discover`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Correlation-ID": queryId },
+          body: JSON.stringify(discoverBody),
           signal: AbortSignal.timeout(5000),
         });
         if (!resp.ok) return [];

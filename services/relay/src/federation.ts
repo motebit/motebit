@@ -52,7 +52,7 @@ const FEDERATION_SUITE = "motebit-concat-ed25519-hex-v1" as const;
  * 3. Update consumer assertions (`federation-e2e.test.ts`, `scripts/test-federation-live.mjs`)
  * 4. Update `@spec` jsdoc annotations on each endpoint that changed
  */
-export const RELAY_SPEC_VERSION = "motebit/relay-federation@1.3";
+export const RELAY_SPEC_VERSION = "motebit/relay-federation@1.4";
 import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from "node:crypto";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import type { DatabaseDriver } from "@motebit/persistence";
@@ -114,11 +114,11 @@ export interface FederationConfig {
   /**
    * Require a valid per-hop sender signature on inbound
    * `POST /federation/v1/discover` requests (relay-federation@1.3 §4.1 + §10.2).
-   * Default: false — the tolerant-reader rollout window: an UNSIGNED discover
-   * from an un-upgraded peer is accepted with a warning so the mesh keeps
-   * discovering during a rolling deploy. A PRESENT-but-invalid signature is
-   * ALWAYS rejected regardless of this flag. Flip to true once every peer emits
-   * signed discover requests, at which point an unsigned request rejects (403).
+   * Default: true since 1.4 (the 2026-07-21 sunset, #188) — an unsigned inbound
+   * discover rejects (403). Set false ONLY to keep accepting unsigned discovers
+   * from a peer still on < 1.3 — an explicit, owned fail-open for your own mesh
+   * (cold-audit P0-3b). A PRESENT-but-invalid signature is ALWAYS rejected
+   * regardless of this flag.
    */
   requireDiscoverSignature?: boolean;
 }
@@ -127,18 +127,18 @@ export interface FederationConfig {
  * Default for {@link FederationConfig.requireDiscoverSignature}, extracted to a
  * named const so the sunset forcing-test (#188) can assert it.
  *
- * **SUNSET 2026-07-21 (#188).** This tolerant default is a P0 fail-open
- * (cold-audit finding P0-3b): an unsigned inbound discover is accepted during the
- * relay-federation@1.3 rollout window. Every motebit relay already runs strict;
- * the default stays tolerant only to spare an unknown, un-upgraded self-hosted
- * peer a hard 403 during the announced window. On 2026-07-21 it FLIPS to `true`
- * (announced in spec `relay-federation-v1.md` §4.1.1 + `docs/operator/self-host.md`);
- * an operator who still needs tolerant sets `requireDiscoverSignature: false`
- * explicitly. The flip is enforced by the dated test in
- * `services/relay/src/__tests__/federation-discover-sunset.test.ts` so it cannot
- * rot in a recap — change this one line to `true` and the test goes green.
+ * **SUNSET EXECUTED 2026-07-21 (#188) — strict is the default.** The tolerant
+ * pre-sunset default was a P0 fail-open (cold-audit finding P0-3b): an unsigned
+ * inbound discover was accepted during the relay-federation@1.3 rollout window,
+ * to spare an unknown, un-upgraded self-hosted peer a hard 403. The window
+ * closed on schedule (announced in spec `relay-federation-v1.md` §4.1.1 +
+ * `docs/operator/self-host.md`): an unsigned inbound discover now rejects (403).
+ * An operator who still needs tolerant sets `requireDiscoverSignature: false`
+ * explicitly — a named, owned decision, no longer a silent default. The flip is
+ * enforced by the dated test in
+ * `services/relay/src/__tests__/federation-discover-sunset.test.ts`.
  */
-export const DEFAULT_REQUIRE_DISCOVER_SIGNATURE = false;
+export const DEFAULT_REQUIRE_DISCOVER_SIGNATURE = true;
 
 export interface AgentInfo {
   motebit_id: string;
@@ -1070,11 +1070,13 @@ async function verifyPeerSignature(
  * request: stamp `sender_relay` (THIS relay — the immediate forwarder, distinct
  * from the multi-hop `origin_relay`) and a fresh `timestamp`, then sign the
  * RFC 8785 (JCS) canonical JSON of the whole body (sans `signature`) and attach
- * the hex signature. Both discover senders — the originating query
- * (`task-routing.ts`) and the fan-out re-forward (the discover handler below) —
- * route through this single helper so the signed bytes can never diverge from
- * what `verifyDiscoverSender` recomputes on the receiver. relay-federation@1.3
- * §4.1 + §10.2.
+ * the hex signature. All three discover senders — the originating task-routing
+ * query (`task-routing.ts`), the marketplace discover fan-out (`agents.ts` —
+ * the missed third sender the 1.4 strict default exposed), and the fan-out
+ * re-forward (the discover handler below) — route through this single helper
+ * so the signed bytes can never diverge from what `verifyDiscoverSender`
+ * recomputes on the receiver. relay-federation@1.3 §4.1 + §10.2; strict by
+ * default since 1.4 (§4.1.1 sunset 2026-07-21).
  */
 export async function signDiscoverBody<T extends Record<string, unknown>>(
   body: T,
@@ -1293,7 +1295,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 1: Identity ──
 
-  /** @spec motebit/relay-federation@1.3 */
+  /** @spec motebit/relay-federation@1.4 */
   app.get("/federation/v1/identity", (c) => {
     return c.json({
       spec: RELAY_SPEC_VERSION,
@@ -1312,7 +1314,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 2: Peering Protocol ──
 
-  /** @spec motebit/relay-federation@1.3 */
+  /** @spec motebit/relay-federation@1.4 */
   app.post("/federation/v1/peer/propose", async (c) => {
     const body = await c.req.json<{
       relay_id?: string;
@@ -1421,7 +1423,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     });
   });
 
-  /** @spec motebit/relay-federation@1.3 */
+  /** @spec motebit/relay-federation@1.4 */
   app.post("/federation/v1/peer/confirm", async (c) => {
     const body = await c.req.json<{ relay_id?: string; challenge_response?: string }>();
     const { relay_id, challenge_response } = body;
@@ -1463,7 +1465,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     return c.json({ status: "active", peered_at: now });
   });
 
-  /** @spec motebit/relay-federation@1.3 */
+  /** @spec motebit/relay-federation@1.4 */
   app.post("/federation/v1/peer/heartbeat", async (c) => {
     const body = await c.req.json<{
       relay_id?: string;
@@ -1576,7 +1578,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
   // — witnesses are portable across compositions of the same body. The
   // issuer's eventual final cert.signature binds the assembled witness
   // array.
-  /** @spec motebit/relay-federation@1.3 */
+  /** @spec motebit/relay-federation@1.4 */
   app.post("/federation/v1/horizon/witness", async (c) => {
     const rawBody = (await c.req.json()) as unknown;
     const parsed = WitnessSolicitationRequestSchema.safeParse(rawBody);
@@ -1655,7 +1657,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
   // Cert remains TERMINAL per retention-policy.md decision 5 — a
   // sustained dispute is a reputation hit on the issuer, not a cert
   // invalidation.
-  /** @spec motebit/relay-federation@1.3 */
+  /** @spec motebit/relay-federation@1.4 */
   app.post("/federation/v1/horizon/dispute", async (c) => {
     const rawBody = (await c.req.json()) as unknown;
     const parsed = WitnessOmissionDisputeSchema.safeParse(rawBody);
@@ -1776,7 +1778,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
    * MUST switch on `error_code`, not `message`. The rest of §3–15
    * still uses plain `{message}`; aligning is a follow-up arc.
    */
-  /** @spec motebit/relay-federation@1.3 */
+  /** @spec motebit/relay-federation@1.4 */
   app.post("/federation/v1/disputes/:disputeId/vote-request", async (c) => {
     const disputeIdParam = c.req.param("disputeId");
 
@@ -1919,7 +1921,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     return c.json(signedVote);
   });
 
-  /** @spec motebit/relay-federation@1.3 */
+  /** @spec motebit/relay-federation@1.4 */
   app.post("/federation/v1/peer/remove", async (c) => {
     const body = await c.req.json<{ relay_id?: string; signature?: string }>();
     const { relay_id, signature: sig } = body;
@@ -1969,7 +1971,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     });
   });
 
-  /** @spec motebit/relay-federation@1.3 */
+  /** @spec motebit/relay-federation@1.4 */
   app.get("/federation/v1/peers", (c) => {
     const rows = db
       .prepare(
@@ -1995,7 +1997,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 3: Federated Discovery ──
 
-  /** @spec motebit/relay-federation@1.3 */
+  /** @spec motebit/relay-federation@1.4 */
   app.post("/federation/v1/discover", async (c) => {
     const body = await c.req.json<{
       query: { capability?: string; motebit_id?: string; limit?: number };
@@ -2145,7 +2147,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 4: Task Forwarding ──
 
-  /** @spec motebit/relay-federation@1.3 */
+  /** @spec motebit/relay-federation@1.4 */
   app.post("/federation/v1/task/forward", async (c) => {
     const body = await c.req.json<{
       task_id: string;
@@ -2225,7 +2227,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     );
   });
 
-  /** @spec motebit/relay-federation@1.3 */
+  /** @spec motebit/relay-federation@1.4 */
   app.post("/federation/v1/task/result", async (c) => {
     const body = await c.req.json<{
       task_id: string;
@@ -2273,7 +2275,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 5: Settlement ──
 
-  /** @spec motebit/relay-federation@1.3 */
+  /** @spec motebit/relay-federation@1.4 */
   app.post("/federation/v1/settlement/forward", async (c) => {
     const body = await c.req.json<{
       task_id: string;
@@ -2322,7 +2324,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     });
   });
 
-  /** @spec motebit/relay-federation@1.3 */
+  /** @spec motebit/relay-federation@1.4 */
   app.get("/federation/v1/settlements", (c) => {
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
     const rows = db
@@ -2333,7 +2335,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
   // ── Phase 5: Settlement Proof (§7.6.6) ──
 
-  /** @spec motebit/relay-federation@1.3 */
+  /** @spec motebit/relay-federation@1.4 */
   app.get("/federation/v1/settlement/proof", async (c) => {
     const settlementId = c.req.query("settlement_id");
     if (!settlementId) {
