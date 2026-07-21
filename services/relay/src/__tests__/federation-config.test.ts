@@ -224,7 +224,9 @@ describe("Federation configuration enforcement", () => {
       expect(res.status).toBe(200);
     });
 
-    it("discover works with no config restrictions", async () => {
+    it("UNSIGNED discover rejects by default since the 1.4 sunset (403)", async () => {
+      // Pre-1.4 an unsigned discover passed under the tolerant rollout default;
+      // the 2026-07-21 sunset (#188) flipped requireDiscoverSignature to true.
       const res = await relay.app.request("/federation/v1/discover", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -237,7 +239,29 @@ describe("Federation configuration enforcement", () => {
           origin_relay: "any-relay",
         }),
       });
+      expect(res.status).toBe(403);
+    });
+
+    it("unsigned discover still works under an explicit requireDiscoverSignature:false opt-out", async () => {
+      const tolerant = await createRelay({
+        endpointUrl: "http://tolerant.test:3001",
+        displayName: "Tolerant Relay",
+        requireDiscoverSignature: false,
+      });
+      const res = await tolerant.app.request("/federation/v1/discover", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: { capability: "web_search" },
+          hop_count: 0,
+          max_hops: 2,
+          visited: [],
+          query_id: "q-tolerant",
+          origin_relay: "any-relay",
+        }),
+      });
       expect(res.status).toBe(200);
+      await tolerant.close();
     });
 
     it("federation enabled by default when endpointUrl is set", async () => {

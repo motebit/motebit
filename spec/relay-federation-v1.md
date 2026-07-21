@@ -1,13 +1,14 @@
-# motebit/relay-federation@1.3
+# motebit/relay-federation@1.4
 
 ## Relay Federation Specification
 
 **Status:** Stable
-**Version:** 1.3
-**Date:** 2026-06-11
+**Version:** 1.4
+**Date:** 2026-07-21
 
 **Version history:**
 
+- **1.4** (2026-07-21) — The announced `requireDiscoverSignature` default flip, executed on its 2026-06-21 deprecation-notice schedule: default `false → true`, so an unsigned inbound discover now rejects (403) by default, closing the cold-audit P0-3b fail-open for every relay that has not explicitly opted out. Wire unchanged (the §4.1.1 signature fields are optional since 1.3); config-restorable (`requireDiscoverSignature: false` — an explicit, owned fail-open). Minor, not peering-incompatible: version negotiation compares majors only.
 - **Deprecation notice (2026-06-21):** the `requireDiscoverSignature` config default flips `false → true` on **2026-07-21** (ships as 1.4), ending the 1.3 tolerant-reader window — an unsigned inbound discover then rejects (403) by default. Config-restorable (`requireDiscoverSignature: false`), wire unchanged. See §4.1.1.
 - **1.3** (2026-06-11) — Additive: per-hop sender authentication on `POST /federation/v1/discover` (§4.1). Each forwarding relay signs the request as the immediate `sender_relay` (distinct from the multi-hop `origin_relay`, which carries through for dedup/merge); the receiver verifies that direct neighbor's signature against `relay_peers` (state `active`) and enforces the ±5-minute `timestamp` drift window. Backward-compatible via a tolerant-reader rollout — an unsigned discover is accepted with a warning until an operator sets `requireDiscoverSignature`, after which an unsigned request rejects (403); a PRESENT-but-invalid signature always rejects regardless. Also closes the §10.2 latent fail-open by making `verifyPeerSignature` REQUIRE the in-body `timestamp` (previously the drift check was skipped when the field was absent) across task/forward, task/result, settlement/forward, and discover — every sender already stamps it, so only malformed/replayed requests are affected. Route table unchanged (fifteen entries); peers without 1.3 interoperate through the rollout window.
 - **1.2 — Corrigendum** (2026-06-11) — Documentation correctness, no wire change. §10/§10.2/§10.3 previously described a uniform `X-Relay-Id`/`X-Relay-Signature`/`X-Relay-Timestamp` transport-header authentication scheme returning HTTP 401. That scheme was never normative and contradicted the in-body signing constructions specified since 1.0 in §3.1, §3.2, §5.3–§5.4, and §7.3 — and never implemented. The authentication map is now per-endpoint and in-body (in-body `signature` field over RFC 8785 canonical JSON; signer keyed by the in-body relay id against `relay_peers`; failures are 403/400, not 401). This corrects the prose to match the wire that 1.0–1.2 always spoke. Also documents `/discover`'s current mesh-membership authentication and names **per-hop sender signing** as a tracked hardening item — shipped in 1.3 above.
@@ -222,18 +223,19 @@ optional on the wire so a 1.3 relay interoperates with pre-1.3 peers during a
 rolling deploy; senders always sign. Once every peer emits signed discover
 requests, operators flip `requireDiscoverSignature` to close the unsigned path.
 
-**Default flip — sunset 2026-07-21 (the tolerant-reader window closes).** The
-`requireDiscoverSignature` config default is `false` (tolerant) through this
-rollout. On **2026-07-21** it flips to `true`: an unsigned inbound discover
-rejects (403) by **default**, closing the cold-audit P0-3b fail-open for every
-relay that has not explicitly opted out. It is a behavior change only for a
-self-hosted relay whose direct neighbors do not yet sign (running
-relay-federation < 1.3) — announced here and in `docs/operator/self-host.md`
-rather than flipped silently. It is **config-restorable**: an operator who must
-keep accepting unsigned discovers sets `requireDiscoverSignature: false`
-explicitly (and owns the fail-open for their own mesh). The wire is unchanged
-(the signature fields are optional since 1.3); only the default acceptance policy
-changes, so the flip ships as a minor (1.4), not a peering-incompatible major.
+**Default flip — sunset EXECUTED 2026-07-21 (1.4; the tolerant-reader window
+closed).** The `requireDiscoverSignature` config default was `false` (tolerant)
+through the 1.3 rollout. Since **1.4 (2026-07-21)** it is `true`: an unsigned
+inbound discover rejects (403) by **default**, closing the cold-audit P0-3b
+fail-open for every relay that has not explicitly opted out. It was a behavior
+change only for a self-hosted relay whose direct neighbors do not sign (running
+relay-federation < 1.3) — announced here and in `docs/operator/self-host.md` on
+2026-06-21 rather than flipped silently. It is **config-restorable**: an
+operator who must keep accepting unsigned discovers sets
+`requireDiscoverSignature: false` explicitly (and owns the fail-open for their
+own mesh). The wire is unchanged (the signature fields are optional since 1.3);
+only the default acceptance policy changed, so the flip shipped as a minor
+(1.4), not a peering-incompatible major.
 
 ### 4.2 — Hop Limit
 
@@ -722,14 +724,14 @@ The fifteen routes below are the binding cross-relay contract. Renaming or reloc
 
 Authentication is **in-body and per-endpoint** — there is no transport-header (`X-Relay-*`) scheme. Each endpoint authenticates with the construction its own section specifies; this table is the authoritative map.
 
-| Endpoint(s)                                                            | Authentication                                                                                                                                                                                                                                                                                                                                                                                   | Failure                                                       |
-| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------- |
-| `peer/propose`, `peer/confirm`                                         | Nonce challenge-response (§3.1). The peer is not yet `active`, so the public key comes from the proposal payload, not `relay_peers`.                                                                                                                                                                                                                                                             | 403                                                           |
-| `peer/heartbeat`, `peer/remove`                                        | In-body `signature` over the construction the section specifies (§3.2 heartbeat: `{relay_id}\|{timestamp}\|{suite}`), verified against the peer's `relay_peers.public_key`.                                                                                                                                                                                                                      | 403                                                           |
-| `task/forward`, `task/result`, `settlement/forward`                    | In-body `signature` field: hex-encoded Ed25519 over the RFC 8785 (JCS) canonical JSON of the request body **with the `signature` field removed**. The signer is named by the in-body relay id (`origin_relay`); its public key is looked up in `relay_peers` (state `active`). An in-body `timestamp` is checked for ±5-minute drift.                                                            | 403 (unknown/inactive peer or invalid signature); 400 (drift) |
-| `horizon/witness`, `horizon/dispute`, `disputes/:id/vote-request`      | In-body signed payloads per §15–§16; signer key from `relay_peers`.                                                                                                                                                                                                                                                                                                                              | 403                                                           |
-| `discover`                                                             | Per-hop sender signing (§4.1.1, since 1.3): in-body `signature` over the canonical body, signer `sender_relay` (the immediate forwarder, NOT `origin_relay`) keyed against `relay_peers` (active), `timestamp` drift-checked. Tolerant-reader rollout — unsigned accepted with a warning until `requireDiscoverSignature` is set, then rejected; a present-but-invalid signature always rejects. | 403/400 when signed or required; — while unsigned in rollout  |
-| `GET identity`, `GET peers`, `GET settlements`, `GET settlement/proof` | Unauthenticated by design: identity is public (§2.4) and the settlement proof is self-verifying (§7.6.6).                                                                                                                                                                                                                                                                                        | —                                                             |
+| Endpoint(s)                                                            | Authentication                                                                                                                                                                                                                                                                                                                                                                                                           | Failure                                                       |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------- |
+| `peer/propose`, `peer/confirm`                                         | Nonce challenge-response (§3.1). The peer is not yet `active`, so the public key comes from the proposal payload, not `relay_peers`.                                                                                                                                                                                                                                                                                     | 403                                                           |
+| `peer/heartbeat`, `peer/remove`                                        | In-body `signature` over the construction the section specifies (§3.2 heartbeat: `{relay_id}\|{timestamp}\|{suite}`), verified against the peer's `relay_peers.public_key`.                                                                                                                                                                                                                                              | 403                                                           |
+| `task/forward`, `task/result`, `settlement/forward`                    | In-body `signature` field: hex-encoded Ed25519 over the RFC 8785 (JCS) canonical JSON of the request body **with the `signature` field removed**. The signer is named by the in-body relay id (`origin_relay`); its public key is looked up in `relay_peers` (state `active`). An in-body `timestamp` is checked for ±5-minute drift.                                                                                    | 403 (unknown/inactive peer or invalid signature); 400 (drift) |
+| `horizon/witness`, `horizon/dispute`, `disputes/:id/vote-request`      | In-body signed payloads per §15–§16; signer key from `relay_peers`.                                                                                                                                                                                                                                                                                                                                                      | 403                                                           |
+| `discover`                                                             | Per-hop sender signing (§4.1.1, since 1.3): in-body `signature` over the canonical body, signer `sender_relay` (the immediate forwarder, NOT `origin_relay`) keyed against `relay_peers` (active), `timestamp` drift-checked. Unsigned rejects by default since 1.4 (the executed 2026-07-21 sunset); tolerant only under an explicit `requireDiscoverSignature: false`. A present-but-invalid signature always rejects. | 403/400; — while unsigned under an explicit tolerant opt-out  |
+| `GET identity`, `GET peers`, `GET settlements`, `GET settlement/proof` | Unauthenticated by design: identity is public (§2.4) and the settlement proof is self-verifying (§7.6.6).                                                                                                                                                                                                                                                                                                                | —                                                             |
 
 The receiving relay, for the signed mutating endpoints:
 
