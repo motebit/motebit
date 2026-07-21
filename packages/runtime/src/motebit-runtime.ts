@@ -255,7 +255,7 @@ import { SecretRedactingProvider } from "./secret-redacting-provider.js";
 import { CredentialManager } from "./credential-manager.js";
 import { readLatestHardwareAttestationClaim } from "./hardware-attestation-projection.js";
 import { readLatencyStats } from "./latency-stats-projection.js";
-import { scoreAttestation, selectWorker as selectWorkerByTrust } from "@motebit/semiring";
+import { scoreAttestation, rankWorkersWithBasis } from "@motebit/semiring";
 import { PlanExecutionManager } from "./plan-execution.js";
 import { createGoalsEmitter, type GoalsEmitter, type GoalLifecycleStatus } from "./goals.js";
 import { createMemoryFormationQueue, type MemoryFormationQueue } from "./memory-formation-queue.js";
@@ -300,8 +300,11 @@ import {
   consolidationReceiptDigest,
   consolidationContentDigest,
   signContentArtifact,
+  signRoutingTranscript,
+  bytesToHex as cryptoBytesToHex,
   type ContentArtifactManifest,
 } from "@motebit/crypto";
+import type { RoutingDecisionTranscript } from "@motebit/protocol";
 import type { ConsolidationMutationCommitment } from "@motebit/sdk";
 // `GOAL_RESULT_ARTIFACT` is re-exported via `@motebit/sdk` per the sdk
 // CLAUDE.md re-export rule — every protocol type accessible through sdk.
@@ -567,6 +570,13 @@ export class MotebitRuntime {
   private latencyStatsStore: LatencyStatsStoreAdapter | null;
   private agentGraph: AgentGraphManager;
   private _signingKeys: { privateKey: Uint8Array; publicKey: Uint8Array } | null;
+  /**
+   * Bounded buffer of recently minted routing-decision transcripts
+   * (docs/doctrine/routing-decision-transcript.md — minted always, retained
+   * locally, egressed on dispute or owner choice, never broadcast). The
+   * `getRecentApprovalDecisions()` buffer-and-getter shape.
+   */
+  private _recentRoutingTranscripts: RoutingDecisionTranscript[] = [];
   /**
    * Sovereign Solana wallet rail. Null when the runtime has no signing keys
    * or the caller did not configure a Solana rail. When present, exposes
@@ -3996,6 +4006,19 @@ export class MotebitRuntime {
   }
 
   /**
+   * Recently minted routing-decision transcripts, newest last — the signed
+   * record of why each ranked paid hire won
+   * (docs/doctrine/routing-decision-transcript.md). Session-scoped and
+   * bounded, like `getRecentApprovalDecisions()`: disclosure is
+   * dispute-scoped or owner-initiated, never broadcast, and the buffer
+   * REVEALS, never authorizes. Durable cross-restart archival is a deferred,
+   * consumer-shaped concern.
+   */
+  getRecentRoutingTranscripts(): ReadonlyArray<RoutingDecisionTranscript> {
+    return this._recentRoutingTranscripts;
+  }
+
+  /**
    * Per-session pixel-passthrough consent. Composed into the loop's
    * `projectForAi` pixel gate alongside provider mode and effective
    * sensitivity. Default is `denied` — fail-closed for fresh sessions.
@@ -4948,12 +4971,15 @@ export class MotebitRuntime {
               // inflate its `read_url` estimate. The pairwise trust level (the
               // relationship) still speaks through the prior.
               const capability = params.capability;
-              const exploitTop = selectWorkerByTrust(this.motebitId, rankable, { capability });
-              const winner = selectWorkerByTrust(this.motebitId, rankable, {
+              // The produced-basis emitter runs the REAL ranking and freezes
+              // exactly what it consumed — winner, explored flag, and the
+              // transcript basis in one pass
+              // (docs/doctrine/routing-decision-transcript.md Inc 3).
+              const { winner, basis } = rankWorkersWithBasis(this.motebitId, rankable, {
                 capability,
                 explore: { seed: exploreSeed, strength },
               });
-              if (winner != null) {
+              if (winner != null && basis != null) {
                 // Surface the "why" — the sub-hop routing decision, including
                 // whether exploration overrode the exploit-favorite (the honest
                 // "why the newcomer got tried" signal).
@@ -4962,10 +4988,49 @@ export class MotebitRuntime {
                   capability,
                   candidates: rankable.length,
                   strength: Number(strength.toFixed(3)),
-                  explored: exploitTop != null && winner.motebit_id !== exploitTop.motebit_id,
+                  explored: basis.explored,
                   quality: Number(winner.route.trust.toFixed(3)),
                   bonded: rankable.find((r) => r.motebit_id === winner.motebit_id)?.bonded === true,
                 });
+                // Mint the signed routing-decision transcript from the frozen
+                // basis (produced-basis: minted by the code path that made the
+                // decision, never reconstructed). Reveals, never authorizes —
+                // minting failure never fails the hire; the transcript is
+                // evidence, not authority.
+                if (this._signingKeys != null) {
+                  try {
+                    const transcript = await signRoutingTranscript(
+                      {
+                        spec: "motebit/routing-transcript@1.0",
+                        delegator_motebit_id: this.motebitId,
+                        delegator_public_key: cryptoBytesToHex(this._signingKeys.publicKey),
+                        issued_at: Date.now(),
+                        ...basis,
+                      },
+                      this._signingKeys.privateKey,
+                    );
+                    this._recentRoutingTranscripts.push(transcript);
+                    if (this._recentRoutingTranscripts.length > 50) {
+                      this._recentRoutingTranscripts.shift();
+                    }
+                    this._logger.warn("routing.transcript_minted", {
+                      winner: transcript.winner_motebit_id,
+                      capability: transcript.capability,
+                      candidates: transcript.candidates.length,
+                      explored: transcript.explored,
+                      // The signature is the transcript's collision-resistant
+                      // handle (it covers the JCS-canonical bytes) — the
+                      // binding key a consumer joins on. Wire-level digest
+                      // binding into the delegation record lands with Inc 4's
+                      // consumer (the conformance probe), consumer-forced.
+                      transcript_sig: transcript.signature.slice(0, 16),
+                    });
+                  } catch (err) {
+                    this._logger.warn("routing.transcript_mint_failed", {
+                      error: err instanceof Error ? err.message : String(err),
+                    });
+                  }
+                }
               }
               return winner?.motebit_id ?? null;
             };
