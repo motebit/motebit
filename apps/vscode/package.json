@@ -37,7 +37,7 @@
     "clean": "rm -rf out .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "vscode-languageclient": "^9.0.1"
+    "vscode-languageclient": "^10.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.20.0",
