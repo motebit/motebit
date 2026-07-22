@@ -530,6 +530,12 @@ export function defaultCreateMoneyRuntime(
       policy: { ...policyOverrides, denyAbove: RiskLevel.R4_MONEY },
       solanaWallet: wallet,
       grantSpendStore: grantSpendStore as never,
+      // The molecule's identity keys double as the delegator signing keys so
+      // the runtime can mint routing-decision transcripts for its ranked paid
+      // hires (docs/doctrine/routing-decision-transcript.md Inc 3 — without
+      // these the producer is silently dormant and every deployed molecule
+      // WARNs "no transcripts" in conformance).
+      signingKeys: { privateKey: identity.privateKey, publicKey: identity.publicKey },
     },
     { storage, renderer: new NullRenderer(), tools },
   );
