@@ -33,6 +33,20 @@ const logger = createLogger({ service: "relay", module: "bond-store" });
  */
 export const BOND_BACKING_STALENESS_MS = 60_000;
 
+/**
+ * Reference minimum bond amount (micro-USDC) for the PUBLIC discover `bonded`
+ * signal. A bond below this floor is a real, signed, address-bound commitment
+ * but too small to carry the anti-sybil weight the signal implies — without a
+ * floor, a self-registered $0 bond mints `bonded: true` at zero capital, and a
+ * sybil swarm does so per-identity for free (the exact property the bond is
+ * meant to bound). `REFERENCE_` because the credible-commitment threshold is a
+ * mechanism-design choice an operator tunes, not interop law; $1.00 makes an
+ * N-identity swarm cost ~$N rather than nothing. This gates ONLY the discover
+ * signal — the money-eligibility gate keeps its own stricter coverage math
+ * (`bondCoversTicket`, ≥10× ticket + in-flight).
+ */
+export const REFERENCE_MIN_BONDED_SIGNAL_MICRO = 1_000_000;
+
 /** Verifier-cache state for a bond's onchain backing. */
 export type BondBackingState = "pending" | "backed" | "underbacked";
 
