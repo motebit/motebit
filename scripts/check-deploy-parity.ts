@@ -101,10 +101,16 @@ function parseEnvExample(path: string): Set<string> {
 /**
  * Return all env var names read in a service's source.
  *
- * Recognizes three shapes:
+ * Recognizes four shapes:
  *   - process.env.FOO
  *   - process.env["FOO"]
  *   - parseBoolEnv("FOO", ...) / parseIntEnv / parseFloatEnv (services/relay/src/env.ts helpers)
+ *   - env.FOO / env["FOO"] — the INJECTED env source in a pure config builder
+ *     (relay-config.ts `buildRelayConfigFromEnv(env, …)`). The builder reads
+ *     the env through a parameter (default process.env) so effective config is
+ *     unit-testable; the reads are real, just one indirection removed from
+ *     `process.env`. SCREAMING_SNAKE-constrained so `env.foo`/`obj.envX` don't
+ *     match.
  *
  * If a service introduces a new env-reading helper, extend the regex — the
  * gate's correctness depends on knowing every shape. Better to false-positive
@@ -114,6 +120,7 @@ function envVarsReadInSource(serviceDir: string): Set<string> {
   const names = new Set<string>();
   const directEnv = /process\.env(?:\.([A-Z][A-Z0-9_]*)|\[["']([A-Z][A-Z0-9_]*)["']\])/g;
   const helperEnv = /\bparse(?:Bool|Int|Float)Env\s*\(\s*["']([A-Z][A-Z0-9_]*)["']/g;
+  const injectedEnv = /\benv(?:\.([A-Z][A-Z0-9_]*)|\[["']([A-Z][A-Z0-9_]*)["']\])/g;
 
   function walk(dir: string): void {
     let entries: string[];
@@ -138,6 +145,10 @@ function envVarsReadInSource(serviceDir: string): Set<string> {
         helperEnv.lastIndex = 0;
         while ((m = helperEnv.exec(src)) !== null) {
           names.add(m[1]);
+        }
+        injectedEnv.lastIndex = 0;
+        while ((m = injectedEnv.exec(src)) !== null) {
+          names.add(m[1] ?? m[2]);
         }
       }
     }

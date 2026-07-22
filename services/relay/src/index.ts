@@ -251,8 +251,13 @@ export interface SyncRelayConfig {
     revocationHorizonIntervalMs?: number;
     /**
      * Require a valid per-hop sender signature on inbound `/federation/v1/discover`
-     * (relay-federation@1.3 §4.1). Default: false (tolerant-reader rollout window).
-     * Mirrors `FederationConfig.requireDiscoverSignature` — passed straight through.
+     * (relay-federation@1.4 §4.1.1). Default: TRUE since the #188 sunset —
+     * `DEFAULT_REQUIRE_DISCOVER_SIGNATURE` (federation.ts) — an unsigned inbound
+     * discover rejects (403). The production boot wires this from that canonical
+     * constant via `buildRelayConfigFromEnv` (relay-config.ts); an operator
+     * peering with a pre-1.3 relay sets `MOTEBIT_FEDERATION_REQUIRE_DISCOVER_SIGNATURE=false`
+     * explicitly (config-restorable opt-out). Passed straight through to
+     * `FederationConfig.requireDiscoverSignature`.
      */
     requireDiscoverSignature?: boolean;
   };

@@ -39,11 +39,19 @@ interface Rule {
   boundary: string;
 }
 
+// The env → config wiring now lives in the pure builder
+// (relay-config.ts), driven by the SECURITY_BOUNDARY_DEFAULTS registry there.
+// This gate is the fast static tripwire; the effective-config unit test
+// (relay-config.test.ts) is the strong semantic enforcement (it boots the
+// real builder and asserts the computed value). Both bind to the same
+// registry — the test imports it directly, this gate mirrors the one
+// constant-backed boundary as a source-text assertion so a shadowing literal
+// fails at `pnpm check` speed without a build.
 const REGISTRY: Rule[] = [
   {
     envVar: "MOTEBIT_FEDERATION_REQUIRE_DISCOVER_SIGNATURE",
     constant: "DEFAULT_REQUIRE_DISCOVER_SIGNATURE",
-    configFile: "services/relay/src/server.ts",
+    configFile: "services/relay/src/relay-config.ts",
     boundary: "federation per-hop discover signing (the #188 sunset; cross-org trust boundary)",
   },
 ];

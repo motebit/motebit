@@ -148,12 +148,12 @@ const PROBES: ReadonlyArray<Probe> = [
   {
     script: "check-security-default-wiring",
     proves:
-      "flags server.ts re-shadowing the federation discover-signature default with a hard-coded literal instead of the canonical DEFAULT_REQUIRE_DISCOVER_SIGNATURE constant (the #346 sunset-inert-in-prod regression)",
+      "flags the relay config builder re-shadowing the federation discover-signature default with a hard-coded literal instead of the canonical DEFAULT_REQUIRE_DISCOVER_SIGNATURE constant (the #346 sunset-inert-in-prod regression)",
     perturb: () =>
-      mutateFile("services/relay/src/server.ts", (src) =>
+      mutateFile("services/relay/src/relay-config.ts", (src) =>
         src.replace(
-          'MOTEBIT_FEDERATION_REQUIRE_DISCOVER_SIGNATURE",\n          DEFAULT_REQUIRE_DISCOVER_SIGNATURE,',
-          'MOTEBIT_FEDERATION_REQUIRE_DISCOVER_SIGNATURE",\n          false,',
+          "DEFAULT_REQUIRE_DISCOVER_SIGNATURE,\n            env,",
+          "false,\n            env,",
         ),
       ),
   },
