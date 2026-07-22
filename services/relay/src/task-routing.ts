@@ -111,6 +111,7 @@ export interface TaskRouter {
        * (cross-operator P2P funding — the relay never transmits).
        */
       _settlement_address: string | null;
+      _public_key: string | null;
     }[];
     federationEdges: Array<{
       from: string;
@@ -459,6 +460,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
        * (cross-operator P2P funding — the relay never transmits).
        */
       _settlement_address: string | null;
+      _public_key: string | null;
     }[];
     federationEdges: Array<{
       from: string;
@@ -583,6 +585,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
           profile: CandidateProfile;
           _source_relay_endpoint: string;
           _settlement_address: string | null;
+          _public_key: string | null;
         }[] = [];
 
         for (const agent of agents) {
@@ -631,6 +634,11 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
             },
             _source_relay_endpoint: peer.endpoint_url,
             _settlement_address: agent.settlement_address ?? null,
+            // The peer-forwarded worker key. UNTRUSTED as-is (a malicious peer
+            // forges it) — the federated pay-to seam binds it: it is authoritative
+            // only when it sovereign-binds to the worker's motebit_id AND the
+            // settlement address derives from it. docs/doctrine/settlement-authority-binding.md.
+            _public_key: agent.public_key ?? null,
           });
         }
         return results;
@@ -652,6 +660,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
             profile: CandidateProfile;
             _source_relay_endpoint: string;
             _settlement_address: string | null;
+            _public_key: string | null;
           }[]
         > => r.status === "fulfilled",
       )

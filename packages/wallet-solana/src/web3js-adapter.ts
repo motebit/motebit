@@ -53,6 +53,30 @@ export function deriveSolanaAddress(publicKey: Uint8Array): string {
   // the address without depending on this provider package.
   return base58Encode(publicKey);
 }
+
+/**
+ * The DERIVED settlement-authority binding: is `settlementAddress` the identity
+ * key's own Solana address? A Solana address IS `deriveSolanaAddress` of the
+ * key, so `settlementAddress === deriveSolanaAddress(publicKeyHex)` proves the
+ * agent's key authorizes this payout destination — tautologically, offline, no
+ * artifact (docs/doctrine/settlement-authority-binding.md, the `derived-bound`
+ * rung; the same shape as the commitment bond's address binding). A distinct
+ * payout wallet needs the signed-bound rung instead. Fail-closed on a malformed
+ * key. The CALLER is responsible for the public key being the agent's real key
+ * (its own registry row, or an identity-binding-verified key for a federated
+ * worker) — this only checks address⇄key, not key⇄motebit_id.
+ */
+export function isDerivedSettlementBinding(
+  settlementAddress: string,
+  publicKeyHex: string,
+): boolean {
+  if (!/^[0-9a-f]{64}$/i.test(publicKeyHex)) return false;
+  const bytes = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) {
+    bytes[i] = parseInt(publicKeyHex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return settlementAddress === deriveSolanaAddress(bytes);
+}
 import {
   createAssociatedTokenAccountInstruction,
   createTransferInstruction,

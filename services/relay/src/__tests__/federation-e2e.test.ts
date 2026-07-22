@@ -23,6 +23,7 @@ import {
   sign,
   canonicalJson,
 } from "@motebit/encryption";
+import { deriveSovereignMotebitId } from "@motebit/crypto";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
 import { deriveSolanaAddress, SolanaWalletRail } from "@motebit/wallet-solana";
 import type { SolanaRpcAdapter } from "@motebit/wallet-solana";
@@ -320,6 +321,59 @@ async function registerAgent(
   });
 
   return { motebitId, publicKeyHex, privateKey: keypair.privateKey };
+}
+
+/**
+ * Register a SOVEREIGN worker (motebit_id derives from its own genesis key) with
+ * a DERIVED settlement address (`deriveSolanaAddress(public_key)`). This is what
+ * a real federated worker that can be offline-bound looks like: the origin relay
+ * can prove the peer-forwarded key is the worker's (`verifySovereignBinding`) and
+ * that the payout address is that key's own (`isDerivedSettlementBinding`) — the
+ * settlement-authority binding a cross-operator P2P leg now requires. Skips the
+ * relay's random-id `/identity` mint (which produces a NON-bindable UUIDv7).
+ */
+async function registerSovereignWorker(
+  relay: SyncRelay,
+  name: string,
+  capabilities: string[],
+  pricing: Array<{ capability: string; unit_cost: number; currency: string; per: string }> = [],
+): Promise<{
+  motebitId: string;
+  publicKeyHex: string;
+  privateKey: Uint8Array;
+  settlementAddress: string;
+}> {
+  const keypair = await generateKeypair();
+  const publicKeyHex = bytesToHex(keypair.publicKey);
+  const motebitId = await deriveSovereignMotebitId(publicKeyHex);
+  const settlementAddress = deriveSolanaAddress(keypair.publicKey);
+  await relay.app.request("/device/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+    body: JSON.stringify({
+      motebit_id: motebitId,
+      device_name: `${name}-device`,
+      public_key: publicKeyHex,
+    }),
+  });
+  await relay.app.request("/api/v1/agents/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+    body: JSON.stringify({
+      motebit_id: motebitId,
+      endpoint_url: "http://localhost:0/mcp",
+      capabilities,
+      public_key: publicKeyHex,
+      settlement_address: settlementAddress,
+      settlement_modes: "p2p",
+    }),
+  });
+  await relay.app.request(`/api/v1/agents/${motebitId}/listing`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+    body: JSON.stringify({ capabilities, pricing, description: `${name} service agent` }),
+  });
+  return { motebitId, publicKeyHex, privateKey: keypair.privateKey, settlementAddress };
 }
 
 // === Tests ===
@@ -1351,11 +1405,11 @@ describe("Federation E2E", () => {
       // virtual account. The relay transmitter surface is provably zero —
       // money never enters relay custody. Replaces the PHASE 2 relay-custody
       // chain for the funded path (off-ramp-as-user-action.md § federated P2P).
-      const WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
+      let WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv"; // reassigned to the worker's derived address once it exists
       const FAKE_TX_HASH =
         "4vERYvaLiDsLaNaTransaCtiNSignaTuReHashThatis88charsLng1234567891abcDEFghijk";
 
-      const bob = await registerAgent(
+      const bob = await registerSovereignWorker(
         relayB,
         "bob-p2p",
         ["paid-quantum"],
@@ -1363,6 +1417,7 @@ describe("Federation E2E", () => {
       );
       // Bob declares a settlement_address — the worker leg destination the
       // delegator pays directly (surfaced to A via federated discovery, P-A).
+      WORKER_ADDR = bob.settlementAddress;
       relayB.moteDb.db
         .prepare(
           "UPDATE agent_registry SET settlement_address = ?, settlement_modes = 'p2p' WHERE motebit_id = ?",
@@ -1582,18 +1637,19 @@ describe("Federation E2E", () => {
       // P2P delegation never delivered a proof, so the relay 402'd every paid
       // cross-agent delegation. Types + the shared split primitive can't catch a
       // wire-key mismatch; only an end-to-end submission can.
-      const WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
+      let WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv"; // reassigned to the worker's derived address once it exists
       const SIG = "4vERYvaLiDsLaNaTransaCtiNSignaTuReHashThatis88charsLng1234567891abcDEFghijk";
 
       // Remote worker bob on B: priced + p2p + a settlement address. Discovery
       // from A surfaces its pricing + B's relay key (PR-fed-1/1b) — the inputs
       // the client's federated branch consumes.
-      const bob = await registerAgent(
+      const bob = await registerSovereignWorker(
         relayB,
         "bob-client",
         ["client-cap"],
         [{ capability: "client-cap", unit_cost: 1.0, currency: "USD", per: "task" }],
       );
+      WORKER_ADDR = bob.settlementAddress;
       relayB.moteDb.db
         .prepare(
           "UPDATE agent_registry SET settlement_address = ?, settlement_modes = 'p2p' WHERE motebit_id = ?",
@@ -1689,16 +1745,17 @@ describe("Federation E2E", () => {
       // forward that failed — must remain resubmittable with the same proof, or
       // the delegator's only recovery would be to pay again. The guard keys on
       // SETTLED proofs: unsettled tx → allowed; settled tx → 409.
-      const WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
+      let WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv"; // reassigned to the worker's derived address once it exists
       const FAKE_TX_HASH =
         "4vERYvaLiDsLaNaTransaCtiNSignaTuReHashThatis88charsLng1234567891abcDEFghijk";
 
-      const bob = await registerAgent(
+      const bob = await registerSovereignWorker(
         relayB,
         "bob-replay",
         ["replay-cap"],
         [{ capability: "replay-cap", unit_cost: 1.0, currency: "USD", per: "task" }],
       );
+      WORKER_ADDR = bob.settlementAddress;
       relayB.moteDb.db
         .prepare("UPDATE agent_registry SET settlement_address = ? WHERE motebit_id = ?")
         .run(WORKER_ADDR, bob.motebitId);
@@ -1806,15 +1863,16 @@ describe("Federation E2E", () => {
       // receipt must be rejected before any settlement fires. The happy-path
       // counterpart (valid forwarded receipt → receipt_verified → settles) is the
       // PHASE 2 settlement test directly above.
-      const WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
+      let WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv"; // reassigned to the worker's derived address once it exists
       const FAKE_TX_HASH =
         "4vERYvaLiDsLaNaTransaCtiNSignaTuReHashThatis88charsLng1234567891abcDEFghijk";
-      const bob = await registerAgent(
+      const bob = await registerSovereignWorker(
         relayB,
         "bob-tamper",
         ["tamper-cap"],
         [{ capability: "tamper-cap", unit_cost: 1.0, currency: "USD", per: "task" }],
       );
+      WORKER_ADDR = bob.settlementAddress;
       relayB.moteDb.db
         .prepare("UPDATE agent_registry SET settlement_address = ? WHERE motebit_id = ?")
         .run(WORKER_ADDR, bob.motebitId);
@@ -1982,15 +2040,16 @@ describe("Federation E2E", () => {
       // leg) and the forward-site three-leg validation (worker/origin-fee/executor-fee
       // address + amount). Each malformed proof must be rejected, never forwarded —
       // the relay only forwards a proof it can stand behind.
-      const WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
+      let WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv"; // reassigned to the worker's derived address once it exists
       const FAKE_TX_HASH =
         "4vERYvaLiDsLaNaTransaCtiNSignaTuReHashThatis88charsLng1234567891abcDEFghijk";
-      const bob = await registerAgent(
+      const bob = await registerSovereignWorker(
         relayB,
         "bob-malformed",
         ["malformed-cap"],
         [{ capability: "malformed-cap", unit_cost: 1.0, currency: "USD", per: "task" }],
       );
+      WORKER_ADDR = bob.settlementAddress;
       relayB.moteDb.db
         .prepare("UPDATE agent_registry SET settlement_address = ? WHERE motebit_id = ?")
         .run(WORKER_ADDR, bob.motebitId);
