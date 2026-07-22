@@ -11,7 +11,7 @@
  * another's. Anonymous discover (no caller) returns identity + capabilities +
  * pricing only — public marketplace data, private trust kept private.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { SyncRelay } from "../index.js";
 import { generateKeypair, bytesToHex } from "@motebit/encryption";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
@@ -20,6 +20,7 @@ import {
   enrichWithHardwareAttestation,
   enrichWithLatencyStats,
   enrichWithBondStatus,
+  sanitizePeerAgent,
 } from "../agents.js";
 
 interface DiscoveredAgent {
@@ -592,9 +593,12 @@ describe("GET /api/v1/agents/discover — marketplace enrichment", () => {
       motebit_id: string;
       backing_state?: "pending" | "backed" | "underbacked";
       expires_at?: number;
+      /** Committed amount in micro-USDC. Default 5_000_000 (above the signal floor). */
+      bond_amount_micro?: number;
     },
   ): void {
     const now = Date.now();
+    const amount = opts.bond_amount_micro ?? 5_000_000;
     db.prepare(
       `INSERT INTO relay_bond_commitments
         (bond_id, motebit_id, bonded_address, bonded_public_key, bond_amount_micro,
@@ -606,7 +610,7 @@ describe("GET /api/v1/agents/discover — marketplace enrichment", () => {
       opts.motebit_id,
       "BondAddr1111111111111111111111111111111111",
       "aa".repeat(32),
-      5_000_000,
+      amount,
       "usdc",
       "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
       now,
@@ -615,7 +619,7 @@ describe("GET /api/v1/agents/discover — marketplace enrichment", () => {
       "sig",
       "{}",
       opts.backing_state ?? "pending",
-      opts.backing_state === "backed" ? 5_000_000 : null,
+      opts.backing_state === "backed" ? amount : null,
       opts.backing_state != null && opts.backing_state !== "pending" ? now : null,
       now,
     );
@@ -663,14 +667,175 @@ describe("GET /api/v1/agents/discover — marketplace enrichment", () => {
     }
   });
 
-  it("enrichWithBondStatus preserves peer-provided bonded on federated agents", () => {
-    // Same federation-passthrough rule as the HA + latency enrichers: the
-    // home relay's bond table is authoritative for agents that bonded there.
+  it("enrichWithBondStatus STRIPS peer-provided bonded — a federated peer cannot mint the signal (laundering fix)", () => {
+    // A bond is an onchain fact only THIS relay's RPC verifier may assert; a
+    // peer forwarding an agent cannot vouch that it is bonded (rule 6). An
+    // inbound `bonded: true` on an agent with no local backed bond row must be
+    // stripped, never re-published. Regression for the HIGH federation-
+    // laundering finding — this test previously asserted the vulnerable
+    // "preserves peer-provided bonded" behavior.
     const enriched = enrichWithBondStatus(
       [{ motebit_id: "fed-bonded-agent", capabilities: ["x"], bonded: true } as EnricherInput],
       relay.moteDb.db,
     );
-    expect(enriched[0]!.bonded).toBe(true);
+    expect(enriched[0]!.bonded).toBeUndefined();
+  });
+
+  it("enrichWithBondStatus attaches NOTHING for a sub-floor (near-zero) bond — zero-capital sybil signal is closed", async () => {
+    const kp = await generateKeypair();
+    await registerAgent(relay, "dust-bond-agent", bytesToHex(kp.publicKey));
+    insertBond(relay.moteDb.db, {
+      bond_id: "bond-dust",
+      motebit_id: "dust-bond-agent",
+      backing_state: "backed",
+      bond_amount_micro: 1, // a signed, address-bound, backed — but 0.000001 USDC
+    });
+    const res = await relay.app.request("/api/v1/agents/discover");
+    const { agents } = (await res.json()) as { agents: DiscoveredAgent[] };
+    const target = agents.find((a) => a.motebit_id === "dust-bond-agent");
+    expect(target).toBeDefined();
+    expect(target!.bonded).toBeUndefined();
+  });
+
+  it("sanitizePeerAgent strips relay-attested fields on a valid record; DROPS a forged low hop_distance", () => {
+    // A valid multi-hop record: bonded stripped, the rest passes through.
+    const cleaned = sanitizePeerAgent({
+      motebit_id: "peer-agent",
+      bonded: true,
+      hop_distance: 2,
+      settlement_address: "PeerOwnAddr",
+    });
+    expect(cleaned).not.toBeNull();
+    expect(cleaned!.bonded).toBeUndefined();
+    expect(cleaned!.hop_distance).toBe(2);
+    expect(cleaned!.settlement_address).toBe("PeerOwnAddr");
+
+    // A forged hop_distance -1 (bid to override a local hop-0 record) is DROPPED,
+    // never normalized to a winning 1.
+    expect(sanitizePeerAgent({ motebit_id: "victim", bonded: true, hop_distance: -1 })).toBeNull();
+  });
+
+  it("sanitizePeerAgent DROPS (never normalizes) any protocol-invalid hop_distance — the remote-vs-remote fix", () => {
+    // Honest values in [1, MAX] pass through unchanged.
+    expect(sanitizePeerAgent({ motebit_id: "x", hop_distance: 1 })!.hop_distance).toBe(1);
+    expect(sanitizePeerAgent({ motebit_id: "x", hop_distance: 3 })!.hop_distance).toBe(3);
+    // Everything else is dropped — NOT normalized to an advantageous 1, which
+    // would let a forgery outrank an honest distance-2/3 record.
+    expect(sanitizePeerAgent({ motebit_id: "x" })).toBeNull(); // missing
+    expect(sanitizePeerAgent({ motebit_id: "x", hop_distance: 0 })).toBeNull();
+    expect(sanitizePeerAgent({ motebit_id: "x", hop_distance: -1 })).toBeNull();
+    expect(sanitizePeerAgent({ motebit_id: "x", hop_distance: 1.9 })).toBeNull(); // float
+    expect(sanitizePeerAgent({ motebit_id: "x", hop_distance: "1" })).toBeNull(); // string
+    expect(sanitizePeerAgent({ motebit_id: "x", hop_distance: 999 })).toBeNull(); // out of range
+  });
+
+  it("END-TO-END: a malicious peer cannot override a local record's routing or launder its bond (collision attack)", async () => {
+    // The real security invariant (not just "the sanitizer removed a field"): a
+    // federated peer that forges a LOCAL agent's motebit_id — with bonded:true,
+    // a forged low hop_distance, and an ATTACKER settlement_address — cannot win
+    // the lowest-hop-wins merge, cannot redirect the agent's settlement, and
+    // cannot mint its bond signal. Exercises the full discover handler + merge,
+    // not the sanitizer in isolation.
+    const kp = await generateKeypair();
+    await registerAgent(relay, "collision-target", bytesToHex(kp.publicKey));
+
+    // An active peer so the handler fans out.
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, state) VALUES (?, ?, ?, 'active')",
+      )
+      .run("evil-peer", "bb".repeat(32), "http://evil-peer.test");
+
+    // The malicious peer returns a forged record colliding with the local id.
+    const forged = {
+      motebit_id: "collision-target",
+      bonded: true,
+      hop_distance: -1,
+      settlement_address: "AttackerAddr9999999999999999999999999999999",
+      source_relay: "evil-peer",
+      capabilities: ["web_search"],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.includes("/federation/v1/discover")
+          ? new Response(JSON.stringify({ agents: [forged] }), { status: 200 })
+          : new Response("not found", { status: 404 }),
+      ),
+    );
+    try {
+      const res = await relay.app.request("/api/v1/agents/discover");
+      const { agents } = (await res.json()) as {
+        agents: Array<Record<string, unknown> & { motebit_id: string }>;
+      };
+      const target = agents.find((a) => a.motebit_id === "collision-target");
+      expect(target).toBeDefined();
+      // Bond signal NOT laundered.
+      expect(target!.bonded).toBeUndefined();
+      // Local record won the merge (hop_distance 0), attacker's forged record
+      // (hop_distance -1) was dropped as protocol-invalid.
+      expect(target!.hop_distance).toBe(0);
+      // Settlement routing NOT redirected to the attacker.
+      expect(target!.settlement_address).not.toBe("AttackerAddr9999999999999999999999999999999");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("END-TO-END remote-vs-remote: a malicious peer's malformed-hop forgery cannot outrank an honest peer's record", async () => {
+    // The residual attack the earlier local-collision test could NOT prove: two
+    // peers serving the SAME non-local identity. The honest peer reports it at a
+    // valid distance 2 with its real settlement address; the malicious peer
+    // reports the same id with a forged hop_distance (protocol-invalid) and an
+    // attacker settlement address. The malformed record must be DROPPED so it
+    // cannot win the lowest-hop-wins merge and redirect settlement.
+    for (const [id, url] of [
+      ["honest-peer", "http://honest-peer.test"],
+      ["evil-peer", "http://evil-peer.test"],
+    ] as const) {
+      relay.moteDb.db
+        .prepare(
+          "INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, state) VALUES (?, ?, ?, 'active')",
+        )
+        .run(id, "cc".repeat(32), url);
+    }
+    const honestRecord = {
+      motebit_id: "remote-identity",
+      hop_distance: 2,
+      settlement_address: "HonestRemoteAddr1111111111111111111111111111",
+      source_relay: "honest-peer",
+      capabilities: ["web_search"],
+    };
+    const forgedRecord = {
+      motebit_id: "remote-identity",
+      hop_distance: 0, // protocol-invalid → dropped (would else normalize to a winning 1)
+      settlement_address: "AttackerAddr9999999999999999999999999999999",
+      source_relay: "evil-peer",
+      capabilities: ["web_search"],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.startsWith("http://honest-peer.test"))
+          return new Response(JSON.stringify({ agents: [honestRecord] }), { status: 200 });
+        if (url.startsWith("http://evil-peer.test"))
+          return new Response(JSON.stringify({ agents: [forgedRecord] }), { status: 200 });
+        return new Response("not found", { status: 404 });
+      }),
+    );
+    try {
+      const res = await relay.app.request("/api/v1/agents/discover");
+      const { agents } = (await res.json()) as {
+        agents: Array<Record<string, unknown> & { motebit_id: string }>;
+      };
+      const target = agents.find((a) => a.motebit_id === "remote-identity");
+      expect(target).toBeDefined();
+      // The honest record won; the attacker's malformed forgery was dropped.
+      expect(target!.settlement_address).toBe("HonestRemoteAddr1111111111111111111111111111");
+      expect(target!.settlement_address).not.toBe("AttackerAddr9999999999999999999999999999999");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("enrichWithBondStatus attaches nothing for agents with no bond row", () => {
