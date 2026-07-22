@@ -43,6 +43,11 @@ const CHAIN: Array<{ file: string; needle: string; link: string }> = [
     link: "producer signs the frozen basis",
   },
   {
+    file: "packages/molecule-runner/src/index.ts",
+    needle: "signingKeys: { privateKey: identity.privateKey",
+    link: "money molecules wire delegator signing keys (else the producer is silently dormant in every deployed molecule)",
+  },
+  {
     file: "packages/runtime/src/relay-delegation.ts",
     needle: "routingTranscript?:",
     link: "GrantedDelegationResult carries the egress field",
@@ -85,5 +90,5 @@ if (broken.length > 0) {
 }
 
 console.log(
-  `✓ check-routing-transcript-emission: all ${CHAIN.length} links of the transcript chain (producer → result egress → receipt embed → both-rung proof) are present.`,
+  `✓ check-routing-transcript-emission: all ${CHAIN.length} links of the transcript chain (producer → signing keys → result egress → receipt embed → both-rung proof) are present.`,
 );
