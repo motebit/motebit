@@ -4946,6 +4946,10 @@ export class MotebitRuntime {
       // never a hidden `Math.random`. Strength scales DOWN with the hop's stakes:
       // explore freely on micro-priced hops, pure-exploit on dollar-scale ones.
       const exploreSeed = params.delegation.token.signature;
+      // The transcript minted for THIS call's ranked selection — threaded onto
+      // the result so a molecule can self-attest it into its own receipt
+      // (Inc 4 egress; the sub_settlements shape).
+      let mintedTranscript: RoutingDecisionTranscript | null = null;
       const selectWorker: WorkerSelector | undefined =
         params.targetWorkerId != null
           ? undefined
@@ -5013,6 +5017,7 @@ export class MotebitRuntime {
                     if (this._recentRoutingTranscripts.length > 50) {
                       this._recentRoutingTranscripts.shift();
                     }
+                    mintedTranscript = transcript;
                     this._logger.warn("routing.transcript_minted", {
                       winner: transcript.winner_motebit_id,
                       capability: transcript.capability,
@@ -5144,6 +5149,9 @@ export class MotebitRuntime {
         dryRun: false,
         receipt: result.receipt,
         ...(result.settlement ? { settlement: result.settlement } : {}),
+        ...(mintedTranscript != null
+          ? { routingTranscript: mintedTranscript as RoutingDecisionTranscript }
+          : {}),
       };
     } finally {
       // Standing authority dies with the call — never leaks to a later turn.
