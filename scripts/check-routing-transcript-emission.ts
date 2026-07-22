@@ -43,6 +43,11 @@ const CHAIN: Array<{ file: string; needle: string; link: string }> = [
     link: "producer signs the frozen basis",
   },
   {
+    file: "packages/runtime/src/motebit-runtime.ts",
+    needle: "mintedTranscript = transcript",
+    link: "producer threads the minted transcript onto the delegation result (the buffer alone is not egress)",
+  },
+  {
     file: "packages/molecule-runner/src/index.ts",
     needle: "signingKeys: { privateKey: identity.privateKey",
     link: "money molecules wire delegator signing keys (else the producer is silently dormant in every deployed molecule)",

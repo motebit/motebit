@@ -588,13 +588,20 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
       }),
     );
 
-    await runtime.executeGrantedDelegation({
+    const execResult = await runtime.executeGrantedDelegation({
       capability: "research",
       prompt: "survey the topic",
       delegation: { token, grant },
       dryRun: false,
     });
     vi.unstubAllGlobals();
+
+    // Inc 4 egress: the RESULT carries the transcript (what a molecule
+    // self-attests from) — not just the session buffer.
+    expect(execResult.ok).toBe(true);
+    if (execResult.ok && !execResult.dryRun) {
+      expect(execResult.routingTranscript?.winner_motebit_id).toBe("alice-worker");
+    }
 
     const transcripts = runtime.getRecentRoutingTranscripts();
     expect(transcripts).toHaveLength(1);
