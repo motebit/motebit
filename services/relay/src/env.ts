@@ -9,7 +9,17 @@
  *
  * These helpers centralize the parsing rules so every boolean env var
  * behaves the same way, and the default is explicit in the call site.
+ *
+ * The `env` source is INJECTABLE (default `process.env`) so the config
+ * builder (`relay-config.ts`) can compute EFFECTIVE configuration under an
+ * arbitrary env map — the seam that makes "boot the real config, assert what
+ * the deployed process actually computes" testable (the effective-config
+ * harness closing the #346/#357/#358 shadow-the-constant class). Existing
+ * call sites pass two args and read `process.env` unchanged.
  */
+
+/** The minimal shape of an environment source — `process.env` satisfies it. */
+export type EnvSource = Record<string, string | undefined>;
 
 /**
  * Parse a boolean environment variable with an explicit default.
@@ -25,8 +35,12 @@
  *   const deviceAuth = parseBoolEnv("MOTEBIT_ENABLE_DEVICE_AUTH", true);
  *   const freeze     = parseBoolEnv("MOTEBIT_EMERGENCY_FREEZE", false);
  */
-export function parseBoolEnv(name: string, defaultValue: boolean): boolean {
-  const raw = process.env[name];
+export function parseBoolEnv(
+  name: string,
+  defaultValue: boolean,
+  env: EnvSource = process.env,
+): boolean {
+  const raw = env[name];
   if (raw == null) return defaultValue;
   const normalized = raw.trim().toLowerCase();
   if (normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on") {
@@ -42,8 +56,12 @@ export function parseBoolEnv(name: string, defaultValue: boolean): boolean {
  * Parse an integer environment variable with a default. Rejects NaN and
  * non-finite values, returning the default instead.
  */
-export function parseIntEnv(name: string, defaultValue: number): number {
-  const raw = process.env[name];
+export function parseIntEnv(
+  name: string,
+  defaultValue: number,
+  env: EnvSource = process.env,
+): number {
+  const raw = env[name];
   if (raw == null) return defaultValue;
   const parsed = parseInt(raw, 10);
   return Number.isFinite(parsed) ? parsed : defaultValue;
@@ -53,8 +71,12 @@ export function parseIntEnv(name: string, defaultValue: number): number {
  * Parse a float environment variable with a default. Rejects NaN and
  * non-finite values.
  */
-export function parseFloatEnv(name: string, defaultValue: number): number {
-  const raw = process.env[name];
+export function parseFloatEnv(
+  name: string,
+  defaultValue: number,
+  env: EnvSource = process.env,
+): number {
+  const raw = env[name];
   if (raw == null) return defaultValue;
   const parsed = parseFloat(raw);
   return Number.isFinite(parsed) ? parsed : defaultValue;
