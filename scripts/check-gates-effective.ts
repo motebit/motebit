@@ -146,6 +146,18 @@ function mutateFile(relativePath: string, mutate: (src: string) => string): () =
 
 const PROBES: ReadonlyArray<Probe> = [
   {
+    script: "check-security-default-wiring",
+    proves:
+      "flags server.ts re-shadowing the federation discover-signature default with a hard-coded literal instead of the canonical DEFAULT_REQUIRE_DISCOVER_SIGNATURE constant (the #346 sunset-inert-in-prod regression)",
+    perturb: () =>
+      mutateFile("services/relay/src/server.ts", (src) =>
+        src.replace(
+          'MOTEBIT_FEDERATION_REQUIRE_DISCOVER_SIGNATURE",\n          DEFAULT_REQUIRE_DISCOVER_SIGNATURE,',
+          'MOTEBIT_FEDERATION_REQUIRE_DISCOVER_SIGNATURE",\n          false,',
+        ),
+      ),
+  },
+  {
     script: "check-routing-transcript-emission",
     proves:
       "flags the runtime WorkerSelector seam quietly dropping the produced-basis emitter (a refactor back to bare selectWorker stops minting transcripts and turns the probe's verify-if-present assertion silently vacuous)",

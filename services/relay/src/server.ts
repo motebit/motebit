@@ -24,6 +24,7 @@ import { createSyncRelay } from "./index.js";
 import type { X402Config } from "./index.js";
 import { createLogger } from "./logger.js";
 import { parseBoolEnv, parseIntEnv, parseFloatEnv } from "./env.js";
+import { DEFAULT_REQUIRE_DISCOVER_SIGNATURE } from "./federation.js";
 
 if (process.env.NODE_ENV === "production" && !process.env.MOTEBIT_DB_PATH) {
   createLogger({ service: "relay" }).error("relay.fatal", {
@@ -104,13 +105,19 @@ const relay = await createSyncRelay({
           ? parseIntEnv("MOTEBIT_FEDERATION_MAX_PEERS", 50)
           : undefined,
         autoAcceptPeers: parseBoolEnv("MOTEBIT_FEDERATION_AUTO_ACCEPT", false),
-        // Strict per-hop discover signing (relay-federation@1.3 §4.1). Leave
-        // false until every mesh peer runs the signing producer; flipping one
-        // peer strict while another still sends unsigned discovers 403s the
-        // mesh. Tracked in issue #188.
+        // Strict per-hop discover signing. The DEFAULT lives in ONE place —
+        // `DEFAULT_REQUIRE_DISCOVER_SIGNATURE` (federation.ts) — which the
+        // #188 sunset flipped to `true` for relay-federation@1.4. Using the
+        // constant as the env fallback (never a hard-coded literal) is what
+        // makes the sunset actually govern the shipped relay: a literal here
+        // shadowed the constant, so #346 was a no-op in production (the
+        // `?? DEFAULT` in federation.ts is dead when the config carries a
+        // concrete boolean). An operator peering with a pre-1.3 relay that
+        // still sends unsigned discovers sets the env var to `false`
+        // explicitly — an owned, config-restorable opt-out (spec §4.1.1).
         requireDiscoverSignature: parseBoolEnv(
           "MOTEBIT_FEDERATION_REQUIRE_DISCOVER_SIGNATURE",
-          false,
+          DEFAULT_REQUIRE_DISCOVER_SIGNATURE,
         ),
         allowedPeers: process.env.MOTEBIT_FEDERATION_ALLOWED_PEERS
           ? process.env.MOTEBIT_FEDERATION_ALLOWED_PEERS.split(",").map((s) => s.trim())
