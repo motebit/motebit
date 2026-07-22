@@ -166,6 +166,7 @@
     "check-panel-controllers": "npx tsx scripts/check-panel-controllers.ts",
     "check-consolidation-primitives": "npx tsx scripts/check-consolidation-primitives.ts",
     "check-routing-transcript-emission": "npx tsx scripts/check-routing-transcript-emission.ts",
+    "check-security-default-wiring": "npx tsx scripts/check-security-default-wiring.ts",
     "check-tool-modes": "npx tsx scripts/check-tool-modes.ts",
     "check-mode-contract-readers": "npx tsx scripts/check-mode-contract-readers.ts",
     "check-drop-handlers": "npx tsx scripts/check-drop-handlers.ts",

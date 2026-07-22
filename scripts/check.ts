@@ -453,6 +453,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-panel-controllers",
   },
   {
+    name: "check-security-default-wiring",
+    defends:
+      "a security-boundary default (federation discover-signature strictness today) is wired from its canonical constant through the REAL deployment config in server.ts, never shadowed by a hard-coded literal — the shadow-the-constant incident class that made the #346 sunset a production no-op while its constant-only test stayed green (siblings: #357 dormant keys, #358 lost threading). Single source of truth so flipping the constant governs the shipped relay. Added 2026-07-22.",
+    script: "check-security-default-wiring",
+  },
+  {
     name: "check-routing-transcript-emission",
     defends:
       "every ranked paid hire mints a signed RoutingDecisionTranscript that egresses to the molecule's receipt and is verified by the conformance probe on both rungs — the producer (rankWorkersWithBasis + signRoutingTranscript at the runtime WorkerSelector seam), the GrantedDelegationResult egress field, the research receipt embed, and the probe's integrity+faithfulness assertion are one chain; dropping any link makes the verify-if-present probe silently vacuous (docs/doctrine/routing-decision-transcript.md Inc 3/4, added 2026-07-21 closing the arc: a hire you can prove, not just replay)",
