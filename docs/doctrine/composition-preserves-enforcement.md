@@ -1,0 +1,39 @@
+# Composition preserves enforcement
+
+> **Motebit must prove not only that its components are correct, but that its intended guarantees remain enforced when those components are composed into the deployed system.**
+
+This is the obligation the gate suite does not individually carry. Every gate proves a _local_ property of a part; none of them proves that the part is actually reached, with the right inputs, in the artifact that ships. The gap between those two is where a month of real defects lived — so the obligation gets named, and its enforcement mechanism gets built, rather than being rediscovered one production incident at a time.
+
+The two load-bearing words are deliberate. **"Remain enforced"** — not "survive": a guarantee can still _exist_ in the source and never be _acted on_ by the running system. **"Deployed system"** — not "running under test": a composition that CI assembles correctly can still be assembled wrong in the shipped image (different config resolution, unwired keys, a dropped call). The sentence fails exactly the defects below, which is what makes it a test and not a slogan.
+
+## The flaw class, with a birthdate
+
+Trace the commit history for the family whose own messages admit a capability existed but did not fire — `inert / dormant / shadowed / silent / lost`. It does not scatter. It clusters, and the first cluster has a date:
+
+- **Mid-June 2026** — the CLI-entry sev-1s: [`motebit-verify`](../../packages/verify) inert for every installed invocation (symlink'd-bin entry guard), the relay key silently dead via its bin, cloud-usage debits silently dropped. A correct binary, an unreached entry point.
+- **Late July 2026** — the routing-transcript / federation arc: the transcript producer dormant in deployed molecules because delegator signing keys were unwired (`#357`); the minted transcript lost at egress in branch churn (`#358`); the `#188` discover-signature sunset **inert in production because `server.ts` shadowed the constant** (`#359`); and the settlement-authority payer seam, whose first version enforced only at the relay — _after_ the payer had already broadcast — and so protected records but not funds ([`settlement-authority-binding`](settlement-authority-binding.md)).
+
+The flaw began mid-June because that is when the system crossed a complexity threshold and the dominant bug **changed shape**: from _logic-wrong_ (a part computes the wrong thing; a unit test catches it) to _enforcement-not-local_ (the part is correct and green, but the deployed path does not reach it). The root cause is structural, not a discipline lapse: in a 53-package DAG a feature's **definition** — type, crypto law, conformance vector, all passing — and its **activation** — the deployed process invoking it with resolved config and wired keys — live in _different packages_. Every gate we had proved definition. Nothing proved activation.
+
+## Honest calibration — what the gates do and don't prove
+
+Do not overstate the starting position. Our gates predominantly prove **local** properties — dependency-layer membership ([`check-deps`](../../scripts/check-deps.ts)), generated-file consistency, closed-registry canonicality, declaration presence, formatting, wire-format coverage. A few reach further ([`check-gates-effective`](../../scripts/check-gates-effective.ts) perturbs each gate to prove it still fires; [`check-money-authority`](../../scripts/check-money-authority.ts) enforces the R4 standing-authority composition). But **none individually proves that the complete deployed path preserves every intended guarantee.** That framing matters: it makes the gap _structural_ — a missing category of proof — not a coverage hole to be closed by raising a threshold.
+
+Symmetrically, do not overstate the fix. A harness earns the claim "proves enforcement in the deployed system" only if it builds the **actual production artifact**, boots it through the real entry point, resolves production-equivalent configuration, uses real credential and key wiring, crosses the persistence and process boundaries, exercises the external interfaces, verifies forbidden side effects do not occur — **and goes red when each critical connection is deliberately severed.** A harness that composes the parts in-process is just another _modeled_ composition, which is precisely the thing that passed for `#357`. The severing test is the whole point: an activation check that does not fail when you re-shadow the constant proves nothing.
+
+## The response is two-part, and detection is the weaker half
+
+The first response already shipped: the effective-config harness ([`#360`](../../services/relay/src/relay-config.ts), `buildRelayConfigFromEnv` + `SECURITY_BOUNDARY_DEFAULTS` + `probeSecurityBoundaries`) — it proves the _resolved_ security-boundary config at the enforcement point, not the exported constant, and [`check-security-default-wiring`](../../scripts/check-security-default-wiring.ts) forbids a hard-coded literal shadowing a canonical default. That is real, and it is the **detection** half.
+
+But detection is the weaker half, and naming it as the whole answer would be a mistake. _A test detects a shadowed constant; a better configuration architecture makes shadowing structurally impossible._ This is [`runtime-invariants-over-prompt-rules`](runtime-invariants-over-prompt-rules.md) — make illegal states unrepresentable — applied to composition: one resolution path, no second literal that _can_ diverge, so the shadow does not compile rather than getting caught after the fact. So the doctrine is a pair, ranked:
+
+1. **Reduce the seams where enforcement can disappear.** Prefer a structure where the guarantee cannot be composed away — a single resolution path, a producer that cannot be constructed without its key, an egress that is the return type rather than a side assignment. Structural impossibility beats detection wherever it is affordable.
+2. **Prove composition for the seams that remain.** Where a seam is irreducible, an **activation-conformance** pass exercises the deployed artifact end to end and proves each pipeline link — identity → authorization → policy → action → receipt → settlement → trust — is _live_, with the deliberate-severing test as its integrity check.
+
+## Provisional until hostile evidence
+
+The class is **not** closed by this document. Doctrine can name the obligation; only hostile production-path evidence can establish that it has been met. The bar is concrete: the activation-conformance pass must catch **reintroduced** versions of `#357`, `#358`, and `#359` against the real deployable — the dormant producer, the lost egress, the shadowed constant — each deliberately reinjected, each turning the pass red. Until that evidence exists, "we have closed the composition gap" is an aspiration, not a fact, and this doc says so on purpose.
+
+## Scope
+
+Governs how the repository proves itself, alongside [`agentic-era-engineering`](agentic-era-engineering.md) (coherence is the scarce resource) and [`gate-repair-instructions`](gate-repair-instructions.md) (a gate teaches its rule on contact). It is not a wire-protocol change and introduces no new type. It is the invariant that sits _above_ the gate suite: each gate proves a part; this obligation demands proof that composition-in-deployment preserves the guarantee the parts were built to make.
