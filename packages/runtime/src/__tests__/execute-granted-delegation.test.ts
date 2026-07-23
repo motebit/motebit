@@ -625,6 +625,115 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     });
   });
 
+  it("SEVERING (reintroduces #357): the SAME paid hire WITHOUT delegator signing keys settles but mints NO transcript — proving the assertion above catches a dormant producer", async () => {
+    // docs/doctrine/composition-preserves-enforcement.md — the severing test.
+    // The happy-path case above asserts the transcript is PRESENT; that only
+    // proves enforcement if the assertion goes red when the guarantee is
+    // severed. #357 was exactly this: defaultCreateMoneyRuntime never passed
+    // signingKeys, so `_signingKeys` was null in every deployed molecule and
+    // the Inc 3 producer skipped minting — honestly (reveals-never-authorizes)
+    // but everywhere. Here we reproduce that condition (omit `signingKeys` from
+    // the runtime) and prove the paid hire STILL succeeds while the transcript
+    // is absent from BOTH the result and the buffer. If a future change made
+    // the producer mint without keys, or made the happy-path assertion pass
+    // vacuously, THIS test would fail — that is its whole job.
+    const ALICE_ADDR = "AliceWorkerAddr2222222222222222222222222222";
+    const operator = await generateKeypair();
+    const clerk = await generateKeypair();
+    const grant = await makeGrant(operator, clerk);
+    const token = await mintTick(grant, operator);
+
+    const storage = createInMemoryStorage();
+    await (
+      storage.agentTrustStore as { setAgentTrust: (r: AgentTrustRecord) => Promise<void> }
+    ).setAgentTrust({
+      motebit_id: "clerk-001",
+      remote_motebit_id: "alice-worker",
+      trust_level: AgentTrustLevel.Trusted,
+      first_seen_at: NOW - 100 * HOUR,
+      last_seen_at: NOW,
+      interaction_count: 20,
+      successful_tasks: 20,
+      failed_tasks: 0,
+    });
+
+    const { wallet, buildP2pPayment } = mockWallet(async (r) => ({
+      tx_hash: "tx",
+      chain: "solana",
+      network: "solana:x",
+      to_address: r.workerAddress,
+      amount_micro: r.amountMicro,
+      fee_to_address: r.treasuryAddress,
+      fee_amount_micro: r.feeAmountMicro,
+    }));
+
+    const runtime = new MotebitRuntime(
+      {
+        motebitId: "clerk-001",
+        tickRateHz: 0,
+        policy: { requireApprovalAbove: RiskLevel.R1_DRAFT, denyAbove: RiskLevel.R4_MONEY },
+        solanaWallet: wallet,
+        // signingKeys DELIBERATELY OMITTED — this is the #357 dormancy condition.
+      },
+      { ...createAdapters(), storage },
+    );
+    runtime.enableInteractiveDelegation({
+      syncUrl: "https://mock-relay.test",
+      authToken: async () => "test-token",
+      relayPublicKey: PINNED_HEX,
+      buildP2pPayment,
+      acknowledgeNoHistoryRisk: true,
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/api/v1/agents/discover"))
+          return jsonResponse({
+            agents: [
+              {
+                motebit_id: "bob-worker",
+                settlement_address: WORKER_ADDR,
+                settlement_modes: "p2p",
+                pricing: [{ capability: "research", unit_cost: 1.5 }],
+              },
+              {
+                motebit_id: "alice-worker",
+                settlement_address: ALICE_ADDR,
+                settlement_modes: "p2p",
+                pricing: [{ capability: "research", unit_cost: 1.5 }],
+              },
+            ],
+          });
+        if (url.includes("/p2p-eligibility")) return jsonResponse({ allowed: true });
+        if (url.includes("/listing"))
+          return jsonResponse({ pricing: [{ capability: "research", unit_cost: 1.5 }] });
+        if (url.endsWith("/task")) return jsonResponse({ task_id: "t1" }, 201);
+        if (url.includes("/task/"))
+          return jsonResponse({ task: { status: "completed" }, receipt: fakeReceipt() });
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    const execResult = await runtime.executeGrantedDelegation({
+      capability: "research",
+      prompt: "survey the topic",
+      delegation: { token, grant },
+      dryRun: false,
+    });
+    vi.unstubAllGlobals();
+
+    // The hire STILL settles — the transcript reveals, it never authorizes, so
+    // its absence must not break the money path.
+    expect(execResult.ok).toBe(true);
+    // …but the transcript is absent from the RESULT seam a molecule consumes…
+    if (execResult.ok && !execResult.dryRun) {
+      expect(execResult.routingTranscript).toBeUndefined();
+    }
+    // …and from the session buffer. Dormant producer, exactly as #357.
+    expect(runtime.getRecentRoutingTranscripts()).toHaveLength(0);
+  });
+
   it("unpinned LOW-STAKES ⇒ exploration engaged at full strength (the newcomer on-ramp is live)", async () => {
     // docs/doctrine/exploration-as-market-vitality.md: a cheap hop ($0.003, below
     // the stakes floor) explores at full strength — a newcomer can earn a first
