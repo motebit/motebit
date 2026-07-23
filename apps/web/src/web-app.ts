@@ -80,7 +80,7 @@ import {
   type AnnounceMotebitResult,
 } from "@motebit/core-identity";
 import {
-  createSignedToken,
+  mintAudienceToken,
   deriveSyncEncryptionKey,
   secureErase,
   bytesToHex,
@@ -3505,17 +3505,9 @@ export class UnbootedWebApp {
     }
 
     try {
-      return await createSignedToken(
-        {
-          mid: this._motebitId,
-          did: this._deviceId,
-          iat: Date.now(),
-          exp: Date.now() + 5 * 60 * 1000,
-          jti: crypto.randomUUID(),
-          aud,
-        },
-        privKeyBytes,
-      );
+      return (
+        await mintAudienceToken({ mid: this._motebitId, did: this._deviceId, aud }, privKeyBytes)
+      ).token;
     } finally {
       secureErase(privKeyBytes);
     }

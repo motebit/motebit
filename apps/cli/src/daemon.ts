@@ -34,7 +34,7 @@ import {
   DeviceCapability,
 } from "@motebit/sdk";
 import {
-  createSignedToken,
+  mintAudienceToken,
   verifySignedToken,
   secureErase,
   signExecutionReceipt,
@@ -396,17 +396,12 @@ export async function handleRun(config: CliConfig): Promise<void> {
     let authToken = syncToken;
     if (privKeyBytes && fullConfig.device_id) {
       try {
-        authToken = await createSignedToken(
-          {
-            mid: motebitId,
-            did: fullConfig.device_id,
-            iat: Date.now(),
-            exp: Date.now() + 5 * 60 * 1000,
-            jti: crypto.randomUUID(),
-            aud: "sync",
-          },
-          privKeyBytes,
-        );
+        authToken = (
+          await mintAudienceToken(
+            { mid: motebitId, did: fullConfig.device_id, aud: "sync" },
+            privKeyBytes,
+          )
+        ).token;
       } catch {
         // Fall back to sync token
       }
@@ -598,17 +593,12 @@ export async function handleRun(config: CliConfig): Promise<void> {
       const tokenFactory = async (audience = "task:submit"): Promise<string> => {
         if (!fullConfig.device_id) return syncToken ?? "";
         try {
-          return await createSignedToken(
-            {
-              mid: motebitId,
-              did: fullConfig.device_id,
-              iat: Date.now(),
-              exp: Date.now() + 5 * 60 * 1000,
-              jti: crypto.randomUUID(),
-              aud: audience,
-            },
-            privateKeyForDelegation,
-          );
+          return (
+            await mintAudienceToken(
+              { mid: motebitId, did: fullConfig.device_id, aud: audience },
+              privateKeyForDelegation,
+            )
+          ).token;
         } catch {
           return syncToken ?? "";
         }
@@ -1390,17 +1380,12 @@ export async function handleServe(config: CliConfig): Promise<void> {
       let wsAuthToken = masterToken;
       if (fullConfigForServe.device_id) {
         try {
-          wsAuthToken = await createSignedToken(
-            {
-              mid: motebitId,
-              did: fullConfigForServe.device_id,
-              iat: Date.now(),
-              exp: Date.now() + 5 * 60 * 1000,
-              jti: crypto.randomUUID(),
-              aud: "sync",
-            },
-            servePrivateKey,
-          );
+          wsAuthToken = (
+            await mintAudienceToken(
+              { mid: motebitId, did: fullConfigForServe.device_id, aud: "sync" },
+              servePrivateKey,
+            )
+          ).token;
         } catch {
           // Fall back to master token
         }
@@ -1544,8 +1529,8 @@ export async function handleServe(config: CliConfig): Promise<void> {
       //   a. Call `/api/v1/agents/bootstrap` (unauthenticated, rate-limited,
       //      idempotent) to register `(motebit_id, device_id, public_key)`
       //      so the relay knows which key to verify our token against.
-      //   b. Mint a `createSignedToken` with `aud: "admin:query"` (5-min
-      //      expiry, signed by `servePrivateKey`) and use it as Bearer.
+      //   b. Mint a signed token (`mintAudienceToken`) with `aud: "admin:query"`
+      //      signed by `servePrivateKey` and use it as Bearer.
       //
       // Master token, when present, still wins — operators with explicit
       // tokens skip the self-signing dance.
@@ -1578,14 +1563,12 @@ export async function handleServe(config: CliConfig): Promise<void> {
         // 5 min — a 5-min token would expire before the second heartbeat.
         // Agents that run longer than 24h will need to be restarted (or
         // refactor heartbeat to re-mint on each call). Acceptable for v1.
-        const signedToken = await createSignedToken(
+        const { token: signedToken } = await mintAudienceToken(
           {
             mid: motebitId,
             did: fullConfigForServe.device_id,
-            iat: Date.now(),
-            exp: Date.now() + 24 * 60 * 60 * 1000,
-            jti: crypto.randomUUID(),
             aud: "admin:query",
+            ttlMs: 24 * 60 * 60 * 1000,
           },
           servePrivateKey,
         );
@@ -1645,17 +1628,12 @@ export async function handleServe(config: CliConfig): Promise<void> {
           // Surface-provided token minter — the shared layer doesn't know about keys
           const mintToken: MintToken = async (audience: TokenAudience): Promise<string> => {
             if (servePrivateKey && fullConfigForServe.device_id) {
-              return createSignedToken(
-                {
-                  mid: motebitId,
-                  did: fullConfigForServe.device_id,
-                  iat: Date.now(),
-                  exp: Date.now() + 5 * 60 * 1000,
-                  jti: crypto.randomUUID(),
-                  aud: audience,
-                },
-                servePrivateKey,
-              );
+              return (
+                await mintAudienceToken(
+                  { mid: motebitId, did: fullConfigForServe.device_id, aud: audience },
+                  servePrivateKey,
+                )
+              ).token;
             }
             return masterToken ?? "";
           };

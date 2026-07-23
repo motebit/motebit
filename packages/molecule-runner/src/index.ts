@@ -50,7 +50,7 @@ import { openMotebitDatabase } from "@motebit/persistence";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { MotebitRuntime, NullRenderer } from "@motebit/runtime";
 import type { PolicyConfig, StorageAdapters, GrantedDelegationResult } from "@motebit/runtime";
-import { signStandingDelegation, signDelegation, createSignedToken } from "@motebit/crypto";
+import { signStandingDelegation, signDelegation, mintAudienceToken } from "@motebit/crypto";
 import type {
   StandingDelegation,
   DelegationToken,
@@ -481,18 +481,7 @@ export function makeAuthTokenMinter(
   const did = identity.deviceId;
   const pk = identity.privateKey;
   return async (audience: TokenAudience = "task:submit"): Promise<string> => {
-    const now = Date.now();
-    return createSignedToken(
-      {
-        mid: identity.motebitId,
-        did,
-        iat: now,
-        exp: now + 5 * 60 * 1000,
-        jti: crypto.randomUUID(),
-        aud: audience,
-      },
-      pk,
-    );
+    return (await mintAudienceToken({ mid: identity.motebitId, did, aud: audience }, pk)).token;
   };
 }
 

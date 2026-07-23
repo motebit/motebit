@@ -51,7 +51,7 @@ vi.mock("../identity.js", () => ({
 }));
 
 vi.mock("@motebit/encryption", () => ({
-  createSignedToken: vi.fn().mockResolvedValue("fake.signed.token"),
+  mintAudienceToken: vi.fn().mockResolvedValue({ token: "fake.signed.token", payload: {} }),
   secureErase: vi.fn(),
 }));
 

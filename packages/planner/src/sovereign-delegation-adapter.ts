@@ -51,18 +51,15 @@ export interface SovereignDelegationConfig {
   ) => void;
   /** Routing strategy passed to discovery. */
   routingStrategy?: "cost" | "quality" | "balanced";
-  /** Create a signed auth token for MCP calls. Injected to avoid importing crypto directly. */
-  createSignedToken: (
-    payload: {
-      mid: string;
-      did: string;
-      iat: number;
-      exp: number;
-      jti: string;
-      aud: string;
-    },
+  /**
+   * Mint an audience-bound signed auth token. Injected to avoid importing
+   * crypto directly. The minter owns iat/exp/jti assembly (the canonical
+   * `mintAudienceToken` seam); the adapter supplies only identity + audience.
+   */
+  mintAudienceToken: (
+    input: { mid: string; did: string; aud: string; ttlMs?: number },
     privateKey: Uint8Array,
-  ) => Promise<string>;
+  ) => Promise<{ token: string }>;
   /** Verify an execution receipt. Injected to avoid importing crypto directly. */
   verifyReceipt: (receipt: ExecutionReceipt, publicKey: Uint8Array) => Promise<boolean>;
   /** Hex-decode utility. */
@@ -292,16 +289,9 @@ export class SovereignDelegationAdapter implements StepDelegationAdapter {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      // Create signed auth token for the remote agent
-      const token = await this.config.createSignedToken(
-        {
-          mid: motebitId,
-          did: deviceId,
-          iat: Date.now(),
-          exp: Date.now() + 5 * 60 * 1000,
-          jti: crypto.randomUUID(),
-          aud: TASK_SUBMIT_AUDIENCE,
-        },
+      // Mint signed auth token for the remote agent
+      const { token } = await this.config.mintAudienceToken(
+        { mid: motebitId, did: deviceId, aud: TASK_SUBMIT_AUDIENCE },
         signingKeys.privateKey,
       );
 

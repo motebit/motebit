@@ -363,8 +363,8 @@ describe("auth resolution: hardening", () => {
   it("throws a typed kind=auth error when no Web Crypto is available to mint a nonce", async () => {
     const keys = await generateKeypair();
     const fetchMock = vi.fn(async () => jsonResponse(BALANCE_OK));
-    // Runtime with no CSPRNG at all — mintJti must fail closed with a typed
-    // RelayClientError, not a raw TypeError.
+    // Runtime with no CSPRNG at all — the mint pre-flight must fail closed
+    // with a typed RelayClientError, not a raw TypeError.
     vi.stubGlobal("crypto", undefined);
     try {
       const client = makeClient(fetchMock as unknown as typeof fetch, {

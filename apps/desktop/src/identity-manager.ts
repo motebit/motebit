@@ -55,7 +55,7 @@ import {
   type BootstrapKeyStore,
 } from "@motebit/core-identity";
 import {
-  createSignedToken,
+  mintAudienceToken,
   hexPublicKeyToDidKey,
   secureErase,
   bytesToHex,
@@ -293,17 +293,9 @@ export class IdentityManager {
   async createSyncToken(privateKeyHex: string, aud: string = "sync"): Promise<string> {
     const privKeyBytes = hexToBytes(privateKeyHex);
     try {
-      return await createSignedToken(
-        {
-          mid: this.motebitId,
-          did: this.deviceId,
-          iat: Date.now(),
-          exp: Date.now() + 5 * 60 * 1000,
-          jti: crypto.randomUUID(),
-          aud,
-        },
-        privKeyBytes,
-      );
+      return (
+        await mintAudienceToken({ mid: this.motebitId, did: this.deviceId, aud }, privKeyBytes)
+      ).token;
     } finally {
       secureErase(privKeyBytes);
     }

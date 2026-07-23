@@ -386,6 +386,9 @@ export interface DataIntegrityProof {
 export function decodeSkillSignaturePublicKey(sig: SkillSignature): Uint8Array;
 
 // @public
+export const DEFAULT_SIGNED_TOKEN_TTL_MS: number;
+
+// @public
 export const DELEGATION_TOKEN_SUITE: "motebit-jcs-ed25519-b64-v1";
 
 export { DelegationRevocation }
@@ -879,6 +882,27 @@ export interface KeySuccessionRecord {
 
 // @public
 export type KnownKeys = Map<string, Uint8Array>;
+
+// @public
+export function mintAudienceToken(input: MintAudienceTokenInput, privateKey: Uint8Array): Promise<MintedAudienceToken>;
+
+// @public (undocumented)
+export interface MintAudienceTokenInput {
+    aud: string;
+    // (undocumented)
+    did: string;
+    // (undocumented)
+    mid: string;
+    nowMs?: number;
+    ttlMs?: number;
+}
+
+// @public (undocumented)
+export interface MintedAudienceToken {
+    payload: SignedTokenPayload;
+    // (undocumented)
+    token: string;
+}
 
 // @public
 export function mintSecureEnclaveReceiptForTest(input: {

@@ -36,6 +36,8 @@ import {
   ed25519Verify,
   createSignedToken,
   verifySignedToken,
+  mintAudienceToken,
+  DEFAULT_SIGNED_TOKEN_TTL_MS,
   signExecutionReceipt,
   verifyExecutionReceipt,
   signToolInvocationReceipt,
@@ -280,6 +282,54 @@ describe("createSignedToken / verifySignedToken", () => {
     const token = await createSignedToken(payload, kp.privateKey);
     const result = await verifySignedToken(token, kp.publicKey);
     expect(result).toBeNull();
+  });
+});
+
+describe("mintAudienceToken (the canonical mint seam)", () => {
+  it("mints a token verifySignedToken accepts, with the identity and audience supplied", async () => {
+    const kp = await generateKeypair();
+    const { token, payload } = await mintAudienceToken(
+      { mid: "mote-123", did: "device-456", aud: "sync" },
+      kp.privateKey,
+    );
+    const result = await verifySignedToken(token, kp.publicKey);
+    expect(result).not.toBeNull();
+    expect(result!.mid).toBe("mote-123");
+    expect(result!.did).toBe("device-456");
+    expect(result!.aud).toBe("sync");
+    // The returned payload IS the signed payload — callers surface exp from it.
+    expect(result).toEqual(payload);
+  });
+
+  it("defaults the lifetime to DEFAULT_SIGNED_TOKEN_TTL_MS and honors ttlMs overrides", async () => {
+    const kp = await generateKeypair();
+    const { payload } = await mintAudienceToken({ mid: "m", did: "d", aud: "sync" }, kp.privateKey);
+    expect(payload.exp - payload.iat).toBe(DEFAULT_SIGNED_TOKEN_TTL_MS);
+
+    const short = await mintAudienceToken(
+      { mid: "m", did: "d", aud: "runtime:attach", ttlMs: 30_000 },
+      kp.privateKey,
+    );
+    expect(short.payload.exp - short.payload.iat).toBe(30_000);
+  });
+
+  it("honors the injected-clock nowMs override (token caches, deterministic tests)", async () => {
+    const kp = await generateKeypair();
+    const fixedNow = 1_700_000_000_000;
+    const { payload } = await mintAudienceToken(
+      { mid: "m", did: "d", aud: "sync", nowMs: fixedNow, ttlMs: 60_000 },
+      kp.privateKey,
+    );
+    expect(payload.iat).toBe(fixedNow);
+    expect(payload.exp).toBe(fixedNow + 60_000);
+  });
+
+  it("mints a fresh CSPRNG jti per token (replay defense)", async () => {
+    const kp = await generateKeypair();
+    const a = await mintAudienceToken({ mid: "m", did: "d", aud: "sync" }, kp.privateKey);
+    const b = await mintAudienceToken({ mid: "m", did: "d", aud: "sync" }, kp.privateKey);
+    expect(a.payload.jti).toBeTruthy();
+    expect(a.payload.jti).not.toBe(b.payload.jti);
   });
 });
 

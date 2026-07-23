@@ -33,7 +33,7 @@ vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
 }));
 
 vi.mock("@motebit/encryption", () => ({
-  createSignedToken: vi.fn().mockResolvedValue("mock-signed-token"),
+  mintAudienceToken: vi.fn().mockResolvedValue({ token: "mock-signed-token" }),
   secureErase: vi.fn((bytes: Uint8Array) => bytes.fill(0)),
   // verifyKeySuccession is statically imported by acceptKeyRotation in
   // index.ts, so it must appear in the module-level mock surface even
@@ -1363,7 +1363,7 @@ describe("McpClientAdapter — key rotation grace period", () => {
 
     // Mock verifyKeySuccession to return true
     vi.doMock("@motebit/encryption", () => ({
-      createSignedToken: vi.fn().mockResolvedValue("mock-signed-token"),
+      mintAudienceToken: vi.fn().mockResolvedValue({ token: "mock-signed-token" }),
       verifyKeySuccession: vi.fn().mockResolvedValue(true),
     }));
 
@@ -1386,7 +1386,7 @@ describe("McpClientAdapter — key rotation grace period", () => {
     const adapter = new McpClientAdapter(httpConfig({ motebitPublicKey: "aa".repeat(32) }));
 
     vi.doMock("@motebit/encryption", () => ({
-      createSignedToken: vi.fn().mockResolvedValue("mock-signed-token"),
+      mintAudienceToken: vi.fn().mockResolvedValue({ token: "mock-signed-token" }),
       verifyKeySuccession: vi.fn().mockResolvedValue(true),
     }));
 
@@ -1511,10 +1511,10 @@ describe("McpClientAdapter — createCallerToken paths", () => {
     expect(adapter.isConnected).toBe(true);
   });
 
-  it("catches createSignedToken error and connects without token", async () => {
-    // Mock createSignedToken to throw
-    const { createSignedToken } = await import("@motebit/encryption");
-    (createSignedToken as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+  it("catches mintAudienceToken error and connects without token", async () => {
+    // Mock mintAudienceToken to throw
+    const { mintAudienceToken } = await import("@motebit/encryption");
+    (mintAudienceToken as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new Error("Signing failed"),
     );
 

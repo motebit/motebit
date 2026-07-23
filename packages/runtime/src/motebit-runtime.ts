@@ -1661,15 +1661,14 @@ export class MotebitRuntime {
       routingStrategy: opts?.routingStrategy,
       maxRetries: opts?.maxRetries,
       onDelegationFailure: opts?.onDelegationFailure,
-      createSignedToken: async (
-        payload: Omit<import("@motebit/encryption").SignedTokenPayload, "suite">,
+      mintAudienceToken: async (
+        input: { mid: string; did: string; aud: string; ttlMs?: number },
         privateKey: Uint8Array,
-      ): Promise<string> => {
-        // The signer stamps `suite` — callers pass the suite-less shape,
-        // matching the inline structural type SovereignDelegationConfig
-        // declares (no cryptosuite coupling leaking into planner).
-        const { createSignedToken: create } = await import("@motebit/encryption");
-        return create(payload, privateKey);
+      ): Promise<{ token: string }> => {
+        // The minter owns iat/exp/jti/suite assembly — the planner's inline
+        // structural type carries no cryptosuite or freshness coupling.
+        const { mintAudienceToken: mint } = await import("@motebit/encryption");
+        return mint(input, privateKey);
       },
       verifyReceipt: async (
         receipt: import("@motebit/sdk").ExecutionReceipt,

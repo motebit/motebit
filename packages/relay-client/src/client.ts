@@ -21,7 +21,7 @@
  *
  * Auth is the relay's dual-bearer model, resolved per request in strict
  * precedence order: injected `CredentialSource` (the `@motebit/sdk`
- * contract) → device-key minting (audience-bound `createSignedToken`,
+ * contract) → device-key minting (audience-bound `mintAudienceToken`,
  * the cross-endpoint-replay defense — each method names its
  * `TokenAudience` from the closed registry) → static bearer token.
  * Endpoints that require auth throw `kind: "auth"` before the network
@@ -47,7 +47,7 @@ import {
   TASK_SUBMIT_AUDIENCE,
 } from "@motebit/protocol";
 import type { AccountWithdrawRequest, AccountWithdrawResult } from "@motebit/protocol";
-import { createSignedToken } from "@motebit/crypto";
+import { mintAudienceToken } from "@motebit/crypto";
 import {
   AccountBalanceResultSchema,
   AccountWithdrawResultSchema,
@@ -126,27 +126,22 @@ function isRetryable(status: number): boolean {
 }
 
 /**
- * jti nonce for replay defense. `crypto.randomUUID` is absent on some
- * targets this package must reach (React Native without a WebCrypto
- * polyfill; browsers on insecure origins), so fall back to a
- * getRandomValues-derived hex nonce. If no Web Crypto is present at all,
- * fail with a typed `RelayClientError` (not a raw TypeError) — a device-key
- * signer cannot mint a replay-safe token without a CSPRNG, and the caller
- * catches the same error shape as every other client failure.
+ * Web Crypto is absent on some targets this package must reach (React
+ * Native without a WebCrypto polyfill; browsers on insecure origins), and
+ * `mintAudienceToken` fails on its jti mint without one. Pre-flight so a
+ * device-key signer fails with a typed `RelayClientError` (not a raw
+ * Error) — the caller catches the same error shape as every other client
+ * failure.
  */
-function mintJti(): string {
+function assertCsprngAvailable(): void {
   const c = globalThis.crypto as Crypto | undefined;
-  if (typeof c?.randomUUID === "function") return c.randomUUID();
-  if (typeof c?.getRandomValues !== "function") {
+  if (typeof c?.randomUUID !== "function" && typeof c?.getRandomValues !== "function") {
     throw new RelayClientError(
       "auth",
       "(token-mint)",
       "no Web Crypto available to mint a replay-safe token nonce — provide a WebCrypto polyfill or use credentialSource/staticToken auth",
     );
   }
-  const bytes = new Uint8Array(16);
-  c.getRandomValues(bytes);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /** Declared shape of `POST /agent/:id/task` (submit). */
@@ -399,19 +394,18 @@ export class RelayClient {
       if (cached && cached.exp - TOKEN_REUSE_MARGIN_MS > iat) {
         return cached.token;
       }
-      const exp = iat + TOKEN_TTL_MS;
-      const token = await createSignedToken(
+      assertCsprngAvailable();
+      const { token, payload } = await mintAudienceToken(
         {
           mid: this.auth.deviceKey.motebitId,
           did: this.auth.deviceKey.deviceId,
-          iat,
-          exp,
-          jti: mintJti(),
           aud: audience,
+          ttlMs: TOKEN_TTL_MS,
+          nowMs: iat,
         },
         this.auth.deviceKey.privateKey,
       );
-      this.tokenCache.set(audience, { token, exp });
+      this.tokenCache.set(audience, { token, exp: payload.exp });
       return token;
     }
     if (this.auth.staticToken != null && this.auth.staticToken !== "") {

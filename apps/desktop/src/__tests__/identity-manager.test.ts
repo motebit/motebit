@@ -53,7 +53,7 @@ vi.mock("@motebit/core-identity", () => ({
 }));
 
 vi.mock("@motebit/encryption", () => ({
-  createSignedToken: vi.fn(async () => "signed-token"),
+  mintAudienceToken: vi.fn(async () => ({ token: "signed-token", payload: {} })),
   hexPublicKeyToDidKey: vi.fn((hex: string) => `did:key:${hex.slice(0, 8)}`),
   secureErase: vi.fn(),
   bytesToHex: vi.fn((bytes: Uint8Array) =>

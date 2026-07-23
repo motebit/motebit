@@ -20,7 +20,7 @@ vi.mock("@motebit/state-export-client", () => ({
   verifyTransparencyDeclaration: verifyMock,
 }));
 vi.mock("@motebit/encryption", () => ({
-  createSignedToken: vi.fn(),
+  mintAudienceToken: vi.fn(async () => ({ token: "mock-token", payload: {} })),
   secureErase: vi.fn(),
 }));
 vi.mock("../identity.js", () => ({

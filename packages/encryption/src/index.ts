@@ -45,6 +45,10 @@ export {
   getPublicKeyBySuite,
   createSignedToken,
   verifySignedToken,
+  mintAudienceToken,
+  DEFAULT_SIGNED_TOKEN_TTL_MS,
+  type MintAudienceTokenInput,
+  type MintedAudienceToken,
   parseScopeSet,
   isScopeNarrowed,
   // Ed25519 — aliased from ed25519Sign/ed25519Verify for backward compat

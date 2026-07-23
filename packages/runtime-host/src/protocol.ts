@@ -33,7 +33,7 @@ export type AttachRefusalReason = "auth_failed" | "version_skew" | "malformed_he
 export interface HelloMessage {
   t: "hello";
   protocol_version: number;
-  /** Device-key-signed token, `aud: "runtime:attach"` (see `@motebit/crypto` `createSignedToken`). */
+  /** Device-key-signed token, `aud: "runtime:attach"` (see `@motebit/crypto` `mintAudienceToken`). */
   token: string;
 }
 
