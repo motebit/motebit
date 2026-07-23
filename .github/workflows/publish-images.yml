@@ -90,6 +90,57 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # ── Activation gate: probe the built image BEFORE anything is pushed ──
+      #
+      # The container-image rung of the booted-artifact tier
+      # (docs/doctrine/composition-preserves-enforcement.md): the rungs below
+      # it prove the source entry and the compiled dist enforce the security
+      # boundaries; this step proves the SHIPPED artifact does — the
+      # `pnpm deploy`-flattened filesystem, the pinned base image, `run.sh`
+      # itself, booted exactly as an operator boots it, probed from outside
+      # over real HTTP. A lost boundary here blocks the push: a bad image is
+      # never published. amd64-only (the runner's native arch); the multi-arch
+      # push below rebuilds from the shared buildx cache, so the probed layers
+      # and the published amd64 layers are the same.
+      - name: Build probe candidate (amd64, local load)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: services/relay/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: motebit-relay-probe:candidate
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Boot the image and probe deployed-behavior security boundaries
+        run: |
+          set -eu
+          # Production-shaped strict env: the image's own defaults
+          # (NODE_ENV=production, PORT=3000, MOTEBIT_DB_PATH=/data/motebit.db)
+          # with NO security-boundary overrides — docker env is explicit, so
+          # nothing ambient can leak in. Federation enabled so the #359
+          # cross-org boundary is reachable.
+          docker run -d --name relay-under-probe \
+            -e X402_PAY_TO_ADDRESS=0x0000000000000000000000000000000000000000 \
+            -e MOTEBIT_FEDERATION_ENDPOINT_URL=https://relay-under-probe.example/federation \
+            motebit-relay-probe:candidate
+          # The probe runs INSIDE the same image (sibling container sharing
+          # the relay's network namespace) and imports the image's OWN
+          # compiled probeSecurityBoundaries — the probe bytes are the
+          # artifact's bytes.
+          if ! docker run --rm \
+            --network container:relay-under-probe \
+            -v "$PWD/services/relay/scripts/probe-image.mjs:/probe.mjs:ro" \
+            --entrypoint node \
+            motebit-relay-probe:candidate /probe.mjs http://127.0.0.1:3000; then
+            echo "── relay-under-probe logs ──"
+            docker logs relay-under-probe || true
+            exit 1
+          fi
+          docker rm -f relay-under-probe
+
       - name: Build and push (amd64 + arm64)
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
