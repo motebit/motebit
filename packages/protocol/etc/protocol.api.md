@@ -2217,6 +2217,9 @@ export interface HardwareAttestationClaim {
 }
 
 // @public
+export function hexToBytes32(hex: string): Uint8Array | null;
+
+// @public
 export type HorizonSubject = {
     readonly kind: "motebit";
     readonly motebit_id: MotebitId;
