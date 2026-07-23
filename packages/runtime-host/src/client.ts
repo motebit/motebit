@@ -11,7 +11,7 @@
  * loudly to their origin, never silently retried across an authority
  * boundary.
  */
-import { createSignedToken } from "@motebit/crypto";
+import { mintAudienceToken } from "@motebit/crypto";
 import { RUNTIME_ATTACH_AUDIENCE } from "@motebit/protocol";
 import {
   encodeFrame,
@@ -53,20 +53,18 @@ export async function mintAttachToken(
   opts: { ttlMs?: number; now?: () => number } = {},
 ): Promise<string> {
   const now = opts.now ?? (() => Date.now());
-  const issuedAt = now();
-  return createSignedToken(
-    {
-      mid: identity.motebitId,
-      did: identity.deviceId,
-      iat: issuedAt,
-      exp: issuedAt + (opts.ttlMs ?? 30_000),
-      // Web Crypto — available in node ≥ 20 AND the desktop webview;
-      // this module must never import node:crypto.
-      jti: globalThis.crypto.randomUUID(),
-      aud: RUNTIME_ATTACH_AUDIENCE,
-    },
-    privateKey,
-  );
+  return (
+    await mintAudienceToken(
+      {
+        mid: identity.motebitId,
+        did: identity.deviceId,
+        aud: RUNTIME_ATTACH_AUDIENCE,
+        ttlMs: opts.ttlMs ?? 30_000,
+        nowMs: now(),
+      },
+      privateKey,
+    )
+  ).token;
 }
 
 /**

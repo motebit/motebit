@@ -52,7 +52,7 @@ import {
   type AppearanceConfig,
   type DeletionCertificate,
 } from "@motebit/sdk";
-import { createSignedToken, secureErase, bytesToHex } from "@motebit/encryption";
+import { mintAudienceToken, secureErase, bytesToHex } from "@motebit/encryption";
 import {
   bootstrapIdentity as sharedBootstrapIdentity,
   rotateIdentityKeys,
@@ -1943,17 +1943,9 @@ export class MobileApp {
     const privKeyBytes = await this.getPrivKeyBytes();
 
     try {
-      return await createSignedToken(
-        {
-          mid: this.motebitId,
-          did: this.deviceId,
-          iat: Date.now(),
-          exp: Date.now() + 5 * 60 * 1000,
-          jti: crypto.randomUUID(),
-          aud,
-        },
-        privKeyBytes,
-      );
+      return (
+        await mintAudienceToken({ mid: this.motebitId, did: this.deviceId, aud }, privKeyBytes)
+      ).token;
     } finally {
       secureErase(privKeyBytes);
     }

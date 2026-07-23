@@ -8,7 +8,7 @@
  * lives here.
  */
 
-import { createSignedToken, secureErase } from "@motebit/encryption";
+import { mintAudienceToken, secureErase } from "@motebit/encryption";
 import type { TokenAudience } from "@motebit/sdk";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig, type FullConfig } from "../config.js";
@@ -136,13 +136,10 @@ export async function getRelayAuthHeaders(
         promptLabel: "Passphrase: ",
       });
       try {
-        const token = await createSignedToken(
+        const { token } = await mintAudienceToken(
           {
             mid: fullConfig.motebit_id,
             did: fullConfig.device_id,
-            iat: Date.now(),
-            exp: Date.now() + 5 * 60 * 1000,
-            jti: crypto.randomUUID(),
             aud: opts?.aud ?? "admin:query",
           },
           privateKey,

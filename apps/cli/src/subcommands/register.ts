@@ -10,7 +10,7 @@
  * `getRelayUrl`, which requires one.
  */
 
-import { createSignedToken, secureErase } from "@motebit/encryption";
+import { mintAudienceToken, secureErase } from "@motebit/encryption";
 import { verifyTransparencyDeclaration } from "@motebit/state-export-client";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig, saveFullConfig } from "../config.js";
@@ -101,15 +101,8 @@ export async function handleRegister(config: CliConfig): Promise<void> {
   // Step 2: Verify registration succeeded by minting a signed token and calling /health
   if (registered && privateKeyBytes) {
     try {
-      const token = await createSignedToken(
-        {
-          mid: motebitId,
-          did: deviceId,
-          iat: Date.now(),
-          exp: Date.now() + 5 * 60 * 1000,
-          jti: crypto.randomUUID(),
-          aud: "sync",
-        },
+      const { token } = await mintAudienceToken(
+        { mid: motebitId, did: deviceId, aud: "sync" },
         privateKeyBytes,
       );
 

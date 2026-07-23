@@ -17,7 +17,7 @@ import { verify, rotate as rotateIdentityFile } from "@motebit/identity-file";
 import { rotateIdentityKeys } from "@motebit/core-identity";
 import {
   hexPublicKeyToDidKey,
-  createSignedToken,
+  mintAudienceToken,
   secureErase,
   bytesToHex,
 } from "@motebit/encryption";
@@ -174,15 +174,8 @@ export async function handleRotate(config: CliConfig): Promise<void> {
       const newPrivKey = fromHex(newPrivKeyHex);
       const deviceId = fullConfig.device_id ?? "";
 
-      const token = await createSignedToken(
-        {
-          mid: motebitId,
-          did: deviceId,
-          iat: Date.now(),
-          exp: Date.now() + 5 * 60 * 1000,
-          jti: crypto.randomUUID(),
-          aud: "rotate-key",
-        },
+      const { token } = await mintAudienceToken(
+        { mid: motebitId, did: deviceId, aud: "rotate-key" },
         newPrivKey,
       );
       secureErase(newPrivKey);

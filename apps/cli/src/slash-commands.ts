@@ -17,7 +17,7 @@ import { InMemoryToolRegistry } from "@motebit/tools";
 import { AgentTrustLevel, SensitivityLevel } from "@motebit/sdk";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import { computeReputationScore } from "@motebit/policy";
-import { createSignedToken, verifyExecutionReceipt, hexToBytes } from "@motebit/encryption";
+import { mintAudienceToken, verifyExecutionReceipt, hexToBytes } from "@motebit/encryption";
 import { McpServerAdapter, wireServerDeps } from "@motebit/mcp-server";
 import type { McpServerConfig as McpServerAdapterConfig } from "@motebit/mcp-server";
 import { type CliConfig, COMMANDS } from "./args.js";
@@ -120,18 +120,12 @@ async function getRelayToken(
     config.syncToken ?? process.env["MOTEBIT_API_TOKEN"] ?? process.env["MOTEBIT_SYNC_TOKEN"];
   if (master) return master;
   if (repl?.privateKeyBytes && repl?.deviceId) {
-    const now = Date.now();
-    return createSignedToken(
-      {
-        mid: repl.motebitId,
-        did: repl.deviceId,
-        iat: now,
-        exp: now + 5 * 60 * 1000,
-        jti: crypto.randomUUID(),
-        aud,
-      },
-      repl.privateKeyBytes,
-    );
+    return (
+      await mintAudienceToken(
+        { mid: repl.motebitId, did: repl.deviceId, aud },
+        repl.privateKeyBytes,
+      )
+    ).token;
   }
   return undefined;
 }
@@ -701,18 +695,7 @@ export async function handleSlashCommand(
       runtime.enableInteractiveDelegation({
         syncUrl: connectUrl,
         authToken: async (audience = "task:submit") => {
-          const now = Date.now();
-          return createSignedToken(
-            {
-              mid,
-              did,
-              iat: now,
-              exp: now + 5 * 60 * 1000,
-              jti: crypto.randomUUID(),
-              aud: audience,
-            },
-            pk,
-          );
+          return (await mintAudienceToken({ mid, did, aud: audience }, pk)).token;
         },
         routingStrategy: config.routingStrategy,
       });

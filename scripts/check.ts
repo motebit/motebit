@@ -932,6 +932,12 @@ const GATES: ReadonlyArray<Gate> = [
       "the permanent structural lock behind the treasury-drain fix: a virtual-account balance may be credited (`creditAccount(` / `.credit(` in `services/relay/src`) ONLY from an allowlist of verified-funding modules (deposit-detector onchain, Stripe checkout/webhook, task/federation settlement, allocation_release net-zero, the account-store wrapper, and free-credit's non-withdrawable grant). The removed self-declared `POST /deposit` route credited spendable+withdrawable balance from a client-supplied amount → self-declare→auto-settled-withdrawal free-money vector; deleting it closed the hole, this gate keeps it closed forever. A NEW credit call site outside the allowlist fails CI, forcing a reviewer to decide: verified funding, or does the credited balance need a withdrawal hold (the free-credit shape — `AccountStore.getUnspentGrantHold`)? Companion to the `/deposit`→404 regression test in virtual-accounts.test.ts. Invariant #135, added 2026-07-02",
     script: "check-credit-caller-allowlist",
   },
+  {
+    name: "check-token-mint-canonical",
+    defends:
+      "audience-bound auth tokens are minted through the ONE canonical seam — `mintAudienceToken` (@motebit/crypto), which owns iat/exp/jti assembly — never via raw `createSignedToken(` outside packages/crypto/src/signing.ts (tests exempt: adversarial fixtures need exact payload control). Before the seam, 23 call sites each restated the freshness window and replay nonce — the identity→authz instance of the shadow-the-constant class (one site drifting its TTL or nonce source silently weakens the boundary while every test stays green). One seam means one place where the assembly can be right or wrong. Invariant #147, added 2026-07-23",
+    script: "check-token-mint-canonical",
+  },
 ];
 
 interface Result {

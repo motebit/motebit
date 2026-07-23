@@ -1,6 +1,6 @@
 import { DEFAULT_CONFIG } from "@motebit/ai-core";
 import type { MotebitPersonalityConfig } from "@motebit/ai-core";
-import { deriveSyncEncryptionKey, createSignedToken } from "@motebit/encryption";
+import { deriveSyncEncryptionKey, mintAudienceToken } from "@motebit/encryption";
 import { connectMcpServers } from "@motebit/mcp-client";
 import { formatBodyAwareness } from "@motebit/ai-core";
 import { providerAcceptsModel } from "@motebit/sdk";
@@ -788,18 +788,7 @@ async function main(): Promise<void> {
         const pk = privateKeyBytes;
         const did = deviceId;
         const authToken = async (audience = "task:submit"): Promise<string> => {
-          const now = Date.now();
-          return createSignedToken(
-            {
-              mid: motebitId,
-              did,
-              iat: now,
-              exp: now + 5 * 60 * 1000,
-              jti: crypto.randomUUID(),
-              aud: audience,
-            },
-            pk,
-          );
+          return (await mintAudienceToken({ mid: motebitId, did, aud: audience }, pk)).token;
         };
         const delegationCfg = {
           syncUrl,

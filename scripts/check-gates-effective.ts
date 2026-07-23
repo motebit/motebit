@@ -2424,6 +2424,18 @@ export async function probeFetch(): Promise<unknown> {
         ),
       ),
   },
+  {
+    script: "check-token-mint-canonical",
+    proves:
+      "flags a raw `createSignedToken(` mint reintroduced in non-test source outside the canonical seam — the restated-iat/exp/jti boilerplate whose per-site drift `mintAudienceToken` exists to end. Probe injects a raw call into molecule-runner (a swept mint plane); the gate must flag it. byte-identical restoration on cleanup.",
+    perturb: () =>
+      mutateFile(`packages/molecule-runner/src/index.ts`, (src) =>
+        src.replace(
+          "export function makeAuthTokenMinter(",
+          `function ${PROBE_PREFIX}rawMint(pk: Uint8Array) {\n  return createSignedToken({} as never, pk);\n}\nexport function makeAuthTokenMinter(`,
+        ),
+      ),
+  },
 ];
 
 /**

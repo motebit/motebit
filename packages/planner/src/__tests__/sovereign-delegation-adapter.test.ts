@@ -62,7 +62,7 @@ function makeConfig(overrides?: Partial<SovereignDelegationConfig>): SovereignDe
       chain: "solana",
       asset: "USDC",
     },
-    createSignedToken: vi.fn().mockResolvedValue("mock-token"),
+    mintAudienceToken: vi.fn().mockResolvedValue({ token: "mock-token" }),
     verifyReceipt: vi.fn().mockResolvedValue(true),
     hexToBytes: vi.fn().mockReturnValue(new Uint8Array(32)),
     hash: vi.fn().mockResolvedValue("hash-abc"),

@@ -287,6 +287,79 @@ export async function createSignedToken(
   return `${payloadB64}.${sigB64}`;
 }
 
+/** Default signed-token lifetime: 5 minutes. */
+export const DEFAULT_SIGNED_TOKEN_TTL_MS = 5 * 60 * 1000;
+
+export interface MintAudienceTokenInput {
+  mid: string;
+  did: string;
+  /**
+   * Audience binding. Kept `string` here — @motebit/crypto is
+   * zero-monorepo-deps, so the closed `TokenAudience` union lives in
+   * @motebit/protocol and call sites supply the typed value.
+   */
+  aud: string;
+  /** Token lifetime in ms. Default `DEFAULT_SIGNED_TOKEN_TTL_MS`. */
+  ttlMs?: number;
+  /**
+   * Issued-at instant override for injected-clock callers (token caches,
+   * deterministic tests) — the adapter-pattern clock idiom. Default now.
+   */
+  nowMs?: number;
+}
+
+export interface MintedAudienceToken {
+  token: string;
+  /** The exact signed payload — for callers that surface `exp` or log `jti`. */
+  payload: SignedTokenPayload;
+}
+
+/** Replay-safe token nonce from the platform CSPRNG. Fail-closed: a token
+ * without a random jti is replayable, so no Math.random fallback exists. */
+function mintJti(): string {
+  const c = globalThis.crypto as Crypto | undefined;
+  if (typeof c?.randomUUID === "function") return c.randomUUID();
+  if (typeof c?.getRandomValues === "function") {
+    const bytes = c.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  throw new Error("no CSPRNG available — cannot mint a replay-safe jti");
+}
+
+/**
+ * The canonical mint seam for audience-bound auth tokens.
+ *
+ * `createSignedToken` deliberately fills no defaults, so before this helper
+ * every call site restated `iat` / `exp` / `jti` / TTL — dozens of
+ * independent restatements of the same security-relevant boilerplate, each
+ * one a place for the freshness or replay defense to silently drift
+ * (composition-preserves-enforcement: reduce the seams). This helper owns
+ * that assembly: `iat` is now, `exp` is `iat + ttlMs`, `jti` comes from the
+ * platform CSPRNG. Call sites supply only what actually varies — identity,
+ * audience, and (rarely) a non-default TTL.
+ *
+ * Monorepo call sites MUST mint through here (`check-token-mint-canonical`);
+ * raw `createSignedToken` remains public API for verifier tests and
+ * adversarial fixtures that need exact payload control.
+ */
+export async function mintAudienceToken(
+  input: MintAudienceTokenInput,
+  privateKey: Uint8Array,
+): Promise<MintedAudienceToken> {
+  const iat = input.nowMs ?? Date.now();
+  const payload: SignedTokenPayload = {
+    mid: input.mid,
+    did: input.did,
+    iat,
+    exp: iat + (input.ttlMs ?? DEFAULT_SIGNED_TOKEN_TTL_MS),
+    jti: mintJti(),
+    aud: input.aud,
+    suite: SIGNED_TOKEN_SUITE,
+  };
+  const token = await createSignedToken(payload, privateKey);
+  return { token, payload };
+}
+
 /**
  * Verify a signed token. Returns the parsed payload if valid and not
  * expired, null otherwise.

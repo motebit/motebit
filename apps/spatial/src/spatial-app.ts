@@ -46,7 +46,7 @@ import {
   type BootstrapConfigStore,
   type BootstrapKeyStore,
 } from "@motebit/core-identity";
-import { createSignedToken, secureErase } from "@motebit/encryption";
+import { mintAudienceToken, secureErase } from "@motebit/encryption";
 import type { TokenAudience } from "@motebit/sdk";
 import { generate as generateIdentityFile } from "@motebit/identity-file";
 import type {
@@ -275,17 +275,9 @@ export class SpatialApp {
    */
   async createSyncToken(aud: TokenAudience = "sync"): Promise<string | null> {
     if (this._privKeyBytes == null || this.motebitId === "spatial-local") return null;
-    return createSignedToken(
-      {
-        mid: this.motebitId,
-        did: this.deviceId,
-        iat: Date.now(),
-        exp: Date.now() + 5 * 60 * 1000,
-        jti: crypto.randomUUID(),
-        aud,
-      },
-      this._privKeyBytes,
-    );
+    return (
+      await mintAudienceToken({ mid: this.motebitId, did: this.deviceId, aud }, this._privKeyBytes)
+    ).token;
   }
   private _planStore: IdbPlanStore | null = null;
   private _pendingApprovalResolve: ((approved: boolean) => void) | null = null;
@@ -498,17 +490,9 @@ export class SpatialApp {
       const motebitId = this.motebitId;
       const deviceId = this.deviceId;
       this.tokenFactory = async (): Promise<string> => {
-        return createSignedToken(
-          {
-            mid: motebitId,
-            did: deviceId,
-            iat: Date.now(),
-            exp: Date.now() + 5 * 60 * 1000,
-            jti: crypto.randomUUID(),
-            aud: "sync",
-          },
-          privKeyBytes,
-        );
+        return (
+          await mintAudienceToken({ mid: motebitId, did: deviceId, aud: "sync" }, privKeyBytes)
+        ).token;
       };
     }
 
@@ -569,17 +553,12 @@ export class SpatialApp {
         if (this._privKeyBytes == null || this.motebitId == null || this.deviceId == null) {
           return null;
         }
-        return createSignedToken(
-          {
-            mid: this.motebitId,
-            did: this.deviceId,
-            iat: Date.now(),
-            exp: Date.now() + 5 * 60 * 1000,
-            jti: crypto.randomUUID(),
-            aud: "proxy:token",
-          },
-          this._privKeyBytes,
-        );
+        return (
+          await mintAudienceToken(
+            { mid: this.motebitId, did: this.deviceId, aud: "proxy:token" },
+            this._privKeyBytes,
+          )
+        ).token;
       },
       onProviderReady: (config: ProxyProviderConfig) => {
         this._proxyConfig = config;

@@ -36,7 +36,7 @@ import * as path from "node:path";
 import {
   bytesToHex,
   canonicalJson,
-  createSignedToken,
+  mintAudienceToken,
   generateKeypair,
   secureErase,
   sha256,
@@ -287,17 +287,12 @@ async function mintSignedToken(args: {
   privateKey: Uint8Array;
   audience: TokenAudience;
 }): Promise<string> {
-  return createSignedToken(
-    {
-      mid: args.motebitId,
-      did: args.deviceId,
-      iat: Date.now(),
-      exp: Date.now() + 5 * 60 * 1000,
-      jti: crypto.randomUUID(),
-      aud: args.audience,
-    },
-    args.privateKey,
-  );
+  return (
+    await mintAudienceToken(
+      { mid: args.motebitId, did: args.deviceId, aud: args.audience },
+      args.privateKey,
+    )
+  ).token;
 }
 
 // ---------------------------------------------------------------------------

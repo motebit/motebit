@@ -38,7 +38,7 @@
 
 import type { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { createSignedToken, type SignedTokenPayload } from "@motebit/encryption";
+import { mintAudienceToken } from "@motebit/encryption";
 import { BROWSER_SANDBOX_AUDIENCE } from "@motebit/protocol";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
@@ -70,18 +70,16 @@ export async function mintBrowserSandboxToken(
   motebitId: string,
   ttlSec: number = DEFAULT_SANDBOX_TOKEN_TTL_SEC,
 ): Promise<{ token: string; expiresAt: number }> {
-  const nowMs = Date.now();
-  const expiresAt = nowMs + ttlSec * 1000;
-  const payload: Omit<SignedTokenPayload, "suite"> = {
-    mid: motebitId,
-    did: relayIdentity.did,
-    iat: nowMs,
-    exp: expiresAt,
-    jti: crypto.randomUUID(),
-    aud: BROWSER_SANDBOX_AUDIENCE,
-  };
-  const token = await createSignedToken(payload, relayIdentity.privateKey);
-  return { token, expiresAt };
+  const { token, payload } = await mintAudienceToken(
+    {
+      mid: motebitId,
+      did: relayIdentity.did,
+      aud: BROWSER_SANDBOX_AUDIENCE,
+      ttlMs: ttlSec * 1000,
+    },
+    relayIdentity.privateKey,
+  );
+  return { token, expiresAt: payload.exp };
 }
 
 export interface BrowserSandboxRoutesDeps {

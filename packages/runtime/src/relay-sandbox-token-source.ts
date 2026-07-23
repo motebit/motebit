@@ -62,7 +62,7 @@ export interface RelayBackedSandboxTokenSourceOptions {
    * Returns a fresh motebit-signed grant token bound to
    * `BROWSER_SANDBOX_GRANT_AUDIENCE`. Called once per cache miss.
    * The motebit's signing-keys layer typically wires this to
-   * `createSignedToken({ ..., aud: BROWSER_SANDBOX_GRANT_AUDIENCE },
+   * `mintAudienceToken({ ..., aud: BROWSER_SANDBOX_GRANT_AUDIENCE },
    * privateKey)`.
    */
   readonly getGrantToken: () => Promise<string>;
