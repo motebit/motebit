@@ -25,7 +25,7 @@ vi.mock("@motebit/encryption", () => ({
   hexPublicKeyToDidKey: vi.fn(),
   verifyVerifiableCredential: vi.fn(),
   verifyVerifiablePresentation: vi.fn(),
-  createSignedToken: vi.fn(),
+  mintAudienceToken: vi.fn(async () => ({ token: "mock-token", payload: {} })),
   secureErase: vi.fn(),
   bytesToHex: vi.fn(),
 }));

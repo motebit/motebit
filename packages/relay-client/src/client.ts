@@ -21,7 +21,7 @@
  *
  * Auth is the relay's dual-bearer model, resolved per request in strict
  * precedence order: injected `CredentialSource` (the `@motebit/sdk`
- * contract) → device-key minting (audience-bound `createSignedToken`,
+ * contract) → device-key minting (audience-bound `mintAudienceToken`,
  * the cross-endpoint-replay defense — each method names its
  * `TokenAudience` from the closed registry) → static bearer token.
  * Endpoints that require auth throw `kind: "auth"` before the network

@@ -86,7 +86,7 @@ vi.mock("expo-three", () => ({
 }));
 
 vi.mock("@motebit/encryption", () => ({
-  createSignedToken: vi.fn(() => Promise.resolve("mock-signed-token")),
+  mintAudienceToken: vi.fn(() => Promise.resolve({ token: "mock-signed-token", payload: {} })),
 }));
 
 vi.mock("@motebit/core-identity", () => ({
