@@ -313,6 +313,17 @@ describe("mintAudienceToken (the canonical mint seam)", () => {
     expect(short.payload.exp - short.payload.iat).toBe(30_000);
   });
 
+  it("honors the injected-clock nowMs override (token caches, deterministic tests)", async () => {
+    const kp = await generateKeypair();
+    const fixedNow = 1_700_000_000_000;
+    const { payload } = await mintAudienceToken(
+      { mid: "m", did: "d", aud: "sync", nowMs: fixedNow, ttlMs: 60_000 },
+      kp.privateKey,
+    );
+    expect(payload.iat).toBe(fixedNow);
+    expect(payload.exp).toBe(fixedNow + 60_000);
+  });
+
   it("mints a fresh CSPRNG jti per token (replay defense)", async () => {
     const kp = await generateKeypair();
     const a = await mintAudienceToken({ mid: "m", did: "d", aud: "sync" }, kp.privateKey);

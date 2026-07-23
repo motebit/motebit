@@ -25,7 +25,10 @@
  *      missing `jti`/`aud`, wrong audience) that the canonical seam
  *      structurally refuses to produce.
  *
- * Static text parse — no execution.
+ * Static text parse — no execution. Known limitation: an aliased import
+ * (`import { createSignedToken as x }`) evades the textual match — the same
+ * accepted blind spot as the suite's other call-site scans; zero aliased
+ * imports exist today and one appearing in review is itself the signal.
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
