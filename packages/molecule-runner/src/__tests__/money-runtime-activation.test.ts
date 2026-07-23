@@ -30,7 +30,13 @@
  * the chain that #357 + #358 broke.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { generateKeypair, bytesToHex, verifyRoutingTranscript } from "@motebit/crypto";
+import {
+  generateKeypair,
+  bytesToHex,
+  verifyRoutingTranscript,
+  signDelegationRevocation,
+  signStandingDelegation,
+} from "@motebit/crypto";
 import { createInMemoryStorage } from "@motebit/runtime";
 import { InMemoryToolRegistry } from "@motebit/tools";
 import type { BootstrapAndEmitIdentityResult } from "@motebit/mcp-server";
@@ -84,6 +90,11 @@ function moneyConfig(): MoleculeConfig {
   };
 }
 
+/** Typed URL extraction from a fetch-mock call arg (no default stringify). */
+function reqUrl(input: string | URL | Request): string {
+  return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+}
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -134,9 +145,9 @@ type ActivationRuntime = {
   executeGrantedDelegation: (params: {
     capability: string;
     prompt: string;
-    delegation: { token: unknown; grant: unknown };
+    delegation: { token: unknown; grant: unknown; revocations?: unknown[] };
     dryRun: boolean;
-  }) => Promise<{ ok: boolean }>;
+  }) => Promise<{ ok: boolean; code?: string }>;
   getRecentRoutingTranscripts: () => ReadonlyArray<MintedTranscript>;
   stop?: () => void;
 };
@@ -204,5 +215,162 @@ describe("defaultCreateMoneyRuntime — transcript producer ACTIVE at the compos
     expect(
       await verifyRoutingTranscript(t as unknown as Parameters<typeof verifyRoutingTranscript>[0]),
     ).toEqual({ valid: true });
+  });
+});
+
+/**
+ * The policy→action link's composition-root NEGATIVES
+ * (docs/doctrine/composition-preserves-enforcement.md — pipeline-link
+ * ladder). The fail-closed proofs for money-without-authority all lived one
+ * layer below (`execute-granted-delegation.test.ts` constructs
+ * MotebitRuntime directly), so a drift in the REAL builder's policy wiring
+ * would leave every one of them green. These drive the same refusals through
+ * `defaultCreateMoneyRuntime` — the exact function deployed molecules use.
+ *
+ * Rung honesty: this is the composition-root rung, in-process. The deployed
+ * consumer (services/clerk via runMolecule's spend handle) has no
+ * booted-artifact rung yet; that rung is the link's remaining step.
+ *
+ * Discriminating power (severing run, recorded in the PR): the revocation
+ * list reaches `verifyGrantForTurn` only through the caller-threaded
+ * `params.delegation.revocations ?? []` — a threading with a fail-open
+ * default that NO static needle covers (`check-money-authority` pins the
+ * verify call, the null-check, and the scope fence, but not revocation
+ * threading). Severing it (`?? []` → `[]`) turns the revoked-grant test red
+ * while `check-money-authority` stays green — the needle-invisible class.
+ */
+describe("defaultCreateMoneyRuntime — money-without-authority fails CLOSED at the composition root", () => {
+  it("a REVOKED self-grant is refused (requires_verified_grant), no selection, no broadcast", async () => {
+    const identity = await realIdentity();
+    const cfg = moneyConfig();
+    const runtime = defaultCreateMoneyRuntime(
+      identity,
+      createInMemoryStorage(),
+      new InMemoryToolRegistry(),
+      { requireApprovalAbove: RiskLevel.R3_EXECUTE, denyAbove: RiskLevel.R3_EXECUTE },
+      cfg,
+      undefined as never,
+    ) as unknown as ActivationRuntime;
+
+    const grant = await selfIssueGrant(identity, cfg.moneyExecution!);
+    const token = await mintTick(grant, identity);
+    const g = grant as unknown as {
+      grant_id: string;
+      delegator_id: string;
+      delegator_public_key: string;
+    };
+    const revocation = await signDelegationRevocation(
+      {
+        grant_id: g.grant_id,
+        delegator_id: g.delegator_id,
+        delegator_public_key: g.delegator_public_key,
+        revoked_at: Date.now(),
+      },
+      identity.privateKey,
+    );
+
+    stubRelayAndRpcFetch();
+    const exec = await runtime.executeGrantedDelegation({
+      capability: "research",
+      prompt: "activation probe (revoked)",
+      delegation: { token, grant, revocations: [revocation] },
+      dryRun: false,
+    });
+    runtime.stop?.();
+
+    expect(exec).toEqual({ ok: false, code: "requires_verified_grant" });
+    // Refusal happened BEFORE selection: no transcript minted, and the real
+    // rail was never reached (no RPC call on the stubbed fetch).
+    expect(runtime.getRecentRoutingTranscripts()).toHaveLength(0);
+    const fetchMock = globalThis.fetch as unknown as {
+      mock: { calls: [string | URL | Request][] };
+    };
+    const rpcCalls = fetchMock.mock.calls.filter(([input]) => reqUrl(input).startsWith(SOLANA_RPC));
+    expect(rpcCalls).toHaveLength(0);
+  });
+
+  it("an OUT-OF-SCOPE grant is refused (missing_scope), no selection, no broadcast", async () => {
+    const identity = await realIdentity();
+    const cfg = moneyConfig();
+    const runtime = defaultCreateMoneyRuntime(
+      identity,
+      createInMemoryStorage(),
+      new InMemoryToolRegistry(),
+      { requireApprovalAbove: RiskLevel.R3_EXECUTE, denyAbove: RiskLevel.R3_EXECUTE },
+      cfg,
+      undefined as never,
+    ) as unknown as ActivationRuntime;
+
+    // Same REAL signing path as selfIssueGrant, wrong SIGNED scope — the
+    // grant authorizes a different tool than the spend handle invokes.
+    const now = Date.now();
+    const grant = await signStandingDelegation(
+      {
+        grant_id: `clerk-self-grant:${identity.motebitId}`,
+        delegator_id: identity.motebitId,
+        delegator_public_key: identity.publicKeyHex,
+        delegate_id: identity.motebitId,
+        delegate_public_key: identity.publicKeyHex,
+        scope: "pay_invoice",
+        subject: "market:self-funded-delegation",
+        cadence_ms: 0,
+        issued_at: now,
+        not_before: null,
+        expires_at: now + 90 * 24 * 60 * 60 * 1000,
+        max_token_ttl_ms: 60 * 60 * 1000, // ≥ the tick's real TICK_TTL_MS (1h)
+        spend_ceiling: cfg.moneyExecution!.spendCeiling,
+      },
+      identity.privateKey,
+    );
+    const token = await mintTick(grant, identity);
+
+    stubRelayAndRpcFetch();
+    const exec = await runtime.executeGrantedDelegation({
+      capability: "research",
+      prompt: "activation probe (out of scope)",
+      delegation: { token, grant },
+      dryRun: false,
+    });
+    runtime.stop?.();
+
+    expect(exec).toEqual({ ok: false, code: "missing_scope" });
+    expect(runtime.getRecentRoutingTranscripts()).toHaveLength(0);
+    const fetchMock = globalThis.fetch as unknown as {
+      mock: { calls: [string | URL | Request][] };
+    };
+    const rpcCalls = fetchMock.mock.calls.filter(([input]) => reqUrl(input).startsWith(SOLANA_RPC));
+    expect(rpcCalls).toHaveLength(0);
+  });
+
+  it("a TAMPERED grant (ceiling raised after signing) is refused (requires_verified_grant)", async () => {
+    const identity = await realIdentity();
+    const cfg = moneyConfig();
+    const runtime = defaultCreateMoneyRuntime(
+      identity,
+      createInMemoryStorage(),
+      new InMemoryToolRegistry(),
+      { requireApprovalAbove: RiskLevel.R3_EXECUTE, denyAbove: RiskLevel.R3_EXECUTE },
+      cfg,
+      undefined as never,
+    ) as unknown as ActivationRuntime;
+
+    const grant = await selfIssueGrant(identity, cfg.moneyExecution!);
+    const token = await mintTick(grant, identity);
+    const tampered = {
+      ...(grant as unknown as Record<string, unknown>),
+      spend_ceiling: { schema: "motebit.spend-ceiling.v1", lifetime_limit_micro: 1_000_000_000 },
+    };
+
+    stubRelayAndRpcFetch();
+    const exec = await runtime.executeGrantedDelegation({
+      capability: "research",
+      prompt: "activation probe (tampered)",
+      delegation: { token, grant: tampered },
+      dryRun: false,
+    });
+    runtime.stop?.();
+
+    expect(exec).toEqual({ ok: false, code: "requires_verified_grant" });
+    expect(runtime.getRecentRoutingTranscripts()).toHaveLength(0);
   });
 });
