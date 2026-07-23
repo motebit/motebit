@@ -23,6 +23,25 @@ import {
   computeFederatedFeeSplit,
   PLATFORM_FEE_RATE,
 } from "@motebit/protocol";
+import { verifySovereignBinding } from "@motebit/crypto";
+
+/**
+ * The DERIVED settlement-authority binding, inlined here to keep the
+ * rail-agnostic runtime from depending on `@motebit/wallet-solana` (Solana
+ * coupling): a Solana address IS `base58Encode` of the 32-byte Ed25519 key, so
+ * `address === base58Encode(key)` proves the key authorizes the payout offline.
+ * Mirrors `isDerivedSettlementBinding` in `@motebit/wallet-solana` (both use the
+ * one `@motebit/protocol` base58 codec). Fail-closed on a malformed key.
+ * docs/doctrine/settlement-authority-binding.md.
+ */
+function isDerivedSolanaSettlement(settlementAddress: string, publicKeyHex: string): boolean {
+  if (!/^[0-9a-f]{64}$/i.test(publicKeyHex)) return false;
+  const bytes = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) {
+    bytes[i] = parseInt(publicKeyHex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return settlementAddress === base58Encode(bytes);
+}
 
 /**
  * Closed-union error codes for relay delegation failures. The UI maps each to
@@ -104,6 +123,14 @@ export type DelegationErrorCode =
   | "trust_threshold_unmet"
   /** Pre-flight. No agent advertises the capability. */
   | "no_routing"
+  /**
+   * Pre-flight, BEFORE broadcast. A FEDERATED (peer-hosted) worker's discovered
+   * settlement address is not cryptographically bound to the worker's identity
+   * — a malicious peer could be redirecting the worker's payments. The client
+   * refuses to broadcast rather than pay a peer-asserted address it cannot
+   * verify. No funds move. docs/doctrine/settlement-authority-binding.md.
+   */
+  | "worker_settlement_unbound"
   /** Pre-flight. HTTP 400 — malformed submission. Code bug, surface loudly. */
   | "malformed_request"
   /** In-flight. Polling exceeded `timeoutMs` without a receipt. */
@@ -902,6 +929,7 @@ export async function resolveP2pPaymentRequest(
     const data = (await resp.json()) as {
       agents?: Array<{
         motebit_id: string;
+        public_key?: string | null;
         settlement_address?: string | null;
         settlement_modes?: string | string[] | null;
         source_relay_public_key?: string | null;
@@ -959,6 +987,31 @@ export async function resolveP2pPaymentRequest(
           ? `Pinned worker "${params.targetWorkerId}" is not P2P-eligible for "${capability}".`
           : `No P2P-capable worker advertises "${capability}".`,
       );
+    }
+
+    // SETTLEMENT-AUTHORITY BINDING at the payer, BEFORE broadcast — the seam that
+    // protects the DELEGATOR's funds (the relay's own check runs post-broadcast,
+    // too late to prevent loss). A FEDERATED candidate (`source_relay_public_key`
+    // set ⇒ hosted on a peer) carries a settlement address ASSERTED BY THAT PEER,
+    // with no authed registration on our own relay proving the worker chose it —
+    // so a malicious peer could redirect the worker's payments. Bind it
+    // fail-closed: the peer-forwarded key must sovereign-bind to the worker's
+    // motebit_id AND the address must derive from it. A LOCAL candidate's address
+    // is authed by our own relay (the worker set it) — trusted, no check, so
+    // custody separation stays legitimate. Non-bindable federated workers refuse
+    // pre-broadcast (no funds move) until the signed/anchored rung ships (Inc 2/3).
+    // docs/doctrine/settlement-authority-binding.md.
+    if (candidate.source_relay_public_key != null) {
+      const bound =
+        candidate.public_key != null &&
+        isDerivedSolanaSettlement(candidate.settlement_address, candidate.public_key) &&
+        (await verifySovereignBinding(candidate.motebit_id, candidate.public_key));
+      if (!bound) {
+        return fail(
+          "worker_settlement_unbound",
+          `Federated worker "${candidate.motebit_id}" settlement address is not identity-bound; refusing to pay a peer-asserted destination.`,
+        );
+      }
     }
     worker = {
       motebit_id: candidate.motebit_id,

@@ -7,7 +7,8 @@
  * NOT `insufficient_balance` (misleading: implies a funding shortfall). The
  * gate-code branch sits before the generic 402 branch; this locks that order.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll, afterEach } from "vitest";
+import { deriveSovereignMotebitId } from "@motebit/crypto";
 import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/protocol";
 import {
   base58Encode,
@@ -655,6 +656,21 @@ describe("resolveAndSubmitP2pDelegation", () => {
   const PEER_KEY_HEX = Array.from(PEER_KEY_BYTES, (b) => b.toString(16).padStart(2, "0")).join("");
   const EXPECTED_B_TREASURY = base58Encode(PEER_KEY_BYTES);
 
+  // A SOVEREIGN + DERIVED federated worker — the only kind the payer can bind
+  // offline before broadcast: its id commits to its key, and its settlement
+  // address IS that key's Solana address. A peer cannot forge either
+  // (settlement-authority-binding.md). Non-bound federated candidates are now
+  // refused pre-broadcast, so the mocks must reflect a real bindable worker.
+  const WORKER_KEY_BYTES = new Uint8Array(32).fill(5);
+  const WORKER_KEY_HEX = Array.from(WORKER_KEY_BYTES, (b) => b.toString(16).padStart(2, "0")).join(
+    "",
+  );
+  const WORKER_DERIVED_ADDR = base58Encode(WORKER_KEY_BYTES);
+  let WORKER_SOVEREIGN_ID: string;
+  beforeAll(async () => {
+    WORKER_SOVEREIGN_ID = await deriveSovereignMotebitId(WORKER_KEY_HEX);
+  });
+
   /** A rail builder that echoes ALL six legs (incl. the executor-fee leg). */
   const buildFederatedProof = vi.fn(
     async (req: SovereignP2pPaymentRequest): Promise<P2pPaymentProof> => ({
@@ -683,8 +699,9 @@ describe("resolveAndSubmitP2pDelegation", () => {
         // pricing (no /listing fetch — the origin can't serve a remote listing).
         discover: discoverOk([
           {
-            motebit_id: "remote-bob",
-            settlement_address: "RemoteBobAddr",
+            motebit_id: WORKER_SOVEREIGN_ID,
+            public_key: WORKER_KEY_HEX,
+            settlement_address: WORKER_DERIVED_ADDR,
             settlement_modes: "p2p",
             source_relay_public_key: PEER_KEY_HEX,
             pricing: [{ capability: "web_search", unit_cost: 1 }],
@@ -701,7 +718,7 @@ describe("resolveAndSubmitP2pDelegation", () => {
     expect(build).toHaveBeenCalledTimes(1);
     const req = build.mock.calls[0]![0] as SovereignP2pPaymentRequest;
     const split = computeFederatedFeeSplit(toMicro(1), PLATFORM_FEE_RATE);
-    expect(req.workerAddress).toBe("RemoteBobAddr");
+    expect(req.workerAddress).toBe(WORKER_DERIVED_ADDR);
     // Worker nets the budget minus BOTH fees — not unit_cost (that's the budget).
     expect(req.amountMicro).toBe(split.workerNetMicro);
     // Origin (A) fee → the PINNED treasury; executor (B) fee → the peer-derived one.
@@ -722,8 +739,9 @@ describe("resolveAndSubmitP2pDelegation", () => {
       routedFetch({
         discover: discoverOk([
           {
-            motebit_id: "remote-bob",
-            settlement_address: "RemoteBobAddr",
+            motebit_id: WORKER_SOVEREIGN_ID,
+            public_key: WORKER_KEY_HEX,
+            settlement_address: WORKER_DERIVED_ADDR,
             settlement_modes: "p2p",
             source_relay_public_key: PEER_KEY_HEX,
             pricing: [{ capability: "web_search", unit_cost: 1 }],
@@ -743,8 +761,9 @@ describe("resolveAndSubmitP2pDelegation", () => {
       routedFetch({
         discover: discoverOk([
           {
-            motebit_id: "remote-bob",
-            settlement_address: "RemoteBobAddr",
+            motebit_id: WORKER_SOVEREIGN_ID,
+            public_key: WORKER_KEY_HEX,
+            settlement_address: WORKER_DERIVED_ADDR,
             settlement_modes: "p2p",
             source_relay_public_key: PEER_KEY_HEX,
             pricing: null,
@@ -766,8 +785,9 @@ describe("resolveAndSubmitP2pDelegation", () => {
       routedFetch({
         discover: discoverOk([
           {
-            motebit_id: "remote-bob",
-            settlement_address: "RemoteBobAddr",
+            motebit_id: WORKER_SOVEREIGN_ID,
+            public_key: WORKER_KEY_HEX,
+            settlement_address: WORKER_DERIVED_ADDR,
             settlement_modes: "p2p",
             source_relay_public_key: "nothex",
             pricing: [{ capability: "web_search", unit_cost: 1 }],
