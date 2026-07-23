@@ -12,7 +12,8 @@
  * through its real entry composition, real env resolution, real HTTP
  * listener — enforces the strict boundary observed from OUTSIDE.
  *
- * The tier is a two-rung ladder over the SAME probe:
+ * The tier is a two-rung ladder over the SAME probe (boot mechanics in
+ * `booted-entry-harness.ts`):
  *
  *  - Rung 1 (Inc 3b) — SOURCE entry: `src/server.ts` via tsx. Proves the
  *    entry's composition enforces the boundary.
@@ -25,7 +26,7 @@
  * Keeping both rungs is deliberate: a rung-1-green / rung-2-red differential
  * localizes the fault to the build step. Freshness of `dist/` is guaranteed
  * by turbo's `test` → `build` dependency in the canonical pipeline; the
- * beforeAll existence check carries the repair instruction for anyone
+ * harness's precondition check carries the repair instruction for anyone
  * running vitest directly.
  *
  * Each rung spawns its entry as a child process with a production-shaped
@@ -46,123 +47,26 @@
  * one-time proof they discriminate.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { probeSecurityBoundaries } from "../relay-config.js";
+import {
+  BOOT_TIMEOUT_MS,
+  DIST_TIER,
+  SOURCE_TIER,
+  bootRealEntry,
+  killBootedEntry,
+  type BootedEntry,
+} from "./booted-entry-harness.js";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const SERVER_ENTRY = resolve(HERE, "..", "server.ts");
-const DIST_ENTRY = resolve(HERE, "..", "..", "dist", "server.js");
-const BOOT_TIMEOUT_MS = 60_000;
-
-interface EntryTier {
-  /** Which rung of the booted-artifact ladder this is. */
-  name: string;
-  command: string;
-  args: string[];
-  /** Throws with a repair instruction when the rung's input is absent. */
-  precondition?: () => void;
-}
-
-const TIERS: EntryTier[] = [
-  {
-    name: "source entry (tsx src/server.ts)",
-    command: "npx",
-    args: ["--yes", "tsx", SERVER_ENTRY],
-  },
-  {
-    name: "compiled artifact (node dist/server.js — the run.sh exec line)",
-    command: process.execPath,
-    args: [DIST_ENTRY],
-    precondition: () => {
-      if (!existsSync(DIST_ENTRY)) {
-        throw new Error(
-          `${DIST_ENTRY} is missing — this rung boots the COMPILED artifact. ` +
-            `Run \`pnpm --filter @motebit/relay build\` first; the canonical ` +
-            `pipeline (turbo test → build dependency) does this for you.`,
-        );
-      }
-    },
-  },
-];
-
-interface BootedEntry {
-  child: ChildProcess;
-  baseUrl: string;
-}
-
-/** Spawn a real deployed entry and resolve when it reports listening. */
-function bootRealEntry(tier: EntryTier): Promise<BootedEntry> {
-  return new Promise((resolveBooted, reject) => {
-    // Production-shaped STRICT env: the minimal valid config with NO
-    // security-boundary overrides — exactly the state #359's sunset was
-    // supposed to be strict in. Federation enabled so the cross-org boundary
-    // is reachable. Ambient overrides are DELETED (not empty-stringed) so a
-    // dev shell exporting an opt-out cannot leak into the child's resolution.
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      X402_PAY_TO_ADDRESS: "0x0000000000000000000000000000000000000000",
-      MOTEBIT_FEDERATION_ENDPOINT_URL: "https://relay-under-test.example/federation",
-      PORT: "0", // ephemeral — the entry logs the real bound port
-      NODE_ENV: "test",
-    };
-    delete env.MOTEBIT_FEDERATION_REQUIRE_DISCOVER_SIGNATURE;
-    delete env.MOTEBIT_ENABLE_DEVICE_AUTH;
-    delete env.MOTEBIT_FEDERATION_AUTO_ACCEPT;
-    delete env.MOTEBIT_DB_PATH; // ":memory:" default
-    let bootLog = "";
-    const child = spawn(tier.command, tier.args, {
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const timer = setTimeout(() => {
-      reject(
-        new Error(`${tier.name} did not report listening within ${BOOT_TIMEOUT_MS}ms:\n${bootLog}`),
-      );
-    }, BOOT_TIMEOUT_MS - 2_000);
-    const onChunk = (chunk: Buffer): void => {
-      bootLog += chunk.toString();
-      // The entry's own boot logger emits {"msg":"relay.listening","port":N}.
-      for (const line of bootLog.split("\n")) {
-        if (!line.includes("relay.listening")) continue;
-        try {
-          const parsed = JSON.parse(line) as { port?: number };
-          if (typeof parsed.port === "number") {
-            clearTimeout(timer);
-            resolveBooted({ child, baseUrl: `http://127.0.0.1:${parsed.port}` });
-            return;
-          }
-        } catch {
-          // partial line — keep buffering
-        }
-      }
-    };
-    child.stdout!.on("data", onChunk);
-    child.stderr!.on("data", onChunk);
-    child.on("exit", (code) => {
-      clearTimeout(timer);
-      reject(new Error(`${tier.name} exited before listening (code ${code}):\n${bootLog}`));
-    });
-  });
-}
-
-for (const tier of TIERS) {
+for (const tier of [SOURCE_TIER, DIST_TIER]) {
   describe(`booted entry — deployed-behavior security boundaries (#359 activation) — ${tier.name}`, () => {
     let booted: BootedEntry | null = null;
 
     beforeAll(async () => {
-      tier.precondition?.();
       booted = await bootRealEntry(tier);
     }, BOOT_TIMEOUT_MS);
 
     afterAll(() => {
-      if (booted != null) {
-        const c = booted.child;
-        c.kill("SIGTERM");
-        setTimeout(() => c.kill("SIGKILL"), 5_000).unref();
-      }
+      killBootedEntry(booted);
     });
 
     it("every applicable security boundary reports STRICT when probed over real HTTP", async () => {
