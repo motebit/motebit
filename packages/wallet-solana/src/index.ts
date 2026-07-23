@@ -33,7 +33,11 @@ export {
   type ConfirmedTransferLeg,
 } from "./adapter.js";
 
-export { Web3JsRpcAdapter, deriveSolanaAddress } from "./web3js-adapter.js";
+export {
+  Web3JsRpcAdapter,
+  deriveSolanaAddress,
+  isDerivedSettlementBinding,
+} from "./web3js-adapter.js";
 
 export { buildP2pPaymentProof, type BuildP2pPaymentProofArgs } from "./p2p-payment-proof.js";
 

@@ -16,6 +16,66 @@ import type { RelayIdentity } from "./federation.js";
 import { insertRevocationEvent, signDiscoverBody } from "./federation.js";
 import type { TaskRouter } from "./task-routing.js";
 import { evaluateSettlementEligibility } from "./task-routing.js";
+import { REFERENCE_MIN_BONDED_SIGNAL_MICRO } from "./bond-store.js";
+
+/**
+ * Fields the ORIGIN relay computes itself and MUST NOT accept from a federated
+ * peer — a peer that forwards agents cannot mint these signals about them
+ * (rule 6: the relay re-publishes only what it independently verifies). `bonded`
+ * is RPC-verified locally by `enrichWithBondStatus`; `hardware_attestation`
+ * and `latency_stats` have their own passthrough discipline (a peer's local
+ * view of ITS agents is authoritative for those), so only `bonded` is stripped.
+ */
+const RELAY_ATTESTED_PEER_FIELDS = ["bonded"] as const;
+
+/**
+ * Upper sanity bound on a peer-asserted `hop_distance`. The mesh caps
+ * traversal at `max_hops = 3`, so an honest `hop_count + 1` never exceeds 4;
+ * 8 is generous headroom. A value outside `[1, MAX]` is protocol-invalid.
+ */
+const MAX_PEER_HOP_DISTANCE = 8;
+
+/**
+ * Sanitize an agent record received from a federated peer before it enters the
+ * merge, or DROP it (`null`) if protocol-invalid. (1) Strip relay-attested
+ * fields the peer cannot vouch for (the federation-laundering fix).
+ * (2) Validate `hop_distance` is a safe integer in `[1, MAX_PEER_HOP_DISTANCE]`
+ * — a genuine peer returns `hop_count + 1` in that range (federation.ts), so an
+ * honest value passes through unchanged. A missing / non-integer / out-of-range
+ * / non-number value is protocol-invalid and the record is DROPPED, NOT
+ * normalized: normalizing a forgery to the minimum distance (1) would let it
+ * outrank an honest distant record (distance 2/3) in the lowest-hop-wins merge
+ * and thereby redirect that identity's settlement_address (the remote-vs-remote
+ * manipulation). Dropping is fail-closed and cannot beat any honest record.
+ *
+ * KNOWN LIMITATION — NOT closed by this function, flagged for the specialist
+ * review as potentially EXISTENTIAL, not ordinary hardening: a malicious DIRECT
+ * peer can assert a VALID-but-lying low hop_distance (claim `1`) for a NON-local
+ * identity that an honest peer serves further away, winning the merge with a
+ * forged settlement_address. hop_distance is peer-asserted and unverifiable;
+ * the real fix is binding settlement_address cryptographically to the agent's
+ * succession key / signed manifest so a relay TRANSPORTS the address but never
+ * CREATES its authority by returning JSON. This function closes the LOCAL
+ * collision (local always wins) and the MALFORMED-hop vector; the crypto-
+ * binding of settlement authority is deferred (docs/security/external-audit-scope.md).
+ * (Also deferred: portable remote-bond EVIDENCE a receiver re-verifies — the
+ * wire carries no bond evidence today, so dropping the boolean is
+ * conservative-correct, not a regression.)
+ */
+export function sanitizePeerAgent(agent: Record<string, unknown>): Record<string, unknown> | null {
+  const raw = agent.hop_distance;
+  if (!(
+    typeof raw === "number" &&
+    Number.isSafeInteger(raw) &&
+    raw >= 1 &&
+    raw <= MAX_PEER_HOP_DISTANCE
+  )) {
+    return null; // protocol-invalid hop_distance — drop, never normalize
+  }
+  const clean: Record<string, unknown> = { ...agent };
+  for (const f of RELAY_ATTESTED_PEER_FIELDS) delete clean[f];
+  return clean;
+}
 import {
   hexPublicKeyToDidKey,
   verifyKeySuccession,
@@ -274,14 +334,24 @@ export function enrichWithBondStatus<T extends Record<string, unknown> & { moteb
          FROM relay_bond_commitments
         WHERE motebit_id IN (${placeholders})
           AND expires_at > ?
-          AND backing_state = 'backed'`,
+          AND backing_state = 'backed'
+          AND bond_amount_micro >= ?`,
     )
-    .all(...agents.map((a) => a.motebit_id), nowMs) as Array<{ motebit_id: string }>;
-  if (rows.length === 0) return agents;
+    .all(...agents.map((a) => a.motebit_id), nowMs, REFERENCE_MIN_BONDED_SIGNAL_MICRO) as Array<{
+    motebit_id: string;
+  }>;
   const backed = new Set(rows.map((r) => r.motebit_id));
+  // AUTHORITATIVE: the relay asserts `bonded` ONLY from its OWN RPC-verified,
+  // above-floor, non-expired bond rows — never a value carried IN. A federated
+  // peer cannot mint this signal by attaching `bonded: true` to an agent it
+  // forwards (rule 6: the relay re-publishes only what it independently
+  // verifies). So we STRIP any inbound `bonded` on every agent and set it true
+  // only for locally-backed ids — closing the federation-laundering path even
+  // when this relay has zero backed candidates (the old early-return leaked a
+  // laundered value in that case).
   return agents.map((a) => {
-    if (a.bonded != null) return a; // peer-provided bond status wins for federated agents
-    return backed.has(a.motebit_id) ? { ...a, bonded: true } : a;
+    const { bonded: _inbound, ...rest } = a as T & { bonded?: unknown };
+    return (backed.has(a.motebit_id) ? { ...rest, bonded: true } : rest) as T;
   });
 }
 
@@ -1459,7 +1529,9 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         });
         if (!resp.ok) return [];
         const data = (await resp.json()) as { agents: Array<Record<string, unknown>> };
-        return data.agents ?? [];
+        return (data.agents ?? [])
+          .map(sanitizePeerAgent)
+          .filter((a): a is Record<string, unknown> => a !== null);
       } catch {
         return [];
       }

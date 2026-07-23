@@ -3499,6 +3499,7 @@ export { ALL_ACCRUAL_KINDS, isAccrualKind, ACCRUAL_KIND_MARKERS } from "./accrua
 export type { SettlementAsset } from "./settlement-asset.js";
 export { ALL_SETTLEMENT_ASSETS, isSettlementAsset } from "./settlement-asset.js";
 export { base58Encode } from "./base58.js";
+export { hexToBytes32 } from "./hex.js";
 
 // ── Commitment Bond (protocol-level) ────────────────────────────
 // An agent's self-signed proof-of-funds at its OWN sovereign Solana

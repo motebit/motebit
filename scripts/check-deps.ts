@@ -225,6 +225,11 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     // package. NOT a Solana primitive — the "address = base58(pubkey)" knowledge
     // stays at the call site.
     "base58Encode",
+    // Fixed-width hex decode — pure deterministic byte math, fail-closed on
+    // malformed input. The single shared prelude to the identity-binding checks
+    // in wallet-solana and the rail-agnostic runtime, so the "address = base58
+    // derivation of key" invariant has ONE decoder, not a per-package copy.
+    "hexToBytes32",
     // Token audiences — pure type guard over a frozen closed-union
     // registry. Same shape as `isSuiteId` above.
     "isTokenAudience",

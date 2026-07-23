@@ -32,7 +32,11 @@ vi.mock("@solana/spl-token", async (importOriginal) => {
 
 import { TokenAccountNotFoundError } from "@solana/spl-token";
 
-import { Web3JsRpcAdapter, deriveSolanaAddress } from "../web3js-adapter.js";
+import {
+  Web3JsRpcAdapter,
+  deriveSolanaAddress,
+  isDerivedSettlementBinding,
+} from "../web3js-adapter.js";
 import {
   USDC_MINT_MAINNET,
   InsufficientUsdcBalanceError,
@@ -957,5 +961,28 @@ describe("Web3JsRpcAdapter exposed getters", () => {
     });
     expect(adapter.getCommitment()).toBe("confirmed");
     expect(adapter.getUsdcMint()).toBe(USDC_MINT_MAINNET);
+  });
+});
+
+describe("isDerivedSettlementBinding — the derived settlement-authority rung", () => {
+  const key = new Uint8Array(32).fill(7);
+  const keyHex = Array.from(key)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  const derivedAddress = deriveSolanaAddress(key);
+
+  it("true when the address IS the key's own Solana address (tautological binding)", () => {
+    expect(isDerivedSettlementBinding(derivedAddress, keyHex)).toBe(true);
+  });
+
+  it("false for a DIFFERENT address (a distinct payout wallet — the signed-bound case)", () => {
+    const other = deriveSolanaAddress(new Uint8Array(32).fill(9));
+    expect(isDerivedSettlementBinding(other, keyHex)).toBe(false);
+  });
+
+  it("fail-closed on a malformed public key (never throws, returns false)", () => {
+    expect(isDerivedSettlementBinding(derivedAddress, "not-hex")).toBe(false);
+    expect(isDerivedSettlementBinding(derivedAddress, "aa")).toBe(false); // too short
+    expect(isDerivedSettlementBinding(derivedAddress, keyHex.toUpperCase())).toBe(true); // hex case-insensitive
   });
 });

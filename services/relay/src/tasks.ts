@@ -2141,7 +2141,14 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           throw new TaskError("TASK_P2P_INELIGIBLE", eligibility.reason, 403);
         }
 
-        // Verify worker's settlement address matches payment proof
+        // Verify worker's settlement address matches payment proof. At the LOCAL
+        // leg the address was written by the worker itself (register/patch is
+        // caller===motebit_id authed) or the operator — so the write-auth IS the
+        // authorization, and an agent choosing a distinct payout wallet is
+        // legitimate custody separation, not a redirect. No identity-derivation
+        // binding is required here; the federated leg (below) is where a PEER
+        // asserts a DIFFERENT agent's address and binding must be enforced.
+        // docs/doctrine/settlement-authority-binding.md.
         if (proof.to_address !== workerReg.settlement_address) {
           throw new TaskError(
             "TASK_P2P_ADDRESS_MISMATCH",
@@ -2553,6 +2560,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           profile: CandidateProfile;
           _source_relay_endpoint: string;
           _settlement_address: string | null;
+          _public_key: string | null;
         }[] = [];
         let federationEdges: Array<{
           from: string;
@@ -2621,6 +2629,31 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           if (!workerAddr) {
             throw new HTTPException(400, {
               message: "Discovered remote worker has no settlement_address",
+            });
+          }
+
+          // SETTLEMENT-AUTHORITY BINDING at the cross-org boundary. Unlike the
+          // local leg, `workerAddr` here is asserted by a PEER — this relay has no
+          // authed registration proving the worker chose it, so a malicious peer
+          // could redirect the worker's payments. Bind it fail-closed
+          // (docs/doctrine/settlement-authority-binding.md, derived rung): the
+          // peer-forwarded key must (1) sovereign-bind to the worker's motebit_id
+          // — a peer can't forge a key the id commits to — and (2) be the key the
+          // address derives from. Both hold ⇒ the address is the worker's own,
+          // beyond the peer's power to forge. A non-sovereign / rotated / distinct-
+          // wallet worker fails closed here until the signed-bound rung transports
+          // the succession-verified binding (Inc 2/3); prod has no external peers,
+          // so that deferral is latent.
+          const { isDerivedSettlementBinding } = await import("@motebit/wallet-solana");
+          const { verifySovereignBinding } = await import("@motebit/crypto");
+          const boundOk =
+            fc._public_key != null &&
+            isDerivedSettlementBinding(workerAddr, fc._public_key) &&
+            (await verifySovereignBinding(targetId, fc._public_key));
+          if (!boundOk) {
+            throw new HTTPException(400, {
+              message:
+                "Remote worker settlement address is not identity-bound (peer-asserted address rejected; no derived+sovereign or signed binding)",
             });
           }
           if (fedPrice == null || fedPrice.unit_cost <= 0) {
