@@ -180,6 +180,8 @@ const PATH_ALLOWLIST: Record<string, string> = {
     "historical reference — proactive-interior doctrine describes the file's deletion in past tense ('Net: housekeeping.ts deleted'). The narrative wouldn't read coherently without the cited name.",
   "docs/ops/SECRETS.md":
     "operator-private gitignored file per the operator-transparency split — treasury-custody.md §Phase 1 names the path operators MUST keep privately (hardware-wallet device, Fly.io secrets, treasury address). Present on the operator's local filesystem, intentionally absent from the repo. The citation is shape-only.",
+  "dist/server.js":
+    "build artifact, intentionally gitignored — composition-preserves-enforcement.md names the compiled relay entry (`node dist/server.js`, the command run.sh / package.json#start / the systemd unit all exec) because the booted-artifact activation rung boots exactly this file. The citation is the artifact's identity, not a source path.",
 };
 
 interface Finding {
