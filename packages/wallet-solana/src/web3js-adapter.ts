@@ -26,7 +26,7 @@ import {
   type TransactionInstruction,
   type Commitment,
 } from "@solana/web3.js";
-import { base58Encode } from "@motebit/protocol";
+import { base58Encode, hexToBytes32 } from "@motebit/protocol";
 
 /**
  * Derive the motebit's sovereign Solana address from its Ed25519 identity
@@ -70,12 +70,8 @@ export function isDerivedSettlementBinding(
   settlementAddress: string,
   publicKeyHex: string,
 ): boolean {
-  if (!/^[0-9a-f]{64}$/i.test(publicKeyHex)) return false;
-  const bytes = new Uint8Array(32);
-  for (let i = 0; i < 32; i++) {
-    bytes[i] = parseInt(publicKeyHex.slice(i * 2, i * 2 + 2), 16);
-  }
-  return settlementAddress === deriveSolanaAddress(bytes);
+  const bytes = hexToBytes32(publicKeyHex);
+  return bytes != null && settlementAddress === deriveSolanaAddress(bytes);
 }
 import {
   createAssociatedTokenAccountInstruction,

@@ -18,6 +18,7 @@ import type { TokenAudience } from "@motebit/protocol";
 import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/protocol";
 import {
   base58Encode,
+  hexToBytes32,
   toMicro,
   computeP2pFeeMicro,
   computeFederatedFeeSplit,
@@ -35,12 +36,8 @@ import { verifySovereignBinding } from "@motebit/crypto";
  * docs/doctrine/settlement-authority-binding.md.
  */
 function isDerivedSolanaSettlement(settlementAddress: string, publicKeyHex: string): boolean {
-  if (!/^[0-9a-f]{64}$/i.test(publicKeyHex)) return false;
-  const bytes = new Uint8Array(32);
-  for (let i = 0; i < 32; i++) {
-    bytes[i] = parseInt(publicKeyHex.slice(i * 2, i * 2 + 2), 16);
-  }
-  return settlementAddress === base58Encode(bytes);
+  const bytes = hexToBytes32(publicKeyHex);
+  return bytes != null && settlementAddress === base58Encode(bytes);
 }
 
 /**
