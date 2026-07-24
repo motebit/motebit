@@ -471,21 +471,30 @@ describe("GET /api/v1/agents/discover — marketplace enrichment", () => {
     expect(enriched[0]!.hardware_attestation?.platform).toBe("software");
   });
 
-  it("enrichWithHardwareAttestation preserves peer-provided HA on federated agents", () => {
-    // Federation merge passes through HA from the upstream peer relay. The
-    // local enricher must not overwrite it when we have no local credential —
-    // the peer's HA store is more authoritative for cross-relay agents.
+  it("enrichWithHardwareAttestation overlays ONLY the relay's own projection, never a peer's forged HA (bond-signal sibling)", () => {
+    // Sibling-boundary fix (follow-up to the `bonded` laundering close): a
+    // federated peer's `hardware_attestation` is not independently verifiable
+    // here — it is laundering by the same threat model as a forged `bonded`.
+    // The relay overlays only its OWN local credential projection; the peer's
+    // claim is discarded (and stripped upstream on ingress by
+    // sanitizePeerAgent). Pre-fix, the peer's forged android_keystore/score-100
+    // won — this asserts the secure behavior and fails against that code.
+    insertTrustCredential(relay.moteDb.db, {
+      credential_id: "ha-fed-cred",
+      subject_motebit_id: "federated-agent",
+      platform: "secure_enclave",
+    });
     const enriched = enrichWithHardwareAttestation(
       [
         {
           motebit_id: "federated-agent",
           capabilities: ["x"],
-          hardware_attestation: { platform: "android_keystore", score: 1 },
+          hardware_attestation: { platform: "android_keystore", score: 100 },
         } as EnricherInput,
       ],
       relay.moteDb.db,
     );
-    expect(enriched[0]!.hardware_attestation?.platform).toBe("android_keystore");
+    expect(enriched[0]!.hardware_attestation?.platform).toBe("secure_enclave");
   });
 
   // ── enrichWithLatencyStats: per-row observed-latency readout data ──
@@ -543,10 +552,13 @@ describe("GET /api/v1/agents/discover — marketplace enrichment", () => {
     expect(enriched[0]!.latency_stats).toBeUndefined();
   });
 
-  it("enrichWithLatencyStats preserves peer-provided latency on federated agents", () => {
-    // Same federation-passthrough rule as the HA enricher: the peer's
-    // latency view is more authoritative for agents we've never directly
-    // routed to. The local enricher must not overwrite it.
+  it("enrichWithLatencyStats overlays ONLY the relay's own measurement, never a peer's forged latency (bond-signal sibling)", () => {
+    // Sibling-boundary fix: a federated peer's `latency_stats` is not
+    // independently verifiable here — laundering by the same threat model as a
+    // forged `bonded`. The relay attaches only its OWN measured latency; the
+    // peer's claim is discarded (and stripped upstream by sanitizePeerAgent).
+    // Pre-fix, the peer's forged 50ms won over the relay's real 9999ms
+    // measurement — this asserts the secure behavior and fails against that.
     insertLatencySample(relay.moteDb.db, {
       motebit_id: "submitter-x",
       remote_motebit_id: "fed-lat-agent",
@@ -562,8 +574,7 @@ describe("GET /api/v1/agents/discover — marketplace enrichment", () => {
       ],
       relay.moteDb.db,
     );
-    expect(enriched[0]!.latency_stats?.avg_ms).toBe(50);
-    expect(enriched[0]!.latency_stats?.sample_count).toBe(10);
+    expect(enriched[0]!.latency_stats?.avg_ms).toBe(9999);
   });
 
   it("/api/v1/agents/discover surfaces latency_stats on agents with samples", async () => {
@@ -697,16 +708,23 @@ describe("GET /api/v1/agents/discover — marketplace enrichment", () => {
     expect(target!.bonded).toBeUndefined();
   });
 
-  it("sanitizePeerAgent strips relay-attested fields on a valid record; DROPS a forged low hop_distance", () => {
-    // A valid multi-hop record: bonded stripped, the rest passes through.
+  it("sanitizePeerAgent strips ALL relay-attested fields on a valid record; DROPS a forged low hop_distance", () => {
+    // A valid multi-hop record: every relay-attested signal a peer cannot
+    // mint (bonded + its siblings hardware_attestation + latency_stats) is
+    // stripped on ingress; the rest passes through.
     const cleaned = sanitizePeerAgent({
       motebit_id: "peer-agent",
       bonded: true,
+      hardware_attestation: { platform: "secure_enclave", key_exported: false, score: 100 },
+      latency_stats: { avg_ms: 1, p95_ms: 1, sample_count: 999 },
       hop_distance: 2,
       settlement_address: "PeerOwnAddr",
     });
     expect(cleaned).not.toBeNull();
     expect(cleaned!.bonded).toBeUndefined();
+    // Sibling-boundary fix: a peer cannot mint these about a remote agent.
+    expect(cleaned!.hardware_attestation).toBeUndefined();
+    expect(cleaned!.latency_stats).toBeUndefined();
     expect(cleaned!.hop_distance).toBe(2);
     expect(cleaned!.settlement_address).toBe("PeerOwnAddr");
 
