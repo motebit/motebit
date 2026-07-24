@@ -35,6 +35,7 @@ import { bootstrapAndEmitIdentity, startServiceServer, wireServerDeps } from "@m
 import {
   deriveSolanaAddress,
   createSolanaWalletRail,
+  SolanaWalletRail,
   sweepWalletRail,
   type SweepableWallet,
 } from "@motebit/wallet-solana";
@@ -499,17 +500,32 @@ export function defaultCreateMoneyRuntime(
   policyOverrides: Partial<PolicyConfig>,
   config: MoleculeConfig,
   grantSpendStore: unknown,
+  /**
+   * Test-only injection of the sovereign wallet rail — the sibling of the
+   * `createSweepWallet` adapter override, applied to the money-execution rail.
+   * Production callers (`runMolecule`) never pass it, so the deployed path is
+   * byte-identical: it constructs the real `createSolanaWalletRail` against
+   * `money.solanaRpcUrl`. A cross-artifact activation test injects a rail over
+   * a fake `SolanaRpcAdapter` so the REAL composition root (this builder, the
+   * R4 authority gate, the metered submission path) can be driven against a
+   * booted relay without a live Solana RPC. `adapter-pattern-everywhere`:
+   * all I/O abstracted, a fake for tests. See
+   * docs/doctrine/composition-preserves-enforcement.md (the runtime→relay bridge).
+   */
+  walletOverride?: SolanaWalletRail,
 ): RunnerRuntime {
   const money = config.moneyExecution;
   if (money == null) throw new Error("defaultCreateMoneyRuntime called without moneyExecution");
-  const wallet = createSolanaWalletRail({
-    rpcUrl: money.solanaRpcUrl,
-    identitySeed: identity.privateKey,
-    // Match the rail's mint to the network — else a devnet molecule reads the
-    // (empty) mainnet-USDC ATA and every live hop fails `insufficient_balance`.
-    // Undefined passes through to the rail's mainnet-USDC default.
-    usdcMint: money.usdcMint,
-  });
+  const wallet =
+    walletOverride ??
+    createSolanaWalletRail({
+      rpcUrl: money.solanaRpcUrl,
+      identitySeed: identity.privateKey,
+      // Match the rail's mint to the network — else a devnet molecule reads the
+      // (empty) mainnet-USDC ATA and every live hop fails `insufficient_balance`.
+      // Undefined passes through to the rail's mainnet-USDC default.
+      usdcMint: money.usdcMint,
+    });
   const runtime = new MotebitRuntime(
     {
       motebitId: identity.motebitId,
