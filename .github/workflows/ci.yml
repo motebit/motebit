@@ -217,22 +217,32 @@ jobs:
     timeout-minutes: 3
     outputs:
       scripts: ${{ steps.filter.outputs.scripts }}
+      relay: ${{ steps.filter.outputs.relay }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
 
       - id: filter
-        name: Detect scripts/ changes vs base
+        name: Detect scripts/ and services/relay/ changes vs base
         run: |
           scripts=false
+          relay=false
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            if git diff --name-only "origin/${{ github.base_ref }}...HEAD" | grep -qE '^scripts/'; then
+            changed=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+            if echo "$changed" | grep -qE '^scripts/'; then
               scripts=true
+            fi
+            # activation-effectiveness must fire on a relay refactor (the exact
+            # regression it guards: a source change making a booted suite go
+            # vacuous), not only on gate edits.
+            if echo "$changed" | grep -qE '^services/relay/'; then
+              relay=true
             fi
           fi
           echo "scripts=$scripts" >> "$GITHUB_OUTPUT"
-          echo "scripts/ touched vs '${{ github.base_ref }}': $scripts"
+          echo "relay=$relay" >> "$GITHUB_OUTPUT"
+          echo "scripts/ touched vs '${{ github.base_ref }}': $scripts; services/relay/ touched: $relay"
 
   gate-effectiveness:
     # Probe every drift-defense gate with a known-violating fixture to prove
@@ -279,6 +289,46 @@ jobs:
         # the same scripts/-scoped job — without this they never execute in CI,
         # and a check that never runs can't protect you.
         run: pnpm test:gates
+
+  activation-effectiveness:
+    # Prove every booted-*-activation suite still DISCRIMINATES: reintroduce a
+    # real severing into the relay source, rebuild the compiled artifact, and
+    # require the booted suite to red. A suite that stays green under its own
+    # severing is vacuous and no longer guards composition-preserves-enforcement
+    # (docs/doctrine/composition-preserves-enforcement.md). This is the durable,
+    # continuous form of the manual severing runs the ladder PRs recorded once.
+    # Heavier than gate-effectiveness (a dist rebuild per probe), so it's its
+    # own job scoped to relay + gate-script changes (and every push to main) —
+    # a relay refactor is exactly what can make a suite go vacuous.
+    needs: changes
+    if: |
+      github.event_name == 'push' ||
+      needs.changes.outputs.scripts == 'true' ||
+      needs.changes.outputs.relay == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v4
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        # The gate rebuilds @motebit/relay per probe; its workspace deps
+        # (@motebit/* the relay imports) must be built first so `tsc -b` on the
+        # relay resolves them.
+        run: pnpm build
+
+      - name: Prove every booted activation suite discriminates its severing
+        run: pnpm check-activation-effective
 
   sibling-audit:
     if: github.event_name == 'pull_request'
