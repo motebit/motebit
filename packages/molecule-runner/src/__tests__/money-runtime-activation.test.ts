@@ -39,6 +39,8 @@ import {
 } from "@motebit/crypto";
 import { createInMemoryStorage } from "@motebit/runtime";
 import { InMemoryToolRegistry } from "@motebit/tools";
+import { SolanaWalletRail } from "@motebit/wallet-solana";
+import type { SolanaRpcAdapter } from "@motebit/wallet-solana";
 import type { BootstrapAndEmitIdentityResult } from "@motebit/mcp-server";
 import type { MoleculeConfig } from "../index.js";
 import { defaultCreateMoneyRuntime, selfIssueGrant, mintTick } from "../index.js";
@@ -372,5 +374,149 @@ describe("defaultCreateMoneyRuntime — money-without-authority fails CLOSED at 
 
     expect(exec).toEqual({ ok: false, code: "requires_verified_grant" });
     expect(runtime.getRecentRoutingTranscripts()).toHaveLength(0);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // policy→action gates the sovereign WALLET at the composition root.
+  //
+  // The negatives above fail closed BEFORE selection (no transcript). This
+  // pair reaches SELECTION and asserts the injected rail's payment leg
+  // (`sendUsdcBatch` — the real outbound spend) fires ONLY under authority:
+  // the R4 gate is the sole thing standing between an unauthorized grant and a
+  // real money movement. It exercises the `walletOverride` seam on
+  // `defaultCreateMoneyRuntime` — the adapter-pattern injection that unblocks
+  // the runtime→relay bridge (docs/doctrine/composition-preserves-enforcement.md):
+  // a fake `SolanaRpcAdapter` lets the REAL composition root drive its real
+  // payment path with no live Solana RPC. The /task POST is stubbed to 500 so
+  // the hire returns immediately after the payment leg — `executeGrantedDelegation`
+  // exposes no receipt-poll timeout, and the payment leg (not the poll) is the
+  // assertion.
+  // ─────────────────────────────────────────────────────────────────────
+
+  const FAKE_SIG =
+    "4vERYvaLiDsLaNaTransaCtiNSignaTuReHashThatis88charsLng1234567891abcDEFghijk1234";
+
+  function fakeRail(): { rail: SolanaWalletRail; sent: () => number } {
+    let calls = 0;
+    const adapter = {
+      ownAddress: "FaKeSo1anaAddr1111111111111111111111111111",
+      getUsdcBalance: async () => 100_000_000n,
+      getSolBalance: async () => 10_000_000n,
+      sendUsdc: async () => ({ ok: true, signature: FAKE_SIG, slot: 1, confirmed: true }),
+      sendUsdcBatch: async (legs: readonly unknown[]) => {
+        calls++;
+        return legs.map(() => ({ ok: true, signature: FAKE_SIG, slot: 1, confirmed: true }));
+      },
+      getTransaction: async () => ({ status: "not_found" }),
+      isReachable: async () => true,
+    } as unknown as SolanaRpcAdapter;
+    return { rail: new SolanaWalletRail(adapter), sent: () => calls };
+  }
+
+  function stubToPaymentLeg(): void {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = reqUrl(input);
+        if (url.includes("/api/v1/agents/discover"))
+          return jsonResponse({
+            agents: [
+              {
+                motebit_id: "worker-a",
+                settlement_address: "WorkerAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                settlement_modes: "p2p",
+                pricing: [{ capability: "research", unit_cost: 0.05 }],
+              },
+              {
+                motebit_id: "worker-b",
+                settlement_address: "WorkerBbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                settlement_modes: "p2p",
+                pricing: [{ capability: "research", unit_cost: 0.05 }],
+              },
+            ],
+          });
+        if (url.includes("/p2p-eligibility"))
+          return jsonResponse({ allowed: url.includes("acknowledge_no_history_risk=true") });
+        if (url.includes("/listing"))
+          return jsonResponse({ pricing: [{ capability: "research", unit_cost: 0.05 }] });
+        // Fail the submission fast — the payment leg has already run by here.
+        if (url.endsWith("/task")) return new Response("submit refused (test)", { status: 500 });
+        return new Response("not found", { status: 404 });
+      }),
+    );
+  }
+
+  it("R4 gates the sovereign WALLET at the composition root: an authorized hire fires the injected payment leg", async () => {
+    const identity = await realIdentity();
+    const cfg = moneyConfig();
+    const { rail, sent } = fakeRail();
+    const runtime = defaultCreateMoneyRuntime(
+      identity,
+      createInMemoryStorage(),
+      new InMemoryToolRegistry(),
+      { requireApprovalAbove: RiskLevel.R3_EXECUTE, denyAbove: RiskLevel.R3_EXECUTE },
+      cfg,
+      undefined as never,
+      rail, // the walletOverride seam
+    ) as unknown as ActivationRuntime;
+    const grant = await selfIssueGrant(identity, cfg.moneyExecution!);
+    const token = await mintTick(grant, identity);
+    stubToPaymentLeg();
+    await runtime.executeGrantedDelegation({
+      capability: "research",
+      prompt: "authorized",
+      delegation: { token, grant },
+      dryRun: false,
+    });
+    runtime.stop?.();
+    // The injected rail flowed through the REAL builder to the payment path,
+    // and the authorized grant let it fire — a real outbound spend attempt.
+    expect(sent()).toBeGreaterThanOrEqual(1);
+  });
+
+  it("R4 gates the sovereign WALLET at the composition root: an out-of-scope hire never fires the payment leg", async () => {
+    const identity = await realIdentity();
+    const cfg = moneyConfig();
+    const { rail, sent } = fakeRail();
+    const runtime = defaultCreateMoneyRuntime(
+      identity,
+      createInMemoryStorage(),
+      new InMemoryToolRegistry(),
+      { requireApprovalAbove: RiskLevel.R3_EXECUTE, denyAbove: RiskLevel.R3_EXECUTE },
+      cfg,
+      undefined as never,
+      rail,
+    ) as unknown as ActivationRuntime;
+    const now = Date.now();
+    const grant = await signStandingDelegation(
+      {
+        grant_id: `clerk-self-grant:${identity.motebitId}`,
+        delegator_id: identity.motebitId,
+        delegator_public_key: identity.publicKeyHex,
+        delegate_id: identity.motebitId,
+        delegate_public_key: identity.publicKeyHex,
+        scope: "pay_invoice", // wrong SIGNED scope for a `research` hire
+        subject: "market:self-funded-delegation",
+        cadence_ms: 0,
+        issued_at: now,
+        not_before: null,
+        expires_at: now + 90 * 24 * 60 * 60 * 1000,
+        max_token_ttl_ms: 60 * 60 * 1000,
+        spend_ceiling: cfg.moneyExecution!.spendCeiling,
+      },
+      identity.privateKey,
+    );
+    const token = await mintTick(grant, identity);
+    stubToPaymentLeg();
+    const exec = await runtime.executeGrantedDelegation({
+      capability: "research",
+      prompt: "out of scope",
+      delegation: { token, grant },
+      dryRun: false,
+    });
+    runtime.stop?.();
+    expect(exec).toEqual({ ok: false, code: "missing_scope" });
+    // The gate fail-closed BEFORE selection — the injected wallet never moved.
+    expect(sent()).toBe(0);
   });
 });
