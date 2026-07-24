@@ -837,7 +837,16 @@ export async function handleReceiptIngestion(
           status: "settled",
         };
 
-        const subSettlement = settleOnReceipt(subAllocation, sub, null, subSettlementId);
+        // Same injected-rate threading as the main settlement below — the
+        // sub-hop gross was locked with `platformFeeRate` (via subGross), so
+        // its split must use the same rate, not the 0.05 default.
+        const subSettlement = settleOnReceipt(
+          subAllocation,
+          sub,
+          null,
+          subSettlementId,
+          platformFeeRate,
+        );
         subSettlement.amount_settled = Math.round(subSettlement.amount_settled);
         subSettlement.platform_fee = Math.round(subSettlement.platform_fee);
 
@@ -1151,7 +1160,12 @@ export async function handleReceiptIngestion(
         status: "settled",
       };
 
-      const settlement = settleOnReceipt(allocation, receipt, null, settlementId);
+      // Thread the INJECTED platformFeeRate into the split — else it defaults
+      // to PLATFORM_FEE_RATE (0.05) while the gross lock above used the
+      // injected rate, so on a relay configured with a non-default
+      // MOTEBIT_PLATFORM_FEE_RATE the recorded platform_fee (and the worker's
+      // amount_settled) diverge from what the delegator was actually charged.
+      const settlement = settleOnReceipt(allocation, receipt, null, settlementId, platformFeeRate);
       // Round to integer micro-units for DB storage
       settlement.amount_settled = Math.round(settlement.amount_settled);
       settlement.platform_fee = Math.round(settlement.platform_fee);

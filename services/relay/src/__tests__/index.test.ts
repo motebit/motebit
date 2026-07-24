@@ -2877,3 +2877,101 @@ describe("POST /api/v1/agents/:motebitId/rotate-key", () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe("Sync Relay — relay-custody fee split honors the injected platformFeeRate", () => {
+  // Regression guard for the fee-split seam: the gross allocation hold is
+  // locked with the INJECTED `platformFeeRate` (computeGrossAmount), so the
+  // settlement split MUST use the same rate. Before the fix, `settleOnReceipt`
+  // was called without the rate arg and defaulted to 0.05 — so on a relay
+  // configured with a non-default MOTEBIT_PLATFORM_FEE_RATE the recorded
+  // platform_fee (and the worker's amount_settled) diverged from what the
+  // delegator was charged. This drives the REAL relay-custody settlement path
+  // at a 10% rate; against the pre-fix code the split stays at 5% and every
+  // assertion below fails.
+  it("records platform_fee_rate = the configured 0.10 and pays the worker exactly net", async () => {
+    const relay = await createTestRelay({ platformFeeRate: 0.1, enableDeviceAuth: false });
+    const DELEGATOR = "fee-rate-delegator";
+
+    // A priced worker, connected so the task dispatches to it.
+    const kp = await generateKeypair();
+    const idRes = await relay.app.request("/identity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ owner_id: "fee-rate-worker-owner" }),
+    });
+    const { motebit_id: workerId } = (await idRes.json()) as { motebit_id: string };
+    const devRes = await relay.app.request("/device/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        motebit_id: workerId,
+        device_name: "worker",
+        public_key: bytesToHex(kp.publicKey),
+      }),
+    });
+    const { device_id: workerDeviceId } = (await devRes.json()) as { device_id: string };
+    for (const id of [workerId, DELEGATOR]) {
+      await relay.app.request(`/api/v1/agents/${id}/listing`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+        body: JSON.stringify({
+          capabilities: ["web_search"],
+          pricing: [{ capability: "web_search", unit_cost: 1.0, currency: "USD", per: "task" }],
+        }),
+      });
+    }
+    const workerWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
+    relay.connections.set(DELEGATOR, [
+      { ws: workerWs as never, deviceId: workerDeviceId, capabilities: ["web_search"] },
+    ]);
+    seedBalance(relay, DELEGATOR, 5.0);
+
+    const submitRes = await relay.app.request(`/agent/${DELEGATOR}/task`, {
+      method: "POST",
+      headers: jsonAuthWithIdempotency(),
+      body: JSON.stringify({ prompt: "q", required_capabilities: ["web_search"] }),
+    });
+    expect(submitRes.status).toBe(201);
+    const { task_id } = (await submitRes.json()) as { task_id: string };
+
+    const receipt = await signExecutionReceipt(
+      {
+        task_id,
+        relay_task_id: task_id,
+        motebit_id: workerId as unknown as import("@motebit/sdk").MotebitId,
+        device_id: workerDeviceId as unknown as import("@motebit/sdk").DeviceId,
+        submitted_at: Date.now(),
+        completed_at: Date.now(),
+        status: "completed" as const,
+        result: "done",
+        tools_used: ["web_search"],
+        memories_formed: 0,
+        prompt_hash: "abc",
+        result_hash: "def",
+      },
+      kp.privateKey,
+    );
+    const resultRes = await relay.app.request(`/agent/${DELEGATOR}/task/${task_id}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(receipt),
+    });
+    expect(resultRes.status).toBe(200);
+
+    const settleRes = await relay.app.request(`/agent/${DELEGATOR}/settlements`, {
+      headers: AUTH_HEADER,
+    });
+    const body = (await settleRes.json()) as {
+      settlements: Array<Record<string, number | string>>;
+    };
+    const s = body.settlements.find((r) => r.allocation_id === `x402-${task_id}`);
+    expect(s).toBeDefined();
+    // gross = round($1.00 / (1 - 0.10)) = 1_111_111 micro; fee = round(gross * 0.10)
+    // = 111_111; amount_settled = gross - fee = 1_000_000 (the advertised net).
+    // Pre-fix: platform_fee_rate = 0.05, fee ≈ 55_556, amount_settled ≈ 1_055_556.
+    expect(s!.platform_fee_rate).toBe(0.1);
+    expect(s!.platform_fee).toBeGreaterThan(100_000); // ~111_111 at 10%, not ~55_556 at 5%
+    expect(s!.amount_settled).toBe(1_000_000); // worker paid exactly the advertised net
+    await relay.close?.();
+  });
+});
