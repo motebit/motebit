@@ -188,10 +188,12 @@ function finalize(kind: VerifyKind, filePath: string, checks: VerifyCheck[]): Ve
 }
 
 function formatZodErrors(
-  issues: ReadonlyArray<{ path: ReadonlyArray<string | number>; message: string }>,
+  // zod 4 issue paths are `PropertyKey[]` (string | number | symbol); coerce
+  // each segment to string for the dotted display.
+  issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; message: string }>,
 ): string {
   return issues
-    .map((i) => `${i.path.length === 0 ? "(root)" : i.path.join(".")}: ${i.message}`)
+    .map((i) => `${i.path.length === 0 ? "(root)" : i.path.map(String).join(".")}: ${i.message}`)
     .join("; ");
 }
 

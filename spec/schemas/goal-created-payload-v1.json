@@ -12,96 +12,47 @@
       "description": "Stable UUID of the goal; stable across yaml-driven revisions."
     },
     "prompt": {
-      "type": "string",
-      "description": "Natural-language goal text. REQUIRED on initial creation; MAY be absent on revision when only scheduling metadata changed."
+      "description": "Natural-language goal text. REQUIRED on initial creation; MAY be absent on revision when only scheduling metadata changed.",
+      "type": "string"
     },
     "interval_ms": {
+      "description": "Scheduling cadence in milliseconds. Absent for one-shot goals.",
       "type": "integer",
       "minimum": 0,
-      "description": "Scheduling cadence in milliseconds. Absent for one-shot goals."
+      "maximum": 9007199254740991
     },
     "mode": {
-      "type": "string",
-      "description": "Scheduling mode — e.g. `\"recurring\"` or `\"once\"`. Future variants reserved."
+      "description": "Scheduling mode — e.g. `\"recurring\"` or `\"once\"`. Future variants reserved.",
+      "type": "string"
     },
     "wall_clock_ms": {
+      "description": "Wall-clock anchor for the first run (Unix milliseconds).",
       "type": "integer",
-      "description": "Wall-clock anchor for the first run (Unix milliseconds)."
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
     },
     "project_id": {
-      "type": "string",
-      "description": "User-facing project grouping. Opaque to the protocol."
+      "description": "User-facing project grouping. Opaque to the protocol.",
+      "type": "string"
     },
     "routine_id": {
-      "type": "string",
-      "description": "Source routine id when materialized from a motebit.yaml routine."
+      "description": "Source routine id when materialized from a motebit.yaml routine.",
+      "type": "string"
     },
     "routine_source": {
-      "type": "string",
-      "description": "Free-text source attribution (e.g. yaml file path)."
+      "description": "Free-text source attribution (e.g. yaml file path).",
+      "type": "string"
     },
     "routine_hash": {
-      "type": "string",
-      "description": "Canonical hash of the source routine. Used to detect yaml drift."
+      "description": "Canonical hash of the source routine. Used to detect yaml drift.",
+      "type": "string"
     },
     "update": {
+      "description": "Marker set on yaml-driven revisions; absent on initial creation.",
       "type": "boolean",
-      "const": true,
-      "description": "Marker set on yaml-driven revisions; absent on initial creation."
+      "const": true
     }
   },
   "required": ["goal_id"],
-  "additionalProperties": true,
-  "definitions": {
-    "GoalCreatedPayload": {
-      "type": "object",
-      "properties": {
-        "goal_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Stable UUID of the goal; stable across yaml-driven revisions."
-        },
-        "prompt": {
-          "type": "string",
-          "description": "Natural-language goal text. REQUIRED on initial creation; MAY be absent on revision when only scheduling metadata changed."
-        },
-        "interval_ms": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Scheduling cadence in milliseconds. Absent for one-shot goals."
-        },
-        "mode": {
-          "type": "string",
-          "description": "Scheduling mode — e.g. `\"recurring\"` or `\"once\"`. Future variants reserved."
-        },
-        "wall_clock_ms": {
-          "type": "integer",
-          "description": "Wall-clock anchor for the first run (Unix milliseconds)."
-        },
-        "project_id": {
-          "type": "string",
-          "description": "User-facing project grouping. Opaque to the protocol."
-        },
-        "routine_id": {
-          "type": "string",
-          "description": "Source routine id when materialized from a motebit.yaml routine."
-        },
-        "routine_source": {
-          "type": "string",
-          "description": "Free-text source attribution (e.g. yaml file path)."
-        },
-        "routine_hash": {
-          "type": "string",
-          "description": "Canonical hash of the source routine. Used to detect yaml drift."
-        },
-        "update": {
-          "type": "boolean",
-          "const": true,
-          "description": "Marker set on yaml-driven revisions; absent on initial creation."
-        }
-      },
-      "required": ["goal_id"],
-      "additionalProperties": true
-    }
-  }
+  "additionalProperties": {}
 }

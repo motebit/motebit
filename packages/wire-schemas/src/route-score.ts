@@ -30,11 +30,10 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type { RouteScore } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 /** Stable `$id` for the route-score v1 wire format. */
@@ -129,12 +128,8 @@ export const _ROUTE_SCORE_TYPE_PARITY: {
 // ---------------------------------------------------------------------------
 
 export function buildRouteScoreJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(RouteScoreSchema, {
-    name: "RouteScore",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("RouteScore", raw, {
+  const raw = toDraft7(RouteScoreSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: ROUTE_SCORE_SCHEMA_ID,
     title: "RouteScore (v1)",
     description:

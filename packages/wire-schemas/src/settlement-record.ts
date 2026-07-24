@@ -26,7 +26,6 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import {
   ALL_SETTLEMENT_MODES,
@@ -34,7 +33,7 @@ import {
   type SettlementRecord,
 } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 /** Stable `$id` for the settlement-record v1 wire format. */
@@ -170,12 +169,8 @@ export const _SETTLEMENT_RECORD_TYPE_PARITY: {
 // ---------------------------------------------------------------------------
 
 export function buildSettlementRecordJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(SettlementRecordSchema, {
-    name: "SettlementRecord",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("SettlementRecord", raw, {
+  const raw = toDraft7(SettlementRecordSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: SETTLEMENT_RECORD_SCHEMA_ID,
     title: "SettlementRecord (v1)",
     description:

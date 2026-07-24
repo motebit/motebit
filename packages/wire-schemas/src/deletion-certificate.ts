@@ -21,11 +21,10 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type { DeletionCertificate } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 // ---------------------------------------------------------------------------
@@ -185,10 +184,20 @@ const MutablePruningCertSchema = z
     sensitivity: sensitivityField(),
     reason: reasonField(),
     deleted_at: z.number().describe("Unix milliseconds when the runtime erased the record."),
-    subject_signature: subjectSignatureField().optional(),
-    operator_signature: operatorSignatureField().optional(),
-    delegate_signature: delegateSignatureField().optional(),
-    guardian_signature: guardianSignatureField().optional(),
+    subject_signature: subjectSignatureField()
+      .optional()
+      .describe(
+        "The subject's succession signature over the cert body, when the subject co-signs.",
+      ),
+    operator_signature: operatorSignatureField()
+      .optional()
+      .describe("The operator's signature over the cert body, when the operator co-signs."),
+    delegate_signature: delegateSignatureField()
+      .optional()
+      .describe("A delegate's signature over the cert body, when a delegate co-signs."),
+    guardian_signature: guardianSignatureField()
+      .optional()
+      .describe("A guardian's signature over the cert body, when a guardian co-signs."),
   })
   .strict()
   .describe(
@@ -260,7 +269,9 @@ const FederationGraphAnchorSchema = z
 const AppendOnlyHorizonCertSchema = z
   .object({
     kind: z.literal("append_only_horizon"),
-    subject: HorizonSubjectSchema,
+    subject: HorizonSubjectSchema.describe(
+      "What this append-only horizon covers — a motebit or a federation subject.",
+    ),
     store_id: z
       .string()
       .min(1)
@@ -275,7 +286,9 @@ const AppendOnlyHorizonCertSchema = z
       .describe(
         "Federation peers co-witnessing the horizon advance. Empty array is permitted only when `witness_required` was false at issuance time (decision 9 — derived from federation graph state).",
       ),
-    federation_graph_anchor: FederationGraphAnchorSchema.optional(),
+    federation_graph_anchor: FederationGraphAnchorSchema.optional().describe(
+      "Anchor binding the witness/quorum federation graph at horizon time (phase 4).",
+    ),
     issued_at: z.number().describe("Unix milliseconds when the issuer signed."),
     suite: suiteField(),
     signature: z
@@ -318,10 +331,20 @@ const ConsolidationFlushCertSchema = z
         "Present iff `flushed_to: memory_node`. References the consolidated node so audit trails reconstruct the derivation.",
       ),
     flushed_at: z.number().describe("Unix milliseconds."),
-    subject_signature: subjectSignatureField().optional(),
-    operator_signature: operatorSignatureField().optional(),
-    delegate_signature: delegateSignatureField().optional(),
-    guardian_signature: guardianSignatureField().optional(),
+    subject_signature: subjectSignatureField()
+      .optional()
+      .describe(
+        "The subject's succession signature over the cert body, when the subject co-signs.",
+      ),
+    operator_signature: operatorSignatureField()
+      .optional()
+      .describe("The operator's signature over the cert body, when the operator co-signs."),
+    delegate_signature: delegateSignatureField()
+      .optional()
+      .describe("A delegate's signature over the cert body, when a delegate co-signs."),
+    guardian_signature: guardianSignatureField()
+      .optional()
+      .describe("A guardian's signature over the cert body, when a guardian co-signs."),
   })
   .strict()
   .describe(
@@ -351,12 +374,8 @@ export const _DELETION_CERTIFICATE_TYPE_PARITY: { forward: _Forward; reverse: _R
 };
 
 export function buildDeletionCertificateJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(DeletionCertificateSchema, {
-    name: "DeletionCertificate",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("DeletionCertificate", raw, {
+  const raw = toDraft7(DeletionCertificateSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: DELETION_CERTIFICATE_SCHEMA_ID,
     title: "DeletionCertificate (v1)",
     description:

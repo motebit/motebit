@@ -28,11 +28,10 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type { AgentTask } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 /** Stable `$id` for the agent-task v1 wire format. */
@@ -161,12 +160,8 @@ export const _AGENT_TASK_TYPE_PARITY: { forward: _ForwardCheck; reverse: _Revers
 // ---------------------------------------------------------------------------
 
 export function buildAgentTaskJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(AgentTaskSchema, {
-    name: "AgentTask",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("AgentTask", raw, {
+  const raw = toDraft7(AgentTaskSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: AGENT_TASK_SCHEMA_ID,
     title: "AgentTask (v1)",
     description:

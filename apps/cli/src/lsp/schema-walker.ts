@@ -10,10 +10,12 @@
  * dropdown. That's the whole point of the placement choice.
  *
  * Sharp edges:
- *  - `.optional()`, `.default()`, and `.transform()` all wrap the inner
- *    schema in outer types (ZodOptional / ZodDefault / ZodEffects). Each
- *    carries its own `_def.description`, so `findDescription` walks outside
- *    → inside and returns the first non-empty description it finds.
+ *  - `.optional()`, `.default()`, and `.transform()` wrap the inner schema
+ *    in outer types (ZodOptional / ZodDefault / ZodPipe — the last was
+ *    ZodEffects before zod 4). Each carries its own `.description`, so
+ *    `findDescription` walks outside → inside and returns the first non-empty
+ *    description it finds. `.refine()`/`.superRefine()` do NOT wrap in zod 4
+ *    (they return the base type with a check), so they need no unwrapping.
  *  - `z.literal(1)` is not enumerable like `z.enum([...])`; `enumValues`
  *    returns the single literal value as a one-element array so completion
  *    can still offer it as a value hint.
@@ -25,7 +27,9 @@ import { z } from "zod";
 export function unwrapOne(schema: z.ZodTypeAny): z.ZodTypeAny | null {
   if (schema instanceof z.ZodOptional) return schema.unwrap() as z.ZodTypeAny;
   if (schema instanceof z.ZodDefault) return schema.removeDefault() as z.ZodTypeAny;
-  if (schema instanceof z.ZodEffects) return schema.innerType() as z.ZodTypeAny;
+  // zod 4: `.transform()` produces a ZodPipe (was ZodEffects); unwrap to its
+  // input side — the pre-transform schema the user actually writes.
+  if (schema instanceof z.ZodPipe) return (schema as unknown as { in: z.ZodTypeAny }).in;
   if (schema instanceof z.ZodNullable) return schema.unwrap() as z.ZodTypeAny;
   return null;
 }
@@ -48,7 +52,7 @@ export function unwrapAll(schema: z.ZodTypeAny): z.ZodTypeAny {
 export function findDescription(schema: z.ZodTypeAny): string | undefined {
   let cur: z.ZodTypeAny = schema;
   for (;;) {
-    const desc = (cur._def as { description?: string }).description;
+    const desc = cur.description; // zod 4: `.description` getter (`_def.description` is gone)
     if (desc != null && desc !== "") return desc;
     const next = unwrapOne(cur);
     if (next === null) return undefined;

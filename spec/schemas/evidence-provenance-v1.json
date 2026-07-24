@@ -25,99 +25,43 @@
       "description": "Content address of the raw primary-record bytes a third party can independently fetch — NEVER the projected text."
     },
     "projection": {
+      "description": "Opaque, app-owned projection recipe id (e.g. agency.html-text.v1). Absent ⇒ the span is located over the raw bytes directly; present ⇒ a re-verifier applies the consumer-injected recipe, else fails closed (projection_unresolved).",
       "type": "string",
-      "minLength": 1,
-      "description": "Opaque, app-owned projection recipe id (e.g. agency.html-text.v1). Absent ⇒ the span is located over the raw bytes directly; present ⇒ a re-verifier applies the consumer-injected recipe, else fails closed (projection_unresolved)."
+      "minLength": 1
     },
     "projectionClass": {
+      "description": "Assurance class of a present projection: `spec-reproducible` (§7 — independently reimplementable from spec, the default) or `tool-pinned` (§7-tool — reproducible only by running the recipe's content-addressed pinned tool). ABSENT ⇒ spec-reproducible (the weaker class is opt-in). Carried, NOT verified by the law — the consumer policies on it.",
       "type": "string",
-      "enum": ["spec-reproducible", "tool-pinned"],
-      "description": "Assurance class of a present projection: `spec-reproducible` (§7 — independently reimplementable from spec, the default) or `tool-pinned` (§7-tool — reproducible only by running the recipe's content-addressed pinned tool). ABSENT ⇒ spec-reproducible (the weaker class is opt-in). Carried, NOT verified by the law — the consumer policies on it."
+      "enum": ["spec-reproducible", "tool-pinned"]
     },
     "span": {
       "type": "string",
       "description": "The verbatim span asserted PRESENT in projection(bytes) — the law's subject."
     },
     "locator": {
+      "description": "Advisory locator narrowing where the span sits. NOT load-bearing — the law is exact-substring presence, never a second thing a re-verifier must reproduce.",
       "type": "object",
       "properties": {
         "start": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
         },
         "end": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
         }
       },
       "required": ["start", "end"],
-      "additionalProperties": false,
-      "description": "Advisory locator narrowing where the span sits. NOT load-bearing — the law is exact-substring presence, never a second thing a re-verifier must reproduce."
+      "additionalProperties": false
     },
     "binding": {
+      "description": "Opaque resolved-identity reference (a motebit_id or a domain token the consumer resolves). CARRIED, NOT verified by the law — issuer authority is app-layer.",
       "type": "string",
-      "minLength": 1,
-      "description": "Opaque resolved-identity reference (a motebit_id or a domain token the consumer resolves). CARRIED, NOT verified by the law — issuer authority is app-layer."
+      "minLength": 1
     }
   },
   "required": ["digest", "span"],
-  "additionalProperties": false,
-  "definitions": {
-    "EvidenceProvenance": {
-      "type": "object",
-      "properties": {
-        "digest": {
-          "type": "object",
-          "properties": {
-            "algorithm": {
-              "type": "string",
-              "enum": ["sha-256"],
-              "description": "Content-digest hash algorithm — `sha-256` today; agile by registry append."
-            },
-            "value": {
-              "type": "string",
-              "pattern": "^[0-9a-f]+$",
-              "description": "Lowercase hex digest of the RAW, independently-obtainable bytes under `algorithm`."
-            }
-          },
-          "required": ["algorithm", "value"],
-          "additionalProperties": false,
-          "description": "Content address of the raw primary-record bytes a third party can independently fetch — NEVER the projected text."
-        },
-        "projection": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Opaque, app-owned projection recipe id (e.g. agency.html-text.v1). Absent ⇒ the span is located over the raw bytes directly; present ⇒ a re-verifier applies the consumer-injected recipe, else fails closed (projection_unresolved)."
-        },
-        "projectionClass": {
-          "type": "string",
-          "enum": ["spec-reproducible", "tool-pinned"],
-          "description": "Assurance class of a present projection: `spec-reproducible` (§7 — independently reimplementable from spec, the default) or `tool-pinned` (§7-tool — reproducible only by running the recipe's content-addressed pinned tool). ABSENT ⇒ spec-reproducible (the weaker class is opt-in). Carried, NOT verified by the law — the consumer policies on it."
-        },
-        "span": {
-          "type": "string",
-          "description": "The verbatim span asserted PRESENT in projection(bytes) — the law's subject."
-        },
-        "locator": {
-          "type": "object",
-          "properties": {
-            "start": {
-              "type": "integer"
-            },
-            "end": {
-              "type": "integer"
-            }
-          },
-          "required": ["start", "end"],
-          "additionalProperties": false,
-          "description": "Advisory locator narrowing where the span sits. NOT load-bearing — the law is exact-substring presence, never a second thing a re-verifier must reproduce."
-        },
-        "binding": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Opaque resolved-identity reference (a motebit_id or a domain token the consumer resolves). CARRIED, NOT verified by the law — issuer authority is app-layer."
-        }
-      },
-      "required": ["digest", "span"],
-      "additionalProperties": false
-    }
-  }
+  "additionalProperties": false
 }

@@ -33,6 +33,7 @@
     "submitted_at": {
       "type": "integer",
       "minimum": 0,
+      "maximum": 9007199254740991,
       "description": "Unix milliseconds."
     }
   },
@@ -44,50 +45,5 @@
     "content_hash",
     "submitted_at"
   ],
-  "additionalProperties": false,
-  "definitions": {
-    "SkillRegistrySubmitResponse": {
-      "type": "object",
-      "properties": {
-        "skill_id": {
-          "type": "string",
-          "description": "`<submitter_motebit_id>/<name>@<version>` — canonical addressing tuple."
-        },
-        "submitter_motebit_id": {
-          "type": "string",
-          "pattern": "^did:key:z[1-9A-HJ-NP-Za-km-z]{40,80}$",
-          "description": "did:key derived from envelope.signature.public_key by the relay. Returned so the caller can confirm the relay derived the same did:key it expected."
-        },
-        "name": {
-          "type": "string",
-          "pattern": "^[a-z0-9-]+$",
-          "description": "Slug. Echoes manifest.name."
-        },
-        "version": {
-          "type": "string",
-          "minLength": 1,
-          "description": "SemVer. Echoes manifest.version."
-        },
-        "content_hash": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$",
-          "description": "Echoes envelope.skill.content_hash."
-        },
-        "submitted_at": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Unix milliseconds."
-        }
-      },
-      "required": [
-        "skill_id",
-        "submitter_motebit_id",
-        "name",
-        "version",
-        "content_hash",
-        "submitted_at"
-      ],
-      "additionalProperties": false
-    }
-  }
+  "additionalProperties": false
 }

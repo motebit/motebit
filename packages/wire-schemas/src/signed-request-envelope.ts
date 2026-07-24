@@ -21,11 +21,10 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type { SignedRequestEnvelope } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 /** Stable `$id` for the signed-request-envelope v1 wire format. External tools pin to this. */
@@ -102,12 +101,8 @@ export const _SIGNED_REQUEST_ENVELOPE_TYPE_PARITY: {
 // ---------------------------------------------------------------------------
 
 export function buildSignedRequestEnvelopeJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(SignedRequestEnvelopeSchema, {
-    name: "SignedRequestEnvelope",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("SignedRequestEnvelope", raw, {
+  const raw = toDraft7(SignedRequestEnvelopeSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: SIGNED_REQUEST_ENVELOPE_SCHEMA_ID,
     title: "SignedRequestEnvelope (v1)",
     description:

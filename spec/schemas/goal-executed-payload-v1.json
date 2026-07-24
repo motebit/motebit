@@ -12,56 +12,26 @@
       "description": "UUID of the executed goal."
     },
     "summary": {
-      "type": "string",
-      "description": "Up to ~200 characters of the agent's response text for a successful run."
+      "description": "Up to ~200 characters of the agent's response text for a successful run.",
+      "type": "string"
     },
     "tool_calls": {
+      "description": "Number of tool calls performed during a successful run.",
       "type": "integer",
       "minimum": 0,
-      "description": "Number of tool calls performed during a successful run."
+      "maximum": 9007199254740991
     },
     "memories": {
+      "description": "Number of memory nodes formed during a successful run.",
       "type": "integer",
       "minimum": 0,
-      "description": "Number of memory nodes formed during a successful run."
+      "maximum": 9007199254740991
     },
     "error": {
-      "type": "string",
-      "description": "Error message; present iff the run terminated in failure. Consumers MUST NOT parse it semantically."
+      "description": "Error message; present iff the run terminated in failure. Consumers MUST NOT parse it semantically.",
+      "type": "string"
     }
   },
   "required": ["goal_id"],
-  "additionalProperties": true,
-  "definitions": {
-    "GoalExecutedPayload": {
-      "type": "object",
-      "properties": {
-        "goal_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "UUID of the executed goal."
-        },
-        "summary": {
-          "type": "string",
-          "description": "Up to ~200 characters of the agent's response text for a successful run."
-        },
-        "tool_calls": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Number of tool calls performed during a successful run."
-        },
-        "memories": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Number of memory nodes formed during a successful run."
-        },
-        "error": {
-          "type": "string",
-          "description": "Error message; present iff the run terminated in failure. Consumers MUST NOT parse it semantically."
-        }
-      },
-      "required": ["goal_id"],
-      "additionalProperties": true
-    }
-  }
+  "additionalProperties": {}
 }

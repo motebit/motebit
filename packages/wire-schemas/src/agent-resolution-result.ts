@@ -22,11 +22,10 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type { AgentResolutionResult } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 /** Stable `$id` for the agent-resolution-result v1 wire format. */
@@ -128,12 +127,8 @@ export const _AGENT_RESOLUTION_RESULT_TYPE_PARITY: {
 // ---------------------------------------------------------------------------
 
 export function buildAgentResolutionResultJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(AgentResolutionResultSchema, {
-    name: "AgentResolutionResult",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("AgentResolutionResult", raw, {
+  const raw = toDraft7(AgentResolutionResultSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: AGENT_RESOLUTION_RESULT_SCHEMA_ID,
     title: "AgentResolutionResult (v1)",
     description:

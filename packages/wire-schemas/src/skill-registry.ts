@@ -15,7 +15,6 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type {
   SkillRegistryBundle,
@@ -25,7 +24,7 @@ import type {
   SkillRegistrySubmitResponse,
 } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 import { SkillEnvelopeSchema } from "./skill-envelope.js";
 
@@ -258,12 +257,8 @@ export const _SKILL_REGISTRY_TYPE_PARITY: {
 // ---------------------------------------------------------------------------
 
 export function buildSkillRegistryEntryJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(SkillRegistryEntrySchema, {
-    name: "SkillRegistryEntry",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("SkillRegistryEntry", raw, {
+  const raw = toDraft7(SkillRegistryEntrySchema);
+  return assembleJsonSchemaFor(raw, {
     $id: SKILL_REGISTRY_ENTRY_SCHEMA_ID,
     title: "SkillRegistryEntry (v1)",
     description:
@@ -272,12 +267,8 @@ export function buildSkillRegistryEntryJsonSchema(): Record<string, unknown> {
 }
 
 export function buildSkillRegistrySubmitRequestJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(SkillRegistrySubmitRequestSchema, {
-    name: "SkillRegistrySubmitRequest",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("SkillRegistrySubmitRequest", raw, {
+  const raw = toDraft7(SkillRegistrySubmitRequestSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: SKILL_REGISTRY_SUBMIT_REQUEST_SCHEMA_ID,
     title: "SkillRegistrySubmitRequest (v1)",
     description:
@@ -286,12 +277,8 @@ export function buildSkillRegistrySubmitRequestJsonSchema(): Record<string, unkn
 }
 
 export function buildSkillRegistrySubmitResponseJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(SkillRegistrySubmitResponseSchema, {
-    name: "SkillRegistrySubmitResponse",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("SkillRegistrySubmitResponse", raw, {
+  const raw = toDraft7(SkillRegistrySubmitResponseSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: SKILL_REGISTRY_SUBMIT_RESPONSE_SCHEMA_ID,
     title: "SkillRegistrySubmitResponse (v1)",
     description:
@@ -300,12 +287,8 @@ export function buildSkillRegistrySubmitResponseJsonSchema(): Record<string, unk
 }
 
 export function buildSkillRegistryListingJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(SkillRegistryListingSchema, {
-    name: "SkillRegistryListing",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("SkillRegistryListing", raw, {
+  const raw = toDraft7(SkillRegistryListingSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: SKILL_REGISTRY_LISTING_SCHEMA_ID,
     title: "SkillRegistryListing (v1)",
     description:
@@ -314,12 +297,8 @@ export function buildSkillRegistryListingJsonSchema(): Record<string, unknown> {
 }
 
 export function buildSkillRegistryBundleJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(SkillRegistryBundleSchema, {
-    name: "SkillRegistryBundle",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("SkillRegistryBundle", raw, {
+  const raw = toDraft7(SkillRegistryBundleSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: SKILL_REGISTRY_BUNDLE_SCHEMA_ID,
     title: "SkillRegistryBundle (v1)",
     description:

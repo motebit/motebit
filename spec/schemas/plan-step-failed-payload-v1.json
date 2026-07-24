@@ -19,6 +19,7 @@
     "ordinal": {
       "type": "integer",
       "minimum": 0,
+      "maximum": 9007199254740991,
       "description": "Zero-based position of the step within its plan."
     },
     "error": {
@@ -26,50 +27,14 @@
       "description": "Error message from the failing step. Consumers MUST NOT parse it semantically."
     },
     "task_id": {
-      "type": "string",
-      "description": "Delegation task id; present iff this step was delegated (§3.7)."
+      "description": "Delegation task id; present iff this step was delegated (§3.7).",
+      "type": "string"
     },
     "goal_id": {
-      "type": "string",
-      "description": "Owning goal when the plan serves a goal."
+      "description": "Owning goal when the plan serves a goal.",
+      "type": "string"
     }
   },
   "required": ["plan_id", "step_id", "ordinal", "error"],
-  "additionalProperties": true,
-  "definitions": {
-    "PlanStepFailedPayload": {
-      "type": "object",
-      "properties": {
-        "plan_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "UUID of the parent plan."
-        },
-        "step_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "UUID of the failed step."
-        },
-        "ordinal": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Zero-based position of the step within its plan."
-        },
-        "error": {
-          "type": "string",
-          "description": "Error message from the failing step. Consumers MUST NOT parse it semantically."
-        },
-        "task_id": {
-          "type": "string",
-          "description": "Delegation task id; present iff this step was delegated (§3.7)."
-        },
-        "goal_id": {
-          "type": "string",
-          "description": "Owning goal when the plan serves a goal."
-        }
-      },
-      "required": ["plan_id", "step_id", "ordinal", "error"],
-      "additionalProperties": true
-    }
-  }
+  "additionalProperties": {}
 }

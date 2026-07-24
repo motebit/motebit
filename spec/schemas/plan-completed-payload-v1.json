@@ -12,28 +12,10 @@
       "description": "UUID of the completed plan."
     },
     "goal_id": {
-      "type": "string",
-      "description": "Owning goal when the plan served a goal."
+      "description": "Owning goal when the plan served a goal.",
+      "type": "string"
     }
   },
   "required": ["plan_id"],
-  "additionalProperties": true,
-  "definitions": {
-    "PlanCompletedPayload": {
-      "type": "object",
-      "properties": {
-        "plan_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "UUID of the completed plan."
-        },
-        "goal_id": {
-          "type": "string",
-          "description": "Owning goal when the plan served a goal."
-        }
-      },
-      "required": ["plan_id"],
-      "additionalProperties": true
-    }
-  }
+  "additionalProperties": {}
 }

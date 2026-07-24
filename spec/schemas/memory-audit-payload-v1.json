@@ -20,26 +20,5 @@
     }
   },
   "required": ["missed_patterns", "turn_message"],
-  "additionalProperties": true,
-  "definitions": {
-    "MemoryAuditPayload": {
-      "type": "object",
-      "properties": {
-        "missed_patterns": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Memory-worthy pattern labels the ai-core heuristic detected in the turn but the model didn't tag — each entry is a `<label>: \"<excerpt>\"` string (label ∈ preference / personal_fact / goal / correction), produced by `detectUntaggedMemoryPatterns` in @motebit/ai-core. Free-form strings, NOT sensitivity levels (the field name is patterns, not classifications)."
-        },
-        "turn_message": {
-          "type": "string",
-          "maxLength": 200,
-          "description": "Up to 200 characters of the triggering user message. Implementations MUST truncate at emission."
-        }
-      },
-      "required": ["missed_patterns", "turn_message"],
-      "additionalProperties": true
-    }
-  }
+  "additionalProperties": {}
 }

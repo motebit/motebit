@@ -36,7 +36,6 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type {
   GradientCredentialSubject,
@@ -44,7 +43,7 @@ import type {
   TrustCredentialSubject,
 } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 import { HardwareAttestationClaimSchema } from "./hardware-attestation-claim.js";
 
@@ -147,12 +146,8 @@ export const _REPUTATION_CREDENTIAL_SUBJECT_TYPE_PARITY: {
 };
 
 export function buildReputationCredentialSubjectJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(ReputationCredentialSubjectSchema, {
-    name: "ReputationCredentialSubject",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("ReputationCredentialSubject", raw, {
+  const raw = toDraft7(ReputationCredentialSubjectSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: REPUTATION_CREDENTIAL_SUBJECT_SCHEMA_ID,
     title: "ReputationCredentialSubject (v1)",
     description:
@@ -226,12 +221,8 @@ export const _TRUST_CREDENTIAL_SUBJECT_TYPE_PARITY: {
 };
 
 export function buildTrustCredentialSubjectJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(TrustCredentialSubjectSchema, {
-    name: "TrustCredentialSubject",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("TrustCredentialSubject", raw, {
+  const raw = toDraft7(TrustCredentialSubjectSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: TRUST_CREDENTIAL_SUBJECT_SCHEMA_ID,
     title: "TrustCredentialSubject (v1)",
     description:
@@ -317,12 +308,8 @@ export const _GRADIENT_CREDENTIAL_SUBJECT_TYPE_PARITY: {
 };
 
 export function buildGradientCredentialSubjectJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(GradientCredentialSubjectSchema, {
-    name: "GradientCredentialSubject",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("GradientCredentialSubject", raw, {
+  const raw = toDraft7(GradientCredentialSubjectSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: GRADIENT_CREDENTIAL_SUBJECT_SCHEMA_ID,
     title: "GradientCredentialSubject (v1)",
     description:

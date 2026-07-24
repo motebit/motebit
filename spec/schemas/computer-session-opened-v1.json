@@ -19,11 +19,13 @@
     "display_width": {
       "type": "integer",
       "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
       "description": "Primary display logical width in pixels."
     },
     "display_height": {
       "type": "integer",
       "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
       "description": "Primary display logical height in pixels."
     },
     "scaling_factor": {
@@ -34,6 +36,7 @@
     "opened_at": {
       "type": "integer",
       "minimum": 0,
+      "maximum": 9007199254740991,
       "description": "Unix ms when the session opened."
     }
   },
@@ -45,51 +48,5 @@
     "scaling_factor",
     "opened_at"
   ],
-  "additionalProperties": true,
-  "definitions": {
-    "ComputerSessionOpened": {
-      "type": "object",
-      "properties": {
-        "session_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Newly allocated computer-use session identifier."
-        },
-        "motebit_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Motebit identity binding for this session."
-        },
-        "display_width": {
-          "type": "integer",
-          "exclusiveMinimum": 0,
-          "description": "Primary display logical width in pixels."
-        },
-        "display_height": {
-          "type": "integer",
-          "exclusiveMinimum": 0,
-          "description": "Primary display logical height in pixels."
-        },
-        "scaling_factor": {
-          "type": "number",
-          "exclusiveMinimum": 0,
-          "description": "Logical-to-physical ratio. Retina = 2.0."
-        },
-        "opened_at": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Unix ms when the session opened."
-        }
-      },
-      "required": [
-        "session_id",
-        "motebit_id",
-        "display_width",
-        "display_height",
-        "scaling_factor",
-        "opened_at"
-      ],
-      "additionalProperties": true
-    }
-  }
+  "additionalProperties": {}
 }

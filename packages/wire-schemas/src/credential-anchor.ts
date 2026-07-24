@@ -39,11 +39,10 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type { CredentialAnchorBatch, CredentialAnchorProof } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 // ---------------------------------------------------------------------------
@@ -186,12 +185,8 @@ export const _CREDENTIAL_ANCHOR_BATCH_TYPE_PARITY: {
 };
 
 export function buildCredentialAnchorBatchJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(CredentialAnchorBatchSchema, {
-    name: "CredentialAnchorBatch",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("CredentialAnchorBatch", raw, {
+  const raw = toDraft7(CredentialAnchorBatchSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: CREDENTIAL_ANCHOR_BATCH_SCHEMA_ID,
     title: "CredentialAnchorBatch (v1)",
     description:
@@ -298,12 +293,8 @@ export const _CREDENTIAL_ANCHOR_PROOF_TYPE_PARITY: {
 };
 
 export function buildCredentialAnchorProofJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(CredentialAnchorProofSchema, {
-    name: "CredentialAnchorProof",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("CredentialAnchorProof", raw, {
+  const raw = toDraft7(CredentialAnchorProofSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: CREDENTIAL_ANCHOR_PROOF_SCHEMA_ID,
     title: "CredentialAnchorProof (v1)",
     description:

@@ -14,11 +14,10 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type { RoutingDecisionTranscript, TranscriptCandidate } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 export const ROUTING_TRANSCRIPT_SCHEMA_ID =
@@ -153,12 +152,8 @@ export const _ROUTING_TRANSCRIPT_TYPE_PARITY: {
  * Pure — called from the build-schemas script and from the drift test.
  */
 export function buildRoutingTranscriptJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(RoutingDecisionTranscriptSchema, {
-    name: "RoutingDecisionTranscript",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("RoutingDecisionTranscript", raw, {
+  const raw = toDraft7(RoutingDecisionTranscriptSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: ROUTING_TRANSCRIPT_SCHEMA_ID,
     title: "RoutingDecisionTranscript (v1)",
     description:

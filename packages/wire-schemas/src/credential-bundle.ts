@@ -32,11 +32,10 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type { CredentialBundle } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 /** Stable `$id` for the credential-bundle v1 wire format. */
@@ -127,12 +126,8 @@ export const _CREDENTIAL_BUNDLE_TYPE_PARITY: {
 // ---------------------------------------------------------------------------
 
 export function buildCredentialBundleJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(CredentialBundleSchema, {
-    name: "CredentialBundle",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("CredentialBundle", raw, {
+  const raw = toDraft7(CredentialBundleSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: CREDENTIAL_BUNDLE_SCHEMA_ID,
     title: "CredentialBundle (v1)",
     description:

@@ -25,11 +25,10 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type { SignedTransparencyDeclaration } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 // ---------------------------------------------------------------------------
@@ -121,12 +120,8 @@ export const _SIGNED_TRANSPARENCY_DECLARATION_TYPE_PARITY: {
 };
 
 export function buildSignedTransparencyDeclarationJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(SignedTransparencyDeclarationSchema, {
-    name: "SignedTransparencyDeclaration",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("SignedTransparencyDeclaration", raw, {
+  const raw = toDraft7(SignedTransparencyDeclarationSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: SIGNED_TRANSPARENCY_DECLARATION_SCHEMA_ID,
     title: "SignedTransparencyDeclaration (v1)",
     description:

@@ -18,40 +18,14 @@
     "total_steps": {
       "type": "integer",
       "minimum": 0,
+      "maximum": 9007199254740991,
       "description": "Total number of steps the plan was materialized with."
     },
     "goal_id": {
-      "type": "string",
-      "description": "Owning goal when the plan serves a scheduled or on-demand goal."
+      "description": "Owning goal when the plan serves a scheduled or on-demand goal.",
+      "type": "string"
     }
   },
   "required": ["plan_id", "title", "total_steps"],
-  "additionalProperties": true,
-  "definitions": {
-    "PlanCreatedPayload": {
-      "type": "object",
-      "properties": {
-        "plan_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Stable UUID of the plan."
-        },
-        "title": {
-          "type": "string",
-          "description": "Human-readable title summarizing the plan's goal."
-        },
-        "total_steps": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Total number of steps the plan was materialized with."
-        },
-        "goal_id": {
-          "type": "string",
-          "description": "Owning goal when the plan serves a scheduled or on-demand goal."
-        }
-      },
-      "required": ["plan_id", "title", "total_steps"],
-      "additionalProperties": true
-    }
-  }
+  "additionalProperties": {}
 }

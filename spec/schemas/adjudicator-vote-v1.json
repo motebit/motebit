@@ -14,6 +14,7 @@
     "round": {
       "type": "integer",
       "minimum": 1,
+      "maximum": 9007199254740991,
       "description": "Adjudication round. 1 for original adjudication; 2 for §8.3 appeal. Signature-bound (foundation law §6.5 + §8.3): a peer's round-1 vote bytes do not satisfy round-2 binding even for the same evidence. Cross-round vote replay is cryptographically rejected, not enforced by leader bookkeeping alone."
     },
     "peer_id": {
@@ -42,48 +43,5 @@
     }
   },
   "required": ["dispute_id", "round", "peer_id", "vote", "rationale", "suite", "signature"],
-  "additionalProperties": false,
-  "definitions": {
-    "AdjudicatorVote": {
-      "type": "object",
-      "properties": {
-        "dispute_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Dispute this vote applies to. Signature-bound: the canonical body includes this field, so a vote signed for dispute A cannot be replayed into dispute B (foundation law §6.5). A malicious adjudicator collecting old votes from other disputes cannot stuff them into a new resolution because the dispute_id binding breaks the per-vote signature."
-        },
-        "round": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "Adjudication round. 1 for original adjudication; 2 for §8.3 appeal. Signature-bound (foundation law §6.5 + §8.3): a peer's round-1 vote bytes do not satisfy round-2 binding even for the same evidence. Cross-round vote replay is cryptographically rejected, not enforced by leader bookkeeping alone."
-        },
-        "peer_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Federation peer's motebit identity. The signer of this vote."
-        },
-        "vote": {
-          "type": "string",
-          "enum": ["upheld", "overturned", "split"],
-          "description": "Dispute outcome. `upheld` = filer wins, fund_action follows. `overturned` = respondent wins, original settlement stands. `split` = partial fault, split_ratio applies."
-        },
-        "rationale": {
-          "type": "string",
-          "description": "Per-peer explanation of the vote. Optional in practice (empty string permitted) but encouraged so the resolution's auditability is meaningful."
-        },
-        "suite": {
-          "type": "string",
-          "const": "motebit-jcs-ed25519-b64-v1",
-          "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for dispute artifacts: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature, hex public key. Verifiers reject missing or unknown values fail-closed."
-        },
-        "signature": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Base64url-encoded Ed25519 signature over `canonicalJson(body)` where `body` = the artifact minus `signature`. Signed by the voting peer over canonical JSON of all fields except signature. The signature covers `dispute_id`, `round`, `peer_id`, and `vote` (foundation law §6.5 + §8.3: votes are not portable across disputes, rounds, peers, or outcomes)."
-        }
-      },
-      "required": ["dispute_id", "round", "peer_id", "vote", "rationale", "suite", "signature"],
-      "additionalProperties": false
-    }
-  }
+  "additionalProperties": false
 }

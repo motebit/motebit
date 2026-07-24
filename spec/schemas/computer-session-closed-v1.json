@@ -14,36 +14,14 @@
     "closed_at": {
       "type": "integer",
       "minimum": 0,
+      "maximum": 9007199254740991,
       "description": "Unix ms when the session closed."
     },
     "reason": {
-      "type": "string",
-      "description": "Free-text close reason. Examples: 'user_closed', 'timeout', 'error', 'manager_disposed'."
+      "description": "Free-text close reason. Examples: 'user_closed', 'timeout', 'error', 'manager_disposed'.",
+      "type": "string"
     }
   },
   "required": ["session_id", "closed_at"],
-  "additionalProperties": true,
-  "definitions": {
-    "ComputerSessionClosed": {
-      "type": "object",
-      "properties": {
-        "session_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Computer-use session identifier being closed."
-        },
-        "closed_at": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Unix ms when the session closed."
-        },
-        "reason": {
-          "type": "string",
-          "description": "Free-text close reason. Examples: 'user_closed', 'timeout', 'error', 'manager_disposed'."
-        }
-      },
-      "required": ["session_id", "closed_at"],
-      "additionalProperties": true
-    }
-  }
+  "additionalProperties": {}
 }

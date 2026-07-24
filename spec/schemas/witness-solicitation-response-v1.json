@@ -17,6 +17,7 @@
       "description": "Base64url-encoded Ed25519 signature over the same canonical bytes the issuer signed in `WitnessSolicitationRequest.issuer_signature` (i.e. `canonicalJson(cert_body)` under `cert_body.suite`). The issuer copies this signature verbatim into `cert.witnessed_by[].signature`."
     },
     "inclusion_proof": {
+      "description": "Optional Merkle inclusion proof for the peer's federation pubkey against `cert_body.federation_graph_anchor.merkle_root`. Phase 4b-3 verifier policy admits signature-only witnesses; future tightening to mandatory-inclusion-proof lands by changing verifier policy alone — the wire shape is forward-compatible.",
       "type": "object",
       "properties": {
         "siblings": {
@@ -30,70 +31,23 @@
         "leaf_index": {
           "type": "integer",
           "minimum": 0,
+          "maximum": 9007199254740991,
           "description": "0-based index of the disputant's pubkey in the sorted peer set at horizon_ts."
         },
         "layer_sizes": {
           "type": "array",
           "items": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "maximum": 9007199254740991
           },
           "description": "Per-layer node counts, used to detect odd-leaf promotion when reconstructing the root."
         }
       },
       "required": ["siblings", "leaf_index", "layer_sizes"],
-      "additionalProperties": false,
-      "description": "Optional Merkle inclusion proof for the peer's federation pubkey against `cert_body.federation_graph_anchor.merkle_root`. Phase 4b-3 verifier policy admits signature-only witnesses; future tightening to mandatory-inclusion-proof lands by changing verifier policy alone — the wire shape is forward-compatible."
+      "additionalProperties": false
     }
   },
   "required": ["motebit_id", "signature"],
-  "additionalProperties": false,
-  "definitions": {
-    "WitnessSolicitationResponse": {
-      "type": "object",
-      "properties": {
-        "motebit_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "The witnessing peer's motebit identity. The pubkey resolves through the same `resolveMotebitPublicKey` path the cert verifier uses for `cert.witnessed_by[i].motebit_id`."
-        },
-        "signature": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Base64url-encoded Ed25519 signature over the same canonical bytes the issuer signed in `WitnessSolicitationRequest.issuer_signature` (i.e. `canonicalJson(cert_body)` under `cert_body.suite`). The issuer copies this signature verbatim into `cert.witnessed_by[].signature`."
-        },
-        "inclusion_proof": {
-          "type": "object",
-          "properties": {
-            "siblings": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1
-              },
-              "description": "Hex-encoded sibling hashes ordered leaf-to-root. Same shape as credential-anchor-v1 §6 and the `inclusion_proof` field on `cert.witnessed_by[i]`."
-            },
-            "leaf_index": {
-              "type": "integer",
-              "minimum": 0,
-              "description": "0-based index of the disputant's pubkey in the sorted peer set at horizon_ts."
-            },
-            "layer_sizes": {
-              "type": "array",
-              "items": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "description": "Per-layer node counts, used to detect odd-leaf promotion when reconstructing the root."
-            }
-          },
-          "required": ["siblings", "leaf_index", "layer_sizes"],
-          "additionalProperties": false,
-          "description": "Optional Merkle inclusion proof for the peer's federation pubkey against `cert_body.federation_graph_anchor.merkle_root`. Phase 4b-3 verifier policy admits signature-only witnesses; future tightening to mandatory-inclusion-proof lands by changing verifier policy alone — the wire shape is forward-compatible."
-        }
-      },
-      "required": ["motebit_id", "signature"],
-      "additionalProperties": false
-    }
-  }
+  "additionalProperties": false
 }

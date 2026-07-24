@@ -17,11 +17,10 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type { SkillEnvelope } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 import { SkillManifestSchema } from "./skill-manifest.js";
 
@@ -132,12 +131,8 @@ export const _SKILL_ENVELOPE_TYPE_PARITY: {
 // ---------------------------------------------------------------------------
 
 export function buildSkillEnvelopeJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(SkillEnvelopeSchema, {
-    name: "SkillEnvelope",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("SkillEnvelope", raw, {
+  const raw = toDraft7(SkillEnvelopeSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: SKILL_ENVELOPE_SCHEMA_ID,
     title: "SkillEnvelope (v1)",
     description:

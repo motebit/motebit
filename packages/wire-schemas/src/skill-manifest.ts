@@ -21,11 +21,10 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type { SkillManifest } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 /** Stable `$id` for the skill-manifest v1 wire format. External tools pin to this. */
@@ -97,7 +96,7 @@ const SkillManifestMetadataSchema = z
       .describe("Free-form category for UI grouping. Never load-bearing."),
     tags: z.array(z.string()).optional().describe("Free-form tags. UI filtering only."),
     config: z
-      .record(z.unknown())
+      .record(z.string(), z.unknown())
       .optional()
       .describe(
         "Per-skill configuration values. Keys and shapes are skill-defined; the runtime injects them via `skills.config.<key>` per agentskills.io conventions.",
@@ -170,12 +169,8 @@ export const _SKILL_MANIFEST_TYPE_PARITY: {
 
 /** Build the JSON Schema (draft-07) object for SkillManifest. Pure. */
 export function buildSkillManifestJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(SkillManifestSchema, {
-    name: "SkillManifest",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("SkillManifest", raw, {
+  const raw = toDraft7(SkillManifestSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: SKILL_MANIFEST_SCHEMA_ID,
     title: "SkillManifest (v1)",
     description:

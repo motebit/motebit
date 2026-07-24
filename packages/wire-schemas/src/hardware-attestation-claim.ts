@@ -33,11 +33,10 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type { HardwareAttestationClaim } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 // ---------------------------------------------------------------------------
@@ -108,12 +107,8 @@ export const _HARDWARE_ATTESTATION_CLAIM_TYPE_PARITY: {
 // ---------------------------------------------------------------------------
 
 export function buildHardwareAttestationClaimJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(HardwareAttestationClaimSchema, {
-    name: "HardwareAttestationClaim",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("HardwareAttestationClaim", raw, {
+  const raw = toDraft7(HardwareAttestationClaimSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: HARDWARE_ATTESTATION_CLAIM_SCHEMA_ID,
     title: "HardwareAttestationClaim (v1)",
     description:

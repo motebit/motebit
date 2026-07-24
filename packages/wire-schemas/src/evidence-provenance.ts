@@ -14,12 +14,11 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type { EvidenceProvenance, DigestAlgorithm, ProjectionClass } from "@motebit/protocol";
 import { ALL_DIGEST_ALGORITHMS, ALL_PROJECTION_CLASSES } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 // ---------------------------------------------------------------------------
@@ -101,12 +100,8 @@ export const _EVIDENCE_PROVENANCE_TYPE_PARITY: {
 };
 
 export function buildEvidenceProvenanceJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(EvidenceProvenanceSchema, {
-    name: "EvidenceProvenance",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("EvidenceProvenance", raw, {
+  const raw = toDraft7(EvidenceProvenanceSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: EVIDENCE_PROVENANCE_SCHEMA_ID,
     title: "EvidenceProvenance (v1)",
     description:

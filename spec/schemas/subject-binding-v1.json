@@ -28,34 +28,5 @@
     }
   },
   "required": ["schema", "artifact_schema", "digest_method", "digest"],
-  "additionalProperties": false,
-  "definitions": {
-    "SubjectBindingV1": {
-      "type": "object",
-      "properties": {
-        "schema": {
-          "type": "string",
-          "const": "motebit.subject-binding.v1",
-          "description": "This binding's own type tag (in-body domain separation)."
-        },
-        "artifact_schema": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Declared type of the detached artifact this digest addresses (e.g. `motebit.monitor-scope.v1`). The verifier MUST check the presented artifact's `schema` equals this, fail-closed."
-        },
-        "digest_method": {
-          "type": "string",
-          "const": "jcs-sha256-hex",
-          "description": "How `digest` was computed: `hex(SHA-256(canonicalJson(artifact)))`. A new hash is a new literal here, never a silent change. NOT a signature `suite`."
-        },
-        "digest": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$",
-          "description": "`hex(SHA-256(canonicalJson(detached artifact)))`, 64 lowercase. Recompute from the artifact as received so JSON whitespace can't break the match."
-        }
-      },
-      "required": ["schema", "artifact_schema", "digest_method", "digest"],
-      "additionalProperties": false
-    }
-  }
+  "additionalProperties": false
 }

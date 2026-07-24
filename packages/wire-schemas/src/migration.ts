@@ -30,7 +30,6 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type {
   BalanceWaiver,
@@ -40,7 +39,7 @@ import type {
   MigrationToken,
 } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 import { CredentialBundleSchema } from "./credential-bundle.js";
 
@@ -137,12 +136,8 @@ export const _MIGRATION_REQUEST_TYPE_PARITY: {
 };
 
 export function buildMigrationRequestJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(MigrationRequestSchema, {
-    name: "MigrationRequest",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("MigrationRequest", raw, {
+  const raw = toDraft7(MigrationRequestSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: MIGRATION_REQUEST_SCHEMA_ID,
     title: "MigrationRequest (v1)",
     description:
@@ -196,12 +191,8 @@ export const _MIGRATION_TOKEN_TYPE_PARITY: {
 };
 
 export function buildMigrationTokenJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(MigrationTokenSchema, {
-    name: "MigrationToken",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("MigrationToken", raw, {
+  const raw = toDraft7(MigrationTokenSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: MIGRATION_TOKEN_SCHEMA_ID,
     title: "MigrationToken (v1)",
     description:
@@ -279,12 +270,8 @@ export const _DEPARTURE_ATTESTATION_TYPE_PARITY: {
 };
 
 export function buildDepartureAttestationJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(DepartureAttestationSchema, {
-    name: "DepartureAttestation",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("DepartureAttestation", raw, {
+  const raw = toDraft7(DepartureAttestationSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: DEPARTURE_ATTESTATION_SCHEMA_ID,
     title: "DepartureAttestation (v1)",
     description:
@@ -332,12 +319,8 @@ export const _BALANCE_WAIVER_TYPE_PARITY: {
 };
 
 export function buildBalanceWaiverJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(BalanceWaiverSchema, {
-    name: "BalanceWaiver",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("BalanceWaiver", raw, {
+  const raw = toDraft7(BalanceWaiverSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: BALANCE_WAIVER_SCHEMA_ID,
     title: "BalanceWaiver (v1)",
     description:
@@ -395,12 +378,8 @@ export const _MIGRATION_PRESENTATION_TYPE_PARITY: {
 };
 
 export function buildMigrationPresentationJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(MigrationPresentationSchema, {
-    name: "MigrationPresentation",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("MigrationPresentation", raw, {
+  const raw = toDraft7(MigrationPresentationSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: MIGRATION_PRESENTATION_SCHEMA_ID,
     title: "MigrationPresentation (v1)",
     description:

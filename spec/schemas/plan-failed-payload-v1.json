@@ -16,32 +16,10 @@
       "description": "Free-text failure rationale. Consumers MUST NOT parse it semantically."
     },
     "goal_id": {
-      "type": "string",
-      "description": "Owning goal when the plan served a goal."
+      "description": "Owning goal when the plan served a goal.",
+      "type": "string"
     }
   },
   "required": ["plan_id", "reason"],
-  "additionalProperties": true,
-  "definitions": {
-    "PlanFailedPayload": {
-      "type": "object",
-      "properties": {
-        "plan_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "UUID of the failed plan."
-        },
-        "reason": {
-          "type": "string",
-          "description": "Free-text failure rationale. Consumers MUST NOT parse it semantically."
-        },
-        "goal_id": {
-          "type": "string",
-          "description": "Owning goal when the plan served a goal."
-        }
-      },
-      "required": ["plan_id", "reason"],
-      "additionalProperties": true
-    }
-  }
+  "additionalProperties": {}
 }

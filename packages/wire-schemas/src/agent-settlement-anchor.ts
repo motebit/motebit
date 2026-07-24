@@ -36,11 +36,10 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type { AgentSettlementAnchorBatch, AgentSettlementAnchorProof } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 // ---------------------------------------------------------------------------
@@ -182,12 +181,8 @@ export const _AGENT_SETTLEMENT_ANCHOR_BATCH_TYPE_PARITY: {
 };
 
 export function buildAgentSettlementAnchorBatchJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(AgentSettlementAnchorBatchSchema, {
-    name: "AgentSettlementAnchorBatch",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("AgentSettlementAnchorBatch", raw, {
+  const raw = toDraft7(AgentSettlementAnchorBatchSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: AGENT_SETTLEMENT_ANCHOR_BATCH_SCHEMA_ID,
     title: "AgentSettlementAnchorBatch (v1)",
     description:
@@ -294,12 +289,8 @@ export const _AGENT_SETTLEMENT_ANCHOR_PROOF_TYPE_PARITY: {
 };
 
 export function buildAgentSettlementAnchorProofJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(AgentSettlementAnchorProofSchema, {
-    name: "AgentSettlementAnchorProof",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("AgentSettlementAnchorProof", raw, {
+  const raw = toDraft7(AgentSettlementAnchorProofSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: AGENT_SETTLEMENT_ANCHOR_PROOF_SCHEMA_ID,
     title: "AgentSettlementAnchorProof (v1)",
     description:
