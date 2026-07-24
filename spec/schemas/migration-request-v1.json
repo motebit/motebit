@@ -12,12 +12,12 @@
       "description": "Agent's motebit identity (UUIDv7). The signer of this request."
     },
     "destination_relay": {
-      "type": "string",
-      "description": "Optional URL or relay_id of the intended destination. Source relay MUST NOT condition token issuance on this value (foundation law §4.3) — it's informational only."
+      "description": "Optional URL or relay_id of the intended destination. Source relay MUST NOT condition token issuance on this value (foundation law §4.3) — it's informational only.",
+      "type": "string"
     },
     "reason": {
-      "type": "string",
-      "description": "Optional human-readable reason for migration. Source relay MUST NOT condition token issuance on this value — informational only."
+      "description": "Optional human-readable reason for migration. Source relay MUST NOT condition token issuance on this value — informational only.",
+      "type": "string"
     },
     "requested_at": {
       "type": "number",
@@ -35,41 +35,5 @@
     }
   },
   "required": ["motebit_id", "requested_at", "suite", "signature"],
-  "additionalProperties": false,
-  "definitions": {
-    "MigrationRequest": {
-      "type": "object",
-      "properties": {
-        "motebit_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Agent's motebit identity (UUIDv7). The signer of this request."
-        },
-        "destination_relay": {
-          "type": "string",
-          "description": "Optional URL or relay_id of the intended destination. Source relay MUST NOT condition token issuance on this value (foundation law §4.3) — it's informational only."
-        },
-        "reason": {
-          "type": "string",
-          "description": "Optional human-readable reason for migration. Source relay MUST NOT condition token issuance on this value — informational only."
-        },
-        "requested_at": {
-          "type": "number",
-          "description": "Unix timestamp in milliseconds when the agent issued the request."
-        },
-        "suite": {
-          "type": "string",
-          "const": "motebit-jcs-ed25519-b64-v1",
-          "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for migration artifacts: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature, hex public key. Verifiers reject missing or unknown values fail-closed."
-        },
-        "signature": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Base64url-encoded Ed25519 signature over `canonicalJson(body)` where `body` = the artifact minus `signature`. Signed by the agent."
-        }
-      },
-      "required": ["motebit_id", "requested_at", "suite", "signature"],
-      "additionalProperties": false
-    }
-  }
+  "additionalProperties": false
 }

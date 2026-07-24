@@ -10,7 +10,6 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type {
   PlanCreatedPayload,
@@ -22,7 +21,7 @@ import type {
   PlanFailedPayload,
 } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 const SCHEMA_BASE = "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas";
@@ -59,12 +58,8 @@ export const _PLAN_CREATED_PAYLOAD_TYPE_PARITY: {
 };
 
 export function buildPlanCreatedPayloadJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(PlanCreatedPayloadSchema, {
-    name: "PlanCreatedPayload",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("PlanCreatedPayload", raw, {
+  const raw = toDraft7(PlanCreatedPayloadSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: PLAN_CREATED_PAYLOAD_SCHEMA_ID,
     title: "PlanCreatedPayload (v1)",
     description:
@@ -105,12 +100,8 @@ export const _PLAN_STEP_STARTED_PAYLOAD_TYPE_PARITY: {
 };
 
 export function buildPlanStepStartedPayloadJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(PlanStepStartedPayloadSchema, {
-    name: "PlanStepStartedPayload",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("PlanStepStartedPayload", raw, {
+  const raw = toDraft7(PlanStepStartedPayloadSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: PLAN_STEP_STARTED_PAYLOAD_SCHEMA_ID,
     title: "PlanStepStartedPayload (v1)",
     description:
@@ -156,12 +147,8 @@ export const _PLAN_STEP_COMPLETED_PAYLOAD_TYPE_PARITY: {
 };
 
 export function buildPlanStepCompletedPayloadJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(PlanStepCompletedPayloadSchema, {
-    name: "PlanStepCompletedPayload",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("PlanStepCompletedPayload", raw, {
+  const raw = toDraft7(PlanStepCompletedPayloadSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: PLAN_STEP_COMPLETED_PAYLOAD_SCHEMA_ID,
     title: "PlanStepCompletedPayload (v1)",
     description:
@@ -205,12 +192,8 @@ export const _PLAN_STEP_FAILED_PAYLOAD_TYPE_PARITY: {
 };
 
 export function buildPlanStepFailedPayloadJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(PlanStepFailedPayloadSchema, {
-    name: "PlanStepFailedPayload",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("PlanStepFailedPayload", raw, {
+  const raw = toDraft7(PlanStepFailedPayloadSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: PLAN_STEP_FAILED_PAYLOAD_SCHEMA_ID,
     title: "PlanStepFailedPayload (v1)",
     description:
@@ -236,7 +219,7 @@ export const PlanStepDelegatedPayloadSchema = z
       .min(1)
       .describe("Relay-issued task identifier. Matches the subsequent AgentTaskCompleted.task_id."),
     routing_choice: z
-      .record(z.unknown())
+      .record(z.string(), z.unknown())
       .optional()
       .describe(
         "Routing provenance picked by the semiring. Opaque to this spec; forward-compat via passthrough.",
@@ -257,12 +240,8 @@ export const _PLAN_STEP_DELEGATED_PAYLOAD_TYPE_PARITY: {
 };
 
 export function buildPlanStepDelegatedPayloadJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(PlanStepDelegatedPayloadSchema, {
-    name: "PlanStepDelegatedPayload",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("PlanStepDelegatedPayload", raw, {
+  const raw = toDraft7(PlanStepDelegatedPayloadSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: PLAN_STEP_DELEGATED_PAYLOAD_SCHEMA_ID,
     title: "PlanStepDelegatedPayload (v1)",
     description:
@@ -293,12 +272,8 @@ export const _PLAN_COMPLETED_PAYLOAD_TYPE_PARITY: {
 };
 
 export function buildPlanCompletedPayloadJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(PlanCompletedPayloadSchema, {
-    name: "PlanCompletedPayload",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("PlanCompletedPayload", raw, {
+  const raw = toDraft7(PlanCompletedPayloadSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: PLAN_COMPLETED_PAYLOAD_SCHEMA_ID,
     title: "PlanCompletedPayload (v1)",
     description:
@@ -332,12 +307,8 @@ export const _PLAN_FAILED_PAYLOAD_TYPE_PARITY: {
 };
 
 export function buildPlanFailedPayloadJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(PlanFailedPayloadSchema, {
-    name: "PlanFailedPayload",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("PlanFailedPayload", raw, {
+  const raw = toDraft7(PlanFailedPayloadSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: PLAN_FAILED_PAYLOAD_SCHEMA_ID,
     title: "PlanFailedPayload (v1)",
     description:

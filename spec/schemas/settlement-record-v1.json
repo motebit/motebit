@@ -27,7 +27,14 @@
       "description": "SHA-256 hex digest of the canonical-JSON ExecutionReceipt that earned this settlement. Lets external workers verify the relay paid them for the receipt they actually emitted."
     },
     "ledger_hash": {
-      "type": ["string", "null"],
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Optional SHA-256 hex digest of the relay's accounting ledger entry committing this settlement. Null when the relay does not maintain an external-facing ledger; present when the relay publishes one for transparency."
     },
     "amount_settled": {
@@ -48,12 +55,12 @@
       "description": "How the money moved for this settlement: `relay` (relay-custody — virtual-account credit/debit on the relay's books) or `p2p` (peer-to-peer onchain transfer — relay records the audit but never held the funds). Closed registry: the `SettlementMode` union in `@motebit/protocol/src/settlement-mode.ts`. Carried in the signed body so the lane is part of the relay's attestation; the relay cannot silently re-label a custodied settlement as p2p after the fact. Treasury reconciliation (operator fee accrual) is structurally NOT a settlement and never appears here — see `docs/doctrine/settlement-rails.md` § \"Lanes for external readers\"."
     },
     "x402_tx_hash": {
-      "type": "string",
-      "description": "x402 payment transaction hash, when the settlement was paid on-chain. Absent for relay-custody settlements (off-chain ledger only). When present, lets workers verify the on-chain transfer matched the recorded `amount_settled`."
+      "description": "x402 payment transaction hash, when the settlement was paid on-chain. Absent for relay-custody settlements (off-chain ledger only). When present, lets workers verify the on-chain transfer matched the recorded `amount_settled`.",
+      "type": "string"
     },
     "x402_network": {
-      "type": "string",
-      "description": "x402 network used for the payment, as a CAIP-2 chain identifier (e.g. `eip155:8453` for Base). Required-when `x402_tx_hash` is present so workers know which chain to query."
+      "description": "x402 network used for the payment, as a CAIP-2 chain identifier (e.g. `eip155:8453` for Base). Required-when `x402_tx_hash` is present so workers know which chain to query.",
+      "type": "string"
     },
     "status": {
       "type": "string",
@@ -96,102 +103,5 @@
     "suite",
     "signature"
   ],
-  "additionalProperties": false,
-  "definitions": {
-    "SettlementRecord": {
-      "type": "object",
-      "properties": {
-        "settlement_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Stable settlement identifier (UUID). Unique per relay; lets external systems correlate this record with relay logs and on-chain events."
-        },
-        "allocation_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Identifier of the BudgetAllocation this settlement closes. The allocation locked funds when the task was submitted; this record finalizes them."
-        },
-        "motebit_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "The payee — `motebit_id` of the worker this settlement pays (equals the executing agent's `ExecutionReceipt.motebit_id`). Named in the signed body so the receipt is self-contained: a worker proves it was paid from the bytes alone, without a relay-side allocation→payee join. The relay cannot re-point the payee after the fact."
-        },
-        "receipt_hash": {
-          "type": "string",
-          "minLength": 1,
-          "description": "SHA-256 hex digest of the canonical-JSON ExecutionReceipt that earned this settlement. Lets external workers verify the relay paid them for the receipt they actually emitted."
-        },
-        "ledger_hash": {
-          "type": ["string", "null"],
-          "description": "Optional SHA-256 hex digest of the relay's accounting ledger entry committing this settlement. Null when the relay does not maintain an external-facing ledger; present when the relay publishes one for transparency."
-        },
-        "amount_settled": {
-          "type": "number",
-          "description": "Amount paid to the executing agent in micro-units (1 USD = 1,000,000). After platform-fee deduction. Money math is integer micro-units throughout the protocol — no floating-point drift."
-        },
-        "platform_fee": {
-          "type": "number",
-          "description": "Platform fee extracted by the relay in micro-units. Sums with `amount_settled` to the gross billed amount. Recorded so workers can independently verify the relay didn't take more than declared."
-        },
-        "platform_fee_rate": {
-          "type": "number",
-          "description": "Fee rate applied to this settlement (e.g. `0.05` = 5%). Recorded per-settlement for auditability — a relay that changes its default fee mid-flight cannot retroactively rewrite past settlements without breaking this field's signed/hashed binding."
-        },
-        "settlement_mode": {
-          "type": "string",
-          "enum": ["relay", "p2p"],
-          "description": "How the money moved for this settlement: `relay` (relay-custody — virtual-account credit/debit on the relay's books) or `p2p` (peer-to-peer onchain transfer — relay records the audit but never held the funds). Closed registry: the `SettlementMode` union in `@motebit/protocol/src/settlement-mode.ts`. Carried in the signed body so the lane is part of the relay's attestation; the relay cannot silently re-label a custodied settlement as p2p after the fact. Treasury reconciliation (operator fee accrual) is structurally NOT a settlement and never appears here — see `docs/doctrine/settlement-rails.md` § \"Lanes for external readers\"."
-        },
-        "x402_tx_hash": {
-          "type": "string",
-          "description": "x402 payment transaction hash, when the settlement was paid on-chain. Absent for relay-custody settlements (off-chain ledger only). When present, lets workers verify the on-chain transfer matched the recorded `amount_settled`."
-        },
-        "x402_network": {
-          "type": "string",
-          "description": "x402 network used for the payment, as a CAIP-2 chain identifier (e.g. `eip155:8453` for Base). Required-when `x402_tx_hash` is present so workers know which chain to query."
-        },
-        "status": {
-          "type": "string",
-          "enum": ["completed", "partial", "refunded"],
-          "description": "Terminal state of the settlement. `completed` = full payment to executor. `partial` = some funds disbursed, remainder held (e.g. dispute window). `refunded` = settled funds returned to delegator (dispute resolved against executor or task voided)."
-        },
-        "settled_at": {
-          "type": "number",
-          "description": "Unix timestamp in milliseconds when the settlement was committed."
-        },
-        "issuer_relay_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Motebit identity of the issuing relay — the signer of this settlement. Verifiers resolve this to a public key (via federation peer registry or a known-keys store) and check Ed25519 against the canonical body."
-        },
-        "suite": {
-          "type": "string",
-          "const": "motebit-jcs-ed25519-b64-v1",
-          "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for settlement records: JCS canonicalization (RFC 8785), Ed25519 primitive, base64url signature encoding, hex public-key encoding. Verifiers reject missing or unknown values fail-closed."
-        },
-        "signature": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Base64url-encoded Ed25519 signature by `issuer_relay_id` over `canonicalJson(body)` where `body` = this record minus `signature`. Commits the relay to the exact (amount_settled, platform_fee, platform_fee_rate, status) tuple — a relay that issues inconsistent records to different observers fails self-attestation: at most one of the records verifies. See spec/delegation-v1.md §6.4 foundation law."
-        }
-      },
-      "required": [
-        "settlement_id",
-        "allocation_id",
-        "motebit_id",
-        "receipt_hash",
-        "ledger_hash",
-        "amount_settled",
-        "platform_fee",
-        "platform_fee_rate",
-        "settlement_mode",
-        "status",
-        "settled_at",
-        "issuer_relay_id",
-        "suite",
-        "signature"
-      ],
-      "additionalProperties": false
-    }
-  }
+  "additionalProperties": false
 }

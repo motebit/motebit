@@ -26,7 +26,6 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type {
   StandingDelegation,
@@ -35,7 +34,7 @@ import type {
   SpendCeilingV1,
 } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 /** Stable `$id`s for the standing-delegation v1 wire formats. External tools pin to these. */
@@ -367,12 +366,8 @@ export const _DELEGATION_REVOCATION_TYPE_PARITY: {
 // ---------------------------------------------------------------------------
 
 export function buildStandingDelegationJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(StandingDelegationSchema, {
-    name: "StandingDelegation",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  const assembled = assembleJsonSchemaFor("StandingDelegation", raw, {
+  const raw = toDraft7(StandingDelegationSchema);
+  const assembled = assembleJsonSchemaFor(raw, {
     $id: STANDING_DELEGATION_SCHEMA_ID,
     title: "StandingDelegation (v1)",
     description:
@@ -381,29 +376,19 @@ export function buildStandingDelegationJsonSchema(): Record<string, unknown> {
   // The embedded spend_ceiling copies carry the same §3.3 window
   // dependencies as the standalone schema — the grant schema must refuse
   // what the wire format forbids, same as spend-ceiling-v1.json.
+  // zod 4's native z.toJSONSchema inlines fully — there is no `definitions`
+  // bag to also inject into (unlike the old zod-to-json-schema $refStrategy).
   const props = assembled["properties"] as Record<string, unknown> | undefined;
   injectWindowDependencies(
     props?.["spend_ceiling"],
     "standing-delegation-v1.json properties.spend_ceiling",
   );
-  const defs = assembled["definitions"] as Record<string, unknown> | undefined;
-  const defProps = (defs?.["StandingDelegation"] as Record<string, unknown> | undefined)?.[
-    "properties"
-  ] as Record<string, unknown> | undefined;
-  injectWindowDependencies(
-    defProps?.["spend_ceiling"],
-    "standing-delegation-v1.json definitions.StandingDelegation.properties.spend_ceiling",
-  );
   return assembled;
 }
 
 export function buildSubjectBindingV1JsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(SubjectBindingV1Schema, {
-    name: "SubjectBindingV1",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("SubjectBindingV1", raw, {
+  const raw = toDraft7(SubjectBindingV1Schema);
+  return assembleJsonSchemaFor(raw, {
     $id: SUBJECT_BINDING_SCHEMA_ID,
     title: "SubjectBindingV1 (v1)",
     description:
@@ -412,30 +397,21 @@ export function buildSubjectBindingV1JsonSchema(): Record<string, unknown> {
 }
 
 export function buildSpendCeilingV1JsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(SpendCeilingV1Schema, {
-    name: "SpendCeilingV1",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  const assembled = assembleJsonSchemaFor("SpendCeilingV1", raw, {
+  const raw = toDraft7(SpendCeilingV1Schema);
+  const assembled = assembleJsonSchemaFor(raw, {
     $id: SPEND_CEILING_SCHEMA_ID,
     title: "SpendCeilingV1 (v1)",
     description:
       "The delegator's signed autonomous-spend ceiling (standing-delegation@1.2) — the HOW-MUCH a StandingDelegation authorizes, carried in the grant's signed body as a cryptographic commitment. Integer micro-units, USD-denominated (1 USD = 1,000,000), each ≤ 2^53−1 for JCS number fidelity. Per-window limits require `window_ms` (enforced via `dependencies`). Absent from a grant ⇒ no autonomous money (fail-closed `ceiling_absent`). See spec/standing-delegation-v1.md §3.3.",
   });
+  // Native inlines fully — the root IS the ceiling object; no definitions bag.
   injectWindowDependencies(assembled, "spend-ceiling-v1.json root");
-  const defs = assembled["definitions"] as Record<string, unknown> | undefined;
-  injectWindowDependencies(defs?.["SpendCeilingV1"], "spend-ceiling-v1.json definitions");
   return assembled;
 }
 
 export function buildDelegationRevocationJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(DelegationRevocationSchema, {
-    name: "DelegationRevocation",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("DelegationRevocation", raw, {
+  const raw = toDraft7(DelegationRevocationSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: DELEGATION_REVOCATION_SCHEMA_ID,
     title: "DelegationRevocation (v1)",
     description:

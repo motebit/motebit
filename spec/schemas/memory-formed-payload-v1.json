@@ -21,6 +21,7 @@
       "description": "Sensitivity classification used by sync forwarders to decide whether to redact memory content before crossing a device boundary. Emitter-authored; not forwarder-mutable."
     },
     "source": {
+      "description": "Provenance classification. Absent ⇒ formed before provenance tracking. Receivers validate with isMemorySource and degrade unknown vocabulary to absent — never to a trusted tier, never rejecting the event.",
       "type": "string",
       "enum": [
         "user_stated",
@@ -28,88 +29,39 @@
         "tool_derived",
         "peer_agent",
         "consolidation_derived"
-      ],
-      "description": "Provenance classification. Absent ⇒ formed before provenance tracking. Receivers validate with isMemorySource and degrade unknown vocabulary to absent — never to a trusted tier, never rejecting the event."
+      ]
     },
     "redacted": {
+      "description": "Present only on the wire when a sync forwarder has replaced `content`. Original events MUST NOT carry this field.",
       "type": "boolean",
-      "const": true,
-      "description": "Present only on the wire when a sync forwarder has replaced `content`. Original events MUST NOT carry this field."
+      "const": true
     },
     "redacted_sensitivity": {
-      "$ref": "#/definitions/MemoryFormedPayload/properties/sensitivity",
-      "description": "Original sensitivity retained after redaction so downstream receivers honor policy without seeing content."
+      "description": "Original sensitivity retained after redaction so downstream receivers honor policy without seeing content.",
+      "type": "string",
+      "enum": ["none", "personal", "medical", "financial", "secret"]
     },
     "redacted_reason": {
+      "description": "Discriminates why `content` is \"[REDACTED]\". Absent ⇒ sync-forwarder sensitivity redaction (original re-requestable from the emitter). \"deleted\" ⇒ a deletion tombstone from the forget path — content gone for good; consumers MUST NOT re-form a node from it.",
       "type": "string",
-      "const": "deleted",
-      "description": "Discriminates why `content` is \"[REDACTED]\". Absent ⇒ sync-forwarder sensitivity redaction (original re-requestable from the emitter). \"deleted\" ⇒ a deletion tombstone from the forget path — content gone for good; consumers MUST NOT re-form a node from it."
+      "const": "deleted"
     },
     "valid_from": {
-      "type": "number",
-      "description": "Validity-time start (Unix ms) — when the fact became true; MAY predate recording time (backdated). Absent ⇒ recording time. Spec §3.5."
+      "description": "Validity-time start (Unix ms) — when the fact became true; MAY predate recording time (backdated). Absent ⇒ recording time. Spec §3.5.",
+      "type": "number"
     },
     "valid_until": {
-      "type": ["number", "null"],
-      "description": "Validity-time end (Unix ms), or null for an open interval (still true). Closed by a later supersession."
+      "description": "Validity-time end (Unix ms), or null for an open interval (still true). Closed by a later supersession.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": ["node_id", "content", "sensitivity"],
-  "additionalProperties": true,
-  "definitions": {
-    "MemoryFormedPayload": {
-      "type": "object",
-      "properties": {
-        "node_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "UUID v4 of the newly-formed memory node. Unique per emitter."
-        },
-        "content": {
-          "type": "string",
-          "description": "Textual content. MAY be replaced with \"[REDACTED]\" by a sync forwarder when `sensitivity` exceeds the forwarder policy."
-        },
-        "sensitivity": {
-          "type": "string",
-          "enum": ["none", "personal", "medical", "financial", "secret"],
-          "description": "Sensitivity classification used by sync forwarders to decide whether to redact memory content before crossing a device boundary. Emitter-authored; not forwarder-mutable."
-        },
-        "source": {
-          "type": "string",
-          "enum": [
-            "user_stated",
-            "agent_inferred",
-            "tool_derived",
-            "peer_agent",
-            "consolidation_derived"
-          ],
-          "description": "Provenance classification. Absent ⇒ formed before provenance tracking. Receivers validate with isMemorySource and degrade unknown vocabulary to absent — never to a trusted tier, never rejecting the event."
-        },
-        "redacted": {
-          "type": "boolean",
-          "const": true,
-          "description": "Present only on the wire when a sync forwarder has replaced `content`. Original events MUST NOT carry this field."
-        },
-        "redacted_sensitivity": {
-          "$ref": "#/definitions/MemoryFormedPayload/properties/sensitivity",
-          "description": "Original sensitivity retained after redaction so downstream receivers honor policy without seeing content."
-        },
-        "redacted_reason": {
-          "type": "string",
-          "const": "deleted",
-          "description": "Discriminates why `content` is \"[REDACTED]\". Absent ⇒ sync-forwarder sensitivity redaction (original re-requestable from the emitter). \"deleted\" ⇒ a deletion tombstone from the forget path — content gone for good; consumers MUST NOT re-form a node from it."
-        },
-        "valid_from": {
-          "type": "number",
-          "description": "Validity-time start (Unix ms) — when the fact became true; MAY predate recording time (backdated). Absent ⇒ recording time. Spec §3.5."
-        },
-        "valid_until": {
-          "type": ["number", "null"],
-          "description": "Validity-time end (Unix ms), or null for an open interval (still true). Closed by a later supersession."
-        }
-      },
-      "required": ["node_id", "content", "sensitivity"],
-      "additionalProperties": true
-    }
-  }
+  "additionalProperties": {}
 }

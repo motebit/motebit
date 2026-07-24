@@ -20,11 +20,10 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type { ExecutionReceipt } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 /** Stable `$id` for the execution-receipt v1 wire format. External tools pin to this. */
@@ -245,12 +244,8 @@ export const _WIRE_SCHEMA_TYPE_PARITY: { forward: _ForwardCheck; reverse: _Rever
  * called from the build-schemas script and from the drift test.
  */
 export function buildExecutionReceiptJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(ExecutionReceiptSchema, {
-    name: "ExecutionReceipt",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("ExecutionReceipt", raw, {
+  const raw = toDraft7(ExecutionReceiptSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: EXECUTION_RECEIPT_SCHEMA_ID,
     title: "ExecutionReceipt (v1)",
     description:

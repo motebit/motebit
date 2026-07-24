@@ -87,7 +87,7 @@ export function parseSkillFile(rawText: string): {
 
   const validation = SkillManifestSchema.safeParse(frontmatter);
   if (!validation.success) {
-    const first = validation.error.errors[0];
+    const first = validation.error.issues[0];
     const path = first?.path.join(".") ?? "(root)";
     throw new SkillParseError(
       `Frontmatter failed schema validation at \`${path}\`: ${first?.message ?? "unknown"}`,

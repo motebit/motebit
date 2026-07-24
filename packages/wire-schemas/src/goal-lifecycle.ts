@@ -12,7 +12,6 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type {
   GoalCreatedPayload,
@@ -22,7 +21,7 @@ import type {
   GoalRemovedPayload,
 } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 const SCHEMA_BASE = "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas";
@@ -93,12 +92,8 @@ export const _GOAL_CREATED_PAYLOAD_TYPE_PARITY: {
 };
 
 export function buildGoalCreatedPayloadJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(GoalCreatedPayloadSchema, {
-    name: "GoalCreatedPayload",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("GoalCreatedPayload", raw, {
+  const raw = toDraft7(GoalCreatedPayloadSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: GOAL_CREATED_PAYLOAD_SCHEMA_ID,
     title: "GoalCreatedPayload (v1)",
     description:
@@ -150,12 +145,8 @@ export const _GOAL_EXECUTED_PAYLOAD_TYPE_PARITY: {
 };
 
 export function buildGoalExecutedPayloadJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(GoalExecutedPayloadSchema, {
-    name: "GoalExecutedPayload",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("GoalExecutedPayload", raw, {
+  const raw = toDraft7(GoalExecutedPayloadSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: GOAL_EXECUTED_PAYLOAD_SCHEMA_ID,
     title: "GoalExecutedPayload (v1)",
     description:
@@ -190,12 +181,8 @@ export const _GOAL_PROGRESS_PAYLOAD_TYPE_PARITY: {
 };
 
 export function buildGoalProgressPayloadJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(GoalProgressPayloadSchema, {
-    name: "GoalProgressPayload",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("GoalProgressPayload", raw, {
+  const raw = toDraft7(GoalProgressPayloadSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: GOAL_PROGRESS_PAYLOAD_SCHEMA_ID,
     title: "GoalProgressPayload (v1)",
     description:
@@ -229,12 +216,8 @@ export const _GOAL_COMPLETED_PAYLOAD_TYPE_PARITY: {
 };
 
 export function buildGoalCompletedPayloadJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(GoalCompletedPayloadSchema, {
-    name: "GoalCompletedPayload",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("GoalCompletedPayload", raw, {
+  const raw = toDraft7(GoalCompletedPayloadSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: GOAL_COMPLETED_PAYLOAD_SCHEMA_ID,
     title: "GoalCompletedPayload (v1)",
     description:
@@ -272,12 +255,8 @@ export const _GOAL_REMOVED_PAYLOAD_TYPE_PARITY: {
 };
 
 export function buildGoalRemovedPayloadJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(GoalRemovedPayloadSchema, {
-    name: "GoalRemovedPayload",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("GoalRemovedPayload", raw, {
+  const raw = toDraft7(GoalRemovedPayloadSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: GOAL_REMOVED_PAYLOAD_SCHEMA_ID,
     title: "GoalRemovedPayload (v1)",
     description:

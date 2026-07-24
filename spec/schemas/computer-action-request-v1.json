@@ -12,7 +12,7 @@
       "description": "Open session the action belongs to."
     },
     "action": {
-      "anyOf": [
+      "oneOf": [
         {
           "type": "object",
           "properties": {
@@ -22,7 +22,7 @@
             }
           },
           "required": ["kind"],
-          "additionalProperties": true
+          "additionalProperties": {}
         },
         {
           "type": "object",
@@ -33,7 +33,7 @@
             }
           },
           "required": ["kind"],
-          "additionalProperties": true
+          "additionalProperties": {}
         },
         {
           "type": "object",
@@ -47,10 +47,14 @@
               "properties": {
                 "x": {
                   "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
                   "description": "Logical pixel X coordinate."
                 },
                 "y": {
                   "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
                   "description": "Logical pixel Y coordinate."
                 }
               },
@@ -58,26 +62,26 @@
               "additionalProperties": false
             },
             "button": {
-              "type": "string",
-              "description": "\"left\" | \"right\" | \"middle\". Defaults to \"left\"."
+              "description": "\"left\" | \"right\" | \"middle\". Defaults to \"left\".",
+              "type": "string"
             },
             "modifiers": {
+              "description": "Modifier keys held during the action. Subset of `[\"cmd\", \"ctrl\", \"alt\", \"shift\"]`.",
               "type": "array",
               "items": {
                 "type": "string"
-              },
-              "description": "Modifier keys held during the action. Subset of `[\"cmd\", \"ctrl\", \"alt\", \"shift\"]`."
+              }
             },
             "target_hint": {
               "type": "object",
               "properties": {
                 "role": {
-                  "type": "string",
-                  "description": "Accessibility role. Examples: 'button', 'link'."
+                  "description": "Accessibility role. Examples: 'button', 'link'.",
+                  "type": "string"
                 },
                 "label": {
-                  "type": "string",
-                  "description": "Accessible label or visible text."
+                  "description": "Accessible label or visible text.",
+                  "type": "string"
                 },
                 "source": {
                   "type": "string",
@@ -89,7 +93,7 @@
             }
           },
           "required": ["kind", "target"],
-          "additionalProperties": true
+          "additionalProperties": {}
         },
         {
           "type": "object",
@@ -99,20 +103,56 @@
               "const": "double_click"
             },
             "target": {
-              "$ref": "#/definitions/ComputerActionRequest/properties/action/anyOf/2/properties/target"
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Logical pixel X coordinate."
+                },
+                "y": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Logical pixel Y coordinate."
+                }
+              },
+              "required": ["x", "y"],
+              "additionalProperties": false
             },
             "button": {
               "type": "string"
             },
             "modifiers": {
-              "$ref": "#/definitions/ComputerActionRequest/properties/action/anyOf/2/properties/modifiers"
+              "description": "Modifier keys held during the action. Subset of `[\"cmd\", \"ctrl\", \"alt\", \"shift\"]`.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             },
             "target_hint": {
-              "$ref": "#/definitions/ComputerActionRequest/properties/action/anyOf/2/properties/target_hint"
+              "type": "object",
+              "properties": {
+                "role": {
+                  "description": "Accessibility role. Examples: 'button', 'link'.",
+                  "type": "string"
+                },
+                "label": {
+                  "description": "Accessible label or visible text.",
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string",
+                  "description": "Source of the hint: 'accessibility', 'dom', 'vision', 'user_annotation'."
+                }
+              },
+              "required": ["source"],
+              "additionalProperties": false
             }
           },
           "required": ["kind", "target"],
-          "additionalProperties": true
+          "additionalProperties": {}
         },
         {
           "type": "object",
@@ -122,14 +162,46 @@
               "const": "mouse_move"
             },
             "target": {
-              "$ref": "#/definitions/ComputerActionRequest/properties/action/anyOf/2/properties/target"
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Logical pixel X coordinate."
+                },
+                "y": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Logical pixel Y coordinate."
+                }
+              },
+              "required": ["x", "y"],
+              "additionalProperties": false
             },
             "target_hint": {
-              "$ref": "#/definitions/ComputerActionRequest/properties/action/anyOf/2/properties/target_hint"
+              "type": "object",
+              "properties": {
+                "role": {
+                  "description": "Accessibility role. Examples: 'button', 'link'.",
+                  "type": "string"
+                },
+                "label": {
+                  "description": "Accessible label or visible text.",
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string",
+                  "description": "Source of the hint: 'accessibility', 'dom', 'vision', 'user_annotation'."
+                }
+              },
+              "required": ["source"],
+              "additionalProperties": false
             }
           },
           "required": ["kind", "target"],
-          "additionalProperties": true
+          "additionalProperties": {}
         },
         {
           "type": "object",
@@ -139,27 +211,80 @@
               "const": "drag"
             },
             "from": {
-              "$ref": "#/definitions/ComputerActionRequest/properties/action/anyOf/2/properties/target"
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Logical pixel X coordinate."
+                },
+                "y": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Logical pixel Y coordinate."
+                }
+              },
+              "required": ["x", "y"],
+              "additionalProperties": false
             },
             "to": {
-              "$ref": "#/definitions/ComputerActionRequest/properties/action/anyOf/2/properties/target"
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Logical pixel X coordinate."
+                },
+                "y": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Logical pixel Y coordinate."
+                }
+              },
+              "required": ["x", "y"],
+              "additionalProperties": false
             },
             "button": {
               "type": "string"
             },
             "modifiers": {
-              "$ref": "#/definitions/ComputerActionRequest/properties/action/anyOf/2/properties/modifiers"
+              "description": "Modifier keys held during the action. Subset of `[\"cmd\", \"ctrl\", \"alt\", \"shift\"]`.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             },
             "duration_ms": {
               "type": "integer",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 9007199254740991
             },
             "target_hint": {
-              "$ref": "#/definitions/ComputerActionRequest/properties/action/anyOf/2/properties/target_hint"
+              "type": "object",
+              "properties": {
+                "role": {
+                  "description": "Accessibility role. Examples: 'button', 'link'.",
+                  "type": "string"
+                },
+                "label": {
+                  "description": "Accessible label or visible text.",
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string",
+                  "description": "Source of the hint: 'accessibility', 'dom', 'vision', 'user_annotation'."
+                }
+              },
+              "required": ["source"],
+              "additionalProperties": false
             }
           },
           "required": ["kind", "from", "to"],
-          "additionalProperties": true
+          "additionalProperties": {}
         },
         {
           "type": "object",
@@ -174,11 +299,12 @@
             },
             "per_char_delay_ms": {
               "type": "integer",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 9007199254740991
             }
           },
           "required": ["kind", "text"],
-          "additionalProperties": true
+          "additionalProperties": {}
         },
         {
           "type": "object",
@@ -193,7 +319,7 @@
             }
           },
           "required": ["kind", "key"],
-          "additionalProperties": true
+          "additionalProperties": {}
         },
         {
           "type": "object",
@@ -203,19 +329,39 @@
               "const": "scroll"
             },
             "target": {
-              "$ref": "#/definitions/ComputerActionRequest/properties/action/anyOf/2/properties/target"
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Logical pixel X coordinate."
+                },
+                "y": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Logical pixel Y coordinate."
+                }
+              },
+              "required": ["x", "y"],
+              "additionalProperties": false
             },
             "dx": {
               "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991,
               "description": "Scroll wheel delta X."
             },
             "dy": {
               "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991,
               "description": "Scroll wheel delta Y."
             }
           },
           "required": ["kind", "target", "dx", "dy"],
-          "additionalProperties": true
+          "additionalProperties": {}
         },
         {
           "type": "object",
@@ -231,7 +377,7 @@
             }
           },
           "required": ["kind", "url"],
-          "additionalProperties": true
+          "additionalProperties": {}
         },
         {
           "type": "object",
@@ -246,7 +392,7 @@
             }
           },
           "required": ["kind", "element_id"],
-          "additionalProperties": true
+          "additionalProperties": {}
         },
         {
           "type": "object",
@@ -261,7 +407,7 @@
             }
           },
           "required": ["kind", "element_id"],
-          "additionalProperties": true
+          "additionalProperties": {}
         },
         {
           "type": "object",
@@ -279,319 +425,23 @@
               "description": "Text to type."
             },
             "per_char_delay_ms": {
+              "description": "Per-character delay in ms; same shape as the lower-level `type` action.",
               "type": "integer",
               "minimum": 0,
-              "description": "Per-character delay in ms; same shape as the lower-level `type` action."
+              "maximum": 9007199254740991
             },
             "clear_first": {
-              "type": "boolean",
-              "description": "If true (default), clear the field's current value before typing; false appends."
+              "description": "If true (default), clear the field's current value before typing; false appends.",
+              "type": "boolean"
             }
           },
           "required": ["kind", "element_id", "text"],
-          "additionalProperties": true
+          "additionalProperties": {}
         }
       ],
       "description": "Discriminated action variant. The `kind` field selects the branch."
     }
   },
   "required": ["session_id", "action"],
-  "additionalProperties": true,
-  "definitions": {
-    "ComputerActionRequest": {
-      "type": "object",
-      "properties": {
-        "session_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Open session the action belongs to."
-        },
-        "action": {
-          "anyOf": [
-            {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "type": "string",
-                  "const": "screenshot"
-                }
-              },
-              "required": ["kind"],
-              "additionalProperties": true
-            },
-            {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "type": "string",
-                  "const": "cursor_position"
-                }
-              },
-              "required": ["kind"],
-              "additionalProperties": true
-            },
-            {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "type": "string",
-                  "const": "click"
-                },
-                "target": {
-                  "type": "object",
-                  "properties": {
-                    "x": {
-                      "type": "integer",
-                      "description": "Logical pixel X coordinate."
-                    },
-                    "y": {
-                      "type": "integer",
-                      "description": "Logical pixel Y coordinate."
-                    }
-                  },
-                  "required": ["x", "y"],
-                  "additionalProperties": false
-                },
-                "button": {
-                  "type": "string",
-                  "description": "\"left\" | \"right\" | \"middle\". Defaults to \"left\"."
-                },
-                "modifiers": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  },
-                  "description": "Modifier keys held during the action. Subset of `[\"cmd\", \"ctrl\", \"alt\", \"shift\"]`."
-                },
-                "target_hint": {
-                  "type": "object",
-                  "properties": {
-                    "role": {
-                      "type": "string",
-                      "description": "Accessibility role. Examples: 'button', 'link'."
-                    },
-                    "label": {
-                      "type": "string",
-                      "description": "Accessible label or visible text."
-                    },
-                    "source": {
-                      "type": "string",
-                      "description": "Source of the hint: 'accessibility', 'dom', 'vision', 'user_annotation'."
-                    }
-                  },
-                  "required": ["source"],
-                  "additionalProperties": false
-                }
-              },
-              "required": ["kind", "target"],
-              "additionalProperties": true
-            },
-            {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "type": "string",
-                  "const": "double_click"
-                },
-                "target": {
-                  "$ref": "#/definitions/ComputerActionRequest/properties/action/anyOf/2/properties/target"
-                },
-                "button": {
-                  "type": "string"
-                },
-                "modifiers": {
-                  "$ref": "#/definitions/ComputerActionRequest/properties/action/anyOf/2/properties/modifiers"
-                },
-                "target_hint": {
-                  "$ref": "#/definitions/ComputerActionRequest/properties/action/anyOf/2/properties/target_hint"
-                }
-              },
-              "required": ["kind", "target"],
-              "additionalProperties": true
-            },
-            {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "type": "string",
-                  "const": "mouse_move"
-                },
-                "target": {
-                  "$ref": "#/definitions/ComputerActionRequest/properties/action/anyOf/2/properties/target"
-                },
-                "target_hint": {
-                  "$ref": "#/definitions/ComputerActionRequest/properties/action/anyOf/2/properties/target_hint"
-                }
-              },
-              "required": ["kind", "target"],
-              "additionalProperties": true
-            },
-            {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "type": "string",
-                  "const": "drag"
-                },
-                "from": {
-                  "$ref": "#/definitions/ComputerActionRequest/properties/action/anyOf/2/properties/target"
-                },
-                "to": {
-                  "$ref": "#/definitions/ComputerActionRequest/properties/action/anyOf/2/properties/target"
-                },
-                "button": {
-                  "type": "string"
-                },
-                "modifiers": {
-                  "$ref": "#/definitions/ComputerActionRequest/properties/action/anyOf/2/properties/modifiers"
-                },
-                "duration_ms": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "target_hint": {
-                  "$ref": "#/definitions/ComputerActionRequest/properties/action/anyOf/2/properties/target_hint"
-                }
-              },
-              "required": ["kind", "from", "to"],
-              "additionalProperties": true
-            },
-            {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "type": "string",
-                  "const": "type"
-                },
-                "text": {
-                  "type": "string",
-                  "description": "Text to type."
-                },
-                "per_char_delay_ms": {
-                  "type": "integer",
-                  "minimum": 0
-                }
-              },
-              "required": ["kind", "text"],
-              "additionalProperties": true
-            },
-            {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "type": "string",
-                  "const": "key"
-                },
-                "key": {
-                  "type": "string",
-                  "description": "Key combination. Example: 'cmd+c', 'escape'."
-                }
-              },
-              "required": ["kind", "key"],
-              "additionalProperties": true
-            },
-            {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "type": "string",
-                  "const": "scroll"
-                },
-                "target": {
-                  "$ref": "#/definitions/ComputerActionRequest/properties/action/anyOf/2/properties/target"
-                },
-                "dx": {
-                  "type": "integer",
-                  "description": "Scroll wheel delta X."
-                },
-                "dy": {
-                  "type": "integer",
-                  "description": "Scroll wheel delta Y."
-                }
-              },
-              "required": ["kind", "target", "dx", "dy"],
-              "additionalProperties": true
-            },
-            {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "type": "string",
-                  "const": "navigate"
-                },
-                "url": {
-                  "type": "string",
-                  "minLength": 1,
-                  "description": "Target URL. Implementations SHOULD normalize relative-looking inputs (`example.com` → `https://example.com`) but MAY reject malformed URLs with a `not_supported` failure. Cloud-browser-only in v1; desktop dispatcher does not implement (no OS-level browser context)."
-                }
-              },
-              "required": ["kind", "url"],
-              "additionalProperties": true
-            },
-            {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "type": "string",
-                  "const": "click_element"
-                },
-                "element_id": {
-                  "type": "string",
-                  "description": "Structural id of the element to click, from a prior AX read of the element space."
-                }
-              },
-              "required": ["kind", "element_id"],
-              "additionalProperties": true
-            },
-            {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "type": "string",
-                  "const": "focus_element"
-                },
-                "element_id": {
-                  "type": "string",
-                  "description": "Structural id of the element to focus without clicking — avoids click side-effects (dropdowns/dialogs) when setting up a type."
-                }
-              },
-              "required": ["kind", "element_id"],
-              "additionalProperties": true
-            },
-            {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "type": "string",
-                  "const": "type_into"
-                },
-                "element_id": {
-                  "type": "string",
-                  "description": "Structural id of the element to type into; the server focuses it first so keystrokes are not swallowed."
-                },
-                "text": {
-                  "type": "string",
-                  "description": "Text to type."
-                },
-                "per_char_delay_ms": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "description": "Per-character delay in ms; same shape as the lower-level `type` action."
-                },
-                "clear_first": {
-                  "type": "boolean",
-                  "description": "If true (default), clear the field's current value before typing; false appends."
-                }
-              },
-              "required": ["kind", "element_id", "text"],
-              "additionalProperties": true
-            }
-          ],
-          "description": "Discriminated action variant. The `kind` field selects the branch."
-        }
-      },
-      "required": ["session_id", "action"],
-      "additionalProperties": true
-    }
-  }
+  "additionalProperties": {}
 }

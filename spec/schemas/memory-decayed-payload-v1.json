@@ -6,12 +6,5 @@
   "description": "Payload of a `memory_decayed` event — reserved for future use. No emitter today; receivers MUST accept without assuming a shape. See spec/memory-delta-v1.md §5.7.",
   "type": "object",
   "properties": {},
-  "additionalProperties": true,
-  "definitions": {
-    "MemoryDecayedPayload": {
-      "type": "object",
-      "properties": {},
-      "additionalProperties": true
-    }
-  }
+  "additionalProperties": {}
 }

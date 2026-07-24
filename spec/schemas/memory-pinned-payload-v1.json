@@ -17,23 +17,5 @@
     }
   },
   "required": ["node_id", "pinned"],
-  "additionalProperties": true,
-  "definitions": {
-    "MemoryPinnedPayload": {
-      "type": "object",
-      "properties": {
-        "node_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "UUID of the affected node."
-        },
-        "pinned": {
-          "type": "boolean",
-          "description": "True when the node is now pinned, false when unpinned. Most-recent-event wins."
-        }
-      },
-      "required": ["node_id", "pinned"],
-      "additionalProperties": true
-    }
-  }
+  "additionalProperties": {}
 }

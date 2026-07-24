@@ -12,28 +12,10 @@
       "description": "UUID of the completed goal."
     },
     "reason": {
-      "type": "string",
-      "description": "Free-text rationale for completion. Consumers MUST NOT parse it semantically."
+      "description": "Free-text rationale for completion. Consumers MUST NOT parse it semantically.",
+      "type": "string"
     }
   },
   "required": ["goal_id"],
-  "additionalProperties": true,
-  "definitions": {
-    "GoalCompletedPayload": {
-      "type": "object",
-      "properties": {
-        "goal_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "UUID of the completed goal."
-        },
-        "reason": {
-          "type": "string",
-          "description": "Free-text rationale for completion. Consumers MUST NOT parse it semantically."
-        }
-      },
-      "required": ["goal_id"],
-      "additionalProperties": true
-    }
-  }
+  "additionalProperties": {}
 }

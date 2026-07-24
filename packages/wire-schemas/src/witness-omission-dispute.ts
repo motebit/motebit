@@ -43,7 +43,6 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type {
   WitnessOmissionDispute,
@@ -51,7 +50,7 @@ import type {
   WitnessSolicitationResponse,
 } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 // ---------------------------------------------------------------------------
@@ -233,12 +232,8 @@ export const _WITNESS_SOLICITATION_REQUEST_TYPE_PARITY: {
 };
 
 export function buildWitnessSolicitationRequestJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(WitnessSolicitationRequestSchema, {
-    name: "WitnessSolicitationRequest",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("WitnessSolicitationRequest", raw, {
+  const raw = toDraft7(WitnessSolicitationRequestSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: WITNESS_SOLICITATION_REQUEST_SCHEMA_ID,
     title: "WitnessSolicitationRequest (v1)",
     description:
@@ -290,12 +285,8 @@ export const _WITNESS_SOLICITATION_RESPONSE_TYPE_PARITY: {
 };
 
 export function buildWitnessSolicitationResponseJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(WitnessSolicitationResponseSchema, {
-    name: "WitnessSolicitationResponse",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("WitnessSolicitationResponse", raw, {
+  const raw = toDraft7(WitnessSolicitationResponseSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: WITNESS_SOLICITATION_RESPONSE_SCHEMA_ID,
     title: "WitnessSolicitationResponse (v1)",
     description:
@@ -414,12 +405,8 @@ export const _WITNESS_OMISSION_DISPUTE_TYPE_PARITY: {
 };
 
 export function buildWitnessOmissionDisputeJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(WitnessOmissionDisputeSchema, {
-    name: "WitnessOmissionDispute",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("WitnessOmissionDispute", raw, {
+  const raw = toDraft7(WitnessOmissionDisputeSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: WITNESS_OMISSION_DISPUTE_SCHEMA_ID,
     title: "WitnessOmissionDispute (v1)",
     description:

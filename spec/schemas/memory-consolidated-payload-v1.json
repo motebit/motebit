@@ -40,56 +40,17 @@
       "description": "Free-text rationale from the consolidation decider. Consumers MUST NOT parse it semantically."
     },
     "superseded_valid_until": {
-      "type": ["number", "null"],
-      "description": "Present on \"supersede\": validity-time (Unix ms) the superseded belief ended; consumers set valid_until on existing_node_id. Spec §3.5."
+      "description": "Present on \"supersede\": validity-time (Unix ms) the superseded belief ended; consumers set valid_until on existing_node_id. Spec §3.5.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": ["action", "existing_node_id", "new_node_id", "reason"],
-  "additionalProperties": true,
-  "definitions": {
-    "MemoryConsolidatedPayload": {
-      "type": "object",
-      "properties": {
-        "action": {
-          "type": "string",
-          "enum": ["merge", "supersede", "reject", "accept"],
-          "description": "Consolidation decision taxonomy, mirroring @motebit/memory-graph's ConsolidationDecision.action."
-        },
-        "existing_node_id": {
-          "anyOf": [
-            {
-              "type": "string",
-              "minLength": 1
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "UUID of the node being merged-into or superseded. `null` for \"accept\" and \"reject\"."
-        },
-        "new_node_id": {
-          "anyOf": [
-            {
-              "type": "string",
-              "minLength": 1
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "UUID of the newly-formed node when one was created. `null` for \"reject\" and supersede-in-place."
-        },
-        "reason": {
-          "type": "string",
-          "description": "Free-text rationale from the consolidation decider. Consumers MUST NOT parse it semantically."
-        },
-        "superseded_valid_until": {
-          "type": ["number", "null"],
-          "description": "Present on \"supersede\": validity-time (Unix ms) the superseded belief ended; consumers set valid_until on existing_node_id. Spec §3.5."
-        }
-      },
-      "required": ["action", "existing_node_id", "new_node_id", "reason"],
-      "additionalProperties": true
-    }
-  }
+  "additionalProperties": {}
 }

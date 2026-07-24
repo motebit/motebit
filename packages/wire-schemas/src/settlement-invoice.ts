@@ -14,11 +14,10 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type { CostAttestationV1, InvoiceV1 } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 /** Stable `$id`s for the settlement-invoice v1 wire formats. External tools pin to these. */
@@ -189,12 +188,8 @@ export const _INVOICE_TYPE_PARITY: {
 // ---------------------------------------------------------------------------
 
 export function buildCostAttestationJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(CostAttestationV1Schema, {
-    name: "CostAttestationV1",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("CostAttestationV1", raw, {
+  const raw = toDraft7(CostAttestationV1Schema);
+  return assembleJsonSchemaFor(raw, {
     $id: COST_ATTESTATION_SCHEMA_ID,
     title: "CostAttestationV1 (v1)",
     description:
@@ -203,12 +198,8 @@ export function buildCostAttestationJsonSchema(): Record<string, unknown> {
 }
 
 export function buildInvoiceJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(InvoiceV1Schema, {
-    name: "InvoiceV1",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("InvoiceV1", raw, {
+  const raw = toDraft7(InvoiceV1Schema);
+  return assembleJsonSchemaFor(raw, {
     $id: INVOICE_SCHEMA_ID,
     title: "InvoiceV1 (v1)",
     description:

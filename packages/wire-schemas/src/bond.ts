@@ -11,12 +11,11 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type { BondCommitment, SettlementAsset } from "@motebit/protocol";
 import { ALL_SETTLEMENT_ASSETS } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 // ---------------------------------------------------------------------------
@@ -94,12 +93,8 @@ export const _BOND_COMMITMENT_TYPE_PARITY: {
 };
 
 export function buildBondCommitmentJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(BondCommitmentSchema, {
-    name: "BondCommitment",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("BondCommitment", raw, {
+  const raw = toDraft7(BondCommitmentSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: BOND_COMMITMENT_SCHEMA_ID,
     title: "BondCommitment (v1)",
     description:

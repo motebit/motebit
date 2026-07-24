@@ -12,40 +12,16 @@
       "description": "Positive decimal USD to withdraw."
     },
     "destination": {
+      "description": "Solana base58 (Path 0) or EVM 0x-hex (Path 1) payout address; omitted ⇒ manual/pending.",
       "type": "string",
-      "minLength": 1,
-      "description": "Solana base58 (Path 0) or EVM 0x-hex (Path 1) payout address; omitted ⇒ manual/pending."
+      "minLength": 1
     },
     "idempotency_key": {
+      "description": "Optional body-level idempotency key; when absent the required Idempotency-Key header is used.",
       "type": "string",
-      "minLength": 1,
-      "description": "Optional body-level idempotency key; when absent the required Idempotency-Key header is used."
+      "minLength": 1
     }
   },
   "required": ["amount"],
-  "additionalProperties": true,
-  "definitions": {
-    "AccountWithdrawRequest": {
-      "type": "object",
-      "properties": {
-        "amount": {
-          "type": "number",
-          "exclusiveMinimum": 0,
-          "description": "Positive decimal USD to withdraw."
-        },
-        "destination": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Solana base58 (Path 0) or EVM 0x-hex (Path 1) payout address; omitted ⇒ manual/pending."
-        },
-        "idempotency_key": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Optional body-level idempotency key; when absent the required Idempotency-Key header is used."
-        }
-      },
-      "required": ["amount"],
-      "additionalProperties": true
-    }
-  }
+  "additionalProperties": {}
 }

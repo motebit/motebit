@@ -26,6 +26,7 @@
     "reinforcement_count": {
       "type": "integer",
       "minimum": 0,
+      "maximum": 9007199254740991,
       "description": "Count of consolidation reinforcement events against this node before the promotion fired."
     },
     "reason": {
@@ -34,40 +35,5 @@
     }
   },
   "required": ["node_id", "from_confidence", "to_confidence", "reinforcement_count", "reason"],
-  "additionalProperties": true,
-  "definitions": {
-    "MemoryPromotedPayload": {
-      "type": "object",
-      "properties": {
-        "node_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "UUID of the promoted node."
-        },
-        "from_confidence": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1,
-          "description": "Confidence score before promotion."
-        },
-        "to_confidence": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1,
-          "description": "Confidence score after promotion. Typically 1.0."
-        },
-        "reinforcement_count": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Count of consolidation reinforcement events against this node before the promotion fired."
-        },
-        "reason": {
-          "type": "string",
-          "description": "Free-text rationale from the promoter. Consumers MUST NOT parse it semantically."
-        }
-      },
-      "required": ["node_id", "from_confidence", "to_confidence", "reinforcement_count", "reason"],
-      "additionalProperties": true
-    }
-  }
+  "additionalProperties": {}
 }

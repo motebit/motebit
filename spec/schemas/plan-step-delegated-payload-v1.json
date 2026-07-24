@@ -19,6 +19,7 @@
     "ordinal": {
       "type": "integer",
       "minimum": 0,
+      "maximum": 9007199254740991,
       "description": "Zero-based position of the step within its plan."
     },
     "task_id": {
@@ -27,53 +28,18 @@
       "description": "Relay-issued task identifier. Matches the subsequent AgentTaskCompleted.task_id."
     },
     "routing_choice": {
+      "description": "Routing provenance picked by the semiring. Opaque to this spec; forward-compat via passthrough.",
       "type": "object",
-      "additionalProperties": {},
-      "description": "Routing provenance picked by the semiring. Opaque to this spec; forward-compat via passthrough."
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
     },
     "goal_id": {
-      "type": "string",
-      "description": "Owning goal when the plan serves a goal."
+      "description": "Owning goal when the plan serves a goal.",
+      "type": "string"
     }
   },
   "required": ["plan_id", "step_id", "ordinal", "task_id"],
-  "additionalProperties": true,
-  "definitions": {
-    "PlanStepDelegatedPayload": {
-      "type": "object",
-      "properties": {
-        "plan_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "UUID of the parent plan."
-        },
-        "step_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "UUID of the delegated step."
-        },
-        "ordinal": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Zero-based position of the step within its plan."
-        },
-        "task_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Relay-issued task identifier. Matches the subsequent AgentTaskCompleted.task_id."
-        },
-        "routing_choice": {
-          "type": "object",
-          "additionalProperties": {},
-          "description": "Routing provenance picked by the semiring. Opaque to this spec; forward-compat via passthrough."
-        },
-        "goal_id": {
-          "type": "string",
-          "description": "Owning goal when the plan serves a goal."
-        }
-      },
-      "required": ["plan_id", "step_id", "ordinal", "task_id"],
-      "additionalProperties": true
-    }
-  }
+  "additionalProperties": {}
 }

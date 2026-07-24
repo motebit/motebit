@@ -13,19 +13,5 @@
     }
   },
   "required": ["node_id"],
-  "additionalProperties": true,
-  "definitions": {
-    "MemoryDeletedPayload": {
-      "type": "object",
-      "properties": {
-        "node_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "UUID of the deleted node. Tombstones it in-log."
-        }
-      },
-      "required": ["node_id"],
-      "additionalProperties": true
-    }
-  }
+  "additionalProperties": {}
 }

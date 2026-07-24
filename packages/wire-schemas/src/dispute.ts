@@ -32,7 +32,6 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type {
   AdjudicatorVote,
@@ -43,7 +42,7 @@ import type {
   VoteRequest,
 } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 // ---------------------------------------------------------------------------
@@ -194,12 +193,8 @@ export const _DISPUTE_REQUEST_TYPE_PARITY: {
 };
 
 export function buildDisputeRequestJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(DisputeRequestSchema, {
-    name: "DisputeRequest",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("DisputeRequest", raw, {
+  const raw = toDraft7(DisputeRequestSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: DISPUTE_REQUEST_SCHEMA_ID,
     title: "DisputeRequest (v1)",
     description:
@@ -262,12 +257,8 @@ export const _DISPUTE_EVIDENCE_TYPE_PARITY: {
 };
 
 export function buildDisputeEvidenceJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(DisputeEvidenceSchema, {
-    name: "DisputeEvidence",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("DisputeEvidence", raw, {
+  const raw = toDraft7(DisputeEvidenceSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: DISPUTE_EVIDENCE_SCHEMA_ID,
     title: "DisputeEvidence (v1)",
     description:
@@ -329,12 +320,8 @@ export const _ADJUDICATOR_VOTE_TYPE_PARITY: {
 };
 
 export function buildAdjudicatorVoteJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(AdjudicatorVoteSchema, {
-    name: "AdjudicatorVote",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("AdjudicatorVote", raw, {
+  const raw = toDraft7(AdjudicatorVoteSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: ADJUDICATOR_VOTE_SCHEMA_ID,
     title: "AdjudicatorVote (v1)",
     description:
@@ -400,12 +387,8 @@ export const _VOTE_REQUEST_TYPE_PARITY: {
 };
 
 export function buildVoteRequestJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(VoteRequestSchema, {
-    name: "VoteRequest",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("VoteRequest", raw, {
+  const raw = toDraft7(VoteRequestSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: VOTE_REQUEST_SCHEMA_ID,
     title: "VoteRequest (v1)",
     description:
@@ -471,12 +454,8 @@ export const _DISPUTE_RESOLUTION_TYPE_PARITY: {
 };
 
 export function buildDisputeResolutionJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(DisputeResolutionSchema, {
-    name: "DisputeResolution",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("DisputeResolution", raw, {
+  const raw = toDraft7(DisputeResolutionSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: DISPUTE_RESOLUTION_SCHEMA_ID,
     title: "DisputeResolution (v1)",
     description:
@@ -528,12 +507,8 @@ export const _DISPUTE_APPEAL_TYPE_PARITY: {
 };
 
 export function buildDisputeAppealJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(DisputeAppealSchema, {
-    name: "DisputeAppeal",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("DisputeAppeal", raw, {
+  const raw = toDraft7(DisputeAppealSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: DISPUTE_APPEAL_SCHEMA_ID,
     title: "DisputeAppeal (v1)",
     description:

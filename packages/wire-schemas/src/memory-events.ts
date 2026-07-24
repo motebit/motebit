@@ -23,7 +23,6 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type {
   MemoryFormedPayload,
@@ -36,7 +35,7 @@ import type {
   MemoryPromotedPayload,
 } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 const SCHEMA_BASE = "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas";
@@ -119,12 +118,8 @@ export const _MEMORY_FORMED_PAYLOAD_TYPE_PARITY: {
 };
 
 export function buildMemoryFormedPayloadJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(MemoryFormedPayloadSchema, {
-    name: "MemoryFormedPayload",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("MemoryFormedPayload", raw, {
+  const raw = toDraft7(MemoryFormedPayloadSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: MEMORY_FORMED_PAYLOAD_SCHEMA_ID,
     title: "MemoryFormedPayload (v1)",
     description:
@@ -154,12 +149,8 @@ export const _MEMORY_ACCESSED_PAYLOAD_TYPE_PARITY: {
 };
 
 export function buildMemoryAccessedPayloadJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(MemoryAccessedPayloadSchema, {
-    name: "MemoryAccessedPayload",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("MemoryAccessedPayload", raw, {
+  const raw = toDraft7(MemoryAccessedPayloadSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: MEMORY_ACCESSED_PAYLOAD_SCHEMA_ID,
     title: "MemoryAccessedPayload (v1)",
     description:
@@ -192,12 +183,8 @@ export const _MEMORY_PINNED_PAYLOAD_TYPE_PARITY: {
 };
 
 export function buildMemoryPinnedPayloadJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(MemoryPinnedPayloadSchema, {
-    name: "MemoryPinnedPayload",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("MemoryPinnedPayload", raw, {
+  const raw = toDraft7(MemoryPinnedPayloadSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: MEMORY_PINNED_PAYLOAD_SCHEMA_ID,
     title: "MemoryPinnedPayload (v1)",
     description:
@@ -227,12 +214,8 @@ export const _MEMORY_DELETED_PAYLOAD_TYPE_PARITY: {
 };
 
 export function buildMemoryDeletedPayloadJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(MemoryDeletedPayloadSchema, {
-    name: "MemoryDeletedPayload",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("MemoryDeletedPayload", raw, {
+  const raw = toDraft7(MemoryDeletedPayloadSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: MEMORY_DELETED_PAYLOAD_SCHEMA_ID,
     title: "MemoryDeletedPayload (v1)",
     description:
@@ -300,12 +283,8 @@ export const _MEMORY_CONSOLIDATED_PAYLOAD_TYPE_PARITY: {
 };
 
 export function buildMemoryConsolidatedPayloadJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(MemoryConsolidatedPayloadSchema, {
-    name: "MemoryConsolidatedPayload",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("MemoryConsolidatedPayload", raw, {
+  const raw = toDraft7(MemoryConsolidatedPayloadSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: MEMORY_CONSOLIDATED_PAYLOAD_SCHEMA_ID,
     title: "MemoryConsolidatedPayload (v1)",
     description:
@@ -345,12 +324,8 @@ export const _MEMORY_AUDIT_PAYLOAD_TYPE_PARITY: {
 };
 
 export function buildMemoryAuditPayloadJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(MemoryAuditPayloadSchema, {
-    name: "MemoryAuditPayload",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("MemoryAuditPayload", raw, {
+  const raw = toDraft7(MemoryAuditPayloadSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: MEMORY_AUDIT_PAYLOAD_SCHEMA_ID,
     title: "MemoryAuditPayload (v1)",
     description:
@@ -376,12 +351,8 @@ export const _MEMORY_DECAYED_PAYLOAD_TYPE_PARITY: {
 };
 
 export function buildMemoryDecayedPayloadJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(MemoryDecayedPayloadSchema, {
-    name: "MemoryDecayedPayload",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("MemoryDecayedPayload", raw, {
+  const raw = toDraft7(MemoryDecayedPayloadSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: MEMORY_DECAYED_PAYLOAD_SCHEMA_ID,
     title: "MemoryDecayedPayload (v1)",
     description:
@@ -427,12 +398,8 @@ export const _MEMORY_PROMOTED_PAYLOAD_TYPE_PARITY: {
 };
 
 export function buildMemoryPromotedPayloadJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(MemoryPromotedPayloadSchema, {
-    name: "MemoryPromotedPayload",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("MemoryPromotedPayload", raw, {
+  const raw = toDraft7(MemoryPromotedPayloadSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: MEMORY_PROMOTED_PAYLOAD_SCHEMA_ID,
     title: "MemoryPromotedPayload (v1)",
     description:

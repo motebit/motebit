@@ -24,11 +24,10 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type { DelegationToken } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 /** Stable `$id` for the delegation-token v1 wire format. External tools pin to this. */
@@ -123,12 +122,8 @@ export const _DELEGATION_TOKEN_TYPE_PARITY: {
 // ---------------------------------------------------------------------------
 
 export function buildDelegationTokenJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(DelegationTokenSchema, {
-    name: "DelegationToken",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("DelegationToken", raw, {
+  const raw = toDraft7(DelegationTokenSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: DELEGATION_TOKEN_SCHEMA_ID,
     title: "DelegationToken (v1)",
     description:

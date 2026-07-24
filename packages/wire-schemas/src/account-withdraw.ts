@@ -20,7 +20,6 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type {
   AccountWithdrawRequest,
@@ -28,7 +27,7 @@ import type {
   AccountWithdrawalRecord,
 } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 /** Stable `$id` for the account-withdraw-request v1 wire format. */
@@ -160,12 +159,8 @@ export const _ACCOUNT_WITHDRAW_RESULT_TYPE_PARITY: {
 // ---------------------------------------------------------------------------
 
 export function buildAccountWithdrawRequestJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(AccountWithdrawRequestSchema, {
-    name: "AccountWithdrawRequest",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("AccountWithdrawRequest", raw, {
+  const raw = toDraft7(AccountWithdrawRequestSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: ACCOUNT_WITHDRAW_REQUEST_SCHEMA_ID,
     title: "AccountWithdrawRequest (v1)",
     description:
@@ -174,12 +169,8 @@ export function buildAccountWithdrawRequestJsonSchema(): Record<string, unknown>
 }
 
 export function buildAccountWithdrawResultJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(AccountWithdrawResultSchema, {
-    name: "AccountWithdrawResult",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("AccountWithdrawResult", raw, {
+  const raw = toDraft7(AccountWithdrawResultSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: ACCOUNT_WITHDRAW_RESULT_SCHEMA_ID,
     title: "AccountWithdrawResult (v1)",
     description:

@@ -27,7 +27,7 @@
  * `__tests__/yaml-json-schema.test.ts`.
  */
 
-import { zodToJsonSchema } from "zod-to-json-schema";
+import { z } from "zod";
 
 import { MotebitYamlObjectSchema } from "./yaml-config.js";
 
@@ -41,22 +41,22 @@ export const MOTEBIT_YAML_SCHEMA_ID =
  * the drift test.
  */
 export function buildYamlJsonSchema(): Record<string, unknown> {
-  const schema = zodToJsonSchema(MotebitYamlObjectSchema, {
-    name: "MotebitYaml",
-    $refStrategy: "none",
-    target: "jsonSchema7",
+  // zod 4's native z.toJSONSchema (draft-7) inlines fully — no definitions bag
+  // to unwrap (unlike zod-to-json-schema@3, which is zod-3-only). `io: "input"`
+  // represents the INPUT side of transforms/pipes (yaml-config coerces some
+  // fields, e.g. a numeric string → number) — the shape the user actually
+  // WRITES, which is what this config schema documents. Drop the renderer's own
+  // $schema; re-emit the canonical envelope with the meta.
+  const { $schema: _rendererSchema, ...body } = z.toJSONSchema(MotebitYamlObjectSchema, {
+    target: "draft-7",
+    io: "input",
   }) as Record<string, unknown>;
-  // zod-to-json-schema wraps the root in a `definitions.MotebitYaml` +
-  // `$ref` envelope. External tools work better with a self-contained
-  // top-level object, so unwrap.
-  const definitions = schema["definitions"] as Record<string, Record<string, unknown>> | undefined;
-  const root = definitions?.["MotebitYaml"] ?? schema;
   return {
     $schema: "http://json-schema.org/draft-07/schema#",
     $id: MOTEBIT_YAML_SCHEMA_ID,
     title: "motebit.yaml (v1)",
     description:
       "Declarative surface for a motebit: personality, provider, governance, MCP servers, and scheduled routines. Applied by `motebit up`.",
-    ...root,
+    ...body,
   };
 }

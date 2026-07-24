@@ -11,11 +11,10 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type { AgentRevocationRecord, AgentRevocationFeed } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 // ---------------------------------------------------------------------------
@@ -105,12 +104,8 @@ export const _AGENT_REVOCATION_RECORD_TYPE_PARITY: {
 };
 
 export function buildAgentRevocationRecordJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(AgentRevocationRecordSchema, {
-    name: "AgentRevocationRecord",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("AgentRevocationRecord", raw, {
+  const raw = toDraft7(AgentRevocationRecordSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: AGENT_REVOCATION_RECORD_SCHEMA_ID,
     title: "AgentRevocationRecord (v1)",
     description:
@@ -159,12 +154,8 @@ export const _AGENT_REVOCATION_FEED_TYPE_PARITY: {
 };
 
 export function buildAgentRevocationFeedJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(AgentRevocationFeedSchema, {
-    name: "AgentRevocationFeed",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("AgentRevocationFeed", raw, {
+  const raw = toDraft7(AgentRevocationFeedSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: AGENT_REVOCATION_FEED_SCHEMA_ID,
     title: "AgentRevocationFeed (v1)",
     description:

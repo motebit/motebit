@@ -26,7 +26,6 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type {
   ComputerActionRequest,
@@ -35,7 +34,7 @@ import type {
   ComputerSessionClosed,
 } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 const SCHEMA_BASE = "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas";
@@ -244,12 +243,8 @@ export const _COMPUTER_ACTION_REQUEST_TYPE_PARITY: {
 };
 
 export function buildComputerActionRequestJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(ComputerActionRequestSchema, {
-    name: "ComputerActionRequest",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("ComputerActionRequest", raw, {
+  const raw = toDraft7(ComputerActionRequestSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: COMPUTER_ACTION_REQUEST_SCHEMA_ID,
     title: "ComputerActionRequest (v1)",
     description:
@@ -284,14 +279,16 @@ const ComputerRedactionSchema = z.object({
 const ScreenshotObservationSchema = z
   .object({
     kind: z.literal("screenshot"),
-    session_id: z.string().min(1),
+    session_id: z.string().min(1).describe("Browser-sandbox session this observation belongs to."),
     artifact_id: z.string().min(1).describe("Artifact ID of the raw capture."),
     artifact_sha256: z.string().min(1).describe("SHA-256 of the raw capture bytes."),
     image_format: z.string().describe('"png" | "jpeg".'),
     width: z.number().int().positive().describe("Image width in logical pixels."),
     height: z.number().int().positive().describe("Image height in logical pixels."),
     captured_at: z.number().int().nonnegative().describe("Unix ms."),
-    redaction: ComputerRedactionSchema,
+    redaction: ComputerRedactionSchema.describe(
+      "Redaction applied to the raw capture before projection, if any.",
+    ),
     projection_artifact_id: z
       .string()
       .optional()
@@ -306,10 +303,10 @@ const ScreenshotObservationSchema = z
 const CursorPositionObservationSchema = z
   .object({
     kind: z.literal("cursor_position"),
-    session_id: z.string().min(1),
-    x: z.number().int(),
-    y: z.number().int(),
-    captured_at: z.number().int().nonnegative(),
+    session_id: z.string().min(1).describe("Browser-sandbox session this observation belongs to."),
+    x: z.number().int().describe("Cursor X in logical pixels."),
+    y: z.number().int().describe("Cursor Y in logical pixels."),
+    captured_at: z.number().int().nonnegative().describe("Unix ms."),
   })
   .passthrough();
 
@@ -330,12 +327,8 @@ export const _COMPUTER_OBSERVATION_RESULT_TYPE_PARITY: {
 };
 
 export function buildComputerObservationResultJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(ComputerObservationResultSchema, {
-    name: "ComputerObservationResult",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("ComputerObservationResult", raw, {
+  const raw = toDraft7(ComputerObservationResultSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: COMPUTER_OBSERVATION_RESULT_SCHEMA_ID,
     title: "ComputerObservationResult (v1)",
     description:
@@ -374,12 +367,8 @@ export const _COMPUTER_SESSION_OPENED_TYPE_PARITY: {
 };
 
 export function buildComputerSessionOpenedJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(ComputerSessionOpenedSchema, {
-    name: "ComputerSessionOpened",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("ComputerSessionOpened", raw, {
+  const raw = toDraft7(ComputerSessionOpenedSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: COMPUTER_SESSION_OPENED_SCHEMA_ID,
     title: "ComputerSessionOpened (v1)",
     description:
@@ -416,12 +405,8 @@ export const _COMPUTER_SESSION_CLOSED_TYPE_PARITY: {
 };
 
 export function buildComputerSessionClosedJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(ComputerSessionClosedSchema, {
-    name: "ComputerSessionClosed",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("ComputerSessionClosed", raw, {
+  const raw = toDraft7(ComputerSessionClosedSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: COMPUTER_SESSION_CLOSED_SCHEMA_ID,
     title: "ComputerSessionClosed (v1)",
     description:

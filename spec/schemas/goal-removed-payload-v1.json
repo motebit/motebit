@@ -12,36 +12,14 @@
       "description": "UUID of the removed goal."
     },
     "routine_id": {
-      "type": "string",
-      "description": "Source routine id when the removal was yaml-pruned."
+      "description": "Source routine id when the removal was yaml-pruned.",
+      "type": "string"
     },
     "reason": {
-      "type": "string",
-      "description": "Free-text rationale (e.g. `\"yaml_pruned\"` or a user reason)."
+      "description": "Free-text rationale (e.g. `\"yaml_pruned\"` or a user reason).",
+      "type": "string"
     }
   },
   "required": ["goal_id"],
-  "additionalProperties": true,
-  "definitions": {
-    "GoalRemovedPayload": {
-      "type": "object",
-      "properties": {
-        "goal_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "UUID of the removed goal."
-        },
-        "routine_id": {
-          "type": "string",
-          "description": "Source routine id when the removal was yaml-pruned."
-        },
-        "reason": {
-          "type": "string",
-          "description": "Free-text rationale (e.g. `\"yaml_pruned\"` or a user reason)."
-        }
-      },
-      "required": ["goal_id"],
-      "additionalProperties": true
-    }
-  }
+  "additionalProperties": {}
 }

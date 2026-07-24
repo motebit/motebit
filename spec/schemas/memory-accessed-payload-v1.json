@@ -13,19 +13,5 @@
     }
   },
   "required": ["node_id"],
-  "additionalProperties": true,
-  "definitions": {
-    "MemoryAccessedPayload": {
-      "type": "object",
-      "properties": {
-        "node_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "UUID of the accessed node."
-        }
-      },
-      "required": ["node_id"],
-      "additionalProperties": true
-    }
-  }
+  "additionalProperties": {}
 }

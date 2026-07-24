@@ -17,8 +17,8 @@
       "description": "Motebit identity — UUIDv7 string. Brand-checked at the type layer in @motebit/protocol; the wire shape is a non-empty string."
     },
     "public_key": {
-      "type": "string",
-      "description": "Signer's Ed25519 public key, hex-encoded. Optional because legacy pre-suite receipts omit it, but required for offline verification — present on every new receipt."
+      "description": "Signer's Ed25519 public key, hex-encoded. Optional because legacy pre-suite receipts omit it, but required for offline verification — present on every new receipt.",
+      "type": "string"
     },
     "device_id": {
       "type": "string",
@@ -52,6 +52,7 @@
     "memories_formed": {
       "type": "integer",
       "minimum": 0,
+      "maximum": 9007199254740991,
       "description": "Count of memories the agent persisted during execution (≥ 0)."
     },
     "prompt_hash": {
@@ -63,21 +64,26 @@
       "description": "SHA-256 hex digest of the canonical result bytes. Pair with `result` for self-verification; with `prompt_hash` for prompt/result provenance."
     },
     "delegation_receipts": {
+      "description": "Nested receipts for subtasks this execution delegated. Recursive — builds the full delegation tree. Each nested receipt is independently signed by its executor.",
       "type": "array",
       "items": {
-        "$ref": "#/definitions/ExecutionReceipt"
-      },
-      "description": "Nested receipts for subtasks this execution delegated. Recursive — builds the full delegation tree. Each nested receipt is independently signed by its executor."
+        "allOf": [
+          {
+            "$ref": "#"
+          }
+        ]
+      }
     },
     "relay_task_id": {
-      "type": "string",
-      "description": "Relay's economic-identity binding for this task. **Required** for relay-mediated tasks (relay rejects receipts without it with HTTP 400). Optional for local execution."
+      "description": "Relay's economic-identity binding for this task. **Required** for relay-mediated tasks (relay rejects receipts without it with HTTP 400). Optional for local execution.",
+      "type": "string"
     },
     "delegated_scope": {
-      "type": "string",
-      "description": "Scope from the delegation token that authorized this execution, if any. Present when the executor received a scoped token; absent for self-submitted tasks."
+      "description": "Scope from the delegation token that authorized this execution, if any. Present when the executor received a scoped token; absent for self-submitted tasks.",
+      "type": "string"
     },
     "source_digest": {
+      "description": "Content digest of the RAW primary-source bytes a fetch-type task retrieved, when `result` is a verbatim raw-byte-addressable span of them (e.g. read_url over a text/* source). Signature-bound; back-compat by absence. A citation builder copies it into Citation.provenance for evidence-provenance re-checking. See spec/evidence-provenance-v1.md.",
       "type": "object",
       "properties": {
         "algorithm": {
@@ -90,12 +96,11 @@
         }
       },
       "required": ["algorithm", "value"],
-      "additionalProperties": false,
-      "description": "Content digest of the RAW primary-source bytes a fetch-type task retrieved, when `result` is a verbatim raw-byte-addressable span of them (e.g. read_url over a text/* source). Signature-bound; back-compat by absence. A citation builder copies it into Citation.provenance for evidence-provenance re-checking. See spec/evidence-provenance-v1.md."
+      "additionalProperties": false
     },
     "source_projection": {
-      "type": "string",
-      "description": "App-owned byte-deterministic projection recipe id (e.g. `agency.html-text.v1`) whose output `result` is, set alongside `source_digest` when `result` is an extracted transform of the raw bytes (read_url over HTML) rather than the bytes verbatim. Present ⇒ a re-verifier applies the recipe to the raw bytes before locating the span; absent ⇒ raw-byte path. Copied into Citation.provenance.projection. See spec/evidence-provenance-v1.md."
+      "description": "App-owned byte-deterministic projection recipe id (e.g. `agency.html-text.v1`) whose output `result` is, set alongside `source_digest` when `result` is an extracted transform of the raw bytes (read_url over HTML) rather than the bytes verbatim. Present ⇒ a re-verifier applies the recipe to the raw bytes before locating the span; absent ⇒ raw-byte path. Copied into Citation.provenance.projection. See spec/evidence-provenance-v1.md.",
+      "type": "string"
     },
     "invocation_origin": {
       "type": "string",
@@ -127,133 +132,5 @@
     "suite",
     "signature"
   ],
-  "additionalProperties": false,
-  "definitions": {
-    "ExecutionReceipt": {
-      "type": "object",
-      "properties": {
-        "task_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Task identifier — UUID assigned at submission time; stable across retries."
-        },
-        "motebit_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Motebit identity — UUIDv7 string. Brand-checked at the type layer in @motebit/protocol; the wire shape is a non-empty string."
-        },
-        "public_key": {
-          "type": "string",
-          "description": "Signer's Ed25519 public key, hex-encoded. Optional because legacy pre-suite receipts omit it, but required for offline verification — present on every new receipt."
-        },
-        "device_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Device identity — UUIDv7 string for the signing device. Brand-checked at the type layer; the wire shape is a non-empty string."
-        },
-        "submitted_at": {
-          "type": "number",
-          "description": "Unix timestamp in milliseconds when the task was submitted."
-        },
-        "completed_at": {
-          "type": "number",
-          "description": "Unix timestamp in milliseconds when the task reached terminal state. Equal to `submitted_at` for instantaneous completions."
-        },
-        "status": {
-          "type": "string",
-          "enum": ["completed", "failed", "denied"],
-          "description": "Terminal state of the task. `completed` = result produced and signed. `failed` = the execution interior did not yield its outcome (crashes, timeouts, and the worker's own principled refusals all included). `denied` = the governance boundary refused: a policy or budget gate blocked the task's actions and no permitted work completed. The discriminator is who refused — the boundary (`denied`) or the interior (`failed`). See execution-ledger-v1 §11.1 Status semantics."
-        },
-        "result": {
-          "type": "string",
-          "description": "Final result payload as a string. Serialization format is task-specific; the receipt commits only to the bytes."
-        },
-        "tools_used": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Names of tools invoked during execution. Empty array for pure-LLM or denied tasks."
-        },
-        "memories_formed": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Count of memories the agent persisted during execution (≥ 0)."
-        },
-        "prompt_hash": {
-          "type": "string",
-          "description": "SHA-256 hex digest of the canonical prompt bytes. Lets verifiers prove a task matched a declared prompt without requiring the prompt itself."
-        },
-        "result_hash": {
-          "type": "string",
-          "description": "SHA-256 hex digest of the canonical result bytes. Pair with `result` for self-verification; with `prompt_hash` for prompt/result provenance."
-        },
-        "delegation_receipts": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/ExecutionReceipt"
-          },
-          "description": "Nested receipts for subtasks this execution delegated. Recursive — builds the full delegation tree. Each nested receipt is independently signed by its executor."
-        },
-        "relay_task_id": {
-          "type": "string",
-          "description": "Relay's economic-identity binding for this task. **Required** for relay-mediated tasks (relay rejects receipts without it with HTTP 400). Optional for local execution."
-        },
-        "delegated_scope": {
-          "type": "string",
-          "description": "Scope from the delegation token that authorized this execution, if any. Present when the executor received a scoped token; absent for self-submitted tasks."
-        },
-        "source_digest": {
-          "type": "object",
-          "properties": {
-            "algorithm": {
-              "type": "string",
-              "description": "Content-digest hash algorithm — `sha-256` today (a `DigestAlgorithm`)."
-            },
-            "value": {
-              "type": "string",
-              "description": "Lowercase hex digest under `algorithm`."
-            }
-          },
-          "required": ["algorithm", "value"],
-          "additionalProperties": false,
-          "description": "Content digest of the RAW primary-source bytes a fetch-type task retrieved, when `result` is a verbatim raw-byte-addressable span of them (e.g. read_url over a text/* source). Signature-bound; back-compat by absence. A citation builder copies it into Citation.provenance for evidence-provenance re-checking. See spec/evidence-provenance-v1.md."
-        },
-        "source_projection": {
-          "type": "string",
-          "description": "App-owned byte-deterministic projection recipe id (e.g. `agency.html-text.v1`) whose output `result` is, set alongside `source_digest` when `result` is an extracted transform of the raw bytes (read_url over HTML) rather than the bytes verbatim. Present ⇒ a re-verifier applies the recipe to the raw bytes before locating the span; absent ⇒ raw-byte path. Copied into Citation.provenance.projection. See spec/evidence-provenance-v1.md."
-        },
-        "invocation_origin": {
-          "type": "string",
-          "enum": ["user-tap", "ai-loop", "scheduled", "agent-to-agent"],
-          "description": "How this task was authorized for invocation. `user-tap` = explicit affordance (surface determinism); `ai-loop` = model-mediated delegation; `scheduled` = cron; `agent-to-agent` = another motebit initiated it. Signature-bound — tampering breaks verification."
-        },
-        "suite": {
-          "type": "string",
-          "const": "motebit-jcs-ed25519-b64-v1",
-          "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for ExecutionReceipt today: JCS canonicalization (RFC 8785), Ed25519 signature, base64url-encoded signature, hex-encoded public key. See @motebit/protocol SUITE_REGISTRY."
-        },
-        "signature": {
-          "type": "string",
-          "description": "Base64url-encoded Ed25519 signature over `canonicalJson(body)` where `body` = this object minus `signature`. Verify with the embedded `public_key` using the suite recipe."
-        }
-      },
-      "required": [
-        "task_id",
-        "motebit_id",
-        "device_id",
-        "submitted_at",
-        "completed_at",
-        "status",
-        "result",
-        "tools_used",
-        "memories_formed",
-        "prompt_hash",
-        "result_hash",
-        "suite",
-        "signature"
-      ],
-      "additionalProperties": false
-    }
-  }
+  "additionalProperties": false
 }

@@ -20,7 +20,6 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import { ALL_EVAL_KINDS } from "@motebit/protocol";
 import type {
@@ -32,7 +31,7 @@ import type {
   RevocationVerdict,
 } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import { EvidenceProvenanceSchema } from "./evidence-provenance.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
@@ -323,12 +322,8 @@ export const _EVAL_ATTESTATION_TYPE_PARITY: {
  * called from the build-schemas script and from the drift test.
  */
 export function buildEvalAttestationJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(EvalAttestationSchema, {
-    name: "EvalAttestation",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("EvalAttestation", raw, {
+  const raw = toDraft7(EvalAttestationSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: EVAL_ATTESTATION_SCHEMA_ID,
     title: "EvalAttestation (v1)",
     description:

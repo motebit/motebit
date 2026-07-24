@@ -11,50 +11,52 @@
       "description": "Schema version. Currently `1`. Pinning lets future CLI versions print a targeted error on mismatch instead of silently misinterpreting the document."
     },
     "name": {
-      "type": "string",
-      "description": "Display name for this motebit. Surfaces in the REPL banner and delegation listings."
+      "description": "Display name for this motebit. Surfaces in the REPL banner and delegation listings.",
+      "type": "string"
     },
     "personality_notes": {
-      "type": "string",
-      "description": "Free-form personality guidance. Appended to the system prompt on every turn. Keep short — every token here costs on every call."
+      "description": "Free-form personality guidance. Appended to the system prompt on every turn. Keep short — every token here costs on every call.",
+      "type": "string"
     },
     "temperature": {
+      "description": "Sampling temperature for the default provider [0, 2]. Unset = model default. Only applied when explicitly set.",
       "type": "number",
       "minimum": 0,
-      "maximum": 2,
-      "description": "Sampling temperature for the default provider [0, 2]. Unset = model default. Only applied when explicitly set."
+      "maximum": 2
     },
     "max_tokens": {
+      "description": "Default max output tokens per response. Overridden by `--max-tokens` at the CLI.",
       "type": "integer",
       "exclusiveMinimum": 0,
-      "description": "Default max output tokens per response. Overridden by `--max-tokens` at the CLI."
+      "maximum": 9007199254740991
     },
     "provider": {
       "type": "object",
       "properties": {
         "mode": {
+          "description": "Provider mode. `byok` = bring-your-own API key (env var). `paid` = motebit cloud. `sovereign` = local on-device model (no external calls).",
           "type": "string",
-          "enum": ["byok", "paid", "sovereign"],
-          "description": "Provider mode. `byok` = bring-your-own API key (env var). `paid` = motebit cloud. `sovereign` = local on-device model (no external calls)."
+          "enum": ["byok", "paid", "sovereign"]
         },
         "wireProtocol": {
+          "description": "Wire protocol the endpoint speaks. `anthropic` for Claude, `openai` for OpenAI-compatible endpoints (OpenAI, Ollama, LM Studio, vLLM).",
           "type": "string",
-          "enum": ["anthropic", "openai"],
-          "description": "Wire protocol the endpoint speaks. `anthropic` for Claude, `openai` for OpenAI-compatible endpoints (OpenAI, Ollama, LM Studio, vLLM)."
+          "enum": ["anthropic", "openai"]
         },
         "model": {
-          "type": "string",
-          "description": "Model identifier, e.g. `claude-sonnet-4-6`, `gpt-5.4-mini`, `llama3.2`."
+          "description": "Model identifier, e.g. `claude-sonnet-4-6`, `gpt-5.4-mini`, `llama3.2`.",
+          "type": "string"
         },
         "baseUrl": {
+          "description": "Override the API base URL. Used for local inference servers (`http://localhost:11434/v1` for Ollama) or routing through a proxy.",
           "type": "string",
-          "format": "uri",
-          "description": "Override the API base URL. Used for local inference servers (`http://localhost:11434/v1` for Ollama) or routing through a proxy."
+          "format": "uri"
         },
         "maxTokens": {
+          "description": "Upper bound on response length (model output tokens).",
           "type": "integer",
           "exclusiveMinimum": 0,
-          "description": "Upper bound on response length (model output tokens)."
+          "maximum": 9007199254740991
         }
       },
       "additionalProperties": false,
@@ -81,11 +83,13 @@
         "maxCallsPerTurn": {
           "type": "integer",
           "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
           "description": "Per-turn tool-call ceiling. Bounds runaway loops and protects the policy gate from exhaustion attacks."
         },
         "maxMemoriesPerTurn": {
           "type": "integer",
           "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
           "description": "Per-turn memory-formation ceiling. Prevents a single turn from flooding the memory graph."
         }
       },
@@ -100,6 +104,7 @@
       "description": "Governance at the boundary — surface-tension constraints that apply to every turn."
     },
     "mcp_servers": {
+      "description": "MCP tool servers to connect on start. Each entry declares transport, endpoint, and (optionally) trust status.",
       "type": "array",
       "items": {
         "type": "object",
@@ -115,49 +120,52 @@
             "description": "Transport. `stdio` spawns a child process; `http` connects to a URL."
           },
           "command": {
-            "type": "string",
-            "description": "Executable to spawn when `transport: stdio`. E.g. `npx`, `node`, `python`."
+            "description": "Executable to spawn when `transport: stdio`. E.g. `npx`, `node`, `python`.",
+            "type": "string"
           },
           "args": {
+            "description": "Argument vector passed to `command` when `transport: stdio`.",
             "type": "array",
             "items": {
               "type": "string"
-            },
-            "description": "Argument vector passed to `command` when `transport: stdio`."
+            }
           },
           "url": {
+            "description": "Endpoint URL when `transport: http`. Must be a full URL including scheme.",
             "type": "string",
-            "format": "uri",
-            "description": "Endpoint URL when `transport: http`. Must be a full URL including scheme."
+            "format": "uri"
           },
           "env": {
+            "description": "Environment variables set for the child process (stdio transport).",
             "type": "object",
-            "additionalProperties": {
+            "propertyNames": {
               "type": "string"
             },
-            "description": "Environment variables set for the child process (stdio transport)."
+            "additionalProperties": {
+              "type": "string"
+            }
           },
           "trusted": {
-            "type": "boolean",
-            "description": "Auto-approve tool calls from this server. Equivalent to promoting the server into `mcp_trusted_servers`. Off by default."
+            "description": "Auto-approve tool calls from this server. Equivalent to promoting the server into `mcp_trusted_servers`. Off by default.",
+            "type": "boolean"
           },
           "motebit": {
-            "type": "boolean",
-            "description": "This server is another motebit instance — enables motebit-to-motebit transport with caller identity injected into every call."
+            "description": "This server is another motebit instance — enables motebit-to-motebit transport with caller identity injected into every call.",
+            "type": "boolean"
           },
           "motebitType": {
+            "description": "Semantic role of the peer motebit. `personal` = another device of yours. `service` = paid worker. `collaborative` = peer agent.",
             "type": "string",
-            "enum": ["personal", "service", "collaborative"],
-            "description": "Semantic role of the peer motebit. `personal` = another device of yours. `service` = paid worker. `collaborative` = peer agent."
+            "enum": ["personal", "service", "collaborative"]
           }
         },
         "required": ["name", "transport"],
         "additionalProperties": false,
         "description": "MCP server — a tool source. stdio transports spawn a subprocess; http transports dial a remote endpoint."
-      },
-      "description": "MCP tool servers to connect on start. Each entry declares transport, endpoint, and (optionally) trust status."
+      }
     },
     "routines": {
+      "description": "Scheduled routines. Each compiles to exactly one Goal row; `id` is the upsert key. Re-running `motebit up` on unchanged yaml is a true no-op.",
       "type": "array",
       "items": {
         "type": "object",
@@ -175,39 +183,37 @@
             "description": "Natural-language prompt the agent runs on each tick. Content changes update the same goal row (preserving `created_at`)."
           },
           "every": {
+            "description": "Run cadence. Interval string (`<n>m`, `<n>h`, `<n>d`). E.g. `1h` = hourly.",
             "type": "string",
-            "minLength": 1,
-            "description": "Run cadence. Interval string (`<n>m`, `<n>h`, `<n>d`). E.g. `1h` = hourly."
+            "minLength": 1
           },
           "mode": {
-            "type": "string",
-            "enum": ["recurring", "once"],
             "default": "recurring",
-            "description": "`recurring` runs every `every` tick forever. `once` runs a single time then marks the goal completed."
+            "description": "`recurring` runs every `every` tick forever. `once` runs a single time then marks the goal completed.",
+            "type": "string",
+            "enum": ["recurring", "once"]
           },
           "wall_clock": {
+            "description": "Hard wall-clock timeout per run. Kills the turn if it exceeds this. Default: 10m.",
             "type": "string",
-            "minLength": 1,
-            "description": "Hard wall-clock timeout per run. Kills the turn if it exceeds this. Default: 10m."
+            "minLength": 1
           },
           "project": {
+            "description": "Project identifier — groups goals that share context (shared memory scope).",
             "type": "string",
-            "minLength": 1,
-            "description": "Project identifier — groups goals that share context (shared memory scope)."
+            "minLength": 1
           },
           "enabled": {
-            "type": "boolean",
             "default": true,
-            "description": "Set false to pause the routine without deleting it. Preserves state and history; resumable with no data loss."
+            "description": "Set false to pause the routine without deleting it. Preserves state and history; resumable with no data loss.",
+            "type": "boolean"
           }
         },
         "required": ["id", "prompt", "every"],
         "additionalProperties": false,
         "description": "A scheduled routine — compiles to exactly one Goal row. Changing fields other than `id` updates the same row in place."
-      },
-      "description": "Scheduled routines. Each compiles to exactly one Goal row; `id` is the upsert key. Re-running `motebit up` on unchanged yaml is a true no-op."
+      }
     }
   },
-  "required": ["version"],
-  "additionalProperties": false
+  "required": ["version"]
 }

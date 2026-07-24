@@ -19,14 +19,13 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type {
   ConsolidationMutationManifest,
   ConsolidationMutationCommitment,
 } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 export const CONSOLIDATION_MUTATION_MANIFEST_SCHEMA_ID =
@@ -163,12 +162,8 @@ export const _CONSOLIDATION_MUTATION_MANIFEST_TYPE_PARITY: {
 };
 
 export function buildConsolidationMutationManifestJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(ConsolidationMutationManifestSchema, {
-    name: "ConsolidationMutationManifest",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("ConsolidationMutationManifest", raw, {
+  const raw = toDraft7(ConsolidationMutationManifestSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: CONSOLIDATION_MUTATION_MANIFEST_SCHEMA_ID,
     title: "ConsolidationMutationManifest (v1)",
     description:

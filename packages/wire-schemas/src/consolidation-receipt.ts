@@ -31,11 +31,10 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 import type { ConsolidationAnchor, ConsolidationReceipt } from "@motebit/protocol";
 
-import { assembleJsonSchemaFor } from "./assemble.js";
+import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
 
 // ---------------------------------------------------------------------------
@@ -205,12 +204,8 @@ export const _CONSOLIDATION_RECEIPT_TYPE_PARITY: {
 };
 
 export function buildConsolidationReceiptJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(ConsolidationReceiptSchema, {
-    name: "ConsolidationReceipt",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("ConsolidationReceipt", raw, {
+  const raw = toDraft7(ConsolidationReceiptSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: CONSOLIDATION_RECEIPT_SCHEMA_ID,
     title: "ConsolidationReceipt (v1)",
     description:
@@ -294,12 +289,8 @@ export const _CONSOLIDATION_ANCHOR_TYPE_PARITY: {
 };
 
 export function buildConsolidationAnchorJsonSchema(): Record<string, unknown> {
-  const raw = zodToJsonSchema(ConsolidationAnchorSchema, {
-    name: "ConsolidationAnchor",
-    $refStrategy: "root",
-    target: "jsonSchema7",
-  }) as Record<string, unknown>;
-  return assembleJsonSchemaFor("ConsolidationAnchor", raw, {
+  const raw = toDraft7(ConsolidationAnchorSchema);
+  return assembleJsonSchemaFor(raw, {
     $id: CONSOLIDATION_ANCHOR_SCHEMA_ID,
     title: "ConsolidationAnchor (v1)",
     description:

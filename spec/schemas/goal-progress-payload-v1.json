@@ -17,23 +17,5 @@
     }
   },
   "required": ["goal_id", "note"],
-  "additionalProperties": true,
-  "definitions": {
-    "GoalProgressPayload": {
-      "type": "object",
-      "properties": {
-        "goal_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "UUID of the goal."
-        },
-        "note": {
-          "type": "string",
-          "description": "Free-text progress narration from the `report_progress` tool. Consumers MUST NOT parse it semantically."
-        }
-      },
-      "required": ["goal_id", "note"],
-      "additionalProperties": true
-    }
-  }
+  "additionalProperties": {}
 }
