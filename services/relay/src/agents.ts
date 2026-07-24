@@ -21,12 +21,19 @@ import { REFERENCE_MIN_BONDED_SIGNAL_MICRO } from "./bond-store.js";
 /**
  * Fields the ORIGIN relay computes itself and MUST NOT accept from a federated
  * peer — a peer that forwards agents cannot mint these signals about them
- * (rule 6: the relay re-publishes only what it independently verifies). `bonded`
- * is RPC-verified locally by `enrichWithBondStatus`; `hardware_attestation`
- * and `latency_stats` have their own passthrough discipline (a peer's local
- * view of ITS agents is authoritative for those), so only `bonded` is stripped.
+ * (rule 6: the relay re-publishes only what it independently verifies). All
+ * three are relay-computed against LOCAL stores and re-attached by their
+ * enrichers: `bonded` from the RPC-verified bond rows (`enrichWithBondStatus`),
+ * `hardware_attestation` from the local credential store
+ * (`enrichWithHardwareAttestation`), `latency_stats` from `relay_latency_stats`
+ * (`enrichWithLatencyStats`). A peer's claim about a remote agent's hardware
+ * attestation or latency is not independently verifiable here and so is
+ * laundering by the same threat model as a forged `bonded` — sibling-boundary
+ * rule: the fix that stripped `bonded` applies identically to its siblings.
+ * A remote agent the relay has no local projection for simply carries no
+ * attested value (never the peer's word for it).
  */
-const RELAY_ATTESTED_PEER_FIELDS = ["bonded"] as const;
+const RELAY_ATTESTED_PEER_FIELDS = ["bonded", "hardware_attestation", "latency_stats"] as const;
 
 /**
  * Upper sanity bound on a peer-asserted `hop_distance`. The mesh caps
@@ -212,7 +219,9 @@ export function enrichWithHardwareAttestation<
   if (projectedByAgent.size === 0) return agents;
 
   return agents.map((a) => {
-    if (a.hardware_attestation != null) return a; // peer-provided HA wins for federated agents
+    // No peer-provided passthrough: a federated peer's `hardware_attestation`
+    // is stripped on ingress (RELAY_ATTESTED_PEER_FIELDS) and only the relay's
+    // OWN local projection is attached — the same discipline as `bonded`.
     const projection = projectedByAgent.get(a.motebit_id);
     if (projection == null) return a;
     return { ...a, hardware_attestation: projection };
@@ -289,7 +298,9 @@ export function enrichWithLatencyStats<T extends Record<string, unknown> & { mot
   if (projectedByAgent.size === 0) return agents;
 
   return agents.map((a) => {
-    if (a.latency_stats != null) return a; // peer-provided latency wins for federated agents
+    // No peer-provided passthrough: a federated peer's `latency_stats` is
+    // stripped on ingress and only the relay's OWN measured projection is
+    // attached — the same discipline as `bonded` and `hardware_attestation`.
     const projection = projectedByAgent.get(a.motebit_id);
     if (projection == null) return a;
     return { ...a, latency_stats: projection };
