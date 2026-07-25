@@ -33,7 +33,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.20.0",
-    "@types/three": "^0.185.0",
+    "@types/three": "^0.185.1",
     "esbuild": "^0.28.1",
     "typescript": "^5.6.0",
     "vitest": "^4.1.10"
