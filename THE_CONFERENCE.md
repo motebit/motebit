@@ -145,7 +145,7 @@ The architecture does not optimize away the valleys. It instrumentalizes them.
 
 ### 5.1 — No Central Authority
 
-The Simurgh is not a master bird that governs the others. Any architecture that requires a central identity authority, a central trust oracle, or a central routing controller violates the principle. The relay facilitates — it carries pressure through the medium — but it does not decide. The semiring decides. The algebra decides. The composition of individual trust scores along the path decides.
+The Simurgh is not a master bird that governs the others. Any architecture that requires a central identity authority, a central trust oracle, or a central routing controller violates the principle. The relay facilitates — it carries pressure through the medium — but it does not decide. The semiring decides. The algebra decides. The composition of individual trust scores along the path decides. This is decentralization of _authority_, not of _economics_: the relay decides no identity, no trust, no route — yet it is economically central by design, the coordination checkpoint and ledger of record that records every settlement and earns a fee at each (see docs/doctrine/clearing-house-not-thin-waist.md). A central coordinator is not a central authority; the Simurgh convenes the flock, it does not rule it.
 
 ### 5.2 — No Procedural Routing
 
