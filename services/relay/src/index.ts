@@ -1533,9 +1533,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     // §8 savant-gap closure.
     void (async () => {
       try {
-        const { buildSignedDeclaration, anchorTransparencyDeclaration } =
+        const { getSignedDeclaration, anchorTransparencyDeclaration } =
           await import("./transparency.js");
-        const declaration = await buildSignedDeclaration(relayIdentity);
+        // Shared singleton — the SAME declaration bytes the serve path
+        // caches, so the anchored hash IS the served hash (declared_at is
+        // in the hash; a separate build here would anchor a phantom the
+        // endpoint never serves). See getSignedDeclaration.
+        const declaration = await getSignedDeclaration(relayIdentity);
         const result = await anchorTransparencyDeclaration(declaration, memoSubmitter);
         logger.info("transparency.anchored", {
           hash: declaration.hash,
