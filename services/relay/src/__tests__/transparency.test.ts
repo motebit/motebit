@@ -22,10 +22,12 @@ import {
 } from "@motebit/encryption";
 import {
   anchorTransparencyDeclaration,
+  attemptTransparencyAnchor,
   buildSignedDeclaration,
   getSignedDeclaration,
   renderMarkdown,
   DECLARATION_CONTENT,
+  type TransparencyAnchorState,
 } from "../transparency.js";
 import type { RelayIdentity } from "../federation.js";
 
@@ -204,6 +206,67 @@ describe("getSignedDeclaration — served hash IS anchored hash (composition gua
     const theirs = await getSignedDeclaration(otherIdentity);
     expect(theirs.relay_public_key).not.toBe(mine.relay_public_key);
     expect(theirs.hash).not.toBe(mine.hash);
+  });
+});
+
+describe("attemptTransparencyAnchor — supervised-loop core (idempotent + retry-safe)", () => {
+  // The prior boot anchor was a fire-and-forget one-shot: a transient RPC
+  // failure left the live declaration PERMANENTLY unanchored, invisibly. The
+  // supervised loop retries until it lands; this is its per-tick core.
+
+  it("anchors once and reports the SERVED hash", async () => {
+    const served = await getSignedDeclaration(relayIdentity);
+    const state: TransparencyAnchorState = { anchored: false };
+    let submitted: string | undefined;
+
+    const landed = await attemptTransparencyAnchor(state, relayIdentity, {
+      submitTransparencyAnchor: async (hash) => {
+        submitted = hash;
+        return { txHash: "tx-1" };
+      },
+    });
+
+    expect(landed).not.toBeNull();
+    expect(landed!.hash).toBe(served.hash); // what lands IS what is served
+    expect(landed!.txHash).toBe("tx-1");
+    expect(submitted).toBe(served.hash);
+    expect(state.anchored).toBe(true);
+  });
+
+  it("is a no-op once anchored (does not re-pay to re-anchor an idempotent hash)", async () => {
+    const state: TransparencyAnchorState = { anchored: true };
+    let calls = 0;
+    const landed = await attemptTransparencyAnchor(state, relayIdentity, {
+      submitTransparencyAnchor: async () => {
+        calls += 1;
+        return { txHash: "tx" };
+      },
+    });
+    expect(landed).toBeNull();
+    expect(calls).toBe(0); // submitter never touched
+  });
+
+  it("retry-safe: a failed submit leaves anchored=false, and the next attempt lands", async () => {
+    const state: TransparencyAnchorState = { anchored: false };
+
+    // Tick 1: submitter throws (transient RPC failure). Rethrows so the
+    // supervised loop records the error; state stays unanchored.
+    await expect(
+      attemptTransparencyAnchor(state, relayIdentity, {
+        submitTransparencyAnchor: async () => {
+          throw new Error("solana rpc down");
+        },
+      }),
+    ).rejects.toThrow("solana rpc down");
+    expect(state.anchored).toBe(false);
+
+    // Tick 2: RPC recovers → the anchor lands. The exact permanence bug the
+    // old fire-and-forget one-shot could not recover from.
+    const landed = await attemptTransparencyAnchor(state, relayIdentity, {
+      submitTransparencyAnchor: async () => ({ txHash: "tx-2" }),
+    });
+    expect(landed).not.toBeNull();
+    expect(state.anchored).toBe(true);
   });
 });
 

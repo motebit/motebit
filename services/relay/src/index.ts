@@ -1106,6 +1106,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // forward-declared bindings are initialized by then.
   let solanaTreasuryAddress: string | undefined;
   let solanaTreasuryReconciliationInterval: ReturnType<typeof setInterval> | undefined;
+  let transparencyAnchorInterval: ReturnType<typeof setInterval> | undefined;
 
   // Admin: treasury reconciliation overview (recent records + aggregated stats).
   // Response shape is per-chain: `chains[]` carries one entry per active or
@@ -1521,37 +1522,26 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       streams: ["settlement", "credential", "revocation", "transparency"],
     });
 
-    // --- Transparency declaration onchain anchoring ---
+    // --- Transparency declaration onchain anchoring (supervised) ---
     // Closes the TOFU gap on /.well-known/motebit-transparency.json: a
     // verifier with the pinned relay anchor address can cross-check the
     // declaration's hash against a Solana memo without trusting the
-    // HTTPS/DNS channel that delivered the declaration. Fire-and-forget
-    // — anchor failure does not block startup or invalidate the signed
-    // (unanchored) declaration; an unanchored verifier still gets TOFU.
-    // Doctrine: docs/doctrine/operator-transparency.md § Stage 2 onchain
-    // anchor (lifted forward 2026-05-11); docs/doctrine/nist-alignment.md
-    // §8 savant-gap closure.
-    void (async () => {
-      try {
-        const { getSignedDeclaration, anchorTransparencyDeclaration } =
-          await import("./transparency.js");
-        // Shared singleton — the SAME declaration bytes the serve path
-        // caches, so the anchored hash IS the served hash (declared_at is
-        // in the hash; a separate build here would anchor a phantom the
-        // endpoint never serves). See getSignedDeclaration.
-        const declaration = await getSignedDeclaration(relayIdentity);
-        const result = await anchorTransparencyDeclaration(declaration, memoSubmitter);
-        logger.info("transparency.anchored", {
-          hash: declaration.hash,
-          tx_hash: result.txHash,
-          anchor_address: memoSubmitter.address,
-        });
-      } catch (err) {
-        logger.warn("transparency.anchor_failed", {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    })();
+    // HTTPS/DNS channel that delivered the declaration. Supervised +
+    // retry-until-landed (rule 18): the prior fire-and-forget one-shot left
+    // the live declaration PERMANENTLY unanchored on any transient RPC
+    // failure, invisibly. Now a persistent failure surfaces as
+    // `transparency-anchor` erroring on GET /api/v1/admin/health, and the
+    // loop retries until it lands (then idempotent no-op). The anchor uses
+    // the shared getSignedDeclaration singleton so what lands IS what the
+    // endpoint serves. Doctrine: docs/doctrine/operator-transparency.md
+    // § Stage 2 onchain anchor; docs/doctrine/nist-alignment.md §8.
+    const { startTransparencyAnchorLoop } = await import("./transparency.js");
+    transparencyAnchorInterval = startTransparencyAnchorLoop(
+      relayIdentity,
+      memoSubmitter,
+      () => getEmergencyFreeze(),
+      loopSupervisor,
+    );
   }
 
   // --- Settlement anchor batching (relay-federation-v1.md §7.6) ---
@@ -1871,6 +1861,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     if (p2pVerifierInterval) clearInterval(p2pVerifierInterval);
     if (bondVerifierInterval) clearInterval(bondVerifierInterval);
     if (solanaTreasuryReconciliationInterval) clearInterval(solanaTreasuryReconciliationInterval);
+    if (transparencyAnchorInterval) clearInterval(transparencyAnchorInterval);
     clearInterval(sweepInterval);
     clearInterval(batchWithdrawalInterval);
     clearInterval(orchestrationWorkerInterval);

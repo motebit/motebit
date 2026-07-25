@@ -31,6 +31,10 @@ import { canonicalJson, sign, bytesToHex, sha256 } from "@motebit/encryption";
 import type { SignedTransparencyDeclaration } from "@motebit/protocol";
 import { TRANSPARENCY_SPEC_ID, TRANSPARENCY_SUITE } from "@motebit/protocol";
 import type { RelayIdentity } from "./federation.js";
+import { createLogger } from "./logger.js";
+import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
+
+const logger = createLogger({ service: "relay", module: "transparency" });
 
 // ---------------------------------------------------------------------------
 // Source of truth — every field here must match observable retention behavior
@@ -422,6 +426,87 @@ export async function anchorTransparencyDeclaration(
   submitter: { submitTransparencyAnchor: (hashHex: string) => Promise<{ txHash: string }> },
 ): Promise<{ txHash: string }> {
   return submitter.submitTransparencyAnchor(declaration.hash);
+}
+
+/** Default retry cadence for the transparency anchor loop (1 minute). */
+export const TRANSPARENCY_ANCHOR_RETRY_MS = 60_000;
+
+/** Mutable landed-flag threaded through the anchor loop's ticks. */
+export interface TransparencyAnchorState {
+  anchored: boolean;
+}
+
+/**
+ * One anchor attempt, idempotent-guarded. Returns the anchored hash + txHash
+ * on the attempt that lands, `null` once already anchored (a cheap no-op —
+ * re-anchoring an unchanged, idempotent hash only wastes SOL). Throws on
+ * submitter failure WITHOUT setting `anchored`, so the supervised loop records
+ * the error and retries on the next tick rather than giving up permanently.
+ *
+ * Consumes the SAME shared singleton the serve path caches
+ * (`getSignedDeclaration`), so what lands on chain is exactly what the endpoint
+ * serves — the invariant `getSignedDeclaration` exists to hold.
+ */
+export async function attemptTransparencyAnchor(
+  state: TransparencyAnchorState,
+  relayIdentity: RelayIdentity,
+  submitter: { submitTransparencyAnchor: (hashHex: string) => Promise<{ txHash: string }> },
+): Promise<{ txHash: string; hash: string } | null> {
+  if (state.anchored) return null;
+  const declaration = await getSignedDeclaration(relayIdentity);
+  const result = await anchorTransparencyDeclaration(declaration, submitter);
+  state.anchored = true;
+  return { txHash: result.txHash, hash: declaration.hash };
+}
+
+/**
+ * Start the supervised transparency-anchor loop.
+ *
+ * Replaces the prior fire-and-forget boot IIFE, which had TWO invisible
+ * failure modes: a transient RPC failure at boot left the live declaration
+ * PERMANENTLY unanchored (no retry), and the failure never reached the
+ * `GET /api/v1/admin/health` `loops` surface (off-supervisor). Both are the
+ * rule-18 class — money/trust-adjacent boot work must be supervised, not
+ * `void asyncWork()`.
+ *
+ * The loop attempts the anchor each tick until it lands, then idempotent-guards
+ * to a cheap no-op `ok` tick (it stays registered so the supervisor keeps
+ * reporting `ok`; clearing it on success would let the freshness window flip it
+ * to a false `stale` and poison `anyUnhealthy()`). A persistent failure shows
+ * as `transparency-anchor` `erroring`. First attempt fires after `intervalMs`
+ * (superviseInterval's cadence) — a negligible delay for an additive,
+ * TOFU-backed trust anchor.
+ *
+ * Doctrine: `services/relay/CLAUDE.md` rule 18;
+ * `docs/doctrine/operator-transparency.md` § Stage 2 onchain anchor.
+ */
+export function startTransparencyAnchorLoop(
+  relayIdentity: RelayIdentity,
+  submitter: {
+    submitTransparencyAnchor: (hashHex: string) => Promise<{ txHash: string }>;
+    address: string;
+  },
+  isFrozen: () => boolean,
+  supervisor?: LoopSupervisor,
+  intervalMs: number = TRANSPARENCY_ANCHOR_RETRY_MS,
+): ReturnType<typeof setInterval> {
+  const state: TransparencyAnchorState = { anchored: false };
+  return superviseInterval(
+    supervisor,
+    "transparency-anchor",
+    intervalMs,
+    async () => {
+      const landed = await attemptTransparencyAnchor(state, relayIdentity, submitter);
+      if (landed) {
+        logger.info("transparency.anchored", {
+          hash: landed.hash,
+          tx_hash: landed.txHash,
+          anchor_address: submitter.address,
+        });
+      }
+    },
+    { isFrozen },
+  );
 }
 
 /**

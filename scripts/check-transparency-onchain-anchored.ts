@@ -18,12 +18,15 @@
  *
  * This gate makes the producer side load-bearing: in the relay startup
  * file, every code path that constructs a `SolanaMemoSubmitter` MUST
- * also wire `anchorTransparencyDeclaration` so the declaration's hash
- * is committed onchain. Forgetting the second call leaves the savant
- * gap open silently.
+ * also wire the transparency anchor so the declaration's hash is
+ * committed onchain — either the supervised `startTransparencyAnchorLoop`
+ * (the canonical shape: retry-until-landed + visible on /admin/health) or
+ * a direct `anchorTransparencyDeclaration` call. Forgetting the wiring
+ * leaves the savant gap open silently.
  *
  * Forbidden: a relay startup that creates `createSolanaMemoSubmitter`
- * without a corresponding `anchorTransparencyDeclaration` call.
+ * without wiring the transparency anchor (`startTransparencyAnchorLoop`
+ * or `anchorTransparencyDeclaration`).
  *
  * Scope: `services/relay/src/index.ts` only. The gate is narrow on
  * purpose — Solana submitters constructed elsewhere (tests, scripts)
@@ -43,7 +46,9 @@ const REPO_ROOT = resolve(new URL(".", import.meta.url).pathname, "..");
 const SCAN_FILES = ["services/relay/src/index.ts"];
 
 const SUBMITTER_PATTERN = /\bcreateSolanaMemoSubmitter\s*\(/g;
-const ANCHOR_PATTERN = /\banchorTransparencyDeclaration\s*\(/g;
+// The anchor is wired either through the supervised loop (canonical) or a
+// direct anchor call — both commit the declaration hash onchain.
+const ANCHOR_PATTERN = /\b(startTransparencyAnchorLoop|anchorTransparencyDeclaration)\s*\(/g;
 
 interface Finding {
   file: string;
@@ -84,7 +89,7 @@ function main(): void {
     if (anchorMatches.length === 0) {
       findings.push({
         file: rel,
-        reason: `creates createSolanaMemoSubmitter (${submitterMatches.length} call(s)) but does NOT call anchorTransparencyDeclaration anywhere in the file — the transparency declaration goes unanchored, leaving the TOFU/savant gap open`,
+        reason: `creates createSolanaMemoSubmitter (${submitterMatches.length} call(s)) but does NOT wire the transparency anchor (startTransparencyAnchorLoop or anchorTransparencyDeclaration) anywhere in the file — the transparency declaration goes unanchored, leaving the TOFU/savant gap open`,
       });
     }
   }
@@ -107,22 +112,27 @@ function main(): void {
   }
   console.log(
     `\n  Fix: after createSolanaMemoSubmitter constructs the submitter,\n` +
-      `       call anchorTransparencyDeclaration with the same submitter so\n` +
-      `       the declaration's hash is committed onchain:\n` +
+      `       start the supervised transparency anchor loop with the same\n` +
+      `       submitter so the declaration's hash is committed onchain:\n` +
       `\n` +
-      `         const { buildSignedDeclaration, anchorTransparencyDeclaration } =\n` +
+      `         const { startTransparencyAnchorLoop } =\n` +
       `           await import("./transparency.js");\n` +
-      `         const declaration = await buildSignedDeclaration(relayIdentity);\n` +
-      `         await anchorTransparencyDeclaration(declaration, memoSubmitter);\n` +
+      `         transparencyAnchorInterval = startTransparencyAnchorLoop(\n` +
+      `           relayIdentity,\n` +
+      `           memoSubmitter,\n` +
+      `           () => getEmergencyFreeze(),\n` +
+      `           loopSupervisor,\n` +
+      `         );\n` +
       `\n` +
       `       Closes the trust-on-first-use savant gap: a verifier with the\n` +
       `       relay's pinned anchor address can cross-check the declaration\n` +
       `       hash against the onchain memo without trusting HTTPS/DNS for\n` +
-      `       the first contact. Fire-and-forget at the relay; anchor failure\n` +
+      `       the first contact. The loop retries until it lands and surfaces\n` +
+      `       a persistent failure on GET /api/v1/admin/health; anchor failure\n` +
       `       must NOT block startup.\n` +
       `\n` +
       `       Doctrine: docs/doctrine/operator-transparency.md § Stage 2,\n` +
-      `       docs/doctrine/nist-alignment.md §8.\n`,
+      `       docs/doctrine/nist-alignment.md §8, services/relay/CLAUDE.md rule 18.\n`,
   );
   process.exit(1);
 }
