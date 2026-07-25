@@ -375,23 +375,36 @@ export async function handleReceiptIngestion(
 
   let receiptValid = await verifyExecutionReceipt(receipt, hexToBytes(pubKeyHex));
 
-  // Fallback: try the public key embedded in the receipt itself.
+  // Fallback: reconcile the registry from the key embedded in the receipt —
+  // but ONLY when that embedded key is ALREADY a registered device of
+  // receipt.motebit_id. Without this binding, an attacker could POST a receipt
+  // under a VICTIM's motebit_id carrying its own key embedded: the fallback
+  // would verify against the attacker key and OVERWRITE the victim's registry
+  // key (a cross-identity hijack). Binding the heal to key material already
+  // associated with the identity closes that — an arbitrary self-signed
+  // embedded key is refused, and the receipt fails closed below. Legitimate
+  // key rotation is the authenticated /rotate-key succession route (which
+  // proves possession of the CURRENT key), never a receipt.
   if (
     !receiptValid &&
     receipt.public_key &&
     typeof receipt.public_key === "string" &&
     receipt.public_key !== pubKeyHex
   ) {
-    receiptValid = await verifyExecutionReceipt(receipt, hexToBytes(receipt.public_key));
-    if (receiptValid) {
-      moteDb.db
-        .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
-        .run(receipt.public_key, receipt.motebit_id);
-      logger.info("receipt.public_key_updated", {
-        correlationId: taskId,
-        motebitId: receipt.motebit_id,
-        reason: "embedded key verified, registry updated",
-      });
+    const devices = await identityManager.listDevices(receipt.motebit_id);
+    const embeddedIsRegisteredDevice = devices.some((d) => d.public_key === receipt.public_key);
+    if (embeddedIsRegisteredDevice) {
+      receiptValid = await verifyExecutionReceipt(receipt, hexToBytes(receipt.public_key));
+      if (receiptValid) {
+        moteDb.db
+          .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
+          .run(receipt.public_key, receipt.motebit_id);
+        logger.info("receipt.public_key_updated", {
+          correlationId: taskId,
+          motebitId: receipt.motebit_id,
+          reason: "embedded key is a registered device, registry reconciled",
+        });
+      }
     }
   }
 
