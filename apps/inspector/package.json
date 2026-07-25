@@ -23,7 +23,7 @@
     "d3-force": "^3.0.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "recharts": "^2.15.0"
+    "recharts": "^3.9.1"
   },
   "devDependencies": {
     "@testing-library/react": "^16.0.0",
