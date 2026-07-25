@@ -146,6 +146,15 @@ function mutateFile(relativePath: string, mutate: (src: string) => string): () =
 
 const PROBES: ReadonlyArray<Probe> = [
   {
+    script: "check-doctrine-cited-constants",
+    proves:
+      "flags a doctrine doc citing a render constant that disagrees with creature.ts — here LIQUESCENTIA's transmission drifting off the code value (the 2026-07-25 DROPLET 0.98-vs-code-0.94 drift, whose wrong-direction 'fix' nearly merged)",
+    perturb: () =>
+      mutateFile("LIQUESCENTIA.md", (src) =>
+        src.replace("Transmission at 0.94", "Transmission at 0.97"),
+      ),
+  },
+  {
     script: "check-security-default-wiring",
     proves:
       "flags the relay config builder re-shadowing the federation discover-signature default with a hard-coded literal instead of the canonical DEFAULT_REQUIRE_DISCOVER_SIGNATURE constant (the #346 sunset-inert-in-prod regression)",
