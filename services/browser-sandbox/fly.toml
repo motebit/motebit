@@ -17,15 +17,23 @@ kill_timeout = 10
 [http_service]
   internal_port = 3500
   force_https = true
-  # Keep one machine always running. Cold-start on this service is
+  # Keep the machine always running — cold-start on this service is
   # ~25s (Chromium boot + Playwright init + Node runtime), which
   # blocks the user's first `/computer` invocation in a session for
   # a quarter-minute. Fly.io shared-CPU 1GB ≈ $2/mo for always-on,
-  # cheap insurance against the UX cliff. Auto-start stays on so a
-  # second concurrent session still wakes a second machine on
-  # demand; auto-stop stays on so machines beyond the floor spin
-  # down when idle.
-  auto_stop_machines = "stop"
+  # cheap insurance against the UX cliff.
+  #
+  # We use auto_stop = false rather than min_machines_running = 1
+  # deliberately: min_machines_running prevents fly from stopping
+  # BELOW the floor, but it does NOT proactively START a stopped
+  # machine to REACH the floor — so a machine left stopped after a
+  # deploy (or a crash-loop, as happened 2026-07-25 when the
+  # Playwright image drifted) stays cold until the next request
+  # eats the full ~25s. This is a single-tenant sandbox (concurrency
+  # ≈ 1), so "never stop the one machine" is exactly "keep it warm,"
+  # with no scale-down worth preserving. auto_start stays on so a
+  # rare second concurrent session can still wake another machine.
+  auto_stop_machines = false
   auto_start_machines = true
   min_machines_running = 1
 
