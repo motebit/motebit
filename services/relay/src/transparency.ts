@@ -375,6 +375,32 @@ export async function buildSignedDeclaration(
 }
 
 /**
+ * Process-wide singleton signed declaration, keyed by relay identity.
+ *
+ * `declared_at` is inside the hashed+signed payload (see
+ * `buildSignedDeclaration`), so two independent `buildSignedDeclaration`
+ * calls produce two different `Date.now()` timestamps → two different
+ * hashes. The serve path (`registerTransparencyRoutes`) and the onchain
+ * anchor path (`index.ts` boot) MUST therefore consume the SAME built
+ * instance — otherwise the anchor certifies a hash the endpoint never
+ * serves, and the TOFU cross-check the anchor exists to provide (fetch
+ * declaration → hash → find matching Solana memo) can never succeed.
+ * This accessor is the single shared source: build once, serve AND anchor
+ * the same bytes. Keyed by identity object so tests with distinct
+ * identities stay isolated.
+ */
+const declarationCache = new WeakMap<RelayIdentity, Promise<SignedDeclaration>>();
+
+export function getSignedDeclaration(relayIdentity: RelayIdentity): Promise<SignedDeclaration> {
+  let declaration = declarationCache.get(relayIdentity);
+  if (declaration === undefined) {
+    declaration = buildSignedDeclaration(relayIdentity);
+    declarationCache.set(relayIdentity, declaration);
+  }
+  return declaration;
+}
+
+/**
  * Anchor a signed transparency declaration to Solana via the Memo
  * program. Closes the trust-on-first-use (TOFU) gap on the first fetch
  * of `/.well-known/motebit-transparency.json` — a verifier who knows
@@ -540,8 +566,10 @@ export interface TransparencyRouteDeps {
 export async function registerTransparencyRoutes(deps: TransparencyRouteDeps): Promise<void> {
   const { app, relayIdentity } = deps;
 
-  // Build once at startup. The declaration content is static between deploys.
-  const declaration = await buildSignedDeclaration(relayIdentity);
+  // Build once at startup, via the shared singleton so the onchain anchor
+  // path (index.ts) serves and anchors the SAME bytes (same declared_at,
+  // same hash). See getSignedDeclaration.
+  const declaration = await getSignedDeclaration(relayIdentity);
 
   // Public endpoint — unauthenticated, served as canonical JSON for
   // verifier compatibility (no Express middleware-style key reordering).

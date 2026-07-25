@@ -23,6 +23,7 @@ import {
 import {
   anchorTransparencyDeclaration,
   buildSignedDeclaration,
+  getSignedDeclaration,
   renderMarkdown,
   DECLARATION_CONTENT,
 } from "../transparency.js";
@@ -141,6 +142,68 @@ describe("anchorTransparencyDeclaration — Stage 2 onchain anchor", () => {
     // verifier reads transparency.json, sees declaration.hash, and
     // looks for memo `motebit:transparency:v1:{declaration.hash}` on chain.
     expect(captured).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+describe("getSignedDeclaration — served hash IS anchored hash (composition guarantee)", () => {
+  // The defect this defends against: the serve path
+  // (registerTransparencyRoutes) and the onchain anchor path (index.ts
+  // boot) each built the declaration via a SEPARATE buildSignedDeclaration
+  // call. Because declared_at (a Date.now() default) is inside the hashed
+  // payload, the two builds produced different hashes — so the relay
+  // anchored a hash the endpoint never served, and the TOFU cross-check
+  // the anchor exists for (fetch declaration → hash → find matching Solana
+  // memo) could never succeed. The fix: one shared singleton, keyed by
+  // identity.
+
+  it("declared_at is hash-affecting — so two independent builds WOULD diverge", async () => {
+    // This is the hazard the shared accessor removes. If two builds pick
+    // different timestamps (they will — different Date.now() at serve vs
+    // anchor), their hashes differ. Demonstrated deterministically with
+    // explicit distinct timestamps.
+    const a = await buildSignedDeclaration(relayIdentity, 1000);
+    const b = await buildSignedDeclaration(relayIdentity, 2000);
+    expect(a.hash).not.toBe(b.hash);
+  });
+
+  it("serve path and anchor path draw the SAME declaration bytes", async () => {
+    // Model the two real call sites: both consume getSignedDeclaration.
+    const served = await getSignedDeclaration(relayIdentity);
+
+    let anchoredHash: string | undefined;
+    await anchorTransparencyDeclaration(await getSignedDeclaration(relayIdentity), {
+      submitTransparencyAnchor: async (hash) => {
+        anchoredHash = hash;
+        return { txHash: "tx" };
+      },
+    });
+
+    // The whole point: what a verifier fetches (served.hash) is exactly
+    // what lands on chain (anchoredHash). Same declared_at, same hash.
+    expect(anchoredHash).toBe(served.hash);
+    expect(served.declared_at).toBe((await getSignedDeclaration(relayIdentity)).declared_at);
+  });
+
+  it("returns a stable singleton per identity (idempotent)", async () => {
+    const first = await getSignedDeclaration(relayIdentity);
+    const second = await getSignedDeclaration(relayIdentity);
+    expect(first).toBe(second); // same object reference
+    expect(first.hash).toBe(second.hash);
+  });
+
+  it("isolates distinct relay identities (WeakMap keying)", async () => {
+    const keypair = await generateKeypair();
+    const otherIdentity: RelayIdentity = {
+      relayMotebitId: `relay-${crypto.randomUUID()}`,
+      publicKey: keypair.publicKey,
+      privateKey: keypair.privateKey,
+      publicKeyHex: bytesToHex(keypair.publicKey),
+      did: `did:key:z${bytesToHex(keypair.publicKey).slice(0, 16)}`,
+    };
+    const mine = await getSignedDeclaration(relayIdentity);
+    const theirs = await getSignedDeclaration(otherIdentity);
+    expect(theirs.relay_public_key).not.toBe(mine.relay_public_key);
+    expect(theirs.hash).not.toBe(mine.hash);
   });
 });
 
