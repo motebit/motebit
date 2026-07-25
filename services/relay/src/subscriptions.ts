@@ -616,7 +616,10 @@ export function registerProxyTokenRoutes(
         cancel_at_period_end: true,
       });
 
-      const periodEndSec = updated.current_period_end;
+      // Stripe's 2025-03-31.basil API moved current_period_end off the
+      // Subscription object onto each subscription item. Relay plans are
+      // single-item, so the item's period end is the subscription's.
+      const periodEndSec = updated.items.data[0]?.current_period_end;
       const periodEnd = typeof periodEndSec === "number" ? periodEndSec * 1000 : null;
       db.prepare(
         "UPDATE relay_subscriptions SET status = 'cancelling', current_period_end = ?, updated_at = ? WHERE motebit_id = ?",

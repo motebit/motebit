@@ -200,7 +200,8 @@ describe("StripeSubscriptionEventAdapter", () => {
         data: {
           object: {
             id: "in_test_001",
-            subscription: "sub_active_123",
+            // Stripe 2025-03-31.basil: subscription moved under parent.
+            parent: { subscription_details: { subscription: "sub_active_123" } },
           },
         },
       });
@@ -218,7 +219,7 @@ describe("StripeSubscriptionEventAdapter", () => {
         data: {
           object: {
             id: "in_test_002",
-            subscription: { id: "sub_nested_456" },
+            parent: { subscription_details: { subscription: { id: "sub_nested_456" } } },
           },
         },
       });
@@ -236,7 +237,7 @@ describe("StripeSubscriptionEventAdapter", () => {
         data: {
           object: {
             id: "in_oneoff_001",
-            subscription: null,
+            parent: null,
           },
         },
       });
@@ -250,7 +251,7 @@ describe("StripeSubscriptionEventAdapter", () => {
         data: {
           object: {
             id: null,
-            subscription: "sub_123",
+            parent: { subscription_details: { subscription: "sub_123" } },
           },
         },
       });
