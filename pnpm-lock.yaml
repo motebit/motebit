@@ -2647,6 +2647,12 @@ importers:
       '@motebit/ai-core':
         specifier: workspace:*
         version: link:../../packages/ai-core
+      '@motebit/mcp-server':
+        specifier: workspace:*
+        version: link:../../packages/mcp-server
+      '@motebit/molecule-runner':
+        specifier: workspace:*
+        version: link:../../packages/molecule-runner
       '@motebit/planner':
         specifier: workspace:*
         version: link:../../packages/planner
@@ -2656,6 +2662,9 @@ importers:
       '@motebit/state-export-client':
         specifier: workspace:*
         version: link:../../packages/state-export-client
+      '@motebit/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
       '@types/node':
         specifier: ^22.20.0
         version: 22.20.0
