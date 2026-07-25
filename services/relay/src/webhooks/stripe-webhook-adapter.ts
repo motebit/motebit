@@ -190,10 +190,10 @@ export class StripeSubscriptionEventAdapter implements SubscriptionEventAdapter 
 
       case "invoice.paid": {
         const invoice = event.data.object;
-        const subscriptionId =
-          typeof invoice.subscription === "string"
-            ? invoice.subscription
-            : (invoice.subscription?.id ?? null);
+        // Stripe's 2025-03-31.basil API removed invoice.subscription; the
+        // originating subscription now lives under parent.subscription_details.
+        const parentSub = invoice.parent?.subscription_details?.subscription ?? null;
+        const subscriptionId = typeof parentSub === "string" ? parentSub : (parentSub?.id ?? null);
         if (!subscriptionId) {
           return { kind: "ignored", type: event.type };
         }
