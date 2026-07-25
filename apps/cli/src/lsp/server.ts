@@ -11,8 +11,8 @@
  * new field in yaml-config.ts lights up in hover + completion automatically.
  *
  * Placement: CLI-only (ships with `motebit lsp`). The SDK stays zero-dep;
- * `vscode-languageserver` and `zod-to-json-schema` are CLI dependencies, the
- * same placement argument as `zod` and `yaml` themselves.
+ * `vscode-languageserver` is a CLI dependency, the same placement argument as
+ * `zod` and `yaml` themselves.
  */
 
 import {
@@ -31,7 +31,7 @@ import {
   type Hover,
   type TextDocumentPositionParams,
   type CompletionParams,
-} from "vscode-languageserver/node.js";
+} from "vscode-languageserver/node";
 import { TextDocument } from "vscode-languageserver-textdocument";
 
 import { MotebitYamlObjectSchema, parseMotebitYaml } from "../yaml-config.js";
