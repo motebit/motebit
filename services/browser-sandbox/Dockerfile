@@ -11,7 +11,7 @@
 # Playwright image is the right metabolic absorption.
 
 # --- Build: install deps + compile TypeScript with full pnpm workspace ---
-FROM mcr.microsoft.com/playwright:v1.59.1-jammy AS build
+FROM mcr.microsoft.com/playwright:v1.61.1-jammy AS build
 WORKDIR /app
 
 # pnpm via corepack (Node 22+ ships corepack; Playwright base has Node 20).
@@ -40,7 +40,7 @@ RUN pnpm --filter @motebit/browser-sandbox... build
 RUN pnpm --filter @motebit/browser-sandbox deploy --prod /app/deployed
 
 # --- Runtime: Playwright base + the deployed bundle ---
-FROM mcr.microsoft.com/playwright:v1.59.1-jammy AS runtime
+FROM mcr.microsoft.com/playwright:v1.61.1-jammy AS runtime
 WORKDIR /app
 
 # Drop privileges — Playwright's base image runs as root by default,
