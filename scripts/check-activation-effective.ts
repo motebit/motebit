@@ -137,6 +137,8 @@ const EXEMPT: Record<string, string> = {
     "its severing is the #359 config-shadow (requireDiscoverSignature), whose reintroduction is already probed at the needle layer by check-security-default-wiring in check-gates-effective; the booted rung is a bonus proof, not the only net.",
   "booted-authz-activation":
     "its severing lives in services/relay/src/middleware.ts (the market-candidates dualAuth carve-out), not tasks.ts; PR #372 proved discrimination in both directions. Candidate to add a probe when the carve-out next changes (the two-site fail-open desync recorded in the doctrine).",
+  "booted-bridge-activation":
+    "the TWO-ARTIFACT bridge: its distinguishing severing is the R4 scope gate in the RUNTIME artifact (packages/runtime/src/motebit-runtime.ts), which this relay-dist rebuild cannot touch — so this meta-gate structurally cannot probe it. The same R4-gate severing is exercised in-process by molecule-runner's money-runtime-activation (#381); the relay-side effects this suite observes (settlement recording, trust accrual) ARE probed here via booted-settlement / booted-trust / booted-pipeline. Cross-artifact bonus proof, not the sole net for any guarantee.",
 };
 
 function replaceOnce(src: string, needle: string, replacement: string): string {
