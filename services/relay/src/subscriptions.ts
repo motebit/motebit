@@ -57,6 +57,22 @@ function getStripe(): Stripe {
   return new Stripe(key, { apiVersion: "2025-03-31.basil" as Stripe.LatestApiVersion });
 }
 
+/**
+ * Extract a subscription's current period end, in milliseconds, from Stripe's
+ * `2025-03-31.basil` shape. Basil removed `current_period_end` from the
+ * Subscription object and moved it onto each subscription item; relay plans are
+ * single-item, so the first item's period end is the subscription's. Returns
+ * `null` when absent or non-numeric.
+ *
+ * Exported so the basil field-location contract is unit-tested directly — the
+ * cancel route that consumes it has no Stripe mock harness (it only exercises
+ * non-Stripe paths), so this pure helper is where the field access is proven.
+ */
+export function subscriptionPeriodEndMs(sub: Stripe.Subscription): number | null {
+  const sec = sub.items.data[0]?.current_period_end;
+  return typeof sec === "number" ? sec * 1000 : null;
+}
+
 // ── Subscription table ──────────────────────────────────────────────────
 
 /** Track subscription status (minimal — Stripe is source of truth). */
@@ -616,11 +632,7 @@ export function registerProxyTokenRoutes(
         cancel_at_period_end: true,
       });
 
-      // Stripe's 2025-03-31.basil API moved current_period_end off the
-      // Subscription object onto each subscription item. Relay plans are
-      // single-item, so the item's period end is the subscription's.
-      const periodEndSec = updated.items.data[0]?.current_period_end;
-      const periodEnd = typeof periodEndSec === "number" ? periodEndSec * 1000 : null;
+      const periodEnd = subscriptionPeriodEndMs(updated);
       db.prepare(
         "UPDATE relay_subscriptions SET status = 'cancelling', current_period_end = ?, updated_at = ? WHERE motebit_id = ?",
       ).run(periodEnd, Date.now(), motebitId);
