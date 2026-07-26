@@ -151,7 +151,7 @@ export class InvokeCapabilityManager {
     );
 
     if (!result.ok) {
-      yield { type: "invoke_error", ...result.error } as StreamChunk;
+      yield { type: "invoke_error", ...result.error };
       return;
     }
 

@@ -604,7 +604,7 @@ export async function handleReceiptIngestion(
               "SELECT trust_level FROM agent_trust WHERE motebit_id = ? AND remote_motebit_id = ?",
             )
             .get(motebitId, sub.motebit_id) as { trust_level: string } | undefined;
-          const trust = trustRow ? trustLevelToScore(trustRow.trust_level as AgentTrustLevel) : 0.1;
+          const trust = trustRow ? trustLevelToScore(trustRow.trust_level) : 0.1;
 
           insertEdge.run(
             parentMotebitId,
@@ -748,7 +748,7 @@ export async function handleReceiptIngestion(
 
           const signedSubP2p = await signSettlement(
             {
-              settlement_id: subP2pSettlementId as never,
+              settlement_id: subP2pSettlementId,
               allocation_id: `p2p-${subRelayTaskId}` as never,
               // Payee = the sub-agent that executed and was paid onchain.
               motebit_id: sub.motebit_id,
@@ -1079,7 +1079,7 @@ export async function handleReceiptIngestion(
 
         const signedP2pAudit = await signSettlement(
           {
-            settlement_id: p2pSettlementId as never,
+            settlement_id: p2pSettlementId,
             allocation_id: `p2p-${taskId}` as never,
             // Payee = the worker that executed and was paid onchain.
             motebit_id: motebitId,
@@ -1580,7 +1580,7 @@ export async function handleReceiptIngestion(
 
         const newLevel = evaluateTrustTransition(trustRecord);
         const trustLevel = newLevel ?? peerRow.trust_level;
-        const trustScore = trustLevelToScore(trustLevel as AgentTrustLevel);
+        const trustScore = trustLevelToScore(trustLevel);
 
         moteDb.db
           .prepare(
@@ -2519,7 +2519,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
             taskId,
             body.prompt,
             pinnedId,
-            taskQueue as Map<string, { task: { status: string }; receipt?: unknown }>,
+            taskQueue,
             logger,
             apiToken,
             async (receiptCandidate: ReceiptCandidate) => {
@@ -3029,7 +3029,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                       taskId,
                       body.prompt,
                       selId,
-                      taskQueue as Map<string, { task: { status: string }; receipt?: unknown }>,
+                      taskQueue,
                       logger,
                       apiToken,
                       async (receiptCandidate: ReceiptCandidate) => {
@@ -3096,7 +3096,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           taskId,
           body.prompt,
           httpCandidate.motebit_id,
-          taskQueue as Map<string, { task: { status: string }; receipt?: unknown }>,
+          taskQueue,
           logger,
           apiToken,
           async (receiptCandidate: ReceiptCandidate) => {

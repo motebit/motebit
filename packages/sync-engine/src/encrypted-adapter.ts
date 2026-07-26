@@ -95,7 +95,7 @@ export class EncryptedEventStoreAdapter implements EventStoreAdapter {
     const encrypted = await this.encryptPayload(entry.payload);
     const encEntry: EventLogEntry = {
       ...entry,
-      payload: { _encrypted: true, _data: encrypted } as unknown as Record<string, unknown>,
+      payload: { _encrypted: true, _data: encrypted },
     };
     await this.inner.append(encEntry);
   }
@@ -117,7 +117,7 @@ export class EncryptedEventStoreAdapter implements EventStoreAdapter {
     // Fallback: non-atomic
     const clock = await this.inner.getLatestClock(entry.motebit_id);
     const assigned = clock + 1;
-    await this.inner.append({ ...encEntry, version_clock: assigned } as EventLogEntry);
+    await this.inner.append({ ...encEntry, version_clock: assigned });
     return assigned;
   }
 

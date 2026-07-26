@@ -26,7 +26,6 @@ import type {
   AdjudicatorVote,
   DisputeEvidence,
   DisputeRequest,
-  DisputeState,
   DisputeOutcome,
   DisputeFundAction,
   VoteRequest,
@@ -217,8 +216,7 @@ function tryFinalizeIfWindowExpired(
       // appealed → final transition inline (commit 4b /appeal flow).
       "SELECT fund_action, split_ratio FROM relay_dispute_resolutions WHERE dispute_id = ? AND round = 1",
     )
-    .get(dispute.dispute_id as string) as
-    { fund_action: DisputeFundAction; split_ratio: number } | undefined;
+    .get(dispute.dispute_id) as { fund_action: DisputeFundAction; split_ratio: number } | undefined;
   if (!resolution) {
     // Defensive: state=resolved without resolution row should not be
     // reachable, but if it is, log + skip rather than crash. The next
@@ -239,7 +237,7 @@ function tryFinalizeIfWindowExpired(
       .prepare(
         "UPDATE relay_disputes SET state = 'final', final_at = ? WHERE dispute_id = ? AND state = 'resolved'",
       )
-      .run(finalAt, dispute.dispute_id as string);
+      .run(finalAt, dispute.dispute_id);
     if (result.changes === 0) {
       // Concurrent caller beat us to the transition. Rollback and
       // re-read.
@@ -319,7 +317,7 @@ function outcomeToResponse(c: Context, disputeId: string, outcome: ResolveOutcom
       {
         ok: false,
         dispute_id: disputeId,
-        state: "arbitration" as DisputeState,
+        state: "arbitration",
         orchestration: {
           status: outcome.orchestration.status,
           attempt_count: outcome.orchestration.attempt_count,
@@ -333,7 +331,7 @@ function outcomeToResponse(c: Context, disputeId: string, outcome: ResolveOutcom
   return c.json({
     ok: true,
     dispute_id: disputeId,
-    state: "resolved" as DisputeState,
+    state: "resolved",
     resolution: outcome.data.resolution,
     fund_action: outcome.data.fund_action,
     split_ratio: outcome.data.split_ratio,
@@ -1177,7 +1175,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     return c.json({
       ok: true,
       dispute_id: req.dispute_id,
-      state: "evidence" as DisputeState,
+      state: "evidence",
       evidence_deadline: evidenceDeadline,
       amount_locked: amountLocked,
       filing_fee: filingFee,
@@ -1370,7 +1368,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       return c.json({
         ok: true,
         dispute_id: disputeId,
-        state: "resolved" as DisputeState,
+        state: "resolved",
         resolution: existing.resolution,
         fund_action: existing.fund_action,
         split_ratio: existing.split_ratio,
@@ -1634,7 +1632,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       return c.json({
         ok: true,
         dispute_id: disputeId,
-        state: "appealed" as DisputeState,
+        state: "appealed",
         appealed_at: ap.appealed_at,
       });
     }
@@ -1726,7 +1724,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     return c.json({
       ok: true,
       dispute_id: disputeId,
-      state: "final" as DisputeState,
+      state: "final",
       appealed_at: ap.appealed_at,
       resolved_at: round2ResolvedAt,
       final_at: finalAt,

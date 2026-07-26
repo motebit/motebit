@@ -18,7 +18,7 @@
 import * as crypto from "node:crypto";
 import { z } from "zod";
 
-import type { Goal, GoalMode } from "@motebit/persistence";
+import type { Goal } from "@motebit/persistence";
 
 import { parseInterval } from "./intervals.js";
 import type { FullConfig } from "./config.js";
@@ -507,7 +507,7 @@ export function routineToGoal(routine: MotebitYamlRoutine, ctx: RoutineToGoalCon
     last_run_at: null,
     enabled: routine.enabled,
     created_at: ctx.now,
-    mode: routine.mode as GoalMode,
+    mode: routine.mode,
     status: "active" as const,
     parent_goal_id: null,
     max_retries: 3,

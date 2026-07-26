@@ -28,11 +28,6 @@ import type {
   BudgetAllocation,
   SettlementRecord,
   CapabilityPrice,
-  AllocationId,
-  SettlementId,
-  ListingId,
-  GoalId,
-  MotebitId,
   StoredCredential,
   ToolAuditEntry,
   AuditStatsSince,
@@ -1842,8 +1837,8 @@ interface ServiceListingRow {
 
 function rowToServiceListing(row: ServiceListingRow): AgentServiceListing {
   return {
-    listing_id: row.listing_id as ListingId,
-    motebit_id: row.motebit_id as MotebitId,
+    listing_id: row.listing_id,
+    motebit_id: row.motebit_id,
     capabilities: JSON.parse(row.capabilities) as string[],
     pricing: JSON.parse(row.pricing) as CapabilityPrice[],
     sla: { max_latency_ms: row.sla_max_latency_ms, availability_guarantee: row.sla_availability },
@@ -1907,9 +1902,9 @@ interface BudgetAllocationRow {
 
 function rowToBudgetAllocation(row: BudgetAllocationRow): BudgetAllocation {
   return {
-    allocation_id: row.allocation_id as AllocationId,
-    goal_id: row.goal_id as GoalId,
-    candidate_motebit_id: row.candidate_motebit_id as MotebitId,
+    allocation_id: row.allocation_id,
+    goal_id: row.goal_id,
+    candidate_motebit_id: row.candidate_motebit_id,
     amount_locked: row.amount_locked,
     currency: row.currency,
     created_at: row.created_at,
@@ -1992,9 +1987,9 @@ interface SettlementRow {
 
 function rowToSettlement(row: SettlementRow): SettlementRecord {
   return {
-    settlement_id: row.settlement_id as SettlementId,
-    allocation_id: row.allocation_id as AllocationId,
-    motebit_id: (row.motebit_id ?? "") as MotebitId,
+    settlement_id: row.settlement_id,
+    allocation_id: row.allocation_id,
+    motebit_id: row.motebit_id ?? "",
     receipt_hash: row.receipt_hash,
     ledger_hash: row.ledger_hash,
     amount_settled: row.amount_settled,

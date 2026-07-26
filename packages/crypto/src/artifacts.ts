@@ -2629,10 +2629,7 @@ export async function signDeviceRegistration<
   const canonical = canonicalJson(withSuite);
   const message = new TextEncoder().encode(canonical);
   const sig = await signBySuite(DEVICE_REGISTRATION_SUITE, message, privateKey);
-  return { ...withSuite, signature: toBase64Url(sig) } as T & {
-    suite: typeof DEVICE_REGISTRATION_SUITE;
-    signature: string;
-  };
+  return { ...withSuite, signature: toBase64Url(sig) };
 }
 
 /**
@@ -2766,10 +2763,7 @@ export async function signMotebitAnnouncement<
   const canonical = canonicalJson(withSuite);
   const message = new TextEncoder().encode(canonical);
   const sig = await signBySuite(MOTEBIT_ANNOUNCEMENT_SUITE, message, privateKey);
-  return { ...withSuite, signature: toBase64Url(sig) } as T & {
-    suite: typeof MOTEBIT_ANNOUNCEMENT_SUITE;
-    signature: string;
-  };
+  return { ...withSuite, signature: toBase64Url(sig) };
 }
 
 /**

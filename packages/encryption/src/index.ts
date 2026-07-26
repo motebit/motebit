@@ -344,7 +344,7 @@ export async function decrypt(payload: EncryptedPayload, key: Uint8Array): Promi
   const result = await crypto.subtle.decrypt(
     { name: "AES-GCM", iv: payload.nonce as BufferSource },
     cryptoKey,
-    combined as BufferSource,
+    combined,
   );
   return new Uint8Array(result);
 }
@@ -436,7 +436,7 @@ export async function createDeletionCertificate(
   const encoder = new TextEncoder();
   const timestamp = Date.now();
   const payload = encoder.encode(`${targetId}:${targetType}:${timestamp}:${deletedBy}`);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", payload as BufferSource);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", payload);
   const hashArray = new Uint8Array(hashBuffer);
   const tombstoneHash = Array.from(hashArray)
     .map((b) => b.toString(16).padStart(2, "0"))

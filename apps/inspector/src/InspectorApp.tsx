@@ -237,7 +237,7 @@ export function InspectorApp(): React.ReactElement {
         }
 
         if ("summary" in budgetRes && budgetRes.summary != null) {
-          setBudgetSummary(budgetRes.summary as { total_locked: number; total_settled: number });
+          setBudgetSummary(budgetRes.summary);
         }
         if ("allocations" in budgetRes) {
           setBudgetAllocations(budgetRes.allocations);

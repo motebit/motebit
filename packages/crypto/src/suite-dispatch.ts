@@ -58,7 +58,7 @@ if (!ed.hashes.sha512) {
   // type-only friction between the two @noble subpackages (v2's return is typed
   // Uint8Array<ArrayBufferLike> while ed25519's setter wants the stricter
   // Uint8Array<ArrayBuffer>).
-  ed.hashes.sha512 = sha512 as unknown as (typeof ed.hashes)["sha512"];
+  ed.hashes.sha512 = sha512;
 }
 
 /**

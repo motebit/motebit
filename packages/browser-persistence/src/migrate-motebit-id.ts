@@ -126,7 +126,7 @@ export async function migrateMotebitId(
       });
       for (const { key, record } of matches) {
         await idbRequest(store.delete(key));
-        const rewritten = { ...record, [fieldName]: newMotebitId } as MotebitIdCarrier;
+        const rewritten = { ...record, [fieldName]: newMotebitId };
         await idbRequest(store.put(rewritten));
       }
       await idbTransaction(tx);

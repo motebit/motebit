@@ -125,7 +125,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     if (typeof globalThis.WebSocket !== "undefined") {
       this.ws = new globalThis.WebSocket(url);
     } else if (_wsPackage) {
-      this.ws = new _wsPackage(url) as unknown as WebSocket;
+      this.ws = new _wsPackage(url);
     } else {
       void resolveWebSocket().then(() => this.connectWithToken(token));
       return;

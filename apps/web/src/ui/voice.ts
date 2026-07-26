@@ -57,7 +57,7 @@ function createSTTProvider(): STTProvider {
 
 const micBtn = document.getElementById("mic-btn") as HTMLButtonElement | null;
 const inputBarWrapper = document.getElementById("input-bar-wrapper") as HTMLDivElement | null;
-const voiceTranscript = document.getElementById("voice-transcript") as HTMLSpanElement | null;
+const voiceTranscript = document.getElementById("voice-transcript");
 const voiceWaveform = document.getElementById("voice-waveform") as HTMLCanvasElement | null;
 
 // === Audio State ===

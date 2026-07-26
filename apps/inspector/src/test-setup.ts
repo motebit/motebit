@@ -4,5 +4,5 @@ if (typeof globalThis.ResizeObserver === "undefined") {
     observe() {}
     unobserve() {}
     disconnect() {}
-  } as unknown as typeof globalThis.ResizeObserver;
+  };
 }

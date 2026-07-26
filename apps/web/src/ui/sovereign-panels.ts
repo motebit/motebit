@@ -13,7 +13,6 @@ import { fetchSolanaBalanceUsdc, openSovereignFundingFlow } from "./wallet-balan
 import { setEmptyPulse } from "./empty-states";
 import {
   createSovereignController,
-  type CredentialEntry,
   type LedgerManifest,
   type SovereignController,
   type SovereignFetchAdapter,
@@ -186,9 +185,9 @@ function createWebAdapter(ctx: WebContext): SovereignFetchAdapter {
         credential_id: crypto.randomUUID(),
         credential_type:
           vc.type.find((t: string) => t !== "VerifiableCredential") ?? "VerifiableCredential",
-        credential: vc as unknown as Record<string, unknown>,
+        credential: vc,
         issued_at: vc.validFrom != null ? new Date(vc.validFrom).getTime() : Date.now(),
-      })) as CredentialEntry[];
+      }));
     },
     // Local-first Identity tab support — reads the bootstrap
     // IdentityCreated event from the local event store. Closes the

@@ -600,10 +600,10 @@ export class McpClientAdapter {
     this.discoveredTools = response.tools.map((mcpTool) => ({
       name: `${this.config.name}__${mcpTool.name}`,
       description: `[${this.config.name}] ${mcpTool.description ?? mcpTool.name}`,
-      inputSchema: (mcpTool.inputSchema ?? {
+      inputSchema: mcpTool.inputSchema ?? {
         type: "object",
         properties: {},
-      }) as Record<string, unknown>,
+      },
       // Every MCP-imported tool is a structured API call by construction
       // — tool.call → JSON in → JSON out. Declaring `mode: "api"` here
       // lands it in the top tier of the registry sort so the model

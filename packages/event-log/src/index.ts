@@ -199,7 +199,7 @@ export class EventStore {
     // Fallback for adapters that don't implement appendWithClock (non-atomic)
     const clock = await this.adapter.getLatestClock(entry.motebit_id);
     const assigned = clock + 1;
-    await this.adapter.append({ ...entry, version_clock: assigned } as EventLogEntry);
+    await this.adapter.append({ ...entry, version_clock: assigned });
     return assigned;
   }
 
@@ -296,7 +296,7 @@ export class EventStore {
     let truncatedCount = 0;
     if (signer.subject.kind === "motebit") {
       truncatedCount = await this.adapter.truncateBeforeHorizon(
-        signer.subject.motebit_id as string,
+        signer.subject.motebit_id,
         horizonTs,
       );
     } else {

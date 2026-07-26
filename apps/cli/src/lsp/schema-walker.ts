@@ -95,14 +95,14 @@ export function objectKeys(schema: z.ZodTypeAny, path: readonly (string | number
   if (target == null) return [];
   const inner = unwrapAll(target);
   if (inner instanceof z.ZodObject) {
-    return Object.keys(inner.shape as Record<string, unknown>);
+    return Object.keys(inner.shape);
   }
   if (inner instanceof z.ZodArray) {
     // For array targets, offer the element object's keys — that's what the
     // user is about to write after a `-` bullet.
     const elem = unwrapAll((inner as z.ZodArray<z.ZodTypeAny>).element);
     if (elem instanceof z.ZodObject) {
-      return Object.keys(elem.shape as Record<string, unknown>);
+      return Object.keys(elem.shape);
     }
   }
   return [];
@@ -123,7 +123,7 @@ export function enumValues(
     return [...(inner.options as string[])];
   }
   if (inner instanceof z.ZodLiteral) {
-    return [String(inner.value as unknown)];
+    return [String(inner.value)];
   }
   if (inner instanceof z.ZodBoolean) {
     return ["true", "false"];

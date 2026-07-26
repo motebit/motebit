@@ -235,7 +235,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   // --- Request context (AsyncLocalStorage) + Correlation ID middleware ---
   app.use("*", async (c, next) => {
     const correlationId = c.req.header("x-correlation-id") ?? crypto.randomUUID();
-    c.set("correlationId" as never, correlationId as never);
+    c.set("correlationId" as never, correlationId);
     c.header("X-Correlation-ID", correlationId);
     const ctx: RequestContext = {
       correlationId,

@@ -1082,7 +1082,7 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
     listTrustedAgents: async (): Promise<AgentRecord[]> => {
       const runtime = ctx.app.getRuntime();
       if (!runtime) return [];
-      return (await runtime.listTrustedAgents()) as AgentRecord[];
+      return await runtime.listTrustedAgents();
     },
     discoverAgents: async (): Promise<DiscoveredAgent[]> => {
       const syncUrl = loadSyncUrl();

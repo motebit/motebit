@@ -125,7 +125,7 @@ export function initActivityPanel(ctx: WebContext): ActivityPanelAPI {
   const filterBar = document.getElementById("activity-filters") as HTMLDivElement | null;
   const searchInput = document.getElementById("activity-search") as HTMLInputElement | null;
   const closeBtn = document.getElementById("activity-close-btn") as HTMLButtonElement | null;
-  const countBadge = document.getElementById("activity-count") as HTMLSpanElement | null;
+  const countBadge = document.getElementById("activity-count");
   const retentionBlock = document.getElementById("activity-retention") as HTMLDivElement | null;
 
   if (

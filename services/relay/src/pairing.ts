@@ -185,7 +185,7 @@ export function registerPairingRoutes(deps: PairingDeps): void {
       `
       UPDATE pairing_sessions SET status = 'claimed', claiming_device_name = ?, claiming_public_key = ?, claiming_x25519_pubkey = ? WHERE pairing_id = ?
     `,
-    ).run(device_name, public_key, x25519_pubkey ?? null, session.pairing_id as string);
+    ).run(device_name, public_key, x25519_pubkey ?? null, session.pairing_id);
 
     return c.json({ pairing_id: session.pairing_id, motebit_id: session.motebit_id });
   });

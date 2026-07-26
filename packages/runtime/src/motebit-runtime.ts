@@ -1448,7 +1448,7 @@ export class MotebitRuntime {
       body,
       this._signingKeys.privateKey,
       this._signingKeys.publicKey,
-    ) as Promise<ComputerSessionReceipt>;
+    );
   }
 
   /**
@@ -1674,10 +1674,7 @@ export class MotebitRuntime {
         receipt: import("@motebit/sdk").ExecutionReceipt,
         publicKey: Uint8Array,
       ): Promise<boolean> => {
-        return verifyExecutionReceipt(
-          receipt as import("@motebit/encryption").SignableReceipt,
-          publicKey,
-        );
+        return verifyExecutionReceipt(receipt, publicKey);
       },
       hexToBytes,
       hash: async (data: Uint8Array): Promise<string> => {
@@ -5148,9 +5145,7 @@ export class MotebitRuntime {
         dryRun: false,
         receipt: result.receipt,
         ...(result.settlement ? { settlement: result.settlement } : {}),
-        ...(mintedTranscript != null
-          ? { routingTranscript: mintedTranscript as RoutingDecisionTranscript }
-          : {}),
+        ...(mintedTranscript != null ? { routingTranscript: mintedTranscript } : {}),
       };
     } finally {
       // Standing authority dies with the call — never leaks to a later turn.

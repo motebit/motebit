@@ -30,7 +30,7 @@ export function canonicalJson(obj: unknown): string {
   if (Array.isArray(obj)) {
     return "[" + obj.map((item) => canonicalJson(item)).join(",") + "]";
   }
-  const sorted = Object.keys(obj as Record<string, unknown>).sort();
+  const sorted = Object.keys(obj).sort();
   const entries = sorted.map(
     (key) => JSON.stringify(key) + ":" + canonicalJson((obj as Record<string, unknown>)[key]),
   );

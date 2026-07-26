@@ -442,7 +442,7 @@ export function extractStateTags(text: string): Partial<MotebitState> {
       updates[field] = value;
     }
   }
-  return updates as Partial<MotebitState>;
+  return updates;
 }
 
 export function extractActions(text: string): string[] {
@@ -646,7 +646,7 @@ export function actionsToStateUpdates(actions: string[]): Partial<MotebitState> 
       }
     }
   }
-  return deltas as Partial<MotebitState>;
+  return deltas;
 }
 
 export function stripTags(text: string): string {
@@ -1304,7 +1304,7 @@ export class AnthropicProvider implements StreamingProvider {
       if (msg.role === "tool") {
         // Merge consecutive tool results into a single user message.
         // Anthropic requires ALL tool_results in one message after the assistant's tool_use.
-        const prev = messages[messages.length - 1] as Record<string, unknown> | undefined;
+        const prev = messages[messages.length - 1];
         const resultContent = buildToolResultContentForAnthropic(msg.content);
         if (prev?.role === "user" && Array.isArray(prev.content)) {
           const blocks = prev.content as Record<string, unknown>[];
@@ -1362,7 +1362,7 @@ export class AnthropicProvider implements StreamingProvider {
     // Append user message — but avoid consecutive user messages (which Anthropic rejects).
     // On loop iteration 2+, user_message is "" and the last message may be tool_results.
     const userContent = contextPack.activationPrompt ? "[listening]" : contextPack.user_message;
-    const lastMsg = messages[messages.length - 1] as Record<string, unknown> | undefined;
+    const lastMsg = messages[messages.length - 1];
     if (lastMsg?.role === "user" && (!userContent || userContent === "")) {
       // Skip empty user message — tool_results already serve as the user turn
     } else {
@@ -1380,7 +1380,7 @@ export class AnthropicProvider implements StreamingProvider {
       if (toolUses.length === 0) continue;
 
       // Next message must be a user message with tool_results for all tool_use ids
-      const next = messages[i + 1] as Record<string, unknown> | undefined;
+      const next = messages[i + 1];
       const nextBlocks = Array.isArray(next?.content)
         ? (next?.content as Array<Record<string, unknown>>)
         : [];

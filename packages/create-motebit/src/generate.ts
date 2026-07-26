@@ -286,12 +286,7 @@ function serializeValue(value: unknown, level: number): string {
     const lines: string[] = [];
     for (const [k, v] of entries) {
       const serialized = serializeValue(v, level + 1);
-      if (
-        typeof v === "object" &&
-        v !== null &&
-        !Array.isArray(v) &&
-        Object.keys(v as Record<string, unknown>).length > 0
-      ) {
+      if (typeof v === "object" && v !== null && !Array.isArray(v) && Object.keys(v).length > 0) {
         lines.push(`${indent(level)}${k}:`);
         lines.push(serialized.replace(/^\n/, ""));
       } else if (Array.isArray(v) && v.length > 0) {

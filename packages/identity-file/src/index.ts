@@ -60,12 +60,7 @@ function serializeValue(value: unknown, level: number): string {
     const lines: string[] = [];
     for (const [k, v] of entries) {
       const serialized = serializeValue(v, level + 1);
-      if (
-        typeof v === "object" &&
-        v !== null &&
-        !Array.isArray(v) &&
-        Object.keys(v as Record<string, unknown>).length > 0
-      ) {
+      if (typeof v === "object" && v !== null && !Array.isArray(v) && Object.keys(v).length > 0) {
         lines.push(`${indent(level)}${k}:`);
         lines.push(serialized.replace(/^\n/, ""));
       } else if (Array.isArray(v) && v.length > 0) {
@@ -77,7 +72,13 @@ function serializeValue(value: unknown, level: number): string {
     return "\n" + lines.join("\n");
   }
 
-  return String(value as string | number | boolean | bigint | symbol);
+  // Residual after the guards above: bigint | symbol | function — never
+  // present in identity-file data, but narrowed positively because TS does
+  // not narrow `unknown` in negative branches (no-base-to-string).
+  if (typeof value === "bigint" || typeof value === "symbol" || typeof value === "function") {
+    return String(value);
+  }
+  return "null";
 }
 
 function serializeYaml(data: MotebitIdentityFile): string {
@@ -472,7 +473,7 @@ export async function update(
   data.spec = parsed.frontmatter.spec;
   data.identity = parsed.frontmatter.identity;
 
-  const yaml = serializeYaml(data as MotebitIdentityFile);
+  const yaml = serializeYaml(data);
   const frontmatter = `---\n${yaml}\n---`;
   const frontmatterBytes = new TextEncoder().encode(yaml);
   const signature = await ed25519Sign(frontmatterBytes, privateKey);

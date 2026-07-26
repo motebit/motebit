@@ -18,7 +18,7 @@ import { sha512 } from "@noble/hashes/sha2.js";
 // Uint8Array<ArrayBufferLike>) and ed25519's setter (wants Uint8Array<ArrayBuffer>);
 // the runtime SHA-512 is identical.
 if (!ed.hashes.sha512) {
-  ed.hashes.sha512 = sha512 as unknown as (typeof ed.hashes)["sha512"];
+  ed.hashes.sha512 = sha512;
 }
 
 // === Types ===
@@ -70,7 +70,7 @@ export function canonicalJson(obj: unknown): string {
   if (Array.isArray(obj)) {
     return "[" + obj.map((item) => canonicalJson(item)).join(",") + "]";
   }
-  const sorted = Object.keys(obj as Record<string, unknown>).sort();
+  const sorted = Object.keys(obj).sort();
   const entries: string[] = [];
   for (const key of sorted) {
     const val = (obj as Record<string, unknown>)[key];

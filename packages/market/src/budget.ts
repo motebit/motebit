@@ -95,7 +95,7 @@ export function allocateCollaborativeBudget(
 
     totalCost += cost;
     allocations.push({
-      motebit_id: participant.motebit_id as MotebitId,
+      motebit_id: participant.motebit_id,
       estimated_cost: cost,
       currency,
     });

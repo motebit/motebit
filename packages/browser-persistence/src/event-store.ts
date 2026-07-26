@@ -74,7 +74,7 @@ export class IdbEventStore implements EventStoreAdapter {
     });
 
     const clock = latestClock + 1;
-    const fullEntry = { ...entry, version_clock: clock } as EventLogEntry;
+    const fullEntry = { ...entry, version_clock: clock };
     try {
       await idbRequest(store.add(fullEntry));
     } catch (err: unknown) {

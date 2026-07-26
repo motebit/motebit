@@ -1158,7 +1158,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
         confidence: n.confidence,
         similarity: 0,
         half_life_days: Math.round(n.half_life / 86_400_000),
-        memory_type: (n.memory_type ?? "semantic") as string,
+        memory_type: n.memory_type ?? "semantic",
         created_at: n.created_at,
       }));
     },

@@ -29,7 +29,7 @@ export interface CursorContext {
 
 /** Walk the yaml CST and find the path at `offset`. */
 export function findPathAtOffset(doc: Document.Parsed, offset: number): CursorContext | null {
-  return walk(doc.contents as Node | null, offset, []);
+  return walk(doc.contents, offset, []);
 }
 
 function walk(node: Node | null, offset: number, path: (string | number)[]): CursorContext | null {

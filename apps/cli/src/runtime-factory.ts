@@ -644,9 +644,9 @@ export function deriveGovernanceForRuntime(governance: GovernanceConfig | undefi
   return {
     policyBudget: { maxCallsPerTurn: g.maxCallsPerTurn },
     policyApproval: {
-      maxRiskLevel: preset.maxRiskLevel as RiskLevel,
-      requireApprovalAbove: preset.requireApprovalAbove as RiskLevel,
-      denyAbove: preset.denyAbove as RiskLevel,
+      maxRiskLevel: preset.maxRiskLevel,
+      requireApprovalAbove: preset.requireApprovalAbove,
+      denyAbove: preset.denyAbove,
     },
     memoryGovernance: {
       persistenceThreshold: g.persistenceThreshold,

@@ -611,7 +611,7 @@ export class SpatialApp {
       ...unified,
       temperature: unified.temperature ?? temperature,
       maxTokens: unified.maxTokens ?? config.maxTokens,
-    } as UnifiedProviderConfig;
+    };
 
     // BYOK requires an API key. Fail closed before constructing anything.
     if (enriched.mode === "byok" && (enriched.apiKey == null || enriched.apiKey === "")) {

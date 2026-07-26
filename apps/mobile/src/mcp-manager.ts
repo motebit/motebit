@@ -10,7 +10,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { InMemoryToolRegistry } from "@motebit/tools";
 import { McpManager } from "@motebit/surface-kit";
-import type { KeyValueStore, ExternalToolHost } from "@motebit/surface-kit";
+import type { KeyValueStore } from "@motebit/surface-kit";
 import type { MotebitRuntime } from "@motebit/runtime";
 import { ASYNC_STORAGE_KEYS } from "./storage-keys";
 
@@ -32,7 +32,7 @@ export class MobileMcpManager extends McpManager {
       storageKey: ASYNC_STORAGE_KEYS.mcpServers,
       // MotebitRuntime structurally satisfies ExternalToolHost
       // (register/unregisterExternalTools).
-      getToolHost: deps.getRuntime as () => ExternalToolHost | null,
+      getToolHost: deps.getRuntime,
       createToolRegistry: () => new InMemoryToolRegistry(),
     });
   }

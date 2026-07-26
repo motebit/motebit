@@ -677,7 +677,7 @@ export default function App(): React.ReactElement {
 
   // Wire WebView ref to adapter when it mounts
   const handleWebViewRef = useCallback((ref: WebView | null) => {
-    (webViewRef as React.MutableRefObject<WebView | null>).current = ref;
+    webViewRef.current = ref;
     app.current.getRenderer().setWebViewRef(ref);
   }, []);
 

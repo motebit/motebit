@@ -172,7 +172,7 @@ async function main(): Promise<void> {
                 // left the multi-hop-P2P claim un-self-attesting.
                 return {
                   ok: true as const,
-                  receipt: r.receipt as unknown as ExecutionReceipt,
+                  receipt: r.receipt,
                   ...(r.settlement != null ? { settlement: r.settlement } : {}),
                   ...(r.routingTranscript != null
                     ? {

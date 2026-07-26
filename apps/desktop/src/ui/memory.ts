@@ -16,7 +16,6 @@ import {
   type MemoryState,
   type FeltConsolidationRecord,
   type FeltCoverageAdapter,
-  type FeltMemoryNode,
 } from "@motebit/panels";
 
 // === DOM Refs ===
@@ -335,7 +334,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
       const cert = await ctx.app.deleteMemory(nodeId);
       // Encryption's cert has a concrete shape; widen to the controller's
       // Record<string, unknown> and let the surface cast back for display.
-      return cert as unknown as Record<string, unknown> | null;
+      return cert;
     },
     pinMemory: (nodeId, pinned) => ctx.app.pinMemory(nodeId, pinned),
     getDecayedConfidence: (node) => ctx.app.getDecayedConfidence(node as never),
@@ -464,7 +463,7 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
     // A calm summary, never a chart or score. Desktop CSS is inline-in-HTML, so
     // styles are set inline here.
     if (allMemories.length > 0) {
-      const felt = resolveFeltMemory(allMemories as unknown as FeltMemoryNode[]);
+      const felt = resolveFeltMemory(allMemories);
       const wrap = document.createElement("div");
       wrap.style.cssText =
         "padding:10px 14px;display:flex;flex-direction:column;gap:3px;border-bottom:1px solid rgba(127,127,127,0.16);";

@@ -22,7 +22,7 @@ import { DEFAULT_OLLAMA_URL } from "@motebit/ai-core";
 import { WebXRThreeJSAdapter } from "@motebit/render-engine";
 import { SpatialVoicePipeline } from "./voice-pipeline";
 import type { OpenAITTSVoice } from "@motebit/voice";
-import { bindHud, type ConnectionState } from "./hud";
+import { bindHud } from "./hud";
 import { ReceiptSatelliteCoordinator } from "./receipt-satellites";
 import {
   TrustConstellationCoordinator,
@@ -597,7 +597,7 @@ function showMainOverlay(): void {
 }
 
 function connectRelayWithHud(): Promise<void> {
-  hud.setConnection("connecting" as ConnectionState);
+  hud.setConnection("connecting");
   return app
     .connectRelay()
     .then(() => {

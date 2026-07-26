@@ -154,7 +154,7 @@ export function propagateTrust(
 
   for (const agentId of graph.nodes()) {
     if (agentId === TRUST_SUPER_SOURCE) continue;
-    if (!includeRoots && rootSet.has(agentId as MotebitId)) continue;
+    if (!includeRoots && rootSet.has(agentId)) continue;
 
     const traced = optimalPathTrace(graph, TRUST_SUPER_SOURCE, agentId);
     if (!traced) continue;
@@ -166,7 +166,7 @@ export function propagateTrust(
     if (realPath.length === 0) continue;
 
     results.push({
-      agentId: agentId as MotebitId,
+      agentId: agentId,
       trust: traced.value,
       path: realPath,
       depth: realPath.length - 1,

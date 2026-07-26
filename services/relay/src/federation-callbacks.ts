@@ -374,7 +374,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
           const originFee = proof.fee_amount_micro;
           const signed = await signSettlement(
             {
-              settlement_id: settlementId as never,
+              settlement_id: settlementId,
               allocation_id: `p2p-${verified.taskId}` as never,
               motebit_id: workerId,
               receipt_hash: verified.receipt.result_hash ?? "",

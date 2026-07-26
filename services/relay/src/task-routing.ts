@@ -302,7 +302,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
         const row = issuerTrustStmt.get(callerMotebitId, pubHex) as
           { trust_level: string } | undefined;
         if (!row) return 0.1;
-        return trustLevelToScore(row.trust_level as AgentTrustLevel);
+        return trustLevelToScore(row.trust_level);
       } catch {
         return 0.3; // Fallback for non-did:key issuers or lookup failures
       }
@@ -1408,7 +1408,7 @@ export async function evaluateSettlementEligibility(
 
   // Established-pair branch — trust + interactions accumulated.
   if (trustRow) {
-    const score = trustLevelToScore(trustRow.trust_level as AgentTrustLevel);
+    const score = trustLevelToScore(trustRow.trust_level);
     if (score >= P2P_MIN_TRUST_SCORE && trustRow.interaction_count >= P2P_MIN_INTERACTIONS) {
       return {
         allowed: true,
@@ -1430,7 +1430,7 @@ export async function evaluateSettlementEligibility(
     worker.public_key &&
     (await verifySovereignBinding(workerId, worker.public_key))
   ) {
-    const score = trustLevelToScore(trustRow.trust_level as AgentTrustLevel);
+    const score = trustLevelToScore(trustRow.trust_level);
     if (
       score >= P2P_SOVEREIGN_MIN_TRUST_SCORE &&
       trustRow.interaction_count >= P2P_SOVEREIGN_MIN_INTERACTIONS
@@ -1455,7 +1455,7 @@ export async function evaluateSettlementEligibility(
   // never fabricates trust and is NEVER recourse (phase-1 signal only). See
   // docs/doctrine/commitment-bond.md + spec/bond-v1.md.
   if (bondEval && trustRow && bondEval.unitCostMicro > 0n) {
-    const score = trustLevelToScore(trustRow.trust_level as AgentTrustLevel);
+    const score = trustLevelToScore(trustRow.trust_level);
     if (
       score >= P2P_BONDED_MIN_TRUST_SCORE &&
       trustRow.interaction_count >= P2P_BONDED_MIN_INTERACTIONS
@@ -1486,7 +1486,7 @@ export async function evaluateSettlementEligibility(
 
   // Neither branch satisfied — reject. The disallowed return has no
   // `mode` field because there's no relay-custody fallback to route to.
-  const score = trustRow ? trustLevelToScore(trustRow.trust_level as AgentTrustLevel) : 0;
+  const score = trustRow ? trustLevelToScore(trustRow.trust_level) : 0;
   const interactions = trustRow?.interaction_count ?? 0;
   return {
     allowed: false,

@@ -2022,7 +2022,7 @@ export class MobileApp {
         credential_id: crypto.randomUUID(),
         credential_type:
           vc.type.find((t: string) => t !== "VerifiableCredential") ?? "VerifiableCredential",
-        credential: vc as unknown as Record<string, unknown>,
+        credential: vc,
         issued_at: vc.validFrom != null ? new Date(vc.validFrom).getTime() : Date.now(),
       }));
   }

@@ -10,7 +10,7 @@
 
 import { InMemoryToolRegistry } from "@motebit/tools/web-safe";
 import { McpManager } from "@motebit/surface-kit";
-import type { KeyValueStore, ExternalToolHost } from "@motebit/surface-kit";
+import type { KeyValueStore } from "@motebit/surface-kit";
 import type { MotebitRuntime } from "@motebit/runtime";
 
 export type { McpServerStatus } from "@motebit/surface-kit";
@@ -34,7 +34,7 @@ export class SpatialMcpManager extends McpManager {
       storageKey: "motebit:mcp_servers",
       // MotebitRuntime structurally satisfies ExternalToolHost
       // (register/unregisterExternalTools).
-      getToolHost: deps.getRuntime as () => ExternalToolHost | null,
+      getToolHost: deps.getRuntime,
       createToolRegistry: () => new InMemoryToolRegistry(),
     });
   }

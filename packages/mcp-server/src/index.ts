@@ -756,7 +756,7 @@ export class McpServerAdapter {
           } finally {
             // Ensure generator is cleaned up on timeout
             if (timedOut) {
-              void gen.return(undefined as never);
+              void gen.return(undefined);
             }
           }
 
