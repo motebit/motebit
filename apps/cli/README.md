@@ -125,7 +125,7 @@ subdirectories. Audit events (trust grants, removals) append to
 
 ## Providers
 
-Intelligence is pluggable: motebit binds to your identity, not a model vendor. Bring your own key:
+The intelligence is pluggable: a motebit's identity, memory, and trust persist independently of its model provider. Configure an inference source:
 
 | Provider          | Setup                                                                                                                                                               |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
