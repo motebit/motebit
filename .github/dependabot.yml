@@ -42,6 +42,33 @@ updates:
       # (see #239). Remove together with the undici override bump.
       - dependency-name: "jsdom"
         update-types: ["version-update:semver-major"]
+      # @peculiar/x509 v2 drops bundled reflect-metadata and forces a global
+      # polyfill + tsyringe DI onto the 4 attestation verifiers; no advisory
+      # against v1. Deferred 2026-07-24 (#397 pass). Remove when a CVE lands
+      # against v1 or a v2-only feature is needed.
+      - dependency-name: "@peculiar/x509"
+        update-types: ["version-update:semver-major"]
+      # Babel's rule: runtime major must match the transform major. The mobile
+      # toolchain (babel-preset-expo) transforms with babel 7 — SDK 57 still
+      # peers on runtime ^7.20.0 (verified 2026-07-26). Remove when
+      # babel-preset-expo peers on @babel/runtime ^8, and bump in the SAME
+      # change as that Expo move.
+      - dependency-name: "@babel/runtime"
+        update-types: ["version-update:semver-major"]
+      # Expo SDK majors are a migration arc (expo install --fix, config +
+      # native-module review, real metro bundle, app boot on the consent-root
+      # surface), never a lockfile merge. Remove when the SDK-57 arc is
+      # scheduled; the RN companions below ride the same arc.
+      - dependency-name: "expo"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "expo-*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@expo/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-native-*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@react-native-async-storage/async-storage"
+        update-types: ["version-update:semver-major"]
     # Grouping strategy: isolate blast radius.
     #
     # Crypto deps are security-critical — any compromise undermines the thesis,

@@ -7,7 +7,7 @@
   "private": true,
   "publisher": "motebit",
   "engines": {
-    "vscode": "^1.80.0"
+    "vscode": "^1.91.0"
   },
   "categories": [
     "Programming Languages",
@@ -37,7 +37,7 @@
     "clean": "rm -rf out .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "vscode-languageclient": "^9.0.1"
+    "vscode-languageclient": "^10.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
