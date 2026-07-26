@@ -354,6 +354,65 @@ describe("resolveAndSubmitP2pDelegation", () => {
     if (!result.ok) expect(result.error.code).toBe("malformed_request");
   });
 
+  it("prefers the pre-flight's canonical amounts over the listing (single source of truth)", async () => {
+    // The relay's pre-flight returns the SAME amounts the submission gate
+    // validates. The client pays those EXACT figures and never re-derives from
+    // the listing — closing the amount-mismatch window (unit drift / price race).
+    const params = resolveParams();
+    const listingSpy = vi.fn(() =>
+      jsonResponse(200, { pricing: [{ capability: "web_search", unit_cost: 0.99 }] }),
+    );
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p,relay" },
+        ]),
+        eligibility: () =>
+          jsonResponse(200, {
+            allowed: true,
+            expected_amount_micro: 500000,
+            expected_fee_micro: 26316,
+          }),
+        listing: listingSpy,
+        submit: () => jsonResponse(400, { code: "TASK_P2P_FEE_AMOUNT_MISMATCH" }),
+      }),
+    );
+
+    const result = await resolveAndSubmitP2pDelegation(params);
+
+    const req = (params.buildP2pPayment as ReturnType<typeof vi.fn>).mock
+      .calls[0]![0] as SovereignP2pPaymentRequest;
+    // Uses the PRE-FLIGHT amounts (500000/26316), NOT the listing's 0.99 (=990000).
+    expect(req.amountMicro).toBe(500000);
+    expect(req.feeAmountMicro).toBe(26316);
+    expect(req.treasuryAddress).toBe(EXPECTED_TREASURY);
+    // And it never reads the listing — the pre-flight is authoritative.
+    expect(listingSpy).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("malformed_request");
+  });
+
+  it("falls back to the listing read when the pre-flight returns no amounts (older relay)", async () => {
+    const params = resolveParams();
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p" },
+        ]),
+        eligibility: () => jsonResponse(200, { allowed: true }), // no amounts
+        listing: listingOk([{ capability: "web_search", unit_cost: 0.5 }]),
+        submit: () => jsonResponse(400, { code: "TASK_P2P_FEE_AMOUNT_MISMATCH" }),
+      }),
+    );
+    await resolveAndSubmitP2pDelegation(params);
+    const req = (params.buildP2pPayment as ReturnType<typeof vi.fn>).mock
+      .calls[0]![0] as SovereignP2pPaymentRequest;
+    expect(req.amountMicro).toBe(toMicro(0.5)); // listing-derived fallback
+    expect(req.feeAmountMicro).toBe(computeP2pFeeMicro(toMicro(0.5), PLATFORM_FEE_RATE));
+  });
+
   it("maps an insufficient USDC balance to insufficient_balance (nothing submitted)", async () => {
     const buildP2pPayment = vi.fn(async () => {
       throw Object.assign(new Error("need more"), { name: "InsufficientUsdcBalanceError" });

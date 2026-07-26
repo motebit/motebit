@@ -1080,20 +1080,37 @@ export async function resolveP2pPaymentRequest(
     //     for never paying a worker the relay would reject is the correct call
     //     when the payment is irreversible (metabolic principle: deny on error).
     let preflightAllowed = false;
+    // The pre-flight ALSO returns the canonical expected amounts (worker leg +
+    // fee) — the SAME figures the submission gate validates. Preferring them
+    // makes the relay the single source of truth for the payment, closing the
+    // amount-mismatch fund-loss window that client-side listing arithmetic
+    // (the dollars-vs-micro unit boundary) can open. Absent on an older relay →
+    // fall through to the listing read below.
+    let preflightAmountMicro: number | undefined;
+    let preflightFeeMicro: number | undefined;
     try {
       const eligToken = await params.authToken("market:listing");
-      const ackQuery =
-        params.acknowledgeNoHistoryRisk === true ? "?acknowledge_no_history_risk=true" : "";
+      const q = new URLSearchParams();
+      if (params.acknowledgeNoHistoryRisk === true) q.set("acknowledge_no_history_risk", "true");
+      if (capability) q.set("capability", capability);
+      const qs = q.toString() ? `?${q.toString()}` : "";
       const resp = await fetch(
-        `${syncUrl}/api/v1/agents/${worker.motebit_id}/p2p-eligibility${ackQuery}`,
+        `${syncUrl}/api/v1/agents/${worker.motebit_id}/p2p-eligibility${qs}`,
         { headers: { Authorization: `Bearer ${eligToken}` }, signal: params.signal },
       );
       if (resp.ok) {
-        const data = (await resp.json()) as { allowed?: boolean; reason?: string };
+        const data = (await resp.json()) as {
+          allowed?: boolean;
+          reason?: string;
+          expected_amount_micro?: number;
+          expected_fee_micro?: number;
+        };
         if (data.allowed !== true) {
           return fail("p2p_ineligible", data.reason ?? "Not P2P-eligible for this worker");
         }
         preflightAllowed = true;
+        preflightAmountMicro = data.expected_amount_micro;
+        preflightFeeMicro = data.expected_fee_micro;
       }
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "AbortError") {
@@ -1107,6 +1124,24 @@ export async function resolveP2pPaymentRequest(
         "p2p_ineligible",
         "P2P eligibility could not be confirmed (pre-flight unavailable) — refusing to broadcast an unconfirmed payment.",
       );
+    }
+
+    // Prefer the relay's canonical amounts from the pre-flight — pay EXACTLY
+    // what the submission gate validates, with no client-side unit math. The
+    // separate listing read (3b) is the fallback for an older relay that didn't
+    // return them.
+    if (preflightAmountMicro != null && preflightAmountMicro > 0 && preflightFeeMicro != null) {
+      return {
+        ok: true,
+        paymentRequest: {
+          workerAddress: worker.settlement_address,
+          amountMicro: preflightAmountMicro,
+          treasuryAddress,
+          feeAmountMicro: preflightFeeMicro,
+        },
+        workerMotebitId: worker.motebit_id,
+        workerAddress: worker.settlement_address,
+      };
     }
 
     // 3b. Price from the worker's listing (market:listing-audience read).
