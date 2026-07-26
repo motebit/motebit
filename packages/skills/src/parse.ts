@@ -95,7 +95,7 @@ export function parseSkillFile(rawText: string): {
   }
 
   return {
-    manifest: validation.data as SkillManifest,
+    manifest: validation.data,
     body: new TextEncoder().encode(bodyText),
   };
 }
