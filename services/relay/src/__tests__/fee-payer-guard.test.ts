@@ -14,6 +14,7 @@ import {
   BASE_TX_FEE_LAMPORTS,
   DEFAULT_WARN_HEADROOM_TXS,
   type FeePayerSolvencySource,
+  type FeePayerGuardState,
 } from "../fee-payer-guard.js";
 import { LoopSupervisor } from "../loop-supervisor.js";
 
@@ -108,6 +109,27 @@ describe("checkFeePayerSolvencyOnce — throw-to-alert", () => {
       },
     };
     await expect(checkFeePayerSolvencyOnce(failing)).rejects.toThrow("429 Too Many Requests");
+  });
+
+  it("marks the first healthy check once (boot-time liveness INFO), then stays marked", async () => {
+    const state: FeePayerGuardState = { firstHealthyLogged: false };
+    const src = source(25_000_000, INCIDENT_RENT_MIN);
+    await checkFeePayerSolvencyOnce(src, {}, state);
+    expect(state.firstHealthyLogged).toBe(true); // first healthy → INFO emitted
+    await checkFeePayerSolvencyOnce(src, {}, state);
+    expect(state.firstHealthyLogged).toBe(true); // subsequent → debug, no repeat INFO
+  });
+
+  it("does not mark first-healthy on a low check — INFO waits for the first RECOVERED-healthy tick", async () => {
+    const state: FeePayerGuardState = { firstHealthyLogged: false };
+    // Low at boot: throws (visible at warn), never counts as the healthy signal.
+    await expect(
+      checkFeePayerSolvencyOnce(source(INCIDENT_BALANCE, INCIDENT_RENT_MIN), {}, state),
+    ).rejects.toThrow();
+    expect(state.firstHealthyLogged).toBe(false);
+    // Recovers → the first healthy tick now emits the liveness INFO.
+    await checkFeePayerSolvencyOnce(source(25_000_000, INCIDENT_RENT_MIN), {}, state);
+    expect(state.firstHealthyLogged).toBe(true);
   });
 });
 

@@ -101,9 +101,19 @@ export function classifyFeePayerSolvency(
  * records it as `erroring`. Returns the solvency on `ok`. Extracted from the
  * loop so it is testable without timers.
  */
+/**
+ * Mutable per-loop state. Tracks whether the boot-time healthy-liveness INFO
+ * line has been emitted, so it fires exactly once (the first healthy check)
+ * rather than every tick.
+ */
+export interface FeePayerGuardState {
+  firstHealthyLogged: boolean;
+}
+
 export async function checkFeePayerSolvencyOnce(
   source: FeePayerSolvencySource,
   opts: { warnHeadroomTxs?: number } = {},
+  state?: FeePayerGuardState,
 ): Promise<FeePayerSolvency> {
   const { balanceLamports, rentExemptMinLamports } = await source.getFeePayerSolvency();
   const s = classifyFeePayerSolvency(balanceLamports, rentExemptMinLamports, opts);
@@ -125,10 +135,25 @@ export async function checkFeePayerSolvencyOnce(
         `. Top up SOL to keep on-chain anchoring alive.`,
     );
   }
-  logger.debug("fee_payer.solvency_ok", {
-    address: source.address,
-    headroom_txs: s.headroomTxs,
-  });
+  // Boot-time liveness signal: log the FIRST healthy check at INFO so an
+  // operator can confirm from logs that the guard is running — the loop is
+  // otherwise silent when healthy (debug ok ticks) and /admin/health is
+  // master-token-gated, so there was no easy "guard alive" signal. Subsequent
+  // healthy checks stay at debug to avoid a per-tick INFO stream. A low check
+  // never reaches here (it throws above, visibly, at warn).
+  if (state && !state.firstHealthyLogged) {
+    state.firstHealthyLogged = true;
+    logger.info("fee_payer.guard_healthy", {
+      address: source.address,
+      headroom_lamports: s.headroomLamports,
+      headroom_txs: s.headroomTxs,
+    });
+  } else {
+    logger.debug("fee_payer.solvency_ok", {
+      address: source.address,
+      headroom_txs: s.headroomTxs,
+    });
+  }
   return s;
 }
 
@@ -146,12 +171,13 @@ export function startFeePayerBalanceGuardLoop(
   opts: { intervalMs?: number; warnHeadroomTxs?: number } = {},
 ): ReturnType<typeof setInterval> {
   const intervalMs = opts.intervalMs ?? DEFAULT_FEE_PAYER_GUARD_INTERVAL_MS;
+  const state: FeePayerGuardState = { firstHealthyLogged: false };
   return superviseInterval(
     supervisor,
     "fee-payer-balance-guard",
     intervalMs,
     async () => {
-      await checkFeePayerSolvencyOnce(source, { warnHeadroomTxs: opts.warnHeadroomTxs });
+      await checkFeePayerSolvencyOnce(source, { warnHeadroomTxs: opts.warnHeadroomTxs }, state);
     },
     { isFrozen },
   );
