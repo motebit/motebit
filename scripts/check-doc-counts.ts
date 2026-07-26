@@ -11,13 +11,13 @@
  * `apps/docs/content/docs/operator/architecture.mdx` against the
  * filesystem — it caught directory-name drift but missed the prose count
  * claims that sit alongside the tree. This gate closes that gap by
- * extracting every numeric count claim from the three doc surfaces and
+ * extracting every numeric count claim from the covered doc surfaces and
  * comparing against the filesystem-derived truth.
  *
  * Strategy:
  *   1. Compute canonical counts from the filesystem (`apps/`, `packages/`,
  *      `services/`, `spec/*.md`).
- *   2. For each of the three doc surfaces, run a set of probes — each is
+ *   2. For each doc surface in DOCS, run a set of probes — each is
  *      a regex that captures `(\d+) <noun>` and a `noun → key` mapping.
  *   3. Every claim found must equal the canonical count for its noun.
  *
@@ -270,6 +270,20 @@ const DOCS: ReadonlyArray<DocFile> = [
         regex: /\(\[`services\/`\]\(services\/\)\) — (\d+) services in four roles/,
         key: "services",
         label: "Marketplace section — service count",
+      },
+    ],
+  },
+  {
+    // The npm-published CLI README (`motebit` on npmjs.com) — a public
+    // surface with no repo context, so its count claims drift silently.
+    // Caught claiming 19 specs when the actual count was 34 (2026-07-25).
+    path: "apps/cli/README.md",
+    probes: [
+      {
+        regex:
+          /the \[(\d+) open specs\]\(https:\/\/github\.com\/motebit\/motebit\/tree\/main\/spec\)/,
+        key: "specs",
+        label: "How-it-ships section — open-specs count",
       },
     ],
   },
