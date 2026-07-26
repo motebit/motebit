@@ -1107,6 +1107,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   let solanaTreasuryAddress: string | undefined;
   let solanaTreasuryReconciliationInterval: ReturnType<typeof setInterval> | undefined;
   let transparencyAnchorInterval: ReturnType<typeof setInterval> | undefined;
+  let feePayerGuardInterval: ReturnType<typeof setInterval> | undefined;
 
   // Admin: treasury reconciliation overview (recent records + aggregated stats).
   // Response shape is per-chain: `chains[]` carries one entry per active or
@@ -1542,6 +1543,20 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       () => getEmergencyFreeze(),
       loopSupervisor,
     );
+
+    // --- Fee-payer solvency guard ---
+    // The memo submitter's identity wallet pays the base fee on every anchor.
+    // Solana freezes a fee-payer that would drop below the rent-exempt floor,
+    // silently stalling ALL anchoring (prod incident 2026-07-25). This guard
+    // watches spendable headroom and surfaces `fee-payer-balance-guard`
+    // erroring on /api/v1/admin/health BEFORE the freeze — the proactive
+    // complement to the transparency loop's after-the-fact symptom. Rule 18.
+    const { startFeePayerBalanceGuardLoop } = await import("./fee-payer-guard.js");
+    feePayerGuardInterval = startFeePayerBalanceGuardLoop(
+      memoSubmitter,
+      () => getEmergencyFreeze(),
+      loopSupervisor,
+    );
   }
 
   // --- Settlement anchor batching (relay-federation-v1.md §7.6) ---
@@ -1862,6 +1877,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     if (bondVerifierInterval) clearInterval(bondVerifierInterval);
     if (solanaTreasuryReconciliationInterval) clearInterval(solanaTreasuryReconciliationInterval);
     if (transparencyAnchorInterval) clearInterval(transparencyAnchorInterval);
+    if (feePayerGuardInterval) clearInterval(feePayerGuardInterval);
     clearInterval(sweepInterval);
     clearInterval(batchWithdrawalInterval);
     clearInterval(orchestrationWorkerInterval);

@@ -22,6 +22,7 @@ const latestBlockhashMock = vi.fn();
 const sendRawTransactionMock = vi.fn();
 const confirmTransactionMock = vi.fn();
 const getBalanceMock = vi.fn();
+const getMinimumBalanceForRentExemptionMock = vi.fn();
 
 vi.mock("@solana/web3.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@solana/web3.js")>();
@@ -33,6 +34,7 @@ vi.mock("@solana/web3.js", async (importOriginal) => {
     sendRawTransaction = sendRawTransactionMock;
     confirmTransaction = confirmTransactionMock;
     getBalance = getBalanceMock;
+    getMinimumBalanceForRentExemption = getMinimumBalanceForRentExemptionMock;
   }
   return {
     ...actual,
@@ -176,6 +178,19 @@ describe("SolanaMemoSubmitter", () => {
       network: SOLANA_DEVNET_CAIP2,
     });
     expect(submitter.network).toBe(SOLANA_DEVNET_CAIP2);
+  });
+
+  it("getFeePayerSolvency reads balance + rent-exempt-min for the identity wallet", async () => {
+    getBalanceMock.mockResolvedValueOnce(895_000);
+    getMinimumBalanceForRentExemptionMock.mockResolvedValueOnce(890_880);
+    const submitter = new SolanaMemoSubmitter({
+      rpcUrl: "https://api.mainnet-beta.solana.com",
+      identitySeed: seed,
+    });
+    const solvency = await submitter.getFeePayerSolvency();
+    expect(solvency).toEqual({ balanceLamports: 895_000, rentExemptMinLamports: 890_880 });
+    // rent-exempt-min is queried for a 0-data account (the plain wallet).
+    expect(getMinimumBalanceForRentExemptionMock).toHaveBeenCalledWith(0, "confirmed");
   });
 
   it("derives address from seed", () => {
