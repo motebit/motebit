@@ -125,6 +125,8 @@ subdirectories. Audit events (trust grants, removals) append to
 
 ## Providers
 
+Intelligence is pluggable: motebit binds to your identity, not a model vendor. Bring your own key:
+
 | Provider          | Setup                                                                                                                                                               |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Anthropic**     | `export ANTHROPIC_API_KEY=sk-ant-...` (default)                                                                                                                     |
