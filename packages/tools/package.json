@@ -28,7 +28,7 @@
     "@motebit/sdk": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^22.20.0",
+    "@types/node": "^22.20.1",
     "typescript": "^5.6.0",
     "vitest": "^4.1.10"
   }
