@@ -380,6 +380,70 @@ describe("P2P Settlement Cycle E2E", () => {
     expect(((await masterRes.json()) as { allowed: boolean }).allowed).toBe(true);
   });
 
+  it("p2p-eligibility returns the canonical expected amounts (closes the amount-mismatch window)", async () => {
+    // The pre-flight returns the SAME amounts the submission gate validates, so
+    // a client pays EXACTLY right — closing the broadcast-then-amount-mismatch
+    // fund-loss window the eligibility check alone doesn't cover. worker leg =
+    // toMicro(unit_cost 0.5) = 500000; fee = computeP2pFeeMicro(500000, 0.05) = 26316.
+    const tok = await makeSignedToken(
+      delegator.motebitId,
+      delegator.deviceId,
+      delegatorKp.privateKey,
+      "market:listing",
+    );
+    const r = await relay.app.request(
+      `/api/v1/agents/${worker.motebitId}/p2p-eligibility?capability=web_search&acknowledge_no_history_risk=true`,
+      { headers: { Authorization: `Bearer ${tok}` } },
+    );
+    const body = (await r.json()) as {
+      allowed: boolean;
+      expected_amount_micro?: number;
+      expected_fee_micro?: number;
+    };
+    expect(body.allowed).toBe(true);
+    expect(body.expected_amount_micro).toBe(500000);
+    expect(body.expected_fee_micro).toBe(26316);
+  });
+
+  it("p2p-eligibility omits the amounts when the worker has no priced listing", async () => {
+    const noListingWorker = "00000000-0000-4000-8000-000000000000";
+    const r = await relay.app.request(`/api/v1/agents/${noListingWorker}/p2p-eligibility`, {
+      headers: AUTH,
+    });
+    const body = (await r.json()) as { expected_amount_micro?: number };
+    expect(body.expected_amount_micro).toBeUndefined();
+  });
+
+  it("expected_fee_micro reflects the INJECTED platformFeeRate, not a hardcoded 0.05", async () => {
+    // The #383 fee-split class: a hint hardcoding 0.05 would mislead a client on
+    // a non-default-rate relay. At 10%, fee = computeP2pFeeMicro(500000, 0.1) = 55556.
+    const r10 = await createTestRelay({ platformFeeRate: 0.1 });
+    try {
+      const workerId = "11111111-1111-4111-8111-111111111111";
+      await r10.app.request(`/api/v1/agents/${workerId}/listing`, {
+        method: "POST",
+        headers: JSON_AUTH,
+        body: JSON.stringify({
+          capabilities: ["web_search"],
+          pricing: [{ capability: "web_search", unit_cost: 0.5, currency: "USD", per: "task" }],
+          pay_to_address: WORKER_SOLANA_ADDR,
+        }),
+      });
+      const res = await r10.app.request(
+        `/api/v1/agents/${workerId}/p2p-eligibility?capability=web_search`,
+        { headers: AUTH },
+      );
+      const body = (await res.json()) as {
+        expected_amount_micro?: number;
+        expected_fee_micro?: number;
+      };
+      expect(body.expected_amount_micro).toBe(500000);
+      expect(body.expected_fee_micro).toBe(55556); // 10% rate — NOT 26316 (5%)
+    } finally {
+      await r10.close();
+    }
+  });
+
   it("full p2p cycle: eligible → submit with proof → receipt → audit record", async () => {
     // === STEP 1: SUBMIT P2P TASK ===
     const taskRes = await relay.app.request(`/agent/${worker.motebitId}/task`, {

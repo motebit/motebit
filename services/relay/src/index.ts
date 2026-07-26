@@ -1352,6 +1352,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     connections,
     taskRouter,
     apiToken,
+    platformFeeRate,
     federationConfig,
     federationQueryCache,
     parseTokenPayloadUnsafe,
