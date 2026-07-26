@@ -91,7 +91,7 @@ motebit federation mesh <url1> <url2> ... # Pair-wise peer N relays
 User-installable procedural-knowledge files (agentskills.io-compatible) with
 motebit's sovereign extensions: cryptographic provenance, sensitivity-tiered
 loading, hardware-attestation gating. Install is permissive; auto-load is
-provenance-gated. See `spec/skills-v1.md`.
+provenance-gated. See [spec/skills-v1.md](https://github.com/motebit/motebit/blob/main/spec/skills-v1.md).
 
 ```bash
 motebit skills list                       # List installed skills with status badges
@@ -125,10 +125,17 @@ subdirectories. Audit events (trust grants, removals) append to
 
 ## Providers
 
-| Provider      | Setup                                                            |
-| ------------- | ---------------------------------------------------------------- |
-| **Anthropic** | `export ANTHROPIC_API_KEY=sk-ant-...`                            |
-| **Ollama**    | Install [Ollama](https://ollama.ai), `motebit --provider ollama` |
+The intelligence is pluggable: a motebit's identity, memory, and trust persist independently of its model provider. Configure an inference source:
+
+| Provider          | Setup                                                                                                                                                               |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Anthropic**     | `export ANTHROPIC_API_KEY=sk-ant-...` (default)                                                                                                                     |
+| **OpenAI**        | `export OPENAI_API_KEY=sk-...`, `motebit --provider openai`                                                                                                         |
+| **Google**        | `export GOOGLE_API_KEY=AIza...`, `motebit --provider google`                                                                                                        |
+| **Groq**          | `export GROQ_API_KEY=gsk_...`, `motebit --provider groq`                                                                                                            |
+| **DeepSeek**      | `export DEEPSEEK_API_KEY=sk-...`, `motebit --provider deepseek`                                                                                                     |
+| **Local server**  | [Ollama](https://ollama.ai), LM Studio, llama.cpp, vLLM, or any OpenAI-compatible endpoint — `motebit --provider local-server` (alias: `ollama`); no API key needed |
+| **Motebit Cloud** | `motebit --provider proxy` — subscription via the relay                                                                                                             |
 
 ## Troubleshooting
 
@@ -146,11 +153,11 @@ See [docs.motebit.com](https://docs.motebit.com) for full documentation.
 
 ## How it ships
 
-`motebit` is the bundled reference runtime — relay, policy engine, sync engine, MCP server, and wallet adapters all inlined into a single binary at build time. The CLI is its primary operator-facing surface; there are no internal package versions to track.
+`motebit` is the bundled reference runtime — relay, policy engine, sync engine, MCP server, and wallet adapters all inlined into a single package at build time. The CLI is its primary operator-facing surface; there are no internal package versions to track.
 
 **The public promise of `motebit@1.0` is that operator-facing surface — subcommands, flags, exit codes, `~/.motebit/` layout, relay HTTP routes, MCP server tool list — not the internal workspace package graph.** Breaking changes to that surface require a major bump.
 
-For the wire-format contract third parties build against, see the Apache-2.0 packages: [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol), [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto), [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk), and the [19 open specs](https://github.com/motebit/motebit/tree/main/spec). Those promise stability independently and are gated by `check-api-surface`.
+For the wire-format contract third parties build against, see the Apache-2.0 packages: [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol), [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto), [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk), and the [34 open specs](https://github.com/motebit/motebit/tree/main/spec). Those promise stability independently and are gated by `check-api-surface`.
 
 ## Related
 

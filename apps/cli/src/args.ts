@@ -528,6 +528,10 @@ Providers:
                           Default model: gpt-5.4-mini
   google                  Uses Google API (requires GOOGLE_API_KEY)
                           Default model: gemini-2.5-flash
+  groq                    Uses Groq API (requires GROQ_API_KEY)
+                          Default model: llama-3.3-70b-versatile
+  deepseek                Uses DeepSeek API (requires DEEPSEEK_API_KEY)
+                          Default model: deepseek-chat
   local-server            Uses a local inference server — Ollama, LM Studio,
                           llama.cpp, Jan, vLLM, or any OpenAI-compatible
                           endpoint (no API key needed). Default model: llama3.2.
