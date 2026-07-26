@@ -74,6 +74,32 @@ export class SolanaMemoSubmitter implements ChainAnchorSubmitter {
     return this.keypair.publicKey.toBase58();
   }
 
+  /**
+   * Read the fee-payer's on-chain solvency: its native SOL balance and the
+   * rent-exempt minimum for a bare (0-data) account. The fee-payer IS this
+   * submitter's identity wallet, which pays the base fee on every anchor
+   * (settlement / credential / revocation / transparency) memo.
+   *
+   * Solana rejects any transaction that would leave the fee-payer below the
+   * rent-exempt minimum — so the *spendable* headroom is
+   * `balance - rentExemptMin`, NOT the raw balance. A wallet sitting just
+   * above the rent floor (headroom < one base fee) is effectively FROZEN:
+   * every anchor fails at simulation with an empty-log error, silently
+   * stalling all on-chain anchoring. Callers use this to alert before that
+   * threshold, not after. (Observed in prod 2026-07-25: 895_000 lamports
+   * balance, 890_880 rent-min ⇒ 4_120 headroom < 5_000 fee ⇒ frozen.)
+   */
+  async getFeePayerSolvency(): Promise<{
+    balanceLamports: number;
+    rentExemptMinLamports: number;
+  }> {
+    const [balanceLamports, rentExemptMinLamports] = await Promise.all([
+      this.connection.getBalance(this.keypair.publicKey, this.commitment),
+      this.connection.getMinimumBalanceForRentExemption(0, this.commitment),
+    ]);
+    return { balanceLamports, rentExemptMinLamports };
+  }
+
   async submitMerkleRoot(
     root: string,
     _relayId: string,
