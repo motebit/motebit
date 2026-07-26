@@ -207,15 +207,13 @@ export function wireServerDeps(
           );
         });
       } else {
-        void runtime.events
-          .append({ ...entry, version_clock: 0 } as EventLogEntry)
-          .catch((err: unknown) => {
-            // eslint-disable-next-line no-console -- no logger in wireServerDeps scope; stderr is the fail-loud sink (matches the package default logger)
-            console.warn(
-              "[motebit] tool event log failed:",
-              err instanceof Error ? err.message : String(err),
-            );
-          });
+        void runtime.events.append({ ...entry, version_clock: 0 }).catch((err: unknown) => {
+          // eslint-disable-next-line no-console -- no logger in wireServerDeps scope; stderr is the fail-loud sink (matches the package default logger)
+          console.warn(
+            "[motebit] tool event log failed:",
+            err instanceof Error ? err.message : String(err),
+          );
+        });
       }
     },
 

@@ -674,7 +674,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
 
   /** @internal */
   app.post("/api/v1/admin/freeze", async (c) => {
-    const body = await c.req.json<{ reason?: string }>().catch(() => ({}) as { reason?: string });
+    const body = await c.req.json<{ reason?: string }>().catch((): { reason?: string } => ({}));
     const reason = typeof body.reason === "string" ? body.reason.trim() : "";
     if (!reason) throw new HTTPException(400, { message: "reason is required" });
 

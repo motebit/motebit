@@ -281,7 +281,7 @@ export function buildRoutingGraph(
   // Apply peer-to-peer edges from delegation receipt trees
   if (peerEdges) {
     for (const edge of peerEdges) {
-      graph.setEdge(edge.from as MotebitId, edge.to as MotebitId, edge.weight);
+      graph.setEdge(edge.from, edge.to, edge.weight);
     }
   }
 
@@ -346,7 +346,7 @@ function buildTrustAttestationGraph(
   if (peerEdges) {
     for (const edge of peerEdges) {
       const hw = edge.hw_attestation ?? HW_ATTESTATION_HARDWARE;
-      graph.setEdge(edge.from as MotebitId, edge.to as MotebitId, [edge.weight.trust, hw] as const);
+      graph.setEdge(edge.from, edge.to, [edge.weight.trust, hw] as const);
     }
   }
 
@@ -468,7 +468,7 @@ function scoreRoute(
   const availability = candidate?.is_online ? 1.0 : 0.0;
 
   return {
-    motebit_id: nodeId as MotebitId,
+    motebit_id: nodeId,
     composite,
     sub_scores: {
       trust,

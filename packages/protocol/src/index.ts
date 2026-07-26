@@ -37,47 +37,47 @@ export type ProposalId = Brand<string, "ProposalId">;
 
 /** Brand a string as a MotebitId after validation. */
 export function asMotebitId(id: string): MotebitId {
-  return id as MotebitId;
+  return id;
 }
 /** Brand a string as a DeviceId after validation. */
 export function asDeviceId(id: string): DeviceId {
-  return id as DeviceId;
+  return id;
 }
 /** Brand a string as a NodeId after validation. */
 export function asNodeId(id: string): NodeId {
-  return id as NodeId;
+  return id;
 }
 /** Brand a string as a GoalId after validation. */
 export function asGoalId(id: string): GoalId {
-  return id as GoalId;
+  return id;
 }
 /** Brand a string as an EventId after validation. */
 export function asEventId(id: string): EventId {
-  return id as EventId;
+  return id;
 }
 /** Brand a string as a ConversationId after validation. */
 export function asConversationId(id: string): ConversationId {
-  return id as ConversationId;
+  return id;
 }
 /** Brand a string as a PlanId after validation. */
 export function asPlanId(id: string): PlanId {
-  return id as PlanId;
+  return id;
 }
 /** Brand a string as an AllocationId after validation. */
 export function asAllocationId(id: string): AllocationId {
-  return id as AllocationId;
+  return id;
 }
 /** Brand a string as a SettlementId after validation. */
 export function asSettlementId(id: string): SettlementId {
-  return id as SettlementId;
+  return id;
 }
 /** Brand a string as a ListingId after validation. */
 export function asListingId(id: string): ListingId {
-  return id as ListingId;
+  return id;
 }
 /** Brand a string as a ProposalId after validation. */
 export function asProposalId(id: string): ProposalId {
-  return id as ProposalId;
+  return id;
 }
 
 // === Enums ===

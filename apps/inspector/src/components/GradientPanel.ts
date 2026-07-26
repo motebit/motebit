@@ -189,7 +189,7 @@ export function GradientPanel({ current, history }: GradientPanelProps): React.R
   // Compute self-model narrative from history
   const snapshots = (history.length > 0 ? history : [current]) as unknown as GradientSnapshot[];
   const selfModel = summarizeGradientHistory(snapshots);
-  const econ = narrateEconomicConsequences(current as unknown as GradientSnapshot);
+  const econ = narrateEconomicConsequences(current);
 
   return h(
     "div",

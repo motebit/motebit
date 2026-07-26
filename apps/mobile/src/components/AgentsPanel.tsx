@@ -24,11 +24,9 @@ import {
   type AgentFreshness,
   type AgentHardwareAttestation,
   type AgentLatencyStats,
-  type AgentRecord,
   type AgentsFetchAdapter,
   type AgentsState,
   type AgentsTab,
-  type DiscoveredAgent,
 } from "@motebit/panels";
 import {
   verifiedSettlementSummaryFetch,
@@ -151,10 +149,10 @@ function createMobileAgentsAdapter(app: MobileApp): AgentsFetchAdapter {
       return app.motebitId !== "mobile-local" ? app.motebitId : null;
     },
     listTrustedAgents: async () => {
-      return (await app.listTrustedAgents()) as AgentRecord[];
+      return await app.listTrustedAgents();
     },
     discoverAgents: async () => {
-      return (await app.discoverAgents()) as DiscoveredAgent[];
+      return await app.discoverAgents();
     },
     // Money side of the trust graph (doctrine §6): the caller's own per-peer
     // economic history, verified against the relay's pinned key. `account:balance`

@@ -136,7 +136,7 @@ function bigintReviver(_key: string, value: unknown): unknown {
     value !== null &&
     typeof value === "object" &&
     "__bigint__" in value &&
-    typeof (value as { __bigint__: unknown }).__bigint__ === "string"
+    typeof value.__bigint__ === "string"
   ) {
     return BigInt((value as { __bigint__: string }).__bigint__);
   }

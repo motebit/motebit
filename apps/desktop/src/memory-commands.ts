@@ -14,7 +14,7 @@
  * runtime; this module owns the operations on it.
  */
 
-import type { MemoryNode, MemoryEdge, SensitivityLevel } from "@motebit/sdk";
+import type { MemoryNode, MemoryEdge } from "@motebit/sdk";
 import { SensitivityLevel as SensitivityLevelEnum } from "@motebit/sdk";
 import { computeDecayedConfidence, embedText } from "@motebit/memory-graph";
 import type { MotebitRuntime } from "@motebit/runtime";
@@ -75,7 +75,7 @@ export async function formMemoryDirect(
     {
       content,
       confidence,
-      sensitivity: SensitivityLevelEnum.None as SensitivityLevel,
+      sensitivity: SensitivityLevelEnum.None,
       // First-run greeting fallback is agent-authored, not a user statement.
       source: "agent_inferred",
     },

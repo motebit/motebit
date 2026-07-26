@@ -49,9 +49,9 @@ export function useForceGraph(
       id: m.node_id,
       content: m.content,
       confidence: m.confidence,
-      sensitivity: m.sensitivity as string,
+      sensitivity: m.sensitivity,
       halfLife: m.half_life,
-      memoryType: (m.memory_type ?? "semantic") as string,
+      memoryType: m.memory_type ?? "semantic",
       pinned: m.pinned,
     }));
 
@@ -62,7 +62,7 @@ export function useForceGraph(
         source: e.source_id,
         target: e.target_id,
         weight: e.weight,
-        relationType: e.relation_type as string,
+        relationType: e.relation_type,
       }));
 
     const sim = forceSimulation<GraphNode>(nodes)

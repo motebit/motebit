@@ -1,4 +1,4 @@
-import type { DesktopAIConfig, InvokeFn } from "../index";
+import type { DesktopAIConfig } from "../index";
 import {
   DEFAULT_GOVERNANCE_CONFIG,
   DEFAULT_APPEARANCE_CONFIG,
@@ -176,7 +176,7 @@ export async function loadDesktopConfig(): Promise<DesktopAIConfig> {
       apiKey,
       localServerEndpoint,
       isTauri: true,
-      invoke: invoke as InvokeFn,
+      invoke: invoke,
       syncUrl,
       syncMasterToken,
       governance,

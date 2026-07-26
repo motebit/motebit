@@ -128,7 +128,7 @@ export function registerDelegationRevocationRoutes(deps: { app: Hono; db: Databa
         message: "Body is not a well-formed DelegationRevocation",
       });
     }
-    const revocation = parsed.data as DelegationRevocation;
+    const revocation = parsed.data;
 
     if (!(await verifyDelegationRevocation(revocation))) {
       // Fail-closed: parsed shape but the Ed25519 signature does not verify

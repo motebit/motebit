@@ -22,8 +22,8 @@ export class IdbConversationSyncStore {
     return all
       .filter((c) => c.lastActiveAt > since)
       .map((c) => ({
-        conversation_id: c.conversationId as SyncConversation["conversation_id"],
-        motebit_id: this.motebitId as SyncConversation["motebit_id"],
+        conversation_id: c.conversationId,
+        motebit_id: this.motebitId,
         started_at: c.startedAt,
         last_active_at: c.lastActiveAt,
         title: c.title,
@@ -38,8 +38,8 @@ export class IdbConversationSyncStore {
       .filter((m) => m.createdAt > since)
       .map((m) => ({
         message_id: m.messageId,
-        conversation_id: m.conversationId as SyncConversationMessage["conversation_id"],
-        motebit_id: m.motebitId as SyncConversationMessage["motebit_id"],
+        conversation_id: m.conversationId,
+        motebit_id: m.motebitId,
         role: m.role,
         content: m.content,
         tool_calls: m.toolCalls,

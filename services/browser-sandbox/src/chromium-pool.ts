@@ -251,7 +251,7 @@ export class BrowserPool {
     // `context.cookies()` originally.
     if (opts.initialCookies && opts.initialCookies.length > 0) {
       try {
-        await context.addCookies(opts.initialCookies as Cookie[]);
+        await context.addCookies(opts.initialCookies);
       } catch {
         // Best-effort seed; if Playwright rejects (e.g., an expired
         // cookie has shifted format), the session still opens. The

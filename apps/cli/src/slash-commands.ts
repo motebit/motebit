@@ -758,7 +758,7 @@ export async function handleSlashCommand(
       const pubHex = fullConfig?.device_public_key;
 
       // Build MCP server deps from the existing runtime using wireServerDeps
-      const serveDeps = wireServerDeps(runtime as Parameters<typeof wireServerDeps>[0], {
+      const serveDeps = wireServerDeps(runtime, {
         motebitId: mid,
         publicKeyHex: pubHex,
       });
@@ -1698,10 +1698,7 @@ export async function handleSlashCommand(
       if (agentRecord?.public_key) {
         try {
           const pubKeyBytes = hexToBytes(agentRecord.public_key);
-          receiptVerified = await verifyExecutionReceipt(
-            receipt as Parameters<typeof verifyExecutionReceipt>[0],
-            pubKeyBytes,
-          );
+          receiptVerified = await verifyExecutionReceipt(receipt, pubKeyBytes);
         } catch {
           receiptVerified = false;
         }

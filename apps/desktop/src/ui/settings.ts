@@ -1,4 +1,4 @@
-import type { DesktopAIConfig, InvokeFn } from "../index";
+import type { DesktopAIConfig } from "../index";
 import { getMcpServersConfig } from "./mcp-connections";
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
@@ -795,7 +795,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     void (async () => {
       try {
         const { invoke } = await import("@tauri-apps/api/core");
-        const content = await ctx.app.exportIdentityFile(invoke as InvokeFn);
+        const content = await ctx.app.exportIdentityFile(invoke);
         if (content == null || content === "") {
           ctx.showToast("Export failed — keypair not available");
           return;
@@ -873,7 +873,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       const reason = rotateKeyReason.value.trim() || undefined;
-      const result = await ctx.app.rotateKey(invoke as InvokeFn, reason);
+      const result = await ctx.app.rotateKey(invoke, reason);
 
       // Show result briefly, then close and update identity display
       rotateKeyResult.style.display = "block";
@@ -1654,8 +1654,8 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         hasDeepgramKeyInKeyring = true;
       }
 
-      voice.rebuildTtsProvider(invoke as InvokeFn);
-      voice.rebuildSttProvider(invoke as InvokeFn);
+      voice.rebuildTtsProvider(invoke);
+      voice.rebuildSttProvider(invoke);
     }
 
     // Operator mode is orthogonal to governance — it's a runtime-only

@@ -1,6 +1,5 @@
 /** System commands: state, model, tools, approvals, conversations, summarize, trust, welcome. */
 
-import type { MotebitId } from "@motebit/sdk";
 import type { MotebitRuntime } from "../index.js";
 import type { CommandResult } from "./types.js";
 
@@ -117,7 +116,7 @@ export async function cmdTrust(runtime: MotebitRuntime): Promise<CommandResult> 
   // with a generous limit; the audit log accrues slowly relative to
   // memory turns, so 10k captures every realistic accumulation. A user
   // who has accumulated more is a use case the audit panel covers.
-  const auditRecords = await runtime.auditLog.query(runtime.motebitId as MotebitId, {
+  const auditRecords = await runtime.auditLog.query(runtime.motebitId, {
     limit: 10000,
   });
   const deletionRecords = auditRecords.filter(

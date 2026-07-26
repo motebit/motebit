@@ -237,12 +237,12 @@ export async function verifyTpmQuote(
   try {
     const provider = x509.cryptoProvider.get();
     const cryptoKey = await akCert.publicKey.export(
-      { name: "ECDSA", namedCurve: "P-256" } as EcKeyImportParams,
+      { name: "ECDSA", namedCurve: "P-256" },
       ["verify"],
       provider,
     );
     const sigOk = await provider.subtle.verify(
-      { name: "ECDSA", hash: "SHA-256" } as EcdsaParams,
+      { name: "ECDSA", hash: "SHA-256" },
       cryptoKey,
       sigBytes as BufferSource,
       attestBytes as BufferSource,

@@ -94,7 +94,8 @@ export function createComputerApprovalFlow(
   const doc =
     opts.doc ??
     (typeof document !== "undefined"
-      ? (document as unknown as NonNullable<typeof opts.doc>)
+      ? // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- false positive: the assertion narrows `doc`'s inferred union to the shim type; removal breaks tsc (TS2345 on every createElement append)
+        (document as unknown as NonNullable<typeof opts.doc>)
       : undefined);
 
   return async (action: ComputerAction): Promise<boolean> => {

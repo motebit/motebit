@@ -259,7 +259,7 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
     const task = stored.task as AgentTask;
 
     // Ensure branded types are restored
-    task.motebit_id = asMotebitId(task.motebit_id as string);
+    task.motebit_id = asMotebitId(task.motebit_id);
 
     const entry: TaskQueueEntry = {
       task,

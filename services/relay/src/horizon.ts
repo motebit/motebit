@@ -149,7 +149,7 @@ export function truncateExecutionLedgersBeforeHorizon(
   const result = db
     .prepare("DELETE FROM relay_execution_ledgers WHERE created_at < ?")
     .run(horizonTs);
-  return (result as { changes: number }).changes;
+  return result.changes;
 }
 
 export function truncateSettlementsBeforeHorizon(db: DatabaseDriver, horizonTs: number): number {
@@ -159,7 +159,7 @@ export function truncateSettlementsBeforeHorizon(db: DatabaseDriver, horizonTs: 
   const result = db
     .prepare("DELETE FROM relay_settlements WHERE settled_at IS NOT NULL AND settled_at < ?")
     .run(horizonTs);
-  return (result as { changes: number }).changes;
+  return result.changes;
 }
 
 export function truncateCredentialAnchorBatchesBeforeHorizon(
@@ -174,7 +174,7 @@ export function truncateCredentialAnchorBatchesBeforeHorizon(
       "DELETE FROM relay_credential_anchor_batches WHERE anchored_at IS NOT NULL AND anchored_at < ?",
     )
     .run(horizonTs);
-  return (result as { changes: number }).changes;
+  return result.changes;
 }
 
 export function truncateRevocationEventsBeforeHorizon(
@@ -184,7 +184,7 @@ export function truncateRevocationEventsBeforeHorizon(
   const result = db
     .prepare("DELETE FROM relay_revocation_events WHERE timestamp < ?")
     .run(horizonTs);
-  return (result as { changes: number }).changes;
+  return result.changes;
 }
 
 export function truncateDisputesBeforeHorizon(db: DatabaseDriver, horizonTs: number): number {
@@ -199,7 +199,7 @@ export function truncateDisputesBeforeHorizon(db: DatabaseDriver, horizonTs: num
          AND COALESCE(final_at, expired_at) < ?`,
     )
     .run(horizonTs);
-  return (result as { changes: number }).changes;
+  return result.changes;
 }
 
 /**
@@ -336,7 +336,7 @@ async function solicitFromPeer(
       return { peerId: peer.peer_relay_id, witness: null, error: "signature_invalid" };
     }
     const witness: HorizonWitness = {
-      motebit_id: response.motebit_id as never,
+      motebit_id: response.motebit_id,
       signature: response.signature,
       ...(response.inclusion_proof !== undefined
         ? { inclusion_proof: response.inclusion_proof }

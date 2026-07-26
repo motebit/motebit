@@ -93,14 +93,14 @@ type ConsolidationAction = "ADD" | "UPDATE" | "REINFORCE" | "NOOP";
 
 function extractConsolidationAction(event: EventLogEntry): ConsolidationAction | null {
   const payload = event.payload;
-  if (payload.action != null) {
-    const action = String(payload.action as string).toUpperCase();
+  if (typeof payload.action === "string") {
+    const action = payload.action.toUpperCase();
     if (action === "ADD" || action === "UPDATE" || action === "REINFORCE" || action === "NOOP") {
       return action;
     }
   }
-  if (payload.consolidation_action != null) {
-    const action = String(payload.consolidation_action as string).toUpperCase();
+  if (typeof payload.consolidation_action === "string") {
+    const action = payload.consolidation_action.toUpperCase();
     if (action === "ADD" || action === "UPDATE" || action === "REINFORCE" || action === "NOOP") {
       return action;
     }

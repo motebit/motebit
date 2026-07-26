@@ -263,11 +263,11 @@ export async function signCertAsSubject<
   return {
     ...cert,
     subject_signature: {
-      motebit_id: motebitId as never,
+      motebit_id: motebitId,
       suite: DELETION_CERTIFICATE_SUITE,
       signature: toBase64Url(sig),
     },
-  } as T;
+  };
 }
 
 /** Sign a multi-signature cert as the operator. */
@@ -283,7 +283,7 @@ export async function signCertAsOperator<
       suite: DELETION_CERTIFICATE_SUITE,
       signature: toBase64Url(sig),
     },
-  } as T;
+  };
 }
 
 /** Sign a multi-signature cert as a delegate (multi-hop authorization). */
@@ -300,12 +300,12 @@ export async function signCertAsDelegate<
   return {
     ...cert,
     delegate_signature: {
-      motebit_id: delegateMotebitId as never,
+      motebit_id: delegateMotebitId,
       delegation_receipt_id: delegationReceiptId,
       suite: DELETION_CERTIFICATE_SUITE,
       signature: toBase64Url(sig),
     },
-  } as T;
+  };
 }
 
 /** Sign a multi-signature cert as the guardian (enterprise custody). */
@@ -321,7 +321,7 @@ export async function signCertAsGuardian<
       suite: DELETION_CERTIFICATE_SUITE,
       signature: toBase64Url(sig),
     },
-  } as T;
+  };
 }
 
 /**
@@ -360,7 +360,7 @@ export async function signHorizonWitness(
   const bytes = canonicalizeHorizonCertForWitness(cert);
   const sig = await signBySuite(DELETION_CERTIFICATE_SUITE, bytes, privateKey);
   const witness: HorizonWitness = {
-    motebit_id: witnessMotebitId as never,
+    motebit_id: witnessMotebitId,
     signature: toBase64Url(sig),
     ...(inclusionProof !== undefined ? { inclusion_proof: inclusionProof } : {}),
   };
@@ -397,7 +397,7 @@ export function canonicalizeHorizonWitnessRequestBody(body: HorizonWitnessReques
     ...body,
     witnessed_by: [],
     signature: "",
-  } as Extract<DeletionCertificate, { kind: "append_only_horizon" }>);
+  });
 }
 
 /**
@@ -517,7 +517,7 @@ async function verifyMultiSignatureCert(
       bytes,
       cert.subject_signature.signature,
       cert.subject_signature.suite,
-      await ctx.resolveMotebitPublicKey(cert.subject_signature.motebit_id as string),
+      await ctx.resolveMotebitPublicKey(cert.subject_signature.motebit_id),
     );
     if (!subjectValid) errors.push("subject_signature invalid");
   }
@@ -539,7 +539,7 @@ async function verifyMultiSignatureCert(
       bytes,
       cert.delegate_signature.signature,
       cert.delegate_signature.suite,
-      await ctx.resolveMotebitPublicKey(cert.delegate_signature.motebit_id as string),
+      await ctx.resolveMotebitPublicKey(cert.delegate_signature.motebit_id),
     );
     if (!delegateValid) errors.push("delegate_signature invalid");
   }
@@ -615,7 +615,7 @@ async function verifyHorizonCert(
   // Issuer key resolution depends on subject discriminator.
   const issuerKey =
     cert.subject.kind === "motebit"
-      ? await ctx.resolveMotebitPublicKey(cert.subject.motebit_id as string)
+      ? await ctx.resolveMotebitPublicKey(cert.subject.motebit_id)
       : await ctx.resolveOperatorPublicKey(cert.subject.operator_id);
 
   const issuerValid = await verifyOneSignature(issuerBytes, cert.signature, cert.suite, issuerKey);
@@ -627,7 +627,7 @@ async function verifyHorizonCert(
   // (a forged witness fails issuer-signature verification above).
   let witnessesValid = 0;
   for (const w of cert.witnessed_by) {
-    const key = await ctx.resolveMotebitPublicKey(w.motebit_id as string);
+    const key = await ctx.resolveMotebitPublicKey(w.motebit_id);
     const ok = await verifyOneSignature(witnessBytes, w.signature, cert.suite, key);
     if (ok) witnessesValid++;
     else errors.push(`witness ${w.motebit_id as string} signature invalid`);

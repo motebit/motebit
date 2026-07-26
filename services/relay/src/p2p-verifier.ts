@@ -368,7 +368,7 @@ function downgradeP2pTrust(db: DatabaseDriver, taskId: string, workerId: string)
              last_seen_at = ?
          WHERE motebit_id = ? AND remote_motebit_id = ?`,
       )
-      .run(Date.now(), delegatorId, workerId) as { changes: number };
+      .run(Date.now(), delegatorId, workerId);
 
     if (updateResult.changes === 0) {
       logger.warn("p2p_verifier.downgrade_no_trust_record", { delegatorId, workerId, taskId });

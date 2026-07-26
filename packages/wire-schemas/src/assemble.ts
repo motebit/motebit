@@ -20,7 +20,7 @@ import { z } from "zod";
 /** Render a zod schema to a draft-07 JSON Schema object (the target every
  * committed wire schema uses). Centralized so the options live in one place. */
 export function toDraft7(schema: z.ZodType): Record<string, unknown> {
-  return z.toJSONSchema(schema, { target: "draft-7" }) as Record<string, unknown>;
+  return z.toJSONSchema(schema, { target: "draft-7" });
 }
 
 export function assembleJsonSchemaFor(

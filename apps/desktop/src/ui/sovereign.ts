@@ -1,10 +1,8 @@
-import type { InvokeFn } from "../index";
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
 import { toMicro } from "@motebit/sdk";
 import {
   createSovereignController,
-  type CredentialEntry,
   type LedgerManifest,
   type SovereignController,
   type SovereignFetchAdapter,
@@ -170,7 +168,7 @@ function createDesktopAdapter(ctx: DesktopContext): SovereignFetchAdapter {
       const micro = await runtime?.getSolanaBalance?.();
       return micro != null ? Number(micro) : null;
     },
-    getLocalCredentials: () => ctx.app.getLocalCredentials() as CredentialEntry[],
+    getLocalCredentials: () => ctx.app.getLocalCredentials(),
     // Local-first Identity tab (Sovereign Arc 2 — desktop + mobile mirror).
     // Reads the bootstrap IdentityCreated event from the Tauri-side SQLite
     // event store. Doctrine: docs/doctrine/protocol-primacy.md.
@@ -805,7 +803,7 @@ export function initSovereign(ctx: DesktopContext): SovereignAPI {
     void (async () => {
       try {
         const { invoke } = await import("@tauri-apps/api/core");
-        const content = await ctx.app.exportIdentityFile(invoke as InvokeFn);
+        const content = await ctx.app.exportIdentityFile(invoke);
         if (content == null || content === "") {
           ctx.showToast("Export failed — keypair not available");
           return;

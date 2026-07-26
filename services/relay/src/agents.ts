@@ -555,7 +555,7 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
       throw new HTTPException(401, { message: "Token verification failed" });
     }
 
-    c.set("callerMotebitId" as never, claims.mid as never);
+    c.set("callerMotebitId" as never, claims.mid);
     await next();
   });
 }
@@ -734,7 +734,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     let pubKeyHex: string | undefined;
     const regRow = moteDb.db
       .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
-      .get(motebitId as string) as { public_key: string } | undefined;
+      .get(motebitId) as { public_key: string } | undefined;
     if (regRow?.public_key) {
       pubKeyHex = regRow.public_key;
     } else {
@@ -992,7 +992,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       throw new HTTPException(401, { message: "Token verification failed" });
     }
 
-    c.set("callerMotebitId" as never, claims.mid as never);
+    c.set("callerMotebitId" as never, claims.mid);
     await next();
   });
 
@@ -1024,7 +1024,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       throw new HTTPException(401, { message: "Token verification failed" });
     }
 
-    c.set("callerMotebitId" as never, claims.mid as never);
+    c.set("callerMotebitId" as never, claims.mid);
     await next();
   });
 

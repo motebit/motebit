@@ -208,12 +208,7 @@ export async function signVerifiableCredential<T = Record<string, unknown>>(
   privateKey: Uint8Array,
   publicKey: Uint8Array,
 ): Promise<VerifiableCredential<T>> {
-  const proof = await signDataIntegrity(
-    unsignedVC as unknown as Record<string, unknown>,
-    privateKey,
-    publicKey,
-    "assertionMethod",
-  );
+  const proof = await signDataIntegrity(unsignedVC, privateKey, publicKey, "assertionMethod");
   return { ...unsignedVC, proof };
 }
 
@@ -249,13 +244,8 @@ export async function signVerifiablePresentation(
   privateKey: Uint8Array,
   publicKey: Uint8Array,
 ): Promise<VerifiablePresentation> {
-  const proof = await signDataIntegrity(
-    unsignedVP as unknown as Record<string, unknown>,
-    privateKey,
-    publicKey,
-    "authentication",
-  );
-  return { ...unsignedVP, proof } as VerifiablePresentation;
+  const proof = await signDataIntegrity(unsignedVP, privateKey, publicKey, "authentication");
+  return { ...unsignedVP, proof };
 }
 
 export async function verifyVerifiablePresentation(

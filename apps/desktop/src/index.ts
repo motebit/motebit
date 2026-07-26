@@ -634,7 +634,7 @@ export class DesktopApp {
     let invoke: InvokeFn;
     try {
       const mod = await import("@tauri-apps/api/core");
-      invoke = mod.invoke as InvokeFn;
+      invoke = mod.invoke;
     } catch {
       return {
         status: "skipped",
@@ -812,7 +812,7 @@ export class DesktopApp {
   ): Promise<Awaited<ReturnType<MotebitRuntime["events"]["query"]>>> {
     const attached = this.attachedRead<Awaited<ReturnType<MotebitRuntime["events"]["query"]>>>(
       "events_query",
-      filter as Record<string, unknown>,
+      filter,
     );
     if (attached) return attached;
     if (!this.runtime) return Promise.resolve([]);
@@ -832,7 +832,7 @@ export class DesktopApp {
   ): Promise<Awaited<ReturnType<MotebitRuntime["auditLog"]["query"]>>> {
     const attached = this.attachedRead<Awaited<ReturnType<MotebitRuntime["auditLog"]["query"]>>>(
       "audit_query",
-      opts as Record<string, unknown>,
+      opts,
     );
     if (attached) return attached;
     if (!this.runtime) return Promise.resolve([]);
@@ -1765,7 +1765,7 @@ export class DesktopApp {
         credential_id: crypto.randomUUID(),
         credential_type:
           vc.type.find((t: string) => t !== "VerifiableCredential") ?? "VerifiableCredential",
-        credential: vc as unknown as Record<string, unknown>,
+        credential: vc,
         issued_at: vc.validFrom != null ? new Date(vc.validFrom).getTime() : Date.now(),
       }));
   }

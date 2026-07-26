@@ -168,7 +168,7 @@ function createMobileAdapter(
       const micro = await runtime?.getSolanaBalance?.();
       return micro != null ? Number(micro) : null;
     },
-    getLocalCredentials: () => app.getLocalCredentials() as CredentialEntry[],
+    getLocalCredentials: () => app.getLocalCredentials(),
     // Local-first Identity tab (Sovereign Arc 2 — desktop + mobile mirror).
     // Reads the bootstrap IdentityCreated event from the Expo SQLite event
     // store; the Sovereign Identity tab renders "Current identity" hero

@@ -309,7 +309,7 @@ async function decodeFrameForTexture(dataUri: string): Promise<DecodedScreencast
           // content renders upside-down. Pre-flip here makes the
           // bitmap's native orientation match WebGL's, and the slab's
           // texture.flipY default keeps working for tier-3 HTMLImage.
-          return await g.createImageBitmap(frame as unknown as ImageBitmapSource, {
+          return await g.createImageBitmap(frame, {
             colorSpaceConversion: "none",
             premultiplyAlpha: "default",
             imageOrientation: "flipY",
