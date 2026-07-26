@@ -102,8 +102,12 @@ import {
   isAgentRevocationReason,
   type AgentRevocationReason,
   isBondCommitment,
+  toMicro,
+  computeP2pFeeMicro,
+  PLATFORM_FEE_RATE,
 } from "@motebit/protocol";
 import { recordBondCommitment, getBestLiveBond } from "./bond-store.js";
+import { getListingUnitCost } from "./tasks.js";
 import {
   buildSignedRevocationRecord,
   insertRevocationRecord,
@@ -375,6 +379,8 @@ export interface AgentsDeps {
   connections: Map<string, ConnectedDevice[]>;
   taskRouter: TaskRouter;
   apiToken?: string;
+  /** Platform fee rate for the P2P eligibility pre-flight's expected-fee hint. Defaults to PLATFORM_FEE_RATE. */
+  platformFeeRate?: number;
   federationConfig?: { displayName?: string; endpointUrl?: string };
   federationQueryCache: Map<string, number>;
   /** Auth helpers from relay auth layer */
@@ -563,6 +569,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     connections,
     taskRouter,
     apiToken,
+    platformFeeRate,
     federationConfig,
     federationQueryCache,
     parseTokenPayloadUnsafe,
@@ -570,6 +577,10 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     isTokenBlacklisted,
     isAgentRevoked,
   } = deps;
+  // Fee rate for the P2P eligibility pre-flight's expected-fee hint — the SAME
+  // rate the submission gate uses, so the hint cannot disagree with what the
+  // relay will accept.
+  const p2pFeeRate = platformFeeRate ?? PLATFORM_FEE_RATE;
 
   // GET /agent/:motebitId/settlements — settlement history for this agent
   /** @internal */
@@ -1730,11 +1741,30 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // identified (master/service token with no `mid`), returns `allowed: true`
     // (advisory — the submission gate still enforces; a privileged caller is not
     // a cold-start sybil risk).
+    //
+    // It ALSO returns the canonical expected P2P payment amounts for the given
+    // `capability`, so a client pays EXACTLY what the submission gate validates
+    // — closing the sibling broadcast-then-AMOUNT-mismatch window (a price
+    // change between the client's listing read and submission, or client-side
+    // unit arithmetic drift — the listing unit_cost is in DOLLARS). The amounts
+    // MIRROR the submission gate (`tasks.ts`): worker leg = toMicro(unit_cost),
+    // fee = computeP2pFeeMicro(worker leg, feeRate). Absent when the worker has
+    // no priced listing for the capability.
     const workerId = asMotebitId(c.req.param("motebitId"));
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
     const ack = c.req.query("acknowledge_no_history_risk") === "true";
+    const capability = c.req.query("capability") ?? undefined;
+
+    const unitCostDollars = getListingUnitCost(moteDb, workerId, capability);
+    const amounts: { expected_amount_micro?: number; expected_fee_micro?: number } = {};
+    if (unitCostDollars > 0) {
+      const expectedAmountMicro = toMicro(unitCostDollars);
+      amounts.expected_amount_micro = expectedAmountMicro;
+      amounts.expected_fee_micro = computeP2pFeeMicro(expectedAmountMicro, p2pFeeRate);
+    }
+
     if (callerMotebitId == null || callerMotebitId === workerId) {
-      return c.json({ allowed: true, reason: "caller not identified — advisory only" });
+      return c.json({ allowed: true, reason: "caller not identified — advisory only", ...amounts });
     }
     const eligibility = await evaluateSettlementEligibility(
       moteDb.db,
@@ -1742,7 +1772,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       workerId,
       ack,
     );
-    return c.json({ allowed: eligibility.allowed, reason: eligibility.reason });
+    return c.json({ allowed: eligibility.allowed, reason: eligibility.reason, ...amounts });
   });
 
   // POST /api/v1/agents/:motebitId/bond — submit a signed commitment bond.
