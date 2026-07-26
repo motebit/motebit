@@ -2418,8 +2418,8 @@ importers:
   services/code-review:
     dependencies:
       '@anthropic-ai/sdk':
-        specifier: ^0.110.0
-        version: 0.110.0(zod@4.4.3)
+        specifier: ^0.112.3
+        version: 0.112.3(zod@4.4.3)
       '@motebit/mcp-client':
         specifier: workspace:^
         version: link:../../packages/mcp-client
@@ -2684,8 +2684,8 @@ importers:
   services/research:
     dependencies:
       '@anthropic-ai/sdk':
-        specifier: ^0.110.0
-        version: 0.110.0(zod@4.4.3)
+        specifier: ^0.112.3
+        version: 0.112.3(zod@4.4.3)
       '@motebit/mcp-client':
         specifier: workspace:*
         version: link:../../packages/mcp-client
@@ -2840,8 +2840,8 @@ packages:
   '@andrewbranch/untar.js@1.0.3':
     resolution: {integrity: sha512-Jh15/qVmrLGhkKJBdXlK1+9tY4lZruYjsgkDFj08ZmDiWVBLJcqkok7Z0/R0In+i1rScBpJlSvrTS2Lm41Pbnw==}
 
-  '@anthropic-ai/sdk@0.110.0':
-    resolution: {integrity: sha512-hOP4bNYXDFHDxxiEgzlILXrxZIYCDnhe8sry0RDRKD/QnsEpvZcQpablCdm9X/WuD/YgOiSIkkqsL1mLLlTqJw==}
+  '@anthropic-ai/sdk@0.112.3':
+    resolution: {integrity: sha512-wjcozJlitVIuBEw9cj/xBuRznwkhcLmXmNzlFoeHbh4AvrDG3HGZrdvEOTTmobcbhjGkfOpKbmDTCQ4s9LQvCg==}
     hasBin: true
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
@@ -12116,7 +12116,7 @@ snapshots:
 
   '@andrewbranch/untar.js@1.0.3': {}
 
-  '@anthropic-ai/sdk@0.110.0(zod@4.4.3)':
+  '@anthropic-ai/sdk@0.112.3(zod@4.4.3)':
     dependencies:
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.0.0
