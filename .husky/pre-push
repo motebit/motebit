@@ -52,8 +52,24 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   # with fallback) — merged 2026-02-19, only in v11.0.0-alpha, not backported.
   # `--ignore-registry-errors` is the documented, intended workaround: audit
   # still runs and reports findings, only the exit code tolerates registry-
-  # side errors. Mirrors the CI workflow's audit step.
-  run_phase "audit" pnpm audit --audit-level=critical --ignore-registry-errors
+  # side errors.
+  #
+  # That slow endpoint also makes audit the SLOWEST phase (~127s, measured
+  # 2026-07-25 — more than gates + format combined) — yet its result changes
+  # only when DEPENDENCIES change. So run it locally only when this push
+  # touches pnpm-lock.yaml (the canonical dependency-change signal); otherwise
+  # CI's audit step (ci.yml, on every pull_request to main) is the backstop.
+  # Diff-scoping, NOT removal — a dependency-changing push still audits before
+  # it can ship a vuln. Fails SAFE: audits if the diff can't be computed. Same
+  # shape as the gate-effectiveness scoping below.
+  _deps_changed=$(git diff --name-only origin/main...HEAD -- pnpm-lock.yaml 2>/dev/null || echo __DIFF_ERR__)
+  if [ -n "$_deps_changed" ]; then
+    run_phase "audit (pnpm-lock.yaml changed)" pnpm audit --audit-level=critical --ignore-registry-errors
+  else
+    [ -z "$MOTEBIT_PREPUSH_QUIET" ] &&
+      printf '\n▷ pre-push: audit — SKIPPED (no pnpm-lock.yaml changes; CI runs it)\n' >&2
+  fi
+
   run_phase "gates (pnpm check)" pnpm check
 
   # check-gates-effective PERTURBS every gate (re-runs each gate under an
