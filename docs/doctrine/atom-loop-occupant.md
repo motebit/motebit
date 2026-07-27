@@ -50,6 +50,16 @@ Per-claim status, five states: _implemented_ (library/construction), _schema-enf
 | Raw strings cannot inhabit id types      | `Brand<T,B>` branded ids                                                                                                                             | **Declared only** — the optional-brand hole: the brand key is optional, so a raw string assigns without a cast; tightening touches every consumer and is its own ticket         |
 | Verify family fails closed everywhere    | [verify-family-fail-closed](verify-family-fail-closed.md)                                                                                            | **Deferred fail-open** on two external seams (standing-delegation revocation, receipt-chain embedded-key fallback), named triggers recorded there; internal R4 path fail-closed |
 
+## The audit
+
+Before a new architectural mechanism ships, three questions with veto power:
+
+1. **Does it preserve the atom?** Any state change or claim-of-act not grounded in a signed canonical artifact is testimony entering a proof system. A self-asserted boolean, a client-supplied balance, an unverified "the environment says so" — each fails here before implementation review begins.
+2. **Does it preserve the loop?** Outbound: does anything cross the boundary that the signer did not choose under policy it holds? Inbound: does any consequence fail to return as signed interior state — or any state mutate without a signed cause?
+3. **Does it preserve the boundary between architecture and occupant?** Two failure directions, both fatal: making the occupant constitutional (a canonical model, an invariant that only holds for one intelligence), and delegating constitutional enforcement _to_ the occupant — an invariant that depends on the model behaving is a prompt rule, and [runtime-invariants-over-prompt-rules](runtime-invariants-over-prompt-rules.md) already forbids it.
+
+These are conservation tests: veto power, not design sufficiency. Retrodicted against decisions made for independent reasons, they predict the outcomes — the self-declared deposit route deleted (question 2), sandbox attestation's never-a-self-asserted-boolean (question 1), the `EvalAttestation` carve-out (questions 1–2), intelligence-pluggability itself (question 3). They would not have invented the commitment bond, the fee structure, or the five spatial primitives — sufficiency comes from the physics and the thesis, not from here.
+
 ## Boundary
 
 This is a lens with a table, not a theorem — it inherits the humility of [identity-as-lineage](identity-as-lineage.md): no claim about cognition, consciousness, or what agency _is_, only about what makes it accountable and where that is enforced. It legislates nothing new: the executable-legibility discipline it follows is [agentic-era-engineering](agentic-era-engineering.md)'s, and the declared-vs-proven split in the table is [operator-transparency](operator-transparency.md)'s, applied per-claim — this page enacts those laws rather than restating them. A regression on the atom is never a bug; it is a collapse, and it should be triaged as one.
