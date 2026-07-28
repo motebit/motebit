@@ -275,6 +275,26 @@ export class InteractiveDelegationManager {
         });
 
         if (!result.ok) {
+          // A failure AFTER the onchain payment settled is categorically
+          // different from a failure that spent nothing, and flattening both
+          // into one string is how a transient poll error becomes a second
+          // real-money charge (#433): the model reads "timeout", concludes the
+          // hire didn't happen, and delegates again. Name the money.
+          const settled = result.error.settledPayment;
+          if (settled) {
+            return {
+              ok: false,
+              error:
+                `PAYMENT_ALREADY_SETTLED — the hire SUCCEEDED and you have already paid ` +
+                `${(settled.paidMicro / 1_000_000).toFixed(4)} USDC (+ ` +
+                `${(settled.feeMicro / 1_000_000).toFixed(4)} fee) onchain, tx ${settled.txHash}. ` +
+                `Only RESULT DELIVERY failed (${result.error.code}: ${result.error.message}). ` +
+                `Do NOT delegate this task again — a second delegation broadcasts a SECOND ` +
+                `payment for work already bought. The task id is ${settled.taskId}; the worker's ` +
+                `result may still arrive or be recoverable. Tell the user the work was paid for ` +
+                `and the result did not come back, and let them decide.`,
+            };
+          }
           return { ok: false, error: `${result.error.code}: ${result.error.message}` };
         }
 

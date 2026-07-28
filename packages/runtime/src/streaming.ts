@@ -24,6 +24,23 @@ import type { StreamChunk } from "./runtime-config.js";
 
 // Re-import the helper — it's file-local in index.ts, so we duplicate it here.
 // Exact copy of the function from index.ts.
+/**
+ * Stable identity for "the human refused THIS action" (#433). Tool name plus
+ * the exact arguments, key-sorted so object-key order can't mint a fresh
+ * identity for a byte-identical intent.
+ *
+ * Deliberately EXACT, not fuzzy: this key gates a re-prompt suppression, so a
+ * false match would silently swallow a genuinely different request. A model
+ * that meaningfully reworks its arguments gets to ask once more; the prompt
+ * text it just received tells it not to.
+ */
+function deniedIntentKey(toolName: string, args: Record<string, unknown>): string {
+  const canonical = JSON.stringify(
+    Object.fromEntries(Object.entries(args).sort(([a], [b]) => a.localeCompare(b))),
+  );
+  return `${toolName}:${canonical}`;
+}
+
 function stripDisplayTags(text: string): { clean: string; pending: string } {
   const clean = text
     .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
@@ -221,6 +238,24 @@ interface PendingApproval {
 export class StreamingManager {
   private _pendingApproval: PendingApproval | null = null;
   private approvalTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Intents the human has REFUSED this session, keyed by tool + exact args
+   * (`deniedIntentKey`). A human "no" is the strongest halt signal in the
+   * system and must behave like one (#433).
+   *
+   * Why this lives on the manager and not the turn context: a denial resumes
+   * through a FRESH `runTurnStreaming` continuation, which mints a new turn
+   * context — so `maxCallsPerTurn` resets to zero and the loop's
+   * consecutive-same-tool brake resets too. Every per-turn counter is blind
+   * across an approval boundary, which is exactly the boundary a denial
+   * crosses. Session-scoped state is the only thing that survives it.
+   *
+   * Observed 2026-07-28 with real money: denying a paid delegation returned a
+   * neutral "User denied this tool call.", the model re-planned, re-proposed
+   * the identical hire, and re-prompted — indefinitely. Ctrl-C was the only
+   * exit.
+   */
+  private readonly deniedIntents = new Map<string, number>();
   private approvalExpiredCallback: (() => void) | null = null;
   private _isProcessing = false;
 
@@ -425,6 +460,42 @@ export class StreamingManager {
         }
       }
 
+      // Approval request. A re-proposal of an intent the human already
+      // refused NEVER reaches the human again (#433): re-asking after a "no"
+      // is the loop, and with a money-blind prompt an exhausted user is one
+      // keystroke from an unwanted irreversible spend. Suppress the request
+      // (the chunk is not yielded, so no surface renders a prompt) and hand
+      // the model a terminal refusal instead.
+      if (
+        chunk.type === "approval_request" &&
+        this.deniedIntents.has(deniedIntentKey(chunk.name, chunk.args))
+      ) {
+        const times = this.deniedIntents.get(deniedIntentKey(chunk.name, chunk.args)) ?? 1;
+        this.deps.injectIntermediateMessages(
+          {
+            role: "assistant" as const,
+            content: `[tool_use: ${chunk.name}(${JSON.stringify(chunk.args)})]`,
+          },
+          {
+            role: "user" as const,
+            content: `[tool_result: ${JSON.stringify({
+              ok: false,
+              error: "REFUSED_BY_HUMAN_ALREADY",
+              terminal: true,
+              message:
+                `You already proposed this exact ${chunk.name} call and the human refused it ` +
+                `(${times}×). It was NOT shown to them again. Stop retrying this action ` +
+                `entirely and answer the user directly instead.`,
+            })}]`,
+          },
+        );
+        yield {
+          type: "text" as const,
+          text: `\n[refused already — not asking again: ${chunk.name}]\n`,
+        };
+        continue;
+      }
+
       // Approval request: capture pending state and start timeout
       if (chunk.type === "approval_request") {
         this._pendingApproval = {
@@ -565,7 +636,17 @@ export class StreamingManager {
           { role: "user" as const, content: `[tool_result: ${JSON.stringify(sanitized)}]` },
         );
       } else {
-        // Push denial into conversation history
+        // Record the refusal BEFORE the continuation turn runs, so a
+        // re-proposal of this exact intent is short-circuited rather than
+        // re-prompting the human (#433).
+        const key = deniedIntentKey(pending.toolName, pending.args);
+        this.deniedIntents.set(key, (this.deniedIntents.get(key) ?? 0) + 1);
+
+        // Push denial into conversation history. The wording is load-bearing:
+        // a neutral "denied" reads to the model as a retryable failure — the
+        // same shape as a network error — so it re-plans and re-proposes the
+        // identical action. A refusal is a DECISION, not a fault; say so, and
+        // name the only legitimate next move (ask the human).
         this.deps.injectIntermediateMessages(
           {
             role: "assistant" as const,
@@ -573,7 +654,17 @@ export class StreamingManager {
           },
           {
             role: "user" as const,
-            content: `[tool_result: {"ok":false,"error":"User denied this tool call."}]`,
+            content: `[tool_result: ${JSON.stringify({
+              ok: false,
+              error: "REFUSED_BY_HUMAN",
+              terminal: true,
+              message:
+                `The human reviewed this exact ${pending.toolName} call and refused it. ` +
+                `This is a decision, not a failure — do NOT retry it, do NOT re-propose it ` +
+                `with reworded arguments, and do NOT route around it with a different tool. ` +
+                `Stop this line of action and tell the user plainly what you were going to do ` +
+                `and that they declined, then ask what they would like instead.`,
+            })}]`,
           },
         );
       }
