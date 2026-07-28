@@ -512,6 +512,14 @@ describe("P2P Settlement Cycle E2E", () => {
     });
     expect(receiptRes.status).toBe(200);
 
+    // Paid-result retention (#424): a completed P2P task's record must outlive
+    // the free-task TTL — the delegator already settled onchain, so reaping the
+    // receipt at 10min makes a paid artifact unrecoverable after a stalled poll.
+    const queueRow = relay.moteDb.db
+      .prepare("SELECT expires_at FROM relay_task_queue WHERE task_id = ?")
+      .get(taskId) as { expires_at: number };
+    expect(queueRow.expires_at).toBeGreaterThan(Date.now() + 10 * 60 * 1000);
+
     // === STEP 3: VERIFY SETTLEMENT AUDIT RECORD ===
     const allSettlements = relay.moteDb.db
       .prepare("SELECT * FROM relay_settlements WHERE task_id = ?")

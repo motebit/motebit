@@ -101,6 +101,18 @@ const logger = createLogger({ service: "tasks" });
 // receipt-time extension below) — sweeping a live task's allocation would
 // open a refund/settlement double-credit race.
 export const TASK_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+/**
+ * Retention for a COMPLETED task the delegator paid for (P2P settlement).
+ * A paid artifact must outlive a slow client: the payer already settled
+ * onchain, so reaping the receipt at the free-task TTL makes the paid
+ * result unrecoverable when polling stalls (token expiry, network) — the
+ * #424 fund-loss-adjacent shape. Allocation-horizon safety: P2P tasks hold
+ * NO budget allocation (they settle onchain, not from a relay-custody
+ * allocation), so the `STALE_ALLOCATION_HORIZON_MS >= 3 * TASK_TTL_MS`
+ * refund-race guard in index.ts is not implicated by this longer retention.
+ */
+export const PAID_TASK_RESULT_RETENTION_MS = 60 * 60 * 1000; // 1 hour
 const MAX_TASK_QUEUE_SIZE = 100_000; // Hard cap prevents memory exhaustion
 
 /** Shape of each entry in the in-memory task queue. */
@@ -3154,6 +3166,17 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       if (!claims?.mid) {
         throw new AuthenticationError("AUTH_INVALID_TOKEN", "Invalid token");
       }
+      // Expiry gets its own honest error BEFORE the boolean verify collapses
+      // every failure into "device not authorized" (#424): a long-running task
+      // outlives the 5-minute token TTL, and the client's correct remedy is
+      // re-mint — not device re-registration. Reading exp from the unverified
+      // payload is safe here: it only selects the error message, never grants.
+      if (typeof claims.exp === "number" && claims.exp < Date.now()) {
+        throw new AuthenticationError(
+          "AUTH_TOKEN_EXPIRED",
+          "Token expired — mint a fresh task:query token and retry",
+        );
+      }
       const verified = await verifySignedTokenForDevice(
         token,
         claims.mid,
@@ -3175,7 +3198,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     if (!entry) {
       throw new TaskError(
         "TASK_NOT_FOUND",
-        `Task not found — it may have expired (TTL ${Math.round(TASK_TTL_MS / 60_000)}min) or the task_id is invalid`,
+        `Task not found — it may have expired (TTL ${Math.round(TASK_TTL_MS / 60_000)}min; paid results retained ${Math.round(PAID_TASK_RESULT_RETENTION_MS / 60_000)}min) or the task_id is invalid`,
         404,
       );
     }
@@ -3216,6 +3239,14 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     if (apiToken == null || token !== apiToken) {
       // Verify as device signed token
       if (enableDeviceAuth && token.includes(".")) {
+        // Same expiry-before-verify honesty as the task:query poll route (#424).
+        const resultClaims = parseTokenPayloadUnsafe(token);
+        if (typeof resultClaims?.exp === "number" && resultClaims.exp < Date.now()) {
+          throw new AuthenticationError(
+            "AUTH_TOKEN_EXPIRED",
+            "Token expired — mint a fresh task:result token and retry",
+          );
+        }
         const verified = await verifySignedTokenForDevice(
           token,
           motebitId,
@@ -3236,7 +3267,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     if (!entry) {
       throw new TaskError(
         "TASK_NOT_FOUND",
-        `Task not found — it may have expired (TTL ${Math.round(TASK_TTL_MS / 60_000)}min) or the task_id is invalid`,
+        `Task not found — it may have expired (TTL ${Math.round(TASK_TTL_MS / 60_000)}min; paid results retained ${Math.round(PAID_TASK_RESULT_RETENTION_MS / 60_000)}min) or the task_id is invalid`,
         404,
       );
     }
@@ -3294,9 +3325,15 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       );
     }
 
-    // Update task status and store receipt before settlement
+    // Update task status and store receipt before settlement. Paid (P2P)
+    // results are retained longer than the free-task TTL — the payer settled
+    // onchain and must be able to recover the artifact after a stalled poll.
+    const resultRetentionMs =
+      entry.settlement_mode === "p2p" || entry.p2p_payment_proof != null
+        ? PAID_TASK_RESULT_RETENTION_MS
+        : TASK_TTL_MS;
     entry.receipt = receipt;
-    entry.expiresAt = Math.max(entry.expiresAt, Date.now() + TASK_TTL_MS);
+    entry.expiresAt = Math.max(entry.expiresAt, Date.now() + resultRetentionMs);
     entry.task.status =
       receipt.status === "completed"
         ? AgentTaskStatus.Completed

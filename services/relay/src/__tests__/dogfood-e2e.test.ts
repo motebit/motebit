@@ -424,6 +424,32 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
     expect(body.status).toBe("completed");
   });
 
+  it("12a. An expired task:query token gets the honest AUTH_TOKEN_EXPIRED, never device-not-authorized (#424)", async () => {
+    // A long-running task legitimately outlives the 5-minute token TTL. The
+    // boolean device-verify collapses every failure into AUTHZ_DEVICE_NOT_AUTHORIZED,
+    // which misdirects the client toward device re-registration when the real
+    // remedy is re-minting. Expiry must be named before the collapse.
+    const now = Date.now();
+    const expiredToken = await createSignedToken(
+      {
+        mid: motebitIdA,
+        did: relayDeviceIdA,
+        iat: now - 10 * 60 * 1000,
+        exp: now - 5 * 60 * 1000,
+        jti: crypto.randomUUID(),
+        aud: "task:query",
+      },
+      keypairA.privateKey,
+    );
+    const res = await relay.app.request(`/agent/${motebitIdB}/task/${sharedTaskId}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${expiredToken}` },
+    });
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { code: string };
+    expect(body.code).toBe("AUTH_TOKEN_EXPIRED");
+  });
+
   it("12. Agent A polls the completed task with a signed device token (task:query audience)", async () => {
     // Agent A uses its own device token with "task:query" audience to poll.
     // The relay verifies the token against A's identity (from token claims.mid),
