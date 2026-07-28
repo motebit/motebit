@@ -381,6 +381,64 @@ describe("resolveAndSubmitP2pDelegation", () => {
     if (!result.ok) expect(result.error.code).toBe("malformed_request");
   });
 
+  it("carries the settled payment on a post-broadcast poll failure so a caller cannot re-pay (#433)", async () => {
+    vi.useFakeTimers();
+    const params = resolveParams({ timeoutMs: 1 });
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p,relay" },
+        ]),
+        listing: listingOk([{ capability: "web_search", unit_cost: 0.5 }]),
+        submit: () => jsonResponse(200, { task_id: "task-paid" }),
+        // The payment settled; only the RESULT poll fails (the transient
+        // relay 5xx / reaped-task shape that caused the live double-hire).
+        poll: () => jsonResponse(503, ""),
+      }),
+    );
+
+    const promise = resolveAndSubmitP2pDelegation(params);
+    await vi.advanceTimersByTimeAsync(5000);
+    const result = await promise;
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      // The failure is still a failure — but it now names the money, so the
+      // caller can tell "paid, undelivered" from "nothing happened".
+      expect(result.error.settledPayment).toBeDefined();
+      expect(result.error.settledPayment?.txHash).toBe("p2p-tx");
+      expect(result.error.settledPayment?.paidMicro).toBe(toMicro(0.5));
+      expect(result.error.settledPayment?.taskId).toBe("task-paid");
+    }
+    // Exactly one broadcast — the payment is never re-built on a poll failure.
+    expect(params.buildP2pPayment).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves settledPayment ABSENT when the failure precedes any broadcast (#433)", async () => {
+    // The negative half: a pre-broadcast failure must NOT claim money moved,
+    // or every honest retry would be suppressed as a phantom double-pay.
+    const params = resolveParams({ maxTotalMicro: toMicro(0.4) });
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p,relay" },
+        ]),
+        listing: listingOk([{ capability: "web_search", unit_cost: 0.5 }]),
+      }),
+    );
+
+    const result = await resolveAndSubmitP2pDelegation(params);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("budget_exceeded");
+      expect(result.error.settledPayment).toBeUndefined();
+    }
+    expect(params.buildP2pPayment).not.toHaveBeenCalled();
+  });
+
   it("refuses an over-budget resolution BEFORE broadcasting — budget_exceeded, nothing paid (#423)", async () => {
     // Worker $0.50 + 5% fee > the $0.40 ceiling. The guard runs on the
     // RESOLVED total (relay-priced), after pricing and before any money moves.

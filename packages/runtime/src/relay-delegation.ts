@@ -161,6 +161,26 @@ export interface DelegationError {
    * field is safe to relay in a signed refusal receipt.
    */
   denial?: string;
+  /**
+   * Set ONLY when the delegator's onchain payment ALREADY SETTLED but the
+   * result could not be retrieved (poll timeout, transient relay 5xx, task
+   * record reaped). The hire happened and the money is gone; only delivery
+   * failed.
+   *
+   * Load-bearing for money safety (#433): without this, a post-broadcast
+   * poll failure is indistinguishable from a never-hired failure
+   * (`worker_not_payable`, `p2p_ineligible`), so an autonomous caller reads
+   * "it failed" and RE-DELEGATES — broadcasting a SECOND payment for work
+   * already bought. A caller seeing this field MUST resolve by re-fetching
+   * this `taskId`, never by re-hiring.
+   */
+  settledPayment?: {
+    txHash: string;
+    paidMicro: number;
+    feeMicro: number;
+    /** The relay task the payment bought — the handle to re-fetch, never re-pay. */
+    taskId: string;
+  };
 }
 
 /**
@@ -719,7 +739,23 @@ export async function submitP2pDelegation(
       },
     };
   }
-  return result;
+  // The poll failed AFTER the payment settled onchain. Carry the settlement
+  // fact into the error so the caller cannot mistake "I couldn't fetch the
+  // result" for "the hire never happened" — the #433 double-pay shape. The
+  // remedy for this failure is re-FETCHING `taskId`, never re-delegating.
+  const paidProof = params.paymentProof;
+  return {
+    ok: false,
+    error: {
+      ...result.error,
+      settledPayment: {
+        txHash: paidProof.tx_hash,
+        paidMicro: paidProof.amount_micro,
+        feeMicro: paidProof.fee_amount_micro + (paidProof.b_fee_amount_micro ?? 0),
+        taskId,
+      },
+    },
+  };
 }
 
 /** Trivial hex → bytes (deterministic parse, no crypto/state/IO) — inlined per

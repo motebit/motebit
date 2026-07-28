@@ -1038,6 +1038,76 @@ describe("resumeAfterApproval — signed consent decision", () => {
     expect(await verifyApprovalDecision(d, keypair.publicKey)).toBe(true);
   });
 
+  it("a denial tells the model the refusal is TERMINAL, not a retryable failure (#433)", async () => {
+    await enterPendingApproval("tc-terminal", "delegate_to_agent", { prompt: "research X" });
+    await collectChunks(runtime.resumeAfterApproval(false));
+
+    const history = runtime.getConversationHistory();
+    const injected = history.map((m) => String(m.content)).join("\n");
+    // The wording is the fix: a neutral "denied" reads as a retryable fault,
+    // so the model re-plans and re-proposes the identical spend.
+    expect(injected).toContain("REFUSED_BY_HUMAN");
+    expect(injected).toContain('"terminal":true');
+    expect(injected).toMatch(/do NOT retry/i);
+    expect(injected).toMatch(/reworded arguments/i);
+  });
+
+  it("never re-prompts the human for an intent they already refused (#433)", async () => {
+    // The live failure: deny → model re-plans → identical hire proposed again
+    // → human prompted again, indefinitely. Ctrl-C was the only exit.
+    const args = { prompt: "research the Open Secure AI Alliance" };
+    await enterPendingApproval("tc-first", "delegate_to_agent", args);
+    await collectChunks(runtime.resumeAfterApproval(false));
+    expect(runtime.hasPendingApproval).toBe(false);
+
+    // The model proposes the byte-identical call again.
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks(
+        {
+          type: "approval_request",
+          tool_call_id: "tc-second",
+          name: "delegate_to_agent",
+          args,
+          risk_level: 4,
+        },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+    await collectChunks(runtime.sendMessageStreaming("go on then"));
+
+    // No pending approval — the request was suppressed, so no surface can
+    // render a prompt and no keystroke can approve an already-refused spend.
+    expect(runtime.hasPendingApproval).toBe(false);
+    const injected = runtime
+      .getConversationHistory()
+      .map((m) => String(m.content))
+      .join("\n");
+    expect(injected).toContain("REFUSED_BY_HUMAN_ALREADY");
+  });
+
+  it("a DIFFERENT intent still reaches the human after an unrelated denial (#433)", async () => {
+    // The suppression must be exact — a blanket block would swallow genuinely
+    // new requests and break the approval gate itself.
+    await enterPendingApproval("tc-a", "delegate_to_agent", { prompt: "task A" });
+    await collectChunks(runtime.resumeAfterApproval(false));
+
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks(
+        {
+          type: "approval_request",
+          tool_call_id: "tc-b",
+          name: "delegate_to_agent",
+          args: { prompt: "task B — a different job" },
+          risk_level: 4,
+        },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+    await collectChunks(runtime.sendMessageStreaming("now do B"));
+
+    expect(runtime.hasPendingApproval).toBe(true);
+  });
+
   it("buffers the decision in getRecentApprovalDecisions(), verifiable, same contract as getRecentReceipts()", async () => {
     await enterPendingApproval("tc-buffer", "transfer", { amt: 1 });
     await collectChunks(runtime.resumeAfterApproval(true));
