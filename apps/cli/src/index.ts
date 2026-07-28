@@ -1044,6 +1044,11 @@ async function main(): Promise<void> {
           runtime,
           {
             voice: voiceController,
+            // Surfaced at the approval prompt so a money decision shows its
+            // ceiling instead of an unbounded "amount set at hire time" (#432).
+            ...(config.budget != null && Number.isFinite(parseFloat(config.budget))
+              ? { budgetUsd: parseFloat(config.budget) }
+              : {}),
           },
         );
       }

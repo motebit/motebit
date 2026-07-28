@@ -8,6 +8,7 @@
 import type { RuntimeHostClient } from "@motebit/runtime-host";
 import { dim, warn, meta, prompt as promptColor } from "./colors.js";
 import { askQuestion, destroyTerminal, readInput, writeOutput } from "./terminal.js";
+import { renderApprovalRequest } from "./approval-render.js";
 
 /** The chunk fields the attached renderer reads. Wire chunks are the
  * coordinator runtime's StreamChunk values, JSON round-tripped. */
@@ -22,12 +23,14 @@ interface WireChunk {
   message?: string;
   code?: string;
   tool_name?: string;
+  risk_level?: number;
   receipt?: { task_id?: string; status?: string };
 }
 
 interface PendingApproval {
   name: string;
   args: Record<string, unknown>;
+  riskLevel?: number;
 }
 
 async function renderStream(
@@ -50,6 +53,7 @@ async function renderStream(
           pendingApproval = {
             name: chunk.name ?? "tool",
             args: chunk.args ?? {},
+            ...(chunk.risk_level != null ? { riskLevel: chunk.risk_level } : {}),
           };
           break;
         case "delegation_start":
@@ -95,10 +99,17 @@ async function renderTurn(
   for (;;) {
     const { pendingApproval } = await renderStream(current);
     if (pendingApproval === null) return;
-    const argsPreview = JSON.stringify(pendingApproval.args).slice(0, 120);
-    const answer = await askQuestion(
-      `\n  ${warn("?")} ${pendingApproval.name}(${argsPreview})\n  Allow? (y/n) `,
-    );
+    // Context as output, prompt on one line — a multi-line prompt string is
+    // redrawn by the line editor per keystroke (#432). Same treatment as the
+    // coordinator-owned REPL in stream.ts.
+    for (const line of renderApprovalRequest({
+      name: pendingApproval.name,
+      args: pendingApproval.args,
+      ...(pendingApproval.riskLevel != null ? { riskLevel: pendingApproval.riskLevel } : {}),
+    })) {
+      writeOutput(line + "\n");
+    }
+    const answer = await askQuestion(`  ${warn("Allow?")} ${dim("(y/n)")} `);
     const approved = answer.trim().toLowerCase() === "y";
     current = client.resolveApproval(approved, motebitId);
   }
