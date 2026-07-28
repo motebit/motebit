@@ -1,5 +1,20 @@
 # @motebit/crypto-appattest
 
+## 1.0.31
+
+### Patch Changes
+
+- 37ab2f5: Bump `cbor2` 1 → 2 in the attestation verifiers. API-compatible for our decode
+  surface (COSE/CBOR attestation objects); build + full fixture-based tests pass
+  unchanged. `@peculiar/x509` held at v1 deliberately — its v2 adds a
+  tsyringe/`reflect-metadata` global-polyfill requirement that warrants its own
+  scoped change on this security-sensitive path.
+- Updated dependencies [5b9ca67]
+- Updated dependencies [25d1e71]
+- Updated dependencies [84fad0f]
+  - @motebit/crypto@3.19.0
+  - @motebit/protocol@3.15.0
+
 ## 1.0.30
 
 ### Patch Changes
