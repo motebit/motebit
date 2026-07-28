@@ -95,6 +95,7 @@
     "@motebit/mcp-server": "workspace:*",
     "@motebit/memory-graph": "workspace:*",
     "@motebit/persistence": "workspace:*",
+    "@motebit/protocol": "workspace:*",
     "@motebit/planner": "workspace:*",
     "@motebit/policy": "workspace:*",
     "@motebit/privacy-layer": "workspace:*",

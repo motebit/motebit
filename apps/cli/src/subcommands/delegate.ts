@@ -352,6 +352,97 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
   const capability = config.capability ?? "web_search";
   let targetMotebitId = config.target;
 
+  // --sovereign: pay the worker directly from the sovereign Solana wallet —
+  // single-step paid P2P delegation (#423). This path NEVER falls back to
+  // relay-custody: every missing prerequisite refuses loudly with its remedy
+  // (the pre-fix behavior silently ignored the flag, hit the empty virtual
+  // account, and misdirected a funded sovereign user to `motebit fund`).
+  if (config.sovereign) {
+    const fullConfig = loadFullConfig();
+    if (fullConfig.relay_public_key == null || fullConfig.relay_public_key === "") {
+      console.error(
+        "Sovereign delegation requires a pinned relay key (the fee leg's treasury derives from it).",
+      );
+      console.error("Run `motebit register` to pair with the relay first.");
+      process.exit(1);
+    }
+    const { loadActiveSigningKey } = await import("../identity.js");
+    let signing: { privateKey: Uint8Array };
+    try {
+      signing = await loadActiveSigningKey(fullConfig, {
+        promptLabel: "Passphrase (for sovereign wallet): ",
+      });
+    } catch (err: unknown) {
+      console.error(
+        `Sovereign delegation requires identity keys: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      process.exit(1);
+    }
+    const { createSolanaWalletRail } = await import("@motebit/wallet-solana");
+    const rail = createSolanaWalletRail({
+      rpcUrl: config.solanaRpcUrl ?? "https://api.mainnet-beta.solana.com",
+      identitySeed: signing.privateKey,
+    });
+    const buildP2pPayment = rail.buildP2pPayment?.bind(rail);
+    if (buildP2pPayment == null) {
+      console.error("The sovereign rail cannot build atomic P2P payments on this platform.");
+      process.exit(1);
+    }
+    const { resolveAndSubmitP2pDelegation } = await import("@motebit/runtime");
+    const { toMicro, fromMicro } = await import("@motebit/protocol");
+    const mintToken = async (aud?: TokenAudience): Promise<string> => {
+      const h = await getRelayAuthHeaders(config, { aud: aud ?? "task:submit", json: true });
+      return (h["Authorization"] ?? "").replace("Bearer ", "");
+    };
+
+    console.log(
+      `Delegating (sovereign P2P) ${targetMotebitId != null ? `to ${targetMotebitId.slice(0, 12)}...` : `— discovering a payable "${capability}" worker`}`,
+    );
+    const result = await resolveAndSubmitP2pDelegation({
+      motebitId,
+      syncUrl: relayUrl,
+      authToken: mintToken,
+      prompt,
+      capability,
+      ...(targetMotebitId != null ? { targetWorkerId: targetMotebitId } : {}),
+      relayPublicKeyHex: fullConfig.relay_public_key,
+      buildP2pPayment,
+      ...(config.payNewAgents ? { acknowledgeNoHistoryRisk: true } : {}),
+      // `--budget` is a hard pre-broadcast ceiling over worker + fee legs.
+      ...(config.budget != null ? { maxTotalMicro: toMicro(parseFloat(config.budget)) } : {}),
+      logger: { warn: (m, ctx) => console.error(`  warn: ${m}`, ctx ?? "") },
+    });
+
+    if (!result.ok) {
+      console.error(`Sovereign delegation failed (${result.error.code}): ${result.error.message}`);
+      if (result.error.code === "p2p_ineligible" && !config.payNewAgents) {
+        console.error(
+          "Hint: a pair with no trust history needs `--pay-new-agents` (cold-start acknowledgment).",
+        );
+      }
+      process.exit(1);
+    }
+
+    const r = result.receipt;
+    if (r.status === "completed") {
+      console.log(`\n--- Result ---\n`);
+      console.log(r.result);
+      console.log();
+      if (r.tools_used != null && r.tools_used.length > 0) {
+        console.log(`Tools: ${r.tools_used.join(", ")}`);
+      }
+    } else {
+      console.log(`Task ${r.status}: ${r.result || "(no result)"}`);
+    }
+    const s = result.settlement;
+    if (s != null && s.paidMicro != null && s.feeMicro != null && s.txHash != null) {
+      console.log(
+        `Paid: $${fromMicro(s.paidMicro).toFixed(4)} to worker + $${fromMicro(s.feeMicro).toFixed(4)} fee (tx ${s.txHash.slice(0, 12)}…)`,
+      );
+    }
+    return;
+  }
+
   // Discover a worker if no target specified
   if (!targetMotebitId) {
     try {

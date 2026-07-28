@@ -81,6 +81,12 @@ export type DelegationErrorCode =
    */
   | "no_sovereign_rail"
   /**
+   * Pre-broadcast. The resolved payment total (worker leg + all fee legs)
+   * exceeds the caller's `maxTotalMicro` ceiling. Nothing was broadcast and
+   * nothing was submitted — the budget is enforced BEFORE money moves.
+   */
+  | "budget_exceeded"
+  /**
    * Pre-flight. A worker was discovered but cannot be paid directly — it has no
    * service listing, no positive price, or no settlement address. Distinct from
    * `no_routing` (no worker at all) and `insufficient_balance` (the delegator's
@@ -805,6 +811,14 @@ export interface ResolveAndSubmitP2pDelegationParams {
   buildP2pPayment?: (request: SovereignP2pPaymentRequest) => Promise<P2pPaymentProof>;
   /** Invocation provenance — signature-bound on the resulting receipt. */
   invocationOrigin?: IntentOrigin;
+  /**
+   * Budget ceiling in micro-units over the ENTIRE resolved payment (worker
+   * leg + every fee leg). Checked after pricing and BEFORE the atomic
+   * broadcast — an over-budget resolution fails `budget_exceeded` with no
+   * money moved and nothing submitted. Absent ⇒ no ceiling (caller trusts
+   * the listing price).
+   */
+  maxTotalMicro?: number;
   /** Upper bound on end-to-end wait. Default 120s. */
   timeoutMs?: number;
   /** Structured logger. */
@@ -1227,6 +1241,22 @@ export async function resolveAndSubmitP2pDelegation(
     ...(params.signal ? { signal: params.signal } : {}),
   });
   if (!resolved.ok) return { ok: false, error: resolved.error };
+
+  // 3b. Budget ceiling — enforced on the RESOLVED total (worker + all fee
+  //     legs), before any irreversible broadcast. The relay's price is the
+  //     truth being checked, so client-side listing math can't under-guard.
+  if (params.maxTotalMicro != null) {
+    const totalMicro =
+      resolved.paymentRequest.amountMicro +
+      resolved.paymentRequest.feeAmountMicro +
+      (resolved.paymentRequest.executorFeeAmountMicro ?? 0);
+    if (totalMicro > params.maxTotalMicro) {
+      return fail(
+        "budget_exceeded",
+        `Resolved payment total ${totalMicro} micro (worker + fees) exceeds the budget ceiling ${params.maxTotalMicro} micro — nothing was broadcast.`,
+      );
+    }
+  }
 
   // 4. Broadcast the atomic payment ONCE. A throw here means nothing settled on
   //    the relay — the proof is never submitted without a confirmed payment.
