@@ -315,17 +315,12 @@ export async function submitAndPollDelegation(
   const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const startedAt = Date.now();
 
-  // Mint audience-specific tokens. The relay enforces `aud` binding:
-  // task:submit for POST, task:query for GET on the task record.
+  // Mint the submit token (used once, immediately). The relay enforces `aud`
+  // binding: task:submit for POST; the task:query token for GET is minted
+  // per poll attempt inside pollForReceipt (see PollForReceiptArgs.getQueryHeader).
   let submitHeader: string;
-  let queryHeader: string;
   try {
-    const [submitToken, queryToken] = await Promise.all([
-      params.authToken("task:submit"),
-      params.authToken("task:query"),
-    ]);
-    submitHeader = `Bearer ${submitToken}`;
-    queryHeader = `Bearer ${queryToken}`;
+    submitHeader = `Bearer ${await params.authToken("task:submit")}`;
   } catch (err: unknown) {
     return {
       ok: false,
@@ -400,7 +395,7 @@ export async function submitAndPollDelegation(
     syncUrl: params.syncUrl,
     motebitId: params.motebitId,
     taskId,
-    queryHeader,
+    getQueryHeader: async () => `Bearer ${await params.authToken("task:query")}`,
     timeoutMs,
     startedAt,
     logger: params.logger,
@@ -416,7 +411,15 @@ interface PollForReceiptArgs {
   syncUrl: string;
   motebitId: string;
   taskId: string;
-  queryHeader: string;
+  /**
+   * Re-minting thunk, called PER poll attempt — never a pre-minted header.
+   * A task can legitimately outlive the 5-minute signed-token TTL (a paid
+   * molecule doing per-hop onchain settlement runs tens of minutes); a
+   * static token then 403s every remaining poll while the relay's task TTL
+   * reaps the completed record — a paid receipt lost to the payer (#424).
+   * Minting is a local Ed25519 sign, so per-attempt cost is negligible.
+   */
+  getQueryHeader: () => Promise<string>;
   timeoutMs: number;
   startedAt: number;
   logger: { warn(message: string, context?: Record<string, unknown>): void };
@@ -451,9 +454,20 @@ async function pollForReceipt(args: PollForReceiptArgs): Promise<DelegationResul
       /* abort — handled on next iteration */
     });
 
+    let queryHeader: string;
+    try {
+      queryHeader = await args.getQueryHeader();
+    } catch (err: unknown) {
+      args.logger.warn("delegation poll token mint failed", {
+        taskId: args.taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      continue;
+    }
+
     try {
       const resp = await fetch(`${args.syncUrl}/agent/${args.motebitId}/task/${args.taskId}`, {
-        headers: { Authorization: args.queryHeader },
+        headers: { Authorization: queryHeader },
         signal: args.signal,
       });
 
@@ -584,14 +598,8 @@ export async function submitP2pDelegation(
   const startedAt = Date.now();
 
   let submitHeader: string;
-  let queryHeader: string;
   try {
-    const [submitToken, queryToken] = await Promise.all([
-      params.authToken("task:submit"),
-      params.authToken("task:query"),
-    ]);
-    submitHeader = `Bearer ${submitToken}`;
-    queryHeader = `Bearer ${queryToken}`;
+    submitHeader = `Bearer ${await params.authToken("task:submit")}`;
   } catch (err: unknown) {
     return {
       ok: false,
@@ -682,7 +690,7 @@ export async function submitP2pDelegation(
     syncUrl: params.syncUrl,
     motebitId: params.motebitId,
     taskId,
-    queryHeader,
+    getQueryHeader: async () => `Bearer ${await params.authToken("task:query")}`,
     timeoutMs,
     startedAt,
     logger: params.logger,

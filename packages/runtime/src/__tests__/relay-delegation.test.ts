@@ -187,6 +187,33 @@ describe("submitP2pDelegation", () => {
     }
   });
 
+  it("re-mints the task:query token on every poll attempt so long tasks outlive the token TTL (#424)", async () => {
+    vi.useFakeTimers();
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { task_id: "task-ttl" })) // submit
+      .mockResolvedValueOnce(jsonResponse(200, { task: { status: "running" }, receipt: null }))
+      // A stale-token-style failure mid-poll: warned and retried, and the NEXT
+      // attempt carries a freshly minted token — the #424 recovery.
+      .mockResolvedValueOnce(jsonResponse(401, { code: "AUTH_TOKEN_EXPIRED" }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, { task: { status: "completed" }, receipt: { result_hash: "rh" } }),
+      );
+
+    const params = baseParams();
+    const promise = submitP2pDelegation(params);
+    await vi.advanceTimersByTimeAsync(2100); // poll 1 (running)
+    await vi.advanceTimersByTimeAsync(2100); // poll 2 (401 — retried)
+    await vi.advanceTimersByTimeAsync(2100); // poll 3 (receipt)
+    const result = await promise;
+
+    expect(result.ok).toBe(true);
+    const auds = params.authToken.mock.calls.map((c) => c[0]);
+    // One submit mint, then one FRESH task:query mint per poll attempt —
+    // never a pre-minted token reused across the task's lifetime.
+    expect(auds.filter((a) => a === "task:submit")).toHaveLength(1);
+    expect(auds.filter((a) => a === "task:query")).toHaveLength(3);
+  });
+
   it("sums both fee legs into settlement.feeMicro for a federated 3-leg proof", async () => {
     vi.useFakeTimers();
     fetchMock
