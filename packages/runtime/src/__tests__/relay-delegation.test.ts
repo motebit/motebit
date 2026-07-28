@@ -381,6 +381,45 @@ describe("resolveAndSubmitP2pDelegation", () => {
     if (!result.ok) expect(result.error.code).toBe("malformed_request");
   });
 
+  it("refuses an over-budget resolution BEFORE broadcasting — budget_exceeded, nothing paid (#423)", async () => {
+    // Worker $0.50 + 5% fee > the $0.40 ceiling. The guard runs on the
+    // RESOLVED total (relay-priced), after pricing and before any money moves.
+    const params = resolveParams({ maxTotalMicro: toMicro(0.4) });
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p,relay" },
+        ]),
+        listing: listingOk([{ capability: "web_search", unit_cost: 0.5 }]),
+      }),
+    );
+
+    const result = await resolveAndSubmitP2pDelegation(params);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("budget_exceeded");
+    expect(params.buildP2pPayment).not.toHaveBeenCalled();
+  });
+
+  it("a ceiling exactly equal to the resolved total passes (budget is inclusive)", async () => {
+    const total = toMicro(0.5) + computeP2pFeeMicro(toMicro(0.5), PLATFORM_FEE_RATE);
+    const params = resolveParams({ maxTotalMicro: total });
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p,relay" },
+        ]),
+        listing: listingOk([{ capability: "web_search", unit_cost: 0.5 }]),
+        submit: () => jsonResponse(400, { code: "TASK_P2P_FEE_AMOUNT_MISMATCH" }),
+      }),
+    );
+
+    await resolveAndSubmitP2pDelegation(params);
+    expect(params.buildP2pPayment).toHaveBeenCalledTimes(1);
+  });
+
   it("prefers the pre-flight's canonical amounts over the listing (single source of truth)", async () => {
     // The relay's pre-flight returns the SAME amounts the submission gate
     // validates. The client pays those EXACT figures and never re-derives from
