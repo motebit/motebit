@@ -27,6 +27,7 @@ vi.mock("@motebit/mcp-client", () => ({
   },
 }));
 
+import { querySelfKnowledge } from "@motebit/self-knowledge";
 import type { AdapterFactory, AtomAdapter, ResearchConfig, SignedReceipt } from "../research.js";
 import { research } from "../research.js";
 
@@ -790,9 +791,16 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
 
   // ── Interior tier (Ring 1: recall_self) ──
 
-  it("recall_self runs locally with no adapter call and emits interior-source citations", async () => {
+  it("recall_self runs locally with no adapter call and emits interior-source citations for report-cited chunks", async () => {
     const ws = new StubAtomAdapter([]);
     const ru = new StubAtomAdapter([]);
+    // The report must CITE an interior chunk for it to become a citation
+    // (interior recalls are context, not automatic sources). Learn the real
+    // corpus hit so the mocked final report can list its locator exactly as
+    // the system prompt contracts (`interior:{source}#{title}`).
+    const expectedHits = querySelfKnowledge("what is motebit", { limit: 2 });
+    expect(expectedHits.length).toBeGreaterThan(0);
+    const cited = expectedHits[0]!;
     mockCreate
       .mockResolvedValueOnce({
         content: [
@@ -805,7 +813,12 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
         ],
       })
       .mockResolvedValueOnce({
-        content: [{ type: "text", text: "Synthesized from interior knowledge." }],
+        content: [
+          {
+            type: "text",
+            text: `Synthesized from interior knowledge. [1]\n\nSources\n[1] ${cited.title} — interior:${cited.source}#${cited.title}`,
+          },
+        ],
       });
 
     const result = await research("tell me about Motebit", {
@@ -827,13 +840,49 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
     expect(result.fetch_count).toBe(0);
     // No signed receipts — interior tier is self-attested via corpus hash.
     expect(result.delegation_receipts).toEqual([]);
-    // Citations are populated with source:"interior" and no receipt_task_id.
-    expect(result.citations.length).toBeGreaterThan(0);
+    // Only the report-cited chunk becomes a citation.
+    expect(result.citations).toHaveLength(1);
     for (const c of result.citations) {
       expect(c.source).toBe("interior");
       expect(c.receipt_task_id).toBeUndefined();
-      expect(c.locator).toMatch(/\.md#/);
+      expect(c.locator).toBe(`${cited.source}#${cited.title}`);
     }
+  });
+
+  it("interior recalls the report does not cite are context, not citations (count still discloses)", async () => {
+    const ws = new StubAtomAdapter([]);
+    const ru = new StubAtomAdapter([]);
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [
+          {
+            type: "tool_use",
+            id: "tu-interior-uncited",
+            name: "motebit_recall_self",
+            input: { query: "what is motebit", limit: 2 },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        // Report never lists any interior locator — the speculative recall
+        // was consulted context only. It must not pad the citation list.
+        content: [{ type: "text", text: "An answer that used no interior sources." }],
+      });
+
+    const result = await research("something off-topic", {
+      ...baseConfig,
+      adapterFactory: makeFactory(
+        new Map([
+          ["web-search", ws],
+          ["read-url", ru],
+        ]),
+      ),
+    });
+
+    expect(result.citations).toEqual([]);
+    // The recall still HAPPENED and is disclosed — filtering citations never
+    // hides that interior knowledge was consulted.
+    expect(result.recall_self_count).toBe(1);
   });
 
   it("treats recall_self with missing query as an empty-query miss (no crash)", async () => {

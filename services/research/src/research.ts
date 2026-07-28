@@ -28,6 +28,25 @@ import { McpClientAdapter } from "@motebit/mcp-client";
 import type { Citation, ExecutionReceipt } from "@motebit/sdk";
 import { querySelfKnowledge } from "@motebit/self-knowledge";
 
+/**
+ * Interior citations are minted only when the REPORT actually cites them.
+ * `motebit_recall_self` is a free, speculative, prompt-encouraged first look —
+ * its hits are model CONTEXT, not automatically report SOURCES; unconditionally
+ * citing them padded off-topic reports with irrelevant self-knowledge excerpts
+ * (observed live: 3 of 5 citations on a pure-web question were droplet-physics
+ * chunks). The system prompt already contracts the model to list interior
+ * sources by locator (`interior:{source}#{title}`), so the filter keeps an
+ * interior citation iff its locator appears in the report text. This is an
+ * INTERSECTION (recalled ∩ report-listed): the model's Sources list can only
+ * shrink the recalled set, never mint provenance for content that was not
+ * actually recalled — a hallucinated Sources line cannot fabricate a citation.
+ * Web citations are receipt-anchored paid acts and always cite;
+ * `recall_self_count` still discloses that interior recalls occurred.
+ */
+function filterInteriorCitations(citations: Citation[], report: string): Citation[] {
+  return citations.filter((c) => c.source !== "interior" || report.includes(c.locator));
+}
+
 const SYSTEM_PROMPT = `You are a research analyst. Given a question, your job is to investigate it thoroughly using the available tools and produce a clear, well-structured report.
 
 You have three tools, ordered by preference:
@@ -88,11 +107,14 @@ export interface ResearchResult {
    */
   routing_transcripts: Record<string, unknown>[];
   /**
-   * One citation per tool call that produced source content (interior recall
-   * or URL fetch; bare web_search hits are not cited — only content actually
-   * read is). Citation.source discriminates interior (self-attested, no
-   * receipt) from web (receipt-bound via receipt_task_id). Aligns 1:1 with
-   * the outer `CitedAnswer.citations` surface built by the service.
+   * Provenance of the report's sources. Web citations: one per URL actually
+   * read (receipt-bound via receipt_task_id; bare web_search hits are not
+   * cited). Interior citations: only recalled chunks the REPORT itself lists
+   * as sources (see `filterInteriorCitations` — speculative recalls that
+   * didn't make the Sources section are context, not citations;
+   * `recall_self_count` discloses they happened). Citation.source
+   * discriminates interior (self-attested, no receipt) from web. Aligns 1:1
+   * with the outer `CitedAnswer.citations` surface built by the service.
    */
   citations: Citation[];
   /** Number of motebit_recall_self calls (interior tier). */
@@ -618,7 +640,7 @@ export async function research(question: string, config: ResearchConfig): Promis
           delegation_receipts: delegationReceipts,
           sub_settlements: subSettlements,
           routing_transcripts: routingTranscripts,
-          citations,
+          citations: filterInteriorCitations(citations, report),
           recall_self_count: recallSelfCount,
           search_count: searchCount,
           fetch_count: fetchCount,
@@ -655,7 +677,7 @@ export async function research(question: string, config: ResearchConfig): Promis
       delegation_receipts: delegationReceipts,
       sub_settlements: subSettlements,
       routing_transcripts: routingTranscripts,
-      citations,
+      citations: filterInteriorCitations(citations, report),
       recall_self_count: recallSelfCount,
       search_count: searchCount,
       fetch_count: fetchCount,
