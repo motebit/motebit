@@ -535,15 +535,38 @@ async function main(): Promise<void> {
   let passphrase: string;
 
   if (fullConfig.cli_encrypted_key) {
-    // Returning user — just the prompt
-    passphrase = envPassphrase ?? (await promptPassphrase("  Passphrase: "));
-    try {
-      await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
-    } catch {
+    // Returning user. Unlocking is local PBKDF2 — offline, no lockout, no
+    // server — so a wrong entry is never terminal. Retry a few times within
+    // this run (interactive only); a non-interactive session with a fixed
+    // MOTEBIT_PASSPHRASE gets one attempt, since looping a constant is futile.
+    const interactive = envPassphrase == null;
+    const maxAttempts = interactive ? 3 : 1;
+    let unlocked = false;
+    passphrase = "";
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      passphrase = envPassphrase ?? (await promptPassphrase("  Passphrase: "));
+      try {
+        await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
+        unlocked = true;
+        break;
+      } catch {
+        if (attempt < maxAttempts) {
+          console.log(`  ${dim(`Incorrect — try again (${maxAttempts - attempt} left).`)}`);
+        }
+      }
+    }
+    if (!unlocked) {
+      // NEVER lead with deletion. `rm ~/.motebit/config.json` erases the
+      // identity key — and any wallet funds it controls — irreversibly. The
+      // real remedy for a forgotten passphrase is to keep trying (unlimited,
+      // offline) or restore from a recovery seed if one was exported.
       console.log();
-      console.log(`  ${dim("Incorrect. Try again, or start fresh:")}`);
+      console.log(`  ${dim("Passphrase not recognized. Attempts are offline and unlimited —")}`);
+      console.log(`  ${dim("re-run `motebit` to keep trying. There is no lockout.")}`);
       console.log();
-      console.log(`     ${dim("rm ~/.motebit/config.json && motebit")}`);
+      console.log(`  ${errorColor("Do not delete ~/.motebit/config.json.")}`);
+      console.log(`  ${dim("It holds your identity key and any wallet funds it controls;")}`);
+      console.log(`  ${dim("deletion is irreversible without a recovery seed.")}`);
       console.log();
       process.exit(1);
     }
