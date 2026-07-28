@@ -5,6 +5,7 @@ import { formatBodyAwareness } from "@motebit/ai-core";
 import { action, meta, warn, dim, prompt as promptColor } from "./colors.js";
 import { writeOutput, askQuestion } from "./terminal.js";
 import { archiveReceipt, renderReceipt } from "./receipt.js";
+import { renderApprovalRequest } from "./approval-render.js";
 import { renderAuthorityDelta } from "./authority-delta-render.js";
 import type { VoiceController } from "./voice.js";
 
@@ -27,13 +28,14 @@ function startDotAnimation(): () => void {
 export async function consumeStream(
   stream: AsyncGenerator<StreamChunk>,
   runtime: MotebitRuntime,
-  opts?: { voice?: VoiceController },
+  opts?: { voice?: VoiceController; budgetUsd?: number },
 ): Promise<void> {
   let pendingApproval: {
     tool_call_id: string;
     name: string;
     args: Record<string, unknown>;
     quorum?: { required: number; approvers: string[]; collected: string[] };
+    risk_level?: number;
   } | null = null;
   let stopAnimation: (() => void) | null = null;
   let lastCompletedReceiptResult: string | null = null;
@@ -58,8 +60,16 @@ export async function consumeStream(
           }
           break;
         }
-        // Delegation tools are announced by delegation_start/delegation_complete instead
-        if (chunk.name === "delegate_to_agent") break;
+        // Delegation normally announces itself via delegation_start/complete,
+        // so tool_status is redundant — UNLESS this is the post-approval
+        // execution path, which executes the tool directly and emits ONLY
+        // tool_status. Blanket-skipping delegate_to_agent here meant the one
+        // path that runs after a human approves a PAID hire rendered nothing
+        // at all: the screen went blank for the entire task (#432). Skip only
+        // when an animation is already running (delegation_start beat us).
+        if (chunk.name === "delegate_to_agent" && chunk.status === "calling" && stopAnimation) {
+          break;
+        }
         if (chunk.status === "calling") {
           writeOutput(`\n  ${action("●")} ${action(chunk.name)}${meta("...")}`);
           stopAnimation = startDotAnimation();
@@ -77,10 +87,16 @@ export async function consumeStream(
           name: chunk.name,
           args: chunk.args,
           quorum: chunk.quorum,
+          // Carried so the prompt can name the stakes. Previously dropped —
+          // which is why a money act rendered identically to a read (#432).
+          risk_level: chunk.risk_level,
         };
         break;
 
       case "delegation_start":
+        // Guard against a second animation when tool_status already started
+        // one (the post-approval path emits tool_status first).
+        if (stopAnimation) break;
         writeOutput(
           `\n  ${action("●")} ${dim("[delegating]")} ${action(chunk.tool)}${meta("...")}`,
         );
@@ -146,14 +162,20 @@ export async function consumeStream(
 
   // Handle approval request after stream ends -- deterministic resumption
   if (pendingApproval) {
-    const argsPreview = JSON.stringify(pendingApproval.args).slice(0, 80);
-    const quorumInfo =
-      pendingApproval.quorum && pendingApproval.quorum.required > 1
-        ? ` [${pendingApproval.quorum.collected.length}/${pendingApproval.quorum.required} approvals]`
-        : "";
-    const answer = await askQuestion(
-      `  ${warn("?")} ${pendingApproval.name}(${argsPreview})${quorumInfo}\n  Allow? (y/n) `,
-    );
+    // Write the decision context as OUTPUT, then prompt on a single line.
+    // A multi-line prompt string is redrawn by the line editor on every
+    // keystroke, which duplicated the whole block on screen as the user
+    // typed their answer (#432).
+    for (const line of renderApprovalRequest({
+      name: pendingApproval.name,
+      args: pendingApproval.args,
+      ...(pendingApproval.risk_level != null ? { riskLevel: pendingApproval.risk_level } : {}),
+      ...(pendingApproval.quorum ? { quorum: pendingApproval.quorum } : {}),
+      ...(opts?.budgetUsd != null ? { budgetUsd: opts.budgetUsd } : {}),
+    })) {
+      writeOutput(line + "\n");
+    }
+    const answer = await askQuestion(`  ${warn("Allow?")} ${dim("(y/n)")} `);
 
     const approved = answer.trim().toLowerCase() === "y";
     writeOutput("\n" + promptColor("mote>") + " ");
