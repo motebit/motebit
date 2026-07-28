@@ -1,5 +1,43 @@
 # motebit CLI Changelog
 
+## 1.10.0
+
+### Minor Changes
+
+- 08e86f6: The self-recovery door is now lit before loss, not found missing at loss time. New `motebit restore [motebit.md]` recovers an identity from its recovery seed — full-bundle restore with a motebit.md (works for legacy ids), seed-only restore that re-derives a sovereign id, and a third case discovered live: when the seed matches the key already on this machine, the flow is a plain passphrase reset with nothing replaced and no confirmation theater. Replacing a different resident identity requires both the cryptographic key-match and typing `REPLACE IDENTITY`, per the identity-restore doctrine's cross-surface invariants. New `motebit seed` shows backup status with identity-type-honest copy (a sovereign id re-derives from its seed alone; a legacy id rides only in motebit.md — back up both), and `motebit seed reveal` prints the seed once, passphrase-gated, recording the backup acknowledgment only after an explicit confirm. `motebit doctor` gains an advisory `warn` tier and reports seed-backup posture without failing readiness; the REPL shows a single dim reminder line until a backup is confirmed. The README's "no consumer key recovery" paragraph now pairs the sovereignty fact with the self-recovery story instead of reading as abandonment. (Internally, `deriveSovereignMotebitId` joins @motebit/encryption's product-layer re-exports so app surfaces never reach the Layer-0 floor.)
+
+### Patch Changes
+
+- da58e84: The approval prompt now names the stakes. A money action renders a distinct `⚠ MONEY · IRREVERSIBLE` band, states that it pays from your sovereign wallet, and shows either the `--budget` ceiling or an honest "amount set by the worker's listing at hire time" — never a fabricated figure, since a delegation's price is late-bound. The action itself reads in human language ("Hire an agent on the motebit network to: …") instead of raw tool JSON, and the context renders as output with a single-line prompt, which also fixes the block duplicating on screen as you typed your answer. Delegation progress now animates on the post-approval execution path, which previously rendered nothing at all while a paid task ran.
+- 8ca1c01: Fix npm README drift and complete the `--help` provider list. The README claimed 19 open specs (actual: 34), listed only 2 of the 7 supported providers, referenced `spec/skills-v1.md` as bare text that resolves to nothing on npmjs.com, and described the package as a "binary". The `--help` Providers section now documents `groq` and `deepseek`, which were fully wired but undocumented. The README's Providers table now leads with the provider-neutrality framing: a motebit's identity, memory, and trust persist independently of its model provider.
+- 0676954: Money-safety and human-veto integrity for paid delegation. A human "no" on an approval is now terminal: the model is told the refusal is a decision (not a retryable failure), and a re-proposal of the same tool + arguments is never shown to the human again. A paid delegation whose result could not be retrieved now reports `PAYMENT_ALREADY_SETTLED` with the amount, tx hash, and task id — so an autonomous caller cannot mistake a delivery failure for a failed hire and broadcast a second payment for work already bought.
+- f3f11ab: Bump the CLI's LSP transport deps: `vscode-jsonrpc` 8 → 9, `vscode-languageserver`
+  9 → 10 (tracks LSP protocol 3.18). Only import change: v10 renamed the Node
+  subpath `vscode-languageserver/node.js` → `vscode-languageserver/node`. All LSP
+  tests pass unchanged. Also drops a stale `zod-to-json-schema` mention left over
+  from the zod-4 migration.
+- 5b9ca67: Add `mintAudienceToken` — the canonical mint seam for audience-bound auth tokens — and sweep every monorepo mint site through it (drift gate `check-token-mint-canonical`, invariant #147).
+
+  `createSignedToken` deliberately fills no defaults, so every call site restated `iat` / `exp` / `jti` / TTL — 23 sites across 17 files as of 2026-07-23, grown from ~9 a month earlier. Each restatement is a place for the freshness window or replay nonce to silently drift: the identity→authz instance of the shadow-the-constant class named in `docs/doctrine/composition-preserves-enforcement.md` (reduce the seams where enforcement can disappear). The helper owns the assembly (`iat` = now, `exp` = `iat + ttlMs` defaulting to `DEFAULT_SIGNED_TOKEN_TTL_MS`, `jti` from the platform CSPRNG with a fail-closed no-CSPRNG error) and returns `{ token, payload }` so sites that surface expiry read `payload.exp` instead of re-deriving it. Injected-clock callers (relay-client's token cache, runtime-host's attach handshake) pass `nowMs` — the adapter-pattern clock idiom, not a freshness bypass.
+
+  The sweep covers CLI, web, mobile, desktop, spatial, planner, molecule-runner, mcp-client, relay-client, runtime-host, and the relay's browser-sandbox minter; planner's injected `SovereignDelegationConfig.createSignedToken` field became `mintAudienceToken` (mint-shaped) so the seam covers injected minters too. `createSignedToken` stays public API — adversarial test fixtures need exact payload control — but non-test monorepo source minting through it now fails CI. Inventory: 146 → 147 invariants, 134 → 135 hard CI gates.
+
+- a5aba85: Wrong-passphrase handling no longer leads with a destructive remedy. The prompt now retries a few times within one run (offline, no lockout), and on giving up it warns — instead of instructing `rm ~/.motebit/config.json`, which erases the identity key and any wallet funds it controls — that attempts are unlimited and offline, and that deletion is irreversible without a recovery seed. A non-interactive session (`MOTEBIT_PASSPHRASE`) still gets a single attempt.
+- ea9b19d: `motebit delegate --sovereign` now works without `--plan`: the plain delegate path pays the worker directly from the sovereign Solana wallet via a single-step paid P2P delegation (discovery or `--target`, cold-start via `--pay-new-agents`, honest `Paid:` settlement line). Previously the flag was silently ignored — the command fell through to relay-custody, hit the empty virtual account, and misdirected a funded sovereign user to `motebit fund`. Every missing prerequisite now refuses loudly with its remedy, and nothing falls back to relay-custody. `--budget` is enforced as a hard pre-broadcast ceiling over the entire resolved payment (worker + all fee legs) — an over-budget resolution fails `budget_exceeded` with no money moved. (`@motebit/protocol` becomes a declared CLI dependency — previously reached only transitively.)
+- 974473a: Bump `stripe` SDK 17 → 22. The runtime API version stays pinned at
+  `2025-03-31.basil` (unchanged); the bump aligns the SDK's TypeScript types with
+  that pinned version, which surfaced two field-location fixes on the relay money
+  path (see PR for the latent-bug detail): `invoice.subscription` →
+  `invoice.parent.subscription_details.subscription`, and subscription
+  `current_period_end` → `items.data[0].current_period_end`.
+- 84fad0f: Internal cleanup: remove no-op type assertions flagged by typescript-eslint 8.65 (`no-unnecessary-type-assertion`), monorepo-wide. Type-level only — no runtime or API change. Where an assertion was masking a real hazard (`no-base-to-string` on unknown payload fields), the site now narrows with a typeof guard instead.
+- d056c67: Migrate to zod 4 (`^4.4.3`) across the four zod-using packages (`@motebit/wire-schemas`, `@motebit/mcp-server`, `@motebit/relay-client`, and the `motebit` CLI).
+
+  The user-visible surface is internal: the CLI's YAML-config validation, its `motebit-yaml-v1.json` schema (now generated by native `z.toJSONSchema` with `io: "input"`), its LSP `schema-walker` (updated for zod 4's introspection API — `ZodEffects` → `ZodPipe`, the `.description` getter), and `verify-wire`'s zod-error formatting (zod 4 issue paths are `PropertyKey[]`) all run on zod 4.
+
+  The substantive work is in `@motebit/wire-schemas` (private): its committed `spec/schemas/*-v1.json` are now generated by zod 4's native `z.toJSONSchema` (`src/assemble.ts`), replacing `zod-to-json-schema@3` — which is zod-3-only and, under zod 4, silently emits empty schemas. All 85 published schemas were regenerated in place as v1: verified a validation-preserving reformat (nullable `type:[X,null]` → `anyOf`, `additionalProperties: true` → `{}`, discriminated-union `anyOf` → `oneOf`) with **zero value-constraints lost and 151 gained** (native captures `.min`/`.max` bounds the old tool dropped, so the published schemas are strictly more faithful to the runtime zod validation).
+  - @motebit/state-export-client@0.5.21
+
 ## 1.9.0
 
 ### Minor Changes

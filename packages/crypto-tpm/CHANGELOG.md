@@ -1,5 +1,16 @@
 # @motebit/crypto-tpm
 
+## 1.1.30
+
+### Patch Changes
+
+- 84fad0f: Internal cleanup: remove no-op type assertions flagged by typescript-eslint 8.65 (`no-unnecessary-type-assertion`), monorepo-wide. Type-level only — no runtime or API change. Where an assertion was masking a real hazard (`no-base-to-string` on unknown payload fields), the site now narrows with a typeof guard instead.
+- Updated dependencies [5b9ca67]
+- Updated dependencies [25d1e71]
+- Updated dependencies [84fad0f]
+  - @motebit/crypto@3.19.0
+  - @motebit/protocol@3.15.0
+
 ## 1.1.29
 
 ### Patch Changes
