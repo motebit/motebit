@@ -413,6 +413,13 @@ Commands:
   wallet swap <sol>         Convert SOL → USDC working capital (Jupiter; gas floor enforced)
   verify-release            Verify this binary's bytes against the operator's signed witness
   doctor                    Check system readiness (Node, SQLite, config)
+  seed [reveal]             Recovery-seed backup status; reveal prints it once
+                            (passphrase-gated) for transcription to paper
+  restore [motebit.md]      Recover an identity from its recovery seed —
+                            with a motebit.md for full-bundle restore, or
+                            seed-only (re-derives a sovereign id). Also resets
+                            a forgotten passphrase when the seed matches the
+                            key already on this machine
   export [--output <dir>]   Export identity bundle (motebit.md, credentials, budget, gradient)
     --all                   Include sensitive memories (medical/financial/secret) in export
   verify <path>             Verify a motebit.md identity file signature

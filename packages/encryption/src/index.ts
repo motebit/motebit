@@ -179,6 +179,11 @@ export {
   // surfaces re-check operator claims without trusting the relay.
   verifyRetentionManifest,
   type RetentionManifestVerifyResult,
+  // Sovereign-id derivation — the commitment of a motebit_id to its key.
+  // Product surfaces need it for identity-recovery flows (is this id the
+  // sovereign commitment to this seed's key, or a legacy mint?) without
+  // reaching into the Layer-0 floor (check-app-primitives).
+  deriveSovereignMotebitId,
 } from "@motebit/crypto";
 
 // ── Re-export credential signing from @motebit/crypto ───────────────
