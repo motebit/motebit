@@ -88,6 +88,14 @@ export interface FullConfig {
    * that still carry this field will hard-error with a reset instruction.
    */
   cli_private_key?: string;
+  /**
+   * When the user confirmed transcribing their recovery seed to durable
+   * storage (`motebit seed reveal` → explicit ack). Self-reported by design
+   * — paper is unverifiable; the field exists so the one-line startup nudge
+   * and the doctor check are dismissible by the honest act they ask for
+   * (#428). Also set by `motebit restore` (holding the seed IS the backup).
+   */
+  seed_backed_up_at?: number;
   cli_encrypted_key?: {
     ciphertext: string; // hex
     nonce: string; // hex

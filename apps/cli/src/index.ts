@@ -73,7 +73,10 @@ import {
   handleCredentials,
   handleRegister,
   handleRelayUp,
+  handleRestore,
   handleRotate,
+  handleSeed,
+  seedBackupStatus,
   handleFederationStatus,
   handleFederationPeers,
   handleFederationPeer,
@@ -206,6 +209,16 @@ async function main(): Promise<void> {
 
   if (subcommand === "rotate") {
     await handleRotate(config);
+    return;
+  }
+
+  if (subcommand === "restore") {
+    await handleRestore(config);
+    return;
+  }
+
+  if (subcommand === "seed") {
+    await handleSeed(config);
     return;
   }
 
@@ -920,6 +933,16 @@ async function main(): Promise<void> {
     operator: config.operator,
   });
   console.log();
+
+  // Recovery-seed nudge — one dim line, gone forever once the user confirms
+  // a backup (`motebit seed reveal`). Calm software: a single actionable
+  // line, not a nag — but an unbacked-up sovereign key is a catastrophic
+  // loss waiting on a forgotten passphrase or a dead disk, and no operator
+  // can help afterwards (#428; the 2026-07-28 founder near-miss).
+  if (seedBackupStatus(loadFullConfig()) === "not_backed_up") {
+    console.log(dim("  recovery seed not backed up — `motebit seed reveal` (once, on paper)"));
+    console.log();
+  }
 
   // First-session activation: creature speaks first after identity birth.
   // Uses generateActivation — no synthetic user message in history.

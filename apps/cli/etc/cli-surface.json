@@ -42,9 +42,11 @@
     "relay": [
       "up"
     ],
+    "restore": [],
     "rotate": [],
     "run": [],
     "schema": [],
+    "seed": [],
     "serve": [],
     "skills": [],
     "smoke": [],

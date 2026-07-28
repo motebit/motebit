@@ -11,11 +11,19 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { openMotebitDatabase } from "@motebit/persistence";
 import { CONFIG_DIR, loadFullConfig } from "../config.js";
+import { seedBackupStatus } from "./seed.js";
 import { getDbPath } from "../runtime-factory.js";
 
 interface DoctorCheck {
   name: string;
   ok: boolean;
+  /**
+   * Advisory tier: renders as `warn` and never fails the doctor exit code.
+   * For postures that deserve attention but must not break "doctor as
+   * readiness probe" (the README's contract) — e.g. an unrecorded recovery
+   * seed (#428): urgent for the owner, irrelevant to system readiness.
+   */
+  warn?: boolean;
   detail: string;
   /**
    * Optional one-line remedy to print on failure. Each P0 first-run gap
@@ -94,6 +102,27 @@ export async function handleDoctor(): Promise<void> {
     checks.push({ name: "Identity", ok: true, detail: `${fullCfg.motebit_id.slice(0, 8)}...` });
   } else {
     checks.push({ name: "Identity", ok: true, detail: "not created yet (run motebit to create)" });
+  }
+
+  // Recovery-seed backup posture (#428). Not a failure — a warning with its
+  // remedy: an unbacked-up sovereign key has no recovery path an operator
+  // can provide, by design, so the self-recovery door must be lit BEFORE
+  // loss. Self-reported ack (paper is unverifiable); see seed.ts.
+  {
+    const posture = seedBackupStatus(fullCfg);
+    if (posture !== "no_identity") {
+      checks.push({
+        name: "Seed backup",
+        // Advisory: never fails readiness/exit-code — but rendered `warn`
+        // with its remedy, because the loss it forestalls is irreversible.
+        ok: true,
+        ...(posture === "not_backed_up" ? { warn: true } : {}),
+        detail: posture === "backed_up" ? "recovery seed recorded" : "not recorded",
+        ...(posture === "not_backed_up"
+          ? { remedy: "motebit seed reveal — show it once, write it on paper" }
+          : {}),
+      });
+    }
   }
 
   // ── First-run economic-path probes ──────────────────────────────────
@@ -391,7 +420,7 @@ export async function handleDoctor(): Promise<void> {
   console.log("\nmotebit doctor\n");
   let allOk = true;
   for (const check of checks) {
-    const icon = check.ok ? "ok" : "FAIL";
+    const icon = check.ok ? (check.warn === true ? "warn" : "ok") : "FAIL";
     console.log(`  ${icon.padEnd(6)} ${check.name.padEnd(20)} ${check.detail}`);
     if (check.remedy != null && check.remedy !== "") {
       console.log(`         ${" ".repeat(20)} → ${check.remedy}`);
