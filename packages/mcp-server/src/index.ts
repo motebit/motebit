@@ -19,6 +19,7 @@ import {
   parseScopeSet,
 } from "@motebit/encryption";
 import type { DelegationToken } from "@motebit/encryption";
+import { startSelfWatchdog } from "./self-watchdog.js";
 
 // Re-export for consumers
 export type { MotebitServerDeps, McpServerConfig, InboundCredentialVerifier };
@@ -27,6 +28,7 @@ export { StaticTokenVerifier };
 
 // Service scaffold — eliminates boilerplate for service motebits
 export { wireServerDeps, startServiceServer } from "./service.js";
+export { startSelfWatchdog, type SelfWatchdogHandle } from "./self-watchdog.js";
 export { buildServiceReceipt } from "./build-receipt.js";
 export type { BuildServiceReceiptInput } from "./build-receipt.js";
 export { bootstrapAndEmitIdentity } from "./bootstrap-service.js";
@@ -308,6 +310,8 @@ export class McpServerAdapter {
   private config: McpServerConfig;
   private deps: MotebitServerDeps;
   private httpServer?: import("node:http").Server;
+  /** #459: loopback self-check that exits the process when unservable. */
+  private selfWatchdog?: import("./self-watchdog.js").SelfWatchdogHandle;
   private lastVerifiedCaller: CallerIdentity | null = null;
 
   /**
@@ -354,6 +358,8 @@ export class McpServerAdapter {
   }
 
   async stop(): Promise<void> {
+    this.selfWatchdog?.stop();
+    this.selfWatchdog = undefined;
     if (this.server !== null) await this.server.close();
     if (this.httpServer) {
       await new Promise<void>((resolve, reject) => {
@@ -1289,5 +1295,16 @@ export class McpServerAdapter {
         resolve();
       });
     });
+
+    // #459 ops leg: a wedged-but-alive atom sat unservable for ~25 minutes
+    // because Fly restarts on process EXIT, not on failing health checks.
+    // The watchdog self-checks over loopback and exits non-zero after
+    // repeated failures so the platform restart policy revives a healthy
+    // process. Opt-out via MOTEBIT_SELF_WATCHDOG=off (local dev/tests).
+    if (process.env["MOTEBIT_SELF_WATCHDOG"] !== "off") {
+      this.selfWatchdog = startSelfWatchdog({
+        healthUrl: `http://127.0.0.1:${port}/health`,
+      });
+    }
   }
 }

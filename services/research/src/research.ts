@@ -23,6 +23,7 @@
  * primitive; they should not reinvent the transport.
  */
 
+import { createHash } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { McpClientAdapter } from "@motebit/mcp-client";
 import type { Citation, ExecutionReceipt } from "@motebit/sdk";
@@ -322,7 +323,15 @@ async function bindRelayBudget(
       headers: {
         Authorization: `Bearer ${config.apiToken}`,
         "Content-Type": "application/json",
-        "Idempotency-Key": crypto.randomUUID(),
+        // Intent-stable, not per-attempt (#459): the same logical sub-hop
+        // (caller × target × prompt) presents the same key, so a retry
+        // REPLAYS the relay's cached response instead of minting a new
+        // task per attempt (the fresh-UUID pattern defeated relay
+        // idempotency during the 2026-07-29 amplification incident).
+        "Idempotency-Key": `sub-${createHash("sha256")
+          .update(`${config.callerMotebitId}\n${targetMotebitId}\n${prompt}`)
+          .digest("hex")
+          .slice(0, 32)}`,
       },
       body: JSON.stringify({
         prompt,
