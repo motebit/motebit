@@ -52,7 +52,7 @@ import type {
 
 import type { CliConfig } from "../args.js";
 import { CONFIG_DIR, loadFullConfig } from "../config.js";
-import { decryptPrivateKey, fromHex, promptPassphrase } from "../identity.js";
+import { decryptPrivateKey, fromHex, resolveUnlockPassphrase } from "../identity.js";
 import { bold, cyan, dim, error as errorColor, success, warn } from "../colors.js";
 
 const DEFAULT_RELAY_URL = "https://relay.motebit.com";
@@ -942,7 +942,10 @@ async function loadIdentityKey(): Promise<{ privateKey: Uint8Array; publicKey: U
       escapeCodeTimeout: 50,
     });
     try {
-      passphrase = await promptPassphrase(rl, "Passphrase: ");
+      passphrase = await resolveUnlockPassphrase("Passphrase: ", {
+        rl,
+        encryptedKey: fullConfig.cli_encrypted_key,
+      });
     } finally {
       rl.close();
     }

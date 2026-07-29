@@ -81,6 +81,15 @@ This is a required deliverable of the unification arc, not doctrine poetry: an e
 - **Remote-trigger as an under-authenticated host-command path** → relay-mediated RCE. The channel is a capability and must be signed-authority-gated like every other.
 - **A frontend growing its own authority** — web/vscode/spatial deciding policy locally instead of invoking a runtime capability. The vscode-on-CLI pattern is the antidote; deviating from it is the smell.
 
+## Decided: keychain-resident passphrase (CLI, opt-in)
+
+The #438 review, decided 2026-07-29: the CLI may store the identity passphrase in the **macOS login Keychain** as an opt-in enrollment (`motebit keychain enroll`). The decision, not the assumption:
+
+- **What changes:** enrollment weakens "passphrase in the owner's head" to "passphrase on this machine" — any process running as the user can read the item (plus the on-disk encrypted key beside it) and decrypt the identity without the human. That adversary already owns the account session, but pre-enrollment it still lacked the passphrase; post-enrollment it does not. This is the standard OS-keychain trade every credential-storing tool makes, and it is **accepted as an opt-in convenience, never a default** — the enrollment copy states it plainly.
+- **What does not change:** the trust class. The CLI runtime already holds authority on this machine; the keychain item adds no new _boundary_, only removes a human factor from an existing one. No operator involvement at any point — the keyring is the user's OS, not ours (sovereignty-preserving recovery, per the #428 framing).
+- **Honesty floor:** the item is login-keychain-protected ("your macOS account"), NOT per-use biometric-gated — `/usr/bin/security` cannot create Secure Enclave ACLs, and the copy must never promise Touch ID it doesn't deliver. A future native binding that adds true biometric gating is additive.
+- **Two structural carve-outs:** enrollment never silences the seed nudge (keychain and disk die with the machine; the seed is the recovery that survives it), and `motebit seed reveal` always prompts interactively (a reveal-once secret must not become a zero-interaction dump for whoever sits at an unlocked terminal).
+
 ## Doctrine check before adding a surface or a capability boundary
 
 1. **Render axis or execution axis?** If it shows what the agent does, it's the slab's job. If it decides what the agent may do, it's the runtime's. Don't merge them.

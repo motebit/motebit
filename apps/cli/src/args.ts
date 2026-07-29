@@ -418,6 +418,9 @@ Commands:
   doctor                    Check system readiness (Node, SQLite, config)
   seed [reveal]             Recovery-seed backup status; reveal prints it once
                             (passphrase-gated) for transcription to paper
+  keychain [enroll|remove]  Store the passphrase in the macOS login Keychain
+                            (opt-in; your macOS account is the protection —
+                            not biometrics; never replaces the seed backup)
   restore [motebit.md]      Recover an identity from its recovery seed —
                             with a motebit.md for full-bundle restore, or
                             seed-only (re-derives a sovereign id). Also resets

@@ -18,7 +18,7 @@ import { fromMicro } from "@motebit/sdk";
 import { createInterface } from "node:readline";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
-import { fromHex, promptPassphrase, decryptPrivateKey } from "../identity.js";
+import { fromHex, resolveUnlockPassphrase, decryptPrivateKey } from "../identity.js";
 import { getRelayUrl, getRelayAuthHeaders, requireMotebitId } from "./_helpers.js";
 
 async function loadIdentityPrivateKey(): Promise<Uint8Array | null> {
@@ -27,7 +27,9 @@ async function loadIdentityPrivateKey(): Promise<Uint8Array | null> {
     return fromHex(config.cli_private_key);
   }
   if (config.cli_encrypted_key) {
-    const passphrase = await promptPassphrase("Passphrase (to sign balance waiver): ");
+    const passphrase = await resolveUnlockPassphrase("Passphrase (to sign balance waiver): ", {
+      encryptedKey: config.cli_encrypted_key,
+    });
     const privateKeyHex = await decryptPrivateKey(config.cli_encrypted_key, passphrase);
     return fromHex(privateKeyHex);
   }

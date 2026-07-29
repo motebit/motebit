@@ -11,6 +11,7 @@ import type { CliConfig } from "./args.js";
 import { loadFullConfig, extractPersonality, persistMotebitPublicKeys } from "./config.js";
 import {
   promptPassphrase,
+  resolveUnlockPassphrase,
   encryptPrivateKey,
   decryptPrivateKey,
   bootstrapIdentity,
@@ -81,6 +82,7 @@ import {
   handleRestore,
   handleRotate,
   handleSeed,
+  handleKeychain,
   seedBackupStatus,
   handleFederationStatus,
   handleFederationPeers,
@@ -224,6 +226,11 @@ async function main(): Promise<void> {
 
   if (subcommand === "seed") {
     await handleSeed(config);
+    return;
+  }
+
+  if (subcommand === "keychain") {
+    await handleKeychain(config);
     return;
   }
 
@@ -562,7 +569,11 @@ async function main(): Promise<void> {
     let unlocked = false;
     passphrase = "";
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      passphrase = envPassphrase ?? (await promptPassphrase("  Passphrase: "));
+      // env → session → enrolled keychain (validated; stale falls to the
+      // prompt) → interactive. A keychain-enrolled machine unlocks silently.
+      passphrase = await resolveUnlockPassphrase("  Passphrase: ", {
+        encryptedKey: fullConfig.cli_encrypted_key,
+      });
       try {
         await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
         unlocked = true;

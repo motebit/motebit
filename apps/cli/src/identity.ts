@@ -17,7 +17,8 @@ import {
 } from "@motebit/core-identity";
 import type { MotebitDatabase } from "@motebit/persistence";
 import type { FullConfig } from "./config.js";
-import { saveFullConfig } from "./config.js";
+import { saveFullConfig, loadFullConfig } from "./config.js";
+import { readKeychainPassphrase } from "./keychain.js";
 
 export function toHex(bytes: Uint8Array): string {
   return Array.from(bytes)
@@ -379,15 +380,93 @@ const DEFAULT_PASSPHRASE_GETTER = async (label: string): Promise<string> => {
   const env = process.env["MOTEBIT_PASSPHRASE"];
   if (env != null && env !== "") {
     lastResolutionFromSession = false;
+    lastResolutionFromKeychain = false;
     return env;
   }
   if (sessionPassphrase != null) {
     lastResolutionFromSession = true;
+    lastResolutionFromKeychain = false;
     return sessionPassphrase;
   }
+  const fromKeychain = tryEnrolledKeychainPassphrase();
+  if (fromKeychain != null) {
+    lastResolutionFromSession = false;
+    lastResolutionFromKeychain = true;
+    return fromKeychain;
+  }
   lastResolutionFromSession = false;
+  lastResolutionFromKeychain = false;
   return promptPassphrase(label);
 };
+
+/**
+ * Keychain leg of the resolution chain (#438): the passphrase enrolled in
+ * the macOS login Keychain, unless a stale read already failed a decrypt
+ * this process (then the keychain is ignored for the rest of the run —
+ * fail-open to the interactive prompt, never a lockout).
+ */
+let keychainDisabledThisProcess = false;
+let lastResolutionFromKeychain = false;
+
+function tryEnrolledKeychainPassphrase(): string | null {
+  if (keychainDisabledThisProcess) return null;
+  try {
+    const motebitId = loadFullConfig().motebit_id;
+    if (motebitId == null || motebitId === "") return null;
+    return readKeychainPassphrase(motebitId);
+  } catch {
+    return null;
+  }
+}
+
+/** Test-only: reset keychain resolution state between cases. */
+export function resetKeychainResolutionForTest(): void {
+  keychainDisabledThisProcess = false;
+  lastResolutionFromKeychain = false;
+}
+
+/** A keychain-sourced passphrase failed to decrypt — stop consulting it this run. */
+function disableKeychainThisProcess(): void {
+  keychainDisabledThisProcess = true;
+  lastResolutionFromKeychain = false;
+  console.error(
+    "  (keychain entry is stale — ignoring it this run; re-enroll with `motebit keychain enroll`)",
+  );
+}
+
+/**
+ * The unlock-passphrase resolution chain for DIRECT prompt sites (export,
+ * attest, rotate, seed, …): env → session cache → enrolled keychain →
+ * interactive prompt. When `encryptedKey` is provided the keychain leg is
+ * VALIDATED here (a stale enrollment falls through to the prompt instead
+ * of surfacing as the caller's "incorrect passphrase" hard-exit — the
+ * user typed nothing, so the failure must not read as their typo).
+ */
+export async function resolveUnlockPassphrase(
+  promptText: string,
+  opts?: {
+    rl?: readline.Interface;
+    encryptedKey?: FullConfig["cli_encrypted_key"];
+    /** Test-only prompt seam — never set in product code. */
+    promptOverrideForTest?: (label: string) => Promise<string>;
+  },
+): Promise<string> {
+  const env = process.env["MOTEBIT_PASSPHRASE"];
+  if (env != null && env !== "") return env;
+  if (sessionPassphrase != null) return sessionPassphrase;
+  const fromKeychain = tryEnrolledKeychainPassphrase();
+  if (fromKeychain != null) {
+    if (opts?.encryptedKey == null) return fromKeychain;
+    try {
+      await decryptPrivateKey(opts.encryptedKey, fromKeychain);
+      return fromKeychain; // validated (and now session-cached by the decrypt)
+    } catch {
+      disableKeychainThisProcess();
+    }
+  }
+  if (opts?.promptOverrideForTest != null) return opts.promptOverrideForTest(promptText);
+  return opts?.rl != null ? promptPassphrase(opts.rl, promptText) : promptPassphrase(promptText);
+}
 
 /**
  * Decrypt the CLI's active Ed25519 signing key from config and verify
@@ -430,7 +509,11 @@ export async function loadActiveSigningKey(
       // Self-heal a stale session cache: if the failed passphrase came
       // from the cache (not env, not a live prompt), the key must have
       // changed since it was proven — drop the cache and ask for real.
-      if (lastResolutionFromSession) {
+      if (lastResolutionFromSession || lastResolutionFromKeychain) {
+        // A cached/enrolled value went stale (key replaced, passphrase
+        // reset) — drop the failing source and resolve for real. Never a
+        // lockout: the retry reaches the interactive prompt.
+        if (lastResolutionFromKeychain) disableKeychainThisProcess();
         clearSessionPassphrase();
         const fresh = await getPassphrase(promptLabel);
         try {

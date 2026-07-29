@@ -72,6 +72,9 @@ motebit verify motebit.md            # Verify an identity file signature
 motebit rotate --reason "scheduled"  # Rotate keypair with succession chain
 motebit seed                         # Recovery-seed backup status
 motebit seed reveal                  # Print the seed once (passphrase-gated) for paper
+motebit keychain enroll              # Opt-in: store the passphrase in the macOS login
+                                     #   Keychain (your macOS account is the protection —
+                                     #   not biometrics; never replaces the seed backup)
 motebit restore [motebit.md]         # Recover an identity — full-bundle from a motebit.md,
                                      #   or seed-only (re-derives a sovereign id); also
                                      #   resets a forgotten passphrase when the seed

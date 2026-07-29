@@ -47,6 +47,7 @@ import {
   decryptPrivateKey,
   encryptPrivateKey,
   promptPassphrase,
+  resolveUnlockPassphrase,
 } from "../identity.js";
 import { getDbPath } from "../runtime-factory.js";
 
@@ -94,7 +95,12 @@ export async function handleAttest(config: CliConfig): Promise<void> {
   let passphrase: string;
 
   if (fullConfig.cli_encrypted_key) {
-    passphrase = envPassphrase ?? (await promptPassphrase(rl, "Passphrase: "));
+    passphrase =
+      envPassphrase ??
+      (await resolveUnlockPassphrase("Passphrase: ", {
+        rl,
+        encryptedKey: fullConfig.cli_encrypted_key,
+      }));
     try {
       await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
     } catch {
