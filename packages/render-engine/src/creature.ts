@@ -11,7 +11,7 @@
 
 import * as THREE from "three";
 import { TrustMode, type BehaviorCues } from "@motebit/sdk";
-import { CANONICAL_MATERIAL, smoothDelta } from "./spec.js";
+import { CANONICAL_MATERIAL, BACKDROP_DOME_RADIUS_M, smoothDelta } from "./spec.js";
 import type { RenderFrame, InteriorColor, AudioReactivity } from "./spec.js";
 
 // === Constants ===
@@ -277,7 +277,7 @@ function createSkyMaterial(
  * the light that illuminates the body.
  */
 export function createBackdropDome(preset: EnvironmentPreset = ENV_DEFAULT): THREE.Mesh {
-  const geo = new THREE.SphereGeometry(8, 64, 32);
+  const geo = new THREE.SphereGeometry(BACKDROP_DOME_RADIUS_M, 64, 32);
   const mat = createSkyMaterial(preset, { forDisplay: true });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.name = "backdrop-dome";
