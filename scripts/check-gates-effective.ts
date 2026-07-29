@@ -1585,6 +1585,18 @@ export function __probeRunScriptDirectly(record: ProbeRecord, scriptName: string
       ),
   },
   {
+    script: "check-self-knowledge-corpus-fresh",
+    proves:
+      "flags a self-knowledge corpus drifted from its source docs — appending a marker the generator would never produce to the committed corpus-data.ts makes the freshness gate's byte-comparison fail",
+    perturb: () =>
+      // The gate regenerates in-process (prettier-formatted, byte-stable)
+      // and compares byte-for-byte; an appended comment forces a delta.
+      mutateFile(
+        "packages/self-knowledge/src/corpus-data.ts",
+        (src) => `${src}// ${PROBE_PREFIX}stale_corpus — drift gate probe\n`,
+      ),
+  },
+  {
     script: "check-doctrine-format",
     proves:
       "flags DOCTRINE.md chain bullet whose canonical bold-link format is broken — dropping the `**` markers reduces the parser's match count below the expected nine and the gate fires",
