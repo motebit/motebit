@@ -46,6 +46,8 @@ export function deriveStreamActivity(chunk: StreamChunk): ActivityLabel | undefi
       return `approval: ${chunk.name}`;
     case "approval_expired":
       return "thinking";
+    case "approval_voided":
+      return "thinking";
     case "task_step_narration":
       // Spatial chrome render: the slab's
       // `motebit × virtual_browser` register IS the activity label

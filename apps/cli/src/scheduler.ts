@@ -24,6 +24,12 @@ interface SuspendedTurn {
   approvalId: string;
   goalId: string;
   createdAt: number;
+  /** The runtime gate's tool_call_id for the approval this turn suspended on.
+   *  Resume/deny is BOUND to it (#462): the scheduler may only resolve the
+   *  pending approval it owns, never whatever happens to be pending — in
+   *  daemon-coordinated setups "whatever is pending" can be a HUMAN's money
+   *  prompt from an attached surface. */
+  toolCallId: string;
 }
 
 export interface GoalStreamResult {
@@ -624,7 +630,12 @@ export class GoalScheduler {
           });
 
           // Track in-memory (runtime holds the actual suspended state)
-          this.suspended.set(approvalId, { approvalId, goalId, createdAt: now });
+          this.suspended.set(approvalId, {
+            approvalId,
+            goalId,
+            createdAt: now,
+            toolCallId: chunk.tool_call_id,
+          });
 
           console.log(
             `\n  [approval-pending] ${chunk.name} — approval_id: ${approvalId.slice(0, 8)}`,
@@ -801,7 +812,12 @@ export class GoalScheduler {
             denied_reason: null,
           });
 
-          this.suspended.set(approvalId, { approvalId, goalId, createdAt: now });
+          this.suspended.set(approvalId, {
+            approvalId,
+            goalId,
+            createdAt: now,
+            toolCallId: innerChunk.tool_call_id,
+          });
           console.log(
             `\n  [approval-pending] ${innerChunk.name} — approval_id: ${approvalId.slice(0, 8)}`,
           );
@@ -857,10 +873,22 @@ export class GoalScheduler {
       if (!item || item.status === "expired") {
         this.suspended.delete(id);
         void this.logApprovalEvent(EventType.ApprovalExpired, turn.goalId, id, "", {});
-        // If runtime is holding this suspended turn, deny to release
-        if (this.runtime.hasPendingApproval) {
+        // Deny-release the runtime ONLY when the pending approval is the one
+        // this suspended turn owns (#462): guarding on bare
+        // `hasPendingApproval` would let the scheduler deny a HUMAN's pending
+        // money prompt in daemon-coordinated setups. And never silently — the
+        // old path discarded the resume stream with zero output.
+        const pending = this.runtime.pendingApprovalInfo;
+        if (pending != null && pending.toolCallId === turn.toolCallId) {
+          console.log(
+            `[approval] expired → denying suspended turn ${id.slice(0, 8)} (${pending.toolName}) to release the runtime`,
+          );
           const resumeStream = this.runtime.resumeAfterApproval(false);
           void this.consumeAndDiscard(resumeStream);
+        } else if (pending != null) {
+          console.log(
+            `[approval] expired ${id.slice(0, 8)} but the runtime's pending approval belongs to another actor (${pending.toolName}) — leaving it untouched`,
+          );
         }
       }
     }
@@ -877,7 +905,13 @@ export class GoalScheduler {
         `[approval] draining ${approved ? "approved" : "denied"}: ${approvalId.slice(0, 8)}`,
       );
 
-      if (this.runtime.hasPendingApproval) {
+      // Resume ONLY the approval this suspended turn owns (#462). If the
+      // runtime's pending approval is a different one (another actor's — in
+      // daemon-coordinated setups possibly a human's live money prompt), the
+      // scheduler's suspended turn was already voided; resuming would
+      // approve/deny SOMEONE ELSE's decision with the stored verdict.
+      const pending = this.runtime.pendingApprovalInfo;
+      if (pending != null && pending.toolCallId === turn.toolCallId) {
         this.currentGoalId = turn.goalId;
         const resumeStream = this.runtime.resumeAfterApproval(approved);
         const result = await this.consumeDaemonStream(resumeStream, turn.goalId);
@@ -885,6 +919,14 @@ export class GoalScheduler {
         if (approved && !result.suspended) {
           this.goalStore.updateLastRun(turn.goalId, Date.now());
         }
+      } else if (pending != null) {
+        console.log(
+          `[approval] ${approvalId.slice(0, 8)} resolved, but the runtime's pending approval belongs to another actor (${pending.toolName}) — this turn was already voided; not resuming`,
+        );
+      } else {
+        console.log(
+          `[approval] ${approvalId.slice(0, 8)} resolved, but its suspended turn is gone (voided or expired) — nothing to resume`,
+        );
       }
 
       this.suspended.delete(approvalId);

@@ -145,6 +145,20 @@ export async function consumeStream(
         );
         break;
 
+      case "approval_voided":
+        // #462: this turn's message set aside a pending approval before the
+        // human answered. Not a refusal, not an expiry — say what happened
+        // and that nothing ran.
+        if (stopAnimation) {
+          stopAnimation();
+          stopAnimation = null;
+        }
+        writeOutput(
+          `\n  ${warn("[your new message set aside the pending approval — nothing was executed]")}\n` +
+            `  ${dim(`(${chunk.tool_name} was never run; no money moved. It can be proposed again.)`)}\n`,
+        );
+        break;
+
       case "invoke_error":
         if (stopAnimation) {
           stopAnimation();

@@ -41,6 +41,10 @@ interface MockRuntimeResult {
   runtime: MotebitRuntime;
   registeredTools: Map<string, ToolHandler>;
   eventsAppended: Array<{ event_type: string; payload: Record<string, unknown> }>;
+  /** Every resumeAfterApproval invocation's `approved` argument (#462 binding assertions). */
+  resumeCalls: boolean[];
+  /** Simulate the runtime's pending approval being REPLACED by another actor's (#462). */
+  setPendingToolCallId: (id: string) => void;
 }
 
 function createMockRuntime(
@@ -52,6 +56,8 @@ function createMockRuntime(
   } = {},
 ): MockRuntimeResult {
   let _hasPending = false;
+  let _pendingToolCallId = "tc-1";
+  const resumeCalls: boolean[] = [];
   const registeredTools = new Map<string, ToolHandler>();
   const eventsAppended: Array<{ event_type: string; payload: Record<string, unknown> }> = [];
 
@@ -61,7 +67,11 @@ function createMockRuntime(
     },
     get pendingApprovalInfo() {
       return _hasPending
-        ? { toolName: opts.approvalToolName ?? "shell_exec", args: opts.approvalArgs ?? {} }
+        ? {
+            toolName: opts.approvalToolName ?? "shell_exec",
+            args: opts.approvalArgs ?? {},
+            toolCallId: _pendingToolCallId,
+          }
         : null;
     },
     async *sendMessageStreaming(_text: string): AsyncGenerator<StreamChunk> {
@@ -83,6 +93,7 @@ function createMockRuntime(
       yield { type: "result" as const, result: makeMockTurnResult() };
     },
     async *resumeAfterApproval(approved: boolean): AsyncGenerator<StreamChunk> {
+      resumeCalls.push(approved);
       _hasPending = false;
       if (approved) {
         yield { type: "tool_status" as const, name: "shell_exec", status: "calling" as const };
@@ -135,7 +146,15 @@ function createMockRuntime(
     consolidationCycle: vi.fn().mockResolvedValue(undefined),
   } as unknown as MotebitRuntime;
 
-  return { runtime, registeredTools, eventsAppended };
+  return {
+    runtime,
+    registeredTools,
+    eventsAppended,
+    resumeCalls,
+    setPendingToolCallId: (id: string) => {
+      _pendingToolCallId = id;
+    },
+  };
 }
 
 function makeGoal(overrides: Partial<Goal> = {}): Goal {
@@ -469,5 +488,98 @@ describe("GoalScheduler — orphan approval cleanup on start", () => {
 
     const a = moteDb.approvalStore.get("resolved-1");
     expect(a!.status).toBe("approved");
+  });
+});
+
+describe("GoalScheduler — approval resolution is bound to the owned toolCallId (#462)", () => {
+  let moteDb: MotebitDatabase;
+
+  beforeEach(() => {
+    moteDb = createMotebitDatabase(":memory:");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  });
+
+  function makeScheduler(runtime: MotebitRuntime): GoalScheduler {
+    const scheduler = new GoalScheduler(
+      runtime,
+      moteDb.goalStore,
+      moteDb.approvalStore,
+      moteDb.goalOutcomeStore,
+      "mote-test",
+      RiskLevel.R3_EXECUTE,
+    );
+    scheduler.registerGoalTools();
+    return scheduler;
+  }
+
+  it("drains a resolved approval by resuming the runtime it OWNS", async () => {
+    const mock = createMockRuntime({ yieldApproval: true });
+    moteDb.goalStore.add(makeGoal());
+    const scheduler = makeScheduler(mock.runtime);
+    await scheduler.tickOnce();
+
+    const approvalId = moteDb.approvalStore.listAll("mote-test")[0]!.approval_id;
+    moteDb.approvalStore.resolve(approvalId, "approved");
+
+    await scheduler.tickOnce();
+    // The suspended turn's toolCallId (tc-1, from the approval_request chunk)
+    // matches the runtime's pending — resume happened, with the verdict.
+    // (hasPendingApproval is not asserted: the always-due goal re-runs in the
+    // same tick and suspends anew — the resumeCalls record is the contract.)
+    expect(mock.resumeCalls).toEqual([true]);
+  });
+
+  it("NEVER resumes when the runtime's pending approval belongs to another actor", async () => {
+    const mock = createMockRuntime({ yieldApproval: true });
+    moteDb.goalStore.add(makeGoal());
+    const scheduler = makeScheduler(mock.runtime);
+    await scheduler.tickOnce();
+
+    const approvalId = moteDb.approvalStore.listAll("mote-test")[0]!.approval_id;
+    moteDb.approvalStore.resolve(approvalId, "approved");
+
+    // Another actor's approval is now pending in the runtime — in a
+    // daemon-coordinated setup this can be a HUMAN's live money prompt.
+    mock.setPendingToolCallId("someone-elses-approval");
+
+    await scheduler.tickOnce();
+    // The stored verdict must NOT be applied to the foreign approval.
+    expect(mock.resumeCalls).toEqual([]);
+    expect(mock.runtime.hasPendingApproval).toBe(true);
+  });
+
+  it("expiry deny-release also skips a foreign pending approval", async () => {
+    const mock = createMockRuntime({ yieldApproval: true });
+    moteDb.goalStore.add(makeGoal());
+    const scheduler = makeScheduler(mock.runtime);
+    await scheduler.tickOnce();
+
+    // Force the stored approval past its TTL, and replace the runtime's
+    // pending with another actor's.
+    const approvalId = moteDb.approvalStore.listAll("mote-test")[0]!.approval_id;
+    moteDb.approvalStore.expireStale(Date.now() + 100 * 3_600_000);
+    mock.setPendingToolCallId("someone-elses-approval");
+
+    await scheduler.tickOnce();
+    // The scheduler's record is expired and cleaned up…
+    expect(moteDb.approvalStore.get(approvalId)!.status).toBe("expired");
+    // …but the foreign pending approval was NOT denied to "release" it.
+    expect(mock.resumeCalls).toEqual([]);
+    expect(mock.runtime.hasPendingApproval).toBe(true);
+  });
+
+  it("expiry deny-release DOES release the runtime when the pending approval is its own", async () => {
+    const mock = createMockRuntime({ yieldApproval: true });
+    moteDb.goalStore.add(makeGoal());
+    const scheduler = makeScheduler(mock.runtime);
+    await scheduler.tickOnce();
+
+    moteDb.approvalStore.expireStale(Date.now() + 100 * 3_600_000);
+
+    await scheduler.tickOnce();
+    expect(mock.resumeCalls).toEqual([false]);
   });
 });

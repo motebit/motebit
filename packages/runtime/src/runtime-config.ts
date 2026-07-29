@@ -393,6 +393,18 @@ export type StreamChunk =
   | { type: "approval_expired"; tool_name: string }
   | {
       /**
+       * A new user turn set aside a pending approval before the human
+       * answered (#462). NOT a refusal and NOT an expiry: nothing executed,
+       * nothing was recorded as denied, and the model may re-propose (which
+       * re-prompts the human). Emitted as the FIRST chunk of the turn that
+       * did the voiding; the surface owning the voided prompt hears it via
+       * `runtime.onApprovalVoided`.
+       */
+      type: "approval_voided";
+      tool_name: string;
+    }
+  | {
+      /**
        * Task-step narration — what motebit is currently doing at the
        * supervisor-cares-about granularity. The slab's chrome consumes
        * this in the `motebit × virtual_browser` register; voice

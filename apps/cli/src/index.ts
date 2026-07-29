@@ -770,6 +770,16 @@ async function main(): Promise<void> {
     );
   });
 
+  // #462: when another actor's new turn voids a pending approval (an
+  // attached frontend chatting through the runtime-host coordinator, or a
+  // new message on this surface), the surface that OWNS the voided prompt
+  // must hear it — the voiding turn's stream renders elsewhere.
+  runtime.onApprovalVoided((toolName) => {
+    console.log(
+      `\n  ${warn(`[a new message set aside the pending approval for ${toolName} — nothing was executed]`)}\n  ${dim("(not a refusal; it can be proposed again)")}`,
+    );
+  });
+
   // Connect MCP servers
   let mcpAdapters: Awaited<ReturnType<typeof connectMcpServers>> = [];
   if (mcpServers.length > 0) {
