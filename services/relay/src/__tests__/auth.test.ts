@@ -238,3 +238,99 @@ describe("verifySignedTokenForDevice — agent-registry sibling fallback", () =>
     expect(ok).toBe(true);
   });
 });
+
+describe("verifySignedTokenForDevice — rejection legibility (#460)", () => {
+  const mid = "motebit-legibility-1";
+  const did = "device-legibility-1";
+
+  const noDeviceIM = {
+    loadDeviceById: async () => null,
+  } as unknown as IdentityManager;
+
+  function deviceIM(publicKeyHex: string): IdentityManager {
+    return {
+      loadDeviceById: async () => ({ public_key: publicKeyHex }),
+    } as unknown as IdentityManager;
+  }
+
+  async function mintToken(privateKey: Uint8Array, aud: TokenAudience = "account:balance") {
+    const now = Date.now();
+    return createSignedToken(
+      { mid, did, iat: now, exp: now + 300_000, jti: "jti-legibility-1", aud },
+      privateKey,
+    );
+  }
+
+  it("names no_key_for_device_or_agent when neither device row nor registry fallback resolves — the silent-401 shape witnessed live", async () => {
+    const kp = await generateKeypair();
+    const token = await mintToken(kp.privateKey);
+    const reasons: string[] = [];
+    const ok = await verifySignedTokenForDevice(
+      token,
+      mid,
+      noDeviceIM,
+      "account:balance",
+      undefined,
+      undefined,
+      undefined,
+      (r) => reasons.push(r),
+    );
+    expect(ok).toBe(false);
+    expect(reasons).toEqual(["no_key_for_device_or_agent"]);
+  });
+
+  it("names the audience mismatch with got + expected", async () => {
+    const kp = await generateKeypair();
+    const token = await mintToken(kp.privateKey, "task:submit");
+    const reasons: string[] = [];
+    const ok = await verifySignedTokenForDevice(
+      token,
+      mid,
+      deviceIM(bytesToHex(kp.publicKey)),
+      "account:balance",
+      undefined,
+      undefined,
+      undefined,
+      (r) => reasons.push(r),
+    );
+    expect(ok).toBe(false);
+    expect(reasons).toEqual(["audience_mismatch:got=task:submit:expected=account:balance"]);
+  });
+
+  it("names a signature failure (token signed by a DIFFERENT key)", async () => {
+    const signer = await generateKeypair();
+    const registered = await generateKeypair();
+    const token = await mintToken(signer.privateKey);
+    const reasons: string[] = [];
+    const ok = await verifySignedTokenForDevice(
+      token,
+      mid,
+      deviceIM(bytesToHex(registered.publicKey)),
+      "account:balance",
+      undefined,
+      undefined,
+      undefined,
+      (r) => reasons.push(r),
+    );
+    expect(ok).toBe(false);
+    expect(reasons).toEqual(["signature_or_expiry_invalid"]);
+  });
+
+  it("a VALID token triggers no rejection callback", async () => {
+    const kp = await generateKeypair();
+    const token = await mintToken(kp.privateKey);
+    const reasons: string[] = [];
+    const ok = await verifySignedTokenForDevice(
+      token,
+      mid,
+      deviceIM(bytesToHex(kp.publicKey)),
+      "account:balance",
+      undefined,
+      undefined,
+      undefined,
+      (r) => reasons.push(r),
+    );
+    expect(ok).toBe(true);
+    expect(reasons).toEqual([]);
+  });
+});

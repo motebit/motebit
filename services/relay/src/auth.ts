@@ -109,15 +109,32 @@ export async function verifySignedTokenForDevice(
   blacklistCheck?: (jti: string, motebitId: string) => boolean,
   agentRevokedCheck?: (motebitId: string) => boolean,
   agentKeyLookup?: (motebitId: string) => string | null,
+  onReject?: (reason: string) => void,
 ): Promise<boolean> {
+  // Rejection legibility (#460): every `return false` names its reason via
+  // the optional callback so the enforcement site can LOG why — witnessed
+  // 2026-07-29: a live 401 left zero server-side trace, making device-auth
+  // failures undiagnosable from the operator seat. The reason never
+  // includes the token; the boolean contract is unchanged (additive).
   const claims = parseTokenPayloadUnsafe(token);
-  if (!claims || claims.mid !== motebitId || !claims.did) return false;
+  if (!claims || claims.mid !== motebitId || !claims.did) {
+    onReject?.(
+      !claims ? "token_unparseable" : claims.mid !== motebitId ? "mid_mismatch" : "did_missing",
+    );
+    return false;
+  }
 
   // Check if the agent's identity has been revoked
-  if (agentRevokedCheck && agentRevokedCheck(motebitId)) return false;
+  if (agentRevokedCheck && agentRevokedCheck(motebitId)) {
+    onReject?.("agent_revoked");
+    return false;
+  }
 
   // Check if this specific token's jti has been blacklisted
-  if (blacklistCheck && claims.jti && blacklistCheck(claims.jti, motebitId)) return false;
+  if (blacklistCheck && claims.jti && blacklistCheck(claims.jti, motebitId)) {
+    onReject?.("jti_blacklisted");
+    return false;
+  }
 
   // Resolve the verifying public key. Device-mode motebits (web/mobile/desktop)
   // have a device row keyed by `did`. Service-mode motebits (molecules) register
@@ -133,14 +150,25 @@ export async function verifySignedTokenForDevice(
   if (pubKeyHex === null && agentKeyLookup) {
     pubKeyHex = agentKeyLookup(motebitId);
   }
-  if (pubKeyHex === null) return false;
+  if (pubKeyHex === null) {
+    onReject?.("no_key_for_device_or_agent");
+    return false;
+  }
 
   const pubKeyBytes = hexToBytes(pubKeyHex);
   const payload = await verifySignedToken(token, pubKeyBytes);
-  if (payload === null || payload.mid !== motebitId) return false;
+  if (payload === null || payload.mid !== motebitId) {
+    onReject?.(payload === null ? "signature_or_expiry_invalid" : "payload_mid_mismatch");
+    return false;
+  }
 
   // Audience binding: reject tokens missing aud or scoped to a different endpoint
-  if (payload.aud !== expectedAudience) return false;
+  if (payload.aud !== expectedAudience) {
+    onReject?.(
+      `audience_mismatch:got=${String(payload.aud ?? "absent")}:expected=${expectedAudience}`,
+    );
+    return false;
+  }
 
   return true;
 }
