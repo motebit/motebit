@@ -13,6 +13,7 @@ npm install @motebit/crypto
 ## Verify
 
 ```typescript
+import fs from "node:fs";
 import { verify } from "@motebit/crypto";
 
 // Identity file
@@ -22,12 +23,14 @@ if (r1.type === "identity" && r1.valid) {
 }
 
 // Execution receipt (object or JSON string)
+const receipt = JSON.parse(fs.readFileSync("receipt.json", "utf-8"));
 const r2 = await verify(receipt);
 if (r2.type === "receipt" && r2.valid) {
   console.log(r2.signer); // did:key of the signing agent
 }
 
 // Verifiable credential
+const credential = JSON.parse(fs.readFileSync("credential.json", "utf-8"));
 const r3 = await verify(credential);
 if (r3.type === "credential" && r3.valid) {
   console.log(r3.issuer); // did:key of the issuer
@@ -85,14 +88,13 @@ const vc = await issueReputationCredential(
 ### Verification
 
 - **`verify(artifact, options?)`** — Verify any artifact. Detects type automatically. Returns discriminated union.
-- **`verifyIdentityFile(content)`** — _(deprecated)_ Legacy identity verification. Use `verify()` instead.
 - **`parse(content)`** — Parse a `motebit.md` without verifying.
-- **`verifyReceiptVerdict(receipt)`** — Structured `VerificationVerdict` for a signed receipt: independent axes (integrity, identityBinding, authority, revocation, temporalBasis, evidenceBasis) + a first-class `repair`, with no top-level `valid` boolean to over-read. See [`docs/doctrine/verify-family-fail-closed.md`](../../docs/doctrine/verify-family-fail-closed.md).
+- **`verifyReceiptVerdict(receipt)`** — Structured `VerificationVerdict` for a signed receipt: independent axes (integrity, identityBinding, authority, revocation, temporalBasis, evidenceBasis) + a first-class `repair`, with no top-level `valid` boolean to over-read. See [`docs/doctrine/verify-family-fail-closed.md`](https://github.com/motebit/motebit/blob/main/docs/doctrine/verify-family-fail-closed.md).
 - **`verifyDelegationTokenVerdict(token, grant, options?)`** — Structured `VerificationVerdict` for a per-tick token against its standing grant. Keeps `authority` and `revocation` orthogonal (a revoked grant reads `authority: "valid"` + `revocation: "revoked"`); `temporalMode: "wall_clock" | "ordering"` selects `temporalBasis` (`local_clock` vs `clockless`) so a clock-rollback is load-bearing in one and irrelevant in the other.
 - **`isFullyVerified(verdict)`** — Fail-closed collapse of a verdict to a boolean: `true` only when every load-bearing axis passes (integrity verified, identity bound, authority valid, revocation fresh). Stricter than the legacy per-function booleans by design.
-- **`verifyEvalAttestation(attestation)`** — Verify the envelope of a signed third-party-measurement artifact (`EvalAttestation`, subject ≠ signer): pinned `EVAL_ATTESTATION_SUITE`, closed-registry `eval_kind` intake (mirrored locally as `EVAL_KINDS_MIRROR` — crypto keeps zero runtime monorepo deps; locked to the protocol registry by `check-eval-kind-canonical`), non-empty results, issuer-key shape, and the signature over canonical bytes. Establishes "this issuer said this about this subject" — deliberately never measurement truth, issuer authority, key→id binding, or freshness. See [`spec/eval-attestation-v1.md`](../../spec/eval-attestation-v1.md).
-- **`signRoutingTranscript(body, delegatorPrivateKey)` / `verifyRoutingTranscript(transcript)`** — Sign and verify the routing-decision transcript (`RoutingDecisionTranscript`, subject = signer — receipt-family: the delegator's own record of why a worker won a paid hire). The verify law is the INTEGRITY rung: pinned `ROUTING_TRANSCRIPT_SUITE`, spec discriminator (mirrored locally as `ROUTING_TRANSCRIPT_SPEC_MIRROR`), non-empty frozen candidate set, winner-membership, key/signature shape, signature over canonical bytes — deliberately never decision faithfulness (the recomputation rung in `@motebit/semiring`), input truth, or key→id binding. See [`spec/routing-transcript-v1.md`](../../spec/routing-transcript-v1.md).
-- **`verifyEvidenceProvenance(bytes, provenance, { resolveProjection? })`** — Re-verify a verdict's evidence down to the primary record: the named `span` is an exact substring of `projection(bytes)`, where the bytes content-address to `digest`. Re-verifiable PRESENCE, never truth, no oracle. The projection is an injected seam (domain-blind — absent ⇒ raw bytes; present + no resolver ⇒ fails closed). See [`docs/doctrine/evidence-provenance.md`](../../docs/doctrine/evidence-provenance.md).
+- **`verifyEvalAttestation(attestation)`** — Verify the envelope of a signed third-party-measurement artifact (`EvalAttestation`, subject ≠ signer): pinned `EVAL_ATTESTATION_SUITE`, closed-registry `eval_kind` intake (mirrored locally as `EVAL_KINDS_MIRROR` — crypto keeps zero runtime monorepo deps; locked to the protocol registry by `check-eval-kind-canonical`), non-empty results, issuer-key shape, and the signature over canonical bytes. Establishes "this issuer said this about this subject" — deliberately never measurement truth, issuer authority, key→id binding, or freshness. See [`spec/eval-attestation-v1.md`](https://github.com/motebit/motebit/blob/main/spec/eval-attestation-v1.md).
+- **`signRoutingTranscript(body, delegatorPrivateKey)` / `verifyRoutingTranscript(transcript)`** — Sign and verify the routing-decision transcript (`RoutingDecisionTranscript`, subject = signer — receipt-family: the delegator's own record of why a worker won a paid hire). The verify law is the INTEGRITY rung: pinned `ROUTING_TRANSCRIPT_SUITE`, spec discriminator (mirrored locally as `ROUTING_TRANSCRIPT_SPEC_MIRROR`), non-empty frozen candidate set, winner-membership, key/signature shape, signature over canonical bytes — deliberately never decision faithfulness (the recomputation rung in `@motebit/semiring`), input truth, or key→id binding. See [`spec/routing-transcript-v1.md`](https://github.com/motebit/motebit/blob/main/spec/routing-transcript-v1.md).
+- **`verifyEvidenceProvenance(bytes, provenance, { resolveProjection? })`** — Re-verify a verdict's evidence down to the primary record: the named `span` is an exact substring of `projection(bytes)`, where the bytes content-address to `digest`. Re-verifiable PRESENCE, never truth, no oracle. The projection is an injected seam (domain-blind — absent ⇒ raw bytes; present + no resolver ⇒ fails closed). See [`docs/doctrine/evidence-provenance.md`](https://github.com/motebit/motebit/blob/main/docs/doctrine/evidence-provenance.md).
 
 ### Signing
 
@@ -132,14 +134,18 @@ const vc = await issueReputationCredential(
 - **`verifyIdentityBindingAnchored(identity, signingKeyHex, atTimestampMs, proof, guardianPublicKeyHex?)`** — Anchored binding: sovereign-root binding AND Merkle inclusion of the current key in the transparency log under `proof.anchoredRoot`. Confirming the root is on-chain is the caller's cross-check.
 - **`deriveSovereignMotebitId(genesisPublicKeyHex)`** — The sovereign commitment of a genesis key: a deterministic UUIDv8 from `sha256(genesisKey)`. A sovereign-minted motebit's `motebit_id` IS this value, so the id↔key binding is self-certifying (offline, no operator). Second-preimage resistance ~2^122.
 - **`verifySovereignBinding(motebitId, genesisPublicKeyHex)`** — True iff `motebitId` is the sovereign commitment to the genesis key. `verifyKeyBindingAtTime` sets `sovereign: true` on its result when this holds.
-- **`verifyMigratingKeyBinding(motebitId, presentedKeyHex, identityFile?)`** — Does `presentedKeyHex` legitimately control `motebitId` right now? The migration key↔id check (spec/migration-v1.md §8.2 step 6), fail-closed: a never-rotated sovereign id binds its key directly; a rotated key binds via the identity file's sovereign-rooted succession chain. Composes `verifySovereignBinding` and `verifyKeyBindingAtTime`.
+- **`verifyMigratingKeyBinding(motebitId, presentedKeyHex, identityFile?)`** — Does `presentedKeyHex` legitimately control `motebitId` right now? The migration key↔id check ([`spec/migration-v1.md`](https://github.com/motebit/motebit/blob/main/spec/migration-v1.md) §8.2 step 6), fail-closed: a never-rotated sovereign id binds its key directly; a rotated key binds via the identity file's sovereign-rooted succession chain. Composes `verifySovereignBinding` and `verifyKeyBindingAtTime`.
 
 ### Settlement anchoring
 
-- **`verifyAgentSettlementAnchor(record, proof, chainVerifier?)`** — Worker-side self-verification of a per-agent settlement Merkle inclusion proof (`spec/agent-settlement-anchor-v1.md`): the held `SettlementRecord` hashes to the anchored leaf, the Merkle path reconstructs to the root, and the relay's batch signature (suite `AGENT_SETTLEMENT_ANCHOR_SUITE`) checks out — all offline, with only the record, the proof, and the relay's public key. SCITT / RFC 6962 shape. The optional `chainVerifier` adds the onchain non-repudiation cross-check.
+- **`verifyAgentSettlementAnchor(record, proof, chainVerifier?)`** — Worker-side self-verification of a per-agent settlement Merkle inclusion proof ([`spec/agent-settlement-anchor-v1.md`](https://github.com/motebit/motebit/blob/main/spec/agent-settlement-anchor-v1.md)): the held `SettlementRecord` hashes to the anchored leaf, the Merkle path reconstructs to the root, and the relay's batch signature (suite `AGENT_SETTLEMENT_ANCHOR_SUITE`) checks out — all offline, with only the record, the proof, and the relay's public key. SCITT / RFC 6962 shape. The optional `chainVerifier` adds the onchain non-repudiation cross-check.
 - **`computeAgentSettlementLeaf(record)`** — The leaf hash for a `SettlementRecord`: `SHA-256(canonicalJson(record))` over the whole signed object (never a field projection), so producer and holder derive the identical leaf from the bytes they each hold.
-- **`verifyFederationSettlementAnchor(record, proof, chainVerifier?)`** — Peer-side self-verification of an inter-relay settlement Merkle inclusion proof (`spec/relay-federation-v1.md` §7.6): the held `FederationSettlementRecord` hashes to the anchored leaf, the Merkle path reconstructs to the root, and the relay's batch signature (suite `FEDERATION_SETTLEMENT_ANCHOR_SUITE`) checks out — all offline, with only the record, the proof, and the relay's public key. The federation analogue of `verifyAgentSettlementAnchor`; same SCITT / RFC 6962 shape. The optional `chainVerifier` adds the onchain non-repudiation cross-check.
+- **`verifyFederationSettlementAnchor(record, proof, chainVerifier?)`** — Peer-side self-verification of an inter-relay settlement Merkle inclusion proof ([`spec/relay-federation-v1.md`](https://github.com/motebit/motebit/blob/main/spec/relay-federation-v1.md) §7.6): the held `FederationSettlementRecord` hashes to the anchored leaf, the Merkle path reconstructs to the root, and the relay's batch signature (suite `FEDERATION_SETTLEMENT_ANCHOR_SUITE`) checks out — all offline, with only the record, the proof, and the relay's public key. The federation analogue of `verifyAgentSettlementAnchor`; same SCITT / RFC 6962 shape. The optional `chainVerifier` adds the onchain non-repudiation cross-check.
 - **`computeFederationSettlementLeaf(record)`** — The leaf hash for a `FederationSettlementRecord`: `SHA-256(canonicalJson(record))` over the whole signed object (never a field projection), so producer and holder derive the identical leaf from the bytes they each hold.
+
+### Hardware attestation
+
+- **`verifyHardwareAttestationClaim(claim, expectedIdentityPublicKeyHex, verifiers?)`** — Verify a `HardwareAttestationClaim`: a platform trust anchor's hardware-backed key signs a canonical body binding itself to the motebit's Ed25519 identity key. `secure_enclave` (Apple Secure Enclave, ECDSA P-256) verifies natively; every other platform dispatches to a verifier injected at the call site from its leaf package — [`@motebit/crypto-appattest`](https://www.npmjs.com/package/@motebit/crypto-appattest) (`device_check`), [`@motebit/crypto-android-keystore`](https://www.npmjs.com/package/@motebit/crypto-android-keystore), [`@motebit/crypto-tpm`](https://www.npmjs.com/package/@motebit/crypto-tpm), [`@motebit/crypto-webauthn`](https://www.npmjs.com/package/@motebit/crypto-webauthn). This package never imports a platform adapter — the `HardwareAttestationVerifiers` injection keeps dispatch explicit, auditable, and tree-shakable, and a claim whose platform has no verifier wired fails closed with a named-missing-adapter error. Hardware attestation is additive scoring on top of the software identity floor, never an admission gate. See [`docs/doctrine/hardware-attestation.md`](https://github.com/motebit/motebit/blob/main/docs/doctrine/hardware-attestation.md).
 
 ### Primitives
 
@@ -147,13 +153,18 @@ const vc = await issueReputationCredential(
 - **`ed25519Sign(message, privateKey)`** — Raw Ed25519 sign.
 - **`ed25519Verify(signature, message, publicKey)`** — Raw Ed25519 verify.
 - **`canonicalJson(obj)`** — Deterministic JSON serialization (JCS/RFC 8785).
-- **`hash(data)`** — SHA-256 hex string.
+- **`hash(data)`** — SHA-256 hex string. Async; takes raw bytes (`Uint8Array`), never a string — for objects, use `canonicalSha256`.
+- **`canonicalSha256(obj)`** — Hex SHA-256 of the UTF-8 bytes of `canonicalJson(obj)`. The canonical object-hashing path.
 - **`hashLeaf(entry, treeHashVersion?)`** — Merkle leaf hash under a `MerkleTreeVersion`: `SHA-256(entry)` for `merkle-sha256-plain-v1` (default), `SHA-256(0x00 ‖ entry)` for the RFC 6962 §2.1 `merkle-sha256-rfc6962-v2` leaf tag. The single dispatch point every leaf builder routes through; throws on an unimplemented version.
-- **`canonicalLeaf(value, treeHashVersion?)`** — JCS-canonicalize `value` then `hashLeaf` it. `canonicalLeaf(x)` (v1 default) is byte-identical to `hash(canonicalJson(x))`.
-- **`resolveTreeHashVersion(raw)`** — Verifier-boundary resolver for a proof's wire `tree_hash_version`: `absent ⇒ merkle-sha256-plain-v1`, a known value to itself, an unknown string to `null` so the caller rejects fail-closed (never silent-downgrade). See `docs/doctrine/merkle-tree-hash-versioning.md`.
+- **`canonicalLeaf(value, treeHashVersion?)`** — JCS-canonicalize `value` then `hashLeaf` it. `canonicalLeaf(x)` (v1 default) is byte-identical to `canonicalSha256(x)`.
+- **`resolveTreeHashVersion(raw)`** — Verifier-boundary resolver for a proof's wire `tree_hash_version`: `absent ⇒ merkle-sha256-plain-v1`, a known value to itself, an unknown string to `null` so the caller rejects fail-closed (never silent-downgrade). See [`docs/doctrine/merkle-tree-hash-versioning.md`](https://github.com/motebit/motebit/blob/main/docs/doctrine/merkle-tree-hash-versioning.md).
 - **`createSignedToken(payload, privateKey)`** — Create a signed auth token.
 - **`verifySignedToken(token, publicKey)`** — Verify a signed auth token.
 - **`publicKeyToDidKey(publicKey)`** / **`didKeyToPublicKey(did)`** — did:key conversion.
+
+### Cryptosuite dispatch (`@motebit/crypto/suite-dispatch`)
+
+The published `./suite-dispatch` subpath is the cryptosuite-agility entry point: **`verifyBySuite`** / **`signBySuite`** map a wire artifact's `suite` value — a complete verification recipe (algorithm + canonicalization + encoding) — to the underlying primitive, fail-closed on missing or unknown suites. Every verifier in this package routes through it; a new suite (post-quantum ML-DSA / SLH-DSA) is a registry addition plus a dispatch arm, never a wire-format break.
 
 ## What can it do?
 
@@ -167,11 +178,17 @@ All operations are **offline** — no network calls, no relay lookup, no runtime
 
 ## Related
 
-- [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) — CLI + library that wraps `verify()` for third-party offline verification
+- [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) — library that wraps `verify()` for third-party offline verification
+- [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) — the `motebit-verify` CLI, with every hardware-attestation platform verifier bundled
+- [`@motebit/crypto-appattest`](https://www.npmjs.com/package/@motebit/crypto-appattest) — iOS App Attest chain verifier (hardware-attestation leaf)
+- [`@motebit/crypto-android-keystore`](https://www.npmjs.com/package/@motebit/crypto-android-keystore) — Android Hardware-Backed Keystore Attestation verifier (hardware-attestation leaf)
+- [`@motebit/crypto-tpm`](https://www.npmjs.com/package/@motebit/crypto-tpm) — Windows / Linux TPM 2.0 EK chain verifier (hardware-attestation leaf)
+- [`@motebit/crypto-webauthn`](https://www.npmjs.com/package/@motebit/crypto-webauthn) — WebAuthn platform-authenticator attestation verifier (hardware-attestation leaf)
 - [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) — wire-format types for the artifacts this package signs and verifies
 - [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk) — developer contract for building Motebit-powered agents
 - [`create-motebit`](https://www.npmjs.com/package/create-motebit) — scaffold a signed agent identity
 - [`motebit`](https://www.npmjs.com/package/motebit) — reference runtime and operator console
+- [Motebit docs](https://docs.motebit.com) — guides and reference for the whole protocol surface
 
 ## License
 

@@ -3,10 +3,12 @@
 Offline Apache-2.0 verifier for TPM 2.0 Endorsement-Key hardware-attestation credentials.
 
 ```bash
-npm i @motebit/crypto-tpm
+npm i @motebit/crypto @motebit/crypto-tpm
 ```
 
-Plugs into [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto)'s `HardwareAttestationVerifiers` dispatcher as the `tpm` verifier — called when a credential declares `platform: "tpm"` (Windows 11 hosts, Linux-on-x86 with `/dev/tpm0`, Mac-with-T2 exposing a TPM interface).
+Requirements: ESM-only; Node ≥ 20.
+
+Plugs into [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto)'s `HardwareAttestationVerifiers` dispatcher as the `tpm` verifier — called when a credential declares `platform: "tpm"` (Windows 11 hosts, Linux-on-x86 with `/dev/tpm0`).
 
 ## Usage
 
@@ -23,8 +25,16 @@ const result = await verify(credential, {
 
 1. The TPM-marshaled `TPMS_ATTEST` structure (magic `0xff544347`, type `TPM_ST_ATTEST_QUOTE = 0x8018`, qualified_signer, extraData, clock_info, firmware_version, attested quote body) — hand-rolled binary parser in `src/tpm-parse.ts`.
 2. The TPM Attestation Key signature over `SHA-256(TPMS_ATTEST)`.
-3. The AK certificate chain against the **pinned vendor EK roots** — Infineon, Nuvoton, STMicroelectronics, Intel PTT. Every non-leaf must carry `basicConstraints.cA === true`, terminal cert DER byte-equal to one of the pinned roots.
+3. The AK certificate chain against the **pinned vendor EK roots** — Infineon, Nuvoton, STMicroelectronics, Intel PTT. Every non-leaf must carry `basicConstraints.cA === true`, every signature verified under its issuer's public key, every cert within its validity window, terminal cert DER byte-equal to one of the pinned roots.
 4. **Identity binding.** The quote's `extraData` must byte-equal `SHA-256(canonicalJson({ attested_at, device_id, identity_public_key, motebit_id, platform: "tpm", version: "1" }))` — the same body the desktop mint path composes. A malicious client that substitutes any other body fails here.
+
+## What a passing verification proves — and what it does not
+
+- **Proves** a vendor-rooted TPM 2.0 Attestation Key signed the quote, and that the quote's `extraData` names the exact Ed25519 identity key the credential claims.
+- **Proves** it offline — every check is deterministic from the pinned vendor roots plus the claim bytes; no network.
+- **Does not prove** the certificate is unrevoked today: vendor revocation lists are out of scope in v1 — a chain that passed once keeps passing.
+- **EK privacy consideration.** The EK is a stable per-chip identity — verifiers see a durable hardware identifier; weigh what chains you share, and with whom.
+- A passing result raises the credential's hardware-attestation score — additive, never an admission gate. See the [hardware-attestation doctrine](https://github.com/motebit/motebit/blob/main/docs/doctrine/hardware-attestation.md).
 
 ## Why pinned
 
@@ -34,12 +44,15 @@ A verifier that dynamically fetched vendor CAs has no sovereign story. The pinne
 
 Beyond `tpmVerifier`, the package exports the parser internals + pinned-root constants for advanced consumers (test fabrications, third-party verifiers wiring custom dispatchers):
 
-- `verifyTpmQuote(...)` — bare-metal entry: takes the already-parsed `TPMS_ATTEST` structure + AK chain and returns the structured verification result.
+- `verifyTpmQuote(claim, opts)` — bare-metal entry: takes the `HardwareAttestationClaim` plus `TpmVerifyOptions` and returns the structured verification result. Parsing happens inside — the claim's `attestation_receipt` (four base64url parts: `TPMS_ATTEST`, signature, AK cert, intermediates) is split and binary-parsed internally; the trust roots are injected via `opts.rootPems` (defaults to `DEFAULT_PINNED_TPM_ROOTS`). `tpmVerifier` is a thin curry over this.
 - `parseTpmsAttest(bytes)` — parse the raw TPM-marshaled binary into a typed `TpmsAttest`. Hand-rolled per TCG spec.
 - `composeTpmsAttestForTest(...)` — inverse of the parser; emits canonical bytes for test fixtures so the round-trip is observable.
 - `TPM_GENERATED_VALUE` (`0xff544347`) — the magic constant TPM-emitted quotes carry; format dispatchers use this to detect the structure.
+- `TPM_ST_ATTEST_QUOTE` (`0x8018`) — the attestation-type tag a `TPM2_Quote` structure must carry.
 - `TPM_PLATFORM` — the canonical platform-string constant (`"tpm"`) used to route by claim platform.
 - `INFINEON_TPM_EK_ROOT_PEM`, `NUVOTON_TPM_EK_ROOT_PEM`, `STMICRO_TPM_EK_RSA_ROOT_PEM`, `STMICRO_TPM_EK_ECC_ROOT_PEM`, `INTEL_PTT_EK_ROOT_PEM` — the pinned vendor EK roots, exported for audit and for `HardwareVerifierBundleConfig.tpmRootPems` overrides in `@motebit/verify`.
+- `DEFAULT_PINNED_TPM_ROOTS` — the default accept-set (all pinned vendor roots above), exported for audit and as the `rootPems` default in `verifyTpmQuote`.
+- `STMICRO_TPM_EK_ROOT_PEM` — **deprecated** since 1.1.0, removed in 2.0.0; an alias for the ECC root. Migrate to the explicit `STMICRO_TPM_EK_RSA_ROOT_PEM` / `STMICRO_TPM_EK_ECC_ROOT_PEM` constants.
 
 ## Why a hand-rolled parser
 

@@ -8,12 +8,12 @@
  * runtime, no network. This module is the smallest public library
  * surface of that promise.
  *
- * Library-only as of v1.0. The `motebit-verify` CLI moved to the BSL
- * `@motebit/verify` package, which layers bundled hardware-attestation
- * adapters (Apple App Attest, TPM 2.0, Google Play Integrity, WebAuthn)
- * on top of this library. The split mirrors long-lived tool lineages
- * like `git` / `libgit2` or `cargo` / `tokio`: permissive-floor library
- * underneath, BSL verb-named CLI on top. Third parties building
+ * Library-only as of v1.0. The `motebit-verify` CLI moved to the
+ * Apache-2.0 `@motebit/verify` package, which layers bundled
+ * hardware-attestation adapters (Apple App Attest, Android Keystore,
+ * TPM 2.0, WebAuthn) on top of this library. The split mirrors
+ * long-lived tool lineages like `npm` / `@npmcli/arborist`: library
+ * underneath, verb-named CLI on top. Third parties building
  * permissive-floor-only verifiers compose this package and
  * `@motebit/crypto` freely — Apache-2.0 carries an explicit patent grant.
  *

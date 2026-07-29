@@ -1,6 +1,6 @@
 # @motebit/sdk
 
-The developer contract for building Motebit-powered agents, services, and integrations. Apache-2.0, zero runtime dependencies.
+The developer contract for building Motebit-powered agents, services, and integrations. Apache-2.0. One runtime dependency — [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol), itself zero-dep.
 
 ## Why this exists
 
@@ -57,13 +57,31 @@ const state: MotebitState = {
 
 Everything from `@motebit/protocol` (re-exported), plus:
 
-- **State vector** — `MotebitState`, `TrustMode`, `BatteryMode`
+- **State vector** — `MotebitState` (SDK-local; its `TrustMode` / `BatteryMode` fields use protocol enums, re-exported here)
 - **Behavior** — `BehaviorCues`, `SPECIES_CONSTRAINTS`
 - **Memory graph** — `MemoryNode`, `MemoryEdge`, `MemoryQuery`, `MemoryStorageAdapter`
 - **Rendering** — `RenderSpec`, `GeometrySpec`, `MaterialSpec`, `LightingSpec`
 - **AI provider** — `ContextPack`, `AIResponse`, `IntelligenceProvider`, `ConversationMessage`
 - **Gradient** — `GradientSnapshot`, `GradientStoreAdapter`, `PrecisionWeights`
 - **Export** — `ExportManifest`, `StorageAdapters`
+
+## What the SDK adds over the protocol
+
+The developer-contract vocabularies — the package's reason to exist as its own namespace rather than a pure re-export:
+
+- **Model registry** (`models.ts`) — the canonical model-identifier constants surfaces route against, so integrators reason about capability classes without tracking provider SKUs
+- **Provider mode** (`provider-mode.ts`) — the three-mode provider vocabulary (user picks the capability class, the system resolves the concrete vendor)
+- **Provider resolver** (`provider-resolver.ts`) — the pure dispatcher from a provider config to a concrete provider choice; the copy-paste-stable logic an alternative runtime needs to match motebit's
+- **Color presets** (`color-presets.ts`) — the canonical interior palettes every surface renders
+- **Approval presets** (`approval-presets.ts`) — risk-threshold presets for automatic tool approval
+- **Risk labels** (`risk-labels.ts`) — canonical labels for the five governance risk levels the `PolicyGate` scores against
+- **Surface options** (`surface-options.ts`) — shared option lists for settings UIs (TTS voices, theme preferences)
+- **Governance config** (`governance-config.ts`) — the persisted governance-settings shape, stable across protocol minors so config on disk survives internal churn
+- **Voice config** (`voice-config.ts`) — the canonical voice-configuration shape, one field vocabulary across surfaces
+- **Appearance config** (`appearance-config.ts`) — the canonical appearance / theme configuration shape
+- **Pixel consent** (`pixel-consent.ts`) — the visual-perception consent vocabulary; pixels cross a different sovereignty boundary than text
+- **Session state** (`session-state.ts`) — the per-turn runtime-state snapshot injected into the system prompt's `[Session]` block
+- **Identity sigil** (`identity-sigil.ts`) — deterministic visual recognition parameters derived from a `motebit_id`
 
 ## Related
 

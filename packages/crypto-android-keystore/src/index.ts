@@ -19,7 +19,7 @@
  *
  * const result = await verify(credential, {
  *   hardwareAttestation: {
- *     android_keystore: androidKeystoreVerifier({
+ *     androidKeystore: androidKeystoreVerifier({
  *       expectedAttestationApplicationId,
  *     }),
  *   },
