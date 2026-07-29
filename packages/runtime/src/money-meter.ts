@@ -48,10 +48,26 @@ export type MoneyMeter = (
 
 export function createMoneyMeter(
   store: GrantSpendStore,
-  options?: { now?: () => number },
+  options?: {
+    now?: () => number;
+    /** When set, a VOLATILE (in-memory) store warns once at first metered spend. */
+    logger?: { warn(message: string, context?: Record<string, unknown>): void };
+  },
 ): MoneyMeter {
   const now = options?.now ?? Date.now;
+  let warnedVolatile = false;
   return async (verifiedGrant, _toolName, args) => {
+    // Durability honesty (#436): metering REAL money against an accumulator
+    // that resets on restart means the lifetime ceiling silently re-arms.
+    // Warn once, at the moment it matters (first metered spend), not at
+    // construction — most runtimes never move money.
+    if (!warnedVolatile && options?.logger != null && (store as { volatile?: boolean }).volatile) {
+      warnedVolatile = true;
+      options.logger.warn("money_meter.volatile_spend_store", {
+        detail:
+          "grant lifetime ceiling is metered in-memory and re-arms on restart — inject the persistent SqliteGrantSpendStore (@motebit/persistence) for live money",
+      });
+    }
     const ceiling = spendCeilingFromGrant(verifiedGrant);
     if (ceiling == null) return { allowed: false, denial: "ceiling_absent" };
 

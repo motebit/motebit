@@ -402,9 +402,9 @@ async function main(): Promise<void> {
     if (grantCmd === "create") {
       await handleGrantCreate(config);
     } else if (grantCmd === "list") {
-      handleGrantList();
+      await handleGrantList();
     } else if (grantCmd === "show") {
-      handleGrantShow(config.positionals[2]);
+      await handleGrantShow(config.positionals[2]);
     } else if (grantCmd === "revoke") {
       await handleGrantRevoke(config.positionals[2]);
     } else {
@@ -993,6 +993,7 @@ async function main(): Promise<void> {
         fullConfig,
         hasRail: solanaWallet !== undefined,
         ...(solanaWallet !== undefined ? { getBalanceMicro: () => solanaWallet.getBalance() } : {}),
+        readGrantSpend: (gid) => moteDb.grantSpendStore.peek(gid),
       });
       for (const line of renderPreflight(pf, dim)) console.log(line);
     }

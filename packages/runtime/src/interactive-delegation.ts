@@ -98,6 +98,15 @@ export interface InteractiveDelegationConfig {
    * rail seam are the cryptographic gates.
    */
   getActiveGrantId?: () => string | null;
+  /**
+   * The runtime's session paid-intent ledger — the mechanical interlock
+   * that refuses a duplicate paid delegation BEFORE broadcast while a
+   * prior payment is settled-but-unretrieved (#435/#436). Bound by the
+   * runtime at enable time; the enforcement itself lives in the shared
+   * submit chokepoint so this path and `executeGrantedDelegation` cannot
+   * diverge.
+   */
+  paidIntentLedger?: import("./paid-intent-ledger.js").PaidIntentLedger;
 }
 
 // === Manager ===
@@ -269,6 +278,7 @@ export class InteractiveDelegationManager {
           ...(ack === true ? { acknowledgeNoHistoryRisk: true } : {}),
           ...(config.routingStrategy ? { routingStrategy: config.routingStrategy } : {}),
           ...(grantId != null ? { grantId } : {}),
+          ...(config.paidIntentLedger != null ? { paidIntentLedger: config.paidIntentLedger } : {}),
           invocationOrigin: "ai-loop",
           ...(timeoutMs != null ? { timeoutMs } : {}),
           logger,
@@ -281,6 +291,24 @@ export class InteractiveDelegationManager {
           // real-money charge (#433): the model reads "timeout", concludes the
           // hire didn't happen, and delegates again. Name the money.
           const settled = result.error.settledPayment;
+          // The interlock refused BEFORE broadcast: no NEW money moved — the
+          // settledPayment here is the PRIOR task's. Distinct wording from
+          // PAYMENT_ALREADY_SETTLED so the model cannot read this refusal as
+          // "this call paid" (it didn't) or as a retryable failure (it isn't).
+          if (result.error.code === "intent_already_paid" && settled) {
+            return {
+              ok: false,
+              error:
+                `INTENT_ALREADY_PAID — refused BEFORE broadcasting; no new money moved. ` +
+                `An earlier payment already settled onchain for this work: ` +
+                `${(settled.paidMicro / 1_000_000).toFixed(4)} USDC (+ ` +
+                `${(settled.feeMicro / 1_000_000).toFixed(4)} fee), tx ${settled.txHash}, ` +
+                `task ${settled.taskId} — and its result was never retrieved. ` +
+                `${result.error.message} ` +
+                `Do NOT re-delegate. Tell the user work was already paid for and its result ` +
+                `is outstanding, and let them decide.`,
+            };
+          }
           if (settled) {
             return {
               ok: false,

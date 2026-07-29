@@ -25,6 +25,7 @@ import {
   PLATFORM_FEE_RATE,
 } from "@motebit/protocol";
 import { verifySovereignBinding } from "@motebit/crypto";
+import type { PaidIntentLedger } from "./paid-intent-ledger.js";
 
 /**
  * The DERIVED settlement-authority binding, inlined here to keep the
@@ -122,6 +123,19 @@ export type DelegationErrorCode =
    * has no meter and cannot produce this.
    */
   | "money_meter_denied"
+  /**
+   * Pre-flight, BEFORE broadcast. The session's paid-intent ledger holds a
+   * SETTLED-but-unretrieved payment that this new delegation would duplicate
+   * (same worker + capability, or too many outstanding payments session-wide).
+   * NO new money moved — the refusal happened before the payment was built.
+   * The prior payment's facts ride in `settledPayment`; the remedy is
+   * re-fetching that `taskId` (or restarting the session after review),
+   * never re-hiring. The mechanical half of the #433 fix: #434 told the
+   * model money moved; this refuses the broadcast even if the model
+   * misreads it (docs/doctrine/memory-never-confers-authority.md posture —
+   * money safety must not end at model compliance).
+   */
+  | "intent_already_paid"
   /** Pre-flight. Trust below the capability's threshold. */
   | "trust_threshold_unmet"
   /** Pre-flight. No agent advertises the capability. */
@@ -234,7 +248,18 @@ export type GrantedDelegationResult =
        */
       routingTranscript?: import("@motebit/protocol").RoutingDecisionTranscript;
     }
-  | { ok: false; code: string };
+  | {
+      ok: false;
+      code: string;
+      /**
+       * Set ONLY when the delegator's onchain payment ALREADY SETTLED but
+       * the result could not be retrieved. Same #433 contract as
+       * `DelegationError.settledPayment` — without it, the human-absent
+       * granted path flattened a paid-but-undelivered hire into a bare
+       * failure code, indistinguishable from never-hired (#436 finding 1).
+       */
+      settledPayment?: DelegationError["settledPayment"];
+    };
 
 export interface SubmitAndPollParams {
   /** This motebit's identity (the submitter/owner of the task). */
@@ -802,6 +827,15 @@ export type WorkerSelector = (
 export interface ResolveAndSubmitP2pDelegationParams {
   /** Standing-grant id (advisory; engages the relay revocation fence). */
   grantId?: string;
+  /**
+   * The session's paid-intent ledger. When present, a settled-but-
+   * unretrieved prior payment refuses a duplicate delegation BEFORE
+   * broadcast (`intent_already_paid`), and a new settled-unretrieved
+   * failure is recorded. The runtime passes its instance on every paid
+   * path (loop + granted) — enforcement lives HERE, in the shared
+   * chokepoint, so the two paths cannot diverge.
+   */
+  paidIntentLedger?: PaidIntentLedger;
   /** The delegator's identity (submitter / owner of the task). */
   motebitId: string;
   /** Base URL of the relay. */
@@ -1278,6 +1312,40 @@ export async function resolveAndSubmitP2pDelegation(
   });
   if (!resolved.ok) return { ok: false, error: resolved.error };
 
+  // 3a-bis. Paid-intent interlock — BEFORE any broadcast. If a prior payment
+  //         to this worker+capability settled onchain and its result was never
+  //         retrieved, a new delegation would buy the same work twice; refuse
+  //         mechanically instead of trusting the caller to have read the
+  //         PAYMENT_ALREADY_SETTLED message (#435/#436 — on the granted path
+  //         there is no human between a retry loop and real money).
+  if (params.paidIntentLedger != null) {
+    const verdict = params.paidIntentLedger.check(resolved.workerMotebitId, params.capability);
+    if (verdict.locked) {
+      const prior = verdict.prior;
+      return {
+        ok: false,
+        error: {
+          code: "intent_already_paid",
+          message:
+            verdict.scope === "pair"
+              ? `A payment to this worker for "${prior.capability}" already settled onchain ` +
+                `(tx ${prior.txHash}) and its result was never retrieved (task ${prior.taskId}). ` +
+                `Refused before broadcast — no new money moved. Re-fetch that task; do not re-hire.`
+              : `${params.paidIntentLedger.outstandingCount} paid delegations have settled onchain ` +
+                `without delivering results — all new paid delegation is suspended for this session. ` +
+                `Refused before broadcast — no new money moved. Oldest unretrieved: task ${prior.taskId} ` +
+                `(tx ${prior.txHash}).`,
+          settledPayment: {
+            txHash: prior.txHash,
+            paidMicro: prior.paidMicro,
+            feeMicro: prior.feeMicro,
+            taskId: prior.taskId,
+          },
+        },
+      };
+    }
+  }
+
   // 3b. Budget ceiling — enforced on the RESOLVED total (worker + all fee
   //     legs), before any irreversible broadcast. The relay's price is the
   //     truth being checked, so client-side listing math can't under-guard.
@@ -1325,7 +1393,7 @@ export async function resolveAndSubmitP2pDelegation(
   }
 
   // 5. Submit the pre-built proof (retry-safe; never re-broadcasts).
-  return submitP2pDelegation({
+  const submitted = await submitP2pDelegation({
     motebitId: params.motebitId,
     syncUrl: params.syncUrl,
     authToken: params.authToken,
@@ -1342,6 +1410,24 @@ export async function resolveAndSubmitP2pDelegation(
     logger: params.logger,
     ...(params.signal ? { signal: params.signal } : {}),
   });
+
+  // 6. Ledger write — a settled-but-unretrieved payment arms the interlock so
+  //    the NEXT delegation to this worker+capability refuses pre-broadcast.
+  //    Recorded only from the settledPayment fact (money verifiably moved),
+  //    never from an intent.
+  if (params.paidIntentLedger != null && !submitted.ok && submitted.error.settledPayment != null) {
+    const sp = submitted.error.settledPayment;
+    params.paidIntentLedger.recordSettledUnretrieved({
+      workerMotebitId: resolved.workerMotebitId,
+      capability: params.capability,
+      taskId: sp.taskId,
+      txHash: sp.txHash,
+      paidMicro: sp.paidMicro,
+      feeMicro: sp.feeMicro,
+      recordedAt: Date.now(),
+    });
+  }
+  return submitted;
 }
 
 export interface SelectDelegationParams {
@@ -1351,6 +1437,8 @@ export interface SelectDelegationParams {
    * the enforcement). Threaded to BOTH submit paths.
    */
   grantId?: string;
+  /** Session paid-intent ledger — threaded to the P2P path's interlock. */
+  paidIntentLedger?: PaidIntentLedger;
   /** The delegator's identity (submitter / owner of the task). */
   motebitId: string;
   /** Base URL of the relay. */
@@ -1461,6 +1549,7 @@ export async function selectAndRunDelegation(
       ...(params.acknowledgeNoHistoryRisk === true ? { acknowledgeNoHistoryRisk: true } : {}),
       ...(params.invocationOrigin ? { invocationOrigin: params.invocationOrigin } : {}),
       ...(params.grantId != null ? { grantId: params.grantId } : {}),
+      ...(params.paidIntentLedger != null ? { paidIntentLedger: params.paidIntentLedger } : {}),
       ...(params.timeoutMs != null ? { timeoutMs: params.timeoutMs } : {}),
       logger: params.logger,
       ...(params.signal ? { signal: params.signal } : {}),
