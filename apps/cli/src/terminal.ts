@@ -1,12 +1,22 @@
 /**
- * Custom terminal renderer — owns raw stdin, no readline.
+ * Custom terminal renderer — owns raw stdin and the bottom of the screen.
  *
- * Two regions: output scrolls above, input pinned to bottom.
- * Event-driven redraw — each event redraws the affected region.
- * No cursor tracking state accumulates across events.
+ * The screen splits into two regions:
+ *   - scrollback (above): append-only, plain prints, never edited
+ *   - the owned bottom region: up to three non-wrapping rows —
+ *     a pending partial output line, a status row, and the input row
  *
- * Replaces input.ts entirely. stream.ts uses writeOutput() instead of
- * process.stdout.write() so output and input never collide.
+ * Every mutation goes through one `commit()`: clear the previously painted
+ * region, append any completed scrollback, repaint the region rows, park the
+ * cursor. Because region rows are truncated/h-scrolled to the terminal width
+ * they NEVER soft-wrap, so "how many rows do I move up to clear" has an exact
+ * answer — including across a resize, where the clear recomputes row heights
+ * at the new width under the macOS reflow model (#455: resize is a repaint,
+ * never a fresh print). Repaints are wrapped in synchronized-output markers
+ * (ESC[?2026) so a repaint is never seen half-done.
+ *
+ * stream.ts, the scheduler, and the injected runtime logger all write through
+ * writeOutput() so output and input never collide (#456).
  */
 
 // ---------------------------------------------------------------------------
@@ -25,40 +35,389 @@ interface InputState {
   promptWidth: number;
 }
 
+/** IO seam so tests can render into a virtual terminal. */
+export interface TerminalIO {
+  write(s: string): void;
+  columns(): number;
+  isTTY: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // ANSI helpers
 // ---------------------------------------------------------------------------
 
+// eslint-disable-next-line no-control-regex
+const ANSI_RE = /\x1b\[[0-9;?]*[a-zA-Z~]/g;
+
 /** Strip ANSI escape codes to get visible character count. */
-function visibleLength(s: string): number {
-  // eslint-disable-next-line no-control-regex
-  return s.replace(/\x1b\[[0-9;]*[a-zA-Z~]/g, "").length;
+export function visibleLength(s: string): number {
+  return s.replace(ANSI_RE, "").length;
 }
+
+/**
+ * Slice a string by VISIBLE character index, preserving every escape
+ * sequence encountered up to the end of the slice (styling opened before
+ * the window still applies inside it).
+ */
+function sliceVisible(s: string, start: number, end: number): string {
+  let out = "";
+  let vis = 0;
+  let i = 0;
+  while (i < s.length && vis < end) {
+    if (s[i] === "\x1b") {
+      ANSI_RE.lastIndex = i;
+      const m = ANSI_RE.exec(s);
+      if (m && m.index === i) {
+        out += m[0];
+        i += m[0].length;
+        continue;
+      }
+    }
+    if (vis >= start) out += s[i]!;
+    vis++;
+    i++;
+  }
+  return out;
+}
+
+const RESET = "\x1b[0m";
+const SYNC_START = "\x1b[?2026h";
+const SYNC_END = "\x1b[?2026l";
 
 const PASTE_OPEN = "\x1b[200~";
 const PASTE_CLOSE = "\x1b[201~";
 
+/** Rows a painted row of visible width `w` occupies after reflow at `cols`. */
+function rowsAt(w: number, cols: number): number {
+  return w > 0 ? Math.floor((w - 1) / cols) + 1 : 1;
+}
+
+/** The cursor's visual row within a row of text, given its column. */
+function cursorVisRow(col: number, cols: number): number {
+  return col > 0 ? Math.floor((col - 1) / cols) : 0;
+}
+
 // ---------------------------------------------------------------------------
-// Singleton state
+// Renderer
 // ---------------------------------------------------------------------------
 
-let initialized = false;
-let inputActive = false;
-let inputState: InputState = { line: "", cursor: 0, prompt: "", promptWidth: 0 };
-let inputResolver: ((line: string) => void) | null = null;
+export interface TerminalRenderer {
+  writeOutput(text: string): void;
+  /** Write a full line of output: completes any pending partial line first,
+   * appends a newline. For line-shaped records (status echoes, tool
+   * completion lines) that must never glue onto streamed text. */
+  writeLine(text: string): void;
+  readInput(promptText: string): Promise<string>;
+  setStatusRow(row: string | null): void;
+  handleEvent(event: TerminalEvent): void;
+  /** Repaint in place — the resize path. Idempotent. */
+  repaint(): void;
+  /** Abandon any active input (stdin closed / shutdown). */
+  detach(): void;
+}
+
+export function createTerminalRenderer(io: TerminalIO): TerminalRenderer {
+  let inputActive = false;
+  let inputState: InputState = { line: "", cursor: 0, prompt: "", promptWidth: 0 };
+  let inputResolver: ((line: string) => void) | null = null;
+  let inputRejecter: (() => void) | null = null;
+
+  /** Partial output line not yet completed by a \n — painted as the region's
+   * top row so streamed text and the status/input rows never collide. */
+  let tail = "";
+  let statusRow: string | null = null;
+
+  // What the last commit painted, for exact clearing (widths are VISIBLE
+  // widths; cursorCol is where the cursor was parked on the last row).
+  let painted: { widths: number[]; cursorCol: number } = { widths: [], cursorCol: 0 };
+
+  function buildInputRow(cols: number): { row: string; width: number; cursorCol: number } {
+    const avail = Math.max(1, cols - 1 - inputState.promptWidth);
+    if (inputState.line.length <= avail) {
+      return {
+        row: inputState.prompt + inputState.line,
+        width: inputState.promptWidth + inputState.line.length,
+        cursorCol: inputState.promptWidth + inputState.cursor,
+      };
+    }
+    // Horizontal scroll: window the line around the cursor. Never wrap —
+    // the non-wrapping region row is what makes clearing (and resize) exact.
+    const start = Math.max(
+      0,
+      Math.min(inputState.cursor - Math.floor(avail / 2), inputState.line.length - avail),
+    );
+    const windowText = inputState.line.slice(start, start + avail);
+    const shown = start > 0 ? "…" + windowText.slice(1) : windowText;
+    return {
+      row: inputState.prompt + shown,
+      width: inputState.promptWidth + shown.length,
+      cursorCol: inputState.promptWidth + (inputState.cursor - start),
+    };
+  }
+
+  /**
+   * The one write path. Clears the previously painted region (reflow-aware),
+   * appends completed scrollback, repaints the region rows, parks the cursor.
+   */
+  function commit(scrollback: string): void {
+    const cols = Math.max(2, io.columns());
+    let out = "";
+
+    if (painted.widths.length > 0) {
+      // Clear the old region. Row heights are recomputed at the CURRENT
+      // width: if the terminal narrowed since the last paint, a reflowing
+      // terminal (macOS Terminal/iTerm2 — where #455 was witnessed) rewrapped
+      // our rows and moved the cursor with the text. On a non-reflowing
+      // terminal this can overshoot by a scrollback line on shrink — a far
+      // smaller wound than the duplicate-prompt class it closes.
+      let up = cursorVisRow(painted.cursorCol, cols);
+      for (let i = 0; i < painted.widths.length - 1; i++) {
+        up += rowsAt(painted.widths[i]!, cols);
+      }
+      if (up > 0) out += `\x1b[${up}A`;
+      out += "\r\x1b[J";
+    }
+
+    out += scrollback;
+
+    const rows: string[] = [];
+    const widths: number[] = [];
+    if (tail !== "") {
+      rows.push(tail + (io.isTTY ? RESET : ""));
+      widths.push(visibleLength(tail));
+    }
+    if (statusRow !== null) {
+      const truncated = sliceVisible(statusRow, 0, cols - 1);
+      rows.push(truncated + (io.isTTY ? RESET : ""));
+      widths.push(visibleLength(truncated));
+    }
+    let cursorCol = 0;
+    if (inputActive) {
+      const built = buildInputRow(cols);
+      rows.push(built.row);
+      widths.push(built.width);
+      cursorCol = built.cursorCol;
+    } else if (widths.length > 0) {
+      cursorCol = widths[widths.length - 1]!;
+    }
+
+    if (rows.length > 0) {
+      out += rows.join("\n");
+      out += "\r";
+      if (cursorCol > 0) out += `\x1b[${cursorCol}C`;
+    }
+
+    const hadOrHasRegion = painted.widths.length > 0 || rows.length > 0;
+    painted = { widths, cursorCol };
+    if (out === "") return;
+    io.write(io.isTTY && hadOrHasRegion ? SYNC_START + out + SYNC_END : out);
+  }
+
+  /** Whether raw passthrough output (non-TTY path) is at a line start. */
+  let atLineStart = true;
+
+  function writeOutput(text: string): void {
+    if (!io.isTTY && statusRow === null && !inputActive && tail === "") {
+      if (text.length > 0) atLineStart = text.endsWith("\n");
+      io.write(text);
+      return;
+    }
+    // Fold into the tail, flushing completed lines (and any full-width
+    // overflow of the remaining partial line) to scrollback in order.
+    let buffer = tail + text;
+    tail = "";
+    let scrollback = "";
+    const lastNl = buffer.lastIndexOf("\n");
+    if (lastNl !== -1) {
+      scrollback = buffer.slice(0, lastNl + 1);
+      buffer = buffer.slice(lastNl + 1);
+    }
+    const cols = Math.max(2, io.columns());
+    while (visibleLength(buffer) >= cols) {
+      // The partial line has visually wrapped — commit the wrapped slice as
+      // scrollback (exactly `cols` visible chars: the terminal soft-wraps it
+      // identically) and keep only the last visual row pinned.
+      scrollback += sliceVisible(buffer, 0, cols);
+      buffer = sliceVisible(buffer, cols, Number.MAX_SAFE_INTEGER);
+    }
+    tail = buffer;
+    commit(scrollback);
+  }
+
+  function writeLine(text: string): void {
+    const midLine = io.isTTY ? tail !== "" : !atLineStart;
+    writeOutput((midLine ? "\n" : "") + text + "\n");
+  }
+
+  function setStatusRow(row: string | null): void {
+    if (!io.isTTY) return;
+    if (row === statusRow) return;
+    statusRow = row;
+    commit("");
+  }
+
+  function submit(): void {
+    const line = inputState.line;
+    inputActive = false;
+    // Durable echo of the full typed line (even if it was h-scrolled).
+    commit(inputState.prompt + line + "\n");
+    if (inputResolver) {
+      const resolve = inputResolver;
+      inputResolver = null;
+      inputRejecter = null;
+      resolve(line);
+    }
+  }
+
+  function handleEvent(event: TerminalEvent): void {
+    if (event.type === "resize") {
+      commit("");
+      return;
+    }
+    if (!inputActive) return;
+    const result = applyEvent(inputState, event);
+    if (result === "submit") {
+      submit();
+    } else if (result === "exit") {
+      io.write("\n");
+      destroyTerminal();
+      process.exit(0);
+    } else {
+      inputState = result.state;
+      commit("");
+    }
+  }
+
+  function readInput(promptText: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      // The input row needs its own line — complete any pending partial.
+      if (tail !== "") writeOutput("\n");
+      inputState = {
+        line: "",
+        cursor: 0,
+        prompt: promptText,
+        promptWidth: visibleLength(promptText),
+      };
+      inputActive = true;
+      inputResolver = resolve;
+      inputRejecter = reject;
+      if (!io.isTTY) {
+        io.write(promptText);
+        return;
+      }
+      commit("");
+    });
+  }
+
+  function detach(): void {
+    if (inputRejecter) {
+      const reject = inputRejecter;
+      inputResolver = null;
+      inputRejecter = null;
+      inputActive = false;
+      reject();
+    }
+  }
+
+  return {
+    writeOutput,
+    writeLine,
+    readInput,
+    setStatusRow,
+    handleEvent,
+    repaint: () => commit(""),
+    detach,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Input reducer (pure)
+// ---------------------------------------------------------------------------
+
+type ReducerResult = { state: InputState } | "submit" | "exit";
+
+function applyEvent(state: InputState, event: TerminalEvent): ReducerResult {
+  switch (event.type) {
+    case "key": {
+      if (event.ctrl) {
+        if (event.key === "c") return "exit";
+        if (event.key === "u") return { state: { ...state, line: "", cursor: 0 } };
+        return { state };
+      }
+      switch (event.key) {
+        case "return":
+          return "submit";
+        case "backspace":
+          if (state.cursor > 0) {
+            return {
+              state: {
+                ...state,
+                line: state.line.slice(0, state.cursor - 1) + state.line.slice(state.cursor),
+                cursor: state.cursor - 1,
+              },
+            };
+          }
+          return { state };
+        case "delete":
+          if (state.cursor < state.line.length) {
+            return {
+              state: {
+                ...state,
+                line: state.line.slice(0, state.cursor) + state.line.slice(state.cursor + 1),
+              },
+            };
+          }
+          return { state };
+        case "left":
+          return { state: { ...state, cursor: Math.max(0, state.cursor - 1) } };
+        case "right":
+          return { state: { ...state, cursor: Math.min(state.line.length, state.cursor + 1) } };
+        case "home":
+          return { state: { ...state, cursor: 0 } };
+        case "end":
+          return { state: { ...state, cursor: state.line.length } };
+        case "up":
+        case "down":
+          return { state }; // No history (yet)
+        default:
+          // Printable character
+          if (event.key.length === 1) {
+            return {
+              state: {
+                ...state,
+                line:
+                  state.line.slice(0, state.cursor) + event.key + state.line.slice(state.cursor),
+                cursor: state.cursor + 1,
+              },
+            };
+          }
+          return { state };
+      }
+    }
+    case "paste": {
+      return {
+        state: {
+          ...state,
+          line: state.line.slice(0, state.cursor) + event.text + state.line.slice(state.cursor),
+          cursor: state.cursor + event.text.length,
+        },
+      };
+    }
+    case "resize":
+      return { state }; // Repaint is triggered externally
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Stdin event parser (module-level: stdin is inherently a singleton)
+// ---------------------------------------------------------------------------
+
 let lastEscTime = 0;
 let pendingEscTimer: ReturnType<typeof setTimeout> | null = null;
 let pasteBuffer: string | null = null; // non-null = inside paste brackets
 let pasteSplitCarry = ""; // partial PASTE_CLOSE held across chunks
 
-// Track how many terminal rows the input occupies for proper clearing
-let inputRows = 0;
-
-// ---------------------------------------------------------------------------
-// Event parser
-// ---------------------------------------------------------------------------
-
-function parseChunk(buf: Buffer): TerminalEvent[] {
+function parseChunk(buf: Buffer, onBareEscape: () => void): TerminalEvent[] {
   const events: TerminalEvent[] = [];
   // Prepend any partial PASTE_CLOSE carried from the previous chunk
   let data = buf.toString("utf-8");
@@ -152,12 +511,12 @@ function parseChunk(buf: Buffer): TerminalEvent[] {
         if (pendingEscTimer) clearTimeout(pendingEscTimer);
         pendingEscTimer = setTimeout(() => {
           pendingEscTimer = null;
-          handleBareEscape();
+          onBareEscape();
         }, 50);
         i++;
       } else {
         // Bare \x1b followed by non-'[' — real Escape key
-        handleBareEscape();
+        onBareEscape();
         i++;
       }
       continue;
@@ -194,221 +553,48 @@ function parseChunk(buf: Buffer): TerminalEvent[] {
   return events;
 }
 
+// ---------------------------------------------------------------------------
+// Singleton wiring over process.stdout / process.stdin
+// ---------------------------------------------------------------------------
+
+const stdoutIO: TerminalIO = {
+  write: (s) => void process.stdout.write(s),
+  columns: () => process.stdout.columns || 80,
+  isTTY: process.stdout.isTTY === true,
+};
+
+const renderer = createTerminalRenderer(stdoutIO);
+
+let initialized = false;
+
 function handleBareEscape(): void {
-  if (!inputActive) return;
   const now = Date.now();
   if (now - lastEscTime < 300) {
     // Double-tap Escape — clear input
     lastEscTime = 0;
-    inputState = { ...inputState, line: "", cursor: 0 };
-    redrawInput();
+    renderer.handleEvent({ type: "key", key: "u", ctrl: true });
   } else {
     lastEscTime = now;
   }
 }
 
-// ---------------------------------------------------------------------------
-// Input reducer (pure)
-// ---------------------------------------------------------------------------
-
-type ReducerResult = { state: InputState } | "submit" | "exit";
-
-function applyEvent(state: InputState, event: TerminalEvent): ReducerResult {
-  switch (event.type) {
-    case "key": {
-      if (event.ctrl) {
-        if (event.key === "c") return "exit";
-        if (event.key === "u") return { state: { ...state, line: "", cursor: 0 } };
-        return { state };
-      }
-      switch (event.key) {
-        case "return":
-          return "submit";
-        case "backspace":
-          if (state.cursor > 0) {
-            return {
-              state: {
-                ...state,
-                line: state.line.slice(0, state.cursor - 1) + state.line.slice(state.cursor),
-                cursor: state.cursor - 1,
-              },
-            };
-          }
-          return { state };
-        case "delete":
-          if (state.cursor < state.line.length) {
-            return {
-              state: {
-                ...state,
-                line: state.line.slice(0, state.cursor) + state.line.slice(state.cursor + 1),
-              },
-            };
-          }
-          return { state };
-        case "left":
-          return { state: { ...state, cursor: Math.max(0, state.cursor - 1) } };
-        case "right":
-          return { state: { ...state, cursor: Math.min(state.line.length, state.cursor + 1) } };
-        case "home":
-          return { state: { ...state, cursor: 0 } };
-        case "end":
-          return { state: { ...state, cursor: state.line.length } };
-        case "up":
-        case "down":
-          return { state }; // No history (yet)
-        default:
-          // Printable character
-          if (event.key.length === 1) {
-            return {
-              state: {
-                ...state,
-                line:
-                  state.line.slice(0, state.cursor) + event.key + state.line.slice(state.cursor),
-                cursor: state.cursor + 1,
-              },
-            };
-          }
-          return { state };
-      }
-    }
-    case "paste": {
-      return {
-        state: {
-          ...state,
-          line: state.line.slice(0, state.cursor) + event.text + state.line.slice(state.cursor),
-          cursor: state.cursor + event.text.length,
-        },
-      };
-    }
-    case "resize":
-      return { state }; // Redraw is triggered externally
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Input redraw
-// ---------------------------------------------------------------------------
-
-function redrawInput(): void {
-  const cols = process.stdout.columns || 80;
-  const fullLine = inputState.prompt + inputState.line;
-  const totalLen = inputState.promptWidth + inputState.line.length;
-  const newRows = Math.max(1, Math.ceil(totalLen / cols) || 1);
-
-  // Move up to start of previous input area and clear
-  if (inputRows > 1) {
-    process.stdout.write(`\x1b[${inputRows - 1}A`);
-  }
-  process.stdout.write("\r");
-  // Clear from cursor to end of screen (covers all old input rows)
-  process.stdout.write("\x1b[J");
-
-  // Write the full line
-  process.stdout.write(fullLine);
-
-  // Position cursor: compute where cursor should be
-  const cursorPos = inputState.promptWidth + inputState.cursor;
-  const cursorRow = Math.floor(cursorPos / cols);
-  const cursorCol = cursorPos % cols;
-  const endRow = Math.floor(Math.max(0, totalLen - 1) / cols);
-
-  // Move from end position to cursor position
-  if (endRow > cursorRow) {
-    process.stdout.write(`\x1b[${endRow - cursorRow}A`);
-  }
-  process.stdout.write(`\r`);
-  if (cursorCol > 0) {
-    process.stdout.write(`\x1b[${cursorCol}C`);
-  }
-
-  inputRows = newRows;
-}
-
-// ---------------------------------------------------------------------------
-// Output region — "lift input, write, replace"
-// ---------------------------------------------------------------------------
-
-/**
- * Write text to the output region above the input line.
- * If input is active, lifts it, writes output, then repaints input.
- * Safe to call from streaming, tool status, etc.
- */
-export function writeOutput(text: string): void {
-  if (!inputActive) {
-    process.stdout.write(text);
-    return;
-  }
-
-  // Move to start of input area
-  if (inputRows > 1) {
-    process.stdout.write(`\x1b[${inputRows - 1}A`);
-  }
-  process.stdout.write("\r\x1b[J"); // Clear input area
-
-  // Write output (scrolls naturally)
-  process.stdout.write(text);
-
-  // Repaint input at new bottom
-  inputRows = 1; // Reset — redrawInput will recalculate
-  redrawInput();
-}
-
-// ---------------------------------------------------------------------------
-// Stdin listener
-// ---------------------------------------------------------------------------
-
 function onStdinData(buf: Buffer): void {
-  const events = parseChunk(buf);
-  for (const event of events) {
-    if (!inputActive) continue;
-
-    if (event.type === "resize") {
-      redrawInput();
-      continue;
-    }
-
-    const result = applyEvent(inputState, event);
-    if (result === "submit") {
-      const line = inputState.line;
-      // Move cursor to end of input, then newline
-      process.stdout.write("\n");
-      inputActive = false;
-      inputRows = 0;
-      if (inputResolver) {
-        const resolve = inputResolver;
-        inputResolver = null;
-        resolve(line);
-      }
-    } else if (result === "exit") {
-      process.stdout.write("\n");
-      process.exit(0);
-    } else {
-      inputState = result.state;
-      redrawInput();
-    }
+  for (const event of parseChunk(buf, handleBareEscape)) {
+    renderer.handleEvent(event);
   }
 }
 
 let resizeTimer: ReturnType<typeof setTimeout> | null = null;
 function onResize(): void {
-  if (!inputActive) return;
-  // Debounce: terminal fires many resize events while dragging.
-  // Only redraw once the resize settles.
+  // Debounce: terminals fire many resize events while dragging. The commit
+  // discipline makes each repaint idempotent, so the debounce is only about
+  // not doing wasted work — not about correctness.
   if (resizeTimer) clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
     resizeTimer = null;
-    if (!inputActive) return;
-    // The terminal already reflowed all text on screen.
-    // Don't try to edit scrollback. Start fresh on a new line.
-    process.stdout.write("\n");
-    inputRows = 1;
-    redrawInput();
-  }, 100);
+    renderer.repaint();
+  }, 80);
 }
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 
 /** Initialize terminal: raw mode, bracketed paste, attach listeners. */
 export function initTerminal(): void {
@@ -447,22 +633,28 @@ export function destroyTerminal(): void {
 }
 
 /**
- * Read a line of input. Drop-in replacement for the old readInput.
- * Returns a Promise that resolves when the user presses Enter.
+ * Write text to the output region above the input line.
+ * If input or a status row is active, output is folded in above them.
+ * Safe to call from streaming, tool status, the runtime logger, etc.
+ */
+export function writeOutput(text: string): void {
+  renderer.writeOutput(text);
+}
+
+/**
+ * Write a full line of output, completing any pending partial line first.
+ * For line-shaped records that must never glue onto streamed text.
+ */
+export function writeLine(text: string): void {
+  renderer.writeLine(text);
+}
+
+/**
+ * Read a line of input. Returns a Promise that resolves when the user
+ * presses Enter.
  */
 export function readInput(promptText: string): Promise<string> {
-  return new Promise((resolve) => {
-    inputState = {
-      line: "",
-      cursor: 0,
-      prompt: promptText,
-      promptWidth: visibleLength(promptText),
-    };
-    inputRows = 1;
-    inputActive = true;
-    inputResolver = resolve;
-    redrawInput();
-  });
+  return renderer.readInput(promptText);
 }
 
 /**
@@ -471,4 +663,14 @@ export function readInput(promptText: string): Promise<string> {
  */
 export function askQuestion(promptText: string): Promise<string> {
   return readInput(promptText);
+}
+
+/**
+ * Set (or clear, with null) the status row rendered directly above the
+ * input line — the calm one-line answer to "is it waiting on me or
+ * working?" during any await. Content is pre-rendered by status-render.ts;
+ * the renderer truncates it to the terminal width so it never wraps.
+ */
+export function setStatusRow(row: string | null): void {
+  renderer.setStatusRow(row);
 }

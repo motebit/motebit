@@ -18,7 +18,16 @@ import type { PlanEngine, PlanChunk } from "@motebit/planner";
 import type { PlanStoreAdapter } from "@motebit/planner";
 import { embedText } from "@motebit/memory-graph";
 import { parseInterval } from "./intervals.js";
-import { writeOutput } from "./terminal.js";
+import { writeLine, writeOutput } from "./terminal.js";
+import { dim, warn as warnColor, error as errorColor } from "./colors.js";
+
+// Background goal/plan ticks print while the user may be mid-keystroke at
+// the prompt — every line goes through the renderer so it lands above the
+// input row instead of corrupting it (#456). Same writeOutput discipline
+// the streaming path already followed.
+const logLine = (msg: string): void => writeLine(dim(msg));
+const warnLine = (msg: string): void => writeLine(warnColor(msg));
+const errorLine = (msg: string): void => writeLine(errorColor(msg));
 
 interface SuspendedTurn {
   approvalId: string;
@@ -113,7 +122,7 @@ export class GoalScheduler {
       wall_clock_ms: 5 * 60 * 1000, // 5 min wall-clock
       project_id: null,
     });
-    console.log("[scheduler] created system memory maintenance goal (24h interval)");
+    logLine("[scheduler] created system memory maintenance goal (24h interval)");
   }
 
   /** Deny any pending approvals left over from a previous daemon run. */
@@ -123,9 +132,7 @@ export class GoalScheduler {
       this.approvalStore.resolve(a.approval_id, "denied", "daemon_restart");
     }
     if (orphans.length > 0) {
-      console.log(
-        `[scheduler] cleaned up ${orphans.length} orphaned approval(s) from previous run`,
-      );
+      logLine(`[scheduler] cleaned up ${orphans.length} orphaned approval(s) from previous run`);
     }
   }
 
@@ -195,7 +202,7 @@ export class GoalScheduler {
         project_id: projectId,
       });
 
-      console.log(`[goal] sub-goal created: ${goalId.slice(0, 8)} — "${prompt.slice(0, 40)}"`);
+      logLine(`[goal] sub-goal created: ${goalId.slice(0, 8)} — "${prompt.slice(0, 40)}"`);
       return Promise.resolve({
         ok: true,
         data: `Sub-goal created: ${goalId.slice(0, 8)} — "${prompt}"`,
@@ -219,7 +226,7 @@ export class GoalScheduler {
       await this.runtime.goals.completed({ goal_id: goalIdAtComplete, reason });
       this.goalStore.setStatus(goalIdAtComplete, "completed");
 
-      console.log(`[goal] completed by agent: ${goalIdAtComplete.slice(0, 8)} — ${reason}`);
+      logLine(`[goal] completed by agent: ${goalIdAtComplete.slice(0, 8)} — ${reason}`);
       return { ok: true, data: `Goal marked as completed: ${reason}` };
     };
 
@@ -237,7 +244,7 @@ export class GoalScheduler {
       // Outcomes are 1-per-run; progress notes are events within a run.
       await this.runtime.goals.progress({ goal_id: this.currentGoalId, note });
 
-      console.log(`[goal] progress: ${note.slice(0, 60)}`);
+      logLine(`[goal] progress: ${note.slice(0, 60)}`);
       return { ok: true, data: `Progress recorded: ${note}` };
     };
 
@@ -441,7 +448,7 @@ export class GoalScheduler {
         const elapsed = goal.last_run_at != null ? now - goal.last_run_at : Infinity;
         if (elapsed < goal.interval_ms) continue;
 
-        console.log(`[goal] executing: "${goal.prompt.slice(0, 60)}"`);
+        logLine(`[goal] executing: "${goal.prompt.slice(0, 60)}"`);
 
         // Build enriched context
         const outcomes = this.goalOutcomeStore.listForGoal(goal.goal_id, 3);
@@ -527,10 +534,10 @@ export class GoalScheduler {
             this.goalStore.setStatus(goal.goal_id, "completed");
           }
 
-          console.log(`[goal] completed: ${goal.goal_id.slice(0, 8)}`);
+          logLine(`[goal] completed: ${goal.goal_id.slice(0, 8)}`);
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
-          console.error(`[goal] error for ${goal.goal_id.slice(0, 8)}: ${msg}`);
+          errorLine(`[goal] error for ${goal.goal_id.slice(0, 8)}: ${msg}`);
 
           // Record failed outcome (runId = outcome_id for audit correlation)
           this.goalOutcomeStore.add({
@@ -555,7 +562,7 @@ export class GoalScheduler {
           const refreshed = this.goalStore.get(goal.goal_id);
           if (refreshed && refreshed.consecutive_failures >= refreshed.max_retries) {
             this.goalStore.setStatus(goal.goal_id, "paused");
-            console.warn(
+            warnLine(
               `[goal] auto-paused ${goal.goal_id.slice(0, 8)} after ${refreshed.consecutive_failures} consecutive failures`,
             );
           }
@@ -570,7 +577,7 @@ export class GoalScheduler {
         void this.runtime.consolidationCycle();
       }
     } catch (err: unknown) {
-      console.error("[scheduler] tick failed", err);
+      errorLine(`[scheduler] tick failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       this.ticking = false;
     }
@@ -637,9 +644,7 @@ export class GoalScheduler {
             toolCallId: chunk.tool_call_id,
           });
 
-          console.log(
-            `\n  [approval-pending] ${chunk.name} — approval_id: ${approvalId.slice(0, 8)}`,
-          );
+          logLine(`\n  [approval-pending] ${chunk.name} — approval_id: ${approvalId.slice(0, 8)}`);
           void this.logApprovalEvent(
             EventType.ApprovalRequested,
             goalId,
@@ -665,7 +670,7 @@ export class GoalScheduler {
         }
 
         case "injection_warning":
-          console.warn(`\n  [warning] suspicious content in ${chunk.tool_name}`);
+          warnLine(`\n  [warning] suspicious content in ${chunk.tool_name}`);
           break;
 
         case "result": {
@@ -673,7 +678,7 @@ export class GoalScheduler {
           if (result.memoriesFormed != null) {
             memoriesFormed += result.memoriesFormed.length;
           }
-          console.log("\n  [goal turn complete]");
+          logLine("\n  [goal turn complete]");
           break;
         }
       }
@@ -697,7 +702,7 @@ export class GoalScheduler {
     let planStream: AsyncGenerator<PlanChunk>;
 
     if (plan && plan.status === PlanStatus.Active) {
-      console.log(`[plan] resuming: ${plan.title} (${plan.plan_id.slice(0, 8)})`);
+      logLine(`[plan] resuming: ${plan.title} (${plan.plan_id.slice(0, 8)})`);
       planStream = this.planEngine!.resumePlan(plan.plan_id, loopDeps, undefined, runId);
     } else {
       // Retrieve relevant memories to inform plan decomposition
@@ -720,7 +725,7 @@ export class GoalScheduler {
       );
       plan = created.plan;
       if (created.truncatedFrom != null) {
-        console.warn(
+        warnLine(
           `[plan] truncated from ${created.truncatedFrom} to ${plan.total_steps} steps (max ${plan.total_steps})`,
         );
       }
@@ -745,15 +750,15 @@ export class GoalScheduler {
       }
       switch (chunk.type) {
         case "plan_created":
-          console.log(`[plan] created: "${chunk.plan.title}" (${chunk.steps.length} steps)`);
+          logLine(`[plan] created: "${chunk.plan.title}" (${chunk.steps.length} steps)`);
           break;
 
         case "plan_truncated":
-          console.warn(`[plan] truncated from ${chunk.requestedSteps} to ${chunk.maxSteps} steps`);
+          warnLine(`[plan] truncated from ${chunk.requestedSteps} to ${chunk.maxSteps} steps`);
           break;
 
         case "step_started":
-          console.log(`[plan] step ${chunk.step.ordinal + 1}: ${chunk.step.description}`);
+          logLine(`[plan] step ${chunk.step.ordinal + 1}: ${chunk.step.description}`);
           break;
 
         case "step_chunk":
@@ -772,7 +777,7 @@ export class GoalScheduler {
               writeOutput(" done\n");
             }
           } else if (chunk.chunk.type === "injection_warning") {
-            console.warn(`\n  [warning] suspicious content in ${chunk.chunk.tool_name}`);
+            warnLine(`\n  [warning] suspicious content in ${chunk.chunk.tool_name}`);
           } else if (chunk.chunk.type === "result") {
             if (chunk.chunk.result.memoriesFormed != null) {
               memoriesFormed += chunk.chunk.result.memoriesFormed.length;
@@ -781,11 +786,11 @@ export class GoalScheduler {
           break;
 
         case "step_completed":
-          console.log(`\n  [step ${chunk.step.ordinal + 1} complete]`);
+          logLine(`\n  [step ${chunk.step.ordinal + 1} complete]`);
           break;
 
         case "step_failed":
-          console.error(`\n  [step ${chunk.step.ordinal + 1} failed: ${chunk.error}]`);
+          errorLine(`\n  [step ${chunk.step.ordinal + 1} failed: ${chunk.error}]`);
           break;
 
         case "approval_request": {
@@ -818,7 +823,7 @@ export class GoalScheduler {
             createdAt: now,
             toolCallId: innerChunk.tool_call_id,
           });
-          console.log(
+          logLine(
             `\n  [approval-pending] ${innerChunk.name} — approval_id: ${approvalId.slice(0, 8)}`,
           );
           void this.logApprovalEvent(
@@ -833,15 +838,15 @@ export class GoalScheduler {
         }
 
         case "plan_completed":
-          console.log(`[plan] completed: ${chunk.plan.title}`);
+          logLine(`[plan] completed: ${chunk.plan.title}`);
           break;
 
         case "plan_failed":
-          console.error(`[plan] failed: ${chunk.reason}`);
+          errorLine(`[plan] failed: ${chunk.reason}`);
           break;
 
         case "reflection": {
-          console.log(`[plan] reflection: ${chunk.result.summary}`);
+          logLine(`[plan] reflection: ${chunk.result.summary}`);
           const stored = await this.persistReflectionMemories(
             chunk.result.memoryCandidates,
             goalId,
@@ -864,7 +869,7 @@ export class GoalScheduler {
     const now = Date.now();
     const expiredCount = this.approvalStore.expireStale(now);
     if (expiredCount > 0) {
-      console.log(`[approvals] expired ${expiredCount} stale approval(s)`);
+      logLine(`[approvals] expired ${expiredCount} stale approval(s)`);
     }
 
     // Clean up in-memory map for expired items and release runtime
@@ -880,13 +885,13 @@ export class GoalScheduler {
         // old path discarded the resume stream with zero output.
         const pending = this.runtime.pendingApprovalInfo;
         if (pending != null && pending.toolCallId === turn.toolCallId) {
-          console.log(
+          logLine(
             `[approval] expired → denying suspended turn ${id.slice(0, 8)} (${pending.toolName}) to release the runtime`,
           );
           const resumeStream = this.runtime.resumeAfterApproval(false);
           void this.consumeAndDiscard(resumeStream);
         } else if (pending != null) {
-          console.log(
+          logLine(
             `[approval] expired ${id.slice(0, 8)} but the runtime's pending approval belongs to another actor (${pending.toolName}) — leaving it untouched`,
           );
         }
@@ -901,9 +906,7 @@ export class GoalScheduler {
       if (item.status !== "approved" && item.status !== "denied") continue;
 
       const approved = item.status === "approved";
-      console.log(
-        `[approval] draining ${approved ? "approved" : "denied"}: ${approvalId.slice(0, 8)}`,
-      );
+      logLine(`[approval] draining ${approved ? "approved" : "denied"}: ${approvalId.slice(0, 8)}`);
 
       // Resume ONLY the approval this suspended turn owns (#462). If the
       // runtime's pending approval is a different one (another actor's — in
@@ -920,11 +923,11 @@ export class GoalScheduler {
           this.goalStore.updateLastRun(turn.goalId, Date.now());
         }
       } else if (pending != null) {
-        console.log(
+        logLine(
           `[approval] ${approvalId.slice(0, 8)} resolved, but the runtime's pending approval belongs to another actor (${pending.toolName}) — this turn was already voided; not resuming`,
         );
       } else {
-        console.log(
+        logLine(
           `[approval] ${approvalId.slice(0, 8)} resolved, but its suspended turn is gone (voided or expired) — nothing to resume`,
         );
       }
@@ -953,7 +956,7 @@ export class GoalScheduler {
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[approval] release drain failed (will retry next tick): ${msg}`);
+      errorLine(`[approval] release drain failed (will retry next tick): ${msg}`);
     }
   }
 
@@ -982,7 +985,7 @@ export class GoalScheduler {
       }
     }
     if (stored > 0) {
-      console.log(`[plan] stored ${stored} learning memor${stored === 1 ? "y" : "ies"}`);
+      logLine(`[plan] stored ${stored} learning memor${stored === 1 ? "y" : "ies"}`);
     }
     return stored;
   }

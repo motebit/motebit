@@ -6,8 +6,10 @@
 // (docs/doctrine/daemon-desktop-unification.md).
 
 import type { RuntimeHostClient } from "@motebit/runtime-host";
-import { dim, warn, meta, prompt as promptColor } from "./colors.js";
-import { askQuestion, destroyTerminal, readInput, writeOutput } from "./terminal.js";
+import { action, dim, warn, meta, prompt as promptColor } from "./colors.js";
+import { askQuestion, destroyTerminal, readInput, writeLine, writeOutput } from "./terminal.js";
+import { startStatus, type StatusHandle } from "./statusline.js";
+import { formatElapsed } from "./status-render.js";
 import { renderApprovalRequest } from "./approval-render.js";
 
 /** The chunk fields the attached renderer reads. Wire chunks are the
@@ -37,6 +39,15 @@ async function renderStream(
   stream: AsyncGenerator<unknown>,
 ): Promise<{ pendingApproval: PendingApproval | null }> {
   let pendingApproval: PendingApproval | null = null;
+  // Same owned-status treatment as the coordinator REPL in stream.ts
+  // (sibling boundary rule): in-flight state lives on the status row,
+  // scrollback gets one durable line per completed act.
+  let status: StatusHandle | null = null;
+  const stopStatus = (): number => {
+    const elapsed = status?.stop() ?? 0;
+    status = null;
+    return elapsed;
+  };
   try {
     for await (const raw of stream) {
       const chunk = raw as WireChunk;
@@ -44,11 +55,23 @@ async function renderStream(
         case "text":
           if (typeof chunk.text === "string") writeOutput(chunk.text);
           break;
-        case "tool_status":
+        case "tool_status": {
+          const name = chunk.name ?? "tool";
           if (chunk.status === "calling") {
-            writeOutput(`\n${meta(`[${chunk.name ?? "tool"}]`)} `);
+            if (name === "delegate_to_agent" && status) break;
+            status =
+              name === "delegate_to_agent"
+                ? startStatus("delegating")
+                : startStatus("running", name);
+          } else if (status) {
+            // A `done` with no status in flight already rendered via
+            // delegation_complete — same guard as stream.ts.
+            writeLine(
+              `  ${action("●")} ${action(name)} ${meta(`· done · ${formatElapsed(0, stopStatus())}`)}`,
+            );
           }
           break;
+        }
         case "approval_request":
           pendingApproval = {
             name: chunk.name ?? "tool",
@@ -57,49 +80,60 @@ async function renderStream(
           };
           break;
         case "delegation_start":
-          writeOutput(`\n${dim(`[delegating · ${chunk.tool ?? ""}]`)} `);
+          if (status) break;
+          status = startStatus("delegating", chunk.tool ?? "task");
           break;
         case "delegation_complete":
+          stopStatus();
           if (chunk.receipt?.task_id != null) {
-            writeOutput(
-              `\n${dim(`[receipt ${chunk.receipt.task_id.slice(0, 8)} · ${chunk.receipt.status ?? ""}]`)}\n`,
+            writeLine(
+              dim(`[receipt ${chunk.receipt.task_id.slice(0, 8)} · ${chunk.receipt.status ?? ""}]`),
             );
           }
           break;
         case "injection_warning":
-          writeOutput(`\n${warn("⚠")} suspicious content in ${chunk.tool_name ?? "tool"} output\n`);
+          writeLine(`${warn("⚠")} suspicious content in ${chunk.tool_name ?? "tool"} output`);
           break;
         case "approval_expired":
           // #457 sibling: the coordinator-owned REPL renders this in
           // stream.ts; an attached frontend must never get silence on an
           // approval outcome either.
-          writeOutput(
-            `\n${warn("[this approval expired before your answer arrived — nothing was executed]")}\n${dim(`(${chunk.tool_name ?? "the tool"} was never run; no money moved. Ask again when ready.)`)}\n`,
+          stopStatus();
+          writeLine(
+            `${warn("[this approval expired before your answer arrived — nothing was executed]")}\n${dim(`(${chunk.tool_name ?? "the tool"} was never run; no money moved. Ask again when ready.)`)}`,
           );
           break;
         case "approval_voided":
           // #462: this turn's message set aside a pending approval (possibly
           // one prompted on another surface). Not a refusal, not an expiry.
-          writeOutput(
-            `\n${warn("[your new message set aside the pending approval — nothing was executed]")}\n${dim(`(${chunk.tool_name ?? "the tool"} was never run; no money moved. It can be proposed again.)`)}\n`,
+          stopStatus();
+          writeLine(
+            `${warn("[your new message set aside the pending approval — nothing was executed]")}\n${dim(`(${chunk.tool_name ?? "the tool"} was never run; no money moved. It can be proposed again.)`)}`,
           );
           break;
         case "invoke_error":
-          writeOutput(
-            `\n${warn(`[invoke failed${chunk.code != null ? ` · ${chunk.code}` : ""}]`)} ${chunk.message ?? ""}\n`,
+          stopStatus();
+          writeLine(
+            `${warn(`[invoke failed${chunk.code != null ? ` · ${chunk.code}` : ""}]`)} ${chunk.message ?? ""}`,
           );
           break;
         case "task_step_narration":
-          if (typeof chunk.text === "string") writeOutput(dim(chunk.text));
+          // Current step on the status row; dim durable echo in scrollback —
+          // the same two-register treatment as the coordinator REPL (#456).
+          if (typeof chunk.text === "string") {
+            status?.step(chunk.text.trim());
+            writeLine(`    ${meta("· " + chunk.text.trim())}`);
+          }
           break;
         default:
           break;
       }
     }
   } catch (err) {
-    writeOutput(
-      `\n${warn("[coordinator error]")} ${err instanceof Error ? err.message : String(err)}\n`,
-    );
+    writeLine(`${warn("[coordinator error]")} ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    // The status row must not outlive the stream (see stream.ts).
+    stopStatus();
   }
   return { pendingApproval };
 }
@@ -122,7 +156,7 @@ async function renderTurn(
       args: pendingApproval.args,
       ...(pendingApproval.riskLevel != null ? { riskLevel: pendingApproval.riskLevel } : {}),
     })) {
-      writeOutput(line + "\n");
+      writeLine(line);
     }
     const answer = await askQuestion(`  ${warn("Allow?")} ${dim("(y/n)")} `);
     const approved = answer.trim().toLowerCase() === "y";
