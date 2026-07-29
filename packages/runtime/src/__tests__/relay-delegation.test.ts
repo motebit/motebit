@@ -1145,11 +1145,14 @@ describe("selectAndRunDelegation", () => {
       }),
     );
 
+    const base = baseSelect();
+    const degrades: Array<{ from: string; to: string; code: string }> = [];
     await selectAndRunDelegation({
-      ...baseSelect(),
+      ...base,
       requiredCapabilities: ["review_pr"],
       relayPublicKey: PINNED_HEX,
       buildP2pPayment,
+      onRouteDegrade: (d) => degrades.push(d),
     });
 
     // No broadcast (pre-flight blocked it), and the fallback is relay-mode — its
@@ -1157,6 +1160,42 @@ describe("selectAndRunDelegation", () => {
     expect(buildP2pPayment).not.toHaveBeenCalled();
     expect(submitBody!.target_agent).toBeUndefined();
     expect(submitBody!.payment_proof).toBeUndefined();
+
+    // #458: the route switch is NEVER silent — callback fired with the
+    // pre-broadcast reason, and the structured log line emitted for headless
+    // callers. Witnessed live 2026-07-29: consent framed as sovereign-wallet
+    // payment, route degraded to relay, nothing rendered.
+    expect(degrades).toEqual([
+      { from: "p2p", to: "relay", code: "p2p_ineligible", message: expect.any(String) },
+    ]);
+    expect(base.logger.warn).toHaveBeenCalledWith(
+      "delegation.route_degraded",
+      expect.objectContaining({ from: "p2p", to: "relay", code: "p2p_ineligible" }),
+    );
+  });
+
+  it("no degrade event when P2P is unconfigured (relay-mode was never a switch)", async () => {
+    let submitted = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/task") && init?.method === "POST") {
+          submitted = true;
+          return jsonResponse(400, { code: "BAD" }); // stop before the poll
+        }
+        return jsonResponse(404, {});
+      }),
+    );
+    const degrades: unknown[] = [];
+    await selectAndRunDelegation({
+      ...baseSelect(),
+      requiredCapabilities: ["review_pr"],
+      onRouteDegrade: (d) => degrades.push(d),
+    });
+    expect(submitted).toBe(true);
+    // Relay-mode by CONFIGURATION is not a route switch — no consent was
+    // framed around a sovereign payment that then didn't happen.
+    expect(degrades).toEqual([]);
   });
 
   it("uses relay-mode (no P2P, no discovery) when no rail is configured", async () => {

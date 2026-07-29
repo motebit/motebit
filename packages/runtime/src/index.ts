@@ -331,6 +331,7 @@ export type {
   GrantedDelegationResult,
   DelegationError,
   DelegationErrorCode,
+  RouteDegrade,
 } from "./relay-delegation.js";
 // The session paid-intent interlock (#435/#436) — enforced inside the shared
 // submit chokepoint; exported for surfaces/tests that render or probe it.

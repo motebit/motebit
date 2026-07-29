@@ -69,6 +69,21 @@ async function renderStream(
         case "injection_warning":
           writeOutput(`\n${warn("⚠")} suspicious content in ${chunk.tool_name ?? "tool"} output\n`);
           break;
+        case "approval_expired":
+          // #457 sibling: the coordinator-owned REPL renders this in
+          // stream.ts; an attached frontend must never get silence on an
+          // approval outcome either.
+          writeOutput(
+            `\n${warn("[this approval expired before your answer arrived — nothing was executed]")}\n${dim(`(${chunk.tool_name ?? "the tool"} was never run; no money moved. Ask again when ready.)`)}\n`,
+          );
+          break;
+        case "approval_voided":
+          // #462: this turn's message set aside a pending approval (possibly
+          // one prompted on another surface). Not a refusal, not an expiry.
+          writeOutput(
+            `\n${warn("[your new message set aside the pending approval — nothing was executed]")}\n${dim(`(${chunk.tool_name ?? "the tool"} was never run; no money moved. It can be proposed again.)`)}\n`,
+          );
+          break;
         case "invoke_error":
           writeOutput(
             `\n${warn(`[invoke failed${chunk.code != null ? ` · ${chunk.code}` : ""}]`)} ${chunk.message ?? ""}\n`,
