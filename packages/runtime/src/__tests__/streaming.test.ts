@@ -1133,15 +1133,44 @@ describe("resumeAfterApproval", () => {
     );
   });
 
-  it("returns silently without pending approval (timeout may have fired)", async () => {
-    // When no pending approval exists (e.g. timeout already fired and cleared it),
-    // resumeAfterApproval returns silently instead of throwing — prevents the race
-    // where a user approves at the same moment the timeout fires.
-    const chunks: unknown[] = [];
+  it("emits approval_expired (never silence) when resumed without a pending approval — #457", async () => {
+    // When no pending approval exists (timeout already fired and cleared it),
+    // resumeAfterApproval must not throw (the approve-vs-timeout race) — but it
+    // must NOT be silent either: witnessed live 2026-07-29, a human approved an
+    // R4 money action after the 10-minute timer voided it and got ZERO rendered
+    // outcome. The typed expiry chunk is the terminal outcome every surface
+    // renders.
+    const chunks: Array<{ type: string; tool_name?: string }> = [];
     for await (const chunk of runtime.resumeAfterApproval(true)) {
-      chunks.push(chunk);
+      chunks.push(chunk as { type: string; tool_name?: string });
     }
-    expect(chunks).toHaveLength(0);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]!.type).toBe("approval_expired");
+  });
+
+  it("resolveApprovalVote after expiry emits approval_expired too — same #457 contract", async () => {
+    const chunks: Array<{ type: string }> = [];
+    for await (const chunk of runtime.resolveApprovalVote(true, "approval-test")) {
+      chunks.push(chunk as { type: string });
+    }
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]!.type).toBe("approval_expired");
+  });
+
+  it("the expiry chunk NAMES the tool when the timeout handler recorded it", async () => {
+    const streaming = (
+      runtime as unknown as {
+        streaming: {
+          _lastExpiredToolName: string | null;
+        };
+      }
+    ).streaming;
+    streaming._lastExpiredToolName = "delegate_to_agent";
+    const chunks: Array<{ type: string; tool_name?: string }> = [];
+    for await (const chunk of runtime.resumeAfterApproval(true)) {
+      chunks.push(chunk as { type: string; tool_name?: string });
+    }
+    expect(chunks[0]).toEqual({ type: "approval_expired", tool_name: "delegate_to_agent" });
   });
 
   it("throws without AI provider", async () => {
