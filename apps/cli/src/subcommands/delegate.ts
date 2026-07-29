@@ -68,13 +68,15 @@ async function handleDelegatePlan(
   let solanaConfig: { rpcUrl: string } | undefined;
   if (config.sovereign) {
     const fullConfig = loadFullConfig();
-    const { fromHex, promptPassphrase, decryptPrivateKey } = await import("../identity.js");
+    const { fromHex, resolveUnlockPassphrase, decryptPrivateKey } = await import("../identity.js");
 
     let privateKey: Uint8Array | null = null;
     if (fullConfig.cli_private_key) {
       privateKey = fromHex(fullConfig.cli_private_key);
     } else if (fullConfig.cli_encrypted_key) {
-      const passphrase = await promptPassphrase("Passphrase (for sovereign wallet): ");
+      const passphrase = await resolveUnlockPassphrase("Passphrase (for sovereign wallet): ", {
+        encryptedKey: fullConfig.cli_encrypted_key,
+      });
       const keyHex = await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
       privateKey = fromHex(keyHex);
     }

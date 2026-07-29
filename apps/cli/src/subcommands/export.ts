@@ -21,6 +21,7 @@ import { CONFIG_DIR, loadFullConfig, saveFullConfig } from "../config.js";
 import {
   fromHex,
   promptPassphrase,
+  resolveUnlockPassphrase,
   encryptPrivateKey,
   decryptPrivateKey,
   bootstrapIdentity,
@@ -41,7 +42,12 @@ export async function handleExport(config: CliConfig): Promise<void> {
   let passphrase: string;
 
   if (fullConfig.cli_encrypted_key) {
-    passphrase = envPassphrase ?? (await promptPassphrase(rl, "Passphrase: "));
+    passphrase =
+      envPassphrase ??
+      (await resolveUnlockPassphrase("Passphrase: ", {
+        rl,
+        encryptedKey: fullConfig.cli_encrypted_key,
+      }));
     try {
       await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
     } catch {

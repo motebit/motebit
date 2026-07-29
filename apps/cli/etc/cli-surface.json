@@ -32,6 +32,7 @@
     "grant": [],
     "id": [],
     "init": [],
+    "keychain": [],
     "ledger": [],
     "logs": [],
     "lsp": [],

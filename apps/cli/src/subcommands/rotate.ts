@@ -23,7 +23,12 @@ import {
 } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
 import { CONFIG_DIR, loadFullConfig, saveFullConfig } from "../config.js";
-import { fromHex, promptPassphrase, encryptPrivateKey, decryptPrivateKey } from "../identity.js";
+import {
+  fromHex,
+  resolveUnlockPassphrase,
+  encryptPrivateKey,
+  decryptPrivateKey,
+} from "../identity.js";
 
 /**
  * Discover motebit.md by searching cwd, parent directories, and ~/.motebit/identity.md.
@@ -104,7 +109,10 @@ export async function handleRotate(config: CliConfig): Promise<void> {
   if (envPassphrase != null && envPassphrase !== "") {
     passphrase = envPassphrase;
   } else {
-    passphrase = await promptPassphrase(rl, "Passphrase: ");
+    passphrase = await resolveUnlockPassphrase("Passphrase: ", {
+      rl,
+      encryptedKey: fullConfig.cli_encrypted_key,
+    });
   }
 
   let oldPrivKeyHex: string;
