@@ -102,6 +102,13 @@ export function renderApprovalRequest(req: ApprovalRequestView): string[] {
         : // No ceiling set: say so plainly rather than implying one exists.
           `  ${dim("Amount: set by the worker's listing at hire time (no --budget ceiling set).")}`,
     );
+    // Route honesty (#458): the route is LATE-BOUND, like the amount. The
+    // 2026-07-29 validation run approved under the sovereign-wallet framing
+    // and the delegation then degraded to relay routing with nothing said.
+    // Consent must describe what can actually happen.
+    lines.push(
+      `  ${dim("If peer payment is unavailable, this reroutes through the relay with no wallet payment — the switch is named in the result.")}`,
+    );
   }
 
   if (req.quorum && req.quorum.required > 1) {

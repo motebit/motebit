@@ -26,6 +26,22 @@ describe("renderApprovalRequest", () => {
     expect(out).toMatch(/sovereign wallet/i);
   });
 
+  it("states the route is late-bound — the relay-reroute possibility is part of consent (#458)", () => {
+    const out = plain(
+      renderApprovalRequest({
+        name: "delegate_to_agent",
+        args: { prompt: "do research" },
+        riskLevel: 4,
+      }),
+    );
+    // Witnessed live 2026-07-29: approval framed as sovereign-wallet payment,
+    // the P2P pre-flight failed closed, and the task ran relay-routed under
+    // that consent. The band must describe what can actually happen — the
+    // route, like the amount, is late-bound.
+    expect(out).toMatch(/If peer payment is unavailable/);
+    expect(out).toMatch(/no wallet payment/);
+  });
+
   it("states the pricing RULE instead of inventing an amount (late-bound spend)", () => {
     const out = plain(
       renderApprovalRequest({

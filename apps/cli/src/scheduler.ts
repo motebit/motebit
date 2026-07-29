@@ -943,8 +943,17 @@ export class GoalScheduler {
   }
 
   private async consumeAndDiscard(stream: AsyncGenerator<StreamChunk>): Promise<void> {
-    for await (const _chunk of stream) {
-      // drain
+    // Never let a drain reject escape — callers fire-and-forget (`void ...`),
+    // so a throw here (e.g. resumeAfterApproval's single-writer "Already
+    // processing" guard, #462, when a human turn is mid-flight on the shared
+    // runtime) would be an unhandled rejection. Log and retry next tick.
+    try {
+      for await (const _chunk of stream) {
+        // drain
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[approval] release drain failed (will retry next tick): ${msg}`);
     }
   }
 

@@ -1430,6 +1430,31 @@ export async function resolveAndSubmitP2pDelegation(
   return submitted;
 }
 
+/**
+ * A pre-broadcast route switch (#458): the sovereign P2P path was configured
+ * and attempted, failed BEFORE any payment could move, and the delegation is
+ * about to proceed relay-mode instead. Consent to a paid hire is framed
+ * around the sovereign route ("pays from your wallet, onchain"), so the
+ * switch to a different route must be NAMED, never silent — the surface
+ * renders it, the tool result states it, and headless callers get the
+ * structured `delegation.route_degraded` log line.
+ *
+ * Money safety note: the degraded relay-mode submission cannot spend the
+ * wallet (no rail is invoked on that path) and a PAID direct delegation
+ * without a P2P proof is refused by the relay's Arc 3.5 gate — the degrade
+ * changes the ROUTE, not the spend. The dishonesty this type closes is
+ * consent describing a mechanism that then didn't happen.
+ */
+export interface RouteDegrade {
+  /** The route the consent framing described. */
+  from: "p2p";
+  /** The route the delegation actually takes. */
+  to: "relay";
+  /** The pre-broadcast P2P failure that forced the switch. */
+  code: DelegationErrorCode;
+  message: string;
+}
+
 export interface SelectDelegationParams {
   /**
    * Standing-grant id the current turn executes under (advisory wire
@@ -1437,6 +1462,12 @@ export interface SelectDelegationParams {
    * the enforcement). Threaded to BOTH submit paths.
    */
   grantId?: string;
+  /**
+   * Fired when the P2P route degrades to relay-mode pre-broadcast (#458) —
+   * the caller renders/records the switch. Optional; the structured
+   * `delegation.route_degraded` log line fires regardless.
+   */
+  onRouteDegrade?: (degrade: RouteDegrade) => void;
   /** Session paid-intent ledger — threaded to the P2P path's interlock. */
   paidIntentLedger?: PaidIntentLedger;
   /** The delegator's identity (submitter / owner of the task). */
@@ -1572,6 +1603,26 @@ export async function selectAndRunDelegation(
     ) {
       return p2p;
     }
+    // The route is switching AFTER consent was (possibly) framed around the
+    // sovereign wallet — name it (#458). Witnessed live 2026-07-29: the
+    // approval band said "Pays from your sovereign wallet — onchain", the
+    // pre-flight failed closed against a drowning relay, and the delegation
+    // proceeded relay-mode under the differently-framed approval with
+    // nothing rendered. Never silent again: structured log always, callback
+    // for the surface/tool to render.
+    const degrade: RouteDegrade = {
+      from: "p2p",
+      to: "relay",
+      code: p2p.error.code,
+      message: p2p.error.message,
+    };
+    params.logger.warn("delegation.route_degraded", {
+      from: degrade.from,
+      to: degrade.to,
+      code: degrade.code,
+      message: degrade.message,
+    });
+    params.onRouteDegrade?.(degrade);
   }
 
   return submitAndPollDelegation({

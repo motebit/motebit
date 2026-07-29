@@ -434,6 +434,84 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
     expect(result.data).toContain("tx-p2p-test");
   });
 
+  it("states the route switch in the tool result when P2P degrades to relay-mode (#458)", async () => {
+    // The live 2026-07-29 gap: consent framed as "pays from your sovereign
+    // wallet — onchain", the pre-flight failed closed, the delegation
+    // proceeded relay-mode, and NOTHING said the route changed. The tool
+    // result must state the switch so the model relays it.
+    const runtime = new MotebitRuntime(
+      { motebitId: "alice-001", tickRateHz: 0 },
+      createAdapters(createMockProvider()),
+    );
+    const buildP2pPayment = vi.fn(async (): Promise<P2pPaymentProof> => {
+      throw new Error("must never be called — pre-flight denied");
+    });
+    const receipt = fakeReceipt();
+
+    mockFetchHandler = async (url: string, init?: RequestInit) => {
+      if (url.includes("/api/v1/agents/discover")) {
+        return new Response(
+          JSON.stringify({
+            agents: [
+              {
+                motebit_id: "bob-worker",
+                settlement_address: "BobWorkerAddr1111111111111111111111111111111",
+                settlement_modes: "relay,p2p",
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.includes("/p2p-eligibility")) {
+        // Fail closed pre-broadcast — the incident's exact shape.
+        return new Response(JSON.stringify({ allowed: false, reason: "relay drowning" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("/agent/alice-001/task") && init?.method === "POST") {
+        const body = JSON.parse(init.body as string) as Record<string, unknown>;
+        // Degraded submission is relay-mode: no pinned target, no proof.
+        expect(body.target_agent).toBeUndefined();
+        expect(body.payment_proof).toBeUndefined();
+        return new Response(JSON.stringify({ task_id: "degraded-task-1" }), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("/agent/alice-001/task/degraded-task-1")) {
+        return new Response(JSON.stringify({ task: { status: "completed" }, receipt }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    };
+
+    runtime.enableInteractiveDelegation({
+      syncUrl: "https://mock-relay.test",
+      authToken: async () => "test-token",
+      relayPublicKey: "07".repeat(32),
+      buildP2pPayment,
+      acknowledgeNoHistoryRisk: true,
+    });
+
+    const result = await runtime.getToolRegistry().execute("delegate_to_agent", {
+      prompt: "search the web for motebit",
+      required_capabilities: ["web_search"],
+    });
+
+    expect(buildP2pPayment).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    // The worker's answer stays primary…
+    expect(result.data).toContain("motebit is a sovereign AI agent framework");
+    // …and the route switch is stated, with the reason and the money truth.
+    expect(result.data).toContain("[route]");
+    expect(result.data).toContain("p2p_ineligible");
+    expect(result.data).toContain("NO onchain payment left the wallet");
+  });
+
   it("returns error on relay submission failure (402 insufficient budget)", async () => {
     const runtime = new MotebitRuntime(
       { motebitId: "alice-001", tickRateHz: 0 },

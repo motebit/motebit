@@ -22,7 +22,11 @@ import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/proto
 function formatSettlementNote(settlement: DelegationSettlement | undefined): string {
   if (!settlement) return "";
   if (settlement.mode === "relay") {
-    return "[settlement] Paid via the relay ledger (instant settlement).";
+    // Route-honest (#458): relay-mode moves NO money from the delegator's
+    // wallet on this path (a paid direct delegation without a P2P proof is
+    // refused by the relay's Arc 3.5 gate) — "Paid via the relay ledger"
+    // overclaimed a payment on free-routed tasks.
+    return "[settlement] Routed relay-mode — no onchain payment left your wallet.";
   }
   // P2P — onchain, paid by the delegator's own atomic transaction.
   const paid =
@@ -267,6 +271,15 @@ export class InteractiveDelegationManager {
         // acceptance-time revocation fence keys on it.
         const grantId = config.getActiveGrantId?.() ?? null;
 
+        // Route-degrade capture (#458): if the sovereign P2P route fails
+        // pre-broadcast and the delegation proceeds relay-mode, the human's
+        // approval may have been framed as a wallet payment — the switch is
+        // stated in this tool's result so the model reports it, never
+        // narrates the sovereign route it didn't take.
+        const routeDegrade: { current: import("./relay-delegation.js").RouteDegrade | null } = {
+          current: null,
+        };
+
         const result = await selectAndRunDelegation({
           motebitId,
           syncUrl: config.syncUrl,
@@ -282,6 +295,9 @@ export class InteractiveDelegationManager {
           invocationOrigin: "ai-loop",
           ...(timeoutMs != null ? { timeoutMs } : {}),
           logger,
+          onRouteDegrade: (degrade) => {
+            routeDegrade.current = degrade;
+          },
         });
 
         if (!result.ok) {
@@ -323,7 +339,14 @@ export class InteractiveDelegationManager {
                 `and the result did not come back, and let them decide.`,
             };
           }
-          return { ok: false, error: `${result.error.code}: ${result.error.message}` };
+          return {
+            ok: false,
+            error:
+              `${result.error.code}: ${result.error.message}` +
+              (routeDegrade.current != null
+                ? ` (This failure happened AFTER the sovereign peer-payment route was unavailable (${routeDegrade.current.code}) and the task had rerouted through the relay — no onchain payment left the wallet at any point.)`
+                : ""),
+          };
         }
 
         // Bump trust (best-effort)
@@ -345,7 +368,18 @@ export class InteractiveDelegationManager {
         const workerResult = result.receipt.result ?? "Task completed (no result text)";
         const settlementNote = formatSettlementNote(result.settlement);
         const workerNote = `[delegated_to: ${result.receipt.motebit_id}]`;
-        const footnotes = [workerNote, ...(settlementNote ? [settlementNote] : [])].join("\n");
+        // Route honesty (#458): the approval may have been framed as a
+        // sovereign-wallet payment; if the route switched, the result says so
+        // explicitly so the model relays the switch to the user.
+        const degradeNote =
+          routeDegrade.current != null
+            ? `[route] The sovereign peer-payment route was unavailable (${routeDegrade.current.code}); this task ran relay-routed instead — NO onchain payment left the wallet. Tell the user the route changed from what the approval described.`
+            : "";
+        const footnotes = [
+          workerNote,
+          ...(settlementNote ? [settlementNote] : []),
+          ...(degradeNote ? [degradeNote] : []),
+        ].join("\n");
         return {
           ok: true,
           data: `${workerResult}\n\n${footnotes}`,
