@@ -36,7 +36,12 @@ import {
   bold,
   cyan,
 } from "./colors.js";
-import { isSlashCommand, parseSlashCommand, handleSlashCommand } from "./slash-commands.js";
+import {
+  isSlashCommand,
+  parseSlashCommand,
+  handleSlashCommand,
+  resolveBareCommand,
+} from "./slash-commands.js";
 import type { ReplContext } from "./slash-commands.js";
 import {
   handleAttest,
@@ -1019,8 +1024,17 @@ async function main(): Promise<void> {
       return;
     }
 
-    if (isSlashCommand(trimmed)) {
-      const { command, args } = parseSlashCommand(trimmed);
+    // Bare capability names route deterministically (#430): `wallet` or
+    // `motebit wallet` typed in the REPL names a capability — invoking it
+    // through the AI loop returns an essay where a money-critical answer
+    // was needed. Read-only names only; the resolver never matches a
+    // question or a sentence.
+    const bareSlash = resolveBareCommand(trimmed);
+    const effective = bareSlash ?? trimmed;
+    if (bareSlash != null) console.log(dim(`  → ${bareSlash}`));
+
+    if (isSlashCommand(effective)) {
+      const { command, args } = parseSlashCommand(effective);
       await handleSlashCommand(command, args, runtime, config, fullConfig, {
         moteDb,
         motebitId,

@@ -53,30 +53,39 @@ export async function handleLedger(config: CliConfig): Promise<void> {
     return;
   }
 
-  // Display formatted summary
+  for (const line of renderLedgerSummary(manifest)) console.log(line);
+}
+
+/**
+ * Pure render of a ledger manifest summary, shared by the shell
+ * subcommand and the REPL's `/ledger` slash so the two surfaces show
+ * the same execution record the same way.
+ */
+export function renderLedgerSummary(manifest: Record<string, unknown>): string[] {
   const timeline = Array.isArray(manifest.timeline) ? manifest.timeline : [];
-  console.log();
-  console.log(`  Execution Ledger`);
-  console.log(`  ${"─".repeat(50)}`);
-  console.log(`  goal_id        ${String(manifest.goal_id)}`);
+  const lines: string[] = [""];
+  lines.push(`  Execution Ledger`);
+  lines.push(`  ${"─".repeat(50)}`);
+  lines.push(`  goal_id        ${String(manifest.goal_id)}`);
   // eslint-disable-next-line @typescript-eslint/no-base-to-string -- plan_id is a string at runtime
-  console.log(`  plan_id        ${String(manifest.plan_id ?? "—")}`);
-  console.log(`  status         ${String(manifest.status)}`);
-  console.log(
+  lines.push(`  plan_id        ${String(manifest.plan_id ?? "—")}`);
+  lines.push(`  status         ${String(manifest.status)}`);
+  lines.push(
     `  started_at     ${manifest.started_at != null ? new Date(manifest.started_at as number).toISOString() : "—"}`,
   );
-  console.log(
+  lines.push(
     `  completed_at   ${manifest.completed_at != null ? new Date(manifest.completed_at as number).toISOString() : "—"}`,
   );
-  console.log(`  timeline       ${timeline.length} events`);
-  console.log(
+  lines.push(`  timeline       ${timeline.length} events`);
+  lines.push(
     `  content_hash   ${typeof manifest.content_hash === "string" ? manifest.content_hash.slice(0, 16) + "..." : "—"}`,
   );
 
   if (typeof manifest.signature === "string" && manifest.signature !== "") {
-    console.log(`  signature      ${manifest.signature.slice(0, 16)}...`);
+    lines.push(`  signature      ${manifest.signature.slice(0, 16)}...`);
   } else {
-    console.log(`  signature      (unsigned — relay-reconstructed)`);
+    lines.push(`  signature      (unsigned — relay-reconstructed)`);
   }
-  console.log();
+  lines.push("");
+  return lines;
 }

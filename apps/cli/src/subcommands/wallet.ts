@@ -31,6 +31,21 @@ interface WalletOptions {
   addressOnly?: boolean;
 }
 
+export const DEFAULT_SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com";
+
+/**
+ * The funding-guidance copy, shared by the shell subcommand and the
+ * REPL's `/wallet` slash so the two surfaces can never drift apart on
+ * money-critical instructions (which chain, what SOL is for).
+ */
+export const WALLET_GUIDANCE_LINES: readonly string[] = [
+  `  This address IS your Ed25519 identity public key, base58-encoded.`,
+  `  Fund with USDC on the SOLANA network (not Base/Ethereum — same asset,`,
+  `  different chains). SOL received here is gas, auto-managed; convert extra`,
+  `  SOL to working capital with \`motebit wallet swap <sol-amount>\`.`,
+  `  Sovereign — no relay, no custody.`,
+];
+
 export async function handleWallet(options: WalletOptions = {}): Promise<void> {
   const config = loadFullConfig();
 
@@ -55,7 +70,7 @@ export async function handleWallet(options: WalletOptions = {}): Promise<void> {
     process.exit(1);
   }
 
-  const rpcUrl = options.rpcUrl ?? "https://api.mainnet-beta.solana.com";
+  const rpcUrl = options.rpcUrl ?? DEFAULT_SOLANA_RPC_URL;
   let rail;
   try {
     rail = createSolanaWalletRail({
@@ -90,11 +105,7 @@ export async function handleWallet(options: WalletOptions = {}): Promise<void> {
   }
 
   console.log();
-  console.log(`  This address IS your Ed25519 identity public key, base58-encoded.`);
-  console.log(`  Fund with USDC on the SOLANA network (not Base/Ethereum — same asset,`);
-  console.log(`  different chains). SOL received here is gas, auto-managed; convert extra`);
-  console.log(`  SOL to working capital with \`motebit wallet swap <sol-amount>\`.`);
-  console.log(`  Sovereign — no relay, no custody.`);
+  for (const line of WALLET_GUIDANCE_LINES) console.log(line);
   console.log();
 }
 
@@ -148,7 +159,7 @@ export async function handleWalletSwap(
     process.exit(1);
   }
 
-  const rpcUrl = options.rpcUrl ?? "https://api.mainnet-beta.solana.com";
+  const rpcUrl = options.rpcUrl ?? DEFAULT_SOLANA_RPC_URL;
   let rail;
   try {
     rail = createSolanaWalletRail({ rpcUrl, identitySeed: privateKey });

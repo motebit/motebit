@@ -2,7 +2,11 @@
 
 import type { MotebitRuntime, ReflectionResult, RelayConfig } from "@motebit/runtime";
 import type { TokenAudience } from "@motebit/sdk";
-import { isTokenAudience } from "@motebit/sdk";
+import { isTokenAudience, fromMicro } from "@motebit/sdk";
+import { createSolanaWalletRail } from "@motebit/wallet-solana";
+import { renderIdentityCard } from "./subcommands/id.js";
+import { DEFAULT_SOLANA_RPC_URL, WALLET_GUIDANCE_LINES } from "./subcommands/wallet.js";
+import { renderLedgerSummary } from "./subcommands/ledger.js";
 import { RelayClient, RelayClientError } from "@motebit/relay-client";
 import { executeCommand } from "@motebit/runtime";
 import { narrateEconomicConsequences } from "@motebit/gradient";
@@ -64,6 +68,36 @@ export function parseSlashCommand(input: string): { command: string; args: strin
     return { command: input.slice(1), args: "" };
   }
   return { command: input.slice(1, spaceIdx), args: input.slice(spaceIdx + 1).trim() };
+}
+
+/**
+ * Bare-name capability routing (#430, surface-determinism): a user who
+ * types `wallet` or `motebit wallet` in the REPL has named a capability,
+ * not started a conversation — routing that to the AI loop returns an
+ * essay where a money-critical answer was needed (witnessed live
+ * 2026-07-28, mid-recovery). Exact bare names from a curated READ-ONLY
+ * set resolve to their deterministic slash instead.
+ *
+ * Deliberately narrow, so chat stays chat:
+ * - read-only capabilities only — never delegate/grant/withdraw (money
+ *   stays behind explicit affordances);
+ * - anything containing `?` is a question → chat;
+ * - `wallet`/`id`/`balance`/`help` accept NO extra words; `ledger` takes
+ *   exactly one (the goal id). A sentence never matches.
+ *
+ * Returns the equivalent slash input, or null to fall through to chat.
+ */
+export function resolveBareCommand(input: string): string | null {
+  if (input.includes("?")) return null;
+  const words = input.trim().split(/\s+/);
+  if (words[0] === "motebit") words.shift();
+  const name = words[0]?.toLowerCase();
+  if (name == null) return null;
+
+  const noArgReads = new Set(["wallet", "id", "balance", "help"]);
+  if (noArgReads.has(name) && words.length === 1) return `/${name}`;
+  if (name === "ledger" && words.length === 2) return `/ledger ${words[1]}`;
+  return null;
 }
 
 function renderProvenanceBadge(record: SkillRecord): string {
@@ -2071,6 +2105,83 @@ export async function handleSlashCommand(
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         console.log(`Response error: ${message}`);
+      }
+      break;
+    }
+
+    case "id": {
+      const idLines = renderIdentityCard(fullConfig ?? {});
+      if (idLines == null) {
+        console.log("No identity on this machine. Run `motebit init` or `motebit restore`.");
+        break;
+      }
+      for (const line of idLines) console.log(line);
+      break;
+    }
+
+    case "wallet": {
+      // The REPL already unlocked the identity key at startup — the wallet
+      // read reuses it, no re-prompt (the key stays owned by the REPL; the
+      // rail copies, we never erase here).
+      if (!repl?.privateKeyBytes) {
+        console.log("Wallet needs the unlocked identity key — run `motebit wallet` in a shell.");
+        break;
+      }
+      try {
+        const rail = createSolanaWalletRail({
+          rpcUrl: config.solanaRpcUrl ?? DEFAULT_SOLANA_RPC_URL,
+          identitySeed: repl.privateKeyBytes,
+        });
+        console.log();
+        console.log(`  chain        solana`);
+        console.log(`  asset        USDC`);
+        console.log(`  address      ${rail.address}`);
+        try {
+          const microUsdc = await rail.getBalance();
+          console.log(`  balance      ${fromMicro(Number(microUsdc)).toFixed(2)} USDC`);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.log(`  balance      (unavailable: ${msg})`);
+        }
+        console.log();
+        for (const line of WALLET_GUIDANCE_LINES) console.log(dim(line));
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.log(`Wallet error: ${msg}`);
+      }
+      break;
+    }
+
+    case "ledger": {
+      const goalId = args.trim();
+      if (goalId === "") {
+        console.log("Usage: /ledger <goal-id>");
+        break;
+      }
+      const ledgerSyncUrl = getRelaySyncUrl(config, fullConfig);
+      if (!ledgerSyncUrl) {
+        console.log("No sync URL configured. Set --sync-url or MOTEBIT_SYNC_URL.");
+        break;
+      }
+      if (!repl) {
+        console.log("Ledger requires an active REPL session.");
+        break;
+      }
+      try {
+        const ledgerToken = await getRelayToken(config, repl);
+        const ledgerRes = await fetch(
+          `${ledgerSyncUrl.replace(/\/$/, "")}/agent/${repl.motebitId}/ledger/${goalId}`,
+          ledgerToken ? { headers: { Authorization: `Bearer ${ledgerToken}` } } : {},
+        );
+        if (!ledgerRes.ok) {
+          console.log(`Ledger error: relay returned ${ledgerRes.status}`);
+          break;
+        }
+        const manifest = (await ledgerRes.json()) as Record<string, unknown>;
+        for (const line of renderLedgerSummary(manifest)) console.log(line);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.log(`Ledger error: ${msg}`);
       }
       break;
     }
