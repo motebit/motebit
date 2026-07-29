@@ -174,7 +174,15 @@ export interface TasksDeps {
   eventStore: EventStore;
   relayIdentity: RelayIdentity;
   connections: Map<string, ConnectedDevice[]>;
-  taskQueue: Map<string, TaskQueueEntry>;
+  /**
+   * The production queue is `TaskQueue` (SQLite-backed) whose indexed
+   * `countBySubmitter` the fairness check uses (#459 — the Map-iteration
+   * fallback is a full-table scan there). Tests may inject a plain Map;
+   * the check falls back to iteration, which is fine at test scale.
+   */
+  taskQueue: Map<string, TaskQueueEntry> & {
+    countBySubmitter?: (submitterId: string) => number;
+  };
   taskRouter: TaskRouter;
   issueCredentials: boolean;
   apiToken?: string;
@@ -1165,11 +1173,19 @@ export async function handleReceiptIngestion(
             .get(taskId) as
             { allocation_id: string; amount_locked: number; motebit_id: string } | undefined);
 
-      const fallbackUnitCost = isP2pTask ? 0 : getListingUnitCost(moteDb, receipt.motebit_id);
-      const grossAmount =
-        entry.price_snapshot ??
-        persistentAlloc?.amount_locked ??
-        (fallbackUnitCost > 0 ? toMicro(computeGrossAmount(fallbackUnitCost, platformFeeRate)) : 0);
+      // Receipt-time pricing honesty (#459): gross comes from what was
+      // actually HELD — the submission price snapshot or the locked
+      // allocation — never from the EXECUTING agent's listing. The removed
+      // fallback (getListingUnitCost over the receipt's signer) fired
+      // exactly when a task had NO snapshot and NO allocation (a zero-cost
+      // submission that never booked funds) and invented a gross that was
+      // never held: guaranteed `settlement.unfunded_skipped`, plus a full
+      // Ed25519 settlement-signing cost per attempt to produce an object
+      // that was then discarded (the constant gross=6316 in the 2026-07-29
+      // incident was web-search's summed listing, not any funded amount).
+      // No snapshot and no allocation ⇒ gross 0 — the honest free-task
+      // settlement.
+      const grossAmount = entry.price_snapshot ?? persistentAlloc?.amount_locked ?? 0;
 
       const settlementId = asSettlementId(crypto.randomUUID());
       const allocationId = persistentAlloc
@@ -1485,7 +1501,15 @@ export async function handleReceiptIngestion(
             originRelay: entry.origin_relay,
             note: "settlement driven by originating relay via /federation/v1/settlement/forward",
           });
-        } else {
+        } else if (settlementFunded) {
+          // Log honesty (#459): `settlement.created` fires ONLY when a
+          // settlement was actually recorded. During the 2026-07-29 incident
+          // this line sat outside the funded guard and reported the same
+          // in-memory gross that `settlement.unfunded_skipped` had just
+          // refused — the log stream claimed money movement that never
+          // happened, dozens of times per second. The multihop sibling
+          // (`multihop.settlement.created`) always had it right; the
+          // unfunded case's record is the unfunded_skipped line alone.
           logger.info("settlement.created", {
             correlationId: taskId,
             gross: settlement.amount_settled + settlement.platform_fee,
@@ -1874,6 +1898,12 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         409,
       );
     }
+    // This request now OWNS the 'processing' claim. Stamp ownership so the
+    // error boundary can release it if the handler throws before
+    // completeIdempotency — else the key is stranded and an honest
+    // same-key retry gets 409 until the 24h sweep (#459). Set only on the
+    // claiming request; a conflict above never reaches this line.
+    c.set("idempotencyClaim" as never, { key: idempotencyKey, motebitId } as never);
 
     const body = await c.req.json<{
       prompt: string;
@@ -2062,23 +2092,35 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       throw new TaskError("TASK_QUEUE_FULL", "Task queue at capacity — try again later", 503);
     }
 
-    // Per-submitter fairness: prevent a single agent from monopolizing queue capacity
+    // Per-submitter fairness: prevent a single agent from monopolizing queue
+    // capacity. Uses the O(1) indexed COUNT — the previous implementation
+    // iterated taskQueue.values(), which is a FULL-TABLE `SELECT *` plus a
+    // per-row JSON.parse on every submission (#459: during the 2026-07-29
+    // amplification incident this scan, growing with the queue it was
+    // guarding, was the largest single event-loop cost and helped starve
+    // the relay past its 2s health budget).
     if (submittedBy) {
-      let submitterCount = 0;
-      for (const entry of taskQueue.values()) {
-        if (entry.submitted_by === submittedBy) submitterCount++;
-        if (submitterCount >= maxTasksPerSubmitter) {
-          logger.warn("task.per_submitter_limit", {
-            correlationId: taskId,
-            submittedBy,
-            limit: maxTasksPerSubmitter,
-          });
-          throw new TaskError(
-            "TASK_PER_SUBMITTER_LIMIT",
-            "Too many pending tasks for this agent",
-            429,
-          );
+      let submitterCount: number;
+      if (typeof taskQueue.countBySubmitter === "function") {
+        submitterCount = taskQueue.countBySubmitter(submittedBy);
+      } else {
+        // Plain-Map injection (tests) — iteration is fine at that scale.
+        submitterCount = 0;
+        for (const entry of taskQueue.values()) {
+          if (entry.submitted_by === submittedBy) submitterCount++;
         }
+      }
+      if (submitterCount >= maxTasksPerSubmitter) {
+        logger.warn("task.per_submitter_limit", {
+          correlationId: taskId,
+          submittedBy,
+          limit: maxTasksPerSubmitter,
+        });
+        throw new TaskError(
+          "TASK_PER_SUBMITTER_LIMIT",
+          "Too many pending tasks for this agent",
+          429,
+        );
       }
     }
 
@@ -2589,6 +2631,15 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
             ? body.exclude_agents.filter((a): a is string => typeof a === "string")
             : [],
         );
+        // Self-exclusion (#459): capability ranking must NEVER select the
+        // SUBMITTER as its own worker. The 2026-07-29 amplification loop
+        // closed exactly here — web-search sub-delegated a read_url task,
+        // the target atom was down, ranking picked the other agent
+        // advertising read_url (the submitter itself), and the task
+        // round-tripped forever (submit → route-to-self → execute →
+        // sub-delegate again). Deliberate self-delegation stays available
+        // via explicit target_agent pinning — that path never ranks.
+        if (submittedBy) excludeSet.add(submittedBy);
         const eligibleProfiles =
           excludeSet.size > 0
             ? multiCapProfiles.filter((p) => !excludeSet.has(p.motebit_id))
@@ -3094,14 +3145,20 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     if (!pinnedLocalHandled && !routed && !federationAttempted && requiredCaps.length > 0) {
       const now = Date.now();
       const capFilter = requiredCaps[0]!;
+      // Self-exclusion (#459): same rule as the scored path — the fallback
+      // must never route a task back to its own submitter (the second half
+      // of the 2026-07-29 routing cycle). Pinned self-delegation never
+      // reaches this query.
       const httpCandidate = moteDb.db
         .prepare(
           `SELECT r.motebit_id, r.endpoint_url FROM agent_registry r
            WHERE r.expires_at > ? AND r.endpoint_url != ''
+             AND r.motebit_id != ?
              AND EXISTS (SELECT 1 FROM json_each(r.capabilities) WHERE value = ?)
            LIMIT 1`,
         )
-        .get(now, capFilter) as { motebit_id: string; endpoint_url: string } | undefined;
+        .get(now, submittedBy ?? "", capFilter) as
+        { motebit_id: string; endpoint_url: string } | undefined;
       if (httpCandidate?.endpoint_url?.trim()) {
         void forwardTaskViaMcp(
           httpCandidate.endpoint_url,

@@ -39,11 +39,16 @@ kill_timeout = 5
 
   [[http_service.checks]]
     interval = "15s"
-    grace_period = "5s"
+    # 2s was the tightest health budget in the fleet — during the 2026-07-29
+    # amplification incident (#459) a starved event loop blew past it and the
+    # Fly proxy pulled the relay from rotation, 503ing every unrelated
+    # endpoint while the process was still alive. 5s tolerates a busy loop
+    # without masking a genuinely dead one.
+    grace_period = "15s"
     method = "GET"
     path = "/health"
     protocol = "http"
-    timeout = "2s"
+    timeout = "5s"
 
 [mounts]
   source = "motebit_data"

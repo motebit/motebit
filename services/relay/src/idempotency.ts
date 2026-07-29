@@ -129,6 +129,23 @@ export function completeIdempotency(
 }
 
 /**
+ * Release a claimed-but-never-completed idempotency key (#459 secondary
+ * defect): a submit handler that throws AFTER `checkIdempotency` claimed
+ * the row used to strand it in 'processing' forever — an honest retry
+ * with the SAME key then got 409 until the 24h sweep, which trains
+ * clients to mint a fresh key per attempt (defeating idempotency
+ * entirely; both storm-implicated submitters did exactly this). Deletes
+ * ONLY a still-'processing' row — a completed row (cached response) is
+ * never touched. Call from the error boundary of the request that made
+ * the claim, never for a conflict observed on someone else's claim.
+ */
+export function releaseIdempotency(db: DatabaseDriver, key: string, motebitId: string): void {
+  db.prepare(
+    "DELETE FROM relay_idempotency_keys WHERE idempotency_key = ? AND motebit_id = ? AND status = 'processing'",
+  ).run(key, motebitId);
+}
+
+/**
  * Delete idempotency records older than 24 hours.
  * Called from the existing cleanup interval in index.ts.
  * Returns the number of records deleted.

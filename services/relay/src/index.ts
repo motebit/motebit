@@ -82,7 +82,11 @@ import { registerWebSocketRoutes } from "./websocket.js";
 import type { ConnectedDevice } from "./websocket.js";
 import { registerSyncRoutes, redactSensitiveEvents } from "./sync-routes.js";
 import { registerIntakeRoutes } from "./intake-routes.js";
-import { createIdempotencyTable, cleanupIdempotencyKeys } from "./idempotency.js";
+import {
+  createIdempotencyTable,
+  cleanupIdempotencyKeys,
+  releaseIdempotency,
+} from "./idempotency.js";
 import {
   createFederationTables,
   initRelayIdentity,
@@ -684,6 +688,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     isAgentRevoked,
     verifySignedTokenForDevice: verifySignedTokenForDeviceWithFallback,
     parseTokenPayloadUnsafe,
+    releaseIdempotencyClaim: (key, motebitId) => releaseIdempotency(moteDb.db, key, motebitId),
     getShuttingDown: config.getShuttingDown,
     getConnectionCount: () => getConnectionCount(),
     isDraining: () => draining,

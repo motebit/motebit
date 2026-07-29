@@ -72,6 +72,14 @@ export interface MiddlewareDeps {
   verifySignedTokenForDevice: typeof verifySignedTokenForDevice;
   parseTokenPayloadUnsafe: typeof parseTokenPayloadUnsafe;
   healthCheckDeps?: HealthCheckDeps;
+  /**
+   * Release a claimed-but-uncompleted idempotency key when a handler
+   * throws after claiming it (#459) — wired by index.ts to
+   * `releaseIdempotency`. The claiming handler stamps ownership via
+   * `c.set("idempotencyClaim", …)`; the error boundary calls this so a
+   * failed submission never strands its key in 'processing'.
+   */
+  releaseIdempotencyClaim?: (key: string, motebitId: string) => void;
 }
 
 export interface MiddlewareResult {
@@ -559,6 +567,20 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
 
   // --- Error handler ---
   app.onError((err, c) => {
+    // #459: if THIS request claimed an idempotency key and then failed
+    // before completing it, release the claim — else the key is stranded
+    // in 'processing' and an honest same-key retry gets 409 until the 24h
+    // sweep. Ownership is stamped only by the claiming request, so a 409
+    // conflict on someone else's live claim never reaches here with a stamp.
+    const claim = c.get("idempotencyClaim" as never) as
+      { key: string; motebitId: string } | undefined;
+    if (claim != null && deps.releaseIdempotencyClaim != null) {
+      try {
+        deps.releaseIdempotencyClaim(claim.key, claim.motebitId);
+      } catch {
+        // Release is best-effort — the 24h sweep remains the backstop.
+      }
+    }
     if (err instanceof RelayError) {
       const status = err.statusCode as 400;
       if (err instanceof RateLimitError) {
