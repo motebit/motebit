@@ -34,3 +34,9 @@ kill_timeout = 5
     path = "/health"
     protocol = "http"
     timeout = "2s"
+
+# #459: a wedged-but-alive process exits via the mcp-server self-watchdog;
+# this policy makes Fly revive it instead of leaving the machine dead.
+[[restart]]
+  policy = "on-failure"
+  retries = 10

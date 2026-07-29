@@ -13,6 +13,7 @@
  * handleAgentTask that runs web_search and optionally sub-delegates
  * read_url to a downstream atom.
  */
+import { createHash } from "node:crypto";
 
 import {
   InMemoryToolRegistry,
@@ -54,6 +55,58 @@ function log(msg: string): void {
  * is reinvented — see CLAUDE.md "Protocol primitives belong in
  * packages, never inline in services" for the doctrine.
  */
+// #459: sub-delegation failure circuit. During the 2026-07-29 incident this
+// path retried a down read-url atom as fast as each handler turn completed —
+// no backoff, no ceiling — creating a fresh relay task per attempt and
+// feeding the settlement-amplification storm. The circuit is deliberately
+// simple: consecutive failures open a cooldown during which subDelegate
+// returns null IMMEDIATELY (before the relay-task POST, so no task is
+// created either); one success closes it. Exported for tests; `nowFn`
+// injectable so the cooldown is deterministic under test.
+export const SUB_DELEGATE_MAX_CONSECUTIVE_FAILURES = 3;
+export const SUB_DELEGATE_COOLDOWN_MS = 60_000;
+let subDelegateConsecutiveFailures = 0;
+let subDelegateCooldownUntil = 0;
+
+export function subDelegateCircuitState(): { failures: number; cooldownUntil: number } {
+  return { failures: subDelegateConsecutiveFailures, cooldownUntil: subDelegateCooldownUntil };
+}
+
+export function resetSubDelegateCircuitForTest(): void {
+  subDelegateConsecutiveFailures = 0;
+  subDelegateCooldownUntil = 0;
+}
+
+/**
+ * Stable intent-derived Idempotency-Key (#459): the same logical
+ * sub-delegation (caller × target × prompt) always presents the SAME key,
+ * so a retry REPLAYS the relay's cached response instead of minting a
+ * brand-new task per attempt — the fresh-UUID-per-attempt pattern is what
+ * made every retry a distinct task/allocation/settlement during the
+ * incident and defeated the relay's idempotency entirely. Safe now that a
+ * failed submission releases its claim relay-side (same arc).
+ */
+export function stableSubmissionKey(caller: string, target: string, prompt: string): string {
+  const digest = createHash("sha256").update(`${caller}\n${target}\n${prompt}`).digest("hex");
+  return `sub-${digest.slice(0, 32)}`;
+}
+
+/** Record one sub-delegation outcome; opens the cooldown at the ceiling. */
+export function recordSubDelegateOutcome(ok: boolean, nowMs: number): void {
+  if (ok) {
+    subDelegateConsecutiveFailures = 0;
+    subDelegateCooldownUntil = 0;
+    return;
+  }
+  subDelegateConsecutiveFailures++;
+  if (subDelegateConsecutiveFailures >= SUB_DELEGATE_MAX_CONSECUTIVE_FAILURES) {
+    subDelegateCooldownUntil = nowMs + SUB_DELEGATE_COOLDOWN_MS;
+    log(
+      `sub-delegation circuit OPEN — ${subDelegateConsecutiveFailures} consecutive failures; cooling down ${SUB_DELEGATE_COOLDOWN_MS / 1000}s`,
+    );
+  }
+}
+
 async function subDelegate(
   mcpUrl: string,
   prompt: string,
@@ -67,6 +120,13 @@ async function subDelegate(
   /** Target motebit ID for relay task submission. */
   targetMotebitId?: string,
 ): Promise<ExecutionReceipt | null> {
+  // Circuit check FIRST — during cooldown, no relay task is created and the
+  // down peer is left alone (#459).
+  if (Date.now() < subDelegateCooldownUntil) {
+    log("sub-delegation skipped — circuit cooling down after consecutive failures");
+    return null;
+  }
+
   // Optional relay budget binding — best-effort, failures don't block the chain
   let subRelayTaskId: string | undefined;
   if (syncUrl != null && syncUrl !== "" && apiToken != null && targetMotebitId != null) {
@@ -76,7 +136,9 @@ async function subDelegate(
         headers: {
           Authorization: `Bearer ${apiToken}`,
           "Content-Type": "application/json",
-          "Idempotency-Key": crypto.randomUUID(),
+          // Intent-stable, not per-attempt (#459) — retries replay, never
+          // mint a new task.
+          "Idempotency-Key": stableSubmissionKey(callerMotebitId, targetMotebitId, prompt),
         },
         body: JSON.stringify({
           prompt,
@@ -114,10 +176,12 @@ async function subDelegate(
     if (subRelayTaskId != null) args.relay_task_id = subRelayTaskId;
     await adapter.executeTool("read-url__motebit_task", args);
     const receipts = adapter.getAndResetDelegationReceipts();
+    recordSubDelegateOutcome(true, Date.now());
     return receipts[0] ?? null;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`sub-delegation failed: ${msg}`);
+    recordSubDelegateOutcome(false, Date.now());
     return null;
   } finally {
     await adapter.disconnect().catch(() => {
