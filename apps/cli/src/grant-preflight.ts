@@ -49,6 +49,13 @@ export async function preflightGrant(deps: {
   hasRail: boolean;
   /** Live USDC balance in micro-units; undefined = RPC unavailable (soft-skip). */
   getBalanceMicro?: () => Promise<bigint>;
+  /**
+   * Read-only view of the grant's spend accumulator (the persistent
+   * `GrantSpendStore.peek`). Structural type — apps consume product
+   * vocabulary, never `@motebit/policy` directly (`check-app-primitives`).
+   * Absent = no durable store to read (headroom check soft-skips).
+   */
+  readGrantSpend?: (grantId: string) => { lifetime_spent_micro: number } | undefined;
 }): Promise<GrantPreflight> {
   const { stored, now, fullConfig, hasRail } = deps;
   const checks: PreflightCheck[] = [];
@@ -160,6 +167,27 @@ export async function preflightGrant(deps: {
         detail: "balance unavailable (RPC) — the meter still bounds every spend",
       });
     }
+  }
+
+  // 7. Ceiling headroom — the #436 legibility fix: lifetime spend was
+  //    recorded durably but observable NOWHERE until the meter's denial.
+  //    Show spent/remaining BEFORE the first spend of the session.
+  const limitMicro = stored.grant.spend_ceiling?.lifetime_limit_micro;
+  if (limitMicro != null && deps.readGrantSpend != null) {
+    const spentMicro = deps.readGrantSpend(stored.grant.grant_id)?.lifetime_spent_micro ?? 0;
+    const remainingMicro = Math.max(0, limitMicro - spentMicro);
+    const usd = (m: number): string => `$${(m / 1_000_000).toFixed(2)}`;
+    checks.push({
+      name: "headroom",
+      ok: remainingMicro > 0,
+      detail: `${usd(remainingMicro)} of ${usd(limitMicro)} lifetime remaining (${usd(spentMicro)} spent)`,
+      ...(remainingMicro > 0
+        ? {}
+        : {
+            remedy:
+              "lifetime ceiling exhausted — the meter refuses every further spend; mint a new grant",
+          }),
+    });
   }
 
   return { armed: checks.every((c) => c.ok), checks };

@@ -361,10 +361,20 @@ export interface GrantSpendStore {
     nonce: number;
     now: number;
   }): Promise<BlastRadiusDecision>;
+  /**
+   * Read-only view of a grant's accumulator — the owner-legibility read
+   * (#436: spend was recorded but observable NOWHERE before the ceiling
+   * denial). Never used for enforcement (enforcement is the atomic
+   * `tryConsume` only); consumers render spent/remaining from it.
+   */
+  peek(grant_id: string): GrantSpendState | undefined;
 }
 
 /** Reference in-memory store. Atomic by construction (no await between read and write). */
 export class InMemoryGrantSpendStore implements GrantSpendStore {
+  /** Accumulators reset with the process — lifetime bounds re-arm on restart. */
+  readonly volatile = true;
+
   private readonly states = new Map<string, GrantSpendState>();
 
   tryConsume(input: {

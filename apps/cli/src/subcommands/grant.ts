@@ -42,7 +42,9 @@ import {
   type DelegationRevocation,
   type SpendCeilingV1,
 } from "@motebit/encryption";
+import { openMotebitDatabase } from "@motebit/persistence";
 import { CONFIG_DIR, loadFullConfig } from "../config.js";
+import { getDbPath } from "../runtime-factory.js";
 import { loadActiveSigningKey } from "../identity.js";
 import type { CliConfig } from "../args.js";
 
@@ -381,7 +383,31 @@ export async function handleGrantCreate(config: CliConfig): Promise<void> {
 
 // === motebit grant list / show =======================================
 
-export function handleGrantList(): void {
+/**
+ * Read a grant's durable spend accumulator (the same SQLite store the money
+ * meter writes). Read-only owner legibility (#436): the spend was recorded on
+ * every metered payment but observable NOWHERE until the ceiling denial.
+ * Undefined when the DB is unavailable or the grant has never spent.
+ */
+async function readSpentMicro(grantIds: string[]): Promise<Map<string, number>> {
+  const spent = new Map<string, number>();
+  try {
+    const db = await openMotebitDatabase(getDbPath(undefined));
+    try {
+      for (const id of grantIds) {
+        const state = db.grantSpendStore.peek(id);
+        if (state != null) spent.set(id, state.lifetime_spent_micro);
+      }
+    } finally {
+      db.close();
+    }
+  } catch {
+    // No DB (fresh machine) — grants exist but nothing has ever spent.
+  }
+  return spent;
+}
+
+export async function handleGrantList(): Promise<void> {
   const grants = listStoredGrants();
   if (grants.length === 0) {
     console.log(
@@ -390,17 +416,21 @@ export function handleGrantList(): void {
     return;
   }
   const now = Date.now();
+  const spent = await readSpentMicro(grants.map((s) => s.grant.grant_id));
   for (const stored of grants) {
     const g = stored.grant;
     const state = stored.revocation != null ? "REVOKED" : g.expires_at < now ? "expired" : "active";
     const ceiling = g.spend_ceiling?.lifetime_limit_micro;
-    console.log(
-      `${g.grant_id}  ${state.padEnd(7)}  ${g.subject}  scope=${g.scope}${ceiling != null ? `  ${usd(ceiling)} lifetime` : "  (no ceiling — no money)"}`,
-    );
+    const spentMicro = spent.get(g.grant_id) ?? 0;
+    const money =
+      ceiling != null
+        ? `  ${usd(Math.max(0, ceiling - spentMicro))} of ${usd(ceiling)} lifetime remaining`
+        : "  (no ceiling — no money)";
+    console.log(`${g.grant_id}  ${state.padEnd(7)}  ${g.subject}  scope=${g.scope}${money}`);
   }
 }
 
-export function handleGrantShow(grantId: string | undefined): void {
+export async function handleGrantShow(grantId: string | undefined): Promise<void> {
   if (grantId == null || grantId === "") {
     console.error("Usage: motebit grant show <grant_id>");
     process.exit(1);
@@ -414,6 +444,13 @@ export function handleGrantShow(grantId: string | undefined): void {
   const due = selectDueTick(stored, now);
   console.log(JSON.stringify(stored.grant, null, 2));
   console.log("");
+  const ceiling = stored.grant.spend_ceiling?.lifetime_limit_micro;
+  if (ceiling != null) {
+    const spentMicro = (await readSpentMicro([stored.grant.grant_id])).get(grantId) ?? 0;
+    console.log(
+      `spend: ${usd(spentMicro)} of ${usd(ceiling)} lifetime used · ${usd(Math.max(0, ceiling - spentMicro))} remaining`,
+    );
+  }
   console.log(
     `ticks: ${stored.ticks.length} pre-minted; ${due != null ? `slot due now (issued_at ${new Date(due.issued_at).toISOString()})` : "no slot due now"}`,
   );

@@ -971,6 +971,86 @@ describe("executeGrantedDelegation — deterministic granted spend, fail-closed"
     expect(buildP2pPayment).not.toHaveBeenCalled();
   });
 
+  it("post-broadcast poll failure PROPAGATES settledPayment — and the paid-intent interlock refuses the re-hire (#436)", async () => {
+    // The human-absent #433 shape: payment settles onchain, result delivery
+    // fails. Before this fix the granted path flattened it to a bare code —
+    // byte-identical to never-hired — and nothing stopped an immediate re-pay.
+    const operator = await generateKeypair();
+    const clerk = await generateKeypair();
+    const grant = await makeGrant(operator, clerk, { lifetimeMicro: 10_000_000 });
+    const { wallet, buildP2pPayment } = mockWallet(async (r) => ({
+      tx_hash: "tx-settled",
+      chain: "solana",
+      network: "solana:devnet",
+      to_address: r.workerAddress,
+      amount_micro: r.amountMicro,
+      fee_to_address: r.treasuryAddress,
+      fee_amount_micro: r.feeAmountMicro,
+    }));
+    const runtime = clerkRuntime(wallet);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/api/v1/agents/discover"))
+          return jsonResponse({
+            agents: [
+              {
+                motebit_id: "bob-worker",
+                settlement_address: WORKER_ADDR,
+                settlement_modes: "p2p",
+                pricing: [{ capability: "research", unit_cost: 0.05 }],
+              },
+            ],
+          });
+        if (url.includes("/p2p-eligibility")) return jsonResponse({ allowed: true });
+        if (url.includes("/listing"))
+          return jsonResponse({ pricing: [{ capability: "research", unit_cost: 0.05 }] });
+        if (url.endsWith("/task")) return jsonResponse({ task_id: "t-paid" }, 201);
+        // The payment settled; only the RESULT retrieval fails. `failed` is
+        // the instantly-terminal post-broadcast poll outcome — it rides the
+        // same settledPayment-attach branch as the live 503→timeout shape
+        // without needing 100 fake-timer poll iterations.
+        if (url.includes("/task/"))
+          return jsonResponse({ task: { status: "failed" }, receipt: null });
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    const first = await runtime.executeGrantedDelegation({
+      capability: "research",
+      prompt: "survey",
+      delegation: { token: await mintTick(grant, operator), grant },
+      targetWorkerId: "bob-worker",
+    });
+
+    expect(first.ok).toBe(false);
+    if (!first.ok) {
+      // The money fact SURVIVES into the granted result — paid-but-undelivered
+      // is no longer byte-identical to never-hired.
+      expect(first.settledPayment).toBeDefined();
+      expect(first.settledPayment?.txHash).toBe("tx-settled");
+      expect(first.settledPayment?.taskId).toBe("t-paid");
+    }
+    expect(buildP2pPayment).toHaveBeenCalledTimes(1);
+
+    // The retry (fresh tick, fresh nonce — the meter would admit it): the
+    // paid-intent interlock refuses BEFORE broadcast. No human, still stopped.
+    const second = await runtime.executeGrantedDelegation({
+      capability: "research",
+      prompt: "survey",
+      delegation: { token: await mintTick(grant, operator), grant },
+      targetWorkerId: "bob-worker",
+    });
+    vi.unstubAllGlobals();
+    expect(second.ok).toBe(false);
+    if (!second.ok) {
+      expect(second.code).toBe("intent_already_paid");
+      expect(second.settledPayment?.taskId).toBe("t-paid");
+    }
+    // Exactly one broadcast across BOTH attempts.
+    expect(buildP2pPayment).toHaveBeenCalledTimes(1);
+  });
+
   it("threads acknowledgeNoHistoryRisk ⇒ cold-start pair is eligible (happy path reachable)", async () => {
     // The eligibility mock allows ONLY when the ack query is present. This
     // dry-run succeeds ⇒ executeGrantedDelegation sent the ack (Finding #1).

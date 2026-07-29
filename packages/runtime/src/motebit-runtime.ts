@@ -229,6 +229,7 @@ import {
   InMemoryGrantSpendStore,
 } from "@motebit/policy";
 import { createMoneyMeter, wrapP2pPaymentWithMeter, type MoneyMeter } from "./money-meter.js";
+import { PaidIntentLedger } from "./paid-intent-ledger.js";
 import { verifyGrantForTurn } from "./grant-verifier.js";
 import {
   resolveAndSubmitP2pDelegation,
@@ -481,6 +482,14 @@ export class MotebitRuntime {
   policy: PolicyGate;
   /** R4 money meter (AND-composition enforcer half) — see money-meter.ts. */
   private moneyMeter: MoneyMeter;
+  /**
+   * Session paid-intent interlock (#435/#436): while a paid delegation's
+   * payment has settled onchain without delivering a result, a duplicate
+   * hire refuses BEFORE broadcast — mechanically, on both the loop path
+   * and the granted deterministic path. One instance per runtime = one
+   * session scope; a restart clears it deliberately.
+   */
+  private readonly _paidIntentLedger = new PaidIntentLedger();
   /**
    * The current turn's verified standing authority (null between turns
    * and on grantless turns). Set only from `verifyGrantForTurn`'s output
@@ -890,7 +899,12 @@ export class MotebitRuntime {
     // is ALWAYS metered; the in-memory default resets on restart (see
     // RuntimeConfig.grantSpendStore — live-money deployments inject the
     // persistent SqliteGrantSpendStore).
-    this.moneyMeter = createMoneyMeter(config.grantSpendStore ?? new InMemoryGrantSpendStore());
+    this.moneyMeter = createMoneyMeter(config.grantSpendStore ?? new InMemoryGrantSpendStore(), {
+      // #436 finding 6: an omitted grantSpendStore silently re-arms the
+      // lifetime ceiling on restart. The meter warns at the first REAL
+      // metered spend (not at construction — most runtimes never move money).
+      logger: this._logger,
+    });
 
     // Restore saved state
     if (this.stateSnapshot) {
@@ -4815,6 +4829,7 @@ export class MotebitRuntime {
       ...config,
       ...(buildP2pPayment ? { buildP2pPayment } : {}),
       getActiveGrantId: () => this._activeTurnGrant?.grant_id ?? null,
+      paidIntentLedger: this._paidIntentLedger,
     });
     // Stash the relay coordinates the deterministic granted-spend path needs
     // (executeGrantedDelegation) — only when a pinned relay key is present, as
@@ -5093,6 +5108,7 @@ export class MotebitRuntime {
         ...(params.targetWorkerId != null ? { targetWorkerId: params.targetWorkerId } : {}),
         ...(selectWorker != null ? { selectWorker } : {}),
         ...(ack === true ? { acknowledgeNoHistoryRisk: true } : {}),
+        paidIntentLedger: this._paidIntentLedger,
         logger: this._logger,
       });
       if (!result.ok) {
@@ -5111,8 +5127,28 @@ export class MotebitRuntime {
           ...(result.error.code !== "money_meter_denied" && "message" in result.error
             ? { message: result.error.message }
             : {}),
+          // The money fact must survive into the log: a paid-but-undelivered
+          // hire is categorically different from never-hired (#436 finding 1).
+          ...(result.error.settledPayment != null
+            ? {
+                settled_tx: result.error.settledPayment.txHash,
+                settled_task: result.error.settledPayment.taskId,
+                settled_paid_micro: result.error.settledPayment.paidMicro,
+              }
+            : {}),
         });
-        return { ok: false, code };
+        // ...and into the RESULT: without this, the human-absent caller reads
+        // a bare failure code, concludes never-hired, and re-delegates — the
+        // #433 double-pay, unprotected by any human prompt. The paid-intent
+        // interlock refuses the re-broadcast; this field makes the refusal
+        // legible and the money fact actionable (re-fetch, never re-hire).
+        return {
+          ok: false,
+          code,
+          ...(result.error.settledPayment != null
+            ? { settledPayment: result.error.settledPayment }
+            : {}),
+        };
       }
       // Accumulate first-person trust in the worker we just hired — the write
       // side of first-person routing, without which the selector above reads a

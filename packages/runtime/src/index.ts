@@ -332,6 +332,14 @@ export type {
   DelegationError,
   DelegationErrorCode,
 } from "./relay-delegation.js";
+// The session paid-intent interlock (#435/#436) — enforced inside the shared
+// submit chokepoint; exported for surfaces/tests that render or probe it.
+export {
+  PaidIntentLedger,
+  SESSION_SUSPEND_THRESHOLD,
+  type UnretrievedPayment,
+  type PaidIntentVerdict,
+} from "./paid-intent-ledger.js";
 // The deterministic surface-affordance entry point (chip tap / button →
 // invokeCapability). Exported so an integration test can drive the REAL entry
 // point against a live relay — the layer above selectAndRunDelegation, where

@@ -23,6 +23,7 @@ import {
   resolveAndSubmitP2pDelegation,
   selectAndRunDelegation,
 } from "../relay-delegation.js";
+import { PaidIntentLedger, SESSION_SUSPEND_THRESHOLD } from "../paid-intent-ledger.js";
 
 const envelope = (code: string, error = "rejected") => JSON.stringify({ code, error });
 
@@ -413,6 +414,84 @@ describe("resolveAndSubmitP2pDelegation", () => {
     }
     // Exactly one broadcast — the payment is never re-built on a poll failure.
     expect(params.buildP2pPayment).toHaveBeenCalledTimes(1);
+  });
+
+  it("records a settled-unretrieved payment and refuses the NEXT hire of the same worker+capability BEFORE broadcast (#435/#436)", async () => {
+    const ledger = new PaidIntentLedger();
+    const fetchStub = routedFetch({
+      discover: discoverOk([
+        { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p,relay" },
+      ]),
+      listing: listingOk([{ capability: "web_search", unit_cost: 0.5 }]),
+      submit: () => jsonResponse(200, { task_id: "task-paid" }),
+      poll: () => jsonResponse(503, ""),
+    });
+    vi.stubGlobal("fetch", fetchStub);
+
+    // Hire 1: payment settles, result delivery fails — the #433 shape.
+    vi.useFakeTimers();
+    const first = resolveAndSubmitP2pDelegation(
+      resolveParams({ timeoutMs: 1, paidIntentLedger: ledger }),
+    );
+    await vi.advanceTimersByTimeAsync(5000);
+    const firstResult = await first;
+    vi.useRealTimers();
+    expect(firstResult.ok).toBe(false);
+    expect(ledger.outstandingCount).toBe(1);
+
+    // Hire 2 (the model's retry): refused mechanically, before any broadcast —
+    // regardless of what the model concluded from the first failure message.
+    const second = resolveParams({ paidIntentLedger: ledger });
+    const secondResult = await resolveAndSubmitP2pDelegation(second);
+    expect(secondResult.ok).toBe(false);
+    if (!secondResult.ok) {
+      expect(secondResult.error.code).toBe("intent_already_paid");
+      // The refusal carries the PRIOR payment's facts — re-fetch, never re-pay.
+      expect(secondResult.error.settledPayment?.taskId).toBe("task-paid");
+      expect(secondResult.error.settledPayment?.txHash).toBe("p2p-tx");
+    }
+    // The interlock fired before the payment was even built.
+    expect(second.buildP2pPayment).not.toHaveBeenCalled();
+  });
+
+  it(`suspends ALL paid delegation once ${SESSION_SUSPEND_THRESHOLD} payments are settled-unretrieved`, async () => {
+    const ledger = new PaidIntentLedger();
+    ledger.recordSettledUnretrieved({
+      workerMotebitId: "worker-x",
+      capability: "translate",
+      taskId: "task-x",
+      txHash: "tx-x",
+      paidMicro: 100_000,
+      feeMicro: 5_000,
+      recordedAt: 1,
+    });
+    ledger.recordSettledUnretrieved({
+      workerMotebitId: "worker-y",
+      capability: "code_review",
+      taskId: "task-y",
+      txHash: "tx-y",
+      paidMicro: 100_000,
+      feeMicro: 5_000,
+      recordedAt: 2,
+    });
+    // A THIRD worker, never hired before — still refused: money is leaking.
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p,relay" },
+        ]),
+        listing: listingOk([{ capability: "web_search", unit_cost: 0.5 }]),
+      }),
+    );
+    const params = resolveParams({ paidIntentLedger: ledger });
+    const result = await resolveAndSubmitP2pDelegation(params);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("intent_already_paid");
+      expect(result.error.message).toContain("suspended");
+    }
+    expect(params.buildP2pPayment).not.toHaveBeenCalled();
   });
 
   it("leaves settledPayment ABSENT when the failure precedes any broadcast (#433)", async () => {
