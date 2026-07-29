@@ -2424,7 +2424,12 @@ export class MotebitRuntime {
     // system-triggered and should not reset the quiet window.
     this._lastUserMessageAt = Date.now();
     this._currentTypedIntent = options?.userActionAttestation ?? null;
-    this.streaming.clearPendingApproval();
+    // A new user turn sets aside any pending approval — but never silently
+    // (#462): the void renders on THIS stream via the typed chunk below, and
+    // the owning surface hears it through the onApprovalVoided callback. A
+    // void is not a refusal — nothing executes, nothing is recorded as
+    // denied, and re-proposal re-prompts the human.
+    const voidedApproval = this.streaming.voidPendingApproval();
     this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
     this.behavior.setSpeaking(true);
 
@@ -2437,6 +2442,12 @@ export class MotebitRuntime {
     const turnStartedAt = Date.now();
 
     try {
+      // Render the void FIRST — before any model output — so the surface
+      // that started this turn sees what its message displaced (#462).
+      if (voidedApproval != null) {
+        yield { type: "approval_voided" as const, tool_name: voidedApproval.toolName };
+      }
+
       const trimmed = this.conversation.trimmed();
       const { knownAgents, agentCapabilities } = await withStageTimeout(
         "build_agent_context",
@@ -2589,9 +2600,18 @@ export class MotebitRuntime {
     const clearedLoopDeps = this.assertSensitivityPermitsAiCall("generateActivation");
 
     if (this._isProcessing) throw new Error("Already processing a message");
+    // A system-triggered turn must NEVER void a human's pending approval —
+    // the pending decision is authority-in-flight, and only a user-initiated
+    // turn may set it aside (and then only visibly). Refuse instead; callers
+    // (idle-tick, goals) treat this as a failed activation and retry later
+    // (#462).
+    if (this.streaming.hasPendingApproval) {
+      throw new Error(
+        "A pending approval is awaiting the user's decision — proactive turns do not void it",
+      );
+    }
 
     this._isProcessing = true;
-    this.streaming.clearPendingApproval();
     this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
     this.behavior.setSpeaking(true);
 
@@ -2638,7 +2658,16 @@ export class MotebitRuntime {
   }
 
   async *resumeAfterApproval(approved: boolean): AsyncGenerator<StreamChunk> {
-    yield* this.streaming.resumeAfterApproval(approved);
+    // Single-writer arbitration (#462): the resume IS a turn. Without this
+    // hold, a concurrent `sendMessageStreaming` could start mid-resume and
+    // run a second provider stream interleaved with the continuation.
+    if (this._isProcessing) throw new Error("Already processing a message");
+    this._isProcessing = true;
+    try {
+      yield* this.streaming.resumeAfterApproval(approved);
+    } finally {
+      this._isProcessing = false;
+    }
   }
 
   get hasPendingApproval(): boolean {
@@ -2649,16 +2678,32 @@ export class MotebitRuntime {
     toolName: string;
     args: Record<string, unknown>;
     quorum?: { required: number; approvers: string[]; collected: string[] };
+    /** Gate's tool_call_id — lets an external arbiter (goals scheduler) verify
+     *  the pending approval is the one it OWNS before resolving it (#462). */
+    toolCallId: string;
   } | null {
     return this.streaming.pendingApprovalInfo;
   }
 
   async *resolveApprovalVote(approved: boolean, approverId: string): AsyncGenerator<StreamChunk> {
-    yield* this.streaming.resolveApprovalVote(approved, approverId);
+    // Same single-writer hold as resumeAfterApproval (#462).
+    if (this._isProcessing) throw new Error("Already processing a message");
+    this._isProcessing = true;
+    try {
+      yield* this.streaming.resolveApprovalVote(approved, approverId);
+    } finally {
+      this._isProcessing = false;
+    }
   }
 
   onApprovalExpired(cb: () => void): void {
     this.streaming.onApprovalExpired(cb);
+  }
+
+  /** Register a callback fired when a new turn voids a pending approval (#462) —
+   *  the surface owning the voided prompt renders the void the moment it happens. */
+  onApprovalVoided(cb: (toolName: string) => void): void {
+    this.streaming.onApprovalVoided(cb);
   }
 
   resetConversation(): void {

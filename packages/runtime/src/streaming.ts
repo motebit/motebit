@@ -259,6 +259,8 @@ export class StreamingManager {
    */
   private readonly deniedIntents = new Map<string, number>();
   private approvalExpiredCallback: (() => void) | null = null;
+  /** Fired when a NEW turn voids a pending approval (#462) — the owning surface renders the void. */
+  private approvalVoidedCallback: ((toolName: string) => void) | null = null;
   private _isProcessing = false;
 
   constructor(private readonly deps: StreamingDeps) {}
@@ -279,18 +281,58 @@ export class StreamingManager {
     toolName: string;
     args: Record<string, unknown>;
     quorum?: { required: number; approvers: string[]; collected: string[] };
+    /** The gate's tool_call_id (= approval_request chunk's id). Lets an external
+     *  arbiter (goals scheduler) prove the approval it resolves is the one it
+     *  OWNS, instead of resuming whatever happens to be pending (#462). */
+    toolCallId: string;
   } | null {
     if (!this._pendingApproval) return null;
     return {
       toolName: this._pendingApproval.toolName,
       args: this._pendingApproval.args,
       quorum: this._pendingApproval.quorum,
+      toolCallId: this._pendingApproval.toolCallId,
     };
   }
 
-  /** Clear pending approval state (called when starting a new message). */
-  clearPendingApproval(): void {
+  /**
+   * Void pending approval state at the start of a NEW user turn.
+   *
+   * A pending approval is authority-in-flight — the human's undelivered
+   * decision — and nothing may consume or discard it invisibly (#462; the
+   * memory-never-confers-authority posture applied to consent). Voiding:
+   * - never executes and never records a refusal (a void is not a "no" —
+   *   the model may re-propose, and re-proposal re-prompts the human);
+   * - clears the expiry timer (the void supersedes the expiry message);
+   * - injects the outcome into conversation history so the model knows the
+   *   proposal was neither run nor denied (mirror of the timeout handler);
+   * - fires the voided callback so the OWNING surface renders the void
+   *   (the new turn's surface gets the `approval_voided` chunk instead).
+   *
+   * Returns the voided approval so the caller can emit the typed chunk.
+   */
+  voidPendingApproval(): { toolName: string } | null {
+    const voided = this._pendingApproval;
+    if (!voided) return null;
     this._pendingApproval = null;
+    this.clearApprovalTimeout();
+    this.deps.injectIntermediateMessages(
+      {
+        role: "assistant" as const,
+        content: `[tool_use: ${voided.toolName}(${JSON.stringify(voided.args)})]`,
+      },
+      {
+        role: "user" as const,
+        content: `[tool_result: {"ok":false,"error":"A new message set this pending approval aside before the user answered. The tool was NEVER executed and the user did NOT refuse it — if it is still needed, propose it again."}]`,
+      },
+    );
+    this.approvalVoidedCallback?.(voided.toolName);
+    return { toolName: voided.toolName };
+  }
+
+  /** Register a callback invoked when a new turn voids a pending approval (#462). */
+  onApprovalVoided(cb: (toolName: string) => void): void {
+    this.approvalVoidedCallback = cb;
   }
 
   /** Shared stream processing — extracts state tags, handles tool/approval/injection chunks. */

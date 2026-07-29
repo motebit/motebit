@@ -920,6 +920,8 @@ describe("processStream side effects", () => {
     expect(runtime.pendingApprovalInfo).toEqual({
       toolName: "delete_file",
       args: { path: "/tmp/x" },
+      quorum: undefined,
+      toolCallId: "tc-1",
     });
   });
 
@@ -3045,5 +3047,122 @@ describe("MotebitRuntime — [Now] block stale pixel-omission (typed-truth-perce
     (rt as unknown as { _sessionStartedAt: number })._sessionStartedAt = 0;
     rt.resetConversation();
     expect((rt as unknown as { _sessionStartedAt: number })._sessionStartedAt).toBeGreaterThan(0);
+  });
+});
+
+describe("approval lifecycle single-writer (#462)", () => {
+  let runtime: MotebitRuntime;
+
+  const injectPending = (
+    rt: MotebitRuntime,
+    toolCallId = "tc-462",
+    toolName = "delegate_to_agent",
+  ) => {
+    (rt as unknown as { streaming: { _pendingApproval: unknown } }).streaming._pendingApproval = {
+      toolCallId,
+      toolName,
+      args: { target: "worker-1" },
+      userMessage: "hire someone",
+      requestedAt: Date.now(),
+    };
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    runtime = new MotebitRuntime(
+      { motebitId: "single-writer-test", tickRateHz: 0 },
+      createAdapters(createMockProvider()),
+    );
+  });
+
+  it("a new user turn voids a pending approval VISIBLY — approval_voided is the first chunk, callback fires, nothing recorded as denied", async () => {
+    injectPending(runtime);
+    const voidedTools: string[] = [];
+    runtime.onApprovalVoided((toolName) => voidedTools.push(toolName));
+
+    const result = makeTurnResult("continuing");
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks({ type: "text", text: "ok" }, { type: "result", result }),
+    );
+
+    const chunks = await collectChunks(runtime.sendMessageStreaming("something else"));
+
+    expect(chunks[0]).toEqual({ type: "approval_voided", tool_name: "delegate_to_agent" });
+    expect(runtime.hasPendingApproval).toBe(false);
+    expect(voidedTools).toEqual(["delegate_to_agent"]);
+    // A void is NOT a refusal — the #433 denied-intents brake must not engage,
+    // so a re-proposal re-prompts the human instead of auto-denying.
+    const denied = (runtime as unknown as { streaming: { deniedIntents: Map<string, number> } })
+      .streaming.deniedIntents;
+    expect(denied.size).toBe(0);
+  });
+
+  it("turns without a pending approval emit no approval_voided chunk", async () => {
+    const result = makeTurnResult("plain");
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks({ type: "text", text: "ok" }, { type: "result", result }),
+    );
+    const chunks = await collectChunks(runtime.sendMessageStreaming("hello"));
+    expect(chunks.some((c) => c.type === "approval_voided")).toBe(false);
+  });
+
+  it("generateActivation refuses while an approval is pending — proactive turns never void human consent", async () => {
+    injectPending(runtime);
+    await expect(async () => {
+      for await (const _chunk of runtime.generateActivation("wake up")) {
+        /* consume */
+      }
+    }).rejects.toThrow(/pending approval/);
+    // The pending approval survives untouched.
+    expect(runtime.hasPendingApproval).toBe(true);
+  });
+
+  it("resumeAfterApproval holds the single-writer lock — refuses while another turn is processing", async () => {
+    (runtime as unknown as { _isProcessing: boolean })._isProcessing = true;
+    injectPending(runtime);
+    await expect(async () => {
+      for await (const _chunk of runtime.resumeAfterApproval(true)) {
+        /* consume */
+      }
+    }).rejects.toThrow("Already processing");
+    // Still pending — the refused resume consumed nothing.
+    expect(runtime.hasPendingApproval).toBe(true);
+  });
+
+  it("resolveApprovalVote holds the same lock", async () => {
+    (runtime as unknown as { _isProcessing: boolean })._isProcessing = true;
+    injectPending(runtime);
+    await expect(async () => {
+      for await (const _chunk of runtime.resolveApprovalVote(true, "someone")) {
+        /* consume */
+      }
+    }).rejects.toThrow("Already processing");
+  });
+
+  it("a new turn cannot start while a resume is mid-flight (the interleave the hold prevents)", async () => {
+    injectPending(runtime);
+    const result = makeTurnResult("resumed");
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks({ type: "text", text: "after denial" }, { type: "result", result }),
+    );
+
+    const resumeGen = runtime.resumeAfterApproval(false);
+    await resumeGen.next(); // resume is now mid-flight
+
+    await expect(async () => {
+      for await (const _chunk of runtime.sendMessageStreaming("interleaved")) {
+        /* consume */
+      }
+    }).rejects.toThrow("Already processing");
+
+    for await (const _chunk of resumeGen) {
+      /* drain */
+    }
+  });
+
+  it("pendingApprovalInfo exposes the gate's toolCallId for external-arbiter binding", () => {
+    injectPending(runtime, "tc-binding-99", "send_payment");
+    expect(runtime.pendingApprovalInfo?.toolCallId).toBe("tc-binding-99");
+    expect(runtime.pendingApprovalInfo?.toolName).toBe("send_payment");
   });
 });
