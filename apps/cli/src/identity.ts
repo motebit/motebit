@@ -33,6 +33,39 @@ export function fromHex(hex: string): Uint8Array {
   return bytes;
 }
 
+// --- Session passphrase: prompt once per invocation ---
+//
+// The identity key is ONE secret, but a single command unlocks it many
+// times: `motebit export` prompts at the top, then each of its three
+// relay-auth headers re-prompts through `loadActiveSigningKey`'s default
+// getter — four identical "Passphrase:" prompts in one run, which reads
+// as Enter-not-working (witnessed live 2026-07-29; `delegate` can reach
+// six). The fix is a process-memory cache seeded ONLY at the two proof
+// points below — a successful AES-GCM decrypt of `cli_encrypted_key`, or
+// the encrypt call that sets the passphrase — never by an unverified
+// prompt. `MOTEBIT_PASSPHRASE` still wins over the cache; nothing is ever
+// persisted; the decrypted key itself is still `secureErase`d after each
+// use, so a long-lived REPL holds no more key material than before. A
+// cached value that later fails to decrypt (key replaced mid-process)
+// self-heals: cleared and re-prompted, never a lockout.
+let sessionPassphrase: string | null = null;
+/** True when the most recent DEFAULT_PASSPHRASE_GETTER resolution came from the cache. */
+let lastResolutionFromSession = false;
+
+export function rememberSessionPassphrase(passphrase: string): void {
+  if (passphrase !== "") sessionPassphrase = passphrase;
+}
+
+export function clearSessionPassphrase(): void {
+  sessionPassphrase = null;
+  lastResolutionFromSession = false;
+}
+
+/** Test-only visibility into the cache — never use in product code. */
+export function sessionPassphraseSnapshotForTest(): string | null {
+  return sessionPassphrase;
+}
+
 export function promptPassphrase(_rl: readline.Interface, prompt: string): Promise<string>;
 export function promptPassphrase(prompt: string): Promise<string>;
 export function promptPassphrase(
@@ -162,6 +195,8 @@ export async function encryptPrivateKey(
   const salt = generateSalt(); // 16 bytes (NIST SP 800-132)
   const key = await deriveKey(passphrase, salt);
   const payload: EncryptedPayload = await encrypt(new TextEncoder().encode(privKeyHex), key);
+  // Setting a passphrase proves it — seed the session cache (see above).
+  rememberSessionPassphrase(passphrase);
   return {
     ciphertext: toHex(payload.ciphertext),
     nonce: toHex(payload.nonce),
@@ -182,6 +217,10 @@ export async function decryptPrivateKey(
     tag: fromHex(encKey.tag),
   };
   const decrypted = await decrypt(payload, key);
+  // Reaching here means the AES-GCM tag verified — the passphrase is
+  // proven correct for the identity key. Seed the session cache so later
+  // unlocks in this invocation resolve silently (see block above).
+  rememberSessionPassphrase(passphrase);
   return new TextDecoder().decode(decrypted);
 }
 
@@ -338,7 +377,15 @@ export interface LoadActiveSigningKeyOptions {
 
 const DEFAULT_PASSPHRASE_GETTER = async (label: string): Promise<string> => {
   const env = process.env["MOTEBIT_PASSPHRASE"];
-  if (env != null && env !== "") return env;
+  if (env != null && env !== "") {
+    lastResolutionFromSession = false;
+    return env;
+  }
+  if (sessionPassphrase != null) {
+    lastResolutionFromSession = true;
+    return sessionPassphrase;
+  }
+  lastResolutionFromSession = false;
   return promptPassphrase(label);
 };
 
@@ -380,11 +427,28 @@ export async function loadActiveSigningKey(
     try {
       privateKeyHex = await decryptPrivateKey(config.cli_encrypted_key, passphrase);
     } catch (err) {
-      throw new IdentityKeyError(
-        "decrypt-failed",
-        `could not decrypt cli_encrypted_key: ${err instanceof Error ? err.message : String(err)}`,
-        "the passphrase is wrong, or the encrypted blob is corrupted",
-      );
+      // Self-heal a stale session cache: if the failed passphrase came
+      // from the cache (not env, not a live prompt), the key must have
+      // changed since it was proven — drop the cache and ask for real.
+      if (lastResolutionFromSession) {
+        clearSessionPassphrase();
+        const fresh = await getPassphrase(promptLabel);
+        try {
+          privateKeyHex = await decryptPrivateKey(config.cli_encrypted_key, fresh);
+        } catch (retryErr) {
+          throw new IdentityKeyError(
+            "decrypt-failed",
+            `could not decrypt cli_encrypted_key: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`,
+            "the passphrase is wrong, or the encrypted blob is corrupted",
+          );
+        }
+      } else {
+        throw new IdentityKeyError(
+          "decrypt-failed",
+          `could not decrypt cli_encrypted_key: ${err instanceof Error ? err.message : String(err)}`,
+          "the passphrase is wrong, or the encrypted blob is corrupted",
+        );
+      }
     }
     source = "encrypted-config";
   } else if (config.cli_private_key != null && config.cli_private_key !== "") {
