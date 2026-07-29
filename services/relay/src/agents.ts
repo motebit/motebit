@@ -394,6 +394,8 @@ export interface AgentsDeps {
     expectedAudience: TokenAudience,
     blacklistCheck?: (jti: string, motebitId: string) => boolean,
     agentRevokedCheck?: (motebitId: string) => boolean,
+    agentKeyLookup?: (motebitId: string) => string | null,
+    onReject?: (reason: string) => void,
   ) => Promise<boolean>;
   isTokenBlacklisted: (jti: string, motebitId: string) => boolean;
   isAgentRevoked: (motebitId: string) => boolean;
@@ -467,16 +469,17 @@ export const PUBLIC_AGENT_ROUTES: ReadonlyArray<{
       "counterparty checks an agent can cover an amount BEFORE transacting, " +
       "which requires no pre-existing auth (sibling of succession).",
   },
-  {
-    match: (p, m) => p.endsWith("/settlements") && m === "GET",
-    reason:
-      "settlements (GET): owner-private financial history, but enforced by " +
-      "its OWN dedicated dualAuth(account:balance) in middleware.ts (same " +
-      "class as /balance) + the handler's first-person own-id check. This " +
-      "agent-middleware carve-out DEFERS to that dualAuth — removing it would " +
-      "double-wrap the route (admin:query here vs account:balance there) and " +
-      "conflict. Not public: account:balance-authed, caller===:motebitId.",
-  },
+  // NOTE (#460): /settlements previously sat here as a carve-out DEFERRING to
+  // its dedicated dualAuth(account:balance) in middleware.ts. That shape had
+  // two flaws: (1) on a deploy with no apiToken configured, registerAuthMiddleware
+  // registers NOTHING, so the carve-out made owner-private financial history
+  // public; (2) its siblings (/balance, /withdraw, /withdrawals, /checkout)
+  // never got the carve-out, so this middleware's admin:query default and
+  // middleware.ts's account:* dualAuth demanded two different audiences of the
+  // same bearer — no device token could satisfy both, and every sovereign
+  // balance read 401'd (witnessed live 2026-07-29). The account family is now
+  // a route-family branch below: both layers agree on the audience, and auth
+  // holds even when the dedicated dualAuth layer is absent.
 ];
 
 /**
@@ -525,7 +528,13 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
       throw new HTTPException(401, { message: "Invalid token" });
     }
 
-    // Expected audience by route family.
+    // Expected audience by route family. The account family (balance /
+    // settlements / withdraw / withdrawals / checkout) MUST name the same
+    // audience middleware.ts's dedicated dualAuth expects — the two layers
+    // both wrap these routes, and a disagreement means no device token can
+    // ever satisfy the composition (#460: the admin:query default here vs
+    // account:balance there 401'd every sovereign balance read). Terminal
+    // segments use endsWith — `/withdrawals` contains `/withdraw`.
     let agentAudience: TokenAudience;
     if (path.includes("/p2p-eligibility")) {
       agentAudience = "market:listing";
@@ -539,6 +548,14 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
       agentAudience = "proxy:token";
     } else if (path.includes("/receipts")) {
       agentAudience = "receipts:read";
+    } else if (path.endsWith("/balance") || path.endsWith("/settlements")) {
+      agentAudience = "account:balance";
+    } else if (path.endsWith("/withdrawals")) {
+      agentAudience = "account:withdrawals";
+    } else if (path.endsWith("/withdraw")) {
+      agentAudience = "account:withdraw";
+    } else if (path.endsWith("/checkout")) {
+      agentAudience = "account:checkout";
     } else {
       agentAudience = "admin:query";
     }
@@ -550,6 +567,17 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
       agentAudience,
       isTokenBlacklisted,
       isAgentRevoked,
+      undefined,
+      // Rejection legibility (#460): this second auth layer rejecting
+      // silently is exactly what made the balance 401 undiagnosable — the
+      // dedicated dualAuth logged nothing because it never rejected.
+      (reason) =>
+        logger.warn("auth.agent_token_rejected", {
+          reason,
+          expectedAudience: agentAudience,
+          mid: claims.mid,
+          path,
+        }),
     );
     if (!valid) {
       throw new HTTPException(401, { message: "Token verification failed" });
