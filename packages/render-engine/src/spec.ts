@@ -57,6 +57,23 @@ export const CANONICAL_SPEC: RenderSpec = {
 // divergence), and the golden-frame harness renders the pose ×
 // performance matrix deterministically. Enforced by check-creature-canon.
 
+// === Camera frustum + zoom envelope — one source, two consumers ===
+//
+// The visible sky is WORLD GEOMETRY (the backdrop dome), so the camera's
+// far plane and the orbit-zoom envelope are COUPLED: every camera
+// position the controls permit must keep the dome's far wall
+// (distance-to-target + dome radius) inside the far plane. Violating it
+// clips the sky along the far plane's screen-centered circle — witnessed
+// live 2026-07-29 on motebit.com as a giant flat disc behind the creature
+// (the transparent canvas showing the page background through the hole).
+// The invariant `CAMERA_FAR_M > ORBIT_MAX_DISTANCE_M +
+// BACKDROP_DOME_RADIUS_M` is locked by camera-envelope.test.ts.
+export const CAMERA_NEAR_M = 0.1;
+export const CAMERA_FAR_M = 20;
+export const BACKDROP_DOME_RADIUS_M = 8;
+export const ORBIT_MIN_DISTANCE_M = 0.3;
+export const ORBIT_MAX_DISTANCE_M = 3.0;
+
 export type CanonicalCameraName =
   "front" | "three_quarter" | "oblique" | "profile" | "back" | "hero";
 

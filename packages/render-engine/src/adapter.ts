@@ -1,7 +1,14 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TrustMode, type RenderSpec } from "@motebit/sdk";
-import { CANONICAL_SPEC, CANONICAL_CAMERA } from "./spec.js";
+import {
+  CANONICAL_SPEC,
+  CANONICAL_CAMERA,
+  CAMERA_NEAR_M,
+  CAMERA_FAR_M,
+  ORBIT_MIN_DISTANCE_M,
+  ORBIT_MAX_DISTANCE_M,
+} from "./spec.js";
 import type {
   RenderAdapter,
   RenderFrame,
@@ -133,11 +140,14 @@ export class ThreeJSAdapter implements RenderAdapter {
     // Camera numbers live in one place — the creature canon
     // (docs/doctrine/creature-canon.md; check-creature-canon).
     const pose = CANONICAL_CAMERA.front;
+    // Far plane must cover the backdrop dome from EVERY position the
+    // orbit envelope permits (spec.ts §camera frustum) — a far plane the
+    // dome outruns clips the sky into a screen-centered hole.
     this.camera = new THREE.PerspectiveCamera(
       pose.fov,
       canvas.clientWidth / canvas.clientHeight,
-      0.1,
-      10,
+      CAMERA_NEAR_M,
+      CAMERA_FAR_M,
     );
     this.camera.position.set(...pose.position);
     this.camera.lookAt(...pose.lookAt);
@@ -450,8 +460,8 @@ export class ThreeJSAdapter implements RenderAdapter {
     this.controls.dampingFactor = 0.08;
     const target = CANONICAL_CAMERA.front.lookAt;
     this.controls.target.set(...target);
-    this.controls.minDistance = 0.3;
-    this.controls.maxDistance = 3.0;
+    this.controls.minDistance = ORBIT_MIN_DISTANCE_M;
+    this.controls.maxDistance = ORBIT_MAX_DISTANCE_M;
     this.controls.update();
   }
 
