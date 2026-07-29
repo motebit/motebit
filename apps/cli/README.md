@@ -32,6 +32,9 @@ motebit delegate "review owner/repo#42"  # Discover worker → submit → get re
   --target <motebit-id>              #   Skip discovery, delegate to specific agent
   --budget 10                        #   Max spend in USD
   --plan                             #   Decompose into steps, multi-agent orchestration
+  --sovereign                        #   Pay agents directly via Solana wallet (no relay settlement)
+  --pay-new-agents                   #   Allow paid P2P delegation to agents with no trust history
+                                     #     (cold-start opt-in; default off)
 
 # Account
 motebit balance                      # Show balance + recent transactions
@@ -43,16 +46,42 @@ motebit run --price 0.50             # Daemon mode — accept tasks at $0.50/tas
 motebit serve --price 0.50           # MCP server mode — same pricing, HTTP transport
 ```
 
+## Standing delegations
+
+Signed, revocable spend grants — scoped capabilities, a lifetime ceiling, short lifetimes by design. See [spec/standing-delegation-v1.md](https://github.com/motebit/motebit/blob/main/spec/standing-delegation-v1.md).
+
+```bash
+motebit grant create                 # Mint a standing-delegation grant
+  --scope <caps>                     #   Capabilities the grant covers
+  --subject <s>                      #   Who may spend under it
+  --lifetime-usd <n>                 #   Hard lifetime ceiling in USD
+  --days 7                           #   Grant lifetime (default 7, max 30 — money grants live short)
+motebit grant list                   # List stored grants (state, subject, ceiling)
+motebit grant show <id>              # Show a grant + its tick schedule
+motebit grant revoke <id>            # Sign the terminal revocation + propagate to the relay
+```
+
 ## Identity & trust
 
 ```bash
+motebit id                           # Show your identity (motebit_id, did:key, public key)
+motebit wallet                       # Show your sovereign Solana wallet (address, USDC balance)
+motebit wallet swap <sol>            # Convert SOL → USDC working capital
 motebit export                       # Export signed identity bundle (motebit.md)
 motebit verify motebit.md            # Verify an identity file signature
 motebit rotate --reason "scheduled"  # Rotate keypair with succession chain
+motebit seed                         # Recovery-seed backup status
+motebit seed reveal                  # Print the seed once (passphrase-gated) for paper
+motebit restore [motebit.md]         # Recover an identity — full-bundle from a motebit.md,
+                                     #   or seed-only (re-derives a sovereign id); also
+                                     #   resets a forgotten passphrase when the seed
+                                     #   matches the key already on this machine
 motebit register                     # Register identity with relay
 motebit credentials                  # List earned credentials
 motebit ledger <goal-id>             # Show execution ledger for a goal
 ```
+
+No operator can recover your key — the seed is yours. Record it with `motebit seed reveal` before you need it; `motebit restore` is the door it opens.
 
 ## Daemon & server
 
@@ -72,8 +101,13 @@ motebit serve --identity motebit.md  # MCP server — expose tools via HTTP/stdi
 motebit goal add "Research X" --every 6h  # Scheduled goal
 motebit goal list                         # List goals with status
 motebit goal outcomes <goal-id>           # Execution history
+motebit goal pause <goal-id>              # Pause a scheduled goal
+motebit goal resume <goal-id>             # Resume a paused goal
+motebit goal remove <goal-id>             # Remove a scheduled goal
 motebit approvals list                    # Pending tool call approvals
+motebit approvals show <id>               # Show approval detail
 motebit approvals approve <id>            # Approve a pending call
+motebit approvals deny <id>               # Deny a pending call [--reason <text>]
 ```
 
 ## Federation
@@ -95,14 +129,16 @@ provenance-gated. See [spec/skills-v1.md](https://github.com/motebit/motebit/blo
 
 ```bash
 motebit skills list                       # List installed skills with status badges
-motebit skills install <directory>        # Install from a local skill directory
+motebit skills install <dir | did:key:…/name@version>  # Install from a local directory or the registry
   --force                                 #   Overwrite existing version
+motebit skills publish <directory>        # Sign a skill directory with your identity key + submit to the relay registry
 motebit skills enable <name>              # Enable for selection (default after install)
 motebit skills disable <name>             # Skip in selection without removing
 motebit skills trust <name>               # Operator-attest an unsigned skill — auto-load eligible
 motebit skills untrust <name>             # Revoke operator-attested trust
 motebit skills verify <name>              # Re-verify the envelope signature
 motebit skills remove <name>              # Delete + emit audit event
+motebit skills audit [name]               # Show the audit log (trust grants, removals, consent) [--event-type=…] [--limit=N] [--json]
 motebit skills run-script <skill> <script> [args...]  # Phase 2 — gated script execution
   --auto-approve                                      #   Skip the prompt (still records the audit row)
 ```
@@ -164,11 +200,12 @@ For the wire-format contract third parties build against, see the Apache-2.0 pac
 - [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) — wire-format types (Apache-2.0, zero deps)
 - [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk) — developer contract for building Motebit-powered agents
 - [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) — signing and verification primitives (Apache-2.0, zero deps)
+- [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) — the `motebit-verify` CLI a human installs to check any signed artifact (Apache-2.0)
 - [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) — offline third-party verifier library (Apache-2.0)
 - [`create-motebit`](https://www.npmjs.com/package/create-motebit) — scaffold a signed agent identity
 
 ## License
 
-BSL-1.1 — see [LICENSE](./LICENSE).
+Business Source License 1.1 (BUSL-1.1) — see [LICENSE](./LICENSE).
 
-"Motebit" is a trademark. The BSL-1.1 License grants rights to this software, not to any Motebit trademarks, logos, or branding. You may not use Motebit branding in a way that suggests endorsement or affiliation without written permission.
+"Motebit" is a trademark. The Business Source License grants rights to this software, not to any Motebit trademarks, logos, or branding. You may not use Motebit branding in a way that suggests endorsement or affiliation without written permission.

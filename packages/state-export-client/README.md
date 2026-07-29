@@ -4,9 +4,15 @@ Browser-safe verifier for motebit state-export responses. Wraps `fetch` with `X-
 
 Apache-2.0 (permissive floor). Consumes `@motebit/crypto` + `@motebit/protocol` only. Zero new cryptographic logic; zero implicit network calls; fail-closed on every verification path.
 
+## Install
+
+```bash
+npm install @motebit/state-export-client
+```
+
 ## Why
 
-Every state-export endpoint in `services/relay/src/state-export.ts` emits a relay-signed `ContentArtifactManifest` in the `X-Motebit-Content-Manifest` HTTP header. Producer-side signing is invisible truth unless a consumer demands the signature. This package is that consumer — drop it into any browser app and every state-export read becomes self-attesting.
+Every state-export endpoint a motebit relay serves emits a relay-signed `ContentArtifactManifest` in the `X-Motebit-Content-Manifest` HTTP header (producer side: [`services/relay/src/state-export.ts`](https://github.com/motebit/motebit/blob/main/services/relay/src/state-export.ts)). Producer-side signing is invisible truth unless a consumer demands the signature. This package is that consumer — drop it into any browser app and every state-export read becomes self-attesting.
 
 A v1.1 execution-ledger goes one layer deeper: the outer manifest is signed by the relay (witness-composition "I assembled these bytes"); the inner `signed_receipts[]` field carries byte-identical canonical JSON of each delegated motebit's own signed `ExecutionReceipt`. `verifyInnerSignedReceipts` recursively audits each one. A relay cannot fabricate inner signatures without holding the delegate motebits' private keys.
 
@@ -97,7 +103,7 @@ if (v.ok) show(`Verified ${v.count} signed de-listing/reinstatement record(s)`);
 else show(`Feed verification failed: ${v.reason}`); // signature_invalid | producer_key_mismatch | record_invalid | …
 ```
 
-`verifyAgentRevocationFeed` verifies the feed's signed digest **and** every contained record against the pinned relay key; `verifyAgentRevocationRecord` verifies a single record standalone. This is the consumer side of the operator's de-list power made accountable ([`spec/agent-revocation-v1.md`](../../spec/agent-revocation-v1.md)): a relay can remove an agent from Discover, but only by emitting a signed, reasoned record anyone can fetch and verify — de-list, never de-identify. Same fail-closed, typed-`reason` contract as the verifiers above; same pinned key as `verifyTransparencyDeclaration`.
+`verifyAgentRevocationFeed` verifies the feed's signed digest **and** every contained record against the pinned relay key; `verifyAgentRevocationRecord` verifies a single record standalone. This is the consumer side of the operator's de-list power made accountable ([`spec/agent-revocation-v1.md`](https://github.com/motebit/motebit/blob/main/spec/agent-revocation-v1.md)): a relay can remove an agent from Discover, but only by emitting a signed, reasoned record anyone can fetch and verify — de-list, never de-identify. Same fail-closed, typed-`reason` contract as the verifiers above; same pinned key as `verifyTransparencyDeclaration`.
 
 ## Quick start — settlement summary (the money side of the trust graph)
 
@@ -124,7 +130,7 @@ if (verification.valid && body)
 else show(`unverifiable: ${verification.reason}`); // unexpected_artifact_type | producer_key_mismatch | content_hash_mismatch | …
 ```
 
-`verifiedSettlementSummaryFetch` builds the canonical URL (`settlementSummaryUrl` — so a surface cannot fetch the money graph without verifying it), verifies the `settlement-summary` manifest against the pinned relay key, and fails closed: even when the bytes verify, a manifest signed for a different `artifact_type` is rejected with `unexpected_artifact_type`. The body is a materialized projection over the relay's signed settlement ledger — first-person, keyed `[motebit_id, peer]`, never a denormalized balance. Doctrine: [`docs/doctrine/agents-as-first-person-trust-graph.md`](../../docs/doctrine/agents-as-first-person-trust-graph.md) §6.
+`verifiedSettlementSummaryFetch` builds the canonical URL (`settlementSummaryUrl` — so a surface cannot fetch the money graph without verifying it), verifies the `settlement-summary` manifest against the pinned relay key, and fails closed: even when the bytes verify, a manifest signed for a different `artifact_type` is rejected with `unexpected_artifact_type`. The body is a materialized projection over the relay's signed settlement ledger — first-person, keyed `[motebit_id, peer]`, never a denormalized balance. Doctrine: [`docs/doctrine/agents-as-first-person-trust-graph.md`](https://github.com/motebit/motebit/blob/main/docs/doctrine/agents-as-first-person-trust-graph.md) §6.
 
 ## Trust-anchor chain
 
@@ -177,20 +183,24 @@ const v = await verifyReceiptDocument(pastedJsonText, {
 
 ## Programmatic surface
 
-| Export                                                     | Kind     | Role                                                                                                                                     |
-| ---------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `fetchTransparencyAnchor(baseUrl, opts?)`                  | function | TOFU bootstrap — fetch `/.well-known/motebit-transparency.json`, verify self-signature, return pinned `TransparencyAnchor`               |
-| `verifyTransparencyDeclaration(declaration)`               | function | Lower-level: verify a `SignedTransparencyDeclaration` from any source (cached, archived, fixture)                                        |
-| `verifiedStateExportFetch(url, opts)`                      | function | Wrap `fetch` — verify outer envelope against body bytes + optional anchor pin                                                            |
-| `verifyManifestAgainstBytes(manifest, bodyBytes, anchor?)` | function | Lower-level: verify a parsed `ContentArtifactManifest` against bytes you already have                                                    |
-| `verifyInnerSignedReceipts(body)`                          | function | Recursive v1.1 inner-receipt audit — per-receipt verdict with typed failure reasons                                                      |
-| `verifyReceiptDocument(jsonText)`                          | function | Verify a pasted/standalone receipt offline — honest view model separating integrity from identity binding (powers receipt.computer)      |
-| `lookupTransparencyAnchor(opts)`                           | function | Onchain — query Solana RPC for a Memo program transaction posting the declaration hash                                                   |
-| `verifyDeclarationOnchainAnchor(declaration, anchor)`      | function | Onchain — verify the Memo transaction's signer and content match the declaration                                                         |
-| `lookupIdentityLogAnchor(address, root, opts?)`            | function | Onchain — confirm a transparency-log root sits on-chain at the pinned relay address (the `anchored` binding rung)                        |
-| `lookupKeyRevocation(address, keyHex, opts?)`              | function | Onchain — find a `motebit:revocation:v1:` memo revoking a signing key (the `revoked` poison verdict; read from the chain, not the relay) |
-| `StateExportFetchError`                                    | class    | Thrown on non-2xx HTTP; verifier never attempts to verify error envelopes                                                                |
-| `MANIFEST_HEADER`                                          | constant | The header name (`"X-Motebit-Content-Manifest"`) — exposed for custom transports                                                         |
+| Export                                                            | Kind     | Role                                                                                                                                                                                                                                                               |
+| ----------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `fetchTransparencyAnchor(baseUrl, opts?)`                         | function | TOFU bootstrap — fetch `/.well-known/motebit-transparency.json`, verify self-signature, return pinned `TransparencyAnchor`                                                                                                                                         |
+| `verifyTransparencyDeclaration(declaration)`                      | function | Lower-level: verify a `SignedTransparencyDeclaration` from any source (cached, archived, fixture)                                                                                                                                                                  |
+| `verifiedStateExportFetch(url, opts)`                             | function | Wrap `fetch` — verify outer envelope against body bytes + optional anchor pin                                                                                                                                                                                      |
+| `verifyManifestAgainstBytes(headerValue, bodyBytes, anchor?)`     | function | Lower-level: verify a raw `X-Motebit-Content-Manifest` header value (base64url string, or `null` for a missing header) against bytes you already have — decoding and parsing happen inside                                                                         |
+| `verifyInnerSignedReceipts(body)`                                 | function | Recursive v1.1 inner-receipt audit — per-receipt verdict with typed failure reasons                                                                                                                                                                                |
+| `verifyReceiptDocument(jsonText, options?)`                       | function | Verify a pasted/standalone receipt offline — honest view model separating integrity from identity binding (powers receipt.computer); the binding ladder (`pinned` / `anchored` / `revoked`) is reached only through `options` (`identity`, `anchor`, `revocation`) |
+| `verifyAgentRevocationRecord(record, expectedRelayPublicKeyHex?)` | function | Verify a single signed `AgentRevocationRecord` — hash recomputation + signature against the embedded relay key, optionally pinned                                                                                                                                  |
+| `verifyAgentRevocationFeed(feed, expectedRelayPublicKeyHex?)`     | function | Verify the signed `AgentRevocationFeed` envelope AND every record inside it against the same (optionally pinned) relay key                                                                                                                                         |
+| `verifiedSettlementSummaryFetch(baseUrl, motebitId, opts?)`       | function | Fetch + verify a motebit's per-peer settlement summary — rejects a manifest signed for a different `artifact_type` with `unexpected_artifact_type`                                                                                                                 |
+| `settlementSummaryUrl(baseUrl, motebitId)`                        | function | Build the canonical settlement-summary URL — so a surface cannot fetch the money graph without verifying it                                                                                                                                                        |
+| `lookupTransparencyAnchor(opts)`                                  | function | Onchain — query Solana RPC for a Memo program transaction posting the declaration hash                                                                                                                                                                             |
+| `verifyDeclarationOnchainAnchor(declaration, anchor)`             | function | Onchain — verify the Memo transaction's signer and content match the declaration                                                                                                                                                                                   |
+| `lookupIdentityLogAnchor(address, root, opts?)`                   | function | Onchain — confirm a transparency-log root sits on-chain at the pinned relay address (the `anchored` binding rung)                                                                                                                                                  |
+| `lookupKeyRevocation(address, keyHex, opts?)`                     | function | Onchain — find a `motebit:revocation:v1:` memo revoking a signing key (the `revoked` poison verdict; read from the chain, not the relay)                                                                                                                           |
+| `StateExportFetchError`                                           | class    | Thrown on non-2xx HTTP; verifier never attempts to verify error envelopes                                                                                                                                                                                          |
+| `MANIFEST_HEADER`                                                 | constant | The header name (`"X-Motebit-Content-Manifest"`) — exposed for custom transports                                                                                                                                                                                   |
 
 All result types (`TransparencyAnchorResult`, `StateExportVerification`, `InnerReceiptsVerification`, etc.) and failure-reason unions are also exported — discriminated unions, type-narrowable by the `ok` / `valid` / `applicable` field.
 
@@ -206,6 +216,7 @@ Every verification path surfaces a typed reason for audit logging.
 - `signature_invalid` — manifest signature did not verify against the declared key
 - `malformed_public_key` / `malformed_signature` / `unsupported_suite` — manifest internals
 - `producer_key_mismatch` — declared key differs from the anchor's pinned key
+- `unexpected_artifact_type` — the bytes verified, but the manifest's `artifact_type` is not the one the typed wrapper expected for this endpoint (signed, but signed for the wrong thing)
 
 **Inner receipts** (`InnerReceiptVerification.reason`, per-receipt):
 
@@ -217,6 +228,15 @@ Every verification path surfaces a typed reason for audit logging.
 
 Non-2xx HTTP throws `StateExportFetchError` — the verifier never attempts to verify error envelopes (signing 5xx pages would be misleading provenance for a service outage).
 
+## Related
+
+- [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) — CLI sibling: `motebit-verify content-artifact` is the file-on-disk path for the same manifests (this package is the live-fetch path)
+- [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) — Apache-2.0 primitives underneath (`verifyContentArtifact`, suite dispatch; zero monorepo deps)
+- [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) — wire-format types (Apache-2.0, zero deps)
+- [`motebit`](https://www.npmjs.com/package/motebit) — reference runtime and operator console (BUSL-1.1)
+
 ## License
 
 Apache-2.0. See `LICENSE` and `NOTICE`.
+
+"Motebit" is a trademark. The Apache License grants rights to this software, not to any Motebit trademarks, logos, or branding. You may not use Motebit branding in a way that suggests endorsement or affiliation without written permission.

@@ -11,7 +11,7 @@ npm install
 node verify.js
 ```
 
-4 commands from zero to a verified agent identity.
+4 commands from zero to a verified agent identity. Requires Node.js >= 20.
 
 ## What it creates
 
@@ -20,6 +20,7 @@ my-agent/
   motebit.md       Signed agent identity (Ed25519)
   verify.js        Verification example
   package.json     Node project with @motebit/crypto
+  README.md        Your agent's own README (identity + first-run steps)
   .env.example     Environment variable template
   .gitignore       Secrets excluded
 ```
@@ -61,11 +62,15 @@ Create an agent that joins the network and earns from delegated tasks:
 ```bash
 npm create motebit my-service -- --agent
 cd my-service && npm install
+cp .env.example .env
 ```
 
-Edit `src/tools.ts` to define your capabilities, set pricing in `.env`:
+Edit `src/tools.ts` to define your capabilities, then set the required passphrase and pricing in `.env`:
 
 ```bash
+MOTEBIT_PASSPHRASE=... # REQUIRED — the same passphrase you set during create.
+                       # Decrypts your agent's signing key at runtime; without it
+                       # the agent boots but motebit_task stays disabled.
 MOTEBIT_SYNC_URL=https://relay.motebit.com
 MOTEBIT_PRICE=0.50     # USD per task
 npm run dev
@@ -78,13 +83,20 @@ Your agent registers with the relay, advertises pricing, and accepts tasks. Othe
 ```
 npm create motebit [dir]            Scaffold with identity generation
 npm create motebit [dir] --agent    Create a runnable service agent with tools
-npm create motebit [dir] --service  Create a service identity (no scaffold)
-npm create motebit [dir] --yes      Non-interactive (requires MOTEBIT_PASSPHRASE)
+npm create motebit [dir] --service  Create a service identity — same scaffold,
+                                    prompts for service fields (name, description,
+                                    capabilities, URL) instead of personal metadata
+npm create motebit [dir] --yes      Non-interactive (requires MOTEBIT_PASSPHRASE;
+                                    with --service, also MOTEBIT_SERVICE_NAME +
+                                    MOTEBIT_SERVICE_DESCRIPTION)
 npx create-motebit verify [path]    Verify a motebit.md signature
 npx create-motebit rotate [path]    Rotate key with signed succession record
 
 -v, --version         Print version
 -h, --help            Print help
+-y, --yes             Non-interactive mode
+--force               Replace an existing identity (use with --yes;
+                      interactive mode prompts instead)
 --reason "..."        Reason for key rotation (with rotate)
 ```
 
@@ -104,11 +116,12 @@ See the [delegation guide](https://docs.motebit.com/docs/developer/delegation) f
 - [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol) — wire-format types (Apache-2.0, zero deps)
 - [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk) — developer contract for building Motebit-powered agents
 - [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto) — sign and verify every Motebit artifact
+- [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) — the `motebit-verify` CLI (the scaffold's `npm run verify` script uses it)
 - [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier) — offline third-party verifier library
 - [`motebit`](https://www.npmjs.com/package/motebit) — reference runtime and operator console
 
 ## License
 
-Apache-2.0 — see [LICENSE](./LICENSE).
+Apache-2.0 — see [LICENSE](./LICENSE) and [NOTICE](./NOTICE).
 
 "Motebit" is a trademark. The Apache License grants rights to this software, not to any Motebit trademarks, logos, or branding. You may not use Motebit branding in a way that suggests endorsement or affiliation without written permission.

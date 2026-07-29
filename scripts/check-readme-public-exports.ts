@@ -184,7 +184,6 @@ const WAIVED_EXPORTS: ReadonlyArray<PackageWaiver> = [
     reason:
       "Primitive surface — README documents the verify-anything entry point; signing primitives + literal suite constants + chain verifiers shipped as named exports without README mention. Document by category in v1.3+.",
     exports: [
-      "verifyHardwareAttestationClaim",
       "canonicalSecureEnclaveBodyForTest",
       "encodeSecureEnclaveReceiptForTest",
       "mintSecureEnclaveReceiptForTest",

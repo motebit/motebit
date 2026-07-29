@@ -2,6 +2,8 @@
 
 Apache-2.0 library for verifying signed Motebit artifacts. The thin file-reading + human-formatting layer on top of [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto)'s pure verification primitives.
 
+## Install
+
 ```bash
 npm i @motebit/verifier
 ```
@@ -28,11 +30,27 @@ Zero relay contact. Zero network. The signer's public key is embedded in the art
 
 Install [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) instead. That package ships the `motebit-verify` binary with every hardware-attestation platform bundled. This package (`@motebit/verifier`) is the library it sits on — reach for it when you're writing TypeScript code that consumes signed artifacts programmatically.
 
-The naming follows the verb / agent-noun lineage that survives for decades — `git` / `libgit2`, `cargo` / `tokio`, `npm` / `@npm/arborist`. Verb (`verify`) = the tool a human installs. Agent-noun with `-er` suffix (`verifier`) = the library code links against.
+The naming follows the verb / agent-noun lineage that survives for decades — `npm` / `@npmcli/arborist`, or `git` beside `libgit2` (the git model reimplemented as a linkable library). Verb (`verify`) = the tool a human installs. Agent-noun with `-er` suffix (`verifier`) = the library code links against.
 
 ## Why this exists
 
 Motebit's moat is the **self-signing body**: every action the agent takes emits a signed receipt that any third party can verify without running the motebit. This package is the smallest public surface of that promise — a deterministic verification library that answers _"is this signed artifact authentic, and what does it claim?"_ — exposed for programmatic consumption.
+
+## API
+
+Everything below is exported from the package root. The prose sections that follow are the detail behind each line.
+
+- **`verifyFile(path, opts?)` / `verifyArtifact(content, opts?)` / `verifySkillDirectory(path, opts?)` / `formatHuman(result)`** — the core surface: read or accept an artifact, auto-detect its kind, return the typed result; render it as a printable banner.
+- **`verifyReceiptVerdict` / `verifyDelegationTokenVerdict` / `isFullyVerified`** — structured `VerificationVerdict` producers (independent axes, no silent `true`) and the fail-closed collapse to a boolean. The verdict types (`VerificationVerdict`, `EvidenceRef`, `RepairInstruction`, …) are exported alongside.
+- **`verifyEvidenceProvenance`** — re-check a verdict's cited evidence down to the primary record: presence, never truth.
+- **`verifyApprovalDecision`** — the "approve" governance band's signed human-consent artifact, verified against a pinned approver key.
+- **`verifyDelegation` / `verifyStandingDelegation` / `verifyTokenAgainstGrant` / `verifyDelegationRevocation` / `findGrantRevocation` / `subjectBindingDigest` / `verifySubjectBinding`** — the delegation family: standing grants, per-tick tokens, revocations, subject bindings.
+- **`verifySovereignBinding` / `verifyKeySuccession` / `verifySuccessionChain` / `verifyBondCommitment` / `verifyMerkleInclusion`** — the public-verification-surface laws an auditor composes.
+- **`signEvalAttestation` / `verifyEvalAttestation` / `EVAL_ATTESTATION_SUITE`** — the EvalAttestation family (signed third-party measurement; subject ≠ signer).
+- **`signRoutingTranscript` / `verifyRoutingTranscript` / `ROUTING_TRANSCRIPT_SUITE`** — the RoutingDecisionTranscript family (the routing arc's proof artifact; subject = signer).
+- **`verifyCostAttestation` / `verifyInvoice` / `executionReceiptDigest` / `costAttestationDigest`** — settlement-invoice verifiers plus the two mandated digest helpers.
+- **`verifyWithdrawalReceipt`** — the relay-signed completed-withdrawal receipt, re-checked offline.
+- **`signRequestEnvelope` / `verifyRequestEnvelope`** — stateless per-request identity authentication against a registered key.
 
 ## What it verifies
 
@@ -70,7 +88,7 @@ On the same principle, the **signed-request-envelope family** is re-exported as 
 ## Guarantees
 
 - **No network.** Verification runs entirely offline. No relay calls, no DID resolution over the wire.
-- **No dependencies beyond `@motebit/crypto`.** Every dependency is a trust attack surface we'd have to re-audit on every upgrade.
+- **One runtime dependency: `@motebit/crypto`.** The only other declared dependency, `@motebit/protocol`, is type-only — every import that crosses it is `import type` / `export type`, so no runtime code crosses that boundary; it exists so the published type declarations resolve. Every dependency is a trust attack surface we'd have to re-audit on every upgrade.
 - **Suite-agile.** New signature suites (post-quantum, future) are registry additions, not library changes — `@motebit/crypto`'s `verifyBySuite` dispatches for us.
 
 ## Related

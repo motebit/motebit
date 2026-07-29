@@ -14,8 +14,10 @@ motebit-verify cred.json      # verify your own
 
 ```
 VALID (receipt)
-  signer:   did:key:z6MknTDuE9nStgifh9bzrGNC8AcsxKSoyikuanL4z8jNN6gm
-  binding:  sovereign · motebit_id commits to the key (offline, no operator)
+  task:    69755e82-5c11-47f4-9768-c9fc275f6c93
+  motebit: 93d0bd7c-d233-845e-946d-60aff1dcfb69
+  signer:  did:key:z6MknTDuE9nStgifh9bzrGNC8AcsxKSoyikuanL4z8jNN6gm
+  binding: sovereign · motebit_id commits to the key (offline, no operator)
 ```
 
 Point it at your own artifact and the output looks the same, dispatched on the artifact type:
@@ -34,8 +36,12 @@ VALID (credential)
 | --------------------------- | --------------------------------------------------------------- |
 | `motebit.md` identity files | YAML frontmatter + Ed25519 proof                                |
 | Execution receipts          | Signed JSON, signer keys chain                                  |
+| Tool-invocation receipts    | Signed JSON — the "auto" band of the governance triad           |
 | W3C VerifiableCredentials   | `eddsa-jcs-2022` proof, hardware-attestation channel if present |
 | VerifiablePresentations     | Signed envelope + every embedded credential                     |
+| Skill envelopes             | Signed `skill-envelope.json` (skills-v1)                        |
+
+Point it at a skill **directory** (containing `SKILL.md` + `skill-envelope.json`) and it runs the full envelope-signature + body-hash + per-file-hash cross-check over every file the envelope declares.
 
 Hardware-attestation channel covers every currently-shipped platform:
 
@@ -57,6 +63,9 @@ motebit-verify <file>                     # auto-detect, print human-readable
 motebit-verify <file> --json              # structured JSON output
 motebit-verify <file> --expect credential # pin expected artifact type
 motebit-verify <file> --clock-skew 30     # allow N seconds of clock drift
+motebit-verify <file> --strict            # also verify an ExecutionReceipt's result_hash
+                                          #   equals SHA-256(result) — reject a signed
+                                          #   receipt whose hash doesn't bind its own result
 
 # Platform overrides (defaults match motebit's canonical identifiers)
 motebit-verify <file> \
@@ -64,11 +73,20 @@ motebit-verify <file> \
   --android-attestation-application-id ./app-id.bin \
   --rp-id example.com
 
+# State exports — verify a relay-asserted content-artifact manifest against the bytes it covers
+motebit-verify content-artifact export.json --manifest <header-or-path>
+motebit-verify content-artifact export.json --manifest manifest.json --producer-key <hex>  # pin the relay
+motebit-verify content-artifact export.json --manifest manifest.json --expect settlement-summary
+
 # Governance triad — verify a human-consent decision (the "approve" band)
 motebit-verify approval-decision decision.json
 motebit-verify approval-decision decision.json --producer-key <hex>   # pin the approver
 motebit-verify approval-decision decision.json --expect-verdict approved
 ```
+
+### State exports — `content-artifact`
+
+`motebit-verify content-artifact <body-file> --manifest <header-or-path>` verifies the `X-Motebit-Content-Manifest` a relay emits on every state-export endpoint against the response-body bytes it covers — a two-step check: SHA-256 content-hash recomputation, then Ed25519 signature verification against the manifest's declared producer key. `--manifest` accepts either the base64url header value or a path to a JSON manifest file (auto-detected). `--producer-key <hex>` pins the expected signer offline — pair it with the key from `/.well-known/motebit-transparency.json` so a relay key swap is rejected with `producer_key_mismatch` instead of silently verifying a new producer. `--expect <type>` narrows to a member of the closed `ContentArtifactType` registry in `@motebit/protocol`. For the in-browser, live-fetch side of the same verification, see [`@motebit/state-export-client`](https://www.npmjs.com/package/@motebit/state-export-client).
 
 ### The governance triad — approve / deny / auto
 
@@ -146,15 +164,15 @@ The original `@motebit/verify@0.7.0` was a zero-dep MIT library with a single `v
 
 - **The `verify()` library primitive** moved to [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto). Now Apache-2.0 (upgraded from MIT — adds an explicit patent grant), same zero deps, same function shape, plus full sign / verify / cryptosuite support.
 - **The file-reading + human-formatting helpers** live at [`@motebit/verifier`](https://www.npmjs.com/package/@motebit/verifier). Apache-2.0, thin layer above `@motebit/crypto`.
-- **The `motebit-verify` CLI — the tool most users actually wanted when they typed `npm install @motebit/verify`** — is now this package, shipped at `1.0.0`. Runs offline. Verifies every motebit artifact. Bundles every hardware-attestation platform.
+- **The `motebit-verify` CLI — the tool most users actually wanted when they typed `npm install @motebit/verify`** — is now this package, shipped on the 1.x line. Runs offline. Verifies every motebit artifact. Bundles every hardware-attestation platform.
 
 If you were on `@motebit/verify@^0.7.0`, migration depends on what you were using:
 
-| You were using                                               | Migrate to                                                                          |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
-| The `verify()` function in TypeScript                        | `import { verify } from "@motebit/crypto"` — same shape, more features              |
-| `verifyFile()` / `formatHuman()` / programmatic CLI wrappers | `import { ... } from "@motebit/verifier"`                                           |
-| Running `motebit-verify` on the command line                 | `npm install -g @motebit/verify` at `^1.0.0` — same command, full platform coverage |
+| You were using                                               | Migrate to                                                                              |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| The `verify()` function in TypeScript                        | `import { verify } from "@motebit/crypto"` — same shape, more features                  |
+| `verifyFile()` / `formatHuman()` / programmatic CLI wrappers | `import { ... } from "@motebit/verifier"`                                               |
+| Running `motebit-verify` on the command line                 | `npm install -g @motebit/verify` on the 1.x line — same command, full platform coverage |
 
 ## Related
 
@@ -164,6 +182,7 @@ If you were on `@motebit/verify@^0.7.0`, migration depends on what you were usin
 - [`@motebit/crypto-android-keystore`](https://www.npmjs.com/package/@motebit/crypto-android-keystore) — Android Hardware-Backed Keystore Attestation adapter bundled into this CLI
 - [`@motebit/crypto-tpm`](https://www.npmjs.com/package/@motebit/crypto-tpm) — TPM 2.0 EK chain adapter bundled into this CLI
 - [`@motebit/crypto-webauthn`](https://www.npmjs.com/package/@motebit/crypto-webauthn) — WebAuthn packed-attestation adapter bundled into this CLI
+- [`@motebit/state-export-client`](https://www.npmjs.com/package/@motebit/state-export-client) — browser-safe sibling: verifies the same content-artifact manifests over live fetch (this CLI is the file-on-disk path)
 - [`motebit`](https://www.npmjs.com/package/motebit) — reference runtime and operator console
 
 ## License

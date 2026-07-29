@@ -16,7 +16,7 @@
  * import { deviceCheckVerifier } from "@motebit/crypto-appattest";
  *
  * const result = await verify(credential, {
- *   hardwareAttestation: { deviceCheck: deviceCheckVerifier({ expectedBundleId: "com.motebit.app" }) },
+ *   hardwareAttestation: { deviceCheck: deviceCheckVerifier({ expectedBundleId: "com.motebit.mobile" }) },
  * });
  * ```
  *

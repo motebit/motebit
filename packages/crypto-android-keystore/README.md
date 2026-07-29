@@ -3,8 +3,10 @@
 Offline Apache-2.0 verifier for Android Hardware-Backed Keystore Attestation hardware-attestation credentials.
 
 ```bash
-npm i @motebit/crypto-android-keystore
+npm i @motebit/crypto @motebit/crypto-android-keystore
 ```
+
+Requirements: ESM-only; Node ≥ 20.
 
 Plugs into [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto)'s `HardwareAttestationVerifiers` dispatcher as the `androidKeystore` verifier — called when a credential declares `platform: "android_keystore"` (Android devices with KeyMaster 3+ / KeyMint 1+ — every modern Android device since Android 7).
 
@@ -14,14 +16,16 @@ Plugs into [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto)'s 
 import { verify } from "@motebit/crypto";
 import { androidKeystoreVerifier } from "@motebit/crypto-android-keystore";
 
+// Raw DER bytes of the registered Android package's
+// `attestationApplicationId`, captured at registration time. Must
+// byte-equal what the leaf attestation extension reports.
+const expectedAttestationApplicationId: Uint8Array = Uint8Array.from(
+  Buffer.from("MIGQMYGNMAsEBmNvbS5tb3RlYml0AgEf...", "base64"),
+);
+
 const result = await verify(credential, {
   hardwareAttestation: {
-    androidKeystore: androidKeystoreVerifier({
-      // Bytes of the registered Android package's `attestationApplicationId`,
-      // captured at registration time. Must byte-equal what the leaf
-      // attestation extension reports.
-      expectedAttestationApplicationId,
-    }),
+    androidKeystore: androidKeystoreVerifier({ expectedAttestationApplicationId }),
   },
 });
 ```
@@ -29,9 +33,16 @@ const result = await verify(credential, {
 ## What it verifies
 
 1. **Cert chain to a pinned Google Hardware Attestation root.** Two roots ship pinned: the legacy RSA-4096 root (for factory-provisioned devices) and the modern ECDSA P-384 root (for RKP-provisioned devices). Verifiers MUST pin both — Google rotated from RSA to ECDSA between Feb–Apr 2026, so a verifier pinning only one drops half its install base.
-2. **The Android Key Attestation extension** (OID `1.3.6.1.4.1.11129.2.1.17`) on the leaf — `attestationVersion ≥ 3` (Keymaster 3 / Android 7+), `attestationSecurityLevel ≥ TRUSTED_ENVIRONMENT` (rejects software-only fallback), `hardwareEnforced.rootOfTrust.verifiedBootState` in caller's allowlist (default `[VERIFIED]`), `hardwareEnforced.attestationApplicationId` byte-equals the registered package binding.
+2. **The Android Key Attestation extension** (OID `1.3.6.1.4.1.11129.2.1.17`) on the leaf — `attestationVersion ≥ 3` (Keymaster 3 / Android 7+), `attestationSecurityLevel ≥ TRUSTED_ENVIRONMENT` (rejects software-only fallback), `hardwareEnforced.rootOfTrust.verifiedBootState` in caller's allowlist (default `[VERIFIED]`), `hardwareEnforced.attestationApplicationId` byte-equals the registered package binding. StrongBox passes and plain TEE passes — the floor is `TRUSTED_ENVIRONMENT`, and the result surfaces `attestation_security_level` so callers can distinguish the two. Today the field is informational — nothing outside this package consumes it yet; a consumer that wants to rank StrongBox above TEE reads it from the result.
 3. **Optional revocation snapshot.** Caller-supplied snapshot keyed by lowercase-hex serial number, mirroring Google's published shape at `https://android.googleapis.com/attestation/status`. Defaults to empty (no revocation enforcement). The verifier never fetches at runtime — `@motebit/verify` ships an embedded snapshot at release time.
 4. **Identity binding.** The leaf's `attestationChallenge` must byte-equal `SHA-256(canonicalJson({ attested_at, device_id, identity_public_key, motebit_id, platform: "android_keystore", version: "1" }))` — the same body the Kotlin `expo-android-keystore` mint path composes. A malicious client that substitutes any other body fails here.
+
+## What a passing verification proves — and what it does not
+
+- **Proves** a Google-rooted secure-hardware key (TEE or StrongBox) on a verified-boot device running the registered package minted the attestation, and that the challenge names the exact Ed25519 identity key the credential claims.
+- **Does not prove** the certificate is unrevoked today: revocation is only as strong as the caller-supplied snapshot, and the default is empty — no revocation enforcement. Any snapshot is a point-in-time capture, not a live check.
+- **Does not prove** StrongBox: a pass means the `TRUSTED_ENVIRONMENT` floor was met — read `attestation_security_level` from the result to distinguish.
+- A passing result raises the credential's hardware-attestation score — additive, never an admission gate. See the [hardware-attestation doctrine](https://github.com/motebit/motebit/blob/main/docs/doctrine/hardware-attestation.md).
 
 ## Why pinned
 
@@ -41,13 +52,14 @@ A verifier that dynamically fetched Google's attestation roots has no sovereign 
 
 Beyond `androidKeystoreVerifier`, the package exports the parser + constants + canonical literals for advanced consumers:
 
-- `verifyAndroidKeystoreAttestation(...)` — bare-metal entry: takes the parsed `KeyDescription` + caller-supplied roots and returns the structured verification result. `androidKeystoreVerifier` is a thin curry over this.
+- `verifyAndroidKeystoreAttestation(claim, opts)` — bare-metal entry: takes the `HardwareAttestationClaim` plus `AndroidKeystoreVerifyOptions` and returns the structured verification result. Parsing happens inside — the claim's chain is split and the `KeyDescription` extension DER-walked internally; the trust anchors are injected via `opts.rootPems` (defaults to `DEFAULT_ANDROID_KEYSTORE_TRUST_ANCHORS`). `androidKeystoreVerifier` is a thin curry over this.
 - `parseKeyDescription(derBytes)` — walk the AOSP `KeyDescription` ASN.1 extension into a typed structure (`attestationVersion`, `attestationSecurityLevel`, `hardwareEnforced`, etc.).
 - `SECURITY_LEVEL_SOFTWARE`, `SECURITY_LEVEL_TRUSTED_ENVIRONMENT`, `SECURITY_LEVEL_STRONG_BOX` — the canonical `attestationSecurityLevel` enum values per AOSP. Use these to constrain the accepted floor.
 - `VERIFIED_BOOT_STATE_VERIFIED`, `VERIFIED_BOOT_STATE_SELF_SIGNED`, `VERIFIED_BOOT_STATE_UNVERIFIED`, `VERIFIED_BOOT_STATE_FAILED` — the four canonical `verifiedBootState` values; populate `allowedVerifiedBootStates` from this set.
 - `ANDROID_KEYSTORE_PLATFORM` — the canonical platform-string constant (`"android_keystore"`).
 - `ANDROID_KEY_ATTESTATION_OID` (`1.3.6.1.4.1.11129.2.1.17`) — the X.509 extension OID the leaf carries.
 - `GOOGLE_ANDROID_KEYSTORE_ROOT_RSA_PEM`, `GOOGLE_ANDROID_KEYSTORE_ROOT_ECDSA_PEM` — the two pinned Google attestation roots (RSA-4096 + ECDSA P-384). Both ship by default; overrideable via `HardwareVerifierBundleConfig.androidKeystoreRootPems` in `@motebit/verify`.
+- `DEFAULT_ANDROID_KEYSTORE_TRUST_ANCHORS` — the default accept-set (both pinned roots), exported for audit and as the `rootPems` default in `verifyAndroidKeystoreAttestation`.
 - `EMPTY_REVOCATION_SNAPSHOT` — typed empty snapshot for callers that don't yet wire a revocation list. Replace with a real snapshot at release time per `@motebit/verify`'s embedding pipeline.
 
 ## Why a hand-rolled DER walker
@@ -64,7 +76,7 @@ Closer to FIDO Yubico-batch than to TPM EK. The leaf X.509 subject is the fixed 
 - [`@motebit/crypto-appattest`](https://www.npmjs.com/package/@motebit/crypto-appattest) — iOS sibling
 - [`@motebit/crypto-tpm`](https://www.npmjs.com/package/@motebit/crypto-tpm) — Windows / Linux TPM sibling
 - [`@motebit/crypto-webauthn`](https://www.npmjs.com/package/@motebit/crypto-webauthn) — browser sibling
-- [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) — canonical CLI bundling all four leaves with motebit defaults
+- [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) — canonical CLI bundling the platform leaves with motebit defaults
 
 ## License
 
