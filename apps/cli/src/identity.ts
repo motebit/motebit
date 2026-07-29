@@ -66,9 +66,21 @@ export function promptPassphrase(
   return new Promise((resolve) => {
     stdout.write(promptText + "\x1b[2m(Tab to show/hide)\x1b[22m ");
 
-    // Pause the caller's rl if provided (prevents it from consuming stdin)
+    // Detach the caller's rl if provided. Pausing alone is NOT enough: a
+    // terminal readline keeps its own 'data' listener on stdin, and when
+    // this reader resumes the stream, BOTH listeners fire — readline echoes
+    // every keystroke (so the user sees each character followed by our mask
+    // star) and its line buffer fights ours for the input, corrupting the
+    // captured passphrase. Witnessed live on `motebit export` 2026-07-28:
+    // the correct passphrase read as incorrect. Remove every foreign 'data'
+    // listener for the duration of the read and restore them on resolve.
     const callerRl = typeof rlOrPrompt !== "string" ? rlOrPrompt : null;
     callerRl?.pause();
+    const foreignDataListeners = stdin.listeners("data") as Array<(chunk: Buffer) => void>;
+    for (const listener of foreignDataListeners) stdin.removeListener("data", listener);
+    const restoreForeignListeners = () => {
+      for (const listener of foreignDataListeners) stdin.on("data", listener);
+    };
 
     stdin.setRawMode(true);
     stdin.resume();
@@ -108,6 +120,7 @@ export function promptPassphrase(
           stdout.write("*".repeat(value.length));
         }
         stdout.write("\n");
+        restoreForeignListeners();
         callerRl?.resume();
         resolve(value);
       } else if (c === "\u0003") {

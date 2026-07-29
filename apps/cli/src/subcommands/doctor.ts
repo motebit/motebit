@@ -104,6 +104,40 @@ export async function handleDoctor(): Promise<void> {
     checks.push({ name: "Identity", ok: true, detail: "not created yet (run motebit to create)" });
   }
 
+  // Stale identity-file divergence (#429). ~/.motebit/motebit.md is a
+  // SNAPSHOT; config.device_public_key is the live truth. A snapshot from
+  // before a key change silently disagrees on the identity key — and it
+  // misled a wallet-address derivation onto the wrong funding address
+  // (2026-07-28, real money). Advisory warn: the file is not load-bearing,
+  // but anything reading it as truth is being lied to.
+  {
+    const mdPath = path.join(CONFIG_DIR, "motebit.md");
+    if (fs.existsSync(mdPath) && fullCfg.device_public_key) {
+      try {
+        const md = fs.readFileSync(mdPath, "utf-8");
+        const keyMatch = /public_key:\s*"?([0-9a-fA-F]{64})"?/.exec(md);
+        const fileKey = keyMatch?.[1]?.toLowerCase();
+        const stale = fileKey != null && fileKey !== fullCfg.device_public_key.toLowerCase();
+        checks.push({
+          name: "Identity file",
+          ok: true,
+          ...(stale ? { warn: true } : {}),
+          detail: stale
+            ? "~/.motebit/motebit.md is STALE — its key differs from the live identity"
+            : "~/.motebit/motebit.md matches the live identity key",
+          ...(stale
+            ? {
+                remedy:
+                  "run `motebit export` — it refreshes the snapshot; the live key is config.device_public_key, never the .md",
+              }
+            : {}),
+        });
+      } catch {
+        // Unreadable file: not a doctor concern beyond its absence.
+      }
+    }
+  }
+
   // Recovery-seed backup posture (#428). Not a failure — a warning with its
   // remedy: an unbacked-up sovereign key has no recovery path an operator
   // can provide, by design, so the self-recovery door must be lit BEFORE
