@@ -185,6 +185,18 @@ export function createDualAuth(deps: MiddlewareDeps) {
       expectedAudience,
       deps.isTokenBlacklisted,
       deps.isAgentRevoked,
+      undefined,
+      // Rejection legibility (#460): a device-auth 401 previously left ZERO
+      // server-side trace (witnessed live 2026-07-29 — undiagnosable from
+      // the operator seat). Log the structured reason; never the token.
+      (reason) =>
+        logger.warn("auth.device_token_rejected", {
+          correlationId: c.req.header("x-correlation-id") ?? "none",
+          reason,
+          expectedAudience,
+          mid: claims.mid,
+          path: new URL(c.req.url, "http://localhost").pathname,
+        }),
     );
     if (!valid) {
       throw new AuthenticationError("AUTH_INVALID_TOKEN", "Token verification failed");
@@ -446,6 +458,15 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
         "sync",
         deps.isTokenBlacklisted,
         deps.isAgentRevoked,
+        undefined,
+        (reason) =>
+          logger.warn("auth.device_token_rejected", {
+            correlationId: c.req.header("x-correlation-id") ?? "none",
+            reason,
+            expectedAudience: "sync",
+            mid: motebitId,
+            path: new URL(c.req.url, "http://localhost").pathname,
+          }),
       );
       if (!verified) {
         throw new AuthorizationError(
