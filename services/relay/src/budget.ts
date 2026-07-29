@@ -182,10 +182,28 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   // detector and the Stripe webhook, both via `creditAccount` server-side.
   // Tests seed via `seedBalance` (test-helpers), not an HTTP money route.
 
+  // First-person own-id check for the account family (#460). The account:*
+  // audiences prove the caller controls SOME registered device key — they
+  // bind the token to the caller's own mid, not to the :motebitId in the
+  // path. Without this check, any authenticated agent could read another
+  // agent's balance/transactions or, worse, POST a withdraw against another
+  // agent's account with a self-supplied destination. A master token
+  // (callerMotebitId unset) bypasses for the operator console — the same
+  // shape as the /settlements handler in state-export.ts.
+  const requireFirstPerson = (c: Context, motebitId: string, what: string): void => {
+    const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+    if (callerMotebitId != null && callerMotebitId !== "" && callerMotebitId !== motebitId) {
+      throw new HTTPException(403, {
+        message: `${what} is first-person: a device token may act only on its own motebit's account`,
+      });
+    }
+  };
+
   // --- Balance ---
   /** @internal */
   app.get("/api/v1/agents/:motebitId/balance", (c) => {
     const motebitId = c.req.param("motebitId");
+    requireFirstPerson(c, motebitId, "balance");
     const account = getAccountBalance(moteDb.db, motebitId);
     if (!account)
       return c.json({
@@ -228,6 +246,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   /** @internal */
   app.post("/api/v1/agents/:motebitId/withdraw", async (c) => {
     const motebitId = c.req.param("motebitId");
+    requireFirstPerson(c, motebitId, "withdraw");
     const correlationId = c.get("correlationId" as never) as string;
 
     // Idempotency key required for financial operations
@@ -514,6 +533,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   /** @internal */
   app.get("/api/v1/agents/:motebitId/withdrawals", (c) => {
     const motebitId = c.req.param("motebitId");
+    requireFirstPerson(c, motebitId, "withdrawal history");
     const withdrawals = getWithdrawals(moteDb.db, motebitId, 50).map((w) =>
       toWithdrawalRecord(w, relayIdentity.relayMotebitId),
     );
@@ -712,6 +732,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       throw new HTTPException(501, { message: "Stripe is not configured on this relay" });
 
     const motebitId = c.req.param("motebitId");
+    requireFirstPerson(c, motebitId, "checkout");
     const correlationId = c.get("correlationId" as never) as string;
     const body = await c.req.json<{ amount: number; return_url?: string }>();
     if (typeof body.amount !== "number" || body.amount <= 0)
