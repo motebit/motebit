@@ -29,7 +29,7 @@ export async function consumeStream(
   stream: AsyncGenerator<StreamChunk>,
   runtime: MotebitRuntime,
   opts?: { voice?: VoiceController; budgetUsd?: number },
-): Promise<void> {
+): Promise<boolean> {
   let pendingApproval: {
     tool_call_id: string;
     name: string;
@@ -39,8 +39,13 @@ export async function consumeStream(
   } | null = null;
   let stopAnimation: (() => void) | null = null;
   let lastCompletedReceiptResult: string | null = null;
+  // #457: whether ANY chunk arrived — the caller uses this to guarantee an
+  // approval answer never ends in pure silence. Returns true once a chunk
+  // is observed (every chunk type renders or deliberately captures).
+  let sawAnyChunk = false;
 
   for await (const chunk of stream) {
+    sawAnyChunk = true;
     switch (chunk.type) {
       case "text":
         writeOutput(chunk.text);
@@ -125,6 +130,21 @@ export async function consumeStream(
         writeOutput(`\n  ${warn("⚠")} ${warn("suspicious content in " + chunk.tool_name)}\n`);
         break;
 
+      case "approval_expired":
+        // #457: an approval submitted after the timeout voided it used to
+        // end with NOTHING on screen — an approved money action with no
+        // rendered outcome. The runtime now emits this typed chunk; say
+        // plainly that nothing executed and how to proceed.
+        if (stopAnimation) {
+          stopAnimation();
+          stopAnimation = null;
+        }
+        writeOutput(
+          `\n  ${warn("[this approval expired before your answer arrived — nothing was executed]")}\n` +
+            `  ${dim(`(${chunk.tool_name} was never run; no money moved. Ask again when ready.)`)}\n`,
+        );
+        break;
+
       case "invoke_error":
         if (stopAnimation) {
           stopAnimation();
@@ -179,7 +199,21 @@ export async function consumeStream(
 
     const approved = answer.trim().toLowerCase() === "y";
     writeOutput("\n" + promptColor("mote>") + " ");
-    await consumeStream(runtime.resolveApprovalVote(approved, runtime.motebitId), runtime, opts);
+    const resumedRendered = await consumeStream(
+      runtime.resolveApprovalVote(approved, runtime.motebitId),
+      runtime,
+      opts,
+    );
+    // #457 backstop: an approval answer must never end with a bare orphaned
+    // `mote>`. The runtime now emits approval_expired on every late-resume
+    // path, so a zero-chunk resume should be impossible — but if a new one
+    // appears, say so instead of silence. Terminal-outcome-always is the
+    // contract for money surfaces.
+    if (!resumedRendered) {
+      writeOutput(
+        `${warn("[nothing came back for this approval — it may have expired or been resolved elsewhere; nothing was executed]")}\n`,
+      );
+    }
   }
 
   // Speak the delegated task's result on completion, but only if voice is
@@ -188,4 +222,6 @@ export async function consumeStream(
   if (opts?.voice && lastCompletedReceiptResult) {
     void opts.voice.speakIfEnabled(lastCompletedReceiptResult);
   }
+
+  return sawAnyChunk;
 }

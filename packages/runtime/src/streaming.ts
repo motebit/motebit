@@ -237,6 +237,8 @@ interface PendingApproval {
 
 export class StreamingManager {
   private _pendingApproval: PendingApproval | null = null;
+  /** Tool name of the most recently EXPIRED approval — lets a late resume name it (#457). */
+  private _lastExpiredToolName: string | null = null;
   private approvalTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * Intents the human has REFUSED this session, keyed by tool + exact args
@@ -578,7 +580,17 @@ export class StreamingManager {
 
     if (!this._pendingApproval) {
       // Timeout already fired — approval came too late. The timeout handler
-      // already injected a denial into conversation history, so this is a no-op.
+      // already injected a denial into conversation history. This MUST NOT
+      // be a silent no-op (#457, witnessed live 2026-07-29: a human approved
+      // an R4 money action ~12 minutes after the prompt, the 10-minute timer
+      // had voided it, and the resume returned zero chunks — an approved
+      // irreversible-money action ended with NOTHING rendered). Emit the
+      // typed expiry chunk (declared since the beginning; zero producers
+      // until now) so every surface can say what happened.
+      yield {
+        type: "approval_expired" as const,
+        tool_name: this._lastExpiredToolName ?? "unknown",
+      };
       return;
     }
     // Resume after tool approval IS a bytes-leave moment — fire the
@@ -751,7 +763,12 @@ export class StreamingManager {
     this.clearApprovalTimeout();
 
     if (!this._pendingApproval) {
-      // Timeout already fired — approval came too late.
+      // Timeout already fired — approval came too late. Same #457 contract
+      // as resumeAfterApproval: never a silent zero-chunk return.
+      yield {
+        type: "approval_expired" as const,
+        tool_name: this._lastExpiredToolName ?? "unknown",
+      };
       return;
     }
 
@@ -804,6 +821,9 @@ export class StreamingManager {
       if (!this._pendingApproval) return;
       const expired = this._pendingApproval;
       this._pendingApproval = null;
+      // Remembered so a late resume can NAME the tool in its
+      // approval_expired chunk (#457) — the pending record is gone by then.
+      this._lastExpiredToolName = expired.toolName;
       // Push denial into conversation history so LLM sees it on next turn
       this.deps.injectIntermediateMessages(
         {

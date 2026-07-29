@@ -36,6 +36,7 @@ import {
   success,
   bold,
   cyan,
+  warn,
 } from "./colors.js";
 import {
   isSlashCommand,
@@ -756,6 +757,18 @@ async function main(): Promise<void> {
     solanaWallet,
   );
   runtimeRef.current = runtime;
+
+  // #457: when a pending approval times out (default 10 minutes), say so
+  // the MOMENT it happens — previously the expiry was structurally
+  // invisible (callback never registered anywhere, chunk never emitted),
+  // so a human answering an expired prompt got pure silence after an
+  // approved money action. The line may land mid-prompt; the redraw
+  // roughness belongs to the #456 rendering arc — silence does not.
+  runtime.onApprovalExpired(() => {
+    console.log(
+      `\n  ${warn("[the pending approval expired — nothing was executed]")}\n  ${dim("(approvals wait 10 minutes; ask again when ready)")}`,
+    );
+  });
 
   // Connect MCP servers
   let mcpAdapters: Awaited<ReturnType<typeof connectMcpServers>> = [];
