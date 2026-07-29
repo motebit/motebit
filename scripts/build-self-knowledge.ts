@@ -111,7 +111,21 @@ function indexChunk(chunk: RawChunk): IndexedChunk {
   };
 }
 
-function run(): void {
+/** The committed artifact this generator owns (and the freshness gate checks). */
+export const CORPUS_TARGET = "packages/self-knowledge/src/corpus-data.ts";
+
+/**
+ * Pure generation: read the sources, build the index, serialize, and run
+ * the output through prettier with the repo config — the SAME formatting
+ * the lint-staged commit hook applies. This is the alignment fix for the
+ * 2026-07-25 format-drift finding: the generator used to emit raw
+ * JSON.stringify (quoted keys) which the commit hook then rewrote into
+ * TS-literal style, so `regenerate` produced an 8k-line phantom reformat
+ * and no gate could byte-compare. Generator output and committed artifact
+ * are now byte-identical by construction, and
+ * `check-self-knowledge-corpus-fresh` compares them.
+ */
+export async function generateCorpusModule(): Promise<string> {
   // 1. Load all source docs. Fail loud on a missing source — silent omission
   //    would silently shrink the corpus without any signal to the caller.
   const loaded: Array<{ source: string; content: string }> = [];
@@ -184,15 +198,27 @@ function run(): void {
   // values inside objects). Trailing semicolon + newline for editor/eslint
   // compatibility.
   const serialized = JSON.stringify(corpusIndex, null, 2);
-  const out = `${header}${serialized};\n`;
+  const raw = `${header}${serialized};\n`;
 
-  const target = join(ROOT, "packages/self-knowledge/src/corpus-data.ts");
-  writeFileSync(target, out, "utf-8");
-
-  // eslint-disable-next-line no-console
-  console.log(
-    `build-self-knowledge: wrote ${chunks.length} chunks, sourceHash=${sourceHash.slice(0, 16)}…`,
-  );
+  // Format with the repo's prettier config so the emitted bytes match what
+  // the lint-staged commit hook would produce — regeneration on unchanged
+  // sources is a zero-line diff, and the freshness gate can byte-compare.
+  const prettier = await import("prettier");
+  const target = join(ROOT, CORPUS_TARGET);
+  const config = await prettier.resolveConfig(target);
+  return prettier.format(raw, { ...config, parser: "typescript" });
 }
 
-run();
+async function run(): Promise<void> {
+  const out = await generateCorpusModule();
+  const target = join(ROOT, CORPUS_TARGET);
+  writeFileSync(target, out, "utf-8");
+
+  const hashMatch = /sourceHash: "([0-9a-f]{16})/.exec(out);
+  // eslint-disable-next-line no-console
+  console.log(`build-self-knowledge: wrote ${CORPUS_TARGET} (sourceHash=${hashMatch?.[1]}…)`);
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  void run();
+}

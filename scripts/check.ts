@@ -383,6 +383,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-llms-txt-fresh",
   },
   {
+    name: "check-self-knowledge-corpus-fresh",
+    defends:
+      "packages/self-knowledge/src/corpus-data.ts (the committed BM25 corpus the runtime queries as its own self-description) matches exactly what scripts/build-self-knowledge.ts would generate from the current root self-description docs (README.md, DROPLET.md, THE_SOVEREIGN_INTERIOR.md, THE_METABOLIC_PRINCIPLE.md); same freshness shape as check-llms-txt-fresh, applied to the interior surface — closes the 2026-07-25 latent-drift finding where a source-doc edit without regeneration silently left querySelfKnowledge serving stale self-description (invariant #149, docs/drift-defenses.md)",
+    script: "check-self-knowledge-corpus-fresh",
+  },
+  {
     name: "check-doctrine-format",
     defends:
       "DOCTRINE.md's chain bullets match the canonical format the llms.txt generator parses (`N. **[FILENAME.md](FILENAME.md)** — derives X.`), the chain length matches the expected nine documents, every cited filename exists at the repo root, and no derives-clause is missing sentence punctuation; moves the failure earlier than the build-time throw in scripts/generate-llms-txt.ts so prose-only edits to DOCTRINE.md can't silently break the LLM-surface generation (invariant #58, full history in docs/drift-defenses.md)",
