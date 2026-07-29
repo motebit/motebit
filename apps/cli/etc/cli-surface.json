@@ -350,6 +350,7 @@
     "dev-keyring.json",
     "identity.md",
     "motebit.db",
+    "motebit.md",
     "relay",
     "relay/relay.db",
     "smoke-x402-buyer-eoa.txt",

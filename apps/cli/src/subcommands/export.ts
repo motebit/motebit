@@ -17,7 +17,7 @@ import { openMotebitDatabase } from "@motebit/persistence";
 import { generate as generateIdentityFile } from "@motebit/identity-file";
 import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
-import { loadFullConfig, saveFullConfig } from "../config.js";
+import { CONFIG_DIR, loadFullConfig, saveFullConfig } from "../config.js";
 import {
   fromHex,
   promptPassphrase,
@@ -46,14 +46,17 @@ export async function handleExport(config: CliConfig): Promise<void> {
       await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
     } catch {
       // Passphrase remediation — distinct from "no identity" because the
-      // config DOES exist, it just won't decrypt. If the passphrase is
-      // remembered, try again via env; if truly lost, the only path is to
-      // delete the config and regenerate (losing the previous identity).
+      // config DOES exist, it just won't decrypt. Attempts are offline and
+      // unlimited, and since `motebit restore` shipped, a lost passphrase is
+      // recoverable from the seed — NEVER advise deleting config.json (it
+      // holds the identity key and any wallet funds; the pre-#431 copy of
+      // this message did exactly that, missed in that fix's sibling sweep).
       console.error("Error: incorrect passphrase.");
       console.error(
-        "  Retry with the correct passphrase, or set MOTEBIT_PASSPHRASE.\n" +
-          "  If the passphrase is lost, delete `~/.motebit/config.json` and\n" +
-          "  run `motebit` to create a new identity (the previous one is unrecoverable).",
+        "  Attempts are offline and unlimited — try again, or set MOTEBIT_PASSPHRASE.\n" +
+          "  Forgot it? `motebit restore` with your recovery seed resets the passphrase.\n" +
+          "  Do not delete ~/.motebit/config.json — it holds your identity key\n" +
+          "  and any wallet funds it controls.",
       );
       rl.close();
       process.exit(1);
@@ -141,6 +144,18 @@ export async function handleExport(config: CliConfig): Promise<void> {
   const identityPath = path.join(outputDir, "motebit.md");
   fs.writeFileSync(identityPath, identityContent, "utf-8");
   exported.push("identity");
+
+  // Also refresh the config-dir snapshot. `~/.motebit/motebit.md` is written
+  // at creation and was refreshed by NOTHING — after a key change it silently
+  // diverges from the live identity (config.device_public_key is the truth;
+  // the stale file misled a wallet-address derivation onto the wrong funding
+  // address, #429). Export is the natural refresh point: every export now
+  // heals the snapshot, and doctor flags any remaining divergence.
+  try {
+    fs.writeFileSync(path.join(CONFIG_DIR, "motebit.md"), identityContent, "utf-8");
+  } catch {
+    // Best-effort — the primary export above already succeeded.
+  }
 
   // 2. Gradient snapshot from local SQLite
   try {
