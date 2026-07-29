@@ -65,7 +65,7 @@ Product-level types (state vectors, creature behavior, rendering spec) live in [
 - [`@motebit/verify`](https://www.npmjs.com/package/@motebit/verify) — the canonical `motebit-verify` CLI
 - [`create-motebit`](https://www.npmjs.com/package/create-motebit) — scaffold a signed agent identity
 - [`motebit`](https://www.npmjs.com/package/motebit) — reference runtime and operator console (BUSL-1.1)
-- [docs.motebit.com](https://docs.motebit.com) — protocol and developer documentation
+- [Motebit docs](https://docs.motebit.com) — protocol and developer documentation
 
 ## License
 

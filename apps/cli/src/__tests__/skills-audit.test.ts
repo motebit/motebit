@@ -138,7 +138,7 @@ describe("handleSkillsAudit", () => {
     expect(events[0]!.skill_name).toBe("alpha");
   });
 
-  it("filters by --type", async () => {
+  it("filters by --event-type", async () => {
     writeAuditFixture([
       JSON.stringify({
         type: "skill_trust_grant",

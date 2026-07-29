@@ -25,14 +25,14 @@ const result = await verify(credential, {
 
 1. The CBOR attestation object the browser emits — `{ fmt, attStmt, authData }`.
 2. **Full attestation** (`fmt: "packed"` with `x5c`): chain-verify the leaf against the **pinned FIDO root set** (Apple Anonymous Attestation, Yubico, Microsoft). Every non-leaf must carry `basicConstraints.cA === true`, terminal cert DER byte-equal to one of the pinned roots. Then `attStmt.sig` verifies over `authData || clientDataHash` using the leaf's public key and `attStmt.alg`.
-3. **Self attestation** (`fmt: "packed"` without `x5c`): `attStmt.sig` verifies over `authData || clientDataHash` using the credential's own public key carried in `authData`. Proves only that the credential's key signed the challenge, not that any specific vendor minted it. The result reports `attestation_kind: "self"`; the [hardware-attestation doctrine](https://github.com/motebit/motebit/blob/main/docs/doctrine/hardware-attestation.md) ranks self attestation below full attestation, and today the field is informational — nothing outside this package consumes it yet.
+3. **Self attestation** (`fmt: "packed"` without `x5c`): `attStmt.sig` verifies over `authData || clientDataHash` using the credential's own public key carried in `authData`. Proves only that the credential's key signed the challenge, not that any specific vendor minted it. The result reports `attestation_kind: "self"` so callers can distinguish it from a vendor-rooted `"full"` attestation; today the field is informational — nothing outside this package consumes it yet.
 4. **Identity binding.** The transmitted `clientDataHash` must equal `SHA-256(canonicalJson({ attested_at, device_id, identity_public_key, motebit_id, platform: "webauthn", version: "1" }))` — the same body the web mint path composes. A malicious page that substitutes any other body fails here.
 
 ## What a passing verification proves — and what it does not
 
 - **Proves** (full attestation) a vendor-rooted authenticator minted the credential, and (both kinds) that the attested body names the exact Ed25519 identity key the credential claims.
 - **Does not prove** vendor origin under self attestation — only that the credential's own key signed the challenge; check `attestation_kind` on the result.
-- **Vendor coverage is a deliberate cut**: only Apple, Yubico, and Microsoft roots are pinned. Full attestations chaining to other vendors (Feitian, Google Titan, SoloKey, …) fail BY DESIGN; new roots land as additive constants.
+- **Vendor coverage is a deliberate cut**: only Apple, Yubico, and Microsoft roots are pinned. Full attestations chaining to other vendors (Feitian, Google Titan, SoloKey, …) fail by design; new roots land as additive constants.
 - **Does not prove** the authenticator is unrevoked today: no FIDO Metadata Service fetch, no revocation checking.
 - A passing result raises the credential's hardware-attestation score — additive, never an admission gate. See the [hardware-attestation doctrine](https://github.com/motebit/motebit/blob/main/docs/doctrine/hardware-attestation.md).
 
