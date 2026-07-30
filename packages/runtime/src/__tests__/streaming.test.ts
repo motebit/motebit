@@ -1110,6 +1110,114 @@ describe("resumeAfterApproval — signed consent decision", () => {
     expect(runtime.hasPendingApproval).toBe(true);
   });
 
+  it("a REWORDED re-proposal in the same exchange is suppressed (#470)", async () => {
+    // The live failure (2026-07-29, v1.11.0, llama3.2): deny a paid hire →
+    // the resumed continuation re-proposed it with the prompt trivially
+    // reworded (one more sentence of the user's own words folded in) → the
+    // exact-args ledger missed → the human was re-prompted seconds after
+    // their "no". Within one exchange, a denial is terminal for the TOOL.
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks(
+        {
+          type: "approval_request",
+          tool_call_id: "tc-470-a",
+          name: "delegate_to_agent",
+          args: { prompt: "What version of motebit is live on npm?" },
+          risk_level: 4,
+        },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+    await collectChunks(runtime.sendMessageStreaming("check npm, don't guess"));
+    expect(runtime.hasPendingApproval).toBe(true);
+
+    // The continuation after the denial re-proposes with REWORDED args.
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks(
+        {
+          type: "approval_request",
+          tool_call_id: "tc-470-b",
+          name: "delegate_to_agent",
+          args: {
+            prompt: "What version of motebit is live on npm? Check the real registry, don't guess.",
+          },
+          risk_level: 4,
+        },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+    const chunks = await collectChunks(runtime.resumeAfterApproval(false));
+
+    // Suppressed: no surface can render a second prompt this exchange.
+    expect(runtime.hasPendingApproval).toBe(false);
+    const injected = runtime
+      .getConversationHistory()
+      .map((m) => String(m.content))
+      .join("\n");
+    expect(injected).toContain("REFUSED_BY_HUMAN_THIS_EXCHANGE");
+    // The brake renders an owner-visible line — the owner sees it fired.
+    const text = chunks
+      .filter((c): c is { type: "text"; text: string } => c.type === "text")
+      .map((c) => c.text)
+      .join("");
+    expect(text).toContain("already declined delegate_to_agent");
+  });
+
+  it("the human's next message releases the exchange brake — even for reworded args (#470)", async () => {
+    await enterPendingApproval("tc-470-c", "delegate_to_agent", { prompt: "hire for task X" });
+    await collectChunks(runtime.resumeAfterApproval(false));
+
+    // A NEW user message re-opens the line the human closed: the same tool
+    // with reworded args prompts again (a human-initiated follow-up is never
+    // swallowed — the void/deny asymmetry that keeps the gate honest).
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks(
+        {
+          type: "approval_request",
+          tool_call_id: "tc-470-d",
+          name: "delegate_to_agent",
+          args: { prompt: "hire for task X, please reconsider" },
+          risk_level: 4,
+        },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+    await collectChunks(runtime.sendMessageStreaming("actually, go ahead and hire someone"));
+    expect(runtime.hasPendingApproval).toBe(true);
+  });
+
+  it("a different TOOL in the same exchange still reaches the human (#470)", async () => {
+    // The brake is per-tool, not global: refusing a hire must not swallow an
+    // unrelated approval-gated proposal in the same continuation.
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks(
+        {
+          type: "approval_request",
+          tool_call_id: "tc-470-e",
+          name: "delegate_to_agent",
+          args: { prompt: "hire someone" },
+          risk_level: 4,
+        },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+    await collectChunks(runtime.sendMessageStreaming("do the task"));
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks(
+        {
+          type: "approval_request",
+          tool_call_id: "tc-470-f",
+          name: "send_money",
+          args: { to: "y", amount: 2 },
+          risk_level: 4,
+        },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+    await collectChunks(runtime.resumeAfterApproval(false));
+    expect(runtime.hasPendingApproval).toBe(true);
+  });
+
   it("buffers the decision in getRecentApprovalDecisions(), verifiable, same contract as getRecentReceipts()", async () => {
     await enterPendingApproval("tc-buffer", "transfer", { amt: 1 });
     await collectChunks(runtime.resumeAfterApproval(true));
