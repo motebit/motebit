@@ -10,6 +10,7 @@ import {
 import {
   __test_buildToolResultContentForAnthropic as toAnthropicContent,
   modelSupportsExtendedThinking,
+  modelRejectsSamplingParams,
 } from "../core";
 import type { AnthropicProviderConfig } from "../index";
 import { TrustMode, BatteryMode, SensitivityLevel } from "@motebit/sdk";
@@ -280,6 +281,34 @@ describe("modelSupportsExtendedThinking", () => {
   });
 });
 
+describe("modelRejectsSamplingParams — Opus 4.7+/Claude-5 request-shape guard", () => {
+  it("rejects sampling params on the removed-family models (each was a live or latent 400)", () => {
+    for (const m of [
+      "claude-opus-5",
+      "claude-opus-4-7",
+      "claude-opus-4-8",
+      "claude-sonnet-5",
+      "claude-fable-5",
+      "claude-mythos-5",
+    ]) {
+      expect(modelRejectsSamplingParams(m)).toBe(true);
+    }
+  });
+
+  it("keeps sampling on models that still accept it", () => {
+    for (const m of [
+      "claude-opus-4-6",
+      "claude-sonnet-4-6",
+      "claude-sonnet-4-5-20250929",
+      "claude-haiku-4-5-20251001",
+      "llama3.2",
+      "gpt-5.4",
+    ]) {
+      expect(modelRejectsSamplingParams(m)).toBe(false);
+    }
+  });
+});
+
 describe("AnthropicProvider Anthropic integration", () => {
   const config: AnthropicProviderConfig = {
     api_key: "test-api-key",
@@ -392,6 +421,37 @@ describe("AnthropicProvider Anthropic integration", () => {
         makeContextPack(),
       );
       expect((bodyOf().thinking as { budget_tokens: number }).budget_tokens).toBe(1024);
+    });
+
+    it("omits configured temperature for claude-opus-5 (sampling removed — 400'd every live CLI turn, 2026-07-29)", async () => {
+      mockFetchSuccess("Hi");
+      await new AnthropicProvider({ ...config, model: "claude-opus-5" }).generate(
+        makeContextPack(),
+      );
+      const body = bodyOf();
+      expect(body.model).toBe("claude-opus-5");
+      expect(body.temperature).toBeUndefined();
+    });
+
+    it("still sends configured temperature for claude-opus-4-6 (sampling accepted there)", async () => {
+      mockFetchSuccess("Hi");
+      await new AnthropicProvider({ ...config, model: "claude-opus-4-6" }).generate(
+        makeContextPack(),
+      );
+      expect(bodyOf().temperature).toBe(0.5);
+    });
+
+    it("extended thinking on claude-opus-5 emits the adaptive shape, never budget_tokens", async () => {
+      mockFetchSuccess("Hi");
+      await new AnthropicProvider({
+        ...config,
+        model: "claude-opus-5",
+        extendedThinking: { budgetTokens: 4000 },
+      }).generate(makeContextPack());
+      const body = bodyOf();
+      expect(body.thinking).toEqual({ type: "adaptive" });
+      expect(body.temperature).toBeUndefined();
+      expect(body.max_tokens as number).toBeGreaterThan(4000);
     });
 
     it("safety net: does NOT enable thinking on an unsupported model even when configured", async () => {
