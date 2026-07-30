@@ -2424,6 +2424,11 @@ export class MotebitRuntime {
     // system-triggered and should not reset the quiet window.
     this._lastUserMessageAt = Date.now();
     this._currentTypedIntent = options?.userActionAttestation ?? null;
+    // A genuine user message releases the exchange-scoped denial brake
+    // (#470): the human can re-open a line they closed — and only the human.
+    // This sits ONLY on the user-initiated path; proactive/system turns
+    // (generateActivation, consolidation) must not launder a "no".
+    this.streaming.beginExchange();
     // A new user turn sets aside any pending approval — but never silently
     // (#462): the void renders on THIS stream via the typed chunk below, and
     // the owning surface hears it through the onApprovalVoided callback. A

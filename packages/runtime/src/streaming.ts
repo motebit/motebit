@@ -258,6 +258,28 @@ export class StreamingManager {
    * exit.
    */
   private readonly deniedIntents = new Map<string, number>();
+  /**
+   * Tools the human refused THIS exchange — since their last message (#470).
+   *
+   * The exact-args ledger above deliberately lets a reworked proposal ask
+   * once more ("a model that meaningfully reworks its arguments gets to ask
+   * once more; the prompt text it just received tells it not to"). That bet
+   * lost, live, 2026-07-29: a weak model reworded the denied paid hire
+   * trivially — folding one more sentence of the user's own words into the
+   * prompt — and re-prompted seconds after the "no", with the terminal
+   * REFUSED_BY_HUMAN instruction in its context. Model compliance cannot
+   * carry a money boundary.
+   *
+   * So the exact ledger gets a complement, not a replacement: within one
+   * exchange, a human denial is terminal for the TOOL, however the arguments
+   * are reworded. The set clears on the next genuine user message
+   * (`beginExchange`) — a human-initiated follow-up can always re-open the
+   * line it closed, so no future request is silently swallowed. Fuzzy arg
+   * matching was rejected for the same reason exact was chosen: a false
+   * match breaks the approval gate; tool-until-next-message cannot
+   * mis-classify.
+   */
+  private readonly deniedToolsThisExchange = new Set<string>();
   private approvalExpiredCallback: (() => void) | null = null;
   /** Fired when a NEW turn voids a pending approval (#462) — the owning surface renders the void. */
   private approvalVoidedCallback: ((toolName: string) => void) | null = null;
@@ -333,6 +355,17 @@ export class StreamingManager {
   /** Register a callback invoked when a new turn voids a pending approval (#462). */
   onApprovalVoided(cb: (toolName: string) => void): void {
     this.approvalVoidedCallback = cb;
+  }
+
+  /**
+   * Mark the start of a genuine user turn (#470). The exchange-scoped denial
+   * brake stops re-asks BETWEEN user messages; the user's own next message
+   * always releases it — the human can re-open any line they closed, and
+   * only the human can. Callers: user-initiated turns only, never proactive
+   * or system-triggered ones (a consolidation tick must not launder a "no").
+   */
+  beginExchange(): void {
+    this.deniedToolsThisExchange.clear();
   }
 
   /** Shared stream processing — extracts state tags, handles tool/approval/injection chunks. */
@@ -540,6 +573,39 @@ export class StreamingManager {
         continue;
       }
 
+      // Same-exchange re-proposal of a tool the human already refused —
+      // however the arguments were reworded (#470). Within one exchange the
+      // denial is terminal for the tool; the human's next message releases
+      // the brake. See deniedToolsThisExchange for why exact-args alone
+      // proved insufficient.
+      if (chunk.type === "approval_request" && this.deniedToolsThisExchange.has(chunk.name)) {
+        this.deps.injectIntermediateMessages(
+          {
+            role: "assistant" as const,
+            content: `[tool_use: ${chunk.name}(${JSON.stringify(chunk.args)})]`,
+          },
+          {
+            role: "user" as const,
+            content: `[tool_result: ${JSON.stringify({
+              ok: false,
+              error: "REFUSED_BY_HUMAN_THIS_EXCHANGE",
+              terminal: true,
+              message:
+                `The human refused a ${chunk.name} call moments ago in this same exchange. ` +
+                `Rewording the arguments does not make it a new request — this proposal was ` +
+                `NOT shown to them. Do not propose ${chunk.name} again until the human sends ` +
+                `a new message. Tell the user plainly what you wanted to do and that they ` +
+                `declined, then ask what they would like instead.`,
+            })}]`,
+          },
+        );
+        yield {
+          type: "text" as const,
+          text: `\n[you already declined ${chunk.name} this turn — not asking again]\n`,
+        };
+        continue;
+      }
+
       // Approval request: capture pending state and start timeout
       if (chunk.type === "approval_request") {
         this._pendingApproval = {
@@ -695,6 +761,9 @@ export class StreamingManager {
         // re-prompting the human (#433).
         const key = deniedIntentKey(pending.toolName, pending.args);
         this.deniedIntents.set(key, (this.deniedIntents.get(key) ?? 0) + 1);
+        // And the exchange-scoped tool brake (#470): until the human's next
+        // message, no rewording of this tool's arguments re-prompts them.
+        this.deniedToolsThisExchange.add(pending.toolName);
 
         // Push denial into conversation history. The wording is load-bearing:
         // a neutral "denied" reads to the model as a retryable failure — the
