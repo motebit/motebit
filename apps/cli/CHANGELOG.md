@@ -1,5 +1,14 @@
 # motebit CLI Changelog
 
+## 1.11.1
+
+### Patch Changes
+
+- 20a263f: A human "no" to a money approval is now terminal for that tool for the rest of the exchange — however the model rewords the arguments (#470). The exact-args denied-intent ledger deliberately let a reworked proposal ask once more; witnessed live, a weak model reworded a denied paid hire trivially and re-prompted seconds after the refusal. The new exchange-scoped brake suppresses any same-tool approval request until the human's next message (which always releases it — a human-initiated follow-up is never swallowed), renders a calm owner-visible line when it fires, and tells the model to return to the conversation instead of retrying. Per-tool, not global: unrelated approval-gated proposals in the same exchange still prompt.
+- 8b03e3e: The `<narration>` tag no longer leaks into visible chat text (witnessed on the first live Opus round: the raw tag rendered above its own dim echo). The narration contract promises the typed `task_step_narration` chunk is the tag's only carrier; the display-strip now keeps that promise, including holding back partially streamed tags.
+- 821a754: Requests to the Opus 4.7+/Claude-5 model family are now shaped to what those models accept (#471 sibling, witnessed live: every claude-opus-5 turn 400'd because the CLI's personality default temperature rode every request — Anthropic removed sampling parameters on that family). The provider now omits `temperature` at the request-body build for models that reject it, whatever any caller configured, and extended thinking emits the adaptive shape instead of the removed `budget_tokens` form on the same family. Models that still accept sampling (Opus 4.6, Sonnet 4.5, Haiku 4.5, local models) are untouched.
+- d265f06: Claude model ids are now real (#471, first half). `/model opus` pointed at a fabricated id (`claude-opus-4-6-20250414` — Anthropic 404s it) and `sonnet` at the equally fictional `claude-sonnet-4-5-latest`; switching persisted the broken id as the session default. The alias table now carries the current live aliases (`claude-opus-5`, `claude-sonnet-5`, `claude-haiku-4-5`), and the task router's model tiers — which fed unservable family names like `claude-opus` straight into the provider — resolve to the same real ids. The provider-blind half of #471 (offering models the active provider cannot serve, and persisting an un-admitted default) remains open as designed work.
+
 ## 1.11.0
 
 ### Minor Changes
