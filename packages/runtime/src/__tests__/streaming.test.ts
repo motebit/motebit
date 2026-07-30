@@ -898,6 +898,54 @@ describe("processStream side effects", () => {
     expect(chunks[1]).toMatchObject({ type: "tool_status", name: "read_file", status: "done" });
   });
 
+  it("strips <narration> tags from display text — the typed chunk is the only carrier", async () => {
+    // Witnessed 2026-07-29 (first live Opus round): the tag leaked verbatim
+    // into the mote> text while the task_step_narration chunk ALSO rendered
+    // its echo. The prompt contract (prompt.ts) promises the tag never
+    // reaches the chat register; stripDisplayTags is where that promise
+    // is kept.
+    const result = makeTurnResult();
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        {
+          type: "text",
+          text: "<narration>Checking npm registry</narration>The live version is 1.11.0.",
+        },
+        { type: "result", result },
+      ),
+    );
+
+    const chunks = await collectChunks(runtime.sendMessageStreaming("what version is live?"));
+    const text = chunks
+      .filter((c): c is { type: "text"; text: string } => c.type === "text")
+      .map((c) => c.text)
+      .join("");
+    expect(text).not.toContain("<narration>");
+    expect(text).not.toContain("Checking npm registry");
+    expect(text).toContain("The live version is 1.11.0.");
+  });
+
+  it("holds back a partially streamed <narration tag instead of flashing it", async () => {
+    const result = makeTurnResult();
+    mockRunTurnStreaming.mockReturnValue(
+      yieldChunks(
+        { type: "text", text: "Done. <narrat" },
+        { type: "text", text: "ion>Reading the page</narration> All set." },
+        { type: "result", result },
+      ),
+    );
+
+    const chunks = await collectChunks(runtime.sendMessageStreaming("go"));
+    const text = chunks
+      .filter((c): c is { type: "text"; text: string } => c.type === "text")
+      .map((c) => c.text)
+      .join("");
+    expect(text).not.toContain("<narrat");
+    expect(text).not.toContain("Reading the page");
+    expect(text).toContain("Done.");
+    expect(text).toContain("All set.");
+  });
+
   it("captures pending approval on approval_request", async () => {
     const result = makeTurnResult();
     mockRunTurnStreaming.mockReturnValue(

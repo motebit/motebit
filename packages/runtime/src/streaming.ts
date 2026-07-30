@@ -45,6 +45,11 @@ function stripDisplayTags(text: string): { clean: string; pending: string } {
   const clean = text
     .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
     .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
+    // The narration contract (prompt.ts, task_step_narration) PROMISES the
+    // tag never leaks into the chat register — the typed chunk is its only
+    // carrier. Witnessed leaking verbatim 2026-07-29 on the first live
+    // Opus round: promised in the prompt, missing from this list.
+    .replace(/<narration>[\s\S]*?<\/narration>/g, "")
     .replace(/<state\s+[^>]*\/>/g, "")
     .replace(/<parameter\s+[^>]*>[\s\S]*?<\/parameter>/g, "")
     .replace(/<\/?(?:artifact|function_calls|invoke|antml)[^>]*>/g, "")
@@ -57,7 +62,7 @@ function stripDisplayTags(text: string): { clean: string; pending: string } {
     .replace(/\*{1,3}/g, "")
     .replace(/ {2,}/g, " ");
 
-  for (const tag of ["<memory", "<thinking", "<parameter"]) {
+  for (const tag of ["<memory", "<thinking", "<parameter", "<narration"]) {
     const lastOpen = clean.lastIndexOf(tag);
     if (lastOpen !== -1) {
       const closeTag = `</${tag.slice(1)}>`;
