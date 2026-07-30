@@ -1,5 +1,51 @@
 # motebit CLI Changelog
 
+## 1.11.0
+
+### Minor Changes
+
+- f1b608c: `motebit keychain enroll` — opt-in passphrase enrollment in the macOS login Keychain (the third leg of the recovery arc: "remember a passphrase" stops being a single point of identity loss, with zero operator involvement).
+
+  Once enrolled, commands unlock silently: the resolution chain is `MOTEBIT_PASSPHRASE` → session cache → enrolled keychain (validated against the encrypted key; a stale enrollment falls through to the prompt with a re-enroll hint, never a lockout) → interactive prompt. `motebit keychain` shows status; `motebit keychain remove` undoes it.
+
+  Honest by design: the item is protected by your macOS account, not biometrics (v1 uses `/usr/bin/security` — no native modules, no gyp builds); any process running as your user can read it, which is why enrollment is opt-in and never a default; it does not replace the recovery seed (keychain and disk die with the machine — the seed nudge stays until a backup is acknowledged); and `motebit seed reveal` always asks interactively, enrolled or not. Other platforms report unsupported honestly.
+
+- 73b3d02: Paid-intent interlock: a delegation whose payment settled without delivering a result can never be paid for twice — mechanically, on every path.
+
+  The #433 fix told the model that money already moved; the last line of defense was still the model reading that message correctly, and on the standing-grant auto-execute path there is no human between a retry loop and real money at all. Now a session-scoped ledger, seeded only by verified settled-payment facts, refuses a duplicate hire of the same worker and capability before any broadcast (typed `intent_already_paid`, fail-closed, carrying the prior task and tx), and suspends all new paid delegation once two payments are outstanding. Enforcement lives inside the shared submit chokepoint, so the interactive loop path and the granted deterministic path cannot diverge.
+
+  Also from the standing-grant audit: `executeGrantedDelegation` no longer flattens a paid-but-undelivered hire into a bare failure code (the settled-payment facts now survive into the result and the operator log); `motebit grant show` and `grant list` display lifetime spend and remaining headroom read from the durable spend store; the session-start grant preflight shows headroom before the first spend and refuses arming on an exhausted ceiling; and metering real money against an in-memory spend store now warns that the lifetime ceiling re-arms on restart.
+
+- 5442a55: REPL: bare capability names now invoke the capability, not the AI loop.
+
+  Typing `wallet` (or the shell habit `motebit wallet`) inside the REPL used to route to chat and come back as an essay — actively obscuring a money-critical answer when the user wanted their funded address. New slash commands `/id`, `/wallet`, and `/ledger <goal-id>` invoke the capabilities deterministically (`/wallet` reuses the key the REPL already unlocked — no re-prompt), and exact bare names from a curated read-only set (`wallet`, `id`, `balance`, `ledger <goal-id>`, `help`) resolve to their slash with a dim `→ /wallet` teaching line. The resolver is deliberately narrow: questions and sentences stay chat, and money or mutating commands never route from bare text.
+
+### Patch Changes
+
+- a3298b5: An approval that expires can never end in silence again.
+
+  Approvals wait ten minutes; answering after the timer had voided one used to render nothing at all — an approved irreversible-money action ending with an empty prompt (witnessed live: the human approved, the runtime returned zero output, and only the blockchain could confirm no money moved). Now the expiry announces itself the moment the timer fires, a late answer renders a plain "this approval expired before your answer arrived — nothing was executed; no money moved," and the REPL prints an honest fallback if a resumed approval ever yields nothing. Every approval answer ends in a rendered terminal outcome.
+
+- f13126e: Pending approvals can no longer be voided or resolved by other actors invisibly. A new user turn that sets aside a pending approval now renders the void on both surfaces (typed `approval_voided` chunk + `onApprovalVoided` callback) and is never recorded as a refusal; proactive turns refuse to start instead of voiding human consent; resume/vote hold the single-writer turn lock; and the goals scheduler resolves only the approval it owns (bound by the gate's `tool_call_id`), never whatever happens to be pending.
+- 74e6114: CLI rendering: the REPL now owns the bottom of the screen (#456, #455). One renderer discipline (clear region, append scrollback, repaint) replaces print-and-hope: resizing repaints the prompt in place instead of stacking duplicates; in-flight delegation shows a calm status row with the current step narration, elapsed time, and poll-attempt count instead of animated dots; runtime warnings (delegation poll failures above all) flow through the renderer as calm text instead of raw JSON dumped into the input line. Same treatment on the attached REPL and the background goal scheduler.
+- fb25e75: Prompt for the identity passphrase once per invocation, not once per unlock.
+
+  `motebit export` prompted four times in a single run — once at the top, then once per relay-auth header minted through `loadActiveSigningKey`'s default getter — which on screen looked like Enter not registering (the prompt line "duplicating" after every submit). `delegate` could reach six prompts, `market` five.
+
+  The passphrase is now cached in process memory for the life of the invocation, seeded only at proof points: a successful AES-GCM decrypt of the identity key, or the encrypt call that sets the passphrase. An unverified prompt never seeds it, `MOTEBIT_PASSPHRASE` still takes precedence, nothing is persisted, and the decrypted key is still securely erased after each use. A cached value that stops decrypting (key replaced mid-process) self-heals by clearing and re-prompting. The relay key passphrase is a different secret on a different path and is unaffected.
+
+- 083867e: README fleet audit: correct every published-package README against the shipped bytes.
+
+  Highlights: the CLI README now documents the recovery arc (`motebit restore`, `motebit seed`), the `grant` standing-delegation family, `id`/`wallet`, and the `--sovereign`/`--pay-new-agents` delegate flags; `@motebit/state-export-client` fixes a wrong first parameter on `verifyManifestAgainstBytes` (raw header string, not a parsed manifest); `create-motebit`'s agent quick start adds the required `MOTEBIT_PASSPHRASE`; `@motebit/crypto-appattest` fixes a non-JCS canonical-body example that produced the wrong digest when reproduced; `@motebit/crypto` drops a function removed at 3.0.0 and documents the hardware-attestation leaf family; `@motebit/protocol`'s example now typechecks; false zero-dependency claims corrected (sdk, verifier); `@motebit/verifier` is consistently described as library-only with `@motebit/verify` as the CLI; all relative repo links replaced with absolute URLs that survive npm rendering.
+
+  An adversarial review pass then corrected two overstated scoring claims (android-keystore StrongBox, webauthn attestation_kind — both fields are surfaced but informational today), a wrong flag name (`skills audit --event-type`, also fixed in the CLI's own usage string), and an under-documented `deviceCheckContext` parameter on `verifyHardwareAttestationClaim`.
+
+- ccf319a: Consent describes what actually happens: the money-approval band now states that the payment route is late-bound (if peer payment is unavailable, the task reroutes through the relay with no wallet payment), the route switch renders and is stated in the delegation result when it occurs, and the relay-mode settlement note no longer overclaims a payment. Also: attached surfaces render approval expiry/void outcomes, and the goals daemon contains drain errors instead of leaking unhandled rejections.
+- 48c1ee5: Three sibling fixes around the identity snapshot and its refresh path. `motebit export` no longer corrupts passphrase input (the masked prompt detaches the caller's readline for the duration of the read — a paused terminal readline kept echoing and consuming keystrokes, so the correct passphrase read as incorrect), and its wrong-passphrase message now names the real remedies (unlimited offline attempts; `motebit restore` resets a forgotten passphrase) instead of advising deletion of the config that holds your key and funds. Export also refreshes `~/.motebit/motebit.md` in place, so the snapshot can no longer silently diverge from the live identity after a key change; `motebit doctor` flags any remaining divergence with an advisory warning — the live key is `config.device_public_key`, never the .md, which is a portable snapshot.
+  (The on-disk surface baseline records the refreshed `~/.motebit/motebit.md` path.)
+- Updated dependencies [083867e]
+  - @motebit/state-export-client@0.5.22
+
 ## 1.10.0
 
 ### Minor Changes
