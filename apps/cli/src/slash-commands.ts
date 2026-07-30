@@ -558,10 +558,13 @@ export async function handleSlashCommand(
 
     case "model": {
       // Known models with short aliases
+      // Anthropic ids are the REAL current aliases (verified against the
+      // models catalog 2026-07-29 — #471 found the previous entries were
+      // fabricated: date-suffixed and "-latest" variants that 404).
       const MODEL_ALIASES: Record<string, string> = {
-        opus: "claude-opus-4-6-20250414",
-        sonnet: "claude-sonnet-4-5-latest",
-        haiku: "claude-haiku-4-5-20251001",
+        opus: "claude-opus-5",
+        sonnet: "claude-sonnet-5",
+        haiku: "claude-haiku-4-5",
         "gpt-5.4": "gpt-5.4",
         "gpt-5.4-mini": "gpt-5.4-mini",
         "gpt-5.4-nano": "gpt-5.4-nano",

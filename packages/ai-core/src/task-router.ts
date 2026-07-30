@@ -124,13 +124,17 @@ export function isModelTier(model: string): model is ModelTier {
 export function resolveModelTier(tier: ModelTier, currentModel: string): string {
   // Detect provider family from current model
   if (currentModel.includes("claude") || currentModel.includes("anthropic")) {
+    // Real API aliases, not family names: the previous values
+    // ("claude-opus" etc.) are not servable model ids — a tier switch fed
+    // them to provider.setModel() and 404'd the turn (#471's sibling,
+    // found in the same sweep).
     switch (tier) {
       case "strongest":
-        return "claude-opus";
+        return "claude-opus-5";
       case "default":
-        return "claude-sonnet";
+        return "claude-sonnet-5";
       case "fast":
-        return "claude-haiku";
+        return "claude-haiku-4-5";
     }
   }
 
