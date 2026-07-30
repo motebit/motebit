@@ -170,9 +170,9 @@ describe("isModelTier", () => {
 
 describe("resolveModelTier", () => {
   it("resolves Anthropic family tiers", () => {
-    expect(resolveModelTier("strongest", "claude-sonnet-4-5-20250929")).toBe("claude-opus");
-    expect(resolveModelTier("default", "claude-haiku-3")).toBe("claude-sonnet");
-    expect(resolveModelTier("fast", "anthropic-x")).toBe("claude-haiku");
+    expect(resolveModelTier("strongest", "claude-sonnet-4-5-20250929")).toBe("claude-opus-5");
+    expect(resolveModelTier("default", "claude-haiku-3")).toBe("claude-sonnet-5");
+    expect(resolveModelTier("fast", "anthropic-x")).toBe("claude-haiku-4-5");
   });
   it("resolves OpenAI family tiers", () => {
     expect(resolveModelTier("strongest", "gpt-5.4-mini")).toBe("gpt-5.4");
@@ -213,7 +213,7 @@ describe("withTaskConfig — tier-to-concrete resolution + fallback restore", ()
         seenModel = current;
       },
     );
-    expect(seenModel).toBe("claude-opus");
+    expect(seenModel).toBe("claude-opus-5");
     // restored
     expect(current).toBe("claude-sonnet-4-5");
   });
