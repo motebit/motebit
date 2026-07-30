@@ -1,5 +1,16 @@
 # @motebit/auditor
 
+## 0.0.4
+
+### Patch Changes
+
+- Updated dependencies [083867e]
+  - @motebit/sdk@2.5.4
+  - @motebit/verifier@1.13.2
+  - @motebit/state-export-client@0.5.22
+  - @motebit/molecule-runner@0.0.0-private
+  - @motebit/tools@0.0.0-private
+
 ## 0.0.3
 
 ### Patch Changes

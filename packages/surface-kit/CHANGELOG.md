@@ -1,5 +1,13 @@
 # @motebit/surface-kit
 
+## 0.0.14
+
+### Patch Changes
+
+- Updated dependencies [083867e]
+  - @motebit/sdk@2.5.4
+  - @motebit/mcp-client@0.0.0-private
+
 ## 0.0.13
 
 ### Patch Changes
