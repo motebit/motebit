@@ -583,6 +583,26 @@ export function modelSupportsExtendedThinking(model: string): boolean {
   return /claude-(?:3-7-sonnet|(?:opus|sonnet)-(?:[4-9]|\d\d))/i.test(model);
 }
 
+/**
+ * Models that REJECT classic sampling parameters (`temperature`/`top_p`/
+ * `top_k`) with HTTP 400 — the Opus 4.7+/Claude-5 family, where sampling
+ * params were removed and `thinking: {type:"enabled", budget_tokens}` was
+ * replaced by adaptive thinking.
+ *
+ * Witnessed live 2026-07-29: every CLI turn on claude-opus-5 400'd because
+ * the personality default temperature (0.7) rode every request. The task
+ * router already propagates `undefined` carefully (the 2026-04-18
+ * motebit.com incident — see ResolvedTaskConfig); this guard makes the
+ * illegal request unrepresentable at the body build itself, whatever any
+ * caller configured. Sonnet 5 is included: it rejects NON-default values,
+ * and omitting is the only always-valid shape.
+ */
+export function modelRejectsSamplingParams(model: string): boolean {
+  return /claude-(?:opus-(?:4-[7-9]|[5-9]\b|\d\d)|sonnet-(?:[5-9]\b|\d\d)|fable|mythos)/i.test(
+    model,
+  );
+}
+
 // Action keywords → MotebitState field deltas
 const ACTION_RULES: { pattern: RegExp; updates: Partial<MotebitState> }[] = [
   // Movement / proximity (allow words between verb and direction)
@@ -997,11 +1017,16 @@ export class AnthropicProvider implements StreamingProvider {
     const body: Record<string, unknown> = {
       model: this.config.model,
       max_tokens: this.config.max_tokens ?? 4096,
-      // Only send temperature when the user explicitly configured it. Claude
-      // Opus 4.7+ deprecates the parameter entirely and returns HTTP 400 when
-      // it's present. Omitting it lets each model use its own default; users
-      // who want to tune sampling still can via `config.temperature`.
-      ...(this.config.temperature !== undefined && { temperature: this.config.temperature }),
+      // Only send temperature when the user explicitly configured it AND the
+      // model still accepts it — the Opus 4.7+/Claude-5 family returns HTTP
+      // 400 when the parameter is present at all (witnessed live 2026-07-29:
+      // the CLI's personality default 0.7 400'd every claude-opus-5 turn).
+      // Omitting it lets each model use its own default; users on models
+      // that accept sampling still tune via `config.temperature`.
+      ...(this.config.temperature !== undefined &&
+        !modelRejectsSamplingParams(this.config.model) && {
+          temperature: this.config.temperature,
+        }),
       // Cacheable system blocks (see buildSystemBlocks) — the static prefix
       // caches at 1/10th input cost, the lever for cost on the agentic loop.
       system: this.buildSystemBlocks(contextPack),
@@ -1080,11 +1105,16 @@ export class AnthropicProvider implements StreamingProvider {
     const body: Record<string, unknown> = {
       model: this.config.model,
       max_tokens: this.config.max_tokens ?? 4096,
-      // Only send temperature when the user explicitly configured it. Claude
-      // Opus 4.7+ deprecates the parameter entirely and returns HTTP 400 when
-      // it's present. Omitting it lets each model use its own default; users
-      // who want to tune sampling still can via `config.temperature`.
-      ...(this.config.temperature !== undefined && { temperature: this.config.temperature }),
+      // Only send temperature when the user explicitly configured it AND the
+      // model still accepts it — the Opus 4.7+/Claude-5 family returns HTTP
+      // 400 when the parameter is present at all (witnessed live 2026-07-29:
+      // the CLI's personality default 0.7 400'd every claude-opus-5 turn).
+      // Omitting it lets each model use its own default; users on models
+      // that accept sampling still tune via `config.temperature`.
+      ...(this.config.temperature !== undefined &&
+        !modelRejectsSamplingParams(this.config.model) && {
+          temperature: this.config.temperature,
+        }),
       // Cacheable system blocks (see buildSystemBlocks) — same caching lever as
       // generate(); the streaming path is the one the chat surface actually uses.
       system: this.buildSystemBlocks(contextPack),
@@ -1290,7 +1320,14 @@ export class AnthropicProvider implements StreamingProvider {
     const et = this.config.extendedThinking;
     if (!et || !modelSupportsExtendedThinking(this.config.model)) return;
     const budget = Math.max(1024, Math.floor(et.budgetTokens));
-    body.thinking = { type: "enabled", budget_tokens: budget };
+    // The Opus 4.7+/Claude-5 family removed `budget_tokens` (HTTP 400) —
+    // adaptive thinking is the only on-mode there. The budget shape survives
+    // on the older models that still require it. The budget still sizes the
+    // max_tokens headroom either way: adaptive thinking spends from the same
+    // output allowance.
+    body.thinking = modelRejectsSamplingParams(this.config.model)
+      ? { type: "adaptive" }
+      : { type: "enabled", budget_tokens: budget };
     const configured = typeof body.max_tokens === "number" ? body.max_tokens : 4096;
     body.max_tokens = Math.max(configured, budget + 4096);
     delete body.temperature;
