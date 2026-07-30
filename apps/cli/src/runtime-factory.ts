@@ -82,6 +82,7 @@ import { querySelfKnowledge } from "@motebit/self-knowledge";
 import type { SearchProvider } from "@motebit/tools";
 import type { McpServerConfig } from "@motebit/mcp-client";
 import { dim } from "./colors.js";
+import { createCliLogger } from "./cli-logger.js";
 import type { CliConfig } from "./args.js";
 import { CONFIG_DIR, loadFullConfig } from "./config.js";
 
@@ -772,6 +773,11 @@ export async function createRuntime(
     {
       motebitId,
       mcpServers,
+      // Renderer-aware logger: runtime warnings (delegation poll failures
+      // above all) flow through the terminal renderer as calm status/dim
+      // lines instead of the default console.warn JSON dump that corrupted
+      // the input line mid-edit (#456).
+      logger: createCliLogger(),
       // Persistent blast-radius accumulator — load-bearing for the money
       // meter's LIFETIME ceiling (an in-memory accumulator re-arms the
       // delegator's total bound on every restart). The CLI hosts the

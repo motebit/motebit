@@ -3,26 +3,19 @@
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import { formatBodyAwareness } from "@motebit/ai-core";
 import { action, meta, warn, dim, prompt as promptColor } from "./colors.js";
-import { writeOutput, askQuestion } from "./terminal.js";
+import { writeOutput, writeLine, askQuestion } from "./terminal.js";
+import { startStatus, type StatusHandle } from "./statusline.js";
+import { formatElapsed } from "./status-render.js";
 import { archiveReceipt, renderReceipt } from "./receipt.js";
 import { renderApprovalRequest } from "./approval-render.js";
 import { renderAuthorityDelta } from "./authority-delta-render.js";
 import type { VoiceController } from "./voice.js";
 
-// Animated dots: cycles .  → .. → ... while a tool call is in flight.
-// Returns a stop function that clears the interval and writes " done\n".
-function startDotAnimation(): () => void {
-  let dots = 1;
-  const timer = setInterval(() => {
-    dots = (dots % 3) + 1;
-    // Erase previous dots (max 3 chars) and rewrite
-    writeOutput(`\x1b[${3}D${meta(".".repeat(dots) + " ".repeat(3 - dots))}`);
-  }, 400);
-  return () => {
-    clearInterval(timer);
-    // Erase dots, write " done\n"
-    writeOutput(`\x1b[${3}D${meta("...")} ${meta("done")}\n`);
-  };
+/** The durable scrollback record of a finished tool call. In-flight state
+ * lives on the status row (statusline.ts); scrollback gets one calm line
+ * per completed act, with how long it took. */
+function toolDoneLine(name: string, elapsedMs: number): string {
+  return `  ${action("●")} ${action(name)} ${meta(`· done · ${formatElapsed(0, elapsedMs)}`)}`;
 }
 
 export async function consumeStream(
@@ -37,161 +30,169 @@ export async function consumeStream(
     quorum?: { required: number; approvers: string[]; collected: string[] };
     risk_level?: number;
   } | null = null;
-  let stopAnimation: (() => void) | null = null;
+  let status: StatusHandle | null = null;
+  const stopStatus = (): number => {
+    const elapsed = status?.stop() ?? 0;
+    status = null;
+    return elapsed;
+  };
   let lastCompletedReceiptResult: string | null = null;
   // #457: whether ANY chunk arrived — the caller uses this to guarantee an
   // approval answer never ends in pure silence. Returns true once a chunk
   // is observed (every chunk type renders or deliberately captures).
   let sawAnyChunk = false;
 
-  for await (const chunk of stream) {
-    sawAnyChunk = true;
-    switch (chunk.type) {
-      case "text":
-        writeOutput(chunk.text);
-        break;
+  try {
+    for await (const chunk of stream) {
+      sawAnyChunk = true;
+      switch (chunk.type) {
+        case "text":
+          writeOutput(chunk.text);
+          break;
 
-      case "tool_status":
-        // Owner-facing authority residual — render the exact repair even
-        // for delegation tools (the delta rides only this surface channel;
-        // the model saw the coarse reason). See AuthorityDelta invariants.
-        if (chunk.status === "done" && chunk.missing_authority != null) {
-          if (stopAnimation) {
-            stopAnimation();
-            stopAnimation = null;
+        case "tool_status":
+          // Owner-facing authority residual — render the exact repair even
+          // for delegation tools (the delta rides only this surface channel;
+          // the model saw the coarse reason). See AuthorityDelta invariants.
+          if (chunk.status === "done" && chunk.missing_authority != null) {
+            stopStatus();
+            for (const line of renderAuthorityDelta(chunk.name, chunk.missing_authority)) {
+              writeLine(meta(line));
+            }
+            break;
           }
-          for (const line of renderAuthorityDelta(chunk.name, chunk.missing_authority)) {
-            writeOutput(meta(line) + "\n");
+          // Delegation normally announces itself via delegation_start/complete,
+          // so tool_status is redundant — UNLESS this is the post-approval
+          // execution path, which executes the tool directly and emits ONLY
+          // tool_status. Blanket-skipping delegate_to_agent here meant the one
+          // path that runs after a human approves a PAID hire rendered nothing
+          // at all: the screen went blank for the entire task (#432). Skip only
+          // when a status is already running (delegation_start beat us).
+          if (chunk.name === "delegate_to_agent" && chunk.status === "calling" && status) {
+            break;
+          }
+          if (chunk.status === "calling") {
+            status =
+              chunk.name === "delegate_to_agent"
+                ? startStatus("delegating")
+                : startStatus("running", chunk.name);
+          } else if (status) {
+            // Scrollback gets one durable line per completed act; the
+            // in-flight state lived on the status row. A `done` with no
+            // status in flight is the redundant twin of a delegation_complete
+            // that already rendered — old code printed a stray " done" here.
+            writeLine(toolDoneLine(chunk.name, stopStatus()));
           }
           break;
-        }
-        // Delegation normally announces itself via delegation_start/complete,
-        // so tool_status is redundant — UNLESS this is the post-approval
-        // execution path, which executes the tool directly and emits ONLY
-        // tool_status. Blanket-skipping delegate_to_agent here meant the one
-        // path that runs after a human approves a PAID hire rendered nothing
-        // at all: the screen went blank for the entire task (#432). Skip only
-        // when an animation is already running (delegation_start beat us).
-        if (chunk.name === "delegate_to_agent" && chunk.status === "calling" && stopAnimation) {
+
+        case "approval_request":
+          pendingApproval = {
+            tool_call_id: chunk.tool_call_id,
+            name: chunk.name,
+            args: chunk.args,
+            quorum: chunk.quorum,
+            // Carried so the prompt can name the stakes. Previously dropped —
+            // which is why a money act rendered identically to a read (#432).
+            risk_level: chunk.risk_level,
+          };
           break;
-        }
-        if (chunk.status === "calling") {
-          writeOutput(`\n  ${action("●")} ${action(chunk.name)}${meta("...")}`);
-          stopAnimation = startDotAnimation();
-        } else {
-          if (stopAnimation) {
-            stopAnimation();
-            stopAnimation = null;
-          } else writeOutput(meta(" done") + "\n");
-        }
-        break;
 
-      case "approval_request":
-        pendingApproval = {
-          tool_call_id: chunk.tool_call_id,
-          name: chunk.name,
-          args: chunk.args,
-          quorum: chunk.quorum,
-          // Carried so the prompt can name the stakes. Previously dropped —
-          // which is why a money act rendered identically to a read (#432).
-          risk_level: chunk.risk_level,
-        };
-        break;
+        case "delegation_start":
+          // Guard against a second status when tool_status already started
+          // one (the post-approval path emits tool_status first).
+          if (status) break;
+          status = startStatus("delegating", chunk.tool);
+          break;
 
-      case "delegation_start":
-        // Guard against a second animation when tool_status already started
-        // one (the post-approval path emits tool_status first).
-        if (stopAnimation) break;
-        writeOutput(
-          `\n  ${action("●")} ${dim("[delegating]")} ${action(chunk.tool)}${meta("...")}`,
-        );
-        stopAnimation = startDotAnimation();
-        break;
+        case "task_step_narration":
+          // What it's doing right now, at supervisor granularity — "payment
+          // confirmed onchain, waiting on the worker" is a different emotional
+          // state than animated dots (#456). The status row shows the current
+          // step; scrollback keeps a dim durable echo so a fast next step
+          // doesn't erase the story.
+          status?.step(chunk.text.trim());
+          writeLine(`    ${meta("· " + chunk.text.trim())}`);
+          break;
 
-      case "delegation_complete":
-        if (stopAnimation) {
-          stopAnimation();
-          stopAnimation = null;
-        } else writeOutput(meta(" done") + "\n");
-        // Archive the signed receipt so `/receipt <task-id>` can re-render
-        // it, and emerge a CLI-native rendering right here — the "oh" beat
-        // that proves the delegation actually happened and the signature
-        // checks out locally. Mirrors the web receipt-artifact.
-        if (chunk.full_receipt) {
-          archiveReceipt(chunk.full_receipt);
-          await renderReceipt(chunk.full_receipt, (line) => writeOutput(line + "\n"));
-          if (chunk.full_receipt.status === "completed" && chunk.full_receipt.result) {
-            lastCompletedReceiptResult = chunk.full_receipt.result;
+        case "delegation_complete":
+          if (status) writeLine(toolDoneLine(chunk.tool, stopStatus()));
+          // Archive the signed receipt so `/receipt <task-id>` can re-render
+          // it, and emerge a CLI-native rendering right here — the "oh" beat
+          // that proves the delegation actually happened and the signature
+          // checks out locally. Mirrors the web receipt-artifact.
+          if (chunk.full_receipt) {
+            archiveReceipt(chunk.full_receipt);
+            await renderReceipt(chunk.full_receipt, (line) => writeOutput(line + "\n"));
+            if (chunk.full_receipt.status === "completed" && chunk.full_receipt.result) {
+              lastCompletedReceiptResult = chunk.full_receipt.result;
+            }
           }
-        }
-        break;
+          break;
 
-      case "injection_warning":
-        writeOutput(`\n  ${warn("⚠")} ${warn("suspicious content in " + chunk.tool_name)}\n`);
-        break;
+        case "injection_warning":
+          writeLine(`  ${warn("⚠")} ${warn("suspicious content in " + chunk.tool_name)}`);
+          break;
 
-      case "approval_expired":
-        // #457: an approval submitted after the timeout voided it used to
-        // end with NOTHING on screen — an approved money action with no
-        // rendered outcome. The runtime now emits this typed chunk; say
-        // plainly that nothing executed and how to proceed.
-        if (stopAnimation) {
-          stopAnimation();
-          stopAnimation = null;
-        }
-        writeOutput(
-          `\n  ${warn("[this approval expired before your answer arrived — nothing was executed]")}\n` +
-            `  ${dim(`(${chunk.tool_name} was never run; no money moved. Ask again when ready.)`)}\n`,
-        );
-        break;
+        case "approval_expired":
+          // #457: an approval submitted after the timeout voided it used to
+          // end with NOTHING on screen — an approved money action with no
+          // rendered outcome. The runtime now emits this typed chunk; say
+          // plainly that nothing executed and how to proceed.
+          stopStatus();
+          writeLine(
+            `  ${warn("[this approval expired before your answer arrived — nothing was executed]")}\n` +
+              `  ${dim(`(${chunk.tool_name} was never run; no money moved. Ask again when ready.)`)}`,
+          );
+          break;
 
-      case "approval_voided":
-        // #462: this turn's message set aside a pending approval before the
-        // human answered. Not a refusal, not an expiry — say what happened
-        // and that nothing ran.
-        if (stopAnimation) {
-          stopAnimation();
-          stopAnimation = null;
-        }
-        writeOutput(
-          `\n  ${warn("[your new message set aside the pending approval — nothing was executed]")}\n` +
-            `  ${dim(`(${chunk.tool_name} was never run; no money moved. It can be proposed again.)`)}\n`,
-        );
-        break;
+        case "approval_voided":
+          // #462: this turn's message set aside a pending approval before the
+          // human answered. Not a refusal, not an expiry — say what happened
+          // and that nothing ran.
+          stopStatus();
+          writeLine(
+            `  ${warn("[your new message set aside the pending approval — nothing was executed]")}\n` +
+              `  ${dim(`(${chunk.tool_name} was never run; no money moved. It can be proposed again.)`)}`,
+          );
+          break;
 
-      case "invoke_error":
-        if (stopAnimation) {
-          stopAnimation();
-          stopAnimation = null;
-        }
-        writeOutput(`\n  ${warn("[invoke failed · " + chunk.code + "]")}\n`);
-        if (chunk.message) writeOutput(`  ${dim(chunk.message)}\n`);
-        break;
+        case "invoke_error":
+          stopStatus();
+          writeLine(`  ${warn("[invoke failed · " + chunk.code + "]")}`);
+          if (chunk.message) writeLine(`  ${dim(chunk.message)}`);
+          break;
 
-      case "result": {
-        const result = chunk.result;
-        writeOutput("\n\n");
+        case "result": {
+          const result = chunk.result;
+          stopStatus();
+          writeOutput("\n\n");
 
-        if (result.memoriesFormed.length > 0) {
+          if (result.memoriesFormed.length > 0) {
+            writeOutput(
+              meta(
+                `  [memories: ${result.memoriesFormed.map((m: { content: string }) => m.content).join(", ")}]`,
+              ) + "\n",
+            );
+          }
+
+          const s = result.stateAfter;
           writeOutput(
             meta(
-              `  [memories: ${result.memoriesFormed.map((m: { content: string }) => m.content).join(", ")}]`,
+              `  [state: attention=${s.attention.toFixed(2)} confidence=${s.confidence.toFixed(2)} valence=${s.affect_valence.toFixed(2)} curiosity=${s.curiosity.toFixed(2)}]`,
             ) + "\n",
           );
+          const bodyLine = formatBodyAwareness(result.cues);
+          if (bodyLine) writeOutput(meta(`  ${bodyLine}`) + "\n");
+          writeOutput("\n");
+          break;
         }
-
-        const s = result.stateAfter;
-        writeOutput(
-          meta(
-            `  [state: attention=${s.attention.toFixed(2)} confidence=${s.confidence.toFixed(2)} valence=${s.affect_valence.toFixed(2)} curiosity=${s.curiosity.toFixed(2)}]`,
-          ) + "\n",
-        );
-        const bodyLine = formatBodyAwareness(result.cues);
-        if (bodyLine) writeOutput(meta(`  ${bodyLine}`) + "\n");
-        writeOutput("\n");
-        break;
       }
     }
+  } finally {
+    // The status row must not outlive the stream — a thrown provider or
+    // relay error would otherwise leave a forever-pulsing "delegating"
+    // above the prompt (and its interval alive).
+    stopStatus();
   }
 
   // Handle approval request after stream ends -- deterministic resumption
@@ -207,7 +208,7 @@ export async function consumeStream(
       ...(pendingApproval.quorum ? { quorum: pendingApproval.quorum } : {}),
       ...(opts?.budgetUsd != null ? { budgetUsd: opts.budgetUsd } : {}),
     })) {
-      writeOutput(line + "\n");
+      writeLine(line);
     }
     const answer = await askQuestion(`  ${warn("Allow?")} ${dim("(y/n)")} `);
 
