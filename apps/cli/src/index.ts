@@ -2,7 +2,6 @@ import { DEFAULT_CONFIG } from "@motebit/ai-core";
 import type { MotebitPersonalityConfig } from "@motebit/ai-core";
 import { deriveSyncEncryptionKey, mintAudienceToken } from "@motebit/encryption";
 import { connectMcpServers } from "@motebit/mcp-client";
-import { formatBodyAwareness } from "@motebit/ai-core";
 import { providerAcceptsModel } from "@motebit/sdk";
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
 import { preflightGrant, renderPreflight } from "./grant-preflight.js";
@@ -1090,21 +1089,14 @@ async function main(): Promise<void> {
 
         console.log(`\n${promptColor("mote>")} ${result.response}\n`);
 
+        // Same register as the streaming path (#480): the durable mutation
+        // renders; the state vector lives behind `/state`.
         if (result.memoriesFormed.length > 0) {
           console.log(
             meta(`  [memories: ${result.memoriesFormed.map((m) => m.content).join(", ")}]`),
           );
+          console.log();
         }
-
-        const s = result.stateAfter;
-        console.log(
-          meta(
-            `  [state: attention=${s.attention.toFixed(2)} confidence=${s.confidence.toFixed(2)} valence=${s.affect_valence.toFixed(2)} curiosity=${s.curiosity.toFixed(2)}]`,
-          ),
-        );
-        const bodyLine = formatBodyAwareness(result.cues);
-        if (bodyLine) console.log(meta(`  ${bodyLine}`));
-        console.log();
       } else {
         writeOutput("\n" + promptColor("mote>") + " ");
         const grantOptions = grantPresenter?.delegationForTurn() ?? undefined;
