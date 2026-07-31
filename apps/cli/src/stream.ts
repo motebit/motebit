@@ -1,7 +1,6 @@
 // --- Streaming consumer and approval flow ---
 
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
-import { formatBodyAwareness } from "@motebit/ai-core";
 import { action, meta, warn, dim, prompt as promptColor } from "./colors.js";
 import { writeOutput, writeLine, askQuestion } from "./terminal.js";
 import { startStatus, type StatusHandle } from "./statusline.js";
@@ -192,23 +191,17 @@ export async function consumeStream(
           stopStatus();
           writeOutput("\n\n");
 
+          // Felt-interior: the per-turn record is the durable mutation
+          // (memories formed), not the operation-level readout. The raw
+          // state vector and body cues read as debug output in the product
+          // register (#480) — `/state` remains the deliberate readout.
           if (result.memoriesFormed.length > 0) {
             writeOutput(
               meta(
                 `  [memories: ${result.memoriesFormed.map((m: { content: string }) => m.content).join(", ")}]`,
-              ) + "\n",
+              ) + "\n\n",
             );
           }
-
-          const s = result.stateAfter;
-          writeOutput(
-            meta(
-              `  [state: attention=${s.attention.toFixed(2)} confidence=${s.confidence.toFixed(2)} valence=${s.affect_valence.toFixed(2)} curiosity=${s.curiosity.toFixed(2)}]`,
-            ) + "\n",
-          );
-          const bodyLine = formatBodyAwareness(result.cues);
-          if (bodyLine) writeOutput(meta(`  ${bodyLine}`) + "\n");
-          writeOutput("\n");
           break;
         }
       }

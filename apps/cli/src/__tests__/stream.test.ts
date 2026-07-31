@@ -157,6 +157,32 @@ describe("consumeStream — thinking-status row during model latency (#480)", ()
     expect(starts).toBe(stops);
   });
 
+  it("the result chunk renders no state-vector or body telemetry (#480)", async () => {
+    await consumeStream(chunks({ type: "text", text: "done." }, resultChunk), runtime);
+    const rendered = events
+      .filter(([k]) => k === "out" || k === "line")
+      .map(([, v]) => v)
+      .join("");
+    expect(rendered).not.toContain("[state:");
+    expect(rendered).not.toContain("attention=");
+    expect(rendered).not.toContain("[Body");
+  });
+
+  it("memories formed — the durable mutation — still render after the turn", async () => {
+    const withMemories = {
+      ...(resultChunk as unknown as { result: Record<string, unknown> }),
+      result: {
+        memoriesFormed: [{ content: "Daniel prefers calm software" }],
+        stateAfter: { attention: 0.5, confidence: 0.5, affect_valence: 0, curiosity: 0.5 },
+        cues: [],
+      },
+    } as unknown as StreamChunk;
+    await consumeStream(chunks({ type: "text", text: "noted." }, withMemories), runtime);
+    const rendered = events.map(([, v]) => v).join("");
+    expect(rendered).toContain("[memories: Daniel prefers calm software]");
+    expect(rendered).not.toContain("[state:");
+  });
+
   it("a throwing stream still tears the thinking row down (finally path)", async () => {
     async function* boom(): AsyncGenerator<StreamChunk> {
       yield { type: "text", text: "so" } as StreamChunk;
