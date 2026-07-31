@@ -34,6 +34,33 @@ export function formatContext(context: Record<string, unknown> | undefined): str
   return parts.length > 0 ? ` (${parts.join(" · ")})` : "";
 }
 
+/**
+ * Designed sentences for logger events with product meaning (#480): a known
+ * event renders as one calm sentence in the product register — the
+ * `key=value` context form is the fallback for unknown events, never the
+ * norm. Return null when the context doesn't match the shape the sentence
+ * was written for; the honest fallback is the compact context form, not a
+ * sentence that might lie.
+ */
+const DESIGNED_SENTENCES: Record<
+  string,
+  (ctx: Record<string, unknown> | undefined) => string | null
+> = {
+  "delegation.route_degraded": (ctx) => {
+    if (ctx?.from !== "p2p" || ctx?.to !== "relay") return null;
+    const code = typeof ctx.code === "string" ? ` (${ctx.code})` : "";
+    return `direct payment route unavailable${code} — this task goes through the relay; no onchain payment leaves the wallet`;
+  },
+  "money_meter.volatile_spend_store": () =>
+    "grant spending is metered in memory this session — the lifetime ceiling re-arms on restart",
+  "relay_key_pin.rotated": (ctx) => {
+    const to = typeof ctx?.toKeyPrefix === "string" ? ` (now ${ctx.toKeyPrefix}…)` : "";
+    return `the relay's signing key rotated${to} — the new key is pinned`;
+  },
+  "relay_key_pin.mismatch": () =>
+    "the relay's signing key does not match the pinned key — refusing to trust it",
+};
+
 export function createCliLogger(): RuntimeLogger {
   // Poll-failure attempts per task, session-scoped. Delegations are few;
   // the cap is a leak guard, not a policy.
@@ -56,6 +83,12 @@ export function createCliLogger(): RuntimeLogger {
         } else {
           writeLine(meta(`  · ${note} — task ${taskId.slice(0, 8)}`));
         }
+        return;
+      }
+
+      const designed = DESIGNED_SENTENCES[message]?.(context);
+      if (designed != null) {
+        writeLine(`  ${warn("·")} ${meta(designed)}`);
         return;
       }
 

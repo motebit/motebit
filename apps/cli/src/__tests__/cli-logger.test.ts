@@ -48,13 +48,48 @@ describe("createCliLogger", () => {
     expect(note).toHaveBeenLastCalledWith("relay hiccup, still waiting (attempt 1)");
   });
 
-  it("renders other warnings as a calm line with compact context", () => {
+  it("renders unknown warnings as a calm line with compact context", () => {
     const logger = createCliLogger();
-    logger.warn("delegation.route_degraded", { from: "p2p", to: "relay" });
+    logger.warn("trust bump failed", { peer: "abc123" });
     const line = plain(writeLine.mock.calls[0]![0] as string);
-    expect(line).toContain("delegation.route_degraded");
-    expect(line).toContain("from=p2p");
-    expect(line).toContain("to=relay");
+    expect(line).toContain("trust bump failed");
+    expect(line).toContain("peer=abc123");
+  });
+
+  it("route_degraded renders as a designed sentence, not a key=value dump (#480)", () => {
+    const logger = createCliLogger();
+    logger.warn("delegation.route_degraded", {
+      from: "p2p",
+      to: "relay",
+      code: "p2p_ineligible",
+      message: "peer lacks p2p eligibility",
+    });
+    const line = plain(writeLine.mock.calls[0]![0] as string);
+    expect(line).toContain("direct payment route unavailable (p2p_ineligible)");
+    expect(line).toContain("no onchain payment leaves the wallet");
+    expect(line).not.toContain("from=");
+    expect(line).not.toContain("to=");
+  });
+
+  it("route_degraded with an unexpected shape falls back to the honest context form", () => {
+    const logger = createCliLogger();
+    logger.warn("delegation.route_degraded", { from: "relay", to: "p2p" });
+    const line = plain(writeLine.mock.calls[0]![0] as string);
+    // The p2p→relay sentence must not lie about a shape it wasn't written for
+    expect(line).not.toContain("no onchain payment");
+    expect(line).toContain("from=relay");
+  });
+
+  it("volatile spend store and key-pin events get designed sentences", () => {
+    const logger = createCliLogger();
+    logger.warn("money_meter.volatile_spend_store", { detail: "long injected detail" });
+    logger.warn("relay_key_pin.mismatch", { pinnedKeyPrefix: "aaa", fetchedKeyPrefix: "bbb" });
+    const first = plain(writeLine.mock.calls[0]![0] as string);
+    const second = plain(writeLine.mock.calls[1]![0] as string);
+    expect(first).toContain("re-arms on restart");
+    expect(first).not.toContain("detail=");
+    expect(second).toContain("does not match the pinned key");
+    expect(second).not.toContain("pinnedKeyPrefix=");
   });
 });
 
