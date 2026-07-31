@@ -39,6 +39,8 @@ export function spinnerFrame(frame: number): string {
 
 export function formatElapsed(startedAt: number, nowMs: number): string {
   const totalSec = Math.max(0, Math.floor((nowMs - startedAt) / 1000));
+  // Sub-second acts read as instants, not a suspicious "0s" (#480).
+  if (totalSec === 0) return "<1s";
   if (totalSec < 60) return `${totalSec}s`;
   const min = Math.floor(totalSec / 60);
   const sec = totalSec % 60;

@@ -79,8 +79,14 @@ describe("formatElapsed", () => {
     expect(formatElapsed(0, 92_000)).toBe("1m 32s");
   });
 
+  it("sub-second reads as an instant, not a suspicious 0s (#480)", () => {
+    expect(formatElapsed(0, 400)).toBe("<1s");
+    expect(formatElapsed(0, 999)).toBe("<1s");
+    expect(formatElapsed(0, 1_000)).toBe("1s");
+  });
+
   it("never goes negative on clock skew", () => {
-    expect(formatElapsed(10_000, 5_000)).toBe("0s");
+    expect(formatElapsed(10_000, 5_000)).toBe("<1s");
   });
 });
 

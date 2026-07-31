@@ -111,6 +111,10 @@ export interface TerminalRenderer {
    * appends a newline. For line-shaped records (status echoes, tool
    * completion lines) that must never glue onto streamed text. */
   writeLine(text: string): void;
+  /** Ensure exactly one blank row above the next write. Idempotent — the
+   * vertical-rhythm primitive (#480): callers say "a gap belongs here"
+   * without knowing whether the previous writer already left one. */
+  writeGap(): void;
   readInput(promptText: string): Promise<string>;
   setStatusRow(row: string | null): void;
   handleEvent(event: TerminalEvent): void;
@@ -215,9 +219,26 @@ export function createTerminalRenderer(io: TerminalIO): TerminalRenderer {
   /** Whether raw passthrough output (non-TTY path) is at a line start. */
   let atLineStart = true;
 
+  /** Consecutive newlines ending the scrollback so far, saturated at 2.
+   * Top-of-screen counts as gapped so writeGap never opens with a blank. */
+  let trailing = 2;
+
+  function noteScrollback(flushed: string, tailAfter: string): void {
+    if (tailAfter !== "") {
+      trailing = 0;
+      return;
+    }
+    if (flushed === "") return;
+    let n = 0;
+    for (let i = flushed.length - 1; i >= 0 && flushed[i] === "\n" && n < 2; i--) n++;
+    // A flush that is nothing but newlines extends the existing run.
+    trailing = n === flushed.length ? Math.min(2, trailing + n) : n;
+  }
+
   function writeOutput(text: string): void {
     if (!io.isTTY && statusRow === null && !inputActive && tail === "") {
       if (text.length > 0) atLineStart = text.endsWith("\n");
+      noteScrollback(text, "");
       io.write(text);
       return;
     }
@@ -240,12 +261,18 @@ export function createTerminalRenderer(io: TerminalIO): TerminalRenderer {
       buffer = sliceVisible(buffer, cols, Number.MAX_SAFE_INTEGER);
     }
     tail = buffer;
+    noteScrollback(scrollback, tail);
     commit(scrollback);
   }
 
   function writeLine(text: string): void {
     const midLine = io.isTTY ? tail !== "" : !atLineStart;
     writeOutput((midLine ? "\n" : "") + text + "\n");
+  }
+
+  function writeGap(): void {
+    const need = tail !== "" ? 2 : Math.max(0, 2 - trailing);
+    if (need > 0) writeOutput("\n".repeat(need));
   }
 
   function setStatusRow(row: string | null): void {
@@ -259,6 +286,7 @@ export function createTerminalRenderer(io: TerminalIO): TerminalRenderer {
     const line = inputState.line;
     inputActive = false;
     // Durable echo of the full typed line.
+    trailing = 1;
     commit(inputState.prompt + line + "\n");
     if (inputResolver) {
       const resolve = inputResolver;
@@ -321,6 +349,7 @@ export function createTerminalRenderer(io: TerminalIO): TerminalRenderer {
   return {
     writeOutput,
     writeLine,
+    writeGap,
     readInput,
     setStatusRow,
     handleEvent,
@@ -662,6 +691,15 @@ export function readInput(promptText: string): Promise<string> {
  */
 export function askQuestion(promptText: string): Promise<string> {
   return readInput(promptText);
+}
+
+/**
+ * Ensure exactly one blank row above the next write — the idempotent
+ * vertical-rhythm primitive (#480). Callers mark where a gap belongs
+ * without knowing whether the previous writer already left one.
+ */
+export function writeGap(): void {
+  renderer.writeGap();
 }
 
 /**
