@@ -6,6 +6,16 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./report-shape": {
+      "types": "./dist/report-shape.d.ts",
+      "default": "./dist/report-shape.js"
+    }
+  },
   "scripts": {
     "build": "tsc -b",
     "dev": "tsx watch src/index.ts",
