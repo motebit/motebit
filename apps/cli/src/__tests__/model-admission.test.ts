@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { admitModelForProvider } from "../model-admission.js";
+import { defaultModelForProvider } from "../args.js";
 
 describe("admitModelForProvider — the provider+model pair gate (#471)", () => {
   it("refuses a hosted Claude id on local-server (witnessed direction 2)", () => {
@@ -35,5 +36,26 @@ describe("admitModelForProvider — the provider+model pair gate (#471)", () => 
 
   it("the ollama legacy alias gets the same strictness as local-server", () => {
     expect(admitModelForProvider("ollama", "claude-opus-5").admissible).toBe(false);
+  });
+
+  it("every provider's own default is admissible on that provider — the fallback can never mint an illegal pairing", () => {
+    // 2026-07-31 live find: after a persisted default_provider flip, the
+    // admission yield fell back to config.model, which still carried the
+    // PARSE-time provider's default — `local-server · claude-sonnet-4-6`
+    // on the founder's first 1.11.2 launch. The fix derives the fallback
+    // through defaultModelForProvider; this locks the derived pair as
+    // admissible by construction for every provider.
+    const providers = [
+      "anthropic",
+      "openai",
+      "google",
+      "groq",
+      "deepseek",
+      "local-server",
+      "proxy",
+    ] as const;
+    for (const p of providers) {
+      expect(admitModelForProvider(p, defaultModelForProvider(p)).admissible).toBe(true);
+    }
   });
 });

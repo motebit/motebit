@@ -19,6 +19,10 @@ export type CliProvider =
 export interface CliConfig {
   provider: CliProvider;
   model: string;
+  /** True when the model came from an explicit `--model` flag. An implicit
+   * model must FOLLOW any later provider change (`defaultModelForProvider`)
+   * — an explicit one is the user's word and never silently swapped. */
+  modelExplicit: boolean;
   dbPath: string | undefined;
   noStream: boolean;
   syncUrl: string | undefined;
@@ -221,18 +225,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
   }
   const cliProvider = rawProvider as CliProvider;
 
-  const defaultModel =
-    cliProvider === "local-server"
-      ? "llama3.2"
-      : cliProvider === "openai"
-        ? "gpt-5.4-mini"
-        : cliProvider === "google"
-          ? "gemini-2.5-flash"
-          : cliProvider === "groq"
-            ? "llama-3.3-70b-versatile"
-            : cliProvider === "deepseek"
-              ? "deepseek-chat"
-              : "claude-sonnet-4-6";
+  const defaultModel = defaultModelForProvider(cliProvider);
   const allowedPaths =
     values["allowed-paths"] != null && values["allowed-paths"] !== ""
       ? values["allowed-paths"].split(",").map((p) => p.trim())
@@ -241,6 +234,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
   return {
     provider: cliProvider,
     model: values.model ?? defaultModel,
+    modelExplicit: values.model != null,
     dbPath: values["db-path"],
     noStream: values["no-stream"],
     syncUrl: values["sync-url"],
@@ -567,6 +561,31 @@ Slash commands (in REPL):`,
 
 export function printVersion(): void {
   console.log(VERSION);
+}
+
+/**
+ * The per-provider model default — the ONLY legitimate fallback when no
+ * explicit model survives config resolution. Extracted from the parse path
+ * (2026-07-31 live find): a persisted `default_provider` used to flip the
+ * provider AFTER parse-time defaulting, leaving the OLD provider's default
+ * on `config.model` — bare `motebit` rendered `local-server ·
+ * claude-sonnet-4-6`, the exact illegal pairing the #471 admission exists
+ * to prevent, minted by the fallback path itself. Any code that changes
+ * the provider after parse must re-derive the model through this function
+ * whenever the model wasn't explicit.
+ */
+export function defaultModelForProvider(provider: CliProvider): string {
+  return provider === "local-server"
+    ? "llama3.2"
+    : provider === "openai"
+      ? "gpt-5.4-mini"
+      : provider === "google"
+        ? "gemini-2.5-flash"
+        : provider === "groq"
+          ? "llama-3.3-70b-versatile"
+          : provider === "deepseek"
+            ? "deepseek-chat"
+            : "claude-sonnet-4-6";
 }
 
 export function printBanner(opts: {

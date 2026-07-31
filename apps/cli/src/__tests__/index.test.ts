@@ -44,6 +44,15 @@ describe("parseCliArgs", () => {
     expect(config.model).toBe("mistral");
   });
 
+  it("modelExplicit marks the user's word apart from a derived default", () => {
+    // The 2026-07-31 live find: a persisted default_provider flip must drag
+    // an IMPLICIT model to the new provider's default, but never touch an
+    // explicit --model. The flag is how config resolution tells them apart.
+    expect(parseCliArgs(["--provider", "local-server"]).modelExplicit).toBe(false);
+    expect(parseCliArgs(["--model", "mistral"]).modelExplicit).toBe(true);
+    expect(parseCliArgs([]).modelExplicit).toBe(false);
+  });
+
   it("parses openai provider", () => {
     const config = parseCliArgs(["--provider", "openai"]);
     expect(config.provider).toBe("openai");

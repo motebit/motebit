@@ -32,6 +32,7 @@ const stubRuntime = null as unknown as MotebitRuntime;
 const stubConfig = {
   provider: "anthropic" as const,
   model: "test",
+  modelExplicit: false,
   dbPath: undefined,
   noStream: false,
   syncUrl: undefined,

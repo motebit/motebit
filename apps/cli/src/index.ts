@@ -5,7 +5,14 @@ import { connectMcpServers } from "@motebit/mcp-client";
 import { admitModelForProvider } from "./model-admission.js";
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
 import { preflightGrant, renderPreflight } from "./grant-preflight.js";
-import { parseCliArgs, printHelp, printVersion, printBanner, trimHistory } from "./args.js";
+import {
+  parseCliArgs,
+  printHelp,
+  printVersion,
+  printBanner,
+  trimHistory,
+  defaultModelForProvider,
+} from "./args.js";
 import type { CliConfig } from "./args.js";
 import { loadFullConfig, extractPersonality, persistMotebitPublicKeys, VERSION } from "./config.js";
 import {
@@ -471,6 +478,15 @@ async function main(): Promise<void> {
     const validProviders = ["anthropic", "openai", "google", "local-server", "proxy"] as const;
     if (validProviders.includes(personalityConfig.default_provider)) {
       config.provider = personalityConfig.default_provider;
+      // An implicit model FOLLOWS the provider (2026-07-31 live find): the
+      // parse-time default was derived from the parse-time provider, so a
+      // persisted default_provider flip left the OLD provider's default on
+      // config.model — bare `motebit` rendered `local-server ·
+      // claude-sonnet-4-6`, the illegal pairing minted by the fallback
+      // path itself. An explicit --model is the user's word and stays.
+      if (!config.modelExplicit) {
+        config.model = defaultModelForProvider(config.provider);
+      }
     }
   }
   if (
@@ -485,10 +501,13 @@ async function main(): Promise<void> {
     // check also refuses a hosted-vendor id on local-server (#471: a bare
     // launch with a persisted claude-* default 404'd against ollama — the
     // sdk primitive is deliberately permissive there, the affordance isn't).
-    // The per-provider parse-time default already sits on config.model.
     if (admitModelForProvider(config.provider, personalityConfig.default_model).admissible) {
       config.model = personalityConfig.default_model;
     } else {
+      // The yield target is DERIVED, never trusted: config.model can carry
+      // another provider's default across a provider flip (the live find
+      // above) — re-derive so the fallback is admissible by construction.
+      config.model = defaultModelForProvider(config.provider);
       console.log(
         dim(
           `  [config default_model "${personalityConfig.default_model}" belongs to another provider; using ${config.model} for ${config.provider}]`,
