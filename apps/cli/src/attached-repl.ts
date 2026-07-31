@@ -7,7 +7,15 @@
 
 import type { RuntimeHostClient } from "@motebit/runtime-host";
 import { action, dim, warn, meta, prompt as promptColor } from "./colors.js";
-import { askQuestion, destroyTerminal, readInput, writeLine, writeOutput } from "./terminal.js";
+import {
+  askQuestion,
+  destroyTerminal,
+  readInput,
+  setModeRow,
+  writeLine,
+  writeOutput,
+} from "./terminal.js";
+import { renderModeRow } from "./mode-render.js";
 import { startStatus, type StatusHandle } from "./statusline.js";
 import { formatElapsed } from "./status-render.js";
 import { renderApprovalRequest } from "./approval-render.js";
@@ -193,6 +201,9 @@ export async function runAttachedRepl(client: RuntimeHostClient, motebitId: stri
     `\n  ${dim("Attached to the machine's coordinator runtime")} ${dim(`(pid ${client.coordinatorPid})`)}\n` +
       `  ${dim("This terminal renders; the coordinator acts. /help for what's available.")}\n\n`,
   );
+  // Sibling of the coordinator REPL's mode row (#480): the attached truth
+  // stays visible as chrome, not just as a scrolled-away banner line.
+  setModeRow(renderModeRow({ attachedPid: client.coordinatorPid }));
 
   let closed = false;
   client.onClose(() => {

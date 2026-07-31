@@ -117,6 +117,9 @@ export interface TerminalRenderer {
   writeGap(): void;
   readInput(promptText: string): Promise<string>;
   setStatusRow(row: string | null): void;
+  /** Set (or clear with null) the persistent mode row — current-truth
+   * chrome (model · provider) painted directly above the input row. */
+  setModeRow(row: string | null): void;
   handleEvent(event: TerminalEvent): void;
   /** Repaint in place — the resize path. Idempotent. */
   repaint(): void;
@@ -134,6 +137,9 @@ export function createTerminalRenderer(io: TerminalIO): TerminalRenderer {
    * top row so streamed text and the status/input rows never collide. */
   let tail = "";
   let statusRow: string | null = null;
+  /** Persistent current-truth chrome (model · provider), painted directly
+   * above the input row (#480). The banner stays history; this stays live. */
+  let modeRow: string | null = null;
 
   // What the last commit painted, for exact clearing (widths are VISIBLE
   // widths; cursorCol is where the cursor was parked on the last row).
@@ -183,6 +189,11 @@ export function createTerminalRenderer(io: TerminalIO): TerminalRenderer {
     }
     if (statusRow !== null) {
       const truncated = sliceVisible(statusRow, 0, cols - 1);
+      rows.push(truncated + (io.isTTY ? RESET : ""));
+      widths.push(visibleLength(truncated));
+    }
+    if (modeRow !== null) {
+      const truncated = sliceVisible(modeRow, 0, cols - 1);
       rows.push(truncated + (io.isTTY ? RESET : ""));
       widths.push(visibleLength(truncated));
     }
@@ -282,6 +293,13 @@ export function createTerminalRenderer(io: TerminalIO): TerminalRenderer {
     commit("");
   }
 
+  function setModeRow(row: string | null): void {
+    if (!io.isTTY) return;
+    if (row === modeRow) return;
+    modeRow = row;
+    commit("");
+  }
+
   function submit(): void {
     const line = inputState.line;
     inputActive = false;
@@ -352,6 +370,7 @@ export function createTerminalRenderer(io: TerminalIO): TerminalRenderer {
     writeGap,
     readInput,
     setStatusRow,
+    setModeRow,
     handleEvent,
     repaint: () => commit(""),
     detach,
@@ -710,4 +729,14 @@ export function writeGap(): void {
  */
 export function setStatusRow(row: string | null): void {
   renderer.setStatusRow(row);
+}
+
+/**
+ * Set (or clear, with null) the persistent mode row above the input line —
+ * the live current-truth chrome (model · provider). The banner remains
+ * scrollback history; a `/model` switch updates this row in place (#480).
+ * Content is pre-rendered by mode-render.ts; truncated, never wraps.
+ */
+export function setModeRow(row: string | null): void {
+  renderer.setModeRow(row);
 }
