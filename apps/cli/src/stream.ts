@@ -31,11 +31,25 @@ export async function consumeStream(
     risk_level?: number;
   } | null = null;
   let status: StatusHandle | null = null;
+  // Model-latency cover (#480): the row that answers "is anything happening?"
+  // between the user's Enter and the first token, and again between a tool's
+  // done-line and the model's next words. Kept separate from `status` so the
+  // work-status guards (delegation_start vs tool_status races) never mistake
+  // "thinking" for an in-flight tool.
+  let thinking: StatusHandle | null = null;
+  const stopThinking = (): void => {
+    thinking?.stop();
+    thinking = null;
+  };
+  // Every terminal-outcome path stops both rows — a thrown provider error or
+  // a result chunk must never leave a pulsing "thinking" above the prompt.
   const stopStatus = (): number => {
+    stopThinking();
     const elapsed = status?.stop() ?? 0;
     status = null;
     return elapsed;
   };
+  thinking = startStatus("thinking");
   let lastCompletedReceiptResult: string | null = null;
   // #457: whether ANY chunk arrived — the caller uses this to guarantee an
   // approval answer never ends in pure silence. Returns true once a chunk
@@ -47,6 +61,8 @@ export async function consumeStream(
       sawAnyChunk = true;
       switch (chunk.type) {
         case "text":
+          // The streamed text is its own progress indicator.
+          stopThinking();
           writeOutput(chunk.text);
           break;
 
@@ -59,6 +75,7 @@ export async function consumeStream(
             for (const line of renderAuthorityDelta(chunk.name, chunk.missing_authority)) {
               writeLine(meta(line));
             }
+            thinking = startStatus("thinking");
             break;
           }
           // Delegation normally announces itself via delegation_start/complete,
@@ -72,6 +89,7 @@ export async function consumeStream(
             break;
           }
           if (chunk.status === "calling") {
+            stopThinking();
             status =
               chunk.name === "delegate_to_agent"
                 ? startStatus("delegating")
@@ -82,6 +100,9 @@ export async function consumeStream(
             // status in flight is the redundant twin of a delegation_complete
             // that already rendered — old code printed a stray " done" here.
             writeLine(toolDoneLine(chunk.name, stopStatus()));
+            // The model reads the result before its next words — cover that
+            // gap too, same as the pre-first-token gap.
+            thinking = startStatus("thinking");
           }
           break;
 
@@ -101,6 +122,7 @@ export async function consumeStream(
           // Guard against a second status when tool_status already started
           // one (the post-approval path emits tool_status first).
           if (status) break;
+          stopThinking();
           status = startStatus("delegating", chunk.tool);
           break;
 
@@ -115,7 +137,10 @@ export async function consumeStream(
           break;
 
         case "delegation_complete":
-          if (status) writeLine(toolDoneLine(chunk.tool, stopStatus()));
+          if (status) {
+            writeLine(toolDoneLine(chunk.tool, stopStatus()));
+            thinking = startStatus("thinking");
+          }
           // Archive the signed receipt so `/receipt <task-id>` can re-render
           // it, and emerge a CLI-native rendering right here — the "oh" beat
           // that proves the delegation actually happened and the signature

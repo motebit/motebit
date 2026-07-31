@@ -43,22 +43,34 @@ async function renderStream(
   // (sibling boundary rule): in-flight state lives on the status row,
   // scrollback gets one durable line per completed act.
   let status: StatusHandle | null = null;
+  // Model-latency cover (#480) — same two-row split as stream.ts: `thinking`
+  // fills the gaps before the first token and between a tool's done-line and
+  // the model's next words; `status` is real in-flight work.
+  let thinking: StatusHandle | null = null;
+  const stopThinking = (): void => {
+    thinking?.stop();
+    thinking = null;
+  };
   const stopStatus = (): number => {
+    stopThinking();
     const elapsed = status?.stop() ?? 0;
     status = null;
     return elapsed;
   };
+  thinking = startStatus("thinking");
   try {
     for await (const raw of stream) {
       const chunk = raw as WireChunk;
       switch (chunk.type) {
         case "text":
+          stopThinking();
           if (typeof chunk.text === "string") writeOutput(chunk.text);
           break;
         case "tool_status": {
           const name = chunk.name ?? "tool";
           if (chunk.status === "calling") {
             if (name === "delegate_to_agent" && status) break;
+            stopThinking();
             status =
               name === "delegate_to_agent"
                 ? startStatus("delegating")
@@ -69,6 +81,7 @@ async function renderStream(
             writeLine(
               `  ${action("●")} ${action(name)} ${meta(`· done · ${formatElapsed(0, stopStatus())}`)}`,
             );
+            thinking = startStatus("thinking");
           }
           break;
         }
@@ -81,6 +94,7 @@ async function renderStream(
           break;
         case "delegation_start":
           if (status) break;
+          stopThinking();
           status = startStatus("delegating", chunk.tool ?? "task");
           break;
         case "delegation_complete":
@@ -90,6 +104,7 @@ async function renderStream(
               dim(`[receipt ${chunk.receipt.task_id.slice(0, 8)} · ${chunk.receipt.status ?? ""}]`),
             );
           }
+          thinking = startStatus("thinking");
           break;
         case "injection_warning":
           writeLine(`${warn("⚠")} suspicious content in ${chunk.tool_name ?? "tool"} output`);
