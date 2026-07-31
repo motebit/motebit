@@ -86,7 +86,11 @@ export async function handleReceiptCommand(
     out(warn(`No archived receipt for task_id=${taskId}`));
     return;
   }
+  // renderReceipt no longer emits its own blank bracket (#480) — spacing
+  // belongs to the caller.
+  out("");
   await renderReceipt(receipt, out);
+  out("");
 }
 
 /**
@@ -114,7 +118,9 @@ async function drainInvokeStream(
         if (textBuf.trim()) out(textBuf.trim());
         if (chunk.full_receipt) {
           archiveReceipt(chunk.full_receipt);
+          out("");
           await renderReceipt(chunk.full_receipt, out);
+          out("");
           // Voice speaks only on explicit opt-in + only for completed tasks.
           if (voice && chunk.full_receipt.status === "completed") {
             const spoken = chunk.full_receipt.result ?? "Task complete.";

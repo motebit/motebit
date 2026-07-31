@@ -233,6 +233,61 @@ describe("terminal renderer — owned bottom region", () => {
     expect(vt.count("you>")).toBe(1);
   });
 
+  it("writeGap is idempotent — exactly one blank row, however many callers ask (#480)", () => {
+    const { vt, r } = setup();
+    r.writeOutput("a line\n");
+    r.writeGap();
+    r.writeGap();
+    r.writeGap();
+    r.writeOutput("next line\n");
+    expect(vt.screen()).toBe("a line\n\nnext line");
+  });
+
+  it("writeGap completes a partial line before opening the gap", () => {
+    const { vt, r } = setup();
+    r.writeOutput("streamed text without newline");
+    r.writeGap();
+    r.writeOutput("after\n");
+    expect(vt.screen()).toBe("streamed text without newline\n\nafter");
+  });
+
+  it("writeGap after an already-blank row adds nothing", () => {
+    const { vt, r } = setup();
+    r.writeOutput("done line\n\n");
+    r.writeGap();
+    r.writeOutput("next\n");
+    expect(vt.screen()).toBe("done line\n\nnext");
+  });
+
+  it("writeGap at the top of the screen opens with no blank", () => {
+    const { vt, r } = setup();
+    r.writeGap();
+    r.writeOutput("first\n");
+    expect(vt.screen()).toBe("first");
+  });
+
+  it("writeGap after a submitted input leaves one blank above the reply", () => {
+    const { vt, r } = setup();
+    const p = r.readInput("you> ");
+    for (const ch of "hi") r.handleEvent({ type: "key", key: ch, ctrl: false });
+    r.handleEvent({ type: "key", key: "return", ctrl: false });
+    void p;
+    r.writeGap();
+    r.writeOutput("mote> hello\n");
+    expect(vt.screen()).toBe("you> hi\n\nmote> hello");
+  });
+
+  it("writeGap folds above an active status row and input", () => {
+    const { vt, r } = setup();
+    r.writeOutput("record\n");
+    r.setStatusRow("  · thinking · 1s");
+    void r.readInput("you> ");
+    r.writeGap();
+    r.writeGap();
+    r.writeOutput("next record\n");
+    expect(vt.screen()).toBe("record\n\nnext record\n  · thinking · 1s\nyou>");
+  });
+
   it("paste inserts at the cursor without corrupting the region", () => {
     const { vt, r } = setup();
     void r.readInput("you> ");

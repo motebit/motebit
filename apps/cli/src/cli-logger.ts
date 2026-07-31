@@ -86,15 +86,20 @@ export function createCliLogger(): RuntimeLogger {
         return;
       }
 
+      // One indentation grammar (#480): 2-space records at act level,
+      // 4-space detail nested under a live act — a logger line that fires
+      // while a status is running is detail of that act.
+      const indent = activeStatus() ? "    " : "  ";
+
       const designed = DESIGNED_SENTENCES[message]?.(context);
       if (designed != null) {
-        writeLine(`  ${warn("·")} ${meta(designed)}`);
+        writeLine(`${indent}${warn("·")} ${meta(designed)}`);
         return;
       }
 
       // Everything else: one calm dim line through the renderer — full
       // information, never raw JSON into the input line.
-      writeLine(`  ${warn("·")} ${meta(message + formatContext(context))}`);
+      writeLine(`${indent}${warn("·")} ${meta(message + formatContext(context))}`);
     },
   };
 }

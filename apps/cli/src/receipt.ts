@@ -160,9 +160,11 @@ export async function renderReceipt(
   out: (line: string) => void = (s) => console.log(s),
   trustedAnchor?: Map<string, Uint8Array>,
 ): Promise<{ verified: boolean; error?: string }> {
+  // Vertical rhythm is the CALLER's: the stream consumer brackets with
+  // writeGap(), the /receipt command with its own spacing (#480). Emitting
+  // blanks here doubled up with the callers' spacing.
   const lines = renderReceiptLine(receipt, 0, true);
   const header = `${dim("─ receipt ")}${dim("·")} ${cyan(shortHash(receipt.task_id))}`;
-  out("");
   out(header);
   for (const line of lines) out(line);
 
@@ -201,7 +203,6 @@ export async function renderReceipt(
       )}${errorMsg ? dim(" · " + errorMsg) : ""}`,
     );
   }
-  out("");
 
   const ret: { verified: boolean; error?: string } = { verified: verifiedFlag };
   if (errorMsg !== undefined) ret.error = errorMsg;

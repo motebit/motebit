@@ -26,6 +26,7 @@ vi.mock("../statusline.js", () => ({ startStatus }));
 vi.mock("../terminal.js", () => ({
   writeOutput: (s: string) => events.push(["out", s]),
   writeLine: (s: string) => events.push(["line", s]),
+  writeGap: () => events.push(["gap", ""]),
   askQuestion: async () => "n",
 }));
 vi.mock("../receipt.js", () => ({

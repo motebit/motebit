@@ -2,7 +2,7 @@
 
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import { action, meta, warn, dim, prompt as promptColor } from "./colors.js";
-import { writeOutput, writeLine, askQuestion } from "./terminal.js";
+import { writeOutput, writeLine, writeGap, askQuestion } from "./terminal.js";
 import { startStatus, type StatusHandle } from "./statusline.js";
 import { formatElapsed } from "./status-render.js";
 import { archiveReceipt, renderReceipt } from "./receipt.js";
@@ -146,7 +146,9 @@ export async function consumeStream(
           // checks out locally. Mirrors the web receipt-artifact.
           if (chunk.full_receipt) {
             archiveReceipt(chunk.full_receipt);
+            writeGap();
             await renderReceipt(chunk.full_receipt, (line) => writeOutput(line + "\n"));
+            writeGap();
             if (chunk.full_receipt.status === "completed" && chunk.full_receipt.result) {
               lastCompletedReceiptResult = chunk.full_receipt.result;
             }
@@ -189,18 +191,19 @@ export async function consumeStream(
         case "result": {
           const result = chunk.result;
           stopStatus();
-          writeOutput("\n\n");
+          writeGap();
 
           // Felt-interior: the per-turn record is the durable mutation
           // (memories formed), not the operation-level readout. The raw
           // state vector and body cues read as debug output in the product
           // register (#480) — `/state` remains the deliberate readout.
           if (result.memoriesFormed.length > 0) {
-            writeOutput(
+            writeLine(
               meta(
                 `  [memories: ${result.memoriesFormed.map((m: { content: string }) => m.content).join(", ")}]`,
-              ) + "\n\n",
+              ),
             );
+            writeGap();
           }
           break;
         }

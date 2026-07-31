@@ -80,6 +80,19 @@ describe("createCliLogger", () => {
     expect(line).toContain("from=relay");
   });
 
+  it("a logger line during a live act nests at 4 spaces; at rest it sits at 2 (#480)", () => {
+    const logger = createCliLogger();
+    activeStatus.mockReturnValue({ note: vi.fn(), step: vi.fn(), stop: vi.fn() });
+    logger.warn("delegation.route_degraded", { from: "p2p", to: "relay" });
+    activeStatus.mockReturnValue(null);
+    logger.warn("trust bump failed", { peer: "abc" });
+    const inAct = plain(writeLine.mock.calls[0]![0] as string);
+    const atRest = plain(writeLine.mock.calls[1]![0] as string);
+    expect(inAct.startsWith("    ·")).toBe(true);
+    expect(atRest.startsWith("  ·")).toBe(true);
+    expect(atRest.startsWith("    ")).toBe(false);
+  });
+
   it("volatile spend store and key-pin events get designed sentences", () => {
     const logger = createCliLogger();
     logger.warn("money_meter.volatile_spend_store", { detail: "long injected detail" });
