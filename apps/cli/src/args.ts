@@ -387,7 +387,10 @@ export const COMMANDS: CommandEntry[] = [
   { usage: "/proposal <id> [accept|reject|counter]", desc: "Respond to a proposal" },
   { usage: "/operator", desc: "Show operator mode status" },
   { usage: "/invoke <cap> <prompt>", desc: "Invoke a capability deterministically (no AI loop)" },
-  { usage: "/receipt <task-id>", desc: "Re-render an archived receipt (offline-verified)" },
+  {
+    usage: "/receipt [task-id-prefix]",
+    desc: "Re-render an archived receipt (offline-verified); no arg = latest",
+  },
   { usage: "/voice [on|off]", desc: "Toggle TTS voice output (opt-in, off by default)" },
   { usage: "/say <text>", desc: "Speak text via TTS (requires voice provider)" },
   { usage: "/skills", desc: "List installed skills with provenance badges" },

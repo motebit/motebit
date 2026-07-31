@@ -330,4 +330,33 @@ describe("terminal renderer — owned bottom region", () => {
     r.handleEvent({ type: "paste", text: "XY" });
     expect(vt.screen()).toBe("you> aXYb");
   });
+
+  it("finalize clears the region so exit lines land on their own row (shutdown glue)", () => {
+    const { vt, r } = setup(60);
+    r.writeOutput("Goodbye!\n");
+    r.setModeRow("  ── llama3.2 · local-server");
+    void r.readInput("you> ");
+    r.finalize();
+    // The exit path writes directly to the terminal after finalize — the
+    // 2026-07-30 live pass witnessed it gluing onto the mode row.
+    vt.write("Synced on exit: pushed 0, pulled 0\n");
+    expect(vt.screen()).toBe("Goodbye!\nyou>\nSynced on exit: pushed 0, pulled 0");
+    expect(vt.screen()).not.toContain("local-serverSynced");
+  });
+
+  it("finalize preserves typed input as history instead of erasing it", () => {
+    const { vt, r } = setup(60);
+    void r.readInput("you> ");
+    type(r, "half-typed thought");
+    r.finalize();
+    vt.write("done\n");
+    expect(vt.screen()).toBe("you> half-typed thought\ndone");
+  });
+
+  it("finalize is idempotent and safe with nothing painted", () => {
+    const { vt, r } = setup(60);
+    r.finalize();
+    r.finalize();
+    expect(vt.screen()).toBe("");
+  });
 });

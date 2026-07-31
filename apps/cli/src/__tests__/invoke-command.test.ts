@@ -201,6 +201,56 @@ describe("handleReceiptCommand", () => {
     expect(joined).toContain(receipt.task_id.slice(0, 12));
     expect(joined).toContain("verified");
   });
+
+  it("resolves a unique prefix — the render truncates ids, so the visible chars must work", async () => {
+    const { receipt } = await makeSignedReceipt({
+      task_id: "c9c302ee-8cf4-4a51-9d33-000000000001",
+    });
+    archiveReceipt(receipt);
+
+    const out: string[] = [];
+    // Exactly what the user can read off the rendered receipt (shortHash = 12 chars).
+    await handleReceiptCommand("c9c302ee-8cf", { out: (line) => out.push(line) });
+    expect(out.join("\n")).toContain("verified");
+  });
+
+  it("strips a trailing ellipsis pasted from the rendered id", async () => {
+    const { receipt } = await makeSignedReceipt({
+      task_id: "c9c302ee-8cf4-4a51-9d33-000000000001",
+    });
+    archiveReceipt(receipt);
+
+    const out: string[] = [];
+    await handleReceiptCommand("c9c302ee-8cf…", { out: (line) => out.push(line) });
+    expect(out.join("\n")).toContain("verified");
+  });
+
+  it("lists candidates on an ambiguous prefix instead of guessing", async () => {
+    const a = await makeSignedReceipt({ task_id: "aaaa-1111" });
+    const b = await makeSignedReceipt({ task_id: "aaaa-2222" });
+    archiveReceipt(a.receipt);
+    archiveReceipt(b.receipt);
+
+    const out: string[] = [];
+    await handleReceiptCommand("aaaa", { out: (line) => out.push(line) });
+    const joined = out.join("\n");
+    expect(joined).toContain("matches 2 receipts");
+    expect(joined).toContain("aaaa-1111");
+    expect(joined).toContain("aaaa-2222");
+  });
+
+  it("no-arg re-renders the latest receipt of the session", async () => {
+    const first = await makeSignedReceipt({ task_id: "task-first" });
+    const second = await makeSignedReceipt({ task_id: "task-second" });
+    archiveReceipt(first.receipt);
+    archiveReceipt(second.receipt);
+
+    const out: string[] = [];
+    await handleReceiptCommand("", { out: (line) => out.push(line) });
+    const joined = out.join("\n");
+    expect(joined).toContain("task-second");
+    expect(joined).not.toContain("task-first");
+  });
 });
 
 // ---------------------------------------------------------------------------
