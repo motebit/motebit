@@ -3,6 +3,7 @@
 import type { MotebitRuntime, ReflectionResult, RelayConfig } from "@motebit/runtime";
 import type { TokenAudience } from "@motebit/sdk";
 import { isTokenAudience, fromMicro, modelVendorHint } from "@motebit/sdk";
+import { discoverModels } from "@motebit/ai-core";
 import { admitModelForProvider } from "./model-admission.js";
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
 import { renderIdentityCard } from "./subcommands/id.js";
@@ -574,6 +575,22 @@ export async function handleSlashCommand(
         mistral: "mistral",
       };
 
+      // Live catalog (#475): the canonical model list lives OUTSIDE the repo
+      // — fetch it from the active provider so the list shown IS the list
+      // served. The static alias table demotes to name resolution + offline
+      // fallback, clearly marked. Soft key read: a missing key means the
+      // catalog falls back, never a hard exit.
+      const envKey =
+        config.provider === "openai"
+          ? process.env["OPENAI_API_KEY"]
+          : process.env["ANTHROPIC_API_KEY"];
+      const catalog = await discoverModels({
+        provider: config.provider,
+        ...(envKey != null && envKey !== "" ? { apiKey: envKey } : {}),
+        ...(config.provider === "local-server" ? { baseUrl: "http://127.0.0.1:11434" } : {}),
+      });
+      const liveIds = catalog.source === "live" ? new Set(catalog.models.map((m) => m.id)) : null;
+
       // Provider-aware list (#471): every row names its provider; rows the
       // ACTIVE provider can't serve render dim with the repair spelled out —
       // the affordance must not offer a switch that cannot work.
@@ -582,6 +599,17 @@ export async function handleSlashCommand(
         return hint === "local" ? "local-server" : hint;
       };
       const showModelList = (current: string) => {
+        if (catalog.source === "live") {
+          const col = Math.max(...catalog.models.map((m) => m.id.length)) + 2;
+          for (const m of catalog.models) {
+            const active = m.id === current;
+            const marker = active ? green(" ●") : "  ";
+            const gap = " ".repeat(Math.max(1, col - m.id.length));
+            console.log(`${marker} ${cyan(m.id)}${gap}${dim(m.displayName ?? "")}`);
+          }
+          console.log(dim(`\n  live from ${config.provider}`));
+          return;
+        }
         const col = Math.max(...Object.keys(MODEL_ALIASES).map((k) => k.length)) + 2;
         for (const [alias, modelId] of Object.entries(MODEL_ALIASES)) {
           const active = modelId === current || alias === current;
@@ -600,6 +628,9 @@ export async function handleSlashCommand(
             );
           }
         }
+        console.log(
+          dim(`\n  offline list — live catalog unavailable (${catalog.fallbackReason ?? "?"})`),
+        );
       };
 
       if (!args) {
@@ -611,7 +642,8 @@ export async function handleSlashCommand(
       }
       const input = args.toLowerCase();
       const resolved = MODEL_ALIASES[input];
-      const isFullId = Object.values(MODEL_ALIASES).includes(args);
+      // A live catalog admits full ids the alias table never knew about.
+      const isFullId = Object.values(MODEL_ALIASES).includes(args) || (liveIds?.has(args) ?? false);
       if (!resolved && !isFullId) {
         console.log(`\nUnknown model: ${cyan(args)}\n`);
         showModelList(runtime.currentModel ?? "");
@@ -619,10 +651,17 @@ export async function handleSlashCommand(
         break;
       }
       const modelId = resolved ?? args;
+      // Live-membership admission first (#475): the provider just told us
+      // what it serves — an id outside that list cannot work, whatever the
+      // offline heuristic thinks.
+      if (liveIds != null && !liveIds.has(modelId)) {
+        console.log(
+          `\n  ${warn(`${modelId} is not served by ${config.provider} right now — /model lists what is`)}\n`,
+        );
+        break;
+      }
       // Pre-flight admission (#471, intelligence-pluggability commitment #1):
-      // a switch the active provider can't serve refuses with the repair —
-      // it must not rename the model, move the marker, or persist a default
-      // that bricks the next launch.
+      // the offline heuristic — load-bearing when the catalog fell back.
       const admission = admitModelForProvider(config.provider, modelId);
       if (!admission.admissible) {
         console.log(`\n  ${warn(admission.teach ?? "model not servable on this provider")}\n`);
