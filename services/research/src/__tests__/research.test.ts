@@ -1294,3 +1294,123 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe("research — empty-report guard (#479)", () => {
+  beforeEach(() => {
+    mockCreate.mockReset();
+  });
+
+  const factory = () =>
+    makeFactory(
+      new Map([
+        ["web-search", new StubAtomAdapter([])],
+        ["read-url", new StubAtomAdapter([])],
+      ]),
+    );
+
+  it("an empty synthesis response triggers one tool-free re-synthesis", async () => {
+    mockCreate
+      .mockResolvedValueOnce({ content: [] }) // end_turn with zero text blocks — the live shape
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Recovered report." }] });
+
+    const result = await research("q", { ...baseConfig, adapterFactory: factory() });
+    expect(result.report).toBe("Recovered report.");
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+    // The retry is synthesis-only: no tools offered, explicit no-tools nudge
+    const retryParams = mockCreate.mock.calls[1]![0] as {
+      tools?: unknown;
+      messages: Array<{ role: string; content: unknown }>;
+    };
+    expect(retryParams.tools).toBeUndefined();
+    expect(retryParams.messages[retryParams.messages.length - 1]!.content).toContain(
+      "no report text",
+    );
+  });
+
+  it("a still-empty retry throws instead of completing an empty artifact", async () => {
+    mockCreate
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "   " }] }) // whitespace-only counts as empty
+      .mockResolvedValueOnce({ content: [] });
+
+    await expect(research("q", { ...baseConfig, adapterFactory: factory() })).rejects.toThrow(
+      "empty report body",
+    );
+  });
+
+  it("a normal report never triggers the retry", async () => {
+    mockCreate.mockResolvedValueOnce({ content: [{ type: "text", text: "Fine." }] });
+    const result = await research("q", { ...baseConfig, adapterFactory: factory() });
+    expect(result.report).toBe("Fine.");
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("the cap-hit forced synthesis is guarded too, and retry usage is billed", async () => {
+    const receipt = makeReceipt({
+      task_id: "search-cap",
+      motebit_id: "web-search-agent",
+      result: "results",
+      signature: "sig-cap",
+    });
+    const ws = new StubAtomAdapter([receipt]);
+    const ru = new StubAtomAdapter([]);
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [
+          { type: "tool_use", id: "tu-1", name: "motebit_web_search", input: { query: "q" } },
+        ],
+      })
+      // Tool budget (1) exhausted → forced synthesis comes back EMPTY…
+      .mockResolvedValueOnce({ content: [], usage: { input_tokens: 3, output_tokens: 0 } })
+      // …and the guard's tool-free retry recovers, with billable usage.
+      .mockResolvedValueOnce({
+        content: [{ type: "text", text: "Capped but recovered." }],
+        usage: { input_tokens: 10, output_tokens: 5 },
+      });
+
+    const result = await research("q", {
+      ...baseConfig,
+      maxToolCalls: 1,
+      adapterFactory: makeFactory(
+        new Map([
+          ["web-search", ws],
+          ["read-url", ru],
+        ]),
+      ),
+    });
+    expect(result.report).toBe("Capped but recovered.");
+    expect(mockCreate).toHaveBeenCalledTimes(3);
+    // Retry tokens flow into the operator cost estimate
+    expect(result.cost_estimate_usd).toBeGreaterThan(0);
+  });
+
+  it("a usage-less retry response (mock shape) still recovers on the cap-hit path", async () => {
+    const receipt = makeReceipt({
+      task_id: "search-cap2",
+      motebit_id: "web-search-agent",
+      result: "results",
+      signature: "sig-cap2",
+    });
+    const ws = new StubAtomAdapter([receipt]);
+    const ru = new StubAtomAdapter([]);
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [
+          { type: "tool_use", id: "tu-1", name: "motebit_web_search", input: { query: "q" } },
+        ],
+      })
+      .mockResolvedValueOnce({ content: [] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Recovered, no usage." }] });
+
+    const result = await research("q", {
+      ...baseConfig,
+      maxToolCalls: 1,
+      adapterFactory: makeFactory(
+        new Map([
+          ["web-search", ws],
+          ["read-url", ru],
+        ]),
+      ),
+    });
+    expect(result.report).toBe("Recovered, no usage.");
+  });
+});

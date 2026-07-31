@@ -205,6 +205,15 @@ async function main(): Promise<void> {
         let delegationReceipts: Record<string, unknown>[] = [];
         try {
           const r = await research(prompt, researchConfig);
+          // #479 backstop at the signing seam: research() already refuses an
+          // empty synthesis, but the receipt is signed HERE — a completed
+          // receipt over an empty body must be structurally impossible, not
+          // a library courtesy (composition-preserves-enforcement).
+          if (r.report.trim() === "") {
+            throw new Error(
+              "empty report body — refusing to sign a completed receipt over an empty artifact",
+            );
+          }
           log(
             `research complete: ${r.report.length} chars, ${r.recall_self_count} interior, ${r.search_count} searches, ${r.fetch_count} fetches, ${r.citations.length} citations`,
           );

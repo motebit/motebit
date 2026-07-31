@@ -318,12 +318,22 @@ async function checkResearcher(
   // and run the structural provenance discipline.
   try {
     const payload = JSON.parse(String(receipt["result"] ?? "{}")) as {
+      report?: string;
       citations?: Array<{
         receipt_task_id?: string;
         excerpt?: string;
         provenance?: { digest?: { algorithm?: string; value?: string }; span?: string };
       }>;
     };
+    // #479: a completed receipt over an empty report body is worse than an
+    // honest failure — the purchased artifact is the report; citations alone
+    // are scaffolding. Non-empty body is a Researcher conformance criterion.
+    const reportChars = (payload.report ?? "").trim().length;
+    record(
+      "research: report body non-empty",
+      reportChars > 0 ? "PASS" : "FAIL",
+      `${reportChars} chars`,
+    );
     const nested = (receipt["delegation_receipts"] ?? []) as Array<{ task_id?: string }>;
     const nestedIds = new Set(nested.map((r) => r.task_id).filter(Boolean));
     const citations = payload.citations ?? [];
