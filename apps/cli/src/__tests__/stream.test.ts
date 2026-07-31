@@ -30,8 +30,8 @@ vi.mock("../terminal.js", () => ({
   askQuestion: async () => "n",
 }));
 vi.mock("../receipt.js", () => ({
-  archiveReceipt: () => {},
-  renderReceipt: async () => {},
+  archiveReceipt: (r: { task_id?: string }) => events.push(["archive", r.task_id ?? ""]),
+  renderReceipt: async (r: { task_id?: string }) => events.push(["receipt", r.task_id ?? ""]),
 }));
 
 import { consumeStream } from "../stream.js";
@@ -182,6 +182,52 @@ describe("consumeStream — thinking-status row during model latency (#480)", ()
     const rendered = events.map(([, v]) => v).join("");
     expect(rendered).toContain("[memories: Daniel prefers calm software]");
     expect(rendered).not.toContain("[state:");
+  });
+
+  it("the #493 receipt beat composes: delegation_complete + stray done = one done-line, one receipt", async () => {
+    // The runtime now emits delegation_complete (with full_receipt) before
+    // the tool_status done twin on the delegate_to_agent path. The CLI must
+    // render ONE done-line, archive + render the receipt, and swallow the
+    // stray done — the same guard the MCP path exercised.
+    const fullReceipt = {
+      task_id: "task-493",
+      motebit_id: "worker-1",
+      status: "completed",
+      tools_used: ["research"],
+      result: "the report",
+      signature: "sig",
+    };
+    await consumeStream(
+      chunks(
+        { type: "tool_status", name: "delegate_to_agent", status: "calling" },
+        {
+          type: "delegation_complete",
+          server: "relay",
+          tool: "research",
+          receipt: { task_id: "task-493", status: "completed", tools_used: ["research"] },
+          full_receipt: fullReceipt,
+        } as unknown as StreamChunk,
+        { type: "tool_status", name: "delegate_to_agent", status: "done", result: "ok" },
+        resultChunk,
+      ),
+      runtime,
+    );
+    // Exactly one done-line (the delegation_complete's), labeled by capability
+    const doneLines = events.filter(([k, v]) => k === "line" && v.includes("done"));
+    expect(doneLines).toHaveLength(1);
+    expect(doneLines[0]![1]).toContain("research");
+    // The receipt beat fired: archived + rendered
+    expect(events).toContainEqual(["archive", "task-493"]);
+    expect(events).toContainEqual(["receipt", "task-493"]);
+    // Status discipline held: delegating stopped once, thinking restarted after
+    expect(statusTrace()).toEqual([
+      "status:thinking",
+      "stop:thinking",
+      "status:delegating",
+      "stop:delegating",
+      "status:thinking",
+      "stop:thinking",
+    ]);
   });
 
   it("a throwing stream still tears the thinking row down (finally path)", async () => {

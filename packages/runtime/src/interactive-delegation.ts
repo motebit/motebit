@@ -514,4 +514,21 @@ export class InteractiveDelegationManager {
   pushReceipt(receipt: ExecutionReceipt): void {
     this.receipts.push(receipt);
   }
+
+  /**
+   * Non-draining view of the stash for the streaming layer's
+   * `delegation_complete` emission (#493): mark the count before a
+   * `delegate_to_agent` call, peek what arrived after it. MUST NOT drain —
+   * `getAndResetReceipts` composes the same bucket into the parent
+   * receipt's `delegation_receipts` chain, and a draining reader here
+   * would silently sever that chain (composition-preserves-enforcement).
+   */
+  get stashedReceiptCount(): number {
+    return this.receipts.length;
+  }
+
+  /** See {@link stashedReceiptCount} — the peek half of the pair. */
+  peekReceiptsSince(count: number): ExecutionReceipt[] {
+    return this.receipts.slice(count);
+  }
 }

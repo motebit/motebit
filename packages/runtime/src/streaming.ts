@@ -131,6 +131,21 @@ export interface StreamingDeps {
   approvalTimeoutMs: number;
   /** Redact secrets from arbitrary text (defense-in-depth at the streaming boundary). */
   redactText(text: string): string;
+  /**
+   * #493: non-draining view of the interactive-delegation receipt stash,
+   * so the streaming layer can emit `delegation_complete` (+ the signed
+   * `full_receipt`) when a `delegate_to_agent` tool completes — the
+   * AI-loop hire path's receipt beat, absent on both routes until now
+   * (the tool returns its result as plain output and stashes the receipt
+   * only for parent-chain composition). PEEK, never drain: draining here
+   * would sever the parent receipt's `delegation_receipts` chain
+   * (composition-preserves-enforcement). Optional for source-compat;
+   * absent deps simply don't emit the beat.
+   */
+  delegationReceiptStash?: {
+    count(): number;
+    peekSince(count: number): import("@motebit/sdk").ExecutionReceipt[];
+  };
   /** Motebit ID. */
   motebitId: string;
   /**
@@ -404,6 +419,12 @@ export class StreamingManager {
       { toolName: string; args: Record<string, unknown>; startedAt: number }
     >();
 
+    // #493: stash watermark for the in-flight delegate_to_agent call.
+    // Tool calls execute sequentially within a stream, so a single mark
+    // (set on "calling", read+cleared on "done") is sufficient and does
+    // not depend on tool_call_id being present.
+    let delegateStashMark: number | null = null;
+
     for await (let chunk of stream) {
       // Deferred memory-formation chunks are an internal runtime
       // protocol handled by `MotebitRuntime._catchDeferredFormationChunks`
@@ -444,6 +465,11 @@ export class StreamingManager {
           if (motebitServer) {
             this.deps.setDelegating(true);
             yield { type: "delegation_start", server: motebitServer, tool: chunk.name };
+          }
+          // #493: watermark the receipt stash before a delegate_to_agent
+          // call so the matching "done" can peek exactly what it stashed.
+          if (chunk.name === "delegate_to_agent") {
+            delegateStashMark = this.deps.delegationReceiptStash?.count() ?? null;
           }
         } else if (chunk.status === "done") {
           // Defense-in-depth: redact secrets from tool results at the
@@ -538,6 +564,38 @@ export class StreamingManager {
               receipt: receiptSummary,
               full_receipt: fullReceipt,
             };
+          }
+          // #493: the AI-loop hire path's receipt beat. delegate_to_agent
+          // returns its result as plain tool output and stashes the
+          // worker's signed receipt only for parent-chain composition —
+          // no producer ever emitted delegation_complete here, so the one
+          // path a human uses to HIRE never rendered the receipt (both
+          // routes; witnessed on the 1.11.1 soak, #479). Peek (never
+          // drain) the receipts stashed during THIS call and forward
+          // them; this yields BEFORE the tool_status done chunk below,
+          // the same ordering the MCP path produces, so consumers' guard
+          // for the stray-done twin already composes.
+          if (chunk.name === "delegate_to_agent" && delegateStashMark != null) {
+            const mark = delegateStashMark;
+            delegateStashMark = null;
+            const stashed = this.deps.delegationReceiptStash?.peekSince(mark) ?? [];
+            for (const receipt of stashed) {
+              yield {
+                type: "delegation_complete",
+                server: "relay",
+                tool: receipt.tools_used?.[0] ?? "delegate_to_agent",
+                ...(typeof receipt.task_id === "string" && typeof receipt.status === "string"
+                  ? {
+                      receipt: {
+                        task_id: receipt.task_id,
+                        status: receipt.status,
+                        tools_used: receipt.tools_used ?? [],
+                      },
+                    }
+                  : {}),
+                full_receipt: receipt,
+              };
+            }
           }
         }
       }
@@ -730,6 +788,13 @@ export class StreamingManager {
       if (approved) {
         // Execute the tool directly
         yield { type: "tool_status" as const, name: pending.toolName, status: "calling" as const };
+        // #493: watermark the receipt stash — the post-approval path is the
+        // highest-stakes render of the receipt beat (a human just approved
+        // a spend; the signed receipt is the outcome #457 promised them).
+        const approvedStashMark =
+          pending.toolName === "delegate_to_agent"
+            ? (this.deps.delegationReceiptStash?.count() ?? null)
+            : null;
         const toolRegistry = this.deps.getToolRegistry();
         const result = await toolRegistry.execute(pending.toolName, pending.args);
 
@@ -742,6 +807,31 @@ export class StreamingManager {
             tool_name: pending.toolName,
             patterns: check.injectionPatterns!,
           };
+        }
+
+        // #493: emit the receipt beat BEFORE the done chunk — the same
+        // delegation_complete-then-stray-done ordering the MCP path
+        // produces, which every consumer's twin guard already handles.
+        // Peek, never drain (parent-chain composition owns the drain).
+        if (approvedStashMark != null) {
+          const stashed = this.deps.delegationReceiptStash?.peekSince(approvedStashMark) ?? [];
+          for (const receipt of stashed) {
+            yield {
+              type: "delegation_complete" as const,
+              server: "relay",
+              tool: receipt.tools_used?.[0] ?? "delegate_to_agent",
+              ...(typeof receipt.task_id === "string" && typeof receipt.status === "string"
+                ? {
+                    receipt: {
+                      task_id: receipt.task_id,
+                      status: receipt.status,
+                      tools_used: receipt.tools_used ?? [],
+                    },
+                  }
+                : {}),
+              full_receipt: receipt,
+            };
+          }
         }
 
         yield {
