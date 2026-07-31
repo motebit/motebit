@@ -3,17 +3,21 @@
  *
  * The screen splits into two regions:
  *   - scrollback (above): append-only, plain prints, never edited
- *   - the owned bottom region: up to three non-wrapping rows —
- *     a pending partial output line, a status row, and the input row
+ *   - the owned bottom region: a pending partial output line, a status row,
+ *     and the input row
  *
  * Every mutation goes through one `commit()`: clear the previously painted
  * region, append any completed scrollback, repaint the region rows, park the
- * cursor. Because region rows are truncated/h-scrolled to the terminal width
- * they NEVER soft-wrap, so "how many rows do I move up to clear" has an exact
- * answer — including across a resize, where the clear recomputes row heights
- * at the new width under the macOS reflow model (#455: resize is a repaint,
- * never a fresh print). Repaints are wrapped in synchronized-output markers
- * (ESC[?2026) so a repaint is never seen half-done.
+ * cursor. The tail and status rows are truncated to the terminal width and
+ * never soft-wrap; the input row is one LOGICAL row of arbitrary width that
+ * the terminal soft-wraps across as many visual rows as it needs (#480:
+ * wrapped display replaced the h-scroll window). Clearing stays exact
+ * because visual height is recomputable — `rowsAt(width, cols)` — and the
+ * cursor parks via the same math (`cursorVisRow`), including across a
+ * resize, where the clear recomputes row heights at the new width under the
+ * macOS reflow model (#455: resize is a repaint, never a fresh print).
+ * Repaints are wrapped in synchronized-output markers (ESC[?2026) so a
+ * repaint is never seen half-done.
  *
  * stream.ts, the scheduler, and the injected runtime logger all write through
  * writeOutput() so output and input never collide (#456).
@@ -131,27 +135,14 @@ export function createTerminalRenderer(io: TerminalIO): TerminalRenderer {
   // widths; cursorCol is where the cursor was parked on the last row).
   let painted: { widths: number[]; cursorCol: number } = { widths: [], cursorCol: 0 };
 
-  function buildInputRow(cols: number): { row: string; width: number; cursorCol: number } {
-    const avail = Math.max(1, cols - 1 - inputState.promptWidth);
-    if (inputState.line.length <= avail) {
-      return {
-        row: inputState.prompt + inputState.line,
-        width: inputState.promptWidth + inputState.line.length,
-        cursorCol: inputState.promptWidth + inputState.cursor,
-      };
-    }
-    // Horizontal scroll: window the line around the cursor. Never wrap —
-    // the non-wrapping region row is what makes clearing (and resize) exact.
-    const start = Math.max(
-      0,
-      Math.min(inputState.cursor - Math.floor(avail / 2), inputState.line.length - avail),
-    );
-    const windowText = inputState.line.slice(start, start + avail);
-    const shown = start > 0 ? "…" + windowText.slice(1) : windowText;
+  function buildInputRow(): { row: string; width: number; cursorCol: number } {
+    // The full line, always. The terminal soft-wraps it; clearing and cursor
+    // parking recompute its visual height from the width, so nothing is
+    // hidden behind an h-scroll window (#480).
     return {
-      row: inputState.prompt + shown,
-      width: inputState.promptWidth + shown.length,
-      cursorCol: inputState.promptWidth + (inputState.cursor - start),
+      row: inputState.prompt + inputState.line,
+      width: inputState.promptWidth + inputState.line.length,
+      cursorCol: inputState.promptWidth + inputState.cursor,
     };
   }
 
@@ -193,7 +184,7 @@ export function createTerminalRenderer(io: TerminalIO): TerminalRenderer {
     }
     let cursorCol = 0;
     if (inputActive) {
-      const built = buildInputRow(cols);
+      const built = buildInputRow();
       rows.push(built.row);
       widths.push(built.width);
       cursorCol = built.cursorCol;
@@ -203,8 +194,16 @@ export function createTerminalRenderer(io: TerminalIO): TerminalRenderer {
 
     if (rows.length > 0) {
       out += rows.join("\n");
+      // Park the cursor at cursorCol WITHIN the last logical row. After the
+      // write above the terminal cursor sits at the end of that row's last
+      // visual row; the target may be on an earlier visual row when the
+      // input has wrapped and the edit point is mid-line.
+      const lastWidth = widths[widths.length - 1]!;
+      const upWithin = cursorVisRow(lastWidth, cols) - cursorVisRow(cursorCol, cols);
+      if (upWithin > 0) out += `\x1b[${upWithin}A`;
       out += "\r";
-      if (cursorCol > 0) out += `\x1b[${cursorCol}C`;
+      const colInRow = cursorCol - cursorVisRow(cursorCol, cols) * cols;
+      if (colInRow > 0) out += `\x1b[${colInRow}C`;
     }
 
     const hadOrHasRegion = painted.widths.length > 0 || rows.length > 0;
@@ -259,7 +258,7 @@ export function createTerminalRenderer(io: TerminalIO): TerminalRenderer {
   function submit(): void {
     const line = inputState.line;
     inputActive = false;
-    // Durable echo of the full typed line (even if it was h-scrolled).
+    // Durable echo of the full typed line.
     commit(inputState.prompt + line + "\n");
     if (inputResolver) {
       const resolve = inputResolver;
