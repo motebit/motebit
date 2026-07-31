@@ -354,6 +354,60 @@ function receiptResultText(receipt: SignedReceipt): string {
   return JSON.stringify(r ?? null);
 }
 
+/** The joined text of a response's text blocks. */
+function responseText(content: Anthropic.ContentBlock[]): string {
+  return content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("\n");
+}
+
+/**
+ * #479: a completed research turn whose report body is EMPTY is a worse
+ * artifact than an honest failure — witnessed live on a paid hire (citations
+ * delivered, findings blank, receipt signed "completed"). A synthesis
+ * response can legally carry zero text blocks (an end_turn with empty
+ * content, a max_tokens cut) and nothing guarded it. When that happens,
+ * force ONE tool-free re-synthesis; if the retry is still empty, throw —
+ * the molecule then signs a failed receipt, never a completed-empty one.
+ */
+async function ensureReport(params: {
+  client: Anthropic;
+  messages: Anthropic.MessageParam[];
+  lastContent: Anthropic.ContentBlock[];
+  report: string;
+  sourceCount: number;
+  addUsage: (r: Anthropic.Message) => void;
+}): Promise<string> {
+  if (params.report.trim() !== "") return params.report;
+  const retry = await params.client.messages.create({
+    model: "claude-sonnet-4-6",
+    max_tokens: 4096,
+    system: SYSTEM_PROMPT,
+    messages: [
+      ...params.messages,
+      // Echo the empty response only when it had content blocks — an empty
+      // assistant content array is not a valid turn on the wire.
+      ...(params.lastContent.length > 0
+        ? [{ role: "assistant" as const, content: params.lastContent }]
+        : []),
+      {
+        role: "user" as const,
+        content:
+          "Your previous reply contained no report text. Write the full report NOW from the sources you already gathered, following the report format. Do not call any tools.",
+      },
+    ],
+  });
+  params.addUsage(retry);
+  const retried = responseText(retry.content);
+  if (retried.trim() === "") {
+    throw new Error(
+      `research synthesis returned an empty report body (${params.sourceCount} source(s) gathered) — refusing to complete an empty artifact`,
+    );
+  }
+  return retried;
+}
+
 // === The research turn ===
 
 /**
@@ -638,10 +692,17 @@ export async function research(question: string, config: ResearchConfig): Promis
       );
 
       if (toolUses.length === 0) {
-        const report = response.content
-          .filter((b): b is Anthropic.TextBlock => b.type === "text")
-          .map((b) => b.text)
-          .join("\n");
+        const report = await ensureReport({
+          client,
+          messages,
+          lastContent: response.content,
+          report: responseText(response.content),
+          sourceCount: citations.length,
+          addUsage: (r) => {
+            inputTokens += r.usage?.input_tokens ?? 0;
+            outputTokens += r.usage?.output_tokens ?? 0;
+          },
+        });
         return {
           report,
           cost_estimate_usd:
@@ -675,10 +736,17 @@ export async function research(question: string, config: ResearchConfig): Promis
     });
     inputTokens += finalResponse.usage?.input_tokens ?? 0;
     outputTokens += finalResponse.usage?.output_tokens ?? 0;
-    const report = finalResponse.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("\n");
+    const report = await ensureReport({
+      client,
+      messages,
+      lastContent: finalResponse.content,
+      report: responseText(finalResponse.content),
+      sourceCount: citations.length,
+      addUsage: (r) => {
+        inputTokens += r.usage?.input_tokens ?? 0;
+        outputTokens += r.usage?.output_tokens ?? 0;
+      },
+    });
 
     return {
       report,
