@@ -43,6 +43,20 @@ export const FRESHNESS_AWAKE_MS = 6 * 60 * 1000; // one heartbeat cycle (5m) + s
 export const FRESHNESS_RECENT_MS = 30 * 60 * 1000; // missed a cycle, still likely reachable
 export const FRESHNESS_DORMANT_MS = 24 * 60 * 60 * 1000; // asleep but wakeable
 
+/**
+ * Liveness decay on the DEFAULT discovery projection (#473). A row whose
+ * last sign of life (heartbeat, else registration) is older than this drops
+ * out of BROWSE results — probe residue (`probe.invalid`), dead tunnel
+ * endpoints, and abandoned registrations stop being the marketplace's first
+ * impression. The RECORD persists (dissolution-spectrum: the default
+ * projection decays, the ledger doesn't — the 90-day janitor is the only
+ * remover), a directed `motebit_id` lookup still finds the row, and
+ * `include=all` on /discover restores the full view. NEVER a registration
+ * gate — open registration is by-design; sybil resistance lives at the
+ * first-person trust layer (agents-as-first-person-trust-graph).
+ */
+export const FRESHNESS_DELISTED_MS = 7 * 24 * 60 * 60 * 1000; // a week unheard-of ⇒ off the default shelf
+
 export type AgentFreshness = "awake" | "recently_seen" | "dormant" | "cold";
 
 export /**
@@ -136,6 +150,7 @@ export interface TaskRouter {
     motebitId?: string,
     limit?: number,
     federatedOnly?: boolean,
+    includeDelisted?: boolean,
   ): Array<{
     motebit_id: string;
     public_key: string;
@@ -682,6 +697,10 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     limit = 20,
     /** When true, exclude agents with federation_visible = 0 (cross-relay privacy opt-out). */
     federatedOnly = false,
+    /** When true, browse results include rows past FRESHNESS_DELISTED_MS
+     * (the `include=all` escape hatch — #473). Directed motebit_id lookups
+     * always see the full record regardless. */
+    includeDelisted = false,
   ): Array<{
     motebit_id: string;
     public_key: string;
@@ -728,6 +747,15 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     const fedFilter = federatedOnly
       ? " AND (federation_visible IS NULL OR federation_visible != 0)"
       : "";
+    // Liveness decay on BROWSE queries only (#473): the default projection
+    // hides rows unheard-of for FRESHNESS_DELISTED_MS — last heartbeat, or
+    // registration time for rows that never heartbeated (probe residue).
+    // Directed motebit_id lookups below never carry this filter: the ghost
+    // problem is the browse shelf, not the record.
+    const delistCutoff = Math.floor(now - FRESHNESS_DELISTED_MS);
+    const staleFilter = includeDelisted
+      ? ""
+      : ` AND COALESCE(NULLIF(last_heartbeat, 0), registered_at, 0) >= ${delistCutoff}`;
 
     let rows: Array<Record<string, unknown>>;
 
@@ -747,7 +775,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
         .prepare(
           `
         SELECT * FROM agent_registry
-        WHERE EXISTS (SELECT 1 FROM json_each(capabilities) WHERE value = ?)${revokedFilter}${fedFilter}
+        WHERE EXISTS (SELECT 1 FROM json_each(capabilities) WHERE value = ?)${revokedFilter}${fedFilter}${staleFilter}
         LIMIT ?
       `,
         )
@@ -764,7 +792,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
       rows = db
         .prepare(
           `
-        SELECT * FROM agent_registry WHERE 1=1${revokedFilter}${fedFilter} LIMIT ?
+        SELECT * FROM agent_registry WHERE 1=1${revokedFilter}${fedFilter}${staleFilter} LIMIT ?
       `,
         )
         .all(limit) as Array<Record<string, unknown>>;

@@ -1506,17 +1506,22 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     const motebitId = c.req.query("motebit_id");
     const limitParam = Number(c.req.query("limit") ?? "20");
     const limit = Math.min(Math.max(1, limitParam), 100);
+    // #473: the DEFAULT projection decays (rows unheard-of past
+    // FRESHNESS_DELISTED_MS drop out; the relay's own row is chrome, not a
+    // market participant). `include=all` restores the raw registry view —
+    // the record is never erased, only the default shelf is curated.
+    const includeAll = c.req.query("include") === "all";
 
-    // Local results (existing behavior, unchanged)
-    const localAgents = taskRouter.queryLocalAgents(
-      capability ?? undefined,
-      motebitId ?? undefined,
-      limit,
-    );
+    const localAgents = taskRouter
+      .queryLocalAgents(capability ?? undefined, motebitId ?? undefined, limit, false, includeAll)
+      .filter((a) => includeAll || a.motebit_id !== relayIdentity.relayMotebitId);
 
     // Add source_relay metadata to local results
     const localResults = localAgents.map((a) => ({
       ...a,
+      // The relay's own registration reads as a zero-capability ghost in the
+      // agent listing — mark its role when the full view includes it.
+      ...(a.motebit_id === relayIdentity.relayMotebitId ? { role: "relay" as const } : {}),
       source_relay: relayIdentity.relayMotebitId,
       relay_name: federationConfig?.displayName ?? null,
       hop_distance: 0,
