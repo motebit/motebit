@@ -1223,6 +1223,14 @@ export class MotebitRuntime {
         this.assertSensitivityPermitsAiCall(entry, toolName),
       getLatestCues: () => this.latestCues,
       getApprovalStore: () => this.approvalStore,
+      // #493: non-draining stash view for the delegate_to_agent receipt
+      // beat. Lazy closures — interactiveDelegation is constructed before
+      // the StreamingManager, but the indirection keeps that ordering a
+      // non-constraint.
+      delegationReceiptStash: {
+        count: () => this.interactiveDelegation.stashedReceiptCount,
+        peekSince: (n) => this.interactiveDelegation.peekReceiptsSince(n),
+      },
       redactText: (text) => {
         if (typeof this.policy.redact === "function") {
           return this.policy.redact(text);

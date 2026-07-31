@@ -3322,3 +3322,213 @@ describe("approval lifecycle single-writer (#462)", () => {
     expect(runtime.pendingApprovalInfo?.toolName).toBe("send_payment");
   });
 });
+
+// === #493: the delegate_to_agent receipt beat ===
+//
+// The AI-loop hire path returns its result as plain tool output and stashes
+// the worker's signed receipt only for parent-chain composition — nothing
+// emitted delegation_complete, so the one path a human uses to HIRE never
+// rendered the receipt (both routes). The streaming layer now peeks (never
+// drains) the stash and emits the beat before the tool_status done twin.
+
+describe("delegate_to_agent receipt beat (#493)", () => {
+  let runtime: MotebitRuntime;
+
+  function stashOf(rt: MotebitRuntime): {
+    pushReceipt(r: unknown): void;
+    stashedReceiptCount: number;
+  } {
+    return (
+      rt as unknown as {
+        interactiveDelegation: { pushReceipt(r: unknown): void; stashedReceiptCount: number };
+      }
+    ).interactiveDelegation;
+  }
+
+  function makeDelegationReceipt(taskId: string): Record<string, unknown> {
+    return {
+      task_id: taskId,
+      motebit_id: "worker-1",
+      status: "completed",
+      tools_used: ["research"],
+      result: "the purchased report",
+      signature: "sig-" + taskId,
+      public_key: "aa".repeat(32),
+      prompt_hash: "",
+      result_hash: "",
+      submitted_at: Date.now(),
+      completed_at: Date.now(),
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    runtime = new MotebitRuntime(
+      { motebitId: "receipt-beat-test", tickRateHz: 0 },
+      createAdapters(createMockProvider()),
+    );
+  });
+
+  it("emits delegation_complete with the stashed full_receipt, BEFORE the tool_status done twin", async () => {
+    mockRunTurnStreaming.mockReturnValueOnce(
+      (async function* () {
+        yield {
+          type: "tool_status" as const,
+          name: "delegate_to_agent",
+          status: "calling" as const,
+        };
+        // The tool handler stashes the worker's signed receipt mid-call.
+        stashOf(runtime).pushReceipt(makeDelegationReceipt("task-beat-1"));
+        yield {
+          type: "tool_status" as const,
+          name: "delegate_to_agent",
+          status: "done" as const,
+          result: "Task completed",
+        };
+        yield { type: "result" as const, result: makeTurnResult() };
+      })(),
+    );
+
+    const chunks = await collectChunks(runtime.sendMessageStreaming("hire a researcher"));
+    const types = chunks.map((c) => c.type);
+    const beatIdx = types.indexOf("delegation_complete");
+    const doneIdx = chunks.findIndex(
+      (c) => c.type === "tool_status" && (c as { status?: string }).status === "done",
+    );
+    expect(beatIdx).toBeGreaterThan(-1);
+    expect(beatIdx).toBeLessThan(doneIdx);
+
+    const beat = chunks[beatIdx] as {
+      tool: string;
+      receipt?: { task_id: string; status: string };
+      full_receipt?: { signature: string };
+    };
+    expect(beat.tool).toBe("research"); // labeled by the worker's capability
+    expect(beat.receipt?.task_id).toBe("task-beat-1");
+    expect(beat.full_receipt?.signature).toBe("sig-task-beat-1");
+  });
+
+  it("PEEKS, never drains — the parent receipt chain still gets the receipt", async () => {
+    mockRunTurnStreaming.mockReturnValueOnce(
+      (async function* () {
+        yield {
+          type: "tool_status" as const,
+          name: "delegate_to_agent",
+          status: "calling" as const,
+        };
+        stashOf(runtime).pushReceipt(makeDelegationReceipt("task-beat-2"));
+        yield {
+          type: "tool_status" as const,
+          name: "delegate_to_agent",
+          status: "done" as const,
+          result: "ok",
+        };
+        yield { type: "result" as const, result: makeTurnResult() };
+      })(),
+    );
+    await collectChunks(runtime.sendMessageStreaming("hire"));
+
+    // The composition drain (handleAgentTask's path) must still see it.
+    const drained = runtime.getAndResetInteractiveDelegationReceipts();
+    expect(drained).toHaveLength(1);
+    expect(drained[0]!.task_id).toBe("task-beat-2");
+  });
+
+  it("a delegate call that stashes nothing (failed/refused) emits no beat", async () => {
+    mockRunTurnStreaming.mockReturnValueOnce(
+      (async function* () {
+        yield {
+          type: "tool_status" as const,
+          name: "delegate_to_agent",
+          status: "calling" as const,
+        };
+        yield {
+          type: "tool_status" as const,
+          name: "delegate_to_agent",
+          status: "done" as const,
+          result: "delegation failed (worker_unreachable)",
+        };
+        yield { type: "result" as const, result: makeTurnResult() };
+      })(),
+    );
+    const chunks = await collectChunks(runtime.sendMessageStreaming("hire"));
+    expect(chunks.some((c) => c.type === "delegation_complete")).toBe(false);
+  });
+
+  it("pre-existing stash entries are not re-emitted — only receipts from THIS call", async () => {
+    stashOf(runtime).pushReceipt(makeDelegationReceipt("task-earlier"));
+    mockRunTurnStreaming.mockReturnValueOnce(
+      (async function* () {
+        yield {
+          type: "tool_status" as const,
+          name: "delegate_to_agent",
+          status: "calling" as const,
+        };
+        stashOf(runtime).pushReceipt(makeDelegationReceipt("task-fresh"));
+        yield {
+          type: "tool_status" as const,
+          name: "delegate_to_agent",
+          status: "done" as const,
+          result: "ok",
+        };
+        yield { type: "result" as const, result: makeTurnResult() };
+      })(),
+    );
+    const chunks = await collectChunks(runtime.sendMessageStreaming("hire"));
+    const beats = chunks.filter((c) => c.type === "delegation_complete") as Array<{
+      receipt?: { task_id: string };
+    }>;
+    expect(beats).toHaveLength(1);
+    expect(beats[0]!.receipt?.task_id).toBe("task-fresh");
+  });
+
+  it("post-approval direct execution emits the beat too — the highest-stakes render", async () => {
+    // Register a delegate_to_agent tool whose handler stashes the receipt
+    // (the real handler's shape, minus the relay).
+    (
+      runtime as unknown as {
+        toolRegistry: {
+          register(
+            d: { name: string; description: string; parameters: Record<string, never> },
+            h: () => Promise<{ ok: boolean; data: string }>,
+          ): void;
+        };
+      }
+    ).toolRegistry.register(
+      { name: "delegate_to_agent", description: "hire", parameters: {} },
+      async () => {
+        stashOf(runtime).pushReceipt(makeDelegationReceipt("task-approved"));
+        return { ok: true, data: "Task completed by worker-1" };
+      },
+    );
+
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks(
+        {
+          type: "approval_request",
+          tool_call_id: "tc-beat",
+          name: "delegate_to_agent",
+          args: { capability: "research", prompt: "go" },
+          risk_level: 4,
+        },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+    await collectChunks(runtime.sendMessageStreaming("hire someone"));
+    expect(runtime.hasPendingApproval).toBe(true);
+
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks({ type: "result", result: makeTurnResult() }),
+    );
+    const resumed = await collectChunks(runtime.resumeAfterApproval(true));
+    const types = resumed.map((c) => c.type);
+    const beatIdx = types.indexOf("delegation_complete");
+    const doneIdx = resumed.findIndex(
+      (c) => c.type === "tool_status" && (c as { status?: string }).status === "done",
+    );
+    expect(beatIdx).toBeGreaterThan(-1);
+    expect(beatIdx).toBeLessThan(doneIdx);
+    const beat = resumed[beatIdx] as { full_receipt?: { task_id?: string } };
+    expect(beat.full_receipt?.task_id).toBe("task-approved");
+  });
+});
