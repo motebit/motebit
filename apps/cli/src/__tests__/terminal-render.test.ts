@@ -288,6 +288,40 @@ describe("terminal renderer — owned bottom region", () => {
     expect(vt.screen()).toBe("record\n\nnext record\n  · thinking · 1s\nyou>");
   });
 
+  it("mode row sits between status and input, updates in place (#480)", () => {
+    const { vt, r } = setup(60);
+    r.setModeRow("  ── claude-opus-4-6 · anthropic");
+    r.setStatusRow("  · thinking · 2s");
+    void r.readInput("you> ");
+    type(r, "hi");
+    expect(vt.screen()).toBe("  · thinking · 2s\n  ── claude-opus-4-6 · anthropic\nyou> hi");
+    r.setModeRow("  ── claude-haiku-4-5 · anthropic");
+    expect(vt.count("──")).toBe(1);
+    expect(vt.screen()).toContain("claude-haiku-4-5");
+    expect(vt.screen()).not.toContain("opus");
+  });
+
+  it("mode row truncates to the width, never wraps", () => {
+    const { vt, r } = setup(20);
+    r.setModeRow("  ── a-very-long-model-identifier · some-provider");
+    expect(vt.screen().split("\n").length).toBe(1);
+  });
+
+  it("output and resize keep a single mode row", () => {
+    const { vt, r } = setup(40);
+    r.setModeRow("  ── model-x · anthropic");
+    void r.readInput("you> ");
+    r.writeOutput("a reply line\n");
+    for (const cols of [30, 24, 40]) {
+      vt.resize(cols);
+      r.repaint();
+    }
+    expect(vt.count("model-x")).toBe(1);
+    expect(vt.count("you>")).toBe(1);
+    const rows = vt.screen().split("\n");
+    expect(rows[0]).toBe("a reply line");
+  });
+
   it("paste inserts at the cursor without corrupting the region", () => {
     const { vt, r } = setup();
     void r.readInput("you> ");

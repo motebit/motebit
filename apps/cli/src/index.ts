@@ -23,7 +23,8 @@ import {
   openMotebitDatabase,
 } from "./runtime-factory.js";
 import { consumeStream } from "./stream.js";
-import { readInput, writeOutput, initTerminal, destroyTerminal } from "./terminal.js";
+import { readInput, writeOutput, setModeRow, initTerminal, destroyTerminal } from "./terminal.js";
+import { renderModeRow } from "./mode-render.js";
 import { electCliRuntimeHost } from "./runtime-host.js";
 import { runAttachedRepl } from "./attached-repl.js";
 import type { ElectionOutcome } from "@motebit/runtime-host";
@@ -1033,6 +1034,14 @@ async function main(): Promise<void> {
   }
 
   const prompt = (): void => {
+    // Refresh the current-truth chrome each cycle — a `/model` switch mid-
+    // session updates the row in place; the banner stays history (#480).
+    setModeRow(
+      renderModeRow({
+        model: runtime.currentModel ?? config.model,
+        provider: config.provider,
+      }),
+    );
     readInput(promptColor("you>") + " ").then(
       (line) => void handleLine(line),
       () => {}, // Ignore errors (e.g. stdin closed)
