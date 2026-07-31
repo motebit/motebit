@@ -16,6 +16,7 @@ import {
   writeOutput,
 } from "./terminal.js";
 import { renderModeRow } from "./mode-render.js";
+import { detectShellInvocation } from "./slash-commands.js";
 import { startStatus, type StatusHandle } from "./statusline.js";
 import { formatElapsed } from "./status-render.js";
 import { renderApprovalRequest } from "./approval-render.js";
@@ -252,6 +253,13 @@ export async function runAttachedRepl(client: RuntimeHostClient, motebitId: stri
         `${dim(`${trimmed.split(" ")[0]} needs the runtime in-process — not available in attached mode.`)}\n` +
           `${dim("Stop the coordinator and re-run `motebit` to use it.")}\n`,
       );
+      continue;
+    }
+    // Sibling of the coordinator REPL's #500 guard: a full CLI invocation
+    // typed at the chat prompt teaches instead of reaching the model.
+    const shellTeach = detectShellInvocation(trimmed);
+    if (shellTeach != null) {
+      writeOutput(dim(shellTeach) + "\n\n");
       continue;
     }
     writeOutput(promptColor("mote>") + " ");
