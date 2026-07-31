@@ -125,6 +125,12 @@ export interface TerminalRenderer {
   repaint(): void;
   /** Abandon any active input (stdin closed / shutdown). */
   detach(): void;
+  /** Retire the owned region: flush any partial line and the in-flight
+   * input row into scrollback, clear the status/mode rows, park the cursor
+   * at a fresh line start. After this, plain console writes (exit-path
+   * lines like "Synced on exit") land on their own line instead of gluing
+   * onto the last region row. Idempotent. */
+  finalize(): void;
 }
 
 export function createTerminalRenderer(io: TerminalIO): TerminalRenderer {
@@ -324,7 +330,8 @@ export function createTerminalRenderer(io: TerminalIO): TerminalRenderer {
     if (result === "submit") {
       submit();
     } else if (result === "exit") {
-      io.write("\n");
+      // No direct io.write here — it would desync the painted-region
+      // tracking before finalize's clear math runs inside destroyTerminal.
       destroyTerminal();
       process.exit(0);
     } else {
@@ -364,6 +371,25 @@ export function createTerminalRenderer(io: TerminalIO): TerminalRenderer {
     }
   }
 
+  function finalize(): void {
+    let scrollback = "";
+    if (tail !== "") {
+      scrollback += tail + "\n";
+      tail = "";
+    }
+    if (inputActive) {
+      // Preserve whatever the user had typed as history instead of
+      // erasing it with the region.
+      scrollback += buildInputRow().row + "\n";
+      inputResolver = null;
+      inputRejecter = null;
+      inputActive = false;
+    }
+    statusRow = null;
+    modeRow = null;
+    commit(scrollback);
+  }
+
   return {
     writeOutput,
     writeLine,
@@ -374,6 +400,7 @@ export function createTerminalRenderer(io: TerminalIO): TerminalRenderer {
     handleEvent,
     repaint: () => commit(""),
     detach,
+    finalize,
   };
 }
 
@@ -665,6 +692,12 @@ export function initTerminal(): void {
 export function destroyTerminal(): void {
   if (!initialized) return;
   initialized = false;
+
+  // Retire the owned region first (clears the mode/status rows and parks
+  // the cursor on a fresh line) so exit-path console writes don't glue
+  // onto the last region row (witnessed 2026-07-30: mode row + "Synced on
+  // exit:" concatenated on one line).
+  renderer.finalize();
 
   process.stdin.removeListener("data", onStdinData);
   process.stdout.removeListener("resize", onResize);

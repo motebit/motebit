@@ -48,6 +48,35 @@ export function getArchivedReceipt(taskId: string): ExecutionReceipt | undefined
   return ARCHIVE.get(taskId);
 }
 
+/**
+ * Resolve a full task_id OR a unique prefix to an archived receipt. The
+ * rendered receipt only ever shows a truncated id (`shortHash`, 12 chars +
+ * "…"), so `/receipt` must accept what the user can actually see and type.
+ * A trailing "…" from copy-pasting the rendered id is stripped.
+ */
+export function findArchivedReceipt(
+  idOrPrefix: string,
+):
+  | { kind: "hit"; receipt: ExecutionReceipt }
+  | { kind: "ambiguous"; taskIds: string[] }
+  | { kind: "miss" } {
+  const prefix = idOrPrefix.replace(/…$/, "");
+  if (prefix === "") return { kind: "miss" };
+  const exact = ARCHIVE.get(prefix);
+  if (exact) return { kind: "hit", receipt: exact };
+  const matches = [...ARCHIVE.keys()].filter((id) => id.startsWith(prefix));
+  if (matches.length === 1) return { kind: "hit", receipt: ARCHIVE.get(matches[0]!)! };
+  if (matches.length > 1) return { kind: "ambiguous", taskIds: matches };
+  return { kind: "miss" };
+}
+
+/** The most recently archived receipt this session, if any. */
+export function latestArchivedReceipt(): ExecutionReceipt | undefined {
+  let last: ExecutionReceipt | undefined;
+  for (const r of ARCHIVE.values()) last = r;
+  return last;
+}
+
 /** Clear the session archive. Used by tests. */
 export function clearReceiptArchive(): void {
   ARCHIVE.clear();

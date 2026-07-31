@@ -728,13 +728,13 @@ async function main(): Promise<void> {
       runtimeRef,
     });
   } catch (err: unknown) {
+    destroyTerminal();
     console.error(
       `Runtime-host election failed: ${err instanceof Error ? err.message : String(err)}`,
     );
     console.error(
       "Another motebit process may be coordinating with an incompatible build. Stop it and retry.",
     );
-    destroyTerminal();
     process.exit(1);
   }
   if (election.role === "frontend") {
@@ -984,7 +984,10 @@ async function main(): Promise<void> {
   };
 
   process.on("SIGINT", () => {
-    console.log("\nGoodbye!");
+    // Retire the region before printing — otherwise "Goodbye!" glues onto
+    // the mode row and desyncs the clear math inside destroyTerminal.
+    destroyTerminal();
+    console.log("Goodbye!");
     void shutdown().then(() => process.exit(0));
   });
 

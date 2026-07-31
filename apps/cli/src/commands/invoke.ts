@@ -14,7 +14,7 @@
 // immediately — closing the loop locally, no relay roundtrip needed for
 // verification.
 //
-// `/receipt <task-id>` re-renders an archived receipt. It does NOT invoke
+// `/receipt [task-id-prefix]` re-renders an archived receipt. It does NOT invoke
 // anything — it reads from the session archive, verifies the signature
 // offline, and prints. But it IS an affordance (user typed a specific
 // command), and category-error-wise it routes through the receipt subsystem,
@@ -22,7 +22,12 @@
 
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 
-import { archiveReceipt, getArchivedReceipt, renderReceipt } from "../receipt.js";
+import {
+  archiveReceipt,
+  findArchivedReceipt,
+  latestArchivedReceipt,
+  renderReceipt,
+} from "../receipt.js";
 import { dim, error as errorColor, warn } from "../colors.js";
 import type { VoiceController } from "../voice.js";
 
@@ -68,7 +73,9 @@ export async function handleInvokeCommand(args: string, deps: InvokeCommandDeps)
 }
 
 /**
- * Handle `/receipt <task-id>` — re-render an archived receipt. Does not
+ * Handle `/receipt [task-id-prefix]` — re-render an archived receipt (no
+ * arg = the session's latest; a unique prefix of the rendered id works,
+ * since the render truncates). Does not
  * invoke a capability; it is a read of local state plus an offline verify.
  */
 export async function handleReceiptCommand(
@@ -77,14 +84,27 @@ export async function handleReceiptCommand(
 ): Promise<void> {
   const out = deps.out ?? ((s: string) => console.log(s));
   const taskId = args.trim();
+  let receipt;
   if (!taskId) {
-    out(errorColor("Usage: /receipt <task-id>"));
-    return;
-  }
-  const receipt = getArchivedReceipt(taskId);
-  if (!receipt) {
-    out(warn(`No archived receipt for task_id=${taskId}`));
-    return;
+    // The rendered receipt shows a truncated id, so the no-arg form is the
+    // common affordance: re-render the most recent receipt of the session.
+    receipt = latestArchivedReceipt();
+    if (!receipt) {
+      out(warn("No receipts archived this session. Usage: /receipt [task-id-prefix]"));
+      return;
+    }
+  } else {
+    const found = findArchivedReceipt(taskId);
+    if (found.kind === "ambiguous") {
+      out(warn(`Prefix "${taskId}" matches ${found.taskIds.length} receipts:`));
+      for (const id of found.taskIds) out(dim(`  ${id}`));
+      return;
+    }
+    if (found.kind === "miss") {
+      out(warn(`No archived receipt matches "${taskId}" this session.`));
+      return;
+    }
+    receipt = found.receipt;
   }
   // renderReceipt no longer emits its own blank bracket (#480) — spacing
   // belongs to the caller.
