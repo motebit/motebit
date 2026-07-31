@@ -10,6 +10,10 @@ export * from "./core.js";
 export { OpenAIProvider } from "./openai-provider.js";
 export type { OpenAIProviderConfig, OpenAIStreamChunk } from "./openai-provider.js";
 
+// Live model-catalog discovery — pluggability contract at the provider seam (#475)
+export { discoverModels } from "./model-catalog.js";
+export type { CatalogModel, ModelCatalog, DiscoverModelsParams } from "./model-catalog.js";
+
 // Loop: agentic turn execution (requires memory-graph → onnxruntime-node)
 export { runTurn, runTurnStreaming, projectProviderClearance } from "./loop.js";
 // The live-state boundary clause — exported so evals outside ai-core can
