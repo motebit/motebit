@@ -70,7 +70,7 @@ export interface AIResponse {
 export const ANTHROPIC_CANONICAL_URL = "https://api.anthropic.com";
 
 // @public
-export const ANTHROPIC_MODELS: readonly ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"];
+export const ANTHROPIC_MODELS: readonly ["claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-5-20251101", "claude-sonnet-4-5-20250929", "claude-opus-4-1-20250805"];
 
 // @public (undocumented)
 export type AnthropicModel = (typeof ANTHROPIC_MODELS)[number];

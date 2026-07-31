@@ -7,11 +7,22 @@
 // 3 tiers per provider: strongest, default, fast.
 // When a new model ships, update the arrays — every surface picks it up.
 
-/** Anthropic Claude models: opus (strongest), sonnet (default), haiku (fast). */
+/** Anthropic Claude models: opus (strongest), sonnet (default), haiku (fast).
+ * Every id verified against the live GET /v1/models catalog (2026-07-30);
+ * `check-model-catalog-drift` (scheduled, weekly) goes red when this
+ * snapshot drifts from what the provider serves. Never construct an id. */
 export const ANTHROPIC_MODELS = [
+  "claude-fable-5",
+  "claude-opus-5",
+  "claude-opus-4-8",
   "claude-opus-4-7",
+  "claude-opus-4-6",
+  "claude-sonnet-5",
   "claude-sonnet-4-6",
   "claude-haiku-4-5-20251001",
+  "claude-opus-4-5-20251101",
+  "claude-sonnet-4-5-20250929",
+  "claude-opus-4-1-20250805",
 ] as const;
 
 /** OpenAI models: gpt-5.4 (strongest), gpt-5.4-mini (default), gpt-5.4-nano (fast). */

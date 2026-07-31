@@ -1,0 +1,44 @@
+# The first EXTERNAL drift gate (#475, inventory row #150): the model
+# catalog's canonical truth lives OUTSIDE the repo (the provider's live
+# models endpoint), so this defense cannot run in `pnpm check` — it runs on
+# a schedule, the sibling of archetype-conformance. Red means the committed
+# snapshot (ANTHROPIC_MODELS) or the request-shape families drifted from
+# what the provider actually serves: hours-behind instead of months-behind,
+# a red check instead of a user-facing 404.
+#
+# Secrets (repository level):
+#   ANTHROPIC_API_KEY   read-only catalog access (GET /v1/models only)
+#
+# The gate runs with --require-key: a missing secret is RED, never a silent
+# skip — a dormant external gate is the composition-preserves-enforcement
+# flaw class in miniature.
+
+name: Model catalog drift
+
+on:
+  schedule:
+    - cron: "23 9 * * 1" # weekly, Monday
+  workflow_dispatch:
+
+concurrency:
+  group: model-catalog-drift
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build the imported packages
+        run: pnpm --filter @motebit/sdk... --filter @motebit/ai-core... build
+      - name: Diff snapshot + shaping families against the live catalog
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: npx tsx scripts/check-model-catalog-drift.ts --require-key
