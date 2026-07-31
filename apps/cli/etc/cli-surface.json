@@ -355,6 +355,7 @@
     "relay",
     "relay/relay.db",
     "smoke-x402-buyer-eoa.txt",
-    "smoke-x402-worker-eoa.txt"
+    "smoke-x402-worker-eoa.txt",
+    "update-check.json"
   ]
 }

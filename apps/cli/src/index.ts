@@ -7,7 +7,12 @@ import { createSolanaWalletRail } from "@motebit/wallet-solana";
 import { preflightGrant, renderPreflight } from "./grant-preflight.js";
 import { parseCliArgs, printHelp, printVersion, printBanner, trimHistory } from "./args.js";
 import type { CliConfig } from "./args.js";
-import { loadFullConfig, extractPersonality, persistMotebitPublicKeys } from "./config.js";
+import { loadFullConfig, extractPersonality, persistMotebitPublicKeys, VERSION } from "./config.js";
+import {
+  renderUpdateNudge,
+  readUpdateState,
+  refreshUpdateCheckInBackground,
+} from "./update-nudge.js";
 import {
   promptPassphrase,
   resolveUnlockPassphrase,
@@ -985,6 +990,19 @@ async function main(): Promise<void> {
   if (seedBackupStatus(loadFullConfig()) === "not_backed_up") {
     console.log(dim("  recovery seed not backed up — `motebit seed reveal` (once, on paper)"));
     console.log();
+  }
+
+  // Update nudge — the seed nudge's register applied to staleness: a global
+  // npm install never self-updates, and the 1.11.1→1.11.2 gap was invisible
+  // until the founder asked. Cached check, background refresh for the NEXT
+  // launch, silent offline; MOTEBIT_NO_UPDATE_CHECK=1 opts out.
+  if (process.env["MOTEBIT_NO_UPDATE_CHECK"] !== "1") {
+    const updateNudge = renderUpdateNudge({ currentVersion: VERSION, state: readUpdateState() });
+    if (updateNudge != null) {
+      console.log(dim(`  ${updateNudge}`));
+      console.log();
+    }
+    refreshUpdateCheckInBackground();
   }
 
   // First-session activation: creature speaks first after identity birth.
