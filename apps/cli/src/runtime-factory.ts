@@ -790,6 +790,12 @@ export async function createRuntime(
       // (enableInteractiveDelegation). Absent ⇒ delegation degrades to
       // relay-mode honestly.
       ...(solanaWallet ? { solanaWallet } : {}),
+      // #501 — sovereign override for capability-tiered tool admission.
+      // Default (absent/false): a minimal-tier model is never offered
+      // R4_MONEY tools; the owner can restore full exposure in config.
+      ...(loadFullConfig().offer_money_tools_to_minimal_models === true
+        ? { offerMoneyToolsToMinimalModels: true }
+        : {}),
       policy: {
         operatorMode: config.operator,
         pathAllowList: config.allowedPaths,

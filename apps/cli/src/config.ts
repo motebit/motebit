@@ -96,6 +96,15 @@ export interface FullConfig {
    * (#428). Also set by `motebit restore` (holding the seed IS the backup).
    */
   seed_backed_up_at?: number;
+  /**
+   * Capability-tiered tool admission override (#501). Default (absent):
+   * a minimal-tier model (e.g. a 3B local model) is never OFFERED
+   * money-moving tools — the runtime omits them from the model-visible
+   * list. Set `true` to restore full exposure: sovereignty preserved,
+   * only the footgun default removed. A deliberate config field, not a
+   * flag — a per-launch flag invites cargo-culting into scripts.
+   */
+  offer_money_tools_to_minimal_models?: boolean;
   cli_encrypted_key?: {
     ciphertext: string; // hex
     nonce: string; // hex

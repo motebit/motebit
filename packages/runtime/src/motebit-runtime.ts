@@ -46,6 +46,7 @@ import {
   rankSensitivity,
   CONTEXT_SAFE_SENSITIVITY,
   RiskLevel,
+  modelCapabilityTier,
 } from "@motebit/sdk";
 import type { SensitivityCleared } from "@motebit/sdk";
 import type {
@@ -547,6 +548,8 @@ export class MotebitRuntime {
   /** Allowed proactive capability names. Empty by default — fail-closed
    *  sovereign default. User opts in explicitly via runtime config. */
   private _proactiveCapabilities: ReadonlySet<string>;
+  /** #501 — config override: offer R4_MONEY tools to minimal-tier models. */
+  private _offerMoneyToolsToMinimalModels: boolean;
   /** Auto-anchor policy; null when disabled. Stored by reference so the
    *  submitter can be rotated by the surface without re-constructing the
    *  runtime. */
@@ -790,8 +793,16 @@ export class MotebitRuntime {
     // Memory-mutation tools only — no surface side effects during tending.
     this._proactiveCapabilities = new Set(config.proactiveCapabilities ?? []);
     this._proactiveAnchor = config.proactiveAnchor ?? null;
+    this._offerMoneyToolsToMinimalModels = config.offerMoneyToolsToMinimalModels ?? false;
     this.scopedToolRegistry = new ScopedToolRegistry(this.toolRegistry, {
       allows: (toolName) => {
+        // Capability tier (#501): a minimal-tier model is never OFFERED an
+        // R4_MONEY tool — omitted from list(), fail-closed on execute().
+        // Composes by AND with the presence scope below; reads the CURRENT
+        // model by reference, so a mid-session /model switch adjusts
+        // exposure with no re-wire. invokeCapability (user-tap) does not
+        // route through this registry — a tap is its own authorizer.
+        if (!this.tierAllowsTool(toolName)) return false;
         const presence = this.presence.get();
         if (presence.mode === "responsive" || presence.mode === "idle") return true;
         // tending: only the user-allowed proactive tools, intersected with
@@ -1375,6 +1386,36 @@ export class MotebitRuntime {
 
   get currentModel(): string | null {
     return this.provider?.model ?? null;
+  }
+
+  /**
+   * Capability-tiered tool admission (#501): may the CURRENT model be
+   * offered `toolName`? True unless the model is `minimal`-tier AND the
+   * tool classifies at `R4_MONEY` AND the config override is off. Keys on
+   * the SAME `classifyTool` vocabulary the approval gate uses, so any
+   * future money tool inherits the policy at birth — and a rail-less
+   * `delegate_to_agent` (R2 without a payment builder) stays offered:
+   * the tool crosses the withholding line exactly when it can move money.
+   */
+  private tierAllowsTool(toolName: string): boolean {
+    if (this._offerMoneyToolsToMinimalModels) return true;
+    const model = this.provider?.model ?? null;
+    if (model == null || modelCapabilityTier(model) !== "minimal") return true;
+    const def = this.toolRegistry.list().find((t) => t.name === toolName);
+    if (def == null) return true;
+    return classifyTool(def).risk < RiskLevel.R4_MONEY;
+  }
+
+  /**
+   * Surface-honesty readout (#501): true when the current model's tier is
+   * withholding at least one registered money tool. Surfaces render ONE
+   * calm line from this (launch / model switch) — never a toast.
+   */
+  get moneyToolsWithheld(): boolean {
+    if (this._offerMoneyToolsToMinimalModels) return false;
+    const model = this.provider?.model ?? null;
+    if (model == null || modelCapabilityTier(model) !== "minimal") return false;
+    return this.toolRegistry.list().some((t) => classifyTool(t).risk >= RiskLevel.R4_MONEY);
   }
 
   setModel(model: string): void {

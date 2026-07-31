@@ -2,7 +2,7 @@ import { DEFAULT_CONFIG } from "@motebit/ai-core";
 import type { MotebitPersonalityConfig } from "@motebit/ai-core";
 import { deriveSyncEncryptionKey, mintAudienceToken } from "@motebit/encryption";
 import { connectMcpServers } from "@motebit/mcp-client";
-import { admitModelForProvider } from "./model-admission.js";
+import { admitModelForProvider, MONEY_TOOLS_WITHHELD_NOTICE } from "./model-admission.js";
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
 import { preflightGrant, renderPreflight } from "./grant-preflight.js";
 import {
@@ -1025,6 +1025,14 @@ async function main(): Promise<void> {
       console.log();
     }
     refreshUpdateCheckInBackground();
+  }
+
+  // Capability-tier honesty (#501): when the selected model's tier is
+  // withholding money tools, say so ONCE at launch in the nudge register —
+  // the owner must never discover the difference mid-conversation.
+  if (runtime.moneyToolsWithheld) {
+    console.log(dim(`  ${MONEY_TOOLS_WITHHELD_NOTICE}`));
+    console.log();
   }
 
   // First-session activation: creature speaks first after identity birth.

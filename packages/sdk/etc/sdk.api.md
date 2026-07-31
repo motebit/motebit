@@ -590,6 +590,12 @@ export interface MlxProviderSpec {
 export const MODEL_DEFAULT_REVIEW_BY: Record<string, string>;
 
 // @public
+export type ModelCapabilityTier = "frontier" | "capable" | "minimal";
+
+// @public
+export function modelCapabilityTier(model: string): ModelCapabilityTier;
+
+// @public
 export function modelVendorHint(model: string): "anthropic" | "openai" | "google" | "deepseek" | "groq" | "local" | "unknown";
 
 // @public
