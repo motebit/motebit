@@ -7,7 +7,7 @@
  * ids stay permissive so new model releases never brick startup.
  */
 import { describe, it, expect } from "vitest";
-import { modelVendorHint, providerAcceptsModel } from "../models.js";
+import { modelVendorHint, providerAcceptsModel, LOCAL_SERVER_SUGGESTED_MODELS } from "../models.js";
 
 describe("modelVendorHint", () => {
   it("attributes registry members and naming signatures", () => {
@@ -45,5 +45,22 @@ describe("providerAcceptsModel — refuses only KNOWN cross-vendor mismatches", 
   it("groq serves open-family models", () => {
     expect(providerAcceptsModel("groq", "llama-3.3-70b-versatile")).toBe(true);
     expect(providerAcceptsModel("groq", "claude-sonnet-4-6")).toBe(false);
+  });
+});
+
+describe("gpt-oss is the open-weights LOCAL family, never the hosted OpenAI API (2026-07-31)", () => {
+  it("vendor hint is local for every gpt-oss form", () => {
+    expect(modelVendorHint("gpt-oss")).toBe("local");
+    expect(modelVendorHint("gpt-oss:20b")).toBe("local");
+    expect(modelVendorHint("gpt-oss:120b")).toBe("local");
+    // The hosted family is untouched by the carve-out
+    expect(modelVendorHint("gpt-5.4")).toBe("openai");
+    expect(modelVendorHint("gpt-5.4-mini")).toBe("openai");
+  });
+
+  it("local-server serves its whole suggested table", () => {
+    for (const m of LOCAL_SERVER_SUGGESTED_MODELS) {
+      expect(providerAcceptsModel("local-server", m), m).toBe(true);
+    }
   });
 });

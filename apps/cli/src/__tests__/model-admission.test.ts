@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { admitModelForProvider } from "../model-admission.js";
 import { defaultModelForProvider } from "../args.js";
+import { LOCAL_SERVER_SUGGESTED_MODELS } from "@motebit/sdk";
 
 describe("admitModelForProvider — the provider+model pair gate (#471)", () => {
   it("refuses a hosted Claude id on local-server (witnessed direction 2)", () => {
@@ -27,6 +28,15 @@ describe("admitModelForProvider — the provider+model pair gate (#471)", () => 
     expect(admitModelForProvider("openai", "gpt-5.4").admissible).toBe(true);
     expect(admitModelForProvider("local-server", "llama3.2").admissible).toBe(true);
     expect(admitModelForProvider("local-server", "qwen2.5:7b").admissible).toBe(true);
+    // gpt-oss is OpenAI's OPEN-WEIGHTS local family — the `gpt-` prefix must
+    // not misroute it to the hosted-API refusal (2026-07-31 defaults refresh).
+    expect(admitModelForProvider("local-server", "gpt-oss:20b").admissible).toBe(true);
+  });
+
+  it("every suggested local model is admissible on local-server — the dropdown can never offer a refusal", () => {
+    for (const m of LOCAL_SERVER_SUGGESTED_MODELS) {
+      expect(admitModelForProvider("local-server", m).admissible, m).toBe(true);
+    }
   });
 
   it("stays permissive on unknown ids — registry lag must not brick a switch", () => {

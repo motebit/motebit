@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { DEFAULT_LOCAL_SERVER_MODEL } from "@motebit/sdk";
 import {
   parseCliArgs,
   printHelp,
@@ -28,14 +29,14 @@ describe("parseCliArgs", () => {
   it("parses --provider local-server with default model", () => {
     const config = parseCliArgs(["--provider", "local-server"]);
     expect(config.provider).toBe("local-server");
-    expect(config.model).toBe("llama3.2");
+    expect(config.model).toBe(DEFAULT_LOCAL_SERVER_MODEL);
   });
 
   it("accepts --provider ollama as an ergonomic alias for local-server", () => {
     const config = parseCliArgs(["--provider", "ollama"]);
     // Internal representation is always the vendor-agnostic name.
     expect(config.provider).toBe("local-server");
-    expect(config.model).toBe("llama3.2");
+    expect(config.model).toBe(DEFAULT_LOCAL_SERVER_MODEL);
   });
 
   it("--model overrides provider default", () => {

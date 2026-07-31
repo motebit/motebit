@@ -1,6 +1,14 @@
 // --- CLI argument parsing, help, version, banner ---
 
 import { parseArgs } from "node:util";
+import {
+  DEFAULT_ANTHROPIC_MODEL,
+  DEFAULT_DEEPSEEK_MODEL,
+  DEFAULT_GOOGLE_MODEL,
+  DEFAULT_GROQ_MODEL,
+  DEFAULT_LOCAL_SERVER_MODEL,
+  DEFAULT_OPENAI_MODEL,
+} from "@motebit/sdk";
 import { VERSION } from "./config.js";
 import { bold, dim, cyan, green, command } from "./colors.js";
 
@@ -576,16 +584,16 @@ export function printVersion(): void {
  */
 export function defaultModelForProvider(provider: CliProvider): string {
   return provider === "local-server"
-    ? "llama3.2"
+    ? DEFAULT_LOCAL_SERVER_MODEL
     : provider === "openai"
-      ? "gpt-5.4-mini"
+      ? DEFAULT_OPENAI_MODEL
       : provider === "google"
-        ? "gemini-2.5-flash"
+        ? DEFAULT_GOOGLE_MODEL
         : provider === "groq"
-          ? "llama-3.3-70b-versatile"
+          ? DEFAULT_GROQ_MODEL
           : provider === "deepseek"
-            ? "deepseek-chat"
-            : "claude-sonnet-4-6";
+            ? DEFAULT_DEEPSEEK_MODEL
+            : DEFAULT_ANTHROPIC_MODEL;
 }
 
 export function printBanner(opts: {
