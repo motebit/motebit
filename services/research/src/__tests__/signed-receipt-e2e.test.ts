@@ -131,6 +131,25 @@ afterAll(async () => {
   await Promise.all([wsAtom.stop(), ruAtom.stop()]);
 });
 
+/**
+ * A final-response report satisfying the v1 shape contract (#504): flows
+ * that READ sources must end with a deliverable-shaped report — exactly
+ * what the live producer now demands before delivering.
+ */
+const SHAPED_REPORT = [
+  "**Question** — the test question, restated.",
+  "",
+  "**Findings**",
+  "",
+  "The synthesized answer, specific and cited inline [1]. This paragraph",
+  "stands in for real findings and carries enough substance to clear the",
+  "report shape contract's minimum-length floor for tests.",
+  "",
+  "**Sources**",
+  "",
+  "[1] Example source — https://example.com/source",
+].join("\n");
+
 describe("research — signed receipt E2E (molecule → web-search + read-url)", () => {
   it("accumulates exactly one receipt per delegated atom call, ordered by dispatch", async () => {
     mockCreate
@@ -155,7 +174,7 @@ describe("research — signed receipt E2E (molecule → web-search + read-url)",
         ],
       })
       .mockResolvedValueOnce({
-        content: [{ type: "text", text: "## Findings\nSynthesized report with citations [1]." }],
+        content: [{ type: "text", text: SHAPED_REPORT }],
       });
 
     const result = await research("what is x", {
@@ -202,7 +221,7 @@ describe("research — signed receipt E2E (molecule → web-search + read-url)",
         ],
       })
       .mockResolvedValueOnce({
-        content: [{ type: "text", text: "Done." }],
+        content: [{ type: "text", text: SHAPED_REPORT }],
       });
 
     const result = await research("verify me", {
@@ -233,7 +252,7 @@ describe("research — signed receipt E2E (molecule → web-search + read-url)",
       .mockResolvedValueOnce({
         content: [{ type: "tool_use", id: "tu-1", name: "motebit_read_url", input: { url } }],
       })
-      .mockResolvedValueOnce({ content: [{ type: "text", text: "Done." }] });
+      .mockResolvedValueOnce({ content: [{ type: "text", text: SHAPED_REPORT }] });
 
     const result = await research("provenance", {
       anthropicApiKey: "sk-ant-test",
@@ -276,7 +295,7 @@ describe("research — signed receipt E2E (molecule → web-search + read-url)",
       .mockResolvedValueOnce({
         content: [{ type: "tool_use", id: "tu-1", name: "motebit_read_url", input: { url } }],
       })
-      .mockResolvedValueOnce({ content: [{ type: "text", text: "Done." }] });
+      .mockResolvedValueOnce({ content: [{ type: "text", text: SHAPED_REPORT }] });
 
     const result = await research("provenance-html", {
       anthropicApiKey: "sk-ant-test",
@@ -365,7 +384,7 @@ describe("research — signed receipt E2E (molecule → web-search + read-url)",
         ],
       })
       .mockResolvedValueOnce({
-        content: [{ type: "text", text: "## Report" }],
+        content: [{ type: "text", text: SHAPED_REPORT }],
       });
 
     const result = await research("tree", {
@@ -427,7 +446,7 @@ describe("research — signed receipt E2E (molecule → web-search + read-url)",
         ],
       })
       .mockResolvedValueOnce({
-        content: [{ type: "text", text: "." }],
+        content: [{ type: "text", text: SHAPED_REPORT }],
       });
 
     const result = await research("id-test", {

@@ -99,6 +99,25 @@ function makeReceipt(
   } as SignedReceipt;
 }
 
+/**
+ * A final-response report satisfying the v1 shape contract (#504): flows
+ * that READ sources must end with a deliverable-shaped report — exactly
+ * what the live producer now demands before delivering.
+ */
+const SHAPED_REPORT = [
+  "**Question** — the test question, restated.",
+  "",
+  "**Findings**",
+  "",
+  "The synthesized answer, specific and cited inline [1]. This paragraph",
+  "stands in for real findings and carries enough substance to clear the",
+  "report shape contract's minimum-length floor for tests.",
+  "",
+  "**Sources**",
+  "",
+  "[1] Example source — https://example.com/source",
+].join("\n");
+
 const baseConfig: ResearchConfig = {
   anthropicApiKey: "sk-ant-test",
   webSearchUrl: "http://web-search.test/mcp",
@@ -568,7 +587,7 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
           },
         ],
       })
-      .mockResolvedValueOnce({ content: [{ type: "text", text: "Read." }] });
+      .mockResolvedValueOnce({ content: [{ type: "text", text: SHAPED_REPORT }] });
 
     const result = await research("read this", {
       ...baseConfig,
@@ -616,7 +635,7 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
           { type: "tool_use", id: "tu-3", name: "motebit_web_search", input: { query: "2" } },
         ],
       })
-      .mockResolvedValueOnce({ content: [{ type: "text", text: "Final." }] });
+      .mockResolvedValueOnce({ content: [{ type: "text", text: SHAPED_REPORT }] });
 
     const result = await research("multi", {
       ...baseConfig,
@@ -816,7 +835,7 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
         content: [
           {
             type: "text",
-            text: `Synthesized from interior knowledge. [1]\n\nSources\n[1] ${cited.title} — interior:${cited.source}#${cited.title}`,
+            text: `**Question** — tell me about Motebit.\n\n**Findings**\n\nSynthesized from interior knowledge, specific and cited inline [1]. This paragraph stands in for real findings and carries enough substance to clear the report shape contract's minimum-length floor.\n\n**Sources**\n\n[1] ${cited.title} — interior:${cited.source}#${cited.title}`,
           },
         ],
       });
@@ -1412,5 +1431,110 @@ describe("research — empty-report guard (#479)", () => {
       ),
     });
     expect(result.report).toBe("Recovered, no usage.");
+  });
+});
+
+describe("research — report shape guard (#504)", () => {
+  beforeEach(() => {
+    mockCreate.mockReset();
+  });
+
+  /** One read_url hop (mints a web citation → sourcesRead), then `finalText`. */
+  function fetchFlowThen(finalText: string): { ws: StubAtomAdapter; ru: StubAtomAdapter } {
+    const receipt = makeReceipt({
+      task_id: "shape-fetch",
+      motebit_id: "read-url-agent",
+      result: "Page contents.",
+      signature: "sig-shape",
+    });
+    const ws = new StubAtomAdapter([]);
+    const ru = new StubAtomAdapter([receipt]);
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [
+          {
+            type: "tool_use",
+            id: "tu-1",
+            name: "motebit_read_url",
+            input: { url: "https://a.example.com" },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: finalText }] });
+    return { ws, ru };
+  }
+
+  function run(adapters: { ws: StubAtomAdapter; ru: StubAtomAdapter }) {
+    return research("q", {
+      ...baseConfig,
+      adapterFactory: makeFactory(
+        new Map([
+          ["web-search", adapters.ws],
+          ["read-url", adapters.ru],
+        ]),
+      ),
+    });
+  }
+
+  const NOTES = "Searched for X. Found some pages. Snippet: lorem ipsum.";
+
+  it("a notes-shaped final (sources read) gets one re-synthesis naming the deficiency", async () => {
+    const adapters = fetchFlowThen(NOTES);
+    mockCreate.mockResolvedValueOnce({ content: [{ type: "text", text: SHAPED_REPORT }] });
+
+    const result = await run(adapters);
+    expect(result.report).toBe(SHAPED_REPORT);
+    expect(mockCreate).toHaveBeenCalledTimes(3);
+    const retryParams = mockCreate.mock.calls[2]![0] as {
+      tools?: unknown;
+      messages: Array<{ role: string; content: unknown }>;
+    };
+    expect(retryParams.tools).toBeUndefined();
+    expect(retryParams.messages[retryParams.messages.length - 1]!.content).toContain(
+      "not a finished report",
+    );
+  });
+
+  it("a thin original is DELIVERED when the retry regresses to empty — never discard a paid non-empty artifact", async () => {
+    const adapters = fetchFlowThen(NOTES);
+    mockCreate.mockResolvedValueOnce({ content: [] });
+
+    const result = await run(adapters);
+    expect(result.report).toBe(NOTES);
+  });
+
+  it("a thin original is delivered when the retry is no better", async () => {
+    const adapters = fetchFlowThen(NOTES);
+    mockCreate.mockResolvedValueOnce({
+      content: [{ type: "text", text: "Different notes, still not a report." }],
+    });
+
+    const result = await run(adapters);
+    expect(result.report).toBe(NOTES);
+  });
+
+  it("an improved-but-imperfect retry is delivered (residual issues logged, not fatal)", async () => {
+    const adapters = fetchFlowThen(NOTES);
+    // Retry has both sections but stays under the floor: 1 issue vs 3.
+    const partial = "**Findings**\nYes.\n**Sources**\n[1] x — https://x.example";
+    mockCreate.mockResolvedValueOnce({ content: [{ type: "text", text: partial }] });
+
+    const result = await run(adapters);
+    expect(result.report).toBe(partial);
+  });
+
+  it("a clean sourced report passes untouched — no retry call", async () => {
+    const adapters = fetchFlowThen(SHAPED_REPORT);
+    const result = await run(adapters);
+    expect(result.report).toBe(SHAPED_REPORT);
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+  });
+
+  it("an EMPTY response whose retry is thin still delivers the retry (empty is the worse artifact)", async () => {
+    const adapters = fetchFlowThen("   ");
+    mockCreate.mockResolvedValueOnce({ content: [{ type: "text", text: NOTES }] });
+
+    const result = await run(adapters);
+    expect(result.report).toBe(NOTES);
   });
 });

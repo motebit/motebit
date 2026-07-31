@@ -28,6 +28,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { McpClientAdapter } from "@motebit/mcp-client";
 import type { Citation, ExecutionReceipt } from "@motebit/sdk";
 import { querySelfKnowledge } from "@motebit/self-knowledge";
+import { reportShapeIssues } from "./report-shape.js";
 
 /**
  * Interior citations are minted only when the REPORT actually cites them.
@@ -64,7 +65,9 @@ For each report:
 3. **Open questions** — what you couldn't answer. Skip if there are none.
 4. **Sources** — numbered list: interior chunks you read (via motebit_recall_self) first, then URLs you read (via motebit_read_url), in order of citation. Each line: \`[N] Title — {locator}\` where locator is either \`interior:{source}#{title}\` or the URL.
 
-Be direct. No filler. Match depth to the question. If nothing you looked up answers the question, say so — do not fabricate.`;
+Be direct. No filler. Match depth to the question. If nothing you looked up answers the question, say so — do not fabricate.
+
+Your final message is delivered verbatim to a paying customer as the purchased report. When you stop calling tools, that message MUST be the complete report in the format above — never planning, running commentary, or pasted tool output.`;
 
 let cachedClient: Anthropic | null = null;
 
@@ -363,46 +366,87 @@ function responseText(content: Anthropic.ContentBlock[]): string {
 }
 
 /**
- * #479: a completed research turn whose report body is EMPTY is a worse
- * artifact than an honest failure — witnessed live on a paid hire (citations
- * delivered, findings blank, receipt signed "completed"). A synthesis
- * response can legally carry zero text blocks (an end_turn with empty
- * content, a max_tokens cut) and nothing guarded it. When that happens,
- * force ONE tool-free re-synthesis; if the retry is still empty, throw —
- * the molecule then signs a failed receipt, never a completed-empty one.
+ * #479 + #504: the loop treats ANY tool-free response as the finished
+ * report, but a synthesis response can legally be empty (an end_turn with
+ * zero text blocks, a max_tokens cut — witnessed live: citations delivered,
+ * findings blank, receipt signed "completed") or notes-shaped ("mid-work
+ * notes plus source snippets", witnessed live 2026-07-30 on a paid hire).
+ *
+ * Both get ONE tool-free re-synthesis with the deficiency named. Then the
+ * remedies diverge on what honesty demands: a still-EMPTY body throws (the
+ * molecule signs a failed receipt, never a completed-empty one), while a
+ * still-thin body is DELIVERED best-effort with the issues logged — a paid,
+ * non-empty artifact belongs to the buyer; shape quality is the archetype's
+ * earned record, graded by the conformance probe against the same
+ * `reportShapeIssues` contract.
  */
 async function ensureReport(params: {
   client: Anthropic;
   messages: Anthropic.MessageParam[];
   lastContent: Anthropic.ContentBlock[];
   report: string;
-  sourceCount: number;
+  citations: Citation[];
   addUsage: (r: Anthropic.Message) => void;
 }): Promise<string> {
-  if (params.report.trim() !== "") return params.report;
+  // "Sources read" follows the POST-filter citation rule the conformance
+  // probe grades on: web citations are receipt-anchored acts and always
+  // count; interior recalls count only when the report cites them
+  // (speculative uncited recalls are context, not sources). Recomputed per
+  // candidate text because the retry may cite differently.
+  const sourcesReadFor = (text: string): boolean =>
+    filterInteriorCitations(params.citations, text).length > 0;
+  const issues = reportShapeIssues(params.report, { sourcesRead: sourcesReadFor(params.report) });
+  if (issues.length === 0) return params.report;
+
+  const wasEmpty = issues[0]!.code === "empty";
+  const deficiency = wasEmpty
+    ? "Your previous reply contained no report text."
+    : `Your previous reply is not a finished report (${issues.map((i) => i.detail).join("; ")}).`;
+
   const retry = await params.client.messages.create({
     model: "claude-sonnet-4-6",
     max_tokens: 4096,
     system: SYSTEM_PROMPT,
     messages: [
       ...params.messages,
-      // Echo the empty response only when it had content blocks — an empty
-      // assistant content array is not a valid turn on the wire.
+      // Echo the deficient response only when it had content blocks — an
+      // empty assistant content array is not a valid turn on the wire.
       ...(params.lastContent.length > 0
         ? [{ role: "assistant" as const, content: params.lastContent }]
         : []),
       {
         role: "user" as const,
-        content:
-          "Your previous reply contained no report text. Write the full report NOW from the sources you already gathered, following the report format. Do not call any tools.",
+        content: `${deficiency} Write the complete report NOW from the sources you already gathered, following the report format (Question / Findings with inline [N] citations / Sources). Do not call any tools.`,
       },
     ],
   });
   params.addUsage(retry);
   const retried = responseText(retry.content);
+
   if (retried.trim() === "") {
-    throw new Error(
-      `research synthesis returned an empty report body (${params.sourceCount} source(s) gathered) — refusing to complete an empty artifact`,
+    if (wasEmpty) {
+      throw new Error(
+        `research synthesis returned an empty report body (${params.citations.length} source(s) gathered) — refusing to complete an empty artifact`,
+      );
+    }
+    // Retry regressed to empty — the original thin-but-real text is still
+    // the better artifact for the buyer.
+    console.log(
+      `[research] report shape: retry came back empty, delivering original with issues [${issues.map((i) => i.code).join(",")}]`,
+    );
+    return params.report;
+  }
+
+  const retriedIssues = reportShapeIssues(retried, { sourcesRead: sourcesReadFor(retried) });
+  if (retriedIssues.length >= issues.length && !wasEmpty) {
+    console.log(
+      `[research] report shape: retry did not improve (${retriedIssues.map((i) => i.code).join(",")} vs ${issues.map((i) => i.code).join(",")}), delivering original`,
+    );
+    return params.report;
+  }
+  if (retriedIssues.length > 0) {
+    console.log(
+      `[research] report shape: delivering retry with residual issues [${retriedIssues.map((i) => i.code).join(",")}]`,
     );
   }
   return retried;
@@ -697,7 +741,7 @@ export async function research(question: string, config: ResearchConfig): Promis
           messages,
           lastContent: response.content,
           report: responseText(response.content),
-          sourceCount: citations.length,
+          citations,
           addUsage: (r) => {
             inputTokens += r.usage?.input_tokens ?? 0;
             outputTokens += r.usage?.output_tokens ?? 0;
@@ -741,7 +785,7 @@ export async function research(question: string, config: ResearchConfig): Promis
       messages,
       lastContent: finalResponse.content,
       report: responseText(finalResponse.content),
-      sourceCount: citations.length,
+      citations,
       addUsage: (r) => {
         inputTokens += r.usage?.input_tokens ?? 0;
         outputTokens += r.usage?.output_tokens ?? 0;

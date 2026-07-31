@@ -337,6 +337,23 @@ async function checkResearcher(
     const nested = (receipt["delegation_receipts"] ?? []) as Array<{ task_id?: string }>;
     const nestedIds = new Set(nested.map((r) => r.task_id).filter(Boolean));
     const citations = payload.citations ?? [];
+    // #504 — the quality half of #479: a non-empty body can still be a
+    // notes-dump ("mid-work notes plus source snippets", witnessed live
+    // 2026-07-30 on a paid hire). Grade the report against the SAME v1
+    // shape contract the producer retries against — deterministic shape,
+    // never an LLM judge; quality beyond shape stays the archetype's
+    // earned record, not a relay gate.
+    const { reportShapeIssues } = await import("@motebit/research/report-shape");
+    const shapeIssues = reportShapeIssues(payload.report ?? "", {
+      sourcesRead: citations.length > 0,
+    });
+    record(
+      "research: report shape (synthesis, not notes)",
+      shapeIssues.length === 0 ? "PASS" : "FAIL",
+      shapeIssues.length === 0
+        ? "Findings + Sources present, floor cleared"
+        : shapeIssues.map((i) => `${i.code}: ${i.detail}`).join("; "),
+    );
     const orphan = citations.filter(
       (c) => c.receipt_task_id != null && !nestedIds.has(c.receipt_task_id),
     );
