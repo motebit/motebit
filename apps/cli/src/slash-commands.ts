@@ -49,6 +49,7 @@ import { deriveSyncEncryptionKey } from "@motebit/encryption";
 import { parseInterval } from "./intervals.js";
 import { handleInvokeCommand, handleReceiptCommand } from "./commands/invoke.js";
 import type { VoiceController } from "./voice.js";
+import cliSurface from "../etc/cli-surface.json";
 
 export interface ReplContext {
   moteDb: MotebitDatabase;
@@ -101,6 +102,43 @@ export function resolveBareCommand(input: string): string | null {
   if (name === "ledger" && words.length === 2) return `/ledger ${words[1]}`;
   return null;
 }
+
+/**
+ * Shell-invocation detector (#500, surface-determinism): a full CLI
+ * invocation typed at the chat prompt (`motebit --provider anthropic`,
+ * `motebit seed reveal`) is an easy mid-drive slip — no human means it as
+ * conversation. Witnessed live 2026-07-31: the fall-through reached a weak
+ * model which fabricated an unrelated R4 money intent from it (governance
+ * held; the affordance gap is what this closes).
+ *
+ * The vocabulary is the committed cli-surface baseline — the same file
+ * `check-cli-surface` keeps honest against the real dispatcher — never a
+ * hand-list. Only a KNOWN subcommand or `--flag` after the `motebit`
+ * prefix triggers; "motebit is a droplet of intelligence" stays chat.
+ *
+ * Returns a dim teach line, or null to fall through. The command is NEVER
+ * executed on the user's behalf (a REPL must not shell out on a guess) and
+ * never reaches the model.
+ */
+export function detectShellInvocation(input: string): string | null {
+  if (input.includes("?")) return null;
+  const words = input.trim().split(/\s+/);
+  if (words.length < 2 || words[0] !== "motebit") return null;
+  const second = words[1]!;
+
+  const known = second.startsWith("--")
+    ? CLI_FLAG_NAMES.has(second.slice(2).split("=")[0]!.toLowerCase())
+    : CLI_SUBCOMMAND_NAMES.has(second.toLowerCase());
+  if (!known) return null;
+
+  return "  that's a shell command — type `quit`, then run it in your terminal";
+}
+
+// The operator-surface vocabulary, inlined into the bundle at build time.
+// check-cli-surface guarantees this file matches the live dispatcher, so
+// the detector can never teach a command the binary doesn't have.
+const CLI_SUBCOMMAND_NAMES = new Set(Object.keys(cliSurface.subcommands));
+const CLI_FLAG_NAMES = new Set(cliSurface.flags.map((f) => f.name.toLowerCase()));
 
 function renderProvenanceBadge(record: SkillRecord): string {
   // if/else chain rather than switch — the `command-registry.test.ts` regex

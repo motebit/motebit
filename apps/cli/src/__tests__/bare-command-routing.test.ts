@@ -5,7 +5,7 @@
  * resolver is deliberately narrow; these tests lock both directions.
  */
 import { describe, it, expect } from "vitest";
-import { resolveBareCommand } from "../slash-commands.js";
+import { detectShellInvocation, resolveBareCommand } from "../slash-commands.js";
 import { renderIdentityCard } from "../subcommands/id.js";
 
 describe("resolveBareCommand", () => {
@@ -49,6 +49,66 @@ describe("resolveBareCommand", () => {
   it("case-insensitive on the name, null on empty", () => {
     expect(resolveBareCommand("Wallet")).toBe("/wallet");
     expect(resolveBareCommand("")).toBeNull();
+  });
+});
+
+/**
+ * Shell-invocation detector (#500): a full CLI invocation typed at the
+ * chat prompt teaches instead of reaching the model. Witnessed live: the
+ * fall-through let a weak model fabricate an R4 money intent from
+ * `motebit --provider anthropic`. Vocabulary comes from the committed
+ * cli-surface baseline, never a hand-list.
+ */
+describe("detectShellInvocation", () => {
+  const TEACH = "shell command";
+
+  it("detects the witnessed incident input — known flag after the motebit prefix", () => {
+    expect(detectShellInvocation("motebit --provider anthropic")).toContain(TEACH);
+  });
+
+  it("detects known subcommand invocations, with flags and args", () => {
+    expect(detectShellInvocation("motebit seed reveal")).toContain(TEACH);
+    expect(detectShellInvocation("motebit run --price 5")).toContain(TEACH);
+    expect(detectShellInvocation("motebit doctor")).toContain(TEACH);
+    expect(detectShellInvocation("motebit balance extra words")).toContain(TEACH);
+  });
+
+  it("detects --flag=value shapes", () => {
+    expect(detectShellInvocation("motebit --model=claude-opus-5")).toContain(TEACH);
+  });
+
+  it("ordinary sentences starting with 'motebit' stay chat", () => {
+    expect(detectShellInvocation("motebit is a droplet of intelligence")).toBeNull();
+    expect(detectShellInvocation("motebit please research quantum computing")).toBeNull();
+  });
+
+  it("unknown flags and subcommands stay chat — only the real surface teaches", () => {
+    expect(detectShellInvocation("motebit --frobnicate now")).toBeNull();
+    expect(detectShellInvocation("motebit frobnicate")).toBeNull();
+  });
+
+  it("questions stay chat even when command-shaped", () => {
+    expect(detectShellInvocation("motebit --provider anthropic?")).toBeNull();
+  });
+
+  it("no motebit prefix or bare 'motebit' stays chat", () => {
+    expect(detectShellInvocation("--provider anthropic")).toBeNull();
+    expect(detectShellInvocation("motebit")).toBeNull();
+    expect(detectShellInvocation("run --price 5")).toBeNull();
+  });
+
+  it("never resolves to an executed command — the return is a teach line only", () => {
+    const line = detectShellInvocation("motebit seed reveal")!;
+    expect(line.startsWith("/")).toBe(false);
+    expect(line).toContain("run it in your terminal");
+  });
+
+  it("read-only bare names still route deterministically first (caller ordering contract)", () => {
+    // `motebit wallet` matches BOTH the resolver and the detector; the
+    // caller runs resolveBareCommand first, so the deterministic slash
+    // wins. This test documents that both halves match it.
+    expect(resolveBareCommand("motebit wallet")).toBe("/wallet");
+    expect(detectShellInvocation("motebit wallet")).toContain(TEACH);
   });
 });
 

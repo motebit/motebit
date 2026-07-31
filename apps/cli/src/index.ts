@@ -55,6 +55,7 @@ import {
   parseSlashCommand,
   handleSlashCommand,
   resolveBareCommand,
+  detectShellInvocation,
 } from "./slash-commands.js";
 import type { ReplContext } from "./slash-commands.js";
 import {
@@ -1119,6 +1120,20 @@ async function main(): Promise<void> {
     const bareSlash = resolveBareCommand(trimmed);
     const effective = bareSlash ?? trimmed;
     if (bareSlash != null) console.log(dim(`  → ${bareSlash}`));
+
+    // A full CLI invocation typed at the chat prompt (#500) teaches instead
+    // of reaching the model — a weak model once fabricated a money intent
+    // from exactly this noise. Runs after resolveBareCommand so
+    // `motebit wallet` still routes deterministically.
+    if (bareSlash == null) {
+      const shellTeach = detectShellInvocation(trimmed);
+      if (shellTeach != null) {
+        console.log(dim(shellTeach));
+        console.log();
+        prompt();
+        return;
+      }
+    }
 
     if (isSlashCommand(effective)) {
       const { command, args } = parseSlashCommand(effective);
