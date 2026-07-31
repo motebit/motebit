@@ -372,6 +372,90 @@ describe("GET /api/v1/agents/discover — marketplace enrichment", () => {
     expect(target!.freshness).toBe("cold");
   });
 
+  // ── #473: liveness decay on the DEFAULT projection ─────────────────────
+  // The default browse shelf decays; the ledger doesn't. Registration stays
+  // open — this is projection hygiene, never a gate.
+
+  it("agent unheard-of past a week drops out of the default browse projection", async () => {
+    const kp = await generateKeypair();
+    await registerAgent(relay, "ghost-week-agent", bytesToHex(kp.publicKey));
+    const eightDaysAgo = Date.now() - 8 * 24 * 60 * 60 * 1000;
+    relay.moteDb.db
+      .prepare(
+        "UPDATE agent_registry SET last_heartbeat = ?, registered_at = ? WHERE motebit_id = ?",
+      )
+      .run(eightDaysAgo, eightDaysAgo, "ghost-week-agent");
+
+    const res = await relay.app.request("/api/v1/agents/discover");
+    const { agents } = (await res.json()) as { agents: DiscoveredAgent[] };
+    expect(agents.find((a) => a.motebit_id === "ghost-week-agent")).toBeUndefined();
+  });
+
+  it("include=all restores delisted rows — off the shelf, never out of the ledger", async () => {
+    const kp = await generateKeypair();
+    await registerAgent(relay, "ghost-week-agent-2", bytesToHex(kp.publicKey));
+    const eightDaysAgo = Date.now() - 8 * 24 * 60 * 60 * 1000;
+    relay.moteDb.db
+      .prepare(
+        "UPDATE agent_registry SET last_heartbeat = ?, registered_at = ? WHERE motebit_id = ?",
+      )
+      .run(eightDaysAgo, eightDaysAgo, "ghost-week-agent-2");
+
+    const res = await relay.app.request("/api/v1/agents/discover?include=all");
+    const { agents } = (await res.json()) as { agents: DiscoveredAgent[] };
+    const target = agents.find((a) => a.motebit_id === "ghost-week-agent-2");
+    expect(target).toBeDefined();
+    expect(target!.freshness).toBe("cold");
+  });
+
+  it("a directed motebit_id lookup still finds a delisted row", async () => {
+    const kp = await generateKeypair();
+    await registerAgent(relay, "ghost-week-agent-3", bytesToHex(kp.publicKey));
+    const eightDaysAgo = Date.now() - 8 * 24 * 60 * 60 * 1000;
+    relay.moteDb.db
+      .prepare(
+        "UPDATE agent_registry SET last_heartbeat = ?, registered_at = ? WHERE motebit_id = ?",
+      )
+      .run(eightDaysAgo, eightDaysAgo, "ghost-week-agent-3");
+
+    const res = await relay.app.request("/api/v1/agents/discover?motebit_id=ghost-week-agent-3");
+    const { agents } = (await res.json()) as { agents: DiscoveredAgent[] };
+    expect(agents.find((a) => a.motebit_id === "ghost-week-agent-3")).toBeDefined();
+  });
+
+  it("probe residue that never heartbeated ages out via registration time", async () => {
+    const kp = await generateKeypair();
+    await registerAgent(relay, "probe-residue-agent", bytesToHex(kp.publicKey));
+    const eightDaysAgo = Date.now() - 8 * 24 * 60 * 60 * 1000;
+    relay.moteDb.db
+      .prepare(
+        "UPDATE agent_registry SET last_heartbeat = 0, registered_at = ? WHERE motebit_id = ?",
+      )
+      .run(eightDaysAgo, "probe-residue-agent");
+
+    const res = await relay.app.request("/api/v1/agents/discover");
+    const { agents } = (await res.json()) as { agents: DiscoveredAgent[] };
+    expect(agents.find((a) => a.motebit_id === "probe-residue-agent")).toBeUndefined();
+  });
+
+  it("the relay's own registration is excluded from the default agent listing", async () => {
+    const relayId = relay.relayIdentity.relayMotebitId;
+    const kp = await generateKeypair();
+    await registerAgent(relay, relayId, bytesToHex(kp.publicKey));
+
+    const defaultRes = await relay.app.request("/api/v1/agents/discover");
+    const defaultBody = (await defaultRes.json()) as { agents: DiscoveredAgent[] };
+    expect(defaultBody.agents.find((a) => a.motebit_id === relayId)).toBeUndefined();
+
+    const allRes = await relay.app.request("/api/v1/agents/discover?include=all");
+    const allBody = (await allRes.json()) as {
+      agents: Array<DiscoveredAgent & { role?: string }>;
+    };
+    const selfRow = allBody.agents.find((a) => a.motebit_id === relayId);
+    expect(selfRow).toBeDefined();
+    expect(selfRow!.role).toBe("relay");
+  });
+
   it("fresh agent (just registered) has freshness='awake'", async () => {
     const kp = await generateKeypair();
     await registerAgent(relay, "fresh-agent-freshness", bytesToHex(kp.publicKey));
