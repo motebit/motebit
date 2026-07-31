@@ -2,7 +2,8 @@
 
 import type { MotebitRuntime, ReflectionResult, RelayConfig } from "@motebit/runtime";
 import type { TokenAudience } from "@motebit/sdk";
-import { isTokenAudience, fromMicro } from "@motebit/sdk";
+import { isTokenAudience, fromMicro, modelVendorHint } from "@motebit/sdk";
+import { admitModelForProvider } from "./model-admission.js";
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
 import { renderIdentityCard } from "./subcommands/id.js";
 import { DEFAULT_SOLANA_RPC_URL, WALLET_GUIDANCE_LINES } from "./subcommands/wallet.js";
@@ -573,13 +574,31 @@ export async function handleSlashCommand(
         mistral: "mistral",
       };
 
+      // Provider-aware list (#471): every row names its provider; rows the
+      // ACTIVE provider can't serve render dim with the repair spelled out —
+      // the affordance must not offer a switch that cannot work.
+      const providerLabel = (modelId: string): string => {
+        const hint = modelVendorHint(modelId);
+        return hint === "local" ? "local-server" : hint;
+      };
       const showModelList = (current: string) => {
         const col = Math.max(...Object.keys(MODEL_ALIASES).map((k) => k.length)) + 2;
         for (const [alias, modelId] of Object.entries(MODEL_ALIASES)) {
           const active = modelId === current || alias === current;
+          const servable = admitModelForProvider(config.provider, modelId).admissible;
           const marker = active ? green(" ●") : "  ";
           const gap = " ".repeat(Math.max(1, col - alias.length));
-          console.log(`${marker} ${cyan(alias)}${gap}${dim(modelId)}`);
+          if (servable) {
+            console.log(
+              `${marker} ${cyan(alias)}${gap}${dim(modelId + " · " + providerLabel(modelId))}`,
+            );
+          } else {
+            console.log(
+              dim(
+                `${marker} ${alias}${gap}${modelId} · needs --provider ${providerLabel(modelId)}`,
+              ),
+            );
+          }
         }
       };
 
@@ -600,9 +619,27 @@ export async function handleSlashCommand(
         break;
       }
       const modelId = resolved ?? args;
+      // Pre-flight admission (#471, intelligence-pluggability commitment #1):
+      // a switch the active provider can't serve refuses with the repair —
+      // it must not rename the model, move the marker, or persist a default
+      // that bricks the next launch.
+      const admission = admitModelForProvider(config.provider, modelId);
+      if (!admission.admissible) {
+        console.log(`\n  ${warn(admission.teach ?? "model not servable on this provider")}\n`);
+        break;
+      }
       runtime.setModel(modelId);
       if (fullConfig) {
         fullConfig.default_model = modelId;
+        // Persist the PAIR: a model default with no memory of its provider is
+        // the #471 footgun — a later bare `motebit` launch (provider default:
+        // local-server) would 404 on a hosted model id. groq/deepseek aren't
+        // in the persisted-provider union; for them the model alone persists,
+        // and the launch-side admission still yields politely.
+        const persistable = ["anthropic", "openai", "google", "local-server", "proxy"];
+        if (persistable.includes(config.provider)) {
+          fullConfig.default_provider = config.provider as FullConfig["default_provider"];
+        }
         saveFullConfig(fullConfig);
       }
       console.log();

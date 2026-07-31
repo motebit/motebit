@@ -2,7 +2,7 @@ import { DEFAULT_CONFIG } from "@motebit/ai-core";
 import type { MotebitPersonalityConfig } from "@motebit/ai-core";
 import { deriveSyncEncryptionKey, mintAudienceToken } from "@motebit/encryption";
 import { connectMcpServers } from "@motebit/mcp-client";
-import { providerAcceptsModel } from "@motebit/sdk";
+import { admitModelForProvider } from "./model-admission.js";
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
 import { preflightGrant, renderPreflight } from "./grant-preflight.js";
 import { parseCliArgs, printHelp, printVersion, printBanner, trimHistory } from "./args.js";
@@ -476,9 +476,12 @@ async function main(): Promise<void> {
     // Config residue yields politely: a default_model from a previous
     // provider era must not ride along onto a different provider (the
     // 2026-07-06 "anthropic · llama3.2:latest" pairing — pre-flight
-    // admission per intelligence-pluggability-contract). The per-provider
-    // parse-time default already sits on config.model; keep it and say so.
-    if (providerAcceptsModel(config.provider, personalityConfig.default_model)) {
+    // admission per intelligence-pluggability-contract). The CLI-strict
+    // check also refuses a hosted-vendor id on local-server (#471: a bare
+    // launch with a persisted claude-* default 404'd against ollama — the
+    // sdk primitive is deliberately permissive there, the affordance isn't).
+    // The per-provider parse-time default already sits on config.model.
+    if (admitModelForProvider(config.provider, personalityConfig.default_model).admissible) {
       config.model = personalityConfig.default_model;
     } else {
       console.log(
@@ -490,13 +493,14 @@ async function main(): Promise<void> {
   }
   // An EXPLICIT contradiction fails loud at startup, naming both — never
   // deferred to an opaque first-call API error.
-  if (process.argv.includes("--model") && !providerAcceptsModel(config.provider, config.model)) {
-    console.error(
-      `Model "${config.model}" does not belong to provider "${config.provider}" — ` +
-        `pick a matching pair (e.g. --provider anthropic --model claude-sonnet-4-6), ` +
-        `or drop --model to use the provider's default.`,
-    );
-    process.exit(1);
+  if (process.argv.includes("--model")) {
+    const admission = admitModelForProvider(config.provider, config.model);
+    if (!admission.admissible) {
+      console.error(
+        `Model "${config.model}" does not belong to provider "${config.provider}" — ${admission.teach ?? "pick a matching pair, or drop --model to use the provider's default."}`,
+      );
+      process.exit(1);
+    }
   }
   if (fullConfig.max_tokens != null && !process.argv.includes("--max-tokens")) {
     config.maxTokens = fullConfig.max_tokens;
