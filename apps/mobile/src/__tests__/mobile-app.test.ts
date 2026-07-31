@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { DEFAULT_LOCAL_SERVER_MODEL } from "@motebit/sdk";
 
 // === Module Mocks ===
 
@@ -356,9 +357,9 @@ describe("MobileApp.initAI", () => {
     expect(app.currentModel).toBe("mistral");
   });
 
-  it("defaults to llama3.2 for local-server", async () => {
+  it("defaults to the sdk local-server default", async () => {
     await app.initAI({ provider: "local-server" });
-    expect(app.currentModel).toBe("llama3.2");
+    expect(app.currentModel).toBe(DEFAULT_LOCAL_SERVER_MODEL);
   });
 
   it("defaults to claude-sonnet for anthropic", async () => {
@@ -387,7 +388,7 @@ describe("MobileApp.settings", () => {
   it("returns defaults when no settings stored", async () => {
     const settings = await app.loadSettings();
     expect(settings.provider).toBe("local-server");
-    expect(settings.model).toBe("llama3.2");
+    expect(settings.model).toBe(DEFAULT_LOCAL_SERVER_MODEL);
     expect(settings.appearance.colorPreset).toBe("moonlight");
     expect(settings.approvalPreset).toBe("balanced");
   });

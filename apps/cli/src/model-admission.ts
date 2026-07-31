@@ -11,7 +11,7 @@
  * admissible — registry lag must never brick a switch.
  */
 
-import { modelVendorHint, providerAcceptsModel } from "@motebit/sdk";
+import { DEFAULT_LOCAL_SERVER_MODEL, modelVendorHint, providerAcceptsModel } from "@motebit/sdk";
 
 /** Vendors whose models are served by a hosted API, never a local server. */
 const HOSTED_VENDORS = new Set(["anthropic", "openai", "google", "deepseek"]);
@@ -39,8 +39,8 @@ export function admitModelForProvider(provider: string, model: string): ModelAdm
       teach:
         `${model} is a hosted ${hint} model — a local server can't serve it. ` +
         (flag != null
-          ? `Restart with --provider ${flag}, or pick a local model (e.g. /model llama3.2).`
-          : `Pick a local model instead (e.g. /model llama3.2).`),
+          ? `Restart with --provider ${flag}, or pick a local model (e.g. /model ${DEFAULT_LOCAL_SERVER_MODEL}).`
+          : `Pick a local model instead (e.g. /model ${DEFAULT_LOCAL_SERVER_MODEL}).`),
     };
   }
 

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import { DEFAULT_LOCAL_SERVER_MODEL } from "@motebit/sdk";
 import {
   DesktopApp,
   createTauriStorage,
@@ -460,7 +461,7 @@ describe("DesktopApp.currentModel", () => {
   it("returns the model after ollama initAI", async () => {
     app = new DesktopApp();
     await app.initAI({ provider: "local-server", isTauri: false });
-    expect(app.currentModel).toBe("llama3.2");
+    expect(app.currentModel).toBe(DEFAULT_LOCAL_SERVER_MODEL);
   });
 
   it("returns custom model when specified", async () => {
@@ -513,7 +514,7 @@ describe("DesktopApp.setModel", () => {
   it("switches model in-place for ollama", async () => {
     app = new DesktopApp();
     await app.initAI({ provider: "local-server", isTauri: false });
-    expect(app.currentModel).toBe("llama3.2");
+    expect(app.currentModel).toBe(DEFAULT_LOCAL_SERVER_MODEL);
     app.setModel("mistral");
     expect(app.currentModel).toBe("mistral");
   });

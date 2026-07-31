@@ -16,8 +16,8 @@
  *   For every backtick-anchored model-literal that **looks like a
  *   default-context reference** in any in-scope doc, the literal must
  *   match the canonical default for that provider as derived from
- *   `apps/cli/src/args.ts` (the `defaultModel` ternary chain at the
- *   top of `parseCliArgs`).
+ *   `packages/sdk/src/models.ts` (`DEFAULT_ANTHROPIC_MODEL`, the
+ *   registry home the CLI itself consumes).
  *
  * Canonical extraction:
  *
@@ -30,9 +30,13 @@
  *     "claude-sonnet-4-6"
  *
  *   Each branch maps a provider key to its default model. The gate
- *   parses this chain (regex, anchored to the local `defaultModel`
- *   constant) so a future bump to e.g. `claude-sonnet-5-1` only
- *   requires editing args.ts; the gate auto-follows.
+ *   parses this chain (regex, anchored to
+ *   `DEFAULT_ANTHROPIC_MODEL`) so a future bump to e.g.
+ *   `claude-sonnet-5-1` only requires editing models.ts; the gate
+ *   auto-follows. (2026-07-31: extraction moved from the CLI's
+ *   `defaultModel` ternary to the sdk registry when the ternary was
+ *   refactored to consume the sdk constants — the canonical followed
+ *   the single source one level down.)
  *
  * Provider families gated:
  *
@@ -73,7 +77,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
 
-const ARGS_TS = path.join(REPO_ROOT, "apps/cli/src/args.ts");
+const MODELS_TS = path.join(REPO_ROOT, "packages/sdk/src/models.ts");
 const DOCS_ROOT = path.join(REPO_ROOT, "apps/docs/content");
 
 const SKIP_DIRS = new Set([
@@ -115,19 +119,20 @@ function findFiles(dir: string, predicate: (p: string) => boolean): string[] {
 }
 
 /**
- * Extract the canonical Claude default model from `apps/cli/src/args.ts`.
- * Looks for the literal default in the `defaultModel` constant — the
- * fall-through (Anthropic) branch of the per-provider ternary chain.
+ * Extract the canonical Claude default model from
+ * `packages/sdk/src/models.ts` — `DEFAULT_ANTHROPIC_MODEL`, the registry
+ * home. (2026-07-31: the CLI's `defaultModel` ternary this gate used to
+ * parse was refactored to consume the sdk constants — the canonical moved
+ * one level down to the true single source, and the gate follows.)
  *
- * If the dispatcher pattern changes (e.g., the constant is renamed or
- * moved into a registry), this regex needs to follow. The inline
- * doctrine note above tells the next maintainer.
+ * If the constant is renamed or the default leaves the sonnet family,
+ * this regex needs to follow. The inline doctrine note above tells the
+ * next maintainer.
  */
 function loadCanonicalClaudeModel(): string | null {
-  const text = fs.readFileSync(ARGS_TS, "utf8");
-  // Match the closing fall-through of the defaultModel ternary chain:
-  // `: "claude-sonnet-N-M[-DDDDDDDD]";`
-  const pattern = /defaultModel\s*=[\s\S]*?:\s*"(claude-sonnet-\d+-\d+(?:-\d+)?)"\s*;/m;
+  const text = fs.readFileSync(MODELS_TS, "utf8");
+  // `export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-N-M[-DDDDDDDD]";`
+  const pattern = /DEFAULT_ANTHROPIC_MODEL\s*=\s*"(claude-sonnet-\d+-\d+(?:-\d+)?)"\s*;/m;
   const m = text.match(pattern);
   return m ? m[1]! : null;
 }
@@ -182,13 +187,13 @@ function scanDoc(doc: string, canonical: string): Finding[] {
 
 function main(): void {
   console.log(
-    "▸ check-docs-default-models — drift defense against stale default-model literals in docs (e.g. `claude-sonnet-4-5-20250929` after the production default moved to `claude-sonnet-4-6`). Extracts the canonical default from `apps/cli/src/args.ts` `defaultModel` ternary and validates every default-context literal in scope matches.",
+    "▸ check-docs-default-models — drift defense against stale default-model literals in docs (e.g. `claude-sonnet-4-5-20250929` after the production default moved to `claude-sonnet-4-6`). Extracts the canonical default from `packages/sdk/src/models.ts` DEFAULT_ANTHROPIC_MODEL and validates every default-context literal in scope matches.",
   );
 
   const canonical = loadCanonicalClaudeModel();
   if (!canonical) {
     console.error(
-      "✗ check-docs-default-models: failed to extract the canonical Claude default model from apps/cli/src/args.ts — the `defaultModel` ternary pattern may have changed; update the regex in loadCanonicalClaudeModel.",
+      "✗ check-docs-default-models: failed to extract the canonical Claude default model from packages/sdk/src/models.ts — the DEFAULT_ANTHROPIC_MODEL pattern may have changed; update the regex in loadCanonicalClaudeModel.",
     );
     process.exit(1);
   }
@@ -205,7 +210,7 @@ function main(): void {
 
   if (allFindings.length === 0) {
     console.log(
-      `✓ check-docs-default-models: ${docs.length} doc(s) scanned; every default-context Claude literal matches the canonical \`${canonical}\` from apps/cli/src/args.ts.`,
+      `✓ check-docs-default-models: ${docs.length} doc(s) scanned; every default-context Claude literal matches the canonical \`${canonical}\` from packages/sdk/src/models.ts.`,
     );
     return;
   }

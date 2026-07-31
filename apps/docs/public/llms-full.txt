@@ -5673,7 +5673,7 @@ Open settings (gear icon, top right) to configure your LLM provider:
 
 | Provider | Setup |
 |---|---|
-| **Ollama** (default) | Install [Ollama](https://ollama.ai), pull a model (`ollama pull llama3.2`), and select "Ollama" in settings |
+| **Ollama** (default) | Install [Ollama](https://ollama.ai), pull a model (`ollama pull qwen3`), and select "Ollama" in settings |
 | **Anthropic** | Enter your API key in settings. Key is stored in the OS keyring, never on disk. |
 
 Set the model name in the **Model** field. Examples: `llama3.2`, `claude-sonnet-4-6`.
@@ -5763,7 +5763,7 @@ Open settings (gear icon, top right) to configure your LLM:
 | **Anthropic** | Enter your API key. Stored in the device keychain, never on disk. |
 | **Hybrid** | Uses Anthropic as primary, falls back to Ollama on failure. Requires both an API key and an Ollama endpoint. |
 
-Set the model name in the **Model** field. Default: `llama3.2`.
+Set the model name in the **Model** field. Default: `qwen3`.
 
 ## Voice input
 
@@ -6266,7 +6266,7 @@ ollama pull mistral
 ollama pull codellama
 ```
 
-Set `default_provider: "ollama"` and `default_model: "llama3.2"` in config, or use the CLI flag `--provider ollama --model llama3.2`.
+Set `default_provider: "ollama"` and `default_model: "qwen3"` in config, or use the CLI flag `--provider ollama --model qwen3`.
 
 Ollama runs on `http://localhost:11434` by default.
 

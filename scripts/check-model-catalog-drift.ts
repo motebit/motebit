@@ -33,9 +33,64 @@
  * it skips politely.
  */
 
-import { ANTHROPIC_MODELS } from "@motebit/sdk";
+import {
+  ANTHROPIC_MODELS,
+  DEFAULT_ANTHROPIC_MODEL,
+  DEFAULT_DEEPSEEK_MODEL,
+  DEFAULT_GOOGLE_MODEL,
+  DEFAULT_GROQ_MODEL,
+  DEFAULT_LOCAL_SERVER_MODEL,
+  DEFAULT_OPENAI_MODEL,
+  DEFAULT_PROXY_MODEL,
+  MODEL_DEFAULT_REVIEW_BY,
+} from "@motebit/sdk";
 import { modelRejectsSamplingParams } from "@motebit/ai-core/browser";
 import { failWithRepair } from "./lib/gate-report.js";
+
+const DEFAULTS_BY_PROVIDER: Record<string, string> = {
+  anthropic: DEFAULT_ANTHROPIC_MODEL,
+  openai: DEFAULT_OPENAI_MODEL,
+  google: DEFAULT_GOOGLE_MODEL,
+  deepseek: DEFAULT_DEEPSEEK_MODEL,
+  groq: DEFAULT_GROQ_MODEL,
+  "local-server": DEFAULT_LOCAL_SERVER_MODEL,
+  proxy: DEFAULT_PROXY_MODEL,
+};
+
+/**
+ * Defaults as perishable inventory: every DEFAULT_*_MODEL carries a
+ * review-by date (MODEL_DEFAULT_REVIEW_BY). Past the date the gate goes
+ * red — the repair is a DELIBERATE human review, never an auto-bump
+ * (behind-on-purpose is a product choice; behind-unknowingly is the
+ * defect). Runs KEYLESS — this half needs no network, so a local
+ * `pnpm check-model-catalog-drift` exercises it too.
+ */
+function checkDefaultReviewDates(): void {
+  const today = new Date().toISOString().slice(0, 10);
+  const lapsed: string[] = [];
+  for (const [provider, reviewBy] of Object.entries(MODEL_DEFAULT_REVIEW_BY)) {
+    const current = DEFAULTS_BY_PROVIDER[provider] ?? "?";
+    if (today > reviewBy) {
+      lapsed.push(`${provider} — default "${current}" unreviewed since ${reviewBy}`);
+    } else {
+      console.log(
+        `check-model-catalog-drift: default ${provider}=${current} reviewed through ${reviewBy}`,
+      );
+    }
+  }
+  if (lapsed.length > 0) {
+    failWithRepair({
+      invariant:
+        "Every DEFAULT_*_MODEL carries an unexpired review-by date — a default can be old, never UNEXAMINED (model half-life is months).",
+      sites: lapsed,
+      canonical: "packages/sdk/src/models.ts",
+      fix:
+        "Review each lapsed DEFAULT_*_MODEL against the current model landscape, then bump its MODEL_DEFAULT_REVIEW_BY date in packages/sdk/src/models.ts deliberately — with or without a model change. " +
+        "Never auto-bump the model itself; behind-on-purpose is a product choice (#475).",
+      doctrine: "docs/doctrine/intelligence-pluggability-contract.md",
+    });
+  }
+}
 
 /** Families whose request shape is the LEGACY one (sampling params
  * accepted, budget_tokens thinking). A live id matching neither this nor
@@ -52,6 +107,9 @@ async function fetchLiveIds(apiKey: string): Promise<string[]> {
 }
 
 async function main(): Promise<void> {
+  // Keyless half first: default review-by dates (fails fast when lapsed).
+  checkDefaultReviewDates();
+
   const requireKey = process.argv.includes("--require-key");
   const apiKey = process.env.ANTHROPIC_API_KEY;
 

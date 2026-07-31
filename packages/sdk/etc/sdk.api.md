@@ -274,13 +274,13 @@ export const DEFAULT_GOVERNANCE_CONFIG: GovernanceConfig;
 export const DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile";
 
 // @public
-export const DEFAULT_LOCAL_SERVER_MODEL = "llama3.2";
+export const DEFAULT_LOCAL_SERVER_MODEL = "qwen3";
 
 // @public
 export const DEFAULT_MOTEBIT_CLOUD_URL = "https://api.motebit.com";
 
 // @public
-export const DEFAULT_OLLAMA_MODEL = "llama3.2";
+export const DEFAULT_OLLAMA_MODEL = "qwen3";
 
 // @public
 export const DEFAULT_OPENAI_MODEL = "gpt-5.4-mini";
@@ -462,7 +462,7 @@ export interface LightingSpec {
 }
 
 // @public
-export const LOCAL_SERVER_SUGGESTED_MODELS: readonly ["llama3.2", "llama3.1", "llama3", "mistral", "codellama", "gemma2", "phi3", "qwen2"];
+export const LOCAL_SERVER_SUGGESTED_MODELS: readonly ["qwen3", "gpt-oss", "gemma3", "llama4", "phi4-mini", "deepseek-r1", "mistral-small3.2"];
 
 // @public (undocumented)
 export type LocalServerSuggestedModel = (typeof LOCAL_SERVER_SUGGESTED_MODELS)[number];
@@ -587,6 +587,9 @@ export interface MlxProviderSpec {
 }
 
 // @public
+export const MODEL_DEFAULT_REVIEW_BY: Record<string, string>;
+
+// @public
 export function modelVendorHint(model: string): "anthropic" | "openai" | "google" | "deepseek" | "groq" | "local" | "unknown";
 
 // @public
@@ -638,7 +641,7 @@ export interface OklchColor {
 export function oklchToRgb(input: OklchColor): [number, number, number];
 
 // @public @deprecated (undocumented)
-export const OLLAMA_SUGGESTED_MODELS: readonly ["llama3.2", "llama3.1", "llama3", "mistral", "codellama", "gemma2", "phi3", "qwen2"];
+export const OLLAMA_SUGGESTED_MODELS: readonly ["qwen3", "gpt-oss", "gemma3", "llama4", "phi4-mini", "deepseek-r1", "mistral-small3.2"];
 
 // @public @deprecated (undocumented)
 export type OllamaSuggestedModel = LocalServerSuggestedModel;

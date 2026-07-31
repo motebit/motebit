@@ -85,14 +85,13 @@ export const GROQ_MODELS = ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"] as
  * the safe defaults to surface first.
  */
 export const LOCAL_SERVER_SUGGESTED_MODELS = [
-  "llama3.2",
-  "llama3.1",
-  "llama3",
-  "mistral",
-  "codellama",
-  "gemma2",
-  "phi3",
-  "qwen2",
+  "qwen3", // balanced all-rounder, tool-capable — the first-run default
+  "gpt-oss", // OpenAI open-weights — best small tool-use class (~16GB)
+  "gemma3", // Google open family
+  "llama4", // Meta current family
+  "phi4-mini", // minimal-hardware tier (entry laptops, iGPU)
+  "deepseek-r1", // reasoning-class open weights
+  "mistral-small3.2", // Mistral current small
 ] as const;
 
 /**
@@ -145,8 +144,13 @@ export const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
  */
 export const DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile";
 
-/** Default Ollama model — used as the `local-server` default too. */
-export const DEFAULT_OLLAMA_MODEL = "llama3.2";
+/** Default Ollama model — used as the `local-server` default too.
+ * 2026-07-31 refresh: `llama3.2` (Sept 2024, 3B) was the witnessed weak-model
+ * floor — safe under the governance stack but not useful (fabricated a money
+ * proposal from noise). `qwen3` is the current balanced, tool-capable local
+ * family. A default can be old; it can never be UNEXAMINED — see
+ * MODEL_DEFAULT_REVIEW_BY below. */
+export const DEFAULT_OLLAMA_MODEL = "qwen3";
 
 /**
  * Canonical default model for the on-device `local-server` backend.
@@ -160,6 +164,27 @@ export const DEFAULT_LOCAL_SERVER_MODEL = DEFAULT_OLLAMA_MODEL;
 
 /** Default proxy model (used when no model is specified). */
 export const DEFAULT_PROXY_MODEL = "claude-sonnet-4-6";
+
+/**
+ * Review-by dates for the DEFAULT_*_MODEL constants — defaults as
+ * perishable inventory with a printed expiry. Model half-life is months
+ * now; a default frozen at authoring time ships an old brain in a new
+ * body without anyone deciding that. The rule (coverage-graduation's
+ * shape applied to intelligence): a default can be old — behind-on-purpose
+ * is a product choice — but it can never be UNEXAMINED. The scheduled
+ * external gate (`check-model-catalog-drift`) goes red past a date with a
+ * repair naming this table; the fix is a DELIBERATE human review — bump
+ * the date with or without a model change. The gate never bumps a model.
+ */
+export const MODEL_DEFAULT_REVIEW_BY: Record<string, string> = {
+  anthropic: "2026-10-31",
+  openai: "2026-10-31",
+  google: "2026-10-31",
+  deepseek: "2026-10-31",
+  groq: "2026-10-31",
+  "local-server": "2026-10-31",
+  proxy: "2026-10-31",
+};
 
 // === Type Helpers ===
 
@@ -201,8 +226,16 @@ export function modelVendorHint(
   if ((DEEPSEEK_MODELS as readonly string[]).includes(m)) return "deepseek";
   if ((GROQ_MODELS as readonly string[]).includes(m)) return "groq";
   if (m.startsWith("claude")) return "anthropic";
+  // gpt-oss is OpenAI's OPEN-WEIGHTS family — local-served (ollama/LM
+  // Studio/Groq), never the hosted API. Must precede the `gpt-` branch or
+  // the local-server admission gate refuses its own suggested model.
+  if (m.startsWith("gpt-oss")) return "local";
   if (m.startsWith("gpt-") || /^o[0-9]/.test(m)) return "openai";
   if (m.startsWith("gemini")) return "google";
+  // deepseek-r1 is the OPEN-WEIGHTS reasoning family (ollama tag) — the
+  // hosted API ids are deepseek-chat / deepseek-reasoner. Caught by the
+  // suggested-table admissibility invariant on its first run (2026-07-31).
+  if (m.startsWith("deepseek-r1")) return "local";
   if (m.startsWith("deepseek")) return "deepseek";
   // Ollama-style tags and the common local families.
   if (m.includes(":") || /^(llama|mistral|qwen|phi|gemma|smollm)/.test(m)) return "local";

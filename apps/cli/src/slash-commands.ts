@@ -571,7 +571,9 @@ export async function handleSlashCommand(
         "gpt-5.4-mini": "gpt-5.4-mini",
         "gpt-5.4-nano": "gpt-5.4-nano",
         o3: "o3",
-        "llama3.2": "llama3.2",
+        qwen3: "qwen3",
+        "gpt-oss": "gpt-oss",
+        "llama3.2": "llama3.2", // legacy alias — still resolvable, no longer suggested
         mistral: "mistral",
       };
 
