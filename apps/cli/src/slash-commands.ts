@@ -4,7 +4,11 @@ import type { MotebitRuntime, ReflectionResult, RelayConfig } from "@motebit/run
 import type { TokenAudience } from "@motebit/sdk";
 import { isTokenAudience, fromMicro, modelVendorHint } from "@motebit/sdk";
 import { discoverModels } from "@motebit/ai-core";
-import { admitModelForProvider, MONEY_TOOLS_WITHHELD_NOTICE } from "./model-admission.js";
+import {
+  admitModelForProvider,
+  liveCatalogServes,
+  MONEY_TOOLS_WITHHELD_NOTICE,
+} from "./model-admission.js";
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
 import { renderIdentityCard } from "./subcommands/id.js";
 import { DEFAULT_SOLANA_RPC_URL, WALLET_GUIDANCE_LINES } from "./subcommands/wallet.js";
@@ -642,7 +646,9 @@ export async function handleSlashCommand(
         if (catalog.source === "live") {
           const col = Math.max(...catalog.models.map((m) => m.id.length)) + 2;
           for (const m of catalog.models) {
-            const active = m.id === current;
+            // Tag-normalized: the runtime may hold `qwen3` while ollama
+            // lists `qwen3:latest` — same model, the ● must show.
+            const active = m.id === current || m.id === `${current}:latest`;
             const marker = active ? green(" ●") : "  ";
             const gap = " ".repeat(Math.max(1, col - m.id.length));
             console.log(`${marker} ${cyan(m.id)}${gap}${dim(m.displayName ?? "")}`);
@@ -683,7 +689,9 @@ export async function handleSlashCommand(
       const input = args.toLowerCase();
       const resolved = MODEL_ALIASES[input];
       // A live catalog admits full ids the alias table never knew about.
-      const isFullId = Object.values(MODEL_ALIASES).includes(args) || (liveIds?.has(args) ?? false);
+      const isFullId =
+        Object.values(MODEL_ALIASES).includes(args) ||
+        (liveIds != null && liveCatalogServes(liveIds, args));
       if (!resolved && !isFullId) {
         console.log(`\nUnknown model: ${cyan(args)}\n`);
         showModelList(runtime.currentModel ?? "");
@@ -693,8 +701,9 @@ export async function handleSlashCommand(
       const modelId = resolved ?? args;
       // Live-membership admission first (#475): the provider just told us
       // what it serves — an id outside that list cannot work, whatever the
-      // offline heuristic thinks.
-      if (liveIds != null && !liveIds.has(modelId)) {
+      // offline heuristic thinks. Tag-normalized (ollama serves bare
+      // family names as `:latest`).
+      if (liveIds != null && !liveCatalogServes(liveIds, modelId)) {
         console.log(
           `\n  ${warn(`${modelId} is not served by ${config.provider} right now — /model lists what is`)}\n`,
         );
