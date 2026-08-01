@@ -1471,7 +1471,12 @@ export class AnthropicProvider implements StreamingProvider {
   private buildSystemBlocks(
     contextPack: ContextPack,
   ): Array<{ type: "text"; text: string; cache_control?: { type: "ephemeral" } }> {
-    return buildPromptCacheable(contextPack, this.config.personalityConfig);
+    // Live model per call (#519): a /model switch mid-session must move the
+    // tier-adapted voice block with it. Only the dynamic suffix varies — the
+    // cached static prefix stays byte-identical across models.
+    return buildPromptCacheable(contextPack, this.config.personalityConfig, {
+      model: this.model,
+    });
   }
 
   /**

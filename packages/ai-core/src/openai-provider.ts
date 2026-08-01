@@ -470,7 +470,11 @@ export class OpenAIProvider implements IntelligenceProvider {
   private buildMessages(contextPack: ContextPack): OpenAIMessage[] {
     // Split the system prompt into its static prefix (cacheable, fixed) and the
     // per-turn dynamic suffix — the same two blocks the Anthropic path caches.
-    const blocks = buildSystemPromptCacheable(contextPack, this.config.personalityConfig);
+    // Live model per call (#519): the tier-adapted voice block follows a
+    // mid-session model switch; the cached static block stays byte-identical.
+    const blocks = buildSystemPromptCacheable(contextPack, this.config.personalityConfig, {
+      model: this.model,
+    });
     const staticDoctrine = blocks[0]?.text ?? "";
     const dynamicContext = blocks[1]?.text; // undefined when there's no suffix
 

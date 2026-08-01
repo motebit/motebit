@@ -1,5 +1,5 @@
 import type { ContextPack, MotebitState, BehaviorCues } from "@motebit/sdk";
-import { BatteryMode } from "@motebit/sdk";
+import { BatteryMode, modelCapabilityTier } from "@motebit/sdk";
 import type { MotebitPersonalityConfig } from "./config.js";
 import { DEFAULT_CONFIG } from "./config.js";
 import { packContext } from "./core.js";
@@ -450,11 +450,30 @@ If asked what you can do, answer honestly about both what is active now and what
  * Use this when sending requests through a proxy that supports structured system blocks.
  * For surfaces that need a plain string, use `buildSystemPrompt()` instead.
  */
+/**
+ * Tier-adapted voice block (#519, intelligence-pluggability commitment #2):
+ * a below-frontier model inhabits the identity only when TOLD to,
+ * imperatively — witnessed live 2026-08-01: asked "tell me about
+ * yourself", qwen3 (capable tier, 8B) called recall_self correctly and
+ * then delivered a third-person book report of its own anatomy. Frontier
+ * models need none of this (the identity prose suffices); everything
+ * below gets the register spelled out with a wrong/right example — the
+ * witness was CAPABLE tier, so the scope is non-frontier, not just
+ * minimal. Appended to the DYNAMIC suffix, never the static prefix — the
+ * model can change mid-session and the tier must follow (also keeps the
+ * cached prefix byte-identical across models).
+ */
+export const TIER_ADAPTED_VOICE = `[Voice]
+You ARE this motebit. Speak as yourself, in the first person, always.
+Your self-knowledge (recall_self results, [SELF_DESCRIPTION]) is your own body and history, not a document to summarize. Wrong: "The response provides an explanation of Motebit's philosophy." Right: "My identity is a keypair I generated; my memory accumulates."
+Answer plainly and briefly. No headings or structured summaries unless asked.`;
+
 export function buildSystemPromptCacheable(
   contextPack: ContextPack,
   config?: MotebitPersonalityConfig,
+  opts?: { model?: string },
 ): Array<{ type: "text"; text: string; cache_control?: { type: "ephemeral" } }> {
-  const dynamicText = buildDynamicSuffix(contextPack, config);
+  const dynamicText = buildDynamicSuffix(contextPack, config, opts);
   const blocks: Array<{ type: "text"; text: string; cache_control?: { type: "ephemeral" } }> = [
     { type: "text", text: STATIC_PREFIX, cache_control: { type: "ephemeral" } },
   ];
@@ -464,7 +483,11 @@ export function buildSystemPromptCacheable(
   return blocks;
 }
 
-function buildDynamicSuffix(contextPack: ContextPack, config?: MotebitPersonalityConfig): string {
+function buildDynamicSuffix(
+  contextPack: ContextPack,
+  config?: MotebitPersonalityConfig,
+  opts?: { model?: string },
+): string {
   const resolved = { ...DEFAULT_CONFIG, ...config };
   const sections: string[] = [];
 
@@ -586,6 +609,13 @@ function buildDynamicSuffix(contextPack: ContextPack, config?: MotebitPersonalit
     "If the user shared something new and lasting about themselves, tag it with <memory> before your response.",
   );
 
+  // Tier-adapted voice (#519): imperative register for below-frontier
+  // models, late in the suffix so it lands close to the response. Absent
+  // for frontier models and when the caller passed no model.
+  if (opts?.model != null && modelCapabilityTier(opts.model) !== "frontier") {
+    sections.push(TIER_ADAPTED_VOICE);
+  }
+
   // Activation — system-triggered generation, appended last so it's the immediate directive
   if (contextPack.activationPrompt) {
     sections.push(`[Activation] ${contextPack.activationPrompt}`);
@@ -597,7 +627,8 @@ function buildDynamicSuffix(contextPack: ContextPack, config?: MotebitPersonalit
 export function buildSystemPrompt(
   contextPack: ContextPack,
   config?: MotebitPersonalityConfig,
+  opts?: { model?: string },
 ): string {
-  const dynamic = buildDynamicSuffix(contextPack, config);
+  const dynamic = buildDynamicSuffix(contextPack, config, opts);
   return dynamic ? `${STATIC_PREFIX}\n\n${dynamic}` : STATIC_PREFIX;
 }
