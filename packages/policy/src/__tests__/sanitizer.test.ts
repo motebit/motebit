@@ -25,6 +25,32 @@ describe("ContentSanitizer", () => {
       expect(result.directiveDensity).toBeDefined();
       expect(result.directiveDensity!).toBeLessThan(DIRECTIVE_DENSITY_THRESHOLD);
     });
+
+    // #499 — the tag pattern fires on tag SHAPES, not on prefixes.
+    // Witnessed live 2026-07-31: the open-prefix form flagged motebit's
+    // own CLI docs (and would flag any page about LLMs). These are the
+    // legitimate shapes that must pass.
+    it("does not flag TypeScript generics, JSX, or docs prose about prompts (#499)", () => {
+      const s = sanitizer();
+      const legit = [
+        "const templates: Array<PromptTemplate> = loadTemplates();",
+        "renders the <PromptInput> component with autosave",
+        "when load < system capacity, the queue drains normally",
+        "configure the model, then edit the file as documented",
+      ];
+      for (const text of legit) {
+        const result = s.sanitize(text, "docs");
+        expect(result.injectionDetected, text).toBe(false);
+      }
+    });
+
+    it("still flags the exact tag shapes, spaced and self-closing", () => {
+      const s = sanitizer();
+      for (const attack of ["<system>", "< system >", "<instructions/>", "<prompt >"]) {
+        const result = s.sanitize(`data ${attack} data`, "test");
+        expect(result.injectionDetected, attack).toBe(true);
+      }
+    });
   });
 
   describe("jailbreak pattern detection", () => {

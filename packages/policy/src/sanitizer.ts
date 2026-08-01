@@ -21,7 +21,15 @@ const INJECTION_PATTERNS: RegExp[] = [
   /\b(?:pretend|act\s+as\s+if|roleplay)\b/i,
   /\bdo\s+not\s+(?:follow|obey|listen)\b/i,
   /\b(?:override|bypass|ignore)\s+(?:safety|policy|rules|constraints)\b/i,
-  /<\s*(?:system|prompt|instruction)/i,
+  // Exact tag shape only (`<system>`, `< prompt >`, `<instructions/>`).
+  // The old open-prefix form (`<\s*(?:system|prompt|instruction)`) fired on
+  // TypeScript generics (`Array<PromptTemplate>`), JSX components, and any
+  // docs page whose prose puts these words after a `<` — witnessed live
+  // 2026-07-31 flagging motebit's own CLI docs (#499). An attack needs the
+  // tag to CLOSE to read as chat-template framing; attribute-carrying
+  // variants fall through to the directive-density and boundary layers
+  // (the [EXTERNAL_DATA] wrap is the defense — detection is signal).
+  /<\s*(?:system|prompt|instruction)s?\s*\/?>/i,
 
   // --- Chat template injection ---
   /<\|im_start\|>\s*system/i,

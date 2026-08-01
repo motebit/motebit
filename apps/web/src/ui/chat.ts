@@ -935,9 +935,15 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
           }
 
           case "injection_warning": {
+            // Designed sentence (#499, sibling of the CLI's calm render):
+            // the raw detector patterns are gate-internals — they belong in
+            // the console for operators, never on the chat surface.
+            console.warn(
+              `[injection] tool "${chunk.tool_name}" matched: ${chunk.patterns.join(", ")}`,
+            );
             addMessage(
               "system",
-              `Injection warning from tool "${chunk.tool_name}": ${chunk.patterns.join(", ")}`,
+              `Content from "${chunk.tool_name}" contained text shaped like a prompt-injection attempt — treated as untrusted data, not instructions.`,
             );
             break;
           }
