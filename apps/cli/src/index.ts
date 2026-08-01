@@ -35,7 +35,14 @@ import {
   openMotebitDatabase,
 } from "./runtime-factory.js";
 import { consumeStream } from "./stream.js";
-import { readInput, writeOutput, setModeRow, initTerminal, destroyTerminal } from "./terminal.js";
+import {
+  readInput,
+  writeOutput,
+  writeLine,
+  setModeRow,
+  initTerminal,
+  destroyTerminal,
+} from "./terminal.js";
 import { renderModeRow } from "./mode-render.js";
 import { electCliRuntimeHost } from "./runtime-host.js";
 import { runAttachedRepl } from "./attached-repl.js";
@@ -1127,7 +1134,12 @@ async function main(): Promise<void> {
     // question or a sentence.
     const bareSlash = resolveBareCommand(trimmed);
     const effective = bareSlash ?? trimmed;
-    if (bareSlash != null) console.log(dim(`  → ${bareSlash}`));
+    // Renderer-routed, never console.log: while the owned region is
+    // painted, a direct console write starts at the parked cursor and
+    // glues onto the mode row (witnessed live 2026-08-01 — the #500
+    // teach line rendered as `── llama3.2 · local-serverthat's a shell
+    // command…`). writeLine folds in above the region.
+    if (bareSlash != null) writeLine(dim(`  → ${bareSlash}`));
 
     // A full CLI invocation typed at the chat prompt (#500) teaches instead
     // of reaching the model — a weak model once fabricated a money intent
@@ -1136,8 +1148,8 @@ async function main(): Promise<void> {
     if (bareSlash == null) {
       const shellTeach = detectShellInvocation(trimmed);
       if (shellTeach != null) {
-        console.log(dim(shellTeach));
-        console.log();
+        writeLine(dim(shellTeach));
+        writeLine("");
         prompt();
         return;
       }
