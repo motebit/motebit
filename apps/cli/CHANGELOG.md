@@ -1,5 +1,17 @@
 # motebit CLI Changelog
 
+## 1.12.0
+
+### Minor Changes
+
+- b7a1bef: Capability-tiered tool admission (#501): a minimal-tier model (e.g. a 3B local model) is no longer offered money-moving tools by default — the runtime omits `R4_MONEY`-classified tools from the model-visible list and fail-closes execution, so the witnessed incident class (a weak model fabricating a real-money hire proposal from noise) becomes unrepresentable instead of merely caught by the approval gate. A rail-less `delegate_to_agent` (no wallet bound) stays available — the tool crosses the withholding line exactly when it can move money. Mid-session `/model` switches adjust exposure live. Sovereignty preserved: set `offer_money_tools_to_minimal_models: true` in `~/.motebit/config.json` to restore full exposure; the CLI says what's withheld in one dim line at launch and on `/model` switch, never mid-conversation. User-tap `/invoke` is unaffected (a tap is its own authorizer).
+
+### Patch Changes
+
+- 0475f94: Two rendering nits witnessed in the 1.11.3 live pass. Exit lines no longer glue onto the mode row: `destroyTerminal()` now retires the owned bottom region (flushes the partial line and any in-flight input as history, clears the status/mode rows, parks the cursor on a fresh line) before shutdown output prints. `/receipt` is now usable from its own render: the rendered receipt shows a truncated task id, so the command accepts a unique prefix (a pasted trailing "…" is stripped), lists candidates on an ambiguous prefix, and with no argument re-renders the session's latest receipt.
+- 31e6a27: The CLI's model defaults now consume the sdk registry as single source (`defaultModelForProvider` restated literals; a refresh in one place drifted the other), so the local-server first-run default becomes `qwen3` — a 2026 tool-capable model instead of a 2024 3B one. `/model` gains `qwen3` and `gpt-oss` aliases; refusal teach lines name the current default.
+- a3f0512: A full CLI invocation typed at the chat prompt (`motebit --provider anthropic`, `motebit seed reveal`) now renders a dim teach line instead of reaching the model (#500) — no human means a shell command as conversation, and the fall-through once let a weak model fabricate an unrelated money intent from exactly this noise (governance held; this closes the affordance gap). The vocabulary is the committed cli-surface baseline the `check-cli-surface` gate keeps honest against the real dispatcher, so the detector can never claim a command the binary doesn't have. Only a known subcommand or `--flag` after the `motebit` prefix triggers; sentences that merely start with the word "motebit", questions, and unknown tokens stay chat. The command is never executed on the user's behalf. Both the coordinator and attached REPLs are covered.
+
 ## 1.11.3
 
 ### Patch Changes
