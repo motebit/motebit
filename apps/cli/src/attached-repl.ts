@@ -35,6 +35,7 @@ interface WireChunk {
   code?: string;
   tool_name?: string;
   risk_level?: number;
+  prior_settled_this_turn?: number;
   receipt?: { task_id?: string; status?: string };
 }
 
@@ -42,6 +43,7 @@ interface PendingApproval {
   name: string;
   args: Record<string, unknown>;
   riskLevel?: number;
+  priorSettledThisTurn?: number;
 }
 
 async function renderStream(
@@ -99,6 +101,9 @@ async function renderStream(
             name: chunk.name ?? "tool",
             args: chunk.args ?? {},
             ...(chunk.risk_level != null ? { riskLevel: chunk.risk_level } : {}),
+            ...(chunk.prior_settled_this_turn != null
+              ? { priorSettledThisTurn: chunk.prior_settled_this_turn }
+              : {}),
           };
           break;
         case "delegation_start":
@@ -179,6 +184,9 @@ async function renderTurn(
       name: pendingApproval.name,
       args: pendingApproval.args,
       ...(pendingApproval.riskLevel != null ? { riskLevel: pendingApproval.riskLevel } : {}),
+      ...(pendingApproval.priorSettledThisTurn != null
+        ? { priorSettledThisTurn: pendingApproval.priorSettledThisTurn }
+        : {}),
     })) {
       writeLine(line);
     }

@@ -3532,3 +3532,119 @@ describe("delegate_to_agent receipt beat (#493)", () => {
     expect(beat.full_receipt?.task_id).toBe("task-approved");
   });
 });
+
+// === #522: same-turn spend history stamped onto the approval band ===
+//
+// Witnessed 2026-08-01: a model that failed to digest a delivered result
+// proposed the same hire again, and nothing on the band said money had
+// already moved this exchange. The manager counts its own
+// delegation_complete emissions and stamps the count onto any subsequent
+// approval_request — produced, never model-authored.
+
+describe("approval band spend-history stamp (#522)", () => {
+  let runtime: MotebitRuntime;
+
+  function stashOf(rt: MotebitRuntime): { pushReceipt(r: unknown): void } {
+    return (rt as unknown as { interactiveDelegation: { pushReceipt(r: unknown): void } })
+      .interactiveDelegation;
+  }
+
+  function delegationReceipt(taskId: string): Record<string, unknown> {
+    return {
+      task_id: taskId,
+      motebit_id: "worker-1",
+      status: "completed",
+      tools_used: ["research"],
+      result: "the purchased report",
+      signature: "sig-" + taskId,
+      public_key: "aa".repeat(32),
+      prompt_hash: "",
+      result_hash: "",
+      submitted_at: Date.now(),
+      completed_at: Date.now(),
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    runtime = new MotebitRuntime(
+      { motebitId: "spend-stamp-test", tickRateHz: 0 },
+      createAdapters(createMockProvider()),
+    );
+  });
+
+  it("an approval_request AFTER a settled delegation carries prior_settled_this_turn", async () => {
+    mockRunTurnStreaming.mockReturnValueOnce(
+      (async function* () {
+        yield {
+          type: "tool_status" as const,
+          name: "delegate_to_agent",
+          status: "calling" as const,
+        };
+        stashOf(runtime).pushReceipt(delegationReceipt("task-settle-1"));
+        yield {
+          type: "tool_status" as const,
+          name: "delegate_to_agent",
+          status: "done" as const,
+          result: "done",
+        };
+        // The witnessed re-proposal: a second hire in the same stream.
+        yield {
+          type: "approval_request" as const,
+          tool_call_id: "tc-respend",
+          name: "delegate_to_agent",
+          args: { prompt: "again" },
+          risk_level: 4,
+        };
+        yield { type: "result" as const, result: makeTurnResult() };
+      })(),
+    );
+
+    const chunks = await collectChunks(runtime.sendMessageStreaming("hire a researcher"));
+    const band = chunks.find((c) => c.type === "approval_request") as
+      { prior_settled_this_turn?: number } | undefined;
+    expect(band).toBeDefined();
+    expect(band!.prior_settled_this_turn).toBe(1);
+  });
+
+  it("a fresh user exchange resets the count — the band stays clean", async () => {
+    // First exchange settles a delegation.
+    mockRunTurnStreaming.mockReturnValueOnce(
+      (async function* () {
+        yield {
+          type: "tool_status" as const,
+          name: "delegate_to_agent",
+          status: "calling" as const,
+        };
+        stashOf(runtime).pushReceipt(delegationReceipt("task-settle-2"));
+        yield {
+          type: "tool_status" as const,
+          name: "delegate_to_agent",
+          status: "done" as const,
+          result: "done",
+        };
+        yield { type: "result" as const, result: makeTurnResult() };
+      })(),
+    );
+    await collectChunks(runtime.sendMessageStreaming("hire someone"));
+
+    // Next user message: new exchange, new proposal — no stale history.
+    mockRunTurnStreaming.mockReturnValueOnce(
+      (async function* () {
+        yield {
+          type: "approval_request" as const,
+          tool_call_id: "tc-fresh",
+          name: "delegate_to_agent",
+          args: { prompt: "new thing" },
+          risk_level: 4,
+        };
+        yield { type: "result" as const, result: makeTurnResult() };
+      })(),
+    );
+    const chunks = await collectChunks(runtime.sendMessageStreaming("do something new"));
+    const band = chunks.find((c) => c.type === "approval_request") as
+      { prior_settled_this_turn?: number } | undefined;
+    expect(band).toBeDefined();
+    expect(band!.prior_settled_this_turn).toBeUndefined();
+  });
+});

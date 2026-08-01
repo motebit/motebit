@@ -300,6 +300,14 @@ export class StreamingManager {
    * mis-classify.
    */
   private readonly deniedToolsThisExchange = new Set<string>();
+  /**
+   * #522 — paid delegations that SETTLED in this exchange (a
+   * `delegation_complete` carrying a receipt passed through). Reset with
+   * the denial brake at each genuine user turn; stamped onto any
+   * subsequent `approval_request` so the band can say "a hire already
+   * completed this turn" at the decision moment.
+   */
+  private settledDelegationsThisExchange = 0;
   private approvalExpiredCallback: (() => void) | null = null;
   /** Fired when a NEW turn voids a pending approval (#462) — the owning surface renders the void. */
   private approvalVoidedCallback: ((toolName: string) => void) | null = null;
@@ -386,6 +394,7 @@ export class StreamingManager {
    */
   beginExchange(): void {
     this.deniedToolsThisExchange.clear();
+    this.settledDelegationsThisExchange = 0;
   }
 
   /** Shared stream processing — extracts state tags, handles tool/approval/injection chunks. */
@@ -557,6 +566,7 @@ export class StreamingManager {
               }
             }
             this.deps.setDelegating(false);
+            this.settledDelegationsThisExchange++;
             yield {
               type: "delegation_complete",
               server: motebitServer,
@@ -580,6 +590,7 @@ export class StreamingManager {
             delegateStashMark = null;
             const stashed = this.deps.delegationReceiptStash?.peekSince(mark) ?? [];
             for (const receipt of stashed) {
+              this.settledDelegationsThisExchange++;
               yield {
                 type: "delegation_complete",
                 server: "relay",
@@ -694,6 +705,17 @@ export class StreamingManager {
 
         this.startApprovalTimeout();
         this.deps.pushStateUpdate({ processing: 0.5 });
+
+        // #522 — stamp settled-spend history onto the band's chunk
+        // (produced by this layer's own count, never model-authored). The
+        // human deciding on a re-spend sees that money already moved this
+        // exchange, in the same frame as the Allow?. Witnessed 2026-08-01:
+        // a model that failed to digest a delivered result proposed the
+        // same hire again with nothing on the band saying so.
+        if (this.settledDelegationsThisExchange > 0) {
+          (chunk as { prior_settled_this_turn?: number }).prior_settled_this_turn =
+            this.settledDelegationsThisExchange;
+        }
       }
 
       // Injection warning — processing dips, personality shifts deferred
@@ -816,6 +838,9 @@ export class StreamingManager {
         if (approvedStashMark != null) {
           const stashed = this.deps.delegationReceiptStash?.peekSince(approvedStashMark) ?? [];
           for (const receipt of stashed) {
+            // #522 — the post-approval hire is the exact settled spend the
+            // witnessed re-proposal followed; count it.
+            this.settledDelegationsThisExchange++;
             yield {
               type: "delegation_complete" as const,
               server: "relay",

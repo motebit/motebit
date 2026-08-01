@@ -402,6 +402,17 @@ export type StreamChunk =
       args: Record<string, unknown>;
       risk_level?: number;
       quorum?: { required: number; approvers: string[]; collected: string[] };
+      /**
+       * #522 — count of paid delegations that already SETTLED in this
+       * exchange, stamped by the streaming manager (produced, never
+       * model-authored) when > 0. Surface honesty for the band: the human
+       * deciding on a re-spend sees "a hire already completed this turn"
+       * in the same frame as the Allow?. Witnessed 2026-08-01: a model
+       * that failed to digest a delivered result immediately proposed the
+       * same hire again, and nothing on the band said money had already
+       * moved.
+       */
+      prior_settled_this_turn?: number;
     }
   | { type: "injection_warning"; tool_name: string; patterns: string[] }
   | { type: "approval_expired"; tool_name: string }

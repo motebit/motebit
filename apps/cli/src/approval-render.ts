@@ -37,6 +37,13 @@ export interface ApprovalRequestView {
   quorum?: { required: number; approvers: string[]; collected: string[] };
   /** Hard ceiling from `--budget`, in USD, when the session set one. */
   budgetUsd?: number;
+  /**
+   * #522 — paid delegations that already SETTLED this exchange (stamped by
+   * the runtime, never model-authored). When present, the band names the
+   * fact: the human deciding on a re-spend must see that money already
+   * moved, in the same frame as the Allow?.
+   */
+  priorSettledThisTurn?: number;
 }
 
 /** Truncate for display without lying about it. */
@@ -88,6 +95,19 @@ export function renderApprovalRequest(req: ApprovalRequestView): string[] {
     // The stakes lead. A money act must never be visually indistinguishable
     // from a read — this is the line the founder's $0.26 slipped past.
     lines.push(`  ${warn(bold("⚠ MONEY · IRREVERSIBLE"))}`);
+  }
+
+  // Same-turn spend history (#522): witnessed 2026-08-01 — a model that
+  // failed to digest a delivered result proposed the same hire again, and
+  // nothing on the band said money had already moved this exchange.
+  if (req.priorSettledThisTurn != null && req.priorSettledThisTurn > 0) {
+    lines.push(
+      `  ${warn(
+        req.priorSettledThisTurn === 1
+          ? "A paid hire already completed this turn (receipt above) — this proposes another spend."
+          : `${req.priorSettledThisTurn} paid hires already completed this turn — this proposes another spend.`,
+      )}`,
+    );
   }
 
   for (const [i, line] of describeAction(req.name, req.args).entries()) {

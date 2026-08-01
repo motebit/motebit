@@ -28,6 +28,7 @@ export async function consumeStream(
     args: Record<string, unknown>;
     quorum?: { required: number; approvers: string[]; collected: string[] };
     risk_level?: number;
+    prior_settled_this_turn?: number;
   } | null = null;
   let status: StatusHandle | null = null;
   // Model-latency cover (#480): the row that answers "is anything happening?"
@@ -114,6 +115,8 @@ export async function consumeStream(
             // Carried so the prompt can name the stakes. Previously dropped —
             // which is why a money act rendered identically to a read (#432).
             risk_level: chunk.risk_level,
+            // #522 — runtime-stamped same-turn spend history for the band.
+            prior_settled_this_turn: chunk.prior_settled_this_turn,
           };
           break;
 
@@ -148,6 +151,17 @@ export async function consumeStream(
             archiveReceipt(chunk.full_receipt);
             writeGap();
             await renderReceipt(chunk.full_receipt, (line) => writeOutput(line + "\n"));
+            // #522 — the purchased artifact must stay reachable even when
+            // the model eats it (witnessed 2026-08-01: a \$0.25 report
+            // reached the human only as this receipt). One dim pointer at
+            // the recovery affordance; /receipt renders the result body.
+            if (chunk.full_receipt.result != null && chunk.full_receipt.result !== "") {
+              writeLine(
+                meta(
+                  `  · full result: /receipt ${String(chunk.full_receipt.task_id).slice(0, 12)}`,
+                ),
+              );
+            }
             writeGap();
             if (chunk.full_receipt.status === "completed" && chunk.full_receipt.result) {
               lastCompletedReceiptResult = chunk.full_receipt.result;
@@ -228,6 +242,9 @@ export async function consumeStream(
       ...(pendingApproval.risk_level != null ? { riskLevel: pendingApproval.risk_level } : {}),
       ...(pendingApproval.quorum ? { quorum: pendingApproval.quorum } : {}),
       ...(opts?.budgetUsd != null ? { budgetUsd: opts.budgetUsd } : {}),
+      ...(pendingApproval.prior_settled_this_turn != null
+        ? { priorSettledThisTurn: pendingApproval.prior_settled_this_turn }
+        : {}),
     })) {
       writeLine(line);
     }

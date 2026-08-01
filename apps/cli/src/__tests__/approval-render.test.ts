@@ -109,6 +109,40 @@ describe("renderApprovalRequest", () => {
     expect(out).toContain("1/3 approvals collected");
   });
 
+  // #522 — witnessed 2026-08-01: a re-spend proposal rendered with nothing
+  // saying money had already moved this exchange.
+  it("names same-turn settled spend when the runtime stamped it", () => {
+    const out = plain(
+      renderApprovalRequest({
+        name: "delegate_to_agent",
+        args: { prompt: "x" },
+        riskLevel: 4,
+        priorSettledThisTurn: 1,
+      }),
+    );
+    expect(out).toContain("already completed this turn");
+    expect(out).toContain("another spend");
+  });
+
+  it("pluralizes multiple settled spends", () => {
+    const out = plain(
+      renderApprovalRequest({
+        name: "delegate_to_agent",
+        args: { prompt: "x" },
+        riskLevel: 4,
+        priorSettledThisTurn: 2,
+      }),
+    );
+    expect(out).toContain("2 paid hires already completed");
+  });
+
+  it("no stamp — no history line", () => {
+    const out = plain(
+      renderApprovalRequest({ name: "delegate_to_agent", args: { prompt: "x" }, riskLevel: 4 }),
+    );
+    expect(out).not.toContain("already completed this turn");
+  });
+
   it("clips a long prompt without letting it wrap the decision off-screen", () => {
     const out = plain(
       renderApprovalRequest({

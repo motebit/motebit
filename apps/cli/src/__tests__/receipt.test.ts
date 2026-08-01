@@ -13,7 +13,7 @@ vi.mock("@motebit/encryption", () => ({
   verifyReceiptChain: (...args: unknown[]) => verifyReceiptChainMock(...args),
 }));
 
-const { renderReceipt } = await import("../receipt.js");
+const { renderReceipt, receiptResultBody } = await import("../receipt.js");
 
 function makeReceipt(overrides: Partial<ExecutionReceipt> = {}): ExecutionReceipt {
   return {
@@ -69,5 +69,33 @@ describe("renderReceipt — identity binding status", () => {
   it("unverified → 'verification failed'", async () => {
     const out = await capture({ verified: false, error: "bad signature", delegations: [] });
     expect(out).toContain("verification failed");
+  });
+});
+
+// === #522 — the purchased artifact must be reachable from the receipt ===
+
+describe("receiptResultBody / includeResult (#522)", () => {
+  it("unwraps a JSON envelope to the report the buyer paid for", () => {
+    const receipt = {
+      task_id: "t-1",
+      result: JSON.stringify({ report: "The findings.\nLine two.", citations: [] }),
+    } as unknown as import("@motebit/sdk").ExecutionReceipt;
+    expect(receiptResultBody(receipt)).toBe("The findings.\nLine two.");
+  });
+
+  it("falls back to the raw string when the result is not an envelope", () => {
+    const receipt = {
+      task_id: "t-2",
+      result: "plain text result",
+    } as unknown as import("@motebit/sdk").ExecutionReceipt;
+    expect(receiptResultBody(receipt)).toBe("plain text result");
+  });
+
+  it("null when there is nothing displayable", () => {
+    const receipt = {
+      task_id: "t-3",
+      result: "",
+    } as unknown as import("@motebit/sdk").ExecutionReceipt;
+    expect(receiptResultBody(receipt)).toBeNull();
   });
 });
