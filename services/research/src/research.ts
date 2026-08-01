@@ -303,6 +303,47 @@ const TOOLS: Anthropic.Tool[] = [
   },
 ];
 
+/**
+ * Prompt caching (2026-08-01, the reprice lever): the loop re-sends the
+ * ENTIRE growing history — including every fetched page — on every
+ * iteration, and it ran uncached, which is where the 26–42¢/report
+ * worst case came from. The static prefix (system + tools) and the
+ * conversation prefix are cache-marked; iterations land seconds apart,
+ * far inside the 5-minute TTL, so iterations 2..N read the prefix at
+ * 0.1× input price. The moving breakpoint is applied per REQUEST to a
+ * shallow copy — the canonical `messages` array stays clean, so markers
+ * never accumulate past the API's 4-breakpoint limit.
+ */
+const CACHED_SYSTEM: Anthropic.TextBlockParam[] = [
+  { type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
+];
+
+const CACHED_TOOLS: Anthropic.Tool[] = TOOLS.map((t, i) =>
+  i === TOOLS.length - 1 ? { ...t, cache_control: { type: "ephemeral" as const } } : t,
+);
+
+/** Request-time shallow copy with a cache breakpoint on the final content
+ * block of the final message — caches the whole conversation prefix. */
+export function withPrefixCacheBreakpoint(
+  messages: Anthropic.MessageParam[],
+): Anthropic.MessageParam[] {
+  const last = messages[messages.length - 1];
+  if (last == null) return messages;
+  const mark = { cache_control: { type: "ephemeral" as const } };
+  if (typeof last.content === "string") {
+    return [
+      ...messages.slice(0, -1),
+      { ...last, content: [{ type: "text", text: last.content, ...mark }] },
+    ] as Anthropic.MessageParam[];
+  }
+  if (Array.isArray(last.content) && last.content.length > 0) {
+    const blocks = [...last.content];
+    blocks[blocks.length - 1] = { ...blocks[blocks.length - 1], ...mark } as never;
+    return [...messages.slice(0, -1), { ...last, content: blocks }] as Anthropic.MessageParam[];
+  }
+  return messages;
+}
+
 // === Optional relay budget binding ===
 
 /**
@@ -479,10 +520,28 @@ export async function research(question: string, config: ResearchConfig): Promis
     let recallSelfCount = 0;
     // claude-sonnet-4-6 list pricing per million tokens; estimate only —
     // logged per report so the operator can tune MOTEBIT_UNIT_COST.
+    // Cache tiers: writes bill 1.25x input, reads 0.1x — the loop's
+    // repeated prefix makes reads dominate from iteration 2 on.
     const USD_PER_M_INPUT = 3;
     const USD_PER_M_OUTPUT = 15;
+    const USD_PER_M_CACHE_WRITE = 3.75;
+    const USD_PER_M_CACHE_READ = 0.3;
     let inputTokens = 0;
     let outputTokens = 0;
+    let cacheWriteTokens = 0;
+    let cacheReadTokens = 0;
+    const addUsage = (u: Anthropic.Message["usage"] | undefined): void => {
+      inputTokens += u?.input_tokens ?? 0;
+      outputTokens += u?.output_tokens ?? 0;
+      cacheWriteTokens += u?.cache_creation_input_tokens ?? 0;
+      cacheReadTokens += u?.cache_read_input_tokens ?? 0;
+    };
+    const costUsd = (): number =>
+      (inputTokens * USD_PER_M_INPUT +
+        outputTokens * USD_PER_M_OUTPUT +
+        cacheWriteTokens * USD_PER_M_CACHE_WRITE +
+        cacheReadTokens * USD_PER_M_CACHE_READ) /
+      1e6;
     let searchCount = 0;
     let fetchCount = 0;
     let toolCallCount = 0;
@@ -722,14 +781,13 @@ export async function research(question: string, config: ResearchConfig): Promis
       const response = await client.messages.create({
         model: "claude-sonnet-4-6",
         max_tokens: 4096,
-        system: SYSTEM_PROMPT,
-        tools: TOOLS,
-        messages,
+        system: CACHED_SYSTEM,
+        tools: CACHED_TOOLS,
+        messages: withPrefixCacheBreakpoint(messages),
       });
 
       // Optional-chained: unit-test mocks omit usage; the live API always sends it.
-      inputTokens += response.usage?.input_tokens ?? 0;
-      outputTokens += response.usage?.output_tokens ?? 0;
+      addUsage(response.usage);
 
       const toolUses = response.content.filter(
         (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
@@ -742,15 +800,11 @@ export async function research(question: string, config: ResearchConfig): Promis
           lastContent: response.content,
           report: responseText(response.content),
           citations,
-          addUsage: (r) => {
-            inputTokens += r.usage?.input_tokens ?? 0;
-            outputTokens += r.usage?.output_tokens ?? 0;
-          },
+          addUsage: (r) => addUsage(r.usage),
         });
         return {
           report,
-          cost_estimate_usd:
-            (inputTokens * USD_PER_M_INPUT + outputTokens * USD_PER_M_OUTPUT) / 1e6,
+          cost_estimate_usd: costUsd(),
           delegation_receipts: delegationReceipts,
           sub_settlements: subSettlements,
           routing_transcripts: routingTranscripts,
@@ -773,28 +827,30 @@ export async function research(question: string, config: ResearchConfig): Promis
     const finalResponse = await client.messages.create({
       model: "claude-sonnet-4-6",
       max_tokens: 4096,
-      system:
-        SYSTEM_PROMPT +
-        "\n\nNote: tool budget exhausted. Synthesize a report from what you've already gathered.",
-      messages,
+      // The cached system block stays byte-identical (prefix hit); the
+      // budget-exhausted note rides as a second, uncached block.
+      system: [
+        ...CACHED_SYSTEM,
+        {
+          type: "text",
+          text: "Note: tool budget exhausted. Synthesize a report from what you've already gathered.",
+        },
+      ],
+      messages: withPrefixCacheBreakpoint(messages),
     });
-    inputTokens += finalResponse.usage?.input_tokens ?? 0;
-    outputTokens += finalResponse.usage?.output_tokens ?? 0;
+    addUsage(finalResponse.usage);
     const report = await ensureReport({
       client,
       messages,
       lastContent: finalResponse.content,
       report: responseText(finalResponse.content),
       citations,
-      addUsage: (r) => {
-        inputTokens += r.usage?.input_tokens ?? 0;
-        outputTokens += r.usage?.output_tokens ?? 0;
-      },
+      addUsage: (r) => addUsage(r.usage),
     });
 
     return {
       report,
-      cost_estimate_usd: (inputTokens * USD_PER_M_INPUT + outputTokens * USD_PER_M_OUTPUT) / 1e6,
+      cost_estimate_usd: costUsd(),
       delegation_receipts: delegationReceipts,
       sub_settlements: subSettlements,
       routing_transcripts: routingTranscripts,

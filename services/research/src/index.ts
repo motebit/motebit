@@ -214,8 +214,10 @@ async function main(): Promise<void> {
               "empty report body — refusing to sign a completed receipt over an empty artifact",
             );
           }
+          // The reprice tuning signal (2026-08-01): cost was logged only on
+          // the unused tool-registry path — the HIRE path priced blind.
           log(
-            `research complete: ${r.report.length} chars, ${r.recall_self_count} interior, ${r.search_count} searches, ${r.fetch_count} fetches, ${r.citations.length} citations`,
+            `research complete: ${r.report.length} chars, ${r.recall_self_count} interior, ${r.search_count} searches, ${r.fetch_count} fetches, ${r.citations.length} citations, report_cost_estimate_usd=${r.cost_estimate_usd.toFixed(4)}`,
           );
           delegationReceipts = r.delegation_receipts as unknown as Record<string, unknown>[];
           // The wire payload now carries the citation list. Interior

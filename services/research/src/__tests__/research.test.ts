@@ -29,7 +29,7 @@ vi.mock("@motebit/mcp-client", () => ({
 
 import { querySelfKnowledge } from "@motebit/self-knowledge";
 import type { AdapterFactory, AtomAdapter, ResearchConfig, SignedReceipt } from "../research.js";
-import { research } from "../research.js";
+import { research, withPrefixCacheBreakpoint } from "../research.js";
 
 /**
  * In-memory AtomAdapter — the injectable test seam. Mirrors
@@ -785,8 +785,11 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
 
     expect(result.search_count).toBe(2);
     expect(result.report).toContain("Forced synthesis");
-    const finalCall = mockCreate.mock.calls[2]![0] as { system: string };
-    expect(finalCall.system).toContain("tool budget exhausted");
+    // System is now a cached block array; the budget note rides as an
+    // uncached second block so the cached prefix stays byte-identical.
+    const finalCall = mockCreate.mock.calls[2]![0] as { system: Array<{ text: string }> };
+    const systemText = finalCall.system.map((b) => b.text).join("\n");
+    expect(systemText).toContain("tool budget exhausted");
   });
 
   it("declares the three-tier tool set (interior + web search + web fetch) to Claude", async () => {
@@ -795,17 +798,21 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
       ...baseConfig,
       adapterFactory: () => new StubAtomAdapter([]),
     });
-    const call = mockCreate.mock.calls[0]![0] as { tools: Array<{ name: string }>; system: string };
+    const call = mockCreate.mock.calls[0]![0] as {
+      tools: Array<{ name: string }>;
+      system: Array<{ text: string }>;
+    };
     expect(call.tools.map((t) => t.name).sort()).toEqual([
       "motebit_read_url",
       "motebit_recall_self",
       "motebit_web_search",
     ]);
     // Interior-first guidance must be visible in the system prompt.
-    expect(call.system).toContain("motebit_recall_self");
-    expect(call.system).toContain("motebit_web_search");
-    expect(call.system).toContain("motebit_read_url");
-    expect(call.system).toContain("FIRST");
+    const systemText = call.system.map((b) => b.text).join("\n");
+    expect(systemText).toContain("motebit_recall_self");
+    expect(systemText).toContain("motebit_web_search");
+    expect(systemText).toContain("motebit_read_url");
+    expect(systemText).toContain("FIRST");
   });
 
   // ── Interior tier (Ring 1: recall_self) ──
@@ -1536,5 +1543,101 @@ describe("research — report shape guard (#504)", () => {
 
     const result = await run(adapters);
     expect(result.report).toBe(NOTES);
+  });
+});
+
+// === Prompt caching + cache-aware cost (2026-08-01, the reprice lever) ===
+
+describe("research — prompt caching", () => {
+  beforeEach(() => mockCreate.mockReset());
+
+  const stubFactory = () =>
+    makeFactory(
+      new Map([
+        ["web-search", new StubAtomAdapter([])],
+        ["read-url", new StubAtomAdapter([])],
+      ]),
+    );
+
+  it("every loop request carries cached system, cached tools, and a prefix breakpoint", async () => {
+    mockCreate.mockResolvedValueOnce({ content: [{ type: "text", text: "Direct answer." }] });
+    await research("q", { ...baseConfig, adapterFactory: stubFactory() });
+
+    const req = mockCreate.mock.calls[0]![0] as {
+      system: Array<{ text: string; cache_control?: { type: string } }>;
+      tools: Array<{ cache_control?: { type: string } }>;
+      messages: Array<{ content: unknown }>;
+    };
+    expect(req.system[0]!.cache_control).toEqual({ type: "ephemeral" });
+    expect(req.tools.at(-1)!.cache_control).toEqual({ type: "ephemeral" });
+    // The user question (a string message) was converted to a marked block.
+    const lastMsg = req.messages.at(-1)! as {
+      content: Array<{ type: string; cache_control?: { type: string } }>;
+    };
+    expect(lastMsg.content.at(-1)!.cache_control).toEqual({ type: "ephemeral" });
+  });
+
+  it("the canonical messages array stays clean — breakpoints never accumulate", async () => {
+    const receipt = makeReceipt({
+      task_id: "cache-1",
+      motebit_id: "web-search-agent",
+      result: "[]",
+      signature: "sig-c1",
+    });
+    const ws = new StubAtomAdapter([receipt]);
+    const ru = new StubAtomAdapter([]);
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [
+          { type: "tool_use", id: "tu-1", name: "motebit_web_search", input: { query: "q" } },
+        ],
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Synthesized." }] });
+
+    await research("q", {
+      ...baseConfig,
+      adapterFactory: makeFactory(
+        new Map([
+          ["web-search", ws],
+          ["read-url", ru],
+        ]),
+      ),
+    });
+
+    const secondReq = mockCreate.mock.calls[1]![0] as {
+      messages: Array<{ content: unknown }>;
+    };
+    // Exactly ONE message-level breakpoint per request (the moving one on
+    // the last message) — earlier messages carry none.
+    let marked = 0;
+    for (const m of secondReq.messages) {
+      if (Array.isArray(m.content)) {
+        for (const b of m.content as Array<{ cache_control?: unknown }>) {
+          if (b.cache_control != null) marked++;
+        }
+      }
+    }
+    expect(marked).toBe(1);
+  });
+
+  it("cost estimate prices cache writes at 1.25x and reads at 0.1x input", async () => {
+    mockCreate.mockResolvedValueOnce({
+      content: [{ type: "text", text: "Direct answer." }],
+      usage: {
+        input_tokens: 1000,
+        output_tokens: 1000,
+        cache_creation_input_tokens: 10000,
+        cache_read_input_tokens: 100000,
+      },
+    });
+    const result = await research("q", { ...baseConfig, adapterFactory: stubFactory() });
+    // 1000*3 + 1000*15 + 10000*3.75 + 100000*0.3  = 3000+15000+37500+30000 = 85_500 / 1e6
+    expect(result.cost_estimate_usd).toBeCloseTo(0.0855, 6);
+  });
+
+  it("withPrefixCacheBreakpoint edge shapes: empty list and empty block array pass through", () => {
+    expect(withPrefixCacheBreakpoint([])).toEqual([]);
+    const empty = [{ role: "user" as const, content: [] }];
+    expect(withPrefixCacheBreakpoint(empty)).toEqual(empty);
   });
 });
