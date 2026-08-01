@@ -1,5 +1,14 @@
 # motebit CLI Changelog
 
+## 1.12.1
+
+### Patch Changes
+
+- 47833a3: The live `/model` catalog now teaches the cross-provider path the offline list always had: a dim footer names each other provider with its restart command and default model (`--provider anthropic (claude-sonnet-4-6) · …`). The live list shows only what the active provider serves — correct, but from inside it the other providers were invisible with no path named.
+- 24120c7: `/model` accepts what the local server actually serves: ollama's live catalog returns tagged ids (`llama3.2:latest`) while users — and motebit's own defaults — use bare family names, so `/model qwen3` and `/model llama3.2` were refused as "not served" on a machine that served both (witnessed on the 1.12.0 live pass). Live-catalog membership now normalizes the `:latest` form, and the active-model marker in the `/model` list matches across the same normalization.
+- 462754d: The shell-command teach line and the `→ /slash` routing arrow now fold in above the owned bottom region instead of gluing onto the mode row (witnessed live 2026-08-01: `── llama3.2 · local-serverthat's a shell command…`) — REPL-loop output routes through the renderer, never a raw console write while the region is painted.
+- b432c98: Below-frontier models now get an imperative first-person voice block in the prompt's dynamic suffix (#519): "You ARE this motebit… your self-knowledge is your own body and history, not a document to summarize," with a wrong/right example. Witnessed on qwen3: asked about itself, it delivered a third-person book report of its own anatomy — strong models inhabit the identity, weaker ones need the register spelled out. Follows mid-session `/model` switches; the cached static prefix stays byte-identical across models.
+
 ## 1.12.0
 
 ### Minor Changes
