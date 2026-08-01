@@ -2050,12 +2050,66 @@ describe("synthesizeClosingFallback — runtime guarantee of visible closing tex
       { toolCallsSucceeded: 1, toolCallsFailed: 0, lastToolName: "" },
       { toolCallsSucceeded: 0, toolCallsFailed: 1, lastToolName: "" },
       { toolCallsSucceeded: 100, toolCallsFailed: 100, lastToolName: "x" },
+      { toolCallsSucceeded: 0, toolCallsFailed: 0, lastToolName: "", toolCallsAwaitingApproval: 1 },
+      { toolCallsSucceeded: 0, toolCallsFailed: 0, lastToolName: "x", toolCallsRefusedByHuman: 1 },
     ];
     for (const c of cases) {
       const out = synthesizeClosingFallback(c);
       expect(out.length).toBeGreaterThan(0);
       expect(out.trim()).not.toBe("");
     }
+  });
+
+  // ── #521 — the money-moment lies, witnessed live 2026-08-01: the floor
+  // said "I didn't take any action" three times in one flow (pending
+  // approval, completed $0.25 hire, human refusal) because the approval
+  // path's actions weren't threaded. Floor invariant: never claim
+  // no-action when a call was emitted this turn.
+  it("awaiting approval: points at the band, never denies the proposal exists", () => {
+    const out = synthesizeClosingFallback({
+      toolCallsSucceeded: 0,
+      toolCallsFailed: 0,
+      lastToolName: "delegate_to_agent",
+      toolCallsAwaitingApproval: 1,
+    });
+    expect(out).toMatch(/approval/i);
+    expect(out).not.toMatch(/didn't take any action/i);
+  });
+
+  it("human refusal: a decision, not an absence — names the tool, never 'no action'", () => {
+    const out = synthesizeClosingFallback({
+      toolCallsSucceeded: 0,
+      toolCallsFailed: 0,
+      lastToolName: "delegate_to_agent",
+      toolCallsRefusedByHuman: 1,
+    });
+    expect(out).toContain("delegate_to_agent");
+    expect(out).toMatch(/declined/i);
+    expect(out).not.toMatch(/didn't take any action/i);
+  });
+
+  it("completed pre-continuation execution (seeded success): acknowledges, points at the result", () => {
+    // resumeAfterApproval seeds the continuation loop; the call site
+    // composes succeeded+1 with the executed tool's name.
+    const out = synthesizeClosingFallback({
+      toolCallsSucceeded: 1,
+      toolCallsFailed: 0,
+      lastToolName: "delegate_to_agent",
+    });
+    expect(out).toContain("delegate_to_agent");
+    expect(out).toMatch(/completed|done/i);
+    expect(out).not.toMatch(/didn't take any action/i);
+  });
+
+  it("success outranks refusal/awaiting — a completed action is the headline", () => {
+    const out = synthesizeClosingFallback({
+      toolCallsSucceeded: 1,
+      toolCallsFailed: 0,
+      lastToolName: "web_search",
+      toolCallsAwaitingApproval: 1,
+      toolCallsRefusedByHuman: 1,
+    });
+    expect(out).toMatch(/completed|done/i);
   });
 });
 

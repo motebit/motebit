@@ -55,22 +55,45 @@ const MAX_TOOL_ITERATIONS = 10;
  *     more to say"); the floor just acknowledges and yields the turn
  *     back to the user.
  *
- *   - **Zero actions** (`toolCallsSucceeded === 0 && toolCallsFailed === 0`):
- *     the model emitted no tool calls and no text. Most likely a
- *     model-state weirdness; the floor confesses and invites
- *     redirection.
+ *   - **Awaiting approval** (`toolCallsAwaitingApproval > 0`, nothing
+ *     executed): the turn suspended on the human's decision — the band
+ *     IS the message; the floor points at it instead of denying the
+ *     proposal exists.
+ *
+ *   - **Refused by human** (`toolCallsRefusedByHuman > 0`, nothing
+ *     executed): the human said no. A decision, not an absence of
+ *     action — say so and yield.
+ *
+ *   - **Zero actions** (every counter zero): the model emitted no tool
+ *     calls and no text. Most likely a model-state weirdness; the floor
+ *     confesses and invites redirection.
+ *
+ * #521 floor invariant: NEVER claim "I didn't take any action" when any
+ * tool call was emitted this turn — pending, executed, refused, or
+ * seeded from a pre-continuation execution (the approval path runs the
+ * tool in the streaming layer, then starts a FRESH loop; witnessed live
+ * 2026-08-01: the fallback denied a completed $0.25 hire three times in
+ * one flow because these counters weren't threaded).
  *
  * Doctrine: motebit-computer.md §"Typed truth on results" applied to
- * the turn-completion contract. The runtime promises the user a
- * response per message; this is the mechanical floor that enforces
- * the promise even when model behavior drifts.
+ * the turn-completion contract; composition-preserves-enforcement (the
+ * honesty logic and the money path live in different packages — the
+ * counters are the wire that keeps them composed). The runtime promises
+ * the user a response per message; this is the mechanical floor that
+ * enforces the promise even when model behavior drifts.
  */
 export function synthesizeClosingFallback(args: {
   readonly toolCallsSucceeded: number;
   readonly toolCallsFailed: number;
   readonly lastToolName: string;
+  /** Calls suspended on a human approval this turn (band on screen). */
+  readonly toolCallsAwaitingApproval?: number;
+  /** Calls the human explicitly refused this turn (decision, not failure). */
+  readonly toolCallsRefusedByHuman?: number;
 }): string {
   const { toolCallsSucceeded, toolCallsFailed, lastToolName } = args;
+  const awaiting = args.toolCallsAwaitingApproval ?? 0;
+  const refused = args.toolCallsRefusedByHuman ?? 0;
   if (toolCallsFailed > 0 && toolCallsSucceeded === 0) {
     return lastToolName
       ? `I tried but \`${lastToolName}\` didn't go through — what would you like me to try next?`
@@ -82,7 +105,17 @@ export function synthesizeClosingFallback(args: {
       : `I got partway through (${toolCallsSucceeded}/${toolCallsSucceeded + toolCallsFailed} succeeded) but hit an issue. What should I do next?`;
   }
   if (toolCallsSucceeded > 0) {
-    return "Done. Let me know what's next.";
+    return lastToolName
+      ? `\`${lastToolName}\` completed — the result is above. Let me know what's next.`
+      : "Done. Let me know what's next.";
+  }
+  if (refused > 0) {
+    return lastToolName
+      ? `You declined \`${lastToolName}\` — nothing ran. What would you like instead?`
+      : "You declined that — nothing ran. What would you like instead?";
+  }
+  if (awaiting > 0) {
+    return "That needs your approval — the request is right above.";
   }
   return "I didn't take any action there — what would you like me to do?";
 }
@@ -578,6 +611,22 @@ export interface TurnOptions {
   verifiedGrant?: NonNullable<TurnContext["verifiedGrant"]>;
   /** First conversation ever — no prior history exists. */
   firstConversation?: boolean;
+  /**
+   * #521 — continuation seeding. The approval path executes (or the human
+   * refuses) the gated tool in the STREAMING layer, then starts a fresh
+   * loop for the continuation turn — so this loop's own counters never
+   * saw the action. Witnessed live 2026-08-01: the closing fallback
+   * denied a completed $0.25 hire ("I didn't take any action") because
+   * nothing threaded the pre-continuation execution through. Set by
+   * `resumeAfterApproval`; consumed by the empty-text safety-net gate and
+   * `synthesizeClosingFallback` — raw counters stay pure for metrics.
+   */
+  priorTurnActions?: {
+    /** Tool executed (approved) in the streaming layer before this continuation. */
+    completedToolName?: string;
+    /** Tool the human refused before this continuation. */
+    humanRefusedToolName?: string;
+  };
   /** System-triggered generation — goes into system prompt, not user message. */
   activationPrompt?: string;
   /**
@@ -1017,6 +1066,14 @@ export async function* runTurnStreaming(
   // docs/doctrine/delegation.md + agent-task-handler.ts.
   let toolCallsDenied = 0;
   let toolCallsFailed = 0;
+  // #521 — approval pauses this turn (band on screen when the loop exits).
+  let toolCallsAwaitingApproval = 0;
+  // #521 — continuation seeding (see TurnOptions.priorTurnActions): the
+  // approval path's pre-continuation execution/refusal, threaded so the
+  // closing floor can't deny it. Raw counters stay pure for TurnResult
+  // metrics; only the safety-net gate and the fallback read these.
+  const priorCompletedTool = options?.priorTurnActions?.completedToolName ?? null;
+  const priorRefusedTool = options?.priorTurnActions?.humanRefusedToolName ?? null;
   // Typed-truth log for the dishonest-closing intercept. Captures
   // structured tool result data PRE-sanitization so the typed-truth
   // fields (navigation_triggered, recovery_hint, bot_detection_detected)
@@ -1218,6 +1275,7 @@ export async function* runTurnStreaming(
 
         if (decision.requiresApproval) {
           toolCallsBlocked++;
+          toolCallsAwaitingApproval++;
           const profile = deps.policyGate.classify(toolDef);
           yield {
             type: "approval_request",
@@ -1485,6 +1543,7 @@ export async function* runTurnStreaming(
       // Fallback: no policy gate — use legacy requiresApproval check
       if (toolDef?.requiresApproval === true) {
         toolCallsBlocked++;
+        toolCallsAwaitingApproval++;
         yield {
           type: "approval_request",
           tool_call_id: toolCall.id,
@@ -1653,7 +1712,7 @@ export async function* runTurnStreaming(
   // that got stripped, the user sees nothing. Re-prompt once without tools to
   // force visible text. This typically happens when the model reflects on its
   // own internals after a recall_memories call.
-  if (finalText.trim() === "" && toolCallsSucceeded > 0) {
+  if (finalText.trim() === "" && (toolCallsSucceeded > 0 || priorCompletedTool != null)) {
     conversationHistory.push({
       role: "assistant",
       content: finalResponse.text || "",
@@ -1721,9 +1780,11 @@ export async function* runTurnStreaming(
   // turn-completion contract.
   if (finalText.trim() === "") {
     finalText = synthesizeClosingFallback({
-      toolCallsSucceeded,
+      toolCallsSucceeded: toolCallsSucceeded + (priorCompletedTool != null ? 1 : 0),
       toolCallsFailed,
-      lastToolName,
+      lastToolName: lastToolName || priorCompletedTool || priorRefusedTool || "",
+      toolCallsAwaitingApproval,
+      toolCallsRefusedByHuman: priorRefusedTool != null ? 1 : 0,
     });
     yield { type: "text", text: finalText };
     // Reflect the synthesized text on finalResponse so downstream
