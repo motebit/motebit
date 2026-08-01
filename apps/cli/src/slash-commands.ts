@@ -30,7 +30,7 @@ import { computeReputationScore } from "@motebit/policy";
 import { mintAudienceToken, verifyExecutionReceipt, hexToBytes } from "@motebit/encryption";
 import { McpServerAdapter, wireServerDeps } from "@motebit/mcp-server";
 import type { McpServerConfig as McpServerAdapterConfig } from "@motebit/mcp-server";
-import { type CliConfig, COMMANDS } from "./args.js";
+import { type CliConfig, COMMANDS, defaultModelForProvider } from "./args.js";
 import type { FullConfig } from "./config.js";
 import { CONFIG_DIR, saveFullConfig } from "./config.js";
 import { join } from "node:path";
@@ -654,6 +654,21 @@ export async function handleSlashCommand(
             console.log(`${marker} ${cyan(m.id)}${gap}${dim(m.displayName ?? "")}`);
           }
           console.log(dim(`\n  live from ${config.provider}`));
+          // The live catalog lists only the ACTIVE provider's models — the
+          // offline fallback list teaches the cross-provider path, and the
+          // live branch must too (witnessed 2026-08-01: "where are the
+          // others?"). Switching providers is a restart, so name the exact
+          // command per provider with its default model.
+          const others = (["anthropic", "openai", "google", "local-server"] as const).filter(
+            (p) => p !== config.provider,
+          );
+          console.log(
+            dim(
+              `  other providers (restart to switch): ${others
+                .map((p) => `--provider ${p} (${defaultModelForProvider(p)})`)
+                .join(" · ")}`,
+            ),
+          );
           return;
         }
         const col = Math.max(...Object.keys(MODEL_ALIASES).map((k) => k.length)) + 2;
