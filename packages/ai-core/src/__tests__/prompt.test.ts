@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { buildSystemPrompt, derivePersonalityNote, formatBodyAwareness } from "../prompt";
+import {
+  buildSystemPrompt,
+  buildSystemPromptCacheable,
+  derivePersonalityNote,
+  formatBodyAwareness,
+  TIER_ADAPTED_VOICE,
+} from "../prompt";
 import { TrustMode, BatteryMode, SensitivityLevel } from "@motebit/sdk";
 import type { ContextPack, MotebitState, BehaviorCues } from "@motebit/sdk";
 
@@ -160,6 +166,39 @@ describe("formatBodyAwareness", () => {
 // ---------------------------------------------------------------------------
 // buildSystemPrompt
 // ---------------------------------------------------------------------------
+
+describe("tier-adapted voice block (#519)", () => {
+  it("below-frontier models get the imperative first-person register — incl. the witnessed capable-tier case", () => {
+    for (const model of ["llama3.2:latest", "qwen3:latest", "gpt-5.4-mini"]) {
+      const prompt = buildSystemPrompt(makeContextPack(), undefined, { model });
+      expect(prompt, model).toContain(TIER_ADAPTED_VOICE);
+    }
+  });
+
+  it("frontier models get no voice block — the identity prose suffices", () => {
+    for (const model of ["claude-opus-5", "claude-fable-5", "gpt-5.4", "gemini-2.5-pro"]) {
+      const prompt = buildSystemPrompt(makeContextPack(), undefined, { model });
+      expect(prompt, model).not.toContain("[Voice]");
+    }
+  });
+
+  it("no model passed — no block (fail-open to the strong-model prompt)", () => {
+    expect(buildSystemPrompt(makeContextPack())).not.toContain("[Voice]");
+  });
+
+  it("rides the DYNAMIC block, never the cached static prefix", () => {
+    const blocks = buildSystemPromptCacheable(makeContextPack(), undefined, {
+      model: "llama3.2",
+    });
+    expect(blocks[0]!.text).not.toContain("[Voice]");
+    expect(blocks[1]!.text).toContain(TIER_ADAPTED_VOICE);
+    // Static prefix is byte-identical to the strong-model assembly — cache-safe.
+    const strong = buildSystemPromptCacheable(makeContextPack(), undefined, {
+      model: "claude-opus-5",
+    });
+    expect(blocks[0]!.text).toBe(strong[0]!.text);
+  });
+});
 
 describe("buildSystemPrompt", () => {
   it("includes all core sections", () => {
