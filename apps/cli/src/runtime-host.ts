@@ -17,8 +17,9 @@ import {
   type RuntimeHostPaths,
   type RuntimeHostServer,
 } from "@motebit/runtime-host";
-import { defaultRuntimeHostPaths, nodePlatform } from "@motebit/runtime-host/node";
+import { runtimeHostPathsForDir, nodePlatform } from "@motebit/runtime-host/node";
 import { computerDefinition } from "@motebit/tools/web-safe";
+import { CONFIG_DIR } from "./config.js";
 import type { FullConfig } from "./config.js";
 import { fromHex, loadActiveSigningKey } from "./identity.js";
 
@@ -61,7 +62,13 @@ export { pickSafeChatOptions as pickChatOptions, pickSafeInvokeOptions as pickIn
  * is our own; anything else refuses fail-closed.
  */
 export async function electCliRuntimeHost(deps: CliElectionDeps): Promise<ElectionOutcome> {
-  const paths = deps.paths ?? defaultRuntimeHostPaths();
+  // #512 — the election root FOLLOWS the config root. A sandboxed
+  // MOTEBIT_CONFIG_DIR is a different sovereign; deriving the socket from
+  // homedir() attached it to the user's live coordinator (identity
+  // category error, witnessed 2026-07-31). CONFIG_DIR already resolves
+  // the override or defaults to ~/.motebit, so the normal case is
+  // byte-identical to before (desktop shares the same root).
+  const paths = deps.paths ?? runtimeHostPathsForDir(CONFIG_DIR);
   const deviceId = deps.fullConfig.device_id;
   const devicePublicKey = deps.fullConfig.device_public_key;
 
