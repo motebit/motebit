@@ -1430,6 +1430,50 @@ describe("resumeAfterApproval", () => {
     expect(runtime.hasPendingApproval).toBe(false);
     expect(runtime.pendingApprovalInfo).toBeNull();
   });
+
+  // #521 — the continuation loop starts fresh, so what THIS layer just did
+  // (executed on approval / recorded the refusal) must be threaded, or the
+  // loop's closing floor denies a completed money action (witnessed live
+  // 2026-08-01: "I didn't take any action" after a $0.25 hire).
+  it("approved resume threads priorTurnActions.completedToolName into the continuation", async () => {
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks(
+        { type: "approval_request", tool_call_id: "tc-p1", name: "delegate_to_agent", args: {} },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+    await collectChunks(runtime.sendMessageStreaming("hire someone"));
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks({ type: "result", result: makeTurnResult("ok") }),
+    );
+    await collectChunks(runtime.resumeAfterApproval(true));
+
+    const continuationOpts = mockRunTurnStreaming.mock.calls.at(-1)![2] as {
+      priorTurnActions?: { completedToolName?: string; humanRefusedToolName?: string };
+    };
+    expect(continuationOpts.priorTurnActions).toEqual({ completedToolName: "delegate_to_agent" });
+  });
+
+  it("denied resume threads priorTurnActions.humanRefusedToolName into the continuation", async () => {
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks(
+        { type: "approval_request", tool_call_id: "tc-p2", name: "delegate_to_agent", args: {} },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+    await collectChunks(runtime.sendMessageStreaming("hire someone"));
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks({ type: "result", result: makeTurnResult("ok") }),
+    );
+    await collectChunks(runtime.resumeAfterApproval(false));
+
+    const continuationOpts = mockRunTurnStreaming.mock.calls.at(-1)![2] as {
+      priorTurnActions?: { completedToolName?: string; humanRefusedToolName?: string };
+    };
+    expect(continuationOpts.priorTurnActions).toEqual({
+      humanRefusedToolName: "delegate_to_agent",
+    });
+  });
 });
 
 // === External tool registration ===

@@ -887,11 +887,18 @@ export class StreamingManager {
         );
       }
 
-      // Run continuation turn with updated history
+      // Run continuation turn with updated history. `priorTurnActions`
+      // threads what THIS layer just did (executed on approval / recorded
+      // the human's refusal) into the fresh loop, so its closing floor
+      // can never deny the action (#521 — witnessed live 2026-08-01:
+      // "I didn't take any action" after a completed $0.25 hire).
       const stream = runTurnStreaming(loopDeps, pending.userMessage, {
         conversationHistory: this.deps.getLiveHistory(),
         previousCues: this.deps.getLatestCues(),
         runId: pending.runId,
+        priorTurnActions: approved
+          ? { completedToolName: pending.toolName }
+          : { humanRefusedToolName: pending.toolName },
       });
       yield* this.processStream(stream, pending.userMessage, pending.runId);
     } finally {
