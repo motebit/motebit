@@ -4,7 +4,7 @@ import type { MotebitRuntime, ReflectionResult, RelayConfig } from "@motebit/run
 import type { TokenAudience } from "@motebit/sdk";
 import { isTokenAudience, fromMicro, modelVendorHint } from "@motebit/sdk";
 import { discoverModels } from "@motebit/ai-core";
-import { admitModelForProvider } from "./model-admission.js";
+import { admitModelForProvider, MONEY_TOOLS_WITHHELD_NOTICE } from "./model-admission.js";
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
 import { renderIdentityCard } from "./subcommands/id.js";
 import { DEFAULT_SOLANA_RPC_URL, WALLET_GUIDANCE_LINES } from "./subcommands/wallet.js";
@@ -708,6 +708,12 @@ export async function handleSlashCommand(
         break;
       }
       runtime.setModel(modelId);
+      // Capability-tier honesty (#501): a switch that crosses the tier
+      // line must say so at the moment it happens — the model-visible
+      // toolset just changed.
+      if (runtime.moneyToolsWithheld) {
+        console.log(`\n  ${dim(MONEY_TOOLS_WITHHELD_NOTICE)}`);
+      }
       if (fullConfig) {
         fullConfig.default_model = modelId;
         // Persist the PAIR: a model default with no memory of its provider is

@@ -58,3 +58,11 @@ export function admitModelForProvider(provider: string, model: string): ModelAdm
 
   return { admissible: true };
 }
+
+/**
+ * The one calm line rendered when capability tiering withholds money
+ * tools from the selected model (#501). Shared by launch (index.ts) and
+ * the /model switch so the wording can never drift between the two.
+ */
+export const MONEY_TOOLS_WITHHELD_NOTICE =
+  "money tools withheld from this model (minimal tier) — set offer_money_tools_to_minimal_models in ~/.motebit/config.json if you mean it";

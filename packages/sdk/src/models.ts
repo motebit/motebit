@@ -258,3 +258,89 @@ export function providerAcceptsModel(provider: string, model: string): boolean {
   if (provider === "groq") return hint === "groq" || hint === "local"; // groq serves open models
   return hint === provider;
 }
+
+// === Capability tiers ===
+//
+// Born live, 2026-07-31 (#501): `llama3.2` (3B, 2024) was offered
+// `delegate_to_agent` — a real-money tool — and fabricated a hire proposal
+// from noise. The governance stack held (approval gate, money band, denial
+// brake; $0 moved), which proved the SAFETY floor. The tier axis is the
+// CAPABILITY floor: intelligence-pluggability commitment #3 — tools adapt
+// to the selected model — needs a registry answer to "what class of model
+// is this?". The runtime keys money-tool exposure on it; nothing here
+// gates admission (a minimal model is a legitimate sovereign choice).
+
+/** Capability class of a model id. `unknown → "capable"` — permissive,
+ *  like admission: registry lag must never lobotomize a good new model. */
+export type ModelCapabilityTier = "frontier" | "capable" | "minimal";
+
+/** Model families known to be small (≤~4B): useful for chat, memory, and
+ *  local tools; not reliable instrument-holders. Matched on the id's base
+ *  name (before any `:tag`). */
+const MINIMAL_FAMILIES = [
+  "llama3.2", // 1B/3B family — the witnessed weak-model floor
+  "phi4-mini",
+  "phi-3",
+  "phi3",
+  "smollm",
+  "tinyllama",
+  "gpt-5.4-nano",
+] as const;
+
+/** Frontier prefixes — the strongest hosted classes. Haiku is deliberately
+ *  absent (capable); so are minis/flashes. */
+const FRONTIER_PREFIXES = [
+  "claude-fable",
+  "claude-mythos",
+  "claude-opus",
+  "claude-sonnet",
+  "gpt-5.4", // bare flagship; -mini/-nano handled before this check
+  "gemini-2.5-pro",
+] as const;
+
+/**
+ * Best-effort capability tier for a model id.
+ *
+ * Resolution order:
+ *   1. Ollama-style size tag (`model:NNb`) — the honest parameter signal
+ *      for local pulls: under 7B → `minimal`, otherwise `capable` (a size
+ *      tag never claims frontier).
+ *   2. Known-small families → `minimal`.
+ *   3. Frontier prefixes (with mini/nano demoted first) → `frontier`.
+ *   4. Everything else — including unknown ids — → `capable`.
+ *
+ * Like the defaults table, this is perishable knowledge: it rides the
+ * same review discipline (`MODEL_DEFAULT_REVIEW_BY`) rather than
+ * pretending to be timeless.
+ */
+export function modelCapabilityTier(model: string): ModelCapabilityTier {
+  const m = model.trim().toLowerCase();
+  if (m === "") return "capable";
+
+  // 1. Embedded parameter size — ollama tags (`qwen3:0.6b`, `gemma3:4b`)
+  // and dash-form ids (`Llama-3.2-3B-Instruct…`, `gpt-oss-120b`,
+  // `llama-3.3-70b-versatile`). The honest signal wherever it appears.
+  const sizeTag = /[:\-_](\d+(?:\.\d+)?)b(?:[-_.:]|$)/.exec(m);
+  if (sizeTag != null) {
+    return parseFloat(sizeTag[1]!) < 7 ? "minimal" : "capable";
+  }
+
+  const base = m.split(":")[0]!;
+
+  // 2. Known-small families — prefix match so version suffixes stay in
+  // the family (`smollm2`, `phi3.5`).
+  if (MINIMAL_FAMILIES.some((f) => base.startsWith(f))) {
+    return "minimal";
+  }
+
+  // 3. Frontier — demote the small variants of flagship names first.
+  if (base.endsWith("-mini") || base.endsWith("-nano") || base.includes("flash")) {
+    return "capable";
+  }
+  if (FRONTIER_PREFIXES.some((p) => base.startsWith(p))) {
+    return "frontier";
+  }
+
+  // 4. Permissive default.
+  return "capable";
+}

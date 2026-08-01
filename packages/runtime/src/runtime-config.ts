@@ -255,6 +255,20 @@ export interface RuntimeConfig {
    */
   proactiveCapabilities?: string[];
   /**
+   * Capability-tiered tool admission override (#501). By default a
+   * `minimal`-tier model (per `modelCapabilityTier` in `@motebit/sdk`)
+   * is never OFFERED tools classified at `R4_MONEY` — the tool is
+   * omitted from the model-visible list and execute() fail-closes.
+   * Witnessed 2026-07-31: a 3B model fabricated a real-money hire
+   * proposal from noise; governance caught it, this makes the class
+   * unrepresentable (runtime-invariants-over-prompt-rules).
+   *
+   * Set `true` to restore full exposure — sovereignty preserved, only
+   * the footgun default removed. Never affects `invokeCapability`
+   * (a user tap is its own authorizer) or non-money tools.
+   */
+  offerMoneyToolsToMinimalModels?: boolean;
+  /**
    * Auto-anchor policy for consolidation receipts. When configured, the
    * runtime invokes `anchorPendingConsolidationReceipts` after signing a
    * receipt if either trigger fires:
