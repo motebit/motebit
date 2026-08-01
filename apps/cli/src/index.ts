@@ -737,12 +737,21 @@ async function main(): Promise<void> {
     });
   } catch (err: unknown) {
     destroyTerminal();
-    console.error(
-      `Runtime-host election failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
-    console.error(
-      "Another motebit process may be coordinating with an incompatible build. Stop it and retry.",
-    );
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`Runtime-host election failed: ${msg}`);
+    // #512 — bind failures and attach failures have different causes and
+    // different repairs; the old one-size advice ("incompatible build")
+    // sent the 2026-07-31 socket-path bug hunting in the wrong direction.
+    if (/bind failed|socket path|sun_path|ENOENT|EACCES/i.test(msg)) {
+      console.error(
+        "The socket could not be created — check the config directory exists and the path is short enough " +
+          "(unix sockets cap at ~104 chars), and remove a stale runtime.sock if one is left over.",
+      );
+    } else {
+      console.error(
+        "Another motebit process may be coordinating with an incompatible build. Stop it and retry.",
+      );
+    }
     process.exit(1);
   }
   if (election.role === "frontend") {
