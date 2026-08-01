@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { admitModelForProvider } from "../model-admission.js";
+import { admitModelForProvider, liveCatalogServes } from "../model-admission.js";
 import { defaultModelForProvider } from "../args.js";
 import { LOCAL_SERVER_SUGGESTED_MODELS } from "@motebit/sdk";
 
@@ -67,5 +67,25 @@ describe("admitModelForProvider — the provider+model pair gate (#471)", () => 
     for (const p of providers) {
       expect(admitModelForProvider(p, defaultModelForProvider(p)).admissible).toBe(true);
     }
+  });
+});
+
+describe("liveCatalogServes — ollama tag normalization (2026-08-01 live-pass find)", () => {
+  const live = new Set(["qwen3:latest", "llama3.2:latest", "qwen3:8b", "claude-opus-5"]);
+
+  it("bare family names resolve to their :latest form — the witnessed refusals", () => {
+    expect(liveCatalogServes(live, "llama3.2")).toBe(true);
+    expect(liveCatalogServes(live, "qwen3")).toBe(true); // the shipped default itself
+  });
+
+  it("verbatim ids still pass, tagged or not", () => {
+    expect(liveCatalogServes(live, "qwen3:8b")).toBe(true);
+    expect(liveCatalogServes(live, "llama3.2:latest")).toBe(true);
+    expect(liveCatalogServes(live, "claude-opus-5")).toBe(true);
+  });
+
+  it("a model the server does not hold is still refused", () => {
+    expect(liveCatalogServes(live, "gemma3")).toBe(false);
+    expect(liveCatalogServes(live, "qwen3:0.6b")).toBe(false);
   });
 });

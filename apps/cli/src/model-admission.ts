@@ -66,3 +66,16 @@ export function admitModelForProvider(provider: string, model: string): ModelAdm
  */
 export const MONEY_TOOLS_WITHHELD_NOTICE =
   "money tools withheld from this model (minimal tier) — set offer_money_tools_to_minimal_models in ~/.motebit/config.json if you mean it";
+
+/**
+ * Live-catalog membership with ollama tag normalization (#513-class,
+ * witnessed 2026-08-01 on the 1.12.0 live pass): ollama's /api/tags
+ * returns TAGGED ids (`llama3.2:latest`) but resolves bare family names
+ * to `:latest` server-side — so `/model llama3.2` (and even the shipped
+ * default `qwen3`) was refused as "not served" while the server happily
+ * served it. Membership must accept exactly what the server accepts:
+ * the id verbatim, or its `:latest` form.
+ */
+export function liveCatalogServes(liveIds: ReadonlySet<string>, modelId: string): boolean {
+  return liveIds.has(modelId) || liveIds.has(`${modelId}:latest`);
+}
