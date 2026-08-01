@@ -184,10 +184,42 @@ function renderReceiptLine(receipt: ExecutionReceipt, depth: number, last: boole
  * Returns the verified flag so callers can compose their own messaging, but
  * does its own output — rendering and verification are paired by design.
  */
+/**
+ * Extract the human-readable artifact from a receipt's `result` field
+ * (#522). Wire results are often JSON envelopes (the Researcher ships
+ * `{report, citations, …}`); the buyer wants the report, not the
+ * envelope. Falls back to the raw string. Null when there is nothing
+ * displayable.
+ */
+export function receiptResultBody(receipt: ExecutionReceipt): string | null {
+  const raw = receipt.result;
+  if (raw == null || (typeof raw === "string" && raw.trim() === "")) return null;
+  const text = typeof raw === "string" ? raw : JSON.stringify(raw);
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    if (parsed != null && typeof parsed === "object" && typeof parsed.report === "string") {
+      return parsed.report;
+    }
+  } catch {
+    // not JSON — the raw string IS the artifact
+  }
+  return text;
+}
+
 export async function renderReceipt(
   receipt: ExecutionReceipt,
   out: (line: string) => void = (s) => console.log(s),
   trustedAnchor?: Map<string, Uint8Array>,
+  opts?: {
+    /**
+     * #522 — render the purchased artifact itself (the receipt's `result`
+     * body). Off on the inline post-delegation render (the model usually
+     * relays it; duplicating would double a long report), on for the
+     * explicit `/receipt` affordance — the recovery path when the model
+     * eats the result.
+     */
+    includeResult?: boolean;
+  },
 ): Promise<{ verified: boolean; error?: string }> {
   // Vertical rhythm is the CALLER's: the stream consumer brackets with
   // writeGap(), the /receipt command with its own spacing (#480). Emitting
@@ -196,6 +228,15 @@ export async function renderReceipt(
   const header = `${dim("─ receipt ")}${dim("·")} ${cyan(shortHash(receipt.task_id))}`;
   out(header);
   for (const line of lines) out(line);
+
+  if (opts?.includeResult === true) {
+    const body = receiptResultBody(receipt);
+    if (body != null) {
+      out("");
+      out(dim("─ result"));
+      for (const bodyLine of body.split("\n")) out(bodyLine);
+    }
+  }
 
   // Offline verify — the "oh" beat that makes the receipt evidence, not a
   // claim. Zero relay contact. Verify against the caller's trusted anchor; with

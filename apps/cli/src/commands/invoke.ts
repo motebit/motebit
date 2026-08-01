@@ -107,9 +107,10 @@ export async function handleReceiptCommand(
     receipt = found.receipt;
   }
   // renderReceipt no longer emits its own blank bracket (#480) — spacing
-  // belongs to the caller.
+  // belongs to the caller. includeResult: /receipt IS the recovery
+  // affordance for a purchased artifact the model failed to relay (#522).
   out("");
-  await renderReceipt(receipt, out);
+  await renderReceipt(receipt, out, undefined, { includeResult: true });
   out("");
 }
 
