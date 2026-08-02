@@ -772,7 +772,13 @@ export interface SessionStateSnapshot {
     readonly memory?: MemorySelfState;
     readonly pixelConsent: PixelConsentState;
     readonly sensitivity: SensitivityLevel;
+    readonly settledDelegations?: ReadonlyArray<{
+        readonly capability: string;
+    }>;
     readonly staleBytesOmissionReason?: PixelOmittedReason;
+    readonly substrate?: {
+        readonly model: string;
+    };
 }
 
 // @public

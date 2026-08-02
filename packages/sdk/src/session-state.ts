@@ -143,6 +143,30 @@ export interface SessionStateSnapshot {
    */
   readonly staleBytesOmissionReason?: import("./pixel-consent.js").PixelOmittedReason;
   /**
+   * Substrate proprioception — the model this motebit is thinking
+   * through THIS turn, read live from the provider (follows /model
+   * switches; never a static string). Witnessed 2026-08-01 on
+   * motebit.com: asked "what model are you running — this is a test",
+   * the motebit honestly answered "I don't know" while the surface
+   * chrome rendered `claude-opus-4-7` in the same frame. The runtime
+   * knew; the interior wasn't told. With this facet, "swap the
+   * substrate and I'd still be me" becomes a nameable fact instead of
+   * an assertion — pluggability felt, not claimed. Absent when no
+   * provider is wired.
+   */
+  readonly substrate?: { readonly model: string };
+  /**
+   * Money acts settled THIS exchange — the streaming manager's own
+   * ledger of completed paid delegations (same reset lifecycle as the
+   * denial brake: the user's next message clears it). Witnessed
+   * 2026-08-01: a completed \$0.25 hire the model then denied and tried
+   * to re-buy. A hire listed here is DONE and paid — the [Now] clause
+   * teaches: never deny it, never re-propose it. Produced by the
+   * execution path, never model-authored. Absent/empty when nothing
+   * settled this exchange.
+   */
+  readonly settledDelegations?: ReadonlyArray<{ readonly capability: string }>;
+  /**
    * Memory self-state — runtime-owned. Present when the runtime has
    * a memory store wired (it always does in production; absent only
    * on surfaces/tests that construct a snapshot without one). When

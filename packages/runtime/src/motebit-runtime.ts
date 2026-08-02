@@ -4246,12 +4246,21 @@ export class MotebitRuntime {
         staleBytesOmissionReason = this._lastPixelOmissionReason;
       }
     }
+    // [Now] proprioception (#530): substrate read LIVE from the provider
+    // (follows /model switches) and the streaming manager's settled-money
+    // ledger — the runtime's mouth downstream of its own state, so "I
+    // don't know what model I am" and "I didn't take any action" become
+    // unwritable for facts the runtime holds.
+    const substrateModel = this.provider?.model ?? null;
+    const settled = this.streaming.settledDelegationsList();
     return {
       browser,
       sensitivity,
       pixelConsent: this._pixelConsent,
       memory,
       ...(staleBytesOmissionReason !== undefined ? { staleBytesOmissionReason } : {}),
+      ...(substrateModel != null ? { substrate: { model: substrateModel } } : {}),
+      ...(settled.length > 0 ? { settledDelegations: settled } : {}),
     };
   }
 
