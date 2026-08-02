@@ -1,5 +1,17 @@
 # motebit CLI Changelog
 
+## 1.13.0
+
+### Minor Changes
+
+- 134cd56: The motebit now knows what model it thinks through and what money it moved this turn (#530). Two new `[Now]` facets: `Substrate: <model>` — asked "what model are you running?", it cites the live fact instead of an honest-but-unnecessary "I don't know" (witnessed on motebit.com beside chrome rendering the very answer); and `Settled this turn: <capability> (paid) — done, never re-propose` — a completed hire sits in the model's premises, so denying it or proposing to re-buy it can't survive contact with the ledger (the structural endgame of the amnesiac-middle-manager class, after #521/#522 patched the individual mouths). Both produced by the runtime's execution paths, gate-enforced to travel with their prompt clause and tests.
+
+### Patch Changes
+
+- 1462655: The turn-closing fallback can no longer deny actions it took (#521). Witnessed on the first local-brain paid hire: a silent model made the runtime say "I didn't take any action there" three times — while its own hire sat pending approval, after the approved $0.25 hire completed, and after the human's refusal. The approval path now threads what it did into the continuation loop, and the floor gained honest variants: pending → "that needs your approval — the request is right above"; refused → "you declined `X` — nothing ran"; completed → "`X` completed — the result is above." Floor invariant: no-action is only claimable when no call was emitted.
+- 415c33d: A purchased result can no longer vanish when the model fails to relay it (#522). The inline receipt block now ends with a dim pointer (`· full result: /receipt <id>`), and `/receipt` renders the artifact itself — unwrapping JSON envelopes to the report the buyer paid for. And when a paid delegation has already settled this exchange, any subsequent approval band says so ("a paid hire already completed this turn — this proposes another spend"), stamped by the runtime's own count, never model-authored. Both halves witnessed on the first local-brain hire: a $0.25 report reached the human only as a receipt, followed by a redundant re-spend proposal with nothing on the band naming the money that had already moved.
+- 9705585: The runtime-host election root now follows the config root (#512): with `MOTEBIT_CONFIG_DIR` set, the coordinator socket and lockfile live inside it instead of always at `~/.motebit/` — a sandboxed or scaffolded instance is a different sovereign and elects its own coordinator, never silently attaching its chat turns to the user's live runtime under the user's identity. The normal case is byte-identical. Unix socket paths past the OS `sun_path` limit (~104 chars) now fail loud at construction naming the repair (a shorter config dir), and the election-failure message distinguishes bind problems (path/permissions/stale socket) from attach problems (incompatible coordinator) instead of blaming the wrong one.
+
 ## 1.12.1
 
 ### Patch Changes
