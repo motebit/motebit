@@ -353,6 +353,38 @@ describe("formatSessionState — runtime session-state block", () => {
     expect(out).toBe("[Now] Browser: closed");
   });
 
+  // #530 — [Now] proprioception facets. Witnessed 2026-08-01: an
+  // honest-but-unnecessary "I don't know what model I am" beside chrome
+  // rendering claude-opus-4-7, and a completed hire the model denied.
+  it("emits the Substrate line from the live provider model", async () => {
+    const { formatSessionState } = await import("../prompt");
+    const out = formatSessionState({
+      browser: { status: "closed" },
+      sensitivity: SensitivityLevel.None,
+      pixelConsent: "denied",
+      substrate: { model: "claude-opus-4-7" },
+    });
+    expect(out).toContain("Substrate: claude-opus-4-7");
+  });
+
+  it("emits Settled this turn for the exchange's paid delegations — absent when none", async () => {
+    const { formatSessionState } = await import("../prompt");
+    const out = formatSessionState({
+      browser: { status: "closed" },
+      sensitivity: SensitivityLevel.None,
+      pixelConsent: "denied",
+      settledDelegations: [{ capability: "research" }],
+    });
+    expect(out).toContain("Settled this turn: research (paid)");
+    expect(out).toContain("never re-propose");
+    const none = formatSessionState({
+      browser: { status: "closed" },
+      sensitivity: SensitivityLevel.None,
+      pixelConsent: "denied",
+    });
+    expect(none).not.toContain("Settled this turn");
+  });
+
   it("emits Browser: open with URL when known", async () => {
     const { formatSessionState } = await import("../prompt");
     const out = formatSessionState({

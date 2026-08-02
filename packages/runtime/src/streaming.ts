@@ -307,7 +307,16 @@ export class StreamingManager {
    * subsequent `approval_request` so the band can say "a hire already
    * completed this turn" at the decision moment.
    */
-  private settledDelegationsThisExchange = 0;
+  private settledDelegationsThisExchange: Array<{ capability: string }> = [];
+
+  /**
+   * Read-only view of the settled ledger for the [Now] proprioception
+   * facet (#530) — the runtime's snapshot producer reads this so the
+   * model's premises contain what this layer already did.
+   */
+  settledDelegationsList(): ReadonlyArray<{ capability: string }> {
+    return this.settledDelegationsThisExchange;
+  }
   private approvalExpiredCallback: (() => void) | null = null;
   /** Fired when a NEW turn voids a pending approval (#462) — the owning surface renders the void. */
   private approvalVoidedCallback: ((toolName: string) => void) | null = null;
@@ -394,7 +403,7 @@ export class StreamingManager {
    */
   beginExchange(): void {
     this.deniedToolsThisExchange.clear();
-    this.settledDelegationsThisExchange = 0;
+    this.settledDelegationsThisExchange = [];
   }
 
   /** Shared stream processing — extracts state tags, handles tool/approval/injection chunks. */
@@ -566,7 +575,7 @@ export class StreamingManager {
               }
             }
             this.deps.setDelegating(false);
-            this.settledDelegationsThisExchange++;
+            this.settledDelegationsThisExchange.push({ capability: chunk.name });
             yield {
               type: "delegation_complete",
               server: motebitServer,
@@ -590,7 +599,9 @@ export class StreamingManager {
             delegateStashMark = null;
             const stashed = this.deps.delegationReceiptStash?.peekSince(mark) ?? [];
             for (const receipt of stashed) {
-              this.settledDelegationsThisExchange++;
+              this.settledDelegationsThisExchange.push({
+                capability: receipt.tools_used?.[0] ?? "delegate_to_agent",
+              });
               yield {
                 type: "delegation_complete",
                 server: "relay",
@@ -712,9 +723,9 @@ export class StreamingManager {
         // exchange, in the same frame as the Allow?. Witnessed 2026-08-01:
         // a model that failed to digest a delivered result proposed the
         // same hire again with nothing on the band saying so.
-        if (this.settledDelegationsThisExchange > 0) {
+        if (this.settledDelegationsThisExchange.length > 0) {
           (chunk as { prior_settled_this_turn?: number }).prior_settled_this_turn =
-            this.settledDelegationsThisExchange;
+            this.settledDelegationsThisExchange.length;
         }
       }
 
@@ -840,7 +851,9 @@ export class StreamingManager {
           for (const receipt of stashed) {
             // #522 — the post-approval hire is the exact settled spend the
             // witnessed re-proposal followed; count it.
-            this.settledDelegationsThisExchange++;
+            this.settledDelegationsThisExchange.push({
+              capability: receipt.tools_used?.[0] ?? "delegate_to_agent",
+            });
             yield {
               type: "delegation_complete" as const,
               server: "relay",
