@@ -23,7 +23,10 @@ import type { PolicyConfig, MemoryGovernanceConfig, GrantSpendStore } from "@mot
 /**
  * Default task router config for planning operations.
  * Uses the strongest model for decomposition + reflection — bad plans cascade.
- * Step execution stays on the user's current model (auto-routed per message).
+ * Step execution stays on the user's current model: since #533, tier
+ * "default" RESOLVES to the current model in every family (the sovereign's
+ * choice), so non-overridden tasks are a structural no-op hop — the old
+ * family-workhorse mapping silently borrowed a SKU the user never picked.
  *
  * Class aliases ("claude-opus") are resolved to current dated versions by the
  * proxy's resolveModelAlias(). When Anthropic ships a new Opus, update the
