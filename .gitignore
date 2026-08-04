@@ -86,7 +86,12 @@ services/*/data/
 
 # devnet rehearsal local state (keys + mint — devnet-only, valueless, but never commit)
 .devnet-rehearsal/
-.quickstart-check.mts
+# Root-level dot-prefixed scratch scripts. These are one-off live-product-test
+# drivers: they carry absolute local paths and test-identity passphrases, and
+# two of them (.legC-verify-seam.mts, .poll-task.mts) rode into the tree on an
+# unrelated commit and sat there for a week. The class is ignored, not the
+# instances.
+/.*.mts
 
 # Golden-frame darwin snapshots — local personal baselines only; linux
 # frames in __screenshots__ are the CI-authoritative committed references.
