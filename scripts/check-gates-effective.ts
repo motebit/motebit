@@ -796,6 +796,28 @@ export async function probeLeak(): Promise<boolean> {
       ),
   },
   {
+    script: "check-gate-references",
+    proves:
+      "flags a `check-*` gate NAME asserted in an always-loaded CLAUDE.md that resolves to no gate on disk — the phantom-enforcement class, where the index claims an invariant is guarded and nothing guards it",
+    perturb: () =>
+      // Append an index line asserting a gate that does not exist, in the same
+      // grammatical form the real claims use. The gate should fire on the
+      // unresolvable name.
+      //
+      // The injected line MUST carry the `PROBE_PREFIX + "injected"` needle:
+      // root CLAUDE.md is TRACKED, and `drainStalePerturbations` recovers a
+      // tracked file only when an added line contains that needle. Without it,
+      // a SIGKILL mid-probe would leave a phantom-gate assertion appended to
+      // the one file that loads into every subsequent session — precisely the
+      // poison this gate exists to prevent, written by its own probe.
+      // "Greppable by a human" is the recovery model the drain replaced.
+      mutateFile(
+        "CLAUDE.md",
+        (src) =>
+          `${src}\n- ${PROBE_PREFIX}injected phantom entry. Gate check-probe-nonexistent-gate\n`,
+      ),
+  },
+  {
     script: "check-readme-bin-claims",
     proves:
       "flags an `npm i -g @motebit/<pkg>` invocation in any README.md / CLAUDE.md naming a workspace package whose package.json has no `bin` field",
