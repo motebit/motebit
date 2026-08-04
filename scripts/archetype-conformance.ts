@@ -343,7 +343,18 @@ async function checkResearcher(
     // shape contract the producer retries against — deterministic shape,
     // never an LLM judge; quality beyond shape stays the archetype's
     // earned record, not a relay gate.
-    const { reportShapeIssues } = await import("@motebit/research/report-shape");
+    // Imported by RELATIVE PATH, not as `@motebit/research/report-shape`, and
+    // the distinction is load-bearing rather than stylistic. A `workspace:*`
+    // entry in the ROOT package.json must resolve inside the relay's Docker
+    // build, which copies only `packages/` and `services/relay/` — so a root
+    // dependency on any other `services/*` package makes `pnpm deploy --prod`
+    // fail with ERR_PNPM_WORKSPACE_PKG_NOT_FOUND and takes the relay's entire
+    // deploy + image-publish pipeline down. That is not hypothetical: it
+    // stranded production relay for four days (2026-07-31 → 08-04). This is a
+    // repo script, never a published consumer, so the relative import (the
+    // same shape `build-self-knowledge.ts` and `gen-verdict-corpus.ts` use)
+    // gets the same code with no workspace edge. See check-root-workspace-deps.
+    const { reportShapeIssues } = await import("../services/research/src/report-shape.js");
     const shapeIssues = reportShapeIssues(payload.report ?? "", {
       sourcesRead: citations.length > 0,
     });

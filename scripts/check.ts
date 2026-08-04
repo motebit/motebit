@@ -337,6 +337,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-gate-references",
   },
   {
+    name: "check-root-workspace-deps",
+    defends:
+      "every `workspace:*` dependency in the ROOT package.json resolves to a tree the relay Dockerfile actually copies. The relay image is built from a SLICE of the monorepo (root manifest + packages/ + services/relay/), but `pnpm deploy --prod` resolves the workspace from the root manifest that rode along in that slice — so a root dep on any other services/* or apps/* package is unsatisfiable inside the image. Adding `@motebit/research` to root devDeps on 2026-07-31 (for ONE dynamic import in a repo script) took down BOTH the relay deploy and the container-image publish on every run for four days, while main stayed green and production relay sat frozen on the 07-31 build. PR CI never builds the relay image, and check-deploy-parity reasons about what the relay DECLARES, not what the Dockerfile COPIES. Copied trees are parsed from the Dockerfile's COPY lines, so widening the copy set updates the gate automatically (invariant #152)",
+    script: "check-root-workspace-deps",
+  },
+  {
     name: "check-skill-corpus",
     defends:
       "every committed reference skill under `skills/*` carries a body_hash, content_hash, and envelope signature that match what `pnpm --filter @motebit/skills build-reference-skill` would produce — closes the drift class where a contributor edits SKILL.md without re-signing and ships a tampered-looking artifact users would only catch at install time on their machine (added 2026-04-28 alongside spec/skills-v1.md ship)",
