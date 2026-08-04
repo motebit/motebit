@@ -3408,6 +3408,9 @@ export enum RiskLevel {
 // @public
 export const ROTATE_KEY_AUDIENCE: TokenAudience;
 
+// @public
+export function roundSettlementSplitMicro(netExact: number, feeExact: number): SettlementSplitMicro;
+
 // @public (undocumented)
 export interface RouteScore {
     // (undocumented)
@@ -3679,6 +3682,12 @@ export interface SettlementRecord {
     suite: "motebit-jcs-ed25519-b64-v1";
     x402_network?: string;
     x402_tx_hash?: string;
+}
+
+// @public
+export interface SettlementSplitMicro {
+    feeMicro: number;
+    netMicro: number;
 }
 
 // @public (undocumented)

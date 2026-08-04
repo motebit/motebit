@@ -275,3 +275,77 @@ describe("free credit is not withdrawable (SqliteAccountStore.getUnspentGrantHol
     expect(getAccountBalanceDetailed(db, m2).available_for_withdrawal).toBe(toMicro(10));
   });
 });
+
+// The grant hold must bind EVERY exit path, not just the one the user asks
+// for. `requestWithdrawal` subtracted both holds from the start; the two
+// aggregated paths — the sweep loop and the batch enqueue it feeds — computed
+// `balance − disputeHold` and ignored the grant entirely. On a deploy with a
+// sweep rail configured and promotional credit enabled, an unspent grant was
+// auto-swept to the agent's own wallet as real cash. Both now consume the
+// canonical `computeWithdrawableAvailable`.
+describe("free credit is not sweepable (aggregated exit paths)", () => {
+  let relay: SyncRelay;
+  let db: import("@motebit/persistence").DatabaseDriver;
+
+  const GRANT: FreeCreditConfig = {
+    amountMicro: toMicro(5),
+    ipDailyCap: 100,
+    dailyBudgetMicro: toMicro(10_000),
+  };
+
+  beforeEach(async () => {
+    relay = await createTestRelay();
+    db = relay.moteDb.db;
+  });
+  afterEach(async () => {
+    await relay.close();
+  });
+
+  it("refuses to enqueue a pending withdrawal funded by an unspent grant", async () => {
+    const { enqueuePendingWithdrawal } = await import("../batch-withdrawals.js");
+    const m = "grant-sweep-only";
+    grantFreeCreditIfEligible(db, m, "3.3.3.3", { config: GRANT });
+    expect(getAccountBalance(db, m)?.balance).toBe(toMicro(5));
+
+    const pendingId = enqueuePendingWithdrawal(db, {
+      motebitId: m,
+      amountMicro: toMicro(1),
+      destination: "SoLDest1111111111111111111111111111111111111",
+      rail: "solana",
+      source: "sweep",
+    });
+
+    expect(pendingId).toBeNull();
+    // Nothing debited — the grant is still whole.
+    expect(getAccountBalance(db, m)?.balance).toBe(toMicro(5));
+  });
+
+  it("still enqueues real deposited funds sitting alongside a grant", async () => {
+    const { enqueuePendingWithdrawal } = await import("../batch-withdrawals.js");
+    const m = "grant-sweep-mixed";
+    grantFreeCreditIfEligible(db, m, "4.4.4.4", { config: GRANT });
+    creditAccount(db, m, toMicro(10), "deposit", "onchain:0x123", "Verified deposit");
+
+    // $10 real is sweepable; one micro more is not.
+    expect(
+      enqueuePendingWithdrawal(db, {
+        motebitId: m,
+        amountMicro: toMicro(10) + 1,
+        destination: "SoLDest1111111111111111111111111111111111111",
+        rail: "solana",
+        source: "sweep",
+      }),
+    ).toBeNull();
+
+    const ok = enqueuePendingWithdrawal(db, {
+      motebitId: m,
+      amountMicro: toMicro(10),
+      destination: "SoLDest1111111111111111111111111111111111111",
+      rail: "solana",
+      source: "sweep",
+    });
+    expect(ok).not.toBeNull();
+    // Debited at enqueue (Rule 12) — only the grant remains.
+    expect(getAccountBalance(db, m)?.balance).toBe(toMicro(5));
+  });
+});

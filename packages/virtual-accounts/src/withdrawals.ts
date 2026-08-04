@@ -17,6 +17,49 @@ export interface WithdrawalsLogger {
 
 const NOOP_LOGGER: WithdrawalsLogger = { info: () => {} };
 
+/** Balance decomposed into the two withdrawal holds and what's left. */
+export interface WithdrawableAvailable {
+  balance: number;
+  /** Dispute-window escrow — recent settlement credits not yet clear. */
+  disputeHold: number;
+  /** Unspent promotional grant — spendable on inference, never withdrawable. */
+  grantHold: number;
+  /** `balance − disputeHold − grantHold`, floored at zero. */
+  available: number;
+}
+
+/**
+ * How much of an account may LEAVE as cash, right now.
+ *
+ * Canonical because "withdrawable" has two holds and every exit path must
+ * subtract both. This is the single definition; the user-initiated request
+ * path, the relay's aggregated pending-withdrawal enqueue, and the automatic
+ * sweep all consume it rather than each re-deriving `balance − holds`.
+ *
+ * The drift this closes was real: the enqueue and sweep paths subtracted only
+ * the dispute hold, so on a deploy with both a sweep rail and promotional
+ * credit enabled, an unspent grant could be auto-swept out as cash — the exact
+ * outcome the grant hold exists to prevent, reachable on the one exit path
+ * nobody had to ask for.
+ *
+ * Withdrawal-only by construction: `debitSpendable` consults the dispute hold
+ * alone, so grant credit stays spendable on inference.
+ */
+export function computeWithdrawableAvailable(
+  store: AccountStore,
+  motebitId: string,
+): WithdrawableAvailable {
+  const balance = store.getOrCreateAccount(motebitId).balance;
+  const disputeHold = store.getUnwithdrawableHold(motebitId);
+  const grantHold = store.getUnspentGrantHold(motebitId);
+  return {
+    balance,
+    disputeHold,
+    grantHold,
+    available: Math.max(0, balance - disputeHold - grantHold),
+  };
+}
+
 export interface RequestWithdrawalArgs {
   motebitId: string;
   /** Amount in integer micro-units. */
@@ -62,15 +105,15 @@ export function requestWithdrawal(
   // as cash. Both are subtracted from the withdrawable amount; the grant hold
   // is withdrawal-only (spending is unaffected — see `debitSpendable`, which
   // consults only the dispute hold).
-  const disputeHold = store.getUnwithdrawableHold(args.motebitId);
-  const grantHold = store.getUnspentGrantHold(args.motebitId);
-  const account = store.getOrCreateAccount(args.motebitId);
-  const available = account.balance - disputeHold - grantHold;
+  const { balance, disputeHold, grantHold, available } = computeWithdrawableAvailable(
+    store,
+    args.motebitId,
+  );
   if (available < args.amountMicro) {
     logger.info("withdrawal.hold_insufficient", {
       motebitId: args.motebitId,
       requestedAmount: args.amountMicro,
-      balance: account.balance,
+      balance,
       disputeHold,
       grantHold,
       available,

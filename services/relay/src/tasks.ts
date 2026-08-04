@@ -53,7 +53,11 @@ import {
   lexicographicComposite,
 } from "@motebit/market";
 import type { CandidateProfile, CompositeFunction } from "@motebit/market";
-import { computeP2pFeeMicro, computeFederatedFeeSplit } from "@motebit/protocol";
+import {
+  computeP2pFeeMicro,
+  computeFederatedFeeSplit,
+  roundSettlementSplitMicro,
+} from "@motebit/protocol";
 import {
   getAccountBalance,
   creditAccount,
@@ -880,8 +884,17 @@ export async function handleReceiptIngestion(
           subSettlementId,
           platformFeeRate,
         );
-        subSettlement.amount_settled = Math.round(subSettlement.amount_settled);
-        subSettlement.platform_fee = Math.round(subSettlement.platform_fee);
+        // Conserving round to whole micro-units: `net + fee` must still equal
+        // the gross after rounding. Rounding each leg independently overstates
+        // the fee by one micro on 5% of grosses (see roundSettlementSplitMicro).
+        {
+          const rounded = roundSettlementSplitMicro(
+            subSettlement.amount_settled,
+            subSettlement.platform_fee,
+          );
+          subSettlement.amount_settled = rounded.netMicro;
+          subSettlement.platform_fee = rounded.feeMicro;
+        }
 
         // Self-attesting sub-settlement. Sign BEFORE the synchronous
         // BEGIN/COMMIT block — see the canonical settlement site for the
@@ -1208,8 +1221,20 @@ export async function handleReceiptIngestion(
       // amount_settled) diverge from what the delegator was actually charged.
       const settlement = settleOnReceipt(allocation, receipt, null, settlementId, platformFeeRate);
       // Round to integer micro-units for DB storage
-      settlement.amount_settled = Math.round(settlement.amount_settled);
-      settlement.platform_fee = Math.round(settlement.platform_fee);
+      // Conserving round to whole micro-units. `settleOnReceipt` returns a
+      // conserving but possibly fractional pair; rounding the two legs
+      // INDEPENDENTLY breaks `net + fee === gross` on 5% of grosses, each
+      // recording one micro of fee the relay never retained — into the signed,
+      // dispute-grade `relay_settlements` row that feeds the treasury
+      // reconciler's `onchain >= recordedFeeSum` invariant.
+      {
+        const rounded = roundSettlementSplitMicro(
+          settlement.amount_settled,
+          settlement.platform_fee,
+        );
+        settlement.amount_settled = rounded.netMicro;
+        settlement.platform_fee = rounded.feeMicro;
+      }
 
       let credentialRow: {
         credential_id: string;
@@ -1350,14 +1375,28 @@ export async function handleReceiptIngestion(
         const heldRemaining = allocationClaimed
           ? getAllocationHoldRemaining(moteDb.db, allocationId)
           : 0;
-        const settlementFunded = grossAmount === 0 || allocationClaimed;
+        // The funding claim is LEDGER-derived, never row-derived. Claiming the
+        // allocation row proves only that nobody else consumed it — not that
+        // anything was ever debited for it. Allocation rows are also written on
+        // the never-debited best-effort path (`tasks.ts` submission `else`
+        // branch: free agents, and priced-but-unpayable listings whose
+        // `pay_to_address` is absent, which `getAgentPricing` reads as
+        // unpriced while `getListingUnitCost` still mints a `price_snapshot`).
+        // Crediting a worker against such a row mints balance the relay never
+        // received — and `reconcileLedger` cannot see it, because the credit
+        // itself is a ledger row, so the balance equation stays consistent.
+        // Same reasoning the refund/partial branches below already carry.
+        const settlementFunded = grossAmount === 0 || (allocationClaimed && heldRemaining > 0);
         if (!isP2pTask && signedSettlement != null && !settlementFunded) {
           logger.error("settlement.unfunded_skipped", {
             correlationId: taskId,
             settlementId: settlement.settlement_id,
             gross: settlement.amount_settled + settlement.platform_fee,
-            reason:
-              "allocation no longer locked — funds already released to the delegator; settlement skipped to prevent double-credit",
+            allocationClaimed,
+            heldRemaining,
+            reason: allocationClaimed
+              ? "allocation claimed but the ledger holds nothing for it — never debited (best-effort/unpriceable listing), or already released to the delegator; settlement skipped to prevent minting unfunded balance"
+              : "allocation no longer locked — funds already released to the delegator; settlement skipped to prevent double-credit",
           });
         }
         // Relay settlement: INSERT record + credit/refund virtual accounts.

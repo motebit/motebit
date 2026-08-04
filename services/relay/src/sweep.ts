@@ -18,7 +18,9 @@
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
-import { computeDisputeWindowHold, requestWithdrawal } from "./accounts.js";
+import { requestWithdrawal } from "./accounts.js";
+import { computeWithdrawableAvailable } from "@motebit/virtual-accounts";
+import { sqliteAccountStoreFor } from "./account-store-sqlite.js";
 import { enqueuePendingWithdrawal } from "./batch-withdrawals.js";
 import { createLogger } from "./logger.js";
 import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
@@ -102,9 +104,15 @@ export function startSweepLoop(
 
         for (const agent of candidates) {
           try {
-            // Compute available balance (respects dispute window hold)
-            const disputeHold = computeDisputeWindowHold(db, agent.motebit_id);
-            const available = Math.max(0, agent.balance - disputeHold);
+            // Compute available balance. The sweep moves funds OUT as cash, so
+            // it honours both withdrawal holds — dispute-window escrow and the
+            // unspent promotional grant. Canonical definition shared with
+            // `requestWithdrawal` and `enqueuePendingWithdrawal`: an automatic
+            // exit path must not be laxer than the one the user asks for.
+            const { disputeHold, grantHold, available } = computeWithdrawableAvailable(
+              sqliteAccountStoreFor(db),
+              agent.motebit_id,
+            );
 
             // Sweep amount = available - threshold (keep threshold as reserve)
             const sweepAmount = available - agent.sweep_threshold;
@@ -132,6 +140,7 @@ export function startSweepLoop(
                   balanceBefore: agent.balance,
                   threshold: agent.sweep_threshold,
                   disputeHold,
+                  grantHold,
                 });
               }
               continue;
@@ -159,6 +168,7 @@ export function startSweepLoop(
                 balanceBefore: agent.balance,
                 threshold: agent.sweep_threshold,
                 disputeHold,
+                grantHold,
               });
             }
           } catch (err) {

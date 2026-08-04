@@ -69,6 +69,48 @@ export function computeP2pFeeMicro(netCostMicro: number, feeRate: number): numbe
   return Math.round(netCostMicro / (1 - feeRate)) - netCostMicro;
 }
 
+/** A settlement's two recorded legs, rounded to whole micro-units. */
+export interface SettlementSplitMicro {
+  /** Worker net, in whole micro-units. */
+  netMicro: number;
+  /** Platform fee, in whole micro-units. */
+  feeMicro: number;
+}
+
+/**
+ * Round a settlement's (net, fee) pair to whole micro-units **without breaking
+ * conservation**: the returned legs always sum to `round(net + fee)`.
+ *
+ * Rounding the two legs INDEPENDENTLY does not conserve. `settleOnReceipt`
+ * returns a conserving but fractional pair (its `microRound` rounds to six
+ * decimal places, which is a no-op on values already at micro precision), and
+ * `Math.round` applied separately to each half breaks the sum whenever both
+ * land on a .5 boundary — at `feeRate = 0.05` that is every gross ≡ 10 (mod
+ * 20), i.e. exactly 5% of integer grosses, each recording one micro of fee the
+ * relay never retained.
+ *
+ * That matters because the recorded pair is not display: `relay_settlements` is
+ * the signed, dispute-grade history the business is built on, and the recorded
+ * fee sum is the input to the treasury reconciler's `onchain >= recordedFeeSum`
+ * invariant. A systematically over-stated fee drifts the reconciler against the
+ * chain.
+ *
+ * The fee is the rounded leg and the net is the remainder — the same direction
+ * as {@link computeP2pFeeMicro} and {@link computeFederatedFeeSplit}, so all
+ * three lanes (relay-custody, P2P, federated) agree on who absorbs the dust.
+ *
+ * @param netExact worker net, possibly fractional micro-units
+ * @param feeExact platform fee, possibly fractional micro-units
+ */
+export function roundSettlementSplitMicro(
+  netExact: number,
+  feeExact: number,
+): SettlementSplitMicro {
+  const grossMicro = Math.round(netExact + feeExact);
+  const feeMicro = Math.round(feeExact);
+  return { netMicro: grossMicro - feeMicro, feeMicro };
+}
+
 /** The three legs of a cross-operator federated P2P settlement, in micro-units. */
 export interface FederatedFeeSplit {
   /** Origin relay (A) fee leg — `round(budget · feeRate)`. */
