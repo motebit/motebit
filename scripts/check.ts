@@ -331,6 +331,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-claude-md",
   },
   {
+    name: "check-gate-references",
+    defends:
+      "every `check-*` gate NAME asserted in an always-loaded CLAUDE.md resolves to a gate that actually exists — sibling of #25 one aperture over (that gate validates doctrine LINKS resolve; nothing validated gate NAMES). Phantom enforcement is the most expensive drift shape in an agent-read repo: an index that asserts `Gate check-settlement-authority` in the same grammatical form as seven real claims stops an audit rather than failing it, because the reader concludes the invariant is structurally closed. Found 2026-08-04 by a birds-eye review — the named gate was an unshipped Inc-4 aspiration while the money-path invariant it claimed to guard was half-built. Deliberate deferrals stay legal but must be declared in PLANNED_GATES with a reason (the EXCLUDED_CHECKS move applied to claims). Doctrine docs are deliberately out of scope — they are design documents and may name future gates; the index is the surface that says what IS (invariant #151)",
+    script: "check-gate-references",
+  },
+  {
     name: "check-skill-corpus",
     defends:
       "every committed reference skill under `skills/*` carries a body_hash, content_hash, and envelope signature that match what `pnpm --filter @motebit/skills build-reference-skill` would produce — closes the drift class where a contributor edits SKILL.md without re-signing and ships a tampered-looking artifact users would only catch at install time on their machine (added 2026-04-28 alongside spec/skills-v1.md ship)",

@@ -796,6 +796,20 @@ export async function probeLeak(): Promise<boolean> {
       ),
   },
   {
+    script: "check-gate-references",
+    proves:
+      "flags a `check-*` gate NAME asserted in an always-loaded CLAUDE.md that resolves to no gate on disk — the phantom-enforcement class, where the index claims an invariant is guarded and nothing guards it",
+    perturb: () =>
+      // Append an index line asserting a gate that does not exist, in the same
+      // grammatical form the real claims use. The gate should fire on the
+      // unresolvable name. The `PROBE-ONLY` marker is trivially greppable if
+      // cleanup ever fails; mutateFile restores byte-identical.
+      mutateFile(
+        "CLAUDE.md",
+        (src) => `${src}\n- PROBE-ONLY phantom entry. Gate check-probe-nonexistent-gate\n`,
+      ),
+  },
+  {
     script: "check-readme-bin-claims",
     proves:
       "flags an `npm i -g @motebit/<pkg>` invocation in any README.md / CLAUDE.md naming a workspace package whose package.json has no `bin` field",
