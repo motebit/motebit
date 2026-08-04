@@ -802,11 +802,19 @@ export async function probeLeak(): Promise<boolean> {
     perturb: () =>
       // Append an index line asserting a gate that does not exist, in the same
       // grammatical form the real claims use. The gate should fire on the
-      // unresolvable name. The `PROBE-ONLY` marker is trivially greppable if
-      // cleanup ever fails; mutateFile restores byte-identical.
+      // unresolvable name.
+      //
+      // The injected line MUST carry the `PROBE_PREFIX + "injected"` needle:
+      // root CLAUDE.md is TRACKED, and `drainStalePerturbations` recovers a
+      // tracked file only when an added line contains that needle. Without it,
+      // a SIGKILL mid-probe would leave a phantom-gate assertion appended to
+      // the one file that loads into every subsequent session — precisely the
+      // poison this gate exists to prevent, written by its own probe.
+      // "Greppable by a human" is the recovery model the drain replaced.
       mutateFile(
         "CLAUDE.md",
-        (src) => `${src}\n- PROBE-ONLY phantom entry. Gate check-probe-nonexistent-gate\n`,
+        (src) =>
+          `${src}\n- ${PROBE_PREFIX}injected phantom entry. Gate check-probe-nonexistent-gate\n`,
       ),
   },
   {
