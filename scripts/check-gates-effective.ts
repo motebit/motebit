@@ -818,6 +818,22 @@ export async function probeLeak(): Promise<boolean> {
       ),
   },
   {
+    script: "check-root-workspace-deps",
+    proves:
+      "flags a root package.json `workspace:*` dependency pointing outside the trees the relay Dockerfile copies — the shape that froze production relay for four days while main stayed green",
+    perturb: () =>
+      // Reintroduce the exact 2026-07-31 defect: a root devDependency on
+      // @motebit/research, which lives at services/research/ and is therefore
+      // absent from the relay image slice. The gate should name the package,
+      // its resolved directory, and the copied trees.
+      mutateFile("package.json", (src) =>
+        src.replace(
+          /(\n\s*)"@motebit\/runtime": "workspace:\*",/,
+          '$1"@motebit/research": "workspace:*",$1"@motebit/runtime": "workspace:*",',
+        ),
+      ),
+  },
+  {
     script: "check-readme-bin-claims",
     proves:
       "flags an `npm i -g @motebit/<pkg>` invocation in any README.md / CLAUDE.md naming a workspace package whose package.json has no `bin` field",

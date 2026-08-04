@@ -93,6 +93,13 @@ services/*/data/
 # instances.
 /.*.mts
 
+# Gate scratch, written at any depth (check-docs-quickstart-runs materializes
+# this next to the package it exercises and cleans up after itself — but an
+# interrupted run leaves it behind). Kept UNANCHORED on purpose: the pattern
+# above is root-only, and folding this filename into it silently narrowed the
+# ignore from any-depth to root-only.
+.quickstart-check.mts
+
 # Golden-frame darwin snapshots — local personal baselines only; linux
 # frames in __screenshots__ are the CI-authoritative committed references.
 apps/web/e2e/golden/__screenshots__/*-darwin.png
