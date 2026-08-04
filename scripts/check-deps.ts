@@ -217,6 +217,13 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     // Cross-operator federated P2P fee-from-budget split (§7.1) — same interop-law
     // rationale: origin relay validator + delegator client must agree leg-by-leg.
     "computeFederatedFeeSplit",
+    // Conserving (net, fee) → whole-micro rounding for the relay-custody lane.
+    // Same money-algebra category as the two above: pure, deterministic, no
+    // I/O. Rounding the legs independently breaks `net + fee === gross` on 5%
+    // of grosses, and the recorded pair is signed dispute-grade history feeding
+    // the treasury reconciler — so the conserving form is hosted here with the
+    // sibling fee math rather than inlined at each relay call site.
+    "roundSettlementSplitMicro",
     // base58btc codec — pure, chain-agnostic byte → string encoding (Bitcoin
     // alphabet; shared by Solana addresses, IPFS CIDv0, etc.). Same category as
     // the money converters above: deterministic byte math, no I/O, no chain
