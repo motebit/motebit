@@ -33,7 +33,8 @@ import type {
 } from "@motebit/sdk";
 import { isBatchableRail, isWithdrawableRail } from "@motebit/sdk";
 import { shouldBatchSettle, DEFAULT_BATCH_POLICY, type BatchPolicy } from "@motebit/market";
-import { computeDisputeWindowHold, getOrCreateAccount, fromMicro } from "./accounts.js";
+import { fromMicro } from "./accounts.js";
+import { computeWithdrawableAvailable } from "@motebit/virtual-accounts";
 import { sqliteAccountStoreFor } from "./account-store-sqlite.js";
 import { createLogger } from "./logger.js";
 import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
@@ -97,19 +98,25 @@ export function enqueuePendingWithdrawal(db: DatabaseDriver, params: EnqueuePara
     throw new Error(`enqueuePendingWithdrawal: amount must be positive (got ${amountMicro})`);
   }
 
-  // Dispute hold — funds from recent relay settlements are not sweepable.
-  // Policy-layer check; the compound primitive below enforces only the
-  // raw balance invariant. The sum must be computed before we call into
-  // the atomic write so an insufficient-hold state doesn't even attempt
-  // the debit.
-  const account = getOrCreateAccount(db, motebitId);
-  const disputeHold = computeDisputeWindowHold(db, motebitId);
-  if (account.balance - disputeHold < amountMicro) {
-    logger.info("pending_withdrawal.dispute_hold", {
+  // Withdrawal holds — BOTH of them. Aggregation is an exit path like any
+  // other, so it subtracts the dispute-window escrow AND the unspent
+  // promotional grant (`computeWithdrawableAvailable` is the canonical
+  // definition, shared with `requestWithdrawal` and the sweep). Policy-layer
+  // check; the compound primitive below enforces only the raw balance
+  // invariant. Computed before the atomic write so an insufficient-hold state
+  // doesn't even attempt the debit.
+  const { balance, disputeHold, grantHold, available } = computeWithdrawableAvailable(
+    sqliteAccountStoreFor(db),
+    motebitId,
+  );
+  if (available < amountMicro) {
+    logger.info("pending_withdrawal.hold_insufficient", {
       motebitId,
       amountMicro,
-      balance: account.balance,
+      balance,
       disputeHold,
+      grantHold,
+      available,
     });
     return null;
   }

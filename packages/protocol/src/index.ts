@@ -3774,8 +3774,9 @@ export {
   fromCents,
   computeP2pFeeMicro,
   computeFederatedFeeSplit,
+  roundSettlementSplitMicro,
 } from "./money.js";
-export type { FederatedFeeSplit } from "./money.js";
+export type { FederatedFeeSplit, SettlementSplitMicro } from "./money.js";
 
 // Token audiences — closed registry of `aud` claim values for the
 // Routing primitive — closed-registry types for the auto-router.
