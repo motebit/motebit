@@ -282,6 +282,28 @@ export function requiresP2pProof(args: {
   );
 }
 
+/**
+ * x402-chargeability, NOT "does this agent charge money".
+ *
+ * Returns null without a `pay_to_address` — correctly, because the x402 gate it
+ * feeds is an ONCHAIN payment path and `pay_to_address` is where the money
+ * goes. There is no arming an onchain gate with no destination.
+ *
+ * **Do not reuse this as a general "is this agent paid" predicate.** That is a
+ * different question with a different answer: the relay-custody lane credits
+ * the worker's VIRTUAL ACCOUNT and never reads `pay_to_address`, so an agent
+ * can charge for relay-custody work while publishing no onchain address at all.
+ * For "does this agent charge", read the price — `getListingUnitCost(...) > 0`,
+ * the same source `price_snapshot` derives from, so the two cannot disagree.
+ *
+ * Conflating the two made "priced and unpayable" representable and produced the
+ * unfunded-allocation mint: priced enough to book `amount_locked`, not priced
+ * enough to demand payment, leaving a locked allocation with no debit behind it
+ * for every downstream payout site to trust. See the `requiresPayment` comment
+ * at the allocation branch, and `priced-unpayable-listing.test.ts`.
+ *
+ * Sole caller: the x402 middleware wrapper.
+ */
 function getAgentPricing(
   moteDb: MotebitDatabase,
   agentId: string,
@@ -2389,9 +2411,33 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // Persist budget allocation so settlement can verify the lock exists.
     // P2P tasks skip allocation — money already moved onchain.
     if (settlementMode !== "p2p" && priceSnapshot != null && priceSnapshot > 0) {
-      // Determine whether this agent requires payment (has pay_to_address in listing)
-      const agentPricingInfo = getAgentPricing(moteDb, motebitId);
-      const requiresPayment = agentPricingInfo != null;
+      // Payment is required BY DEFINITION here: this branch is guarded by
+      // `priceSnapshot > 0`, and `priceSnapshot` derives from the listing's
+      // own `pricing` column (`getListingUnitCost`). A priced agent charges.
+      //
+      // This used to ask `getAgentPricing(...) != null`, which additionally
+      // required a `pay_to_address` — and that made a priced listing WITHOUT a
+      // payout address read as FREE. It is the same listing row answering two
+      // different questions:
+      //
+      //   - the x402 middleware asks "can this agent be charged ONCHAIN?" —
+      //     which genuinely needs `pay_to_address`, because that is where the
+      //     money goes. `getAgentPricing` still serves that question, unchanged.
+      //   - this branch asks "does this agent charge AT ALL?" — which does not,
+      //     because the relay-custody lane credits the worker's VIRTUAL ACCOUNT
+      //     and never touches `pay_to_address`.
+      //
+      // Conflating them made "priced and unpayable" representable: priced
+      // enough to mint a `price_snapshot`, not priced enough to demand payment.
+      // An unfunded delegation then fell to the free-agent best-effort branch
+      // below and booked an allocation `status='locked'` with `amount_locked`
+      // set and NO debit — a row every downstream payout site trusts (the
+      // settlement credit, the stale-allocation release, the retry-exhaustion
+      // refund), each paying out real balance against money never received.
+      //
+      // Deriving both halves from the one read makes the disagreement
+      // unrepresentable rather than catching it later at each payout site.
+      const requiresPayment = true;
 
       try {
         const delegatorId = submittedBy ?? motebitId;
