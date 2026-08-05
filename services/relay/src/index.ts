@@ -151,6 +151,7 @@ import {
   createProofTable,
   createWalletTable,
   creditAccount,
+  getAllocationHoldRemaining,
   storeSettlementProof,
 } from "./accounts.js";
 import { createPairingTables, registerPairingRoutes } from "./pairing.js";
@@ -201,6 +202,101 @@ export interface X402Config {
 
 /** Callback to query shutdown state. Injected by standalone boot, unused in tests. */
 export type ShutdownStateGetter = () => boolean;
+
+const staleAllocationLogger = createLogger({ service: "stale-allocations" });
+
+/**
+ * Release budget allocations that have sat `'locked'` past the horizon with no
+ * settlement, returning the held funds to the delegator.
+ *
+ * **Releases what the LEDGER holds, never `amount_locked`.** The row's
+ * `amount_locked` is a claim; the ledger is the fact. Allocation rows are also
+ * written on never-debited paths — free agents, and (before the funding check
+ * was corrected) any listing priced above zero whose `pay_to_address` was
+ * absent, which read as free. Crediting `amount_locked` against such a row
+ * mints balance the relay never received, as `allocation_release` — a type
+ * carrying neither the dispute-window hold nor the promotional-grant hold, so
+ * immediately withdrawable. `reconcileLedger` cannot see it either: the credit
+ * is itself a ledger row, so the balance equation stays self-consistent.
+ *
+ * The x402 lane is safe under this rule rather than in spite of it. An x402
+ * payment is credited to the delegator as a `deposit` BEFORE the hold is taken,
+ * so a task that never allocated leaves that deposit sitting in the delegator's
+ * balance — there is nothing to release because they were never debited, and
+ * they are not out of pocket. Releasing `amount_locked` there would pay them
+ * twice.
+ *
+ * Extracted from the cleanup interval so tests drive THIS function rather than
+ * a re-implementation of it. The previous coverage
+ * (`money-loop-failures.test.ts`) copied the loop body into the test — a
+ * modeled composition that stays green no matter what the real loop does.
+ *
+ * @param resolveDelegator maps a task id to its submitter, when the task is
+ *   still in the queue; falls back to the allocation's own `motebit_id`.
+ * @returns the number of allocations released.
+ */
+export function releaseStaleAllocations(
+  db: MotebitDatabase["db"],
+  now: number,
+  horizonMs: number,
+  resolveDelegator: (taskId: string) => string | undefined,
+): number {
+  try {
+    const cutoff = now - horizonMs;
+    const stale = db
+      .prepare(
+        "SELECT allocation_id, task_id, motebit_id, amount_locked FROM relay_allocations WHERE status = 'locked' AND created_at < ?",
+      )
+      .all(cutoff) as Array<{
+      allocation_id: string;
+      task_id: string;
+      motebit_id: string;
+      amount_locked: number;
+    }>;
+    if (stale.length === 0) return 0;
+
+    db.exec("BEGIN");
+    try {
+      for (const alloc of stale) {
+        const held = getAllocationHoldRemaining(db, alloc.allocation_id);
+        if (held <= 0) {
+          // Nothing was ever debited for this row (or it was already
+          // released). Skip the credit; the status flip below still retires
+          // the row so it stops being reconsidered every tick.
+          staleAllocationLogger.warn("stale_allocation.unfunded_skipped", {
+            allocationId: alloc.allocation_id,
+            taskId: alloc.task_id,
+            claimed: alloc.amount_locked,
+            reason:
+              "allocation holds nothing on the ledger — never debited (best-effort path) or already released; release skipped to prevent minting unfunded balance",
+          });
+          continue;
+        }
+        creditAccount(
+          db,
+          resolveDelegator(alloc.task_id) ?? alloc.motebit_id,
+          held,
+          "allocation_release",
+          alloc.allocation_id,
+          `Stale allocation release for task ${alloc.task_id}`,
+        );
+      }
+      db.prepare(
+        "UPDATE relay_allocations SET status = 'released', released_at = ? WHERE status = 'locked' AND created_at < ?",
+      ).run(now, cutoff);
+      db.exec("COMMIT");
+      return stale.length;
+    } catch (err) {
+      db.exec("ROLLBACK");
+      staleAllocationLogger.error("stale_allocation.release_failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return 0;
+    }
+  } catch {
+    return 0; // Best-effort cleanup
+  }
+}
 
 export interface SyncRelayConfig {
   dbPath?: string;
@@ -774,47 +870,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       // Best-effort — no-op if auto_vacuum mode differs
     }
     // Release stale budget allocations locked > 1 hour with no settlement.
-    // Return held funds to the delegator's virtual account.
-    try {
-      const staleAllocations = moteDb.db
-        .prepare(
-          "SELECT allocation_id, task_id, motebit_id, amount_locked FROM relay_allocations WHERE status = 'locked' AND created_at < ?",
-        )
-        .all(now - STALE_ALLOCATION_HORIZON_MS) as Array<{
-        allocation_id: string;
-        task_id: string;
-        motebit_id: string;
-        amount_locked: number;
-      }>;
-
-      if (staleAllocations.length > 0) {
-        moteDb.db.exec("BEGIN");
-        try {
-          for (const alloc of staleAllocations) {
-            const taskEntry = taskQueue.get(alloc.task_id);
-            const delegatorId = taskEntry?.submitted_by ?? alloc.motebit_id;
-            creditAccount(
-              moteDb.db,
-              delegatorId,
-              alloc.amount_locked,
-              "allocation_release",
-              alloc.allocation_id,
-              `Stale allocation release for task ${alloc.task_id}`,
-            );
-          }
-          moteDb.db
-            .prepare(
-              "UPDATE relay_allocations SET status = 'released', released_at = ? WHERE status = 'locked' AND created_at < ?",
-            )
-            .run(now, now - STALE_ALLOCATION_HORIZON_MS);
-          moteDb.db.exec("COMMIT");
-        } catch {
-          moteDb.db.exec("ROLLBACK");
-        }
-      }
-    } catch {
-      // Best-effort cleanup
-    }
+    releaseStaleAllocations(
+      moteDb.db,
+      now,
+      STALE_ALLOCATION_HORIZON_MS,
+      (taskId) => taskQueue.get(taskId)?.submitted_by,
+    );
   });
 
   // --- WebSocket routes ---
@@ -1453,10 +1514,29 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
             return;
           }
           const delegatorId = taskEntry?.submitted_by ?? alloc.motebit_id;
+          // Refund what the LEDGER holds, never `amount_locked` — the row is a
+          // claim, the ledger is the fact. A never-debited allocation (free
+          // agent, or the priced-but-unpayable listing that used to read as
+          // free) would otherwise mint balance here as `allocation_release`,
+          // which carries no dispute-window or grant hold and is therefore
+          // immediately withdrawable. Same rule as `releaseStaleAllocations`.
+          const heldRemaining = getAllocationHoldRemaining(moteDb.db, alloc.allocation_id);
+          if (heldRemaining <= 0) {
+            moteDb.db.exec("ROLLBACK");
+            logger.warn("settlement.retry.refund_skipped_unfunded", {
+              retryId: retry.retry_id,
+              taskId: retry.task_id,
+              allocationId: alloc.allocation_id,
+              claimed: alloc.amount_locked,
+              reason:
+                "allocation holds nothing on the ledger — never debited or already released; refund skipped to prevent minting unfunded balance",
+            });
+            return;
+          }
           creditAccount(
             moteDb.db,
             delegatorId,
-            alloc.amount_locked,
+            heldRemaining,
             "allocation_release",
             alloc.allocation_id,
             `Retry exhaustion refund for task ${retry.task_id}`,
@@ -1472,7 +1552,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
               retry.task_id,
               alloc.allocation_id,
               delegatorId,
-              alloc.amount_locked,
+              // The audit row records what was actually refunded (the ledger
+              // hold), not what the allocation row claimed — otherwise the
+              // refund log asserts a payout that never happened.
+              heldRemaining,
               Date.now(),
             );
           moteDb.db.exec("COMMIT");
@@ -1480,7 +1563,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
             refundId,
             taskId: retry.task_id,
             allocationId: alloc.allocation_id,
-            amount: alloc.amount_locked,
+            amount: heldRemaining,
+            claimed: alloc.amount_locked,
             delegator: delegatorId,
           });
         } catch (txnErr) {
