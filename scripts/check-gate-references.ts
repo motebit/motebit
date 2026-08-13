@@ -128,6 +128,14 @@ const SKIP_DIRS = new Set([
 function instructionSurfaces(repoRoot: string): string[] {
   const files: string[] = [];
   if (existsSync(join(repoRoot, "CLAUDE.md"))) files.push("CLAUDE.md");
+  // `AGENTS.md` is the cross-tool convention some agents read instead of
+  // CLAUDE.md, so it is an always-loaded instruction surface too and must be
+  // held to the same standard. It earned its place here: the first version was
+  // a mechanical find-replace of CLAUDE.md that shipped a reference to a gate
+  // named `check-Codex-md` — a phantom, produced by the same substitution that
+  // rewrote every real path. Scanning only CLAUDE.md left this gate with the
+  // exact aperture hole it exists to close.
+  if (existsSync(join(repoRoot, "AGENTS.md"))) files.push("AGENTS.md");
 
   const walk = (dir: string): void => {
     let entries;
@@ -141,9 +149,9 @@ function instructionSurfaces(repoRoot: string): string[] {
       const full = join(dir, entry.name);
       if (entry.isDirectory()) {
         walk(full);
-      } else if (entry.isFile() && entry.name === "CLAUDE.md") {
+      } else if (entry.isFile() && (entry.name === "CLAUDE.md" || entry.name === "AGENTS.md")) {
         const rel = relative(repoRoot, full);
-        if (rel !== "CLAUDE.md") files.push(rel);
+        if (rel !== "CLAUDE.md" && rel !== "AGENTS.md") files.push(rel);
       }
     }
   };
@@ -157,8 +165,17 @@ function instructionSurfaces(repoRoot: string): string[] {
  * as a NON-INITIAL component of any hyphenated compound, because `-` is a
  * non-word character — `spell-check-mode` would yield `check-mode`, and the
  * repair instruction would tell the reader to go build a gate by that name.
+ *
+ * The character class is case-INSENSITIVE while the comparison against real
+ * gate names stays case-SENSITIVE, and that asymmetry is the point. Real gates
+ * are lowercase-kebab, so a mixed-case mention can never resolve — it is a
+ * phantom by construction. A lowercase-only pattern silently skipped them:
+ * the `check-Codex-md` that shipped in `AGENTS.md` (a blind find-replace of
+ * `check-claude-md`) went unmatched, which is precisely the case this gate is
+ * cited as catching. A gate blind to the incident that justifies it is worse
+ * than no gate.
  */
-const GATE_MENTION = /(?<![-\w])check-[a-z0-9][a-z0-9-]*/g;
+const GATE_MENTION = /(?<![-\w])check-[A-Za-z0-9][A-Za-z0-9-]*/g;
 
 function main(): void {
   const repoRoot = process.cwd();
