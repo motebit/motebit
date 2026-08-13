@@ -308,6 +308,56 @@ describe("startServiceServer", () => {
     fetchSpy.mockRestore();
   });
 
+  it("republishes the service listing on a healthy, continuously-heartbeating service", async () => {
+    // Regression for the month-long staging conformance red.
+    //
+    // The listing is published by `register()` and by nothing else, while
+    // `heartbeat()` only extends the TTL — and a successful heartbeat ALSO
+    // refreshes `lastRegisteredAt`, which is what the staleness branch reads.
+    // So on a healthy service the staleness branch never fired and the listing
+    // became a boot-time one-shot: once the relay lost it, nothing ever put it
+    // back. Six staging atoms sat live, heartbeating and fully discoverable but
+    // unpriced and undescribed for roughly a month, and the archetype
+    // conformance probe went red daily until each machine was restarted by hand.
+    //
+    // The invariant: over a long healthy uptime, `/listing` must be POSTed more
+    // than once. Severing the FULL_REREGISTER_INTERVAL_MS branch reds this while
+    // the boot-registration test above stays green.
+    vi.useFakeTimers();
+    try {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+      handle = await startServiceServer(makeDeps(), {
+        port: 0,
+        syncUrl: "http://fake-relay",
+        apiToken: "test-token",
+        onStart: vi.fn(),
+        log: vi.fn(),
+      });
+
+      const listingCalls = (): number =>
+        fetchSpy.mock.calls.filter(
+          (c) => typeof c[0] === "string" && (c[0] as string).includes("/listing"),
+        ).length;
+
+      // Boot publishes once.
+      expect(listingCalls()).toBe(1);
+
+      // Two hours of a perfectly healthy service: every heartbeat succeeds, so
+      // the staleness branch is never reached. Before the fix this produced
+      // zero further listing POSTs, forever.
+      await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000 + 60_000);
+
+      expect(listingCalls()).toBeGreaterThan(1);
+
+      fetchSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("handles relay registration failure gracefully", async () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
