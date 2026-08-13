@@ -54,7 +54,6 @@ import {
   jsonAuthWithIdempotency,
   seedBalance,
 } from "./test-helpers.js";
-import { getAccountBalance } from "../accounts.js";
 
 let relay: SyncRelay | undefined;
 
@@ -100,7 +99,18 @@ async function priceListing(
  */
 async function settleSelfDelegatedTask(
   r: SyncRelay,
-  args: { unitCost: number; payTo?: string; fundDelegator?: number },
+  args: {
+    unitCost: number;
+    payTo?: string;
+    fundDelegator?: number;
+    /**
+     * Strip the allocation's ledger hold while LEAVING the row `'locked'`.
+     * Models a legacy row booked before the submission-time fix: claimable, but
+     * with nothing behind it. Not creatable through the API any more, which is
+     * exactly why it has to be seeded to be tested.
+     */
+    orphanHoldBeforeReceipt?: boolean;
+  },
 ): Promise<{ motebitId: string; taskId: string }> {
   const keypair = await generateKeypair();
   const pubHex = bytesToHex(keypair.publicKey);
@@ -139,6 +149,17 @@ async function settleSelfDelegatedTask(
     keypair.privateKey,
   );
 
+  if (args.orphanHoldBeforeReceipt === true) {
+    // Delete the hold rows but leave the allocation `'locked'`. The status
+    // check alone still passes here — which is the whole point: this is the
+    // one shape where `allocationClaimed` is TRUE and the ledger holds
+    // nothing, so it is the only thing that exercises the ledger condition
+    // rather than the status condition.
+    r.moteDb.db
+      .prepare("DELETE FROM relay_transactions WHERE reference_id = ? AND type = 'allocation_hold'")
+      .run(`x402-${task_id}`);
+  }
+
   const resultRes = await r.app.request(`/agent/${motebitId}/task/${task_id}/result`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -149,69 +170,36 @@ async function settleSelfDelegatedTask(
   return { motebitId, taskId: task_id };
 }
 
-describe("unfunded allocation must not mint balance at settlement", () => {
-  it("credits nothing when a priced listing has no pay_to_address and no funds were held", async () => {
+describe("settlement credits only what the ledger still holds", () => {
+  /**
+   * The scenario is deliberately NOT "submit an unfunded priced task" any more.
+   * The submission-time fix refuses that at the door (402), so it cannot be
+   * reached through the API — which is the point of shipping both.
+   *
+   * What remains reachable, and is the case this guard actually exists for: an
+   * allocation that WAS funded, whose hold has since been released back to the
+   * delegator, followed by a late receipt. Crediting there pays twice — once to
+   * the delegator on release, once to the worker on settlement — from one hold.
+   */
+  it("refuses to credit against a claimable allocation the ledger does not back", async () => {
     relay = await createTestRelay();
-
-    // Priced at $1.00, no pay_to_address, delegator never funded.
-    const { motebitId } = await settleSelfDelegatedTask(relay, { unitCost: 1.0 });
-
-    const ledger = ledgerByType(relay, motebitId);
-
-    // The premise: this really is the unfunded path — no hold was ever taken.
-    expect(ledger["allocation_hold"] ?? 0).toBe(0);
-
-    // The invariant: no hold ⇒ no settlement credit. A credit here is minted
-    // from nothing — the relay would owe a balance it never received.
-    expect(ledger["settlement_credit"] ?? 0).toBe(0);
-
-    const balance = getAccountBalance(relay.moteDb.db, motebitId)?.balance ?? 0;
-    expect(balance).toBe(0);
-  });
-
-  it("still credits normally when the allocation WAS funded (no regression)", async () => {
-    relay = await createTestRelay();
-
-    // Same shape, but the delegator holds real balance, so `allocateBudget`
-    // succeeds and a genuine `allocation_hold` debit backs the settlement.
-    const { motebitId } = await settleSelfDelegatedTask(relay, {
+    const { motebitId, taskId } = await settleSelfDelegatedTask(relay, {
       unitCost: 1.0,
       fundDelegator: 5.0,
+      orphanHoldBeforeReceipt: true,
     });
 
     const ledger = ledgerByType(relay, motebitId);
 
-    expect(ledger["allocation_hold"] ?? 0).toBeLessThan(0); // debit taken
-    expect(ledger["settlement_credit"] ?? 0).toBeGreaterThan(0); // worker paid
+    // The row is still claimable, but the ledger holds nothing for it.
+    expect(ledger["allocation_hold"] ?? 0).toBe(0);
 
-    // Conservation: the worker's credit never exceeds what was actually held.
-    const held = Math.abs(ledger["allocation_hold"] ?? 0);
-    const credited = ledger["settlement_credit"] ?? 0;
-    expect(credited).toBeLessThanOrEqual(held);
-  });
+    // The invariant: a claimable row with no ledger backing must not pay. The
+    // status check alone would have paid here — this is the ledger condition.
+    expect(ledger["settlement_credit"] ?? 0).toBe(0);
 
-  it("leaves the allocation LOCKED, never 'settled' without a settlement row", async () => {
-    relay = await createTestRelay();
-    const { taskId } = await settleSelfDelegatedTask(relay, { unitCost: 1.0 });
-
-    // Reconciliation invariant 3: a 'settled' allocation must have a matching
-    // settlement record. `allocationClaimed` EXECUTES the status UPDATE, so an
-    // earlier attempt at this fix — claim first, check the ledger second, skip
-    // the INSERT when unfunded — left the row 'settled' with no settlement row
-    // and put `reconcileLedger` into permanent error. Claiming only when funded
-    // is what keeps the claim and the INSERT atomic.
-    const alloc = relay.moteDb.db
-      .prepare("SELECT status FROM relay_allocations WHERE task_id = ?")
-      .get(taskId) as { status: string } | undefined;
-    expect(alloc?.status).toBe("locked");
-
-    const settlements = relay.moteDb.db
-      .prepare("SELECT COUNT(*) as n FROM relay_settlements WHERE task_id = ?")
-      .get(taskId) as { n: number };
-    expect(settlements.n).toBe(0);
-
-    // The ledger reconciler must be clean — this is the assertion the earlier
-    // attempt would have failed.
+    // And reconciliation invariant 3 holds: the row is not left 'settled'
+    // without a settlement record. (Claim-order — see the fix's commit.)
     const orphans = relay.moteDb.db
       .prepare(
         `SELECT COUNT(*) as n FROM relay_allocations a
@@ -220,14 +208,22 @@ describe("unfunded allocation must not mint balance at settlement", () => {
       )
       .get() as { n: number };
     expect(orphans.n).toBe(0);
+    expect(taskId).toBeTruthy();
   });
 
-  // NOT TESTED HERE, deliberately and with the reason stated: the x402 branch
-  // of the spendable-balance computation (earmarked funds excluded from the
-  // escrow net). `x402TxHash` is set only by the facilitator's real
-  // `onAfterSettle` hook — a module closure, not a spyable relay method — so
-  // the submission path that reads it is not integration-drivable, the same
-  // unreachability `requiresP2pProof` already documents for its x402 carve-out.
-  // Writing a test that re-derives the arithmetic on local variables would
-  // assert nothing about the deployed code; an honest gap beats a modeled one.
+  it("still credits normally when the hold is intact (no regression)", async () => {
+    relay = await createTestRelay();
+    const { motebitId } = await settleSelfDelegatedTask(relay, {
+      unitCost: 1.0,
+      fundDelegator: 5.0,
+    });
+
+    const ledger = ledgerByType(relay, motebitId);
+    expect(ledger["allocation_hold"] ?? 0).toBeLessThan(0);
+    expect(ledger["settlement_credit"] ?? 0).toBeGreaterThan(0);
+
+    // Conservation: the worker's credit never exceeds what was actually held.
+    const held = Math.abs(ledger["allocation_hold"] ?? 0);
+    expect(ledger["settlement_credit"] ?? 0).toBeLessThanOrEqual(held);
+  });
 });
