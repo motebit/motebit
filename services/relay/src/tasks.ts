@@ -1359,30 +1359,50 @@ export async function handleReceiptIngestion(
         // keeps reconciliation invariant 3 (allocation 'settled' ⇔ settlement
         // record exists) true: the claim and the INSERT below commit together
         // or not at all.
+        // What the delegator actually has at stake: allocation_hold debits
+        // minus allocation_release credits for this allocation, from the
+        // transaction ledger. NEVER `amount_locked` — allocation rows also
+        // exist for never-debited paths (free-agent best-effort holds), and
+        // crediting against one mints balance the relay never received.
+        //
+        // READ BEFORE CLAIMING, and this ordering is load-bearing.
+        // `allocationClaimed` is not a predicate — it EXECUTES the UPDATE. An
+        // earlier attempt at this fix claimed first, consulted the ledger
+        // second, then skipped the settlement INSERT when unfunded, which left
+        // an allocation permanently `'settled'` with no settlement row: a hard
+        // error in `reconcileLedger` invariant 3 (settled allocation ⇔
+        // settlement record). Deriving funding first and claiming only when
+        // funded keeps the claim and the INSERT atomic, exactly as the previous
+        // comment here promised.
+        const heldOnLedger = getAllocationHoldRemaining(moteDb.db, allocationId);
+        const settlementApplies = !isP2pTask && signedSettlement != null;
+        const fundedOnLedger = grossAmount === 0 || heldOnLedger > 0;
+
+        // Claim only what we intend to settle. An unfunded row stays `'locked'`
+        // and is retired later by the stale-allocation sweep, which (since the
+        // ledger-derived release) correctly pays out nothing for it.
         const allocationClaimed =
-          !isP2pTask &&
-          signedSettlement != null &&
+          settlementApplies &&
+          fundedOnLedger &&
           moteDb.db
             .prepare(
               "UPDATE relay_allocations SET status = 'settled', settled_at = ? WHERE task_id = ? AND status = 'locked'",
             )
             .run(Date.now(), taskId).changes > 0;
-        // What the delegator actually has at stake: allocation_hold debits
-        // minus allocation_release credits for this allocation, from the
-        // transaction ledger. NEVER `amount_locked` — allocation rows also
-        // exist for never-debited paths (free-agent best-effort holds), and
-        // releasing `amount_locked` there would mint unfunded balance.
-        const heldRemaining = allocationClaimed
-          ? getAllocationHoldRemaining(moteDb.db, allocationId)
-          : 0;
-        const settlementFunded = grossAmount === 0 || allocationClaimed;
-        if (!isP2pTask && signedSettlement != null && !settlementFunded) {
+
+        const heldRemaining = allocationClaimed ? heldOnLedger : 0;
+        const settlementFunded = grossAmount === 0 || (allocationClaimed && heldRemaining > 0);
+        if (settlementApplies && !settlementFunded) {
           logger.error("settlement.unfunded_skipped", {
             correlationId: taskId,
             settlementId: settlement.settlement_id,
             gross: settlement.amount_settled + settlement.platform_fee,
+            heldOnLedger,
+            allocationClaimed,
             reason:
-              "allocation no longer locked — funds already released to the delegator; settlement skipped to prevent double-credit",
+              heldOnLedger > 0
+                ? "allocation no longer locked — funds already released to the delegator; settlement skipped to prevent double-credit"
+                : "allocation holds nothing on the ledger — never debited (best-effort path, or a priced listing with no payout address), so crediting the worker would mint balance the relay never received",
           });
         }
         // Relay settlement: INSERT record + credit/refund virtual accounts.
@@ -2462,7 +2482,20 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         const account = getAccountBalance(moteDb.db, delegatorId);
         const rawBalance = account?.balance ?? 0;
         const escrowHold = computeDisputeWindowHold(moteDb.db, delegatorId);
-        const virtualBalance = Math.max(0, rawBalance - escrowHold);
+        // The escrow hold exists to stop a delegator spending its own recent
+        // EARNINGS while those are still disputable. An x402 payment is not
+        // that: it arrived seconds ago, from outside, earmarked for THIS task,
+        // and was deposit-credited just above. Netting the escrow hold against
+        // it would refuse a task the delegator has already paid for onchain.
+        //
+        // That refusal used to fail quietly in the worst way: `allocateBudget`
+        // returned null, control fell to the best-effort branch, and the task
+        // booked an allocation with NO hold behind it — so the relay took the
+        // money, the worker did the work, and the settlement path had nothing
+        // to pay from. Once settlement became ledger-derived that turns into a
+        // worker who is simply never paid. Excluding earmarked x402 funds from
+        // the escrow net keeps the hold real and the invariant honest.
+        const virtualBalance = x402TxHash ? rawBalance : Math.max(0, rawBalance - escrowHold);
 
         // Use allocateBudget to compute lock amount with risk buffer
         const allocation = allocateBudget(
