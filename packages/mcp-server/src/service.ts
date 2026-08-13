@@ -510,8 +510,40 @@ export async function startServiceServer(
   const REGISTRATION_TTL_MS = 15 * 60 * 1000; // 15 minutes (relay-side)
   const STALE_THRESHOLD_MS = REGISTRATION_TTL_MS * 0.7; // re-register at 70% of TTL
 
+  /**
+   * How often to force a FULL re-registration even while heartbeats succeed.
+   *
+   * The service listing is published by `register()` and by nothing else, while
+   * `heartbeat()` only extends the TTL — and, critically, a successful
+   * heartbeat also refreshes `lastRegisteredAt`. So the staleness branch below
+   * never fires on a healthy service, which means the listing is a BOOT-TIME
+   * ONE-SHOT: if the relay ever loses it, nothing republishes it.
+   *
+   * That is not hypothetical. Staging carried six live, heartbeating,
+   * fully-discoverable atoms with ZERO listing rows for roughly a month —
+   * unpriced and undescribed — after the relay's listing table was emptied.
+   * The atoms were healthy the entire time, so they never re-registered. The
+   * archetype conformance probe went red daily and stayed red until each
+   * machine was restarted by hand.
+   *
+   * Same shape as the transparency boot-anchor incident: a fire-and-forget
+   * publish with no maintenance loop leaves a silent, permanent gap. The fix is
+   * the same medicine — make it a maintained invariant, idempotent and
+   * repeated, rather than a thing that happened once at boot.
+   *
+   * Hourly is cheap (one registration POST per service per hour) and bounds the
+   * damage of any listing loss to an hour instead of forever.
+   */
+  const FULL_REREGISTER_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   let lastRegisteredAt = 0; // wall-clock ms of last successful register/heartbeat
+  /**
+   * Wall-clock ms of the last successful FULL registration. Deliberately
+   * separate from `lastRegisteredAt`: heartbeats refresh that one, which is
+   * exactly why it cannot be used to decide when to republish the listing.
+   */
+  let lastFullRegisterAt = 0;
   let registering = false; // guard against concurrent registration attempts
 
   if (config.syncUrl) {
@@ -561,6 +593,7 @@ export async function startServiceServer(
         }
 
         lastRegisteredAt = Date.now();
+        lastFullRegisterAt = lastRegisteredAt;
 
         // Auto-publish service listing so relay routing can find this service
         try {
@@ -629,11 +662,19 @@ export async function startServiceServer(
         // eslint-disable-next-line @typescript-eslint/no-misused-promises -- fire-and-forget heartbeat
         async () => {
           const elapsed = Date.now() - lastRegisteredAt;
+          const sinceFull = Date.now() - lastFullRegisterAt;
           if (elapsed >= STALE_THRESHOLD_MS) {
             // Registration likely expired (process was frozen or heartbeats failed).
             // Full re-registration instead of heartbeat.
             const ok = await register();
             if (ok) log(`Re-registered with relay (stale after ${Math.round(elapsed / 1000)}s)`);
+          } else if (sinceFull >= FULL_REREGISTER_INTERVAL_MS) {
+            // Healthy, but the listing has not been republished in a while.
+            // Heartbeats keep `lastRegisteredAt` fresh forever, so without this
+            // branch a listing lost on the relay side is never restored.
+            const ok = await register();
+            if (ok)
+              log(`Re-registered with relay (listing refresh, ${Math.round(sinceFull / 60000)}m)`);
           } else {
             await heartbeat();
           }
