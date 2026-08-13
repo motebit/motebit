@@ -303,10 +303,22 @@ const PROBES: ReadonlyArray<Probe> = [
     proves:
       "flags a graduation commitment whose target_date has passed while its live coverage thresholds still fall short of the target — the raise-by promise rotting silently past its deadline",
     perturb: () =>
-      // Past-date core-identity's entry (its live thresholds are below target —
-      // why it's under graduation). The deadline gate then fires: past
-      // target_date + target unmet. Cleanup restores the manifest verbatim.
-      mutateFile("coverage-graduation.json", (src) => src.replace('"2026-08-15"', '"2020-01-01"')),
+      // Back-date every entry that STILL has a gap. The deadline gate then
+      // fires: past target_date + target unmet. Cleanup restores verbatim.
+      //
+      // This deliberately does NOT target a single named package. The probe
+      // used to back-date core-identity specifically, and went vacuous the
+      // moment that package graduated (2026-08-13) — the entry was still there,
+      // but its targets were met, so back-dating it proved nothing and the gate
+      // exited 0. Perturbing the shared date of the still-gapped cohort keeps
+      // the probe honest as packages graduate one by one.
+      //
+      // If every entry ever graduates this goes vacuous again — correctly, and
+      // check-gates-effective will say so, because at that point the gate has
+      // no live commitment left to enforce.
+      mutateFile("coverage-graduation.json", (src) =>
+        src.replaceAll('"2026-09-30"', '"2020-01-01"'),
+      ),
   },
   {
     script: "check-money-identity-path-canonical",
