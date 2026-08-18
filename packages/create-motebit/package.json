@@ -50,7 +50,7 @@
     "@motebit/crypto": "workspace:*",
     "@motebit/sdk": "workspace:*",
     "@noble/ed25519": "~3.1.0",
-    "@noble/hashes": "^2.2.0",
+    "@noble/hashes": "^2.3.0",
     "@types/node": "^22.20.1",
     "motebit": "workspace:*",
     "tsup": "^8.0.0",
