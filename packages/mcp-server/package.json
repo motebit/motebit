@@ -15,7 +15,7 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@motebit/core-identity": "workspace:*",
     "@motebit/encryption": "workspace:*",
     "@motebit/identity-file": "workspace:*",
