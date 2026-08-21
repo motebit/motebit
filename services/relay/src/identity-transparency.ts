@@ -164,11 +164,14 @@ export function registerIdentityTransparencyRoutes(deps: IdentityTransparencyDep
   /**
    * @experimental
    * @since 2026-05-21
-   * @stabilizes_by 2026-08-21
+   * @stabilizes_by 2026-09-19
    * @replacement none
-   * @reason Identity-transparency binding endpoint. The IdentityBindingBundle wire
-   *   format may change until the anchored rung is complete (the on-chain root
-   *   cross-check); it graduates to a versioned spec route once stable.
+   * @reason Identity-transparency binding endpoint. The original blocker (the
+   *   anchored on-chain root cross-check) has been met since 2026-05-22 and
+   *   proven live on mainnet, so the stated graduation condition is closed.
+   *   Extended once because promotion is a real arc: IdentityBindingBundle is
+   *   not in @motebit/protocol and appears in no spec, and spec wire types must
+   *   live in the permissive floor. Do not extend again — promote or demote.
    */
   app.get("/api/v1/identity/:motebitId", async (c) => {
     const motebitId = c.req.param("motebitId");
