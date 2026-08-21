@@ -81,6 +81,14 @@ PATENT-BLUEPRINT.md
 # first `pnpm dev` boot per service. Contains private keys — never commit.
 services/*/data/
 
+# Root-level `data/` — the same runtime state, one directory up. Created by a
+# root `pnpm dev` boot and NEVER ignored, because the pattern above is anchored
+# to services/. A blanket `git add -A` swept `data/motebit.key` (a 64-char hex
+# Ed25519 private key), `data/motebit.md`, and the web-search SQLite files onto
+# main in b4838674. Ignore the directory wherever it appears, not just where it
+# was first noticed.
+data/
+
 # Turborepo
 .turbo
 
