@@ -120,6 +120,8 @@ const EXCLUDED_CHECKS: Record<string, string> = {
     "cross-impl conformance — needs the packages built (dist) + python/pynacl, so it runs in the python-receipt-verifier-conformance CI job (with REQUIRE_PYTHON=1), not in the static `pnpm check` pass.",
   "check-evidence-provenance-conformance":
     "cross-impl conformance — needs the packages built (dist) + python3 (stdlib only, no pynacl), so it runs in the python-receipt-verifier-conformance CI job (with REQUIRE_PYTHON=1), not in the static `pnpm check` pass.",
+  "check-coverage-measures-something":
+    "runs a full `vitest run --coverage` per package to prove the thresholds measure a non-empty file set — ~10-30s x 61 packages, far too slow for the static pass. Runs as its own CI job, same shape as check-gates-effective and check-activation-effective.",
   "check-model-catalog-drift":
     "the EXTERNAL drift gate (#475, inventory row #150) — its canonical source is the provider's LIVE models endpoint, so it needs network + ANTHROPIC_API_KEY. Runs weekly from .github/workflows/model-catalog-drift.yml with --require-key (missing secret = red); local runs without the key skip politely.",
 };
