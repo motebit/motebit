@@ -67,8 +67,8 @@
     "cbor2": "^2.3.0"
   },
   "devDependencies": {
-    "@noble/curves": "^2.2.0",
-    "@noble/hashes": "^2.2.0",
+    "@noble/curves": "^2.3.0",
+    "@noble/hashes": "^2.3.0",
     "@peculiar/webcrypto": "^1.7.1",
     "@types/node": "^22.20.1",
     "fast-check": "^4.9.0",
