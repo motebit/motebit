@@ -297,7 +297,7 @@ export function AgentsPanel({ visible, app, onClose }: AgentsPanelProps): React.
                       </View>
                     );
                   })()
-                : null
+                : undefined
             }
             renderItem={({ item }) => {
               const trustColor = TRUST_COLORS[item.trust_level] ?? "#616161";
