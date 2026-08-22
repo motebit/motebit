@@ -33,7 +33,7 @@
     "@motebit/sdk": "workspace:*",
     "@motebit/self-knowledge": "workspace:*",
     "@motebit/tools": "workspace:*",
-    "better-sqlite3": "^12.11.1"
+    "better-sqlite3": "^13.0.2"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
