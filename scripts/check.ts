@@ -122,6 +122,8 @@ const EXCLUDED_CHECKS: Record<string, string> = {
     "cross-impl conformance — needs the packages built (dist) + python3 (stdlib only, no pynacl), so it runs in the python-receipt-verifier-conformance CI job (with REQUIRE_PYTHON=1), not in the static `pnpm check` pass.",
   "check-model-catalog-drift":
     "the EXTERNAL drift gate (#475, inventory row #150) — its canonical source is the provider's LIVE models endpoint, so it needs network + ANTHROPIC_API_KEY. Runs weekly from .github/workflows/model-catalog-drift.yml with --require-key (missing secret = red); local runs without the key skip politely.",
+  "check-deploy-freshness":
+    "the second EXTERNAL drift gate (#551, inventory row #153) — its canonical source is the LIVE Fly fleet, so it needs network + FLY_API_TOKEN. Proves the deployed system is what main says it should be (freshness) and is actually serving (liveness); the static pass can only prove things about the repo. Runs daily from .github/workflows/deploy-freshness.yml with --require-token (missing secret = red); local runs without the token skip politely.",
 };
 
 // Order matters: run fastest first so CI fails loudly on the cheapest signal.

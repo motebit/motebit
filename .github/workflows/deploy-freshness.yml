@@ -1,0 +1,53 @@
+# The second EXTERNAL drift gate (#551, inventory row #153). Every other
+# defense proves something about the REPO; this one asks whether the repo is
+# what is actually RUNNING — canonical truth lives in the Fly fleet, so it
+# cannot run in `pnpm check`.
+#
+# Red means production (or staging) drifted from main: an app behind the last
+# commit that should have shipped it, or an app serving nothing. Three
+# incidents share that shape and none produced a positive signal anyone
+# watched — #549 (relay four days stale, deploy red every run, CI green),
+# #570 (staging slate nine days stale, conformance grading old code), #584
+# (browser-sandbox crash-looped to a stopped machine, found by accident).
+#
+# Secrets (repository level):
+#   FLY_API_TOKEN   the same token the deploy workflows already use
+#
+# Runs with --require-token: a missing secret is RED, never a silent skip —
+# a dormant external gate is precisely the flaw class this gate exists to
+# catch.
+#
+# fetch-depth: 0 is load-bearing. Freshness is measured against the newest
+# commit touching each service's deploy trigger paths, which a shallow clone
+# cannot see; the check degrades to liveness-only without full history.
+
+name: Deploy freshness
+
+on:
+  schedule:
+    - cron: "41 13 * * *" # daily, ahead of the 14:17 archetype-conformance run
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-freshness
+  cancel-in-progress: false
+
+jobs:
+  freshness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master
+      - name: Compare the deployed fleet against main
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: npx tsx scripts/check-deploy-freshness.ts --require-token
