@@ -303,21 +303,29 @@ const PROBES: ReadonlyArray<Probe> = [
     proves:
       "flags a graduation commitment whose target_date has passed while its live coverage thresholds still fall short of the target — the raise-by promise rotting silently past its deadline",
     perturb: () =>
-      // Back-date every entry that STILL has a gap. The deadline gate then
-      // fires: past target_date + target unmet. Cleanup restores verbatim.
+      // Back-date EVERY entry. The deadline gate then fires on any that still
+      // has a gap: past target_date + target unmet. Cleanup restores verbatim.
       //
       // This deliberately does NOT target a single named package. The probe
-      // used to back-date core-identity specifically, and went vacuous the
-      // moment that package graduated (2026-08-13) — the entry was still there,
-      // but its targets were met, so back-dating it proved nothing and the gate
-      // exited 0. Perturbing the shared date of the still-gapped cohort keeps
-      // the probe honest as packages graduate one by one.
+      // first back-dated core-identity specifically and went vacuous the moment
+      // that package graduated (2026-08-13) — the entry was still there, but
+      // its targets were met, so back-dating it proved nothing.
+      //
+      // The second version hard-coded the shared literal "2026-09-30", and went
+      // vacuous again on 2026-08-22 for a subtler reason: @motebit/verify was
+      // re-baselined (#568) and its target_date moved to 2026-11-30. It was the
+      // ONLY gapped entry, so the replaceAll then hit nothing but
+      // already-graduated rows and the gate correctly exited 0. The commitment
+      // had not disappeared — it had simply moved off the date this probe knew.
+      //
+      // Hence: match the FIELD, not any particular date value. A re-baselined
+      // deadline is a normal event and must not silently disarm the probe.
       //
       // If every entry ever graduates this goes vacuous again — correctly, and
       // check-gates-effective will say so, because at that point the gate has
       // no live commitment left to enforce.
       mutateFile("coverage-graduation.json", (src) =>
-        src.replaceAll('"2026-09-30"', '"2020-01-01"'),
+        src.replace(/"target_date":\s*"\d{4}-\d{2}-\d{2}"/g, '"target_date": "2020-01-01"'),
       ),
   },
   {
