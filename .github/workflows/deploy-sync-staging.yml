@@ -1,0 +1,96 @@
+name: Deploy Sync Relay (staging)
+
+# Closes #586, the sibling gap #585 left open. `deploy-sync.yml` ships only
+# services/relay/fly.toml; nothing referenced fly.staging.toml, so
+# motebit-sync-stg only moved when someone deployed it by hand — and on
+# 2026-08-22 `check-deploy-freshness` measured how far that had drifted:
+# deployed 2026-07-16, THIRTY-SIX DAYS behind main, while prod relay was
+# current the same night.
+#
+# That relay is what the daily archetype-conformance probe runs against
+# (relay=https://motebit-sync-stg.fly.dev), and promotion is gated on that
+# probe. A green earned through a five-week-old relay certifies "the slate
+# works against a July relay", not "against main" — and relay-side behaviour
+# is load-bearing in the verdict (the 7-day listing prune at
+# services/relay/src/index.ts:855 is what made #570 fatal in the first place).
+#
+# CI-GATED, deliberately differing from deploy-archetype-staging.yml, which
+# is ungated on the reasoning that staging is where a bad commit SHOULD land
+# first. The distinguishing factor is STATE, not importance: the archetype
+# atoms are stateless and a bad deploy is undone by the next one, whereas the
+# relay carries a persistent volume and runs migrations at boot. Running a
+# migration from a known-red commit onto a stateful volume can wedge staging
+# for longer than the bad commit itself exists, and recovery is manual. The
+# latency the gate costs is irrelevant to an environment graded once a day.
+#
+# Ordering note: ideally the relay lands before the slate re-registers
+# against it. Cross-workflow ordering is not expressible here, and it does
+# not matter in practice — the atoms re-register on their own hourly
+# full-registration cycle (#564), which heals any ordering skew within an
+# hour and well inside the relay's 7-day listing prune.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/relay/**"
+      - "packages/**"
+      - ".github/workflows/deploy-sync-staging.yml"
+  workflow_dispatch:
+
+concurrency:
+  # Not cancel-in-progress: interrupting a stateful rollout mid-migration is
+  # the thing to avoid; queueing is the safer failure mode. Same choice
+  # deploy-sync.yml makes for prod, and the opposite of the stateless slate.
+  group: deploy-relay-staging
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read # read the CI run status for the gate below
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # Same gate deploy-sync.yml applies to prod, for the same reason one
+      # rung down: never run migrations from a commit whose CI is failing.
+      # Manual workflow_dispatch bypasses it — an operator deploying by hand
+      # has already decided.
+      - name: Gate on CI success
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sha='${{ github.sha }}'
+          echo "Waiting for CI to conclude on ${sha} before deploying staging…"
+          for i in $(seq 1 80); do
+            run=$(gh run list --repo '${{ github.repository }}' --workflow ci.yml \
+              --branch main --json headSha,status,conclusion \
+              --jq "[.[] | select(.headSha==\"${sha}\")][0]")
+            status=$(echo "${run}" | jq -r '.status // "pending"')
+            conclusion=$(echo "${run}" | jq -r '.conclusion // ""')
+            echo "  attempt ${i}: CI status=${status} conclusion=${conclusion}"
+            if [ "${status}" = "completed" ]; then
+              if [ "${conclusion}" = "success" ]; then
+                echo "CI is green — proceeding to deploy."
+                exit 0
+              fi
+              echo "::error::CI concluded '${conclusion}' for ${sha} — refusing to deploy the staging relay."
+              exit 1
+            fi
+            sleep 15
+          done
+          echo "::error::Timed out waiting for CI to conclude on ${sha}."
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master
+
+      - name: Deploy to Fly.io
+        run: flyctl deploy --config services/relay/fly.staging.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
