@@ -27,14 +27,32 @@
 import { defineConfig, type ViteUserConfig } from "vitest/config";
 import type { InlineConfig } from "vitest/node";
 
+/** The four coverage axes, as a package floor or a per-glob floor. */
+export interface CoverageFloors {
+  statements: number;
+  branches: number;
+  functions: number;
+  lines: number;
+}
+
 export interface MotebitVitestOptions {
-  /** Per-package coverage thresholds. Required. */
-  thresholds: {
-    statements: number;
-    branches: number;
-    functions: number;
-    lines: number;
-  };
+  /**
+   * Per-package coverage thresholds. Required.
+   *
+   * Optionally carries per-glob floors alongside the package-wide ones, e.g.
+   * `{ statements: 58, …, "**​/adapters.ts": { statements: 100, … } }`.
+   * Vitest applies a glob entry to the files it matches and the bare axes to
+   * everything else.
+   *
+   * The reason this exists (#568): widening `coverage.include` to cover a file
+   * that was previously excluded necessarily drags the PACKAGE aggregate down
+   * toward the newly-measured file, which reads as "someone lowered the
+   * thresholds" even when strictly more code became guarded. A per-glob floor
+   * lets the already-well-covered file keep its own high bar, so widening
+   * scope never costs enforcement anywhere — which is what the project's
+   * "never lower coverage thresholds" policy is actually protecting.
+   */
+  thresholds: CoverageFloors & Record<string, CoverageFloors | number>;
   /** Extra test-file exclude globs (e.g., "**​/e2e/**", "**​/src-tauri/**"). */
   testExclude?: string[];
   /** Override `coverage.include` (default: `["src/**​/*.ts"]`). */
