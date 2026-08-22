@@ -97,19 +97,19 @@
       "package": "@motebit/verify",
       "vitest_config": "packages/verify/vitest.config.ts",
       "current": {
-        "statements": 90,
-        "branches": 75,
-        "functions": 100,
-        "lines": 90
+        "statements": 58,
+        "branches": 50,
+        "functions": 47,
+        "lines": 56
       },
       "target": {
-        "statements": 90,
+        "statements": 85,
         "branches": 80,
-        "functions": 100,
-        "lines": 90
+        "functions": 85,
+        "lines": 85
       },
-      "target_date": "2026-09-30",
-      "rationale": "New registry member (canonical motebit-verify aggregator; verification is the identity path). Branches 75 < 80 \u2014 inherits the bundled leaf verifiers' cert-chain gap plus its own CLI error branches. Plan: rides the shared cert-chain fuzz fixtures (see crypto-appattest entry) + a PR covering the CLI's unsupported-suite / post-quantum-pending branches. Lever: shared fixtures + named CLI error paths."
+      "target_date": "2026-11-30",
+      "rationale": "RE-BASELINED 2026-08-22 (#568). The previous entry (90/75/100/90 -> branches 80 by 09-30) described a measurement that did not exist: src/cli.ts sat in coverageExclude as \"the bin shim\", so the thresholds were enforced against 8 statements in adapters.ts -- 2.3% of the package -- while the stated lever was \"the CLI's unsupported-suite / post-quantum-pending branches\", which live in the excluded file. The lever could not move the number because there was effectively no number. (The thresholds themselves were real, not vacuous: a deliberate severing fails them. #568's \"measures zero files\" reading came from the empty text-reporter table, the same artifact that caused the #575/#576 revert -- coverage-final.json always had adapters.ts at 100%.) cli.ts is now measured, and 45 in-process parseArgs branch tests took the package from 39.4/32.4/47.4/39.8 to 60/51.7/47.4/58.1. The floor is set just under that. Digits are lower than the old 90/75/100/90 but enforcement is 43x wider: 345 statements guarded instead of 8, and adapters.ts keeps a per-glob 100/100/100/100 floor so nothing regressed. Target is the registry's identity floor. Lever: the remaining gap is the command bodies (cli.ts ~640-1012, and the 10 uncovered functions), which the existing suite drives through spawnSync -- real end-to-end verification the parent process cannot instrument. Extract a runCli(argv) seam so those tests execute in-process and their coverage counts. Date moved 09-30 -> 11-30 because that is a refactor of the CLI's entry seam plus five test files, not the fixture pass the old rationale assumed; re-baselining on new information rather than quietly missing the date."
     }
   ]
 }
