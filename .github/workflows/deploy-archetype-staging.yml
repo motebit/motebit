@@ -1,0 +1,80 @@
+name: Deploy archetype slate (staging)
+
+# The staging slate is the conformance CANARY: `archetype-conformance.yml`
+# grades the `-stg` apps every day, and prod promotion is gated on five
+# consecutive greens (scripts/check-promotion-ready.ts). A probe is only
+# worth its verdict if the thing it grades tracks main.
+#
+# Until 2026-08-22 nothing deployed it. The six `deploy-<service>.yml`
+# workflows each deploy `fly.toml` (the PROD app) and nothing referenced
+# `fly.staging.toml`; the `-stg` apps existed only because someone ran
+# `scripts/deploy-archetype-slate.ts` by hand. The consequence was #570:
+# the listing-republish fix (#564) landed on main 39 minutes AFTER the last
+# hand-deploy of the slate, so the atoms kept the pre-fix boot-time-one-shot
+# behaviour, the relay's 7-day listing prune swept their listings, and the
+# probe stayed red for nine days against a bug that was already fixed in
+# main. A merged fix that never reaches the process it fixes is inert —
+# docs/doctrine/composition-preserves-enforcement.md.
+#
+# Deliberately ungated on CI, matching the atom prod workflows
+# (deploy-web-search / read-url / summarize / research). Staging is where a
+# bad commit SHOULD land first; the relay's CI gate exists because it is the
+# durability-sensitive trust root, which this is not.
+#
+# The matrix is locked to the slate by `check-archetype-slate` — adding a
+# seventh archetype without a staging deploy is a gate failure, not a
+# silently un-canaried service.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/web-search/**"
+      - "services/read-url/**"
+      - "services/summarize/**"
+      - "services/research/**"
+      - "services/auditor/**"
+      - "services/clerk/**"
+      - "packages/**"
+      - ".github/workflows/deploy-archetype-staging.yml"
+  workflow_dispatch:
+
+concurrency:
+  # Collapse bursts: a run superseded by a newer main is cancelled rather
+  # than queued, so a night of merges does not become a deploy backlog.
+  group: deploy-archetype-staging
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      # One service failing must not strand the other five on stale code —
+      # a partially-fresh slate is still better than a wholly stale one, and
+      # the per-service job makes the failure legible.
+      fail-fast: false
+      matrix:
+        service:
+          # slate:begin — locked to SLATE by check-archetype-slate
+          - web-search
+          - read-url
+          - summarize
+          - research
+          - auditor
+          - clerk
+          # slate:end
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master
+
+      # The `-stg` apps, volumes and secrets are provisioned once by
+      # `RUN=1 npx tsx scripts/deploy-archetype-slate.ts`. This workflow only
+      # ships code onto apps that already exist; it deliberately does not
+      # create apps or restage secrets, so a missing app is a loud failure
+      # rather than a silent half-provisioned slate.
+      - name: Deploy ${{ matrix.service }} (staging)
+        run: flyctl deploy --config "services/${{ matrix.service }}/fly.staging.toml" --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
