@@ -36,7 +36,7 @@
     "better-sqlite3": "^12.11.1"
   },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@motebit/encryption": "workspace:*",
     "@motebit/identity-file": "workspace:*",
     "@motebit/mcp-server": "workspace:*",
