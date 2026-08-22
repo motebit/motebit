@@ -145,8 +145,8 @@ importers:
         specifier: ^2.22.0
         version: 2.22.0(bufferutil@4.1.0)(ethers@6.16.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(hono@4.13.2)(typescript@5.9.3)(utf-8-validate@6.0.6)
       better-sqlite3:
-        specifier: ^12.11.1
-        version: 12.11.1
+        specifier: ^13.0.2
+        version: 13.0.2
       hono:
         specifier: '>=4.12.4 <5.0.0'
         version: 4.13.2
@@ -411,8 +411,8 @@ importers:
         specifier: ^0.185.4
         version: 0.185.4
       better-sqlite3:
-        specifier: ^12.11.1
-        version: 12.11.1
+        specifier: ^13.0.2
+        version: 13.0.2
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -1629,8 +1629,8 @@ importers:
         version: 1.14.2
     optionalDependencies:
       better-sqlite3:
-        specifier: ^12.11.1
-        version: 12.11.1
+        specifier: ^13.0.2
+        version: 13.0.2
     devDependencies:
       '@types/better-sqlite3':
         specifier: ^7.6.0
@@ -2337,8 +2337,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/verifier
       better-sqlite3:
-        specifier: ^12.11.1
-        version: 12.11.1
+        specifier: ^13.0.2
+        version: 13.0.2
     devDependencies:
       '@motebit/crypto':
         specifier: workspace:*
@@ -2402,8 +2402,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/tools
       better-sqlite3:
-        specifier: ^12.11.1
-        version: 12.11.1
+        specifier: ^13.0.2
+        version: 13.0.2
     devDependencies:
       '@types/node':
         specifier: ^22.20.1
@@ -2436,8 +2436,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/tools
       better-sqlite3:
-        specifier: ^12.11.1
-        version: 12.11.1
+        specifier: ^13.0.2
+        version: 13.0.2
     devDependencies:
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
@@ -2535,8 +2535,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/tools
       better-sqlite3:
-        specifier: ^12.11.1
-        version: 12.11.1
+        specifier: ^13.0.2
+        version: 13.0.2
     devDependencies:
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
@@ -2638,8 +2638,8 @@ importers:
         specifier: ^2.22.0
         version: 2.22.0(bufferutil@4.1.0)(ethers@6.16.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(hono@4.13.2)(typescript@5.9.3)(utf-8-validate@6.0.6)
       better-sqlite3:
-        specifier: ^12.11.1
-        version: 12.11.1
+        specifier: ^13.0.2
+        version: 13.0.2
       hono:
         specifier: '>=4.12.4 <5.0.0'
         version: 4.13.2
@@ -2705,8 +2705,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/tools
       better-sqlite3:
-        specifier: ^12.11.1
-        version: 12.11.1
+        specifier: ^13.0.2
+        version: 13.0.2
     devDependencies:
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
@@ -2751,8 +2751,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/tools
       better-sqlite3:
-        specifier: ^12.11.1
-        version: 12.11.1
+        specifier: ^13.0.2
+        version: 13.0.2
     devDependencies:
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
@@ -2794,8 +2794,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/tools
       better-sqlite3:
-        specifier: ^12.11.1
-        version: 12.11.1
+        specifier: ^13.0.2
+        version: 13.0.2
     devDependencies:
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
@@ -6971,9 +6971,9 @@ packages:
     resolution: {integrity: sha512-pbnl5XzGBdrFU/wT4jqmJVPn2B6UHPBOhzMQkY/SPUPB6QtUXtmBHBIwCbXJol93mOpGMnQyP/+BB19q04xj7g==}
     engines: {node: '>=4'}
 
-  better-sqlite3@12.11.1:
-    resolution: {integrity: sha512-dq9AtApgg5PGFtBzPFSBl3HZQjHok5gaQCM6zh2Yk0aSmDCs1CbnVI8/HgASQkNKsWFpseIO9beg5xxpYhbIfA==}
-    engines: {node: 20.x || 22.x || 23.x || 24.x || 25.x || 26.x}
+  better-sqlite3@13.0.2:
+    resolution: {integrity: sha512-jW6oufeDhXZaiX9Lw5A+oerVClx4iFrI6uDj1zu7SqUAjak9vbJvA0NEcKLNxHiQHb6kYCoFzzXYV0YOauhV3g==}
+    engines: {node: '>=22'}
 
   big-integer@1.6.52:
     resolution: {integrity: sha512-QxD8cf2eVqJOOz63z6JIN9BzvVs/dlySa5HGSBH5xtR8dPteIRQnBxxKqkNTiT6jbDTF6jAfrd4oMcND9RGbQg==}
@@ -9882,6 +9882,10 @@ packages:
 
   node-addon-api@6.1.0:
     resolution: {integrity: sha512-+eawOlIgy680F0kBzPUNFhMZGtJ1YmqM6l4+Crf4IkImjYrO/mqPwRMh352g23uIaQKFItcQ64I7KMaJxHgAVA==}
+
+  node-addon-api@8.9.2:
+    resolution: {integrity: sha512-VijLXbi3UACN69I0JVXJsX4tjACjNoQDgv2gTF6sx2wWEi8tkSg2eX8p5gSIFi8z2+DL3oHmY6OyKce38SDolg==}
+    engines: {node: ^18 || ^20 || >= 21}
 
   node-emoji@2.2.0:
     resolution: {integrity: sha512-Z3lTE9pLaJF47NyMhd4ww1yFTAP8YhYI8SleJiHzM46Fgpm5cnNzSl9XfzFNqbaz+VlJrIj3fXQ4DeN1Rjm6cw==}
@@ -15958,7 +15962,7 @@ snapshots:
       obug: 2.1.3
       std-env: 4.1.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.10(@types/node@26.2.0)(@vitest/coverage-v8@4.1.10)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@8.2.1(@types/node@26.2.0)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12)(yaml@2.9.0))
+      vitest: 4.1.10(@types/node@22.20.1)(@vitest/coverage-v8@4.1.10)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@8.2.1(@types/node@22.20.1)(esbuild@0.27.3)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12)(yaml@2.9.0))
 
   '@vitest/expect@4.1.10':
     dependencies:
@@ -16486,10 +16490,9 @@ snapshots:
     dependencies:
       is-windows: 1.0.2
 
-  better-sqlite3@12.11.1:
+  better-sqlite3@13.0.2:
     dependencies:
-      bindings: 1.5.0
-      prebuild-install: 7.1.3
+      node-addon-api: 8.9.2
 
   big-integer@1.6.52: {}
 
@@ -20097,6 +20100,8 @@ snapshots:
       semver: 7.8.5
 
   node-addon-api@6.1.0: {}
+
+  node-addon-api@8.9.2: {}
 
   node-emoji@2.2.0:
     dependencies:
