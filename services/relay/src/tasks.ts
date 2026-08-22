@@ -957,18 +957,32 @@ export async function handleReceiptIngestion(
           moteDb.db.exec("BEGIN");
 
           // Fail-closed funding claim — mirror of the canonical settlement
-          // site (handleReceiptIngestion). The sub-credit below is funded by
-          // the sub-task's relay-custody hold (`x402-<subRelayTaskId>`);
-          // claim it atomically before crediting. `changes === 0` means the
-          // allocation is not 'locked': it was never funded (a P2P-submitted
-          // sub-hop moves money onchain and books NO relay allocation, so
-          // crediting here would double-pay on top of the onchain leg), or it
-          // was already released by the stale-allocation sweep / a refund
-          // (crediting would double-pay a delegator who was already made
-          // whole). subGross > 0 is guaranteed above, so an unclaimable
-          // allocation always means skip. This is the multi-hop sibling of
-          // the `settlement.unfunded_skipped` guard on the direct path.
+          // site (handleReceiptIngestion), including its claim-ORDER.
+          //
+          // What the delegator actually has at stake for this sub-task:
+          // `allocation_hold` debits minus `allocation_release` credits for
+          // `x402-<subRelayTaskId>`, read from the transaction ledger. NEVER
+          // the allocation row's status alone — a `'locked'` row also exists
+          // on never-debited paths (free-agent best-effort holds), and a paid
+          // sub-delegation is a real `POST /agent/:worker/task` (rule 8), so
+          // it reaches that same branch. Crediting against such a row mints
+          // balance the relay never received, and `reconcileLedger` cannot
+          // see it because the credit is itself a ledger row.
+          //
+          // READ BEFORE CLAIMING, and the ordering is load-bearing. The
+          // UPDATE is not a predicate — it EXECUTES. Claiming first and
+          // consulting the ledger second would leave an unfunded allocation
+          // permanently `'settled'` with no settlement row: a hard error in
+          // `reconcileLedger` invariant 3, and the exact defect that sent the
+          // direct-path fix back for rework (#541 review → #566). Deriving
+          // funding first and claiming only when funded keeps the claim and
+          // the INSERT atomic.
+          //
+          // subGross > 0 is guaranteed above, so there is no zero-cost
+          // carve-out to make here: unfunded always means skip.
+          const subHeldOnLedger = getAllocationHoldRemaining(moteDb.db, subAllocationId);
           const subClaimed =
+            subHeldOnLedger > 0 &&
             moteDb.db
               .prepare(
                 "UPDATE relay_allocations SET status = 'settled', settled_at = ? WHERE task_id = ? AND status = 'locked'",
@@ -982,8 +996,11 @@ export async function handleReceiptIngestion(
               subTaskId: subRelayTaskId,
               subAgent: sub.motebit_id,
               gross: subGross,
+              subHeldOnLedger,
               reason:
-                "sub-allocation not locked — never funded (e.g. P2P sub-hop) or already released; relay credit skipped to prevent unfunded credit / double-pay",
+                subHeldOnLedger > 0
+                  ? "sub-allocation not locked — never funded (e.g. P2P sub-hop) or already released; relay credit skipped to prevent unfunded credit / double-pay"
+                  : "sub-allocation holds nothing on the ledger — never debited (best-effort path, or a P2P-submitted sub-hop that moved money onchain), so crediting the sub-agent would mint balance the relay never received",
             });
           } else {
             moteDb.db
