@@ -306,19 +306,47 @@ const PROBES: ReadonlyArray<Probe> = [
       // Back-date every entry that STILL has a gap. The deadline gate then
       // fires: past target_date + target unmet. Cleanup restores verbatim.
       //
-      // This deliberately does NOT target a single named package. The probe
-      // used to back-date core-identity specifically, and went vacuous the
-      // moment that package graduated (2026-08-13) — the entry was still there,
-      // but its targets were met, so back-dating it proved nothing and the gate
-      // exited 0. Perturbing the shared date of the still-gapped cohort keeps
-      // the probe honest as packages graduate one by one.
+      // Selected by GAP, never by a literal. Two prior forms of this probe
+      // went vacuous, each coupled to manifest data that legitimately moved:
       //
-      // If every entry ever graduates this goes vacuous again — correctly, and
-      // check-gates-effective will say so, because at that point the gate has
-      // no live commitment left to enforce.
-      mutateFile("coverage-graduation.json", (src) =>
-        src.replaceAll('"2026-09-30"', '"2020-01-01"'),
-      ),
+      //   1. It back-dated core-identity by name, and proved nothing once
+      //      that package graduated (2026-08-13) — entry present, targets met.
+      //   2. It rewrote the shared literal "2026-09-30", and proved nothing
+      //      once #589 re-baselined the ONLY still-gapped entry (verify) to
+      //      2026-11-30 — the literal then matched only graduated records, so
+      //      main went red on the push after the PR (the PR itself did not
+      //      touch scripts/, so gate-effectiveness never ran on it).
+      //
+      // The manifest is data the probe must not know by value. Parse it and
+      // back-date whichever entries have `current < target` on any axis —
+      // exactly the predicate the gate enforces (`meetsTarget`), so the probe
+      // tracks the cohort as packages graduate, re-baseline, or move dates.
+      //
+      // If no entry has a gap, throw rather than return the file unchanged: a
+      // silent no-op reads as "gate exited 0" and points the reader at the
+      // gate, when the truth is the gate has no live commitment left to
+      // enforce and the probe (not the gate) needs a decision.
+      mutateFile("coverage-graduation.json", (src) => {
+        type Axes = Record<"statements" | "branches" | "functions" | "lines", number>;
+        const manifest = JSON.parse(src) as {
+          packages: Array<{ package: string; current: Axes; target: Axes; target_date: string }>;
+        };
+        const axes = ["statements", "branches", "functions", "lines"] as const;
+        const gapped = manifest.packages.filter((e) =>
+          axes.some((axis) => e.current[axis] < e.target[axis]),
+        );
+        if (gapped.length === 0) {
+          throw new Error(
+            "probe vacuous: every coverage-graduation.json entry already meets its target, so " +
+              "there is no commitment for check-coverage-graduation to enforce. Either the " +
+              "registry is genuinely fully graduated (retire the probe and the gate together) or " +
+              "an entry's `current` snapshot has drifted above its `target` — see " +
+              "docs/doctrine/coverage-graduation.md.",
+          );
+        }
+        for (const entry of gapped) entry.target_date = "2020-01-01";
+        return `${JSON.stringify(manifest, null, 2)}\n`;
+      }),
   },
   {
     script: "check-money-identity-path-canonical",
