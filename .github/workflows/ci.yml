@@ -230,7 +230,13 @@ jobs:
           relay=false
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             changed=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
-            if echo "$changed" | grep -qE '^scripts/'; then
+            # Probes read repo data outside scripts/ (coverage-graduation.json
+            # is the live example: #589 moved a date there, the probe keyed on
+            # that literal went vacuous, and gate-effectiveness never ran on
+            # the PR because scripts/ was untouched — main went red on push).
+            # A change to a gate INPUT must trigger the same proof as a change
+            # to the gate.
+            if echo "$changed" | grep -qE '^scripts/|^coverage-graduation\.json$'; then
               scripts=true
             fi
             # activation-effectiveness must fire on a relay refactor (the exact
