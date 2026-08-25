@@ -215,7 +215,7 @@
     "prettier": "^3.9.6",
     "publint": "^0.3.23",
     "tsx": "^4.23.12",
-    "turbo": "^2.10.9",
+    "turbo": "^2.10.11",
     "typescript": "^5.9.0",
     "vitest": "^4.1.10",
     "@motebit/semiring": "workspace:*"
