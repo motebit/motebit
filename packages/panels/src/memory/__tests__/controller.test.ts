@@ -14,10 +14,16 @@ import { describe, it, expect, vi } from "vitest";
 import {
   createMemoryController,
   filterMemoriesView,
+  memoryProvenance,
   type DeletionCertificate,
   type MemoryFetchAdapter,
   type MemoryNode,
 } from "../controller.js";
+import {
+  ALL_MEMORY_SOURCES,
+  MEMORY_SOURCE_MARKERS,
+  MEMORY_SOURCE_MARKER_UNKNOWN,
+} from "@motebit/protocol";
 
 // ── Fixtures ──────────────────────────────────────────────────────────
 
@@ -386,6 +392,21 @@ describe("MemoryController — subscribe / dispose", () => {
     ctrl.dispose();
     await ctrl.refresh();
     expect(listener).not.toHaveBeenCalled();
+  });
+});
+
+describe("memoryProvenance", () => {
+  it("maps every canonical MemorySource to its registry marker", () => {
+    for (const source of ALL_MEMORY_SOURCES) {
+      expect(memoryProvenance(source)).toBe(MEMORY_SOURCE_MARKERS[source]);
+    }
+  });
+
+  it("degrades absent / unrecognized sources honestly — never to a trusted tier", () => {
+    expect(memoryProvenance(undefined)).toBe(MEMORY_SOURCE_MARKER_UNKNOWN);
+    expect(memoryProvenance(null)).toBe(MEMORY_SOURCE_MARKER_UNKNOWN);
+    expect(memoryProvenance("web_content")).toBe(MEMORY_SOURCE_MARKER_UNKNOWN);
+    expect(memoryProvenance(42)).toBe(MEMORY_SOURCE_MARKER_UNKNOWN);
   });
 });
 

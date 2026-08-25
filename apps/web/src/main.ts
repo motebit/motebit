@@ -575,8 +575,10 @@ async function bootstrap(): Promise<void> {
     // First visit — nothing inference-y on load, and crucially NO relay contact:
     // we don't fetch a proxy-token on boot (that would phone home + spend free
     // credit on bounces). The free cloud is attempted only on the first message
-    // (chat.ts → tryFreeCloud), on intent. First run is just the creature + the
-    // calm welcome. Nothing to connect yet; reflect the no-provider state.
+    // (chat.ts → tryFreeCloud), on intent. First run is just the creature and
+    // the input — no welcome message renders (a deliberate gap the
+    // first-session arc will fill). Nothing to connect yet; reflect the
+    // no-provider state.
     settings.updateConnectPrompt();
   }
 

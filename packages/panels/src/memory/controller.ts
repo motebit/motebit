@@ -19,6 +19,12 @@
 //     everywhere so a buggy runtime doesn't leak tombstoned rows to one
 //     surface and not another.
 
+import {
+  MEMORY_SOURCE_MARKERS,
+  MEMORY_SOURCE_MARKER_UNKNOWN,
+  isMemorySource,
+} from "@motebit/protocol";
+
 // ── MemoryNode shape (minimal, no @motebit/sdk import) ────────────────
 //
 // The controller never constructs MemoryNodes — it only reads + filters
@@ -38,6 +44,12 @@ export interface MemoryNode {
   tombstoned: boolean;
   pinned: boolean;
   valid_until?: number | null;
+  /**
+   * Provenance (`MemorySource`) — kept structural (`string`) so richer
+   * surface nodes pass through; render via `memoryProvenance`, which
+   * narrows with `isMemorySource` and never fabricates a trusted tier.
+   */
+  source?: string;
 }
 
 /**
@@ -138,6 +150,18 @@ export function classifyCertainty(decayedConfidence: number): Certainty {
   if (decayedConfidence >= 0.95) return "absolute";
   if (decayedConfidence >= 0.7) return "confident";
   return "tentative";
+}
+
+/**
+ * Render marker for a memory's provenance — the same `[from:X]`
+ * vocabulary the model sees in its Layer-1 index
+ * (`docs/doctrine/memory-provenance.md`, which names panel surfaces as
+ * the second render half). Accepts `unknown` because panel nodes are
+ * structural: an absent or unrecognized source renders honestly as
+ * `"unknown"`, never fabricated into a trusted tier like `user`.
+ */
+export function memoryProvenance(source: unknown): string {
+  return isMemorySource(source) ? MEMORY_SOURCE_MARKERS[source] : MEMORY_SOURCE_MARKER_UNKNOWN;
 }
 
 // ── Derived-view filter (pure, exported for test + direct surface use) ─
