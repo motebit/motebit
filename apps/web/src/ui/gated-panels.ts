@@ -18,6 +18,7 @@ import {
 import type { PlanChunk } from "@motebit/runtime";
 import { renderMarkdown, type HireComposeRequest } from "./chat";
 import { setEmptyPulse, setEmptyRow } from "./empty-states";
+import { GOAL_VIEW_RESULT_EVENT } from "./slab-goal-artifact";
 import {
   createAgentsController,
   createMemoryController,
@@ -700,14 +701,21 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
           viewBtn.textContent = "View result";
           viewBtn.addEventListener("click", (e) => {
             e.stopPropagation();
-            // Calm software: open the slab. The runtime's resting
-            // `stream`/`mind` slab item for this fire is already
-            // there if the session hasn't replaced it; if it has
-            // (e.g., after reload), Phase 4's ContentArtifactManifest
-            // signing will reconstruct it lazily — for now, the open
-            // gesture is honest about taking the user to "where
-            // motebit's outputs live."
-            ctx.app.getRenderer().setSlabVisible?.(true);
+            // Slab handoff (#594 Inc 4): a typed, promptless event —
+            // BootedApp structurally cannot mount the slab
+            // (intent-gated-slab), so main.ts owns the summon
+            // (canonical invokeComputer() + setSlabVisible sequence)
+            // and WebApp.presentGoalArtifact resolves the DURABLE
+            // record. The runtime's resting mind-mode slab item is
+            // never rendered and dies on reload — the panel must not
+            // depend on it. Panel closes so it doesn't overlay the
+            // slab it just summoned.
+            closeGoals();
+            document.dispatchEvent(
+              new CustomEvent(GOAL_VIEW_RESULT_EVENT, {
+                detail: { goalId: goal.goal_id },
+              }),
+            );
           });
           expandInner.appendChild(viewBtn);
         }

@@ -628,9 +628,13 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
         actions.appendChild(runNowBtn);
       }
 
-      // Slab navigational anchor — opens the resting `stream`/`mind`
-      // slab item the runtime created during the fire so the user
-      // can read the full artifact in its mind-mode embodiment.
+      // Slab navigational anchor — opens the slab. HONESTY NOTE
+      // (#594 Inc 4 scout): the resting `stream`/`mind` slab item is
+      // never rendered (mind-mode items are hidden by design) and is
+      // session-only, so this gesture shows the slab, not the
+      // artifact. Web resolves the durable record via
+      // presentGoalArtifact; the desktop mirror is staged (same
+      // staged-delivery precedent as getLocalIdentity).
       // Renders only when the latest completed outcome carries a
       // turn id (pre-Phase-3 fires and plan-mode goals degrade to
       // no affordance, the correct calm-software default).

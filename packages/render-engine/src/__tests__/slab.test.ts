@@ -581,6 +581,16 @@ describe("SlabManager — screencast WebGL texture (v1.3 → texture register)",
     expect(screen.visible).toBe(true);
   });
 
+  it('setBodyRegister("artifact") hides the screen mesh even with an active texture — the goal-artifact register renders against pure slab interior (#594 Inc 4)', () => {
+    const mgr = makeManager();
+    mgr.setUserVisible(true);
+    mgr.setBodyRegister("artifact");
+    mgr.setScreencastImage({ width: 1280, height: 800 } as unknown as HTMLImageElement);
+    mgr.update(0, 0.5);
+    const screen = findScreenMesh(mgr)!;
+    expect(screen.visible).toBe(false);
+  });
+
   it("subsequent setScreencastImage calls replace the texture's image in place (no per-frame allocation)", () => {
     const mgr = makeManager();
     const a = { width: 1280, height: 800 } as unknown as HTMLImageElement;
