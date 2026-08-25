@@ -92,6 +92,9 @@ import {
   formatWalletWarning,
 } from "@motebit/encryption";
 import type { KeyTransferPayload } from "@motebit/sdk";
+// Type-only at runtime here (goal-scheduler value-imports only types from
+// this module, so this edge cannot form a runtime cycle).
+import { ARTIFACT_MANIFEST_PREFIX } from "./goal-scheduler";
 import {
   HttpEventStoreAdapter,
   WebSocketEventStoreAdapter,
@@ -2125,29 +2128,76 @@ export class UnbootedWebApp {
    * wins on goal_id collision because local is the signed-locally
    * truth, relay is a mirror.
    *
-   * Future arc swaps this for per-fire signed ExecutionReceipt
-   * aggregation via `replayGoal()` from packages/runtime/src/
-   * execution-ledger.ts — each fire becomes a signature-verified row.
-   * Contract-preserving swap (same `GoalRow` shape); only deepens the
-   * source of truth. Doctrine: docs/doctrine/receipts-unified.md.
+   * #594 Inc 3a: rows now carry `local_verification` when the goal's
+   * signed `ContentArtifactManifest` (written by the scheduler on each
+   * successful fire, previously write-only) verifies against the stored
+   * result bytes AND its `producer_public_key` equals this motebit's
+   * own key — the out-of-band binding the content-artifact trust note
+   * requires. Verification is fail-closed: a present-but-unverifiable
+   * manifest is `"failed"` (a tampering signal), an absent one leaves
+   * the field off. Per-fire rows via `replayGoal()` remain Inc 3b (web
+   * emits no goal lifecycle events yet).
    */
-  getLocalLedger(): Array<{
-    goal_id: string;
-    prompt: string;
-    status: string;
-    created_at: number;
-  }> {
+  async getLocalLedger(): Promise<
+    Array<{
+      goal_id: string;
+      prompt: string;
+      status: string;
+      created_at: number;
+      local_verification?: "verified" | "failed";
+    }>
+  > {
     const scheduler = this._scheduler;
     if (!scheduler) return [];
     const { goals } = scheduler.getState();
-    return goals
-      .filter((g) => g.last_run_at != null || g.status === "completed" || g.status === "failed")
-      .map((g) => ({
-        goal_id: g.goal_id,
-        prompt: g.prompt,
-        status: String(g.status),
-        created_at: g.created_at ?? g.last_run_at ?? Date.now(),
-      }));
+    const executed = goals.filter(
+      (g) => g.last_run_at != null || g.status === "completed" || g.status === "failed",
+    );
+
+    // Lazy-load the verifier only when a signed artifact exists to check.
+    const needsVerify = executed.some((g) => g.last_manifest_signed === true);
+    let verify: typeof import("@motebit/encryption").verifyContentArtifact | null = null;
+    if (needsVerify && this._publicKeyHex) {
+      try {
+        ({ verifyContentArtifact: verify } = await import("@motebit/encryption"));
+      } catch {
+        verify = null; // verifier unavailable — rows render without the field
+      }
+    }
+
+    return Promise.all(
+      executed.map(async (g) => {
+        const row: {
+          goal_id: string;
+          prompt: string;
+          status: string;
+          created_at: number;
+          local_verification?: "verified" | "failed";
+        } = {
+          goal_id: g.goal_id,
+          prompt: g.prompt,
+          status: String(g.status),
+          created_at: g.created_at ?? g.last_run_at ?? Date.now(),
+        };
+        if (verify == null || g.last_manifest_signed !== true) return row;
+        try {
+          const raw = localStorage.getItem(`${ARTIFACT_MANIFEST_PREFIX}${g.goal_id}`);
+          const content = g.last_response_full;
+          if (raw == null || content == null) return row;
+          const manifest = JSON.parse(raw) as import("@motebit/encryption").ContentArtifactManifest;
+          const result = await verify(manifest, new TextEncoder().encode(content));
+          // Conjunction: cryptographic validity AND owner-key binding.
+          row.local_verification =
+            result.valid && manifest.producer_public_key === this._publicKeyHex
+              ? "verified"
+              : "failed";
+        } catch {
+          // A stored-but-unparseable manifest is a failed check, not silence.
+          row.local_verification = "failed";
+        }
+        return row;
+      }),
+    );
   }
 
   /**
