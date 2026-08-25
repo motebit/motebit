@@ -25,6 +25,7 @@ import {
   releaseLiveBrowserItem,
 } from "./ui/slab-items";
 import { buildSlabHomeView } from "./ui/slab-home.js";
+import { buildGoalArtifactView } from "./ui/slab-goal-artifact.js";
 import { buildIdentityFace } from "./ui/identity-face.js";
 import { deriveHomeSeed, type HomeSeedInputs, type HomeTileAction } from "./ui/slab-home-model.js";
 import { animateMarkForReceipt } from "./ui/cobrowse-chrome";
@@ -394,6 +395,15 @@ export class UnbootedWebApp {
    */
   private _onHomeRegister = true;
   private _homeOverlayActive = false;
+  /**
+   * Goal-artifact presentation (#594 Inc 4): non-null while the body
+   * slot presents a durable goal result (`presentGoalArtifact`). Wins
+   * over home/overlay in `effectiveHomeState` / `effectiveBodyRegister`,
+   * and is DISSOLVED by `applyHomeRegisterToCurrentState` — any URL or
+   * session transition recomputes the register and the artifact yields
+   * with no dedicated teardown path.
+   */
+  private _artifactViewGoalId: string | null = null;
   private _motebitId = "";
   private _deviceId = "";
   private _publicKeyHex = "";
@@ -2853,6 +2863,7 @@ export class UnbootedWebApp {
    * focus/blur path.
    */
   private effectiveHomeState(): "hidden" | "register" | "overlay" {
+    if (this._artifactViewGoalId != null) return "register";
     if (this._onHomeRegister) return "register";
     if (this._homeOverlayActive) return "overlay";
     return "hidden";
@@ -2870,6 +2881,7 @@ export class UnbootedWebApp {
    * Doctrine: `motebit-computer.md` §"Body register — the tri-state."
    */
   private effectiveBodyRegister(): SlabBodyRegister {
+    if (this._artifactViewGoalId != null) return "artifact";
     if (this._onHomeRegister) return "home";
     if (this._homeOverlayActive) return "transition";
     return "live";
@@ -2878,6 +2890,10 @@ export class UnbootedWebApp {
   private applyHomeRegisterToCurrentState(): void {
     const handle = this.liveBrowserHandle;
     if (!handle) return;
+    // A URL/session transition dissolves any presented goal artifact —
+    // the artifact view has no teardown path of its own by design
+    // (#594 Inc 4); the register recomputation below is the exit.
+    this._artifactViewGoalId = null;
     const url = this._currentBrowserUrl;
     const onHome = url == null || url === "" || url === "about:blank";
     const wasOnHome = this._onHomeRegister;
@@ -2933,6 +2949,9 @@ export class UnbootedWebApp {
       // dismissed, navigated, or blurred-out during the await window.
       if (this.liveBrowserHandle !== handle) return;
       if (!this._onHomeRegister && !this._homeOverlayActive) return;
+      // A goal artifact presented during the await window owns the slot —
+      // the home view must not stomp it (#594 Inc 4 race guard).
+      if (this._artifactViewGoalId != null) return;
       const seed = deriveHomeSeed(inputs);
       const view = buildSlabHomeView(seed, {
         onTileAction: (action) => this.dispatchHomeTileAction(action),
@@ -2940,6 +2959,35 @@ export class UnbootedWebApp {
       });
       handle.bodySlot.replaceChildren(view);
     });
+  }
+
+  /**
+   * Present a durable goal-result artifact in the slab body (#594 Inc 4).
+   *
+   * Reads the DURABLE record (`last_response_full` on the goal, plus the
+   * signed-manifest claim) — never the runtime's resting mind-mode slab
+   * item, which is hidden by design and session-only. Requires the shell
+   * to be mounted (`invokeComputer()` first — main.ts owns that sequence;
+   * this method is excluded from `BootedApp` so panels must go through
+   * the typed `motebit:goal-view-result` event). No-op when the goal or
+   * its content is gone: the affordance degrades to a plain slab open.
+   */
+  presentGoalArtifact(goalId: string): void {
+    const handle = this.liveBrowserHandle;
+    if (!handle) return;
+    const goal = this.getGoalsController()
+      ?.getState()
+      .goals.find((g) => g.goal_id === goalId);
+    const content = goal?.last_response_full;
+    if (goal == null || content == null || content === "") return;
+    this._artifactViewGoalId = goalId;
+    const view = buildGoalArtifactView(
+      { prompt: goal.prompt, content, signed: goal.last_manifest_signed === true },
+      { soulTint: this._interiorColor ? this.tintToHex(this._interiorColor.tint) : undefined },
+    );
+    handle.bodySlot.replaceChildren(view);
+    handle.setHomeState(this.effectiveHomeState());
+    this.renderer.setSlabBodyRegister?.(this.effectiveBodyRegister());
   }
 
   /**
@@ -4387,4 +4435,11 @@ export class WebApp extends UnbootedWebApp {
  *
  * Doctrine: `intent-gated-slab.md`.
  */
-export type BootedApp = Omit<WebApp, "invokeComputer" | "dismissComputer" | "bootstrap">;
+export type BootedApp = Omit<
+  WebApp,
+  // presentGoalArtifact joins the excluded set (#594 Inc 4): it writes
+  // slab body state, so panels reach it only through the typed
+  // `motebit:goal-view-result` event that main.ts pairs with the
+  // canonical invokeComputer() summon.
+  "invokeComputer" | "dismissComputer" | "presentGoalArtifact" | "bootstrap"
+>;
