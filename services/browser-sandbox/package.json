@@ -21,7 +21,7 @@
     "@hono/node-server": "^1.19.17",
     "@motebit/crypto": "workspace:*",
     "@motebit/protocol": "workspace:*",
-    "hono": "^4.13.2",
+    "hono": "^4.13.3",
     "playwright-core": "^1.62.1",
     "playwright-extra": "^4.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2"
