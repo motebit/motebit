@@ -8960,6 +8960,11 @@
             </div>
             <!-- API Key (BYOK) -->
             <div class="provider-config" id="provider-anthropic">
+              <!-- Sovereignty framing (#594 Inc 5): BYOK is the pluggability
+                   proof, not a power-user chore — one quiet line, no pitch. -->
+              <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px">
+                Your key, your provider — the intelligence is pluggable. The body stays yours.
+              </div>
               <div class="settings-field" style="margin-bottom: 10px">
                 <label>Provider</label>
                 <div style="display: flex; gap: 6px">
@@ -9348,9 +9353,23 @@
           <div class="settings-card">
             <div class="card-title">Voice</div>
             <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px">
-              Keys stay on this device. With no key set, the creature speaks through your browser's
-              built-in voice.
+              With no key set, the creature speaks through your browser's built-in voice.
             </div>
+            <!-- Voice vendor keys behind a calm disclosure (#594 Inc 5,
+                 audience-aware sequencing): a fresh eye meets zero key-shaped
+                 inputs; settings.ts opens it when a key is already stored
+                 (chrome renders state). -->
+            <details id="voice-keys-disclosure">
+              <summary
+                style="
+                  font-size: 12px;
+                  color: var(--text-muted);
+                  cursor: pointer;
+                  margin-bottom: 10px;
+                "
+              >
+                Voice keys — optional. Keys stay on this device.
+              </summary>
             <div class="settings-field">
               <label for="tts-elevenlabs-key">ElevenLabs API Key</label>
               <div class="settings-key-row">
@@ -9429,6 +9448,7 @@
                 Low-latency voice and transcription.
               </div>
             </div>
+            </details>
             <div class="settings-field" style="margin-top: 10px">
               <label for="settings-tts-voice">TTS Voice</label>
               <select id="settings-tts-voice">

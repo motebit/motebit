@@ -1142,6 +1142,18 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     if (ttsDeepgramKey) ttsDeepgramKey.value = getVendorKey("deepgram") ?? "";
     if (ttsInworldKey) ttsInworldKey.value = getVendorKey("inworld") ?? "";
 
+    // Voice keys live behind a collapsed disclosure (#594 Inc 5) so a
+    // fresh eye meets no key-shaped inputs. Chrome renders state: when a
+    // key is already stored, the disclosure opens so the owner sees their
+    // configuration without a hunt.
+    const voiceKeysDisclosure = document.getElementById(
+      "voice-keys-disclosure",
+    ) as HTMLDetailsElement | null;
+    if (voiceKeysDisclosure) {
+      voiceKeysDisclosure.open =
+        (getVendorKey("elevenlabs") ?? getVendorKey("deepgram") ?? getVendorKey("inworld")) != null;
+    }
+
     // Populate TTS voices — must run *after* key fields are filled so the
     // picker reflects the active provider's voice space on open.
     populateTtsVoices();
