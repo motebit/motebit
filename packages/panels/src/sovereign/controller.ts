@@ -54,6 +54,17 @@ export interface GoalRow {
   prompt: string;
   status: string;
   created_at: number;
+  /**
+   * Local signed-artifact verification, adapter-supplied (panels zero-dep
+   * rule: the crypto runs in the surface adapter, never here — same
+   * boundary as `VerifiedFetchResult.verification`). `"verified"` means
+   * the surface verified the locally-stored `ContentArtifactManifest`
+   * against the result bytes AND matched `producer_public_key` to the
+   * owner's own key — strictly stronger than the relay's list-level
+   * badge. `"failed"` is a tampering signal. Absent = no local artifact
+   * for this row (relay-sourced, or the goal predates artifact signing).
+   */
+  local_verification?: "verified" | "failed";
 }
 
 export interface LedgerTimelineEvent {
@@ -202,13 +213,18 @@ export interface SovereignFetchAdapter {
    * relay round-trip; the controller merges local + relay (dedup by
    * goal_id, local wins) into the unified state.goals shape.
    *
-   * Tonight's implementation reads from GoalsRunner state (the local
-   * source of truth for scheduled goals across mode/status/last-run).
-   * Future arc swaps in per-fire signed ExecutionReceipt aggregation
-   * via `replayGoal()` from packages/runtime/src/execution-ledger.ts —
-   * each fire becomes a row, signature-verified locally before display.
-   * That swap is contract-preserving: the GoalRow shape stays; only
-   * the source of truth deepens. Doctrine: receipts-unified.md.
+   * Reads from GoalsRunner state (the local source of truth for
+   * scheduled goals across mode/status/last-run), and — where the
+   * surface stores signed goal artifacts — attaches per-row
+   * `local_verification` after verifying the stored
+   * `ContentArtifactManifest` against the result bytes and the owner's
+   * own key (#594 Inc 3a; verification runs in the adapter per the
+   * zero-dep rule). The remaining deepening is per-fire rows
+   * (#594 Inc 3b): `replayGoal()` aggregation requires goal lifecycle
+   * events the web scheduler does not yet emit, and a merge-key
+   * decision (per-fire run_id rows break the goal_id dedup). Additive
+   * so far — the GoalRow shape only grows optionally.
+   * Doctrine: receipts-unified.md.
    */
   getLocalLedger?(): Promise<GoalRow[]>;
 }

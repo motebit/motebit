@@ -46,7 +46,9 @@ const RUNS_KEY = "motebit.goals_runs";
  *  content-artifact`. Doctrine: `docs/doctrine/goal-results.md`
  *  §"The three categories"; `docs/doctrine/receipts-unified.md` for
  *  the unified receipt family. */
-const ARTIFACT_MANIFEST_PREFIX = "motebit.goal_artifact_manifest.";
+// Exported for WebApp.getLocalLedger (#594 Inc 3a) — the Sovereign Ledger
+// verifies these stored manifests; this file stays the only writer.
+export const ARTIFACT_MANIFEST_PREFIX = "motebit.goal_artifact_manifest.";
 
 function readJson<T>(key: string, fallback: T): T {
   if (typeof localStorage === "undefined") return fallback;

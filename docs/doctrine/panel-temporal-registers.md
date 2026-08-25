@@ -132,8 +132,8 @@ Same trigger applies to any future surface that could go either way (inference-h
 
 Captions vary per panel (each names what fills it and how — passively as content arrives, or actively when setup is needed); the visual register stays uniform.
 
-- Passive: _"Memories appear here / as conversations build"_
-- Active: _"Execution history appears here / connect a relay to see records"_
+- Passive: _"Memories appear here / as conversations build"_ — and, since the Ledger went local-first (`getLocalLedger`, #594 Inc 3a), _"Execution history appears here / as goals complete"_
+- Active: _"Discover new agents / connect a relay in Settings first"_
 - Goals-specific verb form: _"Commit motebit to a goal / a recurring task · or a one-shot plan"_
 
 The pulse signals **"this surface is alive, waiting."** The text tells you what fills it and whether you wait or act. The register is the surface's property; the caption is the substance's content. They compose without one displacing the other.
