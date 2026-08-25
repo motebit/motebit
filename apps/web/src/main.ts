@@ -575,11 +575,22 @@ async function bootstrap(): Promise<void> {
     // First visit — nothing inference-y on load, and crucially NO relay contact:
     // we don't fetch a proxy-token on boot (that would phone home + spend free
     // credit on bounces). The free cloud is attempted only on the first message
-    // (chat.ts → tryFreeCloud), on intent. First run is just the creature and
-    // the input — no welcome message renders (a deliberate gap the
-    // first-session arc will fill). Nothing to connect yet; reflect the
+    // (chat.ts → tryFreeCloud), on intent. Nothing to connect yet; reflect the
     // no-provider state.
     settings.updateConnectPrompt();
+    // The first minute (first-session arc Inc 1, #594): a zero-inference
+    // welcome — the creature speaks once, locally. Conversations are created
+    // lazily on the first exchange, so zero records + no saved provider is an
+    // honest "true first visit" signal; a returning user who cleared their
+    // provider but has history is NOT re-welcomed. A reload before speaking
+    // re-renders the same state — calm software renders state, it doesn't
+    // track whether it already said hello.
+    if (app.listConversations().length === 0) {
+      addMessage(
+        "assistant",
+        "I'm yours — minted just now, with my own key. What you tell me, I remember, inside a boundary you control.",
+      );
+    }
   }
 
   // For returning users with saved config, update prompt immediately
@@ -602,6 +613,27 @@ async function bootstrap(): Promise<void> {
   const cleaned = cleanConversationHistory(history);
   for (const msg of cleaned) {
     addMessage(msg.role, msg.content, true);
+  }
+
+  // Presence → chrome (first-session arc Inc 2, #594). The BODY cue is
+  // already live — runtime.renderFrame modulates the creature whenever
+  // presence.mode === "tending" — so this is only the chrome read: chrome
+  // renders state (chrome-as-state-render), a pure read of presence, never
+  // a write back (sensorium: the body is spoken, never sensed). Calm by
+  // construction: a body attribute plus the input placeholder while the
+  // input is empty — no toast, no count, no score (felt-interior).
+  const runtimeForPresence = app.getRuntime();
+  if (runtimeForPresence != null) {
+    const chatInputEl = document.getElementById("chat-input") as HTMLInputElement | null;
+    const restingPlaceholder = chatInputEl?.placeholder ?? "Say something...";
+    const renderPresence = (mode: string): void => {
+      document.body.dataset.presence = mode;
+      if (chatInputEl != null) {
+        chatInputEl.placeholder = mode === "tending" ? "tending memories..." : restingPlaceholder;
+      }
+    };
+    renderPresence(runtimeForPresence.presence.get().mode);
+    runtimeForPresence.presence.subscribe((presence) => renderPresence(presence.mode));
   }
 }
 
