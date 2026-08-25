@@ -563,8 +563,27 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
   const modelIndicator = document.getElementById("model-indicator") as HTMLDivElement;
 
+  // Transition cue, not a nameplate (mirrors web): the label appears when
+  // the active model changes, holds, then clears — steady state is silent,
+  // the standing record lives in Settings → Intelligence.
+  // `#model-indicator:empty { display: none }` hides the node.
+  const MODEL_CUE_HOLD_MS = 6000;
+  let settledModel: string | null = null;
+  let modelCueTimer: ReturnType<typeof setTimeout> | null = null;
+
   function updateModelIndicator(): void {
-    modelIndicator.textContent = ctx.app.currentModel ?? "";
+    const model = ctx.app.currentModel;
+    if (model === settledModel) return;
+    settledModel = model;
+    if (modelCueTimer != null) clearTimeout(modelCueTimer);
+    modelCueTimer = null;
+    modelIndicator.textContent = model ?? "";
+    if (model != null) {
+      modelCueTimer = setTimeout(() => {
+        modelCueTimer = null;
+        modelIndicator.textContent = "";
+      }, MODEL_CUE_HOLD_MS);
+    }
   }
 
   // === Approval Presets ===

@@ -5,6 +5,7 @@ import { formatTimeAgo } from "../types";
 import {
   createMemoryController,
   classifyCertainty,
+  memoryProvenance,
   resolveFeltConsolidation,
   resolveFeltMemory,
   feltHeadline,
@@ -566,8 +567,17 @@ export function initMemory(ctx: DesktopContext): MemoryAPI {
     // §5.8). When the motebit promotes a memory to "absolute", the
     // user sees the same label here.
     conf.className = `mem-certainty mem-certainty-${certainty}`;
-    conf.textContent = `${certainty} · ${Math.round(decayed * 100)}%`;
+    // The word, not the score (felt-interior): percentage lives on hover.
+    conf.textContent = certainty;
+    conf.title = `${Math.round(decayed * 100)}% decayed confidence`;
     metaDiv.appendChild(conf);
+
+    // Provenance — same [from:X] vocabulary the agent's Layer-1 index sees.
+    const prov = document.createElement("span");
+    prov.className = "mem-provenance";
+    prov.textContent = memoryProvenance(mem.source);
+    prov.title = "How this memory formed";
+    metaDiv.appendChild(prov);
 
     const halfDays = Math.round(mem.half_life / 86_400_000);
     const halfSpan = document.createElement("span");

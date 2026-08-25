@@ -22,6 +22,7 @@ import {
   createAgentsController,
   createMemoryController,
   classifyCertainty,
+  memoryProvenance,
   formatHardwarePlatform,
   formatNameClaim,
   formatLatency,
@@ -243,11 +244,22 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
       confidence.className = `memory-item-certainty memory-certainty-${certainty}`;
       // Three-state label surfaces the `memory_promoted` state (§5.8) —
       // when the agent's Layer-1 index sees `(absolute)` for a node,
-      // the panel renders the same badge here. Percentage stays for
-      // the fine-grained numeric reader; the label is the at-a-glance
-      // certainty cue.
-      confidence.textContent = `${certainty} · ${Math.round(decayed * 100)}%`;
+      // the panel renders the same badge here. The word, not the score:
+      // a felt record carries no numeric display (felt-interior); the
+      // fine-grained percentage moved to the hover title for the
+      // numeric reader.
+      confidence.textContent = certainty;
+      confidence.title = `${Math.round(decayed * 100)}% decayed confidence`;
       meta.appendChild(confidence);
+
+      // Provenance — the same [from:X] vocabulary the model sees in its
+      // Layer-1 index. memory-provenance doctrine names panels as the
+      // second render surface; this closes that half for web.
+      const provenance = document.createElement("span");
+      provenance.className = "memory-item-provenance";
+      provenance.textContent = memoryProvenance(node.source);
+      provenance.title = "How this memory formed";
+      meta.appendChild(provenance);
 
       const time = document.createElement("span");
       time.textContent = formatTimeAgo(node.created_at);
