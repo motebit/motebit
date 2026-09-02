@@ -45,6 +45,8 @@ import {
 } from "@motebit/verifier";
 import { recomputeRoutingDecision } from "@motebit/semiring";
 import type { EvalAttestation } from "@motebit/protocol";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 interface Expectation {
   service: string;
@@ -221,6 +223,60 @@ async function verifyReceiptTree(label: string, receipt: Record<string, unknown>
   );
 }
 
+/**
+ * The purchased payload, or a legible refusal — read the receipt's own
+ * verdict BEFORE parsing its body.
+ *
+ * A worker that cannot do the work signs an HONEST `failed` receipt whose
+ * `result` is the error TEXT, not JSON (see the catch in
+ * `services/research/src/index.ts`). Parsing that text as JSON turns one
+ * operator-actionable sentence into a JSON syntax error — repeated once per
+ * dependent check. That is exactly what hid a six-night staging outage
+ * (2026-08-27 → 2026-09-01): the Researcher's Anthropic key was out of
+ * credits and said so in plain English inside every receipt, while this probe
+ * reported three copies of "Unexpected non-whitespace character after JSON at
+ * position 4" and nothing else. Six red nights, cause unreadable.
+ *
+ * gate-repair-instructions.md: a red must be self-serviceable from its text
+ * alone. So a failed receipt is ONE failure carrying the worker's own words,
+ * and the payload-dependent checks are not-applicable rather than
+ * separately-failed — one root cause reports as one line, not as N.
+ */
+export function purchasedPayload(
+  label: string,
+  receipt: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const status = String(receipt["status"] ?? "");
+  const body = String(receipt["result"] ?? "");
+  if (status === "failed" || receipt["ok"] === false) {
+    record(
+      `${label}: worker completed the work`,
+      "FAIL",
+      `worker signed a FAILED receipt — its own words: ${body.slice(0, 400) || "(empty result)"}`,
+    );
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(body === "" ? "{}" : body);
+    if (typeof parsed !== "object" || parsed === null) {
+      record(
+        `${label}: result payload`,
+        "FAIL",
+        `result is not a JSON object (got ${typeof parsed}) — the worker's payload contract is one JSON object; raw: ${body.slice(0, 200)}`,
+      );
+      return null;
+    }
+    return parsed as Record<string, unknown>;
+  } catch (err) {
+    record(
+      `${label}: result payload`,
+      "FAIL",
+      `receipt status=${status || "(absent)"} but result is not JSON (${err instanceof Error ? err.message : String(err)}) — raw: ${body.slice(0, 200)}`,
+    );
+    return null;
+  }
+}
+
 async function checkResearcher(
   agent: DiscoveredWireAgent,
 ): Promise<Record<string, unknown> | null> {
@@ -236,6 +292,12 @@ async function checkResearcher(
   record("research: paid delegation", "PASS");
   await verifyReceiptTree("research", receipt);
 
+  // Read the verdict before the body: an honest `failed` receipt is a legible
+  // refusal, never a parse error. Integrity above still ran — a refusal is
+  // still a signed artifact, and it must still verify.
+  const purchased = purchasedPayload("research", receipt);
+  if (purchased == null) return receipt;
+
   // The multi-hop-as-P2P invariant: a molecule that did external atom work MUST
   // have PAID for it P2P — never silently for free. Read the self-attested money
   // facts (`sub_settlements`, stamped by the molecule with mode + onchain tx) and
@@ -246,7 +308,7 @@ async function checkResearcher(
   // #333 fixed — research dropping to free direct-MCP would keep the receipt tree
   // verifying while paying no one; here that is a hard FAIL.
   try {
-    const settlePayload = JSON.parse(String(receipt["result"] ?? "{}")) as {
+    const settlePayload = purchased as {
       sub_settlements?: Array<{ mode?: string; tx_hash?: string; capability?: string }>;
       search_count?: number;
       fetch_count?: number;
@@ -279,7 +341,7 @@ async function checkResearcher(
   // admissible candidate survives), so absence alone is a WARN-with-count,
   // never a FAIL — the emission drift gate holds the producer structurally.
   try {
-    const tPayload = JSON.parse(String(receipt["result"] ?? "{}")) as {
+    const tPayload = purchased as {
       routing_transcripts?: Array<Record<string, unknown>>;
       sub_settlements?: Array<{ mode?: string }>;
     };
@@ -317,7 +379,7 @@ async function checkResearcher(
   // Citation chain: parse the result payload, cross-check receipt_task_id
   // and run the structural provenance discipline.
   try {
-    const payload = JSON.parse(String(receipt["result"] ?? "{}")) as {
+    const payload = purchased as {
       report?: string;
       citations?: Array<{
         receipt_task_id?: string;
@@ -417,8 +479,11 @@ async function checkAuditor(
   record("auditor: paid delegation", "PASS");
   await verifyReceiptTree("auditor", receipt);
 
+  const purchased = purchasedPayload("auditor", receipt);
+  if (purchased == null) return;
+
   try {
-    const payload = JSON.parse(String(receipt["result"] ?? "{}")) as {
+    const payload = purchased as {
       attestation?: EvalAttestation;
     };
     if (payload.attestation == null) {
@@ -484,9 +549,12 @@ async function checkClerk(
   record("clerk: paid delegation", "PASS");
   await verifyReceiptTree("clerk", receipt);
 
+  const purchased = purchasedPayload("clerk", receipt);
+  if (purchased == null) return;
+
   try {
     const status = String(receipt["status"] ?? "");
-    const payload = JSON.parse(String(receipt["result"] ?? "{}")) as {
+    const payload = purchased as {
       ok?: boolean;
       dry_run?: boolean;
       code?: string;
@@ -553,7 +621,15 @@ async function main(): Promise<void> {
   if (fails.length > 0) process.exit(1);
 }
 
-main().catch((err: unknown) => {
-  console.error(err instanceof Error ? err.message : String(err));
-  process.exit(1);
-});
+// Entrypoint guard: running the probe is a side effect (network, process.exit),
+// so it must fire only when this file IS the program. Importing it — which the
+// regression test around `purchasedPayload` does — must stay inert.
+const invokedDirectly =
+  process.argv[1] != null && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (invokedDirectly) {
+  main().catch((err: unknown) => {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  });
+}

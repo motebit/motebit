@@ -159,6 +159,10 @@ async function main(): Promise<void> {
             result = { ok: true, data: r.review };
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
+            // An honest failure must be as loud in the log as an honest success —
+            // otherwise a dead service reads as a quiet one. See the research
+            // service for the six-night staging outage this silence hid.
+            log(`code_review FAILED: ${msg}`);
             result = { ok: false, error: msg };
           }
         }

@@ -249,6 +249,15 @@ async function main(): Promise<void> {
           };
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
+          // The refusal is signed into the receipt either way — but a receipt
+          // is read by the BUYER, not by the operator tailing these logs. With
+          // no log here the success path printed "research complete: …" and the
+          // failure path printed nothing at all, so a dead service looked like
+          // a quiet one: six nights of staging conformance red (2026-08-27 →
+          // 09-01) with the cause ("credit balance is too low") visible only to
+          // whoever thought to fetch the stored receipt off the relay. An
+          // honest failure must be as loud in the log as an honest success.
+          log(`research FAILED: ${msg}`);
           result = { ok: false, error: msg };
         }
 
