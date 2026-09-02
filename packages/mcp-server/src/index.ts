@@ -148,6 +148,33 @@ interface MotebitServerDeps {
     description: string;
   } | null>;
 
+  /**
+   * Can this agent actually do the work it advertises, right now?
+   *
+   * Heartbeats assert LIVENESS ("my process is running"). That is not the same
+   * claim as READINESS ("I can perform the capability I list a price for"), and
+   * on 2026-08-27 the difference cost six nights: the staging Researcher's
+   * inference provider was out of credits, so every task failed instantly — yet
+   * it kept heartbeating, kept advertising `freshness: awake` with listed
+   * pricing, kept accepting PAID delegations, and returned a signed refusal for
+   * each one. The buyer's money moved before the work was attempted
+   * (`relay-delegation.ts:1365`), so on the sovereign rail it does not come back
+   * (#610). Selling a refusal is worse than being unreachable.
+   *
+   * When supplied and it answers `ready: false`, `runService` WITHHOLDS the
+   * heartbeat. Nothing is deregistered and no new protocol is involved: the
+   * relay's existing freshness ladder does the work, decaying
+   * `awake → recently_seen → dormant` on its own. The listing stays intact and a
+   * later `ready: true` restores it. Absent, behavior is exactly as before.
+   *
+   * The probe MUST be conservative — see `createProviderReadiness` in
+   * `@motebit/molecule-runner`. Only a durable operator condition (exhausted
+   * credit, revoked key) may answer `false`. Rate limits, 5xx, and timeouts are
+   * transient and must keep answering `true`: a jittery probe that withholds
+   * heartbeats takes the market dark, which is the more expensive failure.
+   */
+  checkReadiness?(): Promise<{ ready: boolean; reason?: string }>;
+
   /** Returns a signed Verifiable Presentation with agent credentials. */
   getCredentials?(): Promise<Record<string, unknown> | null>;
 

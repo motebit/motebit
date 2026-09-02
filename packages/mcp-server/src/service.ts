@@ -631,6 +631,39 @@ export async function startServiceServer(
       }
     };
 
+    // Readiness gate. `true` when the last probe said we can do the work (or no
+    // probe is wired). Tracked so the transition — not every tick — is logged.
+    let advertising = true;
+    /**
+     * Ask the injected probe whether this agent can currently perform what it
+     * advertises. A probe that THROWS is treated as ready: an unreliable probe
+     * must never be the thing that takes a working agent off the market.
+     */
+    const readyToAdvertise = async (): Promise<boolean> => {
+      if (deps.checkReadiness == null) return true;
+      let verdict: { ready: boolean; reason?: string };
+      try {
+        verdict = await deps.checkReadiness();
+      } catch (err: unknown) {
+        // Fail OPEN, deliberately: see above. Log it, since a probe that always
+        // throws is silently doing nothing.
+        log(
+          `Readiness probe threw, continuing to advertise: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return true;
+      }
+      if (verdict.ready !== advertising) {
+        advertising = verdict.ready;
+        log(
+          verdict.ready
+            ? `Ready again — resuming heartbeats, listing will refresh`
+            : `NOT ready (${verdict.reason ?? "no reason given"}) — withholding heartbeats; ` +
+                `discovery freshness will decay rather than advertise work this agent cannot do`,
+        );
+      }
+      return verdict.ready;
+    };
+
     /** Lightweight heartbeat — just extends the TTL. */
     const heartbeat = async (): Promise<void> => {
       try {
@@ -661,6 +694,10 @@ export async function startServiceServer(
       heartbeatTimer = setInterval(
         // eslint-disable-next-line @typescript-eslint/no-misused-promises -- fire-and-forget heartbeat
         async () => {
+          // Readiness first: an agent that cannot do the work must not renew its
+          // claim to be awake for it. Withholding is the whole mechanism — the
+          // relay's freshness ladder does the rest.
+          if (!(await readyToAdvertise())) return;
           const elapsed = Date.now() - lastRegisteredAt;
           const sinceFull = Date.now() - lastFullRegisterAt;
           if (elapsed >= STALE_THRESHOLD_MS) {
@@ -687,6 +724,9 @@ export async function startServiceServer(
     // (Fly.io auto_stop, Kubernetes pod eviction) wake on health checks, which
     // run before any task traffic arrives. Re-registering here closes the window.
     mcpServer.ensureRegistered = async () => {
+      // Same gate on the health-check wake path — otherwise a platform health
+      // probe re-registers an agent the heartbeat loop deliberately let decay.
+      if (!(await readyToAdvertise())) return;
       const elapsed = Date.now() - lastRegisteredAt;
       if (elapsed >= STALE_THRESHOLD_MS) {
         const ok = await register();

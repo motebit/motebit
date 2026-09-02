@@ -358,6 +358,125 @@ describe("startServiceServer", () => {
     }
   });
 
+  it("withholds heartbeats while checkReadiness says the agent cannot work", async () => {
+    // Composition-preserves-enforcement: `createProviderReadiness` being correct
+    // in isolation proves nothing if `runService` never consults it. This drives
+    // the real loop and asserts the seam is actually load-bearing.
+    //
+    // The behavior it protects: an agent whose provider is dead must stop
+    // renewing its claim to be awake, so the relay's freshness ladder decays it
+    // instead of letting it keep taking PAID delegations it can only refuse
+    // (#593, #610). Deleting the readiness call in the heartbeat timer reds this
+    // while every other test here stays green.
+    vi.useFakeTimers();
+    try {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+      let ready = false;
+      const log = vi.fn();
+      handle = await startServiceServer(
+        makeDeps({
+          checkReadiness: () =>
+            Promise.resolve(
+              ready ? { ready: true } : { ready: false, reason: "provider credit exhausted" },
+            ),
+        } as never),
+        {
+          port: 0,
+          syncUrl: "http://fake-relay",
+          apiToken: "test-token",
+          onStart: vi.fn(),
+          log,
+        },
+      );
+
+      const heartbeats = (): number =>
+        fetchSpy.mock.calls.filter(
+          (c) => typeof c[0] === "string" && (c[0] as string).includes("/heartbeat"),
+        ).length;
+
+      // An hour of ticks while not ready: not one heartbeat may go out.
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+      expect(heartbeats()).toBe(0);
+
+      // The transition is logged once, with the reason — an operator must be
+      // able to see WHY an agent went quiet.
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("NOT ready"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("provider credit exhausted"));
+
+      // Recovery resumes advertising.
+      ready = true;
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      expect(heartbeats()).toBeGreaterThan(0);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Ready again"));
+
+      fetchSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("heartbeats normally when no readiness probe is wired", async () => {
+    // The safety default: every service that supplies no probe must behave
+    // exactly as it did before this seam existed.
+    vi.useFakeTimers();
+    try {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+      handle = await startServiceServer(makeDeps(), {
+        port: 0,
+        syncUrl: "http://fake-relay",
+        apiToken: "test-token",
+        onStart: vi.fn(),
+        log: vi.fn(),
+      });
+
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+      const heartbeats = fetchSpy.mock.calls.filter(
+        (c) => typeof c[0] === "string" && (c[0] as string).includes("/heartbeat"),
+      ).length;
+      expect(heartbeats).toBeGreaterThan(0);
+
+      fetchSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps advertising when the readiness probe throws", async () => {
+    // Fail OPEN. An unreliable probe must never be the thing that takes a
+    // working agent off the market.
+    vi.useFakeTimers();
+    try {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+      const log = vi.fn();
+      handle = await startServiceServer(
+        makeDeps({
+          checkReadiness: () => Promise.reject(new Error("probe exploded")),
+        } as never),
+        { port: 0, syncUrl: "http://fake-relay", apiToken: "t", onStart: vi.fn(), log },
+      );
+
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+      const heartbeats = fetchSpy.mock.calls.filter(
+        (c) => typeof c[0] === "string" && (c[0] as string).includes("/heartbeat"),
+      ).length;
+      expect(heartbeats).toBeGreaterThan(0);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Readiness probe threw"));
+
+      fetchSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("handles relay registration failure gracefully", async () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
