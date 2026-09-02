@@ -1,0 +1,138 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/identity-binding-bundle-v1.json",
+  "title": "IdentityBindingBundle (v1)",
+  "description": "The `GET /api/v1/identity/:motebitId` response: a motebit's current key, its self-signed succession chain, and — once anchored — a Merkle inclusion proof against an on-chain root. The bundle carries no relay signature by design: the relay is a CDN, not a trust root, and every claim inside is independently verifiable. See spec/identity-v1.md §7.6.",
+  "type": "object",
+  "properties": {
+    "motebit_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The motebit whose binding this describes."
+    },
+    "created_at": {
+      "type": "string",
+      "description": "ISO-8601 timestamp the genesis key became active (registration time)."
+    },
+    "current_public_key": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "The motebit's CURRENT identity public key (hex) — the head of its chain."
+    },
+    "guardian_public_key": {
+      "description": "The guardian public key (hex), when one is registered. REQUIRED to verify a guardian-recovery link — without it a third party cannot check that link and the whole chain fails to verify.",
+      "type": "string"
+    },
+    "succession": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "old_public_key": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "The key being replaced (hex-encoded Ed25519 public key)."
+          },
+          "new_public_key": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "The key taking over (hex-encoded Ed25519 public key)."
+          },
+          "timestamp": {
+            "type": "number",
+            "description": "Epoch milliseconds when the rotation took effect."
+          },
+          "reason": {
+            "description": "Optional free-text rotation reason.",
+            "type": "string"
+          },
+          "suite": {
+            "type": "string",
+            "const": "motebit-jcs-ed25519-hex-v1",
+            "description": "Cryptosuite — JCS canonicalization, Ed25519, hex encoding."
+          },
+          "old_key_signature": {
+            "description": "Old key's signature over the canonical payload. Present in a normal rotation, ABSENT in a guardian recovery.",
+            "type": "string"
+          },
+          "new_key_signature": {
+            "type": "string",
+            "description": "New key's signature over the canonical payload. Always present."
+          },
+          "recovery": {
+            "description": "True when the rotation was authorized by the guardian, not the old key (§3.8.3).",
+            "type": "boolean"
+          },
+          "guardian_signature": {
+            "description": "Guardian's signature — present only when `recovery` is true.",
+            "type": "string"
+          }
+        },
+        "required": ["old_public_key", "new_public_key", "timestamp", "suite", "new_key_signature"],
+        "additionalProperties": false
+      },
+      "description": "The self-signed rotation chain, genesis → current. Empty if never rotated."
+    },
+    "anchored": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "proof": {
+              "type": "object",
+              "properties": {
+                "index": {
+                  "type": "number",
+                  "description": "Leaf index of this motebit's binding in the identity log."
+                },
+                "siblings": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Merkle path siblings (hex), leaf-to-root."
+                },
+                "layerSizes": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "description": "Node count per tree layer — lets a verifier reconstruct an unbalanced tree."
+                },
+                "anchoredRoot": {
+                  "type": "string",
+                  "description": "The log's Merkle root (hex) — the value the relay posted on-chain."
+                },
+                "tree_hash_version": {
+                  "description": "RFC 6962 §2.1 tree-hash recipe (`MerkleTreeVersion`). **Absent ⇒ `merkle-sha256-plain-v1`**, so proofs minted before this axis existed stay byte-identical. A verifier resolves an unknown value fail-closed — never a silent downgrade. See docs/doctrine/merkle-tree-hash-versioning.md.",
+                  "type": "string",
+                  "enum": ["merkle-sha256-plain-v1", "merkle-sha256-rfc6962-v2"]
+                }
+              },
+              "required": ["index", "siblings", "layerSizes", "anchoredRoot"],
+              "additionalProperties": false,
+              "description": "Inclusion proof whose `anchoredRoot` the verifier MUST confirm on-chain independently."
+            },
+            "tx_hash": {
+              "type": "string",
+              "description": "The chain transaction that posted `anchoredRoot`."
+            },
+            "network": {
+              "type": "string",
+              "description": "CAIP-2 network identifier of the anchor transaction."
+            }
+          },
+          "required": ["proof", "tx_hash", "network"],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Inclusion proof against the latest CONFIRMED on-chain root, or `null` when this motebit is not yet in a confirmed anchor — an honest state, not an error."
+    }
+  },
+  "required": ["motebit_id", "created_at", "current_public_key", "succession", "anchored"],
+  "additionalProperties": false
+}

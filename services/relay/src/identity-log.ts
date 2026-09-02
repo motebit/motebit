@@ -14,33 +14,17 @@
  * separate pieces (the relay wiring, the anchor submitter, the `/identity` route).
  */
 
-import type { MerkleTreeVersion } from "@motebit/protocol";
+import type { IdentityBinding, IdentityLogProof, MerkleTreeVersion } from "@motebit/protocol";
 import { identityLogLeaf } from "@motebit/crypto";
 import { buildMerkleTree, getMerkleProof } from "@motebit/encryption";
 
-/** A motebit's current identity key, as the relay knows it (from `agent_registry`). */
-export interface IdentityBinding {
-  readonly motebit_id: string;
-  /** The motebit's CURRENT identity public key (hex) — the head of its chain. */
-  readonly public_key: string;
-}
-
-/** Inclusion proof shape consumed verbatim by `verifyIdentityBindingAnchored`. */
-export interface IdentityLogProof {
-  readonly index: number;
-  readonly siblings: string[];
-  readonly layerSizes: number[];
-  /** The log's Merkle root (hex) — the value the relay anchors on-chain. */
-  readonly anchoredRoot: string;
-  /**
-   * Tree-hash recipe for the leaf + Merkle path (RFC 6962 §2.1 domain
-   * separation — `MerkleTreeVersion` in `@motebit/protocol`). **Omitted ⇒
-   * `merkle-sha256-plain-v1`** so a proof built under v1 is byte-identical to
-   * one minted before this axis existed. A v2 log stamps the explicit string;
-   * the verifier (`verifyIdentityBindingAnchored`) resolves it fail-closed.
-   */
-  readonly tree_hash_version?: MerkleTreeVersion;
-}
+/**
+ * `IdentityBinding` and `IdentityLogProof` are foundation-law wire shapes
+ * (spec/identity-v1.md §7.6, #574) and live in the permissive floor so external
+ * verifiers can consume them without a BSL dependency. Re-exported here because
+ * this module is their producer.
+ */
+export type { IdentityBinding, IdentityLogProof };
 
 export interface IdentityLog {
   /** Hex Merkle root of the binding set. Empty string when there are no bindings. */

@@ -2097,35 +2097,6 @@ export interface SeedEscrowPayload {
 }
 
 /**
- * A key succession record proving that one Ed25519 key has been replaced by another.
- * Both the old and new keys sign the record, creating a cryptographic chain of custody.
- * Structurally compatible with @motebit/crypto KeySuccessionRecord.
- *
- * Guardian recovery records have `recovery: true` and `guardian_signature` instead of
- * `old_key_signature`. This allows identity recovery when the primary key is compromised.
- */
-export interface KeySuccessionRecord {
-  old_public_key: string; // hex
-  new_public_key: string; // hex
-  timestamp: number;
-  reason?: string;
-  /**
-   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-hex-v1"` for
-   * this artifact today — JCS canonicalization of the unsigned payload,
-   * Ed25519 primitive, hex signature encoding, hex public-key encoding.
-   * The same suite as the identity frontmatter (spec/identity-v1.md §3.8).
-   * Verifiers reject missing or unknown suite values fail-closed.
-   */
-  suite: "motebit-jcs-ed25519-hex-v1";
-  old_key_signature?: string; // hex — present in normal rotation, absent in guardian recovery
-  new_key_signature: string; // hex, new key signs the canonical payload
-  /** Guardian recovery: true when succession was authorized by guardian, not old key. */
-  recovery?: boolean;
-  /** Guardian signature — present only when recovery is true. */
-  guardian_signature?: string; // hex
-}
-
-/**
  * Organizational guardian — enables key recovery and organizational custody.
  * The guardian's private key is held by the organization (cold storage).
  * When present, the guardian can sign succession records on behalf of a compromised key.
@@ -3396,6 +3367,23 @@ export type {
 // motebit/discovery@1.0.
 
 export type { RelayMetadata, RelayMetadataPeer, AgentResolutionResult } from "./discovery.js";
+
+/**
+ * Identity-binding transparency wire types (`spec/identity-v1.md` §7.6) — the
+ * shapes an external verifier codes against to answer "does this key really
+ * belong to this motebit_id?". Promoted from the relay service to the
+ * permissive floor when `GET /api/v1/identity/:motebitId` became foundation
+ * law (#574): a wire commitment third parties depend on cannot live inside a
+ * BSL service, and `check-api-surface` can only pin a shape that is exported
+ * from here.
+ */
+export type {
+  IdentityBinding,
+  IdentityLogProof,
+  AnchoredInclusion,
+  IdentityBindingBundle,
+  KeySuccessionRecord,
+} from "./identity-binding.js";
 
 // Virtual-account balance read — the market-v1 §2 account state projected
 // across the HTTP boundary (decimal USD; conversion happens only at the

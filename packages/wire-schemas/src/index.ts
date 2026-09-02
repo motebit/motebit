@@ -187,6 +187,11 @@ export {
   buildAgentRevocationFeedJsonSchema,
 } from "./agent-revocation.js";
 export {
+  IdentityBindingBundleSchema,
+  IDENTITY_BINDING_BUNDLE_SCHEMA_ID,
+  buildIdentityBindingBundleJsonSchema,
+} from "./identity-binding.js";
+export {
   BondCommitmentSchema,
   BOND_COMMITMENT_SCHEMA_ID,
   buildBondCommitmentJsonSchema,
