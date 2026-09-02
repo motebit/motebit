@@ -20,7 +20,8 @@
 import type { Hono } from "hono";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { SuccessionRecord } from "@motebit/crypto";
-import { buildIdentityLog, type IdentityBinding, type IdentityLogProof } from "./identity-log.js";
+import { buildIdentityLog } from "./identity-log.js";
+import type { AnchoredInclusion, IdentityBinding, IdentityBindingBundle } from "@motebit/protocol";
 import { getLatestAnchoredSnapshot } from "./identity-log-anchoring.js";
 
 /** The relay's succession records are always under this suite (no per-row column). */
@@ -68,41 +69,14 @@ export function readSuccessionChain(db: DatabaseDriver, motebitId: string): Succ
   }));
 }
 
-/** Inclusion proof against the latest confirmed on-chain root, with its anchor tx. */
-export interface AnchoredInclusion {
-  /** Merkle proof; `proof.anchoredRoot` is the root the relay posted on-chain. */
-  readonly proof: IdentityLogProof;
-  /** The Solana tx that posted `anchoredRoot` — provenance for the verifier. */
-  readonly tx_hash: string;
-  /** CAIP-2 network of the anchor tx. */
-  readonly network: string;
-}
-
-/** The `/identity/:motebitId` response: binding material + (if anchored) inclusion proof. */
-export interface IdentityBindingBundle {
-  readonly motebit_id: string;
-  /** ISO timestamp the genesis key became active (the registration time). */
-  readonly created_at: string;
-  /** The motebit's current identity public key (hex) — the chain head. */
-  readonly current_public_key: string;
-  /**
-   * The motebit's guardian public key (hex), if it registered one. Required to
-   * verify a guardian-recovery rotation in the succession chain (the spec's
-   * key-compromise mechanism, §3.8.3) — without it a third party can't check a
-   * recovery link, so the whole chain fails to verify.
-   */
-  readonly guardian_public_key?: string;
-  /** The self-signed rotation chain (genesis → current). Empty if never rotated. */
-  readonly succession: SuccessionRecord[];
-  /**
-   * Inclusion proof against the latest CONFIRMED on-chain anchored root plus its
-   * tx. `null` until this motebit's binding has been anchored — an honest
-   * "not anchored yet" state (the verifier stays at `pinned`/integrity-only). A
-   * non-null proof here is only `anchored` once the verifier independently
-   * confirms `proof.anchoredRoot` is on-chain at the relay's pinned address.
-   */
-  readonly anchored: AnchoredInclusion | null;
-}
+/**
+ * The wire shapes now live in the permissive floor (`@motebit/protocol`) —
+ * `GET /api/v1/identity/:motebitId` is foundation law (spec/identity-v1.md
+ * §7.6, #574), and a shape external verifiers code against cannot be defined
+ * inside a BSL service. Re-exported here so existing relay-side importers and
+ * tests keep working unchanged.
+ */
+export type { AnchoredInclusion, IdentityBindingBundle };
 
 /**
  * Assemble the binding bundle for `motebitId`, or `null` if it isn't registered.
@@ -162,16 +136,20 @@ export function registerIdentityTransparencyRoutes(deps: IdentityTransparencyDep
   // ── GET /api/v1/identity/:motebitId ──
   // Unauthenticated. Serves binding material for offline verification; no secrets.
   /**
-   * @experimental
-   * @since 2026-05-21
-   * @stabilizes_by 2026-09-19
-   * @replacement none
-   * @reason Identity-transparency binding endpoint. The original blocker (the
-   *   anchored on-chain root cross-check) has been met since 2026-05-22 and
-   *   proven live on mainnet, so the stated graduation condition is closed.
-   *   Extended once because promotion is a real arc: IdentityBindingBundle is
-   *   not in @motebit/protocol and appears in no spec, and spec wire types must
-   *   live in the permissive floor. Do not extend again — promote or demote.
+   * @spec motebit/identity@1.0
+   *
+   * Promoted from @experimental on 2026-09-02 (#574). The stated blocker — the
+   * anchored on-chain root cross-check — closed 2026-05-22 and is continuously
+   * live: verified again at promotion time against Solana mainnet, where the
+   * relay's anchor memo `motebit:anchor:v1:<root>:<count>` sits in a confirmed
+   * transaction and prod bundles carry a non-null `anchored`.
+   *
+   * Promotion was an arc, not a relabel. `IdentityBindingBundle` and the shapes
+   * it needs now live in the Apache-2.0 permissive floor (`@motebit/protocol`,
+   * spec §7.6) so an external verifier binds to a pinned surface with a semver
+   * guarantee rather than to a type defined inside a BSL service — the
+   * reciprocal obligation named in `docs/doctrine/agency-proof-integration.md`.
+   * Changing this shape is now a wire break.
    */
   app.get("/api/v1/identity/:motebitId", async (c) => {
     const motebitId = c.req.param("motebitId");

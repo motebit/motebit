@@ -585,7 +585,7 @@ The previous signature becomes invalid. If the file is tracked in version contro
 
 #### Routes (foundation law)
 
-The eight routes below are the binding cross-implementation contract for identity resolution and key-rotation lifecycle. Renaming or relocating any of them is a wire break.
+The nine routes below are the binding cross-implementation contract for identity resolution and key-rotation lifecycle. Renaming or relocating any of them is a wire break.
 
 - `GET /api/v1/agents/:motebitId` — resolve a motebit identity (public key + endpoint) by `motebit_id`.
 - `POST /api/v1/agents/:motebitId/rotate-key` — rotate the identity key, appending a succession record (§3.8).
@@ -595,6 +595,23 @@ The eight routes below are the binding cross-implementation contract for identit
 - `POST /api/v1/agents/:motebitId/approvals` — submit a multi-party approval proposal.
 - `POST /api/v1/agents/:motebitId/approvals/:approvalId/vote` — cast a vote in a multi-party approval.
 - `GET /api/v1/agents/:motebitId/approvals/:approvalId` — read approval state.
+- `GET /api/v1/identity/:motebitId` — resolve the binding material a third party needs to verify a receipt's producer: current key, succession chain, and (once anchored) a Merkle inclusion proof against an on-chain root (§7.6).
+
+## 7.6 Identity-Binding Transparency
+
+`GET /api/v1/identity/:motebitId` is unauthenticated and answers the _binding_ question — does this public key really belong to this `motebit_id`? — that signature integrity alone can never establish ([`docs/doctrine/identity-binding-verification.md`](../docs/doctrine/identity-binding-verification.md)).
+
+The relay is a CDN here, not a trust root. Succession records are signed by the motebit's own keys, so the relay stores them and cannot forge them; and the relay cannot make a binding `anchored` by assertion. A verifier MUST independently confirm that `anchored.proof.anchoredRoot` is posted on-chain at the relay's pinned anchor address before treating the binding as `anchored`. Until a motebit is included in a confirmed anchor, `anchored` is `null` — an honest "not anchored yet" state, not an error, and the verifier stays at `pinned`/integrity-only.
+
+Implementations MUST return `404` for an unregistered `motebit_id` rather than an empty bundle: absence of a binding and a binding with no material are different claims.
+
+### 7.6.1 — IdentityBindingBundle
+
+#### Wire format (foundation law)
+
+The response body is the `IdentityBindingBundle` shape in `@motebit/protocol`, together with `AnchoredInclusion` and `IdentityLogProof` for the anchored rung, `IdentityBinding` for a single leaf of the identity log, and `KeySuccessionRecord` for each link of the rotation chain (§3.8).
+
+A `tree_hash_version` absent from `IdentityLogProof` means `merkle-sha256-plain-v1`, so a proof built before that axis existed stays byte-identical (`MerkleTreeVersion`); a verifier resolves an unknown value fail-closed.
 
 ## 8. Security Considerations
 

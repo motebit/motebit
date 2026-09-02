@@ -431,6 +431,13 @@ export const ALL_TOKEN_AUDIENCES: readonly TokenAudience[];
 export type AllocationId = Brand<string, "AllocationId">;
 
 // @public
+export interface AnchoredInclusion {
+    readonly network: string;
+    readonly proof: IdentityLogProof;
+    readonly tx_hash: string;
+}
+
+// @public
 export interface ApprovalDecision {
     approval_id: string;
     args_hash: string;
@@ -2254,6 +2261,24 @@ export interface HorizonWitnessRequestBody {
 }
 
 // @public
+export interface IdentityBinding {
+    // (undocumented)
+    readonly motebit_id: string;
+    readonly public_key: string;
+}
+
+// @public
+export interface IdentityBindingBundle {
+    readonly anchored: AnchoredInclusion | null;
+    readonly created_at: string;
+    readonly current_public_key: string;
+    readonly guardian_public_key?: string;
+    // (undocumented)
+    readonly motebit_id: string;
+    readonly succession: readonly KeySuccessionRecord[];
+}
+
+// @public
 export type IdentityBindingVerdict = "sovereign" | "anchored" | "pinned" | "unverified" | "invalid";
 
 // @public
@@ -2262,6 +2287,18 @@ export interface IdentityGuardian {
     organization?: string;
     organization_id?: string;
     public_key: string;
+}
+
+// @public
+export interface IdentityLogProof {
+    readonly anchoredRoot: string;
+    // (undocumented)
+    readonly index: number;
+    // (undocumented)
+    readonly layerSizes: number[];
+    // (undocumented)
+    readonly siblings: string[];
+    readonly tree_hash_version?: MerkleTreeVersion;
 }
 
 // @public (undocumented)

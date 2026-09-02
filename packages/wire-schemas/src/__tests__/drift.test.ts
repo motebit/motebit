@@ -47,6 +47,10 @@ import {
   buildAgentRevocationRecordJsonSchema,
   buildAgentRevocationFeedJsonSchema,
 } from "../agent-revocation.js";
+import {
+  IDENTITY_BINDING_BUNDLE_SCHEMA_ID,
+  buildIdentityBindingBundleJsonSchema,
+} from "../identity-binding.js";
 import { BOND_COMMITMENT_SCHEMA_ID, buildBondCommitmentJsonSchema } from "../bond.js";
 import {
   EVIDENCE_PROVENANCE_SCHEMA_ID,
@@ -744,6 +748,12 @@ const CASES: SchemaCase[] = [
     filename: "agent-revocation-feed-v1.json",
     expectedId: AGENT_REVOCATION_FEED_SCHEMA_ID,
     build: buildAgentRevocationFeedJsonSchema,
+  },
+  {
+    name: "identity-binding-bundle-v1",
+    filename: "identity-binding-bundle-v1.json",
+    expectedId: IDENTITY_BINDING_BUNDLE_SCHEMA_ID,
+    build: buildIdentityBindingBundleJsonSchema,
   },
   {
     name: "bond-commitment-v1",
