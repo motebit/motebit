@@ -44,6 +44,12 @@ const LAYER: Record<string, number> = {
   "@motebit/crypto": 0,
 
   // Layer 1 — Primitives (depend only on Layer 0)
+  // The published Apache-2.0 verification libraries: each depends only on
+  // `@motebit/protocol` + `@motebit/crypto` (both layer 0), so layer 1 is their
+  // measured layer, not a courtesy. Previously parked at 6 and unenforced (#544).
+  "@motebit/verifier": 1,
+  "@motebit/state-export-client": 1,
+  "create-motebit": 1,
   "@motebit/voice": 1,
   "@motebit/encryption": 1,
   "@motebit/gradient": 1,
@@ -82,6 +88,10 @@ const LAYER: Record<string, number> = {
   "@motebit/skills": 2,
 
   // Layer 3 — Lower composites (depend on Layer 0–2)
+  // The `motebit-verify` CLI aggregator: bundles the layer-2 platform
+  // attestation leaves on top of the layer-1 verifier. Layer 3 is the lowest
+  // layer that admits those deps (#544).
+  "@motebit/verify": 3,
   "@motebit/privacy-layer": 3,
   "@motebit/ai-core": 3,
   "@motebit/mcp-server": 3,
@@ -97,15 +107,44 @@ const LAYER: Record<string, number> = {
   "@motebit/browser-persistence": 5,
   "@motebit/panels": 5,
 
-  // Layer 6 — Applications (apps/*, services/*, create-motebit, molecule-runner, verifier)
-  "create-motebit": 6,
+  // Layer 6 — Application-tier libraries (packages that sit above the
+  // orchestrator but are still libraries, not apps).
   "@motebit/molecule-runner": 6,
-  "@motebit/verifier": 6,
-  "@motebit/verify": 6,
-  "@motebit/state-export-client": 6,
 };
 
-const APP_LAYER = 6;
+/**
+ * The application tier — `apps/*` and `services/*`, which may depend on any
+ * layer. Deliberately unenforced: an app IS the top of the DAG.
+ *
+ * It sits ABOVE the seven package layers (0–6) rather than being one of them.
+ * That distinction is the fix for #544. `APP_LAYER` used to be `6`, and both
+ * layer checks are written as `... && effectiveLayer !== APP_LAYER` — so every
+ * package EXPLICITLY mapped to 6 silently inherited the app tier's exemption
+ * and received zero layer enforcement. That bucket was not only apps: it held
+ * `@motebit/verifier`, `@motebit/verify` and `@motebit/state-export-client` —
+ * three PUBLISHED Apache-2.0 libraries, one of which (`verifier`) external
+ * consumers build against under the `check-api-surface` guarantee. An
+ * accidental `@motebit/runtime` production dependency added to `verifier` would
+ * not have been caught.
+ *
+ * The proof was already in the tree: `@motebit/verify` had production
+ * dependencies on `@motebit/verifier` and `@motebit/state-export-client`, all
+ * three at layer 6. A same-layer production dependency fails anywhere else in
+ * the DAG and is not on `SAME_LAYER_PROD_ALLOWED`; it passed only because the
+ * check never ran for these packages.
+ *
+ * Those three now carry their TRUE layers (measured from their actual
+ * dependencies, not asserted): `verifier` and `state-export-client` depend only
+ * on layer 0, so they are layer 1; `verify` depends on the layer-2 platform
+ * attestation adapters, so it is layer 3. `create-motebit` likewise needed only
+ * layer 1. `@motebit/molecule-runner` genuinely belongs at 6 (it depends on the
+ * layer-5 runtime) and is now ENFORCED there rather than exempt.
+ *
+ * Keeping this sentinel strictly above every package layer is what makes the
+ * "7 architectural layers" claim in README / architecture.mdx true: seven
+ * enforced package layers (0–6), with applications on top.
+ */
+const APP_LAYER = 7;
 
 // Permissive-floor packages (Apache-2.0 today) — must not import from BSL packages,
 // must export only types. The platform-attestation adapters sit on the permissive
@@ -427,12 +466,8 @@ function discoverPackages(): PkgInfo[] {
       result.push({
         name,
         dir: join(absBase, entry),
-        deps: Object.keys(allDeps ?? {}).filter(
-          (d) => d.startsWith("@motebit/") || d === "create-motebit",
-        ),
-        devDeps: Object.keys(allDevDeps ?? {}).filter(
-          (d) => d.startsWith("@motebit/") || d === "create-motebit",
-        ),
+        deps: Object.keys(allDeps ?? {}).filter(isWorkspacePkg),
+        devDeps: Object.keys(allDevDeps ?? {}).filter(isWorkspacePkg),
         exports: pkg.exports as Record<string, unknown> | undefined,
       });
     }
@@ -440,9 +475,28 @@ function discoverPackages(): PkgInfo[] {
   return result;
 }
 
-/** Extract @motebit/* package name from an import specifier. */
+/**
+ * Is this dependency name one of ours?
+ *
+ * The three workspace-visible shapes are the `@motebit/*` scope, the
+ * `create-motebit` scaffolder, and the bare `motebit` CLI (`apps/cli`,
+ * BUSL-1.1). The last one used to be missing here, which made it invisible to
+ * the cycle check, the layer check AND the permissive-purity check at once
+ * (#544) — `BUNDLED_PACKAGES` already knew the name, so this read as an
+ * oversight rather than a decision. `packages/create-motebit/package.json`
+ * carries `"motebit": "workspace:*"` in devDependencies: a permissive-floor
+ * package with a previously undetectable edge to a BSL one.
+ */
+function isWorkspacePkg(name: string): boolean {
+  return name.startsWith("@motebit/") || name === "create-motebit" || name === "motebit";
+}
+
+/** Extract the workspace package name from an import specifier. */
 function extractPkgName(specifier: string): string | null {
   if (specifier === "create-motebit") return "create-motebit";
+  // Exact name or a subpath import of the CLI — but never a merely
+  // name-prefixed third-party package such as `motebit-foo`.
+  if (specifier === "motebit" || specifier.startsWith("motebit/")) return "motebit";
   const m = /^(@motebit\/[^/]+)/.exec(specifier);
   return m ? m[1] : null;
 }
@@ -646,13 +700,46 @@ function checkInternalImports(packages: PkgInfo[]): void {
   }
 }
 
+/** Is this package filesystem-derived into the application tier? */
+function isAppDir(dir: string): boolean {
+  return dir.includes("/apps/") || dir.includes("/services/");
+}
+
+/**
+ * DEPENDENCY-side layer exceptions, `consumer->dependency`.
+ *
+ * `create-motebit` (permissive-floor scaffolder, layer 1) carries a
+ * `workspace:*` devDependency on the `motebit` CLI (application tier). It is
+ * unused by source today — no import in `src/`, no reference in any script, so
+ * tsup inlines nothing — and it long predates this gate being able to see the
+ * bare `motebit` name at all (#544). Recorded here as a decision rather than
+ * removed, because deleting a dependency from a PUBLISHED package's manifest is
+ * a release-affecting change and the deletion policy says a workspace dep is
+ * never removed on import analysis alone.
+ *
+ * The edge is bounded: `checkPermissivePurity` still fails on any real (non
+ * type-only) source import of `motebit` from this package, so allowlisting the
+ * manifest edge does not allowlist actually using it.
+ */
+const DEV_DEP_LAYER_ALLOWED = new Set(["create-motebit->motebit"]);
+
 // Check 3: Layer ordering
 function checkLayerOrdering(packages: PkgInfo[]): void {
+  // Resolve EVERY package to a layer, including the filesystem-derived
+  // application tier. Without this, `LAYER[dep]` is `undefined` for any app or
+  // service and the dependency is silently skipped — so a library depending on
+  // an APPLICATION, the most inverted edge possible, was never checked (#544).
+  const layerOfDep = new Map<string, number>();
+  for (const p of packages) {
+    const l = LAYER[p.name] ?? (isAppDir(p.dir) ? APP_LAYER : undefined);
+    if (l !== undefined) layerOfDep.set(p.name, l);
+  }
+
   for (const pkg of packages) {
     const pkgLayer = LAYER[pkg.name];
 
     // Apps and services are implicitly the application layer
-    const isApp = pkg.dir.includes("/apps/") || pkg.dir.includes("/services/");
+    const isApp = isAppDir(pkg.dir);
     const effectiveLayer = pkgLayer ?? (isApp ? APP_LAYER : undefined);
 
     if (effectiveLayer === undefined) {
@@ -667,7 +754,7 @@ function checkLayerOrdering(packages: PkgInfo[]): void {
     // Exception: same-layer re-export deps (sdk re-exports protocol, both Layer 0).
     const SAME_LAYER_PROD_ALLOWED = new Set(["@motebit/sdk->@motebit/protocol"]);
     for (const dep of pkg.deps) {
-      const depLayer = LAYER[dep];
+      const depLayer = layerOfDep.get(dep);
       if (depLayer === undefined) continue; // external or unregistered (caught above)
       if (depLayer >= effectiveLayer && effectiveLayer !== APP_LAYER) {
         const pair = `${pkg.name}->${dep}`;
@@ -682,8 +769,9 @@ function checkLayerOrdering(packages: PkgInfo[]): void {
 
     // Dev deps may be same layer or lower (not higher)
     for (const dep of pkg.devDeps) {
-      const depLayer = LAYER[dep];
+      const depLayer = layerOfDep.get(dep);
       if (depLayer === undefined) continue;
+      if (DEV_DEP_LAYER_ALLOWED.has(`${pkg.name}->${dep}`)) continue;
       if (depLayer > effectiveLayer && effectiveLayer !== APP_LAYER) {
         fail(
           "layer",
@@ -882,6 +970,31 @@ function checkNoLicenseInSource(packages: PkgInfo[]): void {
 function checkPermissivePurity(packages: PkgInfo[]): void {
   for (const pkg of packages) {
     if (!PERMISSIVE_PACKAGES.has(pkg.name)) continue;
+
+    // The DECLARED production dependencies, before any source is read.
+    //
+    // This check used to scan `src/` imports only (#544), so a permissive-floor
+    // package could declare a BSL production dependency and stay green for as
+    // long as nothing imported it — an edge that ships in the published
+    // package.json, is installed by every consumer, and is a licensing fact
+    // whether or not any line of code reaches for it. A manifest edge is a
+    // commitment; it does not need an import to be real.
+    //
+    // Production only: devDependencies are a build-time concern and are
+    // governed by the layer check (with `DEV_DEP_LAYER_ALLOWED` recording the
+    // one sanctioned exception), so checking them here would double-report the
+    // same edge under two different names.
+    for (const dep of pkg.deps) {
+      if (dep === pkg.name) continue;
+      if (!PERMISSIVE_IMPORT_ALLOWED.has(dep)) {
+        fail(
+          "permissive-purity",
+          `${pkg.name}/package.json — permissive-floor package "${pkg.name}" declares a production ` +
+            `dependency on BSL package "${dep}". A manifest edge ships to every consumer; ` +
+            `remove it or add "${dep}" to PERMISSIVE_IMPORT_ALLOWED in scripts/check-deps.ts.`,
+        );
+      }
+    }
 
     const srcDir = join(pkg.dir, "src");
     if (!existsSync(srcDir)) continue;
