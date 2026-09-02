@@ -52,6 +52,9 @@ motebit/
 │   ├── crypto/                [L0 · Apache-2.0]    Sign/verify every motebit artifact. Suite dispatcher.
 │   │
 │   │   # Layer 1 — Primitives
+│   ├── create-motebit/        [L1 · Apache-2.0]    Public scaffolder. npm create motebit.
+│   ├── verifier/              [L1 · Apache-2.0]    Library — verifyFile, verifyArtifact, formatHuman helpers over @motebit/crypto. Permissive-floor-pure; no bin.
+│   ├── state-export-client/   [L1 · Apache-2.0]    Browser-safe verifier for `X-Motebit-Content-Manifest` HTTP headers on relay state exports. Trust-on-first-use bootstrap from `/.well-known/motebit-transparency.json` produces a `TransparencyAnchor`; per-call `verifiedStateExportFetch` wraps `fetch` with manifest-against-bytes verification + optional producer-key pin; `verifyInnerSignedReceipts` recursively audits v1.1 execution-ledger `signed_receipts[]` entries against each delegate motebit's own embedded key. Sibling of `motebit/verify` (CLI for files on disk); same crypto primitives, different consumer surface. Drift-locked by `check-state-export-consumer-verifies` (#87) + `check-execution-ledger-inner-receipt-verified` (#90).
 │   ├── voice/                 [L1]          VAD, STT, TTS adapters (provider-judgment; no protocol-level surface).
 │   ├── encryption/            [L1]          AES-256-GCM, PBKDF2, sync keys, deletion certs.
 │   ├── gradient/              [L1]          "What am I?" — narrative from gradient snapshots.
@@ -90,6 +93,7 @@ motebit/
 │   ├── identity-file/         [L2]          Generate/parse/verify motebit.md.
 │   │
 │   │   # Layer 3 — Lower composites
+│   ├── verify/                [L3 · Apache-2.0]    Canonical `motebit-verify` CLI — aggregates the canonical Apache-2.0 platform leaves (App Attest, Android Keystore, TPM, WebAuthn; plus deprecated Play Integrity for one minor cycle) with motebit-canonical defaults (bundle IDs, RP ID, integrity floor) for one-install offline verification. The defaults are overridable flags, not proprietary judgment — the permissive-floor line stays here.
 │   ├── privacy-layer/         [L3]          Retention rules, deletion certificates, export.
 │   ├── ai-core/               [L3]          Pluggable providers, agentic turn loop, context packing.
 │   ├── mcp-server/            [L3]          MCP server adapter, bearer auth, signed receipts.
@@ -105,12 +109,8 @@ motebit/
 │   ├── browser-persistence/   [L5]          IndexedDB adapters for web and spatial.
 │   ├── panels/                [L5]          Surface-agnostic panel controllers (Sovereign today). State + actions; render per surface.
 │   │
-│   │   # Layer 6 — Applications
-│   ├── create-motebit/        [L6 · Apache-2.0]    Public scaffolder. npm create motebit.
+│   │   # Layer 6 — Application-tier libraries (above the orchestrator; apps/services sit above this)
 │   ├── molecule-runner/       [L6]          Shared boot kernel for molecule/atom services — composes runtime + persistence + mcp-server + tools behind one `runMolecule` call.
-│   ├── verifier/              [L6 · Apache-2.0]    Library — verifyFile, verifyArtifact, formatHuman helpers over @motebit/crypto. Permissive-floor-pure; no bin.
-│   ├── verify/                [L6 · Apache-2.0]    Canonical `motebit-verify` CLI — aggregates the canonical Apache-2.0 platform leaves (App Attest, Android Keystore, TPM, WebAuthn; plus deprecated Play Integrity for one minor cycle) with motebit-canonical defaults (bundle IDs, RP ID, integrity floor) for one-install offline verification. The defaults are overridable flags, not proprietary judgment — the permissive-floor line stays here.
-│   ├── state-export-client/   [L6 · Apache-2.0]    Browser-safe verifier for `X-Motebit-Content-Manifest` HTTP headers on relay state exports. Trust-on-first-use bootstrap from `/.well-known/motebit-transparency.json` produces a `TransparencyAnchor`; per-call `verifiedStateExportFetch` wraps `fetch` with manifest-against-bytes verification + optional producer-key pin; `verifyInnerSignedReceipts` recursively audits v1.1 execution-ledger `signed_receipts[]` entries against each delegate motebit's own embedded key. Sibling of `motebit/verify` (CLI for files on disk); same crypto primitives, different consumer surface. Drift-locked by `check-state-export-consumer-verifies` (#87) + `check-execution-ledger-inner-receipt-verified` (#90).
 │   │
 │   │   # Standalone — outside the layer DAG
 │   └── github-action/         [—]           GitHub Action for identity verification in CI.
@@ -175,7 +175,7 @@ motebit/
 
 ## Layer rule
 
-Layer N may depend on layers `0..N-1` in production and `0..N` in devDependencies. Apps and services live at L6 and may depend on any layer. The canonical source of truth is the `LAYER` map in `scripts/check-deps.ts`; the tree above mirrors it. `github-action` is a standalone build artifact for the GitHub Actions runtime and sits outside the DAG.
+Layer N may depend on layers `0..N-1` in production and `0..N` in devDependencies. Apps and services sit in the **application tier above** the seven package layers (`L0`–`L6`) and may depend on any layer — deliberately unenforced, because an app IS the top of the DAG. That tier is deliberately not one of the seven: while it shared the number `6`, every package explicitly mapped to L6 silently inherited the app tier's exemption and got no layer enforcement at all (#544). The canonical source of truth is the `LAYER` map in `scripts/check-deps.ts`; the tree above mirrors it. `github-action` is a standalone build artifact for the GitHub Actions runtime and sits outside the DAG.
 
 ## Permissive / BSL boundary
 
@@ -190,10 +190,10 @@ Layer N may depend on layers `0..N-1` in production and `0..N` in devDependencie
 | `@motebit/crypto-android-keystore`              | How is an Android Keystore Attestation chain verified?             | L2    |
 | `@motebit/crypto-tpm`                           | How is a TPM 2.0 quote verified?                                   | L2    |
 | `@motebit/crypto-webauthn`                      | How is a WebAuthn packed attestation verified?                     | L2    |
-| `@motebit/verifier`                             | How does a third party compose offline verification?               | L6    |
-| `@motebit/verify`                               | How does a one-install CLI verify any motebit artifact end-to-end? | L6    |
-| `@motebit/state-export-client`                  | How does a browser consumer verify a relay's signed state export?  | L6    |
-| `create-motebit`                                | How does a third party scaffold against the protocol?              | L6    |
+| `@motebit/verifier`                             | How does a third party compose offline verification?               | L1    |
+| `@motebit/verify`                               | How does a one-install CLI verify any motebit artifact end-to-end? | L3    |
+| `@motebit/state-export-client`                  | How does a browser consumer verify a relay's signed state export?  | L1    |
+| `create-motebit`                                | How does a third party scaffold against the protocol?              | L1    |
 
 The four canonical `crypto-*` platform leaves (`crypto-appattest`, `crypto-android-keystore`, `crypto-tpm`, `crypto-webauthn`) verify against each platform's published public trust anchor (Apple App Attest root, Google Hardware Attestation roots, TPM vendor roots, FIDO roots) — no motebit-specific judgment. `@motebit/verify` aggregates them with motebit-canonical defaults (bundle IDs, RP ID) into one install, but the defaults are overridable flags, not proprietary judgment — the permissive-floor line stays at the aggregator. The BSL line holds at `motebit` (the operator console) and everything below it: daemon, MCP server, delegation routing, market integration, federation wiring — the actual reference-implementation judgment.
 

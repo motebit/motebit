@@ -8,8 +8,8 @@ Closes the consumer side of the doctrine §8 self-attesting loop. The producer s
 
 ```
 @motebit/crypto                  Apache-2.0  L0  Primitives — verifyContentArtifact, suite-dispatch, canonical-JSON
-@motebit/state-export-client     Apache-2.0  L6  This package — browser-safe wrapper around fetch + TOFU bootstrap
-@motebit/verify                  Apache-2.0  L6  CLI `motebit-verify` (includes the `content-artifact` subcommand)
+@motebit/state-export-client     Apache-2.0  L1  This package — browser-safe wrapper around fetch + TOFU bootstrap
+@motebit/verify                  Apache-2.0  L3  CLI `motebit-verify` (includes the `content-artifact` subcommand)
 ```
 
 `@motebit/verify` and `@motebit/state-export-client` are siblings, not stacked: the CLI handles offline file-on-disk verification, this package handles in-browser response-from-fetch verification. Both consume `verifyContentArtifact` from `@motebit/crypto`; neither holds new crypto. The split keeps Node-only CLI helpers (file I/O, argv parsing) out of the browser bundle, and keeps browser-only fetch wrapping out of the CLI's surface.
