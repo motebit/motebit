@@ -1510,11 +1510,67 @@ describe("research — report shape guard (#504)", () => {
     expect(result.report).toBe(NOTES);
   });
 
-  it("a thin original is delivered when the retry is no better", async () => {
+  it("escalates to a final strict attempt when the retry is no better, and that attempt can save it", async () => {
+    // The measured dead end: over the scheduled conformance history, the red
+    // runs were always a readable answer with no `Findings` heading whose retry
+    // came back readable and still shapeless. The old code gave up here; one
+    // more attempt with a literal-template instruction gets the shape.
     const adapters = fetchFlowThen(NOTES);
-    mockCreate.mockResolvedValueOnce({
-      content: [{ type: "text", text: "Different notes, still not a report." }],
-    });
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [{ type: "text", text: "Different notes, still not a report." }],
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: SHAPED_REPORT }] });
+
+    const result = await run(adapters);
+    expect(result.report).toBe(SHAPED_REPORT);
+    expect(mockCreate).toHaveBeenCalledTimes(4);
+
+    // The escalation must SHOW the headings, not describe them — `hasSection`
+    // matches literal headings, so a parenthetical aside is what failed before.
+    const strictParams = mockCreate.mock.calls[3]![0] as {
+      tools?: unknown;
+      messages: Array<{ role: string; content: unknown }>;
+    };
+    expect(strictParams.tools).toBeUndefined();
+    const sent = String(strictParams.messages[strictParams.messages.length - 1]!.content);
+    expect(sent).toContain("## Findings");
+    expect(sent).toContain("## Sources");
+    expect(sent).toContain("final attempt");
+  });
+
+  it("delivers the thin original when the strict attempt is no better either", async () => {
+    // Bounded at two. A model that will not produce the shape must not spend
+    // the buyer's turn forever, and the paid non-empty artifact is still theirs.
+    const adapters = fetchFlowThen(NOTES);
+    mockCreate
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Still notes." }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Yet more notes." }] });
+
+    const result = await run(adapters);
+    expect(result.report).toBe(NOTES);
+    expect(mockCreate).toHaveBeenCalledTimes(4);
+  });
+
+  it("delivers an improved-but-imperfect strict attempt, residual issues logged", async () => {
+    // Partial credit is still progress: both sections present but under the
+    // floor is 1 issue against the original's 3, so the buyer gets the better
+    // artifact rather than the notes-dump.
+    const adapters = fetchFlowThen(NOTES);
+    const partial = "**Findings**\nYes.\n**Sources**\n[1] x — https://x.example";
+    mockCreate
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Still notes." }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: partial }] });
+
+    const result = await run(adapters);
+    expect(result.report).toBe(partial);
+  });
+
+  it("delivers the thin original when the strict attempt comes back empty", async () => {
+    const adapters = fetchFlowThen(NOTES);
+    mockCreate
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Still notes." }] })
+      .mockResolvedValueOnce({ content: [] });
 
     const result = await run(adapters);
     expect(result.report).toBe(NOTES);

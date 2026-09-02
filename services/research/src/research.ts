@@ -444,6 +444,29 @@ async function ensureReport(params: {
     ? "Your previous reply contained no report text."
     : `Your previous reply is not a finished report (${issues.map((i) => i.detail).join("; ")}).`;
 
+  /**
+   * The re-synthesis instruction.
+   *
+   * The original named the format as a parenthetical aside — "(Question /
+   * Findings with inline [N] citations / Sources)" — which a model can read as
+   * prose guidance rather than a literal requirement. Measured over the
+   * scheduled conformance history (8 runs that reached the shape check, 2 red),
+   * the failing mode was always the same: a readable 1600-char answer with no
+   * `Findings` heading and no `Sources` list, where the retry ran and did not
+   * add them. `hasSection` matches literal headings, so the instruction now
+   * SHOWS the headings instead of describing them.
+   *
+   * `strict` is the escalation used only after a retry produced no improvement
+   * at all — the observed dead end, where the previous code simply gave up.
+   */
+  const instruction = (strict: boolean): string =>
+    `${deficiency} Write the complete report NOW from the sources you already gathered. ` +
+    `Do not call any tools.${strict ? " This is your final attempt — output the report and nothing else." : ""}\n\n` +
+    `Your reply MUST contain these literal section headings, in this order:\n\n` +
+    `## Question\n<restate the question in one line>\n\n` +
+    `## Findings\n<the substantive answer, with inline [N] citations>\n\n` +
+    `## Sources\n[1] <title> — <url>\n`;
+
   const retry = await params.client.messages.create({
     model: "claude-sonnet-4-6",
     max_tokens: 4096,
@@ -457,7 +480,7 @@ async function ensureReport(params: {
         : []),
       {
         role: "user" as const,
-        content: `${deficiency} Write the complete report NOW from the sources you already gathered, following the report format (Question / Findings with inline [N] citations / Sources). Do not call any tools.`,
+        content: instruction(false),
       },
     ],
   });
@@ -480,8 +503,46 @@ async function ensureReport(params: {
 
   const retriedIssues = reportShapeIssues(retried, { sourcesRead: sourcesReadFor(retried) });
   if (retriedIssues.length >= issues.length && !wasEmpty) {
+    // The observed dead end: the retry came back readable but still shapeless.
+    // Previously this gave up here. One more attempt, with the strict framing —
+    // bounded at two, and only on this branch, so the improved-but-imperfect
+    // and regressed-to-empty paths are untouched.
     console.log(
-      `[research] report shape: retry did not improve (${retriedIssues.map((i) => i.code).join(",")} vs ${issues.map((i) => i.code).join(",")}), delivering original`,
+      `[research] report shape: retry did not improve (${retriedIssues.map((i) => i.code).join(",")} vs ${issues.map((i) => i.code).join(",")}), escalating to a final strict attempt`,
+    );
+    const final = await params.client.messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 4096,
+      system: SYSTEM_PROMPT,
+      messages: [
+        ...params.messages,
+        { role: "assistant" as const, content: params.lastContent },
+        { role: "user" as const, content: instruction(true) },
+      ],
+    });
+    params.addUsage(final);
+    // NOTE on the assistant turn above: no `lastContent.length > 0` guard is
+    // needed here (unlike the first retry). Empty content yields empty text,
+    // which sets `wasEmpty`, and this escalation only runs when `!wasEmpty` —
+    // so `lastContent` is non-empty by construction on this path. Guarding it
+    // anyway would be an unreachable branch, which the 100% coverage floor
+    // correctly refuses to accept as untested.
+    const finalText = responseText(final.content);
+    if (finalText.trim() === "") {
+      console.log(`[research] report shape: strict attempt came back empty, delivering original`);
+      return params.report;
+    }
+    const finalIssues = reportShapeIssues(finalText, { sourcesRead: sourcesReadFor(finalText) });
+    if (finalIssues.length < issues.length) {
+      if (finalIssues.length > 0) {
+        console.log(
+          `[research] report shape: delivering strict attempt with residual issues [${finalIssues.map((i) => i.code).join(",")}]`,
+        );
+      }
+      return finalText;
+    }
+    console.log(
+      `[research] report shape: strict attempt did not improve either (${finalIssues.map((i) => i.code).join(",")}), delivering original`,
     );
     return params.report;
   }
