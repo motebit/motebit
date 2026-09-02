@@ -12,7 +12,11 @@
  * MCP server wiring) to `@motebit/molecule-runner`.
  */
 
-import { buildServiceReceipt, runMolecule } from "@motebit/molecule-runner";
+import {
+  buildServiceReceipt,
+  runMolecule,
+  createProviderReadiness,
+} from "@motebit/molecule-runner";
 import type { ExecutionReceipt } from "@motebit/molecule-runner";
 import { InMemoryToolRegistry } from "@motebit/tools";
 import type { ToolDefinition, ToolHandler } from "@motebit/tools";
@@ -91,6 +95,29 @@ async function main(): Promise<void> {
   // 8-tool-call cap) — the per-report cost_estimate_usd log is the tuning
   // signal before any prod price change.
   const unitCost = parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.25");
+
+  // Readiness: detected passively from real task failures (free), recovered
+  // actively by the cheapest possible provider round-trip — one token, and only
+  // while already dark, since no tasks arrive to prove recovery on their own.
+  const readiness = createProviderReadiness({
+    probe: async () => {
+      const resp = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": config.anthropicApiKey ?? "",
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 1,
+          messages: [{ role: "user", content: "." }],
+        }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      return resp.ok;
+    },
+  });
 
   await runMolecule(
     {
@@ -219,6 +246,8 @@ async function main(): Promise<void> {
           log(
             `research complete: ${r.report.length} chars, ${r.recall_self_count} interior, ${r.search_count} searches, ${r.fetch_count} fetches, ${r.citations.length} citations, report_cost_estimate_usd=${r.cost_estimate_usd.toFixed(4)}`,
           );
+          // A completed research turn is the strongest readiness evidence there is.
+          readiness.recordSuccess();
           delegationReceipts = r.delegation_receipts as unknown as Record<string, unknown>[];
           // The wire payload now carries the citation list. Interior
           // citations are self-attested (no receipt_task_id); web
@@ -258,6 +287,10 @@ async function main(): Promise<void> {
           // whoever thought to fetch the stored receipt off the relay. An
           // honest failure must be as loud in the log as an honest success.
           log(`research FAILED: ${msg}`);
+          // Feed the real failure to the readiness tracker. A durable operator
+          // condition (exhausted credit, revoked key) stops this agent
+          // advertising rather than letting it keep selling refusals (#610).
+          readiness.recordFailure(msg);
           result = { ok: false, error: msg };
         }
 
@@ -291,6 +324,7 @@ async function main(): Promise<void> {
       return {
         toolRegistry: registry,
         handleAgentTask,
+        checkReadiness: () => readiness.check(),
         getServiceListing: () =>
           Promise.resolve({
             capabilities: ["research"],

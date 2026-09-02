@@ -64,6 +64,8 @@ import type { ToolRegistry } from "@motebit/tools";
 // Re-export the receipt builder so molecule authors don't reach into
 // `@motebit/mcp-server` for this one helper — runner is the single
 // service-facing import.
+export { createProviderReadiness, classifyProviderFailure } from "./readiness.js";
+export type { ProviderReadiness, ReadinessVerdict } from "./readiness.js";
 export { buildServiceReceipt } from "@motebit/mcp-server";
 export type { BuildServiceReceiptInput } from "@motebit/mcp-server";
 export type { ServiceHandle } from "@motebit/mcp-server";
@@ -113,6 +115,14 @@ export interface MoleculeBuild {
    * SLA; no pricing).
    */
   getServiceListing?: ServiceServerDepsSliceListing;
+
+  /**
+   * Optional readiness probe. When it answers `ready: false`, the service
+   * withholds its relay heartbeat so discovery freshness decays instead of
+   * advertising work the agent cannot currently perform (#610). Build one with
+   * `createProviderReadiness`. Omitted ⇒ today's behavior (always advertise).
+   */
+  checkReadiness?: () => Promise<{ ready: boolean; reason?: string }>;
 
   /**
    * Custom REST routes handled before MCP auth. Used by web-search for
@@ -690,6 +700,9 @@ export async function runMolecule(
   const deps = wireServerDeps(runtime as unknown as ServiceRuntime, wireOpts);
   if (molecule.getServiceListing) {
     deps.getServiceListing = molecule.getServiceListing;
+  }
+  if (molecule.checkReadiness) {
+    deps.checkReadiness = molecule.checkReadiness;
   }
 
   // 6. Start server

@@ -14,7 +14,11 @@
  * prompt.
  */
 
-import { buildServiceReceipt, runMolecule } from "@motebit/molecule-runner";
+import {
+  buildServiceReceipt,
+  runMolecule,
+  createProviderReadiness,
+} from "@motebit/molecule-runner";
 import type { ExecutionReceipt } from "@motebit/molecule-runner";
 import { InMemoryToolRegistry } from "@motebit/tools";
 import type { ToolDefinition, ToolHandler } from "@motebit/tools";
@@ -85,6 +89,28 @@ async function main(): Promise<void> {
     console.error("ANTHROPIC_API_KEY is required for the code review service.");
     process.exit(1);
   }
+  // Readiness: passive detection from real failures, active recovery probe used
+  // only while already dark (see @motebit/molecule-runner readiness.ts).
+  const readiness = createProviderReadiness({
+    probe: async () => {
+      const resp = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": config.anthropicApiKey ?? "",
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 1,
+          messages: [{ role: "user", content: "." }],
+        }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      return resp.ok;
+    },
+  });
+
   if (!config.readUrlUrl) {
     console.error(
       "MOTEBIT_READ_URL_URL is required — code-review delegates PR fetching to the read-url atom.",
@@ -155,6 +181,7 @@ async function main(): Promise<void> {
             log(
               `PR ${prRef.owner}/${prRef.repo}#${prRef.number}: "${r.pr.title}" — ${r.review.length} chars, ${r.delegation_receipts.length} receipts`,
             );
+            readiness.recordSuccess();
             delegationReceipts = r.delegation_receipts;
             result = { ok: true, data: r.review };
           } catch (err: unknown) {
@@ -163,6 +190,9 @@ async function main(): Promise<void> {
             // otherwise a dead service reads as a quiet one. See the research
             // service for the six-night staging outage this silence hid.
             log(`code_review FAILED: ${msg}`);
+            // Durable provider conditions stop this agent advertising rather
+            // than letting it keep selling refusals (#610).
+            readiness.recordFailure(msg);
             result = { ok: false, error: msg };
           }
         }
@@ -197,6 +227,7 @@ async function main(): Promise<void> {
       return {
         toolRegistry: registry,
         handleAgentTask,
+        checkReadiness: () => readiness.check(),
         getServiceListing: () =>
           Promise.resolve({
             capabilities: ["review_pr"],
