@@ -42,6 +42,18 @@ module.exports = {
     // Disabled: eslint-plugin-import@2.32.0 crashes with minimatch 10.x
     // (minimatch removed default export, plugin uses _minimatch2.default)
     // Re-enable after upgrading to eslint-plugin-import@2.33+ or pinning minimatch@9
+    //
+    // REVIEW BY 2026-12-01 — re-measured 2026-09-02 (#546): still blocked
+    // UPSTREAM, not neglected. `npm view eslint-plugin-import versions` shows
+    // 2.32.0 IS the latest published release (no 2.33 exists), and the installed
+    // minimatch is 10.2.4, so the written condition cannot be met yet.
+    //
+    // This was the only undated perishable decision in a repo whose whole
+    // discipline is dated commitments (MODEL_DEFAULT_REVIEW_BY, target_date), so
+    // it would have rotted silently. Dated now. On review: re-run the two-line
+    // measurement above before doing any work — the graduation post-mortem's
+    // lesson is that stale entries rot in the SAFE direction, and the condition
+    // may simply have become true.
     "import/no-extraneous-dependencies": "off",
     "import/no-relative-packages": "error",
     "no-restricted-imports": [
