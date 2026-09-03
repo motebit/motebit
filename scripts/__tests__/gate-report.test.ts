@@ -9,7 +9,12 @@
  */
 import { describe, it, expect } from "vitest";
 
-import { hasRepairInstruction, failWithRepair, formatRepair } from "../lib/gate-report.ts";
+import {
+  hasApertureDisclosure,
+  hasRepairInstruction,
+  failWithRepair,
+  formatRepair,
+} from "../lib/gate-report.ts";
 
 describe("hasRepairInstruction — rejects bare output", () => {
   const bare: Array<[string, string]> = [
@@ -91,5 +96,56 @@ describe("failWithRepair / formatRepair — emit contract-satisfying output", ()
     // Type-level guarantee — the signature is `never`; we don't invoke it here
     // (it calls process.exit). Presence + shape is asserted via formatRepair above.
     expect(typeof failWithRepair).toBe("function");
+  });
+});
+
+describe("hasApertureDisclosure — what a PASSING scanning gate owes its reader", () => {
+  // The inverse surface to the repair contract. A green gate's claim is only as
+  // wide as the set it examined, and aperture drift is invisible by
+  // construction: a narrow gate never goes red, so nothing prompts a check.
+  // check-affordance-routing scanned 57 of 322 app files while printing
+  // "9 apps clean" (#545).
+
+  it.each([
+    "Affordance routing check passed — 322 file(s) scanned across 9 apps",
+    "Wire-schema usage check passed — 14 required pair(s) validated, 0 waived",
+    "✓ 17 `/api/v1/admin/*` route(s) covered by 15 bearerAuth pattern(s)",
+    "check-spec-permissive-boundary: OK (943 permissive-floor exports, 10 waivers)",
+    "✓ check-cli-surface: 36 subcommand(s), 63 flag(s), 4 exit code(s)",
+    "✓ check-docs-cli-claims: 108 doc(s) scanned",
+  ])("accepts a stated count: %j", (output) => {
+    expect(hasApertureDisclosure(output).ok).toBe(true);
+  });
+
+  it("accepts ZERO — an honest and alarming statement", () => {
+    // What the contract forbids is silence, not emptiness. "0 files scanned" is
+    // exactly the disclosure that would have surfaced #545 years earlier.
+    expect(hasApertureDisclosure("check passed — 0 file(s) scanned").ok).toBe(true);
+  });
+
+  it.each([
+    "✓ check-solana-treasury-reconciliation",
+    "✓ check-liquescent-ontology — no glass-as-ontology drift found",
+    "All architectural checks passed.",
+    "Deploy parity check passed — fly.toml ↔ deploy workflow all aligned",
+  ])("rejects silence about scope: %j", (output) => {
+    expect(hasApertureDisclosure(output).ok).toBe(false);
+  });
+
+  it("does NOT count a duration as an aperture", () => {
+    // Nearly every gate prints a timing, and "738ms" is a number beside a word
+    // ending in `s`. Matching it would make the contract vacuous by passing any
+    // gate that reports how long it took — the exact false-green this exists to
+    // prevent, reintroduced through the back door.
+    expect(hasApertureDisclosure("✓ motebit exit 0 738ms").ok).toBe(false);
+    expect(hasApertureDisclosure("done in 1200ms").ok).toBe(false);
+    expect(hasApertureDisclosure("completed in 45 seconds").ok).toBe(false);
+  });
+
+  it("explains what is missing, so the fix is self-serviceable", () => {
+    const r = hasApertureDisclosure("check passed");
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain("examined nothing");
+    expect(r.reason).toMatch(/scanned|checked/);
   });
 });
