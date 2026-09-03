@@ -102,6 +102,15 @@ export function defineMotebitTest(opts: MotebitVitestOptions): ViteUserConfig {
         include: coverageInclude ?? BASE_COVERAGE_INCLUDE,
         exclude: [...BASE_COVERAGE_EXCLUDE, ...coverageExclude],
         thresholds,
+        // vitest's own defaults plus `json-summary`, which writes
+        // `coverage/coverage-summary.json` — the machine-readable totals that
+        // `scripts/measure-coverage-slack.ts` compares against the declared
+        // floors. Deliberately vitest's numbers rather than arithmetic of our
+        // own over `coverage-final.json`: these are the exact figures the
+        // thresholds are checked against, so a slack report can never disagree
+        // with the gate that enforces them. The four defaults are re-listed
+        // because naming `reporter` replaces the list rather than extending it.
+        reporter: ["text", "html", "clover", "json", "json-summary"],
       },
     },
   });
