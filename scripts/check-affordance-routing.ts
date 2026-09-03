@@ -46,7 +46,27 @@ const APPS = [
   "spatial",
   "web",
 ];
-const UI_SUBDIRS = ["ui", "commands"];
+/**
+ * The gate scans EVERY app source file, not a hand-listed set of UI
+ * subdirectories.
+ *
+ * It previously scanned `["ui", "commands"]` only, and the aperture was the
+ * whole problem: of nine apps, six scanned ZERO files, and the CLI — the lead
+ * surface — scanned exactly one, because `commands/` holds a single file while
+ * its 36 real subcommands live in `subcommands/`. Mobile's affordances are in
+ * `components/`, spatial's are flat in `src/`, inspector's and operator's in
+ * `components/`. 57 of 322 app source files were looked at: 18%.
+ *
+ * A gate enforcing surface determinism — a core CLAUDE.md invariant — was blind
+ * to four of the five surfaces it names, and still printed "9 apps clean".
+ *
+ * A hardcoded subdirectory list is a moving target: it encodes today's layout
+ * and silently narrows every time a surface grows a directory. Walking all of
+ * `src/` (minus tests) cannot drift — a new directory is covered the moment it
+ * exists. That is the same reason `check-panel-controllers` scans `ui/` OR
+ * `components/`, generalized one step further.
+ */
+const TEST_DIR_SEGMENTS = ["__tests__", "e2e", "__mocks__"];
 
 const FIXTURE_DIR = resolve(__dirname, "__tests__", "affordance-routing-fixture");
 
@@ -160,13 +180,72 @@ function main(): void {
   }
 
   const all: Violation[] = [];
+  /** Files actually scanned per app — the aperture, reported with the verdict. */
+  const scanned = new Map<string, number>();
   for (const app of APPS) {
-    const dirs = UI_SUBDIRS.map((sd) => resolve(ROOT, "apps", app, "src", sd));
-    all.push(...scanDirs(dirs, app));
+    const srcDir = resolve(ROOT, "apps", app, "src");
+    const files = [...walkTypeScript(srcDir)].filter(
+      (f) => !TEST_DIR_SEGMENTS.some((seg) => f.includes(`/${seg}/`)),
+    );
+    scanned.set(app, files.length);
+    for (const file of files) all.push(...scanFile(app, file));
   }
 
+  // Report the APERTURE alongside the verdict. "Clean" and "scanned nothing"
+  // are different claims, and the previous message conflated them — it printed
+  // "9 apps clean" while six of those apps had zero files in scope. An app with
+  // no files scanned is named explicitly rather than counted as passing.
+  const blind = APPS.filter((a) => (scanned.get(a) ?? 0) === 0);
+  const totalFiles = [...scanned.values()].reduce((a, b) => a + b, 0);
+
+  // Structural signal the pattern-matcher CANNOT reach.
+  //
+  // This gate detects a NARROW anti-pattern: an AI-loop call whose arguments
+  // carry capability-routing signals. A surface that routes every affordance
+  // through ordinary prose prompts matches nothing and passes silently — so
+  // "0 violations" means "no prompt-constructed capability routing found", not
+  // "all affordances are deterministic". Widening the aperture (57 → 322 files)
+  // proved the repo clean of the narrow pattern and, in the same run, proved the
+  // detector blind to the broad one.
+  //
+  // What IS checkable: a surface that drives the AI loop while never calling
+  // `invokeCapability` has no deterministic path at all. That is not
+  // automatically a violation — a chat-only surface legitimately has no
+  // capability affordances — so it is reported, never failed. Deciding which of
+  // its affordances owe a capability is design work, not pattern-matching.
+  const noDeterministicPath = APPS.filter((app) => {
+    const dir = resolve(ROOT, "apps", app, "src");
+    let aiLoop = 0;
+    let capability = 0;
+    for (const file of walkTypeScript(dir)) {
+      if (TEST_DIR_SEGMENTS.some((seg) => file.includes(`/${seg}/`))) continue;
+      const src = readFileSync(file, "utf-8");
+      if (AI_LOOP_CALLS.test(src)) aiLoop++;
+      if (/\binvokeCapability\s*\(/.test(src)) capability++;
+    }
+    return aiLoop > 0 && capability === 0;
+  });
+
   if (all.length === 0) {
-    console.log(`Affordance routing check passed — ${APPS.length} apps clean (${APPS.join(", ")})`);
+    console.log(
+      `Affordance routing check passed — ${totalFiles} file(s) scanned across ${APPS.length} apps`,
+    );
+    if (blind.length > 0) {
+      console.log(
+        `  NOTE: ${blind.length} app(s) had no source files in scope and were therefore ` +
+          `not assessed, not proven clean: ${blind.join(", ")}`,
+      );
+    }
+    if (noDeterministicPath.length > 0) {
+      console.log(
+        `  NOTE: ${noDeterministicPath.length} surface(s) drive the AI loop but never call ` +
+          `\`invokeCapability\` — no deterministic affordance path exists there at all: ` +
+          `${noDeterministicPath.join(", ")}.\n` +
+          `        Not a failure (a chat-only surface legitimately has none), and not ` +
+          `something this gate's\n        pattern-matcher can adjudicate — but it is where ` +
+          `surface-determinism is least likely to hold.\n        Tracked as #545 finding 4.`,
+      );
+    }
     return;
   }
 
