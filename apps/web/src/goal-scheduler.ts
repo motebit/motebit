@@ -86,6 +86,36 @@ export function createWebGoalsScheduler(app: UnbootedWebApp): GoalsEngine {
       // ~30s, not a full cadence.
       if (app.isProcessing) return { outcome: "skipped" };
 
+      /**
+       * Emit `goal_executed` (spec §5.2) for this fire.
+       *
+       * Web was the only surface that never emitted it — the CLI and desktop
+       * schedulers both do (`apps/cli/src/scheduler.ts`), so the execution
+       * ledger was silently surface-dependent: the same goal firing on the same
+       * identity produced a ledger entry on one surface and nothing on another.
+       * That is a Ring-1 divergence (identical capability everywhere), and it is
+       * the prerequisite #594 Inc 3b names for per-fire ledger rows — you cannot
+       * render rows per fire while one surface emits no fires.
+       *
+       * `error` distinguishes the failure variant; the counters are optional and
+       * omitted rather than guessed when a path cannot produce them (the
+       * plan-decomposition path has no per-tool chunk to count). Fire-and-forget
+       * with a swallowed rejection, exactly as the CLI does: a ledger emission
+       * must never take down the goal run that produced it.
+       */
+      const emitExecuted = (payload: {
+        summary?: string;
+        tool_calls?: number;
+        memories?: number;
+        error?: string;
+      }): void => {
+        const rt = app.getRuntime();
+        if (rt == null) return; // identity not loaded — no ledger to write to
+        void rt.goals.executed({ goal_id: goal.goal_id, ...payload }).catch(() => {
+          /* emission is best-effort; the goal outcome is already decided */
+        });
+      };
+
       if (goal.mode === "once") {
         // Once goals use plan-decomposition execution. Web's Goals panel
         // is the only surface that creates these. Plan-mode chunks don't
@@ -120,9 +150,15 @@ export function createWebGoalsScheduler(app: UnbootedWebApp): GoalsEngine {
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
+          emitExecuted({ error: msg });
           return { outcome: "error", error: msg };
         }
-        if (failed) return { outcome: "error", error: failureReason ?? "plan failed" };
+        if (failed) {
+          const reason = failureReason ?? "plan failed";
+          emitExecuted({ error: reason });
+          return { outcome: "error", error: reason };
+        }
+        emitExecuted({ summary: summary.trim().slice(0, 200) });
         return {
           outcome: "fired",
           responsePreview: summary.trim().slice(0, 160) || null,
@@ -154,6 +190,11 @@ export function createWebGoalsScheduler(app: UnbootedWebApp): GoalsEngine {
       const runId = crypto.randomUUID();
       let accumulated = "";
       let tokensUsed: number | undefined;
+      // Counted the same way the CLI counts them, so the ledger means the same
+      // thing on every surface: `tool_calls` is calls INITIATED (one per
+      // `tool_status: "calling"` chunk), not calls that succeeded.
+      let toolCallsMade = 0;
+      let memoriesFormed: number | undefined;
       try {
         for await (const chunk of app.sendMessageStreaming(goal.prompt, runId, {
           suppressHistory: true,
@@ -161,8 +202,12 @@ export function createWebGoalsScheduler(app: UnbootedWebApp): GoalsEngine {
         })) {
           onChunk?.(chunk);
           if (chunk.type === "text") accumulated += chunk.text;
-          else if (chunk.type === "result" && typeof chunk.result.totalTokens === "number") {
-            tokensUsed = chunk.result.totalTokens;
+          else if (chunk.type === "tool_status" && chunk.status === "calling") toolCallsMade++;
+          else if (chunk.type === "result") {
+            if (typeof chunk.result.totalTokens === "number") {
+              tokensUsed = chunk.result.totalTokens;
+            }
+            memoriesFormed = chunk.result.memoriesFormed.length;
           }
         }
       } catch (err) {
@@ -171,6 +216,7 @@ export function createWebGoalsScheduler(app: UnbootedWebApp): GoalsEngine {
         // outlive the artifact it attested.
         writeJson(`${ARTIFACT_MANIFEST_PREFIX}${goal.goal_id}`, null);
         const msg = err instanceof Error ? err.message : String(err);
+        emitExecuted({ error: msg });
         return { outcome: "error", error: msg, ...(tokensUsed != null ? { tokensUsed } : {}) };
       }
       const trimmed = accumulated.trim();
@@ -205,6 +251,12 @@ export function createWebGoalsScheduler(app: UnbootedWebApp): GoalsEngine {
           writeJson(`${ARTIFACT_MANIFEST_PREFIX}${goal.goal_id}`, null);
         }
       }
+
+      emitExecuted({
+        summary: trimmed.slice(0, 200),
+        tool_calls: toolCallsMade,
+        ...(memoriesFormed != null ? { memories: memoriesFormed } : {}),
+      });
 
       return {
         outcome: "fired",
