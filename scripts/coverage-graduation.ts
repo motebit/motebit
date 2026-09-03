@@ -24,6 +24,7 @@
  */
 
 import { readFileSync, existsSync } from "node:fs";
+import { readPackageThresholds } from "./lib/vitest-thresholds.js";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -55,27 +56,14 @@ interface Manifest {
 
 const AXES: Array<keyof Thresholds> = ["statements", "branches", "functions", "lines"];
 
+/**
+ * Live thresholds from the package's vitest config, via the shared brace-aware
+ * reader. The local regex this replaced stopped at the first closing brace, so
+ * per-glob floors (#568) made the parse order-dependent — see
+ * scripts/lib/vitest-thresholds.ts for the worked failure.
+ */
 function readLiveThresholds(configPath: string): Thresholds | null {
-  const abs = resolve(ROOT, configPath);
-  if (!existsSync(abs)) return null;
-  const src = readFileSync(abs, "utf-8");
-  // Match the `thresholds: { ... }` literal inside the defineMotebitTest call.
-  // The shape is uniform across the monorepo; if a package starts using a
-  // computed threshold we'll switch to ts-morph.
-  const match = src.match(/thresholds:\s*\{([^}]+)\}/);
-  if (!match) return null;
-  const body = match[1];
-  const get = (axis: string): number | null => {
-    const m = body.match(new RegExp(`${axis}:\\s*(\\d+(?:\\.\\d+)?)`));
-    return m ? Number(m[1]) : null;
-  };
-  const out: Partial<Thresholds> = {};
-  for (const axis of AXES) {
-    const v = get(axis);
-    if (v === null) return null;
-    out[axis] = v;
-  }
-  return out as Thresholds;
+  return readPackageThresholds(configPath) as Thresholds | null;
 }
 
 function daysUntil(isoDate: string, today: Date): number {

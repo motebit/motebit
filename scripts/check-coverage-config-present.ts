@@ -44,6 +44,7 @@
  */
 
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { readPackageThresholds } from "./lib/vitest-thresholds.js";
 import { join, resolve } from "node:path";
 import {
   MONEY_IDENTITY_PATH,
@@ -56,19 +57,16 @@ const REPO_ROOT = resolve(new URL(".", import.meta.url).pathname, "..");
 const AXES = ["statements", "branches", "functions", "lines"] as const;
 
 /** Read live thresholds from a vitest.config.ts (same method as coverage-graduation.ts). */
+/**
+ * Package-level thresholds, via the shared brace-aware reader.
+ *
+ * The previous local regex (`/thresholds:\s*\{([^}]+)\}/`) stopped at the first
+ * closing brace, so once per-glob floors existed the parse became
+ * order-dependent — a config whose glob entry came first reported the GLOB's
+ * numbers as the package's. See scripts/lib/vitest-thresholds.ts.
+ */
 function readThresholds(configPath: string): CoverageFloor | null {
-  if (!existsSync(configPath)) return null;
-  const src = readFileSync(configPath, "utf-8");
-  const block = src.match(/thresholds:\s*\{([^}]+)\}/);
-  if (!block) return null;
-  const body = block[1]!;
-  const out = {} as Record<(typeof AXES)[number], number>;
-  for (const axis of AXES) {
-    const m = body.match(new RegExp(`${axis}:\\s*(\\d+(?:\\.\\d+)?)`));
-    if (!m) return null;
-    out[axis] = Number(m[1]);
-  }
-  return out;
+  return readPackageThresholds(configPath);
 }
 
 /** Package names currently carried in the graduation manifest (floor-exempt). */
