@@ -472,6 +472,33 @@ describe("listCredentialAnchorBatches", () => {
     expect(batches[1]!.batch_id).toBe(batch1!.batch_id);
   });
 
+  it("stays ordered when two batches share a created_at millisecond", async () => {
+    // The tie is the real case (#615). `created_at` is `Date.now()` at insert,
+    // so two batches cut back-to-back genuinely can land in the same
+    // millisecond — and `ORDER BY created_at DESC` alone leaves their order
+    // UNSPECIFIED, which surfaced as a flake under parallel load.
+    //
+    // The test above only reaches the tie by accident, so it proves nothing on a
+    // fast machine. This one FORCES the collision: cut both batches, then stamp
+    // them to the same instant. Without the `rowid DESC` tiebreaker this is a
+    // coin flip; with it, insertion order decides and "most recent first" keeps
+    // its meaning.
+    await insertCredential(db, { issuedAt: 1000 });
+    const batch1 = await cutCredentialBatch(db, relayIdentity, 1);
+    await insertCredential(db, { issuedAt: 2000 });
+    const batch2 = await cutCredentialBatch(db, relayIdentity, 1);
+
+    db.prepare("UPDATE relay_credential_anchor_batches SET created_at = ?").run(1_700_000_000_000);
+
+    // Repeated because an unspecified order can happen to be right once.
+    for (let i = 0; i < 5; i++) {
+      const batches = listCredentialAnchorBatches(db);
+      expect(batches).toHaveLength(2);
+      expect(batches[0]!.batch_id).toBe(batch2!.batch_id);
+      expect(batches[1]!.batch_id).toBe(batch1!.batch_id);
+    }
+  });
+
   it("respects limit parameter", async () => {
     for (let i = 0; i < 5; i++) {
       await insertCredential(db, { issuedAt: 1000 + i });
