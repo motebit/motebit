@@ -36,7 +36,42 @@ import { defineMotebitTest } from "../../vitest.shared.js";
 // endorses. relay tests finish in ms–low-seconds (drain-grace fix), so 20s is pure
 // headroom, never masking a genuinely slow test.
 export default defineMotebitTest({
-  thresholds: { statements: 72, branches: 61, functions: 77, lines: 72 },
+  // Per-file floors on the money/identity code, plus a package aggregate.
+  //
+  // #546 asked whether services should join the money/identity registry, which
+  // would put the relay at the money tier's 90/85/90/90. The answer is no, and
+  // the reason is visible in the numbers: a package AGGREGATE hides exactly what
+  // it should surface. At 67% branches overall, `key-rotation.ts` — the
+  // identity-COMPROMISE recovery path, the most security-critical file here —
+  // sits at 30. Averaging is what let that happen, and raising the average to 85
+  // would not have found it either.
+  //
+  // So the floors go per-file, on the files that execute money or rotate
+  // identity, each pinned at its MEASURED value. They can only ratchet up; none
+  // of them can regress. This is the same mechanism `packages/verify` uses for
+  // `adapters.ts` (added in #568), applied to the risk rather than to the mean.
+  //
+  // Ranked worst-first, so the list reads as a work queue:
+  thresholds: {
+    // ── the money/identity files ────────────────────────────────────────────
+    "**/key-rotation.ts": { statements: 42, branches: 30, functions: 35, lines: 44 },
+    "**/budget.ts": { statements: 64, branches: 50, functions: 90, lines: 63 },
+    "**/credentials.ts": { statements: 70, branches: 59, functions: 66, lines: 72 },
+    "**/disputes.ts": { statements: 84, branches: 73, functions: 81, lines: 86 },
+    "**/p2p-verifier.ts": { statements: 89, branches: 80, functions: 100, lines: 89 },
+    "**/free-credit.ts": { statements: 94, branches: 84, functions: 100, lines: 93 },
+    // ── everything else ─────────────────────────────────────────────────────
+    // Ratcheted to measured (was 72/61/77/72 against an actual 78/67/81/79 — the
+    // gap was pure slack, and slack in a floor is a floor that is not holding).
+    // ~1 point under measured (78.07 / 67.4 / 81.4 / 79.1). A 0.1 margin is not
+    // a floor, it is a coin flip: this suite's branch total moved 67.47 -> 67.40
+    // between two consecutive runs, and a CI flake costs more than the tenth of
+    // a point it buys.
+    statements: 77,
+    branches: 66,
+    functions: 80,
+    lines: 78,
+  },
   extra: {
     pool: "forks",
     maxWorkers: 2,
