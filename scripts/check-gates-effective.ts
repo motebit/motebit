@@ -294,8 +294,20 @@ const PROBES: ReadonlyArray<Probe> = [
       // Drop treasury-reconciliation's declared statements below the money floor
       // (90). The gate checks the DECLARED threshold against the floor, so no test
       // run is needed; cleanup restores the config verbatim.
+      //
+      // Matched by FIELD, never by value. This probe previously replaced the
+      // literal `"statements: 90"`, and went vacuous the moment that package was
+      // ratcheted 90 -> 100 (its measured coverage was already 100 on all four
+      // axes): the replace matched nothing, the perturbation was a no-op, and the
+      // gate honestly exited 0.
+      //
+      // That is the THIRD time a probe in this file has been coupled to a value
+      // that legitimately moved — see the two prior forms recorded on the
+      // check-coverage-graduation probe directly below. A threshold is supposed
+      // to ratchet upward; a probe that breaks when it does is asserting the
+      // opposite of the policy it defends.
       mutateFile("packages/treasury-reconciliation/vitest.config.ts", (src) =>
-        src.replace("statements: 90", "statements: 50"),
+        src.replace(/statements:\s*\d+(?:\.\d+)?/, "statements: 50"),
       ),
   },
   {

@@ -2,5 +2,7 @@ import { defineMotebitTest } from "../../vitest.shared.js";
 
 export default defineMotebitTest({
   coverageExclude: ["src/index.ts"],
-  thresholds: { statements: 95, branches: 85, functions: 95, lines: 95 },
+  // Ratcheted to measured (100/94.73/100/100) by scripts/measure-coverage-slack.ts.
+  // A floor N points below reality only catches a regression bigger than N.
+  thresholds: { statements: 100, branches: 94, functions: 100, lines: 100 },
 });

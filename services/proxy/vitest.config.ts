@@ -11,5 +11,7 @@ export default defineMotebitTest({
     "src/inference/classify.ts",
     "src/inference/failure-response.ts",
   ],
-  thresholds: { statements: 70, branches: 60, functions: 65, lines: 70 },
+  // Ratcheted to measured (88.48/83.98/89.13/89.77) by scripts/measure-coverage-slack.ts.
+  // A floor N points below reality only catches a regression bigger than N.
+  thresholds: { statements: 87, branches: 82, functions: 88, lines: 88 },
 });
