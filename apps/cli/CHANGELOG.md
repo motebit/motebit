@@ -1,5 +1,11 @@
 # motebit CLI Changelog
 
+## 1.13.3
+
+### Patch Changes
+
+- @motebit/state-export-client@0.5.24
+
 ## 1.13.2
 
 ### Patch Changes
