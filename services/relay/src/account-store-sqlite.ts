@@ -37,6 +37,39 @@ import { DISPUTE_WINDOW_MS } from "@motebit/virtual-accounts";
  */
 export const FREE_CREDIT_REFERENCE_PREFIX = "free-credit:";
 
+/**
+ * Reject a non-integer money amount at the write boundary.
+ *
+ * The money model is integer micro-units with zero floating-point in the money
+ * path (root `CLAUDE.md`). That invariant was enforced in CODE and nowhere in
+ * STORAGE, and the gap is not hypothetical: 2,954 production rows from
+ * 2026-03-19 → 03-24 hold dollar-denominated values like
+ * `0.006315789473684211` in this micro-unit column — off by ~10⁶ (#554).
+ *
+ * SQLite is why it could be written. `amount INTEGER NOT NULL` declares type
+ * AFFINITY, not a constraint: SQLite converts a REAL to an integer only when
+ * the conversion is lossless, and stores it as a REAL otherwise. So the column
+ * type reads like a guarantee and is not one.
+ *
+ * This guard runs on every write, which is what protects the EXISTING databases.
+ * A `CHECK` constraint (added to the table below) cannot be retrofitted to a
+ * live table without a full rebuild, and rebuilding the production money ledger
+ * to fix a class that has not recurred in four months is the wrong trade. Two
+ * layers, deliberately: structural for new databases, fail-closed for old ones.
+ *
+ * Throwing is correct here. Silently writing a corrupt money value is strictly
+ * worse than a loud refusal, and the money path is fail-closed by doctrine.
+ */
+function assertMicroUnits(amount: number, context: string): void {
+  if (!Number.isInteger(amount)) {
+    throw new Error(
+      `${context}: amount must be an integer micro-unit value, got ${amount}. ` +
+        `Dollars were written into this micro-unit column once before (#554, 2,954 rows, ~10⁶ off); ` +
+        `convert at the API boundary with toMicro(dollars) instead.`,
+    );
+  }
+}
+
 /** Create virtual-account + transaction tables. Idempotent. */
 export function createAccountTables(db: DatabaseDriver): void {
   db.exec(`
@@ -52,8 +85,13 @@ export function createAccountTables(db: DatabaseDriver): void {
       transaction_id TEXT PRIMARY KEY,
       motebit_id TEXT NOT NULL,
       type TEXT NOT NULL,
-      amount INTEGER NOT NULL,
-      balance_after INTEGER NOT NULL,
+      -- typeof(...) = 'integer', not "INTEGER": the column type is only an
+      -- AFFINITY in SQLite and let dollars be stored as REAL here (#554). The
+      -- CHECK is what makes the money model's integer-micro-unit invariant
+      -- structural. New databases only — see assertMicroUnits for the write-path
+      -- guard that covers existing ones.
+      amount INTEGER NOT NULL CHECK (typeof(amount) = 'integer'),
+      balance_after INTEGER NOT NULL CHECK (typeof(balance_after) = 'integer'),
       reference_id TEXT,
       description TEXT,
       created_at INTEGER NOT NULL
@@ -150,6 +188,7 @@ export class SqliteAccountStore implements AccountStore {
     referenceId: string | null,
     description: string | null,
   ): number {
+    assertMicroUnits(amount, "credit");
     const now = Date.now();
     const transactionId = crypto.randomUUID();
 
@@ -184,6 +223,7 @@ export class SqliteAccountStore implements AccountStore {
     referenceId: string | null,
     description: string | null,
   ): number | null {
+    assertMicroUnits(amount, "debit");
     const now = Date.now();
     const transactionId = crypto.randomUUID();
 
@@ -224,6 +264,7 @@ export class SqliteAccountStore implements AccountStore {
     const now = Date.now();
     const transactionId = crypto.randomUUID();
 
+    assertMicroUnits(amount, "debitWithHold");
     this.getOrCreateAccount(motebitId);
 
     // Compute the escrow hold first (synchronous), then debit atomically with
@@ -552,6 +593,7 @@ export class SqliteAccountStore implements AccountStore {
     pendingId?: string;
     description?: string;
   }): { pendingId: string; newBalance: number } | null {
+    assertMicroUnits(args.amountMicro, "debitAndEnqueuePending");
     // Idempotent replay — sibling of `requestWithdrawal`'s
     // `getWithdrawalByIdempotencyKey` check. The partial UNIQUE INDEX
     // on (motebit_id, idempotency_key) added in migration v12 is the
