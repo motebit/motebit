@@ -205,7 +205,7 @@
     "@solana/web3.js": "^1.95.0",
     "@typescript-eslint/eslint-plugin": "^8.67.0",
     "@typescript-eslint/parser": "^8.67.0",
-    "@vitest/coverage-v8": "^4.1.10",
+    "@vitest/coverage-v8": "^4.1.11",
     "eslint": "^8.57.1",
     "eslint-import-resolver-typescript": "^4.4.5",
     "eslint-plugin-import": "^2.32.0",
@@ -217,7 +217,7 @@
     "tsx": "^4.23.12",
     "turbo": "^2.10.9",
     "typescript": "^5.9.0",
-    "vitest": "^4.1.10",
+    "vitest": "^4.1.11",
     "@motebit/semiring": "workspace:*"
   },
   "pnpm": {
