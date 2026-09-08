@@ -19,7 +19,7 @@
   "dependencies": {
     "@motebit/molecule-runner": "workspace:*",
     "@motebit/tools": "workspace:*",
-    "better-sqlite3": "^12.11.1"
+    "better-sqlite3": "^13.0.3"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
