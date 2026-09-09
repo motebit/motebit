@@ -1,5 +1,12 @@
 # @motebit/surface-kit
 
+## 0.0.19
+
+### Patch Changes
+
+- @motebit/sdk@2.8.2
+- @motebit/mcp-client@0.0.0-private
+
 ## 0.0.18
 
 ### Patch Changes

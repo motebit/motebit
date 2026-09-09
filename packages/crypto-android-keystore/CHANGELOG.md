@@ -1,5 +1,13 @@
 # @motebit/crypto-android-keystore
 
+## 1.1.32
+
+### Patch Changes
+
+- Updated dependencies [73a099a]
+  - @motebit/protocol@3.17.0
+  - @motebit/crypto@3.19.1
+
 ## 1.1.31
 
 ### Patch Changes
