@@ -68,6 +68,71 @@ export const DEEPSEEK_MODELS = ["deepseek-chat"] as const;
  * `*_MODELS` constants so the settings UIs across surfaces consume
  * them identically.
  */
+/**
+ * How far each provider has actually been PROVEN, as opposed to wired.
+ *
+ * Two wire adapters cover the whole matrix — `AnthropicProvider` (native) and
+ * `OpenAIProvider` (the compat shape that google / groq / deepseek /
+ * local-server all ride via `base_url`). Both ADAPTERS are live-proven. Per
+ * VENDOR the picture is different, and the surfaces were implying a parity that
+ * does not exist (#518):
+ *
+ *   - `anthropic` — live-proven across every real session, and its model ids are
+ *     re-checked weekly against the vendor's own listing endpoint by
+ *     `check-model-catalog-drift`.
+ *   - `local-server` — live-proven (chat, streaming, tool use).
+ *   - everything else — resolver, defaults, admission and footer all exist, but
+ *     NO LIVE TURN HAS EVER RUN. Their model ids came from training-prior
+ *     knowledge and are not covered by the drift gate. That is the exact class
+ *     that already bit the Anthropic table (#474: ids that 404 at runtime), plus
+ *     the vendor request-shape quirks the shared compat adapter papers over
+ *     (#476: Google's OpenAI-compat gaps, DeepSeek reasoner param rejections).
+ *
+ * This is the honest half of #518 — the half that needs no API keys. The other
+ * half is the probe itself: a streamed turn plus one tool call per vendor, which
+ * is what would move a row from `available` to `verified`.
+ *
+ * `available` is not a warning. Every one of these is wired, resolvable, and
+ * expected to work. It states what has been WITNESSED, which is a different
+ * claim from what is supported — and conflating the two is how a catalog of
+ * fabricated ids ships.
+ */
+export type ProviderVerification =
+  /** A real turn has run through this vendor and is expected to keep working. */
+  | "verified"
+  /** Wired and resolvable; no live turn has been witnessed yet. */
+  | "available";
+
+/** Vendors the verification record covers — the BYOK/cloud selectable set. */
+export type VerifiableProvider =
+  "anthropic" | "openai" | "google" | "groq" | "deepseek" | "local-server";
+
+export const PROVIDER_VERIFICATION: Readonly<Record<VerifiableProvider, ProviderVerification>> = {
+  anthropic: "verified",
+  "local-server": "verified",
+  openai: "available",
+  google: "available",
+  groq: "available",
+  deepseek: "available",
+} as const;
+
+/**
+ * One-line disambiguation shown wherever a vendor is offered.
+ *
+ * `groq` carries an explicit "not Grok" because the names differ by one letter
+ * and denote unrelated things: Groq is inference HARDWARE (LPU) hosting other
+ * labs' open weights; Grok is xAI's frontier model, which motebit does not
+ * support. A picker that says only "Groq" will be misread, permanently.
+ */
+export const PROVIDER_NOTE: Readonly<Record<VerifiableProvider, string>> = {
+  anthropic: "Claude — verified live.",
+  "local-server": "Your own machine (Ollama, LM Studio, llama.cpp) — verified live.",
+  openai: "GPT — wired, no live turn witnessed yet.",
+  google: "Gemini via OpenAI-compat — wired, no live turn witnessed yet.",
+  groq: "Fast hosting for open models (Llama, gpt-oss). Not xAI's Grok. Wired, no live turn witnessed yet.",
+  deepseek: "Open-weight, low cost — wired, no live turn witnessed yet.",
+} as const;
+
 export const GROQ_MODELS = ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"] as const;
 
 /**

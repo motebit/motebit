@@ -12,6 +12,8 @@ import {
   modelCapabilityTier,
   providerAcceptsModel,
   LOCAL_SERVER_SUGGESTED_MODELS,
+  PROVIDER_VERIFICATION,
+  PROVIDER_NOTE,
 } from "../models.js";
 
 describe("modelVendorHint", () => {
@@ -116,5 +118,53 @@ describe("modelCapabilityTier — the capability floor (#501)", () => {
     // experience silently loses money tools.
     const tiers = LOCAL_SERVER_SUGGESTED_MODELS.map((m) => modelCapabilityTier(m));
     expect(tiers.filter((t) => t === "minimal")).toHaveLength(1);
+  });
+});
+
+describe("provider verification — supported is not the same claim as witnessed (#518)", () => {
+  it("marks only the providers a live turn has actually run through as verified", () => {
+    // The honest half of #518. Two wire adapters cover the matrix and both are
+    // live-proven, but per VENDOR only anthropic and local-server have ever had
+    // a real turn. Surfaces were implying parity that does not exist.
+    expect(PROVIDER_VERIFICATION.anthropic).toBe("verified");
+    expect(PROVIDER_VERIFICATION["local-server"]).toBe("verified");
+
+    for (const p of ["openai", "google", "groq", "deepseek"] as const) {
+      expect(PROVIDER_VERIFICATION[p]).toBe("available");
+    }
+  });
+
+  it("covers every provider in both records — no vendor can be silently unlabelled", () => {
+    // A vendor added to one record but not the other would render an empty note
+    // or an undefined status, which reads as "fine" rather than "unknown" —
+    // the exact false-green this record exists to prevent.
+    const statuses = Object.keys(PROVIDER_VERIFICATION).sort();
+    const notes = Object.keys(PROVIDER_NOTE).sort();
+    expect(notes).toEqual(statuses);
+    for (const note of Object.values(PROVIDER_NOTE)) {
+      expect(note.trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  it("disambiguates Groq from xAI's Grok, explicitly", () => {
+    // One letter apart, unrelated things: Groq is inference hardware hosting
+    // other labs' open weights; Grok is xAI's model, which motebit does not
+    // support. A picker that says only "Groq" will be misread, permanently.
+    expect(PROVIDER_NOTE.groq).toMatch(/not xai's grok/i);
+  });
+
+  it("says so on every unverified note, so the tiering cannot be half-applied", () => {
+    for (const [provider, status] of Object.entries(PROVIDER_VERIFICATION)) {
+      const note = PROVIDER_NOTE[provider as keyof typeof PROVIDER_NOTE];
+      if (status === "available") {
+        expect(note, `${provider} is unverified but its note does not say so`).toMatch(
+          /no live turn witnessed yet/i,
+        );
+      } else {
+        expect(note, `${provider} is verified but its note does not say so`).toMatch(
+          /verified live/i,
+        );
+      }
+    }
   });
 });

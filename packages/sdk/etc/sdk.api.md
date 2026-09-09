@@ -424,7 +424,7 @@ export interface GradientStoreAdapter {
 // @public
 export const GROQ_CANONICAL_URL = "https://api.groq.com/openai/v1";
 
-// @public
+// @public (undocumented)
 export const GROQ_MODELS: readonly ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"];
 
 // @public
@@ -692,6 +692,12 @@ export interface PrecisionWeights {
 }
 
 // @public
+export const PROVIDER_NOTE: Readonly<Record<VerifiableProvider, string>>;
+
+// @public (undocumented)
+export const PROVIDER_VERIFICATION: Readonly<Record<VerifiableProvider, ProviderVerification>>;
+
+// @public
 export function providerAcceptsModel(provider: string, model: string): boolean;
 
 // @public
@@ -699,6 +705,13 @@ export type ProviderMode = "on-device" | "motebit-cloud" | "byok";
 
 // @public
 export type ProviderSpec = CloudProviderSpec | WebLLMProviderSpec | AppleFoundationModelsSpec | MlxProviderSpec;
+
+// @public
+export type ProviderVerification =
+/** A real turn has run through this vendor and is expected to keep working. */
+"verified"
+/** Wired and resolvable; no live turn has been witnessed yet. */
+| "available";
 
 // @public
 export const PROXY_MODELS: readonly ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
@@ -906,6 +919,9 @@ export class UnsupportedBackendError extends Error {
     // (undocumented)
     backend: OnDeviceBackend;
 }
+
+// @public
+export type VerifiableProvider = "anthropic" | "openai" | "google" | "groq" | "deepseek" | "local-server";
 
 // @public
 export interface VerificationResult {

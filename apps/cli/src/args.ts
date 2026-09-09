@@ -8,6 +8,7 @@ import {
   DEFAULT_GROQ_MODEL,
   DEFAULT_LOCAL_SERVER_MODEL,
   DEFAULT_OPENAI_MODEL,
+  PROVIDER_VERIFICATION,
 } from "@motebit/sdk";
 import { VERSION } from "./config.js";
 import { bold, dim, cyan, green, command } from "./colors.js";
@@ -227,8 +228,22 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     "proxy",
   ];
   if (!VALID_PROVIDERS.includes(rawProvider as CliProvider)) {
+    // Name what has actually been WITNESSED, not just what resolves (#518).
+    // Every provider here is wired; only some have had a live turn run through
+    // them, and a picker that implies parity is how a catalog of unverified
+    // model ids ships unnoticed.
+    const withStatus = VALID_PROVIDERS.map((p) => {
+      const v = (PROVIDER_VERIFICATION as Record<string, string | undefined>)[p];
+      return v === "verified"
+        ? `${p} (verified live)`
+        : v === "available"
+          ? `${p} (unverified)`
+          : p;
+    });
     throw new Error(
-      `Unknown provider "${values.provider}". Use one of: ${VALID_PROVIDERS.join(", ")} (or the alias "ollama" for local-server).`,
+      `Unknown provider "${values.provider}". Use one of: ${withStatus.join(", ")} ` +
+        `(or the alias "ollama" for local-server). "unverified" means wired and expected to ` +
+        `work, but no live turn has been witnessed yet — see #518.`,
     );
   }
   const cliProvider = rawProvider as CliProvider;
