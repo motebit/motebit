@@ -1,6 +1,6 @@
 import type { WebContext } from "../types";
 import type { ProviderConfig, GovernanceConfig, VoiceConfig, AppearanceConfig } from "../storage";
-import { APPROVAL_PRESET_CONFIGS, DEFAULT_GOVERNANCE_CONFIG } from "@motebit/sdk";
+import { APPROVAL_PRESET_CONFIGS, DEFAULT_GOVERNANCE_CONFIG, PROVIDER_NOTE } from "@motebit/sdk";
 import {
   saveProviderConfig,
   saveSoulColor,
@@ -784,6 +784,18 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     });
   });
 
+  /**
+   * Render the per-vendor honesty line from the SDK's canonical
+   * `PROVIDER_NOTE` (#518). Data-driven rather than prose in the markup so the
+   * surfaces cannot drift from what has actually been witnessed — and so the
+   * Groq/Grok disambiguation lives in exactly one place.
+   */
+  function renderByokVendorNote(vendor: string): void {
+    const el = document.getElementById("byok-vendor-note");
+    if (el == null) return;
+    el.textContent = (PROVIDER_NOTE as Record<string, string | undefined>)[vendor] ?? "";
+  }
+
   // === BYOK Sub-Provider Toggle ===
   document.querySelectorAll<HTMLButtonElement>(".byok-provider-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -791,6 +803,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       if (!byok) return;
       activeByokProvider = byok;
       setByokProviderUI(byok);
+      renderByokVendorNote(byok);
     });
   });
 
@@ -1182,6 +1195,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
           switchProviderTab("anthropic");
           activeByokProvider = config.vendor;
           setByokProviderUI(config.vendor);
+          renderByokVendorNote(config.vendor);
           if (config.vendor === "anthropic") {
             anthropicApiKey.value = config.apiKey;
             if (config.model) anthropicModel.value = config.model;
