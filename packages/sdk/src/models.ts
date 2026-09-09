@@ -12,6 +12,7 @@
  * `check-model-catalog-drift` (scheduled, weekly) goes red when this
  * snapshot drifts from what the provider serves. Never construct an id. */
 export const ANTHROPIC_MODELS = [
+  "claude-fable-5-1",
   "claude-fable-5",
   "claude-opus-5",
   "claude-opus-4-8",
@@ -22,7 +23,6 @@ export const ANTHROPIC_MODELS = [
   "claude-haiku-4-5-20251001",
   "claude-opus-4-5-20251101",
   "claude-sonnet-4-5-20250929",
-  "claude-opus-4-1-20250805",
 ] as const;
 
 /** OpenAI models: gpt-5.4 (strongest), gpt-5.4-mini (default), gpt-5.4-nano (fast). */

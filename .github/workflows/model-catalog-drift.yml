@@ -8,6 +8,10 @@
 #
 # Secrets (repository level):
 #   ANTHROPIC_API_KEY   read-only catalog access (GET /v1/models only)
+#   OPENAI_API_KEY      restricted key — List models (read) + chat completions
+#                       (request). #518: openai is the compat SHAPE that
+#                       google/groq/deepseek all inherit, so its ids drifting
+#                       is the widest single failure in the matrix.
 #
 # The gate runs with --require-key: a missing secret is RED, never a silent
 # skip — a dormant external gate is the composition-preserves-enforcement
@@ -41,4 +45,20 @@ jobs:
       - name: Diff snapshot + shaping families against the live catalog
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: npx tsx scripts/check-model-catalog-drift.ts --require-key
+      # A scheduled gate with no alert is a gate nobody reads. This one went RED
+      # every week from 2026-08-10 to 09-07 — five consecutive runs carrying a
+      # real finding (a shipped model id the provider had stopped serving) — and
+      # nothing surfaced it, because the only signal was a red square on a page
+      # no one opens. Same failure the archetype-conformance thread already
+      # solved; this is that step, mirrored.
+      - name: Alert on failure (pinned issue thread)
+        if: failure()
+        run: |
+          gh issue list --label model-catalog-drift --state open --json number --jq '.[0].number' > /tmp/issue || true
+          N=$(cat /tmp/issue)
+          BODY="Scheduled model-catalog drift FAILED: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [ -n "$N" ]; then gh issue comment "$N" --body "$BODY"; else gh issue create --title "Model catalog drift failing" --label model-catalog-drift --body "$BODY"; fi
+        env:
+          GH_TOKEN: ${{ github.token }}
