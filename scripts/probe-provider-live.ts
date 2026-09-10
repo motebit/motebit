@@ -185,6 +185,40 @@ async function probeToolCall(provider: StreamingProvider): Promise<TurnOutcome> 
   return { ok: true, detail: `${call.name}({status: ${JSON.stringify(status)}})` };
 }
 
+/**
+ * Collapse a provider error into ONE diagnostic line.
+ *
+ * The status alone is not a diagnosis. A 401's first line happens to carry the
+ * signal, but a 400 — the #476 class this probe exists to catch — puts the only
+ * useful text inside the JSON body, so truncating to the first line reports
+ * `OpenAI API error 400:` and nothing actionable. Learned the hard way: that is
+ * exactly what the first real openai run printed.
+ *
+ * Parse `error.message` out when the body is JSON; otherwise collapse whitespace
+ * and truncate, which never loses the signal even for a non-JSON body.
+ */
+function headline(message: string): string {
+  const braceAt = message.indexOf("{");
+  if (braceAt !== -1) {
+    try {
+      const body = JSON.parse(message.slice(braceAt)) as {
+        error?: { message?: unknown; param?: unknown };
+      };
+      const detail = body.error?.message;
+      if (typeof detail === "string" && detail.length > 0) {
+        const param = body.error?.param;
+        const where = typeof param === "string" && param.length > 0 ? ` (param: ${param})` : "";
+        return `${message.slice(0, braceAt).trim()} ${detail}${where}`;
+      }
+    } catch {
+      // Not JSON, or truncated JSON — fall through to the collapse below, which
+      // is strictly better than dropping the body.
+    }
+  }
+  const collapsed = message.replace(/\s+/g, " ").trim();
+  return collapsed.length > 400 ? `${collapsed.slice(0, 400)}…` : collapsed;
+}
+
 interface VendorResult {
   vendor: ByokVendor;
   status: "passed" | "failed" | "not-assessed";
@@ -222,14 +256,7 @@ async function probeVendor(vendor: ByokVendor): Promise<VendorResult> {
       if (!outcome.ok) ok = false;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      // First line only: provider error bodies are multi-line JSON and the
-      // status line carries the signal. Trailing `{` is the opening brace of the
-      // body that follows, so it is noise once the body is dropped.
-      const headline = message
-        .split("\n")[0]!
-        .trim()
-        .replace(/\s*\{$/, "");
-      lines.push(`✗ ${label}  threw: ${headline}`);
+      lines.push(`✗ ${label}  threw: ${headline(message)}`);
       durableReason ??= classifyProviderFailure(message);
       ok = false;
     }
