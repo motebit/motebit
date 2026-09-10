@@ -7,8 +7,12 @@
 export * from "./core.js";
 
 // OpenAI provider — real OpenAI wire protocol client (browser-safe)
-export { OpenAIProvider } from "./openai-provider.js";
-export type { OpenAIProviderConfig, OpenAIStreamChunk } from "./openai-provider.js";
+export { OpenAIProvider, openAiRequestShape } from "./openai-provider.js";
+export type {
+  OpenAIProviderConfig,
+  OpenAIStreamChunk,
+  OpenAiRequestShape,
+} from "./openai-provider.js";
 
 // Live model-catalog discovery — pluggability contract at the provider seam (#475)
 export { discoverModels } from "./model-catalog.js";
