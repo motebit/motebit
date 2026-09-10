@@ -1,5 +1,50 @@
 # @motebit/sdk Changelog
 
+## 2.9.0
+
+### Minor Changes
+
+- c320175: `ANTHROPIC_MODELS` re-synced to the live catalog: adds `claude-fable-5-1`, removes `claude-opus-4-1-20250805`.
+
+  Both ids copied verbatim from `GET /v1/models` — never constructed, no date suffix invented. That discipline is the point: fabricated ids are what #474 shipped.
+
+  The removed row is the one that matters. `claude-opus-4-1-20250805` was in the shipped snapshot and **the provider no longer serves it** — a surface offering it would 404 a real user. The added row is the inverse: a live model we were behind on.
+
+  Found by `check-model-catalog-drift`, which had been reporting exactly this **red every week since 2026-08-10** — five consecutive scheduled runs — with nothing surfacing it, because the workflow had no failure alert. Fixed in the same change.
+
+  **Note on the bump.** This narrows an exported `readonly [...]` tuple, which is a type-level removal. Called minor rather than major deliberately: the removed literal names a model that no longer exists, so any consumer referencing it is already broken at runtime, and no consumer in the repo derives a type from `ANTHROPIC_MODELS[number]`. A major saying "nothing you use changed" teaches people to ignore majors. Overrule this before release if you read the tuple contract more strictly.
+
+  Worth flagging separately: encoding a _churning provider catalog_ as a literal tuple makes every model retirement a potential semver event. `readonly string[]` would make catalog syncs non-breaking by construction — a one-time change, not urgent.
+
+- 9bf98ea: Provider surfaces state what has been **witnessed**, not just what resolves.
+
+  Two wire adapters cover the whole provider matrix — `AnthropicProvider` (native) and `OpenAIProvider` (the compat shape google / groq / deepseek / local-server all ride via `base_url`) — and both adapters are live-proven. Per **vendor** the picture is different: only `anthropic` and `local-server` have ever had a real turn run through them. The rest are wired, resolvable, and expected to work, but unwitnessed — and their model ids came from training-prior knowledge rather than a vendor listing endpoint, which is the exact class that already shipped 404-ing ids once (#474).
+
+  The surfaces implied parity that does not exist. This is the honest half of #518 — the half that needs no API keys.
+
+  New exports:
+
+  - `ProviderVerification` — `"verified" | "available"`. `available` is not a warning; it distinguishes _supported_ from _witnessed_, and conflating those is how a catalog of fabricated ids ships unnoticed.
+  - `VerifiableProvider` — the selectable vendor set the record covers.
+  - `PROVIDER_VERIFICATION` — the canonical per-vendor status.
+  - `PROVIDER_NOTE` — the one-line disambiguation each surface renders.
+
+  `PROVIDER_NOTE.groq` carries an explicit _"Not xAI's Grok."_ The names differ by one letter and denote unrelated things — Groq is inference hardware (LPU) hosting other labs' open weights; Grok is xAI's frontier model, which motebit does not support. A picker that says only "Groq" will be misread, permanently.
+
+  Consumed by the CLI's provider-validation error and by the web + desktop BYOK pickers, which render the note from this record rather than from prose in markup — so a surface cannot drift from what has actually been witnessed, and the Groq/Grok disambiguation lives in exactly one place.
+
+  Additive only; no existing export changed.
+
+### Patch Changes
+
+- 2ff5740: `openai` is now verified live.
+
+  A real turn ran through `OpenAIProvider` against `gpt-5.4-mini` — 39 streamed chunks and a tool call whose arguments reassembled intact — so `PROVIDER_VERIFICATION.openai` moves from `available` to `verified` and its note drops "no live turn witnessed yet".
+
+  The status is evidence-backed rather than expected-to-work: the same probe found the vendor completely broken two runs earlier, 400-ing on every turn against a parameter the gpt-5 family had removed. That is what `available` was there to say.
+
+  Only `openai` moves. `google`, `groq` and `deepseek` ride the same OpenAI-compat wire, and a passing openai turn is evidence about the SHAPE, never about their own quirks behind it — Gemini's compat gaps and DeepSeek's parameter rejections are exactly the kind of thing that hides behind a shared adapter. They stay `available` until each has its own key and its own passing probe.
+
 ## 2.8.2
 
 ### Patch Changes
