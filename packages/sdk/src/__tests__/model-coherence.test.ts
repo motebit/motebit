@@ -123,13 +123,23 @@ describe("modelCapabilityTier — the capability floor (#501)", () => {
 
 describe("provider verification — supported is not the same claim as witnessed (#518)", () => {
   it("marks only the providers a live turn has actually run through as verified", () => {
-    // The honest half of #518. Two wire adapters cover the matrix and both are
-    // live-proven, but per VENDOR only anthropic and local-server have ever had
-    // a real turn. Surfaces were implying parity that does not exist.
-    expect(PROVIDER_VERIFICATION.anthropic).toBe("verified");
-    expect(PROVIDER_VERIFICATION["local-server"]).toBe("verified");
+    // #518. Two wire adapters cover the matrix and both are live-proven, but the
+    // claim is made per VENDOR, because a shared adapter hides per-vendor quirks.
+    //
+    // `openai` was promoted 2026-09-09 on evidence, not expectation: a
+    // probe-provider-live dispatch streamed 39 chunks and reassembled a tool
+    // call. Two runs earlier the SAME probe found it 400-ing on every turn
+    // against a parameter the gpt-5 family had removed (#635) — which is exactly
+    // what `available` existed to say.
+    for (const p of ["anthropic", "local-server", "openai"] as const) {
+      expect(PROVIDER_VERIFICATION[p]).toBe("verified");
+    }
 
-    for (const p of ["openai", "google", "groq", "deepseek"] as const) {
+    // Still unwitnessed. These ride the same OpenAI-compat wire as `openai`, and
+    // a passing openai turn is evidence about the SHAPE, never about Gemini's
+    // compat gaps or DeepSeek's parameter rejections. Each needs its own key and
+    // its own passing probe.
+    for (const p of ["google", "groq", "deepseek"] as const) {
       expect(PROVIDER_VERIFICATION[p]).toBe("available");
     }
   });
@@ -163,6 +173,12 @@ describe("provider verification — supported is not the same claim as witnessed
       } else {
         expect(note, `${provider} is verified but its note does not say so`).toMatch(
           /verified live/i,
+        );
+        // The other direction: a promoted row must also stop claiming the
+        // opposite. "verified live, no live turn witnessed yet" would satisfy
+        // the assertion above while contradicting itself in the picker.
+        expect(note, `${provider} is verified but its note still says unwitnessed`).not.toMatch(
+          /no live turn witnessed yet/i,
         );
       }
     }
