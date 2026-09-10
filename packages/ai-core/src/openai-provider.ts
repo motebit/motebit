@@ -162,6 +162,65 @@ interface OpenAIToolDefinition {
 
 // === The provider class ===
 
+/**
+ * Request-shape family for a model on the OpenAI-compat wire.
+ *
+ * The sibling of `modelRejectsSamplingParams` (core.ts) on the other adapter.
+ * That guard was added after #476 — every Opus-5 turn 400-ing on a sampling
+ * parameter the model had removed — and it was never carried across to this
+ * adapter, which is how gpt-5 shipped 400-ing on EVERY turn.
+ *
+ * - `classic` — `max_tokens` + `temperature`. The GPT-4 era, and every
+ *   non-OpenAI vendor riding this wire (Gemini, Groq, DeepSeek, local servers).
+ * - `reasoning-era` — OpenAI's gpt-5 family and o-series, which reject
+ *   `max_tokens` outright (`Use 'max_completion_tokens' instead`) and accept
+ *   only the default `temperature`.
+ *
+ * A closed union rather than a boolean, because the two known consequences are
+ * different in kind — one parameter is RENAMED, the other is OMITTED — and a
+ * third family is a matter of time. Adding one is a new union member plus its
+ * branch at the two body-build sites, which the type checker then demands.
+ *
+ * Classified by model id, matching the Anthropic sibling, so it composes with
+ * proxies and gateways where the base URL is not the vendor's. The patterns are
+ * anchored so that ids merely CONTAINING these tokens do not match — notably
+ * Groq's `openai/gpt-oss-120b`, which is an open-weight model on the classic
+ * shape. A local server publishing a model literally named `o3` would be
+ * misclassified; that is the accepted cost of id-based dispatch, and the
+ * failure is loud (a 400 naming the parameter) rather than silent.
+ */
+export type OpenAiRequestShape = "classic" | "reasoning-era";
+
+export function openAiRequestShape(model: string): OpenAiRequestShape {
+  // `gpt-5` and up (including `gpt-5.4`, `gpt-10`), and the o-series o1/o3/o4.
+  return /^(?:gpt-(?:[5-9]|\d\d)|o[1-9](?:[-.]|$))/i.test(model) ? "reasoning-era" : "classic";
+}
+
+/**
+ * The token-budget and sampling fields for a model's request shape.
+ *
+ * Built in one place so the two body-build sites (`generate`, `generateStream`)
+ * cannot drift — they had already drifted into two copies of the same comment,
+ * and a fix applied to one would have left the other 400-ing.
+ */
+function budgetFields(
+  model: string,
+  maxTokens: number | undefined,
+  temperature: number | undefined,
+): Record<string, unknown> {
+  const budget = maxTokens ?? 4096;
+  if (openAiRequestShape(model) === "reasoning-era") {
+    // `temperature` is deliberately dropped, not passed through: this family
+    // accepts only the default, so omitting is the sole always-valid shape.
+    return { max_completion_tokens: budget };
+  }
+  return {
+    max_tokens: budget,
+    // Only send when explicitly configured — some models reject the parameter.
+    ...(temperature !== undefined && { temperature }),
+  };
+}
+
 export class OpenAIProvider implements IntelligenceProvider {
   constructor(private config: OpenAIProviderConfig) {}
 
@@ -201,11 +260,7 @@ export class OpenAIProvider implements IntelligenceProvider {
     const body: Record<string, unknown> = {
       model: this.config.model,
       messages,
-      max_tokens: this.config.max_tokens ?? 4096,
-      // Only send when explicitly configured — some models (e.g. Claude
-      // Opus 4.7 via Anthropic-compat endpoints) reject the parameter.
-      // See core.ts for the same pattern on the Anthropic wire path.
-      ...(this.config.temperature !== undefined && { temperature: this.config.temperature }),
+      ...budgetFields(this.config.model, this.config.max_tokens, this.config.temperature),
       stream: false,
     };
 
@@ -251,11 +306,7 @@ export class OpenAIProvider implements IntelligenceProvider {
     const body: Record<string, unknown> = {
       model: this.config.model,
       messages,
-      max_tokens: this.config.max_tokens ?? 4096,
-      // Only send when explicitly configured — some models (e.g. Claude
-      // Opus 4.7 via Anthropic-compat endpoints) reject the parameter.
-      // See core.ts for the same pattern on the Anthropic wire path.
-      ...(this.config.temperature !== undefined && { temperature: this.config.temperature }),
+      ...budgetFields(this.config.model, this.config.max_tokens, this.config.temperature),
       stream: true,
       // Ask the server to include token usage in the final SSE chunk.
       // Supported by OpenAI, Google's OpenAI-compat shim, and most local
