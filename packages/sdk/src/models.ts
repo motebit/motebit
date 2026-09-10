@@ -110,7 +110,7 @@ export type VerifiableProvider =
 export const PROVIDER_VERIFICATION: Readonly<Record<VerifiableProvider, ProviderVerification>> = {
   anthropic: "verified",
   "local-server": "verified",
-  openai: "available",
+  openai: "verified",
   google: "available",
   groq: "available",
   deepseek: "available",
@@ -127,7 +127,7 @@ export const PROVIDER_VERIFICATION: Readonly<Record<VerifiableProvider, Provider
 export const PROVIDER_NOTE: Readonly<Record<VerifiableProvider, string>> = {
   anthropic: "Claude — verified live.",
   "local-server": "Your own machine (Ollama, LM Studio, llama.cpp) — verified live.",
-  openai: "GPT — wired, no live turn witnessed yet.",
+  openai: "GPT — verified live.",
   google: "Gemini via OpenAI-compat — wired, no live turn witnessed yet.",
   groq: "Fast hosting for open models (Llama, gpt-oss). Not xAI's Grok. Wired, no live turn witnessed yet.",
   deepseek: "Open-weight, low cost — wired, no live turn witnessed yet.",
