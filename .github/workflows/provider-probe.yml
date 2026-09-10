@@ -36,7 +36,7 @@ on:
         options: ["", anthropic, openai, google, groq, deepseek]
         default: ""
       require:
-        description: "Comma-separated vendors whose MISSING key should fail the run"
+        description: "Vendors whose MISSING key fails the run (must be within the probed set — clear this if you narrow `vendor`)"
         required: false
         type: string
         default: "openai"

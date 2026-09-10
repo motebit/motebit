@@ -254,6 +254,31 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // `--require` is only meaningful for vendors this run actually probes. A name
+  // that is misspelled, or excluded by `--vendor`, would otherwise match nothing
+  // and be silently ignored — the run exits 0 having asserted exactly what the
+  // flag was there to prevent. That is the "green because it isn't looking"
+  // shape, so both cases are refused up front rather than discovered later.
+  const unknownRequired = required.filter((r) => !(VENDORS as readonly string[]).includes(r));
+  if (unknownRequired.length > 0) {
+    console.error(
+      `Unknown vendor(s) in --require: ${unknownRequired.join(", ")}. ` +
+        `Known: ${VENDORS.join(", ")}\n` +
+        `  → A name that matches nothing would make --require a no-op, so it is refused.`,
+    );
+    process.exit(1);
+  }
+  const unprobedRequired = required.filter((r) => !(targets as readonly string[]).includes(r));
+  if (unprobedRequired.length > 0) {
+    console.error(
+      `--require names ${unprobedRequired.join(", ")}, which --vendor=${only} excludes from ` +
+        `this run.\n` +
+        `  → Requiring a vendor you are not probing cannot fail, so it would pass silently.\n` +
+        `    Drop it from --require, or widen --vendor to include it.`,
+    );
+    process.exit(1);
+  }
+
   console.log(`probe-provider-live — live turn through the real adapter\n`);
 
   const results: VendorResult[] = [];
