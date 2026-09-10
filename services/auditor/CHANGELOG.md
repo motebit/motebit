@@ -1,5 +1,16 @@
 # @motebit/auditor
 
+## 0.0.10
+
+### Patch Changes
+
+- Updated dependencies [c320175]
+- Updated dependencies [2ff5740]
+- Updated dependencies [9bf98ea]
+  - @motebit/sdk@2.9.0
+  - @motebit/molecule-runner@0.0.0-private
+  - @motebit/tools@0.0.0-private
+
 ## 0.0.9
 
 ### Patch Changes
