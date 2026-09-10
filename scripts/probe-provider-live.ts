@@ -263,6 +263,24 @@ async function main(): Promise<void> {
       (skipped.length > 0 ? ` (${skipped.map((r) => r.vendor).join(", ")})` : ""),
   );
 
+  // Aperture. PROVIDER_VERIFICATION carries rows this probe structurally cannot
+  // reach — `local-server` is the user's own machine, with no canonical URL and
+  // no key to hold. Derived by SUBTRACTION from the shipped record rather than
+  // listed here, so adding a seventh provider to VerifiableProvider without a
+  // ByokVendor entry surfaces it automatically instead of silently narrowing
+  // what "all vendors passed" means.
+  const unreachable = Object.keys(PROVIDER_VERIFICATION).filter(
+    (p) => !(VENDORS as readonly string[]).includes(p),
+  );
+  if (unreachable.length > 0) {
+    console.log(
+      `  aperture: ${VENDORS.length}/${Object.keys(PROVIDER_VERIFICATION).length} rows in ` +
+        `PROVIDER_VERIFICATION are reachable by this probe; ${unreachable.join(", ")} ` +
+        `${unreachable.length === 1 ? "is" : "are"} not (no key, no canonical endpoint) and ` +
+        `${unreachable.length === 1 ? "its" : "their"} shipped status rests on other evidence.`,
+    );
+  }
+
   if (contradicted.length > 0) {
     console.error(
       `\nFAILED — shipped as "verified" but the live turn did not pass: ` +
