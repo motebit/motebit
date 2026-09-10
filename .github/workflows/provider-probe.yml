@@ -1,0 +1,72 @@
+# The witness half of #518. `check-model-catalog-drift` proves a model ID is
+# still SERVED; this proves a turn actually WORKS through our adapter — the
+# difference between "supported" and "witnessed", which is what
+# PROVIDER_VERIFICATION (@motebit/sdk) encodes for every surface's BYOK picker.
+#
+# Two turns per vendor, because they fail independently: streaming exercises SSE
+# assembly, the tool call exercises schema translation + argument reassembly.
+# #476 was a request-SHAPE defect against a perfectly healthy endpoint, which is
+# precisely why the probe runs through OpenAIProvider/AnthropicProvider and uses
+# the resolver's own default model + base URL rather than anything pinned here.
+#
+# Secrets (repository level) — a vendor with no key is reported NOT ASSESSED and
+# is never counted as passing:
+#   OPENAI_API_KEY      restricted: List models (read) + chat completions (request)
+#   ANTHROPIC_API_KEY   |  GOOGLE_API_KEY  |  GROQ_API_KEY  |  DEEPSEEK_API_KEY
+#
+# MANUAL DISPATCH ONLY, and that is why this file has no `if: failure()` alert:
+# a human triggered the run and is looking at the result. That reasoning does NOT
+# survive adding a schedule — model-catalog-drift.yml sat RED for five
+# consecutive weekly runs carrying a real 404-ing model id because a scheduled
+# workflow's only signal was a red square nobody opens. If you add a `schedule:`
+# trigger below, add the failure-alert step from model-catalog-drift.yml in the
+# same commit.
+#
+# This costs real tokens on real keys. It is deliberately not in `pnpm check`.
+
+name: Provider live probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      vendor:
+        description: "Single vendor to probe (blank = every vendor with a key)"
+        required: false
+        type: choice
+        options: ["", anthropic, openai, google, groq, deepseek]
+        default: ""
+      require:
+        description: "Comma-separated vendors whose MISSING key should fail the run"
+        required: false
+        type: string
+        default: "openai"
+
+concurrency:
+  group: provider-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build the imported packages
+        run: pnpm --filter @motebit/sdk... --filter @motebit/ai-core... build
+      - name: Run a live turn through each vendor's adapter
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          npx tsx scripts/probe-provider-live.ts \
+            ${{ inputs.vendor && format('--vendor={0}', inputs.vendor) || '' }} \
+            ${{ inputs.require && format('--require={0}', inputs.require) || '' }}
