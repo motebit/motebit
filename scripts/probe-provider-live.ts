@@ -48,6 +48,11 @@ import {
   type MotebitState,
 } from "../packages/sdk/src/index.js";
 import type { ToolDefinition } from "../packages/protocol/src/index.js";
+// Reused, not reinvented: this is the same durable-vs-transient classifier the
+// molecule runner uses to decide whether to stop advertising. A 401 here means
+// "your key/account", never "your adapter", and sending a reader to the wrong
+// file is precisely what the repair-instruction contract forbids.
+import { classifyProviderFailure } from "../packages/molecule-runner/src/readiness.js";
 
 const VENDORS: readonly ByokVendor[] = ["anthropic", "openai", "google", "groq", "deepseek"];
 
@@ -185,18 +190,27 @@ interface VendorResult {
   status: "passed" | "failed" | "not-assessed";
   model: string;
   lines: string[];
+  /** Non-null when the failure was a credential/billing condition, not a code defect. */
+  durableReason: string | null;
 }
 
 async function probeVendor(vendor: ByokVendor): Promise<VendorResult> {
   const model = defaultModelForVendor(vendor);
   const apiKey = process.env[KEY_ENV[vendor]];
   if (apiKey == null || apiKey.trim().length === 0) {
-    return { vendor, status: "not-assessed", model, lines: [`no ${KEY_ENV[vendor]} in env`] };
+    return {
+      vendor,
+      status: "not-assessed",
+      model,
+      lines: [`no ${KEY_ENV[vendor]} in env`],
+      durableReason: null,
+    };
   }
 
   const provider = buildProvider(vendor, apiKey);
   const lines: string[] = [];
   let ok = true;
+  let durableReason: string | null = null;
 
   for (const [label, run] of [
     ["stream", probeStreaming],
@@ -207,11 +221,20 @@ async function probeVendor(vendor: ByokVendor): Promise<VendorResult> {
       lines.push(`${outcome.ok ? "✓" : "✗"} ${label}  ${outcome.detail}`);
       if (!outcome.ok) ok = false;
     } catch (err) {
-      lines.push(`✗ ${label}  threw: ${err instanceof Error ? err.message : String(err)}`);
+      const message = err instanceof Error ? err.message : String(err);
+      // First line only: provider error bodies are multi-line JSON and the
+      // status line carries the signal. Trailing `{` is the opening brace of the
+      // body that follows, so it is noise once the body is dropped.
+      const headline = message
+        .split("\n")[0]!
+        .trim()
+        .replace(/\s*\{$/, "");
+      lines.push(`✗ ${label}  threw: ${headline}`);
+      durableReason ??= classifyProviderFailure(message);
       ok = false;
     }
   }
-  return { vendor, status: ok ? "passed" : "failed", model, lines };
+  return { vendor, status: ok ? "passed" : "failed", model, lines, durableReason };
 }
 
 function arg(name: string): string | undefined {
@@ -291,9 +314,27 @@ async function main(): Promise<void> {
     );
   }
   const plainFailures = failed.filter((r) => !contradicted.includes(r));
-  if (plainFailures.length > 0) {
+  // Split the repair instruction by CAUSE. A 401 and a malformed request both
+  // surface as "the turn failed", but they are repaired in different places, and
+  // a rejected key routed to "go read the adapter" is a repair instruction that
+  // actively misleads — worse than none.
+  const credentialFailures = failed.filter((r) => r.durableReason != null);
+  const codeFailures = plainFailures.filter((r) => r.durableReason == null);
+
+  if (credentialFailures.length > 0) {
     console.error(
-      `\nFAILED — live turn broke for: ${plainFailures.map((r) => r.vendor).join(", ")}\n` +
+      `\nFAILED — the account, not the code:\n` +
+        credentialFailures.map((r) => `    ${r.vendor}: ${r.durableReason}`).join("\n") +
+        `\n  → Nothing to fix in the adapter. Rotate or top up the credential behind ` +
+        `${credentialFailures.map((r) => KEY_ENV[r.vendor]).join(", ")},\n` +
+        `    then re-run. A rejected or unfunded key is NOT evidence that the vendor is\n` +
+        `    broken, so do NOT downgrade its PROVIDER_VERIFICATION row on this result —\n` +
+        `    the probe never got to look.`,
+    );
+  }
+  if (codeFailures.length > 0) {
+    console.error(
+      `\nFAILED — live turn broke for: ${codeFailures.map((r) => r.vendor).join(", ")}\n` +
         `  → Read the ✗ line above: a \`stream\` failure is SSE assembly, a \`tool\` failure is\n` +
         `    schema translation or argument reassembly. Both live in the adapter for that wire\n` +
         `    protocol (packages/ai-core/src/openai-provider.ts or core.ts's AnthropicProvider),\n` +
