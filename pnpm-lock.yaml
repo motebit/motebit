@@ -2497,6 +2497,9 @@ importers:
       '@motebit/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@motebit/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
       '@vercel/kv':
         specifier: ^3.0.0
         version: 3.0.0

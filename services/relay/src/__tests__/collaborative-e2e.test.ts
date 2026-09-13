@@ -16,6 +16,7 @@ describe("Collaborative Plan Proposals E2E", () => {
 
   beforeAll(async () => {
     relay = await createSyncRelay({
+      allowPrivateEndpoints: true,
       dbPath: ":memory:",
       apiToken: MASTER_TOKEN,
       enableDeviceAuth: false,

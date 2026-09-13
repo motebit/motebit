@@ -74,6 +74,7 @@ import { createMotebitDatabase } from "@motebit/persistence";
 import type { MotebitDatabase } from "@motebit/persistence";
 import { createLogger } from "./logger.js";
 import { parseBoolEnv, parseFloatEnv, parseIntEnv } from "./env.js";
+import { buildOutboundPolicy } from "./outbound-policy.js";
 import { createRelaySchema } from "./schema.js";
 import { createRelayConfigTable, loadFreezeState, persistFreeze } from "./freeze.js";
 import { parseTokenPayloadUnsafe, verifySignedTokenForDevice } from "./auth.js";
@@ -303,6 +304,13 @@ export interface SyncRelayConfig {
   apiToken?: string; // Legacy single token (still supported as admin/master token)
   corsOrigin?: string;
   enableDeviceAuth?: boolean; // When true, validates per-device tokens (default: true)
+  /**
+   * Permit registered agent / federation peer endpoints on loopback or
+   * private networks (local development, tests). Default false: a deployed
+   * relay refuses to persist — or forward to — any endpoint that is not a
+   * globally-routable destination (`@motebit/sdk` outbound URL law).
+   */
+  allowPrivateEndpoints?: boolean;
   /** x402 on-chain payment for task submission. Required in production. */
   x402: X402Config;
   /** When true, relay issues AgentReputationCredentials on verified receipts. Default: false (peer-issued). */
@@ -481,6 +489,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     apiToken,
     corsOrigin = "*",
     enableDeviceAuth = true,
+    allowPrivateEndpoints = parseBoolEnv("MOTEBIT_ALLOW_PRIVATE_ENDPOINTS", false),
     x402: x402Config,
     // Note: this fallback-to-env read exists for library-mode embedders
     // (tests, programmatic use) that don't go through the standalone boot
@@ -708,6 +717,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const taskQueue = new TaskQueue(moteDb.db);
 
   // --- Relay Identity: persistent Ed25519 keypair ---
+  // One outbound URL policy for every persisted callback the relay will contact.
+  const outboundPolicy = buildOutboundPolicy(allowPrivateEndpoints);
   const relayIdentity: RelayIdentity = await initRelayIdentity(
     moteDb.db,
     config.relayKeyPassphrase,
@@ -957,6 +968,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   registerFederationRoutes({
     db: moteDb.db,
     app,
+    outboundPolicy,
     relayIdentity,
     federationConfig,
     federationQueryCache,
@@ -1411,6 +1423,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // --- Agent routes (registration, discovery, capabilities, settlements, ledger) ---
   registerAgentRoutes({
     app,
+    outboundPolicy,
     moteDb,
     identityManager,
     eventStore,
@@ -1863,6 +1876,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // --- Task routes (submission, polling, receipt settlement) ---
   await registerTaskRoutes({
     app,
+    outboundPolicy,
     moteDb,
     identityManager,
     eventStore,

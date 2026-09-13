@@ -30,7 +30,12 @@
  */
 
 import { buildServiceReceipt, runMolecule } from "@motebit/molecule-runner";
-import { InMemoryToolRegistry, readUrlDefinition, createReadUrlHandler } from "@motebit/tools";
+import {
+  InMemoryToolRegistry,
+  readUrlDefinition,
+  createReadUrlHandler,
+  nodeAddressResolver,
+} from "@motebit/tools";
 import type { ToolResult } from "@motebit/sdk";
 import { loadConfig } from "./helpers.js";
 
@@ -60,7 +65,12 @@ async function main(): Promise<void> {
       const { motebitId, deviceId, publicKey, privateKey } = identity;
 
       const registry = new InMemoryToolRegistry();
-      registry.register(readUrlDefinition, createReadUrlHandler());
+      // Deployed atom: the outbound URL law with a Node resolver — a public
+      // name that resolves into Fly's private network is refused too.
+      registry.register(
+        readUrlDefinition,
+        createReadUrlHandler({ resolve: nodeAddressResolver() }),
+      );
 
       const handleAgentTask = async function* (
         prompt: string,

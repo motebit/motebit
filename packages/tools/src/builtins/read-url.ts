@@ -1,3 +1,5 @@
+import { checkOutboundUrl, fetchPublic } from "@motebit/sdk";
+import type { OutboundUrlOptions } from "@motebit/sdk";
 import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 
 /** @internal */
@@ -31,26 +33,51 @@ export type ReadUrlFetcher = (
   url: string,
 ) => Promise<{ status: number; contentType: string; body: string }>;
 
-const defaultFetcher: ReadUrlFetcher = async (url) => {
-  const res = await fetch(url, {
-    headers: { "User-Agent": "Motebit/0.1" },
-    signal: AbortSignal.timeout(15000),
-  });
-  // Skip body read on error — matches the pre-injection shape so
-  // existing Response-shaped mocks (which only stub .ok + .status)
-  // don't need to also provide headers or a body.
-  if (!res.ok) return { status: res.status, contentType: "", body: "" };
-  const contentType = res.headers.get("content-type") ?? "";
-  // JSON content-type: pre-parse via .json() so test mocks that only
-  // stub .json() (not .text()) still pass, and real responses skip a
-  // redundant string→object round trip.
-  if (contentType.includes("application/json")) {
-    const parsed: unknown = await res.json();
-    return { status: res.status, contentType, body: JSON.stringify(parsed) };
-  }
-  const body = await res.text();
-  return { status: res.status, contentType, body };
-};
+/**
+ * Node address resolver for the outbound URL law — lets the policy refuse a
+ * public NAME that resolves to a private address. Injected explicitly by
+ * Node callers (the CLI runtime, the read-url / web-search atoms); never
+ * assumed, so browser bundles (web-safe.ts) never see `node:dns` and tests
+ * with injected fetchers stay deterministic. Each call imports lazily.
+ */
+export function nodeAddressResolver(): (hostname: string) => Promise<string[]> {
+  return async (hostname) => {
+    const spec = "node:" + "dns";
+    const dns = (await import(/* @vite-ignore */ spec)) as {
+      promises: { lookup(h: string, o: { all: true }): Promise<Array<{ address: string }>> };
+    };
+    return (await dns.promises.lookup(hostname, { all: true })).map((a) => a.address);
+  };
+}
+
+/**
+ * The real fetcher, parameterised by the outbound policy so redirect hops
+ * obey the same law (a public page that 302s into a router admin panel is
+ * refused at the hop).
+ */
+function makeDefaultFetcher(policy: OutboundUrlOptions): ReadUrlFetcher {
+  return async (url) => {
+    const res = await fetchPublic(
+      url,
+      { headers: { "User-Agent": "Motebit/0.1" }, signal: AbortSignal.timeout(15000) },
+      policy,
+    );
+    // Skip body read on error — matches the pre-injection shape so
+    // existing Response-shaped mocks (which only stub .ok + .status)
+    // don't need to also provide headers or a body.
+    if (!res.ok) return { status: res.status, contentType: "", body: "" };
+    const contentType = res.headers.get("content-type") ?? "";
+    // JSON content-type: pre-parse via .json() so test mocks that only
+    // stub .json() (not .text()) still pass, and real responses skip a
+    // redundant string→object round trip.
+    if (contentType.includes("application/json")) {
+      const parsed: unknown = await res.json();
+      return { status: res.status, contentType, body: JSON.stringify(parsed) };
+    }
+    const body = await res.text();
+    return { status: res.status, contentType, body };
+  };
+}
 
 // ── Producer projection: agency.html-text.v1 (HTML → text) ────────────────────
 // Motebit ADOPTS the world-public, content-addressed, immutable recipe
@@ -147,12 +174,44 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
 }
 
 export function createReadUrlHandler(opts?: {
+  /**
+   * Permit loopback + private destinations — a personal runtime reading its
+   * own localhost dev server. Default false: a model-driven fetch must never
+   * reach the LAN, a cloud metadata address or a sibling service by default
+   * (prompt injection → SSRF is the threat). Deployed atoms leave this off.
+   */
+  allowPrivateNetwork?: boolean;
+  /**
+   * Address resolver for the outbound law (`nodeAddressResolver()` in Node).
+   * Absent ⇒ literals and blocked names are checked, resolved addresses are
+   * not — the honest floor for a browser or an injected-fetcher test.
+   */
+  resolve?: (hostname: string) => Promise<string[]>;
   proxyUrl?: string;
   fetcher?: ReadUrlFetcher;
 }): ToolHandler {
+  const policy: OutboundUrlOptions = {
+    allowPrivateNetwork: opts?.allowPrivateNetwork ?? false,
+    ...(opts?.resolve ? { resolve: opts.resolve } : {}),
+  };
+  const fetcher = opts?.fetcher ?? makeDefaultFetcher(policy);
   return async (args) => {
     const url = args.url as string;
     if (!url) return { ok: false, error: "Missing required parameter: url" };
+
+    // Outbound URL law (@motebit/sdk) — refuse BEFORE any network activity,
+    // on both the proxy and the local path. The proxy enforces its own copy
+    // server-side; checking here too keeps the tool honest when it is wired
+    // to a proxy that does not. (The default fetcher re-applies it per
+    // redirect hop via fetchPublic.)
+    const verdict = await checkOutboundUrl(url, policy);
+    if (!verdict.ok) {
+      return {
+        ok: false,
+        error: `Refused: URL is not a fetchable public destination (${verdict.reason}${verdict.detail ? `: ${verdict.detail}` : ""})`,
+        reason: "url_not_allowed",
+      };
+    }
 
     try {
       // Server-side proxy path (browser web surface) takes precedence:
@@ -171,7 +230,6 @@ export function createReadUrlHandler(opts?: {
           : { ok: false, error: result.error ?? "Proxy fetch failed" };
       }
 
-      const fetcher = opts?.fetcher ?? defaultFetcher;
       const { status, contentType, body } = await fetcher(url);
       if (status >= 400) return { ok: false, error: `HTTP ${status}` };
 

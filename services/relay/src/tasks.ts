@@ -9,6 +9,7 @@
 
 import type { Hono } from "hono";
 import type { TokenAudience } from "@motebit/protocol";
+import type { OutboundUrlOptions } from "@motebit/sdk";
 import { HTTPException } from "hono/http-exception";
 import type { MotebitDatabase } from "@motebit/persistence";
 import type { IdentityManager } from "@motebit/core-identity";
@@ -191,6 +192,8 @@ export interface TasksDeps {
   taskRouter: TaskRouter;
   issueCredentials: boolean;
   apiToken?: string;
+  /** Outbound URL law applied to every MCP forward (`buildOutboundPolicy`). */
+  outboundPolicy?: OutboundUrlOptions;
   enableDeviceAuth: boolean;
   maxTasksPerSubmitter: number;
   x402Config: {
@@ -1743,6 +1746,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     taskRouter,
     issueCredentials,
     apiToken,
+    outboundPolicy,
     enableDeviceAuth,
     maxTasksPerSubmitter,
     x402Config,
@@ -2726,6 +2730,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               );
             },
             await dispatchTokenFor(pinnedId),
+            outboundPolicy,
           );
           routed = true;
           logger.info("task.p2p_pinned_dispatched", {
@@ -3246,6 +3251,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                         );
                       },
                       await dispatchTokenFor(selId),
+                      outboundPolicy,
                     );
                     routed = true;
                   }
@@ -3320,6 +3326,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
             );
           },
           await dispatchTokenFor(httpCandidate.motebit_id),
+          outboundPolicy,
         );
         routed = true;
       }

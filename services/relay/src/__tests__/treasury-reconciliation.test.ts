@@ -32,6 +32,7 @@ beforeEach(async () => {
   // conditional (only-runs-on-mainnet) is tested separately via
   // treasury-reconciliation-e2e.test.ts.
   relay = await createSyncRelay({
+    allowPrivateEndpoints: true,
     apiToken: "test-token",
     enableDeviceAuth: true,
     x402: {

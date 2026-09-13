@@ -57,6 +57,9 @@ export async function createTestRelay(overrides?: Partial<SyncRelayConfig>): Pro
     // contention-flake amplifier under parallel `turbo run test`). 10ms keeps
     // the drain code path exercised without the wall-clock + flake cost.
     drainGraceMs: 10,
+    // Tests register workers on 127.0.0.1 — the local-development allowance.
+    // Production keeps the default (false): only globally-routable endpoints.
+    allowPrivateEndpoints: true,
     ...overrides,
   });
 }

@@ -77,6 +77,8 @@ describe("forwardTaskViaMcp — non-2xx is loud, never silent", () => {
       async () => {
         receiptIngested = true;
       },
+      undefined,
+      { allowPrivateNetwork: true },
     );
 
     const failure = cap.entries.find((e) => e.msg === "task.mcp_forward_failed");

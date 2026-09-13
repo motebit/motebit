@@ -24,6 +24,7 @@ const API_TOKEN = "test-token";
 
 async function createTestRelay(): Promise<SyncRelay> {
   return createSyncRelay({
+    allowPrivateEndpoints: true,
     apiToken: API_TOKEN,
     enableDeviceAuth: true,
     x402: {

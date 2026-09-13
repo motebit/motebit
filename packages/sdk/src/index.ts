@@ -602,3 +602,19 @@ export interface ServerVerifier {
     tools: ToolDefinition[],
   ): Promise<VerificationResult>;
 }
+
+// Outbound URL policy — the one law for fetching a URL motebit did not
+// author (SSRF boundary). docs/doctrine/security-boundaries.md §"Outbound URLs".
+export {
+  checkOutboundUrl,
+  assertOutboundUrl,
+  fetchPublic,
+  isPublicAddress,
+  OutboundUrlRefusedError,
+} from "./outbound-url.js";
+export type {
+  OutboundUrlOptions,
+  OutboundUrlRefusal,
+  OutboundUrlVerdict,
+  FetchPublicOptions,
+} from "./outbound-url.js";

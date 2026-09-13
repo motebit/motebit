@@ -255,7 +255,11 @@ describe("booted entry — receipt→settlement link (P2P settlement recorded wi
   let treasuryAddress: string;
 
   beforeAll(async () => {
-    booted = await bootRealEntry(DIST_TIER, { MOTEBIT_API_TOKEN: MASTER_TOKEN });
+    booted = await bootRealEntry(DIST_TIER, {
+      MOTEBIT_API_TOKEN: MASTER_TOKEN,
+      // Tests register workers on localhost — the local-development allowance.
+      MOTEBIT_ALLOW_PRIVATE_ENDPOINTS: "1",
+    });
     // The relay publishes its own key; the treasury is that key's Solana
     // address (deriveSolanaAddress(relayIdentity.publicKey)) — the exact
     // derivation the submission gate checks the fee leg against.

@@ -82,6 +82,7 @@ The developer-contract vocabularies — the package's reason to exist as its own
 - **Pixel consent** (`pixel-consent.ts`) — the visual-perception consent vocabulary; pixels cross a different sovereignty boundary than text
 - **Session state** (`session-state.ts`) — the per-turn runtime-state snapshot injected into the system prompt's `[Session]` block
 - **Identity sigil** (`identity-sigil.ts`) — deterministic visual recognition parameters derived from a `motebit_id`
+- **Outbound URL policy** (`outbound-url.ts`) — the one law for fetching a URL motebit did not author: `checkOutboundUrl` / `assertOutboundUrl` decide (http(s) only, no credentials, never loopback / private / link-local / metadata / `*.internal`, IPv4-in-IPv6 refused, resolved addresses checked when a resolver is injected), `fetchPublic` re-applies it to every redirect hop, `isPublicAddress` classifies a bare address, and `OutboundUrlRefusedError` carries the closed refusal reason. Consumed by the proxy `/v1/fetch`, the `read_url` tool, and the relay's endpoint registration and forward seams
 
 ## Related
 

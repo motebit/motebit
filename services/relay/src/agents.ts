@@ -9,6 +9,8 @@ import type { MotebitDatabase, DatabaseDriver } from "@motebit/persistence";
 import type { IdentityManager } from "@motebit/core-identity";
 import type { EventStore } from "@motebit/event-log";
 import { asMotebitId } from "@motebit/sdk";
+import { checkOutboundUrl } from "@motebit/sdk";
+import type { OutboundUrlOptions } from "@motebit/sdk";
 import type { AgentTrustRecord, ExecutionReceipt, HardwareAttestationClaim } from "@motebit/sdk";
 import { scoreAttestation } from "@motebit/market";
 import type { ConnectedDevice } from "./index.js";
@@ -378,6 +380,8 @@ export interface AgentsDeps {
   relayIdentity: RelayIdentity;
   connections: Map<string, ConnectedDevice[]>;
   taskRouter: TaskRouter;
+  /** Outbound URL law for persisted agent endpoints (`buildOutboundPolicy`). */
+  outboundPolicy?: OutboundUrlOptions;
   apiToken?: string;
   /** Platform fee rate for the P2P eligibility pre-flight's expected-fee hint. Defaults to PLATFORM_FEE_RATE. */
   platformFeeRate?: number;
@@ -1076,6 +1080,17 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
 
     if (!body.endpoint_url || typeof body.endpoint_url !== "string") {
       throw new HTTPException(400, { message: "Missing or invalid 'endpoint_url'" });
+    }
+    // The relay will later CONNECT to this URL (task forwards carry a bearer),
+    // so it must be a globally-routable destination — never loopback,
+    // private, link-local/metadata, *.internal, or a name resolving to one.
+    // Refused at persist time so a hostile registration never becomes a
+    // stored SSRF primitive. Doctrine: security-boundaries.md §"Outbound URLs".
+    const endpointVerdict = await checkOutboundUrl(body.endpoint_url, deps.outboundPolicy);
+    if (!endpointVerdict.ok) {
+      throw new HTTPException(400, {
+        message: `endpoint_url refused: ${endpointVerdict.reason}`,
+      });
     }
     if (!Array.isArray(body.capabilities)) {
       throw new HTTPException(400, {
