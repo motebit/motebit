@@ -73,11 +73,11 @@ describe("forwardTaskViaMcp — non-2xx is loud, never silent", () => {
       "worker-abc",
       taskQueue,
       cap.logger as Parameters<typeof forwardTaskViaMcp>[5],
-      "relay-token",
+      undefined,
       async () => {
         receiptIngested = true;
       },
-      undefined,
+      "disp.token",
       { allowPrivateNetwork: true },
     );
 

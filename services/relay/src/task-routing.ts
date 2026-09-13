@@ -1041,9 +1041,16 @@ export async function forwardTaskViaMcp(
     info: (msg: string, ctx: Record<string, unknown>) => void;
     warn: (msg: string, ctx: Record<string, unknown>) => void;
   },
-  apiToken?: string,
+  /**
+   * Retired: the relay's master token is NEVER sent to a worker endpoint.
+   * Kept positionally so existing call sites and tests do not shift; any
+   * value passed here is ignored. The relay authenticates as itself with
+   * the dispatch token below (`Authorization: Bearer motebit:<token>`),
+   * which the worker verifies under its pinned relay key.
+   */
+  _retiredApiToken?: string,
   onReceipt?: (receipt: ReceiptCandidate) => Promise<void>,
-  /** Relay-signed admission artifact for THIS worker + task (`mintTaskDispatchToken`). */
+  /** Relay-signed admission artifact for THIS worker + task (`mintTaskDispatchToken`) — also the bearer. */
   dispatchToken?: string,
   /** Outbound URL law (`buildOutboundPolicy`); absent ⇒ literals + names only. */
   outboundPolicy?: OutboundUrlOptions,
@@ -1060,12 +1067,27 @@ export async function forwardTaskViaMcp(
     });
     return;
   }
+  if (dispatchToken == null) {
+    logger.warn("task.mcp_forward_refused", {
+      correlationId: taskId,
+      agent: agentId,
+      endpoint: endpointUrl,
+      reason: "no_dispatch_token",
+    });
+    return;
+  }
   const mcpEndpoint = endpointUrl.endsWith("/mcp") ? endpointUrl : `${endpointUrl}/mcp`;
   const mcpHeaders: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/json, text/event-stream",
   };
-  if (apiToken) mcpHeaders["Authorization"] = `Bearer ${apiToken}`;
+  // The relay authenticates AS ITSELF: the per-task, per-worker dispatch
+  // token is the bearer. The master token never leaves the relay — before
+  // this, any registered endpoint received the relay's admin credential on
+  // its first forwarded task (docs/doctrine/task-admission.md §"The relay
+  // authenticates as itself"). A worker on an older @motebit/mcp-server
+  // (no relayTrust) answers 401, which is logged loudly below.
+  if (dispatchToken) mcpHeaders["Authorization"] = `Bearer motebit:${dispatchToken}`;
 
   // Wake-on-delegation: Fly.io `auto_stop_machines = "stop"` services
   // require an HTTP GET to trigger auto-start. MCP POSTs don't wake
