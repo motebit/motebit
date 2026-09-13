@@ -156,6 +156,14 @@ export interface SubmitTaskRequest {
 /** Declared response of a task submission. */
 export interface SubmitTaskResponse {
   task_id: string;
+  /**
+   * Relay-signed task admission token (`task:dispatch`), present ONLY when
+   * the relay did not dispatch the task itself — the submitter is then the
+   * one presenter and passes it as `dispatch_token` to the worker's
+   * `motebit_task`. Absent when the relay routed the task (poll for the
+   * receipt instead). delegation-v1 §3.2; docs/doctrine/task-admission.md.
+   */
+  dispatch_token?: string;
   [key: string]: unknown;
 }
 

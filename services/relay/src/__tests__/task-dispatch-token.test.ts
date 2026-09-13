@@ -20,8 +20,10 @@ import type { RelayIdentity } from "../federation.js";
 import {
   forwardTaskViaMcp,
   mintTaskDispatchToken,
+  taskPromptDigest,
   TASK_DISPATCH_TOKEN_TTL_MS,
 } from "../task-routing.js";
+import { getListingUnitCost } from "../tasks.js";
 import {
   createTestRelay,
   createAgent,
@@ -95,12 +97,14 @@ describe("mintTaskDispatchToken", () => {
       publicKeyHex: bytesToHex(kp.publicKey),
       did: "did:key:relay-test",
     };
-    const token = await mintTaskDispatchToken(relayIdentity, "worker-1", "task-1");
+    const token = await mintTaskDispatchToken(relayIdentity, "worker-1", "task-1", "do the thing");
     const payload = await verifySignedToken(token, kp.publicKey);
     expect(payload).not.toBeNull();
     expect(payload!.aud).toBe("task:dispatch");
     expect(payload!.mid).toBe("worker-1");
     expect(payload!.sub).toBe("task-1");
+    expect(payload!.digest).toBe(await taskPromptDigest("do the thing"));
+    expect(payload!.digest).toMatch(/^[0-9a-f]{64}$/);
     expect(payload!.did).toBe("did:key:relay-test");
     expect(payload!.exp - payload!.iat).toBe(TASK_DISPATCH_TOKEN_TTL_MS);
     expect(TASK_DISPATCH_TOKEN_TTL_MS).toBeLessThanOrEqual(15 * 60 * 1000);
@@ -159,7 +163,47 @@ describe("forwardTaskViaMcp carries the dispatch token", () => {
   });
 });
 
-describe("POST /agent/:worker/task — admission artifact end to end", () => {
+describe("getListingUnitCost — an unlisted capability never prices a priced worker at 0", () => {
+  it("prices an unknown capability at the listing ceiling; a listed one at its own price; unpriced stays 0", async () => {
+    const relay = await createTestRelay();
+    try {
+      const w = await createAgent(relay, bytesToHex((await generateKeypair()).publicKey));
+      await relay.app.request(`/api/v1/agents/${w.motebitId}/listing`, {
+        method: "POST",
+        headers: JSON_AUTH,
+        body: JSON.stringify({
+          capabilities: ["web_search", "read_url"],
+          pricing: [
+            { capability: "web_search", unit_cost: 0.05, currency: "USD", per: "task" },
+            { capability: "read_url", unit_cost: 0.5, currency: "USD", per: "task" },
+          ],
+          sla: { max_latency_ms: 5000, availability_guarantee: 0.99 },
+          description: "priced",
+        }),
+      });
+      expect(getListingUnitCost(relay.moteDb, w.motebitId, "web_search")).toBe(0.05);
+      expect(getListingUnitCost(relay.moteDb, w.motebitId, "bogus")).toBe(0.5);
+      expect(getListingUnitCost(relay.moteDb, w.motebitId)).toBeCloseTo(0.55);
+
+      const free = await createAgent(relay, bytesToHex((await generateKeypair()).publicKey));
+      await relay.app.request(`/api/v1/agents/${free.motebitId}/listing`, {
+        method: "POST",
+        headers: JSON_AUTH,
+        body: JSON.stringify({
+          capabilities: ["echo"],
+          pricing: [{ capability: "echo", unit_cost: 0, currency: "USD", per: "task" }],
+          sla: { max_latency_ms: 5000, availability_guarantee: 0.99 },
+          description: "free",
+        }),
+      });
+      expect(getListingUnitCost(relay.moteDb, free.motebitId, "bogus")).toBe(0);
+    } finally {
+      await relay.close();
+    }
+  });
+});
+
+describe("POST /agent/:worker/task — one presenter per admission", () => {
   let relay: SyncRelay;
   let delegator: { motebitId: string };
   let worker: { motebitId: string };
@@ -175,15 +219,13 @@ describe("POST /agent/:worker/task — admission artifact end to end", () => {
     await relay.close();
   });
 
-  it("returns a dispatch_token bound to the submission target AND forwards one to the pinned worker", async () => {
-    const w = capturingWorker(ROUTE_PORT);
-    servers.push(w.server);
+  async function registerWorker(endpointUrl: string): Promise<void> {
     await relay.app.request("/api/v1/agents/register", {
       method: "POST",
       headers: JSON_AUTH,
       body: JSON.stringify({
         motebit_id: worker.motebitId,
-        endpoint_url: `http://127.0.0.1:${ROUTE_PORT}/mcp`,
+        endpoint_url: endpointUrl,
         capabilities: ["web_search"],
         settlement_address: WORKER_SOLANA_ADDR,
         settlement_modes: "relay,p2p",
@@ -201,16 +243,18 @@ describe("POST /agent/:worker/task — admission artifact end to end", () => {
       }),
     });
     setTrust(relay.moteDb.db, delegator.motebitId, worker.motebitId);
+  }
 
+  async function submitPinnedPaid(prompt: string): Promise<Response> {
     const proof = buildP2pPaymentProof(relay, {
       workerAddress: WORKER_SOLANA_ADDR,
       unitCostMicro: toMicro(0.5),
     });
-    const res = await relay.app.request(`/agent/${delegator.motebitId}/task`, {
+    return relay.app.request(`/agent/${delegator.motebitId}/task`, {
       method: "POST",
       headers: { ...jsonAuthWithIdempotency(), "Idempotency-Key": proof.tx_hash },
       body: JSON.stringify({
-        prompt: "admission probe",
+        prompt,
         submitted_by: delegator.motebitId,
         target_agent: worker.motebitId,
         settlement_mode: "p2p",
@@ -218,35 +262,62 @@ describe("POST /agent/:worker/task — admission artifact end to end", () => {
         required_capabilities: ["web_search"],
       }),
     });
+  }
+
+  it("relay-routed: the forward carries a token bound to the pinned worker + prompt, and the submitter gets NONE", async () => {
+    const w = capturingWorker(ROUTE_PORT);
+    servers.push(w.server);
+    await registerWorker(`http://127.0.0.1:${ROUTE_PORT}/mcp`);
+
+    const res = await submitPinnedPaid("admission probe");
     expect(res.status).toBe(201);
     const body = (await res.json()) as { task_id: string; dispatch_token?: string };
+    expect(body.dispatch_token).toBeUndefined();
 
-    // 3. The submitter gets the artifact for the SUBMISSION TARGET (the URL
-    //    worker — here the delegator's own id, since the paid worker is
-    //    pinned via target_agent), bound to this task.
-    expect(typeof body.dispatch_token).toBe("string");
-    const returned = await verifySignedToken(
-      body.dispatch_token!,
-      hexToBytes(relay.relayIdentity.publicKeyHex),
-    );
-    expect(returned?.aud).toBe("task:dispatch");
-    expect(returned?.mid).toBe(delegator.motebitId);
-    expect(returned?.sub).toBe(body.task_id);
-
-    // 2. The forward to the PINNED worker carries a token minted for THAT
-    //    worker (mid binds to the recipient, not the URL), same task.
     const arrived = await waitFor(() => w.bodies.some((b) => b.method === "tools/call"), 5000);
     expect(arrived).toBe(true);
     const call = w.bodies.find((b) => b.method === "tools/call")!;
-    const forwarded = call.params?.arguments?.dispatch_token;
-    expect(typeof forwarded).toBe("string");
     expect(call.params?.arguments?.relay_task_id).toBe(body.task_id);
     const fwdPayload = await verifySignedToken(
-      forwarded as string,
+      call.params?.arguments?.dispatch_token as string,
       hexToBytes(relay.relayIdentity.publicKeyHex),
     );
+    expect(fwdPayload?.aud).toBe("task:dispatch");
     expect(fwdPayload?.mid).toBe(worker.motebitId);
     expect(fwdPayload?.sub).toBe(body.task_id);
-    expect(fwdPayload?.aud).toBe("task:dispatch");
+    expect(fwdPayload?.digest).toBe(await taskPromptDigest("admission probe"));
+  });
+
+  it("unroutable paid worker: the submitter gets a token bound to the PINNED worker (not the URL agent)", async () => {
+    // Registered with an expired registry row shape: no WebSocket, and an
+    // endpoint the relay will not find live → Phase 0 logs unroutable.
+    await registerWorker("");
+    const res = await submitPinnedPaid("direct presentation");
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { task_id: string; dispatch_token?: string };
+    expect(typeof body.dispatch_token).toBe("string");
+    const payload = await verifySignedToken(
+      body.dispatch_token!,
+      hexToBytes(relay.relayIdentity.publicKeyHex),
+    );
+    expect(payload?.mid).toBe(worker.motebitId);
+    expect(payload?.sub).toBe(body.task_id);
+    expect(payload?.digest).toBe(await taskPromptDigest("direct presentation"));
+  });
+
+  it("plain unrouted submission: token bound to the URL worker", async () => {
+    const res = await relay.app.request(`/agent/${worker.motebitId}/task`, {
+      method: "POST",
+      headers: jsonAuthWithIdempotency(),
+      body: JSON.stringify({ prompt: "hello", submitted_by: worker.motebitId }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { task_id: string; dispatch_token?: string };
+    const payload = await verifySignedToken(
+      body.dispatch_token!,
+      hexToBytes(relay.relayIdentity.publicKeyHex),
+    );
+    expect(payload?.mid).toBe(worker.motebitId);
+    expect(payload?.sub).toBe(body.task_id);
   });
 });

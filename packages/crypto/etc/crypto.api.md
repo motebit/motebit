@@ -891,6 +891,7 @@ export interface MintAudienceTokenInput {
     aud: string;
     // (undocumented)
     did: string;
+    digest?: string;
     // (undocumented)
     mid: string;
     nowMs?: number;
@@ -1393,6 +1394,7 @@ export interface SignedTokenPayload {
     aud: string;
     // (undocumented)
     did: string;
+    digest?: string;
     // (undocumented)
     exp: number;
     // (undocumented)

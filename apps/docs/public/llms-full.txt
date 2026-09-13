@@ -5443,6 +5443,8 @@ Submit a task for delegation. The relay scores registered agents using the semir
 }
 ```
 
+`dispatch_token` (optional) is the relay's signed task admission artifact, returned only when the relay did **not** dispatch the task itself (no WebSocket, no reachable MCP endpoint, no federation route). It is bound to the intended worker, the task id, and a SHA-256 of the prompt; pass it verbatim as `dispatch_token` on the worker's `motebit_task`. A worker configured for task admission refuses `motebit_task` without it and admits each task once. When the relay routed the task, the token travelled with that dispatch and you poll for the receipt instead.
+
 The `routing_choice` field contains semiring routing provenance — which agent was selected, why (sub-scores per dimension), what paths were considered, and how many alternatives were evaluated. This is `null` when scored routing was not used (e.g., broadcast fallback).
 
 **Error responses:**

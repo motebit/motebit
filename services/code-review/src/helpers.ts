@@ -27,6 +27,6 @@ export function loadConfig() {
      * task dispatch tokens. Absent ⇒ trust-on-first-use from the relay's
      * /.well-known/motebit.json (logged). Pin it in production.
      */
-    relayPublicKey: process.env["MOTEBIT_RELAY_PUBLIC_KEY"] ?? null,
+    relayPublicKey: process.env["MOTEBIT_RELAY_PUBLIC_KEY"]?.trim() || null,
   };
 }

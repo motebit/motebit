@@ -1986,12 +1986,17 @@ describe("McpServerAdapter — task admission (dispatch_token)", () => {
     return { handleAgentTask, calls };
   }
 
+  async function digestOf(prompt: string): Promise<string> {
+    return enc.bytesToHex(await enc.sha256(new TextEncoder().encode(prompt)));
+  }
+
   async function mint(
     priv: Uint8Array,
     over: Partial<{
       mid: string;
       aud: string;
       sub: string | undefined;
+      digest: string | undefined;
       nowMs: number;
       ttlMs: number;
     }> = {},
@@ -2002,6 +2007,12 @@ describe("McpServerAdapter — task admission (dispatch_token)", () => {
         did: "relay-did",
         aud: over.aud ?? "task:dispatch",
         ...("sub" in over ? (over.sub != null ? { sub: over.sub } : {}) : { sub: "task-1" }),
+        // Every fixture prompt is "p" unless a case says otherwise.
+        ...("digest" in over
+          ? over.digest != null
+            ? { digest: over.digest }
+            : {}
+          : { digest: await digestOf("p") }),
         ...(over.nowMs != null ? { nowMs: over.nowMs } : {}),
         ...(over.ttlMs != null ? { ttlMs: over.ttlMs } : {}),
       },
@@ -2097,6 +2108,60 @@ describe("McpServerAdapter — task admission (dispatch_token)", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("the token admits THIS prompt — a different prompt, or a token with no digest, is refused", async () => {
+    const relay = await enc.generateKeypair();
+    const { handleAgentTask, calls } = captureTask();
+    const handler = await adapterWith(enc.bytesToHex(relay.publicKey), handleAgentTask);
+    const swapped = await handler({
+      prompt: "something more expensive",
+      dispatch_token: await mint(relay.privateKey),
+    });
+    expect(text(swapped)).toContain("digest mismatch");
+    const none = await handler({
+      prompt: "p",
+      dispatch_token: await mint(relay.privateKey, { sub: "task-2", digest: undefined }),
+    });
+    expect(text(none)).toContain("no prompt digest");
+    expect(calls).toHaveLength(0);
+    // A refused presentation must not consume the admission.
+    await handler({ prompt: "p", dispatch_token: await mint(relay.privateKey) });
+    expect(calls.map((c) => c.relayTaskId)).toEqual(["task-1"]);
+  });
+
+  it("uses an injected durable AdmittedTaskStore so a restart cannot re-admit a live token", async () => {
+    const relay = await enc.generateKeypair();
+    const persisted = new Map<string, number>();
+    const store = {
+      has: (id: string) => persisted.has(id),
+      add: (id: string, exp: number) => {
+        persisted.set(id, exp);
+      },
+    };
+    const relayKey = enc.bytesToHex(relay.publicKey);
+    const first = captureTask();
+    const a1 = new McpServerAdapter(
+      makeConfig({ taskAdmission: { relayPublicKey: relayKey, admittedStore: store } }),
+      makeDeps({ handleAgentTask: first.handleAgentTask }),
+    );
+    await a1.start();
+    const token = await mint(relay.privateKey, { sub: "durable-1" });
+    await registrations.tools.get("motebit_task")!.handler({ prompt: "p", dispatch_token: token });
+    expect(first.calls).toHaveLength(1);
+
+    // "Restart": a fresh adapter over the same store.
+    const second = captureTask();
+    const a2 = new McpServerAdapter(
+      makeConfig({ taskAdmission: { relayPublicKey: relayKey, admittedStore: store } }),
+      makeDeps({ handleAgentTask: second.handleAgentTask }),
+    );
+    await a2.start();
+    const res = await registrations.tools
+      .get("motebit_task")!
+      .handler({ prompt: "p", dispatch_token: token });
+    expect(text(res)).toContain("already admitted");
+    expect(second.calls).toHaveLength(0);
+  });
+
   it("admits each relay task at most once — replaying the token or re-minting for the same sub is refused", async () => {
     const relay = await enc.generateKeypair();
     const { handleAgentTask, calls } = captureTask();
@@ -2112,7 +2177,7 @@ describe("McpServerAdapter — task admission (dispatch_token)", () => {
     expect(text(reminted)).toContain("already admitted");
     // A different task under the same key still runs.
     await handler({
-      prompt: "q",
+      prompt: "p",
       dispatch_token: await mint(relay.privateKey, { sub: "task-10" }),
     });
     expect(calls.map((c) => c.relayTaskId)).toEqual(["task-9", "task-10"]);

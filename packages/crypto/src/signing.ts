@@ -45,6 +45,13 @@ export interface SignedTokenPayload {
    */
   sub?: string;
   /**
+   * Content digest of the subject (hex SHA-256), when the token authorizes a
+   * specific payload and not just a specific subject id — a `task:dispatch`
+   * token carries the SHA-256 of the admitted prompt so the artifact cannot be
+   * presented with different work. Optional and audience-specific.
+   */
+  digest?: string;
+  /**
    * Cryptosuite identifier. Always `"motebit-jwt-ed25519-v1"` for this
    * token shape today. Present in the signed payload so verifiers
    * dispatch primitive verification through `verifyBySuite` rather
@@ -308,6 +315,8 @@ export interface MintAudienceTokenInput {
   aud: string;
   /** Optional subject claim — see `SignedTokenPayload.sub`. Omitted when absent. */
   sub?: string;
+  /** Optional subject content digest (hex SHA-256) — see `SignedTokenPayload.digest`. */
+  digest?: string;
   /** Token lifetime in ms. Default `DEFAULT_SIGNED_TOKEN_TTL_MS`. */
   ttlMs?: number;
   /**
@@ -364,6 +373,7 @@ export async function mintAudienceToken(
     jti: mintJti(),
     aud: input.aud,
     ...(input.sub != null ? { sub: input.sub } : {}),
+    ...(input.digest != null ? { digest: input.digest } : {}),
     suite: SIGNED_TOKEN_SUITE,
   };
   const token = await createSignedToken(payload, privateKey);

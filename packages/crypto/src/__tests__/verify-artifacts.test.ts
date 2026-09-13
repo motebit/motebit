@@ -304,11 +304,18 @@ describe("mintAudienceToken (the canonical mint seam)", () => {
   it("carries an optional `sub` subject claim under the signature and omits it when absent", async () => {
     const kp = await generateKeypair();
     const withSub = await mintAudienceToken(
-      { mid: "worker-1", did: "relay-did", aud: "task:dispatch", sub: "task-abc" },
+      {
+        mid: "worker-1",
+        did: "relay-did",
+        aud: "task:dispatch",
+        sub: "task-abc",
+        digest: "ab".repeat(32),
+      },
       kp.privateKey,
     );
     const verified = await verifySignedToken(withSub.token, kp.publicKey);
     expect(verified?.sub).toBe("task-abc");
+    expect(verified?.digest).toBe("ab".repeat(32));
     expect(verified).toEqual(withSub.payload);
 
     // Tampering with the subject after signing is a signature failure, not a
@@ -320,6 +327,7 @@ describe("mintAudienceToken (the canonical mint seam)", () => {
 
     const without = await mintAudienceToken({ mid: "m", did: "d", aud: "sync" }, kp.privateKey);
     expect("sub" in without.payload).toBe(false);
+    expect("digest" in without.payload).toBe(false);
   });
 
   it("defaults the lifetime to DEFAULT_SIGNED_TOKEN_TTL_MS and honors ttlMs overrides", async () => {

@@ -26,6 +26,7 @@ import {
   didKeyToPublicKey,
   bytesToHex,
   mintAudienceToken,
+  sha256,
 } from "@motebit/encryption";
 import { TASK_DISPATCH_AUDIENCE } from "@motebit/protocol";
 import type { DatabaseDriver } from "@motebit/persistence";
@@ -984,19 +985,26 @@ function isReceiptCandidate(v: unknown): v is ReceiptCandidate {
  */
 export const TASK_DISPATCH_TOKEN_TTL_MS = 15 * 60 * 1000;
 
+/** Hex SHA-256 of the admitted prompt — the `digest` claim on a dispatch token. */
+export async function taskPromptDigest(prompt: string): Promise<string> {
+  return bytesToHex(await sha256(new TextEncoder().encode(prompt)));
+}
+
 /**
  * Mint the relay-signed per-task ADMISSION artifact (`aud: "task:dispatch"`,
- * `mid` = the worker the task is dispatched to, `sub` = the relay task id).
- * Attached to every MCP forward and returned to the submitter, so a worker
- * that admits work only through its relay can verify — offline, against the
- * pinned relay key — that this task cleared submission (payment proof,
- * balance hold, or an explicit carve-out) before it spends anything.
- * Doctrine: `docs/doctrine/task-admission.md`.
+ * `mid` = the worker the task is dispatched to, `sub` = the relay task id,
+ * `digest` = SHA-256 of the admitted prompt). Attached to the relay's own MCP
+ * forward, or returned to a submitter the relay did not dispatch for — exactly
+ * one presenter per admission — so a worker that admits work only through its
+ * relay can verify offline, against the pinned relay key, that THIS work
+ * cleared submission (payment proof, balance hold, or an explicit carve-out)
+ * before it spends anything. Doctrine: `docs/doctrine/task-admission.md`.
  */
 export async function mintTaskDispatchToken(
   relayIdentity: RelayIdentity,
   workerMotebitId: string,
   taskId: string,
+  prompt: string,
 ): Promise<string> {
   const { token } = await mintAudienceToken(
     {
@@ -1004,6 +1012,7 @@ export async function mintTaskDispatchToken(
       did: relayIdentity.did,
       aud: TASK_DISPATCH_AUDIENCE,
       sub: taskId,
+      digest: await taskPromptDigest(prompt),
       ttlMs: TASK_DISPATCH_TOKEN_TTL_MS,
     },
     relayIdentity.privateKey,

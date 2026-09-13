@@ -118,9 +118,10 @@ When the worker is configured for **task admission** (`taskAdmission: "relay"` i
 - The token verifies (`@motebit/crypto.verifySignedToken`) under the worker's pinned relay public key, with `aud` = `task:dispatch` (`TokenAudience` registry).
 - `mid` equals the worker's own `motebit_id` — a token minted for another worker is refused.
 - `sub` is present: it is the relay task id and becomes the receipt's `relay_task_id`. A caller-supplied `relay_task_id` that disagrees with `sub` is refused, never trusted.
-- `sub` has not been admitted before by this worker. One admitted task ⇒ at most one execution; replaying the token or re-minting for the same task is refused.
+- `digest` is present and equals the hex SHA-256 of `prompt` — the token admits THIS work, not any work under this task id.
+- `sub` has not been admitted before by this worker. One admitted task ⇒ at most one execution; replaying the token or re-minting for the same task is refused. Workers SHOULD keep this record durable across restarts.
 
-The relay mints the token after submission clears its settlement gates, attaches it to every MCP forward, and returns it from `POST /agent/:motebit_id/task` so a delegator calling the worker directly presents the same artifact. Workers not configured for admission ignore the field. Doctrine: `docs/doctrine/task-admission.md`.
+The relay mints the token after submission clears its settlement gates. Exactly one presenter holds it: the relay attaches it to its own MCP forward, or — when nothing routed the task — returns it from `POST /agent/:motebit_id/task` (delegation-v1 §3.2) bound to the intended worker so the submitter can present the task directly. Workers not configured for admission ignore the field. Doctrine: `docs/doctrine/task-admission.md`.
 
 When `delegation_token` is present:
 

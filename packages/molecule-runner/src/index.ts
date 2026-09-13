@@ -27,12 +27,12 @@
  * single application-facing entry point.
  */
 
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { dirname, resolve as resolvePath } from "node:path";
 import { RiskLevel } from "@motebit/sdk";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import { bootstrapAndEmitIdentity, startServiceServer, wireServerDeps } from "@motebit/mcp-server";
-import type { TaskAdmissionConfig } from "@motebit/mcp-server";
+import type { AdmittedTaskStore, TaskAdmissionConfig } from "@motebit/mcp-server";
 import {
   deriveSolanaAddress,
   createSolanaWalletRail,
@@ -50,7 +50,8 @@ import type {
 } from "@motebit/mcp-server";
 import { openMotebitDatabase } from "@motebit/persistence";
 import type { MotebitDatabase } from "@motebit/persistence";
-import { MotebitRuntime, NullRenderer } from "@motebit/runtime";
+import { MotebitRuntime, NullRenderer, getOrPinRelayKey } from "@motebit/runtime";
+import type { RelayKeyPinStorage } from "@motebit/runtime";
 import type { PolicyConfig, StorageAdapters, GrantedDelegationResult } from "@motebit/runtime";
 import { signStandingDelegation, signDelegation, mintAudienceToken } from "@motebit/crypto";
 import type {
@@ -335,6 +336,12 @@ export interface MoleculeRunnerAdapters {
   /** HTTP fetch used for the relay well-known key lookup. Default: global `fetch`. */
   fetch?: typeof fetch;
   /**
+   * Durable stores for task admission. Default: JSON files under `dataDir`
+   * (`relay-key-pins.json`, `admitted-tasks.json`) — the same persistent
+   * volume that holds the identity. Tests inject in-memory stores.
+   */
+  admissionStores?: { pinStorage: RelayKeyPinStorage; admittedStore: AdmittedTaskStore };
+  /**
    * Override construction of the sovereign wallet used for sweeping earnings.
    * Default: `createSolanaWalletRail({ rpcUrl, identitySeed })`. Tests inject a
    * fake to exercise the sweep wiring without a network.
@@ -593,6 +600,82 @@ export function defaultCreateMoneyRuntime(
 // Task admission — decide posture + resolve the relay key
 // ---------------------------------------------------------------------------
 
+/** Env-derived defaults for task admission; explicit config always wins. */
+export function taskAdmissionEnvDefaults(env: NodeJS.ProcessEnv = process.env): {
+  taskAdmission?: "relay" | "open";
+  relayPublicKeyHex?: string;
+} {
+  const out: { taskAdmission?: "relay" | "open"; relayPublicKeyHex?: string } = {};
+  const mode = env["MOTEBIT_TASK_ADMISSION"]?.trim();
+  if (mode === "relay" || mode === "open") out.taskAdmission = mode;
+  const key = env["MOTEBIT_RELAY_PUBLIC_KEY"]?.trim();
+  if (key) out.relayPublicKeyHex = key;
+  return out;
+}
+
+/**
+ * A tiny durable JSON map under `dataDir` — the admission state a worker
+ * must not lose across a restart (its relay-key pin and the task ids it has
+ * already admitted). Atomic write via rename; read on every access so a
+ * second process on the same volume sees the same truth.
+ */
+function jsonFileMap(path: string): {
+  get(key: string): string | null;
+  set(key: string, value: string): void;
+  entries(): Record<string, string>;
+  replace(all: Record<string, string>): void;
+} {
+  const read = (): Record<string, string> => {
+    try {
+      return JSON.parse(readFileSync(path, "utf8")) as Record<string, string>;
+    } catch {
+      return {};
+    }
+  };
+  const write = (all: Record<string, string>): void => {
+    const tmp = `${path}.tmp`;
+    writeFileSync(tmp, JSON.stringify(all), { mode: 0o600 });
+    renameSync(tmp, path);
+  };
+  return {
+    get: (k) => read()[k] ?? null,
+    set: (k, v) => {
+      const all = read();
+      all[k] = v;
+      write(all);
+    },
+    entries: read,
+    replace: write,
+  };
+}
+
+/** @internal exported for tests */
+export function fileAdmissionStores(dataDir: string): {
+  pinStorage: RelayKeyPinStorage;
+  admittedStore: AdmittedTaskStore;
+} {
+  const pins = jsonFileMap(resolvePath(dataDir, "relay-key-pins.json"));
+  const admitted = jsonFileMap(resolvePath(dataDir, "admitted-tasks.json"));
+  return {
+    pinStorage: { getItem: (k) => pins.get(k), setItem: (k, v) => pins.set(k, v) },
+    admittedStore: {
+      has: (id) => {
+        const exp = Number(admitted.get(id));
+        return Number.isFinite(exp) && exp > Date.now();
+      },
+      add: (id, expiresAt) => {
+        const now = Date.now();
+        const all = admitted.entries();
+        for (const [k, v] of Object.entries(all)) if (Number(v) <= now) delete all[k];
+        all[id] = String(expiresAt);
+        admitted.replace(all);
+      },
+    },
+  };
+}
+
+const HEX_64 = /^[0-9a-fA-F]{64}$/;
+
 /** @internal exported for tests */
 export async function resolveTaskAdmission(
   config: Pick<
@@ -602,7 +685,10 @@ export async function resolveTaskAdmission(
   molecule: Pick<MoleculeBuild, "getServiceListing">,
   fetchImpl: typeof fetch,
   log: (msg: string) => void,
+  stores: { pinStorage: RelayKeyPinStorage; admittedStore: AdmittedTaskStore },
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<TaskAdmissionConfig | undefined> {
+  const envDefaults = taskAdmissionEnvDefaults(env);
   let priced = false;
   if (molecule.getServiceListing) {
     try {
@@ -618,9 +704,10 @@ export async function resolveTaskAdmission(
       );
     }
   }
-  const mode = config.taskAdmission ?? "open";
+  const configured = config.taskAdmission ?? envDefaults.taskAdmission;
+  const mode = configured ?? "open";
   if (mode === "open") {
-    if (config.taskAdmission == null && priced && config.syncUrl) {
+    if (configured == null && priced && config.syncUrl) {
       // The exact shape the admission primitive exists for, left open. Say
       // so on every boot — a priced listing is a promise that the work is
       // bought, and without admission any relay-registered identity can
@@ -629,48 +716,57 @@ export async function resolveTaskAdmission(
         'task admission: OPEN on a PRICED relay-registered listing — any relay-registered identity can run this work without paying. Set taskAdmission: "relay" (MOTEBIT_TASK_ADMISSION=relay) to require the relay\'s dispatch token.',
       );
     } else {
-      log(
-        `task admission: open (${config.taskAdmission != null ? "configured" : "unpriced or no relay"})`,
-      );
+      log(`task admission: open (${configured != null ? "configured" : "unpriced or no relay"})`);
     }
     return undefined;
   }
 
-  const pinned = config.relayPublicKeyHex ?? config.moneyExecution?.relayPublicKeyHex;
-  if (pinned != null) {
+  // Empty strings are "unset", never a pinned key; a NON-empty malformed pin is
+  // a configuration error that must stop the boot, not a silent deny-all that
+  // logs "pinned relay key".
+  const pinnedRaw =
+    config.relayPublicKeyHex?.trim() ||
+    config.moneyExecution?.relayPublicKeyHex?.trim() ||
+    envDefaults.relayPublicKeyHex ||
+    undefined;
+  if (pinnedRaw != null) {
+    if (!HEX_64.test(pinnedRaw)) {
+      throw new Error(
+        `task admission: relayPublicKeyHex / MOTEBIT_RELAY_PUBLIC_KEY is not a 64-hex Ed25519 public key (got ${pinnedRaw.length} chars) — fix the pin; refusing to start a priced service that could never admit work`,
+      );
+    }
     log("task admission: relay dispatch required (pinned relay key)");
-    return { relayPublicKey: pinned };
+    return { relayPublicKey: pinnedRaw, admittedStore: stores.admittedStore };
   }
   const syncUrl = config.syncUrl?.replace(/\/+$/, "");
   if (!syncUrl) {
     // Nothing to verify against and nothing to fetch from: deny all rather
-    // than open. The operator asked for admission (or priced the listing)
-    // without giving the worker a relay — that is a configuration error the
-    // first task surfaces, not a reason to work for free.
+    // than open. The operator asked for admission without giving the worker
+    // a relay — a configuration error the first task surfaces, not a reason
+    // to work for free.
     log(
       "task admission: relay dispatch required but NO relay key and NO syncUrl — every task will be refused",
     );
-    return { relayPublicKey: () => Promise.resolve(null) };
+    return { relayPublicKey: () => Promise.resolve(null), admittedStore: stores.admittedStore };
   }
   log(
-    `task admission: relay dispatch required — relay key NOT pinned, will trust-on-first-use from ${syncUrl}/.well-known/motebit.json (set relayPublicKeyHex / MOTEBIT_RELAY_PUBLIC_KEY to pin)`,
+    `task admission: relay dispatch required — relay key NOT pinned in config; using the persisted trust-on-first-use pin for ${syncUrl} (rotation verified against the relay's signed succession chain). Set relayPublicKeyHex / MOTEBIT_RELAY_PUBLIC_KEY to pin explicitly.`,
   );
   return {
+    // The same TOFU-with-succession primitive every delegator surface uses
+    // for the P2P fee-leg treasury key (`@motebit/runtime` relay-key-pin):
+    // first fetch persists the pin; a later key change is honored only when
+    // the relay's signed succession chain roots at our pin; otherwise fail
+    // closed. Never a bare re-fetch on every task.
     relayPublicKey: async () => {
-      try {
-        const resp = await fetchImpl(`${syncUrl}/.well-known/motebit.json`, {
-          signal: AbortSignal.timeout(10_000),
-        });
-        if (!resp.ok) return null;
-        const body = (await resp.json()) as { public_key?: unknown };
-        const key = body.public_key;
-        if (typeof key !== "string" || !/^[0-9a-fA-F]{64}$/.test(key)) return null;
-        log(`task admission: relay key resolved from well-known (${key.slice(0, 8)}…)`);
-        return key;
-      } catch {
-        return null;
-      }
+      const key = await getOrPinRelayKey(syncUrl, {
+        fetchImpl,
+        storage: stores.pinStorage,
+        logger: { warn: (m, ctx) => log(`task admission: ${m} ${ctx ? JSON.stringify(ctx) : ""}`) },
+      });
+      return key != null && HEX_64.test(key) ? key : null;
     },
+    admittedStore: stores.admittedStore,
   };
 }
 
@@ -846,7 +942,13 @@ export async function runMolecule(
   // from the molecule's OWN listing so pricing and admission cannot drift
   // apart: a service that charges is a service that requires the relay's
   // signed admission before it spends. Doctrine: task-admission.md.
-  const admission = await resolveTaskAdmission(config, molecule, adapters.fetch ?? fetch, log);
+  const admission = await resolveTaskAdmission(
+    config,
+    molecule,
+    adapters.fetch ?? fetch,
+    log,
+    adapters.admissionStores ?? fileAdmissionStores(config.dataDir),
+  );
   if (admission != null) serverCfg.taskAdmission = admission;
   if (config.authToken != null) serverCfg.authToken = config.authToken;
   if (config.syncUrl != null) serverCfg.syncUrl = config.syncUrl;

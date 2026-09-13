@@ -1,4 +1,4 @@
-# motebit/auth-token@1.0
+# motebit/auth-token@1.1
 
 **Status:** Stable
 **Authors:** Daniel Hakim
@@ -48,16 +48,18 @@ Every implementation MUST emit this exact JSON object shape inside the signed to
 }
 ```
 
-| Field | Type   | Required | Description                                                                                            |
-| ----- | ------ | -------- | ------------------------------------------------------------------------------------------------------ |
-| `mid` | string | yes      | The agent's `motebit_id`. Binds the token to a specific identity.                                      |
-| `did` | string | yes      | The agent's `device_id`. Binds the token to the device that signed it.                                 |
-| `iat` | number | yes      | Issued-at timestamp (epoch milliseconds). When the token was created.                                  |
-| `exp` | number | yes      | Expiration timestamp (epoch milliseconds). Tokens with `exp <= now` MUST be rejected.                  |
-| `jti` | string | yes      | JWT ID — a unique nonce (UUID v4 recommended). Prevents replay attacks. MUST be unique per token.      |
-| `aud` | string | yes      | Audience claim — the endpoint or operation this token authorizes. Prevents cross-endpoint replay (§5). |
+| Field    | Type   | Required | Description                                                                                                                                                                                                                 |
+| -------- | ------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mid`    | string | yes      | The agent's `motebit_id`. Binds the token to a specific identity.                                                                                                                                                           |
+| `did`    | string | yes      | The agent's `device_id`. Binds the token to the device that signed it.                                                                                                                                                      |
+| `iat`    | number | yes      | Issued-at timestamp (epoch milliseconds). When the token was created.                                                                                                                                                       |
+| `exp`    | number | yes      | Expiration timestamp (epoch milliseconds). Tokens with `exp <= now` MUST be rejected.                                                                                                                                       |
+| `jti`    | string | yes      | JWT ID — a unique nonce (UUID v4 recommended). Prevents replay attacks. MUST be unique per token.                                                                                                                           |
+| `aud`    | string | yes      | Audience claim — the endpoint or operation this token authorizes. Prevents cross-endpoint replay (§5).                                                                                                                      |
+| `sub`    | string | no       | Subject claim (JWT `sub`) — the object the token is ABOUT when that is not the bearer (e.g. the relay task id on `task:dispatch`). Audience-specific; a verifier for an audience that defines it MUST require it.           |
+| `digest` | string | no       | Hex SHA-256 of the subject's content when the token authorizes a specific payload (e.g. the admitted prompt on `task:dispatch`). Audience-specific; a verifier for an audience that defines it MUST require and compare it. |
 
-All fields are required. A verifier MUST reject tokens missing any field.
+The six core fields (`mid`, `did`, `iat`, `exp`, `jti`, `aud`) are required. A verifier MUST reject tokens missing any of them. `sub` and `digest` are optional, audience-specific claims (1.1): absent on every audience that does not define them, and REQUIRED by the verifier of an audience that does (§5, `task:dispatch`). Unknown additional claims MUST be ignored, not rejected — the signature covers them either way.
 
 The canonical TypeScript binding is `SignedTokenPayload` in `@motebit/crypto`. This type is defined alongside its signing/verifying primitives because the payload is never useful without the signing algorithm. The wire shape above is the protocol law; the `@motebit/crypto` type is its reference implementation.
 
@@ -138,31 +140,32 @@ Optional additional checks:
 
 The `aud` field MUST contain exactly one of the canonical audience values. Tokens are valid only at the endpoint matching their audience. This prevents an attacker who intercepts a sync token from replaying it to submit tasks.
 
-| Audience                | Endpoint / Operation                               | Description                                                                      |
-| ----------------------- | -------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `sync`                  | WebSocket sync connection, HTTP sync endpoints     | Multi-device data synchronization                                                |
-| `device:auth`           | Ad-hoc authenticated relay reads                   | Per-device auth headers on relay calls                                           |
-| `pair`                  | `POST /api/v1/pair/*`                              | Multi-device pairing flow                                                        |
-| `rotate-key`            | `POST /api/v1/agents/{id}/rotate-key`              | Key rotation endpoint                                                            |
-| `push:register`         | `POST /api/v1/agents/{id}/push/*`                  | Push-notification token registration                                             |
-| `task:submit`           | `POST /agent/{id}/task`                            | Submit a task for delegation                                                     |
-| `task:query`            | `GET /agent/{id}/task/{taskId}`                    | Poll for task result                                                             |
-| `task:result`           | `POST /agent/{id}/task/{taskId}/result`            | Worker posts signed execution receipt                                            |
-| `admin:query`           | `GET /api/v1/admin/*`, registry fallback reads     | Operator console + agent-registry queries                                        |
-| `proposal`              | `/api/v1/proposals/*`                              | Collaborative proposal lifecycle                                                 |
-| `receipts:read`         | `GET /api/v1/agents/{id}/receipts`                 | A motebit reading its own receipts                                               |
-| `market:listing`        | `GET /api/v1/agents/{id}/listing`, p2p-eligibility | Service-listing + eligibility reads                                              |
-| `market:query`          | `GET /api/v1/market/candidates`                    | Market candidate discovery (device-authable; `/market/revenue` is operator-only) |
-| `credentials`           | `/api/v1/agents/{id}/credentials/*`                | Credential submit / verify / revoke                                              |
-| `credentials:present`   | `POST /api/v1/agents/{id}/presentation`            | Verifiable-presentation submission                                               |
-| `account:balance`       | `GET /api/v1/agents/{id}/balance`                  | Read virtual-account balance                                                     |
-| `account:deposit`       | _(reserved — no endpoint)_                         | Reserved for a future funded deposit-initiation endpoint (see note)              |
-| `account:withdraw`      | `POST /api/v1/agents/{id}/withdraw`                | Withdraw request                                                                 |
-| `account:withdrawals`   | `GET /api/v1/agents/{id}/withdrawals`              | List withdrawal history                                                          |
-| `account:checkout`      | `POST /api/v1/agents/{id}/checkout`                | Stripe checkout session create                                                   |
-| `browser-sandbox-grant` | `POST /api/v1/browser-sandbox/token`               | Motebit-signed sandbox grant request                                             |
-| `browser-sandbox`       | Sandbox dispatcher (relay-signed)                  | Relay-signed sandbox dispatcher token                                            |
-| `runtime:attach`        | Local runtime-host socket only                     | Frontend-to-coordinator attach handshake (never accepted by a relay)             |
+| Audience                | Endpoint / Operation                                | Description                                                                                                                                                                                                               |
+| ----------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sync`                  | WebSocket sync connection, HTTP sync endpoints      | Multi-device data synchronization                                                                                                                                                                                         |
+| `device:auth`           | Ad-hoc authenticated relay reads                    | Per-device auth headers on relay calls                                                                                                                                                                                    |
+| `pair`                  | `POST /api/v1/pair/*`                               | Multi-device pairing flow                                                                                                                                                                                                 |
+| `rotate-key`            | `POST /api/v1/agents/{id}/rotate-key`               | Key rotation endpoint                                                                                                                                                                                                     |
+| `push:register`         | `POST /api/v1/agents/{id}/push/*`                   | Push-notification token registration                                                                                                                                                                                      |
+| `task:submit`           | `POST /agent/{id}/task`                             | Submit a task for delegation                                                                                                                                                                                              |
+| `task:query`            | `GET /agent/{id}/task/{taskId}`                     | Poll for task result                                                                                                                                                                                                      |
+| `task:result`           | `POST /agent/{id}/task/{taskId}/result`             | Worker posts signed execution receipt                                                                                                                                                                                     |
+| `task:dispatch`         | `motebit_task` on a worker (agent-mcp-surface §5.1) | Relay-signed task ADMISSION artifact: `mid` = worker, `sub` = relay task id, `digest` = SHA-256(prompt); minted after submission clears the relay's settlement gates; verified by the worker, never accepted by the relay |
+| `admin:query`           | `GET /api/v1/admin/*`, registry fallback reads      | Operator console + agent-registry queries                                                                                                                                                                                 |
+| `proposal`              | `/api/v1/proposals/*`                               | Collaborative proposal lifecycle                                                                                                                                                                                          |
+| `receipts:read`         | `GET /api/v1/agents/{id}/receipts`                  | A motebit reading its own receipts                                                                                                                                                                                        |
+| `market:listing`        | `GET /api/v1/agents/{id}/listing`, p2p-eligibility  | Service-listing + eligibility reads                                                                                                                                                                                       |
+| `market:query`          | `GET /api/v1/market/candidates`                     | Market candidate discovery (device-authable; `/market/revenue` is operator-only)                                                                                                                                          |
+| `credentials`           | `/api/v1/agents/{id}/credentials/*`                 | Credential submit / verify / revoke                                                                                                                                                                                       |
+| `credentials:present`   | `POST /api/v1/agents/{id}/presentation`             | Verifiable-presentation submission                                                                                                                                                                                        |
+| `account:balance`       | `GET /api/v1/agents/{id}/balance`                   | Read virtual-account balance                                                                                                                                                                                              |
+| `account:deposit`       | _(reserved — no endpoint)_                          | Reserved for a future funded deposit-initiation endpoint (see note)                                                                                                                                                       |
+| `account:withdraw`      | `POST /api/v1/agents/{id}/withdraw`                 | Withdraw request                                                                                                                                                                                                          |
+| `account:withdrawals`   | `GET /api/v1/agents/{id}/withdrawals`               | List withdrawal history                                                                                                                                                                                                   |
+| `account:checkout`      | `POST /api/v1/agents/{id}/checkout`                 | Stripe checkout session create                                                                                                                                                                                            |
+| `browser-sandbox-grant` | `POST /api/v1/browser-sandbox/token`                | Motebit-signed sandbox grant request                                                                                                                                                                                      |
+| `browser-sandbox`       | Sandbox dispatcher (relay-signed)                   | Relay-signed sandbox dispatcher token                                                                                                                                                                                     |
+| `runtime:attach`        | Local runtime-host socket only                      | Frontend-to-coordinator attach handshake (never accepted by a relay)                                                                                                                                                      |
 
 This table mirrors the closed `TokenAudience` registry in `@motebit/protocol` (`packages/protocol/src/audience.ts`, `ALL_TOKEN_AUDIENCES`); the registry is the canonical membership. Earlier revisions of this table listed `register-device`, which never existed in the registry — device registration uses `device:auth`. `account:deposit` remains a registered audience but currently maps to no endpoint: the self-declared `POST /api/v1/agents/{id}/deposit` route was removed as a treasury-drain vector (it credited spendable balance from a client-supplied amount), and the audience is held reserved for a future _funded_ deposit-initiation endpoint. Balance is credited only by verified server-side funding (onchain deposit-detector, Stripe webhook).
 
@@ -270,3 +273,8 @@ An implementation conforms to this specification if:
 5. The `motebit:` prefix is used in HTTP `Authorization` headers (§7.1).
 
 A conforming relay MUST reject tokens that fail any of these checks. Fail-closed.
+
+## Change Log
+
+- **1.1 (2026-09-12)** — Additive: optional, audience-specific `sub` and `digest` claims (§3); `task:dispatch` row in the audience table (§5) — the relay-signed task admission artifact (`docs/doctrine/task-admission.md`). Wire-compatible: existing audiences carry neither claim; verifiers that do not know a claim ignore it.
+- **1.0** — Initial.
