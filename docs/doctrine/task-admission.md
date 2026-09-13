@@ -32,6 +32,12 @@ It is minted only after submission has cleared the relay's existing gates, so it
 
 The relay itself never accepts `task:dispatch` inbound. It is a statement the relay makes, not one it consumes.
 
+## The relay authenticates as itself
+
+Before this arc the relay's MCP forward carried its **master token** as the bearer to every registered worker endpoint — including a stranger's. Two free identities (one registers an endpoint, one submits a task needing its capability) were enough to receive the relay's admin credential. That is the same class of defect as the side door, one layer down: transport auth reused an operator secret where a per-task, per-worker artifact already existed.
+
+The dispatch token is that artifact. A worker configured with `relayTrust` (or `taskAdmission`: one pin, two checks) accepts `Authorization: Bearer motebit:<dispatch_token>` when it verifies under the pinned relay key with `aud: task:dispatch` and `mid` = this worker, and treats the caller as its relay. `molecule-runner` sets `relayTrust` for every relay-registered molecule regardless of admission posture. The relay-side switch (forward with the dispatch token as bearer, never the master token) ships as the following PR once workers that accept it are deployed; third-party workers on an older `@motebit/mcp-server` then need the upgrade to receive forwards.
+
 ## Named gaps, carried with the flip trigger
 
 - **Federation.** A task forwarded to a peer relay is delivered by that relay over WebSocket only (`federation-callbacks.ts`); it never MCP-forwards, and the origin relay's token is signed by a key the executor's workers do not pin. An HTTP-only priced worker behind a peer relay was already unreachable through federation; admission does not change that. The executor relay minting its own token for federated dispatch is part of the flip.

@@ -377,3 +377,109 @@ describe("runMolecule threads task admission into startServiceServer", () => {
     });
   });
 });
+
+describe("resolveRelayTrust — the relay may authenticate as itself to any relay-registered molecule", () => {
+  it("pinned key ⇒ string; empty pin + syncUrl ⇒ TOFU resolver; no syncUrl ⇒ undefined; malformed ⇒ throws", async () => {
+    const { resolveRelayTrust } = await import("../index.js");
+    const { stores, pins } = memStores();
+    expect(
+      resolveRelayTrust(
+        { syncUrl: "http://relay", relayPublicKeyHex: RELAY_KEY },
+        stores.pinStorage,
+        noFetch,
+        () => {},
+      ),
+    ).toEqual({ relayPublicKey: RELAY_KEY });
+    expect(
+      resolveRelayTrust({ relayPublicKeyHex: "" }, stores.pinStorage, noFetch, () => {}),
+    ).toBeUndefined();
+    expect(() =>
+      resolveRelayTrust(
+        { syncUrl: "http://relay", relayPublicKeyHex: "nope" },
+        stores.pinStorage,
+        noFetch,
+        () => {},
+      ),
+    ).toThrow(/not a 64-hex/);
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ relay_id: "r", public_key: RELAY_KEY }), { status: 200 }),
+    );
+    const lazy = resolveRelayTrust(
+      { syncUrl: "http://relay/", relayPublicKeyHex: "  " },
+      stores.pinStorage,
+      fetchMock as unknown as typeof fetch,
+      () => {},
+    );
+    expect(typeof lazy?.relayPublicKey).toBe("function");
+    expect(await (lazy!.relayPublicKey as () => Promise<string | null>)()).toBe(RELAY_KEY);
+    expect([...pins.values()]).toContain(RELAY_KEY);
+  });
+
+  it("runMolecule passes relayTrust to the server even when admission is open", async () => {
+    const { runMolecule } = await import("../index.js");
+    const startCalls: Array<Record<string, unknown>> = [];
+    const { stores } = memStores();
+    const adapters = {
+      bootstrapIdentity: async () => ({
+        motebitId: "mot_test",
+        deviceId: "dev",
+        publicKeyHex: "00".repeat(32),
+        publicKey: new Uint8Array(32),
+        privateKey: new Uint8Array(32),
+        identityContent: "# m",
+        identityPath: "/x",
+        isFirstLaunch: true,
+      }),
+      openDatabase: async () => ({ close: () => {} }) as never,
+      createRuntime: () =>
+        ({
+          init: async () => {},
+          stop: () => {},
+          policy: {
+            filterTools: (t: unknown) => t,
+            validate: () => ({ allowed: true }),
+            createTurnContext: () => ({}),
+          },
+          getState: () => ({}),
+          memory: {
+            exportAll: async () => ({ nodes: [], edges: [] }),
+            recallRelevant: async () => [],
+            formMemory: async () => ({ node_id: "n" }),
+          },
+          events: { append: async () => {}, appendWithClock: async () => 0 },
+          getToolRegistry: () => ({
+            list: () => [],
+            execute: async () => ({ ok: true, data: "" }),
+          }),
+        }) as never,
+      startServer: vi.fn(async (_deps: unknown, cfg: Record<string, unknown>) => {
+        startCalls.push(cfg);
+        return { shutdown: async () => {}, server: {} as never };
+      }),
+      existsSync: () => true,
+      mkdirSync: () => {},
+      embedText: async () => [0],
+      log: () => {},
+      admissionStores: stores,
+    };
+    await runMolecule(
+      {
+        dataDir: "/tmp/x",
+        dbPath: "/tmp/x/t.db",
+        port: 1,
+        serviceName: "t",
+        displayName: "T",
+        serviceDescription: "t",
+        capabilities: ["x"],
+        syncUrl: "http://relay",
+        relayPublicKeyHex: RELAY_KEY,
+        taskAdmission: "open",
+      },
+      () => ({ toolRegistry: new InMemoryToolRegistry(), getServiceListing: listing(0) }),
+      adapters as never,
+    );
+    expect(startCalls[0]!.taskAdmission).toBeUndefined();
+    expect(startCalls[0]!.relayTrust).toEqual({ relayPublicKey: RELAY_KEY });
+  });
+});

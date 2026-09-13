@@ -676,6 +676,39 @@ export function fileAdmissionStores(dataDir: string): {
 
 const HEX_64 = /^[0-9a-fA-F]{64}$/;
 
+/** @internal exported for tests — the pinned-or-TOFU relay key for transport trust. */
+export function resolveRelayTrust(
+  config: Pick<MoleculeConfig, "syncUrl" | "relayPublicKeyHex" | "moneyExecution">,
+  pinStorage: RelayKeyPinStorage,
+  fetchImpl: typeof fetch,
+  log: (msg: string) => void,
+): { relayPublicKey: string | (() => Promise<string | null>) } | undefined {
+  const pinned =
+    config.relayPublicKeyHex?.trim() ||
+    config.moneyExecution?.relayPublicKeyHex?.trim() ||
+    undefined;
+  if (pinned != null) {
+    if (!HEX_64.test(pinned)) {
+      throw new Error(
+        `relay trust: relayPublicKeyHex / MOTEBIT_RELAY_PUBLIC_KEY is not a 64-hex Ed25519 public key (got ${pinned.length} chars)`,
+      );
+    }
+    return { relayPublicKey: pinned };
+  }
+  const syncUrl = config.syncUrl?.replace(/\/+$/, "");
+  if (!syncUrl) return undefined;
+  return {
+    relayPublicKey: async () => {
+      const key = await getOrPinRelayKey(syncUrl, {
+        fetchImpl,
+        storage: pinStorage,
+        logger: { warn: (m, ctx) => log(`relay trust: ${m} ${ctx ? JSON.stringify(ctx) : ""}`) },
+      });
+      return key != null && HEX_64.test(key) ? key : null;
+    },
+  };
+}
+
 /** @internal exported for tests */
 export async function resolveTaskAdmission(
   config: Pick<
@@ -942,14 +975,25 @@ export async function runMolecule(
   // from the molecule's OWN listing so pricing and admission cannot drift
   // apart: a service that charges is a service that requires the relay's
   // signed admission before it spends. Doctrine: task-admission.md.
+  const admissionStores = adapters.admissionStores ?? fileAdmissionStores(config.dataDir);
   const admission = await resolveTaskAdmission(
     config,
     molecule,
     adapters.fetch ?? fetch,
     log,
-    adapters.admissionStores ?? fileAdmissionStores(config.dataDir),
+    admissionStores,
   );
   if (admission != null) serverCfg.taskAdmission = admission;
+  // Relay trust is independent of admission posture: any relay-registered
+  // molecule lets its relay authenticate as itself on forwards (dispatch
+  // token as bearer) so the relay's master token never has to travel.
+  const relayTrust = resolveRelayTrust(
+    config,
+    admissionStores.pinStorage,
+    adapters.fetch ?? fetch,
+    log,
+  );
+  if (relayTrust != null) serverCfg.relayTrust = relayTrust;
   if (config.authToken != null) serverCfg.authToken = config.authToken;
   if (config.syncUrl != null) serverCfg.syncUrl = config.syncUrl;
   if (config.apiToken != null) serverCfg.apiToken = config.apiToken;
