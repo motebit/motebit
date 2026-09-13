@@ -156,3 +156,154 @@ describe("route POST — failure-event wiring", () => {
     expect(events[0]!.source).toBe("network");
   });
 });
+
+// ── Spend controls (motebit-cloud path) ───────────────────────────────────────
+import {
+  setSpendStoreForTests,
+  memorySpendStore,
+  DEPOSIT_RPM_LIMIT,
+  DEPOSIT_CONCURRENCY_LIMIT,
+} from "../spend-controls";
+
+const PROXY = { origin: ORIGIN, "x-proxy-token": "tok", "content-type": "application/json" };
+const BODY = JSON.stringify({
+  model: "claude-sonnet-4-6",
+  messages: [{ role: "user", content: "hi" }],
+});
+function tokenFor(over: Partial<ProxyTokenPayload> = {}): ProxyTokenPayload {
+  return {
+    mid: "mote-1",
+    jti: "jti-1",
+    bal: 100_000,
+    models: ["claude-sonnet-4-6"],
+    iat: Date.now(),
+    exp: Date.now() + 3_600_000,
+    ...over,
+  };
+}
+/** A minimal Anthropic SSE body with usage on message_start / message_delta. */
+function sseBody(input = 100, output = 50): ReadableStream<Uint8Array> {
+  const enc = new TextEncoder();
+  const lines = [
+    `data: ${JSON.stringify({ type: "message_start", message: { usage: { input_tokens: input } } })}\n\n`,
+    `data: ${JSON.stringify({ type: "message_delta", usage: { output_tokens: output } })}\n\n`,
+    `data: ${JSON.stringify({ type: "message_stop" })}\n\n`,
+  ];
+  return new ReadableStream({
+    start(c) {
+      for (const l of lines) c.enqueue(enc.encode(l));
+      c.close();
+    },
+  });
+}
+
+describe("spend controls — the token snapshot is not the bound", () => {
+  let store: ReturnType<typeof memorySpendStore>;
+  beforeEach(() => {
+    store = memorySpendStore();
+    setSpendStoreForTests(store);
+    process.env.ANTHROPIC_API_KEY = "sk-server-test";
+  });
+  afterEach(() => {
+    setSpendStoreForTests(undefined);
+    delete process.env.ANTHROPIC_API_KEY;
+  });
+
+  it("refuses with 402 before any provider call once this token's recorded spend reaches its balance", async () => {
+    vi.mocked(validation.parseProxyToken).mockResolvedValue(tokenFor({ bal: 5_000 }));
+    store.map.set("proxy:spent:jti-1", 5_000);
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const res = await post(PROXY, BODY);
+    expect(res.status).toBe(402);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(failureEvents().some((e) => JSON.stringify(e).includes("balance_exhausted"))).toBe(true);
+  });
+
+  it("refuses with 429 + Retry-After when the per-identity per-minute budget is exceeded", async () => {
+    vi.mocked(validation.parseProxyToken).mockResolvedValue(tokenFor());
+    const minute = Math.floor(Date.now() / 60_000);
+    store.map.set(`proxy:rpm:mote-1:${minute}`, DEPOSIT_RPM_LIMIT);
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const res = await post(PROXY, BODY);
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Retry-After")).toBe("60");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("refuses with 429 when the concurrency slots are full, and does not leak a slot", async () => {
+    vi.mocked(validation.parseProxyToken).mockResolvedValue(tokenFor());
+    store.map.set("proxy:active:mote-1", DEPOSIT_CONCURRENCY_LIMIT);
+    vi.stubGlobal("fetch", vi.fn());
+    const res = await post(PROXY, BODY);
+    expect(res.status).toBe(429);
+    expect(store.map.get("proxy:active:mote-1")).toBe(DEPOSIT_CONCURRENCY_LIMIT);
+  });
+
+  it("fails CLOSED (503) when the store is configured but failing — money path, not best-effort", async () => {
+    vi.mocked(validation.parseProxyToken).mockResolvedValue(tokenFor());
+    setSpendStoreForTests({
+      ...store,
+      get: async () => {
+        throw new Error("kv down");
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn());
+    const res = await post(PROXY, BODY);
+    expect(res.status).toBe(503);
+  });
+
+  it("records the metered cost against the token and releases the slot after a streamed response", async () => {
+    vi.mocked(validation.parseProxyToken).mockResolvedValue(tokenFor());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("/debit")) return new Response("{}", { status: 200 });
+        return new Response(sseBody(1_000, 500), {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      }),
+    );
+    const res = await post(PROXY, BODY);
+    expect(res.status).toBe(200);
+    await res.text(); // drain the pump so the finally runs
+    await new Promise((r) => setTimeout(r, 20));
+    const spent = store.map.get("proxy:spent:jti-1") ?? 0;
+    expect(spent).toBeGreaterThan(0);
+    expect(spent).toBe(validation.calculateCostMicro("claude-sonnet-4-6", 1_000, 500, 0, 0));
+    expect(store.map.get("proxy:active:mote-1")).toBe(0);
+    expect(store.map.get(`proxy:rpm:mote-1:${Math.floor(Date.now() / 60_000)}`)).toBe(1);
+  });
+
+  it("releases the slot when the upstream answers non-2xx before any stream", async () => {
+    vi.mocked(validation.parseProxyToken).mockResolvedValue(tokenFor());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: { type: "overloaded_error" } }), { status: 529 }),
+      ),
+    );
+    const res = await post(PROXY, BODY);
+    expect(res.status).toBe(529);
+    expect(store.map.get("proxy:active:mote-1")).toBe(0);
+  });
+
+  it("the BYOK path never touches the spend store (the caller's key, the caller's money)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(sseBody(), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+      ),
+    );
+    const res = await post(BYOK, BODY);
+    expect(res.status).toBe(200);
+    expect(store.map.size).toBe(0);
+  });
+});
