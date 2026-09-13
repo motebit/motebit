@@ -53,6 +53,7 @@ Internal reorganization made visible.
 - **Records** (credentials, settled receipts, memory index, balance history) — panel content, not slab content.
 - **Chat bubbles** — second-person, parallel surface.
 - **Third-person labels** — `fetch: calling…` is a log line; the slab renders the page itself.
+- **Raw tool payloads** — a search result string, a file's text, an MCP tool's JSON under the tool's name. That is the model's food, not the user's view, and the chat reply already carries what was found. These acts are **band-projected**: `tool-policy.ts` gives every tool a `projection` (`body` | `band`); `band` opens no item and the runtime produces a one-line narration for the chrome band ("Searching "dreamversal"", "Reading robots.txt" — `describeToolStep`, produced from name + context, never model-authored, never the raw identifier). `band` is the default for unknown tools. **Admission test for a body item:** it carries a truth-grade above testimony (provenance-typed perception, a receipt, a control state) **or** a medium chat cannot hold (a viewport, an image, something live). If neither, it is a third-person label wearing the slab's authority. Witnessed 2026-09-13: a `WEB_SEARCH` card resting beside the creature with the raw results, duplicating the reply.
 - **Constellations** — they cluster above the slab when their domain is active; their own scene object.
 - **UI chrome** (buttons, menus, inputs) — affordances live on the creature or in panels.
 

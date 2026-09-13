@@ -375,3 +375,8 @@ export type { MoneyMeter, MeterVerdict } from "./money-meter.js";
 // increment 4.
 export { verifyAgentCommandEnvelope, agentCommandAudience } from "@motebit/crypto";
 export type { AgentCommandVerdict } from "@motebit/crypto";
+
+// Slab projection policy + band narration (motebit-computer.md §"Not on the slab").
+export { toolPolicy } from "./tool-policy.js";
+export type { ToolPolicy, ToolProjection, ToolEndState } from "./tool-policy.js";
+export { describeToolStep } from "./tool-narration.js";

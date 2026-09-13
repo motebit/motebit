@@ -35,14 +35,33 @@ describe("toolPolicy", () => {
     }
   });
 
-  it("rests web_search + read_file as tool_result (working material, not a browser viewport)", () => {
-    // web_search isn't the virtual_browser embodiment (it's a
-    // results pane, not a page); it's working material. read_file
-    // is the motebit's eye on a local file.
-    expect(toolPolicy("web_search").endState).toBe("rest");
-    expect(toolPolicy("web_search").mode).toBe("tool_result");
-    expect(toolPolicy("read_file").endState).toBe("rest");
-    expect(toolPolicy("read_file").mode).toBe("tool_result");
+  it("projects web_search + read_file to the BAND — no body card for text the reply already carries", () => {
+    // Witnessed 2026-09-13: a search opened a resting `tool_call`
+    // card that rendered the raw result text under `WEB_SEARCH` and
+    // outlived the answer — the third-person-label violation
+    // (motebit-computer.md §"Not on the slab"). The band narrates
+    // ("Searching …"); the reply carries what was found.
+    for (const name of ["web_search", "read_file"]) {
+      const p = toolPolicy(name);
+      expect(p.projection).toBe("band");
+      expect(p.endState).toBe("dissolve");
+      expect(p.mode).toBe("tool_result");
+    }
+  });
+
+  it("body projection is reserved for the eye with a viewport, the hand, the mind, and the peer", () => {
+    for (const name of [
+      "read_url",
+      "fetch_url",
+      "read_page",
+      "computer",
+      "shell_exec",
+      "bash",
+      "recall_memories",
+      "delegate_to_agent",
+    ]) {
+      expect(toolPolicy(name).projection).toBe("body");
+    }
   });
 
   it("routes delegate_to_agent to delegation kind with peer_viewport mode (detach end-state)", () => {
@@ -78,6 +97,10 @@ describe("toolPolicy", () => {
     const p = toolPolicy("some-tool-not-in-the-registry");
     expect(p.kind).toBe("tool_call");
     expect(p.mode).toBe("tool_result");
+    // …and never a body card: an unknown (e.g. MCP-imported) tool's
+    // result is text the reply carries; a generic card would render
+    // raw JSON under the tool's internal name.
+    expect(p.projection).toBe("band");
     expect(p.endState).toBe("dissolve");
   });
 });

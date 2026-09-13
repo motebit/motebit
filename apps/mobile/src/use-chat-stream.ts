@@ -157,7 +157,13 @@ export function useChatStream(deps: UseChatStreamDeps): UseChatStreamResult {
 
             case "tool_status":
               if (chunk.status === "calling") {
-                addSystemMessage(`Calling ${chunk.name}...`);
+                // Prefer the runtime-produced narration ("Searching …")
+                // over the raw tool identifier; feed band-projected acts
+                // to the slab chrome register as well (mirrors web).
+                addSystemMessage(`${chunk.narration ?? `Calling ${chunk.name}`}...`);
+                if (chunk.slabProjection === "band" && chunk.narration) {
+                  setTaskStepNarration(chunk.narration);
+                }
               }
               break;
 

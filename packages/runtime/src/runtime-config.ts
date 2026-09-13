@@ -377,7 +377,13 @@ export type StreamChunk =
        * (e.g. `request_control`), not a body act. Default `"tool_call"`
        * (or omitted) preserves the existing card-per-call behavior.
        */
-      slabProjection?: "none" | "tool_call";
+      slabProjection?: "none" | "tool_call" | "band";
+      /**
+       * Runtime-produced band narration for a `"band"`-projected act
+       * ("Searching …"). Set by `projectSlabForTurn`, never by the
+       * model; surfaces render it in the `task_step_narration` register.
+       */
+      narration?: string;
       /**
        * Structured failure category, sourced from `ToolResult.reason`
        * (or a typed thrown error's `.reason`) and threaded through

@@ -886,6 +886,15 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
           case "tool_status": {
             if (chunk.status === "calling") {
               showToolStatus(chunk.name, chunk.context);
+              // Band-projected act: the runtime opened no slab body item
+              // and produced a narration line instead. Feed it to the
+              // same chrome register as `task_step_narration` so the
+              // slab (when shown) says "Searching …" rather than
+              // mounting a raw-result card. Doctrine:
+              // motebit-computer.md §"Not on the slab".
+              if (chunk.slabProjection === "band" && chunk.narration) {
+                ctx.app.setTaskStepNarration(chunk.narration);
+              }
             } else if (chunk.status === "done") {
               completeToolStatus(chunk.name);
             }

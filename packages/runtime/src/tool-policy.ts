@@ -13,6 +13,14 @@
  *   - `endState` — what happens when active work completes:
  *     `dissolve` (ephemeral plumbing), `rest` (working material, stays
  *     on the slab), `detach` (graduate into the scene as an artifact).
+ *   - `projection` — WHERE the act shows. `body` opens a slab item
+ *     (the eye with a real viewport, the hand, an artifact). `band`
+ *     opens nothing and narrates the act in the slab's chrome band
+ *     ("Searching …") — for tools whose result is text the chat reply
+ *     already carries. The admission test (motebit-computer.md §"Not
+ *     on the slab"): a body item must carry a truth-grade above
+ *     testimony or a medium chat cannot hold; otherwise it is a
+ *     third-person label wearing the slab's authority.
  *
  * Before this registry, these three classifications lived in separate
  * Sets and switch statements; adding a tool meant editing three places
@@ -28,16 +36,26 @@ import type { SlabItemKind, EmbodimentMode } from "@motebit/render-engine";
 /** Lifecycle end-state for a tool's slab item when active work finishes. */
 export type ToolEndState = "dissolve" | "rest" | "detach";
 
+/** Where a tool's act shows: a slab body item, or a line in the chrome band. */
+export type ToolProjection = "body" | "band";
+
 export interface ToolPolicy {
   readonly kind: SlabItemKind;
   readonly mode: EmbodimentMode;
   readonly endState: ToolEndState;
+  readonly projection: ToolProjection;
 }
 
+// The safe floor for an unknown tool (including every MCP-imported
+// tool) is the BAND: its result is text the reply carries, and a
+// generic `tool_call` card would render raw JSON under the tool's
+// internal name. `kind`/`mode`/`endState` are kept for the
+// classification the projection loop still runs on `done`.
 const DEFAULT_POLICY: ToolPolicy = {
   kind: "tool_call",
   mode: "tool_result",
   endState: "dissolve",
+  projection: "band",
 };
 
 // One row per tool. Order groups by mode for readability; lookup is
@@ -46,14 +64,14 @@ const TOOL_POLICIES: ReadonlyMap<string, ToolPolicy> = new Map<string, ToolPolic
   // virtual_browser — the motebit's eye on an isolated page. Renders
   // as a reader-view iframe on the slab. Rests as an open "tab" until
   // the user dismisses it.
-  ["read_url", { kind: "fetch", mode: "virtual_browser", endState: "rest" }],
-  ["fetch_url", { kind: "fetch", mode: "virtual_browser", endState: "rest" }],
+  ["read_url", { kind: "fetch", mode: "virtual_browser", endState: "rest", projection: "body" }],
+  ["fetch_url", { kind: "fetch", mode: "virtual_browser", endState: "rest", projection: "body" }],
   // Slice 2h — `read_page` is the first ax-tier tool. Same family as
   // read_url (motebit's eye on a page) but operates against an open
   // browser session and returns DOM-derived structured text rather
   // than fetching a fresh URL. Renders as a `fetch` slab item, rests
   // so the user can refer back to the extraction.
-  ["read_page", { kind: "fetch", mode: "virtual_browser", endState: "rest" }],
+  ["read_page", { kind: "fetch", mode: "virtual_browser", endState: "rest", projection: "body" }],
   // computer — Motebit's screenshot/click/type primitive. Renders on
   // the slab as a fetch-kind card so screenshot observations land in
   // the same reader/image-frame surface the user is already watching
@@ -80,28 +98,39 @@ const TOOL_POLICIES: ReadonlyMap<string, ToolPolicy> = new Map<string, ToolPolic
   // `check-computer-dispatcher-modes` enforces that every site
   // registering the `computer` tool declares a mode (or marks
   // itself as the explicit fallback path).
-  ["computer", { kind: "fetch", mode: "tool_result", endState: "rest" }],
+  ["computer", { kind: "fetch", mode: "tool_result", endState: "rest", projection: "body" }],
 
-  // tool_result — search is not a browser viewport, but the results
-  // are still working material worth resting (user may re-read).
-  ["web_search", { kind: "tool_call", mode: "tool_result", endState: "rest" }],
+  // band — search results are the model's food, not the user's view.
+  // The reply carries what was found; the band says "Searching …"
+  // while it happens. (Was a resting `tool_call` body card: it
+  // rendered the raw result text under `WEB_SEARCH` and outlived the
+  // answer — the third-person-label violation, witnessed 2026-09-13.)
+  [
+    "web_search",
+    { kind: "tool_call", mode: "tool_result", endState: "dissolve", projection: "band" },
+  ],
 
   // tool_result — shell / terminal. Output rests as a transcript the
   // user may consult. Upgrades to desktop_drive in future when the
   // motebit acts on the user's real terminal.
-  ["shell_exec", { kind: "shell", mode: "tool_result", endState: "rest" }],
-  ["bash", { kind: "shell", mode: "tool_result", endState: "rest" }],
-  ["shell", { kind: "shell", mode: "tool_result", endState: "rest" }],
-  ["exec", { kind: "shell", mode: "tool_result", endState: "rest" }],
-  ["run_command", { kind: "shell", mode: "tool_result", endState: "rest" }],
+  ["shell_exec", { kind: "shell", mode: "tool_result", endState: "rest", projection: "body" }],
+  ["bash", { kind: "shell", mode: "tool_result", endState: "rest", projection: "body" }],
+  ["shell", { kind: "shell", mode: "tool_result", endState: "rest", projection: "body" }],
+  ["exec", { kind: "shell", mode: "tool_result", endState: "rest", projection: "body" }],
+  ["run_command", { kind: "shell", mode: "tool_result", endState: "rest", projection: "body" }],
 
-  // tool_result — file read. The motebit's eye on a local file.
-  ["read_file", { kind: "tool_call", mode: "tool_result", endState: "rest" }],
+  // band — until a real file renderer exists (motebit-computer.md
+  // §Eye: "files rendered as they are"), a file read is a text dump
+  // under a label. The band says "Reading <file>"; the reply carries it.
+  [
+    "read_file",
+    { kind: "tool_call", mode: "tool_result", endState: "dissolve", projection: "band" },
+  ],
 
   // mind — memory surfacing is internal reorganization made visible.
   // Rests as referenceable nodes while the turn works with them.
-  ["recall_memories", { kind: "memory", mode: "mind", endState: "rest" }],
-  ["search_memories", { kind: "memory", mode: "mind", endState: "rest" }],
+  ["recall_memories", { kind: "memory", mode: "mind", endState: "rest", projection: "body" }],
+  ["search_memories", { kind: "memory", mode: "mind", endState: "rest", projection: "body" }],
 
   // peer_viewport — delegation to a federated peer motebit. The
   // streaming pipeline opens the slab item explicitly on
@@ -115,7 +144,10 @@ const TOOL_POLICIES: ReadonlyMap<string, ToolPolicy> = new Map<string, ToolPolic
   // proof." Sensitivity is `tier-bounded-by-source` (the source
   // being the peer-receipt itself) which composes correctly through
   // `getEffectiveSessionSensitivity`.
-  ["delegate_to_agent", { kind: "delegation", mode: "peer_viewport", endState: "detach" }],
+  [
+    "delegate_to_agent",
+    { kind: "delegation", mode: "peer_viewport", endState: "detach", projection: "body" },
+  ],
 ]);
 
 /**
