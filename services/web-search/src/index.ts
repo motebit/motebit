@@ -26,6 +26,7 @@ import {
   DuckDuckGoSearchProvider,
   BiasedSearchProvider,
   TavilySearchProvider,
+  nodeAddressResolver,
 } from "@motebit/tools";
 import type { SearchProvider } from "@motebit/tools";
 import { buildServiceReceipt, runMolecule } from "@motebit/molecule-runner";
@@ -254,7 +255,10 @@ async function main(): Promise<void> {
 
       const registry = new InMemoryToolRegistry();
       registry.register(webSearchDefinition, createWebSearchHandler(searchProvider));
-      registry.register(readUrlDefinition, createReadUrlHandler());
+      registry.register(
+        readUrlDefinition,
+        createReadUrlHandler({ resolve: nodeAddressResolver() }),
+      );
 
       const handleAgentTask = async function* (
         prompt: string,

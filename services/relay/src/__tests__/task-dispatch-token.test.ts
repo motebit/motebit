@@ -135,6 +135,7 @@ describe("forwardTaskViaMcp carries the dispatch token", () => {
       "master",
       undefined,
       "disp.token",
+      { allowPrivateNetwork: true },
     );
     const call = w.bodies.find((b) => b.method === "tools/call");
     expect(call?.params?.name).toBe("motebit_task");
@@ -157,6 +158,9 @@ describe("forwardTaskViaMcp carries the dispatch token", () => {
       new Map(),
       logger,
       "master",
+      undefined,
+      undefined,
+      { allowPrivateNetwork: true },
     );
     const call = w.bodies.find((b) => b.method === "tools/call");
     expect(call?.params?.arguments).toEqual({ prompt: "do it", relay_task_id: "task-78" });

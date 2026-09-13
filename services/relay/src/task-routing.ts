@@ -9,7 +9,13 @@
 import type { CandidateProfile, TaskRequirements } from "@motebit/market";
 import { aggregateCredentialReputation, aggregateHardwareAttestation } from "@motebit/market";
 import type { ReputationVC, TrustVC } from "@motebit/market";
-import type { CapabilityPrice, AgentTrustRecord, SettlementEligibility } from "@motebit/sdk";
+import type {
+  CapabilityPrice,
+  AgentTrustRecord,
+  SettlementEligibility,
+  OutboundUrlOptions,
+} from "@motebit/sdk";
+import { checkOutboundUrl } from "@motebit/sdk";
 import { asMotebitId, asListingId, AgentTrustLevel } from "@motebit/sdk";
 import { trustLevelToScore } from "@motebit/market";
 import { verifySovereignBinding } from "@motebit/crypto";
@@ -1039,7 +1045,21 @@ export async function forwardTaskViaMcp(
   onReceipt?: (receipt: ReceiptCandidate) => Promise<void>,
   /** Relay-signed admission artifact for THIS worker + task (`mintTaskDispatchToken`). */
   dispatchToken?: string,
+  /** Outbound URL law (`buildOutboundPolicy`); absent ⇒ literals + names only. */
+  outboundPolicy?: OutboundUrlOptions,
 ): Promise<void> {
+  // Re-check at CONNECT time, not only at registration: the registry row is
+  // months old by the time a task arrives, and this forward carries a bearer.
+  const outbound = await checkOutboundUrl(endpointUrl, outboundPolicy);
+  if (!outbound.ok) {
+    logger.warn("task.mcp_forward_refused", {
+      correlationId: taskId,
+      agent: agentId,
+      endpoint: endpointUrl,
+      reason: outbound.reason,
+    });
+    return;
+  }
   const mcpEndpoint = endpointUrl.endsWith("/mcp") ? endpointUrl : `${endpointUrl}/mcp`;
   const mcpHeaders: Record<string, string> = {
     "Content-Type": "application/json",

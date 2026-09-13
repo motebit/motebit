@@ -77,6 +77,7 @@ import {
   BraveSearchProvider,
   DuckDuckGoSearchProvider,
   FallbackSearchProvider,
+  nodeAddressResolver,
 } from "@motebit/tools";
 import { querySelfKnowledge } from "@motebit/self-knowledge";
 import type { SearchProvider } from "@motebit/tools";
@@ -349,7 +350,16 @@ export function buildToolRegistry(
   }
   registry.register(currentTimeDefinition, createCurrentTimeHandler());
   registry.register(webSearchDefinition, createWebSearchHandler(searchProvider));
-  registry.register(readUrlDefinition, createReadUrlHandler());
+  // Model-driven fetches obey the outbound URL law by default (no LAN, no
+  // loopback, no metadata). A developer reading their own localhost server
+  // opts in explicitly — the switch is theirs, never the model's.
+  registry.register(
+    readUrlDefinition,
+    createReadUrlHandler({
+      allowPrivateNetwork: process.env["MOTEBIT_ALLOW_PRIVATE_URLS"] === "1",
+      resolve: nodeAddressResolver(),
+    }),
+  );
 
   // Deferred handlers for memory/events (need runtime, which needs registry).
   // Recall routes through the runtime's `recallMemoriesForTool` — the one place

@@ -252,7 +252,11 @@ describe("booted entry — whole-pipeline single flow (authz→receipt→settlem
   let treasury: string;
 
   beforeAll(async () => {
-    booted = await bootRealEntry(DIST_TIER, { MOTEBIT_API_TOKEN: MASTER_TOKEN });
+    booted = await bootRealEntry(DIST_TIER, {
+      MOTEBIT_API_TOKEN: MASTER_TOKEN,
+      // Tests register workers on localhost — the local-development allowance.
+      MOTEBIT_ALLOW_PRIVATE_ENDPOINTS: "1",
+    });
     const idRes = await fetch(`${booted.baseUrl}/federation/v1/identity`);
     const { public_key } = (await idRes.json()) as { public_key: string };
     treasury = deriveSolanaAddress(Uint8Array.from(Buffer.from(public_key, "hex")));

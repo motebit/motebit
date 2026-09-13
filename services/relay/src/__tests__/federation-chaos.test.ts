@@ -262,6 +262,7 @@ describe("Federation Chaos: Re-Registration Cooldown", () => {
 
   it("rejects re-proposal for pending peer (409), prevents rapid re-registration", async () => {
     const relay = await createSyncRelay({
+      allowPrivateEndpoints: true,
       apiToken: "test-token",
       x402: {
         payToAddress: "0x0000000000000000000000000000000000000000",

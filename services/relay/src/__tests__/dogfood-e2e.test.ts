@@ -128,6 +128,7 @@ describe("Dogfood E2E — Two-Motebit Delegation", () => {
 
   beforeAll(async () => {
     relay = await createSyncRelay({
+      allowPrivateEndpoints: true,
       dbPath: ":memory:",
       apiToken: RELAY_MASTER_TOKEN,
       enableDeviceAuth: true,
@@ -978,6 +979,7 @@ describe("x402 Payment Gate", () => {
 
   beforeAll(async () => {
     relay = await createSyncRelay({
+      allowPrivateEndpoints: true,
       dbPath: ":memory:",
       apiToken: MASTER_TOKEN,
       enableDeviceAuth: true,

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { createReadUrlHandler as createReadUrlHandlerForLaw } from "../builtins/read-url";
 import { InMemoryToolRegistry, SearchProviderError, FallbackSearchProvider } from "../index";
 import { BraveSearchProvider } from "../providers/brave-search";
 import {
@@ -1697,5 +1698,55 @@ describe("web-safe exports", () => {
     expect(webSafe.createSubGoalDefinition).toBeDefined();
     expect(webSafe.completeGoalDefinition).toBeDefined();
     expect(webSafe.reportProgressDefinition).toBeDefined();
+  });
+});
+
+// ── Outbound URL law on read_url (2026-09-13: prompt injection → SSRF) ───────
+describe("read_url — outbound URL law", () => {
+  const createReadUrlHandler = createReadUrlHandlerForLaw;
+
+  it.each([
+    "http://127.0.0.1:8080/admin",
+    "http://10.0.0.1/",
+    "http://169.254.169.254/latest/meta-data/",
+    "http://motebit-sync.internal:8080/api/v1/admin",
+    "http://localhost:3000/",
+    "http://[::ffff:192.168.0.1]/",
+    "file:///etc/passwd",
+  ])("refuses %s before touching the fetcher", async (url) => {
+    const fetcher = vi.fn();
+    const handler = createReadUrlHandler({ fetcher });
+    const res = await handler({ url });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("url_not_allowed");
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("also refuses on the proxy path — the proxy is not trusted to be the only gate", async () => {
+    const spy = vi.spyOn(globalThis, "fetch");
+    const handler = createReadUrlHandler({ proxyUrl: "https://api.motebit.com/v1/fetch" });
+    const res = await handler({ url: "http://169.254.169.254/" });
+    expect(res.ok).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("refuses a public name that resolves privately when a resolver is supplied", async () => {
+    const fetcher = vi.fn();
+    const handler = createReadUrlHandler({ fetcher, resolve: async () => ["10.0.0.8"] });
+    const res = await handler({ url: "https://rebind.example/" });
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("resolved_address_not_public");
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("allowPrivateNetwork is the developer's explicit allowance for localhost", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue({ status: 200, contentType: "text/plain", body: "dev server" });
+    const handler = createReadUrlHandler({ fetcher, allowPrivateNetwork: true });
+    const res = await handler({ url: "http://localhost:3000/" });
+    expect(res.ok).toBe(true);
+    expect(fetcher).toHaveBeenCalledWith("http://localhost:3000/");
   });
 });

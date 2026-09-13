@@ -36,6 +36,7 @@ let relay: SyncRelay;
 
 beforeEach(async () => {
   relay = await createSyncRelay({
+    allowPrivateEndpoints: true,
     apiToken: "test-token",
     enableDeviceAuth: true,
     x402: {

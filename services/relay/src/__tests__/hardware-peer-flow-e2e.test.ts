@@ -135,6 +135,7 @@ describe("Hardware-attestation peer flow — Phase 1 E2E (software sentinel)", (
 
   beforeAll(async () => {
     relay = await createSyncRelay({
+      allowPrivateEndpoints: true,
       dbPath: ":memory:",
       apiToken: MASTER_TOKEN,
       enableDeviceAuth: true,
@@ -424,6 +425,7 @@ describe("Hardware-attestation peer flow — Phase 2 (secure_enclave)", () => {
 
   beforeAll(async () => {
     relay = await createSyncRelay({
+      allowPrivateEndpoints: true,
       dbPath: ":memory:",
       apiToken: MASTER_TOKEN,
       enableDeviceAuth: true,
@@ -594,6 +596,7 @@ describe("Hardware-attestation peer flow — Phase 2 (android_keystore)", () => 
 
   beforeAll(async () => {
     relay = await createSyncRelay({
+      allowPrivateEndpoints: true,
       dbPath: ":memory:",
       apiToken: MASTER_TOKEN,
       enableDeviceAuth: true,
@@ -742,6 +745,7 @@ describe("Hardware-attestation peer flow — Phase 2 (device_check)", () => {
 
   beforeAll(async () => {
     relay = await createSyncRelay({
+      allowPrivateEndpoints: true,
       dbPath: ":memory:",
       apiToken: MASTER_TOKEN,
       enableDeviceAuth: true,
@@ -882,6 +886,7 @@ describe("Hardware-attestation peer flow — Phase 2 (tpm)", () => {
 
   beforeAll(async () => {
     relay = await createSyncRelay({
+      allowPrivateEndpoints: true,
       dbPath: ":memory:",
       apiToken: MASTER_TOKEN,
       enableDeviceAuth: true,
@@ -1017,6 +1022,7 @@ describe("Hardware-attestation peer flow — Phase 2 (webauthn)", () => {
 
   beforeAll(async () => {
     relay = await createSyncRelay({
+      allowPrivateEndpoints: true,
       dbPath: ":memory:",
       apiToken: MASTER_TOKEN,
       enableDeviceAuth: true,

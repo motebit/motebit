@@ -8,6 +8,8 @@
  * All 11 federation endpoints registered here.
  */
 import type { Hono } from "hono";
+import { checkOutboundUrl } from "@motebit/sdk";
+import type { OutboundUrlOptions } from "@motebit/sdk";
 import { HTTPException } from "hono/http-exception";
 import {
   sign,
@@ -1138,6 +1140,8 @@ export interface FederationDeps {
   db: DatabaseDriver;
   app: Hono;
   relayIdentity: RelayIdentity;
+  /** Outbound URL law for persisted peer endpoints (`buildOutboundPolicy`). */
+  outboundPolicy?: OutboundUrlOptions;
   federationConfig?: FederationConfig;
   federationQueryCache: Map<string, number>;
 
@@ -1330,6 +1334,13 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       throw new HTTPException(400, { message: "relay_id and public_key are required" });
     if (!endpoint_url) throw new HTTPException(400, { message: "endpoint_url is required" });
     if (!nonce) throw new HTTPException(400, { message: "nonce is required" });
+    // The challenge proves control of the proposed KEY; it says nothing about
+    // whether the endpoint is a safe destination for this relay to contact.
+    // Persist only globally-routable peer endpoints.
+    const peerVerdict = await checkOutboundUrl(endpoint_url, deps.outboundPolicy);
+    if (!peerVerdict.ok) {
+      throw new HTTPException(400, { message: `endpoint_url refused: ${peerVerdict.reason}` });
+    }
 
     checkFederationEnabled();
     checkVersionCompatibility(spec_version);

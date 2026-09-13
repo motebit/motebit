@@ -117,6 +117,9 @@ export interface ApprovalPresetConfig {
     requireApprovalAbove: number;
 }
 
+// @public
+export function assertOutboundUrl(raw: unknown, opts?: OutboundUrlOptions): Promise<URL>;
+
 // @public (undocumented)
 export interface BehaviorCues {
     // (undocumented)
@@ -163,6 +166,9 @@ export type ByokVendor = "anthropic" | "openai" | "google" | "groq" | "deepseek"
 
 // @public
 export function canonicalVendorBaseUrl(vendor: ByokVendor): string;
+
+// @public
+export function checkOutboundUrl(raw: unknown, opts?: OutboundUrlOptions): Promise<OutboundUrlVerdict>;
 
 // @public
 export interface CloudProviderSpec {
@@ -324,6 +330,15 @@ export interface ExportManifest {
     motebit_id: MotebitId;
 }
 
+// @public
+export function fetchPublic(raw: string, init?: RequestInit, opts?: FetchPublicOptions): Promise<Response>;
+
+// @public (undocumented)
+export interface FetchPublicOptions extends OutboundUrlOptions {
+    fetchImpl?: typeof fetch;
+    maxRedirects?: number;
+}
+
 // @public (undocumented)
 export interface GeometrySpec {
     // (undocumented)
@@ -450,6 +465,9 @@ export interface InteriorColor {
 
 // @public
 export function isLocalServerUrl(url: string | undefined | null): boolean;
+
+// @public
+export function isPublicAddress(address: string): boolean;
 
 // @public (undocumented)
 export interface LightingSpec {
@@ -676,6 +694,34 @@ export const OPENAI_MODELS: readonly ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"]
 
 // @public (undocumented)
 export type OpenAIModel = (typeof OPENAI_MODELS)[number];
+
+// @public (undocumented)
+export interface OutboundUrlOptions {
+    allowPrivateNetwork?: boolean;
+    resolve?: (hostname: string) => Promise<string[]>;
+}
+
+// @public
+export type OutboundUrlRefusal = "invalid_url" | "scheme_not_allowed" | "credentials_in_url" | "host_not_public" | "resolved_address_not_public" | "resolution_failed";
+
+// @public (undocumented)
+export class OutboundUrlRefusedError extends Error {
+    constructor(reason: OutboundUrlRefusal, detail?: string | undefined);
+    // (undocumented)
+    readonly detail?: string | undefined;
+    // (undocumented)
+    readonly reason: OutboundUrlRefusal;
+}
+
+// @public (undocumented)
+export type OutboundUrlVerdict = {
+    ok: true;
+    url: URL;
+} | {
+    ok: false;
+    reason: OutboundUrlRefusal;
+    detail?: string;
+};
 
 // @public
 export type PixelConsentState = "denied" | "session";

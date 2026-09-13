@@ -1,5 +1,7 @@
 export const runtime = "edge";
 
+import { checkOutboundUrl, fetchPublic, OutboundUrlRefusedError } from "@motebit/sdk";
+
 const MAX_RESPONSE_SIZE = 100_000; // 100KB
 const FETCH_TIMEOUT_MS = 15_000;
 const FETCH_DAILY_LIMIT = 50;
@@ -123,18 +125,30 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   // Only allow http/https
-  if (!url.startsWith("http://") && !url.startsWith("https://")) {
-    return new Response(JSON.stringify({ ok: false, error: "invalid url scheme" }), {
-      status: 400,
-      headers: { ...cors, "Content-Type": "application/json" },
-    });
+  // Outbound URL law (SSRF boundary): http(s) only, no credentials, never a
+  // loopback / private / link-local / metadata / *.internal destination, and
+  // every redirect hop re-checked. This runs on Vercel edge with no DNS
+  // resolver, so a public NAME that resolves privately is not caught here —
+  // the edge has no VPC to reach, but the claim is stated rather than
+  // over-made. `@motebit/sdk` checkOutboundUrl is the single source.
+  const verdict = await checkOutboundUrl(url);
+  if (!verdict.ok) {
+    return new Response(
+      JSON.stringify({
+        ok: false,
+        error: verdict.reason === "scheme_not_allowed" ? "invalid url scheme" : "url_not_allowed",
+        reason: verdict.reason,
+      }),
+      { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
+    );
   }
 
   try {
-    const res = await fetch(url, {
-      headers: { "User-Agent": "Motebit/0.1" },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
+    const res = await fetchPublic(
+      verdict.url.href,
+      { headers: { "User-Agent": "Motebit/0.1" }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) },
+      { maxRedirects: 5 },
+    );
 
     if (!res.ok) {
       return new Response(
@@ -159,6 +173,14 @@ export async function POST(request: Request): Promise<Response> {
       headers: { ...cors, "Content-Type": "application/json" },
     });
   } catch (err: unknown) {
+    // A redirect into a non-public destination is a policy refusal, not a
+    // transport error — say so with the closed reason.
+    if (err instanceof OutboundUrlRefusedError) {
+      return new Response(
+        JSON.stringify({ ok: false, error: "url_not_allowed", reason: err.reason }),
+        { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
+      );
+    }
     const msg = err instanceof Error ? err.message : String(err);
     return new Response(JSON.stringify({ ok: false, error: `Fetch error: ${msg}` }), {
       status: 200,

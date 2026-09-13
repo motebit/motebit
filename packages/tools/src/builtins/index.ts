@@ -7,6 +7,7 @@ export {
   createReadUrlHandler,
   projectAgencyHtmlTextV1,
   AGENCY_HTML_TEXT_V1_RECIPE_ID,
+  nodeAddressResolver,
 } from "./read-url.js";
 export { readFileDefinition, createReadFileHandler } from "./read-file.js";
 export { writeFileDefinition, createWriteFileHandler } from "./write-file.js";

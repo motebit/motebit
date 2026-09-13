@@ -6,6 +6,7 @@ const API_TOKEN = "test-token";
 
 async function createTestRelay(): Promise<SyncRelay> {
   return createSyncRelay({
+    allowPrivateEndpoints: true,
     apiToken: API_TOKEN,
     x402: {
       payToAddress: "0x0000000000000000000000000000000000000000",
