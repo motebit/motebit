@@ -133,6 +133,11 @@ async function main(): Promise<void> {
       ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
       ...(config.apiToken != null ? { apiToken: config.apiToken } : {}),
       ...(config.publicUrl != null ? { publicUrl: config.publicUrl } : {}),
+      ...(config.relayPublicKey != null ? { relayPublicKeyHex: config.relayPublicKey } : {}),
+      // Task admission — this molecule spends on inference, so it runs only
+      // relay-admitted work (docs/doctrine/task-admission.md). Escape hatch
+      // for an operator who must reopen it: MOTEBIT_TASK_ADMISSION=open.
+      taskAdmission: process.env["MOTEBIT_TASK_ADMISSION"] === "open" ? "open" : "relay",
       // Inc 2b — paid sub-delegation seam, opt-in via env. When BOTH the Solana
       // RPC and the pinned relay key are set, the Researcher pays priced atoms
       // P2P from its own wallet under a self-issued grant; absent ⇒ no spend

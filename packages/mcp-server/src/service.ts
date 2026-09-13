@@ -12,7 +12,7 @@
  */
 
 import { McpServerAdapter } from "./index.js";
-import type { MotebitServerDeps } from "./index.js";
+import type { MotebitServerDeps, TaskAdmissionConfig } from "./index.js";
 import type {
   ToolDefinition,
   ToolResult,
@@ -409,6 +409,13 @@ export interface ServiceServerConfig {
   authToken?: string;
   /** Service type for inbound policy. */
   motebitType?: "personal" | "service" | "collaborative";
+  /**
+   * Task admission — require a relay-signed `dispatch_token` on every
+   * `motebit_task` (see `McpServerConfig.taskAdmission`). Priced services
+   * registered with a relay should set this; the relay attaches the token
+   * to every forward and returns it to the submitter.
+   */
+  taskAdmission?: TaskAdmissionConfig;
 
   /** Sync relay URL for discovery registration. */
   syncUrl?: string;
@@ -485,6 +492,7 @@ export async function startServiceServer(
       authToken: config.authToken,
       motebitType: config.motebitType ?? "service",
       customRoutes: config.customRoutes,
+      ...(config.taskAdmission != null ? { taskAdmission: config.taskAdmission } : {}),
     },
     deps,
   );

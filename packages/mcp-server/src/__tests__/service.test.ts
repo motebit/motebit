@@ -271,6 +271,21 @@ describe("startServiceServer", () => {
     expect(onStart).toHaveBeenCalledWith(expect.any(Number), 1);
   });
 
+  it("threads taskAdmission through to the adapter (activation, not just definition)", async () => {
+    const taskAdmission = { relayPublicKey: "ab".repeat(32) };
+    handle = await startServiceServer(makeDeps(), { port: 0, taskAdmission });
+    // The adapter's config is private; read it structurally — the point is
+    // that a service which asked for admission actually got an admitting
+    // server, so a severed pass-through here goes red.
+    const cfg = (handle.server as unknown as { config: { taskAdmission?: unknown } }).config;
+    expect(cfg.taskAdmission).toEqual(taskAdmission);
+
+    const plain = await startServiceServer(makeDeps(), { port: 0 });
+    const plainCfg = (plain.server as unknown as { config: { taskAdmission?: unknown } }).config;
+    expect(plainCfg.taskAdmission).toBeUndefined();
+    await plain.shutdown();
+  });
+
   it("shutdown calls onStop and is idempotent", async () => {
     const onStop = vi.fn();
     handle = await startServiceServer(makeDeps(), {

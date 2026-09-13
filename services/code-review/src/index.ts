@@ -134,6 +134,11 @@ async function main(): Promise<void> {
       ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
       ...(config.apiToken != null ? { apiToken: config.apiToken } : {}),
       ...(config.publicUrl != null ? { publicUrl: config.publicUrl } : {}),
+      ...(config.relayPublicKey != null ? { relayPublicKeyHex: config.relayPublicKey } : {}),
+      // Task admission — this molecule spends on inference, so it runs only
+      // relay-admitted work (docs/doctrine/task-admission.md). Escape hatch
+      // for an operator who must reopen it: MOTEBIT_TASK_ADMISSION=open.
+      taskAdmission: process.env["MOTEBIT_TASK_ADMISSION"] === "open" ? "open" : "relay",
     },
     (identity) => {
       const { motebitId, deviceId, publicKey, privateKey } = identity;

@@ -127,8 +127,11 @@ async function subDelegate(
     return null;
   }
 
-  // Optional relay budget binding — best-effort, failures don't block the chain
+  // Optional relay budget binding — best-effort, failures don't block the chain.
+  // The relay's `dispatch_token` (task admission) travels with the task id so a
+  // read-url that admits work only through its relay accepts the hop.
   let subRelayTaskId: string | undefined;
+  let subDispatchToken: string | undefined;
   if (syncUrl != null && syncUrl !== "" && apiToken != null && targetMotebitId != null) {
     try {
       const taskResp = await fetch(`${syncUrl}/agent/${targetMotebitId}/task`, {
@@ -147,8 +150,9 @@ async function subDelegate(
         }),
       });
       if (taskResp.ok) {
-        const taskBody = (await taskResp.json()) as { task_id: string };
+        const taskBody = (await taskResp.json()) as { task_id: string; dispatch_token?: string };
         subRelayTaskId = taskBody.task_id;
+        if (typeof taskBody.dispatch_token === "string") subDispatchToken = taskBody.dispatch_token;
         log(`sub-delegation relay task: ${subRelayTaskId.slice(0, 12)}…`);
       } else {
         log(`sub-delegation relay task failed: ${taskResp.status}`);
@@ -174,6 +178,7 @@ async function subDelegate(
     await adapter.connect();
     const args: Record<string, unknown> = { prompt };
     if (subRelayTaskId != null) args.relay_task_id = subRelayTaskId;
+    if (subDispatchToken != null) args.dispatch_token = subDispatchToken;
     await adapter.executeTool("read-url__motebit_task", args);
     const receipts = adapter.getAndResetDelegationReceipts();
     recordSubDelegateOutcome(true, Date.now());

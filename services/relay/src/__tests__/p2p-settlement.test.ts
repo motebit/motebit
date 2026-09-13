@@ -564,9 +564,18 @@ describe("getListingUnitCost — capability-aware pricing (the multi-hop sub-hop
     expect(getListingUnitCost(relay.moteDb, "researcher", "research")).toBe(0.25);
   });
 
-  it("returns 0 for an unknown agent or a capability the agent does not list", () => {
-    seedListing("atom", [{ capability: "web_search", unit_cost: 0.003 }]);
-    expect(getListingUnitCost(relay.moteDb, "atom", "read_url")).toBe(0); // not listed
+  it("returns 0 for an unknown agent; an unlisted capability on a PRICED agent prices at its ceiling", () => {
+    seedListing("atom", [
+      { capability: "web_search", unit_cost: 0.003 },
+      { capability: "summarize", unit_cost: 0.01 },
+    ]);
+    // Not listed ⇒ the worker's highest listed price, never 0: a submission
+    // naming a capability the worker does not list must not clear the P2P
+    // gate for free and walk away with a dispatch token the worker honors
+    // (docs/doctrine/task-admission.md).
+    expect(getListingUnitCost(relay.moteDb, "atom", "read_url")).toBe(0.01);
     expect(getListingUnitCost(relay.moteDb, "ghost", "web_search")).toBe(0); // no listing
+    seedListing("free", [{ capability: "echo", unit_cost: 0 }]);
+    expect(getListingUnitCost(relay.moteDb, "free", "anything")).toBe(0); // unpriced stays free
   });
 });

@@ -55,6 +55,20 @@ describe("getOrPinRelayKey", () => {
     expect(storage.store.get(`motebit:relay_pin:${RELAY}`)).toBe(KEY_A);
   });
 
+  it("never pins a malformed public_key — a garbage well-known is a no-op, not a poisoned trust root", async () => {
+    const empty = syncStorage();
+    expect(
+      await getOrPinRelayKey(RELAY, { fetchImpl: okFetch("not-hex"), storage: empty }),
+    ).toBeUndefined();
+    expect(empty.store.size).toBe(0);
+    // With an existing pin, a malformed live key neither replaces it nor fails it.
+    const pinned = syncStorage({ [`motebit:relay_pin:${RELAY}`]: KEY_A });
+    expect(
+      await getOrPinRelayKey(RELAY, { fetchImpl: okFetch("zz".repeat(32)), storage: pinned }),
+    ).toBe(KEY_A);
+    expect(pinned.store.get(`motebit:relay_pin:${RELAY}`)).toBe(KEY_A);
+  });
+
   it("works with an ASYNC store (mobile AsyncStorage shape)", async () => {
     const storage = asyncStorage();
     const first = await getOrPinRelayKey(RELAY, { fetchImpl: okFetch(KEY_A), storage });

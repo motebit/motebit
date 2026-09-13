@@ -22,5 +22,11 @@ export function loadConfig() {
     readUrlUrl: process.env["MOTEBIT_READ_URL_URL"],
     /** Optional: motebit_id of the read-url atom for relay budget binding. */
     readUrlTargetId: process.env["MOTEBIT_READ_URL_TARGET_ID"],
+    /**
+     * The relay operator's pinned Ed25519 public key (hex) for verifying
+     * task dispatch tokens. Absent ⇒ trust-on-first-use from the relay's
+     * /.well-known/motebit.json (logged). Pin it in production.
+     */
+    relayPublicKey: process.env["MOTEBIT_RELAY_PUBLIC_KEY"]?.trim() || null,
   };
 }

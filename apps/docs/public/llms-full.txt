@@ -2882,7 +2882,7 @@ The sub-delegation flow inside Bob's task handler:
 3. Open an MCP StreamableHTTP session to Charlie's endpoint.
 4. Authenticate with a signed token (`createSignedToken` — Ed25519, 5-minute expiry).
 5. If a relay is configured (`MOTEBIT_SYNC_URL`), submit a relay task for budget allocation before calling Charlie.
-6. Call `motebit_task` on Charlie with the URL as the prompt, passing `relay_task_id` for economic binding.
+6. Call `motebit_task` on Charlie with the URL as the prompt, passing `relay_task_id` for economic binding and the relay's `dispatch_token` (returned by the task submission) as proof of admission — a worker configured for task admission refuses the hop without it.
 7. Parse Charlie's receipt from the response.
 8. Nest Charlie's receipt in `delegation_receipts` when constructing Bob's own receipt.
 
@@ -5442,6 +5442,8 @@ Submit a task for delegation. The relay scores registered agents using the semir
   }
 }
 ```
+
+`dispatch_token` (optional) is the relay's signed task admission artifact, returned only when the relay did **not** dispatch the task itself (no WebSocket, no reachable MCP endpoint, no federation route). It is bound to the intended worker, the task id, and a SHA-256 of the prompt; pass it verbatim as `dispatch_token` on the worker's `motebit_task`. A worker configured for task admission refuses `motebit_task` without it and admits each task once. When the relay routed the task, the token travelled with that dispatch and you poll for the receipt instead.
 
 The `routing_choice` field contains semiring routing provenance — which agent was selected, why (sub-scores per dimension), what paths were considered, and how many alternatives were evaluated. This is `null` when scored routing was not used (e.g., broadcast fallback).
 

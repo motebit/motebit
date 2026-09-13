@@ -41,6 +41,10 @@
  *     - `task:submit` — submitting a task to a peer via the relay
  *     - `task:query` — polling a submitted task for its result
  *     - `task:result` — a worker device posting a signed execution receipt
+ *     - `task:dispatch` — the RELAY-signed per-task admission artifact a
+ *       worker requires before running `motebit_task` (mid = worker,
+ *       sub = relay task id); proves the task passed the relay's
+ *       settlement gate, so priced work is never done for a stranger
  *     - `admin:query` — admin-bound read paths (transparency, etc.)
  *     - `proposal` — collaborative proposal lifecycle
  *     - `receipts:read` — a motebit reading its OWN signed execution receipts
@@ -79,6 +83,7 @@ export type TokenAudience =
   | "task:submit"
   | "task:query"
   | "task:result"
+  | "task:dispatch"
   | "admin:query"
   | "proposal"
   | "receipts:read"
@@ -133,6 +138,17 @@ export const TASK_QUERY_AUDIENCE: TokenAudience = "task:query";
  * (`POST /agent/{id}/task/{taskId}/result`).
  */
 export const TASK_RESULT_AUDIENCE: TokenAudience = "task:result";
+
+/**
+ * The relay-signed per-task ADMISSION artifact (`docs/doctrine/task-admission.md`).
+ * Minted by the worker's relay when a task clears submission (payment proof /
+ * balance hold / carve-out), with `mid` = the worker the task is dispatched to
+ * and `sub` = the relay task id. A worker configured with `taskAdmission`
+ * verifies it offline against the pinned relay key before `motebit_task`
+ * runs, and refuses a second execution of the same `sub`. Verified by
+ * `@motebit/mcp-server`; never accepted by the relay itself.
+ */
+export const TASK_DISPATCH_AUDIENCE: TokenAudience = "task:dispatch";
 
 /** Admin-bound read paths (transparency, etc.). */
 export const ADMIN_QUERY_AUDIENCE: TokenAudience = "admin:query";
@@ -226,6 +242,7 @@ export const ALL_TOKEN_AUDIENCES: readonly TokenAudience[] = Object.freeze([
   "task:submit",
   "task:query",
   "task:result",
+  "task:dispatch",
   "admin:query",
   "proposal",
   "receipts:read",
