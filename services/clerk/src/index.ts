@@ -84,6 +84,10 @@ async function main(): Promise<void> {
       ...(config.authToken != null ? { authToken: config.authToken } : {}),
       ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
       ...(config.publicUrl != null ? { publicUrl: config.publicUrl } : {}),
+      // Task admission (docs/doctrine/task-admission.md): a priced listing is a
+      // promise that the work is bought — run only relay-admitted work. Escape
+      // hatch for an operator who must reopen it: MOTEBIT_TASK_ADMISSION=open.
+      taskAdmission: process.env["MOTEBIT_TASK_ADMISSION"] === "open" ? "open" : "relay",
       moneyExecution: {
         solanaRpcUrl: config.solanaRpcUrl,
         relayPublicKeyHex: config.relayPublicKey,
