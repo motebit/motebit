@@ -56,7 +56,13 @@ jobs:
         # the audit still runs and reports findings, only the exit code is
         # tolerant of registry-side errors. Revisit when we upgrade pnpm or
         # the endpoint stabilises.
-        run: pnpm audit --audit-level=critical --ignore-registry-errors
+        #
+        # Threshold is HIGH (raised from critical, 2026-09-13). Advisories with
+        # no fix anywhere are accepted explicitly in package.json
+        # `pnpm.auditConfig.ignoreCves`, each with a reachability argument and
+        # a lift trigger in docs/security/dependency-triage.md — a documented
+        # exception, never a bare count threshold.
+        run: pnpm audit --prod --audit-level=high --ignore-registry-errors
 
       - name: Build
         # Must run before drift defenses because check-api-surface shells out
