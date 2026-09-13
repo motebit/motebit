@@ -61,8 +61,13 @@ TaskResponse {
     alternatives_considered:  number
   } | null
   price_snapshot:   number      // Optional: estimated cost in micro-units
+  dispatch_token:   string      // Optional: relay-signed task admission token (auth-token §5 `task:dispatch`),
+                                //   present ONLY when the relay did not dispatch the task itself — the submitter
+                                //   is then the one presenter and passes it to the worker's motebit_task
 }
 ```
+
+`dispatch_token` (1.1) binds `mid` to the intended worker (`target_agent` when set, else the URL agent), `sub` to `task_id`, and `digest` to SHA-256 of `prompt`. When the relay routed the task (WebSocket, MCP forward, or federation) the token travelled with that dispatch and the response carries none: one admission, one presenter. A worker configured for task admission admits each `task_id` once. See `agent-mcp-surface-v1.md` §5.1 and `docs/doctrine/task-admission.md`.
 
 ### 3.3 Foundation Law
 
@@ -393,3 +398,8 @@ The eight routes below are the binding cross-implementation contract for delegat
 | settlement@1.0        | Defines how money moves. This spec defines when settlement is triggered (receipt verification).                   |
 | relay-federation@1.0  | Cross-relay delegation: tasks route via federation peers. Same lifecycle, settlement chains for multi-relay hops. |
 | auth-token@1.0        | Task submission and result delivery require signed bearer tokens with audience binding.                           |
+
+## Change Log
+
+- **1.1 (2026-09-12)** — Additive: optional `dispatch_token` on `TaskResponse` (§3.2), returned only when the relay did not dispatch the task itself. Task admission arc (`docs/doctrine/task-admission.md`).
+- **1.0** — Initial.

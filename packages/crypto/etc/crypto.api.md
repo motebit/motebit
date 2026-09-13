@@ -891,9 +891,11 @@ export interface MintAudienceTokenInput {
     aud: string;
     // (undocumented)
     did: string;
+    digest?: string;
     // (undocumented)
     mid: string;
     nowMs?: number;
+    sub?: string;
     ttlMs?: number;
 }
 
@@ -1392,6 +1394,7 @@ export interface SignedTokenPayload {
     aud: string;
     // (undocumented)
     did: string;
+    digest?: string;
     // (undocumented)
     exp: number;
     // (undocumented)
@@ -1399,6 +1402,7 @@ export interface SignedTokenPayload {
     jti: string;
     // (undocumented)
     mid: string;
+    sub?: string;
     suite: "motebit-jwt-ed25519-v1";
 }
 

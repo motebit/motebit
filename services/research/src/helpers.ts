@@ -25,7 +25,7 @@ export function loadConfig() {
     // P2P; absent ⇒ atom hops use the free direct-MCP path (dormant until the
     // atoms are priced). The molecule's identity key IS the Solana wallet seed.
     solanaRpcUrl: process.env["MOTEBIT_SOLANA_RPC_URL"] ?? null,
-    relayPublicKey: process.env["MOTEBIT_RELAY_PUBLIC_KEY"] ?? null,
+    relayPublicKey: process.env["MOTEBIT_RELAY_PUBLIC_KEY"]?.trim() || null,
     // USDC SPL mint for the sovereign wallet rail — MUST match the network
     // behind MOTEBIT_SOLANA_RPC_URL (devnet USDC on staging). Absent ⇒ the rail
     // defaults to mainnet USDC (only correct on a mainnet deployment).

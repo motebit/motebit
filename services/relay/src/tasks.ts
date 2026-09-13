@@ -73,6 +73,7 @@ import {
   forwardTaskViaMcp,
   evaluateSettlementEligibility,
   type ReceiptCandidate,
+  mintTaskDispatchToken,
 } from "./task-routing.js";
 import type { TaskRouter } from "./task-routing.js";
 import { getBondBackingAdapter } from "./bond-backing-adapter.js";
@@ -248,7 +249,14 @@ export function getListingUnitCost(
   try {
     const pricing = JSON.parse(row.pricing) as CapabilityPrice[];
     if (capability != null) {
-      return pricing.find((p) => p.capability === capability)?.unit_cost ?? 0;
+      const listed = pricing.find((p) => p.capability === capability)?.unit_cost;
+      if (listed != null) return listed;
+      // An UNLISTED capability against a priced worker prices at the worker's
+      // ceiling, never at 0: a `required_capabilities: ["bogus"]` submission
+      // must not clear the P2P gate for free and walk away with a dispatch
+      // token the worker will honor (task-admission.md). Unpriced workers
+      // still price at 0.
+      return pricing.reduce((max, p) => Math.max(max, p.unit_cost ?? 0), 0);
     }
     return pricing.reduce((sum, p) => sum + (p.unit_cost ?? 0), 0);
   } catch {
@@ -2636,6 +2644,15 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
 
     const requiredCaps = task.required_capabilities ?? [];
     const payload = JSON.stringify({ type: "task_request", task });
+    // Task admission artifact — one presenter per admission. Every MCP forward
+    // below mints a token bound to the worker it goes to (`mid`) and to this
+    // prompt (`digest`). If the relay routes the task itself, the relay is the
+    // presenter and the submitter gets NO token; if nothing routes it, the
+    // submitter gets a token bound to the intended worker (`target_agent`, else
+    // the URL worker) so it can present the task directly. Two presentations
+    // of one admission are mutually exclusive at the worker (single-use `sub`).
+    const dispatchTokenFor = (workerId: string): Promise<string> =>
+      mintTaskDispatchToken(relayIdentity, workerId, taskId, body.prompt);
     let routed = false;
     let federationAttempted = false;
     let routingChoice:
@@ -2708,6 +2725,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                 ingestionDeps,
               );
             },
+            await dispatchTokenFor(pinnedId),
           );
           routed = true;
           logger.info("task.p2p_pinned_dispatched", {
@@ -3227,6 +3245,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                           ingestionDeps,
                         );
                       },
+                      await dispatchTokenFor(selId),
                     );
                     routed = true;
                   }
@@ -3300,6 +3319,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               ingestionDeps,
             );
           },
+          await dispatchTokenFor(httpCandidate.motebit_id),
         );
         routed = true;
       }
@@ -3312,10 +3332,20 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       void attemptPushWake(motebitId, { pushAdapter, db: moteDb.db });
     }
 
+    // The submitter becomes the presenter only when the relay did not route
+    // the task anywhere (no WebSocket, no MCP endpoint, no federation). A
+    // routed task's token travelled with the forward; handing the submitter a
+    // second one would race the relay's own dispatch at the worker.
+    const submitterPresents = !routed && !federationAttempted;
+    const intendedWorker =
+      typeof body.target_agent === "string" && body.target_agent.length > 0
+        ? body.target_agent
+        : motebitId;
     const responseBody = {
       task_id: taskId,
       status: task.status,
       routing_choice: routingChoice ?? null,
+      ...(submitterPresents ? { dispatch_token: await dispatchTokenFor(intendedWorker) } : {}),
     };
     completeIdempotency(moteDb.db, idempotencyKey, motebitId, 201, JSON.stringify(responseBody));
     return c.json(responseBody, 201);

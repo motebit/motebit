@@ -1,8 +1,8 @@
 # motebit/agent-mcp-surface@1.0
 
 **Status:** Draft
-**Version:** 1.0
-**Date:** 2026-04-24
+**Version:** 1.1
+**Date:** 2026-09-12
 
 ---
 
@@ -109,8 +109,19 @@ MotebitTaskInput {
   delegation_token:       string      // Optional: signed delegation token (JSON) authorizing the task within a scope
   required_capabilities:  string[]    // Optional: capability names required for the task
   relay_task_id:          string      // Optional: relay-assigned task ID for economic binding
+  dispatch_token:         string      // Optional: relay-signed task admission token (aud "task:dispatch")
 }
 ```
+
+When the worker is configured for **task admission** (`taskAdmission: "relay"` in `@motebit/mcp-server` / `@motebit/molecule-runner`; a priced, relay-registered service SHOULD enable it), `dispatch_token` is REQUIRED and the call MUST be refused before any work starts unless all of the following hold:
+
+- The token verifies (`@motebit/crypto.verifySignedToken`) under the worker's pinned relay public key, with `aud` = `task:dispatch` (`TokenAudience` registry).
+- `mid` equals the worker's own `motebit_id` — a token minted for another worker is refused.
+- `sub` is present: it is the relay task id and becomes the receipt's `relay_task_id`. A caller-supplied `relay_task_id` that disagrees with `sub` is refused, never trusted.
+- `digest` is present and equals the hex SHA-256 of `prompt` — the token admits THIS work, not any work under this task id.
+- `sub` has not been admitted before by this worker. One admitted task ⇒ at most one execution; replaying the token or re-minting for the same task is refused. Workers SHOULD keep this record durable across restarts.
+
+The relay mints the token after submission clears its settlement gates. Exactly one presenter holds it: the relay attaches it to its own MCP forward, or — when nothing routed the task — returns it from `POST /agent/:motebit_id/task` (delegation-v1 §3.2) bound to the intended worker so the submitter can present the task directly. Workers not configured for admission ignore the field. Doctrine: `docs/doctrine/task-admission.md`.
 
 When `delegation_token` is present:
 
@@ -175,4 +186,5 @@ A motebit is conformant with `motebit/agent-mcp-surface@1.0` if all of:
 
 ## Change Log
 
+- **1.1 (2026-09-12)** — Additive: optional `dispatch_token` on `motebit_task` (§5.1) — the relay-signed `task:dispatch` admission artifact, REQUIRED by workers configured for task admission (priced relay-registered services), ignored by others. Backward-compatible: an older worker's zod shape strips the unknown field; an older relay simply omits it. Doctrine: `docs/doctrine/task-admission.md`.
 - **1.0 (2026-04-24)** — Initial draft. Pins the eight canonical agent-MCP surface tool names and their input schemas. Introduces profile-based conformance via `motebitType`.

@@ -10,13 +10,16 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { AgentTrustLevel, RiskLevel } from "@motebit/sdk";
+import { AgentTrustLevel, RiskLevel, TASK_DISPATCH_AUDIENCE } from "@motebit/sdk";
 import type { ToolDefinition, ToolResult, PolicyDecision } from "@motebit/sdk";
 import {
   hexPublicKeyToDidKey,
   hexToBytes,
+  bytesToHex,
+  sha256,
   verifyDelegation,
   parseScopeSet,
+  verifySignedToken as defaultVerifySignedToken,
 } from "@motebit/encryption";
 import type { DelegationToken } from "@motebit/encryption";
 import { startSelfWatchdog } from "./self-watchdog.js";
@@ -188,8 +191,67 @@ interface MotebitServerDeps {
   verifySignedToken?(
     token: string,
     publicKey: Uint8Array,
-  ): Promise<{ mid: string; did: string; iat: number; exp: number } | null>;
+  ): Promise<{
+    mid: string;
+    did: string;
+    iat: number;
+    exp: number;
+    aud?: string;
+    sub?: string;
+    digest?: string;
+    jti?: string;
+  } | null>;
 }
+
+// === Task admission ===
+
+/**
+ * Where a worker remembers which relay task ids it has already admitted.
+ * The default is an in-process Map — correct for one process that never
+ * restarts inside a token's TTL. A deployed worker SHOULD inject a durable
+ * store (molecule-runner persists one under its data dir) so a restart or a
+ * second instance cannot re-admit a task whose token is still live.
+ */
+export interface AdmittedTaskStore {
+  has(relayTaskId: string): boolean | Promise<boolean>;
+  add(relayTaskId: string, expiresAt: number): void | Promise<void>;
+}
+
+/** See `McpServerConfig.taskAdmission`. */
+export interface TaskAdmissionConfig {
+  /** Relay Ed25519 public key (hex), or a resolver returning it (null = unavailable). */
+  relayPublicKey: string | (() => Promise<string | null>);
+  /** Durable single-use record of admitted task ids. Default: in-process. */
+  admittedStore?: AdmittedTaskStore;
+}
+
+/**
+ * Longest a verified dispatch token's `sub` is remembered for replay
+ * refusal. Bounded by the token's own `exp`, so the memory is small and
+ * self-pruning; the relay mints dispatch tokens with a short TTL.
+ */
+const ADMITTED_TASK_RETENTION_CAP_MS = 60 * 60 * 1000;
+
+/** In-process `AdmittedTaskStore` — prunes expired entries on every write. */
+class MemoryAdmittedTaskStore implements AdmittedTaskStore {
+  private readonly admitted = new Map<string, number>();
+  has(id: string): boolean {
+    const exp = this.admitted.get(id);
+    if (exp == null) return false;
+    if (exp <= Date.now()) {
+      this.admitted.delete(id);
+      return false;
+    }
+    return true;
+  }
+  add(id: string, expiresAt: number): void {
+    const now = Date.now();
+    for (const [k, exp] of this.admitted) if (exp <= now) this.admitted.delete(k);
+    this.admitted.set(id, expiresAt);
+  }
+}
+
+type AdmissionOutcome = { ok: true; relayTaskId: string } | { ok: false; reason: string };
 
 // === Config ===
 
@@ -209,6 +271,22 @@ interface McpServerConfig {
   motebitType?: "personal" | "service" | "collaborative";
   /** Timeout in milliseconds for motebit_task generator iteration (default: 300000 = 5 minutes). */
   taskTimeoutMs?: number;
+  /**
+   * Task admission — when set, `motebit_task` runs ONLY for a task the
+   * relay admitted: the caller must present a `dispatch_token` signed by
+   * the relay (`aud: "task:dispatch"`, `mid` = this motebit, `sub` = the
+   * relay task id), and each `sub` is admitted at most once per process
+   * lifetime. Transport auth (bearer / signed caller token) says WHO is
+   * calling; this says WHAT was admitted — a priced worker must not do
+   * work for a caller whose payment the relay never saw.
+   *
+   * `relayPublicKey` is the relay's Ed25519 key as hex, or a lazy resolver
+   * (e.g. a `/.well-known/motebit.json` fetch) so boot never blocks on the
+   * relay. Fail-closed: an unresolved key denies every task.
+   *
+   * See `docs/doctrine/task-admission.md`.
+   */
+  taskAdmission?: TaskAdmissionConfig;
   /** Custom REST routes handled before MCP auth (same level as /health).
    *  Return true if handled, false to continue to MCP. */
   customRoutes?: (
@@ -340,6 +418,10 @@ export class McpServerAdapter {
   /** #459: loopback self-check that exits the process when unservable. */
   private selfWatchdog?: import("./self-watchdog.js").SelfWatchdogHandle;
   private lastVerifiedCaller: CallerIdentity | null = null;
+  /** Single-use record of admitted relay task ids (injected or in-process). */
+  private readonly admittedTasks: AdmittedTaskStore;
+  /** Memoized relay public key for task admission (resolved once, on first task). */
+  private relayAdmissionKey: Promise<Uint8Array | null> | null = null;
 
   /**
    * Hook for relay re-registration on health checks. Set by startServiceServer
@@ -350,6 +432,7 @@ export class McpServerAdapter {
   constructor(config: McpServerConfig, deps: MotebitServerDeps) {
     this.config = config;
     this.deps = deps;
+    this.admittedTasks = config.taskAdmission?.admittedStore ?? new MemoryAdmittedTaskStore();
   }
 
   /**
@@ -684,15 +767,46 @@ export class McpServerAdapter {
             .describe(
               "Relay-assigned task ID for economic binding — included in the signed receipt",
             ),
+          dispatch_token: z
+            .string()
+            .optional()
+            .describe(
+              "Relay-signed task admission token (aud task:dispatch). Required by workers that admit work only through their relay.",
+            ),
         },
         async (args: {
           prompt: string;
           delegation_token?: string;
           required_capabilities?: unknown;
           relay_task_id?: string;
+          dispatch_token?: string;
         }) => {
           const denied = await this.validateSyntheticTool(toolDef, args);
           if (denied) return denied;
+
+          // Task admission (fail-closed). Runs BEFORE any work — the agent
+          // loop, and therefore the provider spend, never starts for a task
+          // the relay did not admit. Transport auth already established WHO
+          // is calling; this establishes that the relay saw the money.
+          let relayTaskId = args.relay_task_id;
+          if (this.config.taskAdmission) {
+            const admission = await this.admitTask(
+              args.dispatch_token,
+              args.relay_task_id,
+              args.prompt,
+            );
+            if (!admission.ok) {
+              this.deps.logToolCall("motebit_task", args, {
+                ok: false,
+                error: `admission denied: ${admission.reason}`,
+              });
+              return {
+                content: [{ type: "text" as const, text: `Denied: ${admission.reason}` }],
+                isError: true,
+              };
+            }
+            relayTaskId = admission.relayTaskId;
+          }
 
           // Parse and verify delegation token for scope enforcement
           let delegatedScope: string | undefined;
@@ -760,7 +874,7 @@ export class McpServerAdapter {
 
           const gen = handleAgentTask(args.prompt, {
             delegatedScope,
-            relayTaskId: args.relay_task_id,
+            relayTaskId,
           });
           let timedOut = false;
           try {
@@ -1055,6 +1169,80 @@ export class McpServerAdapter {
   }
 
   // --- Caller Verification ---
+
+  /**
+   * Verify a relay-signed dispatch token against the pinned relay key and
+   * bind this invocation to its task id. Every failure is a denial with a
+   * closed reason; nothing here is best-effort.
+   */
+  private async admitTask(
+    dispatchToken: string | undefined,
+    claimedRelayTaskId: string | undefined,
+    prompt: string,
+  ): Promise<AdmissionOutcome> {
+    const admission = this.config.taskAdmission!;
+    if (!dispatchToken) {
+      return {
+        ok: false,
+        reason:
+          "this service admits work only through its relay — submit the task to the relay and present the returned dispatch_token",
+      };
+    }
+    if (this.relayAdmissionKey == null) {
+      this.relayAdmissionKey = (async () => {
+        const hex =
+          typeof admission.relayPublicKey === "string"
+            ? admission.relayPublicKey
+            : await admission.relayPublicKey().catch(() => null);
+        if (!hex || !/^[0-9a-fA-F]{64}$/.test(hex)) return null;
+        return hexToBytes(hex);
+      })();
+    }
+    const key = await this.relayAdmissionKey;
+    if (key == null) {
+      // Unresolved key stays unresolved only for this attempt; the next task
+      // re-tries the resolver (a relay that was briefly down must not deny
+      // forever), but no task is ever admitted without it.
+      this.relayAdmissionKey = null;
+      return { ok: false, reason: "relay public key unavailable — task admission cannot verify" };
+    }
+    const payload = this.deps.verifySignedToken
+      ? await this.deps.verifySignedToken(dispatchToken, key)
+      : await defaultVerifySignedToken(dispatchToken, key);
+    if (!payload) return { ok: false, reason: "dispatch_token invalid or expired" };
+    if (payload.aud !== TASK_DISPATCH_AUDIENCE) {
+      return { ok: false, reason: "dispatch_token audience mismatch" };
+    }
+    if (payload.mid !== this.deps.motebitId) {
+      return { ok: false, reason: "dispatch_token was issued for a different worker" };
+    }
+    const sub = payload.sub;
+    if (typeof sub !== "string" || sub.length === 0) {
+      return { ok: false, reason: "dispatch_token carries no task id" };
+    }
+    if (claimedRelayTaskId != null && claimedRelayTaskId !== sub) {
+      return { ok: false, reason: "relay_task_id does not match dispatch_token" };
+    }
+    // The token admits THIS work, not any work under this task id: the relay
+    // signed the SHA-256 of the prompt it accepted. A token replayed with a
+    // different prompt is refused. (Required — the relay always mints it.)
+    if (typeof payload.digest !== "string" || payload.digest.length === 0) {
+      return { ok: false, reason: "dispatch_token carries no prompt digest" };
+    }
+    const promptDigest = bytesToHex(await sha256(new TextEncoder().encode(prompt)));
+    if (payload.digest.toLowerCase() !== promptDigest) {
+      return { ok: false, reason: "prompt does not match the admitted task (digest mismatch)" };
+    }
+    // One admitted task ⇒ at most one execution.
+    if (await this.admittedTasks.has(sub)) {
+      return { ok: false, reason: "task already admitted — a dispatch token is single-use" };
+    }
+    await this.admittedTasks.add(
+      sub,
+      Math.min(payload.exp, Date.now() + ADMITTED_TASK_RETENTION_CAP_MS),
+    );
+    return { ok: true, relayTaskId: sub };
+  }
 
   private async verifyCallerToken(token: string): Promise<CallerIdentity | null> {
     if (!this.deps.verifySignedToken) return null;

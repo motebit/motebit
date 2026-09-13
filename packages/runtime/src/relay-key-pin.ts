@@ -80,7 +80,11 @@ export async function getOrPinRelayKey(
     });
     if (resp.ok) {
       const body = (await resp.json()) as { public_key?: unknown; relay_id?: unknown };
-      if (typeof body.public_key === "string" && body.public_key.length > 0) {
+      // Only a well-formed Ed25519 public key may become (or replace) a pin.
+      // Pinning a malformed value would fail closed against the REAL key on
+      // every later fetch until someone hand-edits the store — a garbage
+      // response must be a no-op, not a poisoned trust root.
+      if (typeof body.public_key === "string" && /^[0-9a-fA-F]{64}$/.test(body.public_key)) {
         fetchedKey = body.public_key;
       }
       if (typeof body.relay_id === "string" && body.relay_id.length > 0) {
