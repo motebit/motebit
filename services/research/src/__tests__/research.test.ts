@@ -1188,6 +1188,46 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
     expect(ws.calls[0]!.args.dispatch_token).toBe("disp.tok");
   });
 
+  it("treats a 200 with no task_id as no binding (neither relay_task_id nor dispatch_token forwarded)", async () => {
+    const receipt = makeReceipt({ result: "[]", signature: "sig-r1" });
+    const ws = new StubAtomAdapter([receipt]);
+    const ru = new StubAtomAdapter([]);
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ dispatch_token: "orphan" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      mockCreate
+        .mockResolvedValueOnce({
+          content: [
+            { type: "tool_use", id: "tu-1", name: "motebit_web_search", input: { query: "q" } },
+          ],
+        })
+        .mockResolvedValueOnce({ content: [{ type: "text", text: "ok" }] });
+      await research("q", {
+        ...baseConfig,
+        syncUrl: "http://relay.test",
+        apiToken: "tok",
+        webSearchTargetId: "ws-mote",
+        adapterFactory: makeFactory(
+          new Map([
+            ["web-search", ws],
+            ["read-url", ru],
+          ]),
+        ),
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    expect(ws.calls[0]!.args.relay_task_id).toBeUndefined();
+    expect(ws.calls[0]!.args.dispatch_token).toBeUndefined();
+  });
+
   it("forwards relay_task_id without a dispatch_token when an older relay returns none", async () => {
     const receipt = makeReceipt({ result: "[]", signature: "sig-r1" });
     const ws = new StubAtomAdapter([receipt]);
