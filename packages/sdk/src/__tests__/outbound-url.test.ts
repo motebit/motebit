@@ -198,3 +198,105 @@ describe("fetchPublic — redirects re-apply the law", () => {
     });
   });
 });
+
+describe("checkOutboundUrl — full range table + parser edges (branch coverage is the contract)", () => {
+  it.each([
+    ["http://192.0.0.9/", false],
+    ["http://192.0.2.9/", false],
+    ["http://192.88.99.9/", false],
+    ["http://198.18.0.9/", false],
+    ["http://198.19.255.9/", false],
+    ["http://198.51.100.9/", false],
+    ["http://203.0.113.9/", false],
+    ["http://240.0.0.9/", false],
+    ["http://239.255.255.250/", false],
+    ["http://100.63.0.1/", true],
+    ["http://100.127.255.255/", false],
+    ["http://172.15.0.1/", true],
+    ["http://198.17.0.1/", true],
+    ["http://[2001:db8::1]/", false],
+    ["http://[2002:0808:0808::1]/", true],
+    ["http://[2002:0a00:0001::1]/", false],
+    ["http://[64:ff9b::808:808]/", true],
+    ["http://[::ffff:8.8.8.8]/", true],
+    ["http://[::8.8.8.8]/", true],
+    ["http://[fe80::1%25en0]/", false],
+    ["http://[2607:f8b0:4005:80a::200e]/", true],
+    ["http://instance-data/", false],
+    ["http://metadata/", false],
+    ["http://a.localdomain/", false],
+    ["http://example.com./", true],
+  ])("%s → public=%s", async (u, expected) => {
+    expect(await ok(u)).toBe(expected);
+  });
+
+  it("malformed IPv6 literals are refused as invalid, not accepted as names", async () => {
+    for (const u of ["http://[1:2:3:4:5:6:7:8:9]/", "http://[1::2::3]/", "http://[zz::1]/"]) {
+      // WHATWG rejects these at parse time → invalid_url.
+      expect(await reason(u)).toBe("invalid_url");
+    }
+  });
+
+  it("isPublicAddress handles bare literal edge forms directly", () => {
+    // Direct calls reach parser branches the URL parser would normalise away.
+    expect(isPublicAddress("1:2:3:4:5:6:7:8:9")).toBe(false); // too many groups
+    expect(isPublicAddress("1::2::3")).toBe(false); // double compression
+    expect(isPublicAddress("::ffff:999.1.1.1")).toBe(false); // bad embedded v4
+    expect(isPublicAddress("1:2:3:4:5:6:7:8")).toBe(true); // no compression, 8 groups
+    expect(isPublicAddress("1:2:3:4:5:6:7")).toBe(false); // 7 groups, no compression
+    expect(isPublicAddress("2001:db8::")).toBe(false);
+    expect(isPublicAddress("2002:c000:0201::")).toBe(false); // 6to4 → 192.0.2.1 (TEST-NET)
+    expect(isPublicAddress("64:ff9b::a00:1")).toBe(false); // NAT64 → 10.0.0.1
+    expect(isPublicAddress("256.1.1.1")).toBe(false);
+    expect(isPublicAddress("::2")).toBe(false); // ::/96 IPv4-compatible block: deprecated, not global
+  });
+
+  it("password-only credentials are refused too", async () => {
+    expect(await reason("https://:pw@example.com/")).toBe("credentials_in_url");
+  });
+});
+
+describe("fetchPublic — method rewriting on redirects", () => {
+  const redirectTo = (location: string, status: number) =>
+    new Response(null, { status, headers: { location } });
+
+  it("303 turns a POST into a GET and drops the body; 307 keeps both", async () => {
+    const calls: RequestInit[] = [];
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_u, init) => {
+      calls.push(init ?? {});
+      if (calls.length === 1) return redirectTo("https://example.com/see-other", 303);
+      if (calls.length === 2) return redirectTo("https://example.com/temp", 307);
+      return new Response("ok", { status: 200 });
+    });
+    const res = await fetchPublic(
+      "https://example.com/submit",
+      { method: "POST", body: "payload" },
+      { fetchImpl },
+    );
+    expect(await res.text()).toBe("ok");
+    expect(calls[0]!.method).toBe("POST");
+    expect(calls[1]!.method).toBe("GET");
+    expect(calls[1]!.body).toBeUndefined();
+    expect(calls[2]!.method).toBe("GET");
+  });
+
+  it("301/302 on POST also become GET; a redirect with no Location is returned as-is", async () => {
+    const calls: RequestInit[] = [];
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_u, init) => {
+      calls.push(init ?? {});
+      if (calls.length === 1) return redirectTo("https://example.com/moved", 301);
+      return new Response(null, { status: 302 }); // no Location header
+    });
+    const res = await fetchPublic(
+      "https://example.com/",
+      { method: "POST", body: "b" },
+      { fetchImpl },
+    );
+    expect(res.status).toBe(302);
+    expect(calls[1]!.method).toBe("GET");
+  });
+
+  it("uses the global fetch when none is injected (initial URL refused ⇒ no call)", async () => {
+    await expect(fetchPublic("http://10.0.0.1/")).rejects.toBeInstanceOf(OutboundUrlRefusedError);
+  });
+});
