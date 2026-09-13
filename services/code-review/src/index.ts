@@ -132,7 +132,6 @@ async function main(): Promise<void> {
       capabilities: ["review_pr"],
       ...(config.authToken != null ? { authToken: config.authToken } : {}),
       ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
-      ...(config.apiToken != null ? { apiToken: config.apiToken } : {}),
       ...(config.publicUrl != null ? { publicUrl: config.publicUrl } : {}),
       ...(config.relayPublicKey != null ? { relayPublicKeyHex: config.relayPublicKey } : {}),
       // Task admission — this molecule spends on inference, so it runs only
@@ -152,7 +151,6 @@ async function main(): Promise<void> {
         callerDeviceId: deviceId,
         callerPrivateKey: privateKey,
         ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
-        ...(config.apiToken != null ? { apiToken: config.apiToken } : {}),
         ...(config.readUrlTargetId != null ? { readUrlTargetId: config.readUrlTargetId } : {}),
       };
 

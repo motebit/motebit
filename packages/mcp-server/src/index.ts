@@ -46,6 +46,7 @@ export type {
   ServiceMemoryGraph,
   ServiceEventStore,
   WireServerDepsOptions,
+  RelayAuth,
   ServiceServerConfig,
   ServiceHandle,
 } from "./service.js";

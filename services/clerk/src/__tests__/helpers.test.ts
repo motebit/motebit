@@ -29,7 +29,6 @@ const TOUCHED = [
   "MOTEBIT_UNIT_COST",
   "MOTEBIT_AUTH_TOKEN",
   "MOTEBIT_SYNC_URL",
-  "MOTEBIT_API_TOKEN",
   "MOTEBIT_PUBLIC_URL",
 ] as const;
 
@@ -94,7 +93,6 @@ describe("clerk loadConfig — defaults and overrides", () => {
     expect(c.relayPublicKey).toBeNull();
     expect(c.authToken).toBeNull();
     expect(c.syncUrl).toBeNull();
-    expect(c.apiToken).toBeNull();
     expect(c.publicUrl).toBeNull();
   });
 
@@ -109,7 +107,6 @@ describe("clerk loadConfig — defaults and overrides", () => {
     process.env["MOTEBIT_UNIT_COST"] = "0.25";
     process.env["MOTEBIT_AUTH_TOKEN"] = "tok";
     process.env["MOTEBIT_SYNC_URL"] = "https://relay.example";
-    process.env["MOTEBIT_API_TOKEN"] = "api";
     process.env["MOTEBIT_PUBLIC_URL"] = "https://clerk.example";
 
     const c = loadConfig();
@@ -123,7 +120,6 @@ describe("clerk loadConfig — defaults and overrides", () => {
     expect(c.unitCost).toBe(0.25);
     expect(c.authToken).toBe("tok");
     expect(c.syncUrl).toBe("https://relay.example");
-    expect(c.apiToken).toBe("api");
     expect(c.publicUrl).toBe("https://clerk.example");
   });
 });

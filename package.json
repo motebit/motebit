@@ -184,6 +184,7 @@
     "check-chat-tag-stripping": "npx tsx scripts/check-chat-tag-stripping.ts",
     "check-drift-defenses-inventory": "npx tsx scripts/check-drift-defenses-inventory.ts",
     "check-playwright-image-parity": "npx tsx scripts/check-playwright-image-parity.ts",
+    "check-worker-no-master-token": "npx tsx scripts/check-worker-no-master-token.ts",
     "build-self-knowledge": "npx tsx scripts/build-self-knowledge.ts",
     "lint:pack": "turbo run lint:pack",
     "api:extract": "turbo run api:extract",

@@ -21,7 +21,6 @@ export interface AuditorServiceConfig {
   unitCost: number;
   authToken: string | null;
   syncUrl: string | null;
-  apiToken: string | null;
   publicUrl: string | null;
 }
 
@@ -36,7 +35,6 @@ export function loadConfig(): AuditorServiceConfig {
     unitCost: parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.01"),
     authToken: process.env["MOTEBIT_AUTH_TOKEN"] ?? null,
     syncUrl: process.env["MOTEBIT_SYNC_URL"] ?? null,
-    apiToken: process.env["MOTEBIT_API_TOKEN"] ?? null,
     publicUrl: process.env["MOTEBIT_PUBLIC_URL"] ?? null,
   };
 }

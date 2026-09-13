@@ -1164,7 +1164,7 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
       await research("q", {
         ...baseConfig,
         syncUrl: "http://relay.test",
-        apiToken: "tok",
+        mintRelayToken: async () => "tok",
         webSearchTargetId: "ws-mote",
         adapterFactory: makeFactory(
           new Map([
@@ -1212,7 +1212,7 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
       await research("q", {
         ...baseConfig,
         syncUrl: "http://relay.test",
-        apiToken: "tok",
+        mintRelayToken: async () => "tok",
         webSearchTargetId: "ws-mote",
         adapterFactory: makeFactory(
           new Map([
@@ -1252,7 +1252,7 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
       await research("q", {
         ...baseConfig,
         syncUrl: "http://relay.test",
-        apiToken: "tok",
+        mintRelayToken: async () => "tok",
         webSearchTargetId: "ws-mote",
         adapterFactory: makeFactory(
           new Map([
@@ -1289,7 +1289,7 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
       const result = await research("q", {
         ...baseConfig,
         syncUrl: "http://relay.test",
-        apiToken: "tok",
+        mintRelayToken: async () => "tok",
         webSearchTargetId: "ws-mote",
         adapterFactory: makeFactory(
           new Map([
@@ -1326,7 +1326,7 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
       const result = await research("q", {
         ...baseConfig,
         syncUrl: "http://relay.test",
-        apiToken: "tok",
+        mintRelayToken: async () => "tok",
         webSearchTargetId: "ws-mote",
         adapterFactory: makeFactory(
           new Map([

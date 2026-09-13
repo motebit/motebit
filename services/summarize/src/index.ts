@@ -38,7 +38,6 @@ function loadConfig() {
     dataDir: process.env["MOTEBIT_DATA_DIR"] ?? "./data",
     authToken: process.env["MOTEBIT_AUTH_TOKEN"],
     syncUrl: process.env["MOTEBIT_SYNC_URL"],
-    apiToken: process.env["MOTEBIT_API_TOKEN"],
     // Zero-cost atom until the multi-hop settlement arc; listed so the market
     // renders it as priced (conformance "pricing listed").
     unitCost: parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0"),
@@ -113,7 +112,6 @@ async function main(): Promise<void> {
       capabilities: ["summarize_search"],
       ...(config.authToken != null ? { authToken: config.authToken } : {}),
       ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
-      ...(config.apiToken != null ? { apiToken: config.apiToken } : {}),
       ...(config.publicUrl != null ? { publicUrl: config.publicUrl } : {}),
     },
     (identity) => {

@@ -974,6 +974,12 @@ const GATES: ReadonlyArray<Gate> = [
       "every `FROM mcr.microsoft.com/playwright:v<X.Y.Z>-…` stage in a service Dockerfile pins the exact version pnpm-lock.yaml resolves for that service's `playwright-core` — read per importer, so each service is held to its own truth. Playwright resolves the browser build by a revision baked into the client, so a client newer than the image exits 1 at boot; browser-sandbox runs always-on (`auto_stop_machines = false`), so the machine crash-loops past its restart budget and STAYS STOPPED until the next deploy. Bitten 2026-07-25 and 2026-08-22 (#577 moved playwright-core, #584 moved the tags). No CI step builds or boots the container, so both halves stayed individually green — the composition-preserves-enforcement class at the image boundary. #647 made every lockfile change auto-deploy every service, which turns this from hygiene into a prerequisite. Invariant #155, added 2026-09-13",
     script: "check-playwright-image-parity",
   },
+  {
+    name: "check-worker-no-master-token",
+    defends:
+      "a worker never holds the relay master token: no `services/*` source outside the relay (browser-sandbox allowlisted — same env NAME, different secret, its own inbound bearer) reads `MOTEBIT_API_TOKEN`, and no worker-side config surface (`MoleculeConfig`, `McpServiceConfig`, `WireServerDepsOptions`) carries an `apiToken` field. Until 2026-09-13 all seven first-party workers presented the relay OPERATOR's master credential as their bearer on register/heartbeat/listing/deregister/key-lookups, so a compromised worker container was a compromised relay — invisible to every test because nothing was wrong except the blast radius. Workers now sign per-audience tokens with their own key (`RelayAuth`) after a public `POST /api/v1/agents/bootstrap`. Same permanent-structural-lock shape as `check-credit-caller-allowlist`. Invariant #156, added 2026-09-13",
+    script: "check-worker-no-master-token",
+  },
 ];
 
 interface Result {

@@ -46,7 +46,6 @@ export interface ReviewConfig {
   callerPrivateKey: Uint8Array;
   /** Optional: relay sync URL for budget-binding sub-delegations. */
   syncUrl?: string;
-  apiToken?: string;
   readUrlTargetId?: string;
   /**
    * Test seam: factory for the mcp-client adapter. Defaults to constructing

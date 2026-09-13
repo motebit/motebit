@@ -16,6 +16,7 @@ import {
   buildServiceReceipt,
   runMolecule,
   createProviderReadiness,
+  makeAuthTokenMinter,
 } from "@motebit/molecule-runner";
 import type { ExecutionReceipt } from "@motebit/molecule-runner";
 import { InMemoryToolRegistry } from "@motebit/tools";
@@ -131,7 +132,6 @@ async function main(): Promise<void> {
       capabilities: ["research"],
       ...(config.authToken != null ? { authToken: config.authToken } : {}),
       ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
-      ...(config.apiToken != null ? { apiToken: config.apiToken } : {}),
       ...(config.publicUrl != null ? { publicUrl: config.publicUrl } : {}),
       ...(config.relayPublicKey != null ? { relayPublicKeyHex: config.relayPublicKey } : {}),
       // Task admission — this molecule spends on inference, so it runs only
@@ -175,9 +175,10 @@ async function main(): Promise<void> {
         callerMotebitId: motebitId,
         callerDeviceId: deviceId,
         callerPrivateKey: privateKey,
+        // Relay budget binding signs as THIS molecule — never an operator secret.
+        mintRelayToken: makeAuthTokenMinter(identity),
         maxToolCalls: config.maxToolCalls,
         ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
-        ...(config.apiToken != null ? { apiToken: config.apiToken } : {}),
         ...(config.webSearchTargetId != null
           ? { webSearchTargetId: config.webSearchTargetId }
           : {}),

@@ -29,7 +29,7 @@ import {
   nodeAddressResolver,
 } from "@motebit/tools";
 import type { SearchProvider } from "@motebit/tools";
-import { buildServiceReceipt, runMolecule } from "@motebit/molecule-runner";
+import { buildServiceReceipt, runMolecule, makeAuthTokenMinter } from "@motebit/molecule-runner";
 import type { ExecutionReceipt } from "@motebit/molecule-runner";
 import { McpClientAdapter } from "@motebit/mcp-client";
 import { loadConfig, canonicalizeResults } from "./helpers.js";
@@ -116,8 +116,8 @@ async function subDelegate(
   callerPrivateKey: Uint8Array,
   /** Relay URL for budget allocation (optional). */
   syncUrl?: string,
-  /** API token for relay calls. */
-  apiToken?: string,
+  /** Mints a `task:submit` bearer signed by THIS service — never an operator secret. */
+  mintRelayToken?: () => Promise<string>,
   /** Target motebit ID for relay task submission. */
   targetMotebitId?: string,
 ): Promise<ExecutionReceipt | null> {
@@ -133,12 +133,12 @@ async function subDelegate(
   // read-url that admits work only through its relay accepts the hop.
   let subRelayTaskId: string | undefined;
   let subDispatchToken: string | undefined;
-  if (syncUrl != null && syncUrl !== "" && apiToken != null && targetMotebitId != null) {
+  if (syncUrl != null && syncUrl !== "" && mintRelayToken != null && targetMotebitId != null) {
     try {
       const taskResp = await fetch(`${syncUrl}/agent/${targetMotebitId}/task`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${apiToken}`,
+          Authorization: `Bearer ${await mintRelayToken()}`,
           "Content-Type": "application/json",
           // Intent-stable, not per-attempt (#459) — retries replay, never
           // mint a new task.
@@ -247,11 +247,12 @@ async function main(): Promise<void> {
       capabilities: ["web_search", "read_url"],
       ...(config.authToken != null ? { authToken: config.authToken } : {}),
       ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
-      ...(config.apiToken != null ? { apiToken: config.apiToken } : {}),
       ...(config.publicUrl != null ? { publicUrl: config.publicUrl } : {}),
     },
     (identity) => {
       const { motebitId, publicKey, privateKey } = identity;
+      // Relay budget binding for the read-url hop signs as this atom.
+      const mintRelayToken = (): Promise<string> => makeAuthTokenMinter(identity)("task:submit");
 
       const registry = new InMemoryToolRegistry();
       registry.register(webSearchDefinition, createWebSearchHandler(searchProvider));
@@ -322,7 +323,7 @@ async function main(): Promise<void> {
                 "web-search-service",
                 privateKey,
                 config.syncUrl,
-                config.apiToken,
+                mintRelayToken,
                 config.delegateTargetId,
               );
               if (charlieReceipt) {
