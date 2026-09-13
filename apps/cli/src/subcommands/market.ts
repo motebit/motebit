@@ -11,6 +11,7 @@
  */
 
 import type { CliConfig } from "../args.js";
+import { openInBrowser, safeExternalUrl } from "../open-external.js";
 import { loadFullConfig } from "../config.js";
 import { formatTimeAgo } from "../utils.js";
 import { fetchRelayJson, getRelayUrl, getRelayAuthHeaders, requireMotebitId } from "./_helpers.js";
@@ -168,8 +169,15 @@ export async function handleFund(config: CliConfig): Promise<void> {
       }
       process.exit(1);
     }
-    const data = (await res.json()) as { checkout_url: string; session_id: string };
-    checkoutUrl = data.checkout_url;
+    const data = (await res.json()) as { checkout_url?: unknown; session_id?: unknown };
+    // The relay is a trust boundary (custom relays are supported): parse
+    // and scheme-check before this string goes anywhere near a process.
+    const parsed = safeExternalUrl(data.checkout_url);
+    if (parsed == null) {
+      console.error("Error: relay returned an invalid checkout URL (expected https).");
+      process.exit(1);
+    }
+    checkoutUrl = parsed.href;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`Error: could not reach relay: ${msg}`);
@@ -180,9 +188,8 @@ export async function handleFund(config: CliConfig): Promise<void> {
   console.log(`\nOpening Stripe Checkout for $${amount.toFixed(2)}...\n`);
   console.log(`  ${checkoutUrl}\n`);
   try {
-    const { execSync } = await import("node:child_process");
-    const openCmd = process.platform === "darwin" ? "open" : "xdg-open";
-    execSync(`${openCmd} "${checkoutUrl}"`, { stdio: "ignore" });
+    // argv, never a shell string — see open-external.ts.
+    await openInBrowser(new URL(checkoutUrl));
   } catch {
     console.log("Could not open browser. Please visit the URL above to complete payment.");
   }

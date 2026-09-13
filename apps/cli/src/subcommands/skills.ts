@@ -9,6 +9,7 @@
  * mis-attributed artifact, not honestly-unsigned.
  */
 
+import { skillScriptEnv, SKILL_ENV_DISCLOSURE } from "../skill-env.js";
 import {
   appendFileSync,
   existsSync,
@@ -765,6 +766,7 @@ export async function handleSkillsRunScript(config: CliConfig): Promise<void> {
       `  Script:       ${cyan(scriptName)} ${dim(`(${String(scriptBytes.length)} bytes)`)}`,
     );
     console.log(`  Args:         ${scriptArgs.length > 0 ? scriptArgs.join(" ") : dim("(none)")}`);
+    console.log(`  Environment:  ${dim(SKILL_ENV_DISCLOSURE)}`);
     console.log(`  Approval ID:  ${dim(approvalId)}`);
     console.log();
     const decision = await promptYesNo("  Approve execution? [y/N] ");
@@ -799,9 +801,11 @@ export async function handleSkillsRunScript(config: CliConfig): Promise<void> {
     const spawnArgs = interpreter.useShebang ? scriptArgs : [tempPath, ...scriptArgs];
     const command = interpreter.useShebang ? tempPath : interpreter.command;
 
+    // Scrubbed environment: approval covered the script, not the
+    // operator's credentials. See skill-env.ts.
     const result = spawnSync(command, spawnArgs, {
       stdio: "inherit",
-      env: process.env,
+      env: skillScriptEnv(process.env),
     });
     if (result.error) {
       console.error(errorColor(`Failed to spawn script: ${result.error.message}`));
