@@ -1091,13 +1091,21 @@ export interface ToolDefinition {
    * address bar, halt indicator). State-chrome tools belong in the
    * latter; the slab item projection is for the former.
    *
+   * `"band"` — the tool's act is narrated in the slab's chrome band
+   * ("Searching …", "Reading …") and NEVER opens a body item. This is
+   * the projection for tools whose result is text the chat reply
+   * already carries (search, file read, generic API tools): a body
+   * card would render the model's raw tool food under a third-person
+   * label, which motebit-computer.md §"Not on the slab" forbids. The
+   * runtime's `tool-policy.ts` applies `band` by default; a tool
+   * declares it here only to override a policy row.
+   *
    * Plumbing: read on the tool_status chunk by ai-core's loop.ts
    * and consumed by the runtime's slab-projection at open time.
    * The closed-string-literal union keeps additions backward
-   * compatible (a future `"observation"` variant could narrow
-   * further without breaking existing consumers).
+   * compatible.
    */
-  slabProjection?: "none" | "tool_call";
+  slabProjection?: "none" | "tool_call" | "band";
   /**
    * When this tool's money facts become known — the R4 metering axis
    * (standing-delegation §3.3; the loop's gate-allow ∧ meter-allow

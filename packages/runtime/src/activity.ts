@@ -37,7 +37,12 @@ export type ActivityLabel = string | null;
 export function deriveStreamActivity(chunk: StreamChunk): ActivityLabel | undefined {
   switch (chunk.type) {
     case "tool_status":
-      return chunk.status === "calling" ? `tool: ${chunk.name}` : "thinking";
+      // Prefer the runtime-produced band narration ("Searching …")
+      // over the raw identifier when a band-projected act carries it;
+      // the identifier is the model's vocabulary, not the motebit's.
+      return chunk.status === "calling"
+        ? chunk.narration?.trim() || `tool: ${chunk.name}`
+        : "thinking";
     case "delegation_start":
       return `delegating → ${chunk.tool}`;
     case "delegation_complete":

@@ -291,6 +291,7 @@ import {
 } from "./slab-controller.js";
 import { DropDispatcher, type DropHandler, classifyToolResult } from "./perception.js";
 import { toolPolicy } from "./tool-policy.js";
+import { describeToolStep } from "./tool-narration.js";
 import {
   runConsolidationCycle,
   type ConsolidationCycleConfig,
@@ -2132,6 +2133,10 @@ export class MotebitRuntime {
 
     try {
       for await (const chunk of stream) {
+        // What we re-emit downstream. Band-projected tool acts are
+        // re-emitted with the produced narration attached; everything
+        // else passes through unchanged.
+        let forward: StreamChunk = chunk;
         if (chunk.type === "text") {
           accumulatedText += chunk.text;
           const updatePayload = activationOnly
@@ -2218,6 +2223,22 @@ export class MotebitRuntime {
             // toolItemIds.set so the matching `done` chunk has
             // nothing to dissolve. Doctrine: motebit-computer.md —
             // slab content is body acts; state chrome is overlays.
+          } else if (
+            chunk.status === "calling" &&
+            (chunk.slabProjection === "band" || toolPolicy(chunk.name).projection === "band")
+          ) {
+            // Band projection — no body item. The act is narrated in the
+            // slab's chrome band from a runtime-PRODUCED line (never the
+            // model's, never the raw tool name), same register as
+            // `task_step_narration`. Nothing is tracked in toolItemIds,
+            // so the matching `done` has nothing to settle. Doctrine:
+            // motebit-computer.md §"Not on the slab" — a third-person
+            // label around raw tool output is a log line, not the eye.
+            forward = {
+              ...chunk,
+              slabProjection: "band",
+              narration: describeToolStep(chunk.name, chunk.context),
+            };
           } else if (chunk.status === "calling") {
             const toolItemId = `slab-tool-${turnId}-${chunk.name}-${Date.now()}`;
             toolItemIds.set(chunk.name, toolItemId);
@@ -2334,7 +2355,7 @@ export class MotebitRuntime {
             }
           }
         }
-        yield chunk;
+        yield forward;
       }
     } catch (err: unknown) {
       outcome = { kind: "failed", error: err instanceof Error ? err.message : String(err) };

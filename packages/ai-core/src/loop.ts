@@ -726,11 +726,21 @@ export type AgenticChunk =
        * not a body act, and its visible representation is a different
        * surface (the slab control band). When `"tool_call"` (default
        * when omitted), the runtime opens a generic `tool_call` slab
-       * item. Closed string-literal union — additive (future variants
-       * like `"observation"` could narrow further without breaking
-       * existing callers).
+       * item. When `"band"`, the runtime opens NO body item and
+       * narrates the act in the slab's chrome band instead (see
+       * `narration`). Closed string-literal union — additive.
        */
-      slabProjection?: "none" | "tool_call";
+      slabProjection?: "none" | "tool_call" | "band";
+      /**
+       * Band narration for a `"band"`-projected act — produced by the
+       * RUNTIME's `describeToolStep` from the tool name + `context`,
+       * never by the model and never set here in ai-core. Surfaces
+       * render it in the same chrome register as `task_step_narration`
+       * ("Searching "dreamversal"", "Reading robots.txt"). Present only
+       * on `calling` chunks the runtime re-emitted with
+       * `slabProjection: "band"`.
+       */
+      narration?: string;
       /**
        * Structured failure category, sourced from `ToolResult.reason`
        * (or from a typed error's `.reason` field when the handler

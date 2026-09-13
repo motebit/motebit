@@ -655,6 +655,95 @@ describe("sendMessageStreaming", () => {
     expect(everSawRequestControlCard).toBe(false);
   });
 
+  it("band projection — web_search opens NO slab item and re-emits with a produced narration", async () => {
+    // motebit-computer.md §"Not on the slab": a raw result under a
+    // third-person label is a log line, not the eye. Band tools are
+    // narrated in the chrome band instead ("Searching …"), produced
+    // by the runtime from name + context — never the tool identifier.
+    mockRunTurnStreaming.mockReturnValue(
+      (async function* () {
+        yield {
+          type: "tool_status" as const,
+          name: "web_search",
+          status: "calling" as const,
+          context: '"dreamversal.com"',
+        };
+        yield {
+          type: "tool_status" as const,
+          name: "web_search",
+          status: "done" as const,
+          result: "Results for dreamversal.com: …",
+        };
+        // A body tool in the same turn still projects.
+        yield { type: "tool_status" as const, name: "read_url", status: "calling" as const };
+        yield {
+          type: "tool_status" as const,
+          name: "read_url",
+          status: "done" as const,
+          result: { url: "https://dreamversal.com/robots.txt", content: "User-agent: *" },
+        };
+        yield { type: "text" as const, text: "Here's what I found." };
+        yield { type: "result" as const, result: makeTurnResult() };
+      })(),
+    );
+    const slabSnapshots: Array<{ items: ReadonlyMap<string, { kind: string; payload: unknown }> }> =
+      [];
+    runtime.slab.subscribe((state) => slabSnapshots.push({ items: state.items }));
+
+    const chunks = await collectChunks(runtime.sendMessageStreaming("research dreamversal.com"));
+
+    const everSawSearchCard = slabSnapshots.some((snap) =>
+      Array.from(snap.items.values()).some(
+        (item) =>
+          item.kind === "tool_call" &&
+          (item.payload as { name?: string } | null)?.name === "web_search",
+      ),
+    );
+    expect(everSawSearchCard).toBe(false);
+    const everSawFetch = slabSnapshots.some((snap) =>
+      Array.from(snap.items.values()).some((item) => item.kind === "fetch"),
+    );
+    expect(everSawFetch).toBe(true);
+
+    const banded = chunks.find(
+      (c) => c.type === "tool_status" && c.name === "web_search" && c.status === "calling",
+    ) as { slabProjection?: string; narration?: string } | undefined;
+    expect(banded?.slabProjection).toBe("band");
+    expect(banded?.narration).toBe('Searching "dreamversal.com"');
+    const fetchCalling = chunks.find(
+      (c) => c.type === "tool_status" && c.name === "read_url" && c.status === "calling",
+    ) as { slabProjection?: string; narration?: string } | undefined;
+    expect(fetchCalling?.narration).toBeUndefined();
+  });
+
+  it("band projection — an unknown (MCP-shaped) tool never opens a generic card", async () => {
+    mockRunTurnStreaming.mockReturnValue(
+      (async function* () {
+        yield {
+          type: "tool_status" as const,
+          name: "acme__lookup_ticket",
+          status: "calling" as const,
+        };
+        yield {
+          type: "tool_status" as const,
+          name: "acme__lookup_ticket",
+          status: "done" as const,
+          result: { id: 42 },
+        };
+        yield { type: "result" as const, result: makeTurnResult() };
+      })(),
+    );
+    const kinds = new Set<string>();
+    runtime.slab.subscribe((state) => {
+      for (const item of state.items.values()) kinds.add(item.kind);
+    });
+    const chunks = await collectChunks(runtime.sendMessageStreaming("look up 42"));
+    expect(kinds.has("tool_call")).toBe(false);
+    const banded = chunks.find((c) => c.type === "tool_status" && c.status === "calling") as
+      { narration?: string } | undefined;
+    expect(banded?.narration).toBe("Using lookup ticket");
+  });
+
   it("Slice 2g — not_in_control failure dissolves instead of resting (control-state residue)", async () => {
     // computer's tool-policy entry has `endState: "rest"` — successful
     // computer calls (or content-failure modes like target_not_found)
@@ -894,7 +983,15 @@ describe("processStream side effects", () => {
 
     const chunks = await collectChunks(runtime.sendMessageStreaming("read a file"));
     expect(chunks).toHaveLength(4);
-    expect(chunks[0]).toEqual({ type: "tool_status", name: "read_file", status: "calling" });
+    // read_file is band-projected: the calling chunk is re-emitted with
+    // the produced narration attached (no context ⇒ bare verb).
+    expect(chunks[0]).toEqual({
+      type: "tool_status",
+      name: "read_file",
+      status: "calling",
+      slabProjection: "band",
+      narration: "Reading",
+    });
     expect(chunks[1]).toMatchObject({ type: "tool_status", name: "read_file", status: "done" });
   });
 
