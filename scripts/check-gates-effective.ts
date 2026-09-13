@@ -2549,6 +2549,22 @@ export async function probeFetch(): Promise<unknown> {
         ),
       ),
   },
+  {
+    script: "check-playwright-image-parity",
+    proves:
+      "flags a Playwright image tag that drifts off the lockfile's resolved playwright-core (the #577→#584 crash-loop shape). Perturbs by PREDICATE — bumps the patch of whichever version the first `FROM mcr.microsoft.com/playwright:v…` stage carries — never a literal version, so a future bump cannot make this probe vacuous. Throws if no pinned stage exists.",
+    perturb: () =>
+      mutateFile("services/browser-sandbox/Dockerfile", (src) => {
+        const re = /(FROM\s+mcr\.microsoft\.com\/playwright:v)(\d+)\.(\d+)\.(\d+)/;
+        const m = re.exec(src);
+        if (m == null) {
+          throw new Error(
+            "probe vacuous: services/browser-sandbox/Dockerfile no longer pins mcr.microsoft.com/playwright — retarget the probe",
+          );
+        }
+        return src.replace(re, `$1$2.$3.${Number(m[4]) + 1}`);
+      }),
+  },
 ];
 
 /**

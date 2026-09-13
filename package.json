@@ -183,6 +183,7 @@
     "check-preset-imports": "npx tsx scripts/check-preset-imports.ts",
     "check-chat-tag-stripping": "npx tsx scripts/check-chat-tag-stripping.ts",
     "check-drift-defenses-inventory": "npx tsx scripts/check-drift-defenses-inventory.ts",
+    "check-playwright-image-parity": "npx tsx scripts/check-playwright-image-parity.ts",
     "build-self-knowledge": "npx tsx scripts/build-self-knowledge.ts",
     "lint:pack": "turbo run lint:pack",
     "api:extract": "turbo run api:extract",
