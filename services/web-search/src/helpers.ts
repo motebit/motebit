@@ -65,6 +65,7 @@ export function loadConfig() {
     braveApiKey: process.env["BRAVE_SEARCH_API_KEY"],
     tavilyApiKey: process.env["TAVILY_API_KEY"],
     publicUrl: process.env["MOTEBIT_PUBLIC_URL"],
+    relayPublicKey: process.env["MOTEBIT_RELAY_PUBLIC_KEY"]?.trim() || undefined,
     delegateReadUrl: process.env["MOTEBIT_DELEGATE_READ_URL"],
     delegateTargetId: process.env["MOTEBIT_DELEGATE_TARGET_ID"],
   };
