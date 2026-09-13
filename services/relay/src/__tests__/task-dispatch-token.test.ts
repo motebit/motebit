@@ -44,9 +44,15 @@ interface CapturedCall {
 }
 
 /** Records every JSON-RPC body the worker's MCP surface receives. */
-function capturingWorker(port: number): { server: Server; bodies: CapturedCall[] } {
+function capturingWorker(port: number): {
+  server: Server;
+  bodies: CapturedCall[];
+  headers: Array<{ authorization?: string }>;
+} {
   const bodies: CapturedCall[] = [];
+  const headers: Array<{ authorization?: string }> = [];
   const server = createServer((req, res) => {
+    if (req.method === "POST") headers.push({ authorization: req.headers.authorization });
     const chunks: Buffer[] = [];
     req.on("data", (c: Buffer) => chunks.push(c));
     req.on("end", () => {
@@ -63,7 +69,7 @@ function capturingWorker(port: number): { server: Server; bodies: CapturedCall[]
     });
   });
   server.listen(port, "127.0.0.1");
-  return { server, bodies };
+  return { server, bodies, headers };
 }
 
 async function waitFor(cond: () => boolean, ms: number): Promise<boolean> {
@@ -144,12 +150,20 @@ describe("forwardTaskViaMcp carries the dispatch token", () => {
       relay_task_id: "task-77",
       dispatch_token: "disp.token",
     });
+    // The relay authenticates AS ITSELF: the dispatch token is the bearer,
+    // and the master token passed positionally is never sent.
+    for (const h of w.headers) {
+      expect(h.authorization).toBe("Bearer motebit:disp.token");
+      expect(h.authorization).not.toContain("master");
+    }
+    expect(w.headers.length).toBeGreaterThan(0);
   });
 
-  it("omits the field entirely when no token is supplied (older call sites)", async () => {
+  it("refuses to forward at all without a dispatch token (there is nothing to authenticate with)", async () => {
     const w = capturingWorker(FORWARD_PORT);
     server = w.server;
-    const logger = { info: () => {}, warn: () => {} };
+    const warns: string[] = [];
+    const logger = { info: () => {}, warn: (m: string) => warns.push(m) };
     await forwardTaskViaMcp(
       `http://127.0.0.1:${FORWARD_PORT}`,
       "task-78",
@@ -162,8 +176,8 @@ describe("forwardTaskViaMcp carries the dispatch token", () => {
       undefined,
       { allowPrivateNetwork: true },
     );
-    const call = w.bodies.find((b) => b.method === "tools/call");
-    expect(call?.params?.arguments).toEqual({ prompt: "do it", relay_task_id: "task-78" });
+    expect(w.bodies).toHaveLength(0);
+    expect(warns).toContain("task.mcp_forward_refused");
   });
 });
 
