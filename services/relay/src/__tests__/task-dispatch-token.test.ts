@@ -289,9 +289,13 @@ describe("POST /agent/:worker/task — one presenter per admission", () => {
   });
 
   it("unroutable paid worker: the submitter gets a token bound to the PINNED worker (not the URL agent)", async () => {
-    // Registered with an expired registry row shape: no WebSocket, and an
-    // endpoint the relay will not find live → Phase 0 logs unroutable.
-    await registerWorker("");
+    // Registered, then the registry row EXPIRES: no WebSocket and no live
+    // endpoint → Phase 0 logs task.p2p_pinned_unroutable and leaves the task
+    // pending, so the submitter is the one presenter.
+    await registerWorker(`http://127.0.0.1:${ROUTE_PORT}/mcp`);
+    relay.moteDb.db
+      .prepare("UPDATE agent_registry SET expires_at = 0 WHERE motebit_id = ?")
+      .run(worker.motebitId);
     const res = await submitPinnedPaid("direct presentation");
     expect(res.status).toBe(201);
     const body = (await res.json()) as { task_id: string; dispatch_token?: string };
