@@ -2162,6 +2162,40 @@ describe("McpServerAdapter — task admission (dispatch_token)", () => {
     expect(second.calls).toHaveLength(0);
   });
 
+  it("two SIMULTANEOUS presentations of one token admit exactly once, even over an async store", async () => {
+    const relay = await enc.generateKeypair();
+    const persisted = new Map<string, number>();
+    // An async store with a real gap between has() and add() — the shape that
+    // lets two callers both observe "not admitted".
+    const store = {
+      has: async (id: string) => {
+        await new Promise((r) => setTimeout(r, 5));
+        return persisted.has(id);
+      },
+      add: async (id: string, exp: number) => {
+        await new Promise((r) => setTimeout(r, 5));
+        persisted.set(id, exp);
+      },
+    };
+    const { handleAgentTask, calls } = captureTask();
+    const adapter = new McpServerAdapter(
+      makeConfig({
+        taskAdmission: { relayPublicKey: enc.bytesToHex(relay.publicKey), admittedStore: store },
+      }),
+      makeDeps({ handleAgentTask }),
+    );
+    await adapter.start();
+    const handler = registrations.tools.get("motebit_task")!.handler;
+    const token = await mint(relay.privateKey, { sub: "race-1" });
+    const results = await Promise.all([
+      handler({ prompt: "p", dispatch_token: token }),
+      handler({ prompt: "p", dispatch_token: token }),
+      handler({ prompt: "p", dispatch_token: token }),
+    ]);
+    expect(calls).toHaveLength(1);
+    expect(results.filter((r) => (r as { isError?: boolean }).isError).length).toBe(2);
+  });
+
   it("admits each relay task at most once — replaying the token or re-minting for the same sub is refused", async () => {
     const relay = await enc.generateKeypair();
     const { handleAgentTask, calls } = captureTask();

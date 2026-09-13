@@ -420,6 +420,14 @@ export class McpServerAdapter {
   private lastVerifiedCaller: CallerIdentity | null = null;
   /** Single-use record of admitted relay task ids (injected or in-process). */
   private readonly admittedTasks: AdmittedTaskStore;
+  /**
+   * Synchronous reservation of task ids mid-admission. The durable store's
+   * `has` → `add` is two awaits apart, so two SIMULTANEOUS presentations of
+   * one token could both read "not admitted" before either wrote. A task id
+   * is reserved here in the same tick it is checked, before any await, and
+   * released only when the store has recorded it (or the attempt failed).
+   */
+  private readonly admittingNow = new Set<string>();
   /** Memoized relay public key for task admission (resolved once, on first task). */
   private relayAdmissionKey: Promise<Uint8Array | null> | null = null;
 
@@ -1233,15 +1241,25 @@ export class McpServerAdapter {
     if (payload.digest.toLowerCase() !== promptDigest) {
       return { ok: false, reason: "prompt does not match the admitted task (digest mismatch)" };
     }
-    // One admitted task ⇒ at most one execution.
-    if (await this.admittedTasks.has(sub)) {
+    // One admitted task ⇒ at most one execution. Reserve synchronously first:
+    // a concurrent presentation of the same task id is refused in this tick,
+    // not after both have raced past the durable store's read.
+    if (this.admittingNow.has(sub)) {
       return { ok: false, reason: "task already admitted — a dispatch token is single-use" };
     }
-    await this.admittedTasks.add(
-      sub,
-      Math.min(payload.exp, Date.now() + ADMITTED_TASK_RETENTION_CAP_MS),
-    );
-    return { ok: true, relayTaskId: sub };
+    this.admittingNow.add(sub);
+    try {
+      if (await this.admittedTasks.has(sub)) {
+        return { ok: false, reason: "task already admitted — a dispatch token is single-use" };
+      }
+      await this.admittedTasks.add(
+        sub,
+        Math.min(payload.exp, Date.now() + ADMITTED_TASK_RETENTION_CAP_MS),
+      );
+      return { ok: true, relayTaskId: sub };
+    } finally {
+      this.admittingNow.delete(sub);
+    }
   }
 
   private async verifyCallerToken(token: string): Promise<CallerIdentity | null> {
