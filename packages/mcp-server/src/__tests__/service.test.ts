@@ -247,6 +247,17 @@ describe("startServiceServer", () => {
     }
   });
 
+  /**
+   * Signed self-auth stand-in. The relay credential a service presents is a
+   * token minted by ITS OWN key per audience — never a static operator secret.
+   * The fake encodes the audience so a test can assert which one each relay
+   * call was bound to.
+   */
+  const testRelayAuth = {
+    deviceId: "test-device",
+    mint: (audience: string) => Promise.resolve(`signed.${audience}`),
+  };
+
   function makeDeps(overrides: Partial<ReturnType<typeof wireServerDeps>> = {}) {
     return {
       motebitId: "test-svc",
@@ -309,7 +320,7 @@ describe("startServiceServer", () => {
     handle = await startServiceServer(makeDeps(), {
       port: 0,
       syncUrl: "http://fake-relay",
-      apiToken: "test-token",
+      relayAuth: testRelayAuth,
       onStart: vi.fn(),
       log,
     });
@@ -347,7 +358,7 @@ describe("startServiceServer", () => {
       handle = await startServiceServer(makeDeps(), {
         port: 0,
         syncUrl: "http://fake-relay",
-        apiToken: "test-token",
+        relayAuth: testRelayAuth,
         onStart: vi.fn(),
         log: vi.fn(),
       });
@@ -401,7 +412,7 @@ describe("startServiceServer", () => {
         {
           port: 0,
           syncUrl: "http://fake-relay",
-          apiToken: "test-token",
+          relayAuth: testRelayAuth,
           onStart: vi.fn(),
           log,
         },
@@ -445,7 +456,7 @@ describe("startServiceServer", () => {
       handle = await startServiceServer(makeDeps(), {
         port: 0,
         syncUrl: "http://fake-relay",
-        apiToken: "test-token",
+        relayAuth: testRelayAuth,
         onStart: vi.fn(),
         log: vi.fn(),
       });
@@ -476,7 +487,7 @@ describe("startServiceServer", () => {
         makeDeps({
           checkReadiness: () => Promise.reject(new Error("probe exploded")),
         } as never),
-        { port: 0, syncUrl: "http://fake-relay", apiToken: "t", onStart: vi.fn(), log },
+        { port: 0, syncUrl: "http://fake-relay", relayAuth: testRelayAuth, onStart: vi.fn(), log },
       );
 
       await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
@@ -501,10 +512,99 @@ describe("startServiceServer", () => {
     handle = await startServiceServer(makeDeps(), {
       port: 0,
       syncUrl: "http://fake-relay",
+      relayAuth: testRelayAuth,
       log,
     });
 
     expect(log).toHaveBeenCalledWith(expect.stringContaining("registration failed"));
+    fetchSpy.mockRestore();
+  });
+
+  it("authenticates every relay call with a bearer signed by its own key, bound per audience — never a static secret", async () => {
+    // The master-token retirement (2026-09-13). Before it, `apiToken` — the
+    // relay OPERATOR's master credential — was the bearer on register,
+    // heartbeat, listing, and deregister, so every worker container held full
+    // relay authority. Now: bootstrap (public, introduces our key) precedes the
+    // first signed call; register/heartbeat/deregister carry `admin:query`,
+    // the listing carries `market:listing`. There is no config field through
+    // which a shared secret could travel.
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    handle = await startServiceServer(makeDeps({ publicKeyHex: "ab".repeat(32) } as never), {
+      port: 0,
+      syncUrl: "http://fake-relay",
+      relayAuth: testRelayAuth,
+      onStart: vi.fn(),
+      log: vi.fn(),
+    });
+    await handle.shutdown();
+    handle = null;
+
+    const calls = fetchSpy.mock.calls.map((c) => ({
+      url: c[0] as string,
+      init: (c[1] ?? {}) as RequestInit,
+    }));
+    const bearer = (url: string): string | undefined =>
+      (calls.find((c) => c.url.includes(url))?.init.headers as Record<string, string> | undefined)
+        ?.Authorization;
+
+    // Bootstrap runs first, unauthenticated, carrying the bootstrap device id
+    // and our public key — the relay learns the key it will verify us with.
+    const bootstrapIdx = calls.findIndex((c) => c.url.endsWith("/api/v1/agents/bootstrap"));
+    const registerIdx = calls.findIndex((c) => c.url.endsWith("/api/v1/agents/register"));
+    expect(bootstrapIdx).toBeGreaterThanOrEqual(0);
+    expect(bootstrapIdx).toBeLessThan(registerIdx);
+    expect(bearer("/agents/bootstrap")).toBeUndefined();
+    expect(JSON.parse(calls[bootstrapIdx]!.init.body as string)).toEqual({
+      motebit_id: "test-svc",
+      device_id: "test-device",
+      public_key: "ab".repeat(32),
+    });
+
+    expect(bearer("/agents/register")).toBe("Bearer signed.admin:query");
+    expect(bearer("/listing")).toBe("Bearer signed.market:listing");
+    expect(bearer("/agents/deregister")).toBe("Bearer signed.admin:query");
+
+    // Nothing on the wire is a static token.
+    for (const c of calls) {
+      const auth = (c.init.headers as Record<string, string> | undefined)?.Authorization;
+      if (auth != null) expect(auth.startsWith("Bearer signed.")).toBe(true);
+    }
+    fetchSpy.mockRestore();
+  });
+
+  it("bootstraps once per process, not on every re-registration", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+      handle = await startServiceServer(makeDeps(), {
+        port: 0,
+        syncUrl: "http://fake-relay",
+        relayAuth: testRelayAuth,
+        onStart: vi.fn(),
+        log: vi.fn(),
+      });
+      await vi.advanceTimersByTimeAsync(3 * 60 * 60 * 1000);
+      const count = (needle: string): number =>
+        fetchSpy.mock.calls.filter((c) => (c[0] as string).includes(needle)).length;
+      expect(count("/agents/register")).toBeGreaterThan(1);
+      expect(count("/agents/bootstrap")).toBe(1);
+      fetchSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips relay registration loudly when syncUrl is set without signed self-auth", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const log = vi.fn();
+    handle = await startServiceServer(makeDeps(), { port: 0, syncUrl: "http://fake-relay", log });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("no relayAuth"));
     fetchSpy.mockRestore();
   });
 
@@ -516,7 +616,7 @@ describe("startServiceServer", () => {
     handle = await startServiceServer(makeDeps(), {
       port: 0,
       syncUrl: "http://fake-relay",
-      apiToken: "tok",
+      relayAuth: testRelayAuth,
     });
 
     await handle.shutdown();

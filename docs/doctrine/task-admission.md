@@ -38,6 +38,14 @@ Before this arc the relay's MCP forward carried its **master token** as the bear
 
 The dispatch token is that artifact. A worker configured with `relayTrust` (or `taskAdmission`: one pin, two checks) accepts `Authorization: Bearer motebit:<dispatch_token>` when it verifies under the pinned relay key with `aud: task:dispatch` and `mid` = this worker, and treats the caller as its relay. `molecule-runner` sets `relayTrust` for every relay-registered molecule regardless of admission posture. The relay forwards with the dispatch token as the bearer and **never sends its master token to a worker**; a forward without a dispatch token is refused before any socket opens (`task.mcp_forward_refused`, `no_dispatch_token`). Third-party workers on an older `@motebit/mcp-server` (no `relayTrust`) answer 401 until upgraded, which the forward logs loudly rather than silently retrying with a secret.
 
+## The worker authenticates as itself
+
+The mirror image of the section above, closed 2026-09-13. Every call a worker makes TO its relay — `bootstrap` → `register` → `heartbeat` → `listing` → `deregister`, the budget-binding `POST /agent/:id/task` on a sub-delegation, and the caller-key lookups the inbound verifier falls back to — is authenticated by a short-lived, audience-bound token signed by the worker's **own identity key** (`RelayAuth` in `@motebit/mcp-server`, minted per call by `makeAuthTokenMinter` in `molecule-runner`). The audiences are the existing ones: `admin:query` for the registration family, `market:listing` for the listing, `task:submit` to open a task. A fresh identity is introduced to the relay through the public, rate-limited, hijack-guarded `POST /api/v1/agents/bootstrap` (same id with a different key ⇒ 409) so the relay holds a key to verify the first signed call against. Key lookups themselves are public protocol artifacts (relay CLAUDE.md rule 6) and need no bearer at all.
+
+Before this, every first-party worker read `MOTEBIT_API_TOKEN` — the relay **operator's master credential** — from its environment and presented it as the bearer on all of the above. The token bypasses rate limits and unlocks identity and device registration, every admin route, sync, state, and execution. A compromised worker container was therefore a compromised relay, and the blast radius was invisible to every test because nothing was wrong except the blast radius. `check-worker-no-master-token` now fails on any `MOTEBIT_API_TOKEN` read outside the relay and on any `apiToken` field on a worker-side config surface, so the secret cannot come back through the plumbing. `molecule-runner` warns loudly at boot if the variable is still set, so a stale deployment secret is visible until an operator removes it.
+
+Named sibling not yet closed: the CLI daemon (`apps/cli/src/daemon.ts`) still registers with the operator's sync token when one is configured and unauthenticated otherwise — the same shape on a published surface with key-unlock UX, tracked as its own arc.
+
 ## Named gaps, carried with the flip trigger
 
 - **Federation.** A task forwarded to a peer relay is delivered by that relay over WebSocket only (`federation-callbacks.ts`); it never MCP-forwards, and the origin relay's token is signed by a key the executor's workers do not pin. An HTTP-only priced worker behind a peer relay was already unreachable through federation; admission does not change that. The executor relay minting its own token for federated dispatch is part of the flip.
@@ -47,7 +55,7 @@ The dispatch token is that artifact. A worker configured with `relayTrust` (or `
 
 - It does not verify payment at the worker. The worker trusts its relay's admission decision, exactly as it already trusts the relay for discovery and settlement records. A worker that wants to verify the chain itself keeps that option open through the same `sub` (the task id joins the relay ledger and the onchain proof).
 - It does not close the proxy's snapshot-balance window or the relay's verify-after-dispatch for P2P proofs. Those are the relay's own gates; this arc makes the worker refuse work that never reached them.
-- It does not change transport auth. A worker still needs its bearer or signed-caller verifier; the shared relay master token remains the relay's transport credential on forwards.
+- It does not replace the worker's inbound verifier. A worker still needs its static bearer or signed-caller verifier for DIRECT callers; the relay itself is authenticated by the dispatch token (§ "The relay authenticates as itself"), and the worker authenticates to the relay with its own key (§ "The worker authenticates as itself").
 
 ## Companion law
 

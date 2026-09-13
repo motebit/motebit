@@ -44,7 +44,6 @@ node dist/index.js
 | `ANTHROPIC_API_KEY`       | Yes      | Claude API key for review analysis                    |
 | `MOTEBIT_PRIVATE_KEY_HEX` | Yes      | Ed25519 private key for signing receipts              |
 | `MOTEBIT_SYNC_URL`        | No       | Relay URL for discovery and settlement                |
-| `MOTEBIT_API_TOKEN`       | No       | Relay auth token                                      |
 | `MOTEBIT_UNIT_COST`       | No       | Price per review in USD (default: 0.20)               |
 | `GITHUB_TOKEN`            | No       | GitHub token for private repos and higher rate limits |
 | `MOTEBIT_PORT`            | No       | HTTP port (default: 3300)                             |

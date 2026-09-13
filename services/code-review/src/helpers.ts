@@ -10,7 +10,6 @@ export function loadConfig() {
     dataDir: process.env["MOTEBIT_DATA_DIR"] ?? "./data",
     authToken: process.env["MOTEBIT_AUTH_TOKEN"],
     syncUrl: process.env["MOTEBIT_SYNC_URL"],
-    apiToken: process.env["MOTEBIT_API_TOKEN"],
     publicUrl: process.env["MOTEBIT_PUBLIC_URL"],
     anthropicApiKey: process.env["ANTHROPIC_API_KEY"],
     /**

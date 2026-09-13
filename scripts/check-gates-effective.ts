@@ -2565,6 +2565,21 @@ export async function probeFetch(): Promise<unknown> {
         return src.replace(re, `$1$2.$3.${Number(m[4]) + 1}`);
       }),
   },
+  {
+    script: "check-worker-no-master-token",
+    proves:
+      "flags a worker reading the relay master token again — the 2026-09-13 blast-radius class (every first-party worker held MOTEBIT_API_TOKEN, so a compromised worker container was a compromised relay). Probe reinstates the env read in research's config loader; byte-identical restoration on cleanup.",
+    perturb: () =>
+      mutateFile("services/research/src/helpers.ts", (src) => {
+        const anchor = 'syncUrl: process.env["MOTEBIT_SYNC_URL"],';
+        if (!src.includes(anchor)) {
+          throw new Error(
+            "probe vacuous: services/research/src/helpers.ts no longer reads MOTEBIT_SYNC_URL — retarget the probe",
+          );
+        }
+        return src.replace(anchor, `${anchor}\n    apiToken: process.env["MOTEBIT_API_TOKEN"],`);
+      }),
+  },
 ];
 
 /**

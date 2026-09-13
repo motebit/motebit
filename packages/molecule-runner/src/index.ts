@@ -175,10 +175,14 @@ export interface MoleculeConfig {
 
   /** Optional bearer token guarding the MCP HTTP endpoint. */
   authToken?: string;
-  /** Sync relay URL — enables registration, heartbeat, and remote key resolution. */
+  /**
+   * Sync relay URL — enables registration, heartbeat, and remote key
+   * resolution. The molecule authenticates to it with its OWN identity key
+   * (short-lived audience-bound tokens minted by `makeAuthTokenMinter`); there
+   * is no operator-secret path, and `MOTEBIT_API_TOKEN` in a worker
+   * environment is refused at boot (`check-worker-no-master-token`).
+   */
   syncUrl?: string;
-  /** API token for relay calls. */
-  apiToken?: string;
   /** Externally-reachable URL the relay advertises for routing. */
   publicUrl?: string;
   /**
@@ -925,6 +929,23 @@ export async function runMolecule(
   log(`Runtime initialized (${config.serviceName})`);
 
   // 5. Wire server deps
+  //
+  // Relay self-auth: every call this molecule makes to its relay (bootstrap →
+  // register → heartbeat → listing → deregister, plus caller-key lookups) is
+  // signed by its own identity key. A worker never holds the relay operator's
+  // master token — before 2026-09-13 every first-party worker did, so a
+  // compromised worker container was a compromised relay.
+  const relayAuth = {
+    deviceId: identity.deviceId,
+    mint: makeAuthTokenMinter(identity),
+  };
+  if (process.env["MOTEBIT_API_TOKEN"] != null && process.env["MOTEBIT_API_TOKEN"] !== "") {
+    log(
+      `WARNING: MOTEBIT_API_TOKEN is set in this worker's environment but is NOT used — ` +
+        `workers authenticate to the relay with their own identity key. Remove the secret ` +
+        `from this deployment; a relay master token has no business in a worker container.`,
+    );
+  }
   const embedFn =
     adapters.embedText === null ? undefined : (adapters.embedText ?? defaultEmbedText);
   const wireOpts: WireServerDepsOptions = {
@@ -932,7 +953,7 @@ export async function runMolecule(
     publicKeyHex: identity.publicKeyHex,
     identityFileContent: identity.identityContent,
     syncUrl: config.syncUrl,
-    apiToken: config.apiToken,
+    relayAuth,
   };
   if (embedFn) wireOpts.embedText = embedFn;
   if (molecule.handleAgentTask) wireOpts.handleAgentTask = molecule.handleAgentTask;
@@ -996,7 +1017,7 @@ export async function runMolecule(
   if (relayTrust != null) serverCfg.relayTrust = relayTrust;
   if (config.authToken != null) serverCfg.authToken = config.authToken;
   if (config.syncUrl != null) serverCfg.syncUrl = config.syncUrl;
-  if (config.apiToken != null) serverCfg.apiToken = config.apiToken;
+  serverCfg.relayAuth = relayAuth;
   if (config.publicUrl != null) serverCfg.publicEndpointUrl = config.publicUrl;
   if (molecule.customRoutes) serverCfg.customRoutes = molecule.customRoutes;
   if (adapters.serverLog) serverCfg.log = adapters.serverLog;

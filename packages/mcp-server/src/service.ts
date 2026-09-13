@@ -22,6 +22,7 @@ import type {
 } from "@motebit/sdk";
 import { EventType, SensitivityLevel, AgentTrustLevel } from "@motebit/sdk";
 import { verifySignedToken as defaultVerifySignedToken } from "@motebit/encryption";
+import type { TokenAudience } from "@motebit/sdk";
 
 // ---------------------------------------------------------------------------
 // Duck-typed interfaces — match what MotebitRuntime provides
@@ -106,6 +107,23 @@ export interface ServiceRuntime {
 // wireServerDeps — the ~70-line boilerplate eliminator
 // ---------------------------------------------------------------------------
 
+/**
+ * How a service authenticates to ITS OWN relay for registration, heartbeat,
+ * listing publication, and caller-key resolution: a short-lived,
+ * audience-bound token signed by the service's own identity key — the same
+ * shape the CLI and every device surface use. There is deliberately no
+ * shared-secret alternative: a worker never holds the relay operator's master
+ * token (`docs/doctrine/task-admission.md` § "The worker authenticates as
+ * itself"). A fresh identity is introduced to the relay through the public,
+ * rate-limited `POST /api/v1/agents/bootstrap` before its first signed call.
+ */
+export interface RelayAuth {
+  /** The `did` claim the relay resolves the signing key by (bootstrap device id). */
+  deviceId: string;
+  /** Mint a signed bearer bound to `audience`. Called per request; tokens are short-lived. */
+  mint: (audience: TokenAudience) => Promise<string>;
+}
+
 export interface WireServerDepsOptions {
   motebitId: string;
   publicKeyHex?: string;
@@ -142,8 +160,8 @@ export interface WireServerDepsOptions {
 
   /** Relay URL for remote key resolution (fallback when local trust store has no record). */
   syncUrl?: string;
-  /** API token for relay calls (key resolution, etc.). */
-  apiToken?: string;
+  /** Signed self-auth for the one relay lookup that is not public (`GET /api/v1/agents/:id`). */
+  relayAuth?: RelayAuth;
 }
 
 export function wireServerDeps(
@@ -268,7 +286,7 @@ export function wireServerDeps(
   {
     const getAgentTrust = runtime.getAgentTrust?.bind(runtime);
     const syncUrl = opts.syncUrl?.replace(/\/+$/, "");
-    const apiToken = opts.apiToken;
+    const relayAuth = opts.relayAuth;
 
     // Track relay-confirmed callers so local FirstContact records get upgraded
     const relayConfirmedCallers = new Set<string>();
@@ -311,34 +329,38 @@ export function wireServerDeps(
         // siblings of the same identity surface — kept in sync by the
         // identity manager — so this lookup is a sibling fallback, not a
         // protocol fork.
+        //
+        // Every lookup here is either PUBLIC (a key is a public protocol
+        // artifact — relay CLAUDE.md rule 6) or signed by THIS service's own
+        // identity. None carries an operator secret: before 2026-09-13 these
+        // calls sent the relay's master token, which meant every worker
+        // container held full relay authority just to read public keys.
         if (syncUrl) {
-          const headers: Record<string, string> = {};
-          if (apiToken) headers["Authorization"] = `Bearer ${apiToken}`;
-
-          // 2a. Device registry (`/api/v1/devices/<motebit_id>`).
+          // 2a. Identity-transparency binding bundle (public). Covers both
+          // registries: the relay assembles it from agent_registry + the
+          // succession chain, and it is the same surface an external verifier
+          // resolves a receipt's producer through.
           try {
-            const resp = await fetch(`${syncUrl}/api/v1/devices/${callerMotebitId}`, { headers });
+            const resp = await fetch(`${syncUrl}/api/v1/identity/${callerMotebitId}`, {
+              signal: AbortSignal.timeout(10_000),
+            });
             if (resp.ok) {
-              const raw: unknown = await resp.json();
-              const arr = Array.isArray(raw)
-                ? (raw as Array<{ public_key?: string }>)
-                : (((raw as Record<string, unknown>).devices as Array<{ public_key?: string }>) ??
-                  []);
-              const key = arr.find((d) => d.public_key)?.public_key;
-              if (key) {
+              const raw = (await resp.json()) as { current_public_key?: unknown };
+              if (typeof raw.current_public_key === "string" && raw.current_public_key !== "") {
                 relayConfirmedCallers.add(callerMotebitId);
-                return { publicKey: key, trustLevel: AgentTrustLevel.Verified };
+                return { publicKey: raw.current_public_key, trustLevel: AgentTrustLevel.Verified };
               }
             }
           } catch {
-            // Relay unreachable — try agent registry next, then fail closed
+            // Relay unreachable — try the registry reads next, then fail closed
           }
 
-          // 2b. Agent registry (`/api/v1/agents/discover?capability=…` returns
-          // an array; we filter by motebit_id). Service motebits live here.
-          // No discovery filter — we ask for everything and pick the row.
+          // 2b. Agent registry via public discovery (`/api/v1/agents/discover`
+          // returns every serving agent; filter by motebit_id).
           try {
-            const resp = await fetch(`${syncUrl}/api/v1/agents/discover`, { headers });
+            const resp = await fetch(`${syncUrl}/api/v1/agents/discover`, {
+              signal: AbortSignal.timeout(10_000),
+            });
             if (resp.ok) {
               const raw = (await resp.json()) as {
                 agents?: Array<{ motebit_id?: string; public_key?: string }>;
@@ -355,7 +377,29 @@ export function wireServerDeps(
               }
             }
           } catch {
-            // Relay unreachable — fail closed
+            // Relay unreachable — one more read, then fail closed
+          }
+
+          // 2c. Direct registry row (`/api/v1/agents/:id`) — an agent route, so
+          // it takes a bearer: this service's OWN signed token, never a shared
+          // secret. Reaches sleeping agents discovery has aged out.
+          if (relayAuth) {
+            try {
+              const token = await relayAuth.mint("admin:query");
+              const resp = await fetch(`${syncUrl}/api/v1/agents/${callerMotebitId}`, {
+                headers: { Authorization: `Bearer ${token}` },
+                signal: AbortSignal.timeout(10_000),
+              });
+              if (resp.ok) {
+                const raw = (await resp.json()) as { public_key?: unknown };
+                if (typeof raw.public_key === "string" && raw.public_key !== "") {
+                  relayConfirmedCallers.add(callerMotebitId);
+                  return { publicKey: raw.public_key, trustLevel: AgentTrustLevel.Verified };
+                }
+              }
+            } catch {
+              // Relay unreachable — fail closed
+            }
           }
         }
 
@@ -421,8 +465,14 @@ export interface ServiceServerConfig {
 
   /** Sync relay URL for discovery registration. */
   syncUrl?: string;
-  /** API token for relay authentication. */
-  apiToken?: string;
+  /**
+   * Signed self-auth to the relay named by `syncUrl`. REQUIRED for
+   * registration to succeed: the relay's agent routes take a bearer, and the
+   * only bearer a service may present is one signed by its own key. Absent ⇒
+   * relay registration is skipped with a loud log line (the service still
+   * serves MCP; it is just not discoverable).
+   */
+  relayAuth?: RelayAuth;
   /** Public endpoint URL for relay registration (default: http://localhost:<port>). */
   publicEndpointUrl?: string;
   /**
@@ -557,12 +607,52 @@ export async function startServiceServer(
   let lastFullRegisterAt = 0;
   let registering = false; // guard against concurrent registration attempts
 
-  if (config.syncUrl) {
+  if (config.syncUrl && config.relayAuth == null) {
+    log(
+      `Relay registration skipped: syncUrl is set but no relayAuth (signed self-auth) was ` +
+        `configured. A service authenticates to its relay with its OWN identity key — there ` +
+        `is no shared-secret path. Wire relayAuth (molecule-runner does this from the ` +
+        `bootstrapped identity) to register, heartbeat, and publish a listing.`,
+    );
+  }
+  if (config.syncUrl && config.relayAuth != null) {
+    const relayAuth = config.relayAuth;
     const toolNames = (await deps.listTools()).map((t) => t.name);
-    const regHeaders: Record<string, string> = {
+    /** Fresh signed bearer per call — tokens are short-lived and audience-bound. */
+    const relayHeaders = async (audience: TokenAudience): Promise<Record<string, string>> => ({
       "Content-Type": "application/json",
+      Authorization: `Bearer ${await relayAuth.mint(audience)}`,
+    });
+    /**
+     * Introduce this identity to the relay once per process. `bootstrap` is
+     * the public, rate-limited, hijack-guarded (same id + different key ⇒ 409)
+     * path that gives the relay a key to verify our signed tokens against
+     * BEFORE the first authenticated call. Idempotent on (id, key), so a
+     * re-registering service is a no-op here; a 409 is logged loudly because
+     * it means this identity is bound to someone else's key on this relay.
+     */
+    let bootstrapped = false;
+    const bootstrap = async (): Promise<void> => {
+      if (bootstrapped) return;
+      const resp = await fetch(`${config.syncUrl}/api/v1/agents/bootstrap`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          motebit_id: deps.motebitId,
+          device_id: relayAuth.deviceId,
+          public_key: deps.publicKeyHex ?? "",
+        }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (resp.ok) {
+        bootstrapped = true;
+        return;
+      }
+      log(
+        `Relay bootstrap ${resp.status === 409 ? "REFUSED — this motebit_id is bound to a different key on the relay" : "failed"}: ` +
+          `${resp.status} ${await resp.text().catch(() => "")}`,
+      );
     };
-    if (config.apiToken) regHeaders["Authorization"] = `Bearer ${config.apiToken}`;
 
     const endpointUrl = config.publicEndpointUrl ?? `http://localhost:${config.port}`;
     const regBody = {
@@ -590,9 +680,10 @@ export async function startServiceServer(
       if (registering) return lastRegisteredAt > 0;
       registering = true;
       try {
+        await bootstrap();
         const regResp = await fetch(`${config.syncUrl}/api/v1/agents/register`, {
           method: "POST",
-          headers: regHeaders,
+          headers: await relayHeaders("admin:query"),
           body: JSON.stringify(regBody),
           signal: AbortSignal.timeout(10_000),
         });
@@ -618,7 +709,7 @@ export async function startServiceServer(
             `${config.syncUrl}/api/v1/agents/${deps.motebitId}/listing`,
             {
               method: "POST",
-              headers: regHeaders,
+              headers: await relayHeaders("market:listing"),
               body: JSON.stringify(listing),
               signal: AbortSignal.timeout(10_000),
             },
@@ -680,7 +771,7 @@ export async function startServiceServer(
       try {
         const resp = await fetch(`${config.syncUrl}/api/v1/agents/heartbeat`, {
           method: "POST",
-          headers: regHeaders,
+          headers: await relayHeaders("admin:query"),
           body: JSON.stringify({ motebit_id: deps.motebitId }),
           signal: AbortSignal.timeout(10_000),
         });
@@ -755,13 +846,12 @@ export async function startServiceServer(
     process.removeListener("SIGINT", onSignal);
     process.removeListener("SIGTERM", onSignal);
     if (heartbeatTimer) clearInterval(heartbeatTimer);
-    if (config.syncUrl) {
+    if (config.syncUrl && config.relayAuth != null) {
       try {
-        const headers: Record<string, string> = {};
-        if (config.apiToken) headers["Authorization"] = `Bearer ${config.apiToken}`;
+        const token = await config.relayAuth.mint("admin:query");
         await fetch(`${config.syncUrl}/api/v1/agents/deregister`, {
           method: "DELETE",
-          headers,
+          headers: { Authorization: `Bearer ${token}` },
         });
       } catch {
         // Best-effort deregistration

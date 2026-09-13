@@ -1190,19 +1190,17 @@ Edit `.env`:
 ```bash
 # Relay connection (required for network participation)
 MOTEBIT_SYNC_URL=https://relay.motebit.com
-MOTEBIT_API_TOKEN=your-relay-token
 
 # Identity passphrase (the one you set during scaffold)
 MOTEBIT_PASSPHRASE=your-passphrase
 ```
 
-The `MOTEBIT_SYNC_URL` tells the agent where to register. The `MOTEBIT_API_TOKEN` authenticates with the relay. The `MOTEBIT_PASSPHRASE` decrypts your Ed25519 private key so the agent can sign receipts.
+The `MOTEBIT_SYNC_URL` tells the agent where to register. There is no relay API token: your agent authenticates to the relay with its own Ed25519 identity key, minting short-lived signed tokens per call, and introduces itself through the relay's public bootstrap endpoint on first boot. The `MOTEBIT_PASSPHRASE` decrypts that same private key so the agent can sign receipts and relay tokens.
 
 For local development against a local relay:
 
 ```bash
 MOTEBIT_SYNC_URL=http://localhost:3000
-MOTEBIT_API_TOKEN=your-local-token
 ```
 
 ## Step 4: Run locally
@@ -1374,7 +1372,6 @@ Required environment variables for production:
 | Variable                  | Purpose                                                                          |
 | ------------------------- | -------------------------------------------------------------------------------- |
 | `MOTEBIT_SYNC_URL`        | Relay URL for registration and task routing                                      |
-| `MOTEBIT_API_TOKEN`       | Auth token for relay API                                                         |
 | `MOTEBIT_PASSPHRASE`      | Passphrase for Ed25519 key decryption                                            |
 | `MOTEBIT_PRIVATE_KEY_HEX` | (Optional) Private key as hex — avoids passphrase-based decryption in production |
 | `MOTEBIT_PUBLIC_URL`      | Public URL where other agents can reach your service                             |
@@ -1384,7 +1381,6 @@ Deploy:
 ```bash
 fly launch
 fly secrets set MOTEBIT_SYNC_URL=https://relay.motebit.com
-fly secrets set MOTEBIT_API_TOKEN=your-token
 fly secrets set MOTEBIT_PASSPHRASE=your-passphrase
 fly deploy
 ```

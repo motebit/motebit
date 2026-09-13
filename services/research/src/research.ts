@@ -26,7 +26,7 @@
 import { createHash } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { McpClientAdapter } from "@motebit/mcp-client";
-import type { Citation, ExecutionReceipt } from "@motebit/sdk";
+import type { Citation, ExecutionReceipt, TokenAudience } from "@motebit/sdk";
 import { querySelfKnowledge } from "@motebit/self-knowledge";
 import { reportShapeIssues } from "./report-shape.js";
 
@@ -143,7 +143,13 @@ export interface ResearchConfig {
   maxToolCalls: number;
   /** Optional: relay sync URL for budget-binding sub-delegations. */
   syncUrl?: string;
-  apiToken?: string;
+  /**
+   * Mints a short-lived `task:submit` bearer signed by THIS service's identity
+   * key, for opening the relay task that binds a sub-delegation's budget. A
+   * worker authenticates to its relay as itself — never with the operator's
+   * master token (`docs/doctrine/task-admission.md`).
+   */
+  mintRelayToken?: (audience?: TokenAudience) => Promise<string>;
   webSearchTargetId?: string;
   readUrlTargetId?: string;
   /**
@@ -368,13 +374,13 @@ async function bindRelayBudget(
   capabilityHint: string,
   targetMotebitId: string | undefined,
 ): Promise<RelayBinding | undefined> {
-  if (config.syncUrl == null || config.apiToken == null || targetMotebitId == null)
+  if (config.syncUrl == null || config.mintRelayToken == null || targetMotebitId == null)
     return undefined;
   try {
     const resp = await fetch(`${config.syncUrl}/agent/${targetMotebitId}/task`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${config.apiToken}`,
+        Authorization: `Bearer ${await config.mintRelayToken("task:submit")}`,
         "Content-Type": "application/json",
         // Intent-stable, not per-attempt (#459): the same logical sub-hop
         // (caller × target × prompt) presents the same key, so a retry

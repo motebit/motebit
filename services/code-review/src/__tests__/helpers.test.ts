@@ -9,7 +9,6 @@ describe("loadConfig", () => {
     "MOTEBIT_DATA_DIR",
     "MOTEBIT_AUTH_TOKEN",
     "MOTEBIT_SYNC_URL",
-    "MOTEBIT_API_TOKEN",
     "MOTEBIT_PUBLIC_URL",
     "ANTHROPIC_API_KEY",
     "MOTEBIT_READ_URL_URL",
@@ -38,7 +37,6 @@ describe("loadConfig", () => {
     expect(config.dataDir).toBe("./data");
     expect(config.authToken).toBeUndefined();
     expect(config.syncUrl).toBeUndefined();
-    expect(config.apiToken).toBeUndefined();
     expect(config.publicUrl).toBeUndefined();
     expect(config.anthropicApiKey).toBeUndefined();
     expect(config.readUrlUrl).toBeUndefined();
@@ -63,7 +61,6 @@ describe("loadConfig", () => {
   it("propagates all optional fields when set", () => {
     process.env["MOTEBIT_AUTH_TOKEN"] = "auth";
     process.env["MOTEBIT_SYNC_URL"] = "https://sync";
-    process.env["MOTEBIT_API_TOKEN"] = "api";
     process.env["MOTEBIT_PUBLIC_URL"] = "https://public";
     process.env["ANTHROPIC_API_KEY"] = "sk-ant";
     process.env["MOTEBIT_READ_URL_URL"] = "http://localhost:3500/mcp";
@@ -72,7 +69,6 @@ describe("loadConfig", () => {
     const config = loadConfig();
     expect(config.authToken).toBe("auth");
     expect(config.syncUrl).toBe("https://sync");
-    expect(config.apiToken).toBe("api");
     expect(config.publicUrl).toBe("https://public");
     expect(config.anthropicApiKey).toBe("sk-ant");
     expect(config.readUrlUrl).toBe("http://localhost:3500/mcp");

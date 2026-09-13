@@ -58,7 +58,6 @@ async function main(): Promise<void> {
       capabilities: ["read_url"],
       ...(config.authToken != null ? { authToken: config.authToken } : {}),
       ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
-      ...(config.apiToken != null ? { apiToken: config.apiToken } : {}),
       ...(config.publicUrl != null ? { publicUrl: config.publicUrl } : {}),
     },
     (identity) => {
