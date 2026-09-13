@@ -968,6 +968,12 @@ const GATES: ReadonlyArray<Gate> = [
       "audience-bound auth tokens are minted through the ONE canonical seam — `mintAudienceToken` (@motebit/crypto), which owns iat/exp/jti assembly — never via raw `createSignedToken(` outside packages/crypto/src/signing.ts (tests exempt: adversarial fixtures need exact payload control). Before the seam, 23 call sites each restated the freshness window and replay nonce — the identity→authz instance of the shadow-the-constant class (one site drifting its TTL or nonce source silently weakens the boundary while every test stays green). One seam means one place where the assembly can be right or wrong. Invariant #147, added 2026-07-23",
     script: "check-token-mint-canonical",
   },
+  {
+    name: "check-playwright-image-parity",
+    defends:
+      "every `FROM mcr.microsoft.com/playwright:v<X.Y.Z>-…` stage in a service Dockerfile pins the exact version pnpm-lock.yaml resolves for that service's `playwright-core` — read per importer, so each service is held to its own truth. Playwright resolves the browser build by a revision baked into the client, so a client newer than the image exits 1 at boot; browser-sandbox runs always-on (`auto_stop_machines = false`), so the machine crash-loops past its restart budget and STAYS STOPPED until the next deploy. Bitten 2026-07-25 and 2026-08-22 (#577 moved playwright-core, #584 moved the tags). No CI step builds or boots the container, so both halves stayed individually green — the composition-preserves-enforcement class at the image boundary. #647 made every lockfile change auto-deploy every service, which turns this from hygiene into a prerequisite. Invariant #155, added 2026-09-13",
+    script: "check-playwright-image-parity",
+  },
 ];
 
 interface Result {
