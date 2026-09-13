@@ -5,6 +5,12 @@ on:
     branches: [main]
     paths:
       - "services/proxy/**"
+      # A lockfile or root-manifest change (dependency security fixes,
+      # pnpm.overrides) changes the built image without touching this
+      # service's own files — it must redeploy too. Witnessed 2026-09-13:
+      # the advisory triage merge redeployed only the relay.
+      - "pnpm-lock.yaml"
+      - "package.json"
       # No `packages/**` trigger: proxy has zero @motebit/* dependencies
       # (only @noble/ed25519, next, react, @vercel/kv), so monorepo package
       # changes cannot affect its build. If this service ever imports a
