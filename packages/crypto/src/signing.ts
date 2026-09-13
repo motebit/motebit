@@ -38,6 +38,13 @@ export interface SignedTokenPayload {
   /** Audience claim — binds token to a specific endpoint/operation. Prevents cross-endpoint replay. */
   aud: string;
   /**
+   * Subject claim (JWT `sub`) — the object this token is ABOUT when that is
+   * not the bearer itself: a relay task id on a `task:dispatch` token, for
+   * example. Optional and audience-specific; verifiers that need it check
+   * for presence themselves. Absent on every pre-existing audience.
+   */
+  sub?: string;
+  /**
    * Cryptosuite identifier. Always `"motebit-jwt-ed25519-v1"` for this
    * token shape today. Present in the signed payload so verifiers
    * dispatch primitive verification through `verifyBySuite` rather
@@ -299,6 +306,8 @@ export interface MintAudienceTokenInput {
    * @motebit/protocol and call sites supply the typed value.
    */
   aud: string;
+  /** Optional subject claim — see `SignedTokenPayload.sub`. Omitted when absent. */
+  sub?: string;
   /** Token lifetime in ms. Default `DEFAULT_SIGNED_TOKEN_TTL_MS`. */
   ttlMs?: number;
   /**
@@ -354,6 +363,7 @@ export async function mintAudienceToken(
     exp: iat + (input.ttlMs ?? DEFAULT_SIGNED_TOKEN_TTL_MS),
     jti: mintJti(),
     aud: input.aud,
+    ...(input.sub != null ? { sub: input.sub } : {}),
     suite: SIGNED_TOKEN_SUITE,
   };
   const token = await createSignedToken(payload, privateKey);

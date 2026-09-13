@@ -70,6 +70,7 @@ const CANONICAL_AUDIENCES = new Set<string>([
   "task:submit",
   "task:query",
   "task:result",
+  "task:dispatch",
   "admin:query",
   "proposal",
   "receipts:read",

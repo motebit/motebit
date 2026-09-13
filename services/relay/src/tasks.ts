@@ -73,6 +73,7 @@ import {
   forwardTaskViaMcp,
   evaluateSettlementEligibility,
   type ReceiptCandidate,
+  mintTaskDispatchToken,
 } from "./task-routing.js";
 import type { TaskRouter } from "./task-routing.js";
 import { getBondBackingAdapter } from "./bond-backing-adapter.js";
@@ -2636,6 +2637,15 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
 
     const requiredCaps = task.required_capabilities ?? [];
     const payload = JSON.stringify({ type: "task_request", task });
+    // Task admission artifact for the submission target (the URL worker). Any
+    // MCP forward to a DIFFERENT worker mints its own (the token binds `mid`).
+    // Returned to the submitter so a delegator that calls the worker directly
+    // can prove admission the same way the relay's own forward does.
+    const submitDispatchToken = await mintTaskDispatchToken(relayIdentity, motebitId, taskId);
+    const dispatchTokenFor = async (workerId: string): Promise<string> =>
+      workerId === motebitId
+        ? submitDispatchToken
+        : mintTaskDispatchToken(relayIdentity, workerId, taskId);
     let routed = false;
     let federationAttempted = false;
     let routingChoice:
@@ -2708,6 +2718,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                 ingestionDeps,
               );
             },
+            await dispatchTokenFor(pinnedId),
           );
           routed = true;
           logger.info("task.p2p_pinned_dispatched", {
@@ -3227,6 +3238,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                           ingestionDeps,
                         );
                       },
+                      await dispatchTokenFor(selId),
                     );
                     routed = true;
                   }
@@ -3300,6 +3312,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               ingestionDeps,
             );
           },
+          await dispatchTokenFor(httpCandidate.motebit_id),
         );
         routed = true;
       }
@@ -3316,6 +3329,9 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       task_id: taskId,
       status: task.status,
       routing_choice: routingChoice ?? null,
+      // Present this to the submission target's `motebit_task` when calling
+      // it directly; the relay's own forwards carry their own copy.
+      dispatch_token: submitDispatchToken,
     };
     completeIdempotency(moteDb.db, idempotencyKey, motebitId, 201, JSON.stringify(responseBody));
     return c.json(responseBody, 201);

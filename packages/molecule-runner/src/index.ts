@@ -32,6 +32,7 @@ import { dirname, resolve as resolvePath } from "node:path";
 import { RiskLevel } from "@motebit/sdk";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import { bootstrapAndEmitIdentity, startServiceServer, wireServerDeps } from "@motebit/mcp-server";
+import type { TaskAdmissionConfig } from "@motebit/mcp-server";
 import {
   deriveSolanaAddress,
   createSolanaWalletRail,
@@ -179,6 +180,29 @@ export interface MoleculeConfig {
   apiToken?: string;
   /** Externally-reachable URL the relay advertises for routing. */
   publicUrl?: string;
+  /**
+   * The relay operator's PINNED Ed25519 public key (hex) used to verify
+   * relay-signed task dispatch tokens. Falls back to `moneyExecution.
+   * relayPublicKeyHex`, then to a one-time fetch of the relay's
+   * `/.well-known/motebit.json` (trust-on-first-use, logged loudly). Pin it
+   * in production.
+   */
+  relayPublicKeyHex?: string;
+  /**
+   * Task admission posture (`docs/doctrine/task-admission.md`).
+   *   - `"relay"` — `motebit_task` runs only with a relay-signed
+   *     `dispatch_token` for this worker and task.
+   *   - `"open"`  — any authenticated caller may submit work (pre-admission
+   *     behavior).
+   * Default: `"open"`, with a LOUD boot warning when the molecule is PRICED
+   * (any listing entry with `unit_cost > 0`) and relay-registered — that is
+   * the shape where a free identity can run priced work for nothing. The
+   * flip to `"relay"`-by-default-when-priced is deferred until every
+   * first-party direct caller of a priced atom forwards the relay's token
+   * (trigger recorded in the doctrine doc); services that spend on inference
+   * opt in explicitly today.
+   */
+  taskAdmission?: "relay" | "open";
 
   /**
    * Money-execution seam — opt-in. When present, the molecule becomes a
@@ -308,6 +332,8 @@ export interface MoleculeRunnerAdapters {
   embedText?: ((text: string) => Promise<number[]>) | null;
   /** Override server start. Default: `startServiceServer` from @motebit/mcp-server. */
   startServer?: typeof startServiceServer;
+  /** HTTP fetch used for the relay well-known key lookup. Default: global `fetch`. */
+  fetch?: typeof fetch;
   /**
    * Override construction of the sovereign wallet used for sweeping earnings.
    * Default: `createSolanaWalletRail({ rpcUrl, identitySeed })`. Tests inject a
@@ -564,6 +590,91 @@ export function defaultCreateMoneyRuntime(
 }
 
 // ---------------------------------------------------------------------------
+// Task admission — decide posture + resolve the relay key
+// ---------------------------------------------------------------------------
+
+/** @internal exported for tests */
+export async function resolveTaskAdmission(
+  config: Pick<
+    MoleculeConfig,
+    "syncUrl" | "relayPublicKeyHex" | "moneyExecution" | "taskAdmission" | "serviceName"
+  >,
+  molecule: Pick<MoleculeBuild, "getServiceListing">,
+  fetchImpl: typeof fetch,
+  log: (msg: string) => void,
+): Promise<TaskAdmissionConfig | undefined> {
+  let priced = false;
+  if (molecule.getServiceListing) {
+    try {
+      const listing = await molecule.getServiceListing();
+      // A null listing is a service that publishes nothing — nothing priced.
+      priced = listing?.pricing.some((p) => p.unit_cost > 0) ?? false;
+    } catch (err) {
+      // A listing that cannot be read is treated as priced: the failure mode
+      // must be "refuse work until the relay admits it", never "work free".
+      priced = true;
+      log(
+        `task admission: listing unreadable (${err instanceof Error ? err.message : String(err)}) — treating as priced`,
+      );
+    }
+  }
+  const mode = config.taskAdmission ?? "open";
+  if (mode === "open") {
+    if (config.taskAdmission == null && priced && config.syncUrl) {
+      // The exact shape the admission primitive exists for, left open. Say
+      // so on every boot — a priced listing is a promise that the work is
+      // bought, and without admission any relay-registered identity can
+      // run it for free. (Default flip deferred: docs/doctrine/task-admission.md.)
+      log(
+        'task admission: OPEN on a PRICED relay-registered listing — any relay-registered identity can run this work without paying. Set taskAdmission: "relay" (MOTEBIT_TASK_ADMISSION=relay) to require the relay\'s dispatch token.',
+      );
+    } else {
+      log(
+        `task admission: open (${config.taskAdmission != null ? "configured" : "unpriced or no relay"})`,
+      );
+    }
+    return undefined;
+  }
+
+  const pinned = config.relayPublicKeyHex ?? config.moneyExecution?.relayPublicKeyHex;
+  if (pinned != null) {
+    log("task admission: relay dispatch required (pinned relay key)");
+    return { relayPublicKey: pinned };
+  }
+  const syncUrl = config.syncUrl?.replace(/\/+$/, "");
+  if (!syncUrl) {
+    // Nothing to verify against and nothing to fetch from: deny all rather
+    // than open. The operator asked for admission (or priced the listing)
+    // without giving the worker a relay — that is a configuration error the
+    // first task surfaces, not a reason to work for free.
+    log(
+      "task admission: relay dispatch required but NO relay key and NO syncUrl — every task will be refused",
+    );
+    return { relayPublicKey: () => Promise.resolve(null) };
+  }
+  log(
+    `task admission: relay dispatch required — relay key NOT pinned, will trust-on-first-use from ${syncUrl}/.well-known/motebit.json (set relayPublicKeyHex / MOTEBIT_RELAY_PUBLIC_KEY to pin)`,
+  );
+  return {
+    relayPublicKey: async () => {
+      try {
+        const resp = await fetchImpl(`${syncUrl}/.well-known/motebit.json`, {
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!resp.ok) return null;
+        const body = (await resp.json()) as { public_key?: unknown };
+        const key = body.public_key;
+        if (typeof key !== "string" || !/^[0-9a-fA-F]{64}$/.test(key)) return null;
+        log(`task admission: relay key resolved from well-known (${key.slice(0, 8)}…)`);
+        return key;
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // runMolecule — the entrypoint services call
 // ---------------------------------------------------------------------------
 
@@ -731,6 +842,12 @@ export async function runMolecule(
       }
     },
   };
+  // Task admission — priced work enters through the relay's gate. Decided
+  // from the molecule's OWN listing so pricing and admission cannot drift
+  // apart: a service that charges is a service that requires the relay's
+  // signed admission before it spends. Doctrine: task-admission.md.
+  const admission = await resolveTaskAdmission(config, molecule, adapters.fetch ?? fetch, log);
+  if (admission != null) serverCfg.taskAdmission = admission;
   if (config.authToken != null) serverCfg.authToken = config.authToken;
   if (config.syncUrl != null) serverCfg.syncUrl = config.syncUrl;
   if (config.apiToken != null) serverCfg.apiToken = config.apiToken;

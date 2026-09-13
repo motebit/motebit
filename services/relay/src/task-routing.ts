@@ -21,7 +21,13 @@ import {
   markBondBacking,
   BOND_BACKING_STALENESS_MS,
 } from "./bond-store.js";
-import { hexPublicKeyToDidKey, didKeyToPublicKey, bytesToHex } from "@motebit/encryption";
+import {
+  hexPublicKeyToDidKey,
+  didKeyToPublicKey,
+  bytesToHex,
+  mintAudienceToken,
+} from "@motebit/encryption";
+import { TASK_DISPATCH_AUDIENCE } from "@motebit/protocol";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { RelayIdentity, FederationConfig } from "./federation.js";
 import { signDiscoverBody } from "./federation.js";
@@ -970,6 +976,42 @@ function isReceiptCandidate(v: unknown): v is ReceiptCandidate {
 }
 
 /**
+ * Lifetime of a relay-signed task dispatch token. Long enough to cover a
+ * cold-start wake + the MCP forward (≤ 30 s init + 120 s call) and a
+ * delegator that submits then calls the worker directly; short enough that
+ * a leaked token is worthless within minutes. The worker refuses a second
+ * execution of the same task id regardless of TTL.
+ */
+export const TASK_DISPATCH_TOKEN_TTL_MS = 15 * 60 * 1000;
+
+/**
+ * Mint the relay-signed per-task ADMISSION artifact (`aud: "task:dispatch"`,
+ * `mid` = the worker the task is dispatched to, `sub` = the relay task id).
+ * Attached to every MCP forward and returned to the submitter, so a worker
+ * that admits work only through its relay can verify — offline, against the
+ * pinned relay key — that this task cleared submission (payment proof,
+ * balance hold, or an explicit carve-out) before it spends anything.
+ * Doctrine: `docs/doctrine/task-admission.md`.
+ */
+export async function mintTaskDispatchToken(
+  relayIdentity: RelayIdentity,
+  workerMotebitId: string,
+  taskId: string,
+): Promise<string> {
+  const { token } = await mintAudienceToken(
+    {
+      mid: workerMotebitId,
+      did: relayIdentity.did,
+      aud: TASK_DISPATCH_AUDIENCE,
+      sub: taskId,
+      ttlMs: TASK_DISPATCH_TOKEN_TTL_MS,
+    },
+    relayIdentity.privateKey,
+  );
+  return token;
+}
+
+/**
  * Forward a task to an agent's MCP endpoint via HTTP StreamableHTTP.
  * Called as fire-and-forget when no WebSocket connection is available.
  * On success, stores the receipt in the task queue for polling.
@@ -986,6 +1028,8 @@ export async function forwardTaskViaMcp(
   },
   apiToken?: string,
   onReceipt?: (receipt: ReceiptCandidate) => Promise<void>,
+  /** Relay-signed admission artifact for THIS worker + task (`mintTaskDispatchToken`). */
+  dispatchToken?: string,
 ): Promise<void> {
   const mcpEndpoint = endpointUrl.endsWith("/mcp") ? endpointUrl : `${endpointUrl}/mcp`;
   const mcpHeaders: Record<string, string> = {
@@ -1073,7 +1117,14 @@ export async function forwardTaskViaMcp(
         jsonrpc: "2.0",
         method: "tools/call",
         id: 2,
-        params: { name: "motebit_task", arguments: { prompt, relay_task_id: taskId } },
+        params: {
+          name: "motebit_task",
+          arguments: {
+            prompt,
+            relay_task_id: taskId,
+            ...(dispatchToken != null ? { dispatch_token: dispatchToken } : {}),
+          },
+        },
       }),
       signal: AbortSignal.timeout(120000),
     });

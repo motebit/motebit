@@ -1950,3 +1950,199 @@ describe("McpServerAdapter — motebit_task scope enforcement", () => {
     expect(result.content[0]!.text).not.toContain("delegated_scope");
   });
 });
+
+// ============================================================
+// Task admission — a priced worker runs only relay-admitted tasks
+// ============================================================
+
+describe("McpServerAdapter — task admission (dispatch_token)", () => {
+  // Real keys + the canonical mint seam: the fixtures are adversarial
+  // (wrong key / wrong audience / wrong worker / expired / replayed), which
+  // the seam structurally refuses to produce, so this file builds them.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  type Enc = typeof import("@motebit/encryption");
+  let enc: Enc;
+  const WORKER = "a1b2c3d4-e5f6-7890-abcd-ef0123456789";
+
+  beforeEach(async () => {
+    enc = await import("@motebit/encryption");
+  });
+
+  function captureTask(): {
+    handleAgentTask: NonNullable<MotebitServerDeps["handleAgentTask"]>;
+    calls: Array<{ prompt: string; relayTaskId?: string }>;
+  } {
+    const calls: Array<{ prompt: string; relayTaskId?: string }> = [];
+    const handleAgentTask: NonNullable<MotebitServerDeps["handleAgentTask"]> = async function* (
+      prompt,
+      options,
+    ) {
+      calls.push({ prompt, relayTaskId: options?.relayTaskId });
+      yield {
+        type: "task_result" as const,
+        receipt: { task_id: "t1", motebit_id: WORKER, signature: "s", status: "completed" },
+      };
+    };
+    return { handleAgentTask, calls };
+  }
+
+  async function mint(
+    priv: Uint8Array,
+    over: Partial<{
+      mid: string;
+      aud: string;
+      sub: string | undefined;
+      nowMs: number;
+      ttlMs: number;
+    }> = {},
+  ): Promise<string> {
+    const { token } = await enc.mintAudienceToken(
+      {
+        mid: over.mid ?? WORKER,
+        did: "relay-did",
+        aud: over.aud ?? "task:dispatch",
+        ...("sub" in over ? (over.sub != null ? { sub: over.sub } : {}) : { sub: "task-1" }),
+        ...(over.nowMs != null ? { nowMs: over.nowMs } : {}),
+        ...(over.ttlMs != null ? { ttlMs: over.ttlMs } : {}),
+      },
+      priv,
+    );
+    return token;
+  }
+
+  async function adapterWith(
+    relayPublicKey: string | (() => Promise<string | null>),
+    handleAgentTask: MotebitServerDeps["handleAgentTask"],
+  ): Promise<ToolHandler> {
+    const adapter = new McpServerAdapter(
+      makeConfig({ taskAdmission: { relayPublicKey } }),
+      makeDeps({ handleAgentTask }),
+    );
+    await adapter.start();
+    return registrations.tools.get("motebit_task")!.handler;
+  }
+
+  function text(result: unknown): string {
+    return (result as { content: Array<{ text: string }> }).content[0]!.text;
+  }
+
+  it("without taskAdmission, motebit_task runs as before (no token required)", async () => {
+    const { handleAgentTask, calls } = captureTask();
+    const adapter = new McpServerAdapter(makeConfig(), makeDeps({ handleAgentTask }));
+    await adapter.start();
+    const handler = registrations.tools.get("motebit_task")!.handler;
+    await handler({ prompt: "p", relay_task_id: "r-1" });
+    expect(calls).toEqual([{ prompt: "p", relayTaskId: "r-1" }]);
+  });
+
+  it("denies a task with no dispatch_token before any work starts", async () => {
+    const relay = await enc.generateKeypair();
+    const { handleAgentTask, calls } = captureTask();
+    const handler = await adapterWith(enc.bytesToHex(relay.publicKey), handleAgentTask);
+    const res = await handler({ prompt: "p" });
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    expect(text(res)).toMatch(/^Denied: this service admits work only through its relay/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("admits a relay-signed token for this worker and binds relayTaskId to its sub", async () => {
+    const relay = await enc.generateKeypair();
+    const { handleAgentTask, calls } = captureTask();
+    const handler = await adapterWith(enc.bytesToHex(relay.publicKey), handleAgentTask);
+    const res = await handler({ prompt: "p", dispatch_token: await mint(relay.privateKey) });
+    expect((res as { isError?: boolean }).isError).toBeUndefined();
+    expect(calls).toEqual([{ prompt: "p", relayTaskId: "task-1" }]);
+  });
+
+  it("the token's sub is the binding — a claimed relay_task_id that disagrees is refused", async () => {
+    const relay = await enc.generateKeypair();
+    const { handleAgentTask, calls } = captureTask();
+    const handler = await adapterWith(enc.bytesToHex(relay.publicKey), handleAgentTask);
+    const res = await handler({
+      prompt: "p",
+      relay_task_id: "someone-elses-task",
+      dispatch_token: await mint(relay.privateKey),
+    });
+    expect(text(res)).toContain("relay_task_id does not match dispatch_token");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses tokens signed by a key other than the pinned relay key", async () => {
+    const relay = await enc.generateKeypair();
+    const impostor = await enc.generateKeypair();
+    const { handleAgentTask, calls } = captureTask();
+    const handler = await adapterWith(enc.bytesToHex(relay.publicKey), handleAgentTask);
+    const res = await handler({ prompt: "p", dispatch_token: await mint(impostor.privateKey) });
+    expect(text(res)).toContain("dispatch_token invalid or expired");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses a wrong audience, a token for another worker, a token with no sub, and an expired token", async () => {
+    const relay = await enc.generateKeypair();
+    const { handleAgentTask, calls } = captureTask();
+    const handler = await adapterWith(enc.bytesToHex(relay.publicKey), handleAgentTask);
+    const cases: Array<[string, string]> = [
+      [await mint(relay.privateKey, { aud: "task:submit" }), "audience mismatch"],
+      [await mint(relay.privateKey, { mid: "other-worker" }), "different worker"],
+      [await mint(relay.privateKey, { sub: undefined }), "carries no task id"],
+      [
+        await mint(relay.privateKey, { nowMs: Date.now() - 60_000, ttlMs: 1_000 }),
+        "invalid or expired",
+      ],
+    ];
+    for (const [token, reason] of cases) {
+      const res = await handler({ prompt: "p", dispatch_token: token });
+      expect(text(res)).toContain(reason);
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("admits each relay task at most once — replaying the token or re-minting for the same sub is refused", async () => {
+    const relay = await enc.generateKeypair();
+    const { handleAgentTask, calls } = captureTask();
+    const handler = await adapterWith(enc.bytesToHex(relay.publicKey), handleAgentTask);
+    const token = await mint(relay.privateKey, { sub: "task-9" });
+    await handler({ prompt: "p", dispatch_token: token });
+    const replay = await handler({ prompt: "p", dispatch_token: token });
+    expect(text(replay)).toContain("already admitted");
+    const reminted = await handler({
+      prompt: "p",
+      dispatch_token: await mint(relay.privateKey, { sub: "task-9" }),
+    });
+    expect(text(reminted)).toContain("already admitted");
+    // A different task under the same key still runs.
+    await handler({
+      prompt: "q",
+      dispatch_token: await mint(relay.privateKey, { sub: "task-10" }),
+    });
+    expect(calls.map((c) => c.relayTaskId)).toEqual(["task-9", "task-10"]);
+  });
+
+  it("fails closed while the relay key resolver returns null, then admits once it resolves (memoized)", async () => {
+    const relay = await enc.generateKeypair();
+    const { handleAgentTask, calls } = captureTask();
+    let available = false;
+    const resolver = vi.fn(async () => (available ? enc.bytesToHex(relay.publicKey) : null));
+    const handler = await adapterWith(resolver, handleAgentTask);
+
+    const denied = await handler({ prompt: "p", dispatch_token: await mint(relay.privateKey) });
+    expect(text(denied)).toContain("relay public key unavailable");
+    expect(calls).toHaveLength(0);
+
+    available = true;
+    await handler({ prompt: "p", dispatch_token: await mint(relay.privateKey, { sub: "a" }) });
+    await handler({ prompt: "p", dispatch_token: await mint(relay.privateKey, { sub: "b" }) });
+    expect(calls.map((c) => c.relayTaskId)).toEqual(["a", "b"]);
+    // One failed attempt + one successful resolution; never re-fetched after success.
+    expect(resolver).toHaveBeenCalledTimes(2);
+  });
+
+  it("a resolver that yields a malformed key denies (never a partial or zero key)", async () => {
+    const relay = await enc.generateKeypair();
+    const { handleAgentTask, calls } = captureTask();
+    const handler = await adapterWith(async () => "not-hex", handleAgentTask);
+    const res = await handler({ prompt: "p", dispatch_token: await mint(relay.privateKey) });
+    expect(text(res)).toContain("relay public key unavailable");
+    expect(calls).toHaveLength(0);
+  });
+});

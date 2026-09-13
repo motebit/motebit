@@ -346,19 +346,28 @@ export function withPrefixCacheBreakpoint(
 
 // === Optional relay budget binding ===
 
+/** What the relay hands back at submission: the task id plus the admission artifact. */
+interface RelayBinding {
+  relayTaskId: string;
+  /** Relay-signed `task:dispatch` token for the target atom (absent on an older relay). */
+  dispatchToken?: string;
+}
+
 /**
  * When relay credentials + a target motebit ID are configured, open a relay
  * task for budget allocation. Returns the relay-issued task_id (forwarded to
  * the atom as `relay_task_id` so the atom binds its receipt to the same
- * economic contract). Best-effort: any failure yields undefined and the
- * delegation proceeds without binding.
+ * economic contract) and the relay's `dispatch_token` (forwarded verbatim —
+ * an atom that admits work only through its relay refuses the hop without
+ * it). Best-effort: any failure yields undefined and the delegation proceeds
+ * without binding.
  */
 async function bindRelayBudget(
   config: ResearchConfig,
   prompt: string,
   capabilityHint: string,
   targetMotebitId: string | undefined,
-): Promise<string | undefined> {
+): Promise<RelayBinding | undefined> {
   if (config.syncUrl == null || config.apiToken == null || targetMotebitId == null)
     return undefined;
   try {
@@ -384,8 +393,12 @@ async function bindRelayBudget(
       }),
     });
     if (!resp.ok) return undefined;
-    const body = (await resp.json()) as { task_id?: string };
-    return body.task_id;
+    const body = (await resp.json()) as { task_id?: string; dispatch_token?: string };
+    if (body.task_id == null) return undefined;
+    return {
+      relayTaskId: body.task_id,
+      ...(typeof body.dispatch_token === "string" ? { dispatchToken: body.dispatch_token } : {}),
+    };
   } catch {
     return undefined;
   }
@@ -769,9 +782,12 @@ export async function research(question: string, config: ResearchConfig): Promis
       }
 
       if (receipt == null) {
-        const relayTaskId = await bindRelayBudget(config, prompt, capabilityHint, targetId);
+        const binding = await bindRelayBudget(config, prompt, capabilityHint, targetId);
         const args: Record<string, unknown> = { prompt };
-        if (relayTaskId != null) args.relay_task_id = relayTaskId;
+        if (binding != null) {
+          args.relay_task_id = binding.relayTaskId;
+          if (binding.dispatchToken != null) args.dispatch_token = binding.dispatchToken;
+        }
 
         const result = await adapter.executeTool(qualified, args);
         // McpClientAdapter captures any motebit-shaped receipt during executeTool.
