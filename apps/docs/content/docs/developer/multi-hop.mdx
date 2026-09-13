@@ -35,7 +35,7 @@ The sub-delegation flow inside Bob's task handler:
 3. Open an MCP StreamableHTTP session to Charlie's endpoint.
 4. Authenticate with a signed token (`createSignedToken` — Ed25519, 5-minute expiry).
 5. If a relay is configured (`MOTEBIT_SYNC_URL`), submit a relay task for budget allocation before calling Charlie.
-6. Call `motebit_task` on Charlie with the URL as the prompt, passing `relay_task_id` for economic binding.
+6. Call `motebit_task` on Charlie with the URL as the prompt, passing `relay_task_id` for economic binding and the relay's `dispatch_token` (returned by the task submission) as proof of admission — a worker configured for task admission refuses the hop without it.
 7. Parse Charlie's receipt from the response.
 8. Nest Charlie's receipt in `delegation_receipts` when constructing Bob's own receipt.
 
