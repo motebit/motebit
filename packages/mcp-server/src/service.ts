@@ -416,6 +416,8 @@ export interface ServiceServerConfig {
    * to every forward and returns it to the submitter.
    */
   taskAdmission?: TaskAdmissionConfig;
+  /** Pinned relay key — lets the relay authenticate to this worker with its dispatch token. */
+  relayTrust?: { relayPublicKey: string | (() => Promise<string | null>) };
 
   /** Sync relay URL for discovery registration. */
   syncUrl?: string;
@@ -493,6 +495,7 @@ export async function startServiceServer(
       motebitType: config.motebitType ?? "service",
       customRoutes: config.customRoutes,
       ...(config.taskAdmission != null ? { taskAdmission: config.taskAdmission } : {}),
+      ...(config.relayTrust != null ? { relayTrust: config.relayTrust } : {}),
     },
     deps,
   );

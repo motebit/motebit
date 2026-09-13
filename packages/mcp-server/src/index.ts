@@ -287,6 +287,16 @@ interface McpServerConfig {
    * See `docs/doctrine/task-admission.md`.
    */
   taskAdmission?: TaskAdmissionConfig;
+  /**
+   * The pinned relay public key (hex, or a lazy resolver) this worker
+   * trusts. Enables the relay to authenticate to this worker AS ITSELF on a
+   * forward — `Authorization: Bearer motebit:<dispatch_token>` — instead of
+   * sharing its master token with every registered endpoint. The same key
+   * verifies `taskAdmission` when that is configured (one trust root, two
+   * checks). Absent ⇒ relay-signed bearers are not recognised and only
+   * static / caller-signed bearers pass transport auth.
+   */
+  relayTrust?: { relayPublicKey: string | (() => Promise<string | null>) };
   /** Custom REST routes handled before MCP auth (same level as /health).
    *  Return true if handled, false to continue to MCP. */
   customRoutes?: (
@@ -428,8 +438,6 @@ export class McpServerAdapter {
    * released only when the store has recorded it (or the attempt failed).
    */
   private readonly admittingNow = new Set<string>();
-  /** Memoized relay public key for task admission (resolved once, on first task). */
-  private relayAdmissionKey: Promise<Uint8Array | null> | null = null;
 
   /**
    * Hook for relay re-registration on health checks. Set by startServiceServer
@@ -1188,7 +1196,6 @@ export class McpServerAdapter {
     claimedRelayTaskId: string | undefined,
     prompt: string,
   ): Promise<AdmissionOutcome> {
-    const admission = this.config.taskAdmission!;
     if (!dispatchToken) {
       return {
         ok: false,
@@ -1196,22 +1203,8 @@ export class McpServerAdapter {
           "this service admits work only through its relay — submit the task to the relay and present the returned dispatch_token",
       };
     }
-    if (this.relayAdmissionKey == null) {
-      this.relayAdmissionKey = (async () => {
-        const hex =
-          typeof admission.relayPublicKey === "string"
-            ? admission.relayPublicKey
-            : await admission.relayPublicKey().catch(() => null);
-        if (!hex || !/^[0-9a-fA-F]{64}$/.test(hex)) return null;
-        return hexToBytes(hex);
-      })();
-    }
-    const key = await this.relayAdmissionKey;
+    const key = await this.resolveRelayKey();
     if (key == null) {
-      // Unresolved key stays unresolved only for this attempt; the next task
-      // re-tries the resolver (a relay that was briefly down must not deny
-      // forever), but no task is ever admitted without it.
-      this.relayAdmissionKey = null;
       return { ok: false, reason: "relay public key unavailable — task admission cannot verify" };
     }
     const payload = this.deps.verifySignedToken
@@ -1260,6 +1253,46 @@ export class McpServerAdapter {
     } finally {
       this.admittingNow.delete(sub);
     }
+  }
+
+  /** Memoized pinned relay key (hex→bytes); shared by transport auth + admission. */
+  private relayKeyPromise: Promise<Uint8Array | null> | null = null;
+
+  private async resolveRelayKey(): Promise<Uint8Array | null> {
+    const source =
+      this.config.relayTrust?.relayPublicKey ?? this.config.taskAdmission?.relayPublicKey;
+    if (source == null) return null;
+    if (this.relayKeyPromise == null) {
+      this.relayKeyPromise = (async () => {
+        const hex = typeof source === "string" ? source : await source().catch(() => null);
+        if (!hex || !/^[0-9a-fA-F]{64}$/.test(hex)) return null;
+        return hexToBytes(hex);
+      })();
+    }
+    const key = await this.relayKeyPromise;
+    if (key == null) this.relayKeyPromise = null; // retry next time; never cache a miss forever
+    return key;
+  }
+
+  /**
+   * A relay-signed dispatch token presented as the transport bearer. Valid
+   * ⇒ the caller IS this worker's relay, dispatching a task it admitted for
+   * this worker. The token's `sub`/`digest` are checked again by
+   * `admitTask` when admission is on; here only identity + binding to this
+   * worker matter. Returns null (not a denial) when the bearer is not a
+   * relay token, so caller-signed bearers still take the normal path.
+   */
+  private async verifyRelayDispatchBearer(token: string): Promise<CallerIdentity | null> {
+    if (this.config.relayTrust == null && this.config.taskAdmission == null) return null;
+    const key = await this.resolveRelayKey();
+    if (key == null) return null;
+    const payload = this.deps.verifySignedToken
+      ? await this.deps.verifySignedToken(token, key)
+      : await defaultVerifySignedToken(token, key);
+    if (!payload) return null;
+    if (payload.aud !== TASK_DISPATCH_AUDIENCE) return null;
+    if (payload.mid !== this.deps.motebitId) return null;
+    return { motebitId: `relay:${payload.did}`, trustLevel: AgentTrustLevel.Verified };
   }
 
   private async verifyCallerToken(token: string): Promise<CallerIdentity | null> {
@@ -1388,8 +1421,13 @@ export class McpServerAdapter {
       const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
 
       if (bearerToken?.startsWith("motebit:")) {
-        // Motebit signed token — verify caller identity
-        const callerInfo = await this.verifyCallerToken(bearerToken.slice(8));
+        // The relay authenticating as itself with the per-task dispatch
+        // token (aud task:dispatch, mid = this worker, signed by the pinned
+        // relay key) — tried first so the relay never needs to hold a
+        // worker-accepted static secret. Falls through to the caller-signed
+        // path when it is not a relay token.
+        const relayCaller = await this.verifyRelayDispatchBearer(bearerToken.slice(8));
+        const callerInfo = relayCaller ?? (await this.verifyCallerToken(bearerToken.slice(8)));
         if (!callerInfo) {
           res.writeHead(401, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "invalid motebit token" }));
