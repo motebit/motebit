@@ -13,7 +13,6 @@
  * handleAgentTask that runs web_search and optionally sub-delegates
  * read_url to a downstream atom.
  */
-import { createHash } from "node:crypto";
 
 import {
   InMemoryToolRegistry,
@@ -29,7 +28,12 @@ import {
   nodeAddressResolver,
 } from "@motebit/tools";
 import type { SearchProvider } from "@motebit/tools";
-import { buildServiceReceipt, runMolecule, makeAuthTokenMinter } from "@motebit/molecule-runner";
+import {
+  buildServiceReceipt,
+  runMolecule,
+  makeAuthTokenMinter,
+  openRelaySubTask,
+} from "@motebit/molecule-runner";
 import type { ExecutionReceipt } from "@motebit/molecule-runner";
 import { McpClientAdapter } from "@motebit/mcp-client";
 import { loadConfig, canonicalizeResults } from "./helpers.js";
@@ -78,20 +82,6 @@ export function resetSubDelegateCircuitForTest(): void {
   subDelegateCooldownUntil = 0;
 }
 
-/**
- * Stable intent-derived Idempotency-Key (#459): the same logical
- * sub-delegation (caller × target × prompt) always presents the SAME key,
- * so a retry REPLAYS the relay's cached response instead of minting a
- * brand-new task per attempt — the fresh-UUID-per-attempt pattern is what
- * made every retry a distinct task/allocation/settlement during the
- * incident and defeated the relay's idempotency entirely. Safe now that a
- * failed submission releases its claim relay-side (same arc).
- */
-export function stableSubmissionKey(caller: string, target: string, prompt: string): string {
-  const digest = createHash("sha256").update(`${caller}\n${target}\n${prompt}`).digest("hex");
-  return `sub-${digest.slice(0, 32)}`;
-}
-
 /** Record one sub-delegation outcome; opens the cooldown at the ceiling. */
 export function recordSubDelegateOutcome(ok: boolean, nowMs: number): void {
   if (ok) {
@@ -128,40 +118,28 @@ async function subDelegate(
     return null;
   }
 
-  // Optional relay budget binding — best-effort, failures don't block the chain.
-  // The relay's `dispatch_token` (task admission) travels with the task id so a
-  // read-url that admits work only through its relay accepts the hop.
+  // Relay budget binding as the ONE presenter (`presenter: "submitter"`): the
+  // relay admits the hop and hands back the dispatch_token; it does not route.
+  // A refusal is honored — the read-url enrichment is skipped, never done free
+  // (docs/doctrine/task-admission.md). No relay configured ⇒ direct call (dev).
   let subRelayTaskId: string | undefined;
   let subDispatchToken: string | undefined;
   if (syncUrl != null && syncUrl !== "" && mintRelayToken != null && targetMotebitId != null) {
-    try {
-      const taskResp = await fetch(`${syncUrl}/agent/${targetMotebitId}/task`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${await mintRelayToken()}`,
-          "Content-Type": "application/json",
-          // Intent-stable, not per-attempt (#459) — retries replay, never
-          // mint a new task.
-          "Idempotency-Key": stableSubmissionKey(callerMotebitId, targetMotebitId, prompt),
-        },
-        body: JSON.stringify({
-          prompt,
-          submitted_by: callerMotebitId,
-          required_capabilities: ["read_url"],
-        }),
-      });
-      if (taskResp.ok) {
-        const taskBody = (await taskResp.json()) as { task_id: string; dispatch_token?: string };
-        subRelayTaskId = taskBody.task_id;
-        if (typeof taskBody.dispatch_token === "string") subDispatchToken = taskBody.dispatch_token;
-        log(`sub-delegation relay task: ${subRelayTaskId.slice(0, 12)}…`);
-      } else {
-        log(`sub-delegation relay task failed: ${taskResp.status}`);
-      }
-    } catch (relayErr: unknown) {
-      const msg = relayErr instanceof Error ? relayErr.message : String(relayErr);
-      log(`sub-delegation relay task error: ${msg}`);
+    const bound = await openRelaySubTask({
+      syncUrl,
+      mintToken: () => mintRelayToken(),
+      callerMotebitId,
+      targetMotebitId,
+      prompt,
+      capability: "read_url",
+    });
+    if (!bound.ok) {
+      log(`sub-delegation not admitted by relay — skipping read_url hop: ${bound.reason}`);
+      return null;
     }
+    subRelayTaskId = bound.relayTaskId;
+    if (bound.dispatchToken != null) subDispatchToken = bound.dispatchToken;
+    log(`sub-delegation relay task: ${subRelayTaskId.slice(0, 12)}…`);
   }
 
   const adapter = new McpClientAdapter({

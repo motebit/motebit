@@ -214,8 +214,19 @@ interface MotebitServerDeps {
  * second instance cannot re-admit a task whose token is still live.
  */
 export interface AdmittedTaskStore {
+  /** Was this task id admitted (run started) inside the retention window? */
   has(relayTaskId: string): boolean | Promise<boolean>;
   add(relayTaskId: string, expiresAt: number): void | Promise<void>;
+  /**
+   * Completion tracking (optional). A store that implements BOTH lets the
+   * worker re-admit a task whose earlier run never produced a receipt (the
+   * process died, the provider timed out) — the delegator's honest retry of
+   * an intent-stable submission replays the same token, and refusing it for
+   * the token's whole TTL strands the task. A store without these keeps the
+   * strict rule: one admission, ever. Never one without the other.
+   */
+  isCompleted?(relayTaskId: string): boolean | Promise<boolean>;
+  complete?(relayTaskId: string): void | Promise<void>;
 }
 
 /** See `McpServerConfig.taskAdmission`. */
@@ -235,20 +246,27 @@ const ADMITTED_TASK_RETENTION_CAP_MS = 60 * 60 * 1000;
 
 /** In-process `AdmittedTaskStore` — prunes expired entries on every write. */
 class MemoryAdmittedTaskStore implements AdmittedTaskStore {
-  private readonly admitted = new Map<string, number>();
+  private readonly admitted = new Map<string, { exp: number; done: boolean }>();
   has(id: string): boolean {
-    const exp = this.admitted.get(id);
-    if (exp == null) return false;
-    if (exp <= Date.now()) {
+    const row = this.admitted.get(id);
+    if (row == null) return false;
+    if (row.exp <= Date.now()) {
       this.admitted.delete(id);
       return false;
     }
     return true;
   }
+  isCompleted(id: string): boolean {
+    return this.has(id) && (this.admitted.get(id)?.done ?? false);
+  }
   add(id: string, expiresAt: number): void {
     const now = Date.now();
-    for (const [k, exp] of this.admitted) if (exp <= now) this.admitted.delete(k);
-    this.admitted.set(id, expiresAt);
+    for (const [k, row] of this.admitted) if (row.exp <= now) this.admitted.delete(k);
+    this.admitted.set(id, { exp: expiresAt, done: false });
+  }
+  complete(id: string): void {
+    const row = this.admitted.get(id);
+    if (row != null) row.done = true;
   }
 }
 
@@ -439,6 +457,14 @@ export class McpServerAdapter {
    * released only when the store has recorded it (or the attempt failed).
    */
   private readonly admittingNow = new Set<string>();
+  /**
+   * Task ids whose run is in flight in THIS process. With a completion-aware
+   * store, "already admitted" alone no longer refuses a re-presentation — a
+   * run that died without a receipt may be retried — so in-flight state must
+   * be held explicitly or a second presentation during the run would double
+   * the work.
+   */
+  private readonly runningNow = new Set<string>();
 
   /**
    * Hook for relay re-registration on health checks. Set by startServiceServer
@@ -806,6 +832,7 @@ export class McpServerAdapter {
           // the relay did not admit. Transport auth already established WHO
           // is calling; this establishes that the relay saw the money.
           let relayTaskId = args.relay_task_id;
+          let admittedSub: string | undefined;
           if (this.config.taskAdmission) {
             const admission = await this.admitTask(
               args.dispatch_token,
@@ -823,155 +850,164 @@ export class McpServerAdapter {
               };
             }
             relayTaskId = admission.relayTaskId;
+            admittedSub = admission.relayTaskId;
           }
+          let admissionCompleted = false;
+          try {
+            // Parse and verify delegation token for scope enforcement
+            let delegatedScope: string | undefined;
+            if (args.delegation_token) {
+              let token: DelegationToken;
+              try {
+                token = JSON.parse(args.delegation_token) as DelegationToken;
+              } catch {
+                return {
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: "Denied: delegation_token is not valid JSON",
+                    },
+                  ],
+                  isError: true,
+                };
+              }
 
-          // Parse and verify delegation token for scope enforcement
-          let delegatedScope: string | undefined;
-          if (args.delegation_token) {
-            let token: DelegationToken;
-            try {
-              token = JSON.parse(args.delegation_token) as DelegationToken;
-            } catch {
-              return {
-                content: [
-                  {
-                    type: "text" as const,
-                    text: "Denied: delegation_token is not valid JSON",
-                  },
-                ],
-                isError: true,
-              };
-            }
+              const sigValid = await verifyDelegation(token);
+              if (!sigValid) {
+                return {
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: "Denied: delegation token has invalid signature",
+                    },
+                  ],
+                  isError: true,
+                };
+              }
 
-            const sigValid = await verifyDelegation(token);
-            if (!sigValid) {
-              return {
-                content: [
-                  {
-                    type: "text" as const,
-                    text: "Denied: delegation token has invalid signature",
-                  },
-                ],
-                isError: true,
-              };
-            }
+              delegatedScope = token.scope;
+              const scopeSet = parseScopeSet(token.scope);
 
-            delegatedScope = token.scope;
-            const scopeSet = parseScopeSet(token.scope);
-
-            // Check required_capabilities against delegated scope
-            if (args.required_capabilities != null && Array.isArray(args.required_capabilities)) {
-              const required = args.required_capabilities as string[];
-              if (!scopeSet.has("*")) {
-                for (const cap of required) {
-                  if (!scopeSet.has(cap)) {
-                    return {
-                      content: [
-                        {
-                          type: "text" as const,
-                          text: `Denied: capability "${cap}" is not within delegated scope "${token.scope}"`,
-                        },
-                      ],
-                      isError: true,
-                    };
+              // Check required_capabilities against delegated scope
+              if (args.required_capabilities != null && Array.isArray(args.required_capabilities)) {
+                const required = args.required_capabilities as string[];
+                if (!scopeSet.has("*")) {
+                  for (const cap of required) {
+                    if (!scopeSet.has(cap)) {
+                      return {
+                        content: [
+                          {
+                            type: "text" as const,
+                            text: `Denied: capability "${cap}" is not within delegated scope "${token.scope}"`,
+                          },
+                        ],
+                        isError: true,
+                      };
+                    }
                   }
                 }
               }
             }
-          }
 
-          let receipt: Record<string, unknown> | undefined;
-          let responseText = "";
+            let receipt: Record<string, unknown> | undefined;
+            let responseText = "";
 
-          const timeoutMs = this.config.taskTimeoutMs ?? 300_000;
-          const timeoutError = Symbol("timeout");
-          const timeoutPromise = new Promise<typeof timeoutError>((resolve) =>
-            setTimeout(() => resolve(timeoutError), timeoutMs),
-          );
+            const timeoutMs = this.config.taskTimeoutMs ?? 300_000;
+            const timeoutError = Symbol("timeout");
+            const timeoutPromise = new Promise<typeof timeoutError>((resolve) =>
+              setTimeout(() => resolve(timeoutError), timeoutMs),
+            );
 
-          const gen = handleAgentTask(args.prompt, {
-            delegatedScope,
-            relayTaskId,
-          });
-          let timedOut = false;
-          try {
-            // Race each iteration of the generator against the timeout
-            // eslint-disable-next-line no-constant-condition -- intentional manual iteration with race
-            while (true) {
-              const result = await Promise.race([gen.next(), timeoutPromise]);
-              if (result === timeoutError) {
-                timedOut = true;
-                break;
-              }
-              const iterResult = result as IteratorResult<
-                | { type: "text"; text: string }
-                | { type: "task_result"; receipt: Record<string, unknown> }
-                | { type: string; [key: string]: unknown }
-              >;
-              if (iterResult.done) break;
-              const chunk = iterResult.value;
-              if (chunk.type === "text") {
-                responseText += (chunk as { type: "text"; text: string }).text;
-              } else if (chunk.type === "task_result") {
-                receipt = (chunk as { type: "task_result"; receipt: Record<string, unknown> })
-                  .receipt;
-              }
-            }
-          } finally {
-            // Ensure generator is cleaned up on timeout
-            if (timedOut) {
-              void gen.return(undefined);
-            }
-          }
-
-          if (timedOut) {
-            this.deps.logToolCall("motebit_task", args, {
-              ok: false,
-              error: `task timed out after ${timeoutMs}ms`,
+            const gen = handleAgentTask(args.prompt, {
+              delegatedScope,
+              relayTaskId,
             });
-            return {
-              content: [
-                {
-                  type: "text" as const,
-                  text: `Error: task timed out after ${timeoutMs}ms`,
-                },
-              ],
-              isError: true,
-            };
-          }
+            let timedOut = false;
+            try {
+              // Race each iteration of the generator against the timeout
+              // eslint-disable-next-line no-constant-condition -- intentional manual iteration with race
+              while (true) {
+                const result = await Promise.race([gen.next(), timeoutPromise]);
+                if (result === timeoutError) {
+                  timedOut = true;
+                  break;
+                }
+                const iterResult = result as IteratorResult<
+                  | { type: "text"; text: string }
+                  | { type: "task_result"; receipt: Record<string, unknown> }
+                  | { type: string; [key: string]: unknown }
+                >;
+                if (iterResult.done) break;
+                const chunk = iterResult.value;
+                if (chunk.type === "text") {
+                  responseText += (chunk as { type: "text"; text: string }).text;
+                } else if (chunk.type === "task_result") {
+                  receipt = (chunk as { type: "task_result"; receipt: Record<string, unknown> })
+                    .receipt;
+                }
+              }
+            } finally {
+              // Ensure generator is cleaned up on timeout
+              if (timedOut) {
+                void gen.return(undefined);
+              }
+            }
 
-          if (receipt) {
-            // Validate receipt has required fields
-            const requiredFields = ["task_id", "motebit_id", "signature", "status"] as const;
-            const missing = requiredFields.filter((f) => receipt[f] == null);
-            if (missing.length > 0) {
+            if (timedOut) {
               this.deps.logToolCall("motebit_task", args, {
                 ok: false,
-                error: `malformed receipt: missing ${missing.join(", ")}`,
+                error: `task timed out after ${timeoutMs}ms`,
               });
               return {
                 content: [
                   {
                     type: "text" as const,
-                    text: `Error: malformed receipt — missing required fields: ${missing.join(", ")}`,
+                    text: `Error: task timed out after ${timeoutMs}ms`,
                   },
                 ],
                 isError: true,
               };
             }
 
-            // delegated_scope is now included by the service before signing —
-            // do NOT mutate the signed receipt here (breaks Ed25519 verification)
-            this.deps.logToolCall("motebit_task", args, { ok: true, data: receipt });
-            return fmt(receipt);
-          }
+            if (receipt) {
+              // Validate receipt has required fields
+              const requiredFields = ["task_id", "motebit_id", "signature", "status"] as const;
+              const missing = requiredFields.filter((f) => receipt[f] == null);
+              if (missing.length > 0) {
+                this.deps.logToolCall("motebit_task", args, {
+                  ok: false,
+                  error: `malformed receipt: missing ${missing.join(", ")}`,
+                });
+                return {
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: `Error: malformed receipt — missing required fields: ${missing.join(", ")}`,
+                    },
+                  ],
+                  isError: true,
+                };
+              }
 
-          this.deps.logToolCall("motebit_task", args, { ok: false, error: "no receipt" });
-          return fmt({
-            status: "completed",
-            response: responseText,
-            receipt_missing: true,
-          });
+              // delegated_scope is now included by the service before signing —
+              // do NOT mutate the signed receipt here (breaks Ed25519 verification)
+              admissionCompleted = true;
+              this.deps.logToolCall("motebit_task", args, { ok: true, data: receipt });
+              return fmt(receipt);
+            }
+
+            this.deps.logToolCall("motebit_task", args, { ok: false, error: "no receipt" });
+            return fmt({
+              status: "completed",
+              response: responseText,
+              receipt_missing: true,
+            });
+          } finally {
+            // A receipt is the only completion. Timeouts, malformed receipts,
+            // and "no receipt" release the in-flight slot without completing,
+            // so the delegator's retry of the same admission can run.
+            await this.settleAdmission(admittedSub, admissionCompleted);
+          }
         },
       );
     }
@@ -1235,24 +1271,43 @@ export class McpServerAdapter {
     if (payload.digest.toLowerCase() !== promptDigest) {
       return { ok: false, reason: "prompt does not match the admitted task (digest mismatch)" };
     }
-    // One admitted task ⇒ at most one execution. Reserve synchronously first:
-    // a concurrent presentation of the same task id is refused in this tick,
-    // not after both have raced past the durable store's read.
-    if (this.admittingNow.has(sub)) {
-      return { ok: false, reason: "task already admitted — a dispatch token is single-use" };
+    // One admitted task ⇒ at most one COMPLETED execution, and at most one in
+    // flight. Reserve synchronously first: a concurrent presentation of the
+    // same task id is refused in this tick, not after both have raced past the
+    // durable store's read.
+    if (this.admittingNow.has(sub) || this.runningNow.has(sub)) {
+      return { ok: false, reason: "task already admitted — this task is running" };
     }
     this.admittingNow.add(sub);
     try {
-      if (await this.admittedTasks.has(sub)) {
-        return { ok: false, reason: "task already admitted — a dispatch token is single-use" };
+      const store = this.admittedTasks;
+      const completionAware = store.isCompleted != null && store.complete != null;
+      if (await store.has(sub)) {
+        // Strict stores: one admission, ever. Completion-aware stores: refuse
+        // only a task that already PRODUCED a receipt; a run cut short (process
+        // died, provider timed out) is re-presentable by the honest retry.
+        if (!completionAware || (await store.isCompleted!(sub))) {
+          return {
+            ok: false,
+            reason: "task already admitted — a dispatch token admits one completed execution",
+          };
+        }
       }
-      await this.admittedTasks.add(
-        sub,
-        Math.min(payload.exp, Date.now() + ADMITTED_TASK_RETENTION_CAP_MS),
-      );
+      await store.add(sub, Math.min(payload.exp, Date.now() + ADMITTED_TASK_RETENTION_CAP_MS));
+      this.runningNow.add(sub);
       return { ok: true, relayTaskId: sub };
     } finally {
       this.admittingNow.delete(sub);
+    }
+  }
+
+  /** The admitted run produced a receipt — record completion; release the in-flight slot. */
+  private async settleAdmission(sub: string | undefined, completed: boolean): Promise<void> {
+    if (sub == null) return;
+    try {
+      if (completed) await this.admittedTasks.complete?.(sub);
+    } finally {
+      this.runningNow.delete(sub);
     }
   }
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const mockCreate = vi.fn();
 vi.mock("@anthropic-ai/sdk", () => ({
@@ -303,5 +303,152 @@ describe("reviewPrViaMotebit — delegation chain", () => {
       callerDeviceId: "code-review-service",
       callerPrivateKey: privateKey,
     });
+  });
+});
+
+describe("relay binding — code-review presents the read-url hop itself", () => {
+  const baseCfg = {
+    anthropicApiKey: "k",
+    readUrlUrl: "http://read-url.test/mcp",
+    callerMotebitId: "code-review-mote",
+    callerDeviceId: "cr-dev",
+    callerPrivateKey: new Uint8Array(32),
+    syncUrl: "http://relay.test",
+    readUrlTargetId: "read-url-mote",
+    mintRelayToken: async () => "signed.task:submit",
+  };
+  let originalFetch: typeof fetch;
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    mockCreate.mockResolvedValue({ content: [{ type: "text", text: "LGTM" }] });
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("opens the relay task as the one presenter and forwards relay_task_id + dispatch_token", async () => {
+    const fetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(
+      async () =>
+        new Response(JSON.stringify({ task_id: "rt-1", dispatch_token: "disp.tok" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const readUrl = new StubAtomAdapter([
+      makeReceipt({ result: SAMPLE_PATCH, signature: "sig-1" }),
+    ]);
+    await reviewPrViaMotebit("https://github.com/o/r/pull/1", {
+      ...baseCfg,
+      adapterFactory: makeFactory(readUrl),
+    });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    if (init == null) throw new Error("relay call had no init");
+    expect(url).toBe("http://relay.test/agent/read-url-mote/task");
+    const body = JSON.parse(init.body as string);
+    expect(body.presenter).toBe("submitter");
+    expect(body.required_capabilities).toEqual(["read_url"]);
+    expect((init.headers as Record<string, string>).Authorization).toBe(
+      "Bearer signed.task:submit",
+    );
+    expect(readUrl.calls[0]!.args.relay_task_id).toBe("rt-1");
+    expect(readUrl.calls[0]!.args.dispatch_token).toBe("disp.tok");
+  });
+
+  it("falls back to the direct call LOUDLY only for the named blocker (unpaid priced atom)", async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ code: "TASK_P2P_PROOF_REQUIRED", error: "pay first" }), {
+          status: 402,
+          headers: { "content-type": "application/json" },
+        }),
+    ) as unknown as typeof fetch;
+    const logs: string[] = [];
+    const readUrl = new StubAtomAdapter([
+      makeReceipt({ result: SAMPLE_PATCH, signature: "sig-1" }),
+    ]);
+    await reviewPrViaMotebit("https://github.com/o/r/pull/1", {
+      ...baseCfg,
+      adapterFactory: makeFactory(readUrl),
+      log: (m) => logs.push(m),
+    });
+    expect(readUrl.calls).toHaveLength(1);
+    expect(readUrl.calls[0]!.args).not.toHaveProperty("dispatch_token");
+    expect(logs.join("\n")).toContain("NOT admitted");
+    expect(logs.join("\n")).toContain("no payer seam");
+  });
+
+  it("forwards relay_task_id alone when an older relay returns no dispatch_token", async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ task_id: "rt-old" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        }),
+    ) as unknown as typeof fetch;
+    const readUrl = new StubAtomAdapter([
+      makeReceipt({ result: SAMPLE_PATCH, signature: "sig-1" }),
+    ]);
+    await reviewPrViaMotebit("https://github.com/o/r/pull/1", {
+      ...baseCfg,
+      adapterFactory: makeFactory(readUrl),
+    });
+    expect(readUrl.calls[0]!.args.relay_task_id).toBe("rt-old");
+    expect(readUrl.calls[0]!.args).not.toHaveProperty("dispatch_token");
+  });
+
+  it("the named-blocker fallback is loud on the default logger too (console)", async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ code: "TASK_P2P_PROOF_REQUIRED" }), {
+          status: 402,
+          headers: { "content-type": "application/json" },
+        }),
+    ) as unknown as typeof fetch;
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const readUrl = new StubAtomAdapter([
+        makeReceipt({ result: SAMPLE_PATCH, signature: "sig-1" }),
+      ]);
+      await reviewPrViaMotebit("https://github.com/o/r/pull/1", {
+        ...baseCfg,
+        adapterFactory: makeFactory(readUrl),
+      });
+      expect(spy.mock.calls.map((c) => String(c[0])).join("\n")).toContain("NOT admitted");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("refuses to run the hop free on any other relay refusal", async () => {
+    globalThis.fetch = vi.fn(
+      async () => new Response("nope", { status: 401 }),
+    ) as unknown as typeof fetch;
+    const readUrl = new StubAtomAdapter([
+      makeReceipt({ result: SAMPLE_PATCH, signature: "sig-1" }),
+    ]);
+    await expect(
+      reviewPrViaMotebit("https://github.com/o/r/pull/1", {
+        ...baseCfg,
+        adapterFactory: makeFactory(readUrl),
+        log: () => {},
+      }),
+    ).rejects.toThrow(/not admitted by the relay/);
+    expect(readUrl.calls).toHaveLength(0);
+  });
+
+  it("calls read-url directly when no relay binding is configured (dev)", async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const readUrl = new StubAtomAdapter([
+      makeReceipt({ result: SAMPLE_PATCH, signature: "sig-1" }),
+    ]);
+    const { syncUrl: _s, readUrlTargetId: _t, mintRelayToken: _m, ...noRelay } = baseCfg;
+    await reviewPrViaMotebit("https://github.com/o/r/pull/1", {
+      ...noRelay,
+      adapterFactory: makeFactory(readUrl),
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(readUrl.calls[0]!.args).toEqual({ prompt: "https://github.com/o/r/pull/1.patch" });
   });
 });

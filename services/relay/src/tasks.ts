@@ -2021,6 +2021,17 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
        * (400) so that surface-determinism callers cannot typo past the gate.
        */
       invocation_origin?: "user-tap" | "ai-loop" | "scheduled" | "agent-to-agent";
+      /**
+       * Who presents the admitted task to the worker (delegation spec §3.1,
+       * 1.2). "relay" (default): the relay routes and forwards, its token
+       * travels with the dispatch. "submitter": the relay runs every settlement
+       * gate but does NOT route; it returns the dispatch_token and the
+       * submitter presents the task directly — the shape of a sub-delegation
+       * whose receipt rides back in the submitter's own delegation chain. One
+       * admission, one presenter, chosen up front instead of by whether
+       * anything happened to route.
+       */
+      presenter?: "relay" | "submitter";
       /** P2P: target agent for direct settlement (required with payment_proof). */
       target_agent?: string;
       /**
@@ -2077,6 +2088,18 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         b_fee_amount_micro?: number;
       };
     }>();
+
+    if (body.presenter != null && body.presenter !== "relay" && body.presenter !== "submitter") {
+      throw new TaskError(
+        "TASK_INVALID_INPUT",
+
+        'presenter must be "relay" or "submitter" when present',
+
+        400,
+      );
+    }
+
+    const submitterPresenter = body.presenter === "submitter";
 
     if (!body.prompt || typeof body.prompt !== "string" || body.prompt.trim() === "") {
       throw new TaskError("TASK_INVALID_INPUT", "Missing or empty 'prompt' field", 400);
@@ -2682,7 +2705,12 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // `pinnedLocalHandled` even when dispatch fails — a paid task must never
     // fan out to a worker the delegator did not pay).
     let pinnedLocalHandled = false;
-    if (settlementMode === "p2p" && body.target_agent != null && !federatedP2pIntent) {
+    if (
+      !submitterPresenter &&
+      settlementMode === "p2p" &&
+      body.target_agent != null &&
+      !federatedP2pIntent
+    ) {
       pinnedLocalHandled = true;
       const pinnedId = body.target_agent;
       routingChoice = {
@@ -2753,7 +2781,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     }
 
     // Phase 1: Scored routing — find best service agents from listings
-    if (!pinnedLocalHandled && requiredCaps.length > 0) {
+    if (!submitterPresenter && !pinnedLocalHandled && requiredCaps.length > 0) {
       try {
         const { profiles, requirements } = taskRouter.buildCandidateProfiles(
           requiredCaps[0],
@@ -3272,7 +3300,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // may have accepted the task, and broadcasting locally would cause double-execution.
     // Also skip for pinned-local paid tasks (Phase 0): fan-out could execute the
     // paid task on a worker the delegator never paid.
-    if (!pinnedLocalHandled && !routed && !federationAttempted) {
+    if (!submitterPresenter && !pinnedLocalHandled && !routed && !federationAttempted) {
       const peers = connections.get(motebitId);
       if (peers) {
         for (const peer of peers) {
@@ -3288,7 +3316,13 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
 
     // Phase 3: HTTP MCP fallback — when no WebSocket routed the task,
     // find a registered agent with matching capabilities and forward via HTTP.
-    if (!pinnedLocalHandled && !routed && !federationAttempted && requiredCaps.length > 0) {
+    if (
+      !submitterPresenter &&
+      !pinnedLocalHandled &&
+      !routed &&
+      !federationAttempted &&
+      requiredCaps.length > 0
+    ) {
       const now = Date.now();
       const capFilter = requiredCaps[0]!;
       // Self-exclusion (#459): same rule as the scored path — the fallback
@@ -3335,7 +3369,13 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // Phase 4: Push wake — when no WebSocket, no HTTP MCP, and no federation routed the task,
     // attempt to wake a mobile device via push notification. Fire-and-forget — the task stays
     // in queue regardless. The device will reconnect via WebSocket and claim the task.
-    if (!pinnedLocalHandled && !routed && !federationAttempted && pushAdapter) {
+    if (
+      !submitterPresenter &&
+      !pinnedLocalHandled &&
+      !routed &&
+      !federationAttempted &&
+      pushAdapter
+    ) {
       void attemptPushWake(motebitId, { pushAdapter, db: moteDb.db });
     }
 
@@ -3344,6 +3384,18 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // routed task's token travelled with the forward; handing the submitter a
     // second one would race the relay's own dispatch at the worker.
     const submitterPresents = !routed && !federationAttempted;
+    if (submitterPresenter) {
+      // Chosen, not incidental: the submitter asked to present. Nothing above
+      // routed (every phase is guarded), so the token below is the ONLY one.
+      logger.info("task.submitter_presents", {
+        correlationId: taskId,
+        worker:
+          typeof body.target_agent === "string" && body.target_agent.length > 0
+            ? body.target_agent
+            : motebitId,
+        submitted_by: submittedBy ?? null,
+      });
+    }
     const intendedWorker =
       typeof body.target_agent === "string" && body.target_agent.length > 0
         ? body.target_agent

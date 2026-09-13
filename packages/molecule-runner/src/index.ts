@@ -53,6 +53,7 @@ import type { MotebitDatabase } from "@motebit/persistence";
 import { MotebitRuntime, NullRenderer, getOrPinRelayKey } from "@motebit/runtime";
 import type { RelayKeyPinStorage } from "@motebit/runtime";
 import type { PolicyConfig, StorageAdapters, GrantedDelegationResult } from "@motebit/runtime";
+import { createHash } from "node:crypto";
 import { signStandingDelegation, signDelegation, mintAudienceToken } from "@motebit/crypto";
 import type {
   StandingDelegation,
@@ -662,17 +663,34 @@ export function fileAdmissionStores(dataDir: string): {
   const admitted = jsonFileMap(resolvePath(dataDir, "admitted-tasks.json"));
   return {
     pinStorage: { getItem: (k) => pins.get(k), setItem: (k, v) => pins.set(k, v) },
+    // Value format: "<expiresAt>" = admitted, "<expiresAt>:done" = completed.
+    // Legacy rows (pre-completion tracking) are bare numbers and read as
+    // admitted-not-completed, so a token whose run was cut short by a deploy
+    // stays re-presentable rather than being refused for its TTL.
     admittedStore: {
       has: (id) => {
-        const exp = Number(admitted.get(id));
+        const exp = Number(String(admitted.get(id) ?? "").split(":")[0]);
         return Number.isFinite(exp) && exp > Date.now();
+      },
+      isCompleted: (id) => {
+        const raw = String(admitted.get(id) ?? "");
+        const exp = Number(raw.split(":")[0]);
+        return Number.isFinite(exp) && exp > Date.now() && raw.endsWith(":done");
       },
       add: (id, expiresAt) => {
         const now = Date.now();
         const all = admitted.entries();
-        for (const [k, v] of Object.entries(all)) if (Number(v) <= now) delete all[k];
+        for (const [k, v] of Object.entries(all)) {
+          if (Number(String(v).split(":")[0]) <= now) delete all[k];
+        }
         all[id] = String(expiresAt);
         admitted.replace(all);
+      },
+      complete: (id) => {
+        const raw = admitted.get(id);
+        if (raw == null) return;
+        const exp = String(raw).split(":")[0];
+        admitted.set(id, `${exp}:done`);
       },
     },
   };
@@ -711,6 +729,95 @@ export function resolveRelayTrust(
       return key != null && HEX_64.test(key) ? key : null;
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Relay sub-task binding — the ONE way a molecule opens a relay task for a
+// hop it will present to the atom itself.
+// ---------------------------------------------------------------------------
+
+export type RelaySubTaskOutcome =
+  | { ok: true; relayTaskId: string; dispatchToken?: string }
+  | { ok: false; reason: string; status?: number; code?: string };
+
+/**
+ * Open a relay task for a sub-delegation this molecule will present DIRECTLY
+ * to the atom (`presenter: "submitter"`, delegation spec §3.1 1.2). The relay
+ * runs every settlement gate, does NOT route the task itself, and returns the
+ * `task:dispatch` token bound to the target — one admission, one presenter.
+ * The atom's receipt rides back in this molecule's own delegation chain, which
+ * is how the relay settles the sub-task (`settleSubReceipt`).
+ *
+ * Authenticated as THIS molecule (`task:submit` signed by its own key). Never
+ * an operator secret. Intent-stable idempotency key (caller × target ×
+ * prompt), so a retry replays the relay's original answer instead of minting
+ * a second task (#459).
+ *
+ * A refusal is returned, never swallowed: the caller decides whether the hop
+ * can proceed without admission (it cannot, once the atom enforces admission —
+ * docs/doctrine/task-admission.md § "The worker authenticates as itself").
+ */
+export async function openRelaySubTask(args: {
+  syncUrl: string;
+  /** Mints the caller's own `task:submit` bearer. */
+  mintToken: (audience: TokenAudience) => Promise<string>;
+  callerMotebitId: string;
+  targetMotebitId: string;
+  prompt: string;
+  capability: string;
+  fetchImpl?: typeof fetch;
+}): Promise<RelaySubTaskOutcome> {
+  const fetchImpl = args.fetchImpl ?? fetch;
+  const idempotencyKey = `sub-${createHash("sha256")
+    .update(`${args.callerMotebitId}\n${args.targetMotebitId}\n${args.prompt}`)
+    .digest("hex")
+    .slice(0, 32)}`;
+  try {
+    const resp = await fetchImpl(
+      `${args.syncUrl.replace(/\/+$/, "")}/agent/${args.targetMotebitId}/task`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${await args.mintToken("task:submit")}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": idempotencyKey,
+        },
+        body: JSON.stringify({
+          prompt: args.prompt,
+          submitted_by: args.callerMotebitId,
+          required_capabilities: [args.capability],
+          presenter: "submitter",
+        }),
+        signal: AbortSignal.timeout(15_000),
+      },
+    );
+    if (!resp.ok) {
+      let code: string | undefined;
+      let reason = `relay refused the sub-task (${resp.status})`;
+      try {
+        const err = (await resp.json()) as { code?: unknown; error?: unknown };
+        if (typeof err.code === "string") code = err.code;
+        if (typeof err.error === "string") reason = `${reason}: ${err.error}`;
+      } catch {
+        // non-JSON refusal body — status is the signal
+      }
+      return { ok: false, reason, status: resp.status, ...(code != null ? { code } : {}) };
+    }
+    const body = (await resp.json()) as { task_id?: unknown; dispatch_token?: unknown };
+    if (typeof body.task_id !== "string" || body.task_id === "") {
+      return { ok: false, reason: "relay answered without a task_id", status: resp.status };
+    }
+    return {
+      ok: true,
+      relayTaskId: body.task_id,
+      ...(typeof body.dispatch_token === "string" ? { dispatchToken: body.dispatch_token } : {}),
+    };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      reason: `relay unreachable: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
 }
 
 /** @internal exported for tests */
