@@ -20,6 +20,7 @@ import {
 import { generateKeypair, bytesToHex } from "@motebit/crypto";
 // eslint-disable-next-line no-restricted-imports -- test mints its own bearer token
 import { createSignedToken } from "@motebit/encryption";
+import { seedBalance } from "./test-helpers.js";
 
 const API_TOKEN = "test-token";
 
@@ -348,5 +349,49 @@ describe("free credit is not sweepable (aggregated exit paths)", () => {
     expect(ok).not.toBeNull();
     // Debited at enqueue (Rule 12) — only the grant remains.
     expect(getAccountBalance(db, m)?.balance).toBe(toMicro(5));
+  });
+});
+
+describe("proxy-token model ceiling — free credit is a first taste, not the frontier tier", () => {
+  let relay: SyncRelay;
+  beforeEach(async () => {
+    relay = await createTestRelay();
+    process.env.MOTEBIT_FREE_CREDIT_USD = "0.10";
+  });
+  afterEach(async () => {
+    delete process.env.MOTEBIT_FREE_CREDIT_USD;
+    await relay.close();
+  });
+
+  it("a free-credit-only account gets no Opus / GPT-5.4 / Gemini Pro; a real deposit unlocks the full ceiling", async () => {
+    const { motebitId, authHeader } = await seedAgentWithProxyToken(relay);
+    const first = (await (
+      await relay.app.request(`/api/v1/agents/${motebitId}/proxy-token`, {
+        method: "POST",
+        headers: authHeader,
+      })
+    ).json()) as { balance: number; models: string[] };
+    expect(first.balance).toBe(toMicro(0.1));
+    expect(first.models).toContain("claude-sonnet-4-6");
+    expect(first.models).toContain("claude-haiku-4-5-20251001");
+    for (const frontier of ["claude-opus-4-6", "gpt-5.4", "gemini-2.5-pro"]) {
+      expect(first.models).not.toContain(frontier);
+    }
+    // The status route reports the same ceiling (one predicate, two readers).
+    const status = (await (
+      await relay.app.request(`/api/v1/subscriptions/${motebitId}/status`, { headers: authHeader })
+    ).json()) as { models: string[] };
+    expect(status.models).not.toContain("claude-opus-4-6");
+
+    // Real funding (a deposit with no free-credit reference) unlocks the ceiling.
+    seedBalance(relay, motebitId, 5);
+    const funded = (await (
+      await relay.app.request(`/api/v1/agents/${motebitId}/proxy-token`, {
+        method: "POST",
+        headers: authHeader,
+      })
+    ).json()) as { models: string[] };
+    expect(funded.models).toContain("claude-opus-4-6");
+    expect(funded.models).toContain("gpt-5.4");
   });
 });

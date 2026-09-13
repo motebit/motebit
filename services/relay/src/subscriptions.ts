@@ -10,6 +10,7 @@
  */
 
 import type { Hono } from "hono";
+import { FREE_CREDIT_REFERENCE_PREFIX } from "./account-store-sqlite.js";
 import { HTTPException } from "hono/http-exception";
 import Stripe from "stripe";
 import type { DatabaseDriver } from "@motebit/persistence";
@@ -31,7 +32,11 @@ import type { SubscriptionEventAdapter } from "./webhooks/stripe-webhook-adapter
 
 const logger = createLogger({ service: "relay", module: "proxy-tokens" });
 
-/** All subscribers can access these models. The proxy enforces per-request cost. */
+/**
+ * Models a token may name once the account has REAL funding (a deposit,
+ * settlement earnings — anything that is not the welcome credit). The proxy
+ * enforces per-request cost and the spend controls; this list is the ceiling.
+ */
 const DEPOSIT_MODELS = [
   "claude-opus-4-6",
   "claude-sonnet-4-6",
@@ -43,6 +48,46 @@ const DEPOSIT_MODELS = [
   "gemini-2.5-flash",
   "gemini-2.5-flash-lite",
 ];
+
+/**
+ * Models a token may name while the account holds ONLY the welcome credit.
+ * The frontier tier is excluded: a $0.10 free identity naming Opus at 16k
+ * output tokens in parallel is the exact overspend shape the 2026-09-12
+ * audit named. Sonnet/Haiku-class is the honest first taste. The proxy
+ * enforces the token's list; the source of funding is knowable only here,
+ * where the ledger lives.
+ */
+const FREE_CREDIT_MODELS = [
+  "claude-sonnet-4-6",
+  "claude-haiku-4-5-20251001",
+  "gpt-5.4-mini",
+  "gpt-5.4-nano",
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+];
+
+/**
+ * Has this account ever been funded by something other than the welcome
+ * credit? Any positive ledger entry whose reference is not the free-credit
+ * grant counts — a deposit, a settlement, a refund of a deposit.
+ */
+export function hasRealFunding(db: DatabaseDriver, motebitId: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 AS n FROM relay_transactions
+       WHERE motebit_id = ? AND amount > 0
+         AND (reference_id IS NULL OR reference_id NOT LIKE ?)
+       LIMIT 1`,
+    )
+    .get(motebitId, `${FREE_CREDIT_REFERENCE_PREFIX}%`) as { n: number } | undefined;
+  return row != null;
+}
+
+/** The model ceiling for an account, by funding source. Empty when there is no balance. */
+export function modelsForAccount(db: DatabaseDriver, motebitId: string, balance: number): string[] {
+  if (balance <= 0) return [];
+  return hasRealFunding(db, motebitId) ? [...DEPOSIT_MODELS] : [...FREE_CREDIT_MODELS];
+}
 
 const PROXY_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -124,13 +169,15 @@ export async function issueProxyToken(
   motebitId: string,
   balanceMicro: number,
   relayIdentity: RelayIdentity,
+  /** Model ceiling for this token (`modelsForAccount`). Default: the funded ceiling. */
+  models: readonly string[] = DEPOSIT_MODELS,
 ): Promise<string> {
   const now = Date.now();
 
   const payload: ProxyToken = {
     mid: motebitId,
     bal: balanceMicro,
-    models: [...DEPOSIT_MODELS],
+    models: [...models],
     jti: crypto.randomUUID(),
     iat: now,
     exp: now + PROXY_TOKEN_TTL_MS,
@@ -188,8 +235,11 @@ export function registerProxyTokenRoutes(
 
     // Issue token even with zero balance — the proxy will reject (402)
     // and the client will fall back to local inference.
+    // Model ceiling by funding source: free-credit-only accounts get the
+    // Sonnet/Haiku-class list; any real funding unlocks the full ceiling.
+    const models = modelsForAccount(db, motebitId, balance);
     try {
-      const token = await issueProxyToken(motebitId, balance, relayIdentity);
+      const token = await issueProxyToken(motebitId, balance, relayIdentity, models);
 
       logger.info("proxy-token.issued", {
         motebitId,
@@ -200,7 +250,7 @@ export function registerProxyTokenRoutes(
         token,
         balance,
         balance_usd: fromMicro(balance),
-        models: balance > 0 ? [...DEPOSIT_MODELS] : [],
+        models,
         expires_at: Date.now() + PROXY_TOKEN_TTL_MS,
       });
     } catch (err) {
@@ -708,7 +758,7 @@ export function registerProxyTokenRoutes(
         : {}),
       balance: account.balance,
       balance_usd: fromMicro(account.balance),
-      models: account.balance > 0 ? [...DEPOSIT_MODELS] : [],
+      models: modelsForAccount(db, motebitId, account.balance),
     });
   });
 }
