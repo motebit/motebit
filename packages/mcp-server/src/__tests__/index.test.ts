@@ -2196,6 +2196,94 @@ describe("McpServerAdapter — task admission (dispatch_token)", () => {
     expect(results.filter((r) => (r as { isError?: boolean }).isError).length).toBe(2);
   });
 
+  it("re-admits a task whose earlier run produced NO receipt (honest retry), and refuses one that completed", async () => {
+    // The retry gap named in docs/doctrine/task-admission.md: an intent-stable
+    // resubmission replays the same token. A run cut short must not strand
+    // the task for the token's whole TTL; a run that produced a receipt must
+    // never run twice.
+    const relay = await enc.generateKeypair();
+    let produceReceipt = false;
+    const calls: string[] = [];
+    const handleAgentTask: NonNullable<MotebitServerDeps["handleAgentTask"]> = async function* (
+      prompt,
+    ) {
+      calls.push(prompt);
+      if (produceReceipt) {
+        yield {
+          type: "task_result" as const,
+          receipt: { task_id: "t1", motebit_id: WORKER, signature: "s", status: "completed" },
+        };
+      } else {
+        yield { type: "text" as const, text: "partial, then the provider died" };
+      }
+    };
+    const handler = await adapterWith(enc.bytesToHex(relay.publicKey), handleAgentTask);
+    const token = await mint(relay.privateKey, { sub: "retry-1" });
+
+    const first = await handler({ prompt: "p", dispatch_token: token });
+    expect(text(first)).toContain("receipt_missing");
+    // Same token, honest retry: admitted again because nothing completed.
+    produceReceipt = true;
+    const second = await handler({ prompt: "p", dispatch_token: token });
+    expect(text(second)).not.toContain("already admitted");
+    expect(calls).toHaveLength(2);
+    // Now a receipt exists: a third presentation is refused.
+    const third = await handler({ prompt: "p", dispatch_token: token });
+    expect(text(third)).toContain("one completed execution");
+    expect(calls).toHaveLength(2);
+  });
+
+  it("refuses a second presentation while the first run is still in flight", async () => {
+    const relay = await enc.generateKeypair();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const handleAgentTask: NonNullable<MotebitServerDeps["handleAgentTask"]> = async function* () {
+      await gate;
+      yield {
+        type: "task_result" as const,
+        receipt: { task_id: "t1", motebit_id: WORKER, signature: "s", status: "completed" },
+      };
+    };
+    const handler = await adapterWith(enc.bytesToHex(relay.publicKey), handleAgentTask);
+    const token = await mint(relay.privateKey, { sub: "inflight-1" });
+    const firstRun = handler({ prompt: "p", dispatch_token: token });
+    await new Promise((r) => setTimeout(r, 10));
+    const second = await handler({ prompt: "p", dispatch_token: token });
+    expect(text(second)).toContain("this task is running");
+    release();
+    const first = await firstRun;
+    expect((first as { isError?: boolean }).isError).not.toBe(true);
+  });
+
+  it("a store WITHOUT completion tracking keeps the strict rule: one admission, ever", async () => {
+    const relay = await enc.generateKeypair();
+    const persisted = new Map<string, number>();
+    const strictStore = {
+      has: (id: string) => persisted.has(id),
+      add: (id: string, exp: number) => {
+        persisted.set(id, exp);
+      },
+    };
+    const handleAgentTask: NonNullable<MotebitServerDeps["handleAgentTask"]> = async function* () {
+      yield { type: "text" as const, text: "no receipt" };
+    };
+    const adapter = new McpServerAdapter(
+      makeConfig({
+        taskAdmission: {
+          relayPublicKey: enc.bytesToHex(relay.publicKey),
+          admittedStore: strictStore,
+        },
+      }),
+      makeDeps({ handleAgentTask }),
+    );
+    await adapter.start();
+    const handler = registrations.tools.get("motebit_task")!.handler;
+    const token = await mint(relay.privateKey, { sub: "strict-1" });
+    await handler({ prompt: "p", dispatch_token: token });
+    const replay = await handler({ prompt: "p", dispatch_token: token });
+    expect(text(replay)).toContain("already admitted");
+  });
+
   it("admits each relay task at most once — replaying the token or re-minting for the same sub is refused", async () => {
     const relay = await enc.generateKeypair();
     const { handleAgentTask, calls } = captureTask();

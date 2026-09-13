@@ -15,6 +15,8 @@
  */
 
 import { McpClientAdapter } from "@motebit/mcp-client";
+import { openRelaySubTask } from "@motebit/molecule-runner";
+import type { TokenAudience } from "@motebit/sdk";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import type { PullRequestInfo } from "./github.js";
 import { reviewPullRequest } from "./review.js";
@@ -47,6 +49,10 @@ export interface ReviewConfig {
   /** Optional: relay sync URL for budget-binding sub-delegations. */
   syncUrl?: string;
   readUrlTargetId?: string;
+  /** Mints this service's own `task:submit` bearer for the relay binding. */
+  mintRelayToken?: (audience?: TokenAudience) => Promise<string>;
+  /** Test seam / observability for the binding decision. */
+  log?: (msg: string) => void;
   /**
    * Test seam: factory for the mcp-client adapter. Defaults to constructing
    * a real `McpClientAdapter`. Tests inject a stub that returns canned
@@ -145,9 +151,40 @@ export async function reviewPrViaMotebit(
 
     // Fetch the patch (mbox format with author/subject headers + diff).
     const patchUrl = prUrl.replace(/\/?$/, "") + ".patch";
-    const readResult = await readUrl.executeTool("read-url__motebit_task", {
-      prompt: patchUrl,
-    });
+    const readArgs: Record<string, unknown> = { prompt: patchUrl };
+    const log = config.log ?? ((m: string) => console.log(`[code-review] ${m}`));
+    if (config.syncUrl != null && config.readUrlTargetId != null && config.mintRelayToken != null) {
+      // Bind the hop through the relay as the ONE presenter (`presenter:
+      // "submitter"`): the relay admits, does not route, returns the
+      // dispatch_token that read-url's admission verifies.
+      const mint = config.mintRelayToken;
+      const bound = await openRelaySubTask({
+        syncUrl: config.syncUrl,
+        mintToken: (aud) => mint(aud),
+        callerMotebitId: config.callerMotebitId,
+        targetMotebitId: config.readUrlTargetId,
+        prompt: patchUrl,
+        capability: "read_url",
+      });
+      if (bound.ok) {
+        readArgs.relay_task_id = bound.relayTaskId;
+        if (bound.dispatchToken != null) readArgs.dispatch_token = bound.dispatchToken;
+      } else if (bound.code === "TASK_P2P_PROOF_REQUIRED") {
+        // NAMED BLOCKER (docs/doctrine/task-admission.md § trigger): read-url
+        // is priced and this service has no payer seam yet, so the relay will
+        // not admit the hop unpaid. While read-url's admission is OPEN the
+        // direct call still succeeds; once it enforces, this fallback is
+        // refused at the atom and the review fails there, honestly. Loud on
+        // every occurrence so the gap stays visible until code-review pays.
+        log(
+          `read-url hop NOT admitted (unpaid priced atom — code-review has no payer seam yet); ` +
+            `calling read-url directly while its admission is open: ${bound.reason}`,
+        );
+      } else {
+        throw new Error(`read-url hop was not admitted by the relay: ${bound.reason}`);
+      }
+    }
+    const readResult = await readUrl.executeTool("read-url__motebit_task", readArgs);
     const fresh = readUrl.getAndResetDelegationReceipts();
     delegationReceipts.push(...fresh);
 

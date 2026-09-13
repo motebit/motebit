@@ -18,6 +18,7 @@ import {
   buildServiceReceipt,
   runMolecule,
   createProviderReadiness,
+  makeAuthTokenMinter,
 } from "@motebit/molecule-runner";
 import type { ExecutionReceipt } from "@motebit/molecule-runner";
 import { InMemoryToolRegistry } from "@motebit/tools";
@@ -152,6 +153,8 @@ async function main(): Promise<void> {
         callerPrivateKey: privateKey,
         ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
         ...(config.readUrlTargetId != null ? { readUrlTargetId: config.readUrlTargetId } : {}),
+        // Relay budget binding signs as THIS molecule — never an operator secret.
+        mintRelayToken: makeAuthTokenMinter(identity),
       };
 
       const registry = new InMemoryToolRegistry();

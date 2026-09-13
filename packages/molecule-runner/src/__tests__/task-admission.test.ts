@@ -10,7 +10,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryToolRegistry } from "@motebit/tools";
 import type { MoleculeConfig } from "../index.js";
-import { fileAdmissionStores, resolveTaskAdmission, taskAdmissionEnvDefaults } from "../index.js";
+import {
+  fileAdmissionStores,
+  openRelaySubTask,
+  resolveTaskAdmission,
+  taskAdmissionEnvDefaults,
+} from "../index.js";
 
 const RELAY_KEY = "ab".repeat(32);
 
@@ -481,5 +486,97 @@ describe("resolveRelayTrust — the relay may authenticate as itself to any rela
     );
     expect(startCalls[0]!.taskAdmission).toBeUndefined();
     expect(startCalls[0]!.relayTrust).toEqual({ relayPublicKey: RELAY_KEY });
+  });
+});
+
+describe("fileAdmissionStores — completion tracking", () => {
+  it("admitted ≠ completed; legacy bare-number rows read as admitted-not-completed", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "adm-"));
+    const { admittedStore } = fileAdmissionStores(dir);
+    const exp = Date.now() + 60_000;
+    await admittedStore.add("a", exp);
+    expect(await admittedStore.has("a")).toBe(true);
+    expect(await admittedStore.isCompleted!("a")).toBe(false);
+    await admittedStore.complete!("a");
+    expect(await admittedStore.isCompleted!("a")).toBe(true);
+    // Re-add (a fresh admission of the same sub) resets completion.
+    await admittedStore.add("a", exp);
+    expect(await admittedStore.isCompleted!("a")).toBe(false);
+    // A row written by the pre-completion format is still an admission.
+    const { admittedStore: again } = fileAdmissionStores(dir);
+    expect(await again.has("a")).toBe(true);
+    expect(await again.isCompleted!("unknown")).toBe(false);
+  });
+});
+
+describe("openRelaySubTask — the one way a molecule binds a hop it presents itself", () => {
+  const args = {
+    syncUrl: "http://relay.test/",
+    mintToken: async (aud: string) => `signed.${aud}`,
+    callerMotebitId: "caller-1",
+    targetMotebitId: "atom-1",
+    prompt: "https://example.com/x",
+    capability: "read_url",
+  };
+
+  it("submits as the submitter-presenter, signed as itself, under an intent-stable key", async () => {
+    const seen: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      seen.push({ url, init });
+      return new Response(JSON.stringify({ task_id: "rt-1", dispatch_token: "d.t" }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    const out = await openRelaySubTask({ ...args, fetchImpl });
+    expect(out).toEqual({ ok: true, relayTaskId: "rt-1", dispatchToken: "d.t" });
+    expect(seen[0]!.url).toBe("http://relay.test/agent/atom-1/task");
+    const headers = seen[0]!.init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer signed.task:submit");
+    const body = JSON.parse(seen[0]!.init.body as string);
+    expect(body).toEqual({
+      prompt: args.prompt,
+      submitted_by: "caller-1",
+      required_capabilities: ["read_url"],
+      presenter: "submitter",
+    });
+    // Same intent ⇒ same key (a retry replays the relay's answer, never a new task).
+    await openRelaySubTask({ ...args, fetchImpl });
+    expect((seen[1]!.init.headers as Record<string, string>)["Idempotency-Key"]).toBe(
+      headers["Idempotency-Key"],
+    );
+    await openRelaySubTask({ ...args, prompt: "other", fetchImpl });
+    expect((seen[2]!.init.headers as Record<string, string>)["Idempotency-Key"]).not.toBe(
+      headers["Idempotency-Key"],
+    );
+  });
+
+  it("returns the relay's refusal with its code instead of swallowing it", async () => {
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ code: "TASK_P2P_PROOF_REQUIRED", error: "pay first" }), {
+        status: 402,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+    const out = await openRelaySubTask({ ...args, fetchImpl });
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.status).toBe(402);
+      expect(out.code).toBe("TASK_P2P_PROOF_REQUIRED");
+      expect(out.reason).toContain("pay first");
+    }
+  });
+
+  it("treats a 2xx without a task_id, and an unreachable relay, as refusals", async () => {
+    const noId = (async () =>
+      new Response(JSON.stringify({ dispatch_token: "orphan" }), {
+        status: 200,
+      })) as unknown as typeof fetch;
+    expect((await openRelaySubTask({ ...args, fetchImpl: noId })).ok).toBe(false);
+    const down = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    const out = await openRelaySubTask({ ...args, fetchImpl: down });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toContain("ECONNREFUSED");
   });
 });

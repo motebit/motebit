@@ -119,7 +119,7 @@ When the worker is configured for **task admission** (`taskAdmission: "relay"` i
 - `mid` equals the worker's own `motebit_id` — a token minted for another worker is refused.
 - `sub` is present: it is the relay task id and becomes the receipt's `relay_task_id`. A caller-supplied `relay_task_id` that disagrees with `sub` is refused, never trusted.
 - `digest` is present and equals the hex SHA-256 of `prompt` — the token admits THIS work, not any work under this task id.
-- `sub` has not been admitted before by this worker. One admitted task ⇒ at most one execution; replaying the token or re-minting for the same task is refused. Workers SHOULD keep this record durable across restarts.
+- `sub` has not already been admitted to a COMPLETED execution by this worker, and no run under it is in flight. One admitted task ⇒ one completed execution: a replayed token whose earlier run produced no receipt (the process died, the provider timed out) MAY be admitted again — the delegator's honest retry of an intent-stable submission replays the same token — while a second presentation during a run, or after a receipt exists, is refused (1.2). Workers SHOULD keep this record durable across restarts; a worker without completion tracking keeps the strict one-admission rule.
 
 The relay mints the token after submission clears its settlement gates. Exactly one presenter holds it: the relay attaches it to its own MCP forward, or — when nothing routed the task — returns it from `POST /agent/:motebit_id/task` (delegation-v1 §3.2) bound to the intended worker so the submitter can present the task directly. Workers not configured for admission ignore the field. Doctrine: `docs/doctrine/task-admission.md`.
 
@@ -186,5 +186,6 @@ A motebit is conformant with `motebit/agent-mcp-surface@1.0` if all of:
 
 ## Change Log
 
+- **1.2 (2026-09-13)** — Clarifying: the §5.1 single-use rule is "one COMPLETED execution per admitted `sub`, at most one in flight" — a receiptless run may be re-presented under the same admission so an honest retry is not stranded for the token's TTL. Wire format unchanged.
 - **1.1 (2026-09-12)** — Additive: optional `dispatch_token` on `motebit_task` (§5.1) — the relay-signed `task:dispatch` admission artifact, REQUIRED by workers configured for task admission (priced relay-registered services), ignored by others. Backward-compatible: an older worker's zod shape strips the unknown field; an older relay simply omits it. Doctrine: `docs/doctrine/task-admission.md`.
 - **1.0 (2026-04-24)** — Initial draft. Pins the eight canonical agent-MCP surface tool names and their input schemas. Introduces profile-based conformance via `motebitType`.

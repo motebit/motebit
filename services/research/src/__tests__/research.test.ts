@@ -1182,13 +1182,16 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
     expect(call[0]).toBe("http://relay.test/agent/ws-mote/task");
     const body = JSON.parse(call[1]!.body as string);
     expect(body.required_capabilities).toEqual(["web_search"]);
+    // One presenter, chosen up front: the Researcher will call the atom itself,
+    // so it asks the relay to admit but not route (delegation spec §3.1 1.2).
+    expect(body.presenter).toBe("submitter");
     expect(ws.calls[0]!.args.relay_task_id).toBe("relay-task-xyz");
     // The relay's admission artifact travels verbatim to the atom — an atom
     // that admits work only through its relay refuses the hop without it.
     expect(ws.calls[0]!.args.dispatch_token).toBe("disp.tok");
   });
 
-  it("treats a 200 with no task_id as no binding (neither relay_task_id nor dispatch_token forwarded)", async () => {
+  it("treats a 200 with no task_id as a refusal — the hop is not run free", async () => {
     const receipt = makeReceipt({ result: "[]", signature: "sig-r1" });
     const ws = new StubAtomAdapter([receipt]);
     const ru = new StubAtomAdapter([]);
@@ -1209,7 +1212,7 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
           ],
         })
         .mockResolvedValueOnce({ content: [{ type: "text", text: "ok" }] });
-      await research("q", {
+      const result = await research("q", {
         ...baseConfig,
         syncUrl: "http://relay.test",
         mintRelayToken: async () => "tok",
@@ -1221,11 +1224,12 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
           ]),
         ),
       });
+      // Honest failure: no atom call, no receipt — the loop is told the hop was not admitted.
+      expect(ws.calls).toHaveLength(0);
+      expect(result.delegation_receipts).toHaveLength(0);
     } finally {
       globalThis.fetch = originalFetch;
     }
-    expect(ws.calls[0]!.args.relay_task_id).toBeUndefined();
-    expect(ws.calls[0]!.args.dispatch_token).toBeUndefined();
   });
 
   it("forwards relay_task_id without a dispatch_token when an older relay returns none", async () => {
@@ -1268,7 +1272,7 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
     expect("dispatch_token" in ws.calls[0]!.args).toBe(false);
   });
 
-  it("survives relay-binding non-OK status (no relay_task_id forwarded)", async () => {
+  it("fails the hop honestly on relay-binding non-OK status (no free call)", async () => {
     const receipt = makeReceipt({ result: "[]", signature: "sig-r1" });
     const ws = new StubAtomAdapter([receipt]);
     const ru = new StubAtomAdapter([]);
@@ -1298,14 +1302,15 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
           ]),
         ),
       });
-      expect(result.delegation_receipts).toHaveLength(1);
-      expect(ws.calls[0]!.args.relay_task_id).toBeUndefined();
+      // The relay said no (429): the Researcher does not do the hop for free.
+      expect(ws.calls).toHaveLength(0);
+      expect(result.delegation_receipts).toHaveLength(0);
     } finally {
       globalThis.fetch = originalFetch;
     }
   });
 
-  it("survives relay-binding throw (catch swallows)", async () => {
+  it("fails the hop honestly when the relay is unreachable (no free call)", async () => {
     const receipt = makeReceipt({ result: "[]", signature: "sig-r1" });
     const ws = new StubAtomAdapter([receipt]);
     const ru = new StubAtomAdapter([]);
@@ -1335,8 +1340,9 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
           ]),
         ),
       });
-      expect(result.delegation_receipts).toHaveLength(1);
-      expect(ws.calls[0]!.args.relay_task_id).toBeUndefined();
+      // Unreachable relay is a refusal, not a license: no atom call.
+      expect(ws.calls).toHaveLength(0);
+      expect(result.delegation_receipts).toHaveLength(0);
     } finally {
       globalThis.fetch = originalFetch;
     }
