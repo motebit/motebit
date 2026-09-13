@@ -18,7 +18,7 @@ import { deriveInteriorColor } from "./ui/color-picker";
 import { initColorPicker } from "./ui/color-picker";
 import { WebLLMProvider, PROXY_BASE_URL, isOnDeviceInferenceActive } from "./providers";
 import { cleanConversationHistory } from "./bootstrap";
-import { initChat, addMessage, showToast } from "./ui/chat";
+import { initChat, addMessage, addWelcomeMessage, showToast } from "./ui/chat";
 import { GOAL_VIEW_RESULT_EVENT } from "./ui/slab-goal-artifact";
 import { initSettings } from "./ui/settings";
 import { initRestoreIdentity } from "./ui/restore-identity";
@@ -599,10 +599,7 @@ async function bootstrap(): Promise<void> {
     // re-renders the same state — calm software renders state, it doesn't
     // track whether it already said hello.
     if (app.listConversations().length === 0) {
-      addMessage(
-        "assistant",
-        "I'm yours — minted just now, with my own key. What you tell me, I remember, inside a boundary you control.",
-      );
+      addWelcomeMessage();
     }
   }
 
