@@ -263,6 +263,35 @@ export function addMessage(
   chatLog.scrollTop = chatLog.scrollHeight;
 }
 
+/**
+ * The first-visit welcome — the creature speaks once, locally, and the one
+ * piece of orientation chrome (a docs link) rides INSIDE that bubble rather
+ * than as a second element competing for the strip above the input. The
+ * former fixed-position "Your motebit is born" card occupied the same 80px
+ * band as this bubble on phones and overlapped it for its 12s life; one
+ * moment, one surface. Markdown rendering escapes HTML, so the anchor is
+ * appended as a node (same `chat-action-link` register as other in-bubble
+ * links) instead of smuggled through the text.
+ */
+export function addWelcomeMessage(): void {
+  addMessage(
+    "assistant",
+    "I'm yours — minted just now, with my own key. What you tell me, I remember, inside a boundary you control.",
+  );
+  const bubble = chatLog.lastElementChild;
+  if (!(bubble instanceof HTMLElement) || !bubble.classList.contains("assistant")) return;
+  const line = document.createElement("div");
+  line.className = "welcome-learn-more";
+  const link = document.createElement("a");
+  link.className = "chat-action-link";
+  link.href = "https://docs.motebit.com";
+  link.target = "_blank";
+  link.rel = "noopener";
+  link.textContent = "Learn more →";
+  line.appendChild(link);
+  bubble.appendChild(line);
+}
+
 export function setProcessing(active: boolean): void {
   if (active) {
     chatInputRow.classList.add("processing");
