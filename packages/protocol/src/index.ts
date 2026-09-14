@@ -2183,7 +2183,7 @@ export interface ExecutionStepSummary {
         capability_match: number;
         availability: number;
       };
-      /** `[0]` = the chosen route (agent ids, caller → worker) whose composed metrics the sub_scores reflect; then the non-dominated alternatives, best first. Pinned hires report `[[worker]]`. */
+      /** `[0]` = the path (agent ids, caller → worker) in the routing graph whose composed metrics the sub_scores reflect — the evidence that justified the choice, not a record of who executed; then the non-dominated alternatives, best first. Pinned hires report `[[worker]]`. */
       routing_paths: string[][];
       /** Number of non-dominated viable routes to the selected agent the policy chose among (0 for a pinned hire). */
       alternatives_considered: number;

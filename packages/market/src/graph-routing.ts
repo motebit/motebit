@@ -10,9 +10,15 @@
  * 2026-04-28 once their final test-only callers were trimmed.
  */
 
-import type { MotebitId, RouteScore } from "@motebit/protocol";
+import type { MotebitId, RouteScore, Semiring } from "@motebit/protocol";
 import { AgentTrustLevel } from "@motebit/protocol";
-import { trustLevelToScore, scoreAttestation, HW_ATTESTATION_HARDWARE } from "@motebit/semiring";
+import {
+  trustLevelToScore,
+  scoreAttestation,
+  HardwareAttestationSemiring,
+  HW_ATTESTATION_HARDWARE,
+  recordSemiring,
+} from "@motebit/semiring";
 import {
   WeightedDigraph,
   RouteWeightSemiring,
@@ -24,7 +30,12 @@ import {
   optimalPathTrace,
   transitiveClosure,
 } from "@motebit/semiring";
-import type { RouteWeight, HardwareAttestationScore, Frontier } from "@motebit/semiring";
+import type {
+  RouteWeight,
+  HardwareAttestationScore,
+  Frontier,
+  DimensionSemirings,
+} from "@motebit/semiring";
 import type { CandidateProfile, TaskRequirements } from "./scoring.js";
 import { blendCredentialTrust } from "./credential-weight.js";
 
@@ -99,13 +110,17 @@ export const weightedSumComposite: CompositeFunction = (_route, scores) => {
  * Higher is better.
  */
 /**
- * Build an EXACT lexicographic composite over normalized [0,1] scores at
- * `LEXICOGRAPHIC_RESOLUTION` (1e-3): each key is quantized to 0..1000 and
- * packed in base 1001, so a higher-priority key always outranks every lower
- * one — a strict improvement at any priority level can never be outweighed
- * by the levels below it. The former `a*1e6 + b*1e3 + c` packing was not
- * exact: an unquantized `b ∈ [0,1]` spans 1e3, so a gap in `a` below 1e-3
- * could be reversed by `b`.
+ * Build a lexicographic composite over normalized [0,1] scores QUANTIZED to
+ * `LEXICOGRAPHIC_RESOLUTION` (1e-3). Each key is rounded to 0..1000 and
+ * packed in base 1001, so the order is exact over the quantized keys: a
+ * higher-priority key that differs by at least one quantum always outranks
+ * every lower key. Two scores within the same 1e-3 band of a key are, by
+ * this policy, EQUAL on that key and the next key decides — the band is the
+ * declared tie tolerance, not a rounding accident, and it is why this stays
+ * a scalar `CompositeFunction` rather than a tuple comparator. The former
+ * `a*1e6 + b*1e3 + c` packing had no such contract: an unquantized
+ * `b ∈ [0,1]` spanned the whole 1e3 band, so a sub-1e-3 gap in `a` was
+ * reversed by `b` silently.
  */
 export const LEXICOGRAPHIC_RESOLUTION = 1000;
 export function lexicographicOver(order: readonly (keyof NormalizedScores)[]): CompositeFunction {
@@ -246,13 +261,12 @@ export function buildRoutingGraph(
 
     const blendedTrust = blendCredentialTrust(staticTrust, candidate.credential_reputation ?? null);
 
-    // Hardware attestation is folded along the CHOSEN route, not here:
-    // `edgeHwScores` records each edge's LOCAL HW score and
-    // `chainHwForPath` takes the weakest link across the ranked path,
-    // then `applyHardwareAttestationBoost` applies
-    // `blendedTrust × (1 + chainHwScore × HARDWARE_ATTESTATION_BOOST)`.
-    // Single-hop is identical to scalar-at-terminal; multi-hop reflects
-    // the weakest-link custody of the route that was actually ranked.
+    // Hardware attestation is not folded into trust here. `edgeHwScores`
+    // records each edge's LOCAL HW score, `liftForRanking` makes it the
+    // sixth frontier dimension (min along the route = weakest-link
+    // custody), and `applyHardwareAttestationBoost` applies
+    // `blendedTrust × (1 + chainHw × HARDWARE_ATTESTATION_BOOST)` to the
+    // route the policy chose. Single-hop is identical to scalar-at-terminal.
     const trust = Math.min(1.0, blendedTrust);
 
     const cost = estimateCandidateCost(candidate);
@@ -288,20 +302,78 @@ export function buildRoutingGraph(
 }
 
 /**
+ * The weight the market RANKS on: the five `RouteWeight` dimensions plus the
+ * chain's hardware-attestation bottleneck (`hw`, min-folded along the path).
+ *
+ * `hw` must be a frontier dimension, not a post-hoc adjustment: the policy
+ * multiplies trust by `(1 + hw × HARDWARE_ATTESTATION_BOOST)` AFTER the
+ * frontier is formed, so a route dominated on the five plain dimensions but
+ * hardware-backed along every hop (trust 0.7 × 1.2 = 0.84) can outscore the
+ * route that dominated it (trust 0.8 × 1.0). Pruning on five dimensions
+ * would have discarded it first. Dominance must see every input the policy
+ * sees — see the approximation contract in `@motebit/semiring` `pareto.ts`.
+ */
+type RankWeight = RouteWeight & { readonly hw: HardwareAttestationScore };
+const RANK_DIMENSIONS: DimensionSemirings<RankWeight> = {
+  ...ROUTE_WEIGHT_DIMENSIONS,
+  hw: HardwareAttestationSemiring,
+};
+const RankWeightSemiring = recordSemiring(
+  RANK_DIMENSIONS as never,
+) as unknown as Semiring<RankWeight>;
+
+/**
+ * Lift the plain routing graph to `RankWeight` edges: each edge gains the
+ * hardware-attestation score of the hop it represents (the candidate's own
+ * for self→candidate, the peer edge's declared score for peer hops; absent ⇒
+ * 0, the attestation semiring's zero). `frontierPaths` over the lifted graph
+ * then yields, per candidate, the non-dominated routes with `hw` = weakest
+ * link along each route — one traversal, six dimensions.
+ */
+function liftForRanking(
+  graph: WeightedDigraph<RouteWeight>,
+  hwByEdge: Map<string, HardwareAttestationScore>,
+): WeightedDigraph<RankWeight> {
+  const lifted = new WeightedDigraph<RankWeight>(RankWeightSemiring);
+  for (const node of graph.nodes()) lifted.addNode(node);
+  for (const edge of graph.edges()) {
+    lifted.setEdge(edge.from, edge.to, {
+      ...edge.weight,
+      hw: hwByEdge.get(`${edge.from}\u0000${edge.to}`) ?? 0,
+    });
+  }
+  return lifted;
+}
+
+/** Per candidate, the frontier of real routes under all six ranking dimensions. */
+function candidateFrontiers(
+  selfId: MotebitId,
+  graph: WeightedDigraph<RouteWeight>,
+  candidates: CandidateProfile[],
+  peerEdges: PeerEdge[] | undefined,
+  maxPaths: number | undefined,
+): Map<string, Frontier<RankWeight>> {
+  const lifted = liftForRanking(graph, edgeHwScores(selfId, candidates, peerEdges));
+  return frontierPaths(lifted, RANK_DIMENSIONS, selfId, {
+    ...(maxPaths != null ? { maxPaths } : {}),
+  });
+}
+
+/**
  * Choose one route from a candidate's frontier under the composite policy,
  * scoring each real route exactly once. Returns the chosen route's own
  * `RouteScore`, the frontier ordered winner-first, and how many viable
  * routes the policy chose among. `null` when no viable route scores.
  */
 function pickRoute(
-  frontier: Frontier<RouteWeight>,
-  scoreOne: (weight: RouteWeight, path: readonly string[]) => RouteScore | null,
-): { score: RouteScore; ordered: Frontier<RouteWeight>; viable: number } | null {
+  frontier: Frontier<RankWeight>,
+  scoreOne: (weight: RankWeight) => RouteScore | null,
+): { score: RouteScore; ordered: Frontier<RankWeight>; viable: number } | null {
   const viable = frontier.filter((p) => p.weight.trust > 0);
   const memo = new Map<string, RouteScore | null>();
-  const scoreOf = (weight: RouteWeight, path: readonly string[]): RouteScore | null => {
+  const scoreOf = (weight: RankWeight, path: readonly string[]): RouteScore | null => {
     const k = path.join("\u0000");
-    if (!memo.has(k)) memo.set(k, scoreOne(weight, path));
+    if (!memo.has(k)) memo.set(k, scoreOne(weight));
     return memo.get(k) ?? null;
   };
   const pick = chooseFromFrontier(viable, (w, path) => scoreOf(w, path)?.composite ?? -Infinity);
@@ -333,10 +405,9 @@ function finiteRouteWeight(w: Partial<RouteWeight>): RouteWeight {
 /**
  * Hardware-attestation score per edge — the candidate's own for a
  * self→candidate edge, the intermediate hop's for a peer edge (identity 1.0
- * when unsupplied). Folded along the CHOSEN path with `min` (weakest-link
- * custody). Previously a parallel product-semiring traversal produced a
- * per-node optimum that, like the record semiring, could mix paths; folding
- * the chosen path keeps the boost truthful to the route actually ranked.
+ * when unsupplied). Lifted onto the ranking graph as the `hw` dimension, so
+ * the frontier's `hw` is the weakest link along each route (the attestation
+ * semiring's ⊗ is `min`).
  */
 function edgeHwScores(
   selfId: MotebitId,
@@ -356,20 +427,6 @@ function edgeHwScores(
     }
   }
   return out;
-}
-
-function chainHwForPath(
-  selfId: MotebitId,
-  path: readonly string[],
-  hwByEdge: Map<string, HardwareAttestationScore>,
-): HardwareAttestationScore {
-  let prev: string = selfId;
-  let hw: number = HW_ATTESTATION_HARDWARE;
-  for (const node of path) {
-    hw = Math.min(hw, hwByEdge.get(`${prev}\u0000${node}`) ?? 0);
-    prev = node;
-  }
-  return hw;
 }
 
 /**
@@ -537,25 +594,17 @@ export function graphRankCandidates(
     config?.callerGuardianPublicKey,
   );
   // Path-preserving ranking: per candidate, the Pareto frontier of REAL
-  // routes; the composite policy chooses among them; the reported metrics
-  // are the chosen route's own. Never the component-wise mixture.
-  const frontiers = frontierPaths(graph, ROUTE_WEIGHT_DIMENSIONS, selfId);
-  const hwByEdge = edgeHwScores(selfId, candidates, config?.peerEdges);
+  // routes over all six ranking dimensions; the composite policy chooses
+  // among them; the reported metrics are the chosen route's own. Never the
+  // component-wise mixture.
+  const frontiers = candidateFrontiers(selfId, graph, candidates, config?.peerEdges, undefined);
   const candidateMap = new Map<string, CandidateProfile>();
   for (const c of candidates) candidateMap.set(c.motebit_id, c);
   const scores: RouteScore[] = [];
   for (const [nodeId, frontier] of frontiers) {
     if (nodeId === selfId) continue;
-    const picked = pickRoute(frontier, (w, path) =>
-      scoreRoute(
-        nodeId,
-        w,
-        candidateMap.get(nodeId),
-        requirements,
-        weights,
-        compositeFn,
-        chainHwForPath(selfId, path, hwByEdge),
-      ),
+    const picked = pickRoute(frontier, ({ hw, ...route }) =>
+      scoreRoute(nodeId, route, candidateMap.get(nodeId), requirements, weights, compositeFn, hw),
     );
     if (picked) scores.push(picked.score);
   }
@@ -618,14 +667,19 @@ export function findTrustedRoute(
 /**
  * RouteScore extended with provenance: explains WHY each agent was chosen.
  *
- * `routing_paths[0]` is the CHOSEN route — the sequence of agent ids from the
- * caller to this candidate whose composed edge metrics the score reports.
- * The remaining entries are the non-dominated alternative routes the policy
- * weighed, in descending policy order. A path is a route that exists, never
- * a component-wise derivation.
+ * `routing_paths[0]` is the path in the routing graph whose composed edge
+ * metrics the score reports — the sequence of agent ids from the caller to
+ * this candidate that JUSTIFIED the choice. The remaining entries are the
+ * non-dominated alternative paths the policy weighed, in descending policy
+ * order. Every entry is a path that exists in the graph, never a
+ * component-wise derivation. The graph's edges are evidence (recorded
+ * delegation edges, discovery, federation peers), so a path is a trust
+ * justification, not a claim that each intermediary took part in executing
+ * the task: dispatch goes to the selected agent (directly, or via the
+ * federation peer on the path), and participation is proven by receipts.
  */
 export interface ExplainedRouteScore extends RouteScore {
-  /** `[0]` = the chosen route (its metrics are the score's metrics); then the alternatives, best first. */
+  /** `[0]` = the path whose metrics the score reports (the justification); then the alternatives, best first. */
   routing_paths: string[][];
   /** Number of non-dominated viable routes to this candidate the policy chose among (≥ 1). */
   alternatives_considered: number;
@@ -636,11 +690,11 @@ export interface ExplainedRouteScore extends RouteScore {
  *
  * Same scoring as graphRankCandidates (shared scoreRoute core). Both rank
  * over the Pareto frontier of REAL routes per candidate (`frontierPaths`);
- * this variant also reports them: `routing_paths[0]` is the route that was
- * chosen — the one whose composed metrics the score reflects — and the rest
- * are the non-dominated alternatives the policy weighed. An explanation
- * that named a node's component-wise optimum would describe a hire that
- * never existed; this one names the hire.
+ * this variant also reports them: `routing_paths[0]` is the path whose
+ * composed metrics the score reflects — the evidence that justified the
+ * choice — and the rest are the non-dominated alternatives the policy
+ * weighed. An explanation that named a node's component-wise optimum would
+ * cite evidence that does not exist; this one cites a path that does.
  *
  * This is the algebraic answer to "explain this routing decision" — not logging,
  * not post-hoc reconstruction, but a first-class semiring query.
@@ -664,29 +718,25 @@ export function explainedRankCandidates(
     config?.callerGuardianPublicKey,
   );
   // 2. Per candidate, the Pareto frontier of real routes (each carrying its
-  //    own composed metrics AND its path). The explanation is therefore
-  //    exact: routing_paths[0] is the route that was chosen and whose metrics
-  //    the score reflects; the rest are the non-dominated alternatives the
-  //    policy weighed. `maxProvPaths` bounds the frontier per candidate.
-  const frontiers = frontierPaths(plainGraph, ROUTE_WEIGHT_DIMENSIONS, selfId, {
-    ...(config?.maxProvPaths != null ? { maxPaths: config.maxProvPaths } : {}),
-  });
-  const hwByEdge = edgeHwScores(selfId, candidates, config?.peerEdges);
+  //    own composed metrics AND its path). routing_paths[0] is the path in
+  //    the routing graph whose composed metrics the score reflects — the
+  //    evidence that justified the choice; the rest are the non-dominated
+  //    alternatives the policy weighed. `maxProvPaths` bounds the frontier
+  //    per candidate (an approximation — see pareto.ts).
+  const frontiers = candidateFrontiers(
+    selfId,
+    plainGraph,
+    candidates,
+    config?.peerEdges,
+    config?.maxProvPaths,
+  );
   const candidateMap = new Map<string, CandidateProfile>();
   for (const c of candidates) candidateMap.set(c.motebit_id, c);
   const scores: ExplainedRouteScore[] = [];
   for (const [nodeId, frontier] of frontiers) {
     if (nodeId === selfId) continue;
-    const picked = pickRoute(frontier, (w, path) =>
-      scoreRoute(
-        nodeId,
-        w,
-        candidateMap.get(nodeId),
-        requirements,
-        weights,
-        compositeFn,
-        chainHwForPath(selfId, path, hwByEdge),
-      ),
+    const picked = pickRoute(frontier, ({ hw, ...route }) =>
+      scoreRoute(nodeId, route, candidateMap.get(nodeId), requirements, weights, compositeFn, hw),
     );
     if (!picked) continue;
     scores.push({

@@ -170,6 +170,121 @@ describe("frontierPaths", () => {
   });
 });
 
+describe("frontierPaths against brute-force enumeration", () => {
+  // Seeded LCG so the graphs are reproducible.
+  function rng(seed: number): () => number {
+    let x = seed >>> 0;
+    return () => {
+      x = (Math.imul(x, 1664525) + 1013904223) >>> 0;
+      return x / 2 ** 32;
+    };
+  }
+  type Edge = { from: string; to: string; w: TC };
+  function randomGraph(seed: number, n: number, density: number): Edge[] {
+    const r = rng(seed);
+    const nodes = Array.from({ length: n }, (_, i) => `n${i}`);
+    const edges: Edge[] = [];
+    for (const a of nodes)
+      for (const b of nodes) {
+        if (a === b || r() > density) continue;
+        edges.push({
+          from: a,
+          to: b,
+          w: { trust: Math.round(r() * 9 + 1) / 10, cost: Math.round(r() * 9 + 1) },
+        });
+      }
+    return edges;
+  }
+  /** All simple paths from `src`, composed under the record semiring, then Pareto-filtered with the same tie rule. */
+  function bruteForce(edges: Edge[], src: string): Map<string, Frontier<TC>> {
+    const out = new Map<string, PathWeight<TC>[]>();
+    const rec = recordSemiring(dims);
+    const walk = (at: string, seen: Set<string>, w: TC, path: string[]) => {
+      for (const e of edges) {
+        if (e.from !== at || seen.has(e.to)) continue;
+        const nw = rec.mul(w, e.w);
+        const np = [...path, e.to];
+        (out.get(e.to) ?? out.set(e.to, []).get(e.to)!).push({ weight: nw, path: np });
+        walk(e.to, new Set([...seen, e.to]), nw, np);
+      }
+    };
+    walk(src, new Set([src]), rec.one, []);
+    const pareto = new Map<string, Frontier<TC>>();
+    for (const [node, items] of out) {
+      const kept = items.filter(
+        (x) =>
+          !items.some(
+            (y) =>
+              y !== x &&
+              dominatesOrEquals(dims, y.weight, x.weight) &&
+              (!dominatesOrEquals(dims, x.weight, y.weight) ||
+                y.path.length < x.path.length ||
+                (y.path.length === x.path.length && y.path.join(" ") < x.path.join(" "))),
+          ),
+      );
+      pareto.set(node, kept);
+    }
+    return pareto;
+  }
+  const canon = (f: Frontier<TC> | undefined) =>
+    [...(f ?? [])].map((p) => `${p.path.join(">")}:${p.weight.trust}/${p.weight.cost}`).sort();
+
+  it("unbounded, equals the exact Pareto set of simple paths, for every node, on 40 random graphs", () => {
+    const sr = recordSemiring(dims);
+    for (let seed = 1; seed <= 40; seed++) {
+      const edges = randomGraph(seed, 6, 0.45);
+      const g = new WeightedDigraph<TC>(sr);
+      for (let i = 0; i < 6; i++) g.addNode(`n${i}`);
+      for (const e of edges) g.setEdge(e.from, e.to, e.w);
+      const got = frontierPaths(g, dims, "n0", { maxPaths: Number.POSITIVE_INFINITY });
+      const want = bruteForce(edges, "n0");
+      for (let i = 1; i < 6; i++) {
+        expect(canon(got.get(`n${i}`)), `seed ${seed} node n${i}`).toEqual(
+          canon(want.get(`n${i}`)),
+        );
+      }
+    }
+  });
+
+  it("is invariant under edge insertion order", () => {
+    const sr = recordSemiring(dims);
+    for (let seed = 41; seed <= 60; seed++) {
+      const edges = randomGraph(seed, 6, 0.5);
+      const build = (order: Edge[]) => {
+        const g = new WeightedDigraph<TC>(sr);
+        for (let i = 0; i < 6; i++) g.addNode(`n${i}`);
+        for (const e of order) g.setEdge(e.from, e.to, e.w);
+        return frontierPaths(g, dims, "n0");
+      };
+      const a = build(edges);
+      const b = build([...edges].reverse());
+      const r = rng(seed);
+      const c = build([...edges].sort(() => r() - 0.5));
+      for (let i = 1; i < 6; i++) {
+        expect(canon(b.get(`n${i}`))).toEqual(canon(a.get(`n${i}`)));
+        expect(canon(c.get(`n${i}`))).toEqual(canon(a.get(`n${i}`)));
+      }
+    }
+  });
+
+  it("the bound is an approximation: it can drop the pair a policy would pick (documented contract 3)", () => {
+    const g = new WeightedDigraph<TC>(recordSemiring(dims));
+    for (const n of ["s", "a", "b", "w"]) g.addNode(n);
+    g.setEdge("s", "w", { trust: 0.3, cost: 1 }); // 1 hop
+    g.setEdge("s", "a", { trust: 0.7, cost: 2 });
+    g.setEdge("a", "w", { trust: 0.7, cost: 2 }); // 2 hops, trust 0.49 — the best trust
+    g.setEdge("s", "b", { trust: 0.6, cost: 1.5 });
+    g.setEdge("b", "w", { trust: 0.6, cost: 1.5 }); // 2 hops, trust 0.36
+    const exact = frontierPaths(g, dims, "s").get("w")!;
+    expect(exact.length).toBe(3);
+    const bounded = frontierPaths(g, dims, "s", { maxPaths: 1 }).get("w")!;
+    expect(bounded.map((p) => p.path)).toEqual([["w"]]); // fewest hops survive
+    const best = chooseFromFrontier(exact, (w) => w.trust)!.chosen;
+    expect(best.path).toEqual(["a", "w"]);
+    expect(bounded.some((p) => p.path.join() === best.path.join())).toBe(false);
+  });
+});
+
 describe("chooseFromFrontier", () => {
   const f: Frontier<TC> = [pw(0.2, 1, "w"), pw(0.81, 10, "t", "w")];
 
