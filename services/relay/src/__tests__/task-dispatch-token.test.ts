@@ -10,12 +10,13 @@
  *   3. the submission response returns it for the submission target, so a
  *      delegator calling the worker directly presents the same artifact.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
 import { generateKeypair, bytesToHex, hexToBytes, verifySignedToken } from "@motebit/encryption";
+import { parseTokenPayloadUnsafe } from "../auth.js";
 import type { RelayIdentity } from "../federation.js";
 import {
   forwardTaskViaMcp,
@@ -23,7 +24,7 @@ import {
   taskPromptDigest,
   TASK_DISPATCH_TOKEN_TTL_MS,
 } from "../task-routing.js";
-import { getListingUnitCost } from "../tasks.js";
+import { getListingUnitCost, refreshDispatchTokenOnReplay } from "../tasks.js";
 import {
   createTestRelay,
   createAgent,
@@ -341,5 +342,117 @@ describe("POST /agent/:worker/task — one presenter per admission", () => {
     );
     expect(payload?.mid).toBe(worker.motebitId);
     expect(payload?.sub).toBe(body.task_id);
+  });
+});
+
+describe("idempotent replay re-mints an aged-out dispatch token for a receiptless task (relay half of the retry gap)", () => {
+  let relay: SyncRelay;
+  let worker: { motebitId: string; deviceId: string };
+  beforeEach(async () => {
+    relay = await createTestRelay();
+    worker = await createAgent(relay, bytesToHex((await generateKeypair()).publicKey));
+  });
+  afterEach(async () => {
+    vi.useRealTimers();
+    await relay.close();
+  });
+
+  const relayKey = () => hexToBytes(relay.relayIdentity.publicKeyHex);
+
+  it("route: the same Idempotency-Key 16 minutes later returns the SAME task id with a FRESH token (same sub + digest, later exp)", async () => {
+    const key = crypto.randomUUID();
+    const submit = () =>
+      relay.app.request(`/agent/${worker.motebitId}/task`, {
+        method: "POST",
+        headers: { ...jsonAuthWithIdempotency(), "Idempotency-Key": key },
+        body: JSON.stringify({ prompt: "hello", submitted_by: worker.motebitId }),
+      });
+    const first = (await (await submit()).json()) as { task_id: string; dispatch_token: string };
+    const firstPayload = await verifySignedToken(first.dispatch_token, relayKey());
+    expect(firstPayload?.sub).toBe(first.task_id);
+
+    // Only the clock moves — past the 15-minute TTL, inside the 24-hour window.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + TASK_DISPATCH_TOKEN_TTL_MS + 60_000);
+
+    const replay = (await (await submit()).json()) as { task_id: string; dispatch_token: string };
+    expect(replay.task_id).toBe(first.task_id);
+    expect(replay.dispatch_token).not.toBe(first.dispatch_token);
+    // The old token is dead now; the new one verifies and admits the SAME work.
+    expect(await verifySignedToken(first.dispatch_token, relayKey())).toBeNull();
+    const fresh = await verifySignedToken(replay.dispatch_token, relayKey());
+    expect(fresh?.sub).toBe(first.task_id);
+    expect(fresh?.mid).toBe(worker.motebitId);
+    expect(fresh?.digest).toBe(firstPayload?.digest);
+    expect(fresh!.exp).toBeGreaterThan(firstPayload!.exp);
+  });
+
+  it("route: a replay inside the TTL returns the original token untouched", async () => {
+    const key = crypto.randomUUID();
+    const submit = () =>
+      relay.app.request(`/agent/${worker.motebitId}/task`, {
+        method: "POST",
+        headers: { ...jsonAuthWithIdempotency(), "Idempotency-Key": key },
+        body: JSON.stringify({ prompt: "hello", submitted_by: worker.motebitId }),
+      });
+    const first = (await (await submit()).json()) as { dispatch_token: string };
+    const replay = (await (await submit()).json()) as { dispatch_token: string };
+    expect(replay.dispatch_token).toBe(first.dispatch_token);
+  });
+
+  it("helper: a task that already has a receipt, one that aged out of the queue, and a body without a token are all replayed untouched", async () => {
+    const kp = await generateKeypair();
+    const rid: RelayIdentity = {
+      relayMotebitId: "relay-test",
+      publicKey: kp.publicKey,
+      publicKeyHex: bytesToHex(kp.publicKey),
+      privateKey: kp.privateKey,
+      did: "did:key:relay-test",
+    };
+    const expired = await mintTaskDispatchToken(rid, worker.motebitId, "t-1", "p");
+    const past = () => Date.now() + TASK_DISPATCH_TOKEN_TTL_MS + 1;
+    const base = { task_id: "t-1", status: "pending", dispatch_token: expired };
+    const deps = (entry: unknown) => ({
+      taskQueue: { get: () => entry as never },
+      relayIdentity: rid,
+      parseTokenPayloadUnsafe,
+      now: past,
+    });
+    // Receipt present ⇒ untouched.
+    const done = await refreshDispatchTokenOnReplay(
+      base,
+      deps({
+        task: { prompt: "p", status: "completed" },
+        receipt: { task_id: "t-1" },
+      }),
+    );
+    expect(done.dispatch_token).toBe(expired);
+    // Aged out of the queue ⇒ untouched.
+    expect((await refreshDispatchTokenOnReplay(base, deps(undefined))).dispatch_token).toBe(
+      expired,
+    );
+    // No token ⇒ untouched.
+    const noToken = { task_id: "t-1", status: "pending" };
+    expect(
+      await refreshDispatchTokenOnReplay(
+        noToken,
+        deps({ task: { prompt: "p", status: "pending" } }),
+      ),
+    ).toEqual(noToken);
+    // Receiptless + expired ⇒ fresh token, same sub, same digest.
+    const fresh = await refreshDispatchTokenOnReplay(
+      base,
+      deps({ task: { prompt: "p", status: "pending" } }),
+    );
+    expect(fresh.dispatch_token).not.toBe(expired);
+    const a = parseTokenPayloadUnsafe(expired)! as { sub?: string; exp?: number; digest?: string };
+    const b = parseTokenPayloadUnsafe(fresh.dispatch_token as string)! as {
+      sub?: string;
+      exp?: number;
+      digest?: string;
+    };
+    expect(b.sub).toBe(a.sub);
+    expect((b as { digest?: string }).digest).toBe((a as { digest?: string }).digest);
+    expect(b.exp!).toBeGreaterThan(a.exp!);
   });
 });

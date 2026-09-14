@@ -87,6 +87,7 @@ import {
 import type { ConnectedDevice } from "./index.js";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import { createLogger } from "./logger.js";
+import type { TaskQueue } from "./task-queue.js";
 import { ExecutionReceiptSchema } from "@motebit/wire-schemas";
 import {
   RelayError,
@@ -295,6 +296,65 @@ export function requiresP2pProof(args: {
     args.submittedBy != null &&
     args.submittedBy !== args.workerId
   );
+}
+
+/** A replayed dispatch token this close to `exp` will not survive the hop — treat as expired. */
+const DISPATCH_TOKEN_REMINT_MARGIN_MS = 60_000;
+
+/**
+ * Idempotent replay ⇒ the same response, INCLUDING the same dispatch token —
+ * which lives 15 minutes while the idempotency window lives 24 hours. A
+ * delegator whose first presentation died without a receipt and who retries
+ * after the TTL would replay an expired token and be refused until the window
+ * lapsed (the retry gap named in docs/doctrine/task-admission.md; the worker
+ * half — re-admitting a receiptless `sub` — shipped with the one-presenter arc).
+ *
+ * This is the relay half: when the replayed body carries a dispatch token that
+ * is expired (or within a minute of it) AND the task still has no receipt, mint
+ * a fresh token for the SAME task id and prompt digest. A task that already
+ * produced a receipt is left alone — its replay should send the delegator to
+ * the result, never to a second admission — and so is any body without a
+ * token. Same `sub`, same `digest`, same worker: nothing about what was
+ * admitted changes, only the clock.
+ */
+export async function refreshDispatchTokenOnReplay(
+  replayed: Record<string, unknown>,
+  deps: {
+    taskQueue: Pick<TaskQueue, "get">;
+    relayIdentity: RelayIdentity;
+    parseTokenPayloadUnsafe: (token: string) => { mid?: string; exp?: number } | null;
+    now?: () => number;
+  },
+): Promise<Record<string, unknown>> {
+  const token = replayed["dispatch_token"];
+  const taskId = replayed["task_id"];
+  if (typeof token !== "string" || typeof taskId !== "string") return replayed;
+  const claims = deps.parseTokenPayloadUnsafe(token);
+  if (claims == null || typeof claims.mid !== "string" || typeof claims.exp !== "number") {
+    return replayed;
+  }
+  const now = (deps.now ?? Date.now)();
+  if (claims.exp - now > DISPATCH_TOKEN_REMINT_MARGIN_MS) return replayed; // still live
+  const entry = deps.taskQueue.get(taskId);
+  if (entry == null) return replayed; // aged out of the queue — nothing to admit
+  const terminal =
+    entry.receipt != null ||
+    entry.task.status === AgentTaskStatus.Completed ||
+    entry.task.status === AgentTaskStatus.Failed ||
+    entry.task.status === AgentTaskStatus.Denied;
+  if (terminal) return replayed;
+  const fresh = await mintTaskDispatchToken(
+    deps.relayIdentity,
+    claims.mid,
+    taskId,
+    entry.task.prompt,
+  );
+  logger.info("task.dispatch_token_reminted", {
+    correlationId: taskId,
+    worker: claims.mid,
+    reason: claims.exp <= now ? "expired" : "expiring",
+  });
+  return { ...replayed, dispatch_token: fresh };
 }
 
 /**
@@ -1982,10 +2042,13 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
 
     const idempCheck = checkIdempotency(moteDb.db, idempotencyKey, motebitId);
     if (idempCheck.action === "replay") {
-      return c.json(
+      // Same answer, fresh admission when the old one has aged out and the
+      // work never happened (see refreshDispatchTokenOnReplay).
+      const replayed = await refreshDispatchTokenOnReplay(
         JSON.parse(idempCheck.body) as Record<string, unknown>,
-        idempCheck.status as 201,
+        { taskQueue, relayIdentity, parseTokenPayloadUnsafe },
       );
+      return c.json(replayed, idempCheck.status as 201);
     }
     if (idempCheck.action === "conflict") {
       throw new TaskError(
