@@ -1,6 +1,6 @@
 /**
- * Auth-middleware tests covering the dualAuth shape: legacy shared
- * bearer + relay-signed audience-bound token.
+ * Auth-middleware tests: relay-signed audience-bound tokens are the ONLY
+ * admitted credential (the v1 shared bearer was retired 2026-09-14).
  *
  * Invariants:
  *   1. `verifyRelaySandboxToken` accepts a token signed by the
@@ -9,10 +9,10 @@
  *   2. Cross-audience replay defense — a token with the wrong `aud`
  *      is rejected.
  *   3. A token signed with a different (non-pinned) key is rejected.
- *   4. `requireAuth` accepts EITHER a relay-signed token OR the legacy
- *      shared bearer when both are configured.
+ *   4. `requireAuth` accepts a relay-signed token and refuses an opaque
+ *      shared-secret bearer, a foreign-key token, and a wrong audience.
  *   5. `requireAuth` rejects a malformed bearer with permission_denied.
- *   6. `requireAuth` requires at least one auth path configured.
+ *   6. `requireAuth` refuses to build without a well-formed pinned key.
  */
 import { describe, it, expect, beforeAll } from "vitest";
 import { Hono } from "hono";
@@ -110,15 +110,10 @@ describe("extractBearer", () => {
   });
 });
 
-describe("requireAuth dualAuth", () => {
-  const LEGACY_TOKEN = "test-legacy-token-1234567890";
-
-  function buildApp(opts: {
-    legacyApiToken: string | null;
-    trustedRelayPublicKeyHex: string | null;
-  }): Hono {
+describe("requireAuth — relay-signed tokens only", () => {
+  function buildApp(trustedRelayPublicKeyHex: string): Hono {
     const app = new Hono();
-    app.use("*", requireAuth(opts));
+    app.use("*", requireAuth({ trustedRelayPublicKeyHex }));
     app.get("/protected", (c) => {
       const motebitId = c.get("motebitId" as never) as string | undefined;
       return c.json({ ok: true, motebitId: motebitId ?? null });
@@ -132,96 +127,48 @@ describe("requireAuth dualAuth", () => {
     return app;
   }
 
-  it("accepts the relay-signed path when only the relay key is configured", async () => {
-    const app = buildApp({
-      legacyApiToken: null,
-      trustedRelayPublicKeyHex: relayPublicKeyHex,
-    });
+  it("accepts a relay-signed token and attributes the request to its motebit", async () => {
+    const app = buildApp(relayPublicKeyHex);
     const token = await mintRelayToken({ motebitId: "motebit-bob" });
     const res = await app.request("/protected", {
       headers: { Authorization: `Bearer ${token}` },
     });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { motebitId: string };
-    expect(body.motebitId).toBe("motebit-bob");
+    expect(((await res.json()) as { motebitId: string }).motebitId).toBe("motebit-bob");
   });
 
-  it("accepts the legacy bearer when only legacy is configured", async () => {
-    const app = buildApp({
-      legacyApiToken: LEGACY_TOKEN,
-      trustedRelayPublicKeyHex: null,
-    });
+  it("rejects an opaque shared-secret bearer — the retired v1 shape has no path", async () => {
+    const app = buildApp(relayPublicKeyHex);
     const res = await app.request("/protected", {
-      headers: { Authorization: `Bearer ${LEGACY_TOKEN}` },
-    });
-    expect(res.status).toBe(200);
-  });
-
-  it("dualAuth — accepts either path when both are configured", async () => {
-    const app = buildApp({
-      legacyApiToken: LEGACY_TOKEN,
-      trustedRelayPublicKeyHex: relayPublicKeyHex,
-    });
-
-    const relayToken = await mintRelayToken({ motebitId: "motebit-carol" });
-    const resRelay = await app.request("/protected", {
-      headers: { Authorization: `Bearer ${relayToken}` },
-    });
-    expect(resRelay.status).toBe(200);
-    expect(((await resRelay.json()) as { motebitId: string }).motebitId).toBe("motebit-carol");
-
-    const resLegacy = await app.request("/protected", {
-      headers: { Authorization: `Bearer ${LEGACY_TOKEN}` },
-    });
-    expect(resLegacy.status).toBe(200);
-    expect(((await resLegacy.json()) as { motebitId: string | null }).motebitId).toBeNull();
-  });
-
-  it("rejects an unsigned bearer that doesn't match the legacy token", async () => {
-    const app = buildApp({
-      legacyApiToken: LEGACY_TOKEN,
-      trustedRelayPublicKeyHex: null,
-    });
-    const res = await app.request("/protected", {
-      headers: { Authorization: "Bearer wrong-token" },
+      headers: { Authorization: "Bearer test-legacy-token-1234567890" },
     });
     expect(res.status).toBe(401);
-    const body = (await res.json()) as { error: { reason: string } };
-    expect(body.error.reason).toBe("permission_denied");
+    expect(((await res.json()) as { error: { reason: string } }).error.reason).toBe(
+      "permission_denied",
+    );
+  });
+
+  it("rejects a token signed by a non-pinned key and one bound to another audience", async () => {
+    const app = buildApp(relayPublicKeyHex);
+    const other = await generateKeypair();
+    const foreign = await mintRelayToken({ signWith: other.privateKey });
+    expect(
+      (await app.request("/protected", { headers: { Authorization: `Bearer ${foreign}` } })).status,
+    ).toBe(401);
+    const wrongAud = await mintRelayToken({ audience: "task:submit" });
+    expect(
+      (await app.request("/protected", { headers: { Authorization: `Bearer ${wrongAud}` } }))
+        .status,
+    ).toBe(401);
   });
 
   it("rejects a malformed authorization header", async () => {
-    const app = buildApp({
-      legacyApiToken: LEGACY_TOKEN,
-      trustedRelayPublicKeyHex: null,
-    });
-    const res = await app.request("/protected", {
-      headers: { Authorization: "Basic abc" },
-    });
+    const app = buildApp(relayPublicKeyHex);
+    const res = await app.request("/protected", { headers: { Authorization: "Basic abc" } });
     expect(res.status).toBe(401);
   });
 
-  it("rejects a relay-shape token under wrong-key relay (does not fall through to legacy unless shape mismatch)", async () => {
-    // This is the subtle one: a JWT-shape bearer that fails relay
-    // verification should NOT then be tested against the legacy
-    // token (no fallback on signature failure — only on shape
-    // mismatch). Otherwise an attacker who knows the legacy token
-    // could wrap it in a JWT-shape envelope to confuse the auth.
-    const otherKeypair = await generateKeypair();
-    const otherToken = await mintRelayToken({ signWith: otherKeypair.privateKey });
-    const app = buildApp({
-      legacyApiToken: LEGACY_TOKEN,
-      trustedRelayPublicKeyHex: relayPublicKeyHex,
-    });
-    const res = await app.request("/protected", {
-      headers: { Authorization: `Bearer ${otherToken}` },
-    });
-    expect(res.status).toBe(401);
-  });
-
-  it("requires at least one auth path", () => {
-    expect(() => requireAuth({ legacyApiToken: null, trustedRelayPublicKeyHex: null })).toThrow(
-      /at least one of/i,
-    );
+  it("refuses to build without a well-formed pinned key", () => {
+    expect(() => requireAuth({ trustedRelayPublicKeyHex: "" })).toThrowError(/64-char hex/);
   });
 });

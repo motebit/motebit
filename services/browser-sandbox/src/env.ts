@@ -23,7 +23,6 @@ export interface BrowserSandboxConfig {
    * `@motebit/browser-sandbox@2.0.0` once federation-grade trust
    * anchors are the only path.
    */
-  readonly apiToken: string | null;
   /**
    * Pinned hex-encoded Ed25519 public key of the trusted relay. When
    * set, the service accepts `Authorization: Bearer <token>` headers
@@ -38,7 +37,7 @@ export interface BrowserSandboxConfig {
    * Multi-relay trust = future work (an array of pinned keys, or a
    * discovery hop).
    */
-  readonly trustedRelayPublicKeyHex: string | null;
+  readonly trustedRelayPublicKeyHex: string;
   /** TCP port to listen on. */
   readonly port: number;
   /**
@@ -69,12 +68,12 @@ const DEFAULT_VIEWPORT_WIDTH = 1280;
 const DEFAULT_VIEWPORT_HEIGHT = 800;
 
 export function loadConfig(): BrowserSandboxConfig {
-  // Either path satisfies auth: legacy shared bearer (single-tenant
-  // local-dev) or pinned relay public key (federation-grade). At least
-  // one MUST be set; both is also fine (dualAuth pattern).
-  const rawApiToken = process.env["MOTEBIT_API_TOKEN"];
-  const apiToken = rawApiToken && rawApiToken.length >= 16 ? rawApiToken : null;
-
+  // The pinned relay public key is the ONLY inbound trust root. The v1
+  // shared bearer (`MOTEBIT_API_TOKEN`) was retired 2026-09-14: production
+  // callers had long moved to relay-signed grants, and a shared secret that
+  // stays valid after its last real caller leaves is exactly the shape the
+  // worker master-token retirement closed. Missing or malformed ⇒ refuse to
+  // boot; there is no fallback path.
   const rawRelayPubkey = process.env["MOTEBIT_TRUSTED_RELAY_PUBKEY"];
   // Ed25519 public keys are 32 bytes = 64 hex chars. Reject anything
   // shorter to fail loud on a malformed env var.
@@ -82,25 +81,18 @@ export function loadConfig(): BrowserSandboxConfig {
     rawRelayPubkey && /^[0-9a-fA-F]{64}$/.test(rawRelayPubkey)
       ? rawRelayPubkey.toLowerCase()
       : null;
-
-  if (rawApiToken && !apiToken) {
-    throw new Error(
-      "browser-sandbox: MOTEBIT_API_TOKEN was set but is shorter than 16 chars — set a real token or unset to use relay-signed-token auth only",
-    );
-  }
   if (rawRelayPubkey && !trustedRelayPublicKeyHex) {
     throw new Error(
-      "browser-sandbox: MOTEBIT_TRUSTED_RELAY_PUBKEY was set but is not a 64-char hex Ed25519 public key — set a valid relay pubkey or unset to use legacy bearer auth only",
+      "browser-sandbox: MOTEBIT_TRUSTED_RELAY_PUBKEY was set but is not a 64-char hex Ed25519 public key",
     );
   }
-  if (!apiToken && !trustedRelayPublicKeyHex) {
+  if (!trustedRelayPublicKeyHex) {
     throw new Error(
-      "browser-sandbox: at least one of MOTEBIT_API_TOKEN (legacy shared bearer) or MOTEBIT_TRUSTED_RELAY_PUBKEY (federation-grade signed-token) must be set",
+      "browser-sandbox: MOTEBIT_TRUSTED_RELAY_PUBKEY is required — the sandbox admits only relay-signed audience-bound tokens (the v1 shared bearer was retired 2026-09-14)",
     );
   }
 
   return {
-    apiToken,
     trustedRelayPublicKeyHex,
     port: parseIntEnv("MOTEBIT_PORT", DEFAULT_PORT),
     maxConcurrentSessions: parseIntEnv("BROWSER_SANDBOX_MAX_SESSIONS", DEFAULT_MAX_SESSIONS),

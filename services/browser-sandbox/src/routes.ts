@@ -83,16 +83,11 @@ export function buildApp(deps: BuildAppDeps): Hono {
   );
 
   // ── Authenticated routes ────────────────────────────────────────
-  // dualAuth: accepts either the legacy shared bearer (MOTEBIT_API_TOKEN)
-  // or a relay-signed audience-bound token verified against the pinned
-  // MOTEBIT_TRUSTED_RELAY_PUBKEY. At least one MUST be configured —
-  // env.ts asserts at boot. See auth.ts header for the migration story.
+  // Relay-signed audience-bound tokens only, verified against the pinned
+  // MOTEBIT_TRUSTED_RELAY_PUBKEY (env.ts asserts it at boot). See auth.ts.
   app.use(
     "/sessions/*",
-    requireAuth({
-      legacyApiToken: deps.config.apiToken,
-      trustedRelayPublicKeyHex: deps.config.trustedRelayPublicKeyHex,
-    }),
+    requireAuth({ trustedRelayPublicKeyHex: deps.config.trustedRelayPublicKeyHex }),
   );
 
   app.post("/sessions/ensure", async (c) => {

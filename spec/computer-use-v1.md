@@ -604,9 +604,7 @@ Any rejection step returns `{ error: { reason: "permission_denied", message: "..
 
 #### Migration from v1 shared bearer
 
-v1 used `MOTEBIT_API_TOKEN` as a single shared secret across all callers. v1.5 keeps the legacy bearer functional alongside the relay-mediated path (`dualAuth` shape), so existing local-dev setups continue to work. Production deployments running on a public surface (e.g. motebit.com) MUST set `MOTEBIT_TRUSTED_RELAY_PUBKEY` and SHOULD NOT set `MOTEBIT_API_TOKEN` (the bundled-secret risk the relay-mediated path exists to eliminate).
-
-The legacy bearer is `@deprecated`; removal is gated on a graduation criterion ("no consumer relies on it") rather than a fixed version.
+v1 used `MOTEBIT_API_TOKEN` as a single shared secret across all callers; v1.5 ran it alongside the relay-mediated path during the transition. The graduation criterion ("no consumer relies on it") was met and the shared bearer was **removed on 2026-09-14**: the reference sandbox reads only `MOTEBIT_TRUSTED_RELAY_PUBKEY`, refuses to boot without it, and admits only relay-signed audience-bound tokens. A conforming sandbox MUST NOT accept a static shared bearer; local development runs a local relay and uses the same signed path.
 
 ---
 

@@ -1,11 +1,9 @@
 /**
  * Bearer-token verification middleware for the browser-sandbox.
  *
- * v1 model (now legacy): a single shared API token (`MOTEBIT_API_TOKEN`
- * env var) gated every endpoint. v1.5 (federation graduation): adds
- * the relay-mediated `aud`-bound signed-token path. Both can be
- * enabled simultaneously (dualAuth pattern, mirroring the relay's own
- * `dualAuth` for `task:submit` / `account:*`).
+ * One trust root: the pinned relay public key. The v1 shared bearer
+ * (`MOTEBIT_API_TOKEN`) is gone — retired 2026-09-14 after every production
+ * caller had moved to relay-signed grants.
  *
  * The relay-signed path:
  *   1. Motebit fetches a short-lived sandbox token from
@@ -33,22 +31,6 @@ import type { Context, MiddlewareHandler } from "hono";
 import { verifySignedToken } from "@motebit/crypto";
 import { BROWSER_SANDBOX_AUDIENCE } from "@motebit/protocol";
 import { ServiceError } from "./errors.js";
-
-/**
- * Constant-time string comparison — equal-length string compare via
- * XOR over codepoints. Avoids the timing-attack surface a plain `===`
- * would expose on every request. Length-mismatched inputs short-
- * circuit (no information leak — an attacker who can probe length
- * already knows the token isn't empty).
- */
-export function constantTimeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < a.length; i++) {
-    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return mismatch === 0;
-}
 
 /**
  * Extract the bearer token from an `Authorization: Bearer <token>`
@@ -114,72 +96,42 @@ export async function verifyRelaySandboxToken(
 
 /**
  * Build a Hono middleware that requires `Authorization: Bearer <token>`
- * on every request. Accepts EITHER:
- *   - a relay-signed audience-bound token (preferred, when
- *     `trustedRelayPublicKeyHex` is configured), OR
- *   - the legacy shared bearer (when `legacyApiToken` is configured).
+ * on every request, where the token is a relay-signed, audience-bound
+ * sandbox token verified against the pinned relay public key. There is
+ * no second path: the v1 shared bearer was retired 2026-09-14 once every
+ * production caller had moved to relay-signed grants.
  *
- * At least one path must be configured (`loadConfig()` enforces this
- * at boot). The middleware tries the relay-signed path first when
- * available — its strong shape (signed JWT) is harder to confuse with
- * the legacy opaque-token shape (a 64+ char hex string vs a JWT-shaped
- * `xxx.yyy`), and the JWT-shape early-out (no dot in the token →
- * skip to legacy) means a legacy bearer that happens to contain a dot
- * still flows through the legacy path on signature failure.
- *
- * On both paths failing, throws `ServiceError("permission_denied",
- * …)` — caught by the global error handler.
+ * On failure, throws `ServiceError("permission_denied", …)` — caught by
+ * the global error handler.
  *
  * Side-channel: the verified motebit_id is set on the Hono context as
- * `c.var.motebitId` for downstream handlers (audit logs, future
- * per-motebit policy). Legacy bearer leaves `motebitId` unset.
+ * `c.var.motebitId` for downstream handlers (audit logs, per-motebit
+ * policy).
  */
 export interface RequireAuthOptions {
-  /** Legacy shared bearer (`MOTEBIT_API_TOKEN`). Null when not configured. */
-  readonly legacyApiToken: string | null;
-  /** Pinned relay public key in hex (`MOTEBIT_TRUSTED_RELAY_PUBKEY`). Null when not configured. */
-  readonly trustedRelayPublicKeyHex: string | null;
+  /** Pinned relay public key in hex (`MOTEBIT_TRUSTED_RELAY_PUBKEY`). */
+  readonly trustedRelayPublicKeyHex: string;
 }
 
 export function requireAuth(opts: RequireAuthOptions): MiddlewareHandler {
-  const { legacyApiToken, trustedRelayPublicKeyHex } = opts;
-  if (!legacyApiToken && !trustedRelayPublicKeyHex) {
-    // Defensive: loadConfig should have caught this. Throwing here
-    // means a hand-constructed deployment that bypassed loadConfig
-    // still fails fast.
-    throw new Error(
-      "browser-sandbox/auth: at least one of legacyApiToken or trustedRelayPublicKeyHex must be set",
-    );
+  const { trustedRelayPublicKeyHex } = opts;
+  if (!/^[0-9a-fA-F]{64}$/.test(trustedRelayPublicKeyHex)) {
+    // Defensive: loadConfig should have caught this. Throwing here means a
+    // hand-constructed deployment that bypassed loadConfig still fails fast.
+    throw new Error("browser-sandbox/auth: trustedRelayPublicKeyHex must be a 64-char hex key");
   }
-  const trustedRelayPubkeyBytes =
-    trustedRelayPublicKeyHex !== null ? hexToBytes(trustedRelayPublicKeyHex) : null;
+  const trustedRelayPubkeyBytes = hexToBytes(trustedRelayPublicKeyHex);
 
   return async (c: Context, next) => {
-    const header = c.req.header("Authorization");
-    const presented = extractBearer(header);
+    const presented = extractBearer(c.req.header("Authorization"));
     if (presented === null) {
       throw new ServiceError("permission_denied", "missing or invalid bearer token");
     }
-
-    // Relay-signed path first — JWT-shape (`xxx.yyy`) and a configured
-    // pinned key. Falls through to legacy on shape mismatch or
-    // verification failure so a legacy-shape bearer still works during
-    // the transition window.
-    if (trustedRelayPubkeyBytes !== null && presented.includes(".")) {
-      const verified = await verifyRelaySandboxToken(presented, trustedRelayPubkeyBytes);
-      if (verified !== null) {
-        c.set("motebitId" as never, verified.motebitId as never);
-        await next();
-        return;
-      }
+    const verified = await verifyRelaySandboxToken(presented, trustedRelayPubkeyBytes);
+    if (verified === null) {
+      throw new ServiceError("permission_denied", "missing or invalid bearer token");
     }
-
-    // Legacy shared-bearer path.
-    if (legacyApiToken !== null && constantTimeEqual(presented, legacyApiToken)) {
-      await next();
-      return;
-    }
-
-    throw new ServiceError("permission_denied", "missing or invalid bearer token");
+    c.set("motebitId" as never, verified.motebitId as never);
+    await next();
   };
 }

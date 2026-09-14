@@ -39,20 +39,49 @@ import type { BrowserSandboxConfig } from "../env.js";
 import type { BrowserPool, BrowserSession } from "../chromium-pool.js";
 import { ServiceError } from "../errors.js";
 
-const TEST_TOKEN = "test-token-1234567890abcdef";
+// The sandbox admits relay-signed tokens only (the v1 shared bearer was
+// retired 2026-09-14). A test relay key is generated once; TEST_CONFIG pins
+// it. `authHeader()` hands out a pre-minted token with a FRESH motebit id per
+// call, so generic route tests keep their one-session-per-call semantics
+// while still presenting a genuinely signed, audience-bound credential.
+let TEST_CONFIG: BrowserSandboxConfig;
+const tokenPool: string[] = [];
 
-const TEST_CONFIG: BrowserSandboxConfig = {
-  apiToken: TEST_TOKEN,
-  trustedRelayPublicKeyHex: null,
-  port: 0,
-  maxConcurrentSessions: 4,
-  sessionIdleMs: 60_000,
-  viewportWidth: 1280,
-  viewportHeight: 800,
-};
+beforeAll(async () => {
+  const keypair = await generateKeypair();
+  const relayPublicKeyHex = Array.from(keypair.publicKey)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  TEST_CONFIG = {
+    trustedRelayPublicKeyHex: relayPublicKeyHex,
+    port: 0,
+    maxConcurrentSessions: 4,
+    sessionIdleMs: 60_000,
+    viewportWidth: 1280,
+    viewportHeight: 800,
+  };
+  const now = Date.now();
+  for (let i = 0; i < 120; i++) {
+    tokenPool.push(
+      await createSignedToken(
+        {
+          mid: `motebit-test-${i}`,
+          did: "did:key:zRelay",
+          iat: now,
+          exp: now + 60 * 60 * 1000,
+          jti: crypto.randomUUID(),
+          aud: BROWSER_SANDBOX_AUDIENCE,
+        },
+        keypair.privateKey,
+      ),
+    );
+  }
+});
 
 function authHeader(): Record<string, string> {
-  return { Authorization: `Bearer ${TEST_TOKEN}` };
+  const token = tokenPool.shift();
+  if (token === undefined) throw new Error("test token pool exhausted — raise the pool size");
+  return { Authorization: `Bearer ${token}` };
 }
 
 interface FakePoolState {
@@ -343,27 +372,6 @@ describe("browser-sandbox routes", () => {
       const a = (await first.json()) as { session_id: string };
       const b = (await second.json()) as { session_id: string };
       // Critical: no cross-identity session sharing.
-      expect(b.session_id).not.toBe(a.session_id);
-      expect(state.sessions.size).toBe(2);
-    });
-
-    it("legacy bearer keeps fresh-every-call (admin/test path unaffected)", async () => {
-      const app = buildApp({
-        config: { ...TEST_CONFIG, trustedRelayPublicKeyHex: relayPublicKeyHex },
-        pool,
-      });
-      // Two calls with the legacy shared bearer — no motebitId on
-      // c.var → route falls through to openSession → fresh every time.
-      const first = await app.request("/sessions/ensure", {
-        method: "POST",
-        headers: authHeader(),
-      });
-      const second = await app.request("/sessions/ensure", {
-        method: "POST",
-        headers: authHeader(),
-      });
-      const a = (await first.json()) as { session_id: string };
-      const b = (await second.json()) as { session_id: string };
       expect(b.session_id).not.toBe(a.session_id);
       expect(state.sessions.size).toBe(2);
     });

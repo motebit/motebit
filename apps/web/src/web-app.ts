@@ -1048,24 +1048,16 @@ export class UnbootedWebApp {
     //   3. Browser-sandbox verifies signature against pinned relay
     //      pubkey. Single trust anchor, no bundled secret.
     //
-    // Legacy path (`VITE_BROWSER_SANDBOX_TOKEN`): shared bearer in
-    // the bundle. Acceptable for local-dev where the bundle is not
-    // public. NEVER set on motebit.com's Vercel env — would expose
-    // the bearer to anyone visiting the page.
+    // There is no bundled-secret path. A shared bearer in a public bundle
+    // leaks to every visitor; the sandbox stopped accepting one on
+    // 2026-09-14. Local dev runs a local relay and takes the same signed
+    // grant path as production.
     const env = (import.meta as unknown as Record<string, Record<string, string> | undefined>).env;
     const browserSandboxUrl = env?.VITE_BROWSER_SANDBOX_URL ?? "";
-    const browserSandboxToken = env?.VITE_BROWSER_SANDBOX_TOKEN ?? "";
     const relayUrl = loadSyncUrl();
 
     let getAuthToken: (() => Promise<string> | string) | null = null;
-    if (browserSandboxToken) {
-      // Local-dev / single-tenant deployment path. The bundled token
-      // matches the sandbox's `MOTEBIT_API_TOKEN` legacy bearer. The
-      // sandbox's `dualAuth` accepts this OR a relay-signed token,
-      // so the same sandbox deployment can serve both paths during
-      // the transition window.
-      getAuthToken = (): string => browserSandboxToken;
-    } else if (relayUrl != null && relayUrl !== "") {
+    if (relayUrl != null && relayUrl !== "") {
       // Production / federation-grade path. The grant signer is the
       // existing `createSyncToken` primitive — already audience-
       // parameterized, already routes through suite-dispatch, secure-

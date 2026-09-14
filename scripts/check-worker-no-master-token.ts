@@ -16,9 +16,10 @@
  * This gate keeps the secret out for good. It fails on:
  *
  *   1. any read of `MOTEBIT_API_TOKEN` in non-test source under `services/*`
- *      (the relay itself excepted — it OWNS the secret — and browser-sandbox,
- *      whose `MOTEBIT_API_TOKEN` is a same-named but DIFFERENT secret: the
- *      legacy static bearer for its OWN inbound endpoint, see the allowlist);
+ *      (the relay itself excepted — it OWNS the secret). browser-sandbox was
+ *      allowlisted at first for a same-named but different secret (its own v1
+ *      inbound shared bearer); that bearer was retired 2026-09-14 and the
+ *      allowlist entry with it — the trigger written into it fired;
  *   2. any read of `MOTEBIT_API_TOKEN` in the two packages that host workers
  *      (`molecule-runner`, `mcp-server`) other than molecule-runner's boot
  *      warning that tells an operator to remove a stale secret;
@@ -48,12 +49,6 @@ const ROOT = process.cwd();
  */
 const ALLOWED_SERVICES: ReadonlyMap<string, string> = new Map([
   ["relay", "the relay OWNS the master token — this is the one legitimate reader"],
-  [
-    "browser-sandbox",
-    "same env NAME, different secret: the legacy static bearer for browser-sandbox's OWN inbound " +
-      "endpoint (services/browser-sandbox/src/auth.ts), presented by the web app — never sent to the " +
-      "relay. Trigger to drop: when the web app stops presenting it and the sandbox is relay-signed-token only.",
-  ],
 ]);
 
 /** The one permitted mention inside the worker-hosting packages: the boot warning. */
