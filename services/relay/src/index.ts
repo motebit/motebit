@@ -80,6 +80,7 @@ import { createRelayConfigTable, loadFreezeState, persistFreeze } from "./freeze
 import { parseTokenPayloadUnsafe, verifySignedTokenForDevice } from "./auth.js";
 import { registerMiddleware, registerAuthMiddleware } from "./middleware.js";
 import { registerWebSocketRoutes } from "./websocket.js";
+import { createAuthEventSink } from "./auth-events.js";
 import type { ConnectedDevice } from "./websocket.js";
 import { registerSyncRoutes, redactSensitiveEvents } from "./sync-routes.js";
 import { registerIntakeRoutes } from "./intake-routes.js";
@@ -771,6 +772,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     blacklistCheck,
     agentRevokedCheck,
     agentKeyLookup,
+    onReject,
   ) =>
     verifySignedTokenForDevice(
       token,
@@ -780,9 +782,22 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       blacklistCheck,
       agentRevokedCheck,
       agentKeyLookup ?? agentRegistryKeyLookup,
+      // Forward the rejection callback. This wrapper silently dropped it
+      // (2026-09-14 finding): every `auth.*_token_rejected` log line and, now,
+      // every rejection record depends on it reaching the verifier.
+      onReject,
     );
 
   // --- Middleware (rate limiting, CORS, security headers, auth, error handling, health) ---
+  // Durable auth-event record: master-token presentations + refused signed
+  // tokens, kept by the relay (30-day window) so posture is proven from a
+  // record, not a log tail. A failed write logs and never fails the request.
+  const authEvents = createAuthEventSink(moteDb.db, (err) =>
+    logger.warn("auth_events.write_failed", {
+      error: err instanceof Error ? err.message : String(err),
+    }),
+  );
+
   const { allLimiters, wsLimiter } = registerMiddleware({
     app,
     apiToken,
@@ -795,6 +810,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     isAgentRevoked,
     verifySignedTokenForDevice: verifySignedTokenForDeviceWithFallback,
     parseTokenPayloadUnsafe,
+    recordAuthEvent: authEvents.record,
     releaseIdempotencyClaim: (key, motebitId) => releaseIdempotency(moteDb.db, key, motebitId),
     getShuttingDown: config.getShuttingDown,
     getConnectionCount: () => getConnectionCount(),
@@ -833,6 +849,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     const now = Date.now();
     // Expire completed/failed tasks and tasks past their TTL
     taskQueue.cleanup(now);
+    // Auth-event record: 30-day rolling window (auth-events.ts).
+    authEvents.sweep(now);
     // Evict oldest entries if queue exceeds hard cap (defensive against flooding)
     const evicted = taskQueue.evict(MAX_TASK_QUEUE_SIZE);
     if (evicted > 0) {
@@ -901,6 +919,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     moteDb,
     apiToken,
     enableDeviceAuth,
+    recordAuthEvent: authEvents.record,
     wsLimiter,
     isTokenBlacklisted,
     isAgentRevoked,
@@ -926,6 +945,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     verifySignedTokenForDevice: verifySignedTokenForDeviceWithFallback,
     isTokenBlacklisted,
     isAgentRevoked,
+    recordAuthEvent: authEvents.record,
   });
 
   // --- Sync routes (HTTP fallback, device registration, identity CRUD) ---
@@ -1273,7 +1293,39 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // or external analytics infrastructure.
   /** @internal */
   app.get("/api/v1/admin/health", (c) => {
-    return c.json({ ...aggregateHealthSummary(moteDb.db), loops: loopSupervisor.snapshot() });
+    return c.json({
+      ...aggregateHealthSummary(moteDb.db),
+      loops: loopSupervisor.snapshot(),
+      // The daily look sees the auth surface: master-token presentations and
+      // refused tokens in the last 24h. Full breakdown at /admin/auth-events.
+      auth_events_24h: authEventCounts24h(),
+    });
+  });
+
+  /** Never let the auth-event read take the health page down with it. */
+  function authEventCounts24h(): Record<string, number> | null {
+    try {
+      return authEvents.summary().counts_by_kind;
+    } catch (err) {
+      logger.warn("auth_events.read_failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  }
+
+  // Admin: the auth-event record (auth-events.ts). Answers "who presented the
+  // master token, on which routes, and what did we refuse?" from the relay's
+  // own 30-day record. Master-token gated by the /api/v1/* catch-all.
+  //   ?since_hours=24 (default 24, max 720)   ?limit=50 (recent rows, max 500)
+  /** @internal */
+  app.get("/api/v1/admin/auth-events", (c) => {
+    const hours = Math.min(Math.max(Number(c.req.query("since_hours") ?? "24") || 24, 1), 720);
+    const limit = Number(c.req.query("limit") ?? "50") || 50;
+    return c.json({
+      window_hours: hours,
+      ...authEvents.summary({ sinceMs: hours * 60 * 60 * 1000, recentLimit: limit }),
+    });
   });
 
   // Admin: platform-fee aggregation (5% of relay-mediated settlements).

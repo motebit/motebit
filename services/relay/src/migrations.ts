@@ -1849,4 +1849,35 @@ export const relayMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 40,
+    name: "auth_events",
+    up: (db) => {
+      // Durable auth-event record (services/relay/src/auth-events.ts): every
+      // master-token presentation and every refused signed token, so the
+      // operator's question "who presented the master token today, and what
+      // did we refuse?" is answered from a record the relay keeps — not from
+      // a hosting provider's rolling log buffer (which, on 2026-09-14, ended
+      // before the deploys it needed to cover). Kind, method, path, the
+      // token's CLAIMED motebit_id, expected audience, rejection reason,
+      // correlation id. No token bytes. No IP (the transparency declaration
+      // promises no app-level IP persistence). 30-day rolling retention,
+      // swept by the task-cleanup loop.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_auth_events (
+          id             INTEGER PRIMARY KEY AUTOINCREMENT,
+          at             INTEGER NOT NULL,
+          kind           TEXT NOT NULL,
+          method         TEXT,
+          path           TEXT NOT NULL,
+          motebit_id     TEXT,
+          audience       TEXT,
+          reason         TEXT,
+          correlation_id TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_auth_events_at ON relay_auth_events(at);
+        CREATE INDEX IF NOT EXISTS idx_auth_events_kind_at ON relay_auth_events(kind, at);
+      `);
+    },
+  },
 ];
