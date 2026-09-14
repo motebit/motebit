@@ -59,6 +59,12 @@ async function main(): Promise<void> {
       ...(config.authToken != null ? { authToken: config.authToken } : {}),
       ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
       ...(config.publicUrl != null ? { publicUrl: config.publicUrl } : {}),
+      ...(config.relayPublicKey != null ? { relayPublicKeyHex: config.relayPublicKey } : {}),
+      // Task admission (docs/doctrine/task-admission.md): run only relay-admitted
+      // work. read-url is UNPRICED (its value is priced into the molecules that
+      // call it), so every first-party hop binds through the relay at zero cost
+      // and carries the token. MOTEBIT_TASK_ADMISSION=open is the escape hatch.
+      taskAdmission: process.env["MOTEBIT_TASK_ADMISSION"] === "open" ? "open" : "relay",
     },
     (identity) => {
       const { motebitId, deviceId, publicKey, privateKey } = identity;

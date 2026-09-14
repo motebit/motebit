@@ -78,10 +78,35 @@ describe("resolveTaskAdmission — posture", () => {
     expect(logs.join("\n")).toContain("pinned relay key");
   });
 
-  it("priced + relay-registered but not opted in ⇒ open, and the boot log says so LOUDLY", async () => {
+  it("priced + relay-registered with nothing configured ⇒ relay by DEFAULT (flipped 2026-09-13)", async () => {
+    // The visible, tested decision the doctrine asked for: a priced listing is
+    // a promise that the work is bought, so the default is to admit only
+    // relay-dispatched work. Reopening is an explicit operator act.
     const logs: string[] = [];
+    const { stores } = memStores();
     const out = await resolveTaskAdmission(
       { syncUrl: "http://relay", relayPublicKeyHex: RELAY_KEY, serviceName: "s" },
+      { getServiceListing: listing(0.2) },
+      noFetch,
+      (m) => logs.push(m),
+      stores,
+      NO_ENV,
+    );
+    expect(out?.relayPublicKey).toBe(RELAY_KEY);
+    expect(out?.admittedStore).toBe(stores.admittedStore);
+    expect(logs.join("\n")).toContain("default for a priced listing");
+    expect(logs.join("\n")).not.toContain("OPEN");
+  });
+
+  it("an explicit open on a priced listing is honored and logged as an operator choice", async () => {
+    const logs: string[] = [];
+    const out = await resolveTaskAdmission(
+      {
+        syncUrl: "http://relay",
+        relayPublicKeyHex: RELAY_KEY,
+        taskAdmission: "open",
+        serviceName: "s",
+      },
       { getServiceListing: listing(0.2) },
       noFetch,
       (m) => logs.push(m),
@@ -89,7 +114,7 @@ describe("resolveTaskAdmission — posture", () => {
       NO_ENV,
     );
     expect(out).toBeUndefined();
-    expect(logs.join("\n")).toContain("OPEN on a PRICED relay-registered listing");
+    expect(logs.join("\n")).toContain("OPEN by explicit operator choice");
   });
 
   it("the env var the warning names actually works: MOTEBIT_TASK_ADMISSION=relay + MOTEBIT_RELAY_PUBLIC_KEY", async () => {
@@ -204,22 +229,23 @@ describe("resolveTaskAdmission — posture", () => {
       ),
     ).toBeUndefined();
     const loud: string[] = [];
-    expect(
-      await resolveTaskAdmission(
-        { syncUrl: "http://relay", serviceName: "s" },
-        {
-          getServiceListing: async () => {
-            throw new Error("boom");
-          },
+    const unreadable = await resolveTaskAdmission(
+      { syncUrl: "http://relay", serviceName: "s" },
+      {
+        getServiceListing: async () => {
+          throw new Error("boom");
         },
-        noFetch,
-        (m) => loud.push(m),
-        memStores().stores,
-        NO_ENV,
-      ),
-    ).toBeUndefined();
+      },
+      noFetch,
+      (m) => loud.push(m),
+      memStores().stores,
+      NO_ENV,
+    );
+    // Fail-closed: unreadable ⇒ priced ⇒ relay-admitted by default (TOFU resolver, no key).
+    expect(unreadable).toBeDefined();
     expect(loud.join("\n")).toContain("treating as priced");
-    expect(loud.join("\n")).toContain("OPEN on a PRICED");
+    // Unreadable listing ⇒ treated as priced ⇒ the DEFAULT is now relay, not open.
+    expect(loud.join("\n")).toContain("default for a priced listing");
   });
 
   it("relay required with no key and no syncUrl ⇒ a resolver that always denies", async () => {
