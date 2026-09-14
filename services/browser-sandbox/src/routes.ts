@@ -23,13 +23,14 @@
  */
 
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { cors } from "hono/cors";
 
 import type { ComputerAction, UserInputEvent } from "@motebit/protocol";
 
 import { requireAuth } from "./auth.js";
 import { executeAction, executeReadPage, executeUserInput } from "./action-executor.js";
-import type { BrowserPool } from "./chromium-pool.js";
+import type { BrowserPool, BrowserSession } from "./chromium-pool.js";
 import type { BrowserSandboxConfig } from "./env.js";
 import { ServiceError, isServiceError } from "./errors.js";
 import { startScreencast } from "./screencast.js";
@@ -82,6 +83,34 @@ export function buildApp(deps: BuildAppDeps): Hono {
     c.json({ ok: true, service: "browser-sandbox", sessions: deps.pool.size() }),
   );
 
+  // ── Session ownership ───────────────────────────────────────────
+  // Every authenticated request carries a verified `mid` (auth.ts). A
+  // session belongs to the motebit that opened it, and ONLY that motebit
+  // may touch it: knowing a session id is not authorization. Before this
+  // check, any holder of a valid relay-signed token could act on, read,
+  // watch, or close another motebit's session by id — "attributed" was
+  // not "authorized". The refusal is `permission_denied`, the same reason
+  // a missing bearer gets, so an id probe learns nothing.
+  const callerMotebitId = (c: Context): string => {
+    const mid = c.get("motebitId" as never) as string | undefined;
+    if (typeof mid !== "string" || mid.length === 0) {
+      // auth.ts always sets it on success; a missing value means the
+      // middleware was bypassed — fail closed, never fall back to anonymous.
+      throw new ServiceError("permission_denied", "missing or invalid bearer token");
+    }
+    return mid;
+  };
+  const ownedSession = (c: Context, sessionId: string): BrowserSession => {
+    const session = deps.pool.getSession(sessionId);
+    if (!session) {
+      throw new ServiceError("session_closed", `session not found: ${sessionId}`);
+    }
+    if (session.motebitId !== callerMotebitId(c)) {
+      throw new ServiceError("permission_denied", "session belongs to another motebit");
+    }
+    return session;
+  };
+
   // ── Authenticated routes ────────────────────────────────────────
   // Relay-signed audience-bound tokens only, verified against the pinned
   // MOTEBIT_TRUSTED_RELAY_PUBKEY (env.ts asserts it at boot). See auth.ts.
@@ -128,14 +157,10 @@ export function buildApp(deps: BuildAppDeps): Hono {
     // session has accumulated since the last persistence write. Cold
     // start (no existing session) seeds normally.
     //
-    // Legacy bearer (no `motebitId`) keeps the fresh-every-call
-    // allocation — admin/test tooling intentionally allocates parallel
-    // sessions and shouldn't be silently deduplicated.
-    const motebitId = c.get("motebitId" as never) as string | undefined;
-    const session =
-      typeof motebitId === "string" && motebitId.length > 0
-        ? await deps.pool.ensureSession({ motebitId, initialCookies })
-        : await deps.pool.openSession({ initialCookies });
+    // Every session is owned: the verified motebit id is required (there is
+    // no anonymous allocation path since the v1 shared bearer was retired).
+    const motebitId = callerMotebitId(c);
+    const session = await deps.pool.ensureSession({ motebitId, initialCookies });
     return c.json({
       session_id: session.sessionId,
       display: {
@@ -169,20 +194,14 @@ export function buildApp(deps: BuildAppDeps): Hono {
   // as other endpoints. Cheap by construction: one map update.
   app.post("/sessions/:id/keepalive", (c) => {
     const sessionId = c.req.param("id");
-    const session = deps.pool.getSession(sessionId);
-    if (!session) {
-      throw new ServiceError("session_closed", `session not found: ${sessionId}`);
-    }
+    ownedSession(c, sessionId);
     deps.pool.touchSession(sessionId);
     return c.body(null, 204);
   });
 
   app.post("/sessions/:id/actions", async (c) => {
     const sessionId = c.req.param("id");
-    const session = deps.pool.getSession(sessionId);
-    if (!session) {
-      throw new ServiceError("session_closed", `session not found: ${sessionId}`);
-    }
+    const session = ownedSession(c, sessionId);
     const body = (await c.req.json().catch(() => ({}))) as { action?: unknown };
     const action = body.action;
     if (
@@ -209,6 +228,8 @@ export function buildApp(deps: BuildAppDeps): Hono {
 
   app.delete("/sessions/:id", async (c) => {
     const sessionId = c.req.param("id");
+    // Only the owner may close; an unknown id stays an idempotent no-op.
+    if (deps.pool.getSession(sessionId)) ownedSession(c, sessionId);
     // Phase 1 cookie persistence: closeSession captures the cookie
     // jar BEFORE tearing down the context and returns it. The
     // dispatcher reads this from the response body and hands it to
@@ -249,10 +270,7 @@ export function buildApp(deps: BuildAppDeps): Hono {
    */
   app.post("/sessions/:id/read-page", async (c) => {
     const sessionId = c.req.param("id");
-    const session = deps.pool.getSession(sessionId);
-    if (!session) {
-      throw new ServiceError("session_closed", `session not found: ${sessionId}`);
-    }
+    const session = ownedSession(c, sessionId);
     deps.pool.touchSession(sessionId);
     deps.pool.beginAction(sessionId);
     try {
@@ -265,10 +283,7 @@ export function buildApp(deps: BuildAppDeps): Hono {
 
   app.post("/sessions/:id/forward-input", async (c) => {
     const sessionId = c.req.param("id");
-    const session = deps.pool.getSession(sessionId);
-    if (!session) {
-      throw new ServiceError("session_closed", `session not found: ${sessionId}`);
-    }
+    const session = ownedSession(c, sessionId);
     const body = (await c.req.json().catch(() => ({}))) as { event?: unknown };
     const event = body.event;
     if (
@@ -322,10 +337,7 @@ export function buildApp(deps: BuildAppDeps): Hono {
    */
   app.get("/sessions/:id/screencast", (c) => {
     const sessionId = c.req.param("id");
-    const session = deps.pool.getSession(sessionId);
-    if (!session) {
-      throw new ServiceError("session_closed", `session not found: ${sessionId}`);
-    }
+    const session = ownedSession(c, sessionId);
     if (session.stopScreencast !== null) {
       throw new ServiceError(
         "policy_denied",

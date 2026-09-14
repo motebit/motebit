@@ -37,10 +37,16 @@ bearer was retired 2026-09-14; there is no second path.
   The reaper skips sessions with in-flight actions, so a slow action
   whose runtime exceeds the idle window is not torn down
   mid-execution.
-- **Per-motebit authorization.** Every request carries a relay-signed
-  token whose `mid` claim names the calling motebit; a session belongs
-  to the motebit that opened it. Session IDs are 128-bit random on top
-  of that, never the only boundary.
+- **Per-motebit authorization, enforced.** Every request carries a
+  relay-signed token whose `mid` claim names the calling motebit; a
+  session belongs to the motebit that opened it, and every per-session
+  route (`actions`, `read-page`, `forward-input`, `screencast`,
+  `keepalive`, `DELETE`) refuses any other motebit's token with
+  `permission_denied` — knowing a session id is not authorization.
+  One session per motebit (`ensure` dedups); the concurrent cap counts
+  motebits, not tabs. The old "single-tenant boundary" caveat is gone:
+  multi-tenant exposure is now a capacity and product decision, not a
+  security one.
 
 ## Where to read more
 
