@@ -43,8 +43,17 @@ export { ProvenanceSemiring, boundedProvenanceSemiring, annotatedSemiring } from
 
 // ── Agent Network Bridge (BSL) ────────────────────────────────────
 export type { RouteWeight, AgentProfile } from "./agent-network.js";
+export type { PathWeight, Frontier, DimensionSemirings } from "./pareto.js";
+export {
+  paretoPathSemiring,
+  frontierPaths,
+  chooseFromFrontier,
+  dominatesOrEquals,
+  DEFAULT_MAX_FRONTIER_PATHS,
+} from "./pareto.js";
 export {
   RouteWeightSemiring,
+  ROUTE_WEIGHT_DIMENSIONS,
   AnnotatedRouteWeightSemiring,
   buildAgentGraph,
   addDelegationEdges,

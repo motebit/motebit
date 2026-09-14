@@ -52,6 +52,7 @@ import {
   computeGrossAmount,
   weightedSumComposite,
   lexicographicComposite,
+  lexicographicOver,
 } from "@motebit/market";
 import type { CandidateProfile, CompositeFunction } from "@motebit/market";
 import {
@@ -3156,7 +3157,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           // Map routing_strategy to semiring composite function
           const compositeFunction: CompositeFunction | undefined =
             body.routing_strategy === "cost"
-              ? (_route, scores) => scores.costScore * 1e6 + scores.reliability * 1e3 + scores.trust
+              ? lexicographicOver(["costScore", "reliability", "trust"])
               : body.routing_strategy === "quality"
                 ? lexicographicComposite
                 : body.routing_strategy === "balanced"

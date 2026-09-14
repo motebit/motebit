@@ -71,6 +71,8 @@ TaskResponse {
 }
 ```
 
+`routing_choice.routing_paths[0]` is the route that was hired — its composed edge metrics are what `sub_scores` reports; later entries are the non-dominated alternatives the policy weighed. Every entry is a route that exists (never a per-dimension optimum no single route attains). Field semantics in full: `execution-ledger-v1.md` §4.1.1.
+
 `dispatch_token` (1.1) binds `mid` to the intended worker (`target_agent` when set, else the URL agent), `sub` to `task_id`, and `digest` to SHA-256 of `prompt`. When the relay routed the task (WebSocket, MCP forward, or federation) the token travelled with that dispatch and the response carries none: one admission, one presenter. A worker configured for task admission admits each `task_id` to one completed execution (a run that produced no receipt may be re-presented under the same admission; a second presentation while a run is in flight is refused). See `agent-mcp-surface-v1.md` §5.1 and `docs/doctrine/task-admission.md`.
 
 ### 3.3 Foundation Law

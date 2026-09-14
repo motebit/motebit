@@ -10,25 +10,21 @@
  * 2026-04-28 once their final test-only callers were trimmed.
  */
 
-import type { MotebitId, RouteScore, Semiring } from "@motebit/protocol";
-import { AgentTrustLevel, productSemiring } from "@motebit/protocol";
-import {
-  trustLevelToScore,
-  scoreAttestation,
-  HardwareAttestationSemiring,
-  HW_ATTESTATION_HARDWARE,
-} from "@motebit/semiring";
+import type { MotebitId, RouteScore } from "@motebit/protocol";
+import { AgentTrustLevel } from "@motebit/protocol";
+import { trustLevelToScore, scoreAttestation, HW_ATTESTATION_HARDWARE } from "@motebit/semiring";
 import {
   WeightedDigraph,
   RouteWeightSemiring,
-  AnnotatedRouteWeightSemiring,
+  ROUTE_WEIGHT_DIMENSIONS,
+  frontierPaths,
+  chooseFromFrontier,
   TrustSemiring,
   projectGraph,
-  optimalPaths,
   optimalPathTrace,
   transitiveClosure,
 } from "@motebit/semiring";
-import type { RouteWeight, Annotated, HardwareAttestationScore } from "@motebit/semiring";
+import type { RouteWeight, HardwareAttestationScore, Frontier } from "@motebit/semiring";
 import type { CandidateProfile, TaskRequirements } from "./scoring.js";
 import { blendCredentialTrust } from "./credential-weight.js";
 
@@ -102,9 +98,33 @@ export const weightedSumComposite: CompositeFunction = (_route, scores) => {
  * cost tertiary. Encoded as a single number with separated magnitude bands.
  * Higher is better.
  */
-export const lexicographicComposite: CompositeFunction = (_route, scores) => {
-  return scores.trust * 1e6 + scores.reliability * 1e3 + scores.costScore;
-};
+/**
+ * Build an EXACT lexicographic composite over normalized [0,1] scores at
+ * `LEXICOGRAPHIC_RESOLUTION` (1e-3): each key is quantized to 0..1000 and
+ * packed in base 1001, so a higher-priority key always outranks every lower
+ * one — a strict improvement at any priority level can never be outweighed
+ * by the levels below it. The former `a*1e6 + b*1e3 + c` packing was not
+ * exact: an unquantized `b ∈ [0,1]` spans 1e3, so a gap in `a` below 1e-3
+ * could be reversed by `b`.
+ */
+export const LEXICOGRAPHIC_RESOLUTION = 1000;
+export function lexicographicOver(order: readonly (keyof NormalizedScores)[]): CompositeFunction {
+  const base = LEXICOGRAPHIC_RESOLUTION + 1;
+  const q = (x: number): number =>
+    Math.round(Math.min(Math.max(Number.isFinite(x) ? x : 0, 0), 1) * LEXICOGRAPHIC_RESOLUTION);
+  return (_route, scores) => {
+    let acc = 0;
+    for (const key of order) acc = acc * base + q(scores[key]);
+    return acc;
+  };
+}
+
+/** Quality-first policy: trust, then reliability, then cost. */
+export const lexicographicComposite: CompositeFunction = lexicographicOver([
+  "trust",
+  "reliability",
+  "costScore",
+]);
 
 /**
  * Routing policy: configurable weights and composite function.
@@ -182,29 +202,6 @@ const ORGANIZATIONAL_TRUST_BASELINE = 0.35;
  */
 const HARDWARE_ATTESTATION_BOOST = 0.2;
 
-// ── Hardware-attestation product semiring (market-local) ──────────
-//
-// `productSemiring(TrustSemiring, HardwareAttestationSemiring)` lifts
-// TrustSemiring's multiplicative composition and HardwareAttestationSemiring's
-// bottleneck-min into a single 2-tuple algebra. Walking a graph under
-// this product in ONE traversal yields, per reachable node, both the
-// best trust chain AND the bottleneck HW score across the path — the
-// latter is the reason this composition exists. A chain whose weakest
-// link is `software` (0.1) terminates with chain-HW = 0.1; a chain
-// containing any absent claim terminates with chain-HW = 0.0 (the
-// semiring zero, annihilating under ⊗).
-//
-// Local to this module: the tuple wiring is a market concern (the
-// product of "routing trust" and "attestation strength") and doesn't
-// belong in the permissive-floor primitive layer. Consumers of `@motebit/semiring`
-// compose their own dimensions analogously.
-type TrustAttestationScore = readonly [number, HardwareAttestationScore];
-
-const TrustAttestationSemiring: Semiring<TrustAttestationScore> = productSemiring(
-  TrustSemiring,
-  HardwareAttestationSemiring,
-);
-
 /**
  * Build a semiring computation graph from candidate profiles.
  *
@@ -249,15 +246,13 @@ export function buildRoutingGraph(
 
     const blendedTrust = blendCredentialTrust(staticTrust, candidate.credential_reputation ?? null);
 
-    // Hardware-attestation composes via the product semiring at
-    // traversal time (see `applyHardwareAttestationBoost`). Each edge
-    // carries the candidate's LOCAL HW score; `optimalPaths` over
-    // `TrustAttestationSemiring` produces the chain's bottleneck HW
-    // score per reachable candidate, which is then folded into trust
-    // via `blendedTrust × (1 + chainHwScore × HARDWARE_ATTESTATION_BOOST)`.
-    // Single-hop result is identical to the previous scalar-at-terminal
-    // composition; multi-hop now reflects the weakest-link custody of
-    // the entire path (the reason the semiring exists).
+    // Hardware attestation is folded along the CHOSEN route, not here:
+    // `edgeHwScores` records each edge's LOCAL HW score and
+    // `chainHwForPath` takes the weakest link across the ranked path,
+    // then `applyHardwareAttestationBoost` applies
+    // `blendedTrust × (1 + chainHwScore × HARDWARE_ATTESTATION_BOOST)`.
+    // Single-hop is identical to scalar-at-terminal; multi-hop reflects
+    // the weakest-link custody of the route that was actually ranked.
     const trust = Math.min(1.0, blendedTrust);
 
     const cost = estimateCandidateCost(candidate);
@@ -278,107 +273,103 @@ export function buildRoutingGraph(
     });
   }
 
-  // Apply peer-to-peer edges from delegation receipt trees
+  // Apply peer-to-peer edges from delegation receipt trees. Every component
+  // is coerced to a finite number first: a peer edge assembled from a nullable
+  // column (or a caller's partial literal) with `regulatory_risk: null` would
+  // otherwise compose to NaN, and a NaN composite makes the route policy's
+  // comparator undefined — the ranking silently degrades to insertion order.
   if (peerEdges) {
     for (const edge of peerEdges) {
-      graph.setEdge(edge.from, edge.to, edge.weight);
+      graph.setEdge(edge.from, edge.to, finiteRouteWeight(edge.weight));
     }
   }
 
   return graph;
+}
+
+/**
+ * Choose one route from a candidate's frontier under the composite policy,
+ * scoring each real route exactly once. Returns the chosen route's own
+ * `RouteScore`, the frontier ordered winner-first, and how many viable
+ * routes the policy chose among. `null` when no viable route scores.
+ */
+function pickRoute(
+  frontier: Frontier<RouteWeight>,
+  scoreOne: (weight: RouteWeight, path: readonly string[]) => RouteScore | null,
+): { score: RouteScore; ordered: Frontier<RouteWeight>; viable: number } | null {
+  const viable = frontier.filter((p) => p.weight.trust > 0);
+  const memo = new Map<string, RouteScore | null>();
+  const scoreOf = (weight: RouteWeight, path: readonly string[]): RouteScore | null => {
+    const k = path.join("\u0000");
+    if (!memo.has(k)) memo.set(k, scoreOne(weight, path));
+    return memo.get(k) ?? null;
+  };
+  const pick = chooseFromFrontier(viable, (w, path) => scoreOf(w, path)?.composite ?? -Infinity);
+  if (pick === null || pick.score === -Infinity) return null;
+  const score = scoreOf(pick.chosen.weight, pick.chosen.path);
+  if (!score) return null;
+  return { score, ordered: pick.ordered, viable: viable.length };
+}
+
+/**
+ * Coerce a possibly-partial edge weight to a total, finite `RouteWeight`.
+ * Absent trust is no trust (0); absent reliability is the multiplicative
+ * identity (1); absent accumulators are the additive identity (0).
+ */
+function finiteRouteWeight(w: Partial<RouteWeight>): RouteWeight {
+  const num = (v: unknown, dflt: number): number =>
+    typeof v === "number" && Number.isFinite(v) ? v : dflt;
+  return {
+    trust: num(w.trust, 0),
+    cost: num(w.cost, 0),
+    latency: num(w.latency, 0),
+    reliability: num(w.reliability, 1),
+    regulatory_risk: num(w.regulatory_risk, 0),
+  };
 }
 
 // ── Hardware-attestation chain composition ────────────────────────
 
 /**
- * Build the parallel `TrustAttestationSemiring` graph — same nodes and
- * edges as the plain routing graph, but every edge weight is a
- * `(trust, hwScore)` tuple. Each self→candidate edge carries the
- * candidate's local `scoreAttestation`. Each peer edge carries its
- * intermediate hop's `hw_attestation` if supplied, else identity
- * (`HW_ATTESTATION_HARDWARE` = 1.0 — passthrough under ⊗). Running
- * `optimalPaths` on this graph yields, per reachable candidate, the
- * bottleneck HW score across the entire path. That score feeds
- * `applyHardwareAttestationBoost` at the ranking boundary.
- *
- * Why a second graph, not a second dimension inside `RouteWeight`:
- * `RouteWeight` lives in `@motebit/semiring` and its shape is part of
- * a multi-surface API. The attestation composition is a market-side
- * product that doesn't need to propagate upstream. Building a small
- * parallel graph here keeps the protocol-level type stable.
+ * Hardware-attestation score per edge — the candidate's own for a
+ * self→candidate edge, the intermediate hop's for a peer edge (identity 1.0
+ * when unsupplied). Folded along the CHOSEN path with `min` (weakest-link
+ * custody). Previously a parallel product-semiring traversal produced a
+ * per-node optimum that, like the record semiring, could mix paths; folding
+ * the chosen path keeps the boost truthful to the route actually ranked.
  */
-function buildTrustAttestationGraph(
+function edgeHwScores(
   selfId: MotebitId,
   candidates: CandidateProfile[],
   peerEdges?: PeerEdge[],
-  callerGuardianPublicKey?: string,
-): WeightedDigraph<TrustAttestationScore> {
-  const graph = new WeightedDigraph(TrustAttestationSemiring);
-  graph.addNode(selfId);
-
+): Map<string, HardwareAttestationScore> {
+  const out = new Map<string, HardwareAttestationScore>();
   for (const candidate of candidates) {
-    if (candidate.trust_record?.trust_level === AgentTrustLevel.Blocked) continue;
-    if (!candidate.is_online) continue;
-
-    let staticTrust =
-      candidate.chain_trust ??
-      (candidate.trust_record ? trustLevelToScore(candidate.trust_record.trust_level) : 0.1);
-
-    if (
-      callerGuardianPublicKey &&
-      candidate.guardian_public_key &&
-      callerGuardianPublicKey === candidate.guardian_public_key
-    ) {
-      staticTrust = Math.max(staticTrust, ORGANIZATIONAL_TRUST_BASELINE);
-    }
-
-    const blendedTrust = blendCredentialTrust(staticTrust, candidate.credential_reputation ?? null);
-    // Prefer peer-verified aggregate when available (Phase 1 of the
-    // hardware-attestation peer flow). Falls back to scoring the
-    // candidate's self-attestation claim when no peer credentials
-    // carrying hardware_attestation have been issued for it.
     const hwScore =
       candidate.hardware_attestation_aggregate?.attestation_score ??
       scoreAttestation(candidate.hardware_attestation);
-    graph.setEdge(selfId, candidate.motebit_id, [blendedTrust, hwScore] as const);
+    out.set(`${selfId}\u0000${candidate.motebit_id}`, hwScore);
   }
-
   if (peerEdges) {
     for (const edge of peerEdges) {
-      const hw = edge.hw_attestation ?? HW_ATTESTATION_HARDWARE;
-      graph.setEdge(edge.from, edge.to, [edge.weight.trust, hw] as const);
+      out.set(`${edge.from}\u0000${edge.to}`, edge.hw_attestation ?? HW_ATTESTATION_HARDWARE);
     }
   }
-
-  return graph;
+  return out;
 }
 
-/**
- * Walk the `TrustAttestationSemiring` graph to produce, per reachable
- * candidate, the bottleneck HW score across the optimal-trust path.
- * Maps node id → chain-HW score. Absent entries (unreachable in the
- * product traversal) default to `HW_ATTESTATION_NONE` (zero) at lookup,
- * which under the boost formula leaves trust untouched.
- */
-function computeChainHwScores(
+function chainHwForPath(
   selfId: MotebitId,
-  candidates: CandidateProfile[],
-  peerEdges?: PeerEdge[],
-  callerGuardianPublicKey?: string,
-): Map<string, HardwareAttestationScore> {
-  const productGraph = buildTrustAttestationGraph(
-    selfId,
-    candidates,
-    peerEdges,
-    callerGuardianPublicKey,
-  );
-  const productPaths = optimalPaths(productGraph, selfId);
-  const out = new Map<string, HardwareAttestationScore>();
-  for (const [nodeId, [, hwScore]] of productPaths) {
-    if (nodeId === selfId) continue;
-    out.set(nodeId, hwScore);
+  path: readonly string[],
+  hwByEdge: Map<string, HardwareAttestationScore>,
+): HardwareAttestationScore {
+  let prev: string = selfId;
+  let hw: number = HW_ATTESTATION_HARDWARE;
+  for (const node of path) {
+    hw = Math.min(hw, hwByEdge.get(`${prev}\u0000${node}`) ?? 0);
+    prev = node;
   }
-  return out;
+  return hw;
 }
 
 /**
@@ -545,38 +536,29 @@ export function graphRankCandidates(
     config?.peerEdges,
     config?.callerGuardianPublicKey,
   );
-  const paths = optimalPaths(graph, selfId);
-
-  // Parallel traversal over `TrustAttestationSemiring` — one pass, one
-  // algebra, yields the chain-bottleneck HW score for every reachable
-  // candidate. See `applyHardwareAttestationBoost` at the ranking
-  // boundary; the boost formula is unchanged, the argument is now the
-  // chain-min instead of the terminal-local score.
-  const chainHw = computeChainHwScores(
-    selfId,
-    candidates,
-    config?.peerEdges,
-    config?.callerGuardianPublicKey,
-  );
-
+  // Path-preserving ranking: per candidate, the Pareto frontier of REAL
+  // routes; the composite policy chooses among them; the reported metrics
+  // are the chosen route's own. Never the component-wise mixture.
+  const frontiers = frontierPaths(graph, ROUTE_WEIGHT_DIMENSIONS, selfId);
+  const hwByEdge = edgeHwScores(selfId, candidates, config?.peerEdges);
   const candidateMap = new Map<string, CandidateProfile>();
   for (const c of candidates) candidateMap.set(c.motebit_id, c);
-
   const scores: RouteScore[] = [];
-  for (const [nodeId, route] of paths) {
-    if (nodeId === selfId || route.trust === 0) continue;
-    const score = scoreRoute(
-      nodeId,
-      route,
-      candidateMap.get(nodeId),
-      requirements,
-      weights,
-      compositeFn,
-      chainHw.get(nodeId) ?? 0,
+  for (const [nodeId, frontier] of frontiers) {
+    if (nodeId === selfId) continue;
+    const picked = pickRoute(frontier, (w, path) =>
+      scoreRoute(
+        nodeId,
+        w,
+        candidateMap.get(nodeId),
+        requirements,
+        weights,
+        compositeFn,
+        chainHwForPath(selfId, path, hwByEdge),
+      ),
     );
-    if (score) scores.push(score);
+    if (picked) scores.push(picked.score);
   }
-
   finalizeScores(scores, maxCandidates, explorationWeight);
   return scores;
 }
@@ -636,23 +618,29 @@ export function findTrustedRoute(
 /**
  * RouteScore extended with provenance: explains WHY each agent was chosen.
  *
- * routing_paths enumerates the derivation paths — each path is a sequence
- * of agent IDs traversed to reach this candidate through the graph.
+ * `routing_paths[0]` is the CHOSEN route — the sequence of agent ids from the
+ * caller to this candidate whose composed edge metrics the score reports.
+ * The remaining entries are the non-dominated alternative routes the policy
+ * weighed, in descending policy order. A path is a route that exists, never
+ * a component-wise derivation.
  */
 export interface ExplainedRouteScore extends RouteScore {
-  /** Derivation paths: each path is a sequence of agent IDs traversed to reach this candidate. */
+  /** `[0]` = the chosen route (its metrics are the score's metrics); then the alternatives, best first. */
   routing_paths: string[][];
-  /** Number of alternative routes that were considered (paths in provenance set). */
+  /** Number of non-dominated viable routes to this candidate the policy chose among (≥ 1). */
   alternatives_considered: number;
 }
 
 /**
  * Rank candidates with provenance tracking — returns WHY each agent was chosen.
  *
- * Same scoring as graphRankCandidates (shared scoreRoute core) but uses
- * annotatedSemiring to track derivation paths through the agent graph.
- * Each result includes the routing explanation: which edges (agent IDs)
- * were traversed to reach this candidate.
+ * Same scoring as graphRankCandidates (shared scoreRoute core). Both rank
+ * over the Pareto frontier of REAL routes per candidate (`frontierPaths`);
+ * this variant also reports them: `routing_paths[0]` is the route that was
+ * chosen — the one whose composed metrics the score reflects — and the rest
+ * are the non-dominated alternatives the policy weighed. An explanation
+ * that named a node's component-wise optimum would describe a hire that
+ * never existed; this one names the hire.
  *
  * This is the algebraic answer to "explain this routing decision" — not logging,
  * not post-hoc reconstruction, but a first-class semiring query.
@@ -675,59 +663,38 @@ export function explainedRankCandidates(
     config?.peerEdges,
     config?.callerGuardianPublicKey,
   );
-
-  // 2. Build an annotated graph: wrap each edge weight with provenance.
-  //    The provenance label for each edge is the target node ID — this records
-  //    which agent was traversed to reach the destination.
-  const annotatedGraph = new WeightedDigraph(AnnotatedRouteWeightSemiring);
-  for (const node of plainGraph.nodes()) annotatedGraph.addNode(node);
-  for (const edge of plainGraph.edges()) {
-    const annotated: Annotated<RouteWeight> = {
-      value: edge.weight,
-      why: [[edge.to]],
-    };
-    annotatedGraph.setEdge(edge.from, edge.to, annotated);
-  }
-
-  // 3. Run optimalPaths over the annotated graph
-  const annotatedPaths = optimalPaths(annotatedGraph, selfId);
-
-  // 3b. Parallel chain-HW bottleneck traversal (see `graphRankCandidates`).
-  const chainHw = computeChainHwScores(
-    selfId,
-    candidates,
-    config?.peerEdges,
-    config?.callerGuardianPublicKey,
-  );
-
-  // 4. Score using the shared core, attach provenance
+  // 2. Per candidate, the Pareto frontier of real routes (each carrying its
+  //    own composed metrics AND its path). The explanation is therefore
+  //    exact: routing_paths[0] is the route that was chosen and whose metrics
+  //    the score reflects; the rest are the non-dominated alternatives the
+  //    policy weighed. `maxProvPaths` bounds the frontier per candidate.
+  const frontiers = frontierPaths(plainGraph, ROUTE_WEIGHT_DIMENSIONS, selfId, {
+    ...(config?.maxProvPaths != null ? { maxPaths: config.maxProvPaths } : {}),
+  });
+  const hwByEdge = edgeHwScores(selfId, candidates, config?.peerEdges);
   const candidateMap = new Map<string, CandidateProfile>();
   for (const c of candidates) candidateMap.set(c.motebit_id, c);
-
   const scores: ExplainedRouteScore[] = [];
-  for (const [nodeId, annotatedRoute] of annotatedPaths) {
-    if (nodeId === selfId || annotatedRoute.value.trust === 0) continue;
-
-    const score = scoreRoute(
-      nodeId,
-      annotatedRoute.value,
-      candidateMap.get(nodeId),
-      requirements,
-      weights,
-      compositeFn,
-      chainHw.get(nodeId) ?? 0,
+  for (const [nodeId, frontier] of frontiers) {
+    if (nodeId === selfId) continue;
+    const picked = pickRoute(frontier, (w, path) =>
+      scoreRoute(
+        nodeId,
+        w,
+        candidateMap.get(nodeId),
+        requirements,
+        weights,
+        compositeFn,
+        chainHwForPath(selfId, path, hwByEdge),
+      ),
     );
-    if (!score) continue;
-
-    const routingPaths = annotatedRoute.why.map((p) => [...p]).filter((p) => p.length > 0);
-
+    if (!picked) continue;
     scores.push({
-      ...score,
-      routing_paths: routingPaths,
-      alternatives_considered: routingPaths.length,
+      ...picked.score,
+      routing_paths: picked.ordered.map((p) => [...p.path]),
+      alternatives_considered: picked.viable,
     });
   }
-
   finalizeScores(scores, maxCandidates, explorationWeight);
   return scores;
 }

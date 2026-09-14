@@ -2183,9 +2183,9 @@ export interface ExecutionStepSummary {
         capability_match: number;
         availability: number;
       };
-      /** Derivation paths through the agent graph. */
+      /** `[0]` = the chosen route (agent ids, caller → worker) whose composed metrics the sub_scores reflect; then the non-dominated alternatives, best first. Pinned hires report `[[worker]]`. */
       routing_paths: string[][];
-      /** Number of candidate agents that were scored. */
+      /** Number of non-dominated viable routes to the selected agent the policy chose among (0 for a pinned hire). */
       alternatives_considered: number;
     };
   };
