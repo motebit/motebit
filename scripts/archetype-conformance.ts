@@ -43,6 +43,7 @@ import {
   verifyEvidenceProvenance,
   verifyRoutingTranscript,
 } from "@motebit/verifier";
+import type { SolanaWalletRail } from "@motebit/wallet-solana";
 import { recomputeRoutingDecision } from "@motebit/semiring";
 import type { EvalAttestation } from "@motebit/protocol";
 import { resolve } from "node:path";
@@ -157,13 +158,12 @@ function checkPresence(agents: DiscoveredWireAgent[]): Map<string, DiscoveredWir
  * history: it pays like one and acknowledges like one (no allowlist;
  * protocol-primacy). Returns the signed receipt.
  */
-async function delegatePaid(
-  workerId: string,
-  capability: string,
-  prompt: string,
-): Promise<Record<string, unknown>> {
+/**
+ * The probe's own Solana rail (devnet). Built from the seed in
+ * DELEGATOR_SEED_HEX; its `address` is the wallet an operator funds.
+ */
+async function delegatorRail(): Promise<SolanaWalletRail> {
   const { Buffer } = await import("node:buffer");
-  const { resolveAndSubmitP2pDelegation } = await import("@motebit/runtime");
   const { createSolanaWalletRail } = await import("@motebit/wallet-solana");
   const required = ["DELEGATOR_MOTEBIT_ID", "DELEGATOR_SEED_HEX", "SOLANA_RPC_URL"] as const;
   for (const k of required) {
@@ -171,11 +171,25 @@ async function delegatePaid(
   }
   const seedHex = process.env["DELEGATOR_SEED_HEX"]!.replace(/^0x/, "");
   const usdcMint = process.env["SOLANA_USDC_MINT"]?.trim() || undefined;
-  const rail = createSolanaWalletRail({
+  return createSolanaWalletRail({
     rpcUrl: process.env["SOLANA_RPC_URL"]!,
     identitySeed: Buffer.from(seedHex, "hex"),
     ...(usdcMint ? { usdcMint } : {}),
   });
+}
+
+/** Where to top the probe up — a public address; the seed never prints. */
+const FUNDING_HINT = (address: string): string =>
+  `delegator wallet ${address} — devnet USDC (mint ${process.env["SOLANA_USDC_MINT"] ?? "default"}); ` +
+  `top up at https://faucet.circle.com (Solana Devnet)`;
+
+async function delegatePaid(
+  workerId: string,
+  capability: string,
+  prompt: string,
+): Promise<Record<string, unknown>> {
+  const { resolveAndSubmitP2pDelegation } = await import("@motebit/runtime");
+  const rail = await delegatorRail();
 
   // Fee-leg trust root: pin the relay key from /.well-known (TOFU) — the
   // treasury derives from THIS, matching the staging-proof harness.
@@ -192,13 +206,18 @@ async function delegatePaid(
     capability,
     targetWorkerId: workerId,
     relayPublicKeyHex: wk.public_key,
-    buildP2pPayment: (req) => rail.buildP2pPayment!(req),
+    buildP2pPayment: (req) => rail.buildP2pPayment(req),
     acknowledgeNoHistoryRisk: true,
     timeoutMs: Number(process.env["TIMEOUT_MS"] ?? "180000"),
     logger: { warn: (m, ctx) => console.warn(`[conformance] warn: ${m}`, ctx ?? "") },
   });
   if (!result.ok) {
-    throw new Error(`${result.error.code}: ${result.error.message}`);
+    // A funding failure names the wallet to fund: four consecutive daily reds
+    // (2026-09-10 → 09-13) said "insufficient_balance" and nothing else — an
+    // operator could not act on it without the seed. The address is public.
+    const hint =
+      result.error.code === "insufficient_balance" ? ` — ${FUNDING_HINT(rail.address)}` : "";
+    throw new Error(`${result.error.code}: ${result.error.message}${hint}`);
   }
   return result.receipt as unknown as Record<string, unknown>;
 }
@@ -604,6 +623,15 @@ async function main(): Promise<void> {
   const bySlate = checkPresence(agents);
 
   if (DELEGATE) {
+    // Say which wallet pays BEFORE anything is attempted, so a funding gap is
+    // diagnosable from the run header alone.
+    try {
+      console.log(`[conformance] ${FUNDING_HINT((await delegatorRail()).address)}\n`);
+    } catch (err) {
+      console.log(
+        `[conformance] delegator rail unavailable: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     const researcher = bySlate.get("research");
     const auditor = bySlate.get("auditor");
     const clerk = bySlate.get("clerk");
