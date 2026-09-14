@@ -54,6 +54,7 @@ import { formatDiagnostic } from "./yaml-config.js";
 import type { CliConfig } from "./args.js";
 import { loadFullConfig, extractPersonality } from "./config.js";
 import { fromHex, loadActiveSigningKey, IdentityKeyError } from "./identity.js";
+import { registerWithRelay, type RelayRegistrationHandle } from "./relay-registration.js";
 import {
   electAttachOrCoordinate,
   electCoordinatorRole,
@@ -66,52 +67,6 @@ import {
   buildStorageAdapters,
   deriveGovernanceForRuntime,
 } from "./runtime-factory.js";
-
-/**
- * Publish a service listing with pricing after relay registration.
- * Shared by handleRun and handleServe — avoids duplication.
- */
-async function publishServiceListing(
-  syncUrl: string,
-  motebitId: string,
-  headers: Record<string, string>,
-  toolNames: string[],
-  priceStr: string | undefined,
-  description: string,
-  log: (msg: string) => void = console.log,
-): Promise<void> {
-  const raw = priceStr ?? process.env["MOTEBIT_PRICE"];
-  if (!raw) return;
-
-  const unitCost = parseFloat(raw);
-  if (isNaN(unitCost) || unitCost <= 0) {
-    log(`Warning: --price "${raw}" is not a valid positive number — earning disabled`);
-    return;
-  }
-
-  try {
-    const resp = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/listing`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        capabilities: toolNames,
-        pricing: toolNames.map((cap) => ({
-          capability: cap,
-          unit_cost: unitCost,
-          currency: "USD",
-          per: "task",
-        })),
-        sla: { max_latency_ms: 60_000, availability_guarantee: 0.95 },
-        description,
-      }),
-    });
-    if (resp.ok) {
-      log(`Pricing: $${unitCost.toFixed(2)}/task — earning enabled`);
-    }
-  } catch {
-    // Best-effort listing
-  }
-}
 
 export async function handleRun(config: CliConfig): Promise<void> {
   const explicitIdentity = config.identity != null && config.identity !== "";
@@ -350,7 +305,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
   const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig.sync_url;
   const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
   let wsAdapter: WebSocketEventStoreAdapter | null = null;
-  let daemonHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  let daemonRegistration: RelayRegistrationHandle | undefined;
   let privKeyBytes: Uint8Array | undefined;
 
   if (syncUrl != null && syncUrl !== "") {
@@ -369,23 +324,6 @@ export async function handleRun(config: CliConfig): Promise<void> {
         console.log(
           `Warning: could not decrypt private key — agent tasks disabled (${err instanceof Error ? err.message : String(err)})`,
         );
-      }
-    }
-
-    // Register device with relay so other agents can resolve our public key
-    if (privKeyBytes && fullConfig.device_id && fullConfig.device_public_key) {
-      try {
-        await fetch(`${syncUrl}/api/v1/agents/bootstrap`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            motebit_id: motebitId,
-            device_id: fullConfig.device_id,
-            public_key: fullConfig.device_public_key,
-          }),
-        });
-      } catch {
-        // Best-effort — relay may be unreachable
       }
     }
 
@@ -622,16 +560,15 @@ export async function handleRun(config: CliConfig): Promise<void> {
       console.log("Delegation: enabled (RelayDelegationAdapter wired)");
     }
 
-    // Register with agent discovery registry so other motebits can find this daemon.
-    try {
+    // Register with agent discovery registry so other motebits can find this
+    // daemon — signed as THIS motebit (bootstrap → register → listing →
+    // heartbeat), never with the operator's sync token and never
+    // unauthenticated. See relay-registration.ts.
+    if (privKeyBytes && fullConfig.device_id && fullConfig.device_public_key) {
       const toolNames = runtime
         .getToolRegistry()
         .list()
         .map((t) => t.name);
-
-      const regHeaders: Record<string, string> = { "Content-Type": "application/json" };
-      if (syncToken) regHeaders["Authorization"] = `Bearer ${syncToken}`;
-
       const regBody: Record<string, unknown> = {
         motebit_id: motebitId,
         endpoint_url: syncUrl,
@@ -644,42 +581,23 @@ export async function handleRun(config: CliConfig): Promise<void> {
           regBody.guardian_attestation = identity.guardian.attestation;
         }
       }
-      const regResp = await fetch(`${syncUrl}/api/v1/agents/register`, {
-        method: "POST",
-        headers: regHeaders,
-        body: JSON.stringify(regBody),
-      });
-
-      if (regResp.ok) {
-        console.log(`Discovery: registered with relay (${toolNames.length} tools)`);
-
-        await publishServiceListing(
-          syncUrl,
+      daemonRegistration = await registerWithRelay({
+        syncUrl,
+        identity: {
           motebitId,
-          regHeaders,
-          toolNames,
-          config.price,
-          `daemon-${motebitId.slice(0, 8)}`,
-        );
-
-        // Heartbeat every 5 minutes to keep the registry entry alive
-        daemonHeartbeatTimer = setInterval(
-          () => {
-            void fetch(`${syncUrl}/api/v1/agents/heartbeat`, {
-              method: "POST",
-              headers: regHeaders,
-            }).catch(() => {
-              // Best-effort heartbeat
-            });
-          },
-          5 * 60 * 1000,
-        );
-      } else {
-        console.log(`Discovery: registry registration returned ${regResp.status} (skipping)`);
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.log(`Discovery: registry registration failed (${msg}) — continuing`);
+          deviceId: fullConfig.device_id,
+          publicKeyHex: fullConfig.device_public_key,
+          privateKey: privKeyBytes,
+        },
+        registration: regBody,
+        toolNames,
+        price: config.price,
+        description: `daemon-${motebitId.slice(0, 8)}`,
+      });
+    } else {
+      console.log(
+        "Discovery: registration skipped — no device signing key available (the daemon registers with its own key, never the operator's token)",
+      );
     }
 
     // Also wire sync via the HTTP adapter
@@ -715,16 +633,8 @@ export async function handleRun(config: CliConfig): Promise<void> {
     const forceExit = setTimeout(() => process.exit(1), 5_000);
     if (typeof forceExit.unref === "function") forceExit.unref(); // Don't block event loop
     try {
-      if (daemonHeartbeatTimer !== undefined) clearInterval(daemonHeartbeatTimer);
-      // Best-effort deregistration from agent discovery registry
-      if (syncUrl) {
-        const deregHeaders: Record<string, string> = {};
-        if (syncToken) deregHeaders["Authorization"] = `Bearer ${syncToken}`;
-        void fetch(`${syncUrl}/api/v1/agents/deregister`, {
-          method: "DELETE",
-          headers: deregHeaders,
-        }).catch(() => {});
-      }
+      // Best-effort deregistration from agent discovery registry (signed as us).
+      if (daemonRegistration) void daemonRegistration.deregister().catch(() => {});
       scheduler.stop();
       wsAdapter?.disconnect();
       // Release the runtime-host socket so a successor can elect.
@@ -1366,7 +1276,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
 
   // Connect to relay (HTTP transport only): WebSocket for task dispatch + HTTP registration
   // Fallback chain: CLI arg > env var > config file
-  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  let serveRegistration: RelayRegistrationHandle | undefined;
   let serveWsAdapter: WebSocketEventStoreAdapter | null = null;
   const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig.sync_url;
   if (transport === "http" && syncUrl) {
@@ -1510,71 +1420,10 @@ export async function handleServe(config: CliConfig): Promise<void> {
         .list()
         .map((t) => t.name);
 
-      // Self-sovereign registration auth.
-      //
-      // The relay's `/api/v1/agents/*` middleware accepts two auth shapes:
-      //   1. Operator master token (`MOTEBIT_API_TOKEN`) — bypass.
-      //   2. Self-signed device token — verified against the agent's own
-      //      registered public key, audience-bound (`admin:query` for
-      //      register/heartbeat/deregister/info).
-      //
-      // Anonymous registration was always advertised as supported (per
-      // create-motebit's `.env.example`: "Anonymous agents can register and
-      // serve for free") but failed in practice because daemon never minted
-      // shape #2 — it only sent `Bearer ${masterToken}` when a master token
-      // existed. Result: scaffolded agents with empty `MOTEBIT_API_TOKEN`
-      // hit 401 at register time and stayed off the discovery graph.
-      //
-      // The fix is two coordinated steps the relay already supports:
-      //   a. Call `/api/v1/agents/bootstrap` (unauthenticated, rate-limited,
-      //      idempotent) to register `(motebit_id, device_id, public_key)`
-      //      so the relay knows which key to verify our token against.
-      //   b. Mint a signed token (`mintAudienceToken`) with `aud: "admin:query"`
-      //      signed by `servePrivateKey` and use it as Bearer.
-      //
-      // Master token, when present, still wins — operators with explicit
-      // tokens skip the self-signing dance.
-      const regHeaders: Record<string, string> = { "Content-Type": "application/json" };
-      if (masterToken) {
-        regHeaders["Authorization"] = `Bearer ${masterToken}`;
-      } else if (servePrivateKey && fullConfigForServe.device_id && publicKeyHex) {
-        // Bootstrap is idempotent: if the identity is already registered with
-        // the same public key, returns 200 with `registered: false`; if new,
-        // 201 with `registered: true`. Either is fine for our purposes.
-        // We don't await the response body — only the network round-trip
-        // matters, and any 4xx other than 409 (key conflict) means we'll
-        // hit a clearer error on the subsequent /register call.
-        try {
-          await fetch(`${syncUrl}/api/v1/agents/bootstrap`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              motebit_id: motebitId,
-              device_id: fullConfigForServe.device_id,
-              public_key: publicKeyHex,
-            }),
-          });
-        } catch {
-          // Best-effort. If bootstrap fails, /register's auth check will
-          // surface a clearer error than a generic network failure here.
-        }
-        // 24h expiry instead of the per-call 5-min default. The same token
-        // is reused for the heartbeat setInterval below, which fires every
-        // 5 min — a 5-min token would expire before the second heartbeat.
-        // Agents that run longer than 24h will need to be restarted (or
-        // refactor heartbeat to re-mint on each call). Acceptable for v1.
-        const { token: signedToken } = await mintAudienceToken(
-          {
-            mid: motebitId,
-            did: fullConfigForServe.device_id,
-            aud: "admin:query",
-            ttlMs: 24 * 60 * 60 * 1000,
-          },
-          servePrivateKey,
-        );
-        regHeaders["Authorization"] = `Bearer ${signedToken}`;
-      }
-
+      // Signed as THIS motebit — bootstrap → register → listing → heartbeat —
+      // never with the operator's master token and never unauthenticated
+      // (relay-registration.ts). A master token is the OPERATOR's credential;
+      // the agent's own key is the only bearer a worker presents.
       const endpointUrl = `http://localhost:${port}`;
       const serveRegBody: Record<string, unknown> = {
         motebit_id: motebitId,
@@ -1588,37 +1437,27 @@ export async function handleServe(config: CliConfig): Promise<void> {
           serveRegBody.guardian_attestation = guardianAttestation;
         }
       }
-      const regResp = await fetch(`${syncUrl}/api/v1/agents/register`, {
-        method: "POST",
-        headers: regHeaders,
-        body: JSON.stringify(serveRegBody),
-      });
-      if (regResp.ok) {
-        log(`Registered with relay: ${syncUrl}`);
-
-        await publishServiceListing(
+      if (servePrivateKey && fullConfigForServe.device_id && publicKeyHex) {
+        serveRegistration = await registerWithRelay({
           syncUrl,
-          motebitId,
-          regHeaders,
-          toolNames,
-          config.price,
-          serverConfig.name ?? `serve-${motebitId.slice(0, 8)}`,
-          log,
-        );
-
-        // Heartbeat every 5 minutes
-        heartbeatTimer = setInterval(
-          () => {
-            void fetch(`${syncUrl}/api/v1/agents/heartbeat`, {
-              method: "POST",
-              headers: regHeaders,
-            }).catch(() => {
-              // Best-effort heartbeat
-            });
+          identity: {
+            motebitId,
+            deviceId: fullConfigForServe.device_id,
+            publicKeyHex,
+            privateKey: servePrivateKey,
           },
-          5 * 60 * 1000,
+          registration: serveRegBody,
+          toolNames,
+          price: config.price,
+          description: serverConfig.name ?? `serve-${motebitId.slice(0, 8)}`,
+          log,
+        });
+      } else {
+        log(
+          "Registry registration skipped — no device signing key available (serve registers with its own key, never the operator's token)",
         );
-
+      }
+      if (serveRegistration?.registered) {
         // Self-test: adversarial onboarding probe via shared command layer.
         // Exercises the exact auth flow production agents use and validates all
         // five sybil defense layers. See packages/runtime/src/commands/self-test.ts.
@@ -1658,8 +1497,6 @@ export async function handleServe(config: CliConfig): Promise<void> {
             log(`[self-test] error: ${errMsg}`);
           }
         }
-      } else {
-        log(`Registry registration failed: ${regResp.status}`);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1673,17 +1510,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
     const forceExit = setTimeout(() => process.exit(1), 5_000);
     if (typeof forceExit.unref === "function") forceExit.unref();
     try {
-      if (heartbeatTimer) clearInterval(heartbeatTimer);
-      if (syncUrl) {
-        try {
-          const masterToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
-          const headers: Record<string, string> = {};
-          if (masterToken) headers["Authorization"] = `Bearer ${masterToken}`;
-          await fetch(`${syncUrl}/api/v1/agents/deregister`, { method: "DELETE", headers });
-        } catch {
-          // Best-effort deregistration
-        }
-      }
+      if (serveRegistration) await serveRegistration.deregister();
       serveWsAdapter?.disconnect();
       await mcpServer.stop();
       // Release the runtime-host socket so a successor can elect.
