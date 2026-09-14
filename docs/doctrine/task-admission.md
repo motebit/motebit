@@ -45,7 +45,7 @@ The mirror image of the section above, closed 2026-09-13. Every call a worker ma
 
 Before this, every first-party worker read `MOTEBIT_API_TOKEN` — the relay **operator's master credential** — from its environment and presented it as the bearer on all of the above. The token bypasses rate limits and unlocks identity and device registration, every admin route, sync, state, and execution. A compromised worker container was therefore a compromised relay, and the blast radius was invisible to every test because nothing was wrong except the blast radius. `check-worker-no-master-token` now fails on any `MOTEBIT_API_TOKEN` read outside the relay and on any `apiToken` field on a worker-side config surface, so the secret cannot come back through the plumbing. `molecule-runner` warns loudly at boot if the variable is still set, so a stale deployment secret is visible until an operator removes it.
 
-Named sibling not yet closed: the CLI daemon (`apps/cli/src/daemon.ts`) still registers with the operator's sync token when one is configured and unauthenticated otherwise — the same shape on a published surface with key-unlock UX, tracked as its own arc.
+The CLI sibling closed the same day (#656): `motebit run` and `motebit serve` register through `apps/cli/src/relay-registration.ts` — bootstrap → register → listing → heartbeat → deregister, each call signed by the motebit's own device key for the route's audience, a fresh token per heartbeat, and never the operator's sync token or an unauthenticated request. No first-party surface presents an operator secret as its own credential anymore.
 
 ## Named gaps, carried with the flip trigger
 
