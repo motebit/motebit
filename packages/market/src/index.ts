@@ -7,6 +7,8 @@ export {
   findTrustedRoute,
   weightedSumComposite,
   lexicographicComposite,
+  lexicographicOver,
+  LEXICOGRAPHIC_RESOLUTION,
 } from "./graph-routing.js";
 export type {
   ExplainedRouteScore,

@@ -5,6 +5,7 @@ import {
   explainedRankCandidates,
   computeTrustClosure,
   findTrustedRoute,
+  lexicographicOver,
 } from "../graph-routing.js";
 import type { ExplainedRouteScore } from "../graph-routing.js";
 import type { CandidateProfile, TaskRequirements } from "../scoring.js";
@@ -275,10 +276,101 @@ describe("graphRankCandidates", () => {
     expect(scoreA).toBeDefined();
     expect(scoreB).toBeDefined();
 
-    // agent-b's trust should reflect multi-hop composition
-    // Direct trust for B is 0.1 (default), but via A it's 0.9 * 0.8 = 0.72
-    // The semiring picks max(0.1, 0.72) = 0.72
-    expect(scoreB!.sub_scores.trust).toBeGreaterThan(0.1);
+    // agent-b is reachable two ways: directly (trust 0.1, the cold-start
+    // default) and via A (0.9 * 0.8 = 0.72). Under the default weighted-sum
+    // policy the trusted two-hop route wins, and the reported trust is THAT
+    // route's trust — not a maximum taken across routes.
+    expect(scoreB!.sub_scores.trust).toBeCloseTo(0.72, 10);
+  });
+
+  it("competing paths: the selected route's reported metrics exactly match its edges, under either policy", () => {
+    // One expensive trusted route (self → helper → worker) and one cheap
+    // less-trusted route (self → worker) to the SAME candidate.
+    const helper = makeCandidate({
+      motebit_id: asMotebitId("helper"),
+      trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Trusted }),
+      listing: makeListing({ capabilities: ["web_search"], motebit_id: asMotebitId("helper") }),
+      latency_stats: { avg_ms: 1000, p95_ms: 3000, sample_count: 50 },
+    });
+    const worker = makeCandidate({
+      motebit_id: asMotebitId("worker"),
+      trust_record: null, // direct trust = 0.1 cold-start default
+      listing: makeListing({ capabilities: ["web_search"], motebit_id: asMotebitId("worker") }),
+      latency_stats: { avg_ms: 1000, p95_ms: 3000, sample_count: 50 },
+    });
+    const hop: RouteWeight = {
+      trust: 0.9,
+      cost: 0.5,
+      latency: 200,
+      reliability: 0.9,
+      regulatory_risk: 0,
+    };
+    const peerEdges = [{ from: "helper", to: "worker", weight: hop }];
+    const graph = buildRoutingGraph(SELF_ID, [helper, worker], peerEdges);
+    const direct = graph.getEdge(SELF_ID, "worker")!;
+    const toHelper = graph.getEdge(SELF_ID, "helper")!;
+    const latencySub = (ms: number) => 1 - ms / (ms + 5000);
+
+    // Default (weighted-sum) policy: the trusted route wins. Every reported
+    // metric is the two-hop route's own composition.
+    const viaHelper = explainedRankCandidates(SELF_ID, [helper, worker], defaultReqs, {
+      peerEdges,
+    }).find((s) => s.motebit_id === "worker")!;
+    expect(viaHelper.routing_paths[0]).toEqual(["helper", "worker"]);
+    expect(viaHelper.routing_paths).toEqual([["helper", "worker"], ["worker"]]);
+    expect(viaHelper.alternatives_considered).toBe(2);
+    expect(viaHelper.sub_scores.trust).toBeCloseTo(toHelper.trust * hop.trust, 10);
+    expect(viaHelper.sub_scores.latency).toBeCloseTo(
+      latencySub(toHelper.latency + hop.latency),
+      10,
+    );
+
+    // Cost-first policy: the cheap direct route wins — and its trust is the
+    // direct edge's 0.1, NOT the 0.81 the other route earns. (The component-wise
+    // ranking reported 0.81 beside the direct route's cost: a hire that never existed.)
+    const cheap = explainedRankCandidates(SELF_ID, [helper, worker], defaultReqs, {
+      peerEdges,
+      compositeFunction: lexicographicOver(["costScore", "reliability", "trust"]),
+    }).find((s) => s.motebit_id === "worker")!;
+    expect(cheap.routing_paths[0]).toEqual(["worker"]);
+    expect(cheap.sub_scores.trust).toBeCloseTo(direct.trust, 10);
+    expect(cheap.sub_scores.trust).toBeCloseTo(0.1, 10);
+    expect(cheap.sub_scores.latency).toBeCloseTo(latencySub(direct.latency), 10);
+
+    // graphRankCandidates ranks over the same frontier: same chosen metrics.
+    const plain = graphRankCandidates(SELF_ID, [helper, worker], defaultReqs, { peerEdges }).find(
+      (s) => s.motebit_id === "worker",
+    )!;
+    expect(plain.sub_scores.trust).toBeCloseTo(viaHelper.sub_scores.trust, 10);
+    expect(plain.composite).toBeCloseTo(viaHelper.composite, 10);
+  });
+
+  it("a peer edge with a missing component never poisons the ranking with NaN", () => {
+    const a = makeCandidate({
+      motebit_id: asMotebitId("agent-a"),
+      trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Trusted }),
+      listing: makeListing({ capabilities: ["web_search"] }),
+    });
+    const b = makeCandidate({
+      motebit_id: asMotebitId("agent-b"),
+      trust_record: null,
+      listing: makeListing({ capabilities: ["web_search"], motebit_id: asMotebitId("agent-b") }),
+    });
+    const peerEdges = [
+      {
+        from: "agent-a",
+        to: "agent-b",
+        // nullable column shape: regulatory_risk absent
+        weight: { trust: 0.8, cost: 1, latency: 100, reliability: 0.9 } as RouteWeight,
+      },
+    ];
+    const scores = explainedRankCandidates(SELF_ID, [a, b], defaultReqs, { peerEdges });
+    for (const s of scores) {
+      expect(Number.isFinite(s.composite)).toBe(true);
+      for (const v of Object.values(s.sub_scores)) expect(Number.isFinite(v)).toBe(true);
+    }
+    const scoreB = scores.find((s) => s.motebit_id === "agent-b")!;
+    expect(scoreB.routing_paths[0]).toEqual(["agent-a", "agent-b"]);
   });
 
   it("returns empty array when all candidates are offline or blocked", () => {
@@ -622,8 +714,65 @@ describe("lexicographicComposite", () => {
       { trust: 1.0, cost: 0, latency: 0, reliability: 1.0, regulatory_risk: 0 },
       { trust: 1.0, reliability: 1.0, costScore: 1.0, latencyNorm: 1.0, riskScore: 1.0 },
     );
-    // 1.0 * 1e6 + 1.0 * 1e3 + 1.0 = 1_001_001
-    expect(result).toBeCloseTo(1_001_001, 0);
+    // Each key quantized to 0..1000 and packed in base 1001:
+    // 1000·1001² + 1000·1001 + 1000 = 1_003_003_000
+    expect(result).toBe(1_003_003_000);
+  });
+
+  it("is EXACT: a strictly higher priority key can never be outweighed by the keys below it", async () => {
+    const { lexicographicComposite, lexicographicOver } = await import("../graph-routing.js");
+    const route = { trust: 0, cost: 0, latency: 0, reliability: 0, regulatory_risk: 0 };
+    // Under the old `trust*1e6 + reliability*1e3 + cost` packing, a 1e-3 trust
+    // gap (1000 units) was matched by a full-range reliability gap (1000 units)
+    // and reversed by the cost term; here one quantum of trust always wins.
+    const slightlyMoreTrusted = lexicographicComposite(route, {
+      trust: 0.801,
+      reliability: 0,
+      costScore: 0,
+      latencyNorm: 0,
+      riskScore: 0,
+    });
+    const slightlyLessTrusted = lexicographicComposite(route, {
+      trust: 0.8,
+      reliability: 1,
+      costScore: 1,
+      latencyNorm: 1,
+      riskScore: 1,
+    });
+    expect(slightlyMoreTrusted).toBeGreaterThan(slightlyLessTrusted);
+    // Within one quantum of the top key the next key decides.
+    const sameBandLowRel = lexicographicComposite(route, {
+      trust: 0.80004,
+      reliability: 0.2,
+      costScore: 1,
+      latencyNorm: 1,
+      riskScore: 1,
+    });
+    const sameBandHighRel = lexicographicComposite(route, {
+      trust: 0.8,
+      reliability: 0.9,
+      costScore: 0,
+      latencyNorm: 0,
+      riskScore: 0,
+    });
+    expect(sameBandHighRel).toBeGreaterThan(sameBandLowRel);
+    // The builder generalizes the same exactness to any key order (the relay's cost-first policy).
+    const costFirst = lexicographicOver(["costScore", "reliability", "trust"]);
+    const cheaper = costFirst(route, {
+      trust: 0,
+      reliability: 0,
+      costScore: 0.501,
+      latencyNorm: 0,
+      riskScore: 0,
+    });
+    const pricier = costFirst(route, {
+      trust: 1,
+      reliability: 1,
+      costScore: 0.5,
+      latencyNorm: 1,
+      riskScore: 1,
+    });
+    expect(cheaper).toBeGreaterThan(pricier);
   });
 });
 

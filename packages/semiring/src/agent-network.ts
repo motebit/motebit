@@ -28,11 +28,12 @@ import {
   ReliabilitySemiring,
   RegulatoryRiskSemiring,
   recordSemiring,
-  optimalPaths,
   optimalPathTrace,
 } from "@motebit/protocol";
 import type { Annotated } from "./provenance.js";
 import { annotatedSemiring } from "./provenance.js";
+import { chooseFromFrontier, frontierPaths } from "./pareto.js";
+import type { DimensionSemirings } from "./pareto.js";
 
 // ── Multi-dimensional edge weight ───────────────────────────────────
 
@@ -44,14 +45,29 @@ export interface RouteWeight {
   readonly regulatory_risk: number;
 }
 
-/** The multi-objective semiring: optimize trust, cost, latency, reliability, regulatory risk simultaneously. */
-export const RouteWeightSemiring: Semiring<RouteWeight> = recordSemiring({
+/**
+ * One semiring per routing dimension — the input to both `recordSemiring`
+ * (component-wise optima) and `paretoPathSemiring` (path-preserving frontier).
+ */
+export const ROUTE_WEIGHT_DIMENSIONS: DimensionSemirings<RouteWeight> = {
   trust: TrustSemiring,
   cost: CostSemiring,
   latency: LatencySemiring,
   reliability: ReliabilitySemiring,
   regulatory_risk: RegulatoryRiskSemiring,
-});
+};
+
+/**
+ * The multi-objective semiring: optimize trust, cost, latency, reliability,
+ * regulatory risk simultaneously. NOTE its ⊕ is component-wise: for a node
+ * reachable by two paths it yields the best trust of one beside the best
+ * cost of the other — a summary of achievable optima, NOT a route. Use it
+ * for closure/summary queries; RANK with `frontierPaths` (pareto.ts), which
+ * returns real paths carrying their own metrics.
+ */
+export const RouteWeightSemiring: Semiring<RouteWeight> = recordSemiring(
+  ROUTE_WEIGHT_DIMENSIONS as never,
+) as unknown as Semiring<RouteWeight>;
 
 /** RouteWeight semiring with provenance tracking. */
 export const AnnotatedRouteWeightSemiring: Semiring<Annotated<RouteWeight>> =
@@ -215,29 +231,52 @@ export function rankReachableAgents(
     reliability: 0.15,
     regulatory_risk: 0.2,
   },
-): Array<{ motebit_id: string; score: number; route: RouteWeight }> {
-  const paths = optimalPaths(graph, source);
-  const results: Array<{ motebit_id: string; score: number; route: RouteWeight }> = [];
-
-  for (const [nodeId, route] of paths) {
-    if (nodeId === source) continue;
-    if (route.trust === 0) continue; // unreachable or blocked
-
-    // Normalize cost, latency, and risk to [0,1] where higher is better
+): Array<{
+  motebit_id: string;
+  score: number;
+  /** The CHOSEN route's own composed metrics — a path that exists. */
+  route: RouteWeight;
+  /** The chosen route, as node ids after `source`. */
+  path: readonly string[];
+  /** Size of the non-dominated frontier the choice was made from. */
+  alternatives: number;
+}> {
+  // Path-preserving: rank over the Pareto frontier of REAL routes per
+  // candidate, never over the component-wise mixture. See pareto.ts.
+  const frontiers = frontierPaths(graph, ROUTE_WEIGHT_DIMENSIONS, source);
+  const scoreOf = (route: RouteWeight): number => {
     const costScore = route.cost === Infinity ? 0 : 1 / (1 + route.cost);
     const latencyScore = route.latency === Infinity ? 0 : 1 / (1 + route.latency / 1000);
     const riskScore = route.regulatory_risk === Infinity ? 0 : 1 / (1 + route.regulatory_risk);
-
-    const score =
+    return (
       route.trust * weights.trust +
       costScore * weights.cost +
       latencyScore * weights.latency +
       route.reliability * weights.reliability +
-      riskScore * (weights.regulatory_risk ?? 0);
-
-    results.push({ motebit_id: nodeId, score, route });
+      riskScore * (weights.regulatory_risk ?? 0)
+    );
+  };
+  const results: Array<{
+    motebit_id: string;
+    score: number;
+    route: RouteWeight;
+    path: readonly string[];
+    alternatives: number;
+  }> = [];
+  for (const [nodeId, frontier] of frontiers) {
+    if (nodeId === source) continue;
+    // Unreachable or blocked: a zero-trust route is never a candidate.
+    const viable = frontier.filter((p) => p.weight.trust > 0);
+    const pick = chooseFromFrontier(viable, (w) => scoreOf(w));
+    if (pick === null) continue;
+    results.push({
+      motebit_id: nodeId,
+      score: pick.score,
+      route: pick.chosen.weight,
+      path: pick.chosen.path,
+      alternatives: viable.length,
+    });
   }
-
   results.sort((a, b) => b.score - a.score);
   return results;
 }

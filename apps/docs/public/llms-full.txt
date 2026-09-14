@@ -4139,6 +4139,8 @@ A semiring `(S, +, *, 0, 1)` is an algebraic structure with two operations:
 
 The key property: `mul` distributes over `add`. This means the graph traversal algorithm can compose edges and aggregate alternatives in any order and get the same answer. One algorithm works for every routing concern.
 
+Two further preconditions make the traversal below terminate with that answer. `add` must be **selective** (idempotent: `add(a, a) = a`, so "better of" is a choice, not a sum), and weights must be **0-closed**: going around a cycle never improves a path (`add(one, x) = one`). Every semiring in the table satisfies both — trust and reliability are ≤ 1 under `*`, costs and latencies are ≥ 0 under `+`, so a loop can only make a route worse. A weight outside its domain (a trust edge above 1, a negative cost) breaks the guarantee, which is why edge weights are validated at the boundary.
+
 ## Concrete semirings
 
 Each semiring models a different routing concern over the same graph:
@@ -4154,7 +4156,7 @@ Each semiring models a different routing concern over the same graph:
 | `RegulatoryRiskSemiring` | `(min, +, Inf, 0)`       | Lowest regulatory risk path                                     |
 | `MaxProductLogSemiring`  | `(max, +, -Inf, 0)`      | Most likely path in log space (avoids underflow on long chains) |
 
-Trust and reliability compose multiplicatively — chaining two 80% trust edges yields 64% effective trust. Cost, latency, and regulatory risk compose additively — chaining a $0.01 edge and a $0.02 edge costs $0.03. Bottleneck composes via `min` — the capacity of a chain is its weakest link.
+Trust and reliability compose multiplicatively — chaining two 80% trust edges yields 64% effective trust. That is a modeling choice, not a law of nature: the product treats each hop as an independent chance of failure, which is the conservative reading (a chain is never more trustworthy than its weakest link, and always less trustworthy than a direct edge). Cost, latency, and regulatory risk compose additively — chaining a $0.01 edge and a $0.02 edge costs $0.03. Bottleneck composes via `min` — the capacity of a chain is its weakest link.
 
 ```typescript
 import {
@@ -4221,17 +4223,23 @@ const RouteWeightSemiring = recordSemiring({
 
 One graph traversal computes trust, cost, latency, reliability, and regulatory risk in a single pass.
 
+Read the result for what it is. Because `add` is component-wise, the value a record semiring assigns to a node reachable by two routes is the best trust of one route beside the best cost of the other — a true summary of the optima achievable **per dimension**, not a route. `{ trust: 0.81, cost: 1 }` can come back for a node whose only routes are `(0.81, 10)` and `(0.2, 1)`. Ranking on that summary, or reporting it as the hire's metrics, describes a route that does not exist. Ranking therefore runs over the [Pareto frontier semiring](#path-preserving-ranking-the-pareto-frontier-semiring) below, which keeps the pairs together.
+
 ### Mapped semiring
 
-Transform a semiring through an isomorphism — useful for branded types or unit conversions:
+Transform a semiring through an isomorphism — a pair of maps that are exact inverses of each other. The semiring laws survive only if nothing is lost in either direction, so a rounding step is not a valid map (`round(x * 100) / 100 ≠ x` breaks `add(a, a) = a` and associativity in the last digit). The intended uses are branded types and lossless unit changes:
 
 ```typescript
 import { mappedSemiring, CostSemiring } from "@motebit/protocol";
 
-const CentsSemiring = mappedSemiring(
+// Branded micro-units over the same integer arithmetic (1 USD = 1_000_000).
+// The maps are identities on the value — only the type changes — so every
+// semiring law holds exactly. Money enters the graph already in micro-units.
+type Micro = number & { readonly __brand: "Micro" };
+const MicroCostSemiring = mappedSemiring(
   CostSemiring,
-  (dollars) => Math.round(dollars * 100), // to cents
-  (cents) => cents / 100, // from cents
+  (micro: Micro) => micro as number,
+  (n: number) => n as Micro,
 );
 ```
 
@@ -4268,7 +4276,7 @@ const paths = optimalPaths(graph, "alice");
 
 Over `TrustSemiring`, this finds the most trusted delegation chain. Over `CostSemiring`, the cheapest pipeline. Over `BooleanSemiring`, the reachable set. Same algorithm, different semiring, different answer.
 
-Complexity: O(V \* E). Early termination when no values change.
+Complexity: O(V \* E) semiring operations for the scalar semirings, under the selective and 0-closed preconditions above. Early termination when no values change. For the frontier semiring each operation is itself O(frontier size), which `maxPaths` bounds.
 
 ### Floyd-Warshall: all-pairs transitive closure
 
@@ -4319,7 +4327,7 @@ import { TrustSemiring, WeightedDigraph, optimalPaths } from "@motebit/protocol"
 
 The protocol-floor symbols above are Apache-2.0 public surface. The `annotatedSemiring` combinator itself is reference-implementation judgment:
 
-<ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/annotated.ts">
+<ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/provenance.ts">
 
 ```typescript
 import { annotatedSemiring } from "@motebit/semiring";
@@ -4346,13 +4354,13 @@ const carol = paths.get("carol");
 
 </ReferenceExample>
 
-Every query returns both the optimal value and the derivation paths that produced it.
+Every query returns the per-dimension optimal value together with the set of paths that were **considered** in reaching it — the union of every route that survived the component-wise `add`. That set explains the derivation; it does not say which one route yields `value`, and under a record semiring no single route may. When the question is "which route was chosen, and what were its metrics?", ask the frontier semiring instead.
 
 ### Bounded provenance
 
 Provenance can grow exponentially in graphs with many parallel paths. `boundedProvenanceSemiring(maxPaths)` caps the number of tracked derivations, keeping the shortest paths (fewest hops = simplest explanation):
 
-<ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/annotated.ts">
+<ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/provenance.ts">
 
 ```typescript
 import { boundedProvenanceSemiring } from "@motebit/semiring";
@@ -4363,6 +4371,41 @@ const bounded = boundedProvenanceSemiring(10); // keep top 10 shortest derivatio
 </ReferenceExample>
 
 The `annotatedSemiring` function uses bounded provenance by default (cap of 100 paths).
+
+## Path-preserving ranking: the Pareto frontier semiring
+
+Change what "best path" means by changing the semiring — the routing doctrine applied to its own weak spot. When several routes reach the same agent and no single route is best in every dimension, the honest value of that node is the **set** of routes nothing else dominates. That set is a semiring element:
+
+- `add` (parallel) = union of the two frontiers, then drop every pair some other pair beats in **every** dimension — "either route works; keep only the ones a policy could pick"
+- `mul` (sequential) = compose weight **and** path pairwise, then drop dominated pairs
+- `zero` = the empty frontier (unreachable)
+- `one` = `{ (identity weight, []) }` (the empty route)
+
+Each element a query returns is a route that exists, carrying exactly the metrics its own edges compose to. A policy then chooses **among** real routes, and the chosen route's metrics are the chosen route's metrics.
+
+<ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/pareto.ts">
+
+```typescript
+import { frontierPaths, chooseFromFrontier, ROUTE_WEIGHT_DIMENSIONS } from "@motebit/semiring";
+
+// graph: self → worker (trust 0.2, cost 1) and self → helper → worker (trust 0.81, cost 10)
+const frontiers = frontierPaths(graph, ROUTE_WEIGHT_DIMENSIONS, "self");
+frontiers.get("worker");
+// [
+//   { weight: { trust: 0.2,  cost: 1,  … }, path: ["worker"] },
+//   { weight: { trust: 0.81, cost: 10, … }, path: ["helper", "worker"] },
+// ]
+// — never { trust: 0.81, cost: 1 }, which is what the record semiring reports.
+
+const trustFirst = chooseFromFrontier(frontiers.get("worker")!, (w) => w.trust);
+// trustFirst.chosen.path   → ["helper", "worker"]
+// trustFirst.chosen.weight → { trust: 0.81, cost: 10, … }   (its own edges, composed)
+// trustFirst.ordered       → chosen first, then the alternatives the policy weighed
+```
+
+</ReferenceExample>
+
+`paretoPathSemiring(dims, { maxPaths })` is the semiring itself, for callers that want to run `optimalPaths` over it directly. Dominance is judged per dimension by that dimension's own `add` (max for trust-like, min for cost-like), so adding a routing concern to `ROUTE_WEIGHT_DIMENSIONS` extends the frontier with no new code. Frontiers can grow with parallel routes; `maxPaths` (default 32) bounds them, keeping the fewest-hop pairs — the same discipline as bounded provenance, and the same caveat: with a bound in force the structure is a semiring up to that bound.
 
 ## Agent network bridge
 
@@ -4382,11 +4425,11 @@ interface RouteWeight {
 }
 ```
 
-`RouteWeightSemiring` is a `recordSemiring` over these five dimensions. One traversal computes all five simultaneously.
+`ROUTE_WEIGHT_DIMENSIONS` names the five per-dimension semirings; `RouteWeightSemiring` is the `recordSemiring` over them (one traversal, five per-dimension optima — a summary), and `frontierPaths(graph, ROUTE_WEIGHT_DIMENSIONS, source)` is the path-preserving traversal ranking uses.
 
 ### Building an agent graph
 
-<ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/agent-graph.ts">
+<ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/agent-network.ts">
 
 ```typescript
 import {
@@ -4405,7 +4448,7 @@ const trusted = mostTrustedPath(graph, selfId, targetId);
 const cheap = cheapestPath(graph, selfId, targetId);
 // { cost: 0.015, path: ["self", "agent-xyz"] }
 
-// Multi-dimensional ranking
+// Multi-dimensional ranking over each agent's frontier of real routes
 const ranked = rankReachableAgents(graph, selfId, {
   trust: 0.3,
   cost: 0.2,
@@ -4413,7 +4456,8 @@ const ranked = rankReachableAgents(graph, selfId, {
   reliability: 0.15,
   regulatory_risk: 0.2,
 });
-// [{ motebit_id, score, route }, ...]
+// [{ motebit_id, score, route, path, alternatives }, ...]
+//   route = the CHOSEN route's own composed metrics; path = that route's hops
 ```
 
 </ReferenceExample>
@@ -4428,7 +4472,7 @@ import { TrustSemiring } from "@motebit/protocol";
 
 `TrustSemiring` is on the Apache-2.0 floor; the `projectGraph` combinator that consumes it is reference-implementation judgment:
 
-<ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/agent-graph.ts">
+<ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/agent-network.ts">
 
 ```typescript
 import { projectGraph } from "@motebit/semiring";
@@ -4443,11 +4487,11 @@ const trustOnly = projectGraph(graph, TrustSemiring, (w) => w.trust);
 
 The `@motebit/market` package's `graphRankCandidates` function is the primary routing entry point. It bridges the semiring algebra with the market's candidate scoring system:
 
-1. Builds a `WeightedDigraph<RouteWeight>` from candidate profiles.
-2. Runs `optimalPaths` to compute algebraically composed per-dimension values.
+1. Builds a `WeightedDigraph<RouteWeight>` from candidate profiles (plus any peer edges from the delegation-receipt graph).
+2. Runs `frontierPaths` to compute, per candidate, the Pareto frontier of real routes — each carrying its own composed metrics and its path.
 3. Normalizes additive accumulators (cost, latency, risk) to `[0,1]` via sigmoid mapping.
-4. Applies a configurable composite function (default: weighted sum) to produce a single ordering value.
-5. Returns `RouteScore[]` for backward compatibility.
+4. Applies a configurable composite function (default: weighted sum) to every route on the frontier and keeps the winner; the hardware-attestation boost is folded along that route's own hops.
+5. Returns `RouteScore[]` whose `sub_scores` are the chosen route's metrics.
 
 <ReferenceExample pkg="@motebit/market" source="packages/market/src/graph-routing.ts">
 
@@ -4474,7 +4518,7 @@ const scores = graphRankCandidates(
 
 ### Explained routing
 
-`explainedRankCandidates` extends `graphRankCandidates` with provenance tracking. Each result includes `routing_paths` — the derivation paths that explain why the agent was chosen:
+`explainedRankCandidates` extends `graphRankCandidates` with the routes themselves. `routing_paths[0]` is the route that was chosen — the one whose composed metrics the score reports — and the remaining entries are the non-dominated alternatives the policy weighed, best first. `alternatives_considered` is the size of that frontier:
 
 <ReferenceExample pkg="@motebit/market" source="packages/market/src/graph-routing.ts">
 
@@ -4483,12 +4527,14 @@ import { explainedRankCandidates } from "@motebit/market";
 
 const explained = explainedRankCandidates(selfId, candidates, requirements);
 // explained[0].routing_paths → [["relay-a", "agent-xyz"], ["agent-xyz"]]
+//   [0] = chosen (via relay-a; its trust/cost/latency are what sub_scores report)
+//   [1] = the direct route, viable but not chosen under this policy
 // explained[0].alternatives_considered → 2
 ```
 
 </ReferenceExample>
 
-This provenance flows end-to-end: the relay returns `routing_choice` on task submission, `PlanEngine` attaches it to the delegation step summary, and it is signed into the execution ledger manifest — creating an immutable audit trail from semiring algebra to cryptographic proof.
+This flows end-to-end: the relay returns `routing_choice` on task submission, `PlanEngine` attaches it to the delegation step summary, and it is signed into the execution ledger manifest — an audit trail from semiring algebra to cryptographic proof. It is only worth signing because it is exact: the transcript names the route that was hired and that route's metrics, so a verifier can recompute both from the same edges. A component-wise summary would have signed a hire that never existed.
 
 ### Composite functions
 
@@ -4502,8 +4548,13 @@ import { weightedSumComposite, lexicographicComposite } from "@motebit/market";
 // Default: weighted sum (all dimensions contribute proportionally)
 // composite = trust * 0.3 + costScore * 0.2 + latencyNorm * 0.15 + ...
 
-// Lexicographic: trust first, then reliability, then cost
-// composite = trust * 1e6 + reliability * 1e3 + costScore
+// Lexicographic: trust first, then reliability, then cost — EXACT.
+// Each key is quantized to 0..1000 and packed in base 1001, so a strictly
+// higher trust band can never be outweighed by the keys below it.
+// (`trust * 1e6 + reliability * 1e3 + costScore` was not exact: an
+// unquantized reliability spans the whole 1e3 band.)
+// lexicographicOver(["costScore", "reliability", "trust"]) builds the
+// same exact order for any key priority — the relay's `cost` strategy uses it.
 ```
 
 </ReferenceExample>

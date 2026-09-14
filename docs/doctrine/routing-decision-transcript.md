@@ -19,7 +19,7 @@ The delegator signs a record of **its own act of choosing** — subject = signer
 - The **decision parameters**: weights, the level→prior mapping, the evidence-cap rule, exploration strength, and an algorithm-version tag.
 - The **outcome**: winner, the explored flag (did the draw override the exploit-favorite), or the pin (`targetWorkerId`) when the hire was a deterministic override — a pinned hire mints a trivial transcript recording the pin as the reason, no draw.
 
-The verification law is **recomputation**: `selectWorker` and `sampleBeta` are pure functions of exactly these inputs, so a verifier re-runs the ranking from the transcript and checks the winner matches the signature's claim. Determinism is same-version (golden vectors pin same-version identity; the cross-engine last-ULP caveat carries over from the exploration doctrine unchanged) — the version tag is load-bearing, not decorative.
+The verification law is **recomputation**: `selectWorker` and `sampleBeta` are pure functions of exactly these inputs, so a verifier re-runs the ranking from the transcript and checks the winner matches the signature's claim. Recomputation presupposes that what the transcript states about the winner is what the ranking actually saw — the route's metrics must be a real route's metrics, never a per-dimension optimum assembled across routes (the path-preserving clause of [`first-person-worker-routing.md`](first-person-worker-routing.md)); a transcript over a mixture would recompute cleanly and still describe a hire that never existed. Determinism is same-version (golden vectors pin same-version identity; the cross-engine last-ULP caveat carries over from the exploration doctrine unchanged) — the version tag is load-bearing, not decorative.
 
 ## Invariants
 
