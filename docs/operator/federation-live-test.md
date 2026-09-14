@@ -27,6 +27,15 @@ Both apps share the **same** `MOTEBIT_API_TOKEN`. The script registers a test ag
 
 The full staging fleet is larger — four relays in a K4 mesh; see "Staging fleet topology" below. The live test exercises only A + B; relays C + D are the §6.2 dispute-orchestration mesh complement that the orchestrator's Phase 8 will use.
 
+> **Parked since 2026-09-14.** Relays B, C, and D are scaled to **zero machines**; their volumes, relay identities, and peer trust state are kept, so the recorded proofs (`docs/proofs/live-sovereign-migration.md`) still point at real relays and the next run resumes with history rather than cold peers. They had run unattended on June code for three months — nothing deploys them automatically (only `motebit-sync-stg` redeploys from `main`). Wake one with a current build, then scale it up:
+>
+> ```bash
+> fly deploy -c services/relay/fly.staging-b.toml -a motebit-sync-stg-b   # builds main's relay
+> fly scale count 1 -a motebit-sync-stg-b --yes
+> ```
+>
+> Repeat for `-c` / `-d` with their configs. Park again with `fly scale count 0 -a <app> --yes` (volumes survive; `fly apps destroy` would not be reversible and would discard the identities).
+
 To rotate the test token:
 
 ```bash
