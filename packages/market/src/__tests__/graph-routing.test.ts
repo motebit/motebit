@@ -6,8 +6,10 @@ import {
   computeTrustClosure,
   findTrustedRoute,
   lexicographicOver,
+  lexicographicComposite,
 } from "../graph-routing.js";
 import type { ExplainedRouteScore } from "../graph-routing.js";
+import { HW_ATTESTATION_HARDWARE } from "@motebit/semiring";
 import type { CandidateProfile, TaskRequirements } from "../scoring.js";
 import { AgentTrustLevel, asMotebitId, asListingId } from "@motebit/protocol";
 import type { AgentTrustRecord, AgentServiceListing } from "@motebit/protocol";
@@ -343,6 +345,52 @@ describe("graphRankCandidates", () => {
     )!;
     expect(plain.sub_scores.trust).toBeCloseTo(viaHelper.sub_scores.trust, 10);
     expect(plain.composite).toBeCloseTo(viaHelper.composite, 10);
+  });
+
+  it("hardware attestation is a frontier dimension: a route dominated on the five plain dimensions but hardware-backed survives pruning and can win", () => {
+    // Direct: self → worker, trust 0.9 (Trusted), no attestation (hw 0).
+    // Via helper: self → helper (Trusted 0.9, hardware-attested) → worker
+    // (peer edge trust 0.85, hardware-attested hop): trust 0.765, more cost,
+    // more latency, lower reliability — dominated on all five plain
+    // dimensions. Its chain hw is 1.0, so after the boost it scores
+    // 0.765 × 1.2 = 0.918 > 0.9. Pruning on five dimensions would have
+    // discarded it before the boost was applied.
+    const helper = makeCandidate({
+      motebit_id: asMotebitId("helper"),
+      trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Trusted }),
+      hardware_attestation: { platform: "secure_enclave", key_exported: false },
+      listing: makeListing({ capabilities: ["web_search"], motebit_id: asMotebitId("helper") }),
+    });
+    const worker = makeCandidate({
+      motebit_id: asMotebitId("worker"),
+      trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Trusted }),
+      listing: makeListing({ capabilities: ["web_search"], motebit_id: asMotebitId("worker") }),
+    });
+    const peerEdges = [
+      {
+        from: "helper",
+        to: "worker",
+        weight: { trust: 0.85, cost: 0.5, latency: 200, reliability: 0.9, regulatory_risk: 0 },
+        hw_attestation: HW_ATTESTATION_HARDWARE,
+      },
+    ];
+    const graph = buildRoutingGraph(SELF_ID, [helper, worker], peerEdges);
+    const direct = graph.getEdge(SELF_ID, "worker")!;
+    const toHelper = graph.getEdge(SELF_ID, "helper")!;
+    // Precondition of the test: the two-hop route really is dominated on the five plain dimensions.
+    expect(toHelper.trust * 0.85).toBeLessThan(direct.trust);
+    expect(toHelper.cost + 0.5).toBeGreaterThan(direct.cost);
+    expect(toHelper.latency + 200).toBeGreaterThan(direct.latency);
+    expect(toHelper.reliability * 0.9).toBeLessThanOrEqual(direct.reliability);
+
+    const w = explainedRankCandidates(SELF_ID, [helper, worker], defaultReqs, {
+      peerEdges,
+      compositeFunction: lexicographicComposite, // trust first
+    }).find((s) => s.motebit_id === "worker")!;
+    expect(w.alternatives_considered).toBe(2); // both routes on the frontier
+    expect(w.routing_paths[0]).toEqual(["helper", "worker"]);
+    expect(w.sub_scores.trust).toBeCloseTo(Math.min(1, toHelper.trust * 0.85 * 1.2), 10);
+    expect(w.sub_scores.trust).toBeGreaterThan(direct.trust);
   });
 
   it("a peer edge with a missing component never poisons the ranking with NaN", () => {
@@ -719,7 +767,7 @@ describe("lexicographicComposite", () => {
     expect(result).toBe(1_003_003_000);
   });
 
-  it("is EXACT: a strictly higher priority key can never be outweighed by the keys below it", async () => {
+  it("is exact over QUANTIZED keys (1e-3 bands): a full quantum at a higher key can never be outweighed below it; within a band the next key decides", async () => {
     const { lexicographicComposite, lexicographicOver } = await import("../graph-routing.js");
     const route = { trust: 0, cost: 0, latency: 0, reliability: 0, regulatory_risk: 0 };
     // Under the old `trust*1e6 + reliability*1e3 + cost` packing, a 1e-3 trust
@@ -756,7 +804,7 @@ describe("lexicographicComposite", () => {
       riskScore: 0,
     });
     expect(sameBandHighRel).toBeGreaterThan(sameBandLowRel);
-    // The builder generalizes the same exactness to any key order (the relay's cost-first policy).
+    // The builder generalizes the same quantized order to any key priority (the relay's cost-first policy).
     const costFirst = lexicographicOver(["costScore", "reliability", "trust"]);
     const cheaper = costFirst(route, {
       trust: 0,

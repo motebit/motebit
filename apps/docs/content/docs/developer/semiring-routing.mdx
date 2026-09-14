@@ -16,7 +16,7 @@ A semiring `(S, +, *, 0, 1)` is an algebraic structure with two operations:
 
 The key property: `mul` distributes over `add`. This means the graph traversal algorithm can compose edges and aggregate alternatives in any order and get the same answer. One algorithm works for every routing concern.
 
-Two further preconditions make the traversal below terminate with that answer. `add` must be **selective** (idempotent: `add(a, a) = a`, so "better of" is a choice, not a sum), and weights must be **0-closed**: going around a cycle never improves a path (`add(one, x) = one`). Every semiring in the table satisfies both — trust and reliability are ≤ 1 under `*`, costs and latencies are ≥ 0 under `+`, so a loop can only make a route worse. A weight outside its domain (a trust edge above 1, a negative cost) breaks the guarantee, which is why edge weights are validated at the boundary.
+Two further preconditions make the traversal below terminate with that answer. `add` must be **idempotent** (`add(a, a) = a` — combining a route with itself changes nothing), and weights must be **0-closed**: going around a cycle never improves a path (`add(one, x) = one`). Every scalar semiring in the table is in fact **selective** (`add(a, b)` is always one of `a` or `b` — a choice, not a sum), which is stronger than idempotent; the frontier semiring below is idempotent but _not_ selective (the union of two frontiers is neither operand), and the traversal is correct for it all the same. Trust and reliability are ≤ 1 under `*`, costs and latencies are ≥ 0 under `+`, so a loop can only make a route worse. A weight outside its domain (a trust edge above 1, a negative cost) breaks the guarantee, which is why edge weights are validated at the boundary.
 
 ## Concrete semirings
 
@@ -33,7 +33,7 @@ Each semiring models a different routing concern over the same graph:
 | `RegulatoryRiskSemiring` | `(min, +, Inf, 0)`       | Lowest regulatory risk path                                     |
 | `MaxProductLogSemiring`  | `(max, +, -Inf, 0)`      | Most likely path in log space (avoids underflow on long chains) |
 
-Trust and reliability compose multiplicatively — chaining two 80% trust edges yields 64% effective trust. That is a modeling choice, not a law of nature: the product treats each hop as an independent chance of failure, which is the conservative reading (a chain is never more trustworthy than its weakest link, and always less trustworthy than a direct edge). Cost, latency, and regulatory risk compose additively — chaining a $0.01 edge and a $0.02 edge costs $0.03. Bottleneck composes via `min` — the capacity of a chain is its weakest link.
+Trust and reliability compose multiplicatively — chaining two 80% trust edges yields 64% effective trust. That is a modeling choice, not a law of nature: the product treats each hop as an independent chance of failure. It guarantees only that a chain is never more trustworthy than any one of its own links; it says nothing about how a chain compares with a _separate_ direct edge (a 0.9 × 0.9 chain outranks a 0.1 direct edge), and independence is an assumption a correlated failure would violate. Cost, latency, and regulatory risk compose additively — chaining a $0.01 edge and a $0.02 edge costs $0.03. Bottleneck composes via `min` — the capacity of a chain is its weakest link.
 
 ```typescript
 import {
@@ -153,7 +153,7 @@ const paths = optimalPaths(graph, "alice");
 
 Over `TrustSemiring`, this finds the most trusted delegation chain. Over `CostSemiring`, the cheapest pipeline. Over `BooleanSemiring`, the reachable set. Same algorithm, different semiring, different answer.
 
-Complexity: O(V \* E) semiring operations for the scalar semirings, under the selective and 0-closed preconditions above. Early termination when no values change. For the frontier semiring each operation is itself O(frontier size), which `maxPaths` bounds.
+Complexity: O(V \* E) semiring operations for the scalar semirings, under the idempotent and 0-closed preconditions above. Early termination when no values change. For the frontier semiring each operation is itself O(frontier size), which `maxPaths` bounds.
 
 ### Floyd-Warshall: all-pairs transitive closure
 
@@ -282,7 +282,13 @@ const trustFirst = chooseFromFrontier(frontiers.get("worker")!, (w) => w.trust);
 
 </ReferenceExample>
 
-`paretoPathSemiring(dims, { maxPaths })` is the semiring itself, for callers that want to run `optimalPaths` over it directly. Dominance is judged per dimension by that dimension's own `add` (max for trust-like, min for cost-like), so adding a routing concern to `ROUTE_WEIGHT_DIMENSIONS` extends the frontier with no new code. Frontiers can grow with parallel routes; `maxPaths` (default 32) bounds them, keeping the fewest-hop pairs — the same discipline as bounded provenance, and the same caveat: with a bound in force the structure is a semiring up to that bound.
+`paretoPathSemiring(dims, { maxPaths })` is the semiring itself, for callers that want to run `optimalPaths` over it directly. Dominance is judged per dimension by that dimension's own `add` (max for trust-like, min for cost-like), so adding a routing concern to the dimension record extends the frontier with no new code.
+
+What is exact and what is not — the contract a caller is relying on:
+
+1. **Unbounded, the frontier is exact.** It equals the Pareto set of simple paths from the source (ties on weight resolve to the fewest-hop path), independent of edge insertion order. The reference tests check this against brute-force enumeration on random graphs.
+2. **A policy must be monotone in the frontier's dimensions.** Pruning discards a route only when another is at least as good in _every_ dimension, so a policy that could still prefer the discarded route — one that reads an input outside the dimensions — is unsound. The market ranks on six dimensions, not five, for exactly this reason: chain hardware attestation multiplies trust after the frontier is formed, so it is lifted into the weight (`min` along the route) rather than applied afterwards.
+3. **The bound is an approximation.** `maxPaths` (default 32) keeps the fewest-hop pairs; it can drop the pair a policy would have chosen, and addition under it is order-sensitive in the tail. Reported metrics stay honest — a surviving pair is still a real route with its own metrics — only optimality is bounded. Same discipline and same caveat as bounded provenance.
 
 ## Agent network bridge
 
@@ -395,7 +401,7 @@ const scores = graphRankCandidates(
 
 ### Explained routing
 
-`explainedRankCandidates` extends `graphRankCandidates` with the routes themselves. `routing_paths[0]` is the route that was chosen — the one whose composed metrics the score reports — and the remaining entries are the non-dominated alternatives the policy weighed, best first. `alternatives_considered` is the size of that frontier:
+`explainedRankCandidates` extends `graphRankCandidates` with the paths themselves. `routing_paths[0]` is the path in the routing graph whose composed metrics the score reports — the evidence that justified the choice — and the remaining entries are the non-dominated alternatives the policy weighed, best first. `alternatives_considered` is the size of that frontier:
 
 <ReferenceExample pkg="@motebit/market" source="packages/market/src/graph-routing.ts">
 
@@ -404,14 +410,14 @@ import { explainedRankCandidates } from "@motebit/market";
 
 const explained = explainedRankCandidates(selfId, candidates, requirements);
 // explained[0].routing_paths → [["relay-a", "agent-xyz"], ["agent-xyz"]]
-//   [0] = chosen (via relay-a; its trust/cost/latency are what sub_scores report)
-//   [1] = the direct route, viable but not chosen under this policy
+//   [0] = the path whose trust/cost/latency sub_scores report (via relay-a)
+//   [1] = the direct path, viable but not chosen under this policy
 // explained[0].alternatives_considered → 2
 ```
 
 </ReferenceExample>
 
-This flows end-to-end: the relay returns `routing_choice` on task submission, `PlanEngine` attaches it to the delegation step summary, and it is signed into the execution ledger manifest — an audit trail from semiring algebra to cryptographic proof. It is only worth signing because it is exact: the transcript names the route that was hired and that route's metrics, so a verifier can recompute both from the same edges. A component-wise summary would have signed a hire that never existed.
+This flows end-to-end: the relay returns `routing_choice` on task submission, `PlanEngine` attaches it to the delegation step summary, and it is signed into the execution ledger manifest — an audit trail from semiring algebra to cryptographic proof. It is only worth signing because it is exact: the transcript names a path that exists in the graph and that path's own metrics, so a verifier can recompute both from the same edges. A component-wise summary would have signed evidence that does not exist. Read the path for what it is: the graph's edges are recorded delegation history, discovery and federation peers, so `routing_paths[0]` is the **trust evidence** behind the choice, not a claim that each intermediary executed part of the task. Dispatch goes to `selected_agent` (directly, or via the federation peer named on the path), and who actually did the work is proven by receipts, never by a routing path.
 
 ### Composite functions
 
@@ -425,13 +431,15 @@ import { weightedSumComposite, lexicographicComposite } from "@motebit/market";
 // Default: weighted sum (all dimensions contribute proportionally)
 // composite = trust * 0.3 + costScore * 0.2 + latencyNorm * 0.15 + ...
 
-// Lexicographic: trust first, then reliability, then cost — EXACT.
-// Each key is quantized to 0..1000 and packed in base 1001, so a strictly
-// higher trust band can never be outweighed by the keys below it.
-// (`trust * 1e6 + reliability * 1e3 + costScore` was not exact: an
-// unquantized reliability spans the whole 1e3 band.)
-// lexicographicOver(["costScore", "reliability", "trust"]) builds the
-// same exact order for any key priority — the relay's `cost` strategy uses it.
+// Lexicographic: trust first, then reliability, then cost — exact over
+// keys QUANTIZED to 1e-3. Each key is rounded to 0..1000 and packed in
+// base 1001, so a trust gap of one quantum or more can never be outweighed
+// by the keys below it; two trusts inside the same 1e-3 band are equal by
+// policy and reliability decides. That band is the declared tie tolerance.
+// (`trust * 1e6 + reliability * 1e3 + costScore` had no such contract: an
+// unquantized reliability spanned the whole 1e3 band.)
+// lexicographicOver(["costScore", "reliability", "trust"]) builds the same
+// quantized order for any key priority — the relay's `cost` strategy uses it.
 ```
 
 </ReferenceExample>
