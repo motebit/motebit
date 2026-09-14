@@ -200,13 +200,13 @@ export interface MoleculeConfig {
    *     `dispatch_token` for this worker and task.
    *   - `"open"`  — any authenticated caller may submit work (pre-admission
    *     behavior).
-   * Default: `"open"`, with a LOUD boot warning when the molecule is PRICED
-   * (any listing entry with `unit_cost > 0`) and relay-registered — that is
-   * the shape where a free identity can run priced work for nothing. The
-   * flip to `"relay"`-by-default-when-priced is deferred until every
-   * first-party direct caller of a priced atom forwards the relay's token
-   * (trigger recorded in the doctrine doc); services that spend on inference
-   * opt in explicitly today.
+   * Default: `"relay"` when the molecule is PRICED (any listing entry with
+   * `unit_cost > 0`) and relay-registered — a priced listing is a promise
+   * that the work is bought — else `"open"`. Flipped 2026-09-13 once every
+   * first-party direct caller of a priced atom carried the relay's token
+   * (`docs/doctrine/task-admission.md`). Set `"open"` explicitly (or
+   * MOTEBIT_TASK_ADMISSION=open) to reopen a priced service; that is an
+   * operator decision, never a default.
    */
   taskAdmission?: "relay" | "open";
 
@@ -849,21 +849,23 @@ export async function resolveTaskAdmission(
     }
   }
   const configured = config.taskAdmission ?? envDefaults.taskAdmission;
-  const mode = configured ?? "open";
+  // Default: a PRICED, relay-registered listing is a promise that the work is
+  // bought, so it runs only relay-admitted work. Reopening it is an explicit
+  // operator decision (config or MOTEBIT_TASK_ADMISSION=open), logged as such.
+  const defaulted = priced && Boolean(config.syncUrl) ? "relay" : "open";
+  const mode = configured ?? defaulted;
   if (mode === "open") {
-    if (configured == null && priced && config.syncUrl) {
-      // The exact shape the admission primitive exists for, left open. Say
-      // so on every boot — a priced listing is a promise that the work is
-      // bought, and without admission any relay-registered identity can
-      // run it for free. (Default flip deferred: docs/doctrine/task-admission.md.)
+    if (configured != null && priced && config.syncUrl) {
       log(
-        'task admission: OPEN on a PRICED relay-registered listing — any relay-registered identity can run this work without paying. Set taskAdmission: "relay" (MOTEBIT_TASK_ADMISSION=relay) to require the relay\'s dispatch token.',
+        "task admission: OPEN by explicit operator choice on a PRICED relay-registered listing — any relay-registered identity can run this work without paying.",
       );
     } else {
       log(`task admission: open (${configured != null ? "configured" : "unpriced or no relay"})`);
     }
     return undefined;
   }
+  if (configured == null)
+    log("task admission: relay dispatch required (default for a priced listing)");
 
   // Empty strings are "unset", never a pinned key; a NON-empty malformed pin is
   // a configuration error that must stop the boot, not a silent deny-all that

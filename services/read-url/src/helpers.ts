@@ -24,9 +24,13 @@ export function loadConfig() {
      */
     authToken: process.env["MOTEBIT_AUTH_TOKEN"],
     publicUrl: process.env["MOTEBIT_PUBLIC_URL"],
-    // Inc 3 — priced now the multi-hop settlement arc landed. Listed so the
-    // atom is a payable market participant; a paying delegator settles the hop
-    // P2P. Default 0 (unpriced) keeps back-compat for a bare boot.
+    /** Pinned relay Ed25519 public key (hex) for task admission; TOFU from the well-known when unset. */
+    relayPublicKey: process.env["MOTEBIT_RELAY_PUBLIC_KEY"]?.trim() || undefined,
+    // Unpriced by decision (2026-09-13): read-url is an internal utility atom
+    // whose value is priced into the molecules that call it (research $0.25,
+    // code-review $0.20). A separate price created an unpayable internal hop
+    // (code-review has no payer seam) that kept admission open here. A price
+    // may return when an external payer exists; the listing shape stays.
     unitCost: parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0"),
   };
 }
