@@ -23,6 +23,7 @@ import { redactSensitiveEvents } from "./redaction.js";
 import { propagateDeletionForEvent } from "./deletion-propagation.js";
 import type { TaskQueueEntry } from "./tasks.js";
 import type { createLogger } from "./logger.js";
+import type { AuthEvent } from "./auth-events.js";
 
 export interface ConnectedDevice {
   ws: WSContext;
@@ -45,6 +46,8 @@ export interface WebSocketDeps {
   wsLimiter: FixedWindowLimiter;
   isTokenBlacklisted: (jti: string, motebitId: string) => boolean;
   isAgentRevoked: (motebitId: string) => boolean;
+  /** Durable auth-event record (auth-events.ts); optional for hand-built test deps. */
+  recordAuthEvent?: (event: AuthEvent) => void;
   verifySignedTokenForDevice: (
     token: string,
     motebitId: string,
@@ -113,6 +116,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
           // Master token bypass
           if (apiToken != null && apiToken !== "" && token === apiToken) {
             logger.info("auth.master_token_ws", { motebitId: mid });
+            deps.recordAuthEvent?.({ kind: "master_token_ws", path: `/ws/sync/${mid}` });
             return true;
           }
           if (!token.includes(".")) {

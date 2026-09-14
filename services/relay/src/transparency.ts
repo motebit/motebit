@@ -136,10 +136,20 @@ export const DECLARATION_CONTENT = {
       enforcement:
         "three layers — agent-boundary gating in packages/privacy-layer, relay ingress redaction in services/relay/src/redaction.ts (applied on both the HTTP and WebSocket sync push paths before eventStore.append), and optional client-side E2E encryption in packages/sync-engine",
     },
+    auth_events: {
+      tables: ["relay_auth_events"],
+      observable: [
+        "every presentation of the operator master token — HTTP method, route path, request correlation id",
+        "every refused signed token — the token's claimed motebit_id, the audience the route expected, the rejection reason, route path, correlation id",
+        "never the token bytes; never the client IP (see ip_addresses below)",
+      ],
+      retention_window:
+        '30-day rolling window, swept every minute by the task-cleanup loop; an operator\'s audit aid ("who presented the master token, what did we refuse") readable at GET /api/v1/admin/auth-events, not a surveillance log',
+    },
     ip_addresses: {
       handling: "transient",
       detail:
-        "client IP is read for rate limiting (in-memory FixedWindowLimiter, no DB) and included in auth-event log lines (Fly.io retention applies, no app-level persistence)",
+        "client IP is read for rate limiting (in-memory FixedWindowLimiter, no DB) and included in auth-event LOG LINES only (Fly.io retention applies); the relay's own auth-event record (relay_auth_events) deliberately has no IP column — no app-level persistence",
       no_app_db_storage: true,
     },
   },
@@ -568,6 +578,15 @@ export function renderMarkdown(): string {
   lines.push("");
   lines.push(`Retention window: ${c.retention.content.retention_window}.`);
   lines.push("");
+  lines.push("");
+  lines.push("### Auth events");
+  lines.push("");
+  lines.push(`Tables: ${c.retention.auth_events.tables.map((t) => `\`${t}\``).join(", ")}.`);
+  lines.push("");
+  lines.push("Observable:");
+  for (const item of c.retention.auth_events.observable) lines.push(`- ${item}`);
+  lines.push("");
+  lines.push(`Retention window: ${c.retention.auth_events.retention_window}.`);
   lines.push(`Enforcement: ${c.retention.content.enforcement}.`);
   lines.push("");
 

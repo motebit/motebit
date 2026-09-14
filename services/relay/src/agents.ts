@@ -100,6 +100,7 @@ import { ExecutionReceiptSchema } from "@motebit/wire-schemas";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import { getAccountBalanceDetailed } from "./accounts.js";
 import { listStoredReceipts, getStoredReceiptJson } from "./receipts-store.js";
+import type { AuthEvent } from "./auth-events.js";
 import {
   isAgentRevocationReason,
   type AgentRevocationReason,
@@ -414,6 +415,8 @@ export interface AgentAuthMiddlewareDeps {
   verifySignedTokenForDevice: AgentsDeps["verifySignedTokenForDevice"];
   isTokenBlacklisted: AgentsDeps["isTokenBlacklisted"];
   isAgentRevoked: AgentsDeps["isAgentRevoked"];
+  /** Durable auth-event record (auth-events.ts); optional for hand-built test deps. */
+  recordAuthEvent?: (event: AuthEvent) => void;
 }
 
 /**
@@ -503,6 +506,7 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
     verifySignedTokenForDevice,
     isTokenBlacklisted,
     isAgentRevoked,
+    recordAuthEvent,
   } = deps;
 
   app.use("/api/v1/agents/*", async (c, next) => {
@@ -521,8 +525,16 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
     }
     const token = authHeader.slice(7);
 
-    // Master token bypass (operator).
+    // Master token bypass (operator) — recorded: a master-token presentation
+    // on an agent route is exactly the shape the retirement arc closed, so it
+    // must be visible if it ever comes back.
     if (apiToken != null && apiToken !== "" && token === apiToken) {
+      recordAuthEvent?.({
+        kind: "master_token",
+        method,
+        path,
+        correlationId: c.req.header("x-correlation-id") ?? null,
+      });
       await next();
       return;
     }
@@ -575,13 +587,23 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
       // Rejection legibility (#460): this second auth layer rejecting
       // silently is exactly what made the balance 401 undiagnosable — the
       // dedicated dualAuth logged nothing because it never rejected.
-      (reason) =>
+      (reason) => {
         logger.warn("auth.agent_token_rejected", {
           reason,
           expectedAudience: agentAudience,
           mid: claims.mid,
           path,
-        }),
+        });
+        recordAuthEvent?.({
+          kind: "agent_token_rejected",
+          method,
+          path,
+          motebitId: claims.mid,
+          audience: agentAudience,
+          reason,
+          correlationId: c.req.header("x-correlation-id") ?? null,
+        });
+      },
     );
     if (!valid) {
       throw new HTTPException(401, { message: "Token verification failed" });

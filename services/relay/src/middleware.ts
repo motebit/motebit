@@ -23,6 +23,7 @@ import {
 import { FixedWindowLimiter } from "./rate-limiter.js";
 import type { verifySignedTokenForDevice, parseTokenPayloadUnsafe } from "./auth.js";
 import { createLogger } from "./logger.js";
+import type { AuthEvent } from "./auth-events.js";
 import { requestContext, enrichRequestContext } from "./request-context.js";
 import type { RequestContext } from "./request-context.js";
 import { RelayError, RateLimitError, AuthenticationError, AuthorizationError } from "./errors.js";
@@ -80,6 +81,13 @@ export interface MiddlewareDeps {
    * failed submission never strands its key in 'processing'.
    */
   releaseIdempotencyClaim?: (key: string, motebitId: string) => void;
+  /**
+   * Durable auth-event record (auth-events.ts): every master-token
+   * presentation and every refused signed token, so posture is proven from a
+   * record the relay keeps rather than a log tail. Optional so hand-built
+   * test deps still compile; production always wires it.
+   */
+  recordAuthEvent?: (event: AuthEvent) => void;
 }
 
 export interface MiddlewareResult {
@@ -177,6 +185,12 @@ export function createDualAuth(deps: MiddlewareDeps) {
         path: new URL(c.req.url, "http://localhost").pathname,
         ip: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? "unknown",
       });
+      deps.recordAuthEvent?.({
+        kind: "master_token",
+        method: c.req.method,
+        path: new URL(c.req.url, "http://localhost").pathname,
+        correlationId: c.req.header("x-correlation-id") ?? null,
+      });
       await next();
       return;
     }
@@ -197,14 +211,24 @@ export function createDualAuth(deps: MiddlewareDeps) {
       // Rejection legibility (#460): a device-auth 401 previously left ZERO
       // server-side trace (witnessed live 2026-07-29 — undiagnosable from
       // the operator seat). Log the structured reason; never the token.
-      (reason) =>
+      (reason) => {
         logger.warn("auth.device_token_rejected", {
           correlationId: c.req.header("x-correlation-id") ?? "none",
           reason,
           expectedAudience,
           mid: claims.mid,
           path: new URL(c.req.url, "http://localhost").pathname,
-        }),
+        });
+        deps.recordAuthEvent?.({
+          kind: "device_token_rejected",
+          method: c.req.method,
+          path: new URL(c.req.url, "http://localhost").pathname,
+          motebitId: claims.mid,
+          audience: expectedAudience,
+          reason,
+          correlationId: c.req.header("x-correlation-id") ?? null,
+        });
+      },
     );
     if (!valid) {
       throw new AuthenticationError("AUTH_INVALID_TOKEN", "Token verification failed");
@@ -390,6 +414,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   app.use("/api/v1/admin/fees", rl(expensiveLimiter));
   app.use("/api/v1/admin/health", rl(expensiveLimiter));
   app.use("/api/v1/admin/transparency", rl(expensiveLimiter));
+  app.use("/api/v1/admin/auth-events", rl(expensiveLimiter));
   app.use("/api/v1/admin/credential-anchoring", rl(expensiveLimiter));
   app.use("/api/v1/admin/treasury-reconciliation", rl(expensiveLimiter));
   app.use("/api/v1/admin/receipts/*", rl(expensiveLimiter));
@@ -439,6 +464,12 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
 
       // Master token bypass
       if (apiToken != null && apiToken !== "" && token === apiToken) {
+        deps.recordAuthEvent?.({
+          kind: "master_token",
+          method: c.req.method,
+          path: new URL(c.req.url, "http://localhost").pathname,
+          correlationId: c.req.header("x-correlation-id") ?? null,
+        });
         await next();
         return;
       }
@@ -467,14 +498,24 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
         deps.isTokenBlacklisted,
         deps.isAgentRevoked,
         undefined,
-        (reason) =>
+        (reason) => {
           logger.warn("auth.device_token_rejected", {
             correlationId: c.req.header("x-correlation-id") ?? "none",
             reason,
             expectedAudience: "sync",
             mid: motebitId,
             path: new URL(c.req.url, "http://localhost").pathname,
-          }),
+          });
+          deps.recordAuthEvent?.({
+            kind: "device_token_rejected",
+            method: c.req.method,
+            path: new URL(c.req.url, "http://localhost").pathname,
+            motebitId,
+            audience: "sync",
+            reason,
+            correlationId: c.req.header("x-correlation-id") ?? null,
+          });
+        },
       );
       if (!verified) {
         throw new AuthorizationError(
@@ -560,6 +601,15 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
         return;
       }
       const mw = bearerAuth({ token: apiToken });
+      const presented = c.req.header("authorization");
+      if (presented === `Bearer ${apiToken}`) {
+        deps.recordAuthEvent?.({
+          kind: "master_token",
+          method: c.req.method,
+          path: c.req.path,
+          correlationId: c.req.header("x-correlation-id") ?? null,
+        });
+      }
       // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance between middleware and handler signatures
       return mw(c as never, next);
     });
@@ -821,6 +871,7 @@ export function registerAuthMiddleware(deps: MiddlewareDeps): void {
   app.use("/api/v1/admin/fees", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/health", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/transparency", bearerAuth({ token: apiToken }));
+  app.use("/api/v1/admin/auth-events", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/credential-anchoring", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/treasury-reconciliation", bearerAuth({ token: apiToken }));
   // Admin receipt audit — master token only; serves byte-identical
