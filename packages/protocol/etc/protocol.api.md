@@ -1293,6 +1293,7 @@ export interface DelegatedStepResult {
         sub_scores: Record<string, number>;
         routing_paths: string[][];
         alternatives_considered: number;
+        trust_evidence_path?: string[];
     };
     // (undocumented)
     step_id: string;
@@ -1963,6 +1964,7 @@ export interface ExecutionStepSummary {
             };
             routing_paths: string[][];
             alternatives_considered: number;
+            trust_evidence_path?: string[];
         };
     };
     // (undocumented)

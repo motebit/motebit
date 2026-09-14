@@ -214,6 +214,13 @@ export function cheapestPath(
  *
  * Returns agents sorted by a composite of trust, cost, latency, reliability.
  * Weights determine the trade-off between dimensions.
+ *
+ * Every edge of `graph` is treated as a hop the task would TRAVERSE: cost,
+ * latency, reliability and risk accumulate along the chosen route. Callers
+ * whose graphs mix executed hops with evidence-only relationships (recorded
+ * delegations) must split them first — `@motebit/market` does (evidence
+ * trust from every edge; execution metrics from executed hops only). The
+ * `selectWorker` star graph is single-hop, so the two coincide there.
  */
 export function rankReachableAgents(
   graph: WeightedDigraph<RouteWeight>,

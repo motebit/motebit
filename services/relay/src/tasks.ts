@@ -2753,6 +2753,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           sub_scores: Record<string, number>;
           routing_paths: string[][];
           alternatives_considered: number;
+          trust_evidence_path?: string[];
         }
       | undefined;
 
@@ -2891,6 +2892,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         let federationEdges: Array<{
           from: string;
           to: string;
+          kind: "evidence" | "traversed";
           weight: {
             trust: number;
             cost: number;
@@ -3144,6 +3146,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           const federationPeerEdges = peerRelayNodes.map((node) => ({
             from: selfId,
             to: node.peerRelayId,
+            kind: "traversed" as const, // the forward really goes through the peer
             weight: {
               trust: node.trust,
               cost: 0,
@@ -3196,6 +3199,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               sub_scores: topScore.sub_scores,
               routing_paths: topScore.routing_paths,
               alternatives_considered: topScore.alternatives_considered,
+              trust_evidence_path: topScore.trust_evidence_path,
             };
 
             // A task forwards to at most ONE federated relay: fanning one task

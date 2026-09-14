@@ -2045,6 +2045,8 @@ export interface DelegatedStepResult {
     sub_scores: Record<string, number>;
     routing_paths: string[][];
     alternatives_considered: number;
+    /** Optional (additive): the vouching path that justified `sub_scores.trust` — evidence, not execution. */
+    trust_evidence_path?: string[];
   };
 }
 
@@ -2183,10 +2185,12 @@ export interface ExecutionStepSummary {
         capability_match: number;
         availability: number;
       };
-      /** `[0]` = the path (agent ids, caller → worker) in the routing graph whose composed metrics the sub_scores reflect — the evidence that justified the choice, not a record of who executed; then the non-dominated alternatives, best first. Pinned hires report `[[worker]]`. */
+      /** `[0]` = the EXECUTED route (agent ids, caller → worker: the hops the task takes — `[worker]` for a direct hire, `[peer_relay, worker]` for a federated one) whose composed execution metrics the sub_scores reflect; then the non-dominated executed alternatives, best first. Pinned hires report `[[worker]]`. */
       routing_paths: string[][];
-      /** Number of non-dominated viable routes to the selected agent the policy chose among (0 for a pinned hire). */
+      /** Number of non-dominated executed routes to the selected agent the policy chose among (0 for a pinned hire). */
       alternatives_considered: number;
+      /** Optional (additive, 2026-09-14): the path through EVERY edge — recorded delegations included — that justified `sub_scores.trust`. A chain of vouching, never a record of who executed the task. */
+      trust_evidence_path?: string[];
     };
   };
 }

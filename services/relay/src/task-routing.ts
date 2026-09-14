@@ -110,6 +110,7 @@ export interface TaskRouter {
   fetchPeerEdges(): Array<{
     from: string;
     to: string;
+    kind: "evidence" | "traversed";
     weight: {
       trust: number;
       cost: number;
@@ -143,6 +144,7 @@ export interface TaskRouter {
     federationEdges: Array<{
       from: string;
       to: string;
+      kind: "evidence" | "traversed";
       weight: {
         trust: number;
         cost: number;
@@ -208,6 +210,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
   function fetchPeerEdges(): Array<{
     from: string;
     to: string;
+    kind: "evidence" | "traversed";
     weight: {
       trust: number;
       cost: number;
@@ -236,6 +239,9 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
       return rows.map((row) => ({
         from: row.from_motebit_id,
         to: row.to_motebit_id,
+        // A recorded delegation is EVIDENCE (vouching); this task will not
+        // traverse it, so its price/latency never price the new hire.
+        kind: "evidence" as const,
         weight: {
           trust: row.trust,
           cost: row.cost,
@@ -493,6 +499,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     federationEdges: Array<{
       from: string;
       to: string;
+      kind: "evidence" | "traversed";
       weight: {
         trust: number;
         cost: number;
@@ -530,6 +537,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     const allFederationEdges: Array<{
       from: string;
       to: string;
+      kind: "evidence" | "traversed";
       weight: {
         trust: number;
         cost: number;
@@ -629,6 +637,8 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
           allFederationEdges.push({
             from: peer.peer_relay_id,
             to: agent.motebit_id,
+            // The task really forwards through the peer relay: a traversed hop.
+            kind: "traversed" as const,
             weight: {
               trust: 0.5,
               cost: 0,

@@ -63,6 +63,7 @@ TaskResponse {
     sub_scores:               Record<string, number>
     routing_paths:            string[][]
     alternatives_considered:  number
+    trust_evidence_path?:     string[]    // Optional (additive): the vouching chain behind sub_scores.trust
   } | null
   price_snapshot:   number      // Optional: estimated cost in micro-units
   dispatch_token:   string      // Optional: relay-signed task admission token (auth-token §5 `task:dispatch`),
@@ -71,7 +72,7 @@ TaskResponse {
 }
 ```
 
-`routing_choice.routing_paths[0]` is the path in the routing graph whose composed edge metrics `sub_scores` reports — the evidence that justified selecting `selected_agent`; later entries are the non-dominated alternatives the policy weighed. Every entry is a path that exists (never a per-dimension optimum no single path attains). A path is trust evidence, not a record of execution: the relay dispatches to `selected_agent` (directly, or via a federation peer on the path), and participation is proven by receipts. Field semantics in full: `execution-ledger-v1.md` §4.1.1.
+`routing_choice.routing_paths[0]` is the EXECUTED route — the hops the task takes to `selected_agent` (direct, or via a federation peer) — whose composed execution metrics `sub_scores` reports; later entries are the non-dominated executed alternatives the policy weighed. The optional `trust_evidence_path` is the vouching chain (recorded delegations included) behind `sub_scores.trust`; it may differ from the executed route, and a recorded delegation's cost or latency never prices the new hire. Every entry is a path that exists (never a per-dimension optimum no single path attains). Neither path is a record of who executed; participation is proven by receipts. Field semantics in full: `execution-ledger-v1.md` §4.1.1.
 
 `dispatch_token` (1.1) binds `mid` to the intended worker (`target_agent` when set, else the URL agent), `sub` to `task_id`, and `digest` to SHA-256 of `prompt`. When the relay routed the task (WebSocket, MCP forward, or federation) the token travelled with that dispatch and the response carries none: one admission, one presenter. A worker configured for task admission admits each `task_id` to one completed execution (a run that produced no receipt may be re-presented under the same admission; a second presentation while a run is in flight is refused). See `agent-mcp-surface-v1.md` §5.1 and `docs/doctrine/task-admission.md`.
 
