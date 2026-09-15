@@ -1028,6 +1028,8 @@ export async function mintTaskDispatchToken(
   workerMotebitId: string,
   taskId: string,
   prompt: string,
+  /** Clock for `iat`/`exp` — injected so a re-mint on replay is stamped by the same clock that judged the old token expired. */
+  nowMs?: number,
 ): Promise<string> {
   const { token } = await mintAudienceToken(
     {
@@ -1037,6 +1039,7 @@ export async function mintTaskDispatchToken(
       sub: taskId,
       digest: await taskPromptDigest(prompt),
       ttlMs: TASK_DISPATCH_TOKEN_TTL_MS,
+      ...(nowMs != null ? { nowMs } : {}),
     },
     relayIdentity.privateKey,
   );
