@@ -22,7 +22,7 @@
     "@motebit/state-export-client": "workspace:*",
     "@motebit/tools": "workspace:*",
     "@motebit/verifier": "workspace:*",
-    "better-sqlite3": "^12.11.1"
+    "better-sqlite3": "^13.0.3"
   },
   "devDependencies": {
     "@motebit/crypto": "workspace:*",
