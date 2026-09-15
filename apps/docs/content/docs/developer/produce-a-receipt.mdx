@@ -46,7 +46,7 @@ This is the one place producers reliably get wrong. There are **two different ha
 
 > **The trap.** `result_hash` and `prompt_hash` are **plain SHA-256 of the UTF-8 string** — **not** canonicalized. `args_hash` (on a `ToolInvocationReceipt`) is `canonicalSha256` of an object. Using `canonicalSha256` on a string adds JSON quotes (`canonicalSha256("x")` hashes `"x"` _with_ the quotes), so it does **not** equal `SHA-256("x")` — and a third party recomputing per spec gets a mismatch. A signed receipt whose `result_hash` nobody can reproduce from its own `result` is a signed number, not a proof.
 
-From the spec (§ Hash fields), verbatim:
+From the spec — the two string hashes are §11.4 "Content Hashing"; `args_hash` is defined in §3.1 (tool-invocation fields):
 
 ```
 prompt_hash = hex(SHA-256(UTF-8(prompt_string)))   // plain SHA-256 of the STRING

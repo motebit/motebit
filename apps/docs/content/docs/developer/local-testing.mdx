@@ -20,7 +20,7 @@ Node >= 20 and pnpm 9.15+ are required.
 
 ## Running a local relay
 
-The relay lives in `services/relay/`. Two environment variables are required:
+The relay lives in `services/relay/`. One environment variable is required (`X402_PAY_TO_ADDRESS`); `MOTEBIT_API_TOKEN` is optional but the `Bearer` examples below use it:
 
 ```bash
 cd services/relay
@@ -122,12 +122,7 @@ curl -X POST http://localhost:3000/api/v1/agents/agent-alice/listing \
 
 If the service listing has pricing, the caller needs funds for budget allocation:
 
-```bash
-curl -X POST http://localhost:3000/api/v1/agents/agent-caller/deposit \
-  -H "Authorization: Bearer test-token" \
-  -H "Content-Type: application/json" \
-  -d '{ "amount": 10.0, "currency": "USD", "description": "Test deposit" }'
-```
+> The self-declared deposit route (`POST /api/v1/agents/:id/deposit`) no longer exists — it was removed as a treasury-drain vector, and balance is credited only by verified server-side funding (Stripe checkout via `POST /api/v1/agents/:id/checkout`, or on-chain USDC picked up by the deposit detector). For a local loop, register an unpriced listing (`unit_cost: 0`) so no balance is needed.
 
 Returns the new balance:
 
@@ -287,7 +282,7 @@ What it validates:
 
 If self-test passes, the agent is correctly wired to the relay. If it fails, the output tells you why — common causes are missing relay URL, auth failure, or unfunded budget.
 
-Every `npm run dev` from a scaffolded agent (`npm create motebit -- --agent`) exercises self-test automatically, so sybil defense regressions are caught by every new developer during onboarding.
+`npm run self-test` from a scaffolded agent (`npm create motebit -- --agent`) exercises the self-delegation probe against the live relay (`dev` and `start` do not pass `--self-test`), so sybil defense regressions are caught by every new developer who runs it during onboarding.
 
 ## Reading the inspector dashboard
 
@@ -324,7 +319,7 @@ The relay is not running. Start it with `pnpm run dev` in `services/relay/`.
 
 The delegating agent's budget account has insufficient funds. Either:
 
-- Fund the account with `POST /api/v1/agents/:id/deposit`
+- Fund the account through a verified path (Stripe checkout, or the on-chain deposit detector) — the self-declared `/deposit` route was removed as a treasury-drain vector; for local testing, use an unpriced listing
 - Remove pricing from the service listing (free agents do not require budget locks)
 - Set `X402_PAY_TO_ADDRESS` to the zero address (disables real payment settlement, but virtual budget accounting still applies)
 

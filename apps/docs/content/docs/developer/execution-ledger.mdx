@@ -136,7 +136,7 @@ The agent submits its signed execution ledger after goal completion. The relay s
 GET /agent/:motebitId/ledger/:goalId
 ```
 
-Returns the execution ledger for a specific goal. If the agent submitted a signed ledger, that is returned. Otherwise, the relay reconstructs one from synced events (unsigned).
+Returns the execution ledger the agent submitted for a specific goal — signed by the agent. If none was submitted, this route returns 404. For a relay-reconstructed ledger assembled from synced events (unsigned), use `GET /api/v1/execution/:motebitId/:goalId` (the state-export surface, which wraps the body in a relay-signed `ContentArtifactManifest`).
 
 The relay-constructed ledger has the same structure but omits the `signature` field. It can be verified for content integrity (the content hash matches the timeline) but not for authenticity.
 
@@ -152,7 +152,7 @@ Returns the relay-reconstructed execution manifest. This endpoint builds the led
 
 To verify a ledger:
 
-1. Check `spec` is `"motebit/execution-ledger@1.0"`.
+1. Check `spec` is `"motebit/execution-ledger@1.0"` or `"motebit/execution-ledger@1.1"` (1.1 is what the relay emits when it archives the inner `signed_receipts`; agent-produced ledgers are 1.0).
 2. Recompute the content hash from the timeline using canonical JSON serialization.
 3. Compare the recomputed hash against `content_hash`. If they differ, the timeline has been tampered with.
 4. If `signature` is present, decode it from base64url and verify the Ed25519 signature over the raw content hash bytes using the agent's public key.

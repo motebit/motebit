@@ -7,17 +7,19 @@ The desktop app is the flagship surface — a Tauri app (Rust backend + webview)
 
 ## Running the desktop app
 
-In development mode (Vite + webview):
+In development mode with the Tauri backend (keyring, operator mode, sync):
 
 ```bash
-pnpm --filter @motebit/desktop dev
+pnpm --filter @motebit/desktop tauri:dev
 ```
 
-For a production build:
+`pnpm --filter @motebit/desktop dev` starts Vite alone — the UI without the Rust backend. For a production app bundle:
 
 ```bash
-pnpm --filter @motebit/desktop build
+pnpm --filter @motebit/desktop tauri:build
 ```
+
+(`build` is the TypeScript build only.)
 
 ## First launch
 
@@ -46,7 +48,7 @@ Set the model name in the **Model** field. Examples: `llama3.2`, `claude-sonnet-
 Operator mode unlocks high-risk tools (file writes, shell execution, payments). It's gated by a PIN:
 
 1. Toggle **Operator Mode** in settings
-2. First time: set a 4-6 digit PIN (stored as SHA-256 hash in keyring)
+2. First time: set a 4-6 digit PIN (stored in the keyring as a salted PBKDF2-SHA256 digest, never plaintext)
 3. Subsequent times: enter your PIN to enable
 
 While active, the agent can use R2+ risk tools. Tool calls still produce audit log entries, and specific tools can still require per-call approval.

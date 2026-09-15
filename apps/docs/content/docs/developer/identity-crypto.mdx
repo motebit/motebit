@@ -50,7 +50,7 @@ Signed tokens authenticate sync requests between a device and the relay server. 
 
 **Payload fields:**
 
-All fields below are **required** — a verifier MUST reject a token missing any of them (spec `auth-token@1.0` §3). Build the token with `createSignedToken`, which sets them for you; do not hand-assemble a `{mid,did,iat,exp}` payload — it will be rejected for missing `jti`/`aud`/`suite`.
+All fields below are **required** — a verifier MUST reject a token missing any of them (spec `auth-token@1.0` §3). `createSignedToken` stamps only `suite`; every other field is the caller's to supply, so mint with `mintAudienceToken` (which fills `jti`, `iat` and `exp` and binds `aud`) rather than hand-assembling a `{mid,did,iat,exp}` payload — that would be rejected for missing `jti`/`aud`.
 
 | Field   | Required | Description                                                                                                    |
 | ------- | -------- | -------------------------------------------------------------------------------------------------------------- |

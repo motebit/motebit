@@ -30,9 +30,9 @@ my-agent/
   motebit.md           Signed agent identity — who your agent is
   src/index.ts         Entrypoint — starts the agent server
   src/tools.ts         Tools — what your agent can do (fetch_url + echo to start)
-  package.json         Scripts: build, dev, start, self-test, verify
+  package.json         Scripts: build, dev, start, self-test, verify (dev/start/self-test run with --env-file=.env)
   tsconfig.json        TypeScript config (ES2022, Node16 module resolution)
-  .env.example         Relay URL + API token
+  .env.example         Passphrase + relay URL (no relay API token — the agent authenticates as itself)
   .gitignore           Secrets and dist excluded
 ```
 
@@ -214,7 +214,7 @@ npm run dev
 This runs `tsc` to compile TypeScript, then starts the agent server:
 
 ```bash
-tsc && node dist/index.js
+tsc && node --env-file=.env dist/index.js
 ```
 
 The entrypoint (`src/index.ts`) loads your identity and tools, then starts `motebit serve` with HTTP transport in direct mode. You should see output like:
@@ -241,7 +241,7 @@ npm run self-test
 Which runs:
 
 ```bash
-tsc && node dist/index.js --self-test
+tsc && node --env-file=.env dist/index.js --self-test
 ```
 
 The `--self-test` flag does something specific after relay registration: it submits a self-delegation task through the relay back to itself. This exercises the full protocol loop in one shot:
@@ -387,7 +387,7 @@ fly secrets set MOTEBIT_PASSPHRASE=your-passphrase
 fly deploy
 ```
 
-The `--self-test` in the `start` script runs on every deploy, confirming the full protocol loop works against the live relay.
+`start` does not pass `--self-test`; run `npm run self-test` (or add `--self-test` to your deploy command) to confirm the full protocol loop against the live relay on each deploy.
 
 See [Architecture](/docs/operator/architecture) for relay deployment and configuration.
 

@@ -49,18 +49,18 @@ Relay A (initiator)                         Relay B (responder)
     |                                            |
     |  1. POST /federation/v1/peer/propose       |
     |  { relay_id, public_key, endpoint_url,     |
-    |    display_name, nonce_a }                  |
+    |    display_name, nonce }                    |
     | -----------------------------------------> |
     |                                            |
     |  2. 200 OK                                 |
     |  { relay_id, public_key, endpoint_url,     |
-    |    display_name, nonce_b,                  |
-    |    challenge: Sign(nonce_a, key_b) }       |
+    |    display_name, nonce,                    |
+    |    challenge: Sign(relay_id:nonce:suite, key_b) } |
     | <----------------------------------------- |
     |                                            |
     |  3. POST /federation/v1/peer/confirm       |
     |  { relay_id,                               |
-    |    challenge_response: Sign(nonce_b, key_a)|
+    |    challenge_response: Sign(relay_id:nonce:suite, key_a)|
     |  }                                         |
     | -----------------------------------------> |
     |                                            |
@@ -68,7 +68,7 @@ Relay A (initiator)                         Relay B (responder)
     | <----------------------------------------- |
 ```
 
-Step 1: Relay A sends its identity and a 32-byte random nonce. Step 2: Relay B signs `relay_id:nonce_a` with its private key, proving key possession. Step 3: Relay A verifies B's signature, then signs `relay_id:nonce_b` with its own key. Relay B verifies. Both transition to `active`.
+Step 1: Relay A sends its identity and a 32-byte random `nonce`. Step 2: Relay B signs `${relay_id}:${nonce}:${suite}` (the wire field is `nonce`; the cryptosuite id is part of the signed message) with its private key, proving key possession. Step 3: Relay A verifies B's signature, then signs the same shape over B's `nonce` with its own key. Relay B verifies. Both transition to `active`.
 
 If any verification fails, the handshake is aborted and the peer record is discarded.
 
@@ -84,7 +84,7 @@ Active peers exchange heartbeats to confirm liveness:
 | Suspend threshold | 3 consecutive missed heartbeats                   |
 | Remove threshold  | 5 consecutive missed heartbeats                   |
 
-The signature covers `relay_id || timestamp` to prevent replay. A suspended peer is excluded from discovery and routing. A single successful heartbeat reactivates a suspended peer. After 5 misses, the peer is removed and requires a full handshake to re-establish.
+The signature covers `relay_id || timestamp` to prevent replay. A suspended peer is excluded from discovery and routing. Recovery has hysteresis: each successful heartbeat decrements the missed count by one, so a peer suspended at 3 misses needs 3 consecutive successes to return to `active`. After 5 misses, the peer is removed and requires a full handshake to re-establish.
 
 ### Peer states
 
@@ -226,13 +226,13 @@ Settlement records may include optional on-chain payment proof fields (`x402_tx_
 
 When a settlement forward fails, the originating relay queues it for exponential backoff retry:
 
-| Parameter    | Value                                |
-| ------------ | ------------------------------------ |
-| Max attempts | 5                                    |
-| Backoff      | 30s, 2min, 8min, 32min, 2h           |
-| Status       | `pending` -> `completed` or `failed` |
+| Parameter    | Value                                                                                   |
+| ------------ | --------------------------------------------------------------------------------------- |
+| Max attempts | `max_attempts` on the retry row (default 5); the policy ceiling is `maxRetries: 8`       |
+| Backoff      | Exponential from 5 s (5 s, 10 s, 20 s, 40 s, …) with ±20% jitter, capped at 1 hour       |
+| Status       | `pending` -> `completed` or `failed`                                                    |
 
-After 5 failed attempts, the settlement requires manual intervention.
+When attempts are exhausted the relay auto-refunds the delegator; nothing waits for manual intervention. Constants live in `services/relay/src/retry-policy.ts` (`DEFAULT_RETRY_POLICY`).
 
 ## Trust model
 
@@ -246,11 +246,13 @@ Trust is isolated per-subject. If a peer relay is demoted, only routes through t
 
 Every request to a federation endpoint must include:
 
-| Header              | Value                                                          |
-| ------------------- | -------------------------------------------------------------- |
-| `X-Relay-Id`        | The sending relay's `motebit_id`                               |
-| `X-Relay-Signature` | Base64url Ed25519 signature of the canonical JSON request body |
-| `X-Relay-Timestamp` | ISO 8601 timestamp; requests older than 5 minutes are rejected |
+| Body field     | Value                                                                                                             |
+| -------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `sender_relay` | The sending relay's `motebit_id` (some routes name it `relay_id`)                                                 |
+| `timestamp`    | Unix epoch milliseconds; requests more than 5 minutes from the receiver's clock are rejected                        |
+| `signature`    | Hex Ed25519 signature over the RFC 8785 canonical JSON of the request body with `signature` removed                |
+
+Authentication is carried **in the JSON body**, not in HTTP headers: the receiver looks up the sender's registered public key, drops `signature`, canonicalizes the rest and verifies.
 
 Federation endpoints use a dedicated rate limit tier: 30 requests per minute per peer relay, keyed by `X-Relay-Id`.
 
@@ -282,12 +284,12 @@ Federation is opt-in. All settings have sensible defaults.
 
 | Setting                         | Type     | Default | Description                           |
 | ------------------------------- | -------- | ------- | ------------------------------------- |
-| `federation.enabled`            | boolean  | `false` | Whether federation is active          |
-| `federation.max_peers`          | number   | `10`    | Maximum active peer relationships     |
+| `federation.enabled`            | boolean  | on when `endpoint_url` is set | Whether federation is active |
+| `federation.max_peers`          | number   | `50`    | Maximum active peer relationships     |
 | `federation.heartbeat_interval` | number   | `60000` | Heartbeat interval (ms)               |
 | `federation.max_hops`           | number   | `3`     | Maximum query forwarding depth        |
 | `federation.platform_fee_rate`  | number   | `0.05`  | Fee rate on forwarded tasks           |
 | `federation.auto_accept_peers`  | boolean  | `false` | Auto-accept incoming proposals        |
 | `federation.allowed_peers`      | string[] | `[]`    | Allowlist of permitted peer relay IDs |
 
-When `federation.enabled` is `false`, all `/federation/v1/` endpoints return HTTP 404.
+When `federation.enabled` is `false`, all `/federation/v1/` endpoints return HTTP 403 (`Federation is disabled on this relay`). When `enabled` is left unset, federation is on whenever `endpoint_url` is configured.

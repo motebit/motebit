@@ -45,7 +45,7 @@ interface ExecutionReceipt {
   prompt_hash: string;
   result_hash: string;
   delegation_receipts?: ExecutionReceipt[];
-  relay_task_id?: string;
+  relay_task_id: string; // required by the relay — a receipt without it is rejected (400)
   delegated_scope?: string;
   suite: "motebit-jcs-ed25519-b64-v1";
   signature: string;
@@ -69,7 +69,7 @@ interface ExecutionReceipt {
 | `prompt_hash`         | `string`              | `hex(SHA-256(UTF-8(prompt)))` — plain SHA-256 of the prompt **string**, lowercase hex (64 chars). Not canonicalized.                                                                                                                                                                                                                                                                                                                                           |
 | `result_hash`         | `string`              | `hex(SHA-256(UTF-8(result)))` — plain SHA-256 of the `result` **string**, lowercase hex (64 chars). Not canonicalized. Recompute it over the exact `result` bytes to re-check. (Canonical-JSON hashing applies only to object-valued fields like a `ToolInvocationReceipt`'s `args_hash`.)                                                                                                                                                                     |
 | `delegation_receipts` | `ExecutionReceipt[]?` | Nested receipts from sub-delegations. In multi-hop scenarios (Alice delegates to Bob, Bob sub-delegates to Charlie), Bob's receipt includes Charlie's receipt here. The relay verifies each nested receipt recursively.                                                                                                                                                                                                                                        |
-| `relay_task_id`       | `string?`             | Cryptographic binding to the relay's economic identity for this task. Included in the Ed25519 signature, so tampering breaks the signature. The relay enforces `relay_task_id === taskIdFromRoute` at settlement. Prevents cross-task replay attacks, including identical-prompt collisions.                                                                                                                                                                   |
+| `relay_task_id`       | `string`              | **Required** on any receipt posted to the relay. Cryptographic binding to the relay's economic identity for this task. Included in the Ed25519 signature, so tampering breaks the signature. The relay rejects a receipt without it (400) and enforces `relay_task_id === taskIdFromRoute` at settlement. Prevents cross-task replay attacks, including identical-prompt collisions.                                                                                                                                                                   |
 | `delegated_scope`     | `string?`             | Scope from the delegation token that authorized this execution. Restricts which tools the task can use (e.g., `"web_search,read_url"`).                                                                                                                                                                                                                                                                                                                        |
 | `suite`               | `string`              | **Required.** Cryptosuite discriminator — always `"motebit-jcs-ed25519-b64-v1"` today. It is part of the signed body: `signExecutionReceipt` stamps it, and a verifier rejects a receipt missing or carrying an unknown value (fail-closed). If you hand-build a receipt, include it **before** signing or the signature won't match.                                                                                                                          |
 | `signature`           | `string`              | Ed25519 signature, base64url. The signed message is the **JCS (RFC 8785) canonical UTF-8 bytes** of all other fields (keys sorted lexicographically, no whitespace, `undefined` omitted) — signed **directly**, with no intermediate SHA-256 of the body. (This differs from the _execution ledger_, which signs a 32-byte content hash, and from _credentials_, which sign concatenated field hashes — do not generalize one artifact's recipe onto another.) |
@@ -131,7 +131,7 @@ To verify a receipt:
 
 1. Extract `signature` from the receipt object.
 2. Build the canonical JSON of all remaining fields (deterministic key ordering).
-3. Verify the Ed25519 signature using the `public_key` from the receipt (or resolve it from the relay via `GET /api/v1/devices/:deviceId`).
+3. Verify the Ed25519 signature using the `public_key` from the receipt (or resolve it from the relay via `GET /api/v1/devices/:motebitId`).
 4. If `relay_task_id` is present, confirm it matches the expected task ID.
 5. Optionally verify `prompt_hash` and `result_hash` against the original inputs/outputs.
 
@@ -158,6 +158,7 @@ Submit an autonomous task for execution. Returns a signed `ExecutionReceipt`.
 | `delegation_token`      | `string`   | No       | Signed delegation token (JSON) authorizing this task within a specific scope. Verified via Ed25519 before execution.       |
 | `required_capabilities` | `string[]` | No       | Capability names required for this task (e.g., `["web_search"]`). Checked against the delegation token's scope if present. |
 | `relay_task_id`         | `string`   | No       | Relay-assigned task ID for economic binding. Included in the signed receipt for settlement.                                |
+| `dispatch_token`        | `string`   | No\*     | Relay-signed `task:dispatch` admission token. \*Required by workers configured for relay task admission (the default for priced listings) — see [Multi-hop](/docs/developer/multi-hop). |
 
 **Output:** JSON containing the full `ExecutionReceipt`, wrapped with a motebit identity tag.
 
@@ -194,7 +195,7 @@ Store a memory in the agent's semantic memory graph.
 | Parameter     | Type     | Required | Description                                                                                                                                            |
 | ------------- | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `content`     | `string` | Yes      | The content to remember.                                                                                                                               |
-| `sensitivity` | `string` | No       | Sensitivity level. External callers are capped at `"none"` or `"personal"` — attempts to store `"medical"`, `"financial"`, or `"secret"` are rejected. |
+| `sensitivity` | `string` | No       | Sensitivity level. External callers may store only `"none"` — `"personal"`, `"medical"`, `"financial"`, and `"secret"` are all rejected. |
 
 **Output:** JSON with `node_id` of the created memory node.
 
@@ -379,7 +380,7 @@ Poll for the task result. Returns the current task status and receipt (if availa
 }
 ```
 
-The `receipt` field is `null` until the executing agent submits a result. Tasks expire after a TTL (default 15 minutes) — polling after expiry returns 404.
+The `receipt` field is `null` until the executing agent submits a result. Free tasks expire after a TTL of 10 minutes (results for P2P-paid tasks are retained longer) — polling after expiry returns 404.
 
 **Error responses:**
 
@@ -403,7 +404,7 @@ The executing agent posts a signed `ExecutionReceipt` to complete the task. The 
 
 1. **Structural validation** — Requires non-empty `task_id`, `motebit_id`, `signature`, and valid `status`.
 2. **Timestamp validation** — `completed_at - submitted_at` must be within -60s to +3600s.
-3. **Economic binding** — If the receipt has `relay_task_id`, it must match `taskId` from the URL. Mismatch returns 400.
+3. **Economic binding** — The receipt must carry `relay_task_id`, and it must match `taskId` from the URL. A missing or mismatched value returns 400.
 4. **Ed25519 verification** — The relay verifies the signature against the signer's public key (from the receipt or resolved from the agent registry).
 5. **Settlement** — On verified receipt: budget settlement (deduct actual cost), trust record update, and optional credential issuance.
 6. **Nested receipt verification** — If `delegation_receipts` is present, each nested receipt is verified recursively before settlement.
@@ -472,43 +473,9 @@ Transaction types: `deposit`, `withdrawal`, `allocation_hold`, `allocation_relea
 
 If no account exists, returns zero balance with empty transactions.
 
-### Deposit funds
+### Funding an account
 
-```
-POST /api/v1/agents/:motebitId/deposit
-```
-
-Credit the agent's virtual account.
-
-**Request body:**
-
-```json
-{
-  "amount": 1.0,
-  "currency": "USD",
-  "reference": "stripe-pi-abc123",
-  "description": "Deposit via Stripe"
-}
-```
-
-| Field         | Type     | Required | Description                                                                                                                              |
-| ------------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `amount`      | `number` | Yes      | Amount to deposit. Must be positive.                                                                                                     |
-| `currency`    | `string` | No       | Currency code (default: USD).                                                                                                            |
-| `reference`   | `string` | No       | Idempotency key. If a transaction with this reference already exists, the endpoint returns the current balance without double-crediting. |
-| `description` | `string` | No       | Human-readable description for the transaction log.                                                                                      |
-
-**Response (200):**
-
-```json
-{
-  "motebit_id": "019d03fd-...",
-  "balance": 2.5,
-  "transaction_id": "uuid"
-}
-```
-
-When a duplicate `reference` is detected, the response includes `"idempotent": true` and `"transaction_id": null`.
+There is no self-declared deposit endpoint — it was removed as a treasury-drain vector. Balance is credited only by verified server-side funding: the Stripe checkout flow (`POST /api/v1/agents/:motebitId/checkout`, then the Stripe webhook) or on-chain USDC deposits picked up by the relay's deposit detector. See [Budget & Settlement](/docs/developer/budget-settlement).
 
 ### How delegation charges work
 

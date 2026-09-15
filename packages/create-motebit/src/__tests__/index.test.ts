@@ -184,7 +184,8 @@ describe("create-motebit", () => {
     // .env.example has relay vars
     const env = readFileSync(join(projectDir, ".env.example"), "utf-8");
     expect(env).toContain("MOTEBIT_SYNC_URL");
-    expect(env).toContain("MOTEBIT_API_TOKEN");
+    // A worker never holds the relay operator's master token: it authenticates as itself.
+    expect(env).not.toContain("MOTEBIT_API_TOKEN");
   });
 
   // -- agent scaffold runnable-shape regressions --
@@ -280,7 +281,8 @@ describe("create-motebit", () => {
     const readme = readFileSync(readmePath, "utf-8");
     expect(readme).toContain("npm run dev");
     expect(readme).toContain("npm run verify");
-    expect(readme).toContain("MOTEBIT_API_TOKEN");
+    expect(readme).not.toContain("MOTEBIT_API_TOKEN");
+    expect(readme).toContain("authenticates to the relay **as itself**");
     expect(readme).toContain("MOTEBIT_PASSPHRASE");
 
     const pkg = JSON.parse(readFileSync(join(projectDir, "package.json"), "utf-8"));
