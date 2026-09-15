@@ -14,15 +14,6 @@ export function loadConfig() {
     // motebit.md all live under here and survive redeploys.
     dataDir: process.env["MOTEBIT_DATA_DIR"] ?? "./data",
     syncUrl: process.env["MOTEBIT_SYNC_URL"],
-    /**
-     * MCP HTTP endpoint protection. When set, the MCP server only accepts
-     * requests carrying `Authorization: Bearer ${authToken}` (or a motebit
-     * signed token). The relay's `forwardTaskViaMcp` authenticates AS THE
-     * RELAY with the per-task dispatch token (`Bearer motebit:<dispatch>`,
-     * verified under the pinned relay key) — this static bearer is for
-     * direct, non-relay callers.
-     */
-    authToken: process.env["MOTEBIT_AUTH_TOKEN"],
     publicUrl: process.env["MOTEBIT_PUBLIC_URL"],
     /** Pinned relay Ed25519 public key (hex) for task admission; TOFU from the well-known when unset. */
     relayPublicKey: process.env["MOTEBIT_RELAY_PUBLIC_KEY"]?.trim() || undefined,

@@ -27,7 +27,6 @@ const TOUCHED = [
   "MOTEBIT_CLERK_CEILING_MICRO",
   "DRY_RUN",
   "MOTEBIT_UNIT_COST",
-  "MOTEBIT_AUTH_TOKEN",
   "MOTEBIT_SYNC_URL",
   "MOTEBIT_PUBLIC_URL",
 ] as const;
@@ -91,7 +90,6 @@ describe("clerk loadConfig — defaults and overrides", () => {
     const c = loadConfig();
     expect(c.solanaRpcUrl).toBeNull();
     expect(c.relayPublicKey).toBeNull();
-    expect(c.authToken).toBeNull();
     expect(c.syncUrl).toBeNull();
     expect(c.publicUrl).toBeNull();
   });
@@ -105,7 +103,6 @@ describe("clerk loadConfig — defaults and overrides", () => {
     process.env["MOTEBIT_CLERK_CAPABILITY"] = "summarize";
     process.env["MOTEBIT_CLERK_CEILING_MICRO"] = "250000";
     process.env["MOTEBIT_UNIT_COST"] = "0.25";
-    process.env["MOTEBIT_AUTH_TOKEN"] = "tok";
     process.env["MOTEBIT_SYNC_URL"] = "https://relay.example";
     process.env["MOTEBIT_PUBLIC_URL"] = "https://clerk.example";
 
@@ -118,7 +115,6 @@ describe("clerk loadConfig — defaults and overrides", () => {
     expect(c.defaultCapability).toBe("summarize");
     expect(c.ceilingMicro).toBe(250_000);
     expect(c.unitCost).toBe(0.25);
-    expect(c.authToken).toBe("tok");
     expect(c.syncUrl).toBe("https://relay.example");
     expect(c.publicUrl).toBe("https://clerk.example");
   });

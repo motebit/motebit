@@ -19,7 +19,6 @@ export interface AuditorServiceConfig {
   /** How many supplied receipts the spot-check samples at most. */
   receiptSampleN: number;
   unitCost: number;
-  authToken: string | null;
   syncUrl: string | null;
   publicUrl: string | null;
 }
@@ -33,7 +32,6 @@ export function loadConfig(): AuditorServiceConfig {
     relayPublicKey: process.env["MOTEBIT_RELAY_PUBLIC_KEY"] ?? null,
     receiptSampleN: parseInt(process.env["MOTEBIT_RECEIPT_SAMPLE_N"] ?? "3", 10),
     unitCost: parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.01"),
-    authToken: process.env["MOTEBIT_AUTH_TOKEN"] ?? null,
     syncUrl: process.env["MOTEBIT_SYNC_URL"] ?? null,
     publicUrl: process.env["MOTEBIT_PUBLIC_URL"] ?? null,
   };

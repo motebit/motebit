@@ -18,7 +18,8 @@
  *               consecutive green scheduled conformance runs)
  *
  * Required env (real run):
- *   MOTEBIT_API_TOKEN        registration token for the target relay
+ *   MOTEBIT_API_TOKEN        the operator's token — used by THIS script's discover call only;
+ *                            never handed to a worker (workers self-authenticate)
  *   ANTHROPIC_API_KEY        research only (operator-funded inference)
  * Optional:
  *   RELAY_URL                override the target relay base URL
@@ -50,7 +51,10 @@ type Target = "staging" | "prod";
 
 interface SecretContext {
   relayUrl: string;
+  /** The OPERATOR's token — used only for the operator's own discover call below; never placed in a worker secret map. */
   apiToken: string;
+  /** The target relay's Ed25519 public key (hex) from its well-known descriptor — the worker's task-admission pin. */
+  relayPublicKey: string;
   /** capability → motebit_id captured from the relay after atom deploys. */
   atomIds: Map<string, string>;
   appHost: (app: string) => string;
@@ -75,8 +79,12 @@ export const SLATE: SlateService[] = [
     capability: "web_search",
     secrets: (ctx) => ({
       MOTEBIT_SYNC_URL: ctx.relayUrl,
-      MOTEBIT_API_TOKEN: ctx.apiToken,
-      MOTEBIT_AUTH_TOKEN: ctx.apiToken, // inbound MCP-forward auth (mcp-server reads this, not API_TOKEN)
+      // No relay token of any kind: the worker authenticates to the relay AS
+      // ITSELF (per-audience signed tokens after a public bootstrap) and admits
+      // tasks by verifying the relay-signed dispatch token against this pin.
+      // Until 2026-09-15 this map handed the OPERATOR's master token to every
+      // worker twice — as MOTEBIT_API_TOKEN and again as MOTEBIT_AUTH_TOKEN.
+      MOTEBIT_RELAY_PUBLIC_KEY: ctx.relayPublicKey,
       // Inc 3 — the multi-hop settlement arc landed (Inc 1/2), so the atoms are
       // now PRICED market participants, not free riders. Cost-indexed: web
       // search clears ~$0.001-0.01/query in the API economy; $0.003 = ~2x
@@ -98,8 +106,12 @@ export const SLATE: SlateService[] = [
     capability: "read_url",
     secrets: (ctx) => ({
       MOTEBIT_SYNC_URL: ctx.relayUrl,
-      MOTEBIT_API_TOKEN: ctx.apiToken,
-      MOTEBIT_AUTH_TOKEN: ctx.apiToken, // inbound MCP-forward auth (mcp-server reads this, not API_TOKEN)
+      // No relay token of any kind: the worker authenticates to the relay AS
+      // ITSELF (per-audience signed tokens after a public bootstrap) and admits
+      // tasks by verifying the relay-signed dispatch token against this pin.
+      // Until 2026-09-15 this map handed the OPERATOR's master token to every
+      // worker twice — as MOTEBIT_API_TOKEN and again as MOTEBIT_AUTH_TOKEN.
+      MOTEBIT_RELAY_PUBLIC_KEY: ctx.relayPublicKey,
       // Inc 3 — priced now the arc landed. $0.002 = ~2x a page-read's marginal
       // cost, at the Solana settle floor (payment overhead is a known ceiling
       // at this price — the batching arc is the lever below it, not a lower list).
@@ -124,8 +136,12 @@ export const SLATE: SlateService[] = [
     capability: "summarize_search",
     secrets: (ctx) => ({
       MOTEBIT_SYNC_URL: ctx.relayUrl,
-      MOTEBIT_API_TOKEN: ctx.apiToken,
-      MOTEBIT_AUTH_TOKEN: ctx.apiToken, // inbound MCP-forward auth (mcp-server reads this, not API_TOKEN)
+      // No relay token of any kind: the worker authenticates to the relay AS
+      // ITSELF (per-audience signed tokens after a public bootstrap) and admits
+      // tasks by verifying the relay-signed dispatch token against this pin.
+      // Until 2026-09-15 this map handed the OPERATOR's master token to every
+      // worker twice — as MOTEBIT_API_TOKEN and again as MOTEBIT_AUTH_TOKEN.
+      MOTEBIT_RELAY_PUBLIC_KEY: ctx.relayPublicKey,
       MOTEBIT_UNIT_COST: "0",
       WEB_SEARCH_URL: ctx.appHost(
         TARGET === "prod" ? "motebit-web-search" : "motebit-web-search-stg",
@@ -141,8 +157,12 @@ export const SLATE: SlateService[] = [
     capability: "research",
     secrets: (ctx) => ({
       MOTEBIT_SYNC_URL: ctx.relayUrl,
-      MOTEBIT_API_TOKEN: ctx.apiToken,
-      MOTEBIT_AUTH_TOKEN: ctx.apiToken, // inbound MCP-forward auth (mcp-server reads this, not API_TOKEN)
+      // No relay token of any kind: the worker authenticates to the relay AS
+      // ITSELF (per-audience signed tokens after a public bootstrap) and admits
+      // tasks by verifying the relay-signed dispatch token against this pin.
+      // Until 2026-09-15 this map handed the OPERATOR's master token to every
+      // worker twice — as MOTEBIT_API_TOKEN and again as MOTEBIT_AUTH_TOKEN.
+      MOTEBIT_RELAY_PUBLIC_KEY: ctx.relayPublicKey,
       MOTEBIT_UNIT_COST: "0.25",
       MOTEBIT_SETTLEMENT_MODES: "relay,p2p",
       ANTHROPIC_API_KEY: process.env["ANTHROPIC_API_KEY"] ?? "",
@@ -165,8 +185,12 @@ export const SLATE: SlateService[] = [
     capability: "audit_agent",
     secrets: (ctx) => ({
       MOTEBIT_SYNC_URL: ctx.relayUrl,
-      MOTEBIT_API_TOKEN: ctx.apiToken,
-      MOTEBIT_AUTH_TOKEN: ctx.apiToken, // inbound MCP-forward auth (mcp-server reads this, not API_TOKEN)
+      // No relay token of any kind: the worker authenticates to the relay AS
+      // ITSELF (per-audience signed tokens after a public bootstrap) and admits
+      // tasks by verifying the relay-signed dispatch token against this pin.
+      // Until 2026-09-15 this map handed the OPERATOR's master token to every
+      // worker twice — as MOTEBIT_API_TOKEN and again as MOTEBIT_AUTH_TOKEN.
+      MOTEBIT_RELAY_PUBLIC_KEY: ctx.relayPublicKey,
       MOTEBIT_RELAY_URL: ctx.relayUrl,
       MOTEBIT_UNIT_COST: "0.01",
       MOTEBIT_SETTLEMENT_MODES: "relay,p2p",
@@ -181,8 +205,12 @@ export const SLATE: SlateService[] = [
     capability: "execute_delegation",
     secrets: (ctx) => ({
       MOTEBIT_SYNC_URL: ctx.relayUrl,
-      MOTEBIT_API_TOKEN: ctx.apiToken,
-      MOTEBIT_AUTH_TOKEN: ctx.apiToken, // inbound MCP-forward auth (mcp-server reads this, not API_TOKEN)
+      // No relay token of any kind: the worker authenticates to the relay AS
+      // ITSELF (per-audience signed tokens after a public bootstrap) and admits
+      // tasks by verifying the relay-signed dispatch token against this pin.
+      // Until 2026-09-15 this map handed the OPERATOR's master token to every
+      // worker twice — as MOTEBIT_API_TOKEN and again as MOTEBIT_AUTH_TOKEN.
+      MOTEBIT_RELAY_PUBLIC_KEY: ctx.relayPublicKey,
       MOTEBIT_UNIT_COST: "0.01",
       MOTEBIT_SETTLEMENT_MODES: "relay,p2p",
       // DRY-RUN-FIRST: the whole metered spine runs at hard-zero (no broadcast,
@@ -270,6 +298,17 @@ async function discoverByCapability(
   return byCapability;
 }
 
+/** The relay's Ed25519 public key from its well-known descriptor — pinned into every worker. */
+async function fetchRelayPublicKey(relayUrl: string): Promise<string> {
+  const res = await fetch(`${relayUrl}/.well-known/motebit.json`);
+  if (!res.ok) throw new Error(`well-known fetch failed: ${res.status}`);
+  const body = (await res.json()) as { public_key?: string };
+  if (!body.public_key || !/^[0-9a-f]{64}$/.test(body.public_key)) {
+    throw new Error("well-known descriptor carries no 64-hex public_key");
+  }
+  return body.public_key;
+}
+
 async function main(): Promise<void> {
   const apiToken = process.env["MOTEBIT_API_TOKEN"] ?? "";
   console.log(
@@ -284,9 +323,12 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const relayPublicKey = await fetchRelayPublicKey(RELAY_URL);
+  console.log(`relay public key (task-admission pin for every worker): ${relayPublicKey}`);
   const ctx: SecretContext = {
     relayUrl: RELAY_URL,
     apiToken,
+    relayPublicKey,
     atomIds: new Map(),
     appHost: (app) => `https://${app}.fly.dev`,
   };

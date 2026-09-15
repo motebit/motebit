@@ -7,7 +7,6 @@ export function loadConfig() {
     // /data; locally, ./data. Identity (motebit.json, motebit.key, motebit.md)
     // is generated here on first boot and reloaded on every subsequent boot.
     dataDir: process.env["MOTEBIT_DATA_DIR"] ?? "./data",
-    authToken: process.env["MOTEBIT_AUTH_TOKEN"],
     syncUrl: process.env["MOTEBIT_SYNC_URL"],
     publicUrl: process.env["MOTEBIT_PUBLIC_URL"],
     anthropicApiKey: process.env["ANTHROPIC_API_KEY"],

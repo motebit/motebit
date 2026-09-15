@@ -56,7 +56,11 @@ async function main(): Promise<void> {
       displayName: "Read URL",
       serviceDescription: "Minimal URL reader (second hop in multi-hop delegation proof)",
       capabilities: ["read_url"],
-      ...(config.authToken != null ? { authToken: config.authToken } : {}),
+      // No static inbound bearer: callers present a motebit signed token (the
+      // relay's per-task dispatch token, or a caller-signed token) or are
+      // refused. Until 2026-09-15 the deploy script set MOTEBIT_AUTH_TOKEN to the
+      // relay OPERATOR's master token on every worker — a second copy of the
+      // secret #649 retired.
       ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
       ...(config.publicUrl != null ? { publicUrl: config.publicUrl } : {}),
       ...(config.relayPublicKey != null ? { relayPublicKeyHex: config.relayPublicKey } : {}),

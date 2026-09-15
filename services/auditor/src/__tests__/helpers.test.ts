@@ -22,7 +22,6 @@ const TOUCHED = [
   "MOTEBIT_RELAY_PUBLIC_KEY",
   "MOTEBIT_RECEIPT_SAMPLE_N",
   "MOTEBIT_UNIT_COST",
-  "MOTEBIT_AUTH_TOKEN",
   "MOTEBIT_SYNC_URL",
   "MOTEBIT_PUBLIC_URL",
 ] as const;
@@ -79,7 +78,6 @@ describe("auditor loadConfig — defaults and overrides", () => {
     expect(c.dataDir).toBe("./data");
     expect(c.receiptSampleN).toBe(3);
     expect(c.unitCost).toBe(0.01);
-    expect(c.authToken).toBeNull();
     expect(c.publicUrl).toBeNull();
   });
 
@@ -89,7 +87,6 @@ describe("auditor loadConfig — defaults and overrides", () => {
     process.env["MOTEBIT_DATA_DIR"] = "/tmp/adata";
     process.env["MOTEBIT_RECEIPT_SAMPLE_N"] = "7";
     process.env["MOTEBIT_UNIT_COST"] = "0.5";
-    process.env["MOTEBIT_AUTH_TOKEN"] = "tok";
     process.env["MOTEBIT_PUBLIC_URL"] = "https://auditor.example";
 
     const c = loadConfig();
@@ -98,7 +95,6 @@ describe("auditor loadConfig — defaults and overrides", () => {
     expect(c.dataDir).toBe("/tmp/adata");
     expect(c.receiptSampleN).toBe(7);
     expect(c.unitCost).toBe(0.5);
-    expect(c.authToken).toBe("tok");
     expect(c.publicUrl).toBe("https://auditor.example");
   });
 });
