@@ -361,6 +361,12 @@ const DOCS: ReadonlyArray<DocFile> = [
         label: "Lead — published total",
       },
       {
+        // 2026-09-14 (#667): said 51, repo held 62.
+        regex: /The (\d+) workspace-private packages \(everything not in the table above\)/,
+        key: "privatePackages",
+        label: "Private-packages paragraph — private count",
+      },
+      {
         regex: /— (\d+) Apache-2\.0 packages on the/,
         key: "publishedApache",
         label: "Lead — Apache count",
@@ -392,6 +398,18 @@ const DOCS: ReadonlyArray<DocFile> = [
         regex: /(\d+) packages publish from this monorepo/,
         key: "publishedTotal",
         label: "Lead — published total",
+      },
+      {
+        // 2026-09-14 (#667): the page said "Fifty-one" while the repo held 62 —
+        // the README (probed) was right, this page (unprobed) was not.
+        regex: /(\d+) workspace-private packages are pinned to version `0\.0\.0-private`/,
+        key: "privatePackages",
+        label: "Private-sentinel paragraph — private count",
+      },
+      {
+        regex: /(\d+) open specs in \[`spec\/`\]/,
+        key: "specs",
+        label: "Implement-the-spec step — spec count",
       },
     ],
   },

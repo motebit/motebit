@@ -864,7 +864,7 @@ The public promise of `motebit@1.0` is its bundled operator-facing surface — s
 
 ## What's not published
 
-Sixty-two workspace-private packages are pinned to version `0.0.0-private`. The sentinel makes the absence of a semver claim explicit — these packages exist for source organization, get bundled into `motebit`, and have no public API to keep stable. Examples: `@motebit/runtime`, `@motebit/market`, `@motebit/semiring`, `@motebit/mcp-server`, `@motebit/memory-graph`, `@motebit/policy`. You can read the source. You can fork the repo. You cannot `npm install` them, and motebit makes no promises about their internal APIs from one release to the next.
+62 workspace-private packages are pinned to version `0.0.0-private`. The sentinel makes the absence of a semver claim explicit — these packages exist for source organization, get bundled into `motebit`, and have no public API to keep stable. Examples: `@motebit/runtime`, `@motebit/market`, `@motebit/semiring`, `@motebit/mcp-server`, `@motebit/memory-graph`, `@motebit/policy`. You can read the source. You can fork the repo. You cannot `npm install` them, and motebit makes no promises about their internal APIs from one release to the next.
 
 This isn't laziness about API design. It's the inverse: every package promoted to public adds a permanent maintenance surface, locks refactoring decisions, and converts internal cleanups into political major-bumps. Motebit promotes private to public only when a real third party needs it — not when a doc page would be tidier with the import statement.
 
@@ -872,7 +872,7 @@ This isn't laziness about API design. It's the inverse: every package promoted t
 
 Three paths, in order of how much motebit you take with you:
 
-1. **Implement the spec.** Thirty-four open specs in [`spec/`](https://github.com/motebit/motebit/tree/main/spec). Build a runtime in any language; motebit's reference relay will federate with it if your handshake verifies. The Python reference verifier under [`examples/python-receipt-verifier`](https://github.com/motebit/motebit/tree/main/examples/python-receipt-verifier) is the load-bearing demonstration that the spec is sufficient — written against the spec alone, no motebit TypeScript consumed.
+1. **Implement the spec.** 34 open specs in [`spec/`](https://github.com/motebit/motebit/tree/main/spec). Build a runtime in any language; motebit's reference relay will federate with it if your handshake verifies. The Python reference verifier under [`examples/python-receipt-verifier`](https://github.com/motebit/motebit/tree/main/examples/python-receipt-verifier) is the load-bearing demonstration that the spec is sufficient — written against the spec alone, no motebit TypeScript consumed.
 
 2. **Build against the Apache-2.0 floor.** Import `@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto` directly from npm. Verify identity files, parse receipts, compose semirings, compute optimal paths. The type surface of `@motebit/protocol`, `@motebit/crypto`, and `@motebit/sdk` is fixed by the api-extractor baselines at [`packages/{protocol,crypto,sdk}/etc/*.api.md`](https://github.com/motebit/motebit/tree/main/packages) — every break to one of those three requires a `major` changeset (`check-api-surface`); the other published packages keep their promises through conformance fixtures and semver review.
 

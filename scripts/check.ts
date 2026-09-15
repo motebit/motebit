@@ -980,6 +980,12 @@ const GATES: ReadonlyArray<Gate> = [
       "a worker never holds the relay master token: no `services/*` source outside the relay (browser-sandbox allowlisted — same env NAME, different secret, its own inbound bearer) reads `MOTEBIT_API_TOKEN`, and no worker-side config surface (`MoleculeConfig`, `McpServiceConfig`, `WireServerDepsOptions`) carries an `apiToken` field. Until 2026-09-13 all seven first-party workers presented the relay OPERATOR's master credential as their bearer on register/heartbeat/listing/deregister/key-lookups, so a compromised worker container was a compromised relay — invisible to every test because nothing was wrong except the blast radius. Workers now sign per-audience tokens with their own key (`RelayAuth`) after a public `POST /api/v1/agents/bootstrap`. Same permanent-structural-lock shape as `check-credit-caller-allowlist`. Invariant #156, added 2026-09-13",
     script: "check-worker-no-master-token",
   },
+  {
+    name: "check-docs-script-claims",
+    defends:
+      "every package script a docs page tells the reader to run exists in the manifest it would run against: `pnpm --filter <pkg> <script>` resolves to a workspace package by name and one of its `scripts`; `pnpm run <script>` resolves against the most recent `cd <workspace-dir>` in the same fenced block (else the repo root); `npm run <script>` resolves against the scripts the create-motebit scaffold generates. The 2026-09-14 docs-vs-code cross-audit (#667) found three of the five app pages OPENING with a command that did not exist or did something other than the sentence claimed — the first command a new contributor types was the least-checked sentence on the site; `check-docs-tree` enforced the directory listing and `check-docs-cli-claims` the CLI subcommands, but nothing tied a documented script to a package.json. Invariant #157, added 2026-09-14",
+    script: "check-docs-script-claims",
+  },
 ];
 
 interface Result {
