@@ -2566,6 +2566,26 @@ export async function probeFetch(): Promise<unknown> {
       }),
   },
   {
+    script: "check-docs-script-claims",
+    proves:
+      "flags a docs page that tells the reader to run a package script that does not exist — exactly the #667 finding (`pnpm --filter motebit dev` when the CLI has only `start`). Drops a fixture MDX page with a fenced `pnpm --filter motebit` command naming a script no manifest defines; the gate's manifest lookup finds the package and misses the script.",
+    perturb: () =>
+      writeFixture(
+        `apps/docs/content/docs/developer/${PROBE_PREFIX}script_claim_violation.mdx`,
+        [
+          "---",
+          "title: Probe fixture",
+          "description: Probe fixture — intentional nonexistent package script.",
+          "---",
+          "",
+          "```bash",
+          `pnpm --filter motebit ${PROBE_PREFIX}no_such_script`,
+          "```",
+          "",
+        ].join("\n"),
+      ),
+  },
+  {
     script: "check-worker-no-master-token",
     proves:
       "flags a worker reading the relay master token again — the 2026-09-13 blast-radius class (every first-party worker held MOTEBIT_API_TOKEN, so a compromised worker container was a compromised relay). Probe reinstates the env read in research's config loader; byte-identical restoration on cleanup.",
