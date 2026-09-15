@@ -255,6 +255,7 @@ export function buildRoutingGraph(
 ): WeightedDigraph<RouteWeight> {
   const graph = new WeightedDigraph(RouteWeightSemiring);
   graph.addNode(selfId);
+  const viaLegs = new Set<string>();
 
   for (const candidate of candidates) {
     // Skip blocked agents
@@ -295,13 +296,19 @@ export function buildRoutingGraph(
 
     const regulatory_risk = candidate.listing?.regulatory_risk ?? 0;
 
-    graph.setEdge(selfId, candidate.motebit_id, {
+    // Only DISPATCHABLE hops enter the graph. A candidate discovered through a
+    // federation peer is reached via that peer: its own execution metrics sit
+    // on the peer → candidate leg, never on a fictional self → candidate edge.
+    const from = candidate.reachable_via ?? selfId;
+    if (candidate.reachable_via) graph.addNode(candidate.reachable_via);
+    graph.setEdge(from, candidate.motebit_id, {
       trust,
       cost,
       latency,
       reliability,
       regulatory_risk,
     });
+    if (candidate.reachable_via) viaLegs.add(`${from}\u0000${candidate.motebit_id}`);
   }
 
   // Apply peer-to-peer edges from delegation receipt trees. Every component
@@ -311,6 +318,10 @@ export function buildRoutingGraph(
   // comparator undefined — the ranking silently degrades to insertion order.
   if (peerEdges) {
     for (const edge of peerEdges) {
+      // The via-leg computed above from the candidate's own profile is
+      // authoritative; a caller's placeholder for the same hop must not
+      // overwrite it.
+      if (viaLegs.has(`${edge.from}\u0000${edge.to}`)) continue;
       graph.setEdge(edge.from, edge.to, finiteRouteWeight(edge.weight));
     }
   }
@@ -333,7 +344,7 @@ export function buildRoutingGraph(
  *  custody — describe work that will HAPPEN. They compose only along hops
  *  the task will traverse: the direct hire, or a federation relay path.
  *  A delegation record's price and latency are a past job's, never this
- *  task's. The Pareto frontier is taken over EXECUTED routes on these five
+ *  task's. The Pareto frontier is taken over PLANNED EXECUTION routes on these five
  *  dimensions; the policy chooses among them with the evidence trust.
  *
  * Custody (`hw`) must be a frontier dimension, not a post-hoc adjustment:
@@ -378,7 +389,7 @@ function trustEvidence(
 }
 
 /**
- * Per node, the Pareto frontier of EXECUTED routes — the graph restricted to
+ * Per node, the Pareto frontier of PLANNED EXECUTION routes — the graph restricted to
  * hops the task will take (direct hires + `"traversed"` peer edges), each
  * edge carrying the custody score of the hop it represents (the candidate's
  * own for self→candidate, the peer edge's declared score for relay hops;
@@ -408,7 +419,7 @@ function executedFrontiers(
   });
 }
 
-/** One ranked candidate: the chosen executed route, its alternatives, and the trust evidence behind it. */
+/** One ranked candidate: the chosen planned execution route, its alternatives, and the trust evidence behind it. */
 interface RankedCandidate {
   score: RouteScore;
   ordered: Frontier<ExecWeight>;
@@ -418,7 +429,7 @@ interface RankedCandidate {
 
 /**
  * Shared core of both rankers. For each node that has at least one executed
- * route and positive evidence trust: score every executed route once
+ * route and positive evidence trust: score every planned execution route once
  * (evidence trust + that route's own execution metrics + that route's
  * custody), keep the policy's winner, and report the frontier winner-first.
  */
@@ -529,7 +540,8 @@ function edgeHwScores(
     const hwScore =
       candidate.hardware_attestation_aggregate?.attestation_score ??
       scoreAttestation(candidate.hardware_attestation);
-    out.set(`${selfId}\u0000${candidate.motebit_id}`, hwScore);
+    // The candidate's custody sits on the leg that reaches it (direct, or via its peer).
+    out.set(`${candidate.reachable_via ?? selfId}\u0000${candidate.motebit_id}`, hwScore);
   }
   if (peerEdges) {
     for (const edge of peerEdges) {
@@ -698,7 +710,7 @@ export function graphRankCandidates(
   const compositeFn = config?.compositeFunction;
 
   // Evidence trust from every edge; execution metrics and custody from the
-  // executed route only; the policy chooses among executed routes.
+  // planned execution route only; the policy chooses among planned execution routes.
   const ranked = rankOverExecutedRoutes(
     selfId,
     candidates,
@@ -767,11 +779,11 @@ export function findTrustedRoute(
 /**
  * RouteScore extended with the two paths a routing decision rests on.
  *
- * `routing_paths[0]` is the EXECUTED route — the hops the task will take to
+ * `routing_paths[0]` is the PLANNED EXECUTION route — the hops the task will take to
  * reach this candidate (`[candidate]` for a direct hire; `[peer_relay,
  * agent]` for a federated one) — and its composed execution metrics (cost,
  * latency, reliability, risk, custody) are what the score reflects. The
- * remaining entries are the non-dominated executed alternatives the policy
+ * remaining entries are the non-dominated planned-route alternatives the policy
  * weighed, best first.
  *
  * `trust_evidence_path` is the path through the WHOLE graph — recorded
@@ -780,9 +792,9 @@ export function findTrustedRoute(
  * with no better transitive evidence.
  */
 export interface ExplainedRouteScore extends RouteScore {
-  /** `[0]` = the executed route whose execution metrics the score reports; then the executed alternatives, best first. */
+  /** `[0]` = the planned execution route whose execution metrics the score reports; then the planned-route alternatives, best first. */
   routing_paths: string[][];
-  /** Number of non-dominated executed routes to this candidate the policy chose among (≥ 1). */
+  /** Number of non-dominated planned execution routes to this candidate the policy chose among (≥ 1). */
   alternatives_considered: number;
   /** The evidence path (every edge kind) that justifies `sub_scores.trust` — vouching, not execution. */
   trust_evidence_path: string[];
@@ -793,9 +805,9 @@ export interface ExplainedRouteScore extends RouteScore {
  *
  * Same scoring as graphRankCandidates (shared scoreRoute core). Both rank
  * over the Pareto frontier of REAL routes per candidate (`frontierPaths`);
- * this variant also reports them: `routing_paths[0]` is the executed route
+ * this variant also reports them: `routing_paths[0]` is the planned execution route
  * whose composed execution metrics the score reflects, the rest are the
- * non-dominated executed alternatives the policy weighed, and
+ * non-dominated planned-route alternatives the policy weighed, and
  * `trust_evidence_path` is the vouching chain behind the trust value. An
  * explanation that named a node's component-wise optimum would cite a route
  * that does not exist; this one cites two paths that do, each for what it is.
@@ -815,7 +827,7 @@ export function explainedRankCandidates(
   const compositeFn = config?.compositeFunction;
 
   // Same core as graphRankCandidates, plus the report: routing_paths are the
-  // EXECUTED routes (chosen first — the hops the task will take, whose
+  // PLANNED EXECUTION routes (chosen first — the hops the task will take, whose
   // composed execution metrics the score reflects); trust_evidence_path is
   // the path through every edge that justified the trust value.
   // `maxProvPaths` bounds the executed frontier (approximate — pareto.ts).

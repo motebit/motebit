@@ -2185,9 +2185,9 @@ export interface ExecutionStepSummary {
         capability_match: number;
         availability: number;
       };
-      /** `[0]` = the EXECUTED route (agent ids, caller → worker: the hops the task takes — `[worker]` for a direct hire, `[peer_relay, worker]` for a federated one) whose composed execution metrics the sub_scores reflect; then the non-dominated executed alternatives, best first. Pinned hires report `[[worker]]`. */
+      /** `[0]` = the PLANNED EXECUTION route (agent ids, caller → worker: the hops the task takes — `[worker]` for a direct hire, `[peer_relay, worker]` for a federated one) whose composed execution metrics the sub_scores reflect; then the non-dominated planned-route alternatives, best first. Pinned hires report `[[worker]]`. */
       routing_paths: string[][];
-      /** Number of non-dominated executed routes to the selected agent the policy chose among (0 for a pinned hire). */
+      /** Number of non-dominated planned execution routes to the selected agent the policy chose among (0 for a pinned hire). */
       alternatives_considered: number;
       /** Optional (additive, 2026-09-14): the path through EVERY edge — recorded delegations included — that justified `sub_scores.trust`. A chain of vouching, never a record of who executed the task. */
       trust_evidence_path?: string[];
