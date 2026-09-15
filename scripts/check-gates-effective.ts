@@ -46,6 +46,7 @@ import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { hasRepairInstruction } from "./lib/gate-report.js";
+import { acquireGateLock } from "./lib/probe-lock.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -2786,6 +2787,9 @@ function drainStalePerturbations(): void {
 }
 
 function main(): void {
+  // Exclusive with `pnpm check` and the other perturbing script: probes rewrite
+  // real files for their duration (scripts/lib/probe-lock.ts).
+  acquireGateLock(ROOT, "check-gates-effective (mutating probes)");
   drainStalePerturbations();
   assertProbeCoverage();
 

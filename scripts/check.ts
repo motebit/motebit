@@ -36,6 +36,7 @@ import { availableParallelism } from "node:os";
 import { readFileSync, unlinkSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { acquireGateLock } from "./lib/probe-lock.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -1095,6 +1096,10 @@ function assertRegistryCompleteness(): void {
 }
 
 async function main(): Promise<void> {
+  // Exclusive with the effectiveness probes: they mutate real files while
+  // they run, and a gate reading one mid-probe reports a planted violation
+  // as real (scripts/lib/probe-lock.ts). Released on exit.
+  acquireGateLock(ROOT, "pnpm check");
   // Drain any orphan gate-probe files before running production
   // gates. See `drainStaleProbes` for why this lives here and not
   // only in `check-gates-effective`.

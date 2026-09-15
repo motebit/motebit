@@ -39,6 +39,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { failWithRepair } from "./lib/gate-report.js";
+import { acquireGateLock } from "./lib/probe-lock.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -190,6 +191,9 @@ function assertCoverage(): void {
 }
 
 function main(): void {
+  // Exclusive with `pnpm check` and the other perturbing script: probes rewrite
+  // real files for their duration (scripts/lib/probe-lock.ts).
+  acquireGateLock(ROOT, "check-activation-effective (mutating probes)");
   // Refuse to run on a dirty tasks.ts — this gate mutates it in place, and a
   // pre-existing edit would be indistinguishable from a probe (or clobbered by
   // the revert). Same isolation discipline as check-gates-effective.
