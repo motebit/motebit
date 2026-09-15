@@ -126,11 +126,28 @@ function competenceCounts(
   capability?: string,
 ): { successful: number; failed: number } {
   if (!record) return { successful: 0, failed: 0 };
+  // A PAID failure weighs more than a free one: the bucket's
+  // `paid_failure_penalty` (extra integer pseudo-failures written by the
+  // runtime's `bumpTrustFromReceipt` per docs/doctrine/paid-failure-recourse.md)
+  // is added to the failure count the posterior sees. Integer, so the seeded
+  // sampler and transcript recomputation stay exact.
   if (capability != null) {
     const bucket = record.capability_stats?.[capability];
-    return { successful: bucket?.successful_tasks ?? 0, failed: bucket?.failed_tasks ?? 0 };
+    return {
+      successful: bucket?.successful_tasks ?? 0,
+      failed: (bucket?.failed_tasks ?? 0) + (bucket?.paid_failure_penalty ?? 0),
+    };
   }
-  return { successful: record.successful_tasks ?? 0, failed: record.failed_tasks ?? 0 };
+  // Aggregate read: every bucket's penalty counts (including the `"*"` bucket
+  // that holds penalties whose capability was unknown at write time).
+  let penalty = 0;
+  for (const b of Object.values(record.capability_stats ?? {})) {
+    penalty += b.paid_failure_penalty ?? 0;
+  }
+  return {
+    successful: record.successful_tasks ?? 0,
+    failed: (record.failed_tasks ?? 0) + penalty,
+  };
 }
 
 /**

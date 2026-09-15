@@ -142,6 +142,39 @@ describe("SqliteAgentTrustStore", () => {
     });
   });
 
+  it("round-trips a bucket's paid_failure_penalty and drops a malformed one (never a throw)", async () => {
+    await moteDb.agentTrustStore.setAgentTrust(
+      makeRecord({
+        capability_stats: {
+          web_search: { successful_tasks: 3, failed_tasks: 1, paid_failure_penalty: 4 },
+          read_url: { successful_tasks: 2, failed_tasks: 0 },
+        },
+      }),
+    );
+    const found = await moteDb.agentTrustStore.getAgentTrust("mote-local", "mote-remote-1");
+    expect(found!.capability_stats).toEqual({
+      web_search: { successful_tasks: 3, failed_tasks: 1, paid_failure_penalty: 4 },
+      read_url: { successful_tasks: 2, failed_tasks: 0 },
+    });
+    // A corrupt penalty (non-integer / negative / string) reads as no penalty — the
+    // counts survive, the recourse degrades to money-blind rather than crashing.
+    moteDb.db
+      .prepare(
+        "UPDATE agent_trust SET capability_stats = ? WHERE motebit_id = ? AND remote_motebit_id = ?",
+      )
+      .run(
+        JSON.stringify({
+          web_search: { successful_tasks: 3, failed_tasks: 1, paid_failure_penalty: "x" },
+        }),
+        "mote-local",
+        "mote-remote-1",
+      );
+    const degraded = await moteDb.agentTrustStore.getAgentTrust("mote-local", "mote-remote-1");
+    expect(degraded!.capability_stats).toEqual({
+      web_search: { successful_tasks: 3, failed_tasks: 1 },
+    });
+  });
+
   it("stores absent capability_stats as NULL and reads it back undefined", async () => {
     await moteDb.agentTrustStore.setAgentTrust(makeRecord());
     const found = await moteDb.agentTrustStore.getAgentTrust("mote-local", "mote-remote-1");

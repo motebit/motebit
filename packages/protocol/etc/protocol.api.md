@@ -333,6 +333,7 @@ export interface AgentTrustRecord {
     capability_stats?: Record<string, {
         successful_tasks: number;
         failed_tasks: number;
+        paid_failure_penalty?: number;
     }>;
     // (undocumented)
     failed_tasks?: number;

@@ -4583,8 +4583,10 @@ export class MotebitRuntime {
      * single-capability `delegated_scope`, else aggregate-only.
      */
     capability?: string,
+    /** USD the caller paid for this work (settled); weighs a failure per `paidFailureWeight`. */
+    paidUsd?: number,
   ): Promise<void> {
-    return _bumpTrustFromReceipt(this.trustDeps, receipt, verified, capability);
+    return _bumpTrustFromReceipt(this.trustDeps, receipt, verified, capability, paidUsd);
   }
 
   async recordAgentInteraction(
@@ -5297,7 +5299,15 @@ export class MotebitRuntime {
             workerReceipt,
             hexToBytes(workerReceipt.public_key),
           );
-          if (valid) await this.bumpTrustFromReceipt(workerReceipt, true, params.capability);
+          // What THIS delegator paid (micro-units → USD) rides along so a failed
+          // paid hire weighs more than a free one in its own ledger — the
+          // trust-graph recourse of docs/doctrine/paid-failure-recourse.md.
+          const paidMicro = result.settlement?.paidMicro;
+          const paidUsd =
+            typeof paidMicro === "number" && paidMicro > 0 ? paidMicro / 1_000_000 : undefined;
+          if (valid) {
+            await this.bumpTrustFromReceipt(workerReceipt, true, params.capability, paidUsd);
+          }
         }
       } catch (err) {
         this._logger.warn("routing.trust_bump_skipped", {
