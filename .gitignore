@@ -111,3 +111,6 @@ data/
 # Golden-frame darwin snapshots — local personal baselines only; linux
 # frames in __screenshots__ are the CI-authoritative committed references.
 apps/web/e2e/golden/__screenshots__/*-darwin.png
+
+# Exclusive lock held by `pnpm check` and the effectiveness probes (scripts/lib/probe-lock.ts)
+.motebit-gate.lock
