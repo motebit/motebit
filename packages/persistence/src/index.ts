@@ -2366,18 +2366,26 @@ interface AgentTrustRow {
  */
 function parseCapabilityStats(
   raw: string | null,
-): Record<string, { successful_tasks: number; failed_tasks: number }> | undefined {
+): NonNullable<AgentTrustRecord["capability_stats"]> | undefined {
   if (raw == null || raw === "") return undefined;
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (parsed == null || typeof parsed !== "object") return undefined;
-    const out: Record<string, { successful_tasks: number; failed_tasks: number }> = {};
+    const out: NonNullable<AgentTrustRecord["capability_stats"]> = {};
     for (const [cap, v] of Object.entries(parsed as Record<string, unknown>)) {
       if (v == null || typeof v !== "object") continue;
       const s = (v as { successful_tasks?: unknown }).successful_tasks;
       const f = (v as { failed_tasks?: unknown }).failed_tasks;
+      const p = (v as { paid_failure_penalty?: unknown }).paid_failure_penalty;
       if (typeof s === "number" && typeof f === "number") {
-        out[cap] = { successful_tasks: s, failed_tasks: f };
+        out[cap] = {
+          successful_tasks: s,
+          failed_tasks: f,
+          // Paid-failure pseudo-failures (integer ≥ 0); anything else reads as none.
+          ...(typeof p === "number" && Number.isInteger(p) && p > 0
+            ? { paid_failure_penalty: p }
+            : {}),
+        };
       }
     }
     return Object.keys(out).length > 0 ? out : undefined;

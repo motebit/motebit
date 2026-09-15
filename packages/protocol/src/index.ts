@@ -165,7 +165,26 @@ export interface AgentTrustRecord {
    * the cross-capability bleed). See
    * `docs/doctrine/first-person-worker-routing.md`.
    */
-  capability_stats?: Record<string, { successful_tasks: number; failed_tasks: number }>;
+  capability_stats?: Record<
+    string,
+    {
+      successful_tasks: number;
+      failed_tasks: number;
+      /**
+       * Extra pseudo-failures accumulated from PAID failures — the buyer's money
+       * loss recorded as a first-person fact (docs/doctrine/paid-failure-recourse.md:
+       * the recourse on the sovereign rail is the trust graph, so the graph must
+       * weigh a paid failure more than a free one). Each paid failure adds
+       * `paidFailureWeight(amountUsd) − 1` here on top of the 1 it adds to
+       * `failed_tasks`; the routing posterior reads
+       * `failed_tasks + paid_failure_penalty`. Integer, so the seeded Beta
+       * sampler stays exact and a transcript still recomputes. The `"*"` key
+       * holds penalties whose capability was unknown (aggregate-only reads).
+       * Local-only like the rest of this map; never on the wire.
+       */
+      paid_failure_penalty?: number;
+    }
+  >;
   /**
    * Most-recent verified hardware-attestation snapshot about the remote
    * agent. Projected from the latest peer-issued `AgentTrustCredential`
