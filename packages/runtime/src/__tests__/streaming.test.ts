@@ -3789,3 +3789,51 @@ describe("approval band spend-history stamp (#522)", () => {
     expect(band!.prior_settled_this_turn).toBeUndefined();
   });
 });
+
+describe("resumeAfterApproval — closes the gate's audit row for the approved call", () => {
+  it("records the completion against the audit callId the approval chunk carried", async () => {
+    const { InMemoryAuditSink } = await import("@motebit/policy");
+    const sink = new InMemoryAuditSink();
+    const runtime = new MotebitRuntime(
+      { motebitId: "ledger-resume", tickRateHz: 0 },
+      createAdapters(createMockProvider(), {
+        storage: { ...createInMemoryStorage(), toolAuditSink: sink },
+      }),
+    );
+    const reg = new SimpleToolRegistry();
+    reg.register(
+      { name: "write_thing", description: "w", inputSchema: { type: "object" } },
+      async () => ({ ok: true, data: "written" }),
+    );
+    runtime.registerExternalTools("t", reg);
+
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks(
+        {
+          type: "approval_request",
+          tool_call_id: "tc-1",
+          name: "write_thing",
+          args: { p: 1 },
+          risk_level: 2,
+          audit_call_id: "call-LEDGER",
+          turn_id: "turn-LEDGER",
+        },
+        { type: "result", result: makeTurnResult() },
+      ),
+    );
+    await collectChunks(runtime.sendMessageStreaming("do it", "run-LEDGER"));
+    expect(runtime.hasPendingApproval).toBe(true);
+    mockRunTurnStreaming.mockReturnValueOnce(
+      yieldChunks({ type: "result", result: makeTurnResult() }),
+    );
+    await collectChunks(runtime.resumeAfterApproval(true));
+
+    const row = sink.getAll().find((r) => r.callId === "call-LEDGER");
+    expect(row).toBeDefined();
+    expect(row!.turnId).toBe("turn-LEDGER");
+    expect(row!.runId).toBe("run-LEDGER");
+    expect(row!.tool).toBe("write_thing");
+    expect(row!.result?.ok).toBe(true);
+    expect(row!.decision.requiresApproval).toBe(true);
+  });
+});

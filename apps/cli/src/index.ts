@@ -85,6 +85,8 @@ import {
   handleApprovalShow,
   handleApprovalApprove,
   handleApprovalDeny,
+  handleRunsList,
+  handleRunsAck,
   handleId,
   handleInit,
   handleLedger,
@@ -386,6 +388,19 @@ async function main(): Promise<void> {
 
   if (subcommand === "ps") {
     await handlePs(config);
+    return;
+  }
+
+  if (subcommand === "runs") {
+    const runsCmd = config.positionals[1];
+    if (runsCmd == null || runsCmd === "list") {
+      await handleRunsList(config);
+    } else if (runsCmd === "ack") {
+      await handleRunsAck(config);
+    } else {
+      console.error("Usage: motebit runs [list|ack <run_id>]");
+      process.exit(1);
+    }
     return;
   }
 

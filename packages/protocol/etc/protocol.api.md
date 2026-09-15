@@ -3083,6 +3083,7 @@ export interface PolicyDecision {
         timeMs: number;
         cost: number;
     };
+    callId?: string;
     missing_authority?: AuthorityDelta;
     quorum?: {
         required: number;

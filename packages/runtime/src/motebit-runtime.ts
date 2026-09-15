@@ -1235,6 +1235,18 @@ export class MotebitRuntime {
         this.assertSensitivityPermitsAiCall(entry, toolName),
       getLatestCues: () => this.latestCues,
       getApprovalStore: () => this.approvalStore,
+      recordApprovedToolResult: (p) =>
+        this.policy.recordResult(
+          { turnId: p.turnId ?? p.runId ?? "resume", runId: p.runId },
+          // The decision that paused was approval-gated; the human's
+          // signed consent (signAndEmitApprovalDecision) is the authority
+          // record — this row is only the execution completion.
+          { allowed: true, requiresApproval: true, reason: "approved", callId: p.auditCallId },
+          p.toolName,
+          p.args,
+          p.ok,
+          p.durationMs,
+        ),
       // #493: non-draining stash view for the delegate_to_agent receipt
       // beat. Lazy closures — interactiveDelegation is constructed before
       // the StreamingManager, but the indirection keeps that ordering a
@@ -1550,7 +1562,19 @@ export class MotebitRuntime {
   async invokeLocalTool(
     name: string,
     args: Record<string, unknown>,
-    options: { invocationOrigin?: IntentOrigin } = {},
+    options: {
+      invocationOrigin?: IntentOrigin;
+      /**
+       * A human already approved THIS exact action out of band (the
+       * daemon's persisted approval queue, resolved after a restart when
+       * the paused turn can no longer resume). Satisfies the approval
+       * band the same way a user tap does — and, like a tap, never a
+       * hard deny and never R4_MONEY. The receipt's `invocation_origin`
+       * stays whatever the caller passes (e.g. "scheduled"); the consent
+       * itself is a separate signed artifact.
+       */
+      humanApproved?: boolean;
+    } = {},
   ): Promise<ToolResult> {
     const invocationId =
       typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
@@ -1576,13 +1600,15 @@ export class MotebitRuntime {
       // so the gate cannot risk-assess it. Fail closed — it must not run.
       return { ok: false, error: `Tool "${name}" is not available` };
     }
-    const decision = this.policy.validate(toolDef, args, this.policy.createTurnContext());
+    const turnCtx = this.policy.createTurnContext();
+    const decision = this.policy.validate(toolDef, args, turnCtx);
     if (!decision.allowed) {
       return { ok: false, error: decision.reason ?? `Tool "${name}" blocked by policy` };
     }
     if (decision.requiresApproval) {
       const tapSatisfiesApproval =
-        origin === "user-tap" && classifyTool(toolDef).risk < RiskLevel.R4_MONEY;
+        (origin === "user-tap" || options.humanApproved === true) &&
+        classifyTool(toolDef).risk < RiskLevel.R4_MONEY;
       if (!tapSatisfiesApproval) {
         return {
           ok: false,
@@ -1602,6 +1628,9 @@ export class MotebitRuntime {
     }
 
     const completedAt = Date.now();
+    // Completion row for the decision the gate wrote above — closes the
+    // durable-execution ledger for this call before any sink can throw.
+    this.policy.recordResult(turnCtx, decision, name, args, result.ok, completedAt - startedAt);
     const visibleResult = result.ok ? (result.data ?? null) : (result.error ?? null);
 
     // Fire the live activity channel first — the slab renders

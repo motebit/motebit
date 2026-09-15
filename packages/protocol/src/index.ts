@@ -942,6 +942,16 @@ export interface PolicyDecision {
   /** Owner-facing typed residual of a refusal/raise. See `AuthorityDelta`
    *  for the asymmetry + predictor invariants. */
   missing_authority?: AuthorityDelta;
+  /**
+   * Audit call id the gate wrote this decision under (the `callId` of the
+   * `ToolAuditEntry` row appended BEFORE execution). Lets the executor
+   * record the completion (`PolicyGate.recordResult`) against the same
+   * row, so an allowed decision with no completion is a re-checkable
+   * "intended, outcome unknown" state after a crash — never silently
+   * retried. Optional for source-compat with hand-built decisions; the
+   * gate sets it on every decision it returns.
+   */
+  callId?: string;
 }
 
 export interface TurnContext {

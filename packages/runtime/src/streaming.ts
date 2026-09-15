@@ -127,6 +127,22 @@ export interface StreamingDeps {
   getLatestCues(): BehaviorCues;
   /** Approval store for quorum persistence. */
   getApprovalStore(): ApprovalStoreAdapter | null;
+  /**
+   * Close the gate's audit row for an approved call the resume path
+   * executed outside the loop — the completion half of the durable
+   * execution ledger (`PolicyGate.recordResult`). Optional: absent
+   * means the row stays open, which reads as "intended, outcome
+   * unknown" — honest, but the runtime always wires it.
+   */
+  recordApprovedToolResult?(params: {
+    turnId: string | undefined;
+    runId: string | undefined;
+    auditCallId: string | undefined;
+    toolName: string;
+    args: Record<string, unknown>;
+    ok: boolean;
+    durationMs: number;
+  }): void;
   /** Approval timeout in ms. */
   approvalTimeoutMs: number;
   /** Redact secrets from arbitrary text (defense-in-depth at the streaming boundary). */
@@ -253,6 +269,10 @@ interface PendingApproval {
   riskLevel?: number;
   /** Unix ms when the gate fired (the approval was requested). */
   requestedAt: number;
+  /** The gate's audit `callId` for the paused decision (ledger correlation). */
+  auditCallId?: string;
+  /** The loop turn the paused decision belongs to (ledger correlation). */
+  turnId?: string;
 }
 
 export class StreamingManager {
@@ -702,6 +722,8 @@ export class StreamingManager {
           quorum: chunk.quorum,
           riskLevel: chunk.risk_level,
           requestedAt: Date.now(),
+          auditCallId: chunk.audit_call_id,
+          turnId: chunk.turn_id,
         };
 
         // Persist quorum metadata to the approval store (source of truth)
@@ -829,7 +851,35 @@ export class StreamingManager {
             ? (this.deps.delegationReceiptStash?.count() ?? null)
             : null;
         const toolRegistry = this.deps.getToolRegistry();
-        const result = await toolRegistry.execute(pending.toolName, pending.args);
+        const dispatchedAt = Date.now();
+        let result: ToolResult;
+        try {
+          result = await toolRegistry.execute(pending.toolName, pending.args);
+        } catch (err) {
+          // Close the ledger row before re-throwing: the handler threw, so
+          // the tool reports failure — an open row would read as unknown.
+          this.deps.recordApprovedToolResult?.({
+            turnId: pending.turnId,
+            runId: pending.runId,
+            auditCallId: pending.auditCallId,
+            toolName: pending.toolName,
+            args: pending.args,
+            ok: false,
+            durationMs: Date.now() - dispatchedAt,
+          });
+          throw err;
+        }
+        // Completion row for the decision the gate paused on — recorded
+        // the moment execution returns, before sanitization can throw.
+        this.deps.recordApprovedToolResult?.({
+          turnId: pending.turnId,
+          runId: pending.runId,
+          auditCallId: pending.auditCallId,
+          toolName: pending.toolName,
+          args: pending.args,
+          ok: result.ok,
+          durationMs: Date.now() - dispatchedAt,
+        });
 
         // Sanitize through policy if available
         const check = this.deps.sanitizeToolResult(result, pending.toolName);

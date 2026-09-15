@@ -109,3 +109,80 @@ describe("invokeLocalTool — the policy gate is unbypassable (finding h)", () =
     expect(executed).toEqual([]);
   });
 });
+
+describe("invokeLocalTool — durable execution ledger (intent row, then completion row)", () => {
+  async function setupWithSink() {
+    const { InMemoryAuditSink } = await import("@motebit/policy");
+    const sink = new InMemoryAuditSink();
+    const reg = new SimpleToolRegistry();
+    reg.register(toolDef("write_thing", RiskLevel.R2_WRITE), async (): Promise<ToolResult> => ({
+      ok: true,
+      data: "ok",
+    }));
+    reg.register(toolDef("explode", RiskLevel.R2_WRITE), async (): Promise<ToolResult> => {
+      throw new Error("boom");
+    });
+    const runtime = new MotebitRuntime(
+      {
+        motebitId: "test-mote",
+        tickRateHz: 0,
+        policy: { requireApprovalAbove: RiskLevel.R1_DRAFT, denyAbove: RiskLevel.R4_MONEY },
+      },
+      {
+        storage: { ...createInMemoryStorage(), toolAuditSink: sink },
+        renderer: new NullRenderer(),
+      },
+    );
+    runtime.registerExternalTools("test", reg);
+    return { runtime, sink };
+  }
+
+  it("writes the decision row before execution and closes it with the tool's verdict after", async () => {
+    const { runtime, sink } = await setupWithSink();
+    const res = await runtime.invokeLocalTool("write_thing", { p: 1 });
+    expect(res.ok).toBe(true);
+    const rows = sink.getAll().filter((r) => r.tool === "write_thing");
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    const callId = rows[0]!.callId;
+    expect(rows.every((r) => r.callId === callId)).toBe(true);
+    expect(rows[0]!.result).toBeUndefined();
+    expect(rows[rows.length - 1]!.result?.ok).toBe(true);
+  });
+
+  it("a throwing handler still closes the row as failed", async () => {
+    const { runtime, sink } = await setupWithSink();
+    const res = await runtime.invokeLocalTool("explode", {});
+    expect(res.ok).toBe(false);
+    const rows = sink.getAll().filter((r) => r.tool === "explode");
+    expect(rows[rows.length - 1]!.result?.ok).toBe(false);
+  });
+
+  it("humanApproved satisfies the approval band for a scheduled origin (R2), never R4", async () => {
+    const { runtime } = await setupWithSink();
+    const ok = await runtime.invokeLocalTool(
+      "write_thing",
+      {},
+      { invocationOrigin: "scheduled", humanApproved: true },
+    );
+    expect(ok.ok).toBe(true);
+    const notApproved = await runtime.invokeLocalTool(
+      "write_thing",
+      {},
+      { invocationOrigin: "scheduled" },
+    );
+    expect(notApproved.ok).toBe(false);
+  });
+});
+
+describe("invokeLocalTool — humanApproved never clears R4_MONEY", () => {
+  it("R4 stays blocked even with humanApproved (only a verified grant clears it)", async () => {
+    const { runtime, executed } = setup();
+    const res = await runtime.invokeLocalTool(
+      "pay_thing",
+      {},
+      { invocationOrigin: "scheduled", humanApproved: true },
+    );
+    expect(res.ok).toBe(false);
+    expect(executed).not.toContain("pay_thing");
+  });
+});

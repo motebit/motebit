@@ -357,7 +357,10 @@ export class AuditLogger {
       runId,
       callId,
       tool,
-      args,
+      // Same redaction as the decision row — the result row REPLACES it
+      // in keyed sinks (SQLite upserts on call_id), so an unredacted
+      // result row would un-redact the args the decision row had hidden.
+      args: redactSensitiveArgs(args),
       decision,
       result: { ok, durationMs },
       timestamp: Date.now(),
@@ -420,4 +423,59 @@ export class AuditLogger {
   getChainedSink(): ChainedAuditSink | null {
     return this.sink instanceof ChainedAuditSink ? this.sink : null;
   }
+}
+
+/**
+ * The actions in an audit trail whose external effect is UNKNOWN: the
+ * gate allowed them outright (no approval pause) and wrote the decision
+ * row before execution, but no completion row ever followed. After a
+ * process death these are exactly the calls that may or may not have
+ * reached the outside world — the intent row proves preparation, not
+ * that the call occurred.
+ *
+ * Pure over the entries (in-memory and keyed sinks agree): grouped by
+ * `callId`; a call is resolved the moment ANY entry for it carries a
+ * `result`. Approval-gated decisions are excluded — their state lives in
+ * the approval queue, not here — and so are denials (never intended).
+ * Injection rows (`decision.reason` starting with `injection_`) are
+ * post-execution annotations, not intents, and are skipped too.
+ *
+ * Consumers (the daemon scheduler's restart recovery) must hold these
+ * for review, never retry them silently.
+ */
+export function findUnresolvedActions(entries: readonly ToolAuditEntry[]): ToolAuditEntry[] {
+  const byCall = new Map<string, { intent: ToolAuditEntry | null; resolved: boolean }>();
+  for (const e of entries) {
+    const slot = byCall.get(e.callId) ?? { intent: null, resolved: false };
+    if (e.result != null) slot.resolved = true;
+    const isInjectionRow = e.decision.reason?.startsWith("injection_") === true;
+    if (
+      e.decision.allowed &&
+      !e.decision.requiresApproval &&
+      !isInjectionRow &&
+      e.injection == null
+    ) {
+      slot.intent = slot.intent ?? e;
+    }
+    byCall.set(e.callId, slot);
+  }
+  const out: ToolAuditEntry[] = [];
+  for (const slot of byCall.values()) {
+    if (slot.intent != null && !slot.resolved) out.push(slot.intent);
+  }
+  return out;
+}
+
+/**
+ * Count of actions in an audit trail that were allowed and DID complete
+ * (a `result` row exists). Together with `findUnresolvedActions` this
+ * tells a recovery path whether a run had external side effects at all:
+ * zero completed and zero unresolved means re-running repeats nothing.
+ */
+export function countCompletedActions(entries: readonly ToolAuditEntry[]): number {
+  const seen = new Set<string>();
+  for (const e of entries) {
+    if (e.result != null) seen.add(e.callId);
+  }
+  return seen.size;
 }

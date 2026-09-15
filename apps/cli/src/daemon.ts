@@ -221,6 +221,8 @@ export async function handleRun(config: CliConfig): Promise<void> {
     moteDb.goalStore,
     moteDb.approvalStore,
     moteDb.goalOutcomeStore,
+    moteDb.goalRunStore,
+    moteDb.toolAuditSink,
     motebitId,
     denyAbove,
   );

@@ -46,6 +46,10 @@
     "restore": [],
     "rotate": [],
     "run": [],
+    "runs": [
+      "ack",
+      "list"
+    ],
     "schema": [],
     "seed": [],
     "serve": [],

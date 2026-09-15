@@ -4,11 +4,15 @@ import type {
   SqliteGoalStore,
   SqliteApprovalStore,
   SqliteGoalOutcomeStore,
+  SqliteGoalRunStore,
   Goal,
   GoalOutcome,
+  GoalRun,
+  UncertainAction,
 } from "@motebit/persistence";
 import { EventType, RiskLevel, PlanStatus, SensitivityLevel } from "@motebit/sdk";
-import type { ToolHandler } from "@motebit/sdk";
+import type { ToolHandler, AuditLogSink } from "@motebit/sdk";
+import { findUnresolvedActions, countCompletedActions } from "@motebit/policy";
 import {
   createSubGoalDefinition,
   completeGoalDefinition,
@@ -32,6 +36,8 @@ const errorLine = (msg: string): void => writeLine(errorColor(msg));
 interface SuspendedTurn {
   approvalId: string;
   goalId: string;
+  /** The persisted goal run this turn belongs to (goal_runs.run_id). */
+  runId: string;
   createdAt: number;
   /** The runtime gate's tool_call_id for the approval this turn suspended on.
    *  Resume/deny is BOUND to it (#462): the scheduler may only resolve the
@@ -60,11 +66,27 @@ export class GoalScheduler {
   private planStore: PlanStoreAdapter | null = null;
   private tickCount = 0;
 
+  /** Runs already logged as held this process — log the hold once, not every tick. */
+  private heldLogged = new Set<string>();
+
   constructor(
     private runtime: MotebitRuntime,
     private goalStore: SqliteGoalStore,
     private approvalStore: SqliteApprovalStore,
     private goalOutcomeStore: SqliteGoalOutcomeStore,
+    /**
+     * Durable execution ledger — every run is a persisted row from before
+     * its first model call, so a process death leaves a record, and the
+     * next start recovers instead of re-firing (see `recoverInterruptedRuns`).
+     */
+    private runStore: SqliteGoalRunStore,
+    /**
+     * The tool audit log the policy gate writes decision rows into BEFORE
+     * execution and completion rows into after. Restart recovery reads it
+     * by run id to tell "did anything external happen" — and holds the
+     * goal when the answer is yes or unknown.
+     */
+    private auditSink: AuditLogSink,
     private motebitId: string,
     private denyAbove: RiskLevel,
     private defaultTtlMs = 3_600_000, // 1 hour
@@ -88,7 +110,7 @@ export class GoalScheduler {
       const g = this.goalStore.get(goalId);
       return g == null ? null : g.status;
     });
-    this.cleanupOrphanedApprovals();
+    this.recoverInterruptedRuns();
     this.ensureMaintenanceGoal();
     this.timer = setInterval(() => {
       void this.tick();
@@ -125,15 +147,84 @@ export class GoalScheduler {
     logLine("[scheduler] created system memory maintenance goal (24h interval)");
   }
 
-  /** Deny any pending approvals left over from a previous daemon run. */
-  private cleanupOrphanedApprovals(): void {
-    const orphans = this.approvalStore.listPending(this.motebitId);
-    for (const a of orphans) {
-      this.approvalStore.resolve(a.approval_id, "denied", "daemon_restart");
+  /**
+   * Restart recovery. Runs the previous process died inside are still
+   * `running` in the ledger; each becomes `interrupted` with the honest
+   * facts read from the tool audit log:
+   *
+   *   - completed_actions — allowed tool calls that DID record a completion
+   *     (re-running the goal would repeat them);
+   *   - uncertain_actions — allowed tool calls with a decision row but no
+   *     completion row: the process died between dispatch and recording.
+   *     The intent row proves preparation, never that the call happened.
+   *
+   * Any side effect, known or unknown, HOLDS the goal until a human runs
+   * `motebit runs ack <run_id>`. A run with no allowed tool calls at all
+   * resolves itself — re-running it repeats nothing. Pending approvals are
+   * left pending (they were a human's decision to make, and still are);
+   * `awaiting_approval` runs are drained by `drainRecoveredApprovals` once
+   * the human decides.
+   */
+  recoverInterruptedRuns(): void {
+    const stale = this.runStore.listByStatus(this.motebitId, "running");
+    for (const run of stale) {
+      const facts = this.classifyInterruptedRun(run);
+      this.runStore.markInterrupted(run.run_id, facts);
+      const held = facts.completed_actions > 0 || facts.uncertain_actions.length > 0;
+      this.goalOutcomeStore.add({
+        outcome_id: run.run_id,
+        goal_id: run.goal_id,
+        motebit_id: this.motebitId,
+        ran_at: Date.now(),
+        status: "failed",
+        summary: null,
+        tool_calls_made: facts.completed_actions + facts.uncertain_actions.length,
+        memories_formed: 0,
+        error_message: `interrupted: ${facts.note}`,
+      });
+      void this.runtime.goals.executed({
+        goal_id: run.goal_id,
+        error: `interrupted: ${facts.note}`,
+      });
+      if (held) {
+        warnLine(
+          `[scheduler] run ${run.run_id.slice(0, 8)} of goal ${run.goal_id.slice(0, 8)} was interrupted with ${facts.note} — goal HELD until \`motebit runs ack ${run.run_id.slice(0, 8)}\``,
+        );
+      } else {
+        logLine(
+          `[scheduler] run ${run.run_id.slice(0, 8)} was interrupted before any external action — will re-fire on schedule`,
+        );
+      }
     }
-    if (orphans.length > 0) {
-      logLine(`[scheduler] cleaned up ${orphans.length} orphaned approval(s) from previous run`);
+  }
+
+  private classifyInterruptedRun(run: GoalRun): {
+    completed_actions: number;
+    uncertain_actions: UncertainAction[];
+    note: string;
+  } {
+    if (typeof this.auditSink.queryByRunId !== "function") {
+      // The sink cannot answer by run — side effects are UNKNOWN, which is
+      // the held case, not the safe case. A sentinel uncertain action keeps
+      // the hold honest in content: "something may have happened".
+      return {
+        completed_actions: 0,
+        uncertain_actions: [{ call_id: "unknown", tool: "unknown", intended_at: run.started_at }],
+        note: "audit log cannot be queried by run — side effects unknown",
+      };
     }
+    const entries = this.auditSink.queryByRunId(run.run_id);
+    const uncertain = findUnresolvedActions(entries).map((e) => ({
+      call_id: e.callId,
+      tool: e.tool,
+      intended_at: e.timestamp,
+    }));
+    const completed = countCompletedActions(entries);
+    const note =
+      completed === 0 && uncertain.length === 0
+        ? "no external actions recorded"
+        : `${completed} completed action(s), ${uncertain.length} with unknown outcome`;
+    return { completed_actions: completed, uncertain_actions: uncertain, note };
   }
 
   stop(): void {
@@ -141,10 +232,10 @@ export class GoalScheduler {
       clearInterval(this.timer);
       this.timer = null;
     }
-    // On shutdown: expire all pending approvals
-    for (const [id] of this.suspended) {
-      this.approvalStore.resolve(id, "denied", "daemon_shutdown");
-    }
+    // On shutdown the pending approvals STAY pending and their runs stay
+    // `awaiting_approval` in the ledger — a human's decision survives the
+    // process. Only the in-memory resume handles are dropped; after a
+    // restart the decision is applied by `drainRecoveredApprovals`.
     this.suspended.clear();
     // Best-effort memory consolidation on shutdown
     void this.runtime.consolidationCycle();
@@ -432,8 +523,10 @@ export class GoalScheduler {
       // Phase 1: expire stale approvals
       this.expireStaleApprovals();
 
-      // Phase 2: drain resolved approvals
+      // Phase 2: drain resolved approvals — live turns first, then the ones
+      // whose paused turn died with a previous process.
       await this.drainResolvedApprovals();
+      await this.drainRecoveredApprovals();
 
       // Phase 3: skip goal scheduling if runtime has a pending approval
       if (this.runtime.hasPendingApproval) return;
@@ -448,6 +541,20 @@ export class GoalScheduler {
         const elapsed = goal.last_run_at != null ? now - goal.last_run_at : Infinity;
         if (elapsed < goal.interval_ms) continue;
 
+        // Never start a replacement run while an existing run is unresolved:
+        // paused on a human, or interrupted with side effects nobody has
+        // reviewed. Re-firing would repeat what already happened.
+        const blocking = this.runStore.blockingRunForGoal(goal.goal_id);
+        if (blocking != null) {
+          if (!this.heldLogged.has(blocking.run_id)) {
+            this.heldLogged.add(blocking.run_id);
+            logLine(
+              `[goal] ${goal.goal_id.slice(0, 8)} held — run ${blocking.run_id.slice(0, 8)} is ${blocking.status}${blocking.status === "interrupted" ? ` (ack with \`motebit runs ack ${blocking.run_id.slice(0, 8)}\`)` : ""}`,
+            );
+          }
+          continue;
+        }
+
         logLine(`[goal] executing: "${goal.prompt.slice(0, 60)}"`);
 
         // Build enriched context
@@ -460,6 +567,9 @@ export class GoalScheduler {
 
         // Generate a stable runId for this goal execution (= outcome_id for audit correlation)
         const runId = crypto.randomUUID();
+        // Ledger row BEFORE the first model call: a death from here on
+        // leaves a `running` row that restart recovery classifies.
+        this.runStore.start({ run_id: runId, goal_id: goal.goal_id, motebit_id: this.motebitId });
 
         try {
           let result: GoalStreamResult;
@@ -482,7 +592,12 @@ export class GoalScheduler {
               result = await this.executePlanGoal(goal, outcomes, runId, abortController.signal);
             } else {
               const stream = this.runtime.sendMessageStreaming(enrichedPrompt, runId);
-              result = await this.consumeDaemonStream(stream, goal.goal_id, abortController.signal);
+              result = await this.consumeDaemonStream(
+                stream,
+                goal.goal_id,
+                runId,
+                abortController.signal,
+              );
             }
           } finally {
             clearTimeout(deadlineTimer);
@@ -508,6 +623,7 @@ export class GoalScheduler {
             error_message: null,
           });
 
+          this.runStore.setStatus(runId, "completed");
           this.goalStore.updateLastRun(goal.goal_id, Date.now());
           this.goalStore.resetFailures(goal.goal_id);
 
@@ -552,6 +668,8 @@ export class GoalScheduler {
             error_message: msg,
           });
 
+          this.runStore.setStatus(runId, "failed", { note: msg });
+
           // Emit goal_executed (failure variant) — spec §5.2. Every run
           // leaves a wire record regardless of outcome; §1's "ledger is
           // the semantic source of truth" demands it.
@@ -586,6 +704,7 @@ export class GoalScheduler {
   private async consumeDaemonStream(
     stream: AsyncGenerator<StreamChunk>,
     goalId: string,
+    runId: string,
     signal?: AbortSignal,
   ): Promise<GoalStreamResult> {
     let toolCallsMade = 0;
@@ -620,7 +739,8 @@ export class GoalScheduler {
           const argsHash = hashArgs(argsJson);
           const now = Date.now();
 
-          // Persist to SQLite
+          // Persist to SQLite — the FULL args, so a decision made after a
+          // restart can execute exactly what was shown, never a guess.
           this.approvalStore.add({
             approval_id: approvalId,
             motebit_id: this.motebitId,
@@ -634,12 +754,15 @@ export class GoalScheduler {
             expires_at: now + this.defaultTtlMs,
             resolved_at: null,
             denied_reason: null,
+            args_json: argsJson,
           });
+          this.runStore.setStatus(runId, "awaiting_approval", { approval_id: approvalId });
 
           // Track in-memory (runtime holds the actual suspended state)
           this.suspended.set(approvalId, {
             approvalId,
             goalId,
+            runId,
             createdAt: now,
             toolCallId: chunk.tool_call_id,
           });
@@ -732,12 +855,13 @@ export class GoalScheduler {
       planStream = this.planEngine!.executePlan(plan.plan_id, loopDeps, undefined, runId);
     }
 
-    return this.consumePlanStream(planStream, goal.goal_id, signal);
+    return this.consumePlanStream(planStream, goal.goal_id, runId, signal);
   }
 
   private async consumePlanStream(
     stream: AsyncGenerator<PlanChunk>,
     goalId: string,
+    runId: string | undefined,
     signal?: AbortSignal,
   ): Promise<GoalStreamResult> {
     let toolCallsMade = 0;
@@ -815,11 +939,16 @@ export class GoalScheduler {
             expires_at: now + this.defaultTtlMs,
             resolved_at: null,
             denied_reason: null,
+            args_json: argsJson,
           });
+          if (runId != null) {
+            this.runStore.setStatus(runId, "awaiting_approval", { approval_id: approvalId });
+          }
 
           this.suspended.set(approvalId, {
             approvalId,
             goalId,
+            runId: runId ?? approvalId,
             createdAt: now,
             toolCallId: innerChunk.tool_call_id,
           });
@@ -917,10 +1046,17 @@ export class GoalScheduler {
       if (pending != null && pending.toolCallId === turn.toolCallId) {
         this.currentGoalId = turn.goalId;
         const resumeStream = this.runtime.resumeAfterApproval(approved);
-        const result = await this.consumeDaemonStream(resumeStream, turn.goalId);
+        const result = await this.consumeDaemonStream(resumeStream, turn.goalId, turn.runId);
         this.currentGoalId = null;
-        if (approved && !result.suspended) {
-          this.goalStore.updateLastRun(turn.goalId, Date.now());
+        if (!result.suspended) {
+          // The resumed turn ran to its end (a second pause would have
+          // re-marked the run awaiting_approval itself).
+          this.runStore.setStatus(turn.runId, "completed", {
+            note: approved ? "resumed after approval" : "resumed after denial",
+          });
+          if (approved) {
+            this.goalStore.updateLastRun(turn.goalId, Date.now());
+          }
         }
       } else if (pending != null) {
         logLine(
@@ -943,6 +1079,168 @@ export class GoalScheduler {
         item.denied_reason,
       );
     }
+  }
+
+  /**
+   * Apply human decisions to runs whose paused turn no longer exists (the
+   * process that paused them is gone). The paused turn cannot be resumed —
+   * its stream died with the process — so the decision is applied to the
+   * ONE action the human saw:
+   *
+   *   approved → execute exactly the persisted call through
+   *              `invokeLocalTool` (the same policy gate, `humanApproved`
+   *              satisfying the approval band the way a tap does; a hard
+   *              deny still denies; R4_MONEY is never executed here — the
+   *              recovered path holds no verified grant);
+   *   denied   → nothing runs; the run completes with the denial noted.
+   *
+   * The rest of the goal's turn is NOT re-run. That would re-execute the
+   * pre-pause tool calls, which already happened. The goal fires again on
+   * its own cadence.
+   */
+  private async drainRecoveredApprovals(): Promise<void> {
+    const waiting = this.runStore.listByStatus(this.motebitId, "awaiting_approval");
+    for (const run of waiting) {
+      if (run.approval_id == null) continue;
+      if (this.suspended.has(run.approval_id)) continue; // live — handled above
+      const item = this.approvalStore.get(run.approval_id);
+      if (!item) continue;
+      if (item.status === "expired") {
+        this.finishRecoveredRun(run, {
+          ok: false,
+          summary: `approval for ${item.tool_name} expired before a decision`,
+          countAsFailure: false,
+        });
+        continue;
+      }
+      if (item.status !== "approved" && item.status !== "denied") continue;
+
+      const approved = item.status === "approved";
+      void this.logApprovalEvent(
+        approved ? EventType.ApprovalApproved : EventType.ApprovalDenied,
+        run.goal_id,
+        item.approval_id,
+        item.tool_name,
+        {},
+        item.denied_reason,
+      );
+
+      if (!approved) {
+        this.finishRecoveredRun(run, {
+          ok: true,
+          summary: `${item.tool_name} denied by the human after a restart — action not taken; turn not resumed`,
+          countAsFailure: false,
+        });
+        continue;
+      }
+      if (item.args_json == null) {
+        this.finishRecoveredRun(run, {
+          ok: false,
+          summary: `${item.tool_name} was approved after a restart but its full arguments were not persisted — not executed`,
+          countAsFailure: false,
+        });
+        continue;
+      }
+      // `risk_level` is the persisted numeric tier (-1 when unknown).
+      const moneyTier: number = RiskLevel.R4_MONEY;
+      if (item.risk_level >= moneyTier) {
+        this.finishRecoveredRun(run, {
+          ok: false,
+          summary: `${item.tool_name} is a money action — never executed from a recovered run (no verified grant in reach)`,
+          countAsFailure: false,
+        });
+        continue;
+      }
+
+      let args: Record<string, unknown>;
+      try {
+        args = JSON.parse(item.args_json) as Record<string, unknown>;
+      } catch {
+        this.finishRecoveredRun(run, {
+          ok: false,
+          summary: `${item.tool_name} approved after a restart but its persisted arguments are unreadable — not executed`,
+          countAsFailure: false,
+        });
+        continue;
+      }
+      const argsHash = hashArgs(JSON.stringify(args));
+      if (argsHash !== item.args_hash) {
+        this.finishRecoveredRun(run, {
+          ok: false,
+          summary: `${item.tool_name} approved after a restart but the persisted arguments no longer match what was approved — not executed`,
+          countAsFailure: false,
+        });
+        continue;
+      }
+
+      logLine(
+        `[approval] ${item.approval_id.slice(0, 8)} approved after restart — executing ${item.tool_name} exactly as approved`,
+      );
+      this.currentGoalId = run.goal_id;
+      let result: { ok: boolean; data?: unknown; error?: string };
+      try {
+        result = await this.runtime.invokeLocalTool(item.tool_name, args, {
+          invocationOrigin: "scheduled",
+          humanApproved: true,
+        });
+      } catch (err: unknown) {
+        result = { ok: false, error: err instanceof Error ? err.message : String(err) };
+      } finally {
+        this.currentGoalId = null;
+      }
+      const shown = result.ok
+        ? JSON.stringify(result.data ?? null).slice(0, 500)
+        : (result.error ?? "failed");
+      this.finishRecoveredRun(run, {
+        ok: result.ok,
+        summary: result.ok
+          ? `${item.tool_name} executed after approval (recovered run): ${shown}`
+          : `${item.tool_name} failed after approval (recovered run): ${shown}`,
+        countAsFailure: !result.ok,
+        toolCallsMade: 1,
+      });
+    }
+  }
+
+  private finishRecoveredRun(
+    run: GoalRun,
+    verdict: { ok: boolean; summary: string; countAsFailure: boolean; toolCallsMade?: number },
+  ): void {
+    this.runStore.setStatus(run.run_id, verdict.ok ? "completed" : "failed", {
+      note: verdict.summary,
+    });
+    this.goalOutcomeStore.add({
+      outcome_id: crypto.randomUUID(),
+      goal_id: run.goal_id,
+      motebit_id: this.motebitId,
+      ran_at: Date.now(),
+      status: verdict.ok ? "completed" : "failed",
+      summary: verdict.ok ? verdict.summary : null,
+      tool_calls_made: verdict.toolCallsMade ?? 0,
+      memories_formed: 0,
+      error_message: verdict.ok ? null : verdict.summary,
+    });
+    // The goal's own cadence resumes from now either way — the human's
+    // decision closed this run; it is not silently re-fired.
+    this.goalStore.updateLastRun(run.goal_id, Date.now());
+    if (verdict.countAsFailure) {
+      this.goalStore.incrementFailures(run.goal_id);
+    } else if (verdict.ok) {
+      this.goalStore.resetFailures(run.goal_id);
+    }
+    void this.runtime.goals.executed(
+      verdict.ok
+        ? {
+            goal_id: run.goal_id,
+            summary: verdict.summary.slice(0, 200),
+            tool_calls: verdict.toolCallsMade ?? 0,
+            memories: 0,
+          }
+        : { goal_id: run.goal_id, error: verdict.summary },
+    );
+    logLine(
+      `[goal] recovered run ${run.run_id.slice(0, 8)} → ${verdict.ok ? "completed" : "failed"}`,
+    );
   }
 
   private async consumeAndDiscard(stream: AsyncGenerator<StreamChunk>): Promise<void> {

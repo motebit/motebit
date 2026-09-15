@@ -411,4 +411,42 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE agent_trust ADD COLUMN capability_stats TEXT",
     ],
   },
+  {
+    version: 43,
+    description: "goal_runs ledger + approval_queue.args_json — durable unattended execution",
+    statements: [
+      // Durable execution for the daemon scheduler. A goal RUN is now a
+      // persisted row with a lifecycle (running → awaiting_approval /
+      // completed / failed / interrupted) so a process death leaves an
+      // honest record instead of an in-memory map. On restart the
+      // scheduler marks `running` rows `interrupted`, derives the actions
+      // whose external effect is unknown from the tool audit log
+      // (decision row, no completion row) and HOLDS the goal until a
+      // human acknowledges — never silently repeating completed actions,
+      // never retrying an uncertain one. Local private state, never on
+      // the wire.
+      `CREATE TABLE IF NOT EXISTS goal_runs (
+        run_id TEXT PRIMARY KEY,
+        goal_id TEXT NOT NULL,
+        motebit_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        approval_id TEXT,
+        started_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        completed_actions INTEGER NOT NULL DEFAULT 0,
+        uncertain_actions TEXT,
+        reviewed_at INTEGER,
+        note TEXT
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_goal_runs_goal ON goal_runs (goal_id, started_at)",
+      "CREATE INDEX IF NOT EXISTS idx_goal_runs_motebit_status ON goal_runs (motebit_id, status)",
+      // The full argument set of a paused tool call. `args_preview` (500
+      // chars) was enough to SHOW a human what they were approving; it is
+      // not enough to EXECUTE exactly what they approved once the paused
+      // turn is gone (daemon restart). NULL on rows written before this
+      // migration — the scheduler refuses to execute those post-restart
+      // rather than guess.
+      "ALTER TABLE approval_queue ADD COLUMN args_json TEXT",
+    ],
+  },
 ];
