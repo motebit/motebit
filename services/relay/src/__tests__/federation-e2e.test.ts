@@ -1343,9 +1343,38 @@ describe("Federation E2E", () => {
         }),
       });
       expect(taskRes.status).toBe(201);
-      const taskBody = (await taskRes.json()) as { task_id: string; status: string };
+      const taskBody = (await taskRes.json()) as {
+        task_id: string;
+        status: string;
+        routing_choice: {
+          selected_agent: string;
+          routing_paths: string[][];
+          alternatives_considered: number;
+          trust_evidence_path?: string[];
+          sub_scores: { latency: number };
+        } | null;
+      };
       const taskId = taskBody.task_id;
       expect(taskId).toBeDefined();
+
+      // 4b. The PLANNED EXECUTION ROUTE names the peer the task will go
+      // through — Bob is reachable only via Relay B, never directly — and
+      // dispatch (step 5) consumes exactly that route. Trust evidence is the
+      // same path here (no other edge reaches Bob).
+      const relayBId = relayB.relayIdentity.relayMotebitId;
+      expect(taskBody.routing_choice).not.toBeNull();
+      expect(taskBody.routing_choice!.selected_agent).toBe(bob.motebitId);
+      expect(taskBody.routing_choice!.routing_paths[0]).toEqual([relayBId, bob.motebitId]);
+      expect(taskBody.routing_choice!.alternatives_considered).toBe(1);
+      expect(taskBody.routing_choice!.trust_evidence_path).toEqual([relayBId, bob.motebitId]);
+      // The reported latency is the composed route's: the 200 ms cross-relay
+      // hop plus Bob's leg (SLA 5000 ms, no local measurement) — not a
+      // fictional direct hop.
+      const composedMs = 200 + 5000;
+      expect(taskBody.routing_choice!.sub_scores.latency).toBeCloseTo(
+        1 - composedMs / (composedMs + 5000),
+        10,
+      );
 
       // 5. Verify Bob's WebSocket received the task (forwarded via federation)
       // The relay A discovers Bob on relay B, ranks him, forwards via /federation/v1/task/forward,

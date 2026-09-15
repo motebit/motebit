@@ -668,7 +668,14 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
               },
               latency_stats: null, // No local latency data for remote agents
               is_online: true, // Peer discovery returned them, assume available
-              chain_trust: undefined, // Let the semiring graph compose trust along paths
+              // The peer's vouch for its own agent (the trust of the
+              // peer → agent leg); the graph composes it with OUR trust in
+              // the peer along the planned route self → peer → agent.
+              chain_trust: 0.5,
+              // Discovery through a peer does not make the agent directly
+              // dispatchable: the routing graph carries no self → agent edge,
+              // and dispatch forwards to THIS peer (the planned route names it).
+              reachable_via: peer.peer_relay_id,
             },
             _source_relay_endpoint: peer.endpoint_url,
             _settlement_address: agent.settlement_address ?? null,

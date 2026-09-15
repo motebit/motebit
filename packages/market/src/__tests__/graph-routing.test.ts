@@ -385,6 +385,75 @@ describe("graphRankCandidates", () => {
     expect(plain.composite).toBeCloseTo(viaHelper.composite, 10);
   });
 
+  it("a candidate discovered through a peer is NOT directly reachable: its planned route is [peer, agent] and carries the peer hop", () => {
+    // Federation shape: the caller trusts peer relay P (traversed hop, 200 ms);
+    // P's discover response lists agent R with its own pricing. R is
+    // dispatchable only THROUGH P.
+    const peerId = "peer-relay-P";
+    const remote = makeCandidate({
+      motebit_id: asMotebitId("remote-r"),
+      trust_record: null,
+      chain_trust: 0.5, // the peer's vouch on the P → R leg
+      reachable_via: peerId,
+      listing: makeListing({ capabilities: ["web_search"], motebit_id: asMotebitId("remote-r") }),
+      latency_stats: null, // no local data; SLA 5000 ms is the leg's latency
+    });
+    const local = makeCandidate({
+      motebit_id: asMotebitId("local-l"),
+      trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Verified }),
+      listing: makeListing({ capabilities: ["web_search"], motebit_id: asMotebitId("local-l") }),
+    });
+    const hop: RouteWeight = {
+      trust: 0.9,
+      cost: 0,
+      latency: 200,
+      reliability: 0.99,
+      regulatory_risk: 0,
+    };
+    const peerEdges = [
+      { from: String(SELF_ID), to: peerId, kind: "traversed" as const, weight: hop },
+    ];
+
+    const graph = buildRoutingGraph(SELF_ID, [remote, local], peerEdges);
+    const directTargets = [...graph.neighbors(SELF_ID)].map(([n]) => n);
+    expect(directTargets).not.toContain("remote-r"); // discovery ≠ direct reachability
+    expect(directTargets).toContain(peerId);
+    expect([...graph.neighbors(peerId)].map(([n]) => n)).toContain("remote-r"); // R's own metrics sit on the P → R leg
+    const leg = graph.getEdge(peerId, "remote-r")!;
+    expect(leg.latency).toBe(5000);
+
+    const r = explainedRankCandidates(SELF_ID, [remote, local], defaultReqs, { peerEdges }).find(
+      (s) => s.motebit_id === "remote-r",
+    )!;
+    expect(r.routing_paths).toEqual([[peerId, "remote-r"]]); // the only dispatchable route
+    expect(r.alternatives_considered).toBe(1);
+    expect(r.trust_evidence_path).toEqual([peerId, "remote-r"]);
+    // Trust = our trust in the peer × the peer's vouch; latency = hop + leg.
+    expect(r.sub_scores.trust).toBeCloseTo(hop.trust * leg.trust, 10);
+    const composedLatency = hop.latency + leg.latency;
+    expect(r.sub_scores.latency).toBeCloseTo(1 - composedLatency / (composedLatency + 5000), 10);
+
+    // A caller's placeholder for the same leg must not overwrite the real one.
+    const withPlaceholder = buildRoutingGraph(
+      SELF_ID,
+      [remote, local],
+      [
+        ...peerEdges,
+        {
+          from: peerId,
+          to: "remote-r",
+          kind: "traversed" as const,
+          weight: { trust: 0.5, cost: 0, latency: 0, reliability: 0.99, regulatory_risk: 0 },
+        },
+      ],
+    );
+    expect(withPlaceholder.getEdge(peerId, "remote-r")!.latency).toBe(5000);
+
+    // Without the self → peer hop the remote agent is unreachable — never scored.
+    const unreachable = explainedRankCandidates(SELF_ID, [remote, local], defaultReqs);
+    expect(unreachable.find((s) => s.motebit_id === "remote-r")).toBeUndefined();
+  });
+
   it("an EVIDENCE edge never prices the hire: same graph, evidence kind ⇒ one executed route, trust still propagated", () => {
     const helper = makeCandidate({
       motebit_id: asMotebitId("helper"),

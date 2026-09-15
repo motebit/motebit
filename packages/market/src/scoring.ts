@@ -14,6 +14,17 @@ export interface CandidateProfile {
   is_online: boolean;
   /** Pre-composed chain trust score from delegation receipt tree. When set, overrides trust_record lookup. */
   chain_trust?: number;
+  /**
+   * The node the task must go THROUGH to reach this candidate — a federation
+   * peer relay's id — when the candidate is not directly dispatchable by the
+   * caller. Discovery through a peer does not establish direct reachability:
+   * with this set, the routing graph carries NO self→candidate edge; the
+   * candidate's own execution metrics sit on the `reachable_via → candidate`
+   * leg, and the caller supplies the traversed `self → reachable_via` edge.
+   * The planned execution route is then `[reachable_via, candidate]`, and
+   * dispatch consumes that route (the relay forwards to the peer it names).
+   */
+  reachable_via?: string;
   /** Aggregated reputation from peer-issued credentials. When set, blended into trust edge weight. */
   credential_reputation?: import("./credential-weight.js").CredentialReputation;
   /** Guardian public key (hex) if agent is under organizational custody. Same guardian = same org. */

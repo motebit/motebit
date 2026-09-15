@@ -2889,18 +2889,6 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           _settlement_address: string | null;
           _public_key: string | null;
         }[] = [];
-        let federationEdges: Array<{
-          from: string;
-          to: string;
-          kind: "evidence" | "traversed";
-          weight: {
-            trust: number;
-            cost: number;
-            latency: number;
-            reliability: number;
-            regulatory_risk: number;
-          };
-        }> = [];
         let peerRelayNodes: Array<{
           peerRelayId: string;
           trust: number;
@@ -2908,18 +2896,25 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           reliability: number;
         }> = [];
         const remoteAgentRelay = new Map<string, string>(); // remote agent motebit_id → peer relay endpoint_url
+        const peerEndpointByRelayId = new Map<string, string>(); // peer relay id → endpoint_url (dispatch consumes the planned route)
         try {
           const fedResult = await taskRouter.fetchFederatedCandidates(
             requiredCaps,
             callerMotebitId,
           );
           federatedCandidates = fedResult.candidates;
-          federationEdges = fedResult.federationEdges;
+          // `fedResult.federationEdges` (peer → agent topology) is deliberately
+          // not fed to the ranking graph: each remote profile carries
+          // `reachable_via`, so `buildRoutingGraph` builds that leg from the
+          // agent's OWN execution metrics instead of placeholder weights.
           peerRelayNodes = fedResult.peerRelayNodes;
           for (const fc of federatedCandidates) {
             // Filter out excluded agents from federated results too
             if (!excludeSet.has(fc.profile.motebit_id)) {
               remoteAgentRelay.set(fc.profile.motebit_id, fc._source_relay_endpoint);
+              if (fc.profile.reachable_via) {
+                peerEndpointByRelayId.set(fc.profile.reachable_via, fc._source_relay_endpoint);
+              }
             }
           }
         } catch {
@@ -3155,7 +3150,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               regulatory_risk: 0,
             },
           }));
-          const allPeerEdges = [...peerEdges, ...federationPeerEdges, ...federationEdges];
+          // Only the traversed self → peer hop is supplied here; the peer →
+          // agent leg comes from each remote profile's `reachable_via`.
+          // Discovery via a peer never yields a direct self → agent edge.
+          const allPeerEdges = [...peerEdges, ...federationPeerEdges];
 
           // Map routing_strategy to semiring composite function
           const compositeFunction: CompositeFunction | undefined =
@@ -3211,9 +3209,26 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
             for (const sel of selected) {
               const selId = sel.motebit_id;
               if (remoteAgentRelay.has(selId)) {
-                // Remote agent: forward task to peer relay
+                // Remote agent: forward task to the peer relay the PLANNED
+                // ROUTE names. Selection and transport must agree — choosing
+                // a worker and then picking a peer independently would let
+                // the recorded route and the real forward diverge.
                 if (federatedForwarded) continue;
-                const peerEndpoint = remoteAgentRelay.get(selId)!;
+                const plannedRoute = sel.routing_paths[0] ?? [];
+                const plannedPeer = plannedRoute.length >= 2 ? plannedRoute[0] : undefined;
+                const peerEndpoint =
+                  plannedPeer != null ? peerEndpointByRelayId.get(plannedPeer) : undefined;
+                if (peerEndpoint == null || plannedRoute[plannedRoute.length - 1] !== selId) {
+                  // Loud, not silent: the ranking produced a route the dispatcher
+                  // cannot take. Skip rather than forward on a different path.
+                  logger.warn("task.forward_route_mismatch", {
+                    taskId,
+                    agent: selId,
+                    plannedRoute,
+                    knownPeers: [...peerEndpointByRelayId.keys()],
+                  });
+                  continue;
+                }
 
                 // Circuit breaker: skip forwarding if the peer's circuit is open
                 if (!taskRouter.canForward(peerEndpoint)) {

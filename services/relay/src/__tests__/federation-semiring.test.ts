@@ -168,9 +168,12 @@ describe("Federation → Semiring graph wiring", () => {
       reliability: 0.99,
     });
 
-    // chain_trust should be undefined on federated profiles — graph computes trust
+    // Federated profiles carry the peer's vouch as the P → agent leg's trust and
+    // name the peer they are reachable through — the graph builds that leg
+    // from the agent's own metrics; there is no direct self → agent edge.
     for (const c of result.candidates) {
-      expect(c.profile.chain_trust).toBeUndefined();
+      expect(c.profile.chain_trust).toBe(0.5);
+      expect(c.profile.reachable_via).toBe("peer-relay-A");
     }
   });
 

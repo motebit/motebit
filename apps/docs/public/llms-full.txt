@@ -4495,12 +4495,14 @@ The `@motebit/market` package's `graphRankCandidates` function is the primary ro
 
 1. Builds a `WeightedDigraph<RouteWeight>` from candidate profiles plus peer edges. Every peer edge declares what it **is** for this task: `kind: "evidence"` (a recorded delegation — it vouches, the task will not traverse it) or `kind: "traversed"` (a federation relay hop the task really takes).
 2. **Trust** is evidence about the agent: the best transitive trust over _every_ edge, with the vouching path that attains it (`trust_evidence_path`).
-3. **Execution metrics** — cost, latency, reliability, regulatory risk, hardware custody — describe work that will happen: `frontierPaths` over the graph restricted to hops the task will take (the direct hire, or a traversed relay path) gives, per candidate, the Pareto frontier of real executed routes. A delegation record's price and latency are a past job's, never this task's, so they never enter.
+3. **Execution metrics** — cost, latency, reliability, regulatory risk, hardware custody — describe work that will happen: `frontierPaths` over the graph restricted to hops the task will take (the direct hire, or a traversed relay path) gives, per candidate, the Pareto frontier of real planned execution routes. A delegation record's price and latency are a past job's, never this task's, so they never enter.
 4. Normalizes additive accumulators (cost, latency, risk) to `[0,1]` via sigmoid mapping.
-5. Applies a configurable composite function (default: weighted sum) to every executed route — evidence trust, that route's own execution metrics, that route's own custody boost — and keeps the winner.
-6. Returns `RouteScore[]` whose `sub_scores` are the evidence trust and the chosen executed route's metrics.
+5. Applies a configurable composite function (default: weighted sum) to every planned execution route — evidence trust, that route's own execution metrics, that route's own custody boost — and keeps the winner.
+6. Returns `RouteScore[]` whose `sub_scores` are the evidence trust and the chosen planned execution route's metrics.
 
 Why the split: a relationship can vouch for an agent, but only hops the task takes can cost it money or time. Before this split (2026-09-14), hiring B directly with A's recorded delegation to B in the graph priced the hire with A's cost and latency added on.
+
+Two rules keep the graph and the dispatcher in agreement. **Only dispatchable hops enter execution ranking:** a candidate discovered through a federation peer carries `reachable_via`, gets no direct edge, and its own metrics sit on the peer → agent leg. **Dispatch consumes the selected route:** the relay forwards to the peer the planned route names, never to one chosen independently. The route reported at selection time is the _planned execution route_; who actually took part is established afterwards by receipts.
 
 <ReferenceExample pkg="@motebit/market" source="packages/market/src/graph-routing.ts">
 
@@ -4527,7 +4529,7 @@ const scores = graphRankCandidates(
 
 ### Explained routing
 
-`explainedRankCandidates` extends `graphRankCandidates` with both paths a decision rests on. `routing_paths[0]` is the **executed route** — the hops the task will take, whose composed execution metrics the score reports (`["agent-xyz"]` for a direct hire; `["relay-a", "agent-xyz"]` for a federated one) — and the remaining entries are the non-dominated executed alternatives the policy weighed, best first. `alternatives_considered` is the size of that frontier. `trust_evidence_path` is the vouching chain, through every edge kind, that justified the trust value:
+`explainedRankCandidates` extends `graphRankCandidates` with both paths a decision rests on. `routing_paths[0]` is the **planned execution route** — the hops the task will take, whose composed execution metrics the score reports (`["agent-xyz"]` for a direct hire; `["relay-a", "agent-xyz"]` for a federated one) — and the remaining entries are the non-dominated planned-route alternatives the policy weighed, best first. `alternatives_considered` is the size of that frontier. `trust_evidence_path` is the vouching chain, through every edge kind, that justified the trust value:
 
 <ReferenceExample pkg="@motebit/market" source="packages/market/src/graph-routing.ts">
 
@@ -4536,7 +4538,7 @@ import { explainedRankCandidates } from "@motebit/market";
 
 const explained = explainedRankCandidates(selfId, candidates, requirements);
 // explained[0].routing_paths → [["relay-a", "agent-xyz"], ["agent-xyz"]]
-//   [0] = the executed route whose cost/latency/custody sub_scores report (via relay-a)
+//   [0] = the planned execution route whose cost/latency/custody sub_scores report (via relay-a)
 //   [1] = the direct route, viable but not chosen under this policy
 // explained[0].alternatives_considered → 2
 // explained[0].trust_evidence_path → ["agent-abc", "agent-xyz"]
@@ -4545,7 +4547,7 @@ const explained = explainedRankCandidates(selfId, candidates, requirements);
 
 </ReferenceExample>
 
-This flows end-to-end: the relay returns `routing_choice` on task submission, `PlanEngine` attaches it to the delegation step summary, and it is signed into the execution ledger manifest — an audit trail from semiring algebra to cryptographic proof. It is only worth signing because it is exact: the transcript names routes that exist and each route's own metrics, so a verifier can recompute them from the same edges. A component-wise summary would have signed a route that does not exist. Read each path for what it is: `routing_paths[0]` is the executed route (the hops the task takes — direct, or via the federation peer named on it), `trust_evidence_path` is the vouching chain (recorded delegation history, discovery, peers) behind the trust value. Neither is a claim about who did the work; that is proven by receipts.
+This flows end-to-end: the relay returns `routing_choice` on task submission, `PlanEngine` attaches it to the delegation step summary, and it is signed into the execution ledger manifest — an audit trail from semiring algebra to cryptographic proof. It is only worth signing because it is exact: the transcript names routes that exist and each route's own metrics, so a verifier can recompute them from the same edges. A component-wise summary would have signed a route that does not exist. Read each path for what it is: `routing_paths[0]` is the planned execution route (the hops the task takes — direct, or via the federation peer named on it), `trust_evidence_path` is the vouching chain (recorded delegation history, discovery, peers) behind the trust value. Neither is a claim about who did the work; that is proven by receipts.
 
 ### Composite functions
 
