@@ -398,7 +398,7 @@ async function main(): Promise<void> {
     } else if (runsCmd === "ack") {
       await handleRunsAck(config);
     } else {
-      console.error("Usage: motebit runs [list|ack <run_id>]");
+      console.error("Usage: motebit runs [list|ack <run_id> --allow-fresh-run]");
       process.exit(1);
     }
     return;

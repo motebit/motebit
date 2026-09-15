@@ -47,6 +47,7 @@ const stubConfig = {
   wallClock: undefined,
   project: undefined,
   reason: undefined,
+  allowFreshRun: false,
   destination: undefined,
   capability: undefined,
   scope: undefined,

@@ -79,6 +79,11 @@
       "type": "string"
     },
     {
+      "name": "allow-fresh-run",
+      "type": "boolean",
+      "default": false
+    },
+    {
       "name": "allowed-paths",
       "type": "string"
     },

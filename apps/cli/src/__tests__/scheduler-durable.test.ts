@@ -257,13 +257,13 @@ describe("durable execution — interruption while awaiting approval", () => {
     expect(second.streams).toBe(0); // the paused turn is NOT re-run
 
     const run = db.goalRunStore.getByApproval(approval!.approval_id)!;
-    expect(run.status).toBe("completed");
+    // The one approved call finishing is NOT the goal finishing — structurally.
+    expect(run.status).toBe("partial");
     const outcomes = db.goalOutcomeStore.listForGoal("goal-001");
-    const recovered = outcomes.find(
-      (o) => o.status === "completed" && o.summary?.includes("shell_exec"),
-    );
+    expect(outcomes.some((o) => o.status === "completed")).toBe(false);
+    const recovered = outcomes.find((o) => o.status === "partial");
     expect(recovered).toBeDefined();
-    // The one approved call finishing is NOT the goal finishing.
+    expect(recovered!.summary).toContain("shell_exec");
     expect(recovered!.summary).toContain("remaining work was not resumed");
     expect(db.goalStore.get("goal-001")!.last_run_at).not.toBeNull();
 
@@ -289,8 +289,11 @@ describe("durable execution — interruption while awaiting approval", () => {
     expect(second.invoked).toHaveLength(0);
     expect(second.streams).toBe(0);
     const run = db.goalRunStore.getByApproval(approval!.approval_id)!;
-    expect(run.status).toBe("completed");
+    expect(run.status).toBe("partial"); // nothing ran, and the goal did not finish
     expect(run.note).toContain("denied");
+    expect(db.goalOutcomeStore.listForGoal("goal-001").some((o) => o.status === "completed")).toBe(
+      false,
+    );
   });
 
   it("an R4 money approval is never executed from a recovered run", async () => {

@@ -189,7 +189,7 @@ export class GoalScheduler {
       });
       if (held) {
         warnLine(
-          `[scheduler] run ${run.run_id.slice(0, 8)} of goal ${run.goal_id.slice(0, 8)} was interrupted with ${facts.note} — goal HELD until \`motebit runs ack ${run.run_id.slice(0, 8)}\``,
+          `[scheduler] run ${run.run_id.slice(0, 8)} of goal ${run.goal_id.slice(0, 8)} was interrupted with ${facts.note} — goal HELD until \`motebit runs ack ${run.run_id.slice(0, 8)} --allow-fresh-run\``,
         );
       } else {
         logLine(
@@ -550,7 +550,7 @@ export class GoalScheduler {
           if (!this.heldLogged.has(blocking.run_id)) {
             this.heldLogged.add(blocking.run_id);
             logLine(
-              `[goal] ${goal.goal_id.slice(0, 8)} held — run ${blocking.run_id.slice(0, 8)} is ${blocking.status}${blocking.status === "interrupted" ? ` (ack with \`motebit runs ack ${blocking.run_id.slice(0, 8)}\`)` : ""}`,
+              `[goal] ${goal.goal_id.slice(0, 8)} held — run ${blocking.run_id.slice(0, 8)} is ${blocking.status}${blocking.status === "interrupted" ? ` (ack with \`motebit runs ack ${blocking.run_id.slice(0, 8)} --allow-fresh-run\`)` : ""}`,
             );
           }
           continue;
@@ -1221,19 +1221,26 @@ export class GoalScheduler {
     }
   }
 
+  /**
+   * Close a recovered run. A decision applied after a restart never
+   * finishes the GOAL — at most it finishes the one action the human saw —
+   * so the honest terminal states are `partial` (action ran or was refused;
+   * remaining work not resumed) and `failed`. Never `completed`: a
+   * projection that counts completed runs as goal success must not count
+   * these.
+   */
   private finishRecoveredRun(
     run: GoalRun,
     verdict: { ok: boolean; summary: string; countAsFailure: boolean; toolCallsMade?: number },
   ): void {
-    this.runStore.setStatus(run.run_id, verdict.ok ? "completed" : "failed", {
-      note: verdict.summary,
-    });
+    const status = verdict.ok ? "partial" : "failed";
+    this.runStore.setStatus(run.run_id, status, { note: verdict.summary });
     this.goalOutcomeStore.add({
       outcome_id: crypto.randomUUID(),
       goal_id: run.goal_id,
       motebit_id: this.motebitId,
       ran_at: Date.now(),
-      status: verdict.ok ? "completed" : "failed",
+      status,
       summary: verdict.ok ? verdict.summary : null,
       tool_calls_made: verdict.toolCallsMade ?? 0,
       memories_formed: 0,
@@ -1257,9 +1264,7 @@ export class GoalScheduler {
           }
         : { goal_id: run.goal_id, error: verdict.summary },
     );
-    logLine(
-      `[goal] recovered run ${run.run_id.slice(0, 8)} → ${verdict.ok ? "completed" : "failed"}`,
-    );
+    logLine(`[goal] recovered run ${run.run_id.slice(0, 8)} → ${status}`);
   }
 
   private async consumeAndDiscard(stream: AsyncGenerator<StreamChunk>): Promise<void> {

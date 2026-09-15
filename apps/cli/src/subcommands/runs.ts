@@ -4,10 +4,13 @@
  *   motebit runs            list runs that block their goal (paused on a
  *                           human, or interrupted with side effects nobody
  *                           has reviewed), then the most recent runs
- *   motebit runs ack <id>   a human has reviewed an interrupted run and
+ *   motebit runs ack <id> --allow-fresh-run
+ *                           a human has reviewed an interrupted run and
  *                           accepts that the goal's NEXT run starts from
  *                           scratch — it may repeat effects the interrupted
- *                           run already caused. Nothing is retried by ack.
+ *                           run already caused. Without the flag the command
+ *                           prints that consequence and releases nothing.
+ *                           Nothing is retried by ack.
  *
  * An interrupted run is held because re-firing the goal would repeat the
  * tool calls that already completed, and nobody knows whether the ones
@@ -43,6 +46,11 @@ export async function handleRunsList(config: CliConfig): Promise<void> {
     const header = `  ${"RUN".padEnd(10)}${"GOAL".padEnd(10)}${"STATUS".padEnd(20)}${"STARTED".padEnd(16)}NOTE`;
     if (blocking.length > 0) {
       console.log("Holding their goal (needs you):");
+      console.log(
+        dim(
+          "  interrupted runs: `motebit runs ack <run> --allow-fresh-run` releases the goal; its next run starts from scratch and may repeat the effects listed. Nothing is retried.",
+        ),
+      );
       console.log(header);
       console.log("  " + "-".repeat(header.length - 2));
       for (const r of blocking) console.log(formatRow(r));
@@ -62,7 +70,7 @@ export async function handleRunsList(config: CliConfig): Promise<void> {
 export async function handleRunsAck(config: CliConfig): Promise<void> {
   const runId = config.positionals[2];
   if (runId == null || runId === "") {
-    console.error("Usage: motebit runs ack <run_id>");
+    console.error("Usage: motebit runs ack <run_id> --allow-fresh-run");
     process.exit(1);
   }
   const motebitId = requireMotebitId(loadFullConfig());
@@ -85,11 +93,19 @@ export async function handleRunsAck(config: CliConfig): Promise<void> {
       console.log(`Run ${match.run_id.slice(0, 8)} was already acknowledged.`);
       return;
     }
-    moteDb.goalRunStore.ack(match.run_id);
     const unknown = match.uncertain_actions?.length ?? 0;
-    console.log(
-      `Acknowledged run ${match.run_id.slice(0, 8)}. Goal ${match.goal_id.slice(0, 8)} is released: its next run starts from scratch and may repeat effects this run already caused (${match.completed_actions} completed, ${unknown} with unknown effect). Nothing is retried by this command.`,
-    );
+    const consequence = `Releasing goal ${match.goal_id.slice(0, 8)} means its next run starts from scratch and may repeat effects run ${match.run_id.slice(0, 8)} already caused: ${match.completed_actions} completed action(s), ${unknown} with unknown effect${
+      unknown > 0 ? ` (${(match.uncertain_actions ?? []).map((u) => u.tool).join(", ")})` : ""
+    }. Nothing is retried by ack.`;
+    if (!config.allowFreshRun) {
+      // The consequence is shown BEFORE anything is released; the flag is
+      // the explicit acceptance, not a post-hoc warning.
+      console.error(consequence);
+      console.error("Re-run with --allow-fresh-run to accept this and release the goal.");
+      process.exit(1);
+    }
+    moteDb.goalRunStore.ack(match.run_id);
+    console.log(`Acknowledged run ${match.run_id.slice(0, 8)}. ${consequence}`);
   } finally {
     moteDb.close();
   }

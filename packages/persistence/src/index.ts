@@ -1409,7 +1409,13 @@ export interface GoalOutcome {
   goal_id: string;
   motebit_id: string;
   ran_at: number;
-  status: "completed" | "failed" | "suspended";
+  /**
+   * `partial` (migration #43 era): the human's decision on a paused call was
+   * applied after a restart — the one approved action ran (or was refused)
+   * but the goal's REMAINING work was not resumed. Structurally distinct
+   * from `completed` so no projection counts it as goal success.
+   */
+  status: "completed" | "failed" | "suspended" | "partial";
   summary: string | null;
   tool_calls_made: number;
   memories_formed: number;
@@ -1497,14 +1503,17 @@ export class SqliteGoalOutcomeStore {
  *
  *   running            — the daemon is executing it right now
  *   awaiting_approval  — paused on a tool call that needs a human (approval_id set)
- *   completed          — finished; `note` may say "action denied" or "no-op"
+ *   completed          — the run's turn ran to its end
+ *   partial            — a decision was applied after a restart: the one
+ *                        approved action ran (or was refused); the goal's
+ *                        remaining work was NOT resumed. Not goal success.
  *   failed             — errored, expired, or could not be recovered
  *   interrupted        — the process died mid-run; `completed_actions` /
  *                        `uncertain_actions` say whether anything external
  *                        happened, `reviewed_at` whether a human looked
  */
 export type GoalRunStatus =
-  "running" | "awaiting_approval" | "completed" | "failed" | "interrupted";
+  "running" | "awaiting_approval" | "completed" | "partial" | "failed" | "interrupted";
 
 /** An allowed tool call whose completion was never recorded — effect unknown. */
 export interface UncertainAction {
