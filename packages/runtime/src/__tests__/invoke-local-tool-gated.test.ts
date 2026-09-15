@@ -157,6 +157,22 @@ describe("invokeLocalTool — durable execution ledger (intent row, then complet
     expect(rows[rows.length - 1]!.result?.ok).toBe(false);
   });
 
+  it("a human-approved paused decision writes an approval-satisfied row BEFORE the call, under run_id", async () => {
+    const { runtime, sink } = await setupWithSink();
+    await runtime.invokeLocalTool(
+      "write_thing",
+      { p: 2 },
+      { invocationOrigin: "scheduled", humanApproved: true, runId: "run-recovered" },
+    );
+    const rows = sink.getAll().filter((r) => r.tool === "write_thing");
+    const reasons = rows.map((r) => r.decision.reason ?? (r.result ? "result" : "decision"));
+    expect(reasons).toContain("approval_satisfied:human-approved");
+    expect(reasons.indexOf("approval_satisfied:human-approved")).toBeLessThan(
+      reasons.indexOf("result"),
+    );
+    expect(rows.every((r) => r.runId === "run-recovered")).toBe(true);
+  });
+
   it("humanApproved satisfies the approval band for a scheduled origin (R2), never R4", async () => {
     const { runtime } = await setupWithSink();
     const ok = await runtime.invokeLocalTool(

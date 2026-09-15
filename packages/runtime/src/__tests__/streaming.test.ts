@@ -3828,7 +3828,9 @@ describe("resumeAfterApproval — closes the gate's audit row for the approved c
     );
     await collectChunks(runtime.resumeAfterApproval(true));
 
-    const row = sink.getAll().find((r) => r.callId === "call-LEDGER");
+    const rows = sink.getAll().filter((r) => r.callId === "call-LEDGER");
+    expect(rows.map((r) => r.decision.reason)).toContain("approval_satisfied:human-approved");
+    const row = rows.find((r) => r.result != null);
     expect(row).toBeDefined();
     expect(row!.turnId).toBe("turn-LEDGER");
     expect(row!.runId).toBe("run-LEDGER");

@@ -134,6 +134,19 @@ export interface StreamingDeps {
    * means the row stays open, which reads as "intended, outcome
    * unknown" — honest, but the runtime always wires it.
    */
+  /**
+   * Record, BEFORE the resume path executes an approved call, that the
+   * paused decision is proceeding on the human's verdict
+   * (`PolicyGate.recordApprovalSatisfied`). Same correlation fields as
+   * `recordApprovedToolResult`.
+   */
+  recordApprovalSatisfied?(params: {
+    turnId: string | undefined;
+    runId: string | undefined;
+    auditCallId: string | undefined;
+    toolName: string;
+    args: Record<string, unknown>;
+  }): void;
   recordApprovedToolResult?(params: {
     turnId: string | undefined;
     runId: string | undefined;
@@ -851,6 +864,14 @@ export class StreamingManager {
             ? (this.deps.delegationReceiptStash?.count() ?? null)
             : null;
         const toolRegistry = this.deps.getToolRegistry();
+        // Ledger: the paused decision is proceeding — written before the call.
+        this.deps.recordApprovalSatisfied?.({
+          turnId: pending.turnId,
+          runId: pending.runId,
+          auditCallId: pending.auditCallId,
+          toolName: pending.toolName,
+          args: pending.args,
+        });
         const dispatchedAt = Date.now();
         let result: ToolResult;
         try {

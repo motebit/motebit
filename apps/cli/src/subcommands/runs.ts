@@ -4,8 +4,10 @@
  *   motebit runs            list runs that block their goal (paused on a
  *                           human, or interrupted with side effects nobody
  *                           has reviewed), then the most recent runs
- *   motebit runs ack <id>   a human has reviewed an interrupted run; the
- *                           goal may fire again on its own cadence
+ *   motebit runs ack <id>   a human has reviewed an interrupted run and
+ *                           accepts that the goal's NEXT run starts from
+ *                           scratch — it may repeat effects the interrupted
+ *                           run already caused. Nothing is retried by ack.
  *
  * An interrupted run is held because re-firing the goal would repeat the
  * tool calls that already completed, and nobody knows whether the ones
@@ -84,8 +86,9 @@ export async function handleRunsAck(config: CliConfig): Promise<void> {
       return;
     }
     moteDb.goalRunStore.ack(match.run_id);
+    const unknown = match.uncertain_actions?.length ?? 0;
     console.log(
-      `Acknowledged run ${match.run_id.slice(0, 8)}. Goal ${match.goal_id.slice(0, 8)} will fire again on its schedule.`,
+      `Acknowledged run ${match.run_id.slice(0, 8)}. Goal ${match.goal_id.slice(0, 8)} is released: its next run starts from scratch and may repeat effects this run already caused (${match.completed_actions} completed, ${unknown} with unknown effect). Nothing is retried by this command.`,
     );
   } finally {
     moteDb.close();

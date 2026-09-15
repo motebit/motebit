@@ -267,6 +267,35 @@ export class PolicyGate {
    * (docs/doctrine/evidence-provenance.md); that pointer is a sibling
    * artifact, never inferred from this row.
    */
+  /**
+   * Record that a decision which PAUSED for approval is now proceeding to
+   * execution because a human satisfied the band out of band (a genuine
+   * user tap, or a persisted approval applied after a restart). Appended
+   * under the same `callId` BEFORE the call, as an allowed, un-paused
+   * decision (`reason: "approval_satisfied:<by>"`). Without it the ledger
+   * would show only the paused row, which `findUnresolvedActions`
+   * deliberately ignores (the approval queue owns paused state) — so a
+   * death between this execution and its completion row would read as
+   * "nothing happened" instead of "prepared; effect unknown".
+   */
+  recordApprovalSatisfied(
+    ctx: Pick<TurnContext, "turnId" | "runId">,
+    decision: PolicyDecision,
+    tool: string,
+    args: Record<string, unknown>,
+    by: "user-tap" | "human-approved",
+  ): void {
+    if (decision.callId == null) return;
+    this.audit.logDecision(
+      ctx.turnId,
+      decision.callId,
+      tool,
+      args,
+      { ...decision, allowed: true, requiresApproval: false, reason: `approval_satisfied:${by}` },
+      ctx.runId,
+    );
+  }
+
   recordResult(
     ctx: Pick<TurnContext, "turnId" | "runId">,
     decision: PolicyDecision,

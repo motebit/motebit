@@ -3,7 +3,8 @@
  * half of the durable execution ledger. `validate` opened the row (intent)
  * BEFORE the call; `recordResult` must fire the moment `tools.execute`
  * returns or throws, with the tool's own verdict, so a crash-window row
- * (intent with no completion) means exactly "dispatched, outcome unknown".
+ * (intent with no completion) means exactly "prepared; effect unknown" — it
+ * cannot establish that dispatch occurred.
  */
 import { describe, it, expect, vi } from "vitest";
 import { runTurnStreaming } from "../loop";

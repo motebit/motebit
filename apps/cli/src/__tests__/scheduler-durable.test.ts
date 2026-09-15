@@ -239,6 +239,7 @@ describe("durable execution — interruption while awaiting approval", () => {
     s1.stop();
     const [approval] = db.approvalStore.listAll("mote-test");
     db.approvalStore.resolve(approval!.approval_id, "approved");
+    const run0 = db.goalRunStore.getByApproval(approval!.approval_id)!;
 
     const second = mockRuntime();
     const s2 = scheduler(db, second);
@@ -248,15 +249,22 @@ describe("durable execution — interruption while awaiting approval", () => {
     expect(second.invoked).toHaveLength(1);
     expect(second.invoked[0]!.name).toBe("shell_exec");
     expect(second.invoked[0]!.args).toEqual({ command: "ls", cwd: "/tmp" });
-    expect(second.invoked[0]!.opts).toEqual({ invocationOrigin: "scheduled", humanApproved: true });
+    expect(second.invoked[0]!.opts).toEqual({
+      invocationOrigin: "scheduled",
+      humanApproved: true,
+      runId: run0.run_id,
+    });
     expect(second.streams).toBe(0); // the paused turn is NOT re-run
 
     const run = db.goalRunStore.getByApproval(approval!.approval_id)!;
     expect(run.status).toBe("completed");
     const outcomes = db.goalOutcomeStore.listForGoal("goal-001");
-    expect(
-      outcomes.some((o) => o.status === "completed" && o.summary?.includes("shell_exec")),
-    ).toBe(true);
+    const recovered = outcomes.find(
+      (o) => o.status === "completed" && o.summary?.includes("shell_exec"),
+    );
+    expect(recovered).toBeDefined();
+    // The one approved call finishing is NOT the goal finishing.
+    expect(recovered!.summary).toContain("remaining work was not resumed");
     expect(db.goalStore.get("goal-001")!.last_run_at).not.toBeNull();
 
     // A later tick does not execute it again.
@@ -370,6 +378,137 @@ describe("durable execution — interruption while awaiting approval", () => {
     expect(db.goalRunStore.get("run-exp")!.note).toContain("expired");
     expect(m.invoked).toHaveLength(0);
     expect(db.goalRunStore.blockingRunForGoal("goal-001")).toBeNull();
+  });
+});
+
+describe("durable execution — interruption during recovery", () => {
+  let db: MotebitDatabase;
+  beforeEach(() => {
+    db = createMotebitDatabase(":memory:");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  });
+
+  async function pauseApproveAndStop(): Promise<{ approvalId: string; runId: string }> {
+    db.goalStore.add(goal({ interval_ms: 3_600_000 }));
+    const first = mockRuntime({ pause: true });
+    const s1 = scheduler(db, first);
+    await s1.tickOnce();
+    s1.stop();
+    const [approval] = db.approvalStore.listAll("mote-test");
+    db.approvalStore.resolve(approval!.approval_id, "approved");
+    return {
+      approvalId: approval!.approval_id,
+      runId: db.goalRunStore.getByApproval(approval!.approval_id)!.run_id,
+    };
+  }
+
+  it("the run leaves awaiting_approval BEFORE the recovered call executes", async () => {
+    const { runId } = await pauseApproveAndStop();
+    const second = mockRuntime();
+    let statusDuringCall: string | undefined;
+    (second.runtime as unknown as { invokeLocalTool: unknown }).invokeLocalTool = async (
+      name: string,
+      args: Record<string, unknown>,
+      o: unknown,
+    ) => {
+      statusDuringCall = db.goalRunStore.get(runId)!.status;
+      second.invoked.push({ name, args, opts: o });
+      return { ok: true, data: "ran" };
+    };
+    const s2 = scheduler(db, second);
+    s2.recoverInterruptedRuns();
+    await s2.tickOnce();
+    expect(second.invoked).toHaveLength(1);
+    expect(statusDuringCall).toBe("running");
+  });
+
+  it("dying after the recovered call returned but before its outcome landed holds it as unknown — the approval is NOT executed again", async () => {
+    const { runId } = await pauseApproveAndStop();
+
+    // Second process: the gate wrote the decision row under run_id, the tool
+    // returned, and the process died before recordResult / the run's outcome
+    // landed. Reproduce exactly that on-disk state: a `running` run, an
+    // `approved` approval, one decision row with no completion row.
+    const dying = mockRuntime();
+    (dying.runtime as unknown as { invokeLocalTool: unknown }).invokeLocalTool = async (
+      _n: string,
+      _a: Record<string, unknown>,
+      o: { runId?: string },
+    ) => {
+      // What the real invokeLocalTool leaves behind: the gate's paused
+      // decision row, then the approval-satisfied row, then nothing.
+      for (const decision of [
+        { allowed: true, requiresApproval: true },
+        { allowed: true, requiresApproval: false, reason: "approval_satisfied:human-approved" },
+      ]) {
+        db.toolAuditSink.append({
+          turnId: "turn-recovery",
+          runId: o.runId,
+          callId: "call-recovery",
+          tool: "shell_exec",
+          args: { command: "ls", cwd: "/tmp" },
+          decision,
+          timestamp: Date.now(),
+        });
+      }
+      throw new Error("SIGKILL");
+    };
+    const s2 = scheduler(db, dying);
+    s2.recoverInterruptedRuns();
+    await s2.tickOnce();
+    // The scheduler caught the throw and wrote a failure; a real death writes
+    // nothing after the call. Roll its post-call bookkeeping back to the
+    // pre-outcome state the ledger would actually hold.
+    db.goalRunStore.setStatus(runId, "running");
+
+    // Third process.
+    const third = mockRuntime();
+    const s3 = scheduler(db, third);
+    s3.recoverInterruptedRuns();
+    await s3.tickOnce();
+    await s3.tickOnce();
+
+    expect(third.invoked).toHaveLength(0); // not executed a second time
+    expect(third.streams).toBe(0); // goal held
+    const run = db.goalRunStore.get(runId)!;
+    expect(run.status).toBe("interrupted");
+    expect(run.reviewed_at).toBeNull();
+    expect(run.uncertain_actions?.map((u) => u.call_id)).toEqual(["call-recovery"]);
+  });
+});
+
+describe("durable execution — live approval drain", () => {
+  let db: MotebitDatabase;
+  beforeEach(() => {
+    db = createMotebitDatabase(":memory:");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  });
+
+  it("the run leaves awaiting_approval BEFORE the paused turn resumes, and completes after", async () => {
+    db.goalStore.add(goal({ interval_ms: 3_600_000 }));
+    const m = mockRuntime({ pause: true });
+    const s = scheduler(db, m);
+    await s.tickOnce();
+    const [approval] = db.approvalStore.listAll("mote-test");
+    const runId = db.goalRunStore.getByApproval(approval!.approval_id)!.run_id;
+    let statusDuringResume: string | undefined;
+    const original = m.runtime.resumeAfterApproval.bind(m.runtime);
+    (m.runtime as unknown as { resumeAfterApproval: unknown }).resumeAfterApproval = (
+      approved: boolean,
+    ) => {
+      statusDuringResume = db.goalRunStore.get(runId)!.status;
+      return original(approved);
+    };
+    db.approvalStore.resolve(approval!.approval_id, "approved");
+    await s.tickOnce();
+    expect(statusDuringResume).toBe("running");
+    expect(db.goalRunStore.get(runId)!.status).toBe("completed");
   });
 });
 

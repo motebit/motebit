@@ -59,6 +59,32 @@ describe("PolicyGate — intent row before execution, completion row after", () 
     expect(countCompletedActions(sink.getAll())).toBe(1);
   });
 
+  it("recordApprovalSatisfied turns a paused decision into an open intent until the completion lands", () => {
+    const sink = new InMemoryAuditSink();
+    const gate = new PolicyGate(
+      { maxRiskLevel: RiskLevel.R3_EXECUTE, requireApprovalAbove: RiskLevel.R0_READ },
+      sink,
+    );
+    const writeTool: ToolDefinition = {
+      ...readTool,
+      name: "write_thing",
+      riskHint: { risk: RiskLevel.R2_WRITE },
+    };
+    const ctx = gate.createTurnContext("run-2");
+    const decision = gate.validate(writeTool, {}, ctx);
+    expect(decision.requiresApproval).toBe(true);
+    // Paused only: the approval queue owns it — not unresolved here.
+    expect(findUnresolvedActions(sink.getAll())).toEqual([]);
+
+    gate.recordApprovalSatisfied(ctx, decision, writeTool.name, {}, "human-approved");
+    const open = findUnresolvedActions(sink.getAll());
+    expect(open.map((e) => e.callId)).toEqual([decision.callId]);
+    expect(open[0]!.decision.reason).toBe("approval_satisfied:human-approved");
+
+    gate.recordResult(ctx, decision, writeTool.name, {}, true, 3);
+    expect(findUnresolvedActions(sink.getAll())).toEqual([]);
+  });
+
   it("recordResult is a no-op for a decision that never went through validate (no callId)", () => {
     const { gate, sink } = gateWithSink();
     const ctx = gate.createTurnContext();

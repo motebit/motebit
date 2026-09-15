@@ -1235,6 +1235,14 @@ export class MotebitRuntime {
         this.assertSensitivityPermitsAiCall(entry, toolName),
       getLatestCues: () => this.latestCues,
       getApprovalStore: () => this.approvalStore,
+      recordApprovalSatisfied: (p) =>
+        this.policy.recordApprovalSatisfied(
+          { turnId: p.turnId ?? p.runId ?? "resume", runId: p.runId },
+          { allowed: true, requiresApproval: true, callId: p.auditCallId },
+          p.toolName,
+          p.args,
+          "human-approved",
+        ),
       recordApprovedToolResult: (p) =>
         this.policy.recordResult(
           { turnId: p.turnId ?? p.runId ?? "resume", runId: p.runId },
@@ -1574,6 +1582,13 @@ export class MotebitRuntime {
        * itself is a separate signed artifact.
        */
       humanApproved?: boolean;
+      /**
+       * The goal run this invocation belongs to, stamped on the audit row
+       * (`run_id`) so a restart can classify the call by run: a decision row
+       * with no completion row under this run means "prepared; effect
+       * unknown" and holds the goal instead of repeating the call.
+       */
+      runId?: string;
     } = {},
   ): Promise<ToolResult> {
     const invocationId =
@@ -1600,7 +1615,7 @@ export class MotebitRuntime {
       // so the gate cannot risk-assess it. Fail closed — it must not run.
       return { ok: false, error: `Tool "${name}" is not available` };
     }
-    const turnCtx = this.policy.createTurnContext();
+    const turnCtx = this.policy.createTurnContext(options.runId);
     const decision = this.policy.validate(toolDef, args, turnCtx);
     if (!decision.allowed) {
       return { ok: false, error: decision.reason ?? `Tool "${name}" blocked by policy` };
@@ -1617,6 +1632,15 @@ export class MotebitRuntime {
             `Tool "${name}" requires approval a ${origin} invocation cannot grant`,
         };
       }
+      // Ledger: the paused decision is proceeding on a human's say-so.
+      // Written BEFORE the call so a death after it holds as unknown.
+      this.policy.recordApprovalSatisfied(
+        turnCtx,
+        decision,
+        name,
+        args,
+        options.humanApproved === true ? "human-approved" : "user-tap",
+      );
     }
 
     let result: ToolResult;

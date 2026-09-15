@@ -155,8 +155,9 @@ export class GoalScheduler {
    *   - completed_actions — allowed tool calls that DID record a completion
    *     (re-running the goal would repeat them);
    *   - uncertain_actions — allowed tool calls with a decision row but no
-   *     completion row: the process died between dispatch and recording.
-   *     The intent row proves preparation, never that the call happened.
+   *     completion row: the process died somewhere between preparing the call
+   *     and recording its outcome. The row proves preparation — not that
+   *     dispatch occurred, and not what the effect was.
    *
    * Any side effect, known or unknown, HOLDS the goal until a human runs
    * `motebit runs ack <run_id>`. A run with no allowed tool calls at all
@@ -1045,6 +1046,14 @@ export class GoalScheduler {
       const pending = this.runtime.pendingApprovalInfo;
       if (pending != null && pending.toolCallId === turn.toolCallId) {
         this.currentGoalId = turn.goalId;
+        // Leave `awaiting_approval` BEFORE resuming (same reason as the
+        // recovered path): a death after the approved call executes must
+        // land on a `running` row the next start classifies from the audit
+        // log — never on an `approved` approval still "awaiting", which
+        // would execute it again.
+        this.runStore.setStatus(turn.runId, "running", {
+          note: approved ? "resuming after approval" : "resuming after denial",
+        });
         const resumeStream = this.runtime.resumeAfterApproval(approved);
         const result = await this.consumeDaemonStream(resumeStream, turn.goalId, turn.runId);
         this.currentGoalId = null;
@@ -1176,12 +1185,22 @@ export class GoalScheduler {
       logLine(
         `[approval] ${item.approval_id.slice(0, 8)} approved after restart — executing ${item.tool_name} exactly as approved`,
       );
+      // Leave `awaiting_approval` BEFORE the call, not after: if the process
+      // dies between the tool returning and the outcome landing, the next
+      // start must find this run `running` (→ interrupted, classified from
+      // the audit row this call writes under run_id) — never still
+      // `awaiting_approval` with an `approved` row, which would execute the
+      // approval a second time.
+      this.runStore.setStatus(run.run_id, "running", {
+        note: `executing ${item.tool_name} approved after restart`,
+      });
       this.currentGoalId = run.goal_id;
       let result: { ok: boolean; data?: unknown; error?: string };
       try {
         result = await this.runtime.invokeLocalTool(item.tool_name, args, {
           invocationOrigin: "scheduled",
           humanApproved: true,
+          runId: run.run_id,
         });
       } catch (err: unknown) {
         result = { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -1194,8 +1213,8 @@ export class GoalScheduler {
       this.finishRecoveredRun(run, {
         ok: result.ok,
         summary: result.ok
-          ? `${item.tool_name} executed after approval (recovered run): ${shown}`
-          : `${item.tool_name} failed after approval (recovered run): ${shown}`,
+          ? `${item.tool_name} executed after approval (recovered run); the goal's remaining work was not resumed: ${shown}`
+          : `${item.tool_name} failed after approval (recovered run); the goal's remaining work was not resumed: ${shown}`,
         countAsFailure: !result.ok,
         toolCallsMade: 1,
       });
