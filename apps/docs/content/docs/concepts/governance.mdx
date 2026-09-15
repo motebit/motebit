@@ -18,12 +18,12 @@ Tools are classified by the risk they carry:
 | Level | What it means | Examples |
 |---|---|---|
 | Read-only | No side effects | Search the web, read a file, recall memories |
-| Annotate | Creates metadata, no external effect | Browse events, fetch a URL |
+| Draft (`R1_DRAFT`) | Creates metadata, no external effect | Browse events, fetch a URL |
 | Write | Modifies local storage | Write a file |
 | Execute | Runs code or commands | Shell execution |
 | Financial | Money is involved | Payment tools |
 
-Read-only tools flow through automatically. Write and execute tools require operator mode. Financial tools are denied by default. The risk level is inferred from the tool's name and description, so even tools from external sources get classified.
+Read and draft tools flow through automatically. Write and execute tools require operator mode. Financial tools always route to approval unless a signed standing-delegation grant covers the call — they are gated, never auto-run, and no configuration can change that. The risk level is inferred from the tool's name and description, so even tools from external sources get classified.
 
 ## Operator mode
 

@@ -347,7 +347,8 @@ export async function replayGoal(
       status: (p.status ?? "unknown") as string,
       completed_at: (receipt?.completed_at ?? e.timestamp) as number,
       tools_used: (p.tools_used ?? []) as string[],
-      signature_prefix: (receipt?.signature ?? "") as string,
+      // spec/execution-ledger-v1.md §4.2: the first 16 characters of the signature — display/linkage only.
+      signature_prefix: ((receipt?.signature ?? "") as string).slice(0, 16),
     };
   });
 

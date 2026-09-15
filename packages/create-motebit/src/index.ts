@@ -272,7 +272,7 @@ motebit_id: ${motebitId}
 
 \`\`\`bash
 npm install
-cp .env.example .env     # set MOTEBIT_PASSPHRASE (required) + relay URL + (optional) API token
+cp .env.example .env     # set MOTEBIT_PASSPHRASE (required) + relay URL
 npm run dev              # build + start the agent server
 \`\`\`
 
@@ -284,7 +284,7 @@ src/index.ts       Entrypoint — starts the agent server (guarded main-module)
 src/tools.ts       Tools — what your agent can do
 tsconfig.json      TypeScript config (Node16, ES2022, strict)
 package.json       Scripts: build, dev, start, self-test, verify
-.env.example       MOTEBIT_PASSPHRASE (required), relay URL, (optional) API token
+.env.example       MOTEBIT_PASSPHRASE (required), relay URL
 \`\`\`
 
 ## Scripts
@@ -315,10 +315,7 @@ The motebit.md is self-attesting — anyone can verify the signature without con
 
 ## Authentication for the relay
 
-Two paths, in priority order:
-
-1. **\`MOTEBIT_API_TOKEN\`** (env var) — a master token issued by the relay operator. Use this for production deployments and CI.
-2. **Signed device token** — derived from the local key encrypted in \`~/.motebit/config.json\`. Requires \`MOTEBIT_PASSPHRASE\` (or interactive prompt) to decrypt the key on each invocation.
+Your agent authenticates to the relay **as itself**: it introduces its key through the relay's public bootstrap endpoint on first boot, then mints a short-lived Ed25519-signed token per call, bound to the audience each route expects. Paid tasks arrive with a relay-signed \`task:dispatch\` admission token that the agent verifies against the relay's pinned key before running. There is no relay API token to hold — the operator's master token never leaves the relay. The local key is encrypted in \`~/.motebit/config.json\` and needs \`MOTEBIT_PASSPHRASE\` (or an interactive prompt) to decrypt on each invocation.
 
 The same passphrase you set during \`create-motebit\` unlocks every CLI command (credentials, export, attest). Set \`MOTEBIT_PASSPHRASE\` in your shell or \`.env\` to skip the prompt.
 
@@ -581,10 +578,6 @@ MOTEBIT_PASSPHRASE=
 # Override to point at your own relay or a federation peer.
 MOTEBIT_SYNC_URL=https://relay.motebit.com
 
-# API token — only required to accept paid tasks.
-# Anonymous agents can register and serve for free.
-MOTEBIT_API_TOKEN=
-
 # Optional: AI provider (for non-direct mode)
 # ANTHROPIC_API_KEY=sk-ant-...
 `;
@@ -739,7 +732,7 @@ async function agentScaffold(
   console.log(`    src/tools.ts       ${dim("Tools — what your agent can do")}`);
   console.log(`    tsconfig.json      ${dim("TypeScript config")}`);
   console.log(`    package.json       ${dim("Scripts: dev, start, self-test, verify")}`);
-  console.log(`    .env.example       ${dim("Relay URL + API token")}`);
+  console.log(`    .env.example       ${dim("Passphrase + relay URL")}`);
   console.log();
   console.log(`  Motebit ID: ${cyan(result.motebitId)}`);
   console.log();
@@ -751,7 +744,7 @@ async function agentScaffold(
   console.log(`    npm install`);
   console.log(`    npm run verify           ${dim("# Verify your agent's identity signature")}`);
   console.log(
-    `    cp .env.example .env     ${dim("# set MOTEBIT_PASSPHRASE (required), relay URL, API token")}`,
+    `    cp .env.example .env     ${dim("# set MOTEBIT_PASSPHRASE (required), relay URL")}`,
   );
   console.log(`    npm run dev              ${dim("# build + start the agent")}`);
   console.log();

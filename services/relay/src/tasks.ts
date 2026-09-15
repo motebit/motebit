@@ -344,11 +344,16 @@ export async function refreshDispatchTokenOnReplay(
     entry.task.status === AgentTaskStatus.Failed ||
     entry.task.status === AgentTaskStatus.Denied;
   if (terminal) return replayed;
+  // Stamp the re-mint with the same clock that judged the old token expired:
+  // with the real clock, a re-mint in the same millisecond as the original
+  // would carry an identical `exp` — indistinguishable to a worker's
+  // "later than what I saw" check, and a flake in tests with an injected now.
   const fresh = await mintTaskDispatchToken(
     deps.relayIdentity,
     claims.mid,
     taskId,
     entry.task.prompt,
+    now,
   );
   logger.info("task.dispatch_token_reminted", {
     correlationId: taskId,

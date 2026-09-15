@@ -377,7 +377,9 @@ const DOCS: ReadonlyArray<DocFile> = [
         // joined the published surface as 0.1.0 rather than the 1.0.0
         // initial cohort). In both forms the captured digit is the
         // published total: "All " precedes it, or "N of the " does.
-        regex: /(?:All |\d+ of the )(\d+) packages started at `1\.0\.0`/,
+        // 2026-09-14: "converged on" replaced "started at" once the sentence
+        // was corrected (five packages shipped pre-1.0 versions before 1.0.0).
+        regex: /(?:All |\d+ of the )(\d+) packages (?:started at|converged on) `1\.0\.0`/,
         key: "publishedTotal",
         label: "Coordinated-release sentence",
       },

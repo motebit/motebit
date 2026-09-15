@@ -15,14 +15,14 @@ Their names are **claims, not verified handles**. A Discover card renders `claim
 
 | Service      | Capability    | Display name     | Kind     | Price       |
 | ------------ | ------------- | ---------------- | -------- | ----------- |
-| `web-search` | `web_search`  | —                | atom     | operator-set (priced in prod) |
-| `read-url`   | `read_url`    | —                | atom     | free        |
+| `web-search` | `web_search`  | —                | atom     | $0.003/task (`MOTEBIT_UNIT_COST`) |
+| `read-url`   | `read_url`    | —                | atom     | $0.002/task |
 | `summarize`  | `summarize_search` | —           | atom     | free        |
 | `research`   | `research`    | The Researcher   | molecule | $0.25/task  |
 | `auditor`    | `audit_agent` | The Auditor      | molecule | $0.01/task  |
 | `clerk`      | `execute_delegation` | The Clerk | molecule | $0.01/task  |
 
-Atoms run at zero cost today: the delegation chain is relay-visible and every hop is receipted, but nothing settles until the multi-hop settlement arc lands — the listings don't pretend otherwise. Molecules are priced and paid P2P at the top of the chain.
+The multi-hop settlement arc has landed: `web-search` and `read-url` are priced market participants (the molecule pays them P2P for each sub-hop, receipted at every hop) and only `summarize` is free today. Molecules are priced and paid P2P at the top of the chain. Prices are operator-set per deployment (`scripts/deploy-archetype-slate.ts`).
 
 ## The Researcher
 

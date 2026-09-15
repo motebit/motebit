@@ -47,7 +47,7 @@ const result = await verifyEvidenceProvenance(bytes, citation.provenance);
 // { present: false, reason: "span_absent" }     → the span was fabricated.
 ```
 
-`@motebit/verifier` is the Apache-2.0, zero-monorepo-dependency, browser-safe consumer surface. `verifyEvidenceProvenance` (and the `EvidenceProvenance` / `EvidenceProvenanceResult` types) re-export from `@motebit/crypto` through it.
+`@motebit/verifier` is the Apache-2.0, browser-safe consumer surface with zero third-party dependencies (its only dependencies are `@motebit/crypto` and `@motebit/protocol`). `verifyEvidenceProvenance` (and the `EvidenceProvenance` / `EvidenceProvenanceResult` types) re-export from `@motebit/crypto` through it.
 
 ## The recipe path (HTML)
 
@@ -64,7 +64,7 @@ const result = await verifyEvidenceProvenance(rawHtmlBytes, citation.provenance,
 
 The verifier is **domain-blind by construction** — it owns no recipe catalog (that would be document-format authority). You bring a resolver only for recipes you trust; for any other recipe the check fails closed with `projection_unresolved`. To signal "I can't resolve this," _omit_ the recipe from your resolver — never throw as a "not supported" signal (a throw propagates as a caller fault, never a false `present: false`).
 
-The one recipe in use today, [`agency.html-text.v1`](https://github.com/agency-computer/html-text-spec), is a frozen, world-public spec. A conforming implementation reproduces its output **byte-for-byte** from §2 of that spec — five ordered steps, ASCII-only whitespace, a single-pass entity decode. The canonical port to copy is the stdlib-only [Python reference](https://github.com/motebit/motebit/blob/main/examples/python-receipt-verifier/verify_evidence_provenance.py) (`project_agency_html_text_v1`). (If you are already running a motebit, `@motebit/tools` exports `projectAgencyHtmlTextV1`; a lightweight standalone resolver package is on the roadmap — file an issue if you want it sooner.)
+The one recipe in use today, [`agency.html-text.v1`](https://github.com/agency-computer/html-text-spec), is a frozen, world-public spec. A conforming implementation reproduces its output **byte-for-byte** from §2 of that spec — five ordered steps, ASCII-only whitespace, a single-pass entity decode. The canonical port to copy is the stdlib-only [Python reference](https://github.com/motebit/motebit/blob/main/examples/python-receipt-verifier/verify_evidence_provenance.py) (`project_agency_html_text_v1`). (If you are already running a motebit, the workspace-private `@motebit/tools` package (not published to npm — port it, do not depend on it) exports `projectAgencyHtmlTextV1`; a lightweight standalone resolver package is on the roadmap — file an issue if you want it sooner.)
 
 ## Verify in any language
 

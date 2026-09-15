@@ -5,7 +5,7 @@ description: The fastest correct path to verify a motebit ExecutionReceipt — i
 
 You have an `ExecutionReceipt` and you want to prove it's real. The whole point of the protocol is that you can do this yourself, offline, with no relay and no account. This page is the shortest correct path — for JavaScript/TypeScript, for the command line, and for any other language.
 
-The one thing to internalize first: **the verifier is already published. Do not write your own.** Canonicalization (JCS / RFC 8785) and cryptosuite dispatch are exactly where hand-rolled verifiers silently pass on one receipt and fail on the next. The permissive-floor library handles both, is Apache-2.0 with a patent grant, has zero monorepo dependencies, and runs in the browser.
+The one thing to internalize first: **the verifier is already published. Do not write your own.** Canonicalization (JCS / RFC 8785) and cryptosuite dispatch are exactly where hand-rolled verifiers silently pass on one receipt and fail on the next. The permissive-floor library handles both, is Apache-2.0 with a patent grant, has zero third-party dependencies (it pulls in only `@motebit/crypto` and `@motebit/protocol`), and runs in the browser.
 
 ## Try it now — real receipts to verify
 
@@ -85,7 +85,7 @@ Every signed artifact carries an explicit `suite` field on the wire — for exam
 
 ### Delegation chains
 
-If the receipt delegated sub-tasks, each nested receipt is independently signed and verified. Walk `result.delegations` to inspect every hop; the library recurses for you (the spec caps nesting depth at 10).
+If the receipt delegated sub-tasks, each nested receipt is independently signed and verified. Walk `result.delegations` to inspect every hop; the library recurses for you. The spec _recommends_ a nesting-depth limit of 10; the library does not enforce one today, so bound untrusted input yourself before verifying.
 
 ## Command line — two binaries, split by audience
 
@@ -104,11 +104,11 @@ npx @motebit/verify ./receipt_9f4c.json        # binary is `motebit-verify`
 motebit verify receipt ./receipt_9f4c.json
 ```
 
-`motebit-verify` is the **fuller** surface — it wires the canonical hardware-attestation leaves (App Attest, TPM, Android Keystore, WebAuthn) for credentials that carry them, and covers `content-artifact`. Both binaries bottom out in `@motebit/crypto`'s canonical verify, so they report the **same** binding-ladder rung on the same receipt — no second implementation to drift. Why two namespaces at all: keeping `motebit-verify` standalone (and Apache-2.0) is what lets a verifier run without adopting the BSL runtime — verification independence is a trust property, not a CLI-ergonomics one. For the _library_ axis (which package to import), see [Choosing a Verify Surface](/docs/developer/choosing-a-verify-surface).
+`motebit-verify` is the **fuller** surface — it wires the canonical hardware-attestation leaves (App Attest, TPM, Android Keystore, WebAuthn) for credentials that carry them, and covers `content-artifact`. Both binaries bottom out in `@motebit/crypto`'s canonical verify, so a receipt that verifies in one verifies in the other; only `motebit-verify` (via `@motebit/verifier`) computes and reports the binding-ladder rung — `motebit verify receipt` checks schema, suite and signature and prints no rung. Same receipt — no second implementation to drift. Why two namespaces at all: keeping `motebit-verify` standalone (and Apache-2.0) is what lets a verifier run without adopting the BSL runtime — verification independence is a trust property, not a CLI-ergonomics one. For the _library_ axis (which package to import), see [Choosing a Verify Surface](/docs/developer/choosing-a-verify-surface).
 
 ## No web page, no install — see it work
 
-Paste any receipt into [receipt.computer](https://receipt.computer): a public, login-free verifier that runs the _same_ verification client-side and reports the same rung. Because it uses `@motebit/verifier`, a receipt you verify in your own code and a receipt you verify there produce the byte-identical verdict — that agreement is the proof, not a claim about it.
+Paste any receipt into [receipt.computer](https://receipt.computer): a public, login-free verifier that runs the _same_ verification client-side and reports the same rung. It runs `@motebit/state-export-client`, which shares the same `@motebit/crypto` floor as `@motebit/verifier`, and `check-receipt-conformance` holds the two to the same verdict on the shared fixtures — so a receipt you verify in your own code and a receipt you verify there produce the byte-identical verdict — that agreement is the proof, not a claim about it.
 
 ## Any other language
 

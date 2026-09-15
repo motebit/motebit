@@ -27,7 +27,7 @@ Desktop releases are available from the [GitHub releases page](https://github.co
 2. **Device** — Your machine is registered as a trusted device. Later you can add your phone, another computer, or any other device.
 3. **Chat** — The interface appears. Type or speak to your motebit.
 
-Everything is local. Your memories, your identity, your conversation history — all stored on your machine in an encrypted SQLite database.
+Everything is local. Your memories, your identity, your conversation history — all stored on your machine in a local SQLite database protected by filesystem permissions; your private key is the part that is encrypted (PBKDF2 + AES-256-GCM, or the OS keyring).
 
 ### Choose your intelligence
 
@@ -228,7 +228,7 @@ See [Relay Federation](/docs/developer/federation) for the full protocol specifi
 
 Your motebit accumulates:
 
-- **Memories** — Conversations become semantic nodes with confidence scores. Important things strengthen. Trivia decays with a 7-day half-life. You can inspect, export, or delete any memory.
+- **Memories** — Conversations become semantic nodes with confidence scores. Important things strengthen. Episodic memories decay with a 3-day half-life and semantic ones with a 30-day half-life. You can inspect, export, or delete any memory.
 - **Trust** — The more you interact, the more context the agent has. It learns your preferences, your tools, your patterns. This compounds.
 - **Audit trail** — Every action, every tool call, every approval decision is logged immutably. You can replay the full history of your agent's behavior.
 

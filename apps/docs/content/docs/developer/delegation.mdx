@@ -316,7 +316,7 @@ Independent of identity verification, the client computes a SHA-256 hash of the 
 
 ### Sensitivity caps for external callers
 
-External callers cannot store high-sensitivity memories. The `motebit_remember` tool rejects any request with sensitivity level `medical`, `financial`, or `secret`. Memory queries via `motebit_recall` filter out these sensitivity levels before returning results.
+External callers cannot store high-sensitivity memories. The `motebit_remember` tool rejects any request with sensitivity level `personal`, `medical`, `financial`, or `secret` — only `none` is accepted from an external caller. Memory queries via `motebit_recall` filter out these sensitivity levels before returning results.
 
 ### Signed token authentication
 
