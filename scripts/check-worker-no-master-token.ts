@@ -63,7 +63,20 @@ const WORKER_PACKAGES = ["packages/molecule-runner", "packages/mcp-server"];
  * to say it is refused is not a read.
  */
 const ENV_READ =
-  /(?:process\.env|\benv)\s*(?:\.\s*MOTEBIT_API_TOKEN\b|\[\s*["']MOTEBIT_API_TOKEN["']\s*\])/;
+  /(?:process\.env|\benv)\s*(?:\.\s*MOTEBIT_(?:API|AUTH)_TOKEN\b|\[\s*["']MOTEBIT_(?:API|AUTH)_TOKEN["']\s*\])/;
+
+/**
+ * The hand-out side. A deploy script that writes the operator's token into a
+ * worker's secret map defeats every rule above without any worker source
+ * reading `MOTEBIT_API_TOKEN` by that name. Found 2026-09-15: after #649 the
+ * slate script still set `MOTEBIT_AUTH_TOKEN: ctx.apiToken` on all seven
+ * workers — the master token under an alias, digest-identical to the
+ * relay's, live in production for two days after the "retirement".
+ */
+const DEPLOY_SCRIPTS_DIR = "scripts";
+const DEPLOY_SCRIPT = /^deploy-.*\.ts$/;
+const TOKEN_HANDOUT =
+  /^\s*MOTEBIT_\w+\s*:\s*(?:ctx\.apiToken|apiToken|process\.env\s*(?:\.\s*MOTEBIT_API_TOKEN\b|\[\s*["']MOTEBIT_API_TOKEN["']\s*\]))/;
 const CONFIG_FIELD = /^\s*apiToken\??:\s*string/;
 
 function walk(dir: string, out: string[]): void {
@@ -114,10 +127,30 @@ function main(): void {
       const lines = readFileSync(file, "utf8").split("\n");
       lines.forEach((line, i) => {
         if (ENV_READ.test(line)) {
-          violations.push(`${relative(ROOT, file)}:${i + 1}: reads MOTEBIT_API_TOKEN`);
+          violations.push(
+            `${relative(ROOT, file)}:${i + 1}: reads MOTEBIT_API_TOKEN / MOTEBIT_AUTH_TOKEN`,
+          );
         }
       });
     }
+  }
+
+  // Deploy scripts: no worker secret map may carry the operator's token under ANY name.
+  const deployScripts = readdirSync(join(ROOT, DEPLOY_SCRIPTS_DIR)).filter((f) =>
+    DEPLOY_SCRIPT.test(f),
+  );
+  for (const f of deployScripts) {
+    filesScanned++;
+    const rel = `${DEPLOY_SCRIPTS_DIR}/${f}`;
+    readFileSync(join(ROOT, rel), "utf8")
+      .split("\n")
+      .forEach((line, i) => {
+        if (TOKEN_HANDOUT.test(line)) {
+          violations.push(
+            `${rel}:${i + 1}: hands the operator's token to a worker as a secret (${line.trim().slice(0, 60)})`,
+          );
+        }
+      });
   }
 
   for (const pkg of WORKER_PACKAGES) {
@@ -147,17 +180,17 @@ function main(): void {
   if (violations.length > 0) {
     failWithRepair({
       invariant:
-        "a worker never holds the relay master token: no service outside the relay reads MOTEBIT_API_TOKEN, and no worker-side config carries an `apiToken` field (a compromised worker container must not be a compromised relay — 2026-09-13)",
+        "a worker never holds the relay master token: no service outside the relay reads MOTEBIT_API_TOKEN or its alias MOTEBIT_AUTH_TOKEN, no worker-side config carries an `apiToken` field, and no deploy script writes the operator's token into a worker secret map under any name (a compromised worker container must not be a compromised relay — 2026-09-13; alias hand-out found 2026-09-15)",
       sites: violations,
       canonical:
         "packages/mcp-server/src/service.ts (`RelayAuth`: the worker signs per-audience tokens with its OWN key; `POST /api/v1/agents/bootstrap` introduces a fresh key publicly)",
-      fix: "Remove the MOTEBIT_API_TOKEN read / `apiToken` field. If the call needs a relay bearer, mint one with `makeAuthTokenMinter(identity)` from @motebit/molecule-runner (audience per spec/auth-token-v1.md §5: `admin:query` for register/heartbeat/deregister, `market:listing` for the listing, `task:submit` to open a task). A same-named secret that is NOT the relay's master token belongs in ALLOWED_SERVICES with its reason.",
+      fix: "Remove the MOTEBIT_API_TOKEN / MOTEBIT_AUTH_TOKEN read, `apiToken` field, or deploy-script hand-out. A worker's inbound auth is the relay-signed dispatch token (no static bearer); its pin is MOTEBIT_RELAY_PUBLIC_KEY. If the call needs a relay bearer, mint one with `makeAuthTokenMinter(identity)` from @motebit/molecule-runner (audience per spec/auth-token-v1.md §5: `admin:query` for register/heartbeat/deregister, `market:listing` for the listing, `task:submit` to open a task). A same-named secret that is NOT the relay's master token belongs in ALLOWED_SERVICES with its reason.",
       doctrine: "docs/doctrine/task-admission.md § The worker authenticates as itself",
     });
   }
 
   console.log(
-    `✓ No worker holds the relay master token: ${filesScanned} source file(s) scanned across ${scannedServices.length} service(s) (${scannedServices.join(", ")}) + ${WORKER_PACKAGES.length} worker package(s); ${ALLOWED_SERVICES.size} allowlisted reader(s): ${[...ALLOWED_SERVICES.keys()].join(", ")}.`,
+    `✓ No worker holds the relay master token: ${filesScanned} source file(s) scanned across ${scannedServices.length} service(s) (${scannedServices.join(", ")}) + ${WORKER_PACKAGES.length} worker package(s) + ${deployScripts.length} deploy script(s) (${deployScripts.join(", ")}); ${ALLOWED_SERVICES.size} allowlisted reader(s): ${[...ALLOWED_SERVICES.keys()].join(", ")}.`,
   );
 }
 

@@ -130,7 +130,11 @@ async function main(): Promise<void> {
       serviceDescription:
         "Web research agent — investigates a question via motebit's web-search and read-url atoms, returns a synthesized report with a verifiable citation chain (signed delegation_receipts)",
       capabilities: ["research"],
-      ...(config.authToken != null ? { authToken: config.authToken } : {}),
+      // No static inbound bearer: callers present a motebit signed token (the
+      // relay's per-task dispatch token, or a caller-signed token) or are
+      // refused. Until 2026-09-15 the deploy script set MOTEBIT_AUTH_TOKEN to the
+      // relay OPERATOR's master token on every worker — a second copy of the
+      // secret #649 retired.
       ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
       ...(config.publicUrl != null ? { publicUrl: config.publicUrl } : {}),
       ...(config.relayPublicKey != null ? { relayPublicKeyHex: config.relayPublicKey } : {}),
