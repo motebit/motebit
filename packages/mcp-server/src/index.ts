@@ -997,8 +997,14 @@ export class McpServerAdapter {
             }
 
             this.deps.logToolCall("motebit_task", args, { ok: false, error: "no receipt" });
+            // Not "completed". A receipt is the only completion — the
+            // `finally` below says exactly that when it releases the
+            // admission — so reporting completion without one told a
+            // paying delegator the opposite of the truth. A worker that
+            // refuses (because its owner halted it, say) reached here and
+            // answered `completed` with a body explaining it had refused.
             return fmt({
-              status: "completed",
+              status: "failed",
               response: responseText,
               receipt_missing: true,
             });

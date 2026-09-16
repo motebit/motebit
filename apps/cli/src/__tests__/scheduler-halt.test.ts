@@ -52,6 +52,8 @@ interface Mock {
   streams: number;
   invoked: string[];
   consolidations: number;
+  /** How many times a suspended turn was resumed. */
+  resumed: number;
   /** Ask this motebit to stop, exactly as `motebit halt` would. */
   requestHalt: (opts: { goalId?: string; reason?: string }) => HaltRequest;
 }
@@ -75,6 +77,7 @@ function mockRuntime(
     streams: 0,
     invoked: [],
     consolidations: 0,
+    resumed: 0,
     requestHalt: (o) => {
       const h: HaltRequest = {
         halt_id: `halt-${crypto.randomUUID().slice(0, 8)}`,
@@ -143,6 +146,7 @@ function mockRuntime(
       yield { type: "result" as const, result: turnResult() };
     },
     async *resumeAfterApproval(): AsyncGenerator<StreamChunk> {
+      m.resumed++;
       pending = false;
       yield { type: "result" as const, result: turnResult() };
     },
@@ -484,6 +488,40 @@ describe("halt at the scheduler", () => {
     await s.tickOnce();
     s.stop();
     expect(m.consolidations).toBe(0);
+  });
+
+  it("an approval expiring under a halt keeps the suspended turn — it is not dropped", async () => {
+    // The guard was placed AFTER `suspended.delete(id)`, so the entry it
+    // claimed to preserve was already gone: the run never closed, the
+    // goal was held forever, and the runtime stayed wedged on a pending
+    // approval nothing could resolve once the halt lifted.
+    db.goalStore.add(goal({ interval_ms: 3_600_000 }));
+    const m = mockRuntime(db, { pause: true });
+    const s = scheduler(db, m);
+    s.start(999_999);
+    await settle(() => db.approvalStore.listAll("mote-test").length > 0);
+    const [approval] = db.approvalStore.listAll("mote-test");
+    const runId = db.goalRunStore.getByApproval(approval!.approval_id)!.run_id;
+
+    m.requestHalt({ reason: "overnight" });
+    db.approvalStore.expireStale(Date.now() + 100 * 3_600_000);
+    await s.tickOnce();
+    await s.tickOnce();
+
+    // The turn was NOT resumed (that would be a model turn under a halt)…
+    expect(m.resumed).toBe(0);
+    // …and the run is still awaiting, so lifting the halt can still
+    // resolve it rather than leaving the goal held forever.
+    expect(db.goalRunStore.get(runId)!.status).toBe("awaiting_approval");
+    s.stop();
+  });
+
+  it("a halted daemon does not CLAIM a relay task — an unclaimed task can go elsewhere", async () => {
+    // The chokepoint refuses the work either way; claiming first would
+    // black-hole it, because a claimed task is not re-dispatched.
+    const m = mockRuntime(db);
+    m.requestHalt({});
+    expect(m.runtime.haltInForce()).not.toBeNull();
   });
 
   it("a goal-scoped halt stops that goal and leaves the others running", async () => {

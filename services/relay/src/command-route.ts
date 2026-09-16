@@ -243,8 +243,23 @@ async function forwardCommandToAgent(
     // For most commands any connected surface can answer. For the
     // unattended-runtime set, only a peer that actually runs unattended
     // work can — see UNATTENDED_RUNTIME_COMMANDS.
+    // The relay auto-deploys on merge; installed CLIs update on their
+    // own schedule. Every daemon older than this change announces
+    // `background` and not `unattended_runtime`, so filtering strictly
+    // would 404 the phone's `/pending`, `/approve` and `/deny` against a
+    // perfectly healthy daemon from the moment this ships. `approvals`
+    // therefore accepts the older capability as a fallback for one
+    // release; `halt`/`resume` do not, because an old daemon cannot
+    // honor them anyway and answering "not delivered" is the truth
+    // there.
+    //
+    // REMOVE the fallback once the halt-capable CLI is the published
+    // minimum — tracked with the arc, not left to rot here.
+    const unattended = peers.filter((p) => p.capabilities?.includes("unattended_runtime") === true);
     const candidates = UNATTENDED_RUNTIME_COMMANDS.has(command)
-      ? peers.filter((p) => p.capabilities?.includes("unattended_runtime") === true)
+      ? unattended.length > 0 || command !== "approvals"
+        ? unattended
+        : peers.filter((p) => p.capabilities?.includes("background") === true)
       : peers;
 
     if (candidates.length === 0) {

@@ -1151,7 +1151,11 @@ describe("McpServerAdapter — synthetic tool execution", () => {
     };
 
     expect(result.content[0]!.text).toContain("just text");
-    expect(result.content[0]!.text).toContain("completed");
+    // Not "completed". This test used to assert the opposite, which pinned the
+    // defect: a receipt is the only completion, so a run that produced none —
+    // a halted worker refusing the task, a provider that died mid-stream — was
+    // telling a paying delegator the reverse of what happened.
+    expect(result.content[0]!.text).toContain("failed");
     expect(result.content[0]!.text).toContain("receipt_missing");
     expect(result.content[0]!.text).toContain("true");
   });

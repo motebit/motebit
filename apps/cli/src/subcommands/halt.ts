@@ -314,10 +314,15 @@ export async function handleHaltStatus(config: CliConfig): Promise<void> {
       console.log("Running — nothing is halted.");
     } else {
       const waiting = active.filter((h) => h.acknowledged_at == null).length;
+      // A goal-scoped halt stops one goal, not the motebit.
+      const wide = active.some((h) => h.goal_id == null);
+      const scopeWord = wide
+        ? "unattended execution"
+        : `${active.length} goal(s) — the rest of the interior is still running`;
       console.log(
         waiting > 0
-          ? `Stop requested — ${waiting} of ${active.length} not yet acknowledged.`
-          : `Stopped — ${active.length} halt(s) in force.`,
+          ? `Stop requested for ${scopeWord} — ${waiting} of ${active.length} not yet acknowledged.`
+          : `Stopped ${scopeWord}.`,
       );
       for (const h of active) console.log(describe(h));
     }

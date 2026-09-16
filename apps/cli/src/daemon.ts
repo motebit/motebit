@@ -504,6 +504,18 @@ export async function handleRun(config: CliConfig): Promise<void> {
         }
 
         if (msg.type === "task_request" && msg.task != null) {
+          // Refuse BEFORE claiming. The chokepoint in `handleAgentTask`
+          // will refuse this work, but a claimed task is not
+          // re-dispatched — so claiming first would black-hole it, and
+          // the submitter (who cleared the settlement gates to get here)
+          // would learn nothing until it timed out. Leaving it unclaimed
+          // lets the relay offer it elsewhere.
+          const runHalt = runtime.haltInForce();
+          if (runHalt != null) {
+            void runtime.honorHalts().catch(() => undefined);
+            console.log(`\nAgent task not claimed — halted (${runHalt.halt_id.slice(0, 8)})`);
+            return;
+          }
           const task = msg.task as AgentTask;
 
           // Check if we have the required capabilities
@@ -1528,6 +1540,17 @@ export async function handleServe(config: CliConfig): Promise<void> {
       runtimeRef.current?.onHalt(
         () => "no further relay-dispatched tasks will be accepted (one already running finishes)",
       );
+      // Serve announces `unattended_runtime`, so the relay may route a
+      // goal-scoped halt here — and a person can only send the 8-char
+      // prefix `motebit goal list` prints. Without a resolver in this
+      // process too, the same command would succeed or fail depending on
+      // which peer the relay happened to pick.
+      runtimeRef.current?.setGoalIdResolver((prefix) => {
+        const match = moteDb.goalStore
+          .list(motebitId)
+          .find((g) => g.goal_id === prefix || g.goal_id.startsWith(prefix));
+        return match?.goal_id ?? null;
+      });
       const serveHaltTicker = setInterval(() => {
         void runtimeRef.current?.honorHalts().catch((err: unknown) => {
           log(

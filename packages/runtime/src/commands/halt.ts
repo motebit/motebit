@@ -211,11 +211,18 @@ export function cmdHaltStatus(runtime: MotebitRuntime): CommandResult {
     };
   }
   const unacknowledged = active.filter((h) => h.acknowledged_at == null);
+  // A goal-scoped halt stops one goal; the rest of the interior keeps
+  // running. Summarising it as "Stopped" would be the arc's own failure
+  // in the one command whose whole job is to report the truth.
+  const wide = active.some((h) => h.goal_id == null);
+  const scopeWord = wide
+    ? "unattended execution"
+    : `${active.length} goal(s) — the rest of the interior is still running`;
   return {
     summary:
       unacknowledged.length > 0
-        ? `Stop requested (${unacknowledged.length} not yet acknowledged, ${active.length} in force).`
-        : `Stopped — ${active.length} halt(s) in force.`,
+        ? `Stop requested for ${scopeWord} (${unacknowledged.length} of ${active.length} not yet acknowledged).`
+        : `Stopped ${scopeWord}.`,
     detail: active.map(describe).join("\n"),
     data: {
       halted: true,

@@ -80,3 +80,12 @@ Sixth review round — eight findings, three high, and the fix this time is two 
 - **The approval-expiry path ran a model turn under a halt.** Expiring a suspended turn resumes it with a denial, and that continuation can make further non-approval-gated tool calls. The record still expires; the turn waits.
 - **The readers were still collapsing the per-executor model.** `halt_state.acknowledged_at` holds whichever process acknowledged first, and both the command layer and the CLI rendered it as "Stopped". The command now reads its own executor's row and lists the others; the CLI names who acknowledged and what each stopped, and never says a bare "Stopped".
 - `halt goal <prefix> --remote` was unusable with the ids people actually see: the prefix now resolves at the runtime that owns the goals, through a resolver the scheduler registers. And both envelope minters send a nonce, so two identical commands in the same millisecond are no longer refused as a replay — a false "this did not happen" on the one vocabulary where that costs most.
+
+Seventh review round — six findings, and the shape of them says the chokepoints held. None is a new ungated execution path:
+
+- **Expiring a suspended turn deleted it before checking the halt**, so the turn the guard claimed to preserve was already gone and the runtime wedged. The check moved above the delete; a bug introduced by the sixth round's own fix.
+- **The daemon claimed a task before consulting the halt**, so a stopped motebit still took work off the relay queue even though it then refused to run it.
+- **Serve mode never registered the goal-id resolver**, so a goal-scoped halt sent to a serving daemon matched nothing.
+- **A run that produced no receipt reported itself "completed".** A receipt is the only completion — the admission release already says so — so a halted worker was answering a paying delegator with the reverse of what happened. It reports `failed` with `receipt_missing` now. The test asserting "completed" had encoded the defect.
+- `approvals` routed only to peers announcing the new unattended-runtime capability, which would have stopped reaching every already-deployed daemon. It falls back to the capability those daemons announce.
+- A goal-scoped halt was still summarized as "Stopped" in two places, which reads as motebit-wide. Both name the goal.

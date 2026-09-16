@@ -1168,6 +1168,14 @@ export class GoalScheduler {
     for (const [id, turn] of this.suspended) {
       const item = this.approvalStore.get(id);
       if (!item || item.status === "expired") {
+        // Before anything is dropped. Resuming with a denial is a MODEL
+        // TURN whose continuation can make further, non-approval-gated
+        // tool calls — unattended work starting, which a halt forbids.
+        // Placed after the delete (as it first was), this "leave it
+        // suspended" guard did the opposite: the map entry was already
+        // gone, the run never closed, and the runtime stayed wedged on a
+        // pending approval nothing could resolve once the halt lifted.
+        if (this.runtime.haltInForce(turn.goalId) != null) continue;
         this.suspended.delete(id);
         void this.logApprovalEvent(EventType.ApprovalExpired, turn.goalId, id, "", {});
         // Deny-release the runtime ONLY when the pending approval is the one
@@ -1176,14 +1184,6 @@ export class GoalScheduler {
         // money prompt in daemon-coordinated setups. And never silently — the
         // old path discarded the resume stream with zero output.
         const pending = this.runtime.pendingApprovalInfo;
-        // Resuming with a denial is a MODEL TURN: the continuation can
-        // make further, non-approval-gated tool calls. Under a halt that
-        // is unattended work starting, which the acknowledgement says
-        // will not happen — so the record is expired but the turn is left
-        // suspended until the halt lifts.
-        if (pending != null && this.runtime.haltInForce(turn.goalId) != null) {
-          continue;
-        }
         if (pending != null && pending.toolCallId === turn.toolCallId) {
           logLine(
             `[approval] expired → denying suspended turn ${id.slice(0, 8)} (${pending.toolName}) to release the runtime`,
