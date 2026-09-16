@@ -129,13 +129,16 @@ const defaultEvidenceLogger = {
  * character parameter is a page number, not a key.
  */
 const CREDENTIAL_PARAM =
-  /[?&#](?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth|authorization|token|secret|password|passwd|pwd|sig|signature|session|credential)=[^&\s]{8,}/i;
+  /[?&#][^=&\s]*(?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|authorization|token|secret|password|passwd|pwd|signature|credential|sig)=[^&\s]{16,}/i;
 
 /**
  * Userinfo credentials — `https://user:pass@host/…`. A different place
  * to hide the same thing.
  */
 const URL_USERINFO = /^[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i;
+
+/** Set at construction so the ref can be checked with the same engine. */
+let CREDENTIAL_SHAPES_IN_REF: (ref: string) => boolean = () => false;
 
 function looksLikeCredentialBearingUrl(ref: string): boolean {
   // Query AND fragment AND userinfo. The first version anchored on
@@ -144,7 +147,18 @@ function looksLikeCredentialBearingUrl(ref: string): boolean {
   // URL both walked past a guard whose stated purpose is that a
   // credential in a reference is never stored. Checking only the part
   // one happens to think of is the mistake this guard already made once.
-  return CREDENTIAL_PARAM.test(ref) || URL_USERINFO.test(ref);
+  // The credential word can sit anywhere in the parameter NAME, not
+  // only at its start. Anchored to the separator, the rule read
+  // `?sig=` and missed every vendor-prefixed form — measured,
+  // `X-Amz-Signature=` and `X-Goog-Signature=` both walked past, so a
+  // presigned export link handed to the agent wrote its signature into
+  // a row kept for the horizon and printed verbatim on return. Third
+  // time this guard has been too narrow; each time the gap was a place
+  // I had not thought to look rather than a rule that was wrong.
+  //
+  // The shape filter runs over the reference too, which catches a
+  // vendor key embedded in a PATH rather than a query.
+  return CREDENTIAL_PARAM.test(ref) || URL_USERINFO.test(ref) || CREDENTIAL_SHAPES_IN_REF(ref);
 }
 
 /**
@@ -335,6 +349,8 @@ export class PolicyGate {
     // rule precise where a value-shape rule cannot be. It lives here
     // rather than in the shared table because it is true of URLs, not of
     // prose, and the shared table is applied to prose.
+    CREDENTIAL_SHAPES_IN_REF = (ref) =>
+      this.redaction.redactCredentialShapes(ref).redactionCount > 0;
     if (result.source_ref != null && looksLikeCredentialBearingUrl(result.source_ref)) return;
     this.recordOrReport(sink, {
       evidence_id: crypto.randomUUID(),

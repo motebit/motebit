@@ -142,7 +142,7 @@ const SECRET_PATTERNS: {
   // misses, because it allows only one separator.
   {
     pattern:
-      /\b(?:(?:sk|pk|rk)-(?:[A-Za-z0-9]+-)*[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g,
+      /\b(?:(?:sk|pk|rk)[-_](?:[A-Za-z0-9]+[-_])*[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g,
     label: "VENDOR_KEY",
     cloudEgress: true,
     shapeKeyed: true,

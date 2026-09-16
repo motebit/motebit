@@ -169,6 +169,29 @@ describe("PolicyGate.recordEvidence — the sibling artifact recordResult names"
     expect(sink.entries).toEqual([]);
   });
 
+  it("a credential hides in more places than a query parameter", () => {
+    // Three narrowings, and each gap was somewhere I had not looked
+    // rather than a rule that was wrong: the parameter name can carry a
+    // vendor prefix (`X-Amz-Signature`), the secret can sit in the path
+    // rather than the query, and it can ride in userinfo.
+    const { gate, sink, ctx, decision } = setup();
+    for (const ref of [
+      "https://b.s3.amazonaws.com/x?X-Amz-Signature=fe5f80f77d5fa3beca038a248ff027d0445342fe",
+      "https://storage.googleapis.com/b/o?X-Goog-Signature=abcdef0123456789abcdef0123",
+      "https://a.blob.core.windows.net/c/b?sv=2021&sig=AAAAAAAAAAAAAAAAAAAA",
+      "https://api.example.com/v1/keys/sk_live_AAAAAAAAAAAAAAAAAAAA/data",
+      "https://alice:hunter2hunter2@host.example.com/data",
+    ]) {
+      gate.recordEvidence(ctx, decision, "read_url", {
+        ok: true,
+        data: "an ordinary page",
+        source_digest: DIGEST,
+        source_ref: ref,
+      });
+    }
+    expect(sink.entries).toEqual([]);
+  });
+
   it("an ordinary query string is not mistaken for a credential", () => {
     // The rule keys on the parameter NAME and needs a value of real
     // length, so a search term or a page number does not cost anyone
@@ -180,7 +203,19 @@ describe("PolicyGate.recordEvidence — the sibling artifact recordResult names"
       source_digest: DIGEST,
       source_ref: "https://host/search?q=quarterly+revenue&page=2&session=1",
     });
-    expect(sink.entries).toHaveLength(1);
+    gate.recordEvidence(ctx, decision, "read_url", {
+      ok: true,
+      data: "page two",
+      source_digest: DIGEST,
+      source_ref: "https://api.example.com/items?cursor=abc123&limit=50",
+    });
+    gate.recordEvidence(ctx, decision, "read_url", {
+      ok: true,
+      data: "a filing",
+      source_digest: DIGEST,
+      source_ref: "https://example.gov/filings/q3-2026",
+    });
+    expect(sink.entries).toHaveLength(3);
   });
 
   it("catches vendor key formats the older pattern let through", () => {
@@ -263,6 +298,73 @@ describe("PolicyGate.recordEvidence — the sibling artifact recordResult names"
     // No locator: it is advisory, and a tool-agnostic gate cannot know
     // where in the projected text a tool's excerpt begins.
     expect(p.locator).toBeUndefined();
+  });
+
+  it("reports a store refusal before letting it through", () => {
+    // The store raises rather than dropping rows, so the failure has to
+    // land somewhere a person can see. Reported AND rethrown: the tool
+    // path absorbs it so a pointer cannot take down the work it
+    // describes, and this is what stops the absorbing being silence.
+    const warned: string[] = [];
+    const gate = new PolicyGate(
+      {},
+      undefined,
+      {
+        record: () => {
+          throw new Error("database is locked");
+        },
+        listForRun: () => [],
+      },
+      { warn: (m: string) => warned.push(m) },
+    );
+    const ctx = { turnId: "t", runId: "r" };
+    const decision = { callId: "c" } as unknown as Parameters<typeof gate.recordEvidence>[1];
+    expect(() =>
+      gate.recordEvidence(ctx, decision, "read_url", {
+        ok: true,
+        data: "body",
+        source_digest: DIGEST,
+      }),
+    ).toThrow(/database is locked/);
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain("read_url");
+  });
+
+  it("a logger can be swapped in after construction", () => {
+    const warned: string[] = [];
+    const gate = new PolicyGate({}, undefined, {
+      record: () => {
+        throw new Error("disk full");
+      },
+      listForRun: () => [],
+    });
+    gate.setEvidenceLogger({ warn: (m: string) => warned.push(m) });
+    const decision = { callId: "c" } as unknown as Parameters<typeof gate.recordEvidence>[1];
+    expect(() =>
+      gate.recordEvidence({ turnId: "t" }, decision, "read_url", {
+        ok: true,
+        data: "body",
+        source_digest: DIGEST,
+      }),
+    ).toThrow(/disk full/);
+    expect(warned).toHaveLength(1);
+  });
+
+  it("a decision that never went through the gate mints no pointer", () => {
+    // No callId means no audit row to sit beside, and a pointer that
+    // correlates with nothing is worse than an honest gap.
+    const { gate, sink, ctx } = setup();
+    gate.recordEvidence(
+      ctx,
+      {} as unknown as Parameters<typeof gate.recordEvidence>[1],
+      "read_url",
+      {
+        ok: true,
+        data: "body",
+        source_digest: DIGEST,
+      },
+    );
+    expect(sink.entries).toEqual([]);
   });
 
   it("records nothing when no sink is wired — silence, never a fabricated row", () => {

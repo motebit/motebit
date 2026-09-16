@@ -304,11 +304,14 @@ export async function handleRunsShow(config: CliConfig): Promise<void> {
       const anyProjection = evidence.some((e) => e.evidence.provenance?.projection != null);
       console.log(
         dim(
-          "  Re-fetch the source and hash the bytes to confirm the digest.\n" +
+          "  Re-fetch the source and hash its UTF-8 text to confirm the digest.\n" +
             (anyProjection
               ? "  Where a projection is named, apply that recipe to the bytes first —\n" +
                 "  the span lives in the recipe's output, not in the raw bytes.\n"
               : "  The span is located in the bytes directly.\n") +
+            "  (The digest is over the decoded text, so a source served in another\n" +
+            "  encoding will not match byte-for-byte — a producer-side convention,\n" +
+            "  named here rather than left for a stranger to discover.)\n" +
             "  It proves the bytes were read — never that what they say is true.",
         ),
       );

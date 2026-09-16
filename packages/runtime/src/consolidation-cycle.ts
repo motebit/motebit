@@ -750,11 +750,15 @@ async function prunePhase(
 async function flushPhase(
   deps: ConsolidationCycleDeps,
   ctx: PhaseContext,
-): Promise<{ flushedConversations: number; flushedToolAudits: number }> {
+): Promise<{ flushedConversations: number; flushedToolAudits: number; flushedEvidence: number }> {
   const defaultSensitivity = deps.preClassificationDefaultSensitivity ?? SensitivityLevel.Personal;
 
   let flushedConversations = 0;
   let flushedToolAudits = 0;
+  // Counted, like its siblings. The one store with a dedicated horizon
+  // was the one whose flushes reported nothing, so a cycle that signed
+  // certificates and deleted rows looked like a cycle that did nothing.
+  let flushedEvidence = 0;
 
   // Conversations — sensitivity floor only; no obligation floor on
   // conversation messages (the obligation discipline applies to the
@@ -850,19 +854,29 @@ async function flushPhase(
           // two-signed-claims-for-one-identifier defect this changeset
           // says it closed two rounds ago, reintroduced by splitting the
           // horizons. Asking first is the whole fix.
-          if (
-            deps.runEvidenceSink?.eraseForCall != null &&
-            (deps.runEvidenceSink.countForCall?.(candidate.callId) ?? 0) > 0
-          ) {
-            await deps.privacy.signFlushCert({
-              targetKind: "run_evidence",
-              targetId: `run_evidence:${candidate.callId}`,
-              sensitivity: recordSensitivity,
-              reason: lazyClassified
-                ? "retention_enforcement_post_classification"
-                : "self_enforcement",
-            });
+          // A sink that cannot COUNT still gets its rows erased.
+          //
+          // `?? 0` made the absent method read as "nothing there", so a
+          // sink implementing erase but not count would keep verbatim
+          // third-party content forever while its audit row was flushed
+          // — the inversion the block above argues against, arriving
+          // through the optional half of the port rather than the rule.
+          // Unknown means erase; the certificate is what must not be
+          // signed for a record nobody could confirm.
+          const evidenceCount = deps.runEvidenceSink?.countForCall?.(candidate.callId);
+          if (deps.runEvidenceSink?.eraseForCall != null && evidenceCount !== 0) {
+            if (evidenceCount != null && evidenceCount > 0) {
+              await deps.privacy.signFlushCert({
+                targetKind: "run_evidence",
+                targetId: `run_evidence:${candidate.callId}`,
+                sensitivity: recordSensitivity,
+                reason: lazyClassified
+                  ? "retention_enforcement_post_classification"
+                  : "self_enforcement",
+              });
+            }
             deps.runEvidenceSink.eraseForCall(candidate.callId);
+            flushedEvidence++;
           }
         } catch (err: unknown) {
           deps.logger.warn("flush phase: run_evidence erase failed", {
@@ -947,6 +961,7 @@ async function flushPhase(
           reason: "retention_enforcement_post_classification",
         });
         deps.runEvidenceSink.eraseForCall(callId);
+        flushedEvidence++;
       } catch (err: unknown) {
         deps.logger.warn("flush phase: run_evidence horizon erase failed", {
           callId,
@@ -956,7 +971,7 @@ async function flushPhase(
     }
   }
 
-  return { flushedConversations, flushedToolAudits };
+  return { flushedConversations, flushedToolAudits, flushedEvidence };
 }
 
 /**
