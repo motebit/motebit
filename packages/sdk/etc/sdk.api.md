@@ -27,6 +27,7 @@ import type { MotebitId } from '@motebit/protocol';
 import type { MotebitIdentity } from '@motebit/protocol';
 import type { NodeId } from '@motebit/protocol';
 import type { PlanStoreAdapter } from '@motebit/protocol';
+import type { RunEvidenceSink } from '@motebit/protocol';
 import { SensitivityLevel } from '@motebit/protocol';
 import type { ServiceListingStoreAdapter } from '@motebit/protocol';
 import type { SettlementStoreAdapter } from '@motebit/protocol';
@@ -905,6 +906,7 @@ export interface StorageAdapters {
     memoryStorage: MemoryStorageAdapter;
     // (undocumented)
     planStore?: PlanStoreAdapter;
+    runEvidenceSink?: RunEvidenceSink;
     // (undocumented)
     serviceListingStore?: ServiceListingStoreAdapter;
     // (undocumented)

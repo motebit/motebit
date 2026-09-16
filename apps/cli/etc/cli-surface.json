@@ -51,7 +51,8 @@
     "run": [],
     "runs": [
       "ack",
-      "list"
+      "list",
+      "show"
     ],
     "schema": [],
     "seed": [],

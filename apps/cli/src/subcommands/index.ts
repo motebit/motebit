@@ -20,7 +20,7 @@ export {
   handleApprovalShow,
 } from "./approvals.js";
 export { handleAttest } from "./attest.js";
-export { handleRunsList, handleRunsAck } from "./runs.js";
+export { handleRunsList, handleRunsAck, handleRunsShow } from "./runs.js";
 export { handleHalt, handleResume, handleHaltStatus } from "./halt.js";
 export { handleCredentials } from "./credentials.js";
 export { handleDelegate } from "./delegate.js";

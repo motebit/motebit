@@ -3614,6 +3614,28 @@ export interface RoutingDecisionTranscript {
 }
 
 // @public
+export interface RunEvidenceEntry {
+    call_id: string;
+    evidence: EvidenceRef;
+    // (undocumented)
+    evidence_id: string;
+    // (undocumented)
+    recorded_at: number;
+    run_id?: string;
+    // (undocumented)
+    tool: string;
+    // (undocumented)
+    turn_id: string;
+}
+
+// @public
+export interface RunEvidenceSink {
+    listForRun(runId: string): RunEvidenceEntry[];
+    // (undocumented)
+    record(entry: RunEvidenceEntry): void;
+}
+
+// @public
 export const RUNTIME_ATTACH_AUDIENCE: TokenAudience;
 
 // @public

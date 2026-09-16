@@ -133,3 +133,118 @@ function formatRow(r: GoalRun): string {
   const note = r.note ?? "";
   return `  ${r.run_id.slice(0, 8).padEnd(10)}${r.goal_id.slice(0, 8).padEnd(10)}${status.padEnd(20)}${formatTimeAgo(r.started_at).padEnd(16)}${note.length > 60 ? note.slice(0, 59) + "…" : note}`;
 }
+
+/**
+ * `motebit runs show <run_id>` — what one unattended run actually did,
+ * and what of it a stranger could check without trusting this motebit.
+ *
+ * The three sections are deliberately separate, because they carry
+ * different weights of proof. The RESULT is what the motebit produced,
+ * and it is either signed or it is the motebit's word. The TOOL CALLS
+ * are attribution plus each tool's own verdict — never independent
+ * proof that anything happened outside. The EVIDENCE is the only part a
+ * third party can re-check: a content-addressed digest of bytes someone
+ * else can fetch, and a span those bytes contain.
+ *
+ * Empty sections say so in those terms. "No evidence recorded" is not
+ * "nothing was read" — a run whose tools never content-addressed what
+ * they retrieved leaves nothing to re-check, and saying otherwise would
+ * be the same overstatement this arc has spent itself removing.
+ */
+export async function handleRunsShow(config: CliConfig): Promise<void> {
+  const target = config.positionals[2];
+  if (target == null || target === "") {
+    console.error("Usage: motebit runs show <run_id>");
+    process.exit(1);
+  }
+  const motebitId = requireMotebitId(loadFullConfig());
+  const moteDb = await openMotebitDatabase(getDbPath(config.dbPath));
+  try {
+    const recent = moteDb.goalRunStore.listRecent(motebitId, 200);
+    const exact = recent.find((r) => r.run_id === target);
+    const prefixed = recent.filter((r) => r.run_id.startsWith(target));
+    if (exact == null && prefixed.length > 1) {
+      console.error(`Error: "${target}" matches ${prefixed.length} runs — name one exactly.`);
+      for (const r of prefixed) console.error(formatRow(r));
+      process.exit(1);
+    }
+    const run = exact ?? prefixed[0];
+    if (run == null) {
+      console.error(`Error: no run matching "${target}".`);
+      process.exit(1);
+    }
+
+    console.log(`Run ${run.run_id}`);
+    console.log(`  goal      ${run.goal_id}`);
+    console.log(`  status    ${describeStatus(run)}`);
+    console.log(`  started   ${new Date(run.started_at).toISOString()}`);
+    if (run.note != null && run.note !== "") console.log(`  note      ${run.note}`);
+
+    // --- Result, and whether it is signed ---
+    const outcome = moteDb.goalOutcomeStore
+      .listForGoal(run.goal_id, 50)
+      .find((o) => o.outcome_id === run.run_id);
+    console.log("\nResult");
+    if (outcome == null) {
+      console.log(dim("  none recorded — the run did not reach an outcome row."));
+    } else {
+      const body = outcome.response_full ?? outcome.summary;
+      if (body == null || body === "") {
+        console.log(dim("  empty."));
+      } else {
+        for (const line of body.split("\n")) console.log(`  ${line}`);
+        if (outcome.response_full == null) {
+          console.log(dim("  (summary only — this run predates full-result retention)"));
+        }
+      }
+      console.log(
+        outcome.signed_manifest != null
+          ? dim("  signed — verify with: motebit-verify content-artifact")
+          : dim("  NOT signed — this is the motebit's own account, not a signed artifact."),
+      );
+    }
+
+    // --- Tool calls: attribution, not proof ---
+    const calls = moteDb.toolAuditSink.queryByRunId?.(run.run_id) ?? [];
+    console.log(`\nTool calls (${calls.length})`);
+    if (calls.length === 0) {
+      console.log(dim("  none recorded."));
+    } else {
+      for (const c of calls) {
+        const verdict =
+          c.result == null ? "prepared; effect unknown" : c.result.ok ? "ok" : "failed";
+        console.log(`  ${c.callId.slice(0, 8)}  ${c.tool.padEnd(20)}${verdict}`);
+      }
+      console.log(dim("  The tool's own verdict — attribution, never proof of an outside effect."));
+    }
+
+    // --- Evidence: the only re-checkable part ---
+    const evidence = moteDb.runEvidenceStore.listForRun(run.run_id);
+    console.log(`\nEvidence (${evidence.length})`);
+    if (evidence.length === 0) {
+      console.log(
+        dim(
+          "  none recorded. That is not 'nothing was read' — it means no tool in this run\n" +
+            "  content-addressed what it retrieved, so there is nothing to re-check.",
+        ),
+      );
+    } else {
+      for (const e of evidence) {
+        const p = e.evidence.provenance;
+        if (p == null) continue;
+        console.log(`  ${e.tool} · ${p.digest.algorithm}:${p.digest.value.slice(0, 16)}…`);
+        if (p.projection != null) console.log(dim(`    projection ${p.projection}`));
+        const preview = p.span.replace(/\s+/g, " ").slice(0, 100);
+        console.log(dim(`    span "${preview}${p.span.length > 100 ? "…" : ""}"`));
+      }
+      console.log(
+        dim(
+          "  Re-fetch the source, hash the bytes, and check the span is present.\n" +
+            "  It proves the bytes were read — never that what they say is true.",
+        ),
+      );
+    }
+  } finally {
+    moteDb.close();
+  }
+}

@@ -755,6 +755,32 @@ export class GoalScheduler {
           // rather than a completed outcome under a `running` row that the
           // next start would reclassify as interrupted.
           this.runStore.setStatus(runId, "completed");
+          // Sign the artifact, and keep it whole.
+          //
+          // Every other goal-running surface has done both since the
+          // goal-results arc; the daemon — the one surface that runs
+          // goals while nobody is watching — kept a 500-character
+          // summary, discarded the rest, and signed nothing. So the only
+          // record of unattended work was the motebit's own word for it,
+          // on exactly the surface where there is no one present to have
+          // seen otherwise.
+          //
+          // `signGoalArtifact` returns null when no identity is loaded.
+          // That stays null: an unsigned result recorded honestly is a
+          // record; a placeholder signature is a lie with a checksum.
+          const full = result.responseText;
+          let signedManifest: string | null = null;
+          try {
+            const manifest = await this.runtime.signGoalArtifact(full, {
+              goalId: goal.goal_id,
+              runId,
+            });
+            signedManifest = manifest == null ? null : JSON.stringify(manifest);
+          } catch (err: unknown) {
+            logLine(
+              `[scheduler] goal artifact could not be signed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
           // Record outcome (runId = outcome_id for audit correlation)
           this.goalOutcomeStore.add({
             outcome_id: runId,
@@ -762,10 +788,12 @@ export class GoalScheduler {
             motebit_id: this.motebitId,
             ran_at: Date.now(),
             status: "completed",
-            summary: result.responseText.slice(0, 500) || null,
+            summary: full.slice(0, 500) || null,
             tool_calls_made: result.toolCallsMade,
             memories_formed: result.memoriesFormed,
             error_message: null,
+            ...(full !== "" ? { response_full: full } : {}),
+            ...(signedManifest != null ? { signed_manifest: signedManifest } : {}),
           });
           this.goalStore.updateLastRun(goal.goal_id, Date.now());
           this.goalStore.resetFailures(goal.goal_id);
@@ -773,7 +801,7 @@ export class GoalScheduler {
           // Emit goal_executed (success variant) — spec §5.2.
           void this.runtime.goals.executed({
             goal_id: goal.goal_id,
-            summary: result.responseText.slice(0, 200),
+            summary: full.slice(0, 200),
             tool_calls: result.toolCallsMade,
             memories: result.memoriesFormed,
           });

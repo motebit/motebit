@@ -39,6 +39,7 @@ import type {
   CredentialStoreAdapter,
   ApprovalStoreAdapter,
   HaltStoreAdapter,
+  RunEvidenceSink,
   MotebitIdentity,
   AuditRecord,
 } from "@motebit/protocol";
@@ -552,6 +553,12 @@ export interface StorageAdapters {
    * unenforced. The daemon always supplies one.
    */
   haltStore?: HaltStoreAdapter;
+  /**
+   * Where a run's re-checkable evidence pointers are kept. Optional: a
+   * surface without one records no evidence, which every reader must
+   * render as "none recorded" and never as "nothing was read".
+   */
+  runEvidenceSink?: RunEvidenceSink;
 }
 
 // === Credential & Verification Boundaries ===

@@ -7,6 +7,7 @@ import type {
   TurnContext,
   InjectionWarning,
   ApprovalQuorum,
+  RunEvidenceSink,
 } from "@motebit/protocol";
 import { classifyTool, isToolAllowed } from "./risk-model.js";
 import { BudgetEnforcer } from "./budget.js";
@@ -94,6 +95,17 @@ export const DEFAULT_POLICY: PolicyConfig = {
  * - Enforces budgets (calls, time, cost)
  * - Emits audit entries for every decision
  */
+/**
+ * How much of a tool's returned text is kept as the re-checkable span.
+ *
+ * A pointer exists to be re-checked, not to store the document — and a
+ * prefix of a substring is still a substring, so bounding costs the law
+ * nothing. Wide enough to identify WHICH record was read when a person
+ * re-fetches it; far short of keeping the record itself, which would
+ * put retrieved content under a retention policy it never entered.
+ */
+const EVIDENCE_SPAN_MAX_CHARS = 512;
+
 export class PolicyGate {
   private config: PolicyConfig;
   private budget: BudgetEnforcer;
@@ -101,6 +113,7 @@ export class PolicyGate {
   private sanitizer: ContentSanitizer;
   readonly audit: AuditLogger;
   private profileCache = new Map<string, ToolRiskProfile>();
+  private evidenceSink: RunEvidenceSink | null = null;
 
   constructor(config?: Partial<PolicyConfig>, auditSink?: AuditLogSink) {
     // Deep-copy config to prevent external mutation
@@ -118,6 +131,65 @@ export class PolicyGate {
     this.redaction = new RedactionEngine();
     this.sanitizer = new ContentSanitizer();
     this.audit = new AuditLogger(auditSink);
+  }
+
+  /**
+   * Wire the sibling record that `recordResult`'s contract names: where
+   * a run's re-checkable evidence pointers go. A gate without one
+   * records no evidence, and every reader must render that as "none
+   * recorded", never as "nothing was read".
+   */
+  setEvidenceSink(sink: RunEvidenceSink | null): void {
+    this.evidenceSink = sink;
+  }
+
+  /**
+   * Mint the evidence pointer for a tool call that content-addressed
+   * what it read, and nothing otherwise.
+   *
+   * The span is the tool's OWN returned text, not a model's account of
+   * it. `ToolResult.source_digest`'s contract is that its presence means
+   * `data` is either a verbatim span of the raw bytes or the output of
+   * the named byte-deterministic recipe over them — so `data` is a
+   * substring of `projection(bytes)` by construction, which is exactly
+   * the law `verifyEvidenceProvenance` applies. A span nobody fetched
+   * cannot get in here, because the only writer is the fetch itself.
+   *
+   * Bounded, because a pointer is for re-checking, not for storing the
+   * document: a prefix of a substring is still a substring, and
+   * `locator` says which prefix. Absent digest, absent evidence — never
+   * a bare claim this producer cannot back.
+   */
+  recordEvidence(
+    ctx: Pick<TurnContext, "turnId" | "runId">,
+    decision: PolicyDecision,
+    tool: string,
+    result: ToolResult,
+  ): void {
+    if (this.evidenceSink == null) return;
+    if (decision.callId == null) return;
+    if (!result.ok || result.source_digest == null) return;
+    if (typeof result.data !== "string" || result.data === "") return;
+
+    const span = result.data.slice(0, EVIDENCE_SPAN_MAX_CHARS);
+    this.evidenceSink.record({
+      evidence_id: crypto.randomUUID(),
+      ...(ctx.runId != null ? { run_id: ctx.runId } : {}),
+      turn_id: ctx.turnId,
+      call_id: decision.callId,
+      tool,
+      recorded_at: Date.now(),
+      evidence: {
+        kind: "tool_result",
+        ref: decision.callId,
+        provenance: {
+          digest: result.source_digest,
+          ...(result.source_projection != null ? { projection: result.source_projection } : {}),
+          span,
+          locator: { start: 0, end: span.length },
+        },
+      },
+    });
   }
 
   // === Configuration ===

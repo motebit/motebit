@@ -155,6 +155,11 @@ export function buildStorageAdapters(moteDb: MotebitDatabase): StorageAdapters {
     credentialStore: moteDb.credentialStore,
     approvalStore: moteDb.approvalStore,
     haltStore: moteDb.haltStore,
+    // Where the pointers a returning owner re-checks are kept. The
+    // daemon is the surface that runs goals with nobody watching, so it
+    // is the one that most needs its work to be checkable rather than
+    // taken on trust.
+    runEvidenceSink: moteDb.runEvidenceStore,
   };
 }
 

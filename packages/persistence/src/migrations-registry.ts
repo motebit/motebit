@@ -512,4 +512,52 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       )`,
     ],
   },
+  {
+    version: 47,
+    description:
+      "run_evidence + signed/complete goal results — what a returning owner can re-check",
+    statements: [
+      // The sibling artifact `PolicyGate.recordResult`'s contract names:
+      // a pointer to evidence from the affected system, never inferred
+      // from the tool's own verdict. One row per content-addressed read,
+      // written by the fetch itself — so a span nobody retrieved cannot
+      // be in here, whatever a later summary says.
+      //
+      // `span` is bounded at the producer; a prefix of a substring is
+      // still a substring, so the re-check law is unaffected and the
+      // retrieved document never lands in a store it was not admitted
+      // to. `projection` absent means the span sits over the raw bytes
+      // directly; absent `projection_class` means spec-reproducible,
+      // which is the strong rung — the weak one is opt-in and can never
+      // be claimed by omission.
+      `CREATE TABLE IF NOT EXISTS run_evidence (
+        evidence_id TEXT PRIMARY KEY,
+        run_id TEXT,
+        turn_id TEXT NOT NULL,
+        call_id TEXT NOT NULL,
+        tool TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        ref TEXT NOT NULL,
+        digest_algorithm TEXT NOT NULL,
+        digest_value TEXT NOT NULL,
+        projection TEXT,
+        projection_class TEXT,
+        span TEXT NOT NULL,
+        locator_start INTEGER,
+        locator_end INTEGER,
+        recorded_at INTEGER NOT NULL
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_run_evidence_run ON run_evidence (run_id, recorded_at)",
+      "CREATE INDEX IF NOT EXISTS idx_run_evidence_call ON run_evidence (call_id)",
+      // Parity with desktop and mobile, which added both columns in
+      // their own per-surface registries. The shared schema — the one
+      // the CLI daemon uses, the surface that actually runs goals
+      // unattended — never did, so the daemon kept a 500-character
+      // summary and discarded the artifact it had just produced. A
+      // result that is not kept whole cannot be signed, and a result
+      // that is not signed is the motebit's word for what it did.
+      "ALTER TABLE goal_outcomes ADD COLUMN response_full TEXT",
+      "ALTER TABLE goal_outcomes ADD COLUMN signed_manifest TEXT",
+    ],
+  },
 ];

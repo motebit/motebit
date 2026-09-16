@@ -408,6 +408,18 @@ export interface LoopPolicyGate {
    * loop calls it right after `tools.execute` returns or throws. Optional
    * for duck-typed gates; the real `PolicyGate` implements it.
    */
+  /**
+   * Record the re-checkable evidence pointer for a call that content-
+   * addressed what it read. Called right after `recordResult`, with the
+   * tool's whole result rather than a verdict, because the digest and
+   * the text live there. Optional for duck-typed gates.
+   */
+  recordEvidence?(
+    ctx: TurnContext,
+    decision: PolicyDecision,
+    tool: string,
+    result: ToolResult,
+  ): void;
   recordResult?(
     ctx: TurnContext,
     decision: PolicyDecision,
@@ -1450,6 +1462,14 @@ export async function* runTurnStreaming(
           result.ok,
           Date.now() - dispatchedAt,
         );
+        // The sibling artifact the completion row's own contract names:
+        // a pointer to evidence from the affected system, never inferred
+        // from that row. Minted here, beside the result, because this is
+        // where the tool's content-addressed bytes still exist — by the
+        // time a summary is written they are gone, and a span nobody
+        // fetched must not be able to enter the record. No-ops unless the
+        // tool attested a digest.
+        deps.policyGate.recordEvidence?.(turnCtx, decision, toolCall.name, result);
         turnCtx = deps.policyGate.recordToolCall(turnCtx);
 
         // Project the tool result into the AI-visible shape BEFORE

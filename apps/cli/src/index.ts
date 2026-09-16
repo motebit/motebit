@@ -87,6 +87,7 @@ import {
   handleApprovalDeny,
   handleRunsList,
   handleRunsAck,
+  handleRunsShow,
   handleHalt,
   handleResume,
   handleHaltStatus,
@@ -415,8 +416,10 @@ async function main(): Promise<void> {
       await handleRunsList(config);
     } else if (runsCmd === "ack") {
       await handleRunsAck(config);
+    } else if (runsCmd === "show") {
+      await handleRunsShow(config);
     } else {
-      console.error("Usage: motebit runs [list|ack <run_id> --allow-fresh-run]");
+      console.error("Usage: motebit runs [list|show <run_id>|ack <run_id> --allow-fresh-run]");
       process.exit(1);
     }
     return;

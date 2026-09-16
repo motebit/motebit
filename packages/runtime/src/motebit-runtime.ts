@@ -1048,6 +1048,10 @@ export class MotebitRuntime {
     // Approval store — persistence-backed quorum state (source of truth for multi-party approval)
     this.approvalStore = adapters.storage.approvalStore ?? null;
     this.haltStore = adapters.storage.haltStore ?? null;
+    // Handed to the gate rather than held here: the gate is where a tool
+    // result's content-addressed bytes are still in hand, and where the
+    // completion row it sits beside is written.
+    this.policy.setEvidenceSink(adapters.storage.runEvidenceSink ?? null);
 
     // Agent graph — algebraic routing substrate
     this.agentGraph = new AgentGraphManager(

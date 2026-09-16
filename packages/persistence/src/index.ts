@@ -37,6 +37,10 @@ import type {
   PolicyDecision,
   HaltRequest,
   HaltStoreAdapter,
+  RunEvidenceEntry,
+  RunEvidenceSink,
+  DigestAlgorithm,
+  ProjectionClass,
   HaltAcknowledgement,
   ApprovalItem,
   ApprovalStatus,
@@ -1437,6 +1441,23 @@ export interface GoalOutcome {
   memories_formed: number;
   error_message: string | null;
   tokens_used?: number;
+  /**
+   * The result text WHOLE, not the 500-character `summary`.
+   *
+   * `summary` is for a table row; this is the artifact. A daemon that
+   * kept only the summary discarded the thing it had just produced, so
+   * there was nothing left to sign and nothing for a returning owner to
+   * read — the motebit's word for what it did was the only record.
+   */
+  response_full?: string;
+  /**
+   * The serialized `ContentArtifactManifest` over `response_full`, or
+   * absent when this surface could not sign (no identity loaded).
+   *
+   * Absent means unsigned, and every reader must say so rather than
+   * imply a signature it does not have.
+   */
+  signed_manifest?: string;
 }
 
 interface GoalOutcomeRow {
@@ -1450,6 +1471,8 @@ interface GoalOutcomeRow {
   memories_formed: number;
   error_message: string | null;
   tokens_used: number | null;
+  response_full: string | null;
+  signed_manifest: string | null;
 }
 
 function rowToGoalOutcome(row: GoalOutcomeRow): GoalOutcome {
@@ -1464,6 +1487,8 @@ function rowToGoalOutcome(row: GoalOutcomeRow): GoalOutcome {
     memories_formed: row.memories_formed,
     error_message: row.error_message,
     ...(row.tokens_used != null ? { tokens_used: row.tokens_used } : {}),
+    ...(row.response_full != null ? { response_full: row.response_full } : {}),
+    ...(row.signed_manifest != null ? { signed_manifest: row.signed_manifest } : {}),
   };
 }
 
@@ -1475,8 +1500,8 @@ export class SqliteGoalOutcomeStore {
   constructor(db: DatabaseDriver) {
     this.stmtAdd = db.prepare(
       `INSERT OR REPLACE INTO goal_outcomes
-       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full, signed_manifest)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtListForGoal = db.prepare(
       `SELECT * FROM goal_outcomes WHERE goal_id = ? ORDER BY ran_at DESC LIMIT ?`,
@@ -1498,6 +1523,8 @@ export class SqliteGoalOutcomeStore {
       outcome.memories_formed,
       outcome.error_message,
       outcome.tokens_used ?? null,
+      outcome.response_full ?? null,
+      outcome.signed_manifest ?? null,
     );
   }
 
@@ -1509,6 +1536,111 @@ export class SqliteGoalOutcomeStore {
   listRecent(motebitId: string, limit = 10): GoalOutcome[] {
     const rows = this.stmtListRecent.all(motebitId, limit) as GoalOutcomeRow[];
     return rows.map(rowToGoalOutcome);
+  }
+}
+
+// === Run evidence (what a returning owner can re-check) ===
+
+interface RunEvidenceRow {
+  evidence_id: string;
+  run_id: string | null;
+  turn_id: string;
+  call_id: string;
+  tool: string;
+  kind: string;
+  ref: string;
+  digest_algorithm: string;
+  digest_value: string;
+  projection: string | null;
+  projection_class: string | null;
+  span: string;
+  locator_start: number | null;
+  locator_end: number | null;
+  recorded_at: number;
+}
+
+function rowToRunEvidence(row: RunEvidenceRow): RunEvidenceEntry {
+  return {
+    evidence_id: row.evidence_id,
+    ...(row.run_id != null ? { run_id: row.run_id } : {}),
+    turn_id: row.turn_id,
+    call_id: row.call_id,
+    tool: row.tool,
+    recorded_at: row.recorded_at,
+    evidence: {
+      kind: row.kind,
+      ref: row.ref,
+      provenance: {
+        digest: {
+          // Carried as stored. The law compares the digest VALUE and
+          // does not dispatch on the algorithm, so a row written by a
+          // future producer under another algorithm reads back
+          // faithfully and fails the re-check rather than being
+          // silently relabelled here.
+          algorithm: row.digest_algorithm as DigestAlgorithm,
+          value: row.digest_value,
+        },
+        ...(row.projection != null ? { projection: row.projection } : {}),
+        ...(row.projection_class != null
+          ? { projectionClass: row.projection_class as ProjectionClass }
+          : {}),
+        span: row.span,
+        ...(row.locator_start != null && row.locator_end != null
+          ? { locator: { start: row.locator_start, end: row.locator_end } }
+          : {}),
+      },
+    },
+  };
+}
+
+/**
+ * Durable run evidence (migration #47). Implements `RunEvidenceSink`.
+ *
+ * Append-only by construction: there is no update statement. A pointer
+ * is a record of what was read at a moment, and a record that can be
+ * edited after the fact is not evidence.
+ */
+export class SqliteRunEvidenceStore implements RunEvidenceSink {
+  private stmtRecord: PreparedStatement;
+  private stmtListForRun: PreparedStatement;
+
+  constructor(db: DatabaseDriver) {
+    this.stmtRecord = db.prepare(
+      `INSERT OR IGNORE INTO run_evidence
+       (evidence_id, run_id, turn_id, call_id, tool, kind, ref,
+        digest_algorithm, digest_value, projection, projection_class,
+        span, locator_start, locator_end, recorded_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmtListForRun = db.prepare(
+      `SELECT * FROM run_evidence WHERE run_id = ? ORDER BY recorded_at ASC`,
+    );
+  }
+
+  record(entry: RunEvidenceEntry): void {
+    const p = entry.evidence.provenance;
+    if (p == null) return;
+    this.stmtRecord.run(
+      entry.evidence_id,
+      entry.run_id ?? null,
+      entry.turn_id,
+      entry.call_id,
+      entry.tool,
+      entry.evidence.kind,
+      entry.evidence.ref,
+      p.digest.algorithm,
+      p.digest.value,
+      p.projection ?? null,
+      p.projectionClass ?? null,
+      p.span,
+      p.locator?.start ?? null,
+      p.locator?.end ?? null,
+      entry.recorded_at,
+    );
+  }
+
+  listForRun(runId: string): RunEvidenceEntry[] {
+    return (this.stmtListForRun.all(runId) as RunEvidenceRow[]).map(rowToRunEvidence);
   }
 }
 
@@ -3377,6 +3509,7 @@ export interface MotebitDatabase {
   approvalStore: SqliteApprovalStore;
   goalRunStore: SqliteGoalRunStore;
   haltStore: SqliteHaltStore;
+  runEvidenceStore: SqliteRunEvidenceStore;
   commandReplayStore: SqliteCommandReplayStore;
   conversationStore: SqliteConversationStore;
   planStore: SqlitePlanStore;
@@ -3416,6 +3549,7 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   const approvalStore = new SqliteApprovalStore(driver);
   const goalRunStore = new SqliteGoalRunStore(driver);
   const haltStore = new SqliteHaltStore(driver);
+  const runEvidenceStore = new SqliteRunEvidenceStore(driver);
   const commandReplayStore = new SqliteCommandReplayStore(driver);
   const conversationStore = new SqliteConversationStore(driver);
   const planStore = new SqlitePlanStore(driver);
@@ -3442,6 +3576,7 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     approvalStore,
     goalRunStore,
     haltStore,
+    runEvidenceStore,
     commandReplayStore,
     conversationStore,
     planStore,

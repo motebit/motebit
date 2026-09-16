@@ -6,7 +6,7 @@ import type { MemorySource } from "./memory-source.js";
 // Local bindings for `Citation.provenance` + the producer-side `source_digest`
 // fields below (re-exported with the rest of the evidence-provenance vocabulary
 // near the bottom of this barrel).
-import type { EvidenceProvenance, DigestRef } from "./evidence-provenance.js";
+import type { EvidenceProvenance, EvidenceRef, DigestRef } from "./evidence-provenance.js";
 
 // === Branded ID Types ===
 //
@@ -3316,6 +3316,61 @@ export interface AuditLogSink {
    * decision 7. Optional — paired with `enumerateForFlush`.
    */
   erase?(callId: string): void;
+}
+
+// ── Run evidence ───────────────────────────────────────────────────
+// What a returning owner can RE-CHECK, as opposed to what the motebit
+// says it did.
+//
+// `PolicyGate.recordResult` writes the tool's own verdict, and its
+// contract says plainly what that verdict is not: "attribution + the
+// tool's report, not an independent verification of the external
+// effect — a claimed result should link to evidence from the affected
+// system; that pointer is a sibling artifact, never inferred from this
+// row." This is that sibling artifact.
+//
+// The pointer is minted by the code path that PRODUCED the evidence —
+// a fetch tool that content-addressed the bytes it read — and never by
+// a model summarizing afterwards. That is the same
+// attribution-because-produced rule the accrual basis follows: a span
+// nobody fetched cannot be placed into the record, because the only
+// writer is the fetch itself. See docs/doctrine/evidence-provenance.md.
+
+/**
+ * One re-checkable pointer produced during a run.
+ *
+ * Emitted ONLY when the producing tool content-addressed its bytes
+ * (`ToolResult.source_digest`). A tool that did not retrieve anything
+ * emits nothing — absence is honest, and a bare pointer with no
+ * provenance is never a claim the producer cannot back.
+ */
+export interface RunEvidenceEntry {
+  evidence_id: string;
+  /** The goal run this belongs to, when the call ran under one. */
+  run_id?: string;
+  turn_id: string;
+  /** The audit row this evidence sits beside — the join to the tool call. */
+  call_id: string;
+  tool: string;
+  recorded_at: number;
+  /**
+   * The re-checkable pointer itself. `ref` names WHAT was read in the
+   * producing tool's own terms (a URL); `provenance` is what a stranger
+   * re-verifies with `verifyEvidenceProvenance` and no trust in us.
+   */
+  evidence: EvidenceRef;
+}
+
+/**
+ * Where run evidence is kept. Mirrors `ToolAuditSink`'s shape: the
+ * runtime holds the port, a surface supplies the implementation. A
+ * surface that wires none records no evidence, which every reader must
+ * render as "none recorded", never as "nothing was read".
+ */
+export interface RunEvidenceSink {
+  record(entry: RunEvidenceEntry): void;
+  /** Every pointer produced by one run, oldest first. */
+  listForRun(runId: string): RunEvidenceEntry[];
 }
 
 export interface PlanStoreAdapter {
