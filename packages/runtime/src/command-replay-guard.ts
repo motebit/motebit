@@ -70,9 +70,19 @@ export class CommandReplayGuard {
     return false;
   }
 
-  /** Signatures currently remembered. For tests and diagnostics. */
-  get size(): number {
-    return this.seen.size;
+  /**
+   * Signatures remembered IN THIS PROCESS. Zero whenever a shared store
+   * is wired, because the memory lives there — a diagnostic reading
+   * this to confirm the guard is working would otherwise be measuring
+   * nothing in exactly the production configuration.
+   */
+  get inMemorySize(): number {
+    return this.store ? 0 : this.seen.size;
+  }
+
+  /** True when this guard delegates to shared, durable memory. */
+  get isShared(): boolean {
+    return this.store !== undefined;
   }
 
   private prune(now: number): void {

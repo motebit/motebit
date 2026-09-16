@@ -269,11 +269,18 @@ export async function resolveAttachedAct(
       // refusal has to hold here: otherwise a frontend frame could
       // resolve a queued R3/R4 call that the daemon then executes,
       // routing around the consent surface rather than through it.
-      if (command === "approvals" && /^\s*(approve|deny)\b/i.test(args ?? "")) {
+      // `resume` restores unattended autonomy wholesale — a strictly
+      // larger authority act than deciding one queued call — and `halt`
+      // belongs with it as the other half of the same control.
+      if (
+        command === "resume" ||
+        command === "halt" ||
+        (command === "approvals" && /^\s*(approve|deny)\b/i.test(args ?? ""))
+      ) {
         return {
           ok: false,
           error:
-            "deciding an approval requires a consent surface — the attached read/act surface carries no approval channel; decide from a chat-connected surface or the phone",
+            "granting or withdrawing authority requires a consent surface — the attached read/act surface carries no approval channel; use a chat-connected surface, the phone, or the `motebit` CLI",
         };
       }
       // Relay-backed commands answer with the command layer's own

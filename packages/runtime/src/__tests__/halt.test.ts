@@ -6,7 +6,12 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
 import type { PlatformAdapters } from "../index";
 import { EventType } from "@motebit/sdk";
-import type { HaltRequest, HaltStoreAdapter, EventStoreAdapter } from "@motebit/sdk";
+import type {
+  HaltRequest,
+  HaltStoreAdapter,
+  HaltAcknowledgement,
+  EventStoreAdapter,
+} from "@motebit/sdk";
 
 /** Minimal in-memory halt store — the port, not the SQLite implementation. */
 class MemoryHaltStore implements HaltStoreAdapter {
@@ -14,12 +19,29 @@ class MemoryHaltStore implements HaltStoreAdapter {
   request(h: HaltRequest): void {
     this.rows.set(h.halt_id, { ...h });
   }
-  acknowledge(id: string, ack: string, at = Date.now()): void {
+  acks = new Map<string, HaltAcknowledgement[]>();
+  acknowledge(id: string, executorId: string, ack: string, at = Date.now()): void {
+    const list = this.acks.get(id) ?? [];
+    if (!list.some((a) => a.executor_id === executorId)) {
+      list.push({
+        halt_id: id,
+        executor_id: executorId,
+        acknowledged_at: at,
+        acknowledgement: ack,
+      });
+      this.acks.set(id, list);
+    }
     const r = this.rows.get(id);
     if (r && r.acknowledged_at == null) {
       r.acknowledged_at = at;
       r.acknowledgement = ack;
     }
+  }
+  hasAcknowledged(id: string, executorId: string): boolean {
+    return (this.acks.get(id) ?? []).some((a) => a.executor_id === executorId);
+  }
+  acknowledgements(id: string): HaltAcknowledgement[] {
+    return this.acks.get(id) ?? [];
   }
   lift(id: string, at = Date.now()): boolean {
     const r = this.rows.get(id);
@@ -192,5 +214,64 @@ describe("MotebitRuntime — halt", () => {
     expect(await runtime.honorHalts()).toEqual([]);
     expect(runtime.haltInForce()).toBeNull();
     expect(await runtime.liftHalt("anything")).toBe(false);
+  });
+});
+
+describe("halt honoring is per process, not per halt", () => {
+  it("one process acknowledging does not stop another from honoring — the sixth disguise of one bug", async () => {
+    // `motebit run` and `motebit serve` share a machine, a motebit and a
+    // database. When acknowledgement was a single column, whichever
+    // ticked first marked the halt honored for both; the other then
+    // skipped it entirely, never ran its stopper, and its goal run
+    // continued to the wall clock while the phone was told "Stopped".
+    const haltStore = new MemoryHaltStore();
+    const mk = (label: string) => {
+      const storage = createInMemoryStorage();
+      const rt = new MotebitRuntime(
+        { motebitId: "mote-halt", tickRateHz: 0 },
+        { storage: { ...storage, haltStore }, renderer: new NullRenderer() },
+      );
+      const stopped: string[] = [];
+      rt.onHalt(() => {
+        stopped.push(label);
+        return `${label} stopped`;
+      });
+      return { rt, stopped };
+    };
+    const serve = mk("serve");
+    const daemon = mk("daemon");
+
+    await serve.rt.requestHalt({ origin: "remote", reason: "stop" });
+    await serve.rt.honorHalts();
+    expect(serve.stopped).toEqual(["serve"]);
+    // The daemon has NOT stopped yet, and the record must not pretend it has.
+    expect(daemon.stopped).toEqual([]);
+
+    await daemon.rt.honorHalts();
+    expect(daemon.stopped).toEqual(["daemon"]);
+
+    const [halt] = haltStore.listActive("mote-halt");
+    expect(haltStore.acknowledgements(halt!.halt_id).map((a) => a.acknowledgement)).toEqual([
+      "serve stopped",
+      "daemon stopped",
+    ]);
+  });
+
+  it("each process still honors only once", async () => {
+    const haltStore = new MemoryHaltStore();
+    const storage = createInMemoryStorage();
+    const rt = new MotebitRuntime(
+      { motebitId: "mote-halt", tickRateHz: 0 },
+      { storage: { ...storage, haltStore }, renderer: new NullRenderer() },
+    );
+    let calls = 0;
+    rt.onHalt(() => {
+      calls++;
+      return "stopped";
+    });
+    await rt.requestHalt({ origin: "local" });
+    await rt.honorHalts();
+    await rt.honorHalts();
+    expect(calls).toBe(1);
   });
 });

@@ -1466,8 +1466,20 @@ export async function handleServe(config: CliConfig): Promise<void> {
           void runtimeRef.current?.honorHalts().catch((err: unknown) => {
             log(`[halt] honoring failed: ${err instanceof Error ? err.message : String(err)}`);
           });
+          // Not claimed, and deliberately not answered with an invented
+          // frame: the relay's inbound vocabulary has `task_claim` and no
+          // decline verb, so a `task_reject` would be silently dropped —
+          // the appearance of a refusal without one, which is the exact
+          // shape of dishonesty this whole arc exists to remove.
+          //
+          // Known limitation, named rather than papered over: the relay
+          // re-dispatches an unclaimed task, so it will come back and be
+          // refused again until it times out, and the submitter learns
+          // only from that timeout. Giving them a real answer needs a
+          // decline verb in the relay's task protocol, which belongs to
+          // the task arc, not to halt.
           log(
-            `Agent task ${task.task_id.slice(0, 8)}... refused — halted (${serveHalt.halt_id.slice(0, 8)})`,
+            `Agent task ${task.task_id.slice(0, 8)}... not claimed — halted (${serveHalt.halt_id.slice(0, 8)}); it will be re-dispatched until it times out`,
           );
           return;
         }

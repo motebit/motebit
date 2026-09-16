@@ -2263,6 +2263,17 @@ export interface GuestRail extends SettlementRail {
     readonly supportsWithdraw: boolean;
 }
 
+// @public
+export interface HaltAcknowledgement {
+    // (undocumented)
+    acknowledged_at: number;
+    // (undocumented)
+    acknowledgement: string;
+    executor_id: string;
+    // (undocumented)
+    halt_id: string;
+}
+
 // @public (undocumented)
 export type HaltOrigin = "local" | "remote";
 
@@ -2284,10 +2295,12 @@ export interface HaltRequest {
 
 // @public
 export interface HaltStoreAdapter {
-    acknowledge(haltId: string, acknowledgement: string, at?: number): void;
+    acknowledge(haltId: string, executorId: string, acknowledgement: string, at?: number): void;
+    acknowledgements(haltId: string): HaltAcknowledgement[];
     activeFor(motebitId: string, goalId?: string): HaltRequest | null;
     // (undocumented)
     get(haltId: string): HaltRequest | null;
+    hasAcknowledged(haltId: string, executorId: string): boolean;
     lift(haltId: string, at?: number): boolean;
     listActive(motebitId: string): HaltRequest[];
     // (undocumented)

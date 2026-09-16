@@ -492,4 +492,24 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       "CREATE INDEX IF NOT EXISTS idx_command_replay_seen ON command_replay (seen_at)",
     ],
   },
+  {
+    version: 46,
+    description: "halt_acknowledgement — one row per executor, not one per halt",
+    statements: [
+      // `halt_state.acknowledged_at` modelled "the motebit stopped" as a
+      // single fact, but several processes can run unattended work for
+      // one motebit (`motebit run` + `motebit serve`, same machine, same
+      // database). The first to acknowledge marked the halt honored for
+      // all of them; every other process then skipped it and kept
+      // working while the surface reported "Stopped". Acknowledgement is
+      // per executor because stopping is.
+      `CREATE TABLE IF NOT EXISTS halt_acknowledgement (
+        halt_id TEXT NOT NULL,
+        executor_id TEXT NOT NULL,
+        acknowledged_at INTEGER NOT NULL,
+        acknowledgement TEXT NOT NULL,
+        PRIMARY KEY (halt_id, executor_id)
+      )`,
+    ],
+  },
 ];

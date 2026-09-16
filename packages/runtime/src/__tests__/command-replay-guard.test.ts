@@ -69,9 +69,9 @@ describe("CommandReplayGuard", () => {
   it("does not grow without bound", () => {
     const g = new CommandReplayGuard(1000);
     for (let i = 0; i < 50; i++) g.isReplay(`sig-${i}`, 1_000_000 + i);
-    expect(g.size).toBe(50);
+    expect(g.inMemorySize).toBe(50);
     // One call past the window prunes everything older.
     g.isReplay("later", 1_000_000 + 5000);
-    expect(g.size).toBe(1);
+    expect(g.inMemorySize).toBe(1);
   });
 });

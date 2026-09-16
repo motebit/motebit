@@ -133,10 +133,17 @@ async function sendRemote(config: CliConfig, command: string, args?: string): Pr
       // Name the failure for what it is. A command that did not arrive
       // did not stop anything, and saying otherwise is the one thing a
       // halt surface must never do.
+      // 504 is the one http status that means DELIVERED — the runtime
+      // had the command and did not answer inside the window, which is
+      // exactly when a halt is most likely to have been applied (the
+      // stopper racing a slow abort). Calling that "not delivered" would
+      // tell someone their motebit is still running when it has stopped.
       console.error(
-        err.kind === "http" || err.kind === "network"
-          ? `Not delivered: ${err.message}\nThe runtime did not answer, so nothing has been stopped remotely. A halt written locally (\`motebit halt\` without --remote) is in force on this machine regardless.`
-          : `Command failed: ${err.message}`,
+        err.status === 504
+          ? `Delivered, no answer yet: ${err.message}\nThe runtime received this command and did not reply in time. It may well have stopped — check \`motebit halt-status --remote\` rather than assuming either way.`
+          : err.kind === "http" || err.kind === "network"
+            ? `Not delivered: ${err.message}\nThe runtime did not answer, so nothing has been stopped remotely. A halt written locally (\`motebit halt\` without --remote) is in force on this machine regardless.`
+            : `Command failed: ${err.message}`,
       );
       process.exitCode = 1;
       return;
@@ -156,15 +163,24 @@ export async function handleHalt(config: CliConfig): Promise<void> {
     process.exit(1);
   }
   const reason = config.reason;
+  // `--remote` targets a runtime that may be on another machine, whose
+  // goals this database knows nothing about. Resolving locally would
+  // refuse a goal that exists THERE. The id travels as given, and the
+  // remote store's own validation refuses one that matches nothing —
+  // which is where that check belongs.
+  if (config.remote) {
+    await sendRemote(config, "halt", haltArgs(goalArg, reason));
+    return;
+  }
+
   const motebitId = requireMotebitId(loadFullConfig());
   const moteDb = await openMotebitDatabase(getDbPath(config.dbPath));
 
-  // Resolve the id BEFORE anything is recorded or sent. Every other
+  // Locally, resolve the id BEFORE anything is recorded. Every other
   // goal-targeting command accepts the 8-char prefix `motebit goal list`
   // prints, and the scope check downstream is an exact match — so an
   // unresolved prefix would write a halt that matches no goal, report a
-  // stop, and let the goal keep firing. A stop that reports stopping
-  // must have stopped something.
+  // stop, and let the goal keep firing.
   let goalId: string | undefined;
   if (goalArg != null) {
     const match = moteDb.goalStore
@@ -178,12 +194,6 @@ export async function handleHalt(config: CliConfig): Promise<void> {
       process.exit(1);
     }
     goalId = match.goal_id;
-  }
-
-  if (config.remote) {
-    moteDb.close();
-    await sendRemote(config, "halt", haltArgs(goalId, reason));
-    return;
   }
 
   try {

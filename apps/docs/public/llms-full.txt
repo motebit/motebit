@@ -6974,8 +6974,20 @@ happened to be written first. A halt that matched no goal would report a
 stop while the goal kept running, so that state cannot be recorded at
 all.
 
-`motebit serve` is covered too: a halted worker refuses relay-dispatched
-tasks, and says so.
+`motebit serve` is covered too: a halted worker does not claim
+relay-dispatched tasks. One limitation is worth stating plainly — the
+relay's task protocol has no decline verb, so an unclaimed task is
+re-dispatched and refused again until it times out, and the submitter
+learns only from that timeout. Answering them properly needs a decline
+verb, which belongs to the task protocol rather than to halt.
+
+**Several processes, several acknowledgements.** More than one process
+can run unattended work for one motebit — `motebit run` and
+`motebit serve` on the same machine, against the same database — and
+each stops different work. So each acknowledges for itself, and
+`halt-status` lists them. One process acknowledging never meant that
+everything had stopped; treating it as if it did let the other keep
+working under a surface that said "Stopped".
 
 **Requested is not stopped.** The record keeps two timestamps because they
 are two facts. `requested_at` is what you know when you ask;

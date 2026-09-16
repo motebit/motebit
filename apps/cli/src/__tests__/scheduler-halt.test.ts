@@ -66,6 +66,8 @@ function mockRuntime(
   opts: { pause?: boolean; holdStream?: Promise<void> } = {},
 ): Mock {
   const listeners = new Set<(h: HaltRequest) => string | Promise<string>>();
+  /** This mock stands for one process. */
+  const executorId = `test-${crypto.randomUUID().slice(0, 8)}`;
   const tools = new Map<string, ToolHandler>();
   let pending = false;
   const m: Mock = {
@@ -105,13 +107,15 @@ function mockRuntime(
     halts: db.haltStore,
     haltInForce: (goalId?: string) => db.haltStore.activeFor("mote-test", goalId),
     honorHalts: async () => {
+      // Per-executor, exactly as the real runtime does it: another
+      // process acknowledging says nothing about this one.
       const out: HaltRequest[] = [];
       for (const h of db.haltStore
         .listActive("mote-test")
-        .filter((r) => r.acknowledged_at == null)) {
+        .filter((r) => !db.haltStore.hasAcknowledged(r.halt_id, executorId))) {
         const parts: string[] = [];
         for (const l of listeners) parts.push(await l(h));
-        db.haltStore.acknowledge(h.halt_id, parts.join("; ") || "nothing was running");
+        db.haltStore.acknowledge(h.halt_id, executorId, parts.join("; ") || "nothing was running");
         out.push(db.haltStore.get(h.halt_id)!);
       }
       return out;

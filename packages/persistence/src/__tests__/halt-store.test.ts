@@ -57,16 +57,36 @@ describe("SqliteHaltStore", () => {
     expect(active?.acknowledged_at).toBeNull();
   });
 
-  it("acknowledge records what stopping entailed, and is one-way", () => {
+  it("acknowledge records what stopping entailed, and is one-way per executor", () => {
     db.haltStore.request(halt({ halt_id: "h1" }));
-    db.haltStore.acknowledge("h1", "aborted run 1a2b3c4d", 5000);
+    db.haltStore.acknowledge("h1", "daemon", "aborted run 1a2b3c4d", 5000);
     expect(db.haltStore.get("h1")).toMatchObject({
       acknowledged_at: 5000,
       acknowledgement: "aborted run 1a2b3c4d",
     });
-    // A second acknowledgement does not overwrite the first.
-    db.haltStore.acknowledge("h1", "something else", 9000);
+    // The same executor saying it twice does not rewrite its own record.
+    db.haltStore.acknowledge("h1", "daemon", "something else", 9000);
+    expect(db.haltStore.acknowledgements("h1")).toHaveLength(1);
     expect(db.haltStore.get("h1")?.acknowledgement).toBe("aborted run 1a2b3c4d");
+  });
+
+  it("acknowledgement is per EXECUTOR — one process stopping does not speak for another", () => {
+    // `motebit run` and `motebit serve` both run unattended work for one
+    // motebit against one database. When a single column stood in for
+    // both, whichever acknowledged first marked the halt honored, and
+    // the other skipped it and kept working while the surface said
+    // "Stopped".
+    db.haltStore.request(halt({ halt_id: "h1" }));
+    db.haltStore.acknowledge("h1", "serve", "no further relay tasks accepted", 5000);
+
+    expect(db.haltStore.hasAcknowledged("h1", "serve")).toBe(true);
+    expect(db.haltStore.hasAcknowledged("h1", "daemon")).toBe(false);
+
+    db.haltStore.acknowledge("h1", "daemon", "signalled abort of run 1a2b3c4d", 6000);
+    const acks = db.haltStore.acknowledgements("h1");
+    expect(acks.map((a) => a.executor_id)).toEqual(["serve", "daemon"]);
+    // The display column still names the first, and only the first.
+    expect(db.haltStore.get("h1")?.acknowledgement).toBe("no further relay tasks accepted");
   });
 
   it("lift removes it from force, and is idempotent-by-refusal", () => {

@@ -97,7 +97,14 @@ export async function cmdHalt(
   }
   if (halt == null) return { summary: "Halt could not be recorded." };
 
-  await runtime.honorHalts();
+  try {
+    await runtime.honorHalts();
+  } catch {
+    // The halt row is already written and in force. A storage failure
+    // while honoring must not be reported as "nothing was halted" — the
+    // record below is read either way and will say, correctly, that it
+    // is not yet acknowledged.
+  }
   // Read the record rather than the return value: `honorHalts` reports
   // only what THIS call acknowledged, so a halt the scheduler's own
   // phase 0 honored a moment earlier would otherwise be reported as

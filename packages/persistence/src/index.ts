@@ -37,6 +37,7 @@ import type {
   PolicyDecision,
   HaltRequest,
   HaltStoreAdapter,
+  HaltAcknowledgement,
   ApprovalItem,
   ApprovalStatus,
 } from "@motebit/sdk";
@@ -1582,10 +1583,23 @@ export class SqliteHaltStore implements HaltStoreAdapter {
   private stmtListActive: PreparedStatement;
   private stmtListRecent: PreparedStatement;
   private stmtGoalExists: PreparedStatement;
+  private stmtAckExecutor: PreparedStatement;
+  private stmtHasAck: PreparedStatement;
+  private stmtListAcks: PreparedStatement;
 
   constructor(db: DatabaseDriver) {
     this.stmtGoalExists = db.prepare(
       `SELECT goal_id FROM goals WHERE goal_id = ? AND motebit_id = ?`,
+    );
+    this.stmtAckExecutor = db.prepare(
+      `INSERT OR IGNORE INTO halt_acknowledgement (halt_id, executor_id, acknowledged_at, acknowledgement)
+       VALUES (?, ?, ?, ?)`,
+    );
+    this.stmtHasAck = db.prepare(
+      `SELECT 1 FROM halt_acknowledgement WHERE halt_id = ? AND executor_id = ?`,
+    );
+    this.stmtListAcks = db.prepare(
+      `SELECT * FROM halt_acknowledgement WHERE halt_id = ? ORDER BY acknowledged_at ASC`,
     );
     this.stmtRequest = db.prepare(
       `INSERT OR REPLACE INTO halt_state
@@ -1651,8 +1665,27 @@ export class SqliteHaltStore implements HaltStoreAdapter {
     return row === undefined ? null : rowToHalt(row);
   }
 
-  acknowledge(haltId: string, acknowledgement: string, at = Date.now()): void {
+  /**
+   * Record that ONE executor stopped. The per-executor row is the fact;
+   * `halt_state.acknowledged_at` is kept as the first acknowledgement
+   * for display, which is why that update is conditional on being null.
+   */
+  acknowledge(haltId: string, executorId: string, acknowledgement: string, at = Date.now()): void {
+    this.stmtAckExecutor.run(haltId, executorId, at, acknowledgement);
     this.stmtAcknowledge.run(at, acknowledgement, haltId);
+  }
+
+  hasAcknowledged(haltId: string, executorId: string): boolean {
+    return this.stmtHasAck.get(haltId, executorId) !== undefined;
+  }
+
+  acknowledgements(haltId: string): HaltAcknowledgement[] {
+    return (this.stmtListAcks.all(haltId) as HaltAcknowledgement[]).map((r) => ({
+      halt_id: r.halt_id,
+      executor_id: r.executor_id,
+      acknowledged_at: r.acknowledged_at,
+      acknowledgement: r.acknowledgement,
+    }));
   }
 
   lift(haltId: string, at = Date.now()): boolean {

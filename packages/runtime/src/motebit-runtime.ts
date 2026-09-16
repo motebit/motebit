@@ -662,6 +662,15 @@ export class MotebitRuntime {
    * began still gets a pass of its own.
    */
   private honorQueue: Promise<void> = Promise.resolve();
+  /**
+   * Identifies THIS PROCESS, not this device. A machine can run
+   * `motebit run` and `motebit serve` at once — same device id, same
+   * database, different unattended work — and each must honor a halt
+   * for itself. Keying acknowledgement by device would let whichever
+   * process got there first mark the halt honored for both, after which
+   * the other skipped it and kept working.
+   */
+  private readonly executorId = `${typeof process !== "undefined" && process.pid != null ? process.pid : "x"}-${crypto.randomUUID().slice(0, 8)}`;
   private _signingKeysErased = false;
   private _logger: { warn(message: string, context?: Record<string, unknown>): void };
   /**
@@ -2942,9 +2951,11 @@ export class MotebitRuntime {
 
   private async honorHaltsSerialized(): Promise<import("@motebit/sdk").HaltRequest[]> {
     if (!this.haltStore) return [];
+    // Per-executor, not per-halt: another process acknowledging says
+    // nothing about whether THIS process has stopped its own work.
     const pending = this.haltStore
       .listActive(this.motebitId)
-      .filter((h) => h.acknowledged_at == null);
+      .filter((h) => !this.haltStore!.hasAcknowledged(h.halt_id, this.executorId));
     const honored: import("@motebit/sdk").HaltRequest[] = [];
     for (const halt of pending) {
       const stopped: string[] = [];
@@ -2983,7 +2994,7 @@ export class MotebitRuntime {
       }
       const acknowledgement =
         stopped.filter((s) => s.length > 0).join("; ") || "nothing was running";
-      this.haltStore.acknowledge(halt.halt_id, acknowledgement);
+      this.haltStore.acknowledge(halt.halt_id, this.executorId, acknowledgement);
       const acknowledged = this.haltStore.get(halt.halt_id) ?? {
         ...halt,
         acknowledged_at: Date.now(),

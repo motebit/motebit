@@ -3443,17 +3443,34 @@ export interface HaltRequest {
   /** Free text the requester attached, shown wherever the halt is shown. */
   reason: string | null;
   /**
-   * When the motebit actually stopped. `null` means requested-not-yet-
-   * honored. Never set optimistically at request time.
+   * When the FIRST executor acknowledged. Display only.
+   *
+   * It is deliberately not the answer to "has the motebit stopped",
+   * because more than one process can run unattended work for one
+   * motebit — `motebit run` and `motebit serve` both do, on the same
+   * machine, against the same database. A single column standing in for
+   * N independent facts let the first process to acknowledge mark the
+   * halt honored for all of them, after which the others skipped it
+   * entirely and kept working while the surface said "Stopped". Ask
+   * `acknowledgements(halt_id)` who has actually stopped.
    */
   acknowledged_at: number | null;
-  /** What stopping actually entailed — e.g. "aborted run 1a2b3c4d". */
+  /** What the FIRST executor's stopping entailed. Display only. */
   acknowledgement: string | null;
   /** When a human lifted it. A lifted halt no longer blocks anything. */
   lifted_at: number | null;
 }
 
 export type HaltOrigin = "local" | "remote";
+
+/** One executor's account of stopping. See `HaltStoreAdapter.acknowledge`. */
+export interface HaltAcknowledgement {
+  halt_id: string;
+  /** The process that stopped — not the device; a machine can run several. */
+  executor_id: string;
+  acknowledged_at: number;
+  acknowledgement: string;
+}
 
 /**
  * Durable halt state. Mirrors `ApprovalStoreAdapter`'s shape: the
@@ -3462,8 +3479,18 @@ export type HaltOrigin = "local" | "remote";
 export interface HaltStoreAdapter {
   /** Record a request to stop. Not yet a stop — see `HaltRequest`. */
   request(halt: HaltRequest): void;
-  /** Record that the motebit has actually stopped, and what that took. */
-  acknowledge(haltId: string, acknowledgement: string, at?: number): void;
+  /**
+   * Record that ONE executor has stopped, and what that took.
+   *
+   * `executorId` identifies the process, not the device: two processes
+   * on one machine share a device id and must acknowledge separately,
+   * because each stops different work. Idempotent per executor.
+   */
+  acknowledge(haltId: string, executorId: string, acknowledgement: string, at?: number): void;
+  /** Has this executor already stopped for this halt? */
+  hasAcknowledged(haltId: string, executorId: string): boolean;
+  /** Every executor that has stopped for this halt, and what it stopped. */
+  acknowledgements(haltId: string): HaltAcknowledgement[];
   /** Lift a halt. Returns false when no un-lifted halt has that id. */
   lift(haltId: string, at?: number): boolean;
   /**
