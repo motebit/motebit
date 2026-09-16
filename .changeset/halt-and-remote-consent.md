@@ -42,3 +42,5 @@ Second review round (`/code-review 677 high`) — eight findings, two of which m
 - "No unattended runtime is connected" returns 404 rather than 500, so a consent surface can read it as "not delivered".
 - The structured halt scope requires a `goal_id` marker, so a reason like `{"deploy":"done"}` is no longer parsed and silently discarded.
 - The `args_hash` claim is narrowed to what is true: the remote surface carries it forward, it cannot verify it.
+
+And the test that would have caught it, added at the layer that defines the contract: the relay now pins that this route refuses a request with no bearer, refuses the `sync` audience (the exact mistake that made every phone command fail), and accepts `admin:query` — with `packages/relay-client` asserting the other half, that the client sends one. The two halves meet at the real middleware rather than at a stub that agreed with them.

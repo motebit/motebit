@@ -8,9 +8,15 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { SyncRelay } from "../index.js";
-import { generateKeypair, bytesToHex, signAgentCommandEnvelope } from "@motebit/crypto";
+import {
+  generateKeypair,
+  bytesToHex,
+  signAgentCommandEnvelope,
+  mintAudienceToken,
+} from "@motebit/crypto";
+import type { TokenAudience } from "@motebit/protocol";
 import type { KeyPair } from "@motebit/crypto";
-import { JSON_AUTH, createTestRelay } from "./test-helpers.js";
+import { JSON_AUTH, createTestRelay, createAgent } from "./test-helpers.js";
 
 const AGENT_ID = "36080ffe-cmd4-8000-a000-0000000000aa";
 
@@ -230,5 +236,68 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     void postCommand(AGENT_ID, { command: "state", envelope });
     await new Promise((r) => setTimeout(r, 50));
     expect(phone.sentTo).toHaveLength(1);
+  });
+});
+
+/**
+ * The transport-auth contract, pinned from the side that defines it.
+ *
+ * This route sits behind the `/api/v1/agents/*` middleware and is not in
+ * `PUBLIC_AGENT_ROUTES`, so it requires a device bearer with the
+ * route's audience BEFORE the envelope is ever examined. The rest of
+ * this file authenticates with the operator master token, which takes a
+ * bypass branch — which is precisely why a client that sent no bearer,
+ * and a phone that sent the `sync` audience, both shipped broken: every
+ * test at every layer was talking to something that agreed with it.
+ *
+ * `packages/relay-client` asserts the other half (the client sends an
+ * `admin:query` bearer). The two meet here rather than at a stub.
+ */
+describe("the command route's transport-auth contract", () => {
+  // A coherent fixture: one identity, one registered device, and the
+  // agent-registry row that envelope verification reads — all on the
+  // same key, which is what a real daemon or phone has.
+  let mid: string;
+  let did: string;
+
+  beforeEach(async () => {
+    const agent = await createAgent(relay, bytesToHex(keys.publicKey));
+    mid = agent.motebitId;
+    did = agent.deviceId;
+    await registerAgent(mid, bytesToHex(keys.publicKey));
+  });
+
+  async function postWith(aud: TokenAudience | null): Promise<number> {
+    const envelope = await signAgentCommandEnvelope({
+      command: "halt-status",
+      motebitId: mid,
+      identityPrivateKey: keys.privateKey,
+    });
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (aud != null) {
+      const { token } = await mintAudienceToken({ mid, did, aud }, keys.privateKey);
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+    const res = await relay.app.request(`/api/v1/agents/${mid}/command`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ command: "halt-status", envelope }),
+    });
+    return res.status;
+  }
+
+  it("refuses a request with no bearer — a valid envelope is not enough to get in the door", async () => {
+    expect(await postWith(null)).toBe(401);
+  });
+
+  it("refuses the `sync` audience — the exact mistake that made every phone command fail", async () => {
+    expect(await postWith("sync")).toBe(401);
+  });
+
+  it("accepts the audience the client actually sends", async () => {
+    // Past the middleware and past envelope verification. 404 because no
+    // unattended runtime is connected in this test — the handler
+    // answering, not the door refusing.
+    expect(await postWith("admin:query")).toBe(404);
   });
 });
