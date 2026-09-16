@@ -134,6 +134,45 @@ describe("MotebitRuntime — halt", () => {
     expect(ctx.runtime.haltInForce()).toBeNull();
   });
 
+  it("concurrent honors are serialized — one stop, one acknowledgement event", async () => {
+    // The daemon honors halts on its own interval (outside its tick
+    // guard) while a remote `halt` command honors inline, so two callers
+    // overlapping is ordinary. Both must not report the stop.
+    let stops = 0;
+    ctx.runtime.onHalt(async () => {
+      stops++;
+      await new Promise((r) => setTimeout(r, 10));
+      return "aborted run";
+    });
+    await ctx.runtime.requestHalt({ origin: "remote" });
+
+    const [a, b] = await Promise.all([ctx.runtime.honorHalts(), ctx.runtime.honorHalts()]);
+    expect(stops).toBe(1);
+    // Exactly one caller acknowledged it; the other found nothing to do.
+    expect(a.length + b.length).toBe(1);
+    const acks = (await eventTypes(ctx.eventStore)).filter((t) => t === EventType.HaltAcknowledged);
+    expect(acks).toHaveLength(1);
+  });
+
+  it("a halt written while another pass is running still gets honored", async () => {
+    ctx.runtime.onHalt(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+      return "stopped";
+    });
+    await ctx.runtime.requestHalt({ origin: "local" });
+    const first = ctx.runtime.honorHalts();
+    // A second halt arrives while the first pass is in flight. Which
+    // pass picks it up is a scheduling detail; that it is acknowledged
+    // exactly once is the invariant.
+    const second = await ctx.runtime.requestHalt({ goalId: "goal-B", origin: "local" });
+    const [a, b] = await Promise.all([first, ctx.runtime.honorHalts()]);
+
+    expect(ctx.haltStore.get(second!.halt_id)?.acknowledged_at).not.toBeNull();
+    expect([...a, ...b].filter((h) => h.halt_id === second!.halt_id)).toHaveLength(1);
+    const acks = (await eventTypes(ctx.eventStore)).filter((t) => t === EventType.HaltAcknowledged);
+    expect(acks).toHaveLength(2); // one per halt, never one per pass
+  });
+
   it("a stopper unsubscribes", async () => {
     let calls = 0;
     const off = ctx.runtime.onHalt(() => {

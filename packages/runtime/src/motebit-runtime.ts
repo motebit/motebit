@@ -643,6 +643,18 @@ export class MotebitRuntime {
   private haltListeners = new Set<
     (halt: import("@motebit/sdk").HaltRequest) => string | Promise<string>
   >();
+  /**
+   * Serializes `honorHalts`. Two callers are ordinary now that the
+   * daemon honors halts on its own interval (outside its tick guard, so
+   * a stop can interrupt work in progress) while a remote `halt`
+   * command honors inline. Without this, both read the same
+   * un-acknowledged halt, both run the stoppers, and both emit
+   * `HaltAcknowledged` — two "it stopped" events for one stop, in the
+   * log that exists to be the honest record of exactly that. Callers
+   * queue rather than share a result: a halt written after another pass
+   * began still gets a pass of its own.
+   */
+  private honorQueue: Promise<void> = Promise.resolve();
   private _signingKeysErased = false;
   private _logger: { warn(message: string, context?: Record<string, unknown>): void };
   /**
@@ -2909,6 +2921,19 @@ export class MotebitRuntime {
    * nothing new to honor).
    */
   async honorHalts(): Promise<import("@motebit/sdk").HaltRequest[]> {
+    if (!this.haltStore) return [];
+    const prior = this.honorQueue;
+    let release!: () => void;
+    this.honorQueue = new Promise<void>((r) => (release = r));
+    await prior;
+    try {
+      return await this.honorHaltsSerialized();
+    } finally {
+      release();
+    }
+  }
+
+  private async honorHaltsSerialized(): Promise<import("@motebit/sdk").HaltRequest[]> {
     if (!this.haltStore) return [];
     const pending = this.haltStore
       .listActive(this.motebitId)
