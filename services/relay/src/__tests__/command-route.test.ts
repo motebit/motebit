@@ -364,6 +364,27 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     expect(laptop.sentTo.length + vps.sentTo.length).toBeGreaterThan(0);
   });
 
+  it("a `runs` question goes to the runtime that HAS the ledger", async () => {
+    // Read-only, but not answerable by just anyone: the run ledger
+    // lives where goals actually fire. Answered by the phone that asked,
+    // it would report "no runs recorded" about a motebit that had been
+    // working all night — the false empty this routing exists to stop.
+    const phone = fakePeer("phone", ["push_wake"]);
+    const daemon = fakePeer("dev-1", ["background", "unattended_runtime"]);
+    relay.connections.set(AGENT_ID, [phone.peer, daemon.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "runs",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    void postCommand(AGENT_ID, { command: "runs", envelope });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(daemon.sentTo).toHaveLength(1);
+    expect(phone.sentTo).toEqual([]);
+  });
+
   it("a read-only command may still be answered by any connected surface", async () => {
     const phone = fakePeer("phone", ["push_wake"]);
     relay.connections.set(AGENT_ID, [phone.peer] as unknown as Parameters<

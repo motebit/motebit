@@ -55,6 +55,7 @@ import { applyMotebitYaml, resolveYamlPath } from "./subcommands/up.js";
 import { formatDiagnostic } from "./yaml-config.js";
 import type { CliConfig } from "./args.js";
 import { loadFullConfig, extractPersonality } from "./config.js";
+import { createRunLedgerReader } from "./run-ledger-reader.js";
 import { fromHex, loadActiveSigningKey, IdentityKeyError } from "./identity.js";
 import { registerWithRelay, type RelayRegistrationHandle } from "./relay-registration.js";
 import {
@@ -245,6 +246,10 @@ export async function handleRun(config: CliConfig): Promise<void> {
   // acknowledgement, so a night of three restarts reports three
   // processes stopped on a machine that ran one.
   runtime.setHaltExecutorId(`run@${fullConfig.device_id ?? "unknown"}`);
+  // The return view's source. Only this process holds the ledger, so
+  // only it can answer "what happened while I was away" — asked from
+  // the phone, or anywhere else the consent root reaches.
+  runtime.setRunLedgerReader(createRunLedgerReader(moteDb, motebitId));
 
   // Start goal scheduler
   const goals = moteDb.goalStore.list(motebitId);
@@ -1124,6 +1129,9 @@ export async function handleServe(config: CliConfig): Promise<void> {
   // different work, so it takes its own stable id — never the daemon's,
   // never a fresh one per restart.
   runtime.setHaltExecutorId(`serve@${loadFullConfig().device_id ?? "unknown"}`);
+  // Serve shares this machine's database, so it can answer the return
+  // view too — the relay may route the question to either process.
+  runtime.setRunLedgerReader(createRunLedgerReader(moteDb, motebitId));
   // The stopper answers for THIS halt, not for halts in general.
   //
   // Serve executes relay-dispatched tasks. Those are not goal runs, and

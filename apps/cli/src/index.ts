@@ -34,6 +34,7 @@ import {
   createRuntime,
   openMotebitDatabase,
 } from "./runtime-factory.js";
+import { createRunLedgerReader } from "./run-ledger-reader.js";
 import { consumeStream } from "./stream.js";
 import {
   readInput,
@@ -838,6 +839,11 @@ async function main(): Promise<void> {
     solanaWallet,
   );
   runtimeRef.current = runtime;
+  // The interactive terminal holds this machine's ledger, so `/runs`
+  // answers from it rather than reporting that it cannot see one. A
+  // command registered on a surface that owns the data and answers "I
+  // cannot look" would be the ambiguity this view exists to remove.
+  runtime.setRunLedgerReader(createRunLedgerReader(moteDb, motebitId));
 
   // #457: when a pending approval times out (default 10 minutes), say so
   // the MOMENT it happens — previously the expiry was structurally

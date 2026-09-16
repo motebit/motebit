@@ -57,7 +57,17 @@ const RELAY_SIDE_COMMANDS = new Set(["balance", "deposits", "discover", "proposa
  * fails as undelivered, which is the honest answer: nothing was stopped
  * and nothing was decided.
  */
-const UNATTENDED_RUNTIME_COMMANDS = new Set(["halt", "resume", "halt-status", "approvals"]);
+const UNATTENDED_RUNTIME_COMMANDS = new Set([
+  "halt",
+  "resume",
+  "halt-status",
+  "approvals",
+  // The run ledger lives only where goals actually fire, so a `runs`
+  // question answered by any other surface would say "no runs recorded"
+  // about a motebit that had been working all night — the false empty
+  // this routing exists to prevent.
+  "runs",
+]);
 
 /** Commands that require the agent's runtime (forwarded via WebSocket). */
 const RUNTIME_SIDE_COMMANDS = new Set([
@@ -82,6 +92,10 @@ const RUNTIME_SIDE_COMMANDS = new Set([
   "halt",
   "resume",
   "halt-status",
+  // Read-only, and forwarded for the same reason the others are: the
+  // answer lives on the machine that did the work, and the consent root
+  // asking from elsewhere is the point.
+  "runs",
 ]);
 
 /** Informational commands that need no runtime or relay. */

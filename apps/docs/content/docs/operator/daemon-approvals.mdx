@@ -246,6 +246,36 @@ message was delivered. If no unattended runtime is connected the command
 fails, and the honest reading of that failure is "not delivered" — never
 "stopped". A halt written locally is in force on that machine regardless.
 
+### Coming back to it
+
+The phone can already stop the motebit and decide an approval. `/runs`
+lets it see what either was about:
+
+```
+/runs                what happened while you were away
+/runs abc12345       one run in full
+```
+
+The run ledger, the outcomes and the evidence live where goals actually
+fire, and no other surface holds them — so this is a question sent to the
+runtime that has the answer, exactly as a remote halt is. A surface that
+cannot see the ledger says so, which is not the same sentence as "nothing
+happened".
+
+Two things it deliberately does not do. **The verbatim result does not
+travel.** A signed artifact is read on the machine that signed it, because
+a copy arriving over a relay cannot be checked against that signature by
+whatever surface receives it — presenting it as the result would offer
+proof that is not there. A bounded preview travels instead and says which
+it is. **And every piece of text that does cross** passes through the same
+credential-class membrane an approval's arguments pass through, applied at
+the boundary rather than trusted from the reader.
+
+What comes back is the same shape the terminal shows: the run's status,
+what it produced and whether that is signed, what its tools reported, the
+evidence pointers with their sources and full digests, and anything read
+and deliberately not kept.
+
 Every surface of a motebit holds an open socket, so the relay routes
 these verbs specifically to a peer that runs unattended work. Without
 that, a halt sent from the phone could be answered by the phone —

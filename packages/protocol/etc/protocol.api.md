@@ -3636,7 +3636,7 @@ export interface RunEvidenceEntry {
     withheld_reason?: RunEvidenceWithheldReason;
 }
 
-// @public
+// @public (undocumented)
 export interface RunEvidenceSink {
     countForCall?(callId: string): number;
     enumerateStale?(beforeTimestamp: number): string[];
@@ -3648,6 +3648,55 @@ export interface RunEvidenceSink {
 
 // @public
 export type RunEvidenceWithheldReason = "credential_in_span" | "credential_in_source";
+
+// @public
+export interface RunLedgerDetail extends RunLedgerSummary {
+    evidence: ReadonlyArray<{
+        tool: string;
+        ref: string;
+        digest: string;
+        projection?: string;
+    }>;
+    outcomes: ReadonlyArray<{
+        status: string;
+        error_message?: string;
+        summary_preview?: string;
+        signed: boolean;
+    }>;
+    // (undocumented)
+    tool_calls: ReadonlyArray<{
+        tool: string;
+        verdict: string;
+    }>;
+    // (undocumented)
+    withheld: ReadonlyArray<{
+        tool: string;
+        reason: string;
+    }>;
+}
+
+// @public
+export interface RunLedgerReader {
+    get(runIdOrPrefix: string): RunLedgerDetail | null;
+    // (undocumented)
+    listRecent(limit: number): RunLedgerSummary[];
+}
+
+// @public
+export interface RunLedgerSummary {
+    evidence_count: number;
+    // (undocumented)
+    goal_id: string;
+    note?: string;
+    // (undocumented)
+    run_id: string;
+    signed: boolean;
+    // (undocumented)
+    started_at: number;
+    // (undocumented)
+    status: string;
+    withheld_count: number;
+}
 
 // @public
 export const RUNTIME_ATTACH_AUDIENCE: TokenAudience;

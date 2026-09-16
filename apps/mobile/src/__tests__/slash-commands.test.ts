@@ -832,6 +832,25 @@ describe("runSlashCommand — signed remote commands", () => {
     );
   });
 
+  it("/runs asks the runtime that did the work, and /runs <id> opens one", async () => {
+    // The phone could already stop the motebit and decide an approval,
+    // and could see nothing of what either was about. The ledger lives
+    // where goals fire, so this is a question sent there, not a local
+    // read — there is nothing local to read.
+    const sendRemoteCommand = vi.fn(() =>
+      Promise.resolve({ summary: "2 recent run(s).", detail: "abc12345  goal-1  completed" }),
+    );
+    const deps = makeDeps({ sendRemoteCommand });
+    runSlashCommand("runs", "", deps);
+    await settle();
+    expect(sendRemoteCommand).toHaveBeenCalledWith("runs", undefined);
+    expect(deps._messages[0]).toContain("2 recent run(s).");
+
+    runSlashCommand("runs", "abc12345", deps);
+    await settle();
+    expect(sendRemoteCommand).toHaveBeenLastCalledWith("runs", "abc12345");
+  });
+
   it("/halted maps to halt-status, and /pending to the approvals queue", async () => {
     const sendRemoteCommand = vi.fn(() =>
       Promise.resolve({ summary: "Running — nothing is halted." }),

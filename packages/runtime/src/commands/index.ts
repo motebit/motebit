@@ -28,6 +28,8 @@ export type { CommandResult, RelayConfig } from "./types.js";
 export type { SelfTestConfig, MintToken } from "./self-test.js";
 export { cmdSelfTest } from "./self-test.js";
 export { cmdWelcome, cmdApprovals } from "./system.js";
+export { cmdRuns } from "./runs.js";
+import { cmdRuns } from "./runs.js";
 export { cmdHalt, cmdResume, cmdHaltStatus } from "./halt.js";
 export { PlanExecutionVM, type PlanSnapshot, type PlanEvent } from "./plans.js";
 
@@ -72,6 +74,10 @@ export const COMMAND_DEFINITIONS: ReadonlyArray<{ name: string; description: str
   },
   { name: "resume", description: "Give the permission to act unattended back" },
   { name: "halt-status", description: "What is stopped, and whether the motebit has acknowledged" },
+  {
+    name: "runs",
+    description: "What happened while you were away; `runs <id>` opens one in full",
+  },
 ];
 
 /**
@@ -115,6 +121,8 @@ export async function executeCommand(
       return cmdHalt(runtime, args, options?.origin ?? "local");
     case "resume":
       return cmdResume(runtime, args);
+    case "runs":
+      return cmdRuns(runtime, args);
     case "halt-status":
       return cmdHaltStatus(runtime);
     case "conversations":

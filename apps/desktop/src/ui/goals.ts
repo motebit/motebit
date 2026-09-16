@@ -378,8 +378,15 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
         loadFallback();
       })
       .catch(() => {
-        container.innerHTML =
-          '<span style="font-size:10px;color:var(--text-ghost)">Failed to load</span>';
+        // The fallback, not an error message. This surface's
+        // `tool_audit_log` has no `run_id` column at all — it is in the
+        // Rust schema and no desktop migration adds one — so the query
+        // above does not return zero rows, it THROWS, and every
+        // expansion of a recent outcome showed "Failed to load" where
+        // the tool calls should be. The comment above already calls the
+        // timestamp range the pre-migration path; a missing column is
+        // exactly that case, so it belongs on this branch too.
+        loadFallback();
       });
   }
 

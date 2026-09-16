@@ -386,6 +386,10 @@ export const COMMANDS: CommandEntry[] = [
   { usage: "/goal resume <id>", desc: "Resume a paused goal" },
   { usage: "/goal outcomes <id>", desc: "Show execution history" },
   { usage: "/approvals", desc: "Show pending approval queue" },
+  {
+    usage: "/runs [id]",
+    desc: "What happened while you were away; an id opens one run in full",
+  },
   { usage: "/id", desc: "Show your identity card (motebit_id, did, keys)" },
   { usage: "/wallet", desc: "Show your sovereign Solana wallet (address, USDC balance)" },
   { usage: "/ledger <goal-id>", desc: "Show a goal's signed execution ledger" },

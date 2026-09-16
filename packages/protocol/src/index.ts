@@ -3445,6 +3445,84 @@ export interface RunEvidenceEntry {
  * surface that wires none records no evidence, which every reader must
  * render as "none recorded", never as "nothing was read".
  */
+// ── The return view ────────────────────────────────────────────────
+// What a person sees when they come back, from a surface that is not
+// the one that did the work.
+//
+// The run ledger, the outcomes and the evidence all live where the
+// daemon runs. No other surface holds them — not the phone, which is
+// the consent root and can already stop the motebit and decide an
+// approval, and not the desktop, which has no goal stores at all. So
+// "show me evidence when I return" reaches those surfaces the same way
+// stopping does: as a signed request to the runtime that has the
+// answer, which replies with a view of its own record.
+//
+// These shapes are purpose-built for that reply rather than mirrors of
+// the stores. They cross a wire to a surface that cannot check them
+// against anything, so they carry only what a returning owner needs
+// and say plainly what they are not: the verbatim result is elided,
+// because an artifact that must be verified is fetched from the
+// machine that signed it, not summarized across a relay.
+
+/** One run, as it appears in a list of what happened while you were away. */
+export interface RunLedgerSummary {
+  run_id: string;
+  goal_id: string;
+  status: string;
+  started_at: number;
+  /** Why it is holding its goal, when it is. */
+  note?: string;
+  /** True when this run's result carries a signature. */
+  signed: boolean;
+  /** Re-checkable pointers this run produced. */
+  evidence_count: number;
+  /** Pointers it produced and deliberately did not keep. */
+  withheld_count: number;
+}
+
+/** One run in full, as far as a remote surface is allowed to see it. */
+export interface RunLedgerDetail extends RunLedgerSummary {
+  /** The outcome's own status and reason, per recorded outcome. */
+  outcomes: ReadonlyArray<{
+    status: string;
+    error_message?: string;
+    /**
+     * A bounded, redaction-passed preview — NOT the artifact.
+     *
+     * The whole result stays on the machine that produced and signed
+     * it. A summary that crossed a relay could not be checked against
+     * the signature by the surface reading it, so presenting it as the
+     * result would offer proof that is not there.
+     */
+    summary_preview?: string;
+    signed: boolean;
+  }>;
+  tool_calls: ReadonlyArray<{ tool: string; verdict: string }>;
+  /** Each pointer's source and digest — enough to re-fetch and re-hash. */
+  evidence: ReadonlyArray<{
+    tool: string;
+    ref: string;
+    digest: string;
+    projection?: string;
+  }>;
+  withheld: ReadonlyArray<{ tool: string; reason: string }>;
+}
+
+/**
+ * Where the return view gets its answer.
+ *
+ * Registered by the surface that owns the run ledger — today the
+ * daemon, which is the only one that has it. A runtime with no reader
+ * answers that it cannot see the ledger, which is the honest reply from
+ * a process that did not do the work, and is not the same as saying
+ * nothing happened.
+ */
+export interface RunLedgerReader {
+  listRecent(limit: number): RunLedgerSummary[];
+  /** Accepts a full id or the short prefix a person reads off a list. */
+  get(runIdOrPrefix: string): RunLedgerDetail | null;
+}
+
 export interface RunEvidenceSink {
   record(entry: RunEvidenceEntry): void;
   /** Every pointer produced by one run, oldest first. */

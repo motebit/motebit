@@ -1985,6 +1985,8 @@ export class MotebitRuntime {
 
   /** Resolves a short goal-id prefix to a full id. See `setGoalIdResolver`. */
   private goalIdResolver: ((prefix: string) => string | null) | null = null;
+  /** Answers the return view. See `setRunLedgerReader`. */
+  private runLedgerReader: import("@motebit/sdk").RunLedgerReader | null = null;
 
   /**
    * Register a goal-status resolver so the goals primitive can enforce
@@ -2951,6 +2953,23 @@ export class MotebitRuntime {
    */
   setGoalIdResolver(resolver: (prefix: string) => string | null): void {
     this.goalIdResolver = resolver;
+  }
+
+  /**
+   * Register the reader that answers "what happened while I was away".
+   *
+   * The surface that owns the run ledger supplies it — today the
+   * daemon, which is the only one that has it. Same shape as the
+   * goal-id resolver above and for the same reason: the runtime holds
+   * the port, and the process that did the work supplies the answer.
+   */
+  setRunLedgerReader(reader: import("@motebit/sdk").RunLedgerReader | null): void {
+    this.runLedgerReader = reader;
+  }
+
+  /** The return view's source, or `null` on a surface that did not do the work. */
+  get runLedger(): import("@motebit/sdk").RunLedgerReader | null {
+    return this.runLedgerReader;
   }
 
   /** The full goal id for a prefix, or null when nothing matches. */
