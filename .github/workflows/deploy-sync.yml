@@ -22,10 +22,23 @@ permissions:
   contents: read
   actions: read # read the CI run status for the gate below
 
+# The gate WAITS; the deploy WORKS. They are separate jobs because they were
+# not, and the waiting ate the working.
+#
+# As one 30-minute job, the gate's wait came out of the deploy's budget: CI took
+# 11 minutes to conclude, the Fly build then ran 19 and was killed at the job
+# timeout. GitHub reports a timed-out job as "cancelled", which reads like
+# somebody stopped it rather than like a deploy that never landed — so two
+# consecutive merges (the durable-execution and halt arcs) sat on main, CI-green
+# and believed shipped, while production kept serving the release from the day
+# before. A remote halt cannot reach a relay that never received the route.
+#
+# Split, each job gets its own clock: the gate may wait out a slow CI without
+# spending a minute the build needs.
 jobs:
-  deploy:
+  gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
 
     steps:
       # The relay is the durability-sensitive trust root; never deploy a commit
@@ -61,11 +74,29 @@ jobs:
           echo "::error::Timed out waiting for CI to conclude on ${sha}."
           exit 1
 
+  deploy:
+    needs: gate
+    runs-on: ubuntu-latest
+    # The Fly remote build gets the whole budget, not what the gate left over.
+    timeout-minutes: 30
+
+    steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master
 
       - name: Deploy to Fly.io
         run: flyctl deploy --config services/relay/fly.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      # A deploy that did not land must not read as one that did. The job
+      # summary is where an operator looks first, so it carries the release
+      # this run actually put into production.
+      - name: Record the deployed release
+        if: always()
+        run: |
+          echo "### Relay deploy — ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
+          flyctl releases --app motebit-sync 2>&1 | head -3 >> "$GITHUB_STEP_SUMMARY" || true
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
