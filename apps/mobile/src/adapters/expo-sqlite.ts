@@ -2249,6 +2249,19 @@ export class ExpoToolAuditSink implements AuditLogSink {
     );
   }
 
+  /**
+   * One row per call: the completion updates the decision row's `result`
+   * (and timestamp) in place; only when no such row exists is it inserted.
+   * A plain INSERT here would double-count `queryStatsSince`.
+   */
+  complete(entry: ToolAuditEntry): void {
+    const res = this.db.runSync(
+      "UPDATE tool_audit SET result = ?, timestamp = ? WHERE call_id = ?",
+      [entry.result ? JSON.stringify(entry.result) : null, entry.timestamp, entry.callId],
+    );
+    if (res.changes === 0) this.append(entry);
+  }
+
   enumerateForFlush(beforeTimestamp: number): ToolAuditEntry[] {
     const rows = this.db.getAllSync<ToolAuditRow>(
       "SELECT * FROM tool_audit WHERE timestamp < ? ORDER BY timestamp ASC",

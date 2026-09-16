@@ -3829,13 +3829,14 @@ describe("resumeAfterApproval — closes the gate's audit row for the approved c
     await collectChunks(runtime.resumeAfterApproval(true));
 
     const rows = sink.getAll().filter((r) => r.callId === "call-LEDGER");
-    expect(rows.map((r) => r.decision.reason)).toContain("approval_satisfied:human-approved");
+    // The satisfied entry is closed in place: it carries the result and
+    // keeps the decision as recorded.
     const row = rows.find((r) => r.result != null);
     expect(row).toBeDefined();
+    expect(row!.decision.reason).toBe("approval_satisfied:human-approved");
     expect(row!.turnId).toBe("turn-LEDGER");
     expect(row!.runId).toBe("run-LEDGER");
     expect(row!.tool).toBe("write_thing");
     expect(row!.result?.ok).toBe(true);
-    expect(row!.decision.requiresApproval).toBe(true);
   });
 });

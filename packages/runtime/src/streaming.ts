@@ -128,13 +128,6 @@ export interface StreamingDeps {
   /** Approval store for quorum persistence. */
   getApprovalStore(): ApprovalStoreAdapter | null;
   /**
-   * Close the gate's audit row for an approved call the resume path
-   * executed outside the loop — the completion half of the durable
-   * execution ledger (`PolicyGate.recordResult`). Optional: absent
-   * means the row stays open, which reads as "intended, outcome
-   * unknown" — honest, but the runtime always wires it.
-   */
-  /**
    * Record, BEFORE the resume path executes an approved call, that the
    * paused decision is proceeding on the human's verdict
    * (`PolicyGate.recordApprovalSatisfied`). Same correlation fields as
@@ -147,6 +140,13 @@ export interface StreamingDeps {
     toolName: string;
     args: Record<string, unknown>;
   }): void;
+  /**
+   * Close the gate's audit row for an approved call the resume path
+   * executed outside the loop — the completion half of the durable
+   * execution ledger (`PolicyGate.recordResult`). Optional: absent
+   * means the row stays open, which reads as "prepared; effect
+   * unknown" — honest, but the runtime always wires it.
+   */
   recordApprovedToolResult?(params: {
     turnId: string | undefined;
     runId: string | undefined;

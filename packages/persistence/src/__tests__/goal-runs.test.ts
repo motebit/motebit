@@ -102,3 +102,26 @@ describe("SqliteGoalRunStore — the durable run ledger (migration #43)", () => 
     expect(moteDb.approvalStore.get("old")!.args_json).toBeNull();
   });
 });
+
+describe("SqliteToolAuditSink.complete — one row per call", () => {
+  it("the completion replaces the decision row instead of adding a second", () => {
+    const moteDb = createMotebitDatabase(":memory:");
+    const decision = { allowed: true, requiresApproval: false };
+    const base = {
+      turnId: "t",
+      runId: "r",
+      callId: "c1",
+      tool: "x",
+      args: {},
+      decision,
+      timestamp: 1,
+    };
+    moteDb.toolAuditSink.append(base);
+    moteDb.toolAuditSink.complete({ ...base, result: { ok: true, durationMs: 3 }, timestamp: 2 });
+    const rows = moteDb.toolAuditSink.queryByRunId("r");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.result?.ok).toBe(true);
+    const stats = moteDb.toolAuditSink.queryStatsSince(0);
+    expect(stats.totalToolCalls).toBe(1);
+  });
+});

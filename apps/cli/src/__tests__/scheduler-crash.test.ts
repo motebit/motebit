@@ -46,8 +46,13 @@ describe("durable execution — a real process death after the effect, before th
         child.on("exit", (code, signal) => r({ code, signal })),
       );
 
-      // Wait for the external effect to have happened.
-      const deadline = Date.now() + 25_000;
+      // Wait for the external effect to have happened. The budget is
+      // deliberately generous: the child is a fresh `node --import tsx`
+      // process that transpiles before it runs, and the Release job runs
+      // every package's coverage under load — the same CPU starvation that
+      // drove this package's vitest timeout from 5s to 30s. A flake here
+      // would be a false negative on a durability claim.
+      const deadline = Date.now() + 90_000;
       while (!existsSync(marker)) {
         if (Date.now() > deadline) throw new Error(`child never reached the effect: ${stderr}`);
         if (child.exitCode != null) throw new Error(`child exited early: ${stderr}`);
@@ -114,5 +119,5 @@ describe("durable execution — a real process death after the effect, before th
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 60_000);
+  }, 180_000);
 });

@@ -13,6 +13,7 @@
  * treating an uncertain external effect as safe to retry.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { createHash } from "node:crypto";
 import { GoalScheduler } from "../scheduler.js";
 import { createMotebitDatabase, type MotebitDatabase, type Goal } from "@motebit/persistence";
 import { RiskLevel, TrustMode, BatteryMode } from "@motebit/sdk";
@@ -55,24 +56,58 @@ interface Mock {
   runtime: MotebitRuntime;
   streams: number;
   invoked: Array<{ name: string; args: Record<string, unknown>; opts: unknown }>;
+  /** Goal tools currently registered on the (mock) registry. */
+  registered: Map<string, ToolHandler>;
+  /** Simulate the runtime's own approval timeout firing: the paused turn is gone. */
+  clearPending: () => void;
+  /** Simulate another actor's approval becoming pending in the shared runtime. */
+  setForeignPending: () => void;
 }
 
 /** A runtime whose first turn pauses on `shell_exec`, and which counts every stream start. */
-function mockRuntime(opts: { pause?: boolean; invokeOk?: boolean } = {}): Mock {
-  const m: Mock = { runtime: null as unknown as MotebitRuntime, streams: 0, invoked: [] };
+function mockRuntime(
+  opts: {
+    pause?: boolean;
+    invokeOk?: boolean;
+    resumeThrows?: boolean;
+    /** The first stream yields one chunk, then waits on this before continuing. */
+    holdStream?: Promise<void>;
+  } = {},
+): Mock {
   let pending = false;
+  let pendingId = "tc-1";
   const tools = new Map<string, ToolHandler>();
+  const m: Mock = {
+    runtime: null as unknown as MotebitRuntime,
+    streams: 0,
+    invoked: [],
+    registered: tools,
+    clearPending: () => {
+      pending = false;
+    },
+    setForeignPending: () => {
+      pending = true;
+      pendingId = "someone-elses";
+    },
+  };
   m.runtime = {
     get hasPendingApproval() {
       return pending;
     },
     get pendingApprovalInfo() {
       return pending
-        ? { toolName: "shell_exec", args: { command: "ls" }, toolCallId: "tc-1" }
+        ? { toolName: "shell_exec", args: { command: "ls" }, toolCallId: pendingId }
         : null;
     },
     async *sendMessageStreaming(_t: string): AsyncGenerator<StreamChunk> {
       m.streams++;
+      if (opts.holdStream) {
+        yield { type: "text" as const, text: "working" };
+        await opts.holdStream;
+        yield { type: "text" as const, text: "still working" };
+        yield { type: "result" as const, result: turnResult() };
+        return;
+      }
       if (opts.pause === true) {
         pending = true;
         yield {
@@ -89,6 +124,7 @@ function mockRuntime(opts: { pause?: boolean; invokeOk?: boolean } = {}): Mock {
     },
     async *resumeAfterApproval(): AsyncGenerator<StreamChunk> {
       pending = false;
+      if (opts.resumeThrows === true) throw new Error("resume exploded");
       yield { type: "result" as const, result: turnResult() };
     },
     async invokeLocalTool(name: string, args: Record<string, unknown>, o: unknown) {
@@ -598,3 +634,183 @@ describe("durable execution — interruption mid-run", () => {
     expect(runs[0]!.run_id).toBe(db.goalOutcomeStore.listForGoal("goal-001")[0]!.outcome_id);
   });
 });
+
+describe("durable execution — review round: every running transition has a failure transition", () => {
+  let db: MotebitDatabase;
+  beforeEach(() => {
+    db = createMotebitDatabase(":memory:");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  });
+
+  function waitingRun(over: {
+    runId: string;
+    approvalId: string;
+    risk?: number;
+    expiresAt?: number;
+    resolvedAt?: number | null;
+    status?: "pending" | "approved" | "denied";
+  }): void {
+    const now = Date.now();
+    db.goalRunStore.start({ run_id: over.runId, goal_id: "goal-001", motebit_id: "mote-test" });
+    db.goalRunStore.setStatus(over.runId, "awaiting_approval", { approval_id: over.approvalId });
+    const argsJson = JSON.stringify({ command: "ls" });
+    db.approvalStore.add({
+      approval_id: over.approvalId,
+      motebit_id: "mote-test",
+      goal_id: "goal-001",
+      tool_name: "shell_exec",
+      args_preview: argsJson,
+      args_hash: hashArgsForTest(argsJson),
+      risk_level: over.risk ?? RiskLevel.R3_EXECUTE,
+      status: over.status ?? "approved",
+      created_at: now - 10,
+      expires_at: over.expiresAt ?? now + 3_600_000,
+      resolved_at: over.resolvedAt === undefined ? now : over.resolvedAt,
+      denied_reason: null,
+      args_json: argsJson,
+    });
+  }
+
+  it("a live resume that THROWS closes the run as failed — the goal is not held behind an un-ackable running row", async () => {
+    db.goalStore.add(goal({ interval_ms: 3_600_000 }));
+    const m = mockRuntime({ pause: true, resumeThrows: true });
+    const s = scheduler(db, m);
+    await s.tickOnce();
+    const [approval] = db.approvalStore.listAll("mote-test");
+    const runId = db.goalRunStore.getByApproval(approval!.approval_id)!.run_id;
+    db.approvalStore.resolve(approval!.approval_id, "approved");
+
+    await s.tickOnce();
+    const run = db.goalRunStore.get(runId)!;
+    expect(run.status).toBe("failed");
+    expect(run.note).toContain("resume failed");
+    expect(db.goalRunStore.blockingRunForGoal("goal-001")).toBeNull();
+    expect(db.goalOutcomeStore.listForGoal("goal-001").some((o) => o.status === "failed")).toBe(
+      true,
+    );
+  });
+
+  it("an approval resolved after the runtime timed the paused turn out closes the run and is NOT executed out of band", async () => {
+    db.goalStore.add(goal({ interval_ms: 3_600_000 }));
+    const m = mockRuntime({ pause: true });
+    const s = scheduler(db, m);
+    await s.tickOnce();
+    const [approval] = db.approvalStore.listAll("mote-test");
+    const runId = db.goalRunStore.getByApproval(approval!.approval_id)!.run_id;
+    m.clearPending(); // the runtime's own timeout fired; the model was told the call failed
+    db.approvalStore.resolve(approval!.approval_id, "approved");
+
+    await s.tickOnce();
+    await s.tickOnce();
+    expect(m.invoked).toHaveLength(0);
+    const run = db.goalRunStore.get(runId)!;
+    expect(run.status).toBe("failed");
+    expect(run.note).toContain("not executed");
+  });
+
+  it("an approval granted AFTER its expiry (daemon was down, nothing swept it) is never executed", async () => {
+    db.goalStore.add(goal({ interval_ms: 3_600_000 }));
+    const now = Date.now();
+    waitingRun({
+      runId: "run-stale",
+      approvalId: "ap-stale",
+      expiresAt: now - 2 * 86_400_000,
+      resolvedAt: now - 1000,
+    });
+    const m = mockRuntime();
+    const s = scheduler(db, m);
+    s.recoverInterruptedRuns();
+    await s.tickOnce();
+    expect(m.invoked).toHaveLength(0);
+    const run = db.goalRunStore.get("run-stale")!;
+    expect(run.status).toBe("failed");
+    expect(run.note).toContain("expired");
+  });
+
+  it("a recovered approval waits while another actor's approval is pending in the shared runtime", async () => {
+    db.goalStore.add(goal({ interval_ms: 3_600_000 }));
+    waitingRun({ runId: "run-wait", approvalId: "ap-wait" });
+    const m = mockRuntime();
+    m.setForeignPending();
+    const s = scheduler(db, m);
+    s.recoverInterruptedRuns();
+    await s.tickOnce();
+    expect(m.invoked).toHaveLength(0);
+    expect(db.goalRunStore.get("run-wait")!.status).toBe("awaiting_approval");
+    // Once the foreign prompt is gone, the decision applies.
+    m.clearPending();
+    await s.tickOnce();
+    expect(m.invoked).toHaveLength(1);
+    expect(db.goalRunStore.get("run-wait")!.status).toBe("partial");
+  });
+
+  it("goal-scoped tools are registered while a recovered approval executes", async () => {
+    db.goalStore.add(goal({ interval_ms: 3_600_000 }));
+    waitingRun({ runId: "run-tools", approvalId: "ap-tools" });
+    const m = mockRuntime();
+    let sawGoalTools = false;
+    (m.runtime as unknown as { invokeLocalTool: unknown }).invokeLocalTool = async () => {
+      sawGoalTools = m.registered.has("report_progress");
+      return { ok: true, data: "ran" };
+    };
+    const s = scheduler(db, m);
+    s.recoverInterruptedRuns();
+    await s.tickOnce();
+    expect(sawGoalTools).toBe(true);
+  });
+
+  it("restart recovery never overwrites an outcome the live path already wrote", () => {
+    db.goalStore.add(goal());
+    db.goalRunStore.start({ run_id: "run-keep", goal_id: "goal-001", motebit_id: "mote-test" });
+    db.goalOutcomeStore.add({
+      outcome_id: "run-keep",
+      goal_id: "goal-001",
+      motebit_id: "mote-test",
+      ran_at: Date.now(),
+      status: "completed",
+      summary: "the real result",
+      tool_calls_made: 2,
+      memories_formed: 1,
+      error_message: null,
+    });
+    const s = scheduler(db, mockRuntime());
+    s.recoverInterruptedRuns();
+    const outcomes = db.goalOutcomeStore.listForGoal("goal-001");
+    expect(outcomes.find((o) => o.outcome_id === "run-keep")?.summary).toBe("the real result");
+    expect(outcomes).toHaveLength(2);
+  });
+
+  it("a graceful stop() mid-run closes the run as failed — it does not become a held interrupted run on restart", async () => {
+    db.goalStore.add(goal({ interval_ms: 3_600_000 }));
+    let release!: () => void;
+    const hold = new Promise<void>((r) => (release = r));
+    const m = mockRuntime({ holdStream: hold });
+    const s = scheduler(db, m);
+    const tick = s.tickOnce();
+    // Wait until the stream is in flight.
+    const deadline = Date.now() + 5000;
+    while (db.goalRunStore.listByStatus("mote-test", "running").length === 0) {
+      if (Date.now() > deadline) throw new Error("run never started");
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    const [run] = db.goalRunStore.listByStatus("mote-test", "running");
+    s.stop();
+    expect(db.goalRunStore.get(run!.run_id)!.status).toBe("failed");
+    expect(db.goalRunStore.get(run!.run_id)!.note).toContain("stopped");
+    release();
+    await tick;
+    // Still failed after the aborted tick unwinds; nothing blocks the goal.
+    expect(db.goalRunStore.get(run!.run_id)!.status).toBe("failed");
+    expect(db.goalRunStore.blockingRunForGoal("goal-001")).toBeNull();
+    const s2 = scheduler(db, mockRuntime());
+    s2.recoverInterruptedRuns();
+    expect(db.goalRunStore.get(run!.run_id)!.status).toBe("failed");
+  });
+});
+
+function hashArgsForTest(argsJson: string): string {
+  return createHash("sha256").update(argsJson).digest("hex");
+}

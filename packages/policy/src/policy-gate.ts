@@ -254,20 +254,6 @@ export class PolicyGate {
   }
 
   /**
-   * Record the outcome of a tool execution against the decision row the
-   * gate wrote for it. The completion half of the intent/completion pair
-   * (see `validate`). No-op when the decision carries no `callId` (a
-   * hand-built decision that never went through `validate`): a fresh id
-   * here would mint an orphan row that correlates with nothing, which is
-   * worse than an honest gap.
-   *
-   * `ok` is the tool's own verdict. It is attribution + the tool's report,
-   * not an independent verification of the external effect — a claimed
-   * result should link to evidence from the affected system
-   * (docs/doctrine/evidence-provenance.md); that pointer is a sibling
-   * artifact, never inferred from this row.
-   */
-  /**
    * Record that a decision which PAUSED for approval is now proceeding to
    * execution because a human satisfied the band out of band (a genuine
    * user tap, or a persisted approval applied after a restart). Appended
@@ -296,6 +282,27 @@ export class PolicyGate {
     );
   }
 
+  /**
+   * Record the outcome of a tool execution against the decision row the
+   * gate wrote for it. The completion half of the intent/completion pair
+   * (see `validate`). No-op when the decision carries no `callId` (a
+   * hand-built decision that never went through `validate`): a fresh id
+   * here would mint an orphan row that correlates with nothing, which is
+   * worse than an honest gap.
+   *
+   * `ok` is the tool's own verdict. It is attribution + the tool's report,
+   * not an independent verification of the external effect — a claimed
+   * result should link to evidence from the affected system
+   * (docs/doctrine/evidence-provenance.md); that pointer is a sibling
+   * artifact, never inferred from this row.
+   *
+   * Which executors close rows today: the AI loop, the resume-after-approval
+   * path, and `invokeLocalTool`. The MCP-server, attached-surface and
+   * grant-delegation executors validate without closing; their rows stay
+   * open. Restart recovery scopes by `run_id`, which those paths do not
+   * set, so they cannot cause a spurious hold — but the ledger invariant is
+   * not yet enforced by a gate. See docs/drift-defenses.md.
+   */
   recordResult(
     ctx: Pick<TurnContext, "turnId" | "runId">,
     decision: PolicyDecision,

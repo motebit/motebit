@@ -44,6 +44,21 @@ export class InMemoryAuditSink implements AuditLogSink {
     }
   }
 
+  /**
+   * Merge a completion into the entry recorded under its `callId` (one
+   * entry per call). Only `result` + `timestamp` land; the decision as
+   * recorded is kept.
+   */
+  complete(entry: ToolAuditEntry): void {
+    for (let i = this.entries.length - 1; i >= 0; i--) {
+      if (this.entries[i]!.callId === entry.callId) {
+        this.entries[i] = { ...this.entries[i]!, result: entry.result, timestamp: entry.timestamp };
+        return;
+      }
+    }
+    this.append(entry);
+  }
+
   query(turnId: string): ToolAuditEntry[] {
     return this.entries.filter((e) => e.turnId === turnId);
   }
@@ -195,6 +210,21 @@ export class ChainedAuditSink implements AuditLogSink {
     // Sync delegation — inner sink handles persistence + sync
     // queries. ChainedAuditSink doesn't duplicate that work.
     this.inner.append(entry);
+    this.chain(entry);
+  }
+
+  /**
+   * A completion updates the inner store's entry in place (or merges), but
+   * the hash chain is append-only: the completion is a new link, so the
+   * chain records both "decided" and "completed" in order.
+   */
+  complete(entry: ToolAuditEntry): void {
+    if (typeof this.inner.complete === "function") this.inner.complete(entry);
+    else this.inner.append(entry);
+    this.chain(entry);
+  }
+
+  private chain(entry: ToolAuditEntry): void {
     // Async chain write — queued so order is preserved. Caller
     // doesn't await; verification consumers call `drainChain()`
     // before reading.
@@ -352,19 +382,23 @@ export class AuditLogger {
     durationMs: number,
     runId?: string,
   ): void {
-    this.sink.append({
+    const entry: ToolAuditEntry = {
       turnId,
       runId,
       callId,
       tool,
-      // Same redaction as the decision row — the result row REPLACES it
+      // Same redaction as the decision row — the completion REPLACES it
       // in keyed sinks (SQLite upserts on call_id), so an unredacted
       // result row would un-redact the args the decision row had hidden.
       args: redactSensitiveArgs(args),
       decision,
       result: { ok, durationMs },
       timestamp: Date.now(),
-    });
+    };
+    // One entry per call: sinks that can, update/merge in place; a sink
+    // without `complete` gets a second entry (see AuditLogSink.complete).
+    if (typeof this.sink.complete === "function") this.sink.complete(entry);
+    else this.sink.append(entry);
   }
 
   /**

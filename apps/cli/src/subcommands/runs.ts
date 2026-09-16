@@ -77,8 +77,15 @@ export async function handleRunsAck(config: CliConfig): Promise<void> {
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
   try {
-    const all = moteDb.goalRunStore.listRecent(motebitId, 200);
-    const match = all.find((r) => r.run_id === runId || r.run_id.startsWith(runId));
+    // Exact id: the indexed lookup, never a window. Prefix: the runs that
+    // are holding a goal first (those are what a person is here to ack),
+    // then a recent window.
+    const match =
+      moteDb.goalRunStore.get(runId) ??
+      [
+        ...moteDb.goalRunStore.listBlocking(motebitId),
+        ...moteDb.goalRunStore.listRecent(motebitId, 200),
+      ].find((r) => r.run_id.startsWith(runId));
     if (!match) {
       console.error(`Error: no run found matching "${runId}".`);
       process.exit(1);

@@ -559,6 +559,7 @@ export interface AuditLogAdapter {
 export interface AuditLogSink {
     // (undocumented)
     append(entry: ToolAuditEntry): void;
+    complete?(entry: ToolAuditEntry): void;
     enumerateForFlush?(beforeTimestamp: number): ToolAuditEntry[];
     erase?(callId: string): void;
     // (undocumented)

@@ -62,6 +62,10 @@ export class GoalScheduler {
   private ticking = false;
   private suspended = new Map<string, SuspendedTurn>();
   private currentGoalId: string | null = null;
+  /** The run row in flight (fire path or live resume), so a graceful stop can close it. */
+  private currentRunId: string | null = null;
+  private currentAbort: AbortController | null = null;
+  private foreignPendingLogged = false;
   private planEngine: PlanEngine | null = null;
   private planStore: PlanStoreAdapter | null = null;
   private tickCount = 0;
@@ -172,8 +176,11 @@ export class GoalScheduler {
       const facts = this.classifyInterruptedRun(run);
       this.runStore.markInterrupted(run.run_id, facts);
       const held = facts.completed_actions > 0 || facts.uncertain_actions.length > 0;
+      // Own id, never `run.run_id`: the live paths write their outcome under
+      // the run id, and a death between that write and the run-status
+      // transition must not let this row REPLACE a genuine outcome.
       this.goalOutcomeStore.add({
-        outcome_id: run.run_id,
+        outcome_id: crypto.randomUUID(),
         goal_id: run.goal_id,
         motebit_id: this.motebitId,
         ran_at: Date.now(),
@@ -238,6 +245,36 @@ export class GoalScheduler {
     // process. Only the in-memory resume handles are dropped; after a
     // restart the decision is applied by `drainRecoveredApprovals`.
     this.suspended.clear();
+    // A run in flight at a GRACEFUL stop is closed here, synchronously,
+    // because the daemon exits right after this returns and the tick's own
+    // catch may never run. Left `running`, the next start would classify it
+    // as interrupted and hold the goal behind a human ack for what was an
+    // orderly shutdown. It is the process that is alive to say so.
+    if (this.currentRunId != null) {
+      const runId = this.currentRunId;
+      const run = this.runStore.get(runId);
+      const goalId = run?.goal_id ?? this.currentGoalId;
+      this.currentAbort?.abort(new Error("daemon stopped"));
+      this.runStore.setStatus(runId, "failed", { note: "daemon stopped mid-run (graceful)" });
+      if (goalId != null) {
+        this.goalOutcomeStore.add({
+          outcome_id: crypto.randomUUID(),
+          goal_id: goalId,
+          motebit_id: this.motebitId,
+          ran_at: Date.now(),
+          status: "failed",
+          summary: null,
+          tool_calls_made: 0,
+          memories_formed: 0,
+          error_message: "daemon stopped mid-run (graceful)",
+        });
+      }
+      this.currentRunId = null;
+      this.currentAbort = null;
+      logLine(
+        `[scheduler] stopped mid-run ${runId.slice(0, 8)} — closed as failed, will re-fire on schedule`,
+      );
+    }
     // Best-effort memory consolidation on shutdown
     void this.runtime.consolidationCycle();
   }
@@ -578,6 +615,8 @@ export class GoalScheduler {
           // Wall-clock limit: per-goal override → scheduler default
           const wallClock = goal.wall_clock_ms ?? this.goalWallClockMs;
           const abortController = new AbortController();
+          this.currentAbort = abortController;
+          this.currentRunId = runId;
           const deadlineTimer = setTimeout(
             () =>
               abortController.abort(
@@ -611,6 +650,11 @@ export class GoalScheduler {
             return;
           }
 
+          // Run-status transition FIRST, then the outcome row: a death in
+          // between leaves a completed run with no outcome (honest, no hold)
+          // rather than a completed outcome under a `running` row that the
+          // next start would reclassify as interrupted.
+          this.runStore.setStatus(runId, "completed");
           // Record outcome (runId = outcome_id for audit correlation)
           this.goalOutcomeStore.add({
             outcome_id: runId,
@@ -623,8 +667,6 @@ export class GoalScheduler {
             memories_formed: result.memoriesFormed,
             error_message: null,
           });
-
-          this.runStore.setStatus(runId, "completed");
           this.goalStore.updateLastRun(goal.goal_id, Date.now());
           this.goalStore.resetFailures(goal.goal_id);
 
@@ -656,6 +698,7 @@ export class GoalScheduler {
           const msg = err instanceof Error ? err.message : String(err);
           errorLine(`[goal] error for ${goal.goal_id.slice(0, 8)}: ${msg}`);
 
+          this.runStore.setStatus(runId, "failed", { note: msg });
           // Record failed outcome (runId = outcome_id for audit correlation)
           this.goalOutcomeStore.add({
             outcome_id: runId,
@@ -668,8 +711,6 @@ export class GoalScheduler {
             memories_formed: 0,
             error_message: msg,
           });
-
-          this.runStore.setStatus(runId, "failed", { note: msg });
 
           // Emit goal_executed (failure variant) — spec §5.2. Every run
           // leaves a wire record regardless of outcome; §1's "ledger is
@@ -687,6 +728,8 @@ export class GoalScheduler {
           }
         } finally {
           this.currentGoalId = null;
+          this.currentRunId = null;
+          this.currentAbort = null;
           this.unregisterGoalTools();
         }
       }
@@ -1018,11 +1061,30 @@ export class GoalScheduler {
           logLine(
             `[approval] expired → denying suspended turn ${id.slice(0, 8)} (${pending.toolName}) to release the runtime`,
           );
+          // The denied continuation runs under this run id: mark it live so
+          // the recovered-approval drain leaves it alone, and close it when
+          // the continuation ends.
+          this.runStore.setStatus(turn.runId, "running", {
+            note: "approval expired; continuing after denial",
+          });
           const resumeStream = this.runtime.resumeAfterApproval(false);
-          void this.consumeAndDiscard(resumeStream);
-        } else if (pending != null) {
-          logLine(
-            `[approval] expired ${id.slice(0, 8)} but the runtime's pending approval belongs to another actor (${pending.toolName}) — leaving it untouched`,
+          void this.consumeAndDiscard(resumeStream).then(() => {
+            this.runStore.setStatus(turn.runId, "completed", {
+              note: "approval expired; the turn continued after the denial",
+            });
+          });
+        } else {
+          if (pending != null) {
+            logLine(
+              `[approval] expired ${id.slice(0, 8)} but the runtime's pending approval belongs to another actor (${pending.toolName}) — leaving it untouched`,
+            );
+          }
+          // The paused turn is gone (voided or timed out in the runtime);
+          // nothing will ever resume it. Close its run so it neither holds
+          // the goal nor gets picked up by the recovered-approval drain.
+          this.closeVoidedRun(
+            turn,
+            `approval for ${item?.tool_name ?? "a tool"} expired; not executed`,
           );
         }
       }
@@ -1046,6 +1108,7 @@ export class GoalScheduler {
       const pending = this.runtime.pendingApprovalInfo;
       if (pending != null && pending.toolCallId === turn.toolCallId) {
         this.currentGoalId = turn.goalId;
+        this.currentRunId = turn.runId;
         // Leave `awaiting_approval` BEFORE resuming (same reason as the
         // recovered path): a death after the approved call executes must
         // land on a `running` row the next start classifies from the audit
@@ -1054,27 +1117,65 @@ export class GoalScheduler {
         this.runStore.setStatus(turn.runId, "running", {
           note: approved ? "resuming after approval" : "resuming after denial",
         });
-        const resumeStream = this.runtime.resumeAfterApproval(approved);
-        const result = await this.consumeDaemonStream(resumeStream, turn.goalId, turn.runId);
-        this.currentGoalId = null;
-        if (!result.suspended) {
-          // The resumed turn ran to its end (a second pause would have
-          // re-marked the run awaiting_approval itself).
-          this.runStore.setStatus(turn.runId, "completed", {
-            note: approved ? "resumed after approval" : "resumed after denial",
-          });
-          if (approved) {
-            this.goalStore.updateLastRun(turn.goalId, Date.now());
+        try {
+          const resumeStream = this.runtime.resumeAfterApproval(approved);
+          const result = await this.consumeDaemonStream(resumeStream, turn.goalId, turn.runId);
+          if (!result.suspended) {
+            // The resumed turn ran to its end (a second pause would have
+            // re-marked the run awaiting_approval itself).
+            this.runStore.setStatus(turn.runId, "completed", {
+              note: approved ? "resumed after approval" : "resumed after denial",
+            });
+            if (approved) {
+              this.goalStore.updateLastRun(turn.goalId, Date.now());
+            }
           }
+        } catch (err: unknown) {
+          // Every `running` transition needs a failure transition, or the
+          // goal is held behind a row nobody can ack ("running, not
+          // interrupted") until the next restart.
+          const msg = err instanceof Error ? err.message : String(err);
+          errorLine(`[approval] resume of ${approvalId.slice(0, 8)} failed: ${msg}`);
+          this.runStore.setStatus(turn.runId, "failed", { note: `resume failed: ${msg}` });
+          this.goalOutcomeStore.add({
+            outcome_id: crypto.randomUUID(),
+            goal_id: turn.goalId,
+            motebit_id: this.motebitId,
+            ran_at: Date.now(),
+            status: "failed",
+            summary: null,
+            tool_calls_made: 0,
+            memories_formed: 0,
+            error_message: `resume failed: ${msg}`,
+          });
+          this.goalStore.updateLastRun(turn.goalId, Date.now());
+        } finally {
+          this.currentGoalId = null;
+          this.currentRunId = null;
         }
-      } else if (pending != null) {
-        logLine(
-          `[approval] ${approvalId.slice(0, 8)} resolved, but the runtime's pending approval belongs to another actor (${pending.toolName}) — this turn was already voided; not resuming`,
-        );
       } else {
-        logLine(
-          `[approval] ${approvalId.slice(0, 8)} resolved, but its suspended turn is gone (voided or expired) — nothing to resume`,
-        );
+        // Two "nothing to resume" cases. Either way the paused turn no
+        // longer exists, so the stored verdict cannot be applied to it —
+        // and it must NOT fall through to the recovered-approval drain,
+        // which would execute the call out of band, possibly long after the
+        // conversation already recorded it as timed out.
+        if (pending != null) {
+          logLine(
+            `[approval] ${approvalId.slice(0, 8)} resolved, but the runtime's pending approval belongs to another actor (${pending.toolName}) — this turn was already voided; not resuming`,
+          );
+          this.closeVoidedRun(
+            turn,
+            `${item.tool_name} approval resolved after the paused turn was voided by another actor's approval — not executed`,
+          );
+        } else {
+          logLine(
+            `[approval] ${approvalId.slice(0, 8)} resolved, but its suspended turn is gone (voided or expired) — nothing to resume`,
+          );
+          this.closeVoidedRun(
+            turn,
+            `${item.tool_name} approval resolved after the paused turn expired in the runtime — not executed; the conversation already recorded the call as failed`,
+          );
+        }
       }
 
       this.suspended.delete(approvalId);
@@ -1142,6 +1243,18 @@ export class GoalScheduler {
         });
         continue;
       }
+      // The TTL is a bound on the DECISION, not on the sweep: an approval
+      // granted after its expiry (the daemon was down, so no tick expired the
+      // row) is a stale decision and is never executed.
+      const decidedAt = item.resolved_at ?? Date.now();
+      if (decidedAt > item.expires_at) {
+        this.finishRecoveredRun(run, {
+          ok: false,
+          summary: `${item.tool_name} was approved ${formatMsAgo(decidedAt - item.expires_at)} after its approval expired — not executed`,
+          countAsFailure: false,
+        });
+        continue;
+      }
       if (item.args_json == null) {
         this.finishRecoveredRun(run, {
           ok: false,
@@ -1150,6 +1263,19 @@ export class GoalScheduler {
         });
         continue;
       }
+      // Never execute anything while another actor's approval is pending in
+      // the shared runtime (a human's live prompt from an attached surface);
+      // wait for the next tick instead.
+      if (this.runtime.hasPendingApproval) {
+        if (!this.foreignPendingLogged) {
+          this.foreignPendingLogged = true;
+          logLine(
+            `[approval] ${item.approval_id.slice(0, 8)} approved, but another approval is pending in the runtime — waiting`,
+          );
+        }
+        continue;
+      }
+      this.foreignPendingLogged = false;
       // `risk_level` is the persisted numeric tier (-1 when unknown).
       const moneyTier: number = RiskLevel.R4_MONEY;
       if (item.risk_level >= moneyTier) {
@@ -1172,7 +1298,8 @@ export class GoalScheduler {
         });
         continue;
       }
-      const argsHash = hashArgs(JSON.stringify(args));
+      // Hash the stored bytes, exactly what was persisted at pause time.
+      const argsHash = hashArgs(item.args_json);
       if (argsHash !== item.args_hash) {
         this.finishRecoveredRun(run, {
           ok: false,
@@ -1195,6 +1322,11 @@ export class GoalScheduler {
         note: `executing ${item.tool_name} approved after restart`,
       });
       this.currentGoalId = run.goal_id;
+      this.currentRunId = run.run_id;
+      // Goal-scoped tools (create_sub_goal / complete_goal / report_progress)
+      // are registered per fire and unregistered after; an approved call to
+      // one of them must find it registered here too.
+      this.registerGoalTools();
       let result: { ok: boolean; data?: unknown; error?: string };
       try {
         result = await this.runtime.invokeLocalTool(item.tool_name, args, {
@@ -1206,6 +1338,8 @@ export class GoalScheduler {
         result = { ok: false, error: err instanceof Error ? err.message : String(err) };
       } finally {
         this.currentGoalId = null;
+        this.currentRunId = null;
+        this.unregisterGoalTools();
       }
       const shown = result.ok
         ? JSON.stringify(result.data ?? null).slice(0, 500)
@@ -1219,6 +1353,18 @@ export class GoalScheduler {
         toolCallsMade: 1,
       });
     }
+  }
+
+  /**
+   * A suspended turn that no longer exists in the runtime (voided by another
+   * actor's approval, or timed out) cannot receive its verdict. Close the run
+   * so the goal is released on cadence and the recovered-approval drain does
+   * not execute the call out of band. No-op unless the run is still waiting.
+   */
+  private closeVoidedRun(turn: SuspendedTurn, summary: string): void {
+    const run = this.runStore.get(turn.runId);
+    if (run == null || run.status !== "awaiting_approval") return;
+    this.finishRecoveredRun(run, { ok: false, summary, countAsFailure: false });
   }
 
   /**
@@ -1417,4 +1563,11 @@ function formatMs(ms: number): string {
   if (ms >= 86_400_000) return `${ms / 86_400_000}d`;
   if (ms >= 3_600_000) return `${ms / 3_600_000}h`;
   return `${ms / 60_000}m`;
+}
+
+function formatMsAgo(ms: number): string {
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h`;
+  return `${Math.round(ms / 86_400_000)}d`;
 }

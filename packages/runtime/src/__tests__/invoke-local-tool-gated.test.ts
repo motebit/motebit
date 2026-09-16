@@ -165,11 +165,14 @@ describe("invokeLocalTool — durable execution ledger (intent row, then complet
       { invocationOrigin: "scheduled", humanApproved: true, runId: "run-recovered" },
     );
     const rows = sink.getAll().filter((r) => r.tool === "write_thing");
-    const reasons = rows.map((r) => r.decision.reason ?? (r.result ? "result" : "decision"));
-    expect(reasons).toContain("approval_satisfied:human-approved");
-    expect(reasons.indexOf("approval_satisfied:human-approved")).toBeLessThan(
-      reasons.indexOf("result"),
-    );
+    // The paused decision entry, then the approval-satisfied entry — which
+    // the completion later closes IN PLACE (result added, decision kept).
+    const paused = rows.find((r) => r.decision.requiresApproval);
+    const satisfied = rows.find((r) => r.decision.reason === "approval_satisfied:human-approved");
+    expect(paused).toBeDefined();
+    expect(paused!.result).toBeUndefined();
+    expect(satisfied).toBeDefined();
+    expect(satisfied!.result?.ok).toBe(true);
     expect(rows.every((r) => r.runId === "run-recovered")).toBe(true);
   });
 

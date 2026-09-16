@@ -14,6 +14,7 @@ import type { ToolAuditEntry, ToolDefinition } from "@motebit/protocol";
 import {
   PolicyGate,
   InMemoryAuditSink,
+  ChainedAuditSink,
   AuditLogger,
   findUnresolvedActions,
   countCompletedActions,
@@ -163,5 +164,37 @@ describe("findUnresolvedActions — the crash-window reading of the ledger", () 
     ];
     expect(countCompletedActions(rows)).toBe(2);
     expect(findUnresolvedActions(rows).map((e) => e.callId)).toEqual(["c"]);
+  });
+});
+
+describe("one entry per call — completions merge instead of duplicating", () => {
+  it("InMemoryAuditSink keeps a single entry per callId after the completion and counts stats once", () => {
+    const sink = new InMemoryAuditSink();
+    const logger = new AuditLogger(sink);
+    const decision = { allowed: true, requiresApproval: false };
+    logger.logDecision("t", "c1", "write_thing", {}, decision);
+    logger.logResult("t", "c1", "write_thing", {}, decision, true, 7);
+    logger.logDecision("t", "c2", "write_thing", {}, decision);
+    logger.logResult("t", "c2", "write_thing", {}, decision, false, 7);
+
+    expect(sink.getAll()).toHaveLength(2);
+    const stats = sink.queryStatsSince(0);
+    expect(stats.totalToolCalls).toBe(2);
+    expect(stats.succeeded).toBe(1);
+    expect(stats.failed).toBe(1);
+    expect(findUnresolvedActions(sink.getAll())).toEqual([]);
+  });
+
+  it("ChainedAuditSink merges in the inner store but appends the completion as its own chain link", async () => {
+    const inner = new InMemoryAuditSink();
+    const chained = new ChainedAuditSink({ inner });
+    const logger = new AuditLogger(chained);
+    const decision = { allowed: true, requiresApproval: false };
+    logger.logDecision("t", "c1", "write_thing", {}, decision);
+    logger.logResult("t", "c1", "write_thing", {}, decision, true, 7);
+    await chained.drainChain();
+    expect(inner.getAll()).toHaveLength(1);
+    expect(inner.getAll()[0]!.result?.ok).toBe(true);
+    expect(await chained.getChainEntries()).toHaveLength(2);
   });
 });

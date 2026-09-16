@@ -30,8 +30,14 @@ export async function handlePs(config: CliConfig): Promise<void> {
 
     const routineGoals = goals.filter((g) => g.routine_id != null);
     const manualGoals = goals.filter((g) => g.routine_id == null);
+    // A live `running` row blocks a replacement run too, but it is not
+    // "held on you" — it is the daemon working right now.
+    const blocking = moteDb.goalRunStore.listBlocking(motebitId);
     const held = new Map(
-      moteDb.goalRunStore.listBlocking(motebitId).map((r) => [r.goal_id, r] as const),
+      blocking.filter((r) => r.status !== "running").map((r) => [r.goal_id, r] as const),
+    );
+    const live = new Map(
+      blocking.filter((r) => r.status === "running").map((r) => [r.goal_id, r] as const),
     );
 
     const header = `  ${"KEY".padEnd(24)}${"EVERY".padEnd(10)}${"ENABLED".padEnd(10)}${"LAST RUN".padEnd(16)}NEXT RUN`;
@@ -39,10 +45,24 @@ export async function handlePs(config: CliConfig): Promise<void> {
     console.log("  " + "-".repeat(header.length - 2));
 
     for (const g of routineGoals) {
-      console.log(formatRow(g, { manual: false, held: held.get(g.goal_id) ?? null }));
+      console.log(
+        formatRow(g, {
+          manual: false,
+          held: held.get(g.goal_id) ?? null,
+          live: live.get(g.goal_id) ?? null,
+        }),
+      );
     }
     for (const g of manualGoals) {
-      console.log(dim(formatRow(g, { manual: true, held: held.get(g.goal_id) ?? null })));
+      console.log(
+        dim(
+          formatRow(g, {
+            manual: true,
+            held: held.get(g.goal_id) ?? null,
+            live: live.get(g.goal_id) ?? null,
+          }),
+        ),
+      );
     }
     if (held.size > 0) {
       console.log("");
@@ -55,7 +75,10 @@ export async function handlePs(config: CliConfig): Promise<void> {
   }
 }
 
-function formatRow(g: Goal, opts: { manual: boolean; held: GoalRun | null }): string {
+function formatRow(
+  g: Goal,
+  opts: { manual: boolean; held: GoalRun | null; live: GoalRun | null },
+): string {
   const key = opts.manual ? `${g.goal_id.slice(0, 8)} (manual)` : (g.routine_id ?? "?");
   const every = formatMs(g.interval_ms);
   const enabled = g.enabled ? "yes" : "no";
@@ -63,9 +86,11 @@ function formatRow(g: Goal, opts: { manual: boolean; held: GoalRun | null }): st
   const nextRun =
     opts.held != null
       ? `HELD (${opts.held.status === "awaiting_approval" ? "awaiting approval" : "interrupted"} ${opts.held.run_id.slice(0, 8)})`
-      : g.last_run_at != null
-        ? formatTimeAgo(g.last_run_at + g.interval_ms)
-        : "on next tick";
+      : opts.live != null
+        ? `running now (${opts.live.run_id.slice(0, 8)})`
+        : g.last_run_at != null
+          ? formatTimeAgo(g.last_run_at + g.interval_ms)
+          : "on next tick";
   return `  ${truncate(key, 24).padEnd(24)}${every.padEnd(10)}${enabled.padEnd(10)}${lastRun.padEnd(16)}${nextRun}`;
 }
 

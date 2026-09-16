@@ -1109,6 +1109,14 @@ export class SqliteToolAuditSink implements AuditLogSink {
     );
   }
 
+  /** Update the recorded row's result in place; the decision as recorded is kept. */
+  complete(entry: ToolAuditEntry): void {
+    const info = this.db
+      .prepare(`UPDATE tool_audit_log SET result = ?, timestamp = ? WHERE call_id = ?`)
+      .run(entry.result ? JSON.stringify(entry.result) : null, entry.timestamp, entry.callId);
+    if (info.changes === 0) this.append(entry);
+  }
+
   enumerateForFlush(beforeTimestamp: number): ToolAuditEntry[] {
     const rows = this.db
       .prepare(`SELECT * FROM tool_audit_log WHERE timestamp < ? ORDER BY timestamp ASC`)
@@ -1815,16 +1823,6 @@ export class SqliteApprovalStore {
       item.denied_reason,
       item.args_json ?? null,
     );
-  }
-
-  /** Resolved approvals (approved | denied) — the post-restart drain reads these. */
-  listResolved(motebitId: string): ApprovalItem[] {
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM approval_queue WHERE motebit_id = ? AND status IN ('approved', 'denied') ORDER BY resolved_at ASC`,
-      )
-      .all(motebitId) as ApprovalRow[];
-    return rows.map(rowToApproval);
   }
 
   get(approvalId: string): ApprovalItem | null {
