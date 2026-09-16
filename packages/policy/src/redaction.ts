@@ -55,7 +55,11 @@ const SECRET_PATTERNS: {
     pattern: /\b(sk|pk|api|key|token|secret)[_-]?[a-zA-Z0-9]{20,}\b/gi,
     label: "API_KEY",
     cloudEgress: true,
-    shapeKeyed: true,
+    // NOT shape-keyed: this matches any long word beginning `key`,
+    // `api`, `token` or `secret`, so a URL path segment like
+    // `keyboardshortcutsandmoreinfo` fires it. Precise enough for a
+    // user's own typed message, useless over a stranger's page.
+    shapeKeyed: false,
   },
   // AWS keys
   { pattern: /\bAKIA[0-9A-Z]{16}\b/g, label: "AWS_KEY", cloudEgress: true, shapeKeyed: true },
@@ -64,7 +68,10 @@ const SECRET_PATTERNS: {
     pattern: /\bBearer\s+[A-Za-z0-9\-._~+/]+=*\b/g,
     label: "BEARER_TOKEN",
     cloudEgress: true,
-    shapeKeyed: true,
+    // NOT shape-keyed: the shape is the WORD "Bearer", so "Bearer bonds
+    // were phased out in the 1980s" matches. True of an HTTP header,
+    // not of a sentence on a fetched page.
+    shapeKeyed: false,
   },
   // JWTs
   {
@@ -110,11 +117,33 @@ const SECRET_PATTERNS: {
     pattern: /\b(?<![a-z] )(?:[a-z]{3,8} ){11}[a-z]{3,8}\b(?! [a-z])/g,
     label: "SEED_PHRASE",
     cloudEgress: true,
-    shapeKeyed: true,
+    // NOT shape-keyed: twelve short lowercase words is a statistical
+    // shape, and ordinary prose has it — "the quick brown fox jumps
+    // over some lazy dogs that ran away" matches. A seed phrase in a
+    // user's own message is a near-certainty; the same run of words on
+    // a fetched page is a sentence.
+    shapeKeyed: false,
   },
   {
     pattern: /\b(?<![a-z] )(?:[a-z]{3,8} ){23}[a-z]{3,8}\b(?! [a-z])/g,
     label: "SEED_PHRASE",
+    cloudEgress: true,
+    // NOT shape-keyed: twelve short lowercase words is a statistical
+    // shape, and ordinary prose has it — "the quick brown fox jumps
+    // over some lazy dogs that ran away" matches. A seed phrase in a
+    // user's own message is a near-certainty; the same run of words on
+    // a fetched page is a sentence.
+    shapeKeyed: false,
+  },
+  // Vendor key formats with a mandatory punctuation separator. Ordinary
+  // words do not contain one, which is what makes this safe over
+  // third-party prose where the bare-prefix API_KEY pattern above is
+  // not. Also catches the `sk-proj-…` and `ghp_…` shapes that pattern
+  // misses, because it allows only one separator.
+  {
+    pattern:
+      /\b(?:(?:sk|pk|rk)-(?:[A-Za-z0-9]+-)*[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g,
+    label: "VENDOR_KEY",
     cloudEgress: true,
     shapeKeyed: true,
   },

@@ -183,20 +183,49 @@ describe("PolicyGate.recordEvidence — the sibling artifact recordResult names"
     expect(sink.entries).toHaveLength(1);
   });
 
-  it("does NOT catch every key format — the residual, stated rather than implied", () => {
-    // The credential-class set keys on a shared pattern table whose
-    // API_KEY rule allows a single separator, so `sk-proj-…` and `ghp_…`
-    // slip past it. Widening that rule changes what is stripped from
-    // every outbound message to a cloud provider, so it belongs to that
-    // table's own change. This test exists so the gap is a recorded
-    // fact rather than something a later reader assumes is covered.
+  it("catches vendor key formats the older pattern let through", () => {
+    // This once recorded the gap instead: the shared API_KEY rule allows
+    // a single separator, so `sk-proj-…` and `ghp_…` walked past it. The
+    // replacement keys on the mandatory punctuation separator those
+    // formats have and ordinary words do not, which is what makes it
+    // safe to run over a stranger's page as well as a user's message.
     const { gate, sink, ctx, decision } = setup();
-    gate.recordEvidence(ctx, decision, "read_url", {
-      ok: true,
-      data: "OPENAI_API_KEY=sk-proj-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
-      source_digest: DIGEST,
-    });
-    expect(sink.entries).toHaveLength(1);
+    for (const key of [
+      "OPENAI_API_KEY=sk-proj-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "token ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "xoxb-123456789012-abcdefghijkl",
+    ]) {
+      gate.recordEvidence(ctx, decision, "read_url", {
+        ok: true,
+        data: key,
+        source_digest: DIGEST,
+      });
+    }
+    expect(sink.entries).toEqual([]);
+  });
+
+  it("leaves ordinary page text alone — the guard's cost is measured, not assumed", () => {
+    // Every one of these tripped an earlier version of this guard, and
+    // the guard's response is to record NOTHING, so each false positive
+    // costs an owner the evidence for that fetch and tells them nothing
+    // was retrieved.
+    const { gate, sink, ctx, decision } = setup();
+    const benign = [
+      "Reuters, the quick brown fox jumps over some lazy dogs that ran away.",
+      "See https://docs.example.com/keyboardshortcutsandmoreinfo for details.",
+      "Bearer bonds were phased out in the 1980s, the report notes.",
+      "Set DATABASE_URL to postgres://localhost/mydb before running.",
+      "Password: required. Username: optional.",
+      "Fixed in commit a1b2c3d4e5f60718293a4b5c6d7e8f9012345678.",
+    ];
+    for (const text of benign) {
+      gate.recordEvidence(ctx, decision, "read_url", {
+        ok: true,
+        data: text,
+        source_digest: DIGEST,
+      });
+    }
+    expect(sink.entries).toHaveLength(benign.length);
   });
 
   it("survives a policy-config change — the sink travels with the swap", () => {

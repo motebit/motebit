@@ -823,7 +823,13 @@ export class GoalScheduler {
             // COUNT is skipped: a stop the human asked for must not burn
             // the goal's retry budget.
             this.goalOutcomeStore.add({
-              outcome_id: runId,
+              // Fresh id + `run_id` link, like the sibling catch below.
+              // A halt aborts before the result is written today, so this
+              // cannot overwrite one — but the two rows share a table
+              // whose insert replaces, and relying on an ordering that
+              // holds by accident is how the other one came to.
+              outcome_id: crypto.randomUUID(),
+              run_id: runId,
               goal_id: goal.goal_id,
               motebit_id: this.motebitId,
               ran_at: Date.now(),
@@ -845,9 +851,19 @@ export class GoalScheduler {
           errorLine(`[goal] error for ${goal.goal_id.slice(0, 8)}: ${msg}`);
 
           this.runStore.setStatus(runId, "failed", { note: msg });
-          // Record failed outcome (runId = outcome_id for audit correlation)
+          // Fresh id, and linked by `run_id`. This catch wraps the whole
+          // tick INCLUDING the successful path, and several statements
+          // run after `recordCompletedOutcome` — updating last-run,
+          // resetting failures, reading and setting goal status — any of
+          // which can throw on a busy database. Keyed by the run into an
+          // INSERT-OR-REPLACE table, this row would then overwrite the
+          // result that had just been written and destroy the signed
+          // manifest with it: the artifact this whole increment exists
+          // to preserve, deleted by its own error handler. The resume
+          // catch was fixed for this; the primary one was left behind.
           this.goalOutcomeStore.add({
-            outcome_id: runId,
+            outcome_id: crypto.randomUUID(),
+            run_id: runId,
             goal_id: goal.goal_id,
             motebit_id: this.motebitId,
             ran_at: Date.now(),
@@ -896,6 +912,12 @@ export class GoalScheduler {
     goalId: string,
     runId: string,
     signal?: AbortSignal,
+    /**
+     * Text this turn had already produced BEFORE the pause it is now
+     * resuming from. Carried so that a turn which pauses twice does not
+     * lose its first segment — see the suspend site below.
+     */
+    carriedText = "",
   ): Promise<GoalStreamResult> {
     let toolCallsMade = 0;
     let memoriesFormed = 0;
@@ -955,7 +977,15 @@ export class GoalScheduler {
             runId,
             createdAt: now,
             toolCallId: chunk.tool_call_id,
-            ...(responseText !== "" ? { textBeforePause: responseText } : {}),
+            // Carried forward, not overwritten: a resumed turn can pause
+            // AGAIN, and this stream holds only the current segment. The
+            // first version recorded segment two and lost segment one,
+            // so the eventual signature covered everything except the
+            // beginning — the same partial-signed-as-whole defect it was
+            // written to close, one pause further in.
+            ...(carriedText + responseText !== ""
+              ? { textBeforePause: carriedText + responseText }
+              : {}),
           });
 
           logLine(`\n  [approval-pending] ${chunk.name} — approval_id: ${approvalId.slice(0, 8)}`);
@@ -1143,6 +1173,11 @@ export class GoalScheduler {
             runId: runId ?? approvalId,
             createdAt: now,
             toolCallId: innerChunk.tool_call_id,
+            // Plan mode carries the pre-pause text too. Setting it only
+            // on the other stream meant every plan-mode goal that paused
+            // for approval signed the continuation alone, with
+            // `withTextBeforePause` a silent no-op there.
+            ...(responseText !== "" ? { textBeforePause: responseText } : {}),
           });
           logLine(
             `\n  [approval-pending] ${innerChunk.name} — approval_id: ${approvalId.slice(0, 8)}`,
@@ -1239,9 +1274,17 @@ export class GoalScheduler {
           // `progress` silently refuses — while this path nonetheless
           // records the run as having reached an outcome. The sibling
           // resume path sets both for the same reason.
+          const priorGoalId = this.currentGoalId;
+          const priorRunId = this.currentRunId;
           this.currentGoalId = expiredGoalId;
           this.currentRunId = expiredRunId;
-          void this.consumeDaemonStream(resumeStream, expiredGoalId, expiredRunId)
+          void this.consumeDaemonStream(
+            resumeStream,
+            expiredGoalId,
+            expiredRunId,
+            undefined,
+            turn.textBeforePause ?? "",
+          )
             .then(async (result) => {
               // `!result.suspended`, like the sibling path. A denied
               // continuation can make ANOTHER approval-gated call, and
@@ -1271,8 +1314,17 @@ export class GoalScheduler {
               );
             })
             .finally(() => {
-              this.currentGoalId = null;
-              this.currentRunId = null;
+              // RESTORED, not nulled. This runs off a fire-and-forget
+              // promise while the run is `running` rather than blocking,
+              // so a later tick can start a fresh run and set these to
+              // ITS ids — and nulling then stripped the live run's
+              // context from under it. `halt` reads `currentRunId` to
+              // abort, and a graceful stop reads it to close the run, so
+              // both would have silently stopped working on a run that
+              // was genuinely in flight, leaving it to be reclassified
+              // as interrupted and held behind a human.
+              this.currentGoalId = priorGoalId;
+              this.currentRunId = priorRunId;
             })
             .catch((err: unknown) => {
               // Every `running` transition needs a failure transition.
@@ -1351,7 +1403,13 @@ export class GoalScheduler {
         });
         try {
           const resumeStream = this.runtime.resumeAfterApproval(approved);
-          const result = await this.consumeDaemonStream(resumeStream, turn.goalId, turn.runId);
+          const result = await this.consumeDaemonStream(
+            resumeStream,
+            turn.goalId,
+            turn.runId,
+            undefined,
+            turn.textBeforePause ?? "",
+          );
           if (!result.suspended) {
             // The resumed turn ran to its end (a second pause would have
             // re-marked the run awaiting_approval itself).

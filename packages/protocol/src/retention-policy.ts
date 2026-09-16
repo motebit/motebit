@@ -545,7 +545,7 @@ export type RetentionShapeDeclaration =
  * these exact strings with the manifest's `RetentionStoreDeclaration.store_id`.
  */
 export type RuntimeStoreId =
-  "memory" | "event_log" | "conversation_messages" | "tool_audit" | "skill_audit";
+  "memory" | "event_log" | "conversation_messages" | "tool_audit" | "skill_audit" | "run_evidence";
 
 /**
  * Canonical registry: `RuntimeStoreId` → declared `RetentionShape`.
@@ -600,6 +600,23 @@ export const RUNTIME_RETENTION_REGISTRY: Readonly<
     kind: "consolidation_flush",
     flush_to: "expire",
     has_min_floor_resolver: false,
+  },
+  // `run_evidence` holds the re-checkable pointers a run produced —
+  // including a bounded span of VERBATIM third-party retrieved content,
+  // which makes it the most revealing runtime store here and the one a
+  // published manifest can least afford to omit. It shipped unregistered
+  // once: a registry the gate iterates cannot go red about a store that
+  // is not in it, so omission is invisible by construction.
+  //
+  // `append_only_horizon`, not `consolidation_flush`, because that is
+  // what it does: rows are never rewritten, and they age out on a fixed
+  // horizon rather than a per-record sensitivity tier — deliberately,
+  // since nothing can classify content fetched from somewhere else, and
+  // "unknown" must mean held for LESS time rather than forever.
+  run_evidence: {
+    kind: "append_only_horizon",
+    horizon_advance_period_days: 90,
+    witness_required: false,
   },
 });
 

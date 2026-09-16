@@ -3644,7 +3644,7 @@ export const RUNTIME_ATTACH_AUDIENCE: TokenAudience;
 export const RUNTIME_RETENTION_REGISTRY: Readonly<Record<RuntimeStoreId, RetentionShapeDeclaration>>;
 
 // @public
-export type RuntimeStoreId = "memory" | "event_log" | "conversation_messages" | "tool_audit" | "skill_audit";
+export type RuntimeStoreId = "memory" | "event_log" | "conversation_messages" | "tool_audit" | "skill_audit" | "run_evidence";
 
 // @alpha
 export interface ScreencastFrame {
