@@ -55,10 +55,14 @@ permissions:
   contents: read
   actions: read # read the CI run status for the gate below
 
+# Split for the same reason as deploy-sync.yml: a gate that WAITS must not
+# spend the budget of the deploy it gates. Staging has not been bitten yet,
+# but it is the same shape, and the sibling-boundary rule says fix both in
+# the pass that found one.
 jobs:
-  deploy:
+  gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
 
     steps:
       # Same gate deploy-sync.yml applies to prod, for the same reason one
@@ -92,6 +96,12 @@ jobs:
           echo "::error::Timed out waiting for CI to conclude on ${sha}."
           exit 1
 
+  deploy:
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master
