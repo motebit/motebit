@@ -308,7 +308,13 @@ export class PolicyGate {
             ? { projectionClass: result.source_projection_class }
             : {}),
           span,
-          locator: { start: 0, end: span.length },
+          // No `locator`. It is advisory, and this gate is tool-agnostic:
+          // asserting the span starts at offset 0 of `projection(bytes)`
+          // happens to hold for today's only producer and would be
+          // quietly wrong for any tool that returns a mid-document
+          // excerpt. An absent advisory field costs a re-verifier
+          // nothing, because the law is substring presence; a wrong one
+          // sends them to the wrong place.
         },
       },
     });

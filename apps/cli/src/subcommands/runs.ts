@@ -226,7 +226,12 @@ export async function handleRunsShow(config: CliConfig): Promise<void> {
       }
       console.log(
         outcome.signed_manifest != null
-          ? dim("  signed — verify with: motebit-verify content-artifact")
+          ? // Not "verify with <command>": that subcommand needs the body
+            // as a file and the manifest, and this view prints an
+            // indented body and no manifest at all. Naming a command the
+            // reader cannot run from what is on screen is an affordance
+            // that does not exist.
+            dim("  signed — a manifest over this result is stored with the outcome.")
           : dim("  NOT signed — this is the motebit's own account, not a signed artifact."),
       );
     }
@@ -270,9 +275,20 @@ export async function handleRunsShow(config: CliConfig): Promise<void> {
         const preview = p.span.replace(/\s+/g, " ").slice(0, 100);
         console.log(dim(`    span "${preview}${p.span.length > 100 ? "…" : ""}"`));
       }
+      // The instruction has to match the pointer. A projection-bearing
+      // span lives in the RECIPE's output, not in the raw bytes, so
+      // "hash the bytes and check the span is present" returns absent on
+      // a perfectly valid pointer — and a reader following it literally
+      // would conclude the motebit made the span up. That is the exact
+      // wrong conclusion for this command to cause.
+      const anyProjection = evidence.some((e) => e.evidence.provenance?.projection != null);
       console.log(
         dim(
-          "  Re-fetch the source, hash the bytes, and check the span is present.\n" +
+          "  Re-fetch the source and hash the bytes to confirm the digest.\n" +
+            (anyProjection
+              ? "  Where a projection is named, apply that recipe to the bytes first —\n" +
+                "  the span lives in the recipe's output, not in the raw bytes.\n"
+              : "  The span is located in the bytes directly.\n") +
             "  It proves the bytes were read — never that what they say is true.",
         ),
       );

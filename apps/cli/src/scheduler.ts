@@ -1213,6 +1213,16 @@ export class GoalScheduler {
           const expiredRunId = turn.runId;
           void this.consumeDaemonStream(resumeStream, expiredGoalId, expiredRunId)
             .then(async (result) => {
+              // `!result.suspended`, like the sibling path. A denied
+              // continuation can make ANOTHER approval-gated call, and
+              // then the stream returns suspended with a fresh pending
+              // approval and the run already re-marked
+              // `awaiting_approval`. Closing it here anyway recorded a
+              // run as completed while a human decision was still
+              // queued against it — it vanished from the list of runs
+              // holding their goal, and its outcome said the action did
+              // not run while a second one waited.
+              if (result.suspended) return;
               this.runStore.setStatus(expiredRunId, "completed", {
                 note: "approval expired; the turn continued after the denial",
               });
@@ -1225,9 +1235,31 @@ export class GoalScheduler {
               });
             })
             .catch((err: unknown) => {
-              errorLine(
-                `[approval] expired-continuation of ${id.slice(0, 8)} failed: ${err instanceof Error ? err.message : String(err)}`,
-              );
+              // Every `running` transition needs a failure transition.
+              // The drain this replaced never rejected, so the close
+              // always ran; consuming for a result can throw (the
+              // single-writer guard, a tool-call ceiling), and logging
+              // alone left the run `running` with its suspended entry
+              // already gone — nothing would ever close it, and the goal
+              // stayed blocked until a restart reclassified it as
+              // interrupted and asked a human to acknowledge it.
+              const msg = err instanceof Error ? err.message : String(err);
+              errorLine(`[approval] expired-continuation of ${id.slice(0, 8)} failed: ${msg}`);
+              this.runStore.setStatus(expiredRunId, "failed", {
+                note: `expired-approval continuation failed: ${msg}`,
+              });
+              this.goalOutcomeStore.add({
+                outcome_id: crypto.randomUUID(),
+                run_id: expiredRunId,
+                goal_id: expiredGoalId,
+                motebit_id: this.motebitId,
+                ran_at: Date.now(),
+                status: "failed",
+                summary: null,
+                tool_calls_made: 0,
+                memories_formed: 0,
+                error_message: `expired-approval continuation failed: ${msg}`,
+              });
             });
         } else {
           if (pending != null) {

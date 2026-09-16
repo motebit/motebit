@@ -231,7 +231,9 @@ describe("PolicyGate.recordEvidence — the sibling artifact recordResult names"
     expect(p.span.length).toBeLessThan(long.length);
     // The law is substring presence, so the bound cannot break it.
     expect(long.includes(p.span)).toBe(true);
-    expect(p.locator).toEqual({ start: 0, end: p.span.length });
+    // No locator: it is advisory, and a tool-agnostic gate cannot know
+    // where in the projected text a tool's excerpt begins.
+    expect(p.locator).toBeUndefined();
   });
 
   it("records nothing when no sink is wired — silence, never a fabricated row", () => {

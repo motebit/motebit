@@ -865,8 +865,29 @@ async function flushPhase(
   // slip; it is a false signed claim, which is worse than no claim.
   if (deps.runEvidenceSink?.enumerateStale && deps.runEvidenceSink.eraseForCall) {
     const cutoffTs = ctx.now - EVIDENCE_HORIZON_DAYS * MS_PER_DAY;
+    // Calls still inside a retention OBLIGATION — a settlement or
+    // dispute window — keep their evidence, however old.
+    //
+    // The tool-audit loop above already takes the max of the sensitivity
+    // ceiling and the obligation floor per decision 3, deliberately
+    // holding a disputed call past its ceiling. A flat horizon here
+    // ignored that and destroyed the re-checkable evidence for a
+    // disputed call while the audit row beside it was being kept on
+    // purpose — the one case where being able to re-check matters most.
+    const obligationHeld = new Set<string>();
+    const obligationFloor = deps.toolAuditObligationFloorMs;
+    if (obligationFloor != null && deps.toolAuditSink?.enumerateForFlush) {
+      // Enumerated to `now` rather than to a floor, because an
+      // obligation may outrun every sensitivity ceiling — which is the
+      // whole reason it exists.
+      for (const entry of deps.toolAuditSink.enumerateForFlush(ctx.now)) {
+        const held = obligationFloor(entry);
+        if (held > 0 && ctx.now - entry.timestamp <= held) obligationHeld.add(entry.callId);
+      }
+    }
     for (const callId of deps.runEvidenceSink.enumerateStale(cutoffTs)) {
       if (ctx.signal.aborted) break;
+      if (obligationHeld.has(callId)) continue;
       try {
         await deps.privacy.signFlushCert({
           targetKind: "run_evidence",

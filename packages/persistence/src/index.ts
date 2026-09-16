@@ -1667,7 +1667,16 @@ export class SqliteRunEvidenceStore implements RunEvidenceSink {
 
   record(entry: RunEvidenceEntry): void {
     const p = entry.evidence.provenance;
-    if (p == null) return;
+    if (p == null) {
+      // Raised, not returned. `provenance` is optional on the carrier,
+      // so this is a legal entry — and silently dropping it is exactly
+      // the "none recorded about evidence that was produced" failure
+      // this store chose a plain INSERT to avoid, two lines below its
+      // own comment saying so.
+      throw new Error(
+        "refusing to record a run-evidence entry with no provenance — there is nothing re-checkable in it, and storing it silently would report as absence what was actually produced",
+      );
+    }
     this.stmtRecord.run(
       entry.evidence_id,
       entry.run_id ?? null,
