@@ -39,6 +39,7 @@ import type {
   HaltStoreAdapter,
   RunEvidenceEntry,
   RunEvidenceSink,
+  RunEvidenceWithheldReason,
   DigestAlgorithm,
   ProjectionClass,
   HaltAcknowledgement,
@@ -1587,17 +1588,34 @@ interface RunEvidenceRow {
   tool: string;
   kind: string;
   ref: string;
-  digest_algorithm: string;
-  digest_value: string;
+  digest_algorithm: string | null;
+  digest_value: string | null;
   projection: string | null;
   projection_class: string | null;
-  span: string;
+  span: string | null;
+  withheld_reason: string | null;
   locator_start: number | null;
   locator_end: number | null;
   recorded_at: number;
 }
 
 function rowToRunEvidence(row: RunEvidenceRow): RunEvidenceEntry {
+  // A withheld row is a refusal, not a pointer: it carries no digest,
+  // no span and no source, so it reads back as a bare `EvidenceRef`
+  // with the reason attached — the protocol's own back-compat shape for
+  // a producer that has nothing it can back.
+  if (row.withheld_reason != null) {
+    return {
+      evidence_id: row.evidence_id,
+      ...(row.run_id != null ? { run_id: row.run_id } : {}),
+      turn_id: row.turn_id,
+      call_id: row.call_id,
+      tool: row.tool,
+      recorded_at: row.recorded_at,
+      evidence: { kind: row.kind, ref: row.ref },
+      withheld_reason: row.withheld_reason as RunEvidenceWithheldReason,
+    };
+  }
   return {
     evidence_id: row.evidence_id,
     ...(row.run_id != null ? { run_id: row.run_id } : {}),
@@ -1616,13 +1634,13 @@ function rowToRunEvidence(row: RunEvidenceRow): RunEvidenceEntry {
           // faithfully and fails the re-check rather than being
           // silently relabelled here.
           algorithm: row.digest_algorithm as DigestAlgorithm,
-          value: row.digest_value,
+          value: row.digest_value ?? "",
         },
         ...(row.projection != null ? { projection: row.projection } : {}),
         ...(row.projection_class != null
           ? { projectionClass: row.projection_class as ProjectionClass }
           : {}),
-        span: row.span,
+        span: row.span ?? "",
         ...(row.locator_start != null && row.locator_end != null
           ? { locator: { start: row.locator_start, end: row.locator_end } }
           : {}),
@@ -1656,8 +1674,8 @@ export class SqliteRunEvidenceStore implements RunEvidenceSink {
       `INSERT INTO run_evidence
        (evidence_id, run_id, turn_id, call_id, tool, kind, ref,
         digest_algorithm, digest_value, projection, projection_class,
-        span, locator_start, locator_end, recorded_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        span, locator_start, locator_end, recorded_at, withheld_reason)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtListForRun = db.prepare(
       `SELECT * FROM run_evidence WHERE run_id = ? ORDER BY recorded_at ASC`,
@@ -1669,6 +1687,30 @@ export class SqliteRunEvidenceStore implements RunEvidenceSink {
 
   record(entry: RunEvidenceEntry): void {
     const p = entry.evidence.provenance;
+    if (entry.withheld_reason != null) {
+      // A refusal. Written with no digest, no span and no source — the
+      // whole point is that nothing retrieved is kept — so that a reader
+      // can tell "we would not keep this" from "nothing was read".
+      this.stmtRecord.run(
+        entry.evidence_id,
+        entry.run_id ?? null,
+        entry.turn_id,
+        entry.call_id,
+        entry.tool,
+        entry.evidence.kind,
+        entry.evidence.ref,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        entry.recorded_at,
+        entry.withheld_reason,
+      );
+      return;
+    }
     if (p == null) {
       // Raised, not returned. `provenance` is optional on the carrier,
       // so this is a legal entry — and silently dropping it is exactly
@@ -1695,6 +1737,7 @@ export class SqliteRunEvidenceStore implements RunEvidenceSink {
       p.locator?.start ?? null,
       p.locator?.end ?? null,
       entry.recorded_at,
+      null,
     );
   }
 

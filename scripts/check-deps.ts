@@ -223,6 +223,9 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     "getSuiteEntry",
     // Content-digest algorithm — pure type guard over a frozen union (evidence-provenance)
     "isDigestAlgorithm",
+    // Why a run's evidence pointer was withheld — pure type guard over a
+    // frozen union, same shape as `isDigestAlgorithm` above
+    "isRunEvidenceWithheldReason",
     // Tool-mode taxonomy — pure sort-priority lookup over a closed union
     "toolModePriority",
     // Sensitivity ladder algebra — pure math over the closed

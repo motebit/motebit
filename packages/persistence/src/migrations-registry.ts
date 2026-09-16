@@ -538,11 +538,11 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
         tool TEXT NOT NULL,
         kind TEXT NOT NULL,
         ref TEXT NOT NULL,
-        digest_algorithm TEXT NOT NULL,
-        digest_value TEXT NOT NULL,
+        digest_algorithm TEXT,
+        digest_value TEXT,
         projection TEXT,
         projection_class TEXT,
-        span TEXT NOT NULL,
+        span TEXT,
         locator_start INTEGER,
         locator_end INTEGER,
         recorded_at INTEGER NOT NULL,
@@ -553,7 +553,14 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
         -- has somewhere to write when one arrives, and so this store's
         -- at-rest shape matches the consolidation_flush contract it
         -- declares rather than quietly diverging from it.
-        sensitivity TEXT
+        sensitivity TEXT,
+        -- Set when this row records a REFUSAL rather than a pointer: the
+        -- tool retrieved something and the credential guard would not
+        -- keep it. Such a row carries no digest, no span and no source,
+        -- so a withheld pointer is distinguishable from a tool that
+        -- never retrieved anything -- two absences that meant the same
+        -- thing to every reader until now.
+        withheld_reason TEXT
       )`,
       "CREATE INDEX IF NOT EXISTS idx_run_evidence_run ON run_evidence (run_id, recorded_at)",
       "CREATE INDEX IF NOT EXISTS idx_run_evidence_call ON run_evidence (call_id)",

@@ -3371,6 +3371,26 @@ export interface AuditLogSink {
  * emits nothing — absence is honest, and a bare pointer with no
  * provenance is never a claim the producer cannot back.
  */
+/**
+ * Why a pointer that COULD have been recorded was not.
+ *
+ * Only ever a deliberate withholding. A tool that retrieved nothing, or
+ * that did not content-address what it read, produces no entry at all —
+ * that is an honest absence and needs no marker. This is the other case:
+ * evidence existed and was refused, which a reader must be able to tell
+ * apart from nothing having happened.
+ */
+export type RunEvidenceWithheldReason = "credential_in_span" | "credential_in_source";
+
+export const ALL_RUN_EVIDENCE_WITHHELD_REASONS: readonly RunEvidenceWithheldReason[] =
+  Object.freeze(["credential_in_span", "credential_in_source"]);
+
+export function isRunEvidenceWithheldReason(v: unknown): v is RunEvidenceWithheldReason {
+  return (
+    typeof v === "string" && (ALL_RUN_EVIDENCE_WITHHELD_REASONS as readonly string[]).includes(v)
+  );
+}
+
 export interface RunEvidenceEntry {
   evidence_id: string;
   /** The goal run this belongs to, when the call ran under one. */
@@ -3386,6 +3406,24 @@ export interface RunEvidenceEntry {
    * re-verifies with `verifyEvidenceProvenance` and no trust in us.
    */
   evidence: EvidenceRef;
+  /**
+   * Present when this row records a REFUSAL rather than a pointer.
+   *
+   * The guard that withholds credential-class content had the same flaw
+   * as the thing this vocabulary exists to fix: it made evidence
+   * disappear, and a reader could not tell a withheld pointer from a
+   * tool that never retrieved anything. So a guard whose whole purpose
+   * is honesty produced, inside itself, an absence that means two
+   * different things.
+   *
+   * A withheld row carries NO retrieved content — no digest, no span,
+   * and a `ref` that is the call id rather than the source, because the
+   * source is one of the places a credential hides. It says only that
+   * something was read and deliberately not kept, and why. That is
+   * enough to tell the two absences apart, and enough to notice a guard
+   * firing where it should not.
+   */
+  withheld_reason?: RunEvidenceWithheldReason;
 }
 
 /**

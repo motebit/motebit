@@ -408,6 +408,9 @@ export const ALL_MERKLE_TREE_VERSIONS: readonly MerkleTreeVersion[];
 // @public (undocumented)
 export const ALL_PROJECTION_CLASSES: readonly ProjectionClass[];
 
+// @public (undocumented)
+export const ALL_RUN_EVIDENCE_WITHHELD_REASONS: readonly RunEvidenceWithheldReason[];
+
 // @public
 export const ALL_SENSITIVITY_LEVELS: readonly SensitivityLevel[];
 
@@ -2516,6 +2519,9 @@ export function isMerkleTreeVersion(value: unknown): value is MerkleTreeVersion;
 // @public (undocumented)
 export function isProjectionClass(s: string): s is ProjectionClass;
 
+// @public (undocumented)
+export function isRunEvidenceWithheldReason(v: unknown): v is RunEvidenceWithheldReason;
+
 // @public
 export function isSensitivityLevel(value: unknown): value is SensitivityLevel;
 
@@ -3613,7 +3619,7 @@ export interface RoutingDecisionTranscript {
     readonly winner_motebit_id: string;
 }
 
-// @public
+// @public (undocumented)
 export interface RunEvidenceEntry {
     call_id: string;
     evidence: EvidenceRef;
@@ -3626,6 +3632,7 @@ export interface RunEvidenceEntry {
     tool: string;
     // (undocumented)
     turn_id: string;
+    withheld_reason?: RunEvidenceWithheldReason;
 }
 
 // @public
@@ -3637,6 +3644,9 @@ export interface RunEvidenceSink {
     // (undocumented)
     record(entry: RunEvidenceEntry): void;
 }
+
+// @public
+export type RunEvidenceWithheldReason = "credential_in_span" | "credential_in_source";
 
 // @public
 export const RUNTIME_ATTACH_AUDIENCE: TokenAudience;

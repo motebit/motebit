@@ -77,6 +77,45 @@ describe("SqliteRunEvidenceStore", () => {
     expect(db.runEvidenceStore.enumerateStale(Date.now())).toEqual([]);
   });
 
+  it("a withheld row round-trips as a bare reference with its reason", () => {
+    // Read back as the protocol's own shape for a producer with nothing
+    // it can back: a bare `EvidenceRef`, no provenance, plus the reason.
+    db.runEvidenceStore.record({
+      evidence_id: "w1",
+      run_id: "run-1",
+      turn_id: "turn-1",
+      call_id: "call-9",
+      tool: "read_url",
+      recorded_at: 2_000,
+      evidence: { kind: "tool_result", ref: "call-9" },
+      withheld_reason: "credential_in_source",
+    });
+    const [got] = db.runEvidenceStore.listForRun("run-1");
+    expect(got?.withheld_reason).toBe("credential_in_source");
+    expect(got?.evidence.provenance).toBeUndefined();
+    expect(got?.evidence.ref).toBe("call-9");
+  });
+
+  it("a withheld row is flushed on the same horizon as a pointer", () => {
+    // It holds no retrieved content, but it is still a record of a fetch
+    // and belongs to the same call, so it ages out with everything else
+    // rather than accumulating quietly forever.
+    db.runEvidenceStore.record({
+      evidence_id: "w1",
+      run_id: "run-1",
+      turn_id: "t",
+      call_id: "c-old",
+      tool: "read_url",
+      recorded_at: 1_000,
+      evidence: { kind: "tool_result", ref: "c-old" },
+      withheld_reason: "credential_in_span",
+    });
+    expect(db.runEvidenceStore.enumerateStale(5_000)).toEqual(["c-old"]);
+    expect(db.runEvidenceStore.countForCall("c-old")).toBe(1);
+    db.runEvidenceStore.eraseForCall("c-old");
+    expect(db.runEvidenceStore.listForRun("run-1")).toEqual([]);
+  });
+
   it("reports stale calls by the horizon, and not the fresh ones", () => {
     db.runEvidenceStore.record(entry({ evidence_id: "old", call_id: "c-old", recorded_at: 1_000 }));
     db.runEvidenceStore.record(entry({ evidence_id: "new", call_id: "c-new", recorded_at: 9_000 }));

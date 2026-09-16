@@ -9,6 +9,7 @@ import type {
   ApprovalQuorum,
   RunEvidenceSink,
   RunEvidenceEntry,
+  RunEvidenceWithheldReason,
 } from "@motebit/protocol";
 import { classifyTool, isToolAllowed } from "./risk-model.js";
 import { BudgetEnforcer } from "./budget.js";
@@ -334,7 +335,10 @@ export class PolicyGate {
     // the guard whose whole point is that credential-class content
     // produces no pointer at all. A guard that inspects only the part
     // one happens to think of is not a guard.
-    if (this.redaction.redactCredentialShapes(span).redactionCount > 0) return;
+    if (this.redaction.redactCredentialShapes(span).redactionCount > 0) {
+      this.recordWithheld(sink, ctx, decision, tool, "credential_in_span");
+      return;
+    }
     // The SOURCE is guarded separately, by its own rule.
     //
     // `read_url` passes the request URL, and a URL carries credentials
@@ -351,7 +355,10 @@ export class PolicyGate {
     // prose, and the shared table is applied to prose.
     CREDENTIAL_SHAPES_IN_REF = (ref) =>
       this.redaction.redactCredentialShapes(ref).redactionCount > 0;
-    if (result.source_ref != null && looksLikeCredentialBearingUrl(result.source_ref)) return;
+    if (result.source_ref != null && looksLikeCredentialBearingUrl(result.source_ref)) {
+      this.recordWithheld(sink, ctx, decision, tool, "credential_in_source");
+      return;
+    }
     this.recordOrReport(sink, {
       evidence_id: crypto.randomUUID(),
       ...(ctx.runId != null ? { run_id: ctx.runId } : {}),
@@ -399,6 +406,43 @@ export class PolicyGate {
    * it describes), and this is what stops the absorbing from becoming
    * silence.
    */
+  /**
+   * Record that a pointer WAS produced and deliberately not kept.
+   *
+   * The guard that withholds credential-class content had the same flaw
+   * as the thing this vocabulary exists to remove: it made the evidence
+   * simply vanish, so a reader could not tell a refusal from a tool that
+   * retrieved nothing. Both printed "none recorded". A guard whose whole
+   * justification is honesty was producing an ambiguous absence.
+   *
+   * The row carries no digest, no span and no source — keeping any of
+   * those would defeat the withholding, and the source is itself one of
+   * the places a credential hides. It says only that something was read
+   * and refused, and why. That is enough to separate the two absences,
+   * and enough that a guard firing where it should not becomes
+   * observable instead of invisible — which, after four corrections
+   * found by review rather than by me, is the part that matters.
+   */
+  private recordWithheld(
+    sink: RunEvidenceSink,
+    ctx: Pick<TurnContext, "turnId" | "runId">,
+    decision: PolicyDecision,
+    tool: string,
+    reason: RunEvidenceWithheldReason,
+  ): void {
+    if (decision.callId == null) return;
+    this.recordOrReport(sink, {
+      evidence_id: crypto.randomUUID(),
+      ...(ctx.runId != null ? { run_id: ctx.runId } : {}),
+      turn_id: ctx.turnId,
+      call_id: decision.callId,
+      tool,
+      recorded_at: Date.now(),
+      evidence: { kind: "tool_result", ref: decision.callId },
+      withheld_reason: reason,
+    });
+  }
+
   private recordOrReport(sink: RunEvidenceSink, entry: RunEvidenceEntry): void {
     try {
       sink.record(entry);

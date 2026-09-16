@@ -271,7 +271,13 @@ export async function handleRunsShow(config: CliConfig): Promise<void> {
     }
 
     // --- Evidence: the only re-checkable part ---
-    const evidence = moteDb.runEvidenceStore.listForRun(run.run_id);
+    const all_evidence = moteDb.runEvidenceStore.listForRun(run.run_id);
+    // A refusal is not a pointer and must not be counted as one, but it
+    // must not vanish either — the two absences it used to collapse into
+    // ("we would not keep this" and "nothing was read") are the exact
+    // pair this record exists to keep apart.
+    const withheld = all_evidence.filter((e) => e.withheld_reason != null);
+    const evidence = all_evidence.filter((e) => e.withheld_reason == null);
     console.log(`\nEvidence (${evidence.length})`);
     if (evidence.length === 0) {
       console.log(
@@ -313,6 +319,25 @@ export async function handleRunsShow(config: CliConfig): Promise<void> {
             "  encoding will not match byte-for-byte — a producer-side convention,\n" +
             "  named here rather than left for a stranger to discover.)\n" +
             "  It proves the bytes were read — never that what they say is true.",
+        ),
+      );
+    }
+
+    if (withheld.length > 0) {
+      console.log(`\nWithheld (${withheld.length})`);
+      for (const w of withheld) {
+        const why =
+          w.withheld_reason === "credential_in_source"
+            ? "the source carried a credential"
+            : "the retrieved text carried a credential";
+        console.log(`  ${w.tool} · ${why}`);
+      }
+      console.log(
+        dim(
+          "  Something was read and deliberately not kept, so there is nothing\n" +
+            "  here to re-check. This is NOT the same as nothing having been read —\n" +
+            "  and if it appears where you would not expect it, the guard is wrong,\n" +
+            "  which is the only way anyone finds that out.",
         ),
       );
     }

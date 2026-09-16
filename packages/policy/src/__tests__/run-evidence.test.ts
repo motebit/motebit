@@ -140,6 +140,50 @@ describe("PolicyGate.recordEvidence — the sibling artifact recordResult names"
     expect(data.includes(span)).toBe(true);
   });
 
+  it("a withholding is RECORDED, and carries nothing that was retrieved", () => {
+    // The guard used to make the evidence vanish, so a refusal and a
+    // tool that retrieved nothing both read as "none recorded" — an
+    // ambiguous absence, produced by the guard whose justification is
+    // that absences must not be ambiguous.
+    const { gate, sink, ctx, decision } = setup();
+    gate.recordEvidence(ctx, decision, "read_url", {
+      ok: true,
+      data: "aws_access_key_id = AKIAIOSFODNN7EXAMPLE",
+      source_digest: DIGEST,
+      source_ref: "https://host/data",
+    });
+    expect(sink.entries).toHaveLength(1);
+    const row = sink.entries[0]!;
+    expect(row.withheld_reason).toBe("credential_in_span");
+    // Nothing retrieved survives: no digest, no span, and the reference
+    // is the call rather than the source, because the source is one of
+    // the places a credential hides.
+    expect(row.evidence.provenance).toBeUndefined();
+    expect(row.evidence.ref).toBe("call-1");
+    expect(JSON.stringify(row)).not.toContain("AKIA");
+    expect(JSON.stringify(row)).not.toContain("host/data");
+  });
+
+  it("names WHICH of the two hiding places it found", () => {
+    const { gate, sink, ctx, decision } = setup();
+    gate.recordEvidence(ctx, decision, "read_url", {
+      ok: true,
+      data: "an ordinary page of text",
+      source_digest: DIGEST,
+      source_ref: "https://host/export?api_key=sk-live-AAAAAAAAAAAAAAAA",
+    });
+    expect(sink.entries[0]!.withheld_reason).toBe("credential_in_source");
+    expect(JSON.stringify(sink.entries[0])).not.toContain("sk-live");
+  });
+
+  it("a tool that retrieved nothing leaves no row at all — the other absence", () => {
+    // Still distinct, and deliberately so: there is nothing to refuse,
+    // so there is nothing to say.
+    const { gate, sink, ctx, decision } = setup();
+    gate.recordEvidence(ctx, decision, "write_file", { ok: true, data: "wrote 3 lines" });
+    expect(sink.entries).toEqual([]);
+  });
+
   it("records NOTHING when the retrieved text carries credential-class content", () => {
     // Redacting the span is not an option: the law is that the span is
     // an exact substring of the bytes, so a redacted span is a pointer
@@ -152,7 +196,9 @@ describe("PolicyGate.recordEvidence — the sibling artifact recordResult names"
       source_digest: DIGEST,
       source_ref: "https://example.com/secret",
     });
-    expect(sink.entries).toEqual([]);
+    expect(sink.entries).toHaveLength(1);
+    expect(sink.entries[0]!.withheld_reason).toBe("credential_in_span");
+    expect(sink.entries[0]!.evidence.provenance).toBeUndefined();
   });
 
   it("guards the SOURCE too, not only the span", () => {
@@ -166,7 +212,9 @@ describe("PolicyGate.recordEvidence — the sibling artifact recordResult names"
       source_digest: DIGEST,
       source_ref: "https://host/export?api_key=sk-live-AAAAAAAAAAAAAAAAAAAA",
     });
-    expect(sink.entries).toEqual([]);
+    expect(sink.entries).toHaveLength(1);
+    expect(sink.entries[0]!.withheld_reason).toBe("credential_in_source");
+    expect(sink.entries[0]!.evidence.provenance).toBeUndefined();
   });
 
   it("a credential hides in more places than a query parameter", () => {
@@ -189,7 +237,10 @@ describe("PolicyGate.recordEvidence — the sibling artifact recordResult names"
         source_ref: ref,
       });
     }
-    expect(sink.entries).toEqual([]);
+    // Each one is a RECORDED refusal, not a silent gap.
+    expect(sink.entries).toHaveLength(5);
+    expect(sink.entries.every((e) => e.withheld_reason === "credential_in_source")).toBe(true);
+    expect(JSON.stringify(sink.entries)).not.toContain("X-Amz-Signature");
   });
 
   it("an ordinary query string is not mistaken for a credential", () => {
@@ -236,7 +287,8 @@ describe("PolicyGate.recordEvidence — the sibling artifact recordResult names"
         source_digest: DIGEST,
       });
     }
-    expect(sink.entries).toEqual([]);
+    expect(sink.entries).toHaveLength(3);
+    expect(sink.entries.every((e) => e.withheld_reason === "credential_in_span")).toBe(true);
   });
 
   it("leaves ordinary page text alone — the guard's cost is measured, not assumed", () => {
