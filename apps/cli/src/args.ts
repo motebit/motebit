@@ -514,6 +514,7 @@ Commands:
   approvals approve <id>    Approve a pending tool call
   approvals deny <id> [--reason <text>]  Deny a pending tool call
   runs                      Goal runs holding their goal (paused on you, or interrupted with side effects), then recent runs
+  runs show <run_id>        What one run produced, what its tools reported, and the evidence a stranger could re-check
   runs ack <id> --allow-fresh-run  Release an interrupted run's goal; its next run starts from scratch and may repeat effects — nothing is retried
   halt [goal <id>] [--reason "..."] [--remote]  Stop acting unattended; --remote signs a command to the running runtime and returns its acknowledgement
   resume [<halt_id>|all] [--remote]  Give the permission to act unattended back

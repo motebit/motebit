@@ -1643,6 +1643,7 @@ export class SqliteRunEvidenceStore implements RunEvidenceSink {
   private stmtListForRun: PreparedStatement;
   private stmtEraseForCall: PreparedStatement;
   private stmtStale: PreparedStatement;
+  private stmtCountForCall: PreparedStatement;
 
   constructor(db: DatabaseDriver) {
     this.stmtRecord = db.prepare(
@@ -1662,6 +1663,7 @@ export class SqliteRunEvidenceStore implements RunEvidenceSink {
       `SELECT * FROM run_evidence WHERE run_id = ? ORDER BY recorded_at ASC`,
     );
     this.stmtEraseForCall = db.prepare(`DELETE FROM run_evidence WHERE call_id = ?`);
+    this.stmtCountForCall = db.prepare(`SELECT COUNT(*) AS n FROM run_evidence WHERE call_id = ?`);
     this.stmtStale = db.prepare(`SELECT DISTINCT call_id FROM run_evidence WHERE recorded_at < ?`);
   }
 
@@ -1709,6 +1711,12 @@ export class SqliteRunEvidenceStore implements RunEvidenceSink {
    */
   eraseForCall(callId: string): void {
     this.stmtEraseForCall.run(callId);
+  }
+
+  /** How many pointers sit beside one call. See the port's doc. */
+  countForCall(callId: string): number {
+    const row = this.stmtCountForCall.get(callId) as { n: number } | undefined;
+    return row?.n ?? 0;
   }
 
   /** Call ids with pointers older than the horizon. See the port's doc. */

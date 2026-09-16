@@ -3415,6 +3415,16 @@ export interface RunEvidenceSink {
    */
   eraseForCall?(callId: string): void;
   /**
+   * How many pointers sit beside one tool call.
+   *
+   * A deletion certificate must not be signed for a record that is not
+   * there. Most tool calls never content-address anything, so most have
+   * no evidence at all — and signing anyway produced a verifiable
+   * attestation that something was deleted when nothing was. Callers
+   * ask before they sign.
+   */
+  countForCall?(callId: string): number;
+  /**
    * Call ids whose pointers were recorded before `beforeTimestamp`.
    *
    * Evidence needs a horizon of its OWN, not only the audit row's. A

@@ -128,7 +128,7 @@ The CLI supports several subcommands beyond the default interactive REPL:
 | `motebit halt [goal <id>] [--reason "..."] [--remote]` | Withdraw the permission to act unattended; `--remote` signs a command to the running runtime and returns its acknowledgement |
 | `motebit resume [<halt_id>\|all] [--remote]` | Give that permission back |
 | `motebit halt-status [--remote]` | What is stopped, and whether the motebit has acknowledged it |
-| `motebit runs [list\|ack <run_id> --allow-fresh-run]` | Goal-run ledger: runs holding their goal (paused on you, or interrupted with side effects) and recent runs; `ack --allow-fresh-run` releases a reviewed interrupted run, accepting that its goal's next run may repeat effects |
+| `motebit runs [list\|show <run_id>\|ack <run_id> --allow-fresh-run]` | Goal-run ledger: runs holding their goal (paused on you, or interrupted with side effects) and recent runs; `show` opens one run — what it produced and whether that result is signed, what its tools reported, and the evidence pointers a stranger could re-check against the original source; `ack --allow-fresh-run` releases a reviewed interrupted run, accepting that its goal's next run may repeat effects |
 | `motebit rotate [--reason "..."]` | Rotate Ed25519 keypair with signed succession record |
 
 ### Serve flags

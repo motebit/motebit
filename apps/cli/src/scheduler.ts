@@ -954,7 +954,11 @@ export class GoalScheduler {
           if (chunk.status === "calling") {
             writeOutput(`\n  [tool] ${chunk.name}...`);
             toolCallsMade++;
-            if (toolCallsMade > MAX_TOOL_CALLS_PER_RUN) {
+            // Per RUN, so it counts what was carried across every pause.
+            // Comparing only this stream's counter reset the budget at
+            // each approval: a goal that paused five times could make
+            // 250 calls under a guard that says fifty.
+            if (carriedTools + toolCallsMade > MAX_TOOL_CALLS_PER_RUN) {
               throw new Error(`Goal exceeded ${MAX_TOOL_CALLS_PER_RUN} tool calls — run stopped`);
             }
           } else {
@@ -1196,11 +1200,14 @@ export class GoalScheduler {
             runId: runId ?? approvalId,
             createdAt: now,
             toolCallId: innerChunk.tool_call_id,
-            // Plan mode carries the pre-pause text too. Setting it only
-            // on the other stream meant every plan-mode goal that paused
-            // for approval signed the continuation alone, with
-            // `withTextBeforePause` a silent no-op there.
+            // Plan mode carries the pre-pause text AND the counters.
+            // Setting only the text left the same tail-presented-as-whole
+            // defect in the numbers: a plan goal with three calls before
+            // the pause and one after recorded one, which is what the
+            // return view prints and the next run reads.
             ...(responseText !== "" ? { textBeforePause: responseText } : {}),
+            ...(toolCallsMade > 0 ? { toolCallsBeforePause: toolCallsMade } : {}),
+            ...(memoriesFormed > 0 ? { memoriesBeforePause: memoriesFormed } : {}),
           });
           logLine(
             `\n  [approval-pending] ${innerChunk.name} — approval_id: ${approvalId.slice(0, 8)}`,

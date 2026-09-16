@@ -236,16 +236,24 @@ export async function handleRunsShow(config: CliConfig): Promise<void> {
           console.log(dim("  (summary only — this run predates full-result retention)"));
         }
       }
-      console.log(
-        outcome.signed_manifest != null
-          ? // Not "verify with <command>": that subcommand needs the body
-            // as a file and the manifest, and this view prints an
-            // indented body and no manifest at all. Naming a command the
-            // reader cannot run from what is on screen is an affordance
-            // that does not exist.
-            dim("  signed — a manifest over this result is stored with the outcome.")
-          : dim("  NOT signed — this is the motebit's own account, not a signed artifact."),
-      );
+      // The signature line belongs only to rows that could carry one. A
+      // `suspended` row is written at every approval pause, so an
+      // approval-gated run rendered its real result as "signed" and then,
+      // under "and also", the pause row as "NOT signed — the motebit's
+      // own account". Two verdicts for one run, from the command whose
+      // job is that a reader cannot misread the record.
+      if (outcome.status === "completed" || outcome.status === "partial") {
+        console.log(
+          outcome.signed_manifest != null
+            ? // Not "verify with <command>": that subcommand needs the body
+              // as a file and the manifest, and this view prints an
+              // indented body and no manifest at all. Naming a command the
+              // reader cannot run from what is on screen is an affordance
+              // that does not exist.
+              dim("  signed — a manifest over this result is stored with the outcome.")
+            : dim("  NOT signed — this is the motebit's own account, not a signed artifact."),
+        );
+      }
     }
 
     // --- Tool calls: attribution, not proof ---

@@ -838,7 +838,22 @@ async function flushPhase(
         // and skip the increment, blaming a primary success for a
         // secondary fault.
         try {
-          if (deps.runEvidenceSink?.eraseForCall != null) {
+          // Only when there is something to delete.
+          //
+          // Gated on the sink existing, this signed a certificate for
+          // every tool call that aged out — and most never
+          // content-address anything, so most have no evidence row at
+          // all. Worse, the two sweeps run on different clocks (90 days
+          // here by horizon, 365 by the default tier), so a call that
+          // DID produce evidence got a second, identical certificate
+          // long after the horizon had already deleted it. That is the
+          // two-signed-claims-for-one-identifier defect this changeset
+          // says it closed two rounds ago, reintroduced by splitting the
+          // horizons. Asking first is the whole fix.
+          if (
+            deps.runEvidenceSink?.eraseForCall != null &&
+            (deps.runEvidenceSink.countForCall?.(candidate.callId) ?? 0) > 0
+          ) {
             await deps.privacy.signFlushCert({
               targetKind: "run_evidence",
               targetId: `run_evidence:${candidate.callId}`,
