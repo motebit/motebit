@@ -57,9 +57,10 @@
           "background",
           "local_llm",
           "push_wake",
-          "secure_enclave"
+          "secure_enclave",
+          "unattended_runtime"
         ],
-        "description": "Device-side capability the executor must possess. Closed set defined in @motebit/protocol — `stdio_mcp`, `http_mcp` (transports); `file_system`, `keyring` (resources); `background`, `push_wake` (lifecycle); `local_llm` (sovereign mode); `secure_enclave` (hardware-held identity key). New capabilities are protocol additions, not free-form strings."
+        "description": "Device-side capability the executor must possess. Closed set defined in @motebit/protocol — `stdio_mcp`, `http_mcp` (transports); `file_system`, `keyring` (resources); `background`, `push_wake` (lifecycle); `local_llm` (sovereign mode); `secure_enclave` (hardware-held identity key); `unattended_runtime` (runs unattended work AND wires the durable halt + approval stores, so it can honor a stop and decide a queued approval — distinct from `background`, which several surfaces announce without either store). New capabilities are protocol additions, not free-form strings."
       }
     },
     "step_id": {

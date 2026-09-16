@@ -62,6 +62,13 @@ function mockRuntime(opts: {
     },
     events: { getLatestClock: async () => 0, append: noop },
     goals: { created: noop, executed: noop, progress: noop, completed: noop, removed: noop },
+    // Halt contract (increment 2) — never halted in this fixture.
+    onHalt: () => () => undefined,
+    halts: null,
+    haltInForce: () => null,
+    honorHalts: async () => [],
+    liftHalt: async () => false,
+    setGoalIdResolver: () => undefined,
     setGoalStatusResolver: () => undefined,
     getToolRegistry: () => ({ register: () => undefined, replace: () => undefined }),
     stop: () => undefined,

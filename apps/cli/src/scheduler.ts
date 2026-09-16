@@ -10,6 +10,7 @@ import type {
   GoalRun,
   UncertainAction,
 } from "@motebit/persistence";
+import type { HaltRequest } from "@motebit/sdk";
 import { EventType, RiskLevel, PlanStatus, SensitivityLevel } from "@motebit/sdk";
 import type { ToolHandler, AuditLogSink } from "@motebit/sdk";
 import { findUnresolvedActions, countCompletedActions } from "@motebit/policy";
@@ -32,6 +33,18 @@ import { dim, warn as warnColor, error as errorColor } from "./colors.js";
 const logLine = (msg: string): void => writeLine(dim(msg));
 const warnLine = (msg: string): void => writeLine(warnColor(msg));
 const errorLine = (msg: string): void => writeLine(errorColor(msg));
+
+/**
+ * The abort reason a halt uses, so the goal-run catch can tell a stop
+ * the human asked for from a genuine failure. A halt must not spend the
+ * goal's retry budget.
+ */
+class HaltAbort extends Error {
+  constructor(readonly haltId: string) {
+    super(`halted (${haltId.slice(0, 8)})`);
+    this.name = "HaltAbort";
+  }
+}
 
 interface SuspendedTurn {
   approvalId: string;
@@ -72,6 +85,10 @@ export class GoalScheduler {
 
   /** Runs already logged as held this process — log the hold once, not every tick. */
   private heldLogged = new Set<string>();
+  /** Un-register the halt stopper on stop(). */
+  private unregisterHaltListener: (() => void) | null = null;
+  /** Halt ids already logged as blocking this process. */
+  private haltLogged = new Set<string>();
 
   constructor(
     private runtime: MotebitRuntime,
@@ -113,6 +130,20 @@ export class GoalScheduler {
     this.runtime.setGoalStatusResolver((goalId) => {
       const g = this.goalStore.get(goalId);
       return g == null ? null : g.status;
+    });
+    // Register the stopper BEFORE recovery or the first tick: a halt
+    // already in force when the daemon starts must be honored before any
+    // goal fires, not after one slips through.
+    this.unregisterHaltListener = this.runtime.onHalt((halt) => this.stopForHalt(halt));
+    // Only this process holds the goal store, so only it can turn the
+    // 8-char prefix a person reads off `motebit goal list` into a full
+    // id. A remote halt names a goal on THIS machine; the calling
+    // machine has no way to resolve it.
+    this.runtime.setGoalIdResolver((prefix) => {
+      const match = this.goalStore
+        .list(this.motebitId)
+        .find((g) => g.goal_id === prefix || g.goal_id.startsWith(prefix));
+      return match?.goal_id ?? null;
     });
     this.recoverInterruptedRuns();
     this.ensureMaintenanceGoal();
@@ -240,6 +271,8 @@ export class GoalScheduler {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.unregisterHaltListener?.();
+    this.unregisterHaltListener = null;
     // On shutdown the pending approvals STAY pending and their runs stay
     // `awaiting_approval` in the ledger — a human's decision survives the
     // process. Only the in-memory resume handles are dropped; after a
@@ -275,8 +308,25 @@ export class GoalScheduler {
         `[scheduler] stopped mid-run ${runId.slice(0, 8)} — closed as failed, will re-fire on schedule`,
       );
     }
-    // Best-effort memory consolidation on shutdown
-    void this.runtime.consolidationCycle();
+    // Best-effort memory consolidation on shutdown — unless a halt is in
+    // force, whose acknowledgement promised that no further consolidation
+    // would start. A promise that lapses at shutdown is not a promise.
+    //
+    // Guarded because this is a SYNCHRONOUS SQLite read and it is the
+    // last statement in `stop()`. A busy-database throw would propagate
+    // into the daemon's shutdown block and skip everything after it —
+    // the socket disconnect, the runtime-host close, the database
+    // close, and the private-key erase. Failing toward "halted" costs
+    // one best-effort cycle; failing open costs the key still in memory.
+    let haltedAtShutdown = true;
+    try {
+      haltedAtShutdown = this.runtime.haltInForce() != null;
+    } catch {
+      // Treated as halted: skip the cycle, let shutdown finish.
+    }
+    if (!haltedAtShutdown) {
+      void this.runtime.consolidationCycle();
+    }
   }
 
   /** Run a single scheduler tick. Exposed for deterministic testing. */
@@ -553,11 +603,49 @@ export class GoalScheduler {
   }
 
   private async tick(): Promise<void> {
+    // Phase 0 runs OUTSIDE the single-flight guard, and that placement is
+    // the whole point: a goal run holds `ticking` for its entire duration
+    // (up to the wall-clock limit, ten minutes by default), so a halt
+    // honored inside the guard could not reach the run it is meant to
+    // abort until that run had already finished. A halt must be able to
+    // interrupt work in progress, not queue behind it. `honorHalts` is
+    // idempotent and reads one row, so running it on every interval
+    // costs nothing once the work is stopped.
+    // …and inside its OWN try/catch, because it is now outside the one
+    // that wraps the tick body. `tick()` is invoked as `void this.tick()`
+    // from the interval and the daemon registers no unhandledRejection
+    // handler, so a throw here — a busy SQLite write, a malformed row, a
+    // rejecting stopper — would kill the daemon rather than log a failed
+    // tick. A halt that cannot be honored must not take the process down
+    // with it.
+    try {
+      await this.runtime.honorHalts();
+    } catch (err: unknown) {
+      errorLine(
+        `[halt] honoring failed (will retry next tick): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
     // Single-flight guard — prevent re-entry if previous tick is still running
     if (this.ticking) return;
     this.ticking = true;
 
     try {
+      const halted = this.runtime.haltInForce();
+      if (halted != null) {
+        // Keep the approval TTL running. Freezing it would leave a
+        // decidable-looking approval on the phone all night and then
+        // expire a pile of them the instant the halt lifted.
+        this.expireStaleApprovals();
+        if (!this.haltLogged.has(halted.halt_id)) {
+          this.haltLogged.add(halted.halt_id);
+          warnLine(
+            `[halt] unattended execution is stopped (${halted.halt_id.slice(0, 8)}, ${halted.origin}${halted.reason != null ? `: ${halted.reason}` : ""}) — \`motebit resume ${halted.halt_id.slice(0, 8)}\` to give the permission back`,
+          );
+        }
+        return;
+      }
+
       // Phase 1: expire stale approvals
       this.expireStaleApprovals();
 
@@ -578,6 +666,18 @@ export class GoalScheduler {
 
         const elapsed = goal.last_run_at != null ? now - goal.last_run_at : Infinity;
         if (elapsed < goal.interval_ms) continue;
+
+        // A goal-scoped halt stops this goal and nothing else.
+        const goalHalt = this.runtime.haltInForce(goal.goal_id);
+        if (goalHalt != null) {
+          if (!this.haltLogged.has(goalHalt.halt_id)) {
+            this.haltLogged.add(goalHalt.halt_id);
+            warnLine(
+              `[halt] goal ${goal.goal_id.slice(0, 8)} is stopped (${goalHalt.halt_id.slice(0, 8)}) — \`motebit resume ${goalHalt.halt_id.slice(0, 8)}\` to give the permission back`,
+            );
+          }
+          continue;
+        }
 
         // Never start a replacement run while an existing run is unresolved:
         // paused on a human, or interrupted with side effects nobody has
@@ -696,6 +796,38 @@ export class GoalScheduler {
           logLine(`[goal] completed: ${goal.goal_id.slice(0, 8)}`);
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
+          // A stop the human asked for is not a failure of the goal.
+          // Counting it would burn the retry budget and eventually
+          // auto-pause the goal, so lifting the halt would silently not
+          // be enough to start it again.
+          if (err instanceof HaltAbort) {
+            const note = `halted (${err.haltId.slice(0, 8)})`;
+            this.runStore.setStatus(runId, "failed", { note });
+            // Every run leaves a wire record regardless of outcome — the
+            // ledger is the semantic source of truth, and a run that was
+            // stopped is still a run that happened. Only the FAILURE
+            // COUNT is skipped: a stop the human asked for must not burn
+            // the goal's retry budget.
+            this.goalOutcomeStore.add({
+              outcome_id: runId,
+              goal_id: goal.goal_id,
+              motebit_id: this.motebitId,
+              ran_at: Date.now(),
+              status: "partial",
+              summary: `stopped by ${note}`,
+              tool_calls_made: 0,
+              memories_formed: 0,
+              error_message: null,
+            });
+            void this.runtime.goals.executed({
+              goal_id: goal.goal_id,
+              error: `stopped by ${note}`,
+            });
+            logLine(
+              `[goal] ${goal.goal_id.slice(0, 8)} stopped by halt ${err.haltId.slice(0, 8)} — not counted as a failure`,
+            );
+            continue;
+          }
           errorLine(`[goal] error for ${goal.goal_id.slice(0, 8)}: ${msg}`);
 
           this.runStore.setStatus(runId, "failed", { note: msg });
@@ -735,7 +867,7 @@ export class GoalScheduler {
       }
       // Phase 5: periodic memory consolidation (every 10 ticks ≈ 10 min at default 60s)
       this.tickCount++;
-      if (this.tickCount % 10 === 0) {
+      if (this.tickCount % 10 === 0 && this.runtime.haltInForce() == null) {
         void this.runtime.consolidationCycle();
       }
     } catch (err: unknown) {
@@ -1049,6 +1181,14 @@ export class GoalScheduler {
     for (const [id, turn] of this.suspended) {
       const item = this.approvalStore.get(id);
       if (!item || item.status === "expired") {
+        // Before anything is dropped. Resuming with a denial is a MODEL
+        // TURN whose continuation can make further, non-approval-gated
+        // tool calls — unattended work starting, which a halt forbids.
+        // Placed after the delete (as it first was), this "leave it
+        // suspended" guard did the opposite: the map entry was already
+        // gone, the run never closed, and the runtime stayed wedged on a
+        // pending approval nothing could resolve once the halt lifted.
+        if (this.runtime.haltInForce(turn.goalId) != null) continue;
         this.suspended.delete(id);
         void this.logApprovalEvent(EventType.ApprovalExpired, turn.goalId, id, "", {});
         // Deny-release the runtime ONLY when the pending approval is the one
@@ -1093,6 +1233,10 @@ export class GoalScheduler {
 
   private async drainResolvedApprovals(): Promise<void> {
     for (const [approvalId, turn] of this.suspended) {
+      // A halt covering this goal outranks the verdict: resuming would
+      // execute the approved call. The suspended turn is left in place,
+      // so lifting the halt resumes it rather than losing it.
+      if (this.runtime.haltInForce(turn.goalId) != null) continue;
       const item = this.approvalStore.get(approvalId);
       if (!item) continue;
       if (item.status !== "approved" && item.status !== "denied") continue;
@@ -1209,8 +1353,17 @@ export class GoalScheduler {
    * its own cadence.
    */
   private async drainRecoveredApprovals(): Promise<void> {
+    // A halt outranks an approval. The human granted permission for one
+    // action and then withdrew permission to act unattended at all; the
+    // later word wins. The approval stays `approved` — nothing is
+    // executed, and nothing is thrown away.
+    if (this.runtime.haltInForce() != null) return;
     const waiting = this.runStore.listByStatus(this.motebitId, "awaiting_approval");
     for (const run of waiting) {
+      // …and a GOAL-scoped halt outranks that goal's approval. Checking
+      // only the motebit-wide halt above would execute the one call the
+      // narrower halt existed to prevent.
+      if (this.runtime.haltInForce(run.goal_id) != null) continue;
       if (run.approval_id == null) continue;
       if (this.suspended.has(run.approval_id)) continue; // live — handled above
       const item = this.approvalStore.get(run.approval_id);
@@ -1353,6 +1506,54 @@ export class GoalScheduler {
         toolCallsMade: 1,
       });
     }
+  }
+
+  /**
+   * Stop what this scheduler owns, and say what stopping entailed. The
+   * runtime calls this from `honorHalts`; the returned text becomes the
+   * halt's acknowledgement, which is the only honest record that the
+   * motebit actually stopped rather than merely being asked to.
+   *
+   * A goal-scoped halt aborts the in-flight run only when that run
+   * belongs to the halted goal — halting one goal must not kill another
+   * goal's work mid-call.
+   */
+  private stopForHalt(halt: HaltRequest): string {
+    const stopped: string[] = [];
+    const runId = this.currentRunId;
+    if (runId != null) {
+      const run = this.runStore.get(runId);
+      const coversThisRun = halt.goal_id == null || run?.goal_id === halt.goal_id;
+      if (coversThisRun) {
+        // Report what was DONE, never what was attempted. `currentRunId`
+        // is set by three paths but `currentAbort` by only one (the goal
+        // fire) — both approval drains execute with no abort channel at
+        // all. Deriving the sentence from the run id claimed a signal
+        // was sent while a recovered call ran to completion: this arc's
+        // recurring failure wearing one more disguise. The controller's
+        // presence is the fact, so it is what the sentence reads from.
+        const abort = this.currentAbort;
+        if (abort != null) {
+          abort.abort(new HaltAbort(halt.halt_id));
+          // "signalled", not "aborted": the signal is observed between
+          // stream chunks, so a tool call already in flight runs to its
+          // end.
+          stopped.push(
+            `signalled abort of run ${runId.slice(0, 8)} (a tool call already in flight finishes)`,
+          );
+        } else {
+          stopped.push(
+            `run ${runId.slice(0, 8)} is executing an approved call and cannot be interrupted — it will finish`,
+          );
+        }
+      }
+    }
+    stopped.push(
+      halt.goal_id == null
+        ? "no further goal runs, recovered approvals, or consolidation will start"
+        : `goal ${halt.goal_id.slice(0, 8)} will not fire`,
+    );
+    return stopped.join("; ");
   }
 
   /**

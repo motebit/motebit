@@ -30,6 +30,8 @@
       "resume"
     ],
     "grant": [],
+    "halt": [],
+    "halt-status": [],
     "id": [],
     "init": [],
     "keychain": [],
@@ -44,6 +46,7 @@
       "up"
     ],
     "restore": [],
+    "resume": [],
     "rotate": [],
     "run": [],
     "runs": [
@@ -264,6 +267,11 @@
     {
       "name": "reason",
       "type": "string"
+    },
+    {
+      "name": "remote",
+      "type": "boolean",
+      "default": false
     },
     {
       "name": "routing-strategy",

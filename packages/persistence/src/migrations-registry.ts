@@ -449,4 +449,67 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE approval_queue ADD COLUMN args_json TEXT",
     ],
   },
+  {
+    version: 44,
+    description: "halt_state — durable withdrawal of unattended autonomy",
+    statements: [
+      // A halt is state, not a message: a message a stopped process never
+      // receives is not a stop, and a stop a restart forgets is not a stop.
+      // `acknowledged_at` is deliberately separate from `requested_at` —
+      // a daemon that is offline has been ASKED to stop and has not
+      // stopped, and no surface may render the first as the second.
+      // `goal_id` NULL = every goal. Local private state, never on a wire.
+      `CREATE TABLE IF NOT EXISTS halt_state (
+        halt_id TEXT PRIMARY KEY,
+        motebit_id TEXT NOT NULL,
+        goal_id TEXT,
+        requested_at INTEGER NOT NULL,
+        origin TEXT NOT NULL,
+        reason TEXT,
+        acknowledged_at INTEGER,
+        acknowledgement TEXT,
+        lifted_at INTEGER
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_halt_state_active ON halt_state (motebit_id, lifted_at)",
+    ],
+  },
+  {
+    version: 45,
+    description: "command_replay — shared replay memory for signed remote commands",
+    statements: [
+      // An in-memory guard is per-process, and a machine can run both
+      // `motebit run` and `motebit serve` — two peers announcing the
+      // same capability, either of which the relay may pick. A replayed
+      // `resume` landing on the sibling would lift a halt the sovereign
+      // had just applied, which is the act the guard exists to prevent.
+      // Shared and durable for the same reason the halt itself is.
+      // Rows live only as long as the envelope's freshness window;
+      // outside it the verifier has already refused the envelope.
+      `CREATE TABLE IF NOT EXISTS command_replay (
+        signature TEXT PRIMARY KEY,
+        seen_at INTEGER NOT NULL
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_command_replay_seen ON command_replay (seen_at)",
+    ],
+  },
+  {
+    version: 46,
+    description: "halt_acknowledgement — one row per executor, not one per halt",
+    statements: [
+      // `halt_state.acknowledged_at` modelled "the motebit stopped" as a
+      // single fact, but several processes can run unattended work for
+      // one motebit (`motebit run` + `motebit serve`, same machine, same
+      // database). The first to acknowledge marked the halt honored for
+      // all of them; every other process then skipped it and kept
+      // working while the surface reported "Stopped". Acknowledgement is
+      // per executor because stopping is.
+      `CREATE TABLE IF NOT EXISTS halt_acknowledgement (
+        halt_id TEXT NOT NULL,
+        executor_id TEXT NOT NULL,
+        acknowledged_at INTEGER NOT NULL,
+        acknowledgement TEXT NOT NULL,
+        PRIMARY KEY (halt_id, executor_id)
+      )`,
+    ],
+  },
 ];

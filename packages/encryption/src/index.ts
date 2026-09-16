@@ -46,6 +46,13 @@ export {
   createSignedToken,
   verifySignedToken,
   mintAudienceToken,
+  // Reaching a motebit's own running runtime from another of its
+  // surfaces: the phone signs an `agent-command/{motebit_id}` envelope
+  // and the runtime re-verifies fail-closed. Re-exported here for the
+  // same reason `mintAudienceToken` is — apps consume the product
+  // vocabulary, never `@motebit/crypto` directly.
+  signAgentCommandEnvelope,
+  agentCommandAudience,
   DEFAULT_SIGNED_TOKEN_TTL_MS,
   type MintAudienceTokenInput,
   type MintedAudienceToken,

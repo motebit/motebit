@@ -1,4 +1,5 @@
 export { RelayClient } from "./client.js";
+export type { CommandResult } from "./client.js";
 export type {
   RelayClientConfig,
   RelayClientAuth,

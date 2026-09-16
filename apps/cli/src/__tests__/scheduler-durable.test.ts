@@ -142,6 +142,14 @@ function mockRuntime(
       completed: vi.fn().mockResolvedValue(undefined),
       removed: vi.fn().mockResolvedValue(undefined),
     },
+    // Halt contract (increment 2): a mock runtime that does not answer
+    // these makes the scheduler's halt checks throw. Never halted here.
+    onHalt: () => () => undefined,
+    halts: null,
+    haltInForce: () => null,
+    honorHalts: async () => [],
+    liftHalt: async () => false,
+    setGoalIdResolver: vi.fn(),
     setGoalStatusResolver: vi.fn(),
     getToolRegistry: vi.fn().mockReturnValue({
       register: vi

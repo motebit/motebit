@@ -35,6 +35,30 @@ import type { createLogger } from "./logger.js";
 /** Commands the relay can answer from its own database. */
 const RELAY_SIDE_COMMANDS = new Set(["balance", "deposits", "discover", "proposals"]);
 
+/**
+ * Commands that only an UNATTENDED runtime can meaningfully serve.
+ *
+ * Every surface of a motebit holds an open socket and handles
+ * `command_request` — the phone, the web app, the desktop app, and the
+ * daemon. For a read that is harmless: any of them can report state. For
+ * these it is not. A halt sent to the phone that sent it would be
+ * answered "this surface cannot be halted" while the daemon kept
+ * running, and an approval decision sent to a surface with no queue
+ * would be answered "no pending approval matching …" — both
+ * indistinguishable from a genuine refusal, on exactly the commands
+ * where a false negative is most costly.
+ *
+ * So these are routed to a peer announcing `unattended_runtime` — the
+ * capability a surface announces only when it has actually wired the
+ * durable halt and approval stores. `background` is not that signal:
+ * the desktop app announces it and wires neither, so a halt routed by
+ * `background` could be answered "this surface cannot be halted" while
+ * the daemon kept running. If no such peer is connected the request
+ * fails as undelivered, which is the honest answer: nothing was stopped
+ * and nothing was decided.
+ */
+const UNATTENDED_RUNTIME_COMMANDS = new Set(["halt", "resume", "halt-status", "approvals"]);
+
 /** Commands that require the agent's runtime (forwarded via WebSocket). */
 const RUNTIME_SIDE_COMMANDS = new Set([
   "state",
@@ -50,6 +74,14 @@ const RUNTIME_SIDE_COMMANDS = new Set([
   "summarize",
   "approvals",
   "conversations",
+  // Mutating. Safe to forward because the envelope is signed by the
+  // agent's OWN identity key — the caller already holds sovereign
+  // authority, so what these add is reach, not privilege. The relay
+  // still never decides: it forwards the envelope verbatim and the
+  // runtime re-verifies fail-closed before acting.
+  "halt",
+  "resume",
+  "halt-status",
 ]);
 
 /** Informational commands that need no runtime or relay. */
@@ -141,6 +173,11 @@ export function registerCommandRoutes(deps: CommandRouteDeps): void {
         const result = await forwardCommandToAgent(peers, command, args, body.envelope);
         return c.json(result);
       } catch (err: unknown) {
+        // A typed rejection already says what happened and with what
+        // status — re-wrapping it as a 500 would turn "nothing was
+        // delivered" into "the relay broke", and a consent surface
+        // cannot tell those apart.
+        if (err instanceof HTTPException) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         if (msg === "Command timed out") {
           return c.json({ summary: "Agent did not respond in time." }, 504);
@@ -203,8 +240,106 @@ async function forwardCommandToAgent(
 
     pendingCommands.set(commandId, { resolve, timer });
 
-    // Send to first connected device (any device can answer)
-    const sent = peers.some((peer) => {
+    // For most commands any connected surface can answer. For the
+    // unattended-runtime set, only a peer that actually runs unattended
+    // work can — see UNATTENDED_RUNTIME_COMMANDS.
+    const unattended = peers.filter((p) => p.capabilities?.includes("unattended_runtime") === true);
+    let candidates: ConnectedDevice[];
+    let emptyReason: string;
+
+    if (!UNATTENDED_RUNTIME_COMMANDS.has(command)) {
+      candidates = peers;
+      emptyReason = "No reachable device";
+    } else if (unattended.length > 0) {
+      // One machine may announce this twice — `motebit run` and
+      // `motebit serve` are two executors sharing one device id and one
+      // database, so either can answer for both and first-wins is
+      // harmless. Two DEVICES is a different fact: a worker running on
+      // another machine has its own database, so it would answer
+      // `/pending` with "No pending approvals" while the laptop daemon
+      // held a real one — a false empty, which is the answer this whole
+      // block exists to prevent. Refuse rather than pick.
+      //
+      // Only peers that DECLARED an id can be grouped. The relay invents
+      // one per connection for peers that did not, so counting those
+      // would read one machine's two processes as two machines — and a
+      // reconnect racing a not-yet-observed close as a third — refusing
+      // every remote halt in exactly the configuration this arc is for.
+      // Undeclared means unknown, and unknown falls back to delivering
+      // rather than to refusing: a first-wins answer from a peer that
+      // shares the database is right, and this is the same machine in
+      // every deployment that exists today.
+      const declared = unattended.filter((p) => p.deviceIdDeclared === true);
+      const devices = new Set(declared.map((p) => p.deviceId));
+      const allDeclared = declared.length === unattended.length;
+      // ...and the refusal belongs to `approvals` ALONE, because the
+      // reasoning above is about queues.
+      //
+      // A halt delivered to either machine is truthful: the
+      // acknowledgement is per executor and says what THAT executor
+      // stopped, and the halt is durable state the other machine's
+      // executor honors on its own next tick. Refusing it bought
+      // nothing and cost everything — a sovereign running the daemon on
+      // a laptop and the worker on a VPS got 404 "run this command on
+      // the machine you mean" for every remote halt, which is unusable
+      // advice for someone away from both machines. That is precisely
+      // the situation this arc exists for, so the guard was breaking
+      // the feature to protect a different one.
+      const manyMachines = command === "approvals" && allDeclared && devices.size > 1;
+      candidates = manyMachines ? [] : unattended;
+      emptyReason = manyMachines
+        ? `This motebit has unattended runtimes on ${devices.size} different machines, each with its own approval queue, so the relay cannot choose one — run this command on the machine you mean, or stop the runtime you do not`
+        : "No unattended runtime is connected";
+    } else if (command !== "approvals") {
+      // `halt`/`resume` get no fallback: a daemon too old to announce
+      // the capability is too old to honor them, and "not delivered" is
+      // the truth there.
+      candidates = [];
+      emptyReason = "No unattended runtime is connected";
+    } else {
+      // The relay auto-deploys on merge; installed CLIs update on their
+      // own schedule. Every daemon older than this change announces
+      // `background` and not `unattended_runtime`, so filtering strictly
+      // would 404 the phone's `/pending`, `/approve` and `/deny` against
+      // a perfectly healthy daemon from the moment this ships.
+      //
+      // The fallback is only safe while it is UNAMBIGUOUS. The desktop
+      // app announces exactly the same five capabilities as the daemon,
+      // so with both connected there is no signal here that tells them
+      // apart — and sending `/approve ap-1234` to the desktop app gets
+      // back "no pending approval matching ap-1234", which a person
+      // cannot distinguish from the daemon genuinely refusing. A false
+      // refusal on the consent vocabulary is worse than an undelivered
+      // one, so more than one legacy candidate is refused rather than
+      // guessed between.
+      //
+      // REMOVE the fallback once the halt-capable CLI is the published
+      // minimum — tracked with the arc, not left to rot here.
+      const legacy = peers.filter((p) => p.capabilities?.includes("background") === true);
+      candidates = legacy.length === 1 ? legacy : [];
+      emptyReason =
+        legacy.length > 1
+          ? "More than one connected surface could answer and none announces unattended_runtime, so the relay cannot tell the daemon from a desktop app — update the daemon (npm i -g motebit@latest) and reconnect"
+          : "No unattended runtime is connected";
+    }
+
+    if (candidates.length === 0) {
+      clearTimeout(timer);
+      pendingCommands.delete(commandId);
+      // 404, not 500: "nothing was delivered" is the honest reading a
+      // consent surface must be able to show, and clients distinguish
+      // not-connected from server fault by status.
+      reject(
+        new HTTPException(404, {
+          message: UNATTENDED_RUNTIME_COMMANDS.has(command)
+            ? `${emptyReason} — nothing was delivered, so nothing was stopped or decided`
+            : emptyReason,
+        }),
+      );
+      return;
+    }
+
+    const sent = candidates.some((peer) => {
       try {
         peer.ws.send(payload);
         return true;
@@ -216,7 +351,20 @@ async function forwardCommandToAgent(
     if (!sent) {
       clearTimeout(timer);
       pendingCommands.delete(commandId);
-      reject(new Error("No reachable device"));
+      // 404, like the no-candidate path above, and for the same reason.
+      // Every send throwing means the socket is dead but not yet reaped
+      // — the ordinary case moments after a daemon dies — so nothing
+      // was delivered. A plain Error falls through to a 500, and both
+      // clients special-case only 401/404/503/504, so the phone showed
+      // a bare "500:" for a halt that demonstrably did not land: the
+      // relay looking broken instead of the command looking undelivered.
+      reject(
+        new HTTPException(404, {
+          message: UNATTENDED_RUNTIME_COMMANDS.has(command)
+            ? "The runtime's connection is gone — nothing was delivered, so nothing was stopped or decided"
+            : "No reachable device",
+        }),
+      );
     }
   });
 }

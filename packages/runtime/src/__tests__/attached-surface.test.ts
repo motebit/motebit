@@ -158,6 +158,31 @@ describe("serve-and-slash kinds", () => {
     expect(typeof result!.summary).toBe("string");
   });
 
+  it("cannot DECIDE an approval — the attached surface carries no consent channel", async () => {
+    const runtime = makeRuntime();
+    // `approvals` stopped being a read-only listing when it gained
+    // approve/deny. Without this gate a frontend frame could resolve a
+    // queued R3/R4 call that the daemon then executes, routing around
+    // the consent surface — which the `tool_execute` arm refuses on
+    // exactly the same ground.
+    for (const args of ["approve a1b2c3d4", "deny a1b2c3d4 too risky", "  APPROVE x"]) {
+      const result = (await runtime.resolveAttachedAct("command_execute", {
+        command: "approvals",
+        args,
+      })) as { ok: boolean; error?: string };
+      expect(result.ok).toBe(false);
+      expect(result.error).toMatch(/consent surface/);
+    }
+  });
+
+  it("can still LIST approvals — reading is not deciding", async () => {
+    const runtime = makeRuntime();
+    const result = (await runtime.resolveAttachedAct("command_execute", {
+      command: "approvals",
+    })) as { summary: string };
+    expect(typeof result.summary).toBe("string");
+  });
+
   it("tool_execute answers honestly for an unknown tool and gates through policy", async () => {
     const runtime = makeRuntime();
     const result = (await runtime.resolveAttachedAct("tool_execute", {

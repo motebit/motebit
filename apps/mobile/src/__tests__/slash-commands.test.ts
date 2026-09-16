@@ -777,3 +777,112 @@ describe("runSlashCommand cobrowse-as-mode (/wheel, /back)", () => {
     expect(deps._messages[0]).toContain("/back");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Reaching the runtime elsewhere — the phone as consent root
+// ---------------------------------------------------------------------------
+
+/** Wait for the fire-and-forget async body of a command to settle. */
+async function settle(): Promise<void> {
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
+}
+
+describe("runSlashCommand — signed remote commands", () => {
+  it("/halt sends the halt verb with the reason and shows what the runtime answered", async () => {
+    const sendRemoteCommand = vi.fn(() =>
+      Promise.resolve({
+        summary: "Stopped all unattended execution.",
+        detail: "aborted run 1a2b3c4d",
+      }),
+    );
+    const deps = makeDeps({ sendRemoteCommand });
+    runSlashCommand("halt", "going out", deps);
+    await settle();
+    expect(sendRemoteCommand).toHaveBeenCalledWith("halt", "going out");
+    expect(deps._messages[0]).toContain("Stopped all unattended execution.");
+    expect(deps._messages[0]).toContain("aborted run 1a2b3c4d");
+  });
+
+  it("a reason that begins with the word 'goal' stays a reason", async () => {
+    // This branch's first review round removed a `goal <id> <reason>`
+    // grammar from the command line because it read
+    // `--reason "goal cleanup done"` as a halt of a goal named
+    // "cleanup". Reintroducing it here was worse: on the consent root
+    // the store refuses the unmatched scope, so the person asking for a
+    // stop gets silence. "is", "cleanup" and "finished," are all things
+    // someone writes after the word goal, and none is a goal id.
+    const sendRemoteCommand = vi.fn(() => Promise.resolve({ summary: "Stop requested." }));
+    const deps = makeDeps({ sendRemoteCommand });
+    runSlashCommand("halt", "goal is done", deps);
+    await settle();
+    expect(sendRemoteCommand).toHaveBeenCalledWith("halt", "goal is done");
+  });
+
+  it("an explicit --goal marker carries scope the runtime can read", async () => {
+    // A reason never begins with `--goal`, so the marker is unambiguous
+    // in a way the bare keyword cannot be.
+    const sendRemoteCommand = vi.fn(() => Promise.resolve({ summary: "Stop requested." }));
+    const deps = makeDeps({ sendRemoteCommand });
+    runSlashCommand("halt", "--goal a1b2c3d4 too noisy", deps);
+    await settle();
+    expect(sendRemoteCommand).toHaveBeenCalledWith(
+      "halt",
+      JSON.stringify({ goal_id: "a1b2c3d4", reason: "too noisy" }),
+    );
+  });
+
+  it("/halted maps to halt-status, and /pending to the approvals queue", async () => {
+    const sendRemoteCommand = vi.fn(() =>
+      Promise.resolve({ summary: "Running — nothing is halted." }),
+    );
+    const deps = makeDeps({ sendRemoteCommand });
+    runSlashCommand("halted", "", deps);
+    await settle();
+    expect(sendRemoteCommand).toHaveBeenCalledWith("halt-status", undefined);
+
+    runSlashCommand("pending", "", deps);
+    await settle();
+    expect(sendRemoteCommand).toHaveBeenLastCalledWith("approvals", undefined);
+  });
+
+  it("/approve and /deny carry the verb and id into the approvals command", async () => {
+    const sendRemoteCommand = vi.fn(() => Promise.resolve({ summary: "Approved: send_email." }));
+    const deps = makeDeps({ sendRemoteCommand });
+    runSlashCommand("approve", "ap-1234", deps);
+    await settle();
+    expect(sendRemoteCommand).toHaveBeenCalledWith("approvals", "approve ap-1234");
+
+    runSlashCommand("deny", "ap-1234 too risky", deps);
+    await settle();
+    expect(sendRemoteCommand).toHaveBeenLastCalledWith("approvals", "deny ap-1234 too risky");
+  });
+
+  it("/approve without an id asks which one instead of sending a malformed command", async () => {
+    const sendRemoteCommand = vi.fn(() => Promise.resolve({ summary: "unused" }));
+    const deps = makeDeps({ sendRemoteCommand });
+    runSlashCommand("approve", "", deps);
+    await settle();
+    expect(sendRemoteCommand).not.toHaveBeenCalled();
+    expect(deps._messages[0]).toContain("which one?");
+  });
+
+  it("/resume passes the target through, defaulting to none", async () => {
+    const sendRemoteCommand = vi.fn(() => Promise.resolve({ summary: "Resumed." }));
+    const deps = makeDeps({ sendRemoteCommand });
+    runSlashCommand("resume", "all", deps);
+    await settle();
+    expect(sendRemoteCommand).toHaveBeenCalledWith("resume", "all");
+  });
+
+  it("a failure is surfaced in the runtime's own words — not delivered is not stopped", async () => {
+    const sendRemoteCommand = vi.fn(() =>
+      Promise.reject(new Error("The runtime is not connected, so nothing was delivered (503).")),
+    );
+    const deps = makeDeps({ sendRemoteCommand });
+    runSlashCommand("halt", "", deps);
+    await settle();
+    expect(deps._messages[0]).toContain("nothing was delivered");
+    expect(deps._messages[0]).not.toContain("Stopped");
+  });
+});

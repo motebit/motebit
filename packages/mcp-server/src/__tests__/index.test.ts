@@ -1137,6 +1137,34 @@ describe("McpServerAdapter — synthetic tool execution", () => {
     expect(result.content[0]!.text).toContain("completed");
   });
 
+  it("a halted motebit refuses motebit_task whatever handler is wired", async () => {
+    // The gate lives on the MCP surface, not inside the default
+    // handler, because `handleAgentTask` is an injection point: a
+    // surface can replace it wholesale, and `motebit serve --direct`
+    // does — executing tools itself and never reaching the runtime
+    // entry where the halt is otherwise enforced. This stub stands in
+    // for any such replacement.
+    let ran = false;
+    const handleAgentTask = async function* () {
+      ran = true;
+      yield { type: "text" as const, text: "should never run" };
+    };
+    const deps = makeDeps({ handleAgentTask });
+    deps.haltRefusal = () => "this motebit has been stopped by its owner (halt abcd1234)";
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const handler = registrations.tools.get("motebit_task")!.handler;
+    const result = (await handler({ prompt: "do it" })) as {
+      content: Array<{ text: string }>;
+      isError?: boolean;
+    };
+
+    expect(ran).toBe(false);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("stopped by its owner");
+  });
+
   it("motebit_task returns fallback with receipt_missing when no receipt emitted", async () => {
     const handleAgentTask = async function* () {
       yield { type: "text" as const, text: "just text" };
@@ -1151,7 +1179,11 @@ describe("McpServerAdapter — synthetic tool execution", () => {
     };
 
     expect(result.content[0]!.text).toContain("just text");
-    expect(result.content[0]!.text).toContain("completed");
+    // Not "completed". This test used to assert the opposite, which pinned the
+    // defect: a receipt is the only completion, so a run that produced none —
+    // a halted worker refusing the task, a provider that died mid-stream — was
+    // telling a paying delegator the reverse of what happened.
+    expect(result.content[0]!.text).toContain("failed");
     expect(result.content[0]!.text).toContain("receipt_missing");
     expect(result.content[0]!.text).toContain("true");
   });

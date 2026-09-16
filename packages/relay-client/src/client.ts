@@ -33,6 +33,14 @@
  */
 
 import type { CredentialSource } from "@motebit/sdk";
+
+/** The runtime's answer to a remote command. Mirrors `@motebit/runtime`'s
+ *  `CommandResult` without importing the BSL runtime into this client. */
+export interface CommandResult {
+  summary: string;
+  detail?: string;
+  data?: Record<string, unknown>;
+}
 import type {
   AccountBalanceResult,
   AgentResolutionResult,
@@ -47,7 +55,7 @@ import {
   TASK_SUBMIT_AUDIENCE,
 } from "@motebit/protocol";
 import type { AccountWithdrawRequest, AccountWithdrawResult } from "@motebit/protocol";
-import { mintAudienceToken } from "@motebit/crypto";
+import { mintAudienceToken, signAgentCommandEnvelope } from "@motebit/crypto";
 import {
   AccountBalanceResultSchema,
   AccountWithdrawResultSchema,
@@ -280,6 +288,73 @@ export class RelayClient {
       headers: { "Idempotency-Key": options.idempotencyKey },
     });
     return validate(AccountWithdrawResultSchema, body, path, "withdraw") as AccountWithdrawResult;
+  }
+
+  /**
+   * `POST /api/v1/agents/:motebitId/command` — reach this motebit's
+   * running runtime from somewhere else.
+   *
+   * The FIRST production minter of a `signed-request-envelope@1.0` with
+   * the `agent-command/{motebit_id}` audience: the verification stack
+   * has shipped fail-closed on every surface since the unification arc,
+   * and nothing was signing for it. v1 is signer == target, so the
+   * caller must hold this motebit's identity private key — which is
+   * exactly the phone after a key-transfer pairing.
+   *
+   * What comes back is the runtime's own answer. For a halt that means
+   * the response IS the acknowledgement: a `CommandResult` whose data
+   * says `acknowledged: true` is the motebit reporting that it stopped,
+   * not the relay reporting that a message was delivered. When the
+   * runtime is not connected, this throws `kind: "http"` with the
+   * relay's status — and the honest reading of that is "not delivered",
+   * never "stopped".
+   */
+  async sendAgentCommand(opts: {
+    motebitId: string;
+    command: string;
+    args?: string;
+    /** This motebit's identity private key. v1: signer == target. */
+    identityPrivateKey: Uint8Array;
+  }): Promise<CommandResult> {
+    const path = `/api/v1/agents/${encodeURIComponent(opts.motebitId)}/command`;
+    const envelope = await signAgentCommandEnvelope({
+      command: opts.command,
+      ...(opts.args !== undefined ? { args: opts.args } : {}),
+      motebitId: opts.motebitId,
+      identityPrivateKey: opts.identityPrivateKey,
+      now: this.now,
+      // Without it the signature is deterministic over {command, args,
+      // ts(ms), aud}, so two genuinely separate identical commands in
+      // the same millisecond collide — and the replay guard refuses the
+      // second as already-seen. A false "this did not happen" on the one
+      // vocabulary where that is most costly.
+      nonce: crypto.randomUUID(),
+    });
+    const body = await this.requestJson("POST", path, {
+      // The envelope is the end-to-end AUTHORIZATION; the bearer is
+      // transport auth, and the route requires it — `/agents/*` is
+      // behind the agent auth middleware and this path is not in
+      // `PUBLIC_AGENT_ROUTES`, so without a token the request is
+      // rejected before the envelope is ever examined. The audience is
+      // the route's default for a path with no more specific one.
+      audience: "admin:query",
+      // Retry is off: these verbs mutate, and the envelope carries a
+      // freshness window a blind retry would race.
+      retry: false,
+      jsonBody: {
+        command: opts.command,
+        ...(opts.args !== undefined ? { args: opts.args } : {}),
+        envelope,
+      },
+    });
+    if (
+      typeof body !== "object" ||
+      body === null ||
+      typeof (body as CommandResult).summary !== "string"
+    ) {
+      throw new RelayClientError("parse", path, "command response had no `summary`");
+    }
+    return body as CommandResult;
   }
 
   // ── Transport kernel ─────────────────────────────────────────────────

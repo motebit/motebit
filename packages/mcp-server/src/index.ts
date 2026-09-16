@@ -142,6 +142,16 @@ interface MotebitServerDeps {
     | { type: "task_result"; receipt: Record<string, unknown> }
     | { type: string; [key: string]: unknown }
   >;
+  /**
+   * Why this motebit is refusing work right now, or `null` when it is
+   * not. Called before every `motebit_task`, ahead of admission.
+   *
+   * It lives beside `handleAgentTask` rather than inside it because a
+   * surface may replace that handler entirely — `motebit serve
+   * --direct` does — and a stop that only the default handler honors is
+   * not a stop.
+   */
+  haltRefusal?(): string | null;
   identityFileContent?: string;
 
   /** Returns this agent's service listing (capabilities, pricing, SLA). */
@@ -827,6 +837,29 @@ export class McpServerAdapter {
           const denied = await this.validateSyntheticTool(toolDef, args);
           if (denied) return denied;
 
+          // Halted? Refuse before admission is claimed.
+          //
+          // This sits in the MCP surface rather than behind the handler
+          // because `handleAgentTask` is an INJECTION POINT: a surface
+          // may replace it wholesale, and `motebit serve --direct` does
+          // — executing tools itself and never reaching the runtime
+          // entry where the halt is otherwise enforced. A guard inside
+          // the default handler protects only the default handler. This
+          // one covers every handler, including ones not written yet.
+          //
+          // Ahead of admission on purpose: being stopped is a refusal
+          // that owes nothing to whether the relay saw the money, and
+          // claiming a single-use admission for work that will not run
+          // would burn it.
+          const haltedReason = this.deps.haltRefusal?.() ?? null;
+          if (haltedReason != null) {
+            this.deps.logToolCall("motebit_task", args, { ok: false, error: "halted" });
+            return {
+              content: [{ type: "text" as const, text: `Refused: ${haltedReason}` }],
+              isError: true,
+            };
+          }
+
           // Task admission (fail-closed). Runs BEFORE any work — the agent
           // loop, and therefore the provider spend, never starts for a task
           // the relay did not admit. Transport auth already established WHO
@@ -997,8 +1030,14 @@ export class McpServerAdapter {
             }
 
             this.deps.logToolCall("motebit_task", args, { ok: false, error: "no receipt" });
+            // Not "completed". A receipt is the only completion — the
+            // `finally` below says exactly that when it releases the
+            // admission — so reporting completion without one told a
+            // paying delegator the opposite of the truth. A worker that
+            // refuses (because its owner halted it, say) reached here and
+            // answered `completed` with a body explaining it had refused.
             return fmt({
-              status: "completed",
+              status: "failed",
               response: responseText,
               receipt_missing: true,
             });

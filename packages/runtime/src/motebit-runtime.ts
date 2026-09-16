@@ -406,6 +406,28 @@ export interface ToolRecallResult {
   supersededAt?: number;
 }
 
+/**
+ * A short random suffix that never throws.
+ *
+ * `crypto.randomUUID` is secure-context-only in browsers and arrives
+ * late in some React Native bundles. This runs in a class-field
+ * initializer on every surface, halt wired or not, so an unguarded call
+ * would turn a missing API into a runtime that cannot be constructed at
+ * all. Same guard `invokeLocalTool` already uses for its invocation id.
+ */
+function randomSuffix(): string {
+  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID().slice(0, 8)
+    : Math.random().toString(36).slice(2, 10);
+}
+
+/**
+ * How long one halt stopper may take before the acknowledgement records
+ * that it did not finish. Generous — a stopper aborts in-flight work, it
+ * does not wait for it — but bounded, because honoring is serialized.
+ */
+const HALT_STOPPER_TIMEOUT_MS = 10_000;
+
 export class MotebitRuntime {
   readonly motebitId: string;
   readonly state: StateVectorEngine;
@@ -631,6 +653,50 @@ export class MotebitRuntime {
   private credentialStore: import("@motebit/sdk").CredentialStoreAdapter | null = null;
   private planExecution!: PlanExecutionManager;
   private approvalStore: import("@motebit/sdk").ApprovalStoreAdapter | null = null;
+  private haltStore: import("@motebit/sdk").HaltStoreAdapter | null = null;
+  /**
+   * What the executor does when a halt must be honored. Each listener
+   * stops what it owns and returns a description of what it stopped —
+   * those descriptions become the halt's acknowledgement, so the record
+   * says what stopping actually entailed rather than merely that it
+   * happened. A process with no listeners still acknowledges: the halt
+   * is recorded and nothing of this runtime's was running.
+   */
+  private haltListeners = new Set<
+    (halt: import("@motebit/sdk").HaltRequest) => string | Promise<string>
+  >();
+  /**
+   * Serializes `honorHalts`. Two callers are ordinary now that the
+   * daemon honors halts on its own interval (outside its tick guard, so
+   * a stop can interrupt work in progress) while a remote `halt`
+   * command honors inline. Without this, both read the same
+   * un-acknowledged halt, both run the stoppers, and both emit
+   * `HaltAcknowledged` — two "it stopped" events for one stop, in the
+   * log that exists to be the honest record of exactly that. Callers
+   * queue rather than share a result: a halt written after another pass
+   * began still gets a pass of its own.
+   */
+  private honorQueue: Promise<void> = Promise.resolve();
+  /**
+   * Identifies THIS EXECUTOR, not this device. A machine can run
+   * `motebit run` and `motebit serve` at once — same device id, same
+   * database, different unattended work — and each must honor a halt
+   * for itself. Keying acknowledgement by device would let whichever
+   * process got there first mark the halt honored for both, after which
+   * the other skipped it and kept working.
+   *
+   * An executor is a ROLE, not a process lifetime. A long-lived surface
+   * passes a stable id (`setHaltExecutorId`) so a daemon that restarts
+   * three times overnight is still one executor — otherwise every
+   * restart re-honors the same active halt, appends another
+   * acknowledgement row, and `halt-status` reports "3 processes
+   * stopped" on a machine that only ever ran one. That is the same
+   * over-reporting the per-halt acknowledgement column was removed for.
+   *
+   * The default is per-process, which is the honest id for a surface
+   * that really is one of many short-lived ones (a REPL session).
+   */
+  private executorId = `${typeof process !== "undefined" && process.pid != null ? process.pid : "x"}-${randomSuffix()}`;
   private _signingKeysErased = false;
   private _logger: { warn(message: string, context?: Record<string, unknown>): void };
   /**
@@ -981,6 +1047,7 @@ export class MotebitRuntime {
 
     // Approval store — persistence-backed quorum state (source of truth for multi-party approval)
     this.approvalStore = adapters.storage.approvalStore ?? null;
+    this.haltStore = adapters.storage.haltStore ?? null;
 
     // Agent graph — algebraic routing substrate
     this.agentGraph = new AgentGraphManager(
@@ -1849,6 +1916,9 @@ export class MotebitRuntime {
   async replayGoal(goalId: string, privateKey?: Uint8Array): Promise<GoalExecutionManifest | null> {
     return this.planExecution.replayGoal(goalId, privateKey);
   }
+
+  /** Resolves a short goal-id prefix to a full id. See `setGoalIdResolver`. */
+  private goalIdResolver: ((prefix: string) => string | null) | null = null;
 
   /**
    * Register a goal-status resolver so the goals primitive can enforce
@@ -2781,8 +2851,58 @@ export class MotebitRuntime {
     publicKey?: Uint8Array,
     options?: { delegatedScope?: string },
   ): AsyncGenerator<StreamChunk> {
+    // THE chokepoint for dispatched work. Ahead of the provider check
+    // deliberately: being stopped is a refusal that does not depend on
+    // having an AI configured, and a halted runtime that answered "AI
+    // not initialized" would name the wrong reason. Three callers reach it — the
+    // daemon's relay socket, serve's relay socket, and serve's MCP
+    // `motebit_task` tool — and guarding each of them separately is how
+    // five review rounds each found one more that had been missed. A
+    // halt is enforced where the work begins, once, so a path added
+    // later inherits it instead of having to remember.
+    const halted = this.haltInForce();
+    if (halted != null) {
+      yield {
+        type: "text" as const,
+        text: `Refused: this motebit has been stopped by its owner (halt ${halted.halt_id.slice(0, 8)}).`,
+      };
+      return;
+    }
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
     yield* handleAgentTaskFn(this.agentTaskDeps, task, privateKey, deviceId, publicKey, options);
+  }
+
+  /**
+   * Resolve a goal-id prefix the way every goal-facing command does.
+   * Registered by whichever process owns the goal store (the daemon's
+   * scheduler). `cmdHalt` needs it because a remote halt names a goal on
+   * THIS runtime's machine, which the calling machine cannot resolve.
+   */
+  setGoalIdResolver(resolver: (prefix: string) => string | null): void {
+    this.goalIdResolver = resolver;
+  }
+
+  /** The full goal id for a prefix, or null when nothing matches. */
+  resolveGoalId(prefix: string): string | null {
+    return this.goalIdResolver?.(prefix) ?? null;
+  }
+
+  /** Identifies this EXECUTOR — see `executorId`. Readers use it to ask "have I stopped". */
+  get haltExecutorId(): string {
+    return this.executorId;
+  }
+
+  /**
+   * Name this executor by its ROLE, so it survives a restart.
+   *
+   * Call it once at startup, before anything honors a halt, with an id
+   * that is stable for this role on this machine — the CLI daemon uses
+   * `run@<device>` and `serve@<device>`. Two roles on one machine must
+   * not share an id (that was the original defect); one role across
+   * restarts must not have two (that is this one).
+   */
+  setHaltExecutorId(id: string): void {
+    this.executorId = id;
   }
 
   async *resumeAfterApproval(approved: boolean): AsyncGenerator<StreamChunk> {
@@ -2795,6 +2915,242 @@ export class MotebitRuntime {
       yield* this.streaming.resumeAfterApproval(approved);
     } finally {
       this._isProcessing = false;
+    }
+  }
+
+  // ── Halt: withdrawing the standing permission to act unattended ──
+  //
+  // Three verbs, deliberately not one. `requestHalt` records that
+  // someone asked; `honorHalts` is the executor stopping and saying so;
+  // `liftHalt` is a human giving the permission back. Any process can
+  // ask. Only the process that actually runs unattended work can honor,
+  // which is why the request and the acknowledgement are separate rows
+  // and separate events — a daemon that is offline has been asked and
+  // has not stopped, and no surface may render the first as the second.
+
+  /**
+   * Register a stopper. Returns an unsubscribe. The daemon's scheduler
+   * registers one that aborts the in-flight run and blocks new fires.
+   */
+  onHalt(
+    listener: (halt: import("@motebit/sdk").HaltRequest) => string | Promise<string>,
+  ): () => void {
+    this.haltListeners.add(listener);
+    return () => this.haltListeners.delete(listener);
+  }
+
+  /**
+   * The approval queue, or `null` on a surface that wired no store.
+   * The command layer reads and decides through this port so a remote
+   * consent surface and the local terminal write to the same queue.
+   */
+  get approvals(): import("@motebit/sdk").ApprovalStoreAdapter | null {
+    return this.approvalStore;
+  }
+
+  /**
+   * Mask credential-class values in text bound for a non-sovereign
+   * party. The command layer uses it on approval arguments before they
+   * cross the relay to a remote consent surface: a person deciding
+   * needs the destination, the path, the amount — and does not need,
+   * and the relay must not see, an API key that happened to be an
+   * argument. Same membrane as the cloud-egress redactor, applied at
+   * the same kind of boundary.
+   */
+  redactForRemoteDisclosure(text: string): string {
+    return this.policy.redactForCloudEgress(text).text;
+  }
+
+  /** Durable halt state, or `null` on a surface that supplied no store. */
+  get halts(): import("@motebit/sdk").HaltStoreAdapter | null {
+    return this.haltStore;
+  }
+
+  /**
+   * The halt in force for this goal (or for unattended execution in
+   * general when `goalId` is omitted), or `null`. A runtime with no halt
+   * store is never halted — it also has no way to be halted, which is
+   * the honest reading of a surface that did not wire the port.
+   */
+  haltInForce(goalId?: string): import("@motebit/sdk").HaltRequest | null {
+    return this.haltStore?.activeFor(this.motebitId, goalId) ?? null;
+  }
+
+  /**
+   * Ask this motebit to stop acting unattended. Records the request and
+   * nothing more — the caller may be a one-shot CLI process that is not
+   * the thing doing the work. `honorHalts()` is what stops.
+   *
+   * Returns the recorded request. It says who asked and what for, and
+   * nothing about whether anything stopped — that is
+   * `acknowledgements(halt_id)`, one row per process.
+   */
+  async requestHalt(opts: {
+    /** Omit to halt every goal. */
+    goalId?: string;
+    origin: import("@motebit/sdk").HaltOrigin;
+    reason?: string;
+  }): Promise<import("@motebit/sdk").HaltRequest | null> {
+    if (!this.haltStore) return null;
+    const halt: import("@motebit/sdk").HaltRequest = {
+      halt_id: crypto.randomUUID(),
+      motebit_id: this.motebitId,
+      goal_id: opts.goalId ?? null,
+      requested_at: Date.now(),
+      origin: opts.origin,
+      reason: opts.reason ?? null,
+      lifted_at: null,
+    };
+    this.haltStore.request(halt);
+    await this.emitHaltEvent(EventType.HaltRequested, halt);
+    return halt;
+  }
+
+  /**
+   * Honor every halt this runtime has not yet acknowledged: run the
+   * stoppers, then record what stopping entailed. Idempotent — an
+   * already-acknowledged halt is skipped, so calling this every tick
+   * costs nothing once the work is stopped.
+   *
+   * Returns the halts acknowledged by THIS call (empty when there was
+   * nothing new to honor).
+   */
+  async honorHalts(): Promise<import("@motebit/sdk").HaltRequest[]> {
+    if (!this.haltStore) return [];
+    const prior = this.honorQueue;
+    let release!: () => void;
+    this.honorQueue = new Promise<void>((r) => (release = r));
+    await prior;
+    try {
+      return await this.honorHaltsSerialized();
+    } finally {
+      release();
+    }
+  }
+
+  private async honorHaltsSerialized(): Promise<import("@motebit/sdk").HaltRequest[]> {
+    if (!this.haltStore) return [];
+    // A process with no stoppers is not an executor of unattended work,
+    // and must not sign the register as one.
+    //
+    // Acknowledging means "I stopped my work". A surface that wired the
+    // halt store but registered nothing to stop — the interactive REPL
+    // does exactly this — was writing "nothing was running" for a halt
+    // it had no part in, which then answered for the daemon: `/halt` in
+    // the REPL reported "This runtime has stopped all unattended
+    // execution" while the goal daemon kept firing, and `halt-status`
+    // counted that row as a process that had stopped. One
+    // acknowledgement standing in for the executor that actually
+    // matters is the failure migration #46 exists to prevent, arriving
+    // through a different door.
+    //
+    // Silence here is the honest reading and the safe one: the halt is
+    // still in force from the instant it was written (enforcement is at
+    // the chokepoints, not at the acknowledgement), and every surface
+    // reports it as not yet acknowledged, which is true.
+    if (this.haltListeners.size === 0) return [];
+    // Per-executor, not per-halt: another process acknowledging says
+    // nothing about whether THIS process has stopped its own work.
+    const pending = this.haltStore
+      .listActive(this.motebitId)
+      .filter((h) => !this.haltStore!.hasAcknowledged(h.halt_id, this.executorId));
+    const honored: import("@motebit/sdk").HaltRequest[] = [];
+    for (const halt of pending) {
+      const stopped: string[] = [];
+      for (const listener of this.haltListeners) {
+        try {
+          // Bounded: honoring is serialized, so a stopper that never
+          // settles would wedge every later halt behind it — turning a
+          // stuck abort into a motebit that can no longer be stopped at
+          // all. The timeout records the truth instead of hanging.
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            stopped.push(
+              await Promise.race([
+                Promise.resolve(listener(halt)),
+                new Promise<string>((resolve) => {
+                  timer = setTimeout(
+                    () => resolve("a stopper did not finish in time — it may still be running"),
+                    HALT_STOPPER_TIMEOUT_MS,
+                  );
+                }),
+              ]),
+            );
+          } finally {
+            // Left pending, this timer keeps the event loop alive for
+            // its full duration — fine in a daemon, a ten-second hang
+            // on exit for any short-lived process that honors inline.
+            if (timer !== undefined) clearTimeout(timer);
+          }
+        } catch (err) {
+          // A stopper that throws must not leave the halt unacknowledged
+          // — that would read as "still running" forever. Record the
+          // failure IN the acknowledgement instead of swallowing it.
+          const msg = err instanceof Error ? err.message : String(err);
+          stopped.push(`a stopper failed: ${msg}`);
+        }
+      }
+      const acknowledgement =
+        stopped.filter((s) => s.length > 0).join("; ") || "nothing was running";
+      this.haltStore.acknowledge(halt.halt_id, this.executorId, acknowledgement);
+      // This process's own row, never the halt's. Reading the halt back
+      // would attribute whichever executor acknowledged first — so the
+      // log that exists to be the honest record of who stopped would
+      // carry another process's words under this one's stop.
+      const mine = this.haltStore
+        .acknowledgements(halt.halt_id)
+        .find((a) => a.executor_id === this.executorId);
+      await this.emitHaltEvent(EventType.HaltAcknowledged, halt, mine);
+      honored.push(halt);
+    }
+    return honored;
+  }
+
+  /** Give the permission back. Returns false when no such halt is in force. */
+  async liftHalt(haltId: string): Promise<boolean> {
+    if (!this.haltStore) return false;
+    const lifted = this.haltStore.lift(haltId);
+    if (!lifted) return false;
+    const halt = this.haltStore.get(haltId);
+    if (halt) await this.emitHaltEvent(EventType.HaltLifted, halt);
+    return true;
+  }
+
+  private async emitHaltEvent(
+    eventType: EventType,
+    halt: import("@motebit/sdk").HaltRequest,
+    acknowledgement?: import("@motebit/sdk").HaltAcknowledgement,
+  ): Promise<void> {
+    try {
+      await this.events.appendWithClock({
+        event_id: crypto.randomUUID(),
+        motebit_id: this.motebitId,
+        timestamp: Date.now(),
+        event_type: eventType,
+        payload: {
+          halt_id: halt.halt_id,
+          scope: halt.goal_id ?? "all",
+          origin: halt.origin,
+          requested_at: halt.requested_at,
+          ...(halt.reason != null ? { reason: halt.reason } : {}),
+          ...(acknowledgement != null
+            ? {
+                executor_id: acknowledgement.executor_id,
+                acknowledged_at: acknowledgement.acknowledged_at,
+                acknowledgement: acknowledgement.acknowledgement,
+              }
+            : {}),
+          ...(halt.lifted_at != null ? { lifted_at: halt.lifted_at } : {}),
+        },
+        tombstoned: false,
+      });
+    } catch (err) {
+      // The halt itself is already durable in `halt_state`; the event log
+      // is the audit trail, not the enforcement. Never let its failure
+      // make a stop look like it did not happen.
+      this._logger.warn(
+        `[runtime] halt event append failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
@@ -3221,7 +3577,29 @@ export class MotebitRuntime {
   async consolidationCycle(
     config: ConsolidationCycleConfig = {},
   ): Promise<ConsolidationCycleResult> {
-    if (!this.presence.canStartCycle()) {
+    // THE chokepoint for idle work. Four callers reach it — the
+    // scheduler's periodic tick and its shutdown path, the runtime's own
+    // idle tick, and the startup catch-up — and the halt's
+    // acknowledgement promises none of them will start. Guarding the
+    // callers one at a time is what left the runtime's two ungated after
+    // the scheduler's two were fixed.
+    // Guarded: `haltInForce` reads SQLite, which throws on a busy
+    // database, and this sits outside the try below. Both scheduler
+    // call sites are `void`-ed with no handler and the CLI registers no
+    // unhandledRejection handler, so a locked read here would take the
+    // daemon down — the one process whose staying up is the whole
+    // point. Failing toward halted matches the store's fail-closed
+    // posture: an idle cycle skipped is nothing lost.
+    let halted: boolean;
+    try {
+      halted = this.haltInForce() != null;
+    } catch (err) {
+      this._logger.warn(
+        `[runtime] halt check failed before consolidation, skipping the cycle: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      halted = true;
+    }
+    if (halted || !this.presence.canStartCycle()) {
       const now = Date.now();
       return {
         cycleId: "",

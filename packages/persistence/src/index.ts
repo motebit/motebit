@@ -32,7 +32,15 @@ import type { MemoryStorageAdapter, MemoryQuery } from "@motebit/memory-graph";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 import type { IdentityStorage, DeviceRegistration } from "@motebit/core-identity";
 import type { AuditLogAdapter } from "@motebit/privacy-layer";
-import type { ToolAuditEntry, PolicyDecision } from "@motebit/sdk";
+import type {
+  ToolAuditEntry,
+  PolicyDecision,
+  HaltRequest,
+  HaltStoreAdapter,
+  HaltAcknowledgement,
+  ApprovalItem,
+  ApprovalStatus,
+} from "@motebit/sdk";
 import type {
   AuditLogSink,
   AuditStatsSince,
@@ -1504,6 +1512,204 @@ export class SqliteGoalOutcomeStore {
   }
 }
 
+// === Command replay memory (shared across this machine's processes) ===
+
+/**
+ * Durable seen-signature set for signed remote commands (migration #45).
+ *
+ * `INSERT OR IGNORE` makes the check-and-record one atomic statement, so
+ * two processes racing the same replayed envelope cannot both conclude
+ * it is new.
+ */
+export class SqliteCommandReplayStore {
+  private stmtInsert: PreparedStatement;
+  private stmtPrune: PreparedStatement;
+
+  constructor(db: DatabaseDriver) {
+    this.stmtInsert = db.prepare(
+      `INSERT OR IGNORE INTO command_replay (signature, seen_at) VALUES (?, ?)`,
+    );
+    this.stmtPrune = db.prepare(`DELETE FROM command_replay WHERE seen_at < ?`);
+  }
+
+  /** True when this exact envelope was already recorded. Atomic. */
+  isReplay(signature: string, now: number, windowMs: number): boolean {
+    this.stmtPrune.run(now - windowMs);
+    return this.stmtInsert.run(signature, now).changes === 0;
+  }
+}
+
+// === Halt (withdrawing unattended autonomy) ===
+
+interface HaltRow {
+  halt_id: string;
+  motebit_id: string;
+  goal_id: string | null;
+  requested_at: number;
+  origin: string;
+  reason: string | null;
+  acknowledged_at: number | null;
+  acknowledgement: string | null;
+  lifted_at: number | null;
+}
+
+/**
+ * `halt_state.acknowledged_at` / `.acknowledgement` are migration #44
+ * columns that migration #46 superseded. They are read by nothing and
+ * written by nothing: a per-halt column cannot hold N executors' answers,
+ * and while it existed every reader that touched it reported one
+ * process's stop as the whole motebit's. The columns stay for the rows
+ * already written; the projection does not carry them out.
+ */
+function rowToHalt(row: HaltRow): HaltRequest {
+  return {
+    halt_id: row.halt_id,
+    motebit_id: row.motebit_id,
+    goal_id: row.goal_id,
+    requested_at: row.requested_at,
+    origin: row.origin === "remote" ? "remote" : "local",
+    reason: row.reason,
+    lifted_at: row.lifted_at,
+  };
+}
+
+/**
+ * Durable halt state (migration #44). Implements `HaltStoreAdapter`.
+ *
+ * "In force" is `lifted_at IS NULL` — NOT "acknowledged". A requested
+ * halt blocks from the instant it is written, before anyone has
+ * acknowledged it: the gap between asking and stopping must fail toward
+ * stopped, or the ask is advisory.
+ */
+export class SqliteHaltStore implements HaltStoreAdapter {
+  private stmtRequest: PreparedStatement;
+  private stmtGet: PreparedStatement;
+  private stmtLift: PreparedStatement;
+  private stmtListActive: PreparedStatement;
+  private stmtListRecent: PreparedStatement;
+  private stmtGoalExists: PreparedStatement;
+  private stmtAckExecutor: PreparedStatement;
+  private stmtHasAck: PreparedStatement;
+  private stmtListAcks: PreparedStatement;
+
+  constructor(db: DatabaseDriver) {
+    this.stmtGoalExists = db.prepare(
+      `SELECT goal_id FROM goals WHERE goal_id = ? AND motebit_id = ?`,
+    );
+    this.stmtAckExecutor = db.prepare(
+      `INSERT OR IGNORE INTO halt_acknowledgement (halt_id, executor_id, acknowledged_at, acknowledgement)
+       VALUES (?, ?, ?, ?)`,
+    );
+    this.stmtHasAck = db.prepare(
+      `SELECT 1 FROM halt_acknowledgement WHERE halt_id = ? AND executor_id = ?`,
+    );
+    this.stmtListAcks = db.prepare(
+      `SELECT * FROM halt_acknowledgement WHERE halt_id = ? ORDER BY acknowledged_at ASC`,
+    );
+    this.stmtRequest = db.prepare(
+      `INSERT OR REPLACE INTO halt_state
+       (halt_id, motebit_id, goal_id, requested_at, origin, reason, lifted_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmtGet = db.prepare(`SELECT * FROM halt_state WHERE halt_id = ?`);
+    this.stmtLift = db.prepare(
+      `UPDATE halt_state SET lifted_at = ? WHERE halt_id = ? AND lifted_at IS NULL`,
+    );
+    this.stmtListActive = db.prepare(
+      `SELECT * FROM halt_state WHERE motebit_id = ? AND lifted_at IS NULL ORDER BY requested_at ASC`,
+    );
+    this.stmtListRecent = db.prepare(
+      `SELECT * FROM halt_state WHERE motebit_id = ? ORDER BY requested_at DESC LIMIT ?`,
+    );
+  }
+
+  /**
+   * Record a request to stop.
+   *
+   * A goal-scoped halt is validated against the goals table here rather
+   * than trusted from the caller, because three separate review rounds
+   * found three separate ways to write a halt whose scope matched
+   * nothing: a reason parsed as a goal name, an 8-character prefix left
+   * unresolved, and an id that simply did not exist. Each produced the
+   * one failure a stop command must never have — the record said a goal
+   * was halted, `halt-status` listed it as in force, and the goal kept
+   * firing.
+   *
+   * Fixing the fourth call site would have been the fourth fix. A scope
+   * that cannot match is refused at the boundary instead, so no caller —
+   * CLI, command layer, phone, or one not written yet — can record one.
+   */
+  request(halt: HaltRequest): void {
+    if (halt.goal_id != null) {
+      const found = this.stmtGoalExists.get(halt.goal_id, halt.motebit_id) as
+        { goal_id: string } | undefined;
+      if (found === undefined) {
+        throw new Error(
+          `refusing to record a halt scoped to goal "${halt.goal_id}", which does not exist for this motebit — a halt that matches no goal would report a stop while the goal kept running`,
+        );
+      }
+    }
+    this.stmtRequest.run(
+      halt.halt_id,
+      halt.motebit_id,
+      halt.goal_id,
+      halt.requested_at,
+      halt.origin,
+      halt.reason,
+      halt.lifted_at,
+    );
+  }
+
+  get(haltId: string): HaltRequest | null {
+    const row = this.stmtGet.get(haltId) as HaltRow | undefined;
+    return row === undefined ? null : rowToHalt(row);
+  }
+
+  /**
+   * Record that ONE executor stopped. The per-executor row is the whole
+   * fact — there is no per-halt summary to keep in step with it, by
+   * construction.
+   */
+  acknowledge(haltId: string, executorId: string, acknowledgement: string, at = Date.now()): void {
+    this.stmtAckExecutor.run(haltId, executorId, at, acknowledgement);
+  }
+
+  hasAcknowledged(haltId: string, executorId: string): boolean {
+    return this.stmtHasAck.get(haltId, executorId) !== undefined;
+  }
+
+  acknowledgements(haltId: string): HaltAcknowledgement[] {
+    return (this.stmtListAcks.all(haltId) as HaltAcknowledgement[]).map((r) => ({
+      halt_id: r.halt_id,
+      executor_id: r.executor_id,
+      acknowledged_at: r.acknowledged_at,
+      acknowledgement: r.acknowledgement,
+    }));
+  }
+
+  lift(haltId: string, at = Date.now()): boolean {
+    return this.stmtLift.run(at, haltId).changes > 0;
+  }
+
+  listActive(motebitId: string): HaltRequest[] {
+    return (this.stmtListActive.all(motebitId) as HaltRow[]).map(rowToHalt);
+  }
+
+  activeFor(motebitId: string, goalId?: string): HaltRequest | null {
+    const active = this.listActive(motebitId);
+    // Motebit-wide first: it covers everything, so it is the honest
+    // answer to "am I halted" regardless of which goal asked.
+    return (
+      active.find((h) => h.goal_id === null) ??
+      (goalId != null ? (active.find((h) => h.goal_id === goalId) ?? null) : null)
+    );
+  }
+
+  listRecent(motebitId: string, limit = 20): HaltRequest[] {
+    return (this.stmtListRecent.all(motebitId, limit) as HaltRow[]).map(rowToHalt);
+  }
+}
+
 // === Goal Runs (durable unattended execution) ===
 
 /**
@@ -1718,29 +1924,10 @@ export class SqliteGoalRunStore {
 
 // === Approval Queue ===
 
-export type ApprovalStatus = "pending" | "approved" | "denied" | "expired";
-
-export interface ApprovalItem {
-  approval_id: string;
-  motebit_id: string;
-  goal_id: string;
-  tool_name: string;
-  args_preview: string;
-  args_hash: string;
-  risk_level: number;
-  status: ApprovalStatus;
-  created_at: number;
-  expires_at: number;
-  resolved_at: number | null;
-  denied_reason: string | null;
-  /**
-   * Full JSON of the paused call's arguments — what a post-restart
-   * resolution executes EXACTLY (migration #43). Optional/null for rows
-   * written before it existed; such an approval can be shown but never
-   * executed after the paused turn is gone.
-   */
-  args_json?: string | null;
-}
+// Canonical home is `@motebit/protocol` — the shape crosses a wire when a
+// remote consent surface is shown what it is deciding on. Re-exported
+// here so existing importers keep working.
+export type { ApprovalItem, ApprovalStatus } from "@motebit/sdk";
 
 interface ApprovalRow {
   approval_id: string;
@@ -3189,6 +3376,8 @@ export interface MotebitDatabase {
   goalOutcomeStore: SqliteGoalOutcomeStore;
   approvalStore: SqliteApprovalStore;
   goalRunStore: SqliteGoalRunStore;
+  haltStore: SqliteHaltStore;
+  commandReplayStore: SqliteCommandReplayStore;
   conversationStore: SqliteConversationStore;
   planStore: SqlitePlanStore;
   gradientStore: SqliteGradientStore;
@@ -3226,6 +3415,8 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   const goalOutcomeStore = new SqliteGoalOutcomeStore(driver);
   const approvalStore = new SqliteApprovalStore(driver);
   const goalRunStore = new SqliteGoalRunStore(driver);
+  const haltStore = new SqliteHaltStore(driver);
+  const commandReplayStore = new SqliteCommandReplayStore(driver);
   const conversationStore = new SqliteConversationStore(driver);
   const planStore = new SqlitePlanStore(driver);
   const gradientStore = new SqliteGradientStore(driver);
@@ -3250,6 +3441,8 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     goalOutcomeStore,
     approvalStore,
     goalRunStore,
+    haltStore,
+    commandReplayStore,
     conversationStore,
     planStore,
     gradientStore,

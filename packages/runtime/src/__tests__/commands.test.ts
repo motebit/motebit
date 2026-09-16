@@ -24,6 +24,13 @@ function mockRuntime(overrides: Partial<Record<string, unknown>> = {}): MotebitR
     getLastReflection: () => null,
     hasPendingApproval: false,
     pendingApprovalInfo: null,
+    // The approval queue + the credential-class membrane the command
+    // layer routes argument text through before it crosses the relay.
+    // A stub without them would make `approvals` throw, which is the
+    // honest shape: redaction is unconditional, never opt-in.
+    approvals: null,
+    redactForRemoteDisclosure: (t: string) => t,
+    halts: null,
     listConversations: () => [],
     memory: {
       exportAll: async () => ({ nodes: [], edges: [] }),
@@ -88,9 +95,13 @@ describe("executeCommand", () => {
       expect(result!.summary).toContain("web_search");
     });
 
-    it("approvals: reports no pending", async () => {
+    it("approvals: a surface with no queue says so, not 'none pending'", async () => {
+      // This asserted "No pending approvals." — a claim the surface
+      // cannot support. With no readable queue it does not know whether
+      // anything is waiting; the daemon that owns the queue might hold
+      // a real one. The two answers are opposites to whoever is asking.
       const result = await executeCommand(mockRuntime(), "approvals");
-      expect(result!.summary).toBe("No pending approvals.");
+      expect(result!.summary).toContain("cannot list approvals");
     });
 
     it("approvals: reports pending tool", async () => {

@@ -6053,6 +6053,9 @@ The CLI supports several subcommands beyond the default interactive REPL:
 | `motebit doctor` | Diagnose configuration and connectivity issues |
 | `motebit goal add/list/remove/pause/resume` | Manage scheduled goals |
 | `motebit approvals list/show/approve/deny` | Manage the tool approval queue |
+| `motebit halt [goal <id>] [--reason "..."] [--remote]` | Withdraw the permission to act unattended; `--remote` signs a command to the running runtime and returns its acknowledgement |
+| `motebit resume [<halt_id>\|all] [--remote]` | Give that permission back |
+| `motebit halt-status [--remote]` | What is stopped, and whether the motebit has acknowledged it |
 | `motebit runs [list\|ack <run_id> --allow-fresh-run]` | Goal-run ledger: runs holding their goal (paused on you, or interrupted with side effects) and recent runs; `ack --allow-fresh-run` releases a reviewed interrupted run, accepting that its goal's next run may repeat effects |
 | `motebit rotate [--reason "..."]` | Rotate Ed25519 keypair with signed succession record |
 
@@ -6935,6 +6938,138 @@ Error: approval a1b2c3d4 is already denied.
 **Interrupted runs:** If the daemon dies mid-run, the next start marks that run `interrupted` and reads the tool audit log for it: how many allowed tool calls recorded a completion, and how many have a decision row but no completion row (the process died between dispatch and recording — their external effect is unknown). If either count is non-zero the goal is **held**: it will not fire again until you run `motebit runs ack <run_id>`, because re-firing would repeat the completed calls and nobody can say what the unknown ones did. A run with no allowed tool calls at all resolves itself. `motebit ps` shows held goals; `motebit runs` lists the runs holding them. `motebit runs ack <run_id> --allow-fresh-run` retries nothing — it records that you looked and accepts that the goal's next run starts from scratch, which may repeat effects the interrupted run already caused; without the flag the command prints that consequence and releases nothing. A decision applied after a restart closes its run as `partial`, never `completed`: the one approved action ran (or was refused), and the goal's remaining work was not resumed.
 
 **What a restart cannot do:** it cannot resume the paused turn itself (its stream died with the old process), which is why a post-restart decision applies to the one approved call only and the run closes as `partial`. The 1-hour TTL bounds the decision, not the sweep: an approval granted after its expiry — for example while the daemon was down — is refused by `motebit approvals approve` and, if it slipped through, is never executed by the daemon.
+
+## Stopping it
+
+A halt withdraws the standing permission to act unattended. It is not the
+opposite of an approval — an approval authorizes one exact pending call,
+a halt revokes the permission to act at all, and a halt in force outranks
+an approval granted before it.
+
+```bash
+motebit halt --reason "going out"        # stop all unattended execution
+motebit halt goal a1b2c3d4               # stop one goal, leave the rest
+motebit halt-status                      # what was asked, and which processes acknowledged
+motebit resume a1b2c3d4                  # give the permission back
+motebit resume all
+```
+
+A halt stops new goal runs, recovered approvals, and idle consolidation,
+and signals an abort of the run in flight — the daemon checks for halts
+on its own interval, outside the guard that a long-running goal holds, so
+a stop reaches work in progress rather than queueing behind it. The
+signal is observed between steps, so a tool call already dispatched runs
+to its end; the acknowledgement says exactly that rather than claiming
+the run was cut off. A run stopped this way is not counted against the
+goal's retry budget — a stop you asked for is not a failure of the goal. A live
+conversation you are having at the keyboard is not unattended work and is
+not what a halt is for.
+
+A goal-scoped halt is genuinely scoped: it stops that goal's next run and
+that goal's pending approval, and leaves every other goal alone. The id
+is resolved before anything is recorded — the 8-character prefix
+`motebit goal list` prints is enough — and a scope naming a goal that
+does not exist is refused at the store, not merely at the command that
+happened to be written first. A halt that matched no goal would report a
+stop while the goal kept running, so that state cannot be recorded at
+all.
+
+**Where a halt is enforced.** Two chokepoints, not a list of call sites:
+every dispatched task passes through the runtime's task entry, and every
+idle cycle through the consolidation entry, so a path added later
+inherits the refusal instead of having to remember it. On top of those
+the scheduler will not fire a goal, execute a recovered approval, or
+resume a turn whose approval expired — that resume is a model turn, and
+under a halt it is unattended work starting.
+
+`motebit serve` is covered too: a halted worker does not claim
+relay-dispatched tasks. One limitation is worth stating plainly — the
+relay's task protocol has no decline verb, so an unclaimed task is
+re-dispatched and refused again until it times out, and the submitter
+learns only from that timeout. Answering them properly needs a decline
+verb, which belongs to the task protocol rather than to halt.
+
+**Several processes, several acknowledgements.** More than one process
+can run unattended work for one motebit — `motebit run` and
+`motebit serve` on the same machine, against the same database — and
+each stops different work. So each acknowledges for itself, and
+`halt-status` lists them by name. One process acknowledging never meant
+that everything had stopped; treating it as if it did let the other keep
+working under a surface that said "Stopped". So no surface here says a
+bare "Stopped" — `motebit halt` names which processes acknowledged and
+what each of them stopped, and a remote `halt` answers for the runtime
+that received it while listing the rest.
+
+**Acknowledged is not stopped either.** A process acknowledging says it
+answered for itself, not that it had work to stop: the worker answers a
+goal-scoped halt with "nothing here runs under that goal — dispatched
+tasks continue", which is true, useful, and not the goal having
+stopped. So `halt-status` counts processes that ACKNOWLEDGED and prints
+what each one stopped underneath, rather than folding both facts into
+one word.
+
+**Requested is not stopped, and neither is one acknowledgement.** The
+request carries only the ask: who asked, what for, and when. Whether
+anything stopped is a separate record, one row per process, each naming
+the process and what stopping entailed there (`aborted run 1a2b3c4d; no
+further goal runs will start`). It is kept apart because a motebit's
+unattended work can run in several processes at once, so "has it
+stopped" is never one fact. A daemon that is offline, wedged, or
+mid-tool has been asked and has not stopped. `motebit halt` waits a few
+seconds, then names the processes that answered, and no surface reports
+a bare "Stopped" on the strength of one of them.
+
+The halt is durable and in force from the instant it is written — before
+anyone acknowledges it, and across a restart. A stop a restart forgets is
+not a stop.
+
+### From somewhere else
+
+`--remote` signs the command with the motebit's identity key and sends it
+to the running runtime over the relay
+(`signed-request-envelope@1.0`, audience `agent-command/{motebit_id}`).
+The relay verifies at ingress as defence in depth, forwards the envelope
+verbatim, and the runtime re-verifies fail-closed before acting.
+
+```bash
+motebit halt --remote --reason "from the train"
+motebit halt-status --remote
+motebit resume all --remote
+```
+
+Because that request reaches the process that is doing the work, the
+response **is** the acknowledgement: it says what was stopped, not that a
+message was delivered. If no unattended runtime is connected the command
+fails, and the honest reading of that failure is "not delivered" — never
+"stopped". A halt written locally is in force on that machine regardless.
+
+Every surface of a motebit holds an open socket, so the relay routes
+these verbs specifically to a peer that runs unattended work. Without
+that, a halt sent from the phone could be answered by the phone —
+"this surface cannot be halted" — while the daemon kept running, which
+reads exactly like a refusal.
+
+The phone speaks the same verbs as chat commands in the mobile app —
+halt, resume and halted, plus pending, approve and deny for the approval
+queue. (Those are mobile-app commands, not `motebit` CLI subcommands.)
+The phone can sign them because after a key-transfer pairing it holds the
+motebit's identity key; a device paired without key transfer will be told
+so rather than silently refused.
+
+Deciding an approval from the phone does not execute anything there. It
+writes the verdict into the same queue a terminal decision writes to; the
+daemon picks it up on its next tick, through the same policy gate, and a
+money action is still never executed from a recovered run.
+
+What the phone is shown is redacted the way any egress to a non-sovereign
+party is: the destination, the path and the amount are visible so the
+decision is real, while credential-class values are masked, and the full
+arguments never leave the machine. The preview is accompanied by a hash
+over the *whole* argument set. Note precisely what that hash buys: the
+phone holds neither the full arguments nor the un-redacted preview, so it
+cannot recompute anything. The hash lets a later check **on the machine
+that holds the arguments** detect a preview that diverged from what would
+execute; the phone carries it forward rather than verifying it.
 
 ## Governance enforcement
 

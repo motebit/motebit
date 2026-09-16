@@ -29,14 +29,189 @@ export function cmdTools(runtime: MotebitRuntime): CommandResult {
   };
 }
 
-export function cmdApprovals(runtime: MotebitRuntime): CommandResult {
-  if (!runtime.hasPendingApproval) return { summary: "No pending approvals." };
-  const info = runtime.pendingApprovalInfo;
-  if (!info) return { summary: "No pending approvals." };
+/**
+ * `approvals` / `approvals approve <id>` / `approvals deny <id> [reason]`
+ *
+ * The consent surface. This is what a person somewhere else is shown
+ * before they decide, and what carries their decision back — so two
+ * things matter more than they would in a read-only command.
+ *
+ * **It must show the real action.** A tool name is not a decision; the
+ * destination, the path, the amount are. The queue stores a preview of
+ * the arguments alongside a hash over all of them, and both are
+ * surfaced — but note precisely what the hash buys: the remote surface
+ * holds neither the full arguments nor the un-redacted preview, so it
+ * cannot recompute anything. The hash lets a LATER LOCAL check, on the
+ * machine that holds the arguments, detect a preview that diverged from
+ * what would execute. It is carried forward, not verified here.
+ *
+ * **It must not leak while doing so.** This output crosses the relay,
+ * which is not a sovereign party, so argument text goes through the
+ * same credential-class redaction the runtime applies to cloud egress:
+ * a person sees the destination, the relay does not see an API key.
+ * Full arguments never leave the machine — `motebit approvals show`
+ * reads them locally.
+ *
+ * Deciding here does not execute anything. It writes the verdict into
+ * the same queue a terminal decision writes to; the daemon's scheduler
+ * picks it up on its next tick, through the same policy gate, and a
+ * halt in force outranks it.
+ */
+export function cmdApprovals(runtime: MotebitRuntime, args?: string): CommandResult {
+  const store = runtime.approvals;
+  const raw = (args ?? "").trim();
+  const verb = /^(approve|deny)\s+(\S+)\s*(.*)$/i.exec(raw);
+
+  if (verb) {
+    const decision = verb[1]!.toLowerCase() === "approve" ? "approved" : "denied";
+    const idPrefix = verb[2]!;
+    const reason = (verb[3] ?? "").trim();
+    if (store == null) {
+      return {
+        summary: "This surface cannot decide approvals — it has no approval queue.",
+        detail:
+          "Nothing was approved or denied. Ask the process that runs unattended work (`motebit run`), which owns the queue.",
+      };
+    }
+    if (store.listPending == null || store.resolve == null) {
+      return {
+        summary: "This surface cannot decide approvals — its approval store is read-only.",
+      };
+    }
+    const pending = store.listPending(runtime.motebitId);
+    // An ambiguous prefix is refused, never resolved to the oldest
+    // match. `listPending` is oldest-first, so `/approve 1` would have
+    // approved whichever queued call happened to be oldest among those
+    // starting with "1" — possibly a money action nobody named — and
+    // then confirmed it by tool name as though it were the one asked
+    // for. `resume` already refuses an ambiguous halt prefix for this
+    // reason; deciding an approval is the more consequential verb of
+    // the two and was the one without the guard.
+    const exact = pending.find((a) => a.approval_id === idPrefix);
+    const prefixed = pending.filter((a) => a.approval_id.startsWith(idPrefix));
+    if (exact == null && prefixed.length > 1) {
+      return {
+        summary: `"${idPrefix}" matches ${prefixed.length} pending approvals — name one exactly. Nothing was decided.`,
+        detail: prefixed
+          .map((a) => `${a.approval_id.slice(0, 8)} (${a.tool_name}, ${a.risk_level})`)
+          .join("\n"),
+      };
+    }
+    const match = exact ?? prefixed[0];
+    if (!match) {
+      return {
+        summary: `No pending approval matching "${idPrefix}".`,
+        detail:
+          pending.length === 0
+            ? "The queue is empty."
+            : `Pending: ${pending.map((a) => `${a.approval_id.slice(0, 8)} (${a.tool_name})`).join(", ")}`,
+      };
+    }
+    if (Date.now() > match.expires_at) {
+      // Sweep, then refuse. The TTL bounds the decision, not the
+      // daemon's sweep — and a remote surface is used precisely when the
+      // daemon may be down, so nothing else has flipped this row. Left
+      // unswept it keeps appearing in `/pending` and every `/approve` is
+      // refused, which reads as the command being broken rather than the
+      // approval being over. The local CLI already sweeps here.
+      store.expireStale?.(Date.now());
+      return {
+        summary: `Approval ${match.approval_id.slice(0, 8)} expired at ${new Date(match.expires_at).toISOString()} and can no longer be decided.`,
+      };
+    }
+    // The trailing text is a DENIAL reason. Passing it on an approve
+    // would write it to `denied_reason`, producing a row that is
+    // `approved` with a denial attached — and the recovery drain reads
+    // that field into the ApprovalApproved audit event.
+    store.resolve(
+      match.approval_id,
+      decision,
+      decision === "denied" && reason !== "" ? reason : undefined,
+    );
+    return {
+      summary: `${decision === "approved" ? "Approved" : "Denied"}: ${match.tool_name} (${match.approval_id.slice(0, 8)}).`,
+      detail:
+        decision === "approved"
+          ? "The daemon executes it on its next tick, through the same policy gate. A halt in force outranks this."
+          : "Nothing will run.",
+      data: { approval_id: match.approval_id, decision, tool_name: match.tool_name },
+    };
+  }
+
+  // ── List ──
+  // A surface with no readable queue must say so, never report an empty
+  // one. The two are opposite answers to "is anything waiting on me",
+  // and the relay's compatibility fallback can deliver this command to
+  // a surface that is not the daemon — which would then answer "No
+  // pending approvals" while the daemon held a real one. The decide
+  // path above already refuses honestly; this one used to agree with
+  // whatever the caller feared least.
+  if (store?.listPending == null && !runtime.hasPendingApproval) {
+    return {
+      summary: "This surface cannot list approvals — it has no readable approval queue.",
+      detail:
+        "That is not the same as an empty queue. Ask the process that runs unattended work (`motebit run`), which owns the queue this would have read.",
+    };
+  }
+  // Sweep before listing, for the same reason the decide path does.
+  // `listPending` selects on status, not on expiry, so without this the
+  // phone reports "3 approval(s) waiting on you" for rows whose TTL
+  // lapsed while the daemon was down — and then refuses every one of
+  // them, which reads as a broken command rather than an expired
+  // approval. Fixing only the decide path fixed the half nobody sees
+  // first.
+  store?.expireStale?.(Date.now());
+  const pending = store?.listPending?.(runtime.motebitId) ?? [];
+  if (pending.length === 0) {
+    // Fall back to the live in-turn approval (a surface with no queue).
+    if (!runtime.hasPendingApproval) return { summary: "No pending approvals." };
+    const info = runtime.pendingApprovalInfo;
+    if (!info) return { summary: "No pending approvals." };
+    // `data` is serialized whole and returned through the relay, so the
+    // raw argument object must not ride along beside a redacted string.
+    // The redacted text IS the payload.
+    const redactedArgs = runtime.redactForRemoteDisclosure(JSON.stringify(info.args, null, 2));
+    return {
+      summary: `Pending approval: ${info.toolName}`,
+      detail: `Args: ${redactedArgs}`,
+      data: { toolName: info.toolName, args_preview: redactedArgs },
+    };
+  }
+
+  const rows = pending.map((a) => ({
+    approval_id: a.approval_id,
+    tool_name: a.tool_name,
+    risk_level: a.risk_level,
+    goal_id: a.goal_id,
+    created_at: a.created_at,
+    expires_at: a.expires_at,
+    /** Credential-class values masked — this crosses the relay. */
+    args_preview: runtime.redactForRemoteDisclosure(a.args_preview),
+    /** Over the FULL arguments, so a truncated preview is still checkable. */
+    args_hash: a.args_hash,
+    /**
+     * Measured, not inferred. Producers store previews at different
+     * widths (500 chars in the scheduler, 200 elsewhere), so a
+     * length-threshold guess reports most truncated previews as
+     * complete — the phone would then see a preview cut off before the
+     * destination with nothing saying so. `null` means the full
+     * arguments were not persisted (pre-#43 rows), which is unknown
+     * rather than false.
+     */
+    args_truncated: a.args_json != null ? a.args_json.length > a.args_preview.length : null,
+  }));
+  const detail = rows
+    .map(
+      (r) =>
+        `${r.approval_id.slice(0, 8)}  ${r.tool_name}  R${r.risk_level}\n` +
+        `  ${r.args_preview}${r.args_truncated === true ? " …(truncated; full args stay on the machine)" : r.args_truncated === null ? " …(this preview may be incomplete — full args were not persisted)" : ""}\n` +
+        `  expires ${new Date(r.expires_at).toISOString()}`,
+    )
+    .join("\n");
   return {
-    summary: `Pending approval: ${info.toolName}`,
-    detail: `Args: ${JSON.stringify(info.args, null, 2)}`,
-    data: { toolName: info.toolName, args: info.args },
+    summary: `${rows.length} approval(s) waiting on you.`,
+    detail: `${detail}\n\nDecide with: approvals approve <id> | approvals deny <id> [reason]`,
+    data: { approvals: rows },
   };
 }
 
