@@ -141,11 +141,51 @@ describe("cmdHalt", () => {
     expect([...rows.values()][0]!.lifted_at).toBeNull();
   });
 
-  it("parses `goal <id> reason…` into a goal-scoped halt", async () => {
+  it("takes the scope from the structured form", async () => {
     const { runtime, rows } = makeRuntime({ stopper: () => "goal will not fire" });
-    const r = await cmdHalt(runtime, "goal goal-A too noisy", "local");
+    const r = await cmdHalt(
+      runtime,
+      JSON.stringify({ goal_id: "goal-A", reason: "too noisy" }),
+      "local",
+    );
     expect(r.data?.scope).toBe("goal-A");
     expect([...rows.values()][0]).toMatchObject({ goal_id: "goal-A", reason: "too noisy" });
+  });
+
+  it("free text is a REASON and never a scope — a stop that reports stopping a goal must have stopped one", async () => {
+    const { runtime, rows } = makeRuntime({ stopper: () => "stopped" });
+    // The old `goal <id> <reason>` grammar read this as halting a goal
+    // named "cleanup": nothing was halted, and the response said a goal
+    // had been stopped.
+    const r = await cmdHalt(runtime, "goal cleanup done", "local");
+    expect(r.data?.scope).toBe("all");
+    expect([...rows.values()][0]).toMatchObject({ goal_id: null, reason: "goal cleanup done" });
+  });
+
+  it("a reason that merely starts with a brace is still a reason", async () => {
+    const { runtime, rows } = makeRuntime({ stopper: () => "stopped" });
+    await cmdHalt(runtime, "{not json after all", "local");
+    expect([...rows.values()][0]).toMatchObject({ goal_id: null, reason: "{not json after all" });
+  });
+
+  it("reports the acknowledgement even when another actor honored the halt first", async () => {
+    const { runtime } = makeRuntime({ stopper: () => "aborted run 9z" });
+    // Simulate the scheduler's phase 0 having acknowledged it already:
+    // `honorHalts` then returns nothing for THIS call.
+    const realHonor = (runtime as unknown as { honorHalts: () => Promise<unknown[]> }).honorHalts;
+    let first = true;
+    (runtime as unknown as { honorHalts: () => Promise<unknown[]> }).honorHalts = async () => {
+      const out = await realHonor.call(runtime);
+      if (first) {
+        first = false;
+        return out;
+      }
+      return [];
+    };
+    await realHonor.call(runtime); // nothing pending yet
+    const r = await cmdHalt(runtime, "x", "local");
+    expect(r.data?.acknowledged).toBe(true);
+    expect(r.detail).toContain("aborted run 9z");
   });
 
   it("a surface with no halt store refuses honestly instead of succeeding", async () => {
@@ -184,7 +224,12 @@ describe("cmdResume / cmdHaltStatus", () => {
 describe("cmdApprovals — the consent surface", () => {
   it("lists the real action, masks credential-class values, and carries the hash over the FULL args", () => {
     const { runtime } = makeRuntime({
-      pending: [approval({ args_preview: '{"to":"ops@example.com","key":"sk-abc123DEF"}' })],
+      pending: [
+        approval({
+          args_preview: '{"to":"ops@example.com","key":"sk-abc123DEF"}',
+          args_json: '{"to":"ops@example.com","key":"sk-abc123DEF"}',
+        }),
+      ],
     });
     const r = cmdApprovals(runtime);
     expect(r.summary).toBe("1 approval(s) waiting on you.");
@@ -196,7 +241,9 @@ describe("cmdApprovals — the consent surface", () => {
   });
 
   it("flags a truncated preview so a short render is not mistaken for the whole call", () => {
-    const { runtime } = makeRuntime({ pending: [approval({ args_preview: "x".repeat(500) })] });
+    const { runtime } = makeRuntime({
+      pending: [approval({ args_preview: "x".repeat(500), args_json: "x".repeat(1200) })],
+    });
     const rows = (cmdApprovals(runtime).data?.approvals ?? []) as Array<Record<string, unknown>>;
     expect(rows[0]!.args_truncated).toBe(true);
   });
@@ -210,6 +257,45 @@ describe("cmdApprovals — the consent surface", () => {
 
     cmdApprovals(runtime, "deny ap-111 too risky");
     expect(resolved[1]).toEqual({ id: "ap-11111111", status: "denied", reason: "too risky" });
+  });
+
+  it("trailing text on an APPROVE is not written as a denial reason", () => {
+    const { runtime, resolved } = makeRuntime({ pending: [approval()] });
+    cmdApprovals(runtime, "approve ap-11111111 looks fine");
+    // `denied_reason` on an approved row would surface as the denial
+    // reason in the ApprovalApproved audit event.
+    expect(resolved[0]).toEqual({ id: "ap-11111111", status: "approved" });
+  });
+
+  it("truncation is measured against the stored full args, not guessed from a length threshold", () => {
+    const { runtime } = makeRuntime({
+      pending: [
+        // A 200-char preview (the width most producers store) over longer
+        // args: a >= 500 threshold called this complete.
+        approval({ args_preview: "y".repeat(200), args_json: "y".repeat(900) }),
+        approval({ approval_id: "ap-2", args_preview: "short", args_json: "short" }),
+        approval({ approval_id: "ap-3", args_preview: "unknown" }), // pre-#43: no full args
+      ],
+    });
+    const rows = (cmdApprovals(runtime).data?.approvals ?? []) as Array<Record<string, unknown>>;
+    expect(rows[0]!.args_truncated).toBe(true);
+    expect(rows[1]!.args_truncated).toBe(false);
+    expect(rows[2]!.args_truncated).toBeNull();
+  });
+
+  it("the live-turn fallback never returns raw arguments beside the redacted text", () => {
+    const { runtime } = makeRuntime({ pending: [] });
+    (runtime as unknown as { hasPendingApproval: boolean }).hasPendingApproval = true;
+    (
+      runtime as unknown as {
+        pendingApprovalInfo: { toolName: string; args: Record<string, unknown> };
+      }
+    ).pendingApprovalInfo = { toolName: "call_api", args: { key: "sk-abc123DEF", to: "ops@x" } };
+    const r = cmdApprovals(runtime);
+    // `data` is serialized whole and returned through the relay.
+    expect(JSON.stringify(r.data)).not.toContain("sk-abc123DEF");
+    expect(JSON.stringify(r.data)).toContain("ops@x");
+    expect(r.data?.args).toBeUndefined();
   });
 
   it("refuses to decide an approval past its expiry", () => {

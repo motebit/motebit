@@ -291,6 +291,53 @@ describe("halt at the scheduler", () => {
     s.stop();
   });
 
+  it("a halt honored while a run holds the tick guard still aborts it — the guard must not queue a stop behind the work", async () => {
+    db.goalStore.add(goal({ interval_ms: 3_600_000 }));
+    let release!: () => void;
+    const hold = new Promise<void>((r) => (release = r));
+    const m = mockRuntime(db, { holdStream: hold });
+    const s = scheduler(db, m);
+    s.start(999_999);
+    await settle(() => db.goalRunStore.listByStatus("mote-test", "running").length > 0);
+    const [run] = db.goalRunStore.listByStatus("mote-test", "running");
+
+    // `motebit halt` writes the row; the daemon's own interval is what
+    // must pick it up — while the run is still in flight and holding
+    // `ticking`. Phase 0 runs outside that guard for exactly this.
+    const halt = m.requestHalt({ reason: "stop now" });
+    await s.tickOnce();
+
+    const acked = db.haltStore.get(halt.halt_id)!;
+    expect(acked.acknowledged_at).not.toBeNull();
+    expect(acked.acknowledgement).toContain(`aborted run ${run!.run_id.slice(0, 8)}`);
+
+    release();
+    s.stop();
+  });
+
+  it("a goal-scoped halt stops that goal's recovered approval, not just the motebit-wide case", async () => {
+    db.goalStore.add(goal({ interval_ms: 3_600_000 }));
+    const first = mockRuntime(db, { pause: true });
+    const s1 = scheduler(db, first);
+    s1.start(999_999);
+    await settle(() => db.approvalStore.listAll("mote-test").length > 0);
+    s1.stop();
+    const [approval] = db.approvalStore.listAll("mote-test");
+    db.approvalStore.resolve(approval!.approval_id, "approved");
+
+    const second = mockRuntime(db);
+    const s2 = scheduler(db, second);
+    // Narrow halt only — the motebit-wide check would not see this.
+    second.requestHalt({ goalId: "goal-001", reason: "not this goal" });
+    s2.start(999_999);
+    await s2.tickOnce();
+    await s2.tickOnce();
+
+    expect(second.invoked).toEqual([]);
+    expect(db.goalRunStore.getByApproval(approval!.approval_id)?.status).toBe("awaiting_approval");
+    s2.stop();
+  });
+
   it("a goal-scoped halt stops that goal and leaves the others running", async () => {
     db.goalStore.add(goal({ goal_id: "goal-A" }));
     db.goalStore.add(goal({ goal_id: "goal-B" }));

@@ -158,8 +158,14 @@ motebit resume all
 ```
 
 A halt stops new goal runs, recovered approvals, and idle consolidation,
-and aborts the run in flight. A live conversation you are having at the
-keyboard is not unattended work and is not what a halt is for.
+and aborts the run in flight — the daemon checks for halts on its own
+interval, outside the guard that a long-running goal holds, so a stop can
+interrupt work in progress rather than queueing behind it. A live
+conversation you are having at the keyboard is not unattended work and is
+not what a halt is for.
+
+A goal-scoped halt is genuinely scoped: it stops that goal's next run and
+that goal's pending approval, and leaves every other goal alone.
 
 **Requested is not stopped.** The record keeps two timestamps because they
 are two facts. `requested_at` is what you know when you ask;
@@ -190,9 +196,15 @@ motebit resume all --remote
 
 Because that request reaches the process that is doing the work, the
 response **is** the acknowledgement: it says what was stopped, not that a
-message was delivered. If the runtime is not connected the command fails,
-and the honest reading of that failure is "not delivered" — never
+message was delivered. If no unattended runtime is connected the command
+fails, and the honest reading of that failure is "not delivered" — never
 "stopped". A halt written locally is in force on that machine regardless.
+
+Every surface of a motebit holds an open socket, so the relay routes
+these verbs specifically to a peer that runs unattended work. Without
+that, a halt sent from the phone could be answered by the phone —
+"this surface cannot be halted" — while the daemon kept running, which
+reads exactly like a refusal.
 
 The phone speaks the same verbs as chat commands in the mobile app —
 halt, resume and halted, plus pending, approve and deny for the approval

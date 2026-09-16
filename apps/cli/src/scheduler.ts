@@ -564,17 +564,21 @@ export class GoalScheduler {
   }
 
   private async tick(): Promise<void> {
+    // Phase 0 runs OUTSIDE the single-flight guard, and that placement is
+    // the whole point: a goal run holds `ticking` for its entire duration
+    // (up to the wall-clock limit, ten minutes by default), so a halt
+    // honored inside the guard could not reach the run it is meant to
+    // abort until that run had already finished. A halt must be able to
+    // interrupt work in progress, not queue behind it. `honorHalts` is
+    // idempotent and reads one row, so running it on every interval
+    // costs nothing once the work is stopped.
+    await this.runtime.honorHalts();
+
     // Single-flight guard — prevent re-entry if previous tick is still running
     if (this.ticking) return;
     this.ticking = true;
 
     try {
-      // Phase 0: honor any halt that has been asked for and not yet
-      // acted on. FIRST, before approvals are drained or a goal fires —
-      // a halt that arrives between ticks must stop the next tick, not
-      // the one after it. `honorHalts` is idempotent, so the steady
-      // halted state costs one store read per tick.
-      await this.runtime.honorHalts();
       const halted = this.runtime.haltInForce();
       if (halted != null) {
         if (!this.haltLogged.has(halted.halt_id)) {
@@ -1133,6 +1137,10 @@ export class GoalScheduler {
 
   private async drainResolvedApprovals(): Promise<void> {
     for (const [approvalId, turn] of this.suspended) {
+      // A halt covering this goal outranks the verdict: resuming would
+      // execute the approved call. The suspended turn is left in place,
+      // so lifting the halt resumes it rather than losing it.
+      if (this.runtime.haltInForce(turn.goalId) != null) continue;
       const item = this.approvalStore.get(approvalId);
       if (!item) continue;
       if (item.status !== "approved" && item.status !== "denied") continue;
@@ -1256,6 +1264,10 @@ export class GoalScheduler {
     if (this.runtime.haltInForce() != null) return;
     const waiting = this.runStore.listByStatus(this.motebitId, "awaiting_approval");
     for (const run of waiting) {
+      // …and a GOAL-scoped halt outranks that goal's approval. Checking
+      // only the motebit-wide halt above would execute the one call the
+      // narrower halt existed to prevent.
+      if (this.runtime.haltInForce(run.goal_id) != null) continue;
       if (run.approval_id == null) continue;
       if (this.suspended.has(run.approval_id)) continue; // live — handled above
       const item = this.approvalStore.get(run.approval_id);

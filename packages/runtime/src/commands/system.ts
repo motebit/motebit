@@ -86,7 +86,15 @@ export function cmdApprovals(runtime: MotebitRuntime, args?: string): CommandRes
         summary: `Approval ${match.approval_id.slice(0, 8)} expired at ${new Date(match.expires_at).toISOString()} and can no longer be decided.`,
       };
     }
-    store.resolve(match.approval_id, decision, reason !== "" ? reason : undefined);
+    // The trailing text is a DENIAL reason. Passing it on an approve
+    // would write it to `denied_reason`, producing a row that is
+    // `approved` with a denial attached — and the recovery drain reads
+    // that field into the ApprovalApproved audit event.
+    store.resolve(
+      match.approval_id,
+      decision,
+      decision === "denied" && reason !== "" ? reason : undefined,
+    );
     return {
       summary: `${decision === "approved" ? "Approved" : "Denied"}: ${match.tool_name} (${match.approval_id.slice(0, 8)}).`,
       detail:
@@ -104,10 +112,14 @@ export function cmdApprovals(runtime: MotebitRuntime, args?: string): CommandRes
     if (!runtime.hasPendingApproval) return { summary: "No pending approvals." };
     const info = runtime.pendingApprovalInfo;
     if (!info) return { summary: "No pending approvals." };
+    // `data` is serialized whole and returned through the relay, so the
+    // raw argument object must not ride along beside a redacted string.
+    // The redacted text IS the payload.
+    const redactedArgs = runtime.redactForRemoteDisclosure(JSON.stringify(info.args, null, 2));
     return {
       summary: `Pending approval: ${info.toolName}`,
-      detail: `Args: ${runtime.redactForRemoteDisclosure(JSON.stringify(info.args, null, 2))}`,
-      data: { toolName: info.toolName, args: info.args },
+      detail: `Args: ${redactedArgs}`,
+      data: { toolName: info.toolName, args_preview: redactedArgs },
     };
   }
 
@@ -122,13 +134,22 @@ export function cmdApprovals(runtime: MotebitRuntime, args?: string): CommandRes
     args_preview: runtime.redactForRemoteDisclosure(a.args_preview),
     /** Over the FULL arguments, so a truncated preview is still checkable. */
     args_hash: a.args_hash,
-    args_truncated: a.args_preview.length >= 500,
+    /**
+     * Measured, not inferred. Producers store previews at different
+     * widths (500 chars in the scheduler, 200 elsewhere), so a
+     * length-threshold guess reports most truncated previews as
+     * complete — the phone would then see a preview cut off before the
+     * destination with nothing saying so. `null` means the full
+     * arguments were not persisted (pre-#43 rows), which is unknown
+     * rather than false.
+     */
+    args_truncated: a.args_json != null ? a.args_json.length > a.args_preview.length : null,
   }));
   const detail = rows
     .map(
       (r) =>
         `${r.approval_id.slice(0, 8)}  ${r.tool_name}  R${r.risk_level}\n` +
-        `  ${r.args_preview}${r.args_truncated ? " …(truncated; full args stay on the machine)" : ""}\n` +
+        `  ${r.args_preview}${r.args_truncated === true ? " …(truncated; full args stay on the machine)" : r.args_truncated === null ? " …(this preview may be incomplete — full args were not persisted)" : ""}\n` +
         `  expires ${new Date(r.expires_at).toISOString()}`,
     )
     .join("\n");

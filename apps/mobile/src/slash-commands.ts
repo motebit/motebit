@@ -600,7 +600,11 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
     case "deny": {
       const remote: { cmd: string; args?: string } =
         command === "halt"
-          ? { cmd: "halt", ...(args ? { args } : {}) }
+          ? // Free text is a REASON and only a reason. Scope never rides
+            // inside it — the runtime reads a structured form, so
+            // "/halt goal is done" halts everything with that reason
+            // rather than a goal named "is".
+            { cmd: "halt", ...(args ? { args } : {}) }
           : command === "resume"
             ? { cmd: "resume", ...(args ? { args } : {}) }
             : command === "halted"

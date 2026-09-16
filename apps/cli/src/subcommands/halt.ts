@@ -19,6 +19,8 @@
 
 import { openMotebitDatabase } from "@motebit/persistence";
 import type { HaltRequest } from "@motebit/sdk";
+import { EventType } from "@motebit/sdk";
+import { EventStore } from "@motebit/event-log";
 import { RelayClient, RelayClientError } from "@motebit/relay-client";
 
 import type { CliConfig } from "../args.js";
@@ -27,6 +29,54 @@ import { loadActiveSigningKey } from "../identity.js";
 import { secureErase } from "@motebit/encryption";
 import { getDbPath } from "../runtime-factory.js";
 import { requireMotebitId, getRelayUrl } from "./_helpers.js";
+
+/**
+ * The scope travels structurally, never inside the free-text reason.
+ * A `goal <id> <reason>` grammar read `--reason "goal cleanup done"` as
+ * a halt of a goal named "cleanup" — halting nothing while reporting a
+ * stop, the one failure a stop command must never have.
+ */
+function haltArgs(goalId: string | undefined, reason: string | undefined): string | undefined {
+  if (goalId == null) return reason !== undefined && reason !== "" ? reason : undefined;
+  return JSON.stringify({ goal_id: goalId, ...(reason ? { reason } : {}) });
+}
+
+/**
+ * Append a halt event to the local log. The CLI writes the halt row
+ * directly (it is a one-shot process, not the runtime), so without this
+ * the request and the lift would leave no audit trail — only the
+ * daemon's acknowledgement would be recorded, and the history could not
+ * say who asked or who gave the permission back.
+ */
+async function logHaltEvent(
+  moteDb: Awaited<ReturnType<typeof openMotebitDatabase>>,
+  motebitId: string,
+  eventType: EventType,
+  halt: HaltRequest,
+): Promise<void> {
+  try {
+    const events = new EventStore(moteDb.eventStore);
+    await events.appendWithClock({
+      event_id: crypto.randomUUID(),
+      motebit_id: motebitId,
+      timestamp: Date.now(),
+      event_type: eventType,
+      payload: {
+        halt_id: halt.halt_id,
+        scope: halt.goal_id ?? "all",
+        origin: halt.origin,
+        requested_at: halt.requested_at,
+        ...(halt.reason != null ? { reason: halt.reason } : {}),
+        ...(halt.lifted_at != null ? { lifted_at: halt.lifted_at } : {}),
+      },
+      tombstoned: false,
+    });
+  } catch {
+    // The halt row is already durable; the event log is the audit trail,
+    // not the enforcement. Never let its failure make a stop look like
+    // it did not happen.
+  }
+}
 
 /** How long a local `halt` waits for a running daemon to acknowledge. */
 const ACK_WAIT_MS = 3_000;
@@ -90,13 +140,9 @@ export async function handleHalt(config: CliConfig): Promise<void> {
     process.exit(1);
   }
   const reason = config.reason;
-  const commandArgs = [
-    ...(goalId != null ? ["goal", goalId] : []),
-    ...(reason != null && reason !== "" ? [reason] : []),
-  ].join(" ");
 
   if (config.remote) {
-    await sendRemote(config, "halt", commandArgs === "" ? undefined : commandArgs);
+    await sendRemote(config, "halt", haltArgs(goalId, reason));
     return;
   }
 
@@ -115,6 +161,7 @@ export async function handleHalt(config: CliConfig): Promise<void> {
       lifted_at: null,
     };
     moteDb.haltStore.request(halt);
+    await logHaltEvent(moteDb, motebitId, EventType.HaltRequested, halt);
     const scope = goalId == null ? "all unattended execution" : `goal ${goalId.slice(0, 8)}`;
     console.log(`Stop requested for ${scope} (${halt.halt_id.slice(0, 8)}).`);
 
@@ -162,7 +209,16 @@ export async function handleResume(config: CliConfig): Promise<void> {
     }
     if (target === "all") {
       let lifted = 0;
-      for (const h of active) if (moteDb.haltStore.lift(h.halt_id)) lifted++;
+      for (const h of active) {
+        if (!moteDb.haltStore.lift(h.halt_id)) continue;
+        lifted++;
+        await logHaltEvent(
+          moteDb,
+          motebitId,
+          EventType.HaltLifted,
+          moteDb.haltStore.get(h.halt_id) ?? h,
+        );
+      }
       console.log(`Resumed — ${lifted} halt(s) lifted.`);
       return;
     }
@@ -173,6 +229,12 @@ export async function handleResume(config: CliConfig): Promise<void> {
       process.exit(1);
     }
     moteDb.haltStore.lift(match.halt_id);
+    await logHaltEvent(
+      moteDb,
+      motebitId,
+      EventType.HaltLifted,
+      moteDb.haltStore.get(match.halt_id) ?? match,
+    );
     console.log(
       `Resumed ${match.goal_id == null ? "unattended execution" : `goal ${match.goal_id.slice(0, 8)}`} (${match.halt_id.slice(0, 8)}).`,
     );

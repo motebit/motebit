@@ -54,13 +54,24 @@ export async function cmdHalt(
     };
   }
 
+  // Scope arrives structurally, never by re-parsing a flattened string.
+  // A `goal <id> <reason>` grammar read `--reason "goal cleanup done"`
+  // as a halt of a goal named "cleanup" — which halts nothing while
+  // reporting that it stopped something, the one failure a stop command
+  // must never have. Programmatic callers send JSON; a human typing
+  // free text sends a reason and only a reason.
   const raw = (args ?? "").trim();
   let goalId: string | undefined;
   let reason = raw;
-  const goalMatch = /^goal\s+(\S+)\s*(.*)$/i.exec(raw);
-  if (goalMatch) {
-    goalId = goalMatch[1];
-    reason = (goalMatch[2] ?? "").trim();
+  if (raw.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(raw) as { goal_id?: unknown; reason?: unknown };
+      if (typeof parsed.goal_id === "string" && parsed.goal_id !== "") goalId = parsed.goal_id;
+      reason = typeof parsed.reason === "string" ? parsed.reason : "";
+    } catch {
+      // Not the structured form after all — it is a reason that happens
+      // to start with a brace. Treat it as one rather than guessing.
+    }
   }
 
   const halt = await runtime.requestHalt({
@@ -70,11 +81,15 @@ export async function cmdHalt(
   });
   if (halt == null) return { summary: "Halt could not be recorded." };
 
-  const honored = await runtime.honorHalts();
-  const mine = honored.find((h) => h.halt_id === halt.halt_id);
+  await runtime.honorHalts();
+  // Read the record rather than the return value: `honorHalts` reports
+  // only what THIS call acknowledged, so a halt the scheduler's own
+  // phase 0 honored a moment earlier would otherwise be reported as
+  // un-acknowledged when the record plainly says it stopped.
+  const mine = runtime.halts.get(halt.halt_id) ?? halt;
   const scope = goalId == null ? "all unattended execution" : `goal ${goalId.slice(0, 8)}`;
 
-  if (mine?.acknowledged_at == null) {
+  if (mine.acknowledged_at == null) {
     // Recorded but not yet honored by this process — the honest reading.
     return {
       summary: `Stop requested for ${scope}. Not yet acknowledged.`,

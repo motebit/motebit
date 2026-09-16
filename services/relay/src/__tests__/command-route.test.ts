@@ -127,3 +127,87 @@ describe("command ingress envelope verification", () => {
     expect(String(json.summary)).toContain("not connected");
   });
 });
+
+/**
+ * The mutating verbs must reach a runtime that can actually serve them.
+ *
+ * Every surface of a motebit holds an open socket and handles
+ * `command_request` — the phone, the web app, the desktop app, the
+ * daemon. Sending a halt to the phone that sent it would be answered
+ * "this surface cannot be halted" while the daemon kept running, and an
+ * approval decision sent to a surface with no queue would be answered
+ * "no pending approval matching …". Both are indistinguishable from a
+ * genuine refusal, on exactly the commands where a false negative costs
+ * the most.
+ */
+describe("unattended-runtime commands are routed to a runtime that can serve them", () => {
+  function fakePeer(deviceId: string, capabilities: string[]) {
+    const sentTo: string[] = [];
+    return {
+      peer: {
+        ws: {
+          send: (payload: string) => {
+            sentTo.push(payload);
+          },
+        },
+        deviceId,
+        capabilities,
+      },
+      sentTo,
+    };
+  }
+
+  it("a halt is not sent to a surface that only watches — it fails as undelivered", async () => {
+    const phone = fakePeer("phone", ["push_wake"]);
+    relay.connections.set(AGENT_ID, [
+      phone.peer as unknown as typeof relay.connections extends Map<string, (infer T)[]>
+        ? T
+        : never,
+    ]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "halt",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    const { status, json } = await postCommand(AGENT_ID, { command: "halt", envelope });
+    expect(status).toBeGreaterThanOrEqual(400);
+    expect(JSON.stringify(json)).toMatch(/No unattended runtime is connected|not connected/i);
+    // Crucially: the phone was never asked.
+    expect(phone.sentTo).toEqual([]);
+  });
+
+  it("a halt IS sent to the peer that runs unattended work", async () => {
+    const phone = fakePeer("phone", ["push_wake"]);
+    const daemon = fakePeer("daemon", ["file_system", "background"]);
+    relay.connections.set(AGENT_ID, [phone.peer, daemon.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "halt",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    // No response will come back, so this times out — what is asserted is
+    // WHO was asked, not the answer.
+    void postCommand(AGENT_ID, { command: "halt", envelope });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(daemon.sentTo).toHaveLength(1);
+    expect(phone.sentTo).toEqual([]);
+    expect(daemon.sentTo[0]).toContain('"command":"halt"');
+  });
+
+  it("a read-only command may still be answered by any connected surface", async () => {
+    const phone = fakePeer("phone", ["push_wake"]);
+    relay.connections.set(AGENT_ID, [phone.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "state",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    void postCommand(AGENT_ID, { command: "state", envelope });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(phone.sentTo).toHaveLength(1);
+  });
+});
