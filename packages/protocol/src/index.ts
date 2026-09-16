@@ -1458,6 +1458,22 @@ export enum DeviceCapability {
    * saying so falsely is worse than not saying it.
    */
   UnattendedRuntime = "unattended_runtime",
+  /**
+   * This surface OWNS the run ledger — it is the process that fires
+   * goals, so the runs, outcomes, tool audit and evidence are its own
+   * records.
+   *
+   * Narrower than `UnattendedRuntime` on purpose. `motebit serve` runs
+   * unattended work and can be halted, but the work it runs is
+   * relay-dispatched tasks, not goal runs, so its database holds no run
+   * rows of its own making. Co-located with the daemon it shares the
+   * file and sees everything; on its own machine it sees nothing — and
+   * answering "what happened while you were away" from there returns
+   * "No runs recorded yet" about a motebit that worked all night. The
+   * false empty is the exact failure the return view exists to remove,
+   * so the question routes by the record, not by the capability to act.
+   */
+  RunLedger = "run_ledger",
 }
 
 /** Push notification platform for wake-on-demand mobile execution. */

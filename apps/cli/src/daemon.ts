@@ -239,6 +239,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
     DeviceCapability.Keyring,
     DeviceCapability.Background,
     DeviceCapability.UnattendedRuntime,
+    DeviceCapability.RunLedger,
   ]);
 
   // The goal daemon is ONE executor across restarts. Without a stable
@@ -397,9 +398,14 @@ export async function handleRun(config: CliConfig): Promise<void> {
       DeviceCapability.Keyring,
       DeviceCapability.Background,
       // The daemon wires the durable halt + approval stores, so it can
-      // honor a stop and decide a queued approval. Announced here and
-      // nowhere else; the relay routes those verbs by it.
+      // honor a stop and decide a queued approval. The relay routes
+      // those verbs by it.
       DeviceCapability.UnattendedRuntime,
+      // And this is the process that FIRES goals, so the run ledger is
+      // its own record. `motebit serve` announces the capability above
+      // and not this one — it can be stopped, and it has nothing to
+      // report. Announced here and nowhere else.
+      DeviceCapability.RunLedger,
     ];
 
     wsAdapter = new WebSocketEventStoreAdapter({
@@ -1129,9 +1135,18 @@ export async function handleServe(config: CliConfig): Promise<void> {
   // different work, so it takes its own stable id — never the daemon's,
   // never a fresh one per restart.
   runtime.setHaltExecutorId(`serve@${loadFullConfig().device_id ?? "unknown"}`);
-  // Serve shares this machine's database, so it can answer the return
-  // view too — the relay may route the question to either process.
-  runtime.setRunLedgerReader(createRunLedgerReader(moteDb, motebitId));
+  // Serve does NOT answer the return view, even though its database is
+  // this machine's.
+  //
+  // It shares the file when it is co-located with the daemon, and holds
+  // an empty one when it is not — and serve on its own machine is the
+  // arc's own deployment story, a daemon on a laptop and a worker on a
+  // VPS. From there this answered "No runs recorded yet" about a
+  // motebit that had worked all night: a confident false empty, which
+  // is the single failure the return view was built to remove. Serve
+  // runs relay-dispatched tasks, not goal runs, so it has no record of
+  // its own to report either way. The relay routes the question by
+  // `run_ledger`, which only the goal daemon announces.
   // The stopper answers for THIS halt, not for halts in general.
   //
   // Serve executes relay-dispatched tasks. Those are not goal runs, and

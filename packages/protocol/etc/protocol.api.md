@@ -1503,6 +1503,7 @@ export enum DeviceCapability {
     // (undocumented)
     LocalLlm = "local_llm",
     PushWake = "push_wake",
+    RunLedger = "run_ledger",
     SecureEnclave = "secure_enclave",
     // (undocumented)
     StdioMcp = "stdio_mcp",

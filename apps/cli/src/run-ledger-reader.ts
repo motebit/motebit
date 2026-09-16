@@ -171,13 +171,26 @@ export function createRunLedgerReader(moteDb: MotebitDatabase, motebitId: string
           // reported every one of those to a returning owner as
           // "prepared; effect unknown", which says the outside world may
           // have been touched by a call that was refused before it ran.
+          //
+          // A row still marked `requiresApproval` with no result is the
+          // other certainty. The gate appends `recordApprovalSatisfied`
+          // under the SAME call id when a person approves, and the
+          // table replaces on that key — so a row that still says it is
+          // waiting is a call whose approval was never satisfied. It
+          // may still be waiting or the owner may have refused it, and
+          // either way it did not run. Reporting the call the owner
+          // personally refused as "effect unknown" was the same
+          // misreport as the one above, on the refusal that matters
+          // most.
           verdict: !c.decision.allowed
             ? "refused by the policy gate — never attempted"
-            : c.result == null
-              ? "prepared; effect unknown"
-              : c.result.ok
-                ? "ok"
-                : "failed",
+            : c.decision.requiresApproval && c.result == null
+              ? "stopped for your approval — never executed"
+              : c.result == null
+                ? "prepared; effect unknown"
+                : c.result.ok
+                  ? "ok"
+                  : "failed",
         })),
         evidence: evidence.filter(checkable).map((e) => {
           const p = e.evidence.provenance;

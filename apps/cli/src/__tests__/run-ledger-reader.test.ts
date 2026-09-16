@@ -35,7 +35,11 @@ function run(id: string, startedAt: number, note: string | null = null): Row {
 function dbWith(opts: {
   blocking?: Row[];
   recent?: Row[];
-  calls?: Array<{ tool: string; decision: { allowed: boolean }; result?: { ok: boolean } }>;
+  calls?: Array<{
+    tool: string;
+    decision: { allowed: boolean; requiresApproval?: boolean };
+    result?: { ok: boolean };
+  }>;
   evidence?: Array<{ tool: string; withheld_reason?: string; provenance?: unknown }>;
 }): MotebitDatabase {
   const blocking = opts.blocking ?? [];
@@ -90,6 +94,25 @@ describe("run ledger reader", () => {
     // Allowed and never completed IS the unknown — a crash between the
     // pre-call row and the result. That one keeps its honest answer.
     expect(found.run.tool_calls[2]?.verdict).toContain("unknown");
+  });
+
+  it("a call the OWNER refused is not reported as 'effect unknown' either", () => {
+    // The gate appends `recordApprovalSatisfied` under the same call id
+    // when a person approves, and the table replaces on that key — so a
+    // row that still says it is waiting is a call whose approval was
+    // never satisfied. Waiting or refused, it did not run, and that is
+    // the refusal that matters most to report correctly.
+    const reader = createRunLedgerReader(
+      dbWith({
+        recent: [run("r1", 100)],
+        calls: [{ tool: "send_payment", decision: { allowed: true, requiresApproval: true } }],
+      }),
+      MOTEBIT,
+    );
+    const found = reader.get("r1");
+    if (found.kind !== "found") throw new Error("expected found");
+    expect(found.run.tool_calls[0]?.verdict).toContain("never executed");
+    expect(found.run.tool_calls[0]?.verdict).not.toContain("unknown");
   });
 
   it("does not count a pointer with no provenance as checkable", () => {
