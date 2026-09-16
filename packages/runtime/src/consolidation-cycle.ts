@@ -222,6 +222,14 @@ export interface ConsolidationCycleResult {
     prunedRetention?: number;
     flushedConversations?: number;
     flushedToolAudits?: number;
+    /**
+     * Evidence rows erased this cycle. Counted AND surfaced: the counter
+     * existed one round before this field did, so a cycle that erased
+     * five hundred rows and signed five hundred certificates still
+     * reported doing nothing — the exact silence the counter was added
+     * to end, one layer further out.
+     */
+    flushedEvidence?: number;
   };
 }
 
@@ -376,6 +384,7 @@ export async function runConsolidationCycle(
           const out = await flushPhase(deps, ctx);
           result.summary.flushedConversations = out.flushedConversations;
           result.summary.flushedToolAudits = out.flushedToolAudits;
+          result.summary.flushedEvidence = out.flushedEvidence;
           break;
         }
       }

@@ -3619,7 +3619,7 @@ export interface RoutingDecisionTranscript {
     readonly winner_motebit_id: string;
 }
 
-// @public (undocumented)
+// @public
 export interface RunEvidenceEntry {
     call_id: string;
     evidence: EvidenceRef;

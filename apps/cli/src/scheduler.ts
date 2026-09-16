@@ -1914,6 +1914,9 @@ export class GoalScheduler {
     });
   }
 
+  /**
+   * Form a memory from a completed goal outcome so the agent learns from its work.
+   */
   private async formGoalOutcomeMemory(goal: Goal, result: GoalStreamResult): Promise<void> {
     if (!result.responseText) return;
     try {

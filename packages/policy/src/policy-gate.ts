@@ -85,19 +85,6 @@ export const DEFAULT_POLICY: PolicyConfig = {
 // === PolicyGate ===
 
 /**
- * PolicyGate — the surface tension of the agent.
- *
- * Sits between the agentic loop and the tool registry. Every tool call passes
- * through the gate. The gate decides: allowed? needs approval? denied?
- *
- * The gate also:
- * - Filters which tools the model can see (based on mode + risk)
- * - Sanitizes tool results (prompt injection defense)
- * - Redacts secrets from content before it reaches the model
- * - Enforces budgets (calls, time, cost)
- * - Emits audit entries for every decision
- */
-/**
  * How much of a tool's returned text is kept as the re-checkable span.
  *
  * A pointer exists to be re-checked, not to store the document — and a
@@ -138,10 +125,20 @@ const CREDENTIAL_PARAM =
  */
 const URL_USERINFO = /^[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i;
 
-/** Set at construction so the ref can be checked with the same engine. */
-let CREDENTIAL_SHAPES_IN_REF: (ref: string) => boolean = () => false;
-
-function looksLikeCredentialBearingUrl(ref: string): boolean {
+/**
+ * The engine is passed in, not stashed.
+ *
+ * This read a module-level binding that `recordEvidence` reassigned on
+ * every call — shared across every gate instance, retaining the last
+ * one's engine after a policy swap, and initialised to a predicate
+ * returning false. Correct only because the assignment sat one line
+ * above the use; any reordering would have quietly degraded the guard
+ * to query-string matching with nothing to notice.
+ */
+function looksLikeCredentialBearingUrl(
+  ref: string,
+  shapesFound: (text: string) => boolean,
+): boolean {
   // Query AND fragment AND userinfo. The first version anchored on
   // `[?&]` alone, which reads the query string and nothing else — so an
   // OAuth implicit-grant callback (`…/cb#access_token=…`) and a userinfo
@@ -159,7 +156,7 @@ function looksLikeCredentialBearingUrl(ref: string): boolean {
   //
   // The shape filter runs over the reference too, which catches a
   // vendor key embedded in a PATH rather than a query.
-  return CREDENTIAL_PARAM.test(ref) || URL_USERINFO.test(ref) || CREDENTIAL_SHAPES_IN_REF(ref);
+  return CREDENTIAL_PARAM.test(ref) || URL_USERINFO.test(ref) || shapesFound(ref);
 }
 
 /**
@@ -181,6 +178,19 @@ function boundSpan(data: string): string {
   return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
 }
 
+/**
+ * PolicyGate — the surface tension of the agent.
+ *
+ * Sits between the agentic loop and the tool registry. Every tool call passes
+ * through the gate. The gate decides: allowed? needs approval? denied?
+ *
+ * The gate also:
+ * - Filters which tools the model can see (based on mode + risk)
+ * - Sanitizes tool results (prompt injection defense)
+ * - Redacts secrets from content before it reaches the model
+ * - Enforces budgets (calls, time, cost)
+ * - Emits audit entries for every decision
+ */
 export class PolicyGate {
   private config: PolicyConfig;
   private budget: BudgetEnforcer;
@@ -323,19 +333,19 @@ export class PolicyGate {
     // own shape, which is the property that travels across whose words
     // these are.
     //
-    // Residual, stated rather than hidden: the credential-class subset
-    // misses some real key formats (`sk-proj-…`, `ghp_…`) because the
-    // shared API_KEY pattern allows only one separator. Widening it
-    // changes what is stripped from every outbound message to a cloud
-    // provider, so it belongs to that pattern table's own change, not
-    // to this one.
-    // The REF as well as the span. `read_url` passes the request URL,
-    // and a URL carries credentials in query parameters — so a fetch of
-    // `…/export?api_key=…` wrote the key into the pointer's `ref`, past
-    // the guard whose whole point is that credential-class content
-    // produces no pointer at all. A guard that inspects only the part
-    // one happens to think of is not a guard.
-    if (this.redaction.redactCredentialShapes(span).redactionCount > 0) {
+    // (That residual was closed in the same change by `VENDOR_KEY`,
+    // which keys on the mandatory separator those formats carry. Noted
+    // because a stale "known gap" invites someone to re-open it.)
+    // Judged against the WHOLE result, not the bounded span.
+    //
+    // Bounding first meant a secret whose pattern needs bytes past the
+    // cut could never match: a PEM block needs its BEGIN and END
+    // delimiters, about 1.7KB apart, so an endpoint serving a private
+    // key had ~470 characters of it stored verbatim, printed on return,
+    // and kept for the horizon — past the guard whose entire job is that
+    // credential-class content is never kept. The span is what gets
+    // STORED; the data is what gets JUDGED.
+    if (this.redaction.redactCredentialShapes(result.data).redactionCount > 0) {
       this.recordWithheld(sink, ctx, decision, tool, "credential_in_span");
       return;
     }
@@ -353,9 +363,13 @@ export class PolicyGate {
     // rule precise where a value-shape rule cannot be. It lives here
     // rather than in the shared table because it is true of URLs, not of
     // prose, and the shared table is applied to prose.
-    CREDENTIAL_SHAPES_IN_REF = (ref) =>
-      this.redaction.redactCredentialShapes(ref).redactionCount > 0;
-    if (result.source_ref != null && looksLikeCredentialBearingUrl(result.source_ref)) {
+    if (
+      result.source_ref != null &&
+      looksLikeCredentialBearingUrl(
+        result.source_ref,
+        (text) => this.redaction.redactCredentialShapes(text).redactionCount > 0,
+      )
+    ) {
       this.recordWithheld(sink, ctx, decision, tool, "credential_in_source");
       return;
     }
@@ -398,15 +412,6 @@ export class PolicyGate {
   }
 
   /**
-   * Write the pointer, and if the store refuses, say so.
-   *
-   * The store raises rather than dropping rows, so the failure has to
-   * land somewhere it can be seen. Reported here AND rethrown: the
-   * primary tool path absorbs it (a pointer must not take down the work
-   * it describes), and this is what stops the absorbing from becoming
-   * silence.
-   */
-  /**
    * Record that a pointer WAS produced and deliberately not kept.
    *
    * The guard that withholds credential-class content had the same flaw
@@ -443,6 +448,15 @@ export class PolicyGate {
     });
   }
 
+  /**
+   * Write the pointer, and if the store refuses, say so.
+   *
+   * The store raises rather than dropping rows, so the failure has to
+   * land somewhere it can be seen. Reported here AND rethrown: the
+   * primary tool path absorbs it (a pointer must not take down the work
+   * it describes), and this is what stops the absorbing from becoming
+   * silence.
+   */
   private recordOrReport(sink: RunEvidenceSink, entry: RunEvidenceEntry): void {
     try {
       sink.record(entry);

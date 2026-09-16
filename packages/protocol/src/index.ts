@@ -3364,14 +3364,6 @@ export interface AuditLogSink {
 // writer is the fetch itself. See docs/doctrine/evidence-provenance.md.
 
 /**
- * One re-checkable pointer produced during a run.
- *
- * Emitted ONLY when the producing tool content-addressed its bytes
- * (`ToolResult.source_digest`). A tool that did not retrieve anything
- * emits nothing — absence is honest, and a bare pointer with no
- * provenance is never a claim the producer cannot back.
- */
-/**
  * Why a pointer that COULD have been recorded was not.
  *
  * Only ever a deliberate withholding. A tool that retrieved nothing, or
@@ -3391,6 +3383,15 @@ export function isRunEvidenceWithheldReason(v: unknown): v is RunEvidenceWithhel
   );
 }
 
+/**
+ * One re-checkable pointer produced during a run — or, when
+ * `withheld_reason` is set, the record that one was refused.
+ *
+ * A pointer is emitted ONLY when the producing tool content-addressed
+ * its bytes (`ToolResult.source_digest`). A tool that did not retrieve
+ * anything emits nothing at all: absence is honest there, and a bare
+ * pointer with no provenance is never a claim the producer cannot back.
+ */
 export interface RunEvidenceEntry {
   evidence_id: string;
   /** The goal run this belongs to, when the call ran under one. */

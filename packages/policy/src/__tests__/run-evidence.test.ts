@@ -164,6 +164,29 @@ describe("PolicyGate.recordEvidence — the sibling artifact recordResult names"
     expect(JSON.stringify(row)).not.toContain("host/data");
   });
 
+  it("judges the WHOLE result, not the part it would have stored", () => {
+    // The guard ran on the already-bounded span, so a secret whose
+    // pattern needs bytes past the cut could never match. A PEM block
+    // needs its BEGIN and END delimiters about 1.7KB apart: the span is
+    // what gets stored, but the data is what has to be judged, or ~470
+    // characters of a private key are kept verbatim and printed on
+    // return by the guard that exists to prevent exactly that.
+    const { gate, sink, ctx, decision } = setup();
+    const pem =
+      "-----BEGIN RSA PRIVATE KEY-----\n" +
+      "MIIEow".repeat(200) +
+      "\n-----END RSA PRIVATE KEY-----";
+    gate.recordEvidence(ctx, decision, "read_url", {
+      ok: true,
+      data: pem,
+      source_digest: DIGEST,
+      source_ref: "https://host/key",
+    });
+    expect(sink.entries).toHaveLength(1);
+    expect(sink.entries[0]!.withheld_reason).toBe("credential_in_span");
+    expect(JSON.stringify(sink.entries[0])).not.toContain("MIIEow");
+  });
+
   it("names WHICH of the two hiding places it found", () => {
     const { gate, sink, ctx, decision } = setup();
     gate.recordEvidence(ctx, decision, "read_url", {

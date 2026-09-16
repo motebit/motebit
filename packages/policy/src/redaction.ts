@@ -100,7 +100,13 @@ const SECRET_PATTERNS: {
     pattern: /\b(?:key|secret|token|password|credential)\s*[:=]\s*[0-9a-f]{32,}\b/gi,
     label: "HEX_SECRET",
     cloudEgress: true,
-    shapeKeyed: true,
+    // NOT shape-keyed: the pattern is an English word next to a hex
+    // run, which is the property that disqualified CONNECTION_STRING
+    // and PASSWORD above. An API-docs page printing `token: <32 hex>`
+    // as an example — commit hashes, sample digests — would cost the
+    // owner that fetch's evidence and report a credential that is not
+    // there. Same mistake as the other three, made once more.
+    shapeKeyed: false,
   },
   // Base64 encoded secrets — low-precision (false-positives on legitimate base64);
   // NOT egress-redacted so a user can paste a base64 blob to a cloud model.
@@ -205,18 +211,6 @@ export class RedactionEngine {
   }
 
   /**
-   * Redact ONLY the high-precision credential-class patterns (`cloudEgress: true`)
-   * — for masking a user's own typed message before it reaches a NON-SOVEREIGN
-   * (cloud) provider. Deliberately narrower than {@link redact}: it does NOT touch
-   * SSNs, card numbers, or bare base64, which a user often legitimately wants the
-   * model to use and which would false-positive. The model almost never needs to
-   * SEE a raw credential (agents use keys via the credential/tool path), so masking
-   * keys/tokens/seed-phrases/connection-strings from the prompt protects without
-   * breaking the request. The egress gate (`assertSensitivityPermitsAiCall`) still
-   * blocks a whole call when the SESSION tier is medical/financial/secret; this is
-   * the additive floor for secrets typed into an UNMARKED cloud session.
-   */
-  /**
    * Redact only the patterns that identify a secret by its own SHAPE.
    *
    * For third-party retrieved content, where the surrounding words
@@ -242,6 +236,18 @@ export class RedactionEngine {
     return { text: result, redactionCount: count };
   }
 
+  /**
+   * Redact ONLY the high-precision credential-class patterns (`cloudEgress: true`)
+   * — for masking a user's own typed message before it reaches a NON-SOVEREIGN
+   * (cloud) provider. Deliberately narrower than {@link redact}: it does NOT touch
+   * SSNs, card numbers, or bare base64, which a user often legitimately wants the
+   * model to use and which would false-positive. The model almost never needs to
+   * SEE a raw credential (agents use keys via the credential/tool path), so masking
+   * keys/tokens/seed-phrases/connection-strings from the prompt protects without
+   * breaking the request. The egress gate (`assertSensitivityPermitsAiCall`) still
+   * blocks a whole call when the SESSION tier is medical/financial/secret; this is
+   * the additive floor for secrets typed into an UNMARKED cloud session.
+   */
   redactForCloudEgress(text: string): {
     text: string;
     redactionCount: number;

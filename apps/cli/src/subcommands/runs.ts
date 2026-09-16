@@ -164,7 +164,13 @@ export async function handleRunsShow(config: CliConfig): Promise<void> {
     // window-only scan failed to find a full run id pasted from an older
     // run that `ack` resolves without trouble — two commands disagreeing
     // about whether the same row exists.
-    const indexed = moteDb.goalRunStore.get(target);
+    // Scoped to THIS motebit, like the listing beside it. The indexed
+    // lookup is not, and this is the first command that prints verbatim
+    // result text, tool rows and evidence spans — so against a database
+    // holding another identity's runs, a full run id would print that
+    // identity's content while `motebit runs` listed nothing for it.
+    const indexedRun = moteDb.goalRunStore.get(target);
+    const indexed = indexedRun?.motebit_id === motebitId ? indexedRun : null;
     const recent = moteDb.goalRunStore.listRecent(motebitId, 200);
     const exact = indexed ?? recent.find((r) => r.run_id === target);
     const prefixed = recent.filter((r) => r.run_id.startsWith(target));
