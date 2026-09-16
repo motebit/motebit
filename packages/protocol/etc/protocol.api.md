@@ -408,6 +408,9 @@ export const ALL_MERKLE_TREE_VERSIONS: readonly MerkleTreeVersion[];
 // @public (undocumented)
 export const ALL_PROJECTION_CLASSES: readonly ProjectionClass[];
 
+// @public (undocumented)
+export const ALL_RUN_EVIDENCE_WITHHELD_REASONS: readonly RunEvidenceWithheldReason[];
+
 // @public
 export const ALL_SENSITIVITY_LEVELS: readonly SensitivityLevel[];
 
@@ -1979,6 +1982,7 @@ export interface ExecutionReceipt {
     signature: string;
     source_digest?: DigestRef;
     source_projection?: string;
+    source_projection_class?: ProjectionClass;
     status: "completed" | "failed" | "denied";
     // (undocumented)
     submitted_at: number;
@@ -2515,6 +2519,9 @@ export function isMerkleTreeVersion(value: unknown): value is MerkleTreeVersion;
 
 // @public (undocumented)
 export function isProjectionClass(s: string): s is ProjectionClass;
+
+// @public (undocumented)
+export function isRunEvidenceWithheldReason(v: unknown): v is RunEvidenceWithheldReason;
 
 // @public
 export function isSensitivityLevel(value: unknown): value is SensitivityLevel;
@@ -3614,13 +3621,42 @@ export interface RoutingDecisionTranscript {
 }
 
 // @public
+export interface RunEvidenceEntry {
+    call_id: string;
+    evidence: EvidenceRef;
+    // (undocumented)
+    evidence_id: string;
+    // (undocumented)
+    recorded_at: number;
+    run_id?: string;
+    // (undocumented)
+    tool: string;
+    // (undocumented)
+    turn_id: string;
+    withheld_reason?: RunEvidenceWithheldReason;
+}
+
+// @public
+export interface RunEvidenceSink {
+    countForCall?(callId: string): number;
+    enumerateStale?(beforeTimestamp: number): string[];
+    eraseForCall?(callId: string): void;
+    listForRun(runId: string): RunEvidenceEntry[];
+    // (undocumented)
+    record(entry: RunEvidenceEntry): void;
+}
+
+// @public
+export type RunEvidenceWithheldReason = "credential_in_span" | "credential_in_source";
+
+// @public
 export const RUNTIME_ATTACH_AUDIENCE: TokenAudience;
 
 // @public
 export const RUNTIME_RETENTION_REGISTRY: Readonly<Record<RuntimeStoreId, RetentionShapeDeclaration>>;
 
 // @public
-export type RuntimeStoreId = "memory" | "event_log" | "conversation_messages" | "tool_audit" | "skill_audit";
+export type RuntimeStoreId = "memory" | "event_log" | "conversation_messages" | "tool_audit" | "skill_audit" | "run_evidence";
 
 // @alpha
 export interface ScreencastFrame {
@@ -4527,6 +4563,8 @@ export interface ToolResult {
     _sanitized?: boolean;
     source_digest?: DigestRef;
     source_projection?: string;
+    source_projection_class?: ProjectionClass;
+    source_ref?: string;
 }
 
 // @public (undocumented)

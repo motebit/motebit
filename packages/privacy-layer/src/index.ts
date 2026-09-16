@@ -350,7 +350,7 @@ export class DeleteManager {
    * underlying row; the privacy layer signs and audits.
    */
   async flushRecord(args: {
-    targetKind: "conversation_message" | "tool_audit";
+    targetKind: "conversation_message" | "tool_audit" | "run_evidence";
     targetId: string;
     sensitivity: SensitivityLevel;
     reason:
@@ -580,7 +580,7 @@ export class PrivacyLayer {
    * lazy-classify-on-flush cohort per decision 6b.
    */
   async signFlushCert(args: {
-    targetKind: "conversation_message" | "tool_audit";
+    targetKind: "conversation_message" | "tool_audit" | "run_evidence";
     targetId: string;
     sensitivity: SensitivityLevel;
     reason:

@@ -6,7 +6,12 @@ import type { MemorySource } from "./memory-source.js";
 // Local bindings for `Citation.provenance` + the producer-side `source_digest`
 // fields below (re-exported with the rest of the evidence-provenance vocabulary
 // near the bottom of this barrel).
-import type { EvidenceProvenance, DigestRef } from "./evidence-provenance.js";
+import type {
+  EvidenceProvenance,
+  EvidenceRef,
+  DigestRef,
+  ProjectionClass,
+} from "./evidence-provenance.js";
 
 // === Branded ID Types ===
 //
@@ -1214,6 +1219,28 @@ export interface ToolResult {
    * resolves it via an injected `resolveProjection`. Back-compat by absence.
    */
   source_projection?: string;
+  /**
+   * What was read, named by the producing tool in its OWN terms — a URL
+   * for `read_url`, a path for a file reader.
+   *
+   * Set alongside {@link source_digest}. Without it a stored evidence
+   * pointer carries a digest and a span but no source, so "re-fetch the
+   * record and check the span is present" names nothing to re-fetch and
+   * the whole affordance is unusable. The tool names it because only the
+   * tool knows: a consumer that guessed from an argument key would be
+   * putting domain knowledge in the layer that must not have it.
+   */
+  source_ref?: string;
+  /**
+   * How re-checkable {@link source_projection} is, when the recipe is
+   * NOT reimplementable from a published spec to byte identity.
+   *
+   * Absent means `spec-reproducible`, the strong rung — so the weaker
+   * one is opt-in and can never be claimed by omission. A `tool-pinned`
+   * recipe that omits this over-claims. Only the tool knows which rung
+   * its recipe meets, so only the tool may say.
+   */
+  source_projection_class?: ProjectionClass;
 }
 
 export type ToolHandler = (args: Record<string, unknown>) => Promise<ToolResult>;
@@ -1537,6 +1564,18 @@ export interface ExecutionReceipt {
    * directly). Copied into `Citation.provenance.projection`. Back-compat by absence.
    */
   source_projection?: string;
+  /**
+   * How re-checkable {@link source_projection} is — set from the tool's
+   * {@link ToolResult.source_projection_class}; signature-bound.
+   *
+   * Carried here for the same reason it exists at all: absence means
+   * `spec-reproducible`, the strong rung, so a receipt that drops the
+   * class asserts the strong rung on behalf of a recipe that may only
+   * meet the weaker one. The run-evidence pointer and the signed receipt
+   * describe the SAME call, and the one a stranger verifies must not
+   * claim more than the one kept locally.
+   */
+  source_projection_class?: ProjectionClass;
   /**
    * How this task was authorized for invocation. Discriminates user-explicit
    * affordances (chip tap, slash command, scene click) from AI-mediated
@@ -3316,6 +3355,138 @@ export interface AuditLogSink {
    * decision 7. Optional — paired with `enumerateForFlush`.
    */
   erase?(callId: string): void;
+}
+
+// ── Run evidence ───────────────────────────────────────────────────
+// What a returning owner can RE-CHECK, as opposed to what the motebit
+// says it did.
+//
+// `PolicyGate.recordResult` writes the tool's own verdict, and its
+// contract says plainly what that verdict is not: "attribution + the
+// tool's report, not an independent verification of the external
+// effect — a claimed result should link to evidence from the affected
+// system; that pointer is a sibling artifact, never inferred from this
+// row." This is that sibling artifact.
+//
+// The pointer is minted by the code path that PRODUCED the evidence —
+// a fetch tool that content-addressed the bytes it read — and never by
+// a model summarizing afterwards. That is the same
+// attribution-because-produced rule the accrual basis follows: a span
+// nobody fetched cannot be placed into the record, because the only
+// writer is the fetch itself. See docs/doctrine/evidence-provenance.md.
+
+/**
+ * Why a pointer that COULD have been recorded was not.
+ *
+ * Only ever a deliberate withholding. A tool that retrieved nothing, or
+ * that did not content-address what it read, produces no entry at all —
+ * that is an honest absence and needs no marker. This is the other case:
+ * evidence existed and was refused, which a reader must be able to tell
+ * apart from nothing having happened.
+ */
+export type RunEvidenceWithheldReason = "credential_in_span" | "credential_in_source";
+
+export const ALL_RUN_EVIDENCE_WITHHELD_REASONS: readonly RunEvidenceWithheldReason[] =
+  Object.freeze(["credential_in_span", "credential_in_source"]);
+
+export function isRunEvidenceWithheldReason(v: unknown): v is RunEvidenceWithheldReason {
+  return (
+    typeof v === "string" && (ALL_RUN_EVIDENCE_WITHHELD_REASONS as readonly string[]).includes(v)
+  );
+}
+
+/**
+ * One re-checkable pointer produced during a run — or, when
+ * `withheld_reason` is set, the record that one was refused.
+ *
+ * A pointer is emitted ONLY when the producing tool content-addressed
+ * its bytes (`ToolResult.source_digest`). A tool that did not retrieve
+ * anything emits nothing at all: absence is honest there, and a bare
+ * pointer with no provenance is never a claim the producer cannot back.
+ */
+export interface RunEvidenceEntry {
+  evidence_id: string;
+  /** The goal run this belongs to, when the call ran under one. */
+  run_id?: string;
+  turn_id: string;
+  /** The audit row this evidence sits beside — the join to the tool call. */
+  call_id: string;
+  tool: string;
+  recorded_at: number;
+  /**
+   * The re-checkable pointer itself. `ref` names WHAT was read in the
+   * producing tool's own terms (a URL); `provenance` is what a stranger
+   * re-verifies with `verifyEvidenceProvenance` and no trust in us.
+   */
+  evidence: EvidenceRef;
+  /**
+   * Present when this row records a REFUSAL rather than a pointer.
+   *
+   * The guard that withholds credential-class content had the same flaw
+   * as the thing this vocabulary exists to fix: it made evidence
+   * disappear, and a reader could not tell a withheld pointer from a
+   * tool that never retrieved anything. So a guard whose whole purpose
+   * is honesty produced, inside itself, an absence that means two
+   * different things.
+   *
+   * A withheld row carries NO retrieved content — no digest, no span,
+   * and a `ref` that is the call id rather than the source, because the
+   * source is one of the places a credential hides. It says only that
+   * something was read and deliberately not kept, and why. That is
+   * enough to tell the two absences apart, and enough to notice a guard
+   * firing where it should not.
+   */
+  withheld_reason?: RunEvidenceWithheldReason;
+}
+
+/**
+ * Where run evidence is kept. Mirrors `ToolAuditSink`'s shape: the
+ * runtime holds the port, a surface supplies the implementation. A
+ * surface that wires none records no evidence, which every reader must
+ * render as "none recorded", never as "nothing was read".
+ */
+export interface RunEvidenceSink {
+  record(entry: RunEvidenceEntry): void;
+  /** Every pointer produced by one run, oldest first. */
+  listForRun(runId: string): RunEvidenceEntry[];
+  /**
+   * Erase every pointer sitting beside one tool call.
+   *
+   * An evidence row is a sibling of the audit row for the same
+   * `call_id`, and it carries strictly MORE than that row does —
+   * verbatim retrieved content, where the audit row holds redacted
+   * args. So it inherits that row's retention floor and dies in the
+   * same act, under the same deletion certificate. Without this the
+   * flush erased the audit row and left the more revealing sibling
+   * behind forever, which inverts the retention policy it was enforcing.
+   *
+   * Optional — a sink without it is never flushed, which a surface must
+   * treat as a reason not to wire it rather than as a licence to keep
+   * content indefinitely.
+   */
+  eraseForCall?(callId: string): void;
+  /**
+   * How many pointers sit beside one tool call.
+   *
+   * A deletion certificate must not be signed for a record that is not
+   * there. Most tool calls never content-address anything, so most have
+   * no evidence at all — and signing anyway produced a verifiable
+   * attestation that something was deleted when nothing was. Callers
+   * ask before they sign.
+   */
+  countForCall?(callId: string): number;
+  /**
+   * Call ids whose pointers were recorded before `beforeTimestamp`.
+   *
+   * Evidence needs a horizon of its OWN, not only the audit row's. A
+   * tool call's retention floor comes from its sensitivity, and nothing
+   * classifies tool calls today, so every one falls to the `None` tier —
+   * which is `Infinity`. Inheriting that meant verbatim third-party
+   * content, the most revealing thing in the database, was the one
+   * record kept forever by default. Unclassified is a reason to hold it
+   * for less time, never for more.
+   */
+  enumerateStale?(beforeTimestamp: number): string[];
 }
 
 export interface PlanStoreAdapter {

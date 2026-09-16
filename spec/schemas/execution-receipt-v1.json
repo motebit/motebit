@@ -102,6 +102,11 @@
       "description": "App-owned byte-deterministic projection recipe id (e.g. `agency.html-text.v1`) whose output `result` is, set alongside `source_digest` when `result` is an extracted transform of the raw bytes (read_url over HTML) rather than the bytes verbatim. Present ⇒ a re-verifier applies the recipe to the raw bytes before locating the span; absent ⇒ raw-byte path. Copied into Citation.provenance.projection. See spec/evidence-provenance-v1.md.",
       "type": "string"
     },
+    "source_projection_class": {
+      "description": "How re-checkable `source_projection` is: `spec-reproducible` (independently reimplementable from a published spec to byte identity) or `tool-pinned` (reproducible only by the recipe's content-addressed pinned tool). ABSENT means `spec-reproducible` — the strong rung — so the weaker class is opt-in and can never be claimed by omission, and a receipt that drops it over-claims. See spec/evidence-provenance-v1.md §7.",
+      "type": "string",
+      "enum": ["spec-reproducible", "tool-pinned"]
+    },
     "invocation_origin": {
       "type": "string",
       "enum": ["user-tap", "ai-loop", "scheduled", "agent-to-agent"],

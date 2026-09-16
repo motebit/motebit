@@ -512,4 +512,86 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       )`,
     ],
   },
+  {
+    version: 47,
+    description:
+      "run_evidence + signed/complete goal results — what a returning owner can re-check",
+    statements: [
+      // The sibling artifact `PolicyGate.recordResult`'s contract names:
+      // a pointer to evidence from the affected system, never inferred
+      // from the tool's own verdict. One row per content-addressed read,
+      // written by the fetch itself — so a span nobody retrieved cannot
+      // be in here, whatever a later summary says.
+      //
+      // `span` is bounded at the producer; a prefix of a substring is
+      // still a substring, so the re-check law is unaffected and the
+      // retrieved document never lands in a store it was not admitted
+      // to. `projection` absent means the span sits over the raw bytes
+      // directly; absent `projection_class` means spec-reproducible,
+      // which is the strong rung — the weak one is opt-in and can never
+      // be claimed by omission.
+      `CREATE TABLE IF NOT EXISTS run_evidence (
+        evidence_id TEXT PRIMARY KEY,
+        run_id TEXT,
+        turn_id TEXT NOT NULL,
+        call_id TEXT NOT NULL,
+        tool TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        ref TEXT NOT NULL,
+        digest_algorithm TEXT,
+        digest_value TEXT,
+        projection TEXT,
+        projection_class TEXT,
+        span TEXT,
+        locator_start INTEGER,
+        locator_end INTEGER,
+        recorded_at INTEGER NOT NULL,
+        -- Null by default, and honestly so: nothing classifies content
+        -- fetched from somewhere else. The flush lazy-classifies a null
+        -- to the operator's declared default tier, exactly as it does
+        -- for the sibling audit rows. The column exists so a classifier
+        -- has somewhere to write when one arrives, and so this store's
+        -- at-rest shape matches the consolidation_flush contract it
+        -- declares rather than quietly diverging from it.
+        sensitivity TEXT,
+        -- Set when this row records a REFUSAL rather than a pointer: the
+        -- tool retrieved something and the credential guard would not
+        -- keep it. Such a row carries no digest, no span and no source,
+        -- so a withheld pointer is distinguishable from a tool that
+        -- never retrieved anything -- two absences that meant the same
+        -- thing to every reader until now.
+        withheld_reason TEXT
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_run_evidence_run ON run_evidence (run_id, recorded_at)",
+      "CREATE INDEX IF NOT EXISTS idx_run_evidence_call ON run_evidence (call_id)",
+      // The horizon sweep selects on `recorded_at` alone; neither index
+      // above leads on it, so every consolidation cycle full-scanned the
+      // table. Bounded by the horizon, so it degraded quietly rather
+      // than failing — which is the kind of cost that never gets found.
+      "CREATE INDEX IF NOT EXISTS idx_run_evidence_recorded ON run_evidence (recorded_at)",
+      // Parity with desktop and mobile, which added both columns in
+      // their own per-surface registries. The shared schema — the one
+      // the CLI daemon uses, the surface that actually runs goals
+      // unattended — never did, so the daemon kept a 500-character
+      // summary and discarded the artifact it had just produced. A
+      // result that is not kept whole cannot be signed, and a result
+      // that is not signed is the motebit's word for what it did.
+      "ALTER TABLE goal_outcomes ADD COLUMN response_full TEXT",
+      "ALTER TABLE goal_outcomes ADD COLUMN signed_manifest TEXT",
+      // The link from an outcome to the run that produced it, as a
+      // FIELD rather than an id-equality convention.
+      //
+      // The live paths key `outcome_id = run_id`; the recovery paths
+      // deliberately mint a fresh id, because a death between their
+      // write and the run-status transition must not let their row
+      // REPLACE a genuine outcome. Both are right, and together they
+      // meant a reader could only find half the outcomes from a run —
+      // so `runs show` reported "the run did not reach an outcome row"
+      // for exactly the interrupted and recovered runs it exists to
+      // explain. A column serves both: unique ids where they are needed,
+      // and one way to ask.
+      "ALTER TABLE goal_outcomes ADD COLUMN run_id TEXT",
+      "CREATE INDEX IF NOT EXISTS idx_goal_outcomes_run ON goal_outcomes (run_id)",
+    ],
+  },
 ];

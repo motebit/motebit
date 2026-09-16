@@ -21,7 +21,8 @@
 
 import { z } from "zod";
 
-import type { ExecutionReceipt } from "@motebit/protocol";
+import type { ExecutionReceipt, ProjectionClass } from "@motebit/protocol";
+import { ALL_PROJECTION_CLASSES } from "@motebit/protocol";
 
 import { assembleJsonSchemaFor, toDraft7 } from "./assemble.js";
 import type { ParityForward, ParityReverse } from "./__parity/check.js";
@@ -193,6 +194,12 @@ export const ExecutionReceiptSchema: z.ZodType<ExecutionReceiptShape> = z.lazy((
         .optional()
         .describe(
           "App-owned byte-deterministic projection recipe id (e.g. `agency.html-text.v1`) whose output `result` is, set alongside `source_digest` when `result` is an extracted transform of the raw bytes (read_url over HTML) rather than the bytes verbatim. Present ⇒ a re-verifier applies the recipe to the raw bytes before locating the span; absent ⇒ raw-byte path. Copied into Citation.provenance.projection. See spec/evidence-provenance-v1.md.",
+        ),
+      source_projection_class: z
+        .enum(ALL_PROJECTION_CLASSES as unknown as [ProjectionClass, ...ProjectionClass[]])
+        .optional()
+        .describe(
+          "How re-checkable `source_projection` is: `spec-reproducible` (independently reimplementable from a published spec to byte identity) or `tool-pinned` (reproducible only by the recipe's content-addressed pinned tool). ABSENT means `spec-reproducible` — the strong rung — so the weaker class is opt-in and can never be claimed by omission, and a receipt that drops it over-claims. See spec/evidence-provenance-v1.md §7.",
         ),
       invocation_origin: IntentOriginSchema.optional(),
       suite: SuiteSchema,

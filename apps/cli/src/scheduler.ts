@@ -46,12 +46,49 @@ class HaltAbort extends Error {
   }
 }
 
+/**
+ * Rejoin a resumed turn's continuation to what preceded the pause, so an
+ * outcome and its signature cover the run rather than its tail.
+ */
+function withTextBeforePause(turn: SuspendedTurn, result: GoalStreamResult): GoalStreamResult {
+  const before = turn.textBeforePause ?? "";
+  const tools = turn.toolCallsBeforePause ?? 0;
+  const memories = turn.memoriesBeforePause ?? 0;
+  if (before === "" && tools === 0 && memories === 0) return result;
+  // The COUNTS rejoin too. `consumeDaemonStream` resets both on entry,
+  // so an outcome built from the continuation alone reported the tool
+  // calls made after the pause and silently dropped the ones before it
+  // — the same tail-presented-as-whole defect the text carry fixed,
+  // left in the numbers that `runs show` prints and the next run reads.
+  return {
+    ...result,
+    responseText: `${before}${result.responseText}`,
+    toolCallsMade: result.toolCallsMade + tools,
+    memoriesFormed: result.memoriesFormed + memories,
+  };
+}
+
 interface SuspendedTurn {
   approvalId: string;
   goalId: string;
   /** The persisted goal run this turn belongs to (goal_runs.run_id). */
   runId: string;
   createdAt: number;
+  /**
+   * What the model had already produced when this turn paused.
+   *
+   * A resumed turn's stream carries only the CONTINUATION, so an
+   * outcome built from it alone covered the fragment after the pause —
+   * and the `ContentArtifactManifest` signed over it covered that
+   * fragment too, while the return view presented it as the result
+   * whole. The same fragment became the summary the next run reads. A
+   * signature over part of a thing, presented as the thing, is the
+   * failure this arc exists to remove.
+   */
+  textBeforePause?: string;
+  /** Tool calls and memories from before the pause — see `withTextBeforePause`. */
+  toolCallsBeforePause?: number;
+  memoriesBeforePause?: number;
   /** The runtime gate's tool_call_id for the approval this turn suspended on.
    *  Resume/deny is BOUND to it (#462): the scheduler may only resolve the
    *  pending approval it owns, never whatever happens to be pending — in
@@ -212,6 +249,7 @@ export class GoalScheduler {
       // transition must not let this row REPLACE a genuine outcome.
       this.goalOutcomeStore.add({
         outcome_id: crypto.randomUUID(),
+        run_id: run.run_id,
         goal_id: run.goal_id,
         motebit_id: this.motebitId,
         ran_at: Date.now(),
@@ -292,6 +330,7 @@ export class GoalScheduler {
       if (goalId != null) {
         this.goalOutcomeStore.add({
           outcome_id: crypto.randomUUID(),
+          run_id: runId,
           goal_id: goalId,
           motebit_id: this.motebitId,
           ran_at: Date.now(),
@@ -755,25 +794,15 @@ export class GoalScheduler {
           // rather than a completed outcome under a `running` row that the
           // next start would reclassify as interrupted.
           this.runStore.setStatus(runId, "completed");
-          // Record outcome (runId = outcome_id for audit correlation)
-          this.goalOutcomeStore.add({
-            outcome_id: runId,
-            goal_id: goal.goal_id,
-            motebit_id: this.motebitId,
-            ran_at: Date.now(),
-            status: "completed",
-            summary: result.responseText.slice(0, 500) || null,
-            tool_calls_made: result.toolCallsMade,
-            memories_formed: result.memoriesFormed,
-            error_message: null,
-          });
+          const full = result.responseText;
+          await this.recordCompletedOutcome(goal.goal_id, runId, result);
           this.goalStore.updateLastRun(goal.goal_id, Date.now());
           this.goalStore.resetFailures(goal.goal_id);
 
           // Emit goal_executed (success variant) — spec §5.2.
           void this.runtime.goals.executed({
             goal_id: goal.goal_id,
-            summary: result.responseText.slice(0, 200),
+            summary: full.slice(0, 200),
             tool_calls: result.toolCallsMade,
             memories: result.memoriesFormed,
           });
@@ -809,7 +838,13 @@ export class GoalScheduler {
             // COUNT is skipped: a stop the human asked for must not burn
             // the goal's retry budget.
             this.goalOutcomeStore.add({
-              outcome_id: runId,
+              // Fresh id + `run_id` link, like the sibling catch below.
+              // A halt aborts before the result is written today, so this
+              // cannot overwrite one — but the two rows share a table
+              // whose insert replaces, and relying on an ordering that
+              // holds by accident is how the other one came to.
+              outcome_id: crypto.randomUUID(),
+              run_id: runId,
               goal_id: goal.goal_id,
               motebit_id: this.motebitId,
               ran_at: Date.now(),
@@ -831,9 +866,19 @@ export class GoalScheduler {
           errorLine(`[goal] error for ${goal.goal_id.slice(0, 8)}: ${msg}`);
 
           this.runStore.setStatus(runId, "failed", { note: msg });
-          // Record failed outcome (runId = outcome_id for audit correlation)
+          // Fresh id, and linked by `run_id`. This catch wraps the whole
+          // tick INCLUDING the successful path, and several statements
+          // run after `recordCompletedOutcome` — updating last-run,
+          // resetting failures, reading and setting goal status — any of
+          // which can throw on a busy database. Keyed by the run into an
+          // INSERT-OR-REPLACE table, this row would then overwrite the
+          // result that had just been written and destroy the signed
+          // manifest with it: the artifact this whole increment exists
+          // to preserve, deleted by its own error handler. The resume
+          // catch was fixed for this; the primary one was left behind.
           this.goalOutcomeStore.add({
-            outcome_id: runId,
+            outcome_id: crypto.randomUUID(),
+            run_id: runId,
             goal_id: goal.goal_id,
             motebit_id: this.motebitId,
             ran_at: Date.now(),
@@ -882,6 +927,14 @@ export class GoalScheduler {
     goalId: string,
     runId: string,
     signal?: AbortSignal,
+    /**
+     * Text this turn had already produced BEFORE the pause it is now
+     * resuming from. Carried so that a turn which pauses twice does not
+     * lose its first segment — see the suspend site below.
+     */
+    carriedText = "",
+    carriedTools = 0,
+    carriedMemories = 0,
   ): Promise<GoalStreamResult> {
     let toolCallsMade = 0;
     let memoriesFormed = 0;
@@ -901,7 +954,11 @@ export class GoalScheduler {
           if (chunk.status === "calling") {
             writeOutput(`\n  [tool] ${chunk.name}...`);
             toolCallsMade++;
-            if (toolCallsMade > MAX_TOOL_CALLS_PER_RUN) {
+            // Per RUN, so it counts what was carried across every pause.
+            // Comparing only this stream's counter reset the budget at
+            // each approval: a goal that paused five times could make
+            // 250 calls under a guard that says fifty.
+            if (carriedTools + toolCallsMade > MAX_TOOL_CALLS_PER_RUN) {
               throw new Error(`Goal exceeded ${MAX_TOOL_CALLS_PER_RUN} tool calls — run stopped`);
             }
           } else {
@@ -941,6 +998,21 @@ export class GoalScheduler {
             runId,
             createdAt: now,
             toolCallId: chunk.tool_call_id,
+            // Carried forward, not overwritten: a resumed turn can pause
+            // AGAIN, and this stream holds only the current segment. The
+            // first version recorded segment two and lost segment one,
+            // so the eventual signature covered everything except the
+            // beginning — the same partial-signed-as-whole defect it was
+            // written to close, one pause further in.
+            ...(carriedText + responseText !== ""
+              ? { textBeforePause: carriedText + responseText }
+              : {}),
+            ...(carriedTools + toolCallsMade > 0
+              ? { toolCallsBeforePause: carriedTools + toolCallsMade }
+              : {}),
+            ...(carriedMemories + memoriesFormed > 0
+              ? { memoriesBeforePause: carriedMemories + memoriesFormed }
+              : {}),
           });
 
           logLine(`\n  [approval-pending] ${chunk.name} — approval_id: ${approvalId.slice(0, 8)}`);
@@ -955,13 +1027,14 @@ export class GoalScheduler {
           // Record suspended outcome
           this.goalOutcomeStore.add({
             outcome_id: crypto.randomUUID(),
+            ...(runId != null ? { run_id: runId } : {}),
             goal_id: goalId,
             motebit_id: this.motebitId,
             ran_at: now,
             status: "suspended",
             summary: `Suspended for approval: ${chunk.name}`,
-            tool_calls_made: toolCallsMade,
-            memories_formed: memoriesFormed,
+            tool_calls_made: carriedTools + toolCallsMade,
+            memories_formed: carriedMemories + memoriesFormed,
             error_message: null,
           });
 
@@ -1127,6 +1200,14 @@ export class GoalScheduler {
             runId: runId ?? approvalId,
             createdAt: now,
             toolCallId: innerChunk.tool_call_id,
+            // Plan mode carries the pre-pause text AND the counters.
+            // Setting only the text left the same tail-presented-as-whole
+            // defect in the numbers: a plan goal with three calls before
+            // the pause and one after recorded one, which is what the
+            // return view prints and the next run reads.
+            ...(responseText !== "" ? { textBeforePause: responseText } : {}),
+            ...(toolCallsMade > 0 ? { toolCallsBeforePause: toolCallsMade } : {}),
+            ...(memoriesFormed > 0 ? { memoriesBeforePause: memoriesFormed } : {}),
           });
           logLine(
             `\n  [approval-pending] ${innerChunk.name} — approval_id: ${approvalId.slice(0, 8)}`,
@@ -1207,12 +1288,99 @@ export class GoalScheduler {
           this.runStore.setStatus(turn.runId, "running", {
             note: "approval expired; continuing after denial",
           });
+          // Consumed, not discarded: this is a THIRD path that reaches
+          // `completed`, and it wrote no outcome row at all — so a run
+          // that produced work after an approval lapsed reported "the
+          // run did not reach an outcome row", with nothing signed. The
+          // drift gate stayed green because it matches the signing call
+          // once per file, which is the aperture blindness this whole
+          // increment set out to correct, found for the second time
+          // inside the increment itself.
           const resumeStream = this.runtime.resumeAfterApproval(false);
-          void this.consumeAndDiscard(resumeStream).then(() => {
-            this.runStore.setStatus(turn.runId, "completed", {
-              note: "approval expired; the turn continued after the denial",
+          const expiredGoalId = turn.goalId;
+          const expiredRunId = turn.runId;
+          // This path deliberately does NOT touch `currentGoalId` /
+          // `currentRunId`, and an earlier version of it did.
+          //
+          // The reason given for setting them was that the goal tools
+          // fail closed without them. They do — but this runs in the
+          // approval phase, and `registerGoalTools` runs in the goal
+          // phase after it, so during this continuation those tools are
+          // not registered at all. Setting the ids bought nothing.
+          //
+          // It cost something, though. This continuation is
+          // fire-and-forget, so its cleanup lands at an arbitrary later
+          // moment — by which time the goal phase may have started a
+          // real run and put ITS ids there. Writing anything back then
+          // strips a live run of the context a stop uses to abort it and
+          // a graceful shutdown uses to close it, leaving it to be
+          // reclassified as interrupted and held behind a human. Two
+          // versions of the write-back were wrong in opposite
+          // directions; the third is not to write.
+          void this.consumeDaemonStream(
+            resumeStream,
+            expiredGoalId,
+            expiredRunId,
+            undefined,
+            turn.textBeforePause ?? "",
+            turn.toolCallsBeforePause ?? 0,
+            turn.memoriesBeforePause ?? 0,
+          )
+            .then(async (result) => {
+              // `!result.suspended`, like the sibling path. A denied
+              // continuation can make ANOTHER approval-gated call, and
+              // then the stream returns suspended with a fresh pending
+              // approval and the run already re-marked
+              // `awaiting_approval`. Closing it here anyway recorded a
+              // run as completed while a human decision was still
+              // queued against it — it vanished from the list of runs
+              // holding their goal, and its outcome said the action did
+              // not run while a second one waited.
+              if (result.suspended) return;
+              this.runStore.setStatus(expiredRunId, "completed", {
+                note: "approval expired; the turn continued after the denial",
+              });
+              // `partial`, never `completed`: the action the human never
+              // decided did not run, so this is not the goal's work
+              // finished.
+              await this.recordCompletedOutcome(
+                expiredGoalId,
+                expiredRunId,
+                withTextBeforePause(turn, result),
+                {
+                  status: "partial",
+                  errorMessage:
+                    "the approval expired before it was decided; the action did not run",
+                },
+              );
+            })
+            .catch((err: unknown) => {
+              // Every `running` transition needs a failure transition.
+              // The drain this replaced never rejected, so the close
+              // always ran; consuming for a result can throw (the
+              // single-writer guard, a tool-call ceiling), and logging
+              // alone left the run `running` with its suspended entry
+              // already gone — nothing would ever close it, and the goal
+              // stayed blocked until a restart reclassified it as
+              // interrupted and asked a human to acknowledge it.
+              const msg = err instanceof Error ? err.message : String(err);
+              errorLine(`[approval] expired-continuation of ${id.slice(0, 8)} failed: ${msg}`);
+              this.runStore.setStatus(expiredRunId, "failed", {
+                note: `expired-approval continuation failed: ${msg}`,
+              });
+              this.goalOutcomeStore.add({
+                outcome_id: crypto.randomUUID(),
+                run_id: expiredRunId,
+                goal_id: expiredGoalId,
+                motebit_id: this.motebitId,
+                ran_at: Date.now(),
+                status: "failed",
+                summary: null,
+                tool_calls_made: 0,
+                memories_formed: 0,
+                error_message: `expired-approval continuation failed: ${msg}`,
+              });
             });
-          });
         } else {
           if (pending != null) {
             logLine(
@@ -1263,13 +1431,46 @@ export class GoalScheduler {
         });
         try {
           const resumeStream = this.runtime.resumeAfterApproval(approved);
-          const result = await this.consumeDaemonStream(resumeStream, turn.goalId, turn.runId);
+          const result = await this.consumeDaemonStream(
+            resumeStream,
+            turn.goalId,
+            turn.runId,
+            undefined,
+            turn.textBeforePause ?? "",
+            turn.toolCallsBeforePause ?? 0,
+            turn.memoriesBeforePause ?? 0,
+          );
           if (!result.suspended) {
             // The resumed turn ran to its end (a second pause would have
             // re-marked the run awaiting_approval itself).
             this.runStore.setStatus(turn.runId, "completed", {
               note: approved ? "resumed after approval" : "resumed after denial",
             });
+            // Write the outcome, sign it, keep it whole — the same three
+            // things the ordinary completion path does.
+            //
+            // This path wrote NO outcome row at all, so a goal run that
+            // paused for a human's yes and then ran to its end produced
+            // no result, nothing signed, and `runs show` reporting "the
+            // run did not reach an outcome row". The signing gate stayed
+            // green because it matches the call once per file: the
+            // aperture blindness this increment was written to correct,
+            // reproduced one level down inside the fix for it.
+            // `approved`, not unconditionally. A refusal is not a
+            // completion, and writing one as `completed` — signed, no
+            // less — put a denial into `goal_outcomes`, which
+            // `buildGoalContext` reads back into the NEXT run's prompt.
+            // The agent would have learned that work a human refused was
+            // finished work.
+            await this.recordCompletedOutcome(
+              turn.goalId,
+              turn.runId,
+              withTextBeforePause(turn, result),
+              {
+                status: approved ? "completed" : "partial",
+                errorMessage: approved ? null : "the approved action was denied by its owner",
+              },
+            );
             if (approved) {
               this.goalStore.updateLastRun(turn.goalId, Date.now());
             }
@@ -1282,7 +1483,14 @@ export class GoalScheduler {
           errorLine(`[approval] resume of ${approvalId.slice(0, 8)} failed: ${msg}`);
           this.runStore.setStatus(turn.runId, "failed", { note: `resume failed: ${msg}` });
           this.goalOutcomeStore.add({
+            // Fresh id, as the recovery writers use, because this runs
+            // in a catch: if `recordCompletedOutcome` already wrote a
+            // genuine result and a later statement threw, keying this
+            // row by the run would REPLACE that result and destroy the
+            // signed artifact with it. `run_id` is what makes it
+            // findable; the id only has to be unique.
             outcome_id: crypto.randomUUID(),
+            run_id: turn.runId,
             goal_id: turn.goalId,
             motebit_id: this.motebitId,
             ran_at: Date.now(),
@@ -1584,6 +1792,7 @@ export class GoalScheduler {
     this.runStore.setStatus(run.run_id, status, { note: verdict.summary });
     this.goalOutcomeStore.add({
       outcome_id: crypto.randomUUID(),
+      run_id: run.run_id,
       goal_id: run.goal_id,
       motebit_id: this.motebitId,
       ran_at: Date.now(),
@@ -1614,21 +1823,6 @@ export class GoalScheduler {
     logLine(`[goal] recovered run ${run.run_id.slice(0, 8)} → ${status}`);
   }
 
-  private async consumeAndDiscard(stream: AsyncGenerator<StreamChunk>): Promise<void> {
-    // Never let a drain reject escape — callers fire-and-forget (`void ...`),
-    // so a throw here (e.g. resumeAfterApproval's single-writer "Already
-    // processing" guard, #462, when a human turn is mid-flight on the shared
-    // runtime) would be an unhandled rejection. Log and retry next tick.
-    try {
-      for await (const _chunk of stream) {
-        // drain
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      errorLine(`[approval] release drain failed (will retry next tick): ${msg}`);
-    }
-  }
-
   /**
    * Persist memory candidates from plan reflection into the memory graph.
    * Returns the number of memories successfully formed.
@@ -1657,6 +1851,67 @@ export class GoalScheduler {
       logLine(`[plan] stored ${stored} learning memor${stored === 1 ? "y" : "ies"}`);
     }
     return stored;
+  }
+
+  /**
+   * Form a memory from a completed goal outcome so the agent learns from its work.
+   */
+  /**
+   * The ONE place a completed goal run becomes a record.
+   *
+   * Two paths reach completion — an ordinary fire, and a run that paused
+   * for a human's yes and then finished — and only the first of them
+   * wrote an outcome at all. So a goal that needed approval produced no
+   * result, nothing signed, and `runs show` reporting that the run never
+   * reached an outcome row. The signing drift gate stayed green because
+   * it matches the call once per FILE, which is the same aperture
+   * blindness this increment set out to correct, one level down.
+   *
+   * Fixing the second call site would have been the second fix. There is
+   * one writer instead, so a third path inherits signing and whole-result
+   * retention rather than having to remember them.
+   *
+   * `signGoalArtifact` returns null when no identity is loaded, and that
+   * stays null: an unsigned result recorded honestly is a record; a
+   * placeholder signature is a lie with a checksum.
+   */
+  private async recordCompletedOutcome(
+    goalId: string,
+    runId: string,
+    result: GoalStreamResult,
+    opts: { status?: GoalOutcome["status"]; errorMessage?: string | null } = {},
+  ): Promise<void> {
+    const full = result.responseText;
+    let signedManifest: string | null = null;
+    // Nothing to sign is not something to sign. Signing an empty result
+    // produced a manifest over zero bytes, which `runs show` then
+    // rendered as "empty." immediately followed by "signed" — a
+    // signature presented as backing an artifact that does not exist.
+    try {
+      const manifest =
+        full === "" ? null : await this.runtime.signGoalArtifact(full, { goalId, runId });
+      signedManifest = manifest == null ? null : JSON.stringify(manifest);
+    } catch (err: unknown) {
+      logLine(
+        `[scheduler] goal artifact could not be signed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    // runId = outcome_id, so the run, its outcome and its tool-audit rows
+    // all join on one id.
+    this.goalOutcomeStore.add({
+      outcome_id: runId,
+      run_id: runId,
+      goal_id: goalId,
+      motebit_id: this.motebitId,
+      ran_at: Date.now(),
+      status: opts.status ?? "completed",
+      summary: full.slice(0, 500) || null,
+      tool_calls_made: result.toolCallsMade,
+      memories_formed: result.memoriesFormed,
+      error_message: opts.errorMessage ?? null,
+      ...(full !== "" ? { response_full: full } : {}),
+      ...(signedManifest != null ? { signed_manifest: signedManifest } : {}),
+    });
   }
 
   /**

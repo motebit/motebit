@@ -654,6 +654,35 @@ export class MotebitRuntime {
   private planExecution!: PlanExecutionManager;
   private approvalStore: import("@motebit/sdk").ApprovalStoreAdapter | null = null;
   private haltStore: import("@motebit/sdk").HaltStoreAdapter | null = null;
+  /** Held so a policy-config swap cannot drop it. See `updatePolicyConfig`. */
+  private runEvidenceSink: import("@motebit/sdk").RunEvidenceSink | null = null;
+
+  /**
+   * Record an evidence pointer without letting its failure reach the
+   * work it describes.
+   *
+   * The store raises rather than swallowing a bad write, because a
+   * silently missing pointer is precisely what this record must never
+   * have. That choice is only safe if every caller absorbs the throw:
+   * unguarded, a locked database while writing a POINTER would abort the
+   * turn whose tool had already run, leaving the execution ledger open
+   * and the goal held behind a human. A loud log is not silence, and it
+   * costs nothing that matters.
+   */
+  private recordEvidenceSafely(
+    ctx: { turnId: string; runId?: string },
+    decision: import("@motebit/sdk").PolicyDecision,
+    tool: string,
+    result: import("@motebit/sdk").ToolResult,
+  ): void {
+    try {
+      this.policy.recordEvidence(ctx, decision, tool, result);
+    } catch (err: unknown) {
+      this._logger.warn(
+        `[runtime] evidence not recorded for ${tool}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
   /**
    * What the executor does when a halt must be honored. Each listener
    * stops what it owns and returns a description of what it stopped —
@@ -1048,6 +1077,12 @@ export class MotebitRuntime {
     // Approval store — persistence-backed quorum state (source of truth for multi-party approval)
     this.approvalStore = adapters.storage.approvalStore ?? null;
     this.haltStore = adapters.storage.haltStore ?? null;
+    // Handed to the gate rather than held here: the gate is where a tool
+    // result's content-addressed bytes are still in hand, and where the
+    // completion row it sits beside is written.
+    this.runEvidenceSink = adapters.storage.runEvidenceSink ?? null;
+    this.policy.setEvidenceSink(this.runEvidenceSink);
+    this.policy.setEvidenceLogger(this._logger);
 
     // Agent graph — algebraic routing substrate
     this.agentGraph = new AgentGraphManager(
@@ -1310,18 +1345,43 @@ export class MotebitRuntime {
           p.args,
           "human-approved",
         ),
-      recordApprovedToolResult: (p) =>
-        this.policy.recordResult(
+      recordApprovedToolResult: (p) => {
+        const ctx = { turnId: p.turnId ?? p.runId ?? "resume", runId: p.runId };
+        const decision = {
+          allowed: true,
+          requiresApproval: true,
+          reason: "approved",
+          callId: p.auditCallId,
+        };
+        // Ledger row FIRST, evidence second, and the evidence write
+        // guarded.
+        //
+        // The store raises on a bad write by design — a silently missing
+        // pointer is the failure this whole record exists to avoid. But
+        // raising it here, ahead of the completion row and unguarded,
+        // meant a locked database while writing EVIDENCE left the
+        // execution ledger open, which the next daemon start reads as
+        // "interrupted with side effects" and holds the goal behind a
+        // human. A secondary record must never be able to do that to the
+        // primary one. So: close the ledger, then try to record the
+        // pointer, and if that fails say so loudly rather than take the
+        // turn down with it.
+        const closed = this.policy.recordResult(
           { turnId: p.turnId ?? p.runId ?? "resume", runId: p.runId },
           // The decision that paused was approval-gated; the human's
           // signed consent (signAndEmitApprovalDecision) is the authority
           // record — this row is only the execution completion.
-          { allowed: true, requiresApproval: true, reason: "approved", callId: p.auditCallId },
+          decision,
           p.toolName,
           p.args,
           p.ok,
           p.durationMs,
-        ),
+        );
+        if (p.result != null) {
+          this.recordEvidenceSafely(ctx, decision, p.toolName, p.result);
+        }
+        return closed;
+      },
       // #493: non-draining stash view for the delegate_to_agent receipt
       // beat. Lazy closures — interactiveDelegation is constructed before
       // the StreamingManager, but the indirection keeps that ordering a
@@ -1722,6 +1782,12 @@ export class MotebitRuntime {
     // Completion row for the decision the gate wrote above — closes the
     // durable-execution ledger for this call before any sink can throw.
     this.policy.recordResult(turnCtx, decision, name, args, result.ok, completedAt - startedAt);
+    // The deterministic-affordance path closes the ledger, so it records
+    // its evidence too — after the ledger row, and guarded. A `read_url`
+    // fired from a chip tap content-addresses the same bytes as one the
+    // model asked for, and discarding that pointer would make what a run
+    // can prove depend on who started it.
+    this.recordEvidenceSafely(turnCtx, decision, name, result);
     const visibleResult = result.ok ? (result.data ?? null) : (result.error ?? null);
 
     // Fire the live activity channel first — the slab renders
@@ -1963,7 +2029,12 @@ export class MotebitRuntime {
    * Immutable swap — no mutation of the existing PolicyGate.
    */
   updatePolicyConfig(config: Partial<PolicyConfig>): void {
-    this.policy = new PolicyGate(config, this.toolAuditSink);
+    // The evidence sink travels with the swap. It did not, and the
+    // result was a runtime that stopped recording evidence the moment a
+    // user changed any policy setting — silently, and reported
+    // afterwards as "none recorded".
+    this.policy = new PolicyGate(config, this.toolAuditSink, this.runEvidenceSink);
+    this.policy.setEvidenceLogger(this._logger);
     this.wireLoopDeps();
   }
 
@@ -3687,6 +3758,7 @@ export class MotebitRuntime {
           // the desktop renderer's IPC-async cache) silently no-op.
           conversationStore: this.conversationStore,
           toolAuditSink: this.toolAuditSink,
+          runEvidenceSink: this.runEvidenceSink,
           logger: this._logger,
         },
         {

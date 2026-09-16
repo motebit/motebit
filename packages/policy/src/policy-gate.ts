@@ -7,6 +7,9 @@ import type {
   TurnContext,
   InjectionWarning,
   ApprovalQuorum,
+  RunEvidenceSink,
+  RunEvidenceEntry,
+  RunEvidenceWithheldReason,
 } from "@motebit/protocol";
 import { classifyTool, isToolAllowed } from "./risk-model.js";
 import { BudgetEnforcer } from "./budget.js";
@@ -82,6 +85,100 @@ export const DEFAULT_POLICY: PolicyConfig = {
 // === PolicyGate ===
 
 /**
+ * How much of a tool's returned text is kept as the re-checkable span.
+ *
+ * A pointer exists to be re-checked, not to store the document — and a
+ * prefix of a substring is still a substring, so bounding costs the law
+ * nothing. Wide enough to identify WHICH record was read when a person
+ * re-fetches it; far short of keeping the record itself, which would
+ * put retrieved content under a retention policy it never entered.
+ */
+const EVIDENCE_SPAN_MAX_CHARS = 512;
+
+/**
+ * Where an evidence-write failure goes when nobody wired anywhere else.
+ * Console rather than nothing: a surface that forgot to inject a logger
+ * should still see the failure, because the alternative is a record
+ * that goes quiet and reads as though nothing was retrieved.
+ */
+const defaultEvidenceLogger = {
+  warn(message: string): void {
+    // eslint-disable-next-line no-console -- last-resort channel; see above
+    console.warn(message);
+  },
+};
+
+/**
+ * Does this reference carry a secret in its query string?
+ *
+ * Name-keyed on purpose: in a URL the parameter name says what the
+ * value is, and an opaque token has no shape a value-matcher can find.
+ * Deliberately conservative about what counts as a value — a one or two
+ * character parameter is a page number, not a key.
+ */
+const CREDENTIAL_PARAM =
+  /[?&#][^=&\s]*(?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|authorization|token|secret|password|passwd|pwd|signature|credential|sig)=[^&\s]{16,}/i;
+
+/**
+ * Userinfo credentials — `https://user:pass@host/…`. A different place
+ * to hide the same thing.
+ */
+const URL_USERINFO = /^[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i;
+
+/**
+ * The engine is passed in, not stashed.
+ *
+ * This read a module-level binding that `recordEvidence` reassigned on
+ * every call — shared across every gate instance, retaining the last
+ * one's engine after a policy swap, and initialised to a predicate
+ * returning false. Correct only because the assignment sat one line
+ * above the use; any reordering would have quietly degraded the guard
+ * to query-string matching with nothing to notice.
+ */
+function looksLikeCredentialBearingUrl(
+  ref: string,
+  shapesFound: (text: string) => boolean,
+): boolean {
+  // Query AND fragment AND userinfo. The first version anchored on
+  // `[?&]` alone, which reads the query string and nothing else — so an
+  // OAuth implicit-grant callback (`…/cb#access_token=…`) and a userinfo
+  // URL both walked past a guard whose stated purpose is that a
+  // credential in a reference is never stored. Checking only the part
+  // one happens to think of is the mistake this guard already made once.
+  // The credential word can sit anywhere in the parameter NAME, not
+  // only at its start. Anchored to the separator, the rule read
+  // `?sig=` and missed every vendor-prefixed form — measured,
+  // `X-Amz-Signature=` and `X-Goog-Signature=` both walked past, so a
+  // presigned export link handed to the agent wrote its signature into
+  // a row kept for the horizon and printed verbatim on return. Third
+  // time this guard has been too narrow; each time the gap was a place
+  // I had not thought to look rather than a rule that was wrong.
+  //
+  // The shape filter runs over the reference too, which catches a
+  // vendor key embedded in a PATH rather than a query.
+  return CREDENTIAL_PARAM.test(ref) || URL_USERINFO.test(ref) || shapesFound(ref);
+}
+
+/**
+ * Cut the span to the bound WITHOUT splitting a character.
+ *
+ * `slice` counts UTF-16 code units, so a cut landing between the halves
+ * of an astral character (an emoji, a rarer CJK glyph) leaves a lone
+ * surrogate. SQLite stores TEXT as UTF-8 and turns that into U+FFFD, so
+ * the span read back is not the span written — and
+ * `verifyEvidenceProvenance` reports `span_absent` for a pointer this
+ * producer made. A record that fails its own law is worse than a shorter
+ * one, so the cut retreats to a whole character.
+ */
+function boundSpan(data: string): string {
+  if (data.length <= EVIDENCE_SPAN_MAX_CHARS) return data;
+  const cut = data.slice(0, EVIDENCE_SPAN_MAX_CHARS);
+  const last = cut.charCodeAt(cut.length - 1);
+  // A high surrogate at the end has lost its pair to the cut.
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
+
+/**
  * PolicyGate — the surface tension of the agent.
  *
  * Sits between the agentic loop and the tool registry. Every tool call passes
@@ -101,8 +198,40 @@ export class PolicyGate {
   private sanitizer: ContentSanitizer;
   readonly audit: AuditLogger;
   private profileCache = new Map<string, ToolRiskProfile>();
+  private evidenceSink: RunEvidenceSink | null = null;
+  /**
+   * Where an evidence-write failure is reported. Optional, and when it
+   * is absent the failure still throws to the caller — what must never
+   * happen is the failure going nowhere at all, because a missing
+   * pointer then reads as "nothing was retrieved".
+   */
+  private evidenceLogger: { warn(message: string): void } | null = defaultEvidenceLogger;
 
-  constructor(config?: Partial<PolicyConfig>, auditSink?: AuditLogSink) {
+  /**
+   * `evidenceSink` is a CONSTRUCTOR parameter, not only a setter.
+   *
+   * It was setter-only, wired once at runtime construction — and
+   * `updatePolicyConfig` builds a whole new gate, so changing any policy
+   * setting silently produced a gate that recorded no evidence. Nothing
+   * errored; `runs show` simply began printing "none recorded", which
+   * this vocabulary insists must never read as "nothing was read". A
+   * config-induced loss that is indistinguishable from an honest absence
+   * is the worst shape this record can take. Passing it through the
+   * constructor makes a gate that forgot it hard to build; the setter
+   * stays for surfaces that wire storage after construction.
+   */
+  constructor(
+    config?: Partial<PolicyConfig>,
+    auditSink?: AuditLogSink,
+    evidenceSink?: RunEvidenceSink | null,
+    /**
+     * Arrives WITH the sink, not after it. A gate holding a sink and no
+     * logger swallows a store refusal with no output anywhere, which is
+     * the silence-as-absence this record must never produce; the
+     * default keeps that from being the easy thing to build.
+     */
+    evidenceLogger: { warn(message: string): void } | null = defaultEvidenceLogger,
+  ) {
     // Deep-copy config to prevent external mutation
     const merged = { ...DEFAULT_POLICY, ...config };
     this.config = {
@@ -118,6 +247,225 @@ export class PolicyGate {
     this.redaction = new RedactionEngine();
     this.sanitizer = new ContentSanitizer();
     this.audit = new AuditLogger(auditSink);
+    this.evidenceSink = evidenceSink ?? null;
+    this.evidenceLogger = evidenceLogger;
+  }
+
+  /**
+   * Wire the sibling record that `recordResult`'s contract names: where
+   * a run's re-checkable evidence pointers go. A gate without one
+   * records no evidence, and every reader must render that as "none
+   * recorded", never as "nothing was read".
+   */
+  setEvidenceSink(sink: RunEvidenceSink | null): void {
+    this.evidenceSink = sink;
+  }
+
+  /** Report evidence-write failures somewhere. See `evidenceLogger`. */
+  setEvidenceLogger(logger: { warn(message: string): void } | null): void {
+    this.evidenceLogger = logger;
+  }
+
+  /**
+   * Mint the evidence pointer for a tool call that content-addressed
+   * what it read, and nothing otherwise.
+   *
+   * The span is the tool's OWN returned text, not a model's account of
+   * it. `ToolResult.source_digest`'s contract is that its presence means
+   * `data` is either a verbatim span of the raw bytes or the output of
+   * the named byte-deterministic recipe over them — so `data` is a
+   * substring of `projection(bytes)` by construction, which is exactly
+   * the law `verifyEvidenceProvenance` applies. A span nobody fetched
+   * cannot get in here, because the only writer is the fetch itself.
+   *
+   * Bounded, because a pointer is for re-checking, not for storing the
+   * document: a prefix of a substring is still a substring, and
+   * `locator` says which prefix. Absent digest, absent evidence — never
+   * a bare claim this producer cannot back.
+   */
+  recordEvidence(
+    ctx: Pick<TurnContext, "turnId" | "runId">,
+    decision: PolicyDecision,
+    tool: string,
+    result: ToolResult,
+  ): void {
+    if (this.evidenceSink == null) return;
+    const sink = this.evidenceSink;
+    if (decision.callId == null) return;
+    if (!result.ok || result.source_digest == null) return;
+    if (typeof result.data !== "string" || result.data === "") return;
+
+    const span = boundSpan(result.data);
+    // Credential-class content means NO pointer, not a redacted one.
+    //
+    // The sibling audit row redacts its args before persisting, and this
+    // row carries something stronger: verbatim retrieved content, which
+    // `runs show` prints. But redacting a span would be worse than
+    // either alternative — the law is that the span is an exact
+    // substring of the bytes, so a `[REDACTED:…]` span is a claim that
+    // fails re-verification, i.e. a pointer asserting something untrue.
+    //
+    // A pointer that is both safe and true is not available here, so we
+    // record neither. Absence is the honest answer and the one this
+    // vocabulary is built for: the producer never makes a claim it
+    // cannot back. The tool's own result is unaffected; only the
+    // durable pointer is withheld.
+    //
+    // The CREDENTIAL-class set, not the full one.
+    //
+    // `redact` deliberately includes three low-precision patterns —
+    // bare 9-digit runs, any 40+ character alphanumeric token, and
+    // Luhn-passing digit runs — which the pattern table itself marks
+    // `cloudEgress: false` for exactly that reason. Using them here
+    // withheld a pointer whenever a page's first 512 characters held a
+    // commit hash, a reference number, or a long identifier, and the
+    // person was told "none recorded". A guard that suppresses honest
+    // evidence at that rate does not protect the record, it empties it.
+    //
+    // Narrowed twice. The full set fired on a git SHA and a bare
+    // nine-digit reference. The cloud-egress subset still carried two
+    // KEYWORD-keyed patterns — a connection-string URL and the word
+    // "password" near a colon — which are about a user's own typed
+    // message, not a stranger's web page: a docs page printing
+    // `postgres://localhost/mydb` as an example, or a help page reading
+    // `Password: required`, cost the owner the evidence for that fetch
+    // and reported nothing retrieved. What is left keys on the secret's
+    // own shape, which is the property that travels across whose words
+    // these are.
+    //
+    // (That residual was closed in the same change by `VENDOR_KEY`,
+    // which keys on the mandatory separator those formats carry. Noted
+    // because a stale "known gap" invites someone to re-open it.)
+    // Judged against the WHOLE result, not the bounded span.
+    //
+    // Bounding first meant a secret whose pattern needs bytes past the
+    // cut could never match: a PEM block needs its BEGIN and END
+    // delimiters, about 1.7KB apart, so an endpoint serving a private
+    // key had ~470 characters of it stored verbatim, printed on return,
+    // and kept for the horizon — past the guard whose entire job is that
+    // credential-class content is never kept. The span is what gets
+    // STORED; the data is what gets JUDGED.
+    if (this.redaction.redactCredentialShapes(result.data).redactionCount > 0) {
+      this.recordWithheld(sink, ctx, decision, tool, "credential_in_span");
+      return;
+    }
+    // The SOURCE is guarded separately, by its own rule.
+    //
+    // `read_url` passes the request URL, and a URL carries credentials
+    // in query parameters — so a fetch of `…/export?api_key=…` wrote the
+    // key into the pointer's `ref`, past a guard that only looked at the
+    // span. The shared credential patterns catch none of those forms:
+    // measured, `api_key=`, `token=`, `access_token=` and `sig=` all
+    // pass untouched, because the patterns key on the VALUE's shape and
+    // a bare opaque string has none.
+    //
+    // In a URL the parameter NAME is the strong signal, which makes this
+    // rule precise where a value-shape rule cannot be. It lives here
+    // rather than in the shared table because it is true of URLs, not of
+    // prose, and the shared table is applied to prose.
+    if (
+      result.source_ref != null &&
+      looksLikeCredentialBearingUrl(
+        result.source_ref,
+        (text) => this.redaction.redactCredentialShapes(text).redactionCount > 0,
+      )
+    ) {
+      this.recordWithheld(sink, ctx, decision, tool, "credential_in_source");
+      return;
+    }
+    this.recordOrReport(sink, {
+      evidence_id: crypto.randomUUID(),
+      ...(ctx.runId != null ? { run_id: ctx.runId } : {}),
+      turn_id: ctx.turnId,
+      call_id: decision.callId,
+      tool,
+      recorded_at: Date.now(),
+      evidence: {
+        kind: "tool_result",
+        // What was read, in the producing tool's own terms. Falls back
+        // to the call id only when the tool named nothing — such a
+        // pointer is still worth keeping beside its call, but it cannot
+        // be re-fetched and no surface may imply it can.
+        ref: result.source_ref ?? decision.callId,
+        provenance: {
+          digest: result.source_digest,
+          ...(result.source_projection != null ? { projection: result.source_projection } : {}),
+          // Carried only when the TOOL declares it. Absent means
+          // spec-reproducible, the strong rung, so this producer must
+          // never supply a default — defaulting would claim the strong
+          // rung on behalf of a recipe that may meet only the weaker
+          // one, which is the over-claim the class exists to prevent.
+          ...(result.source_projection_class != null
+            ? { projectionClass: result.source_projection_class }
+            : {}),
+          span,
+          // No `locator`. It is advisory, and this gate is tool-agnostic:
+          // asserting the span starts at offset 0 of `projection(bytes)`
+          // happens to hold for today's only producer and would be
+          // quietly wrong for any tool that returns a mid-document
+          // excerpt. An absent advisory field costs a re-verifier
+          // nothing, because the law is substring presence; a wrong one
+          // sends them to the wrong place.
+        },
+      },
+    });
+  }
+
+  /**
+   * Record that a pointer WAS produced and deliberately not kept.
+   *
+   * The guard that withholds credential-class content had the same flaw
+   * as the thing this vocabulary exists to remove: it made the evidence
+   * simply vanish, so a reader could not tell a refusal from a tool that
+   * retrieved nothing. Both printed "none recorded". A guard whose whole
+   * justification is honesty was producing an ambiguous absence.
+   *
+   * The row carries no digest, no span and no source — keeping any of
+   * those would defeat the withholding, and the source is itself one of
+   * the places a credential hides. It says only that something was read
+   * and refused, and why. That is enough to separate the two absences,
+   * and enough that a guard firing where it should not becomes
+   * observable instead of invisible — which, after four corrections
+   * found by review rather than by me, is the part that matters.
+   */
+  private recordWithheld(
+    sink: RunEvidenceSink,
+    ctx: Pick<TurnContext, "turnId" | "runId">,
+    decision: PolicyDecision,
+    tool: string,
+    reason: RunEvidenceWithheldReason,
+  ): void {
+    if (decision.callId == null) return;
+    this.recordOrReport(sink, {
+      evidence_id: crypto.randomUUID(),
+      ...(ctx.runId != null ? { run_id: ctx.runId } : {}),
+      turn_id: ctx.turnId,
+      call_id: decision.callId,
+      tool,
+      recorded_at: Date.now(),
+      evidence: { kind: "tool_result", ref: decision.callId },
+      withheld_reason: reason,
+    });
+  }
+
+  /**
+   * Write the pointer, and if the store refuses, say so.
+   *
+   * The store raises rather than dropping rows, so the failure has to
+   * land somewhere it can be seen. Reported here AND rethrown: the
+   * primary tool path absorbs it (a pointer must not take down the work
+   * it describes), and this is what stops the absorbing from becoming
+   * silence.
+   */
+  private recordOrReport(sink: RunEvidenceSink, entry: RunEvidenceEntry): void {
+    try {
+      sink.record(entry);
+    } catch (err: unknown) {
+      this.evidenceLogger?.warn(
+        `[policy] evidence not recorded for ${entry.tool}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      throw err;
+    }
   }
 
   // === Configuration ===

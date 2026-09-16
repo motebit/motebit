@@ -134,6 +134,13 @@ async function main(): Promise<void> {
           ...(result.ok && result.source_projection != null
             ? { sourceProjection: result.source_projection }
             : {}),
+          // The class travels with the recipe. Dropping it here would
+          // let the signed receipt assert the strong assurance rung for
+          // a recipe that declared the weaker one — the over-claim the
+          // class exists to make impossible.
+          ...(result.ok && result.source_projection_class != null
+            ? { sourceProjectionClass: result.source_projection_class }
+            : {}),
         });
         log(`receipt=${signed.signature.slice(0, 12)}… url="${prompt.slice(0, 60)}"`);
         yield {
