@@ -885,7 +885,12 @@ async function flushPhase(
               });
             }
             deps.runEvidenceSink.eraseForCall(candidate.callId);
-            flushedEvidence++;
+            // Counted only when rows were CONFIRMED to exist. The
+            // erase-anyway branch covers a sink that cannot count, and
+            // incrementing there reported an evidence flush for every
+            // tool-audit row when none existed — a counter added to stop
+            // this cycle misreporting itself, misreporting itself.
+            if (evidenceCount != null) flushedEvidence += evidenceCount;
           }
         } catch (err: unknown) {
           deps.logger.warn("flush phase: run_evidence erase failed", {

@@ -1982,6 +1982,7 @@ export interface ExecutionReceipt {
     signature: string;
     source_digest?: DigestRef;
     source_projection?: string;
+    source_projection_class?: ProjectionClass;
     status: "completed" | "failed" | "denied";
     // (undocumented)
     submitted_at: number;

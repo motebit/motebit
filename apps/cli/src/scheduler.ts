@@ -1033,8 +1033,8 @@ export class GoalScheduler {
             ran_at: now,
             status: "suspended",
             summary: `Suspended for approval: ${chunk.name}`,
-            tool_calls_made: toolCallsMade,
-            memories_formed: memoriesFormed,
+            tool_calls_made: carriedTools + toolCallsMade,
+            memories_formed: carriedMemories + memoriesFormed,
             error_message: null,
           });
 

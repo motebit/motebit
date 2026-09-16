@@ -1565,6 +1565,18 @@ export interface ExecutionReceipt {
    */
   source_projection?: string;
   /**
+   * How re-checkable {@link source_projection} is — set from the tool's
+   * {@link ToolResult.source_projection_class}; signature-bound.
+   *
+   * Carried here for the same reason it exists at all: absence means
+   * `spec-reproducible`, the strong rung, so a receipt that drops the
+   * class asserts the strong rung on behalf of a recipe that may only
+   * meet the weaker one. The run-evidence pointer and the signed receipt
+   * describe the SAME call, and the one a stranger verifies must not
+   * claim more than the one kept locally.
+   */
+  source_projection_class?: ProjectionClass;
+  /**
    * How this task was authorized for invocation. Discriminates user-explicit
    * affordances (chip tap, slash command, scene click) from AI-mediated
    * delegations (the model called `delegate_to_agent` in its loop) and from

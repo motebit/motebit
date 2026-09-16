@@ -214,7 +214,15 @@ export async function handleRunsShow(config: CliConfig): Promise<void> {
     // record and then not showing it is the same outcome as losing it.
     const outcomes = moteDb.goalOutcomeStore.listForRun(run.run_id);
     const fallback = moteDb.goalOutcomeStore.get(run.run_id);
-    const all = outcomes.length > 0 ? outcomes : fallback != null ? [fallback] : [];
+    // The UNION, de-duplicated, not one source or the other. A run that
+    // was open across the upgrade can hold a legacy row keyed by its id
+    // with no run link, and a recovery row that has one — taking the
+    // linked set alone hides the legacy row, which is the same as losing
+    // it by the standard stated three lines up.
+    const all = [...outcomes];
+    if (fallback != null && !all.some((o) => o.outcome_id === fallback.outcome_id)) {
+      all.push(fallback);
+    }
     console.log("\nResult");
     if (all.length === 0) {
       console.log(dim("  none recorded — the run did not reach an outcome row."));

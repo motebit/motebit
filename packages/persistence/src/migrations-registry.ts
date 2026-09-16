@@ -564,6 +564,11 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       )`,
       "CREATE INDEX IF NOT EXISTS idx_run_evidence_run ON run_evidence (run_id, recorded_at)",
       "CREATE INDEX IF NOT EXISTS idx_run_evidence_call ON run_evidence (call_id)",
+      // The horizon sweep selects on `recorded_at` alone; neither index
+      // above leads on it, so every consolidation cycle full-scanned the
+      // table. Bounded by the horizon, so it degraded quietly rather
+      // than failing — which is the kind of cost that never gets found.
+      "CREATE INDEX IF NOT EXISTS idx_run_evidence_recorded ON run_evidence (recorded_at)",
       // Parity with desktop and mobile, which added both columns in
       // their own per-surface registries. The shared schema — the one
       // the CLI daemon uses, the surface that actually runs goals

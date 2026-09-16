@@ -129,3 +129,11 @@ Tenth review round — eight findings, and two of them were leaks rather than ti
 - **The evidence flush counter still reported nothing.** It was computed and returned one round ago and never reached the summary, so a cycle erasing hundreds of rows and signing hundreds of certificates still looked like a cycle that did nothing — the same silence the counter was added to end, one layer further out.
 - A module-level mutable predicate, reassigned on every call and shared across every gate, is now passed as an argument. It was correct only because the assignment sat one line above the use.
 - Five documentation blocks had drifted onto the wrong symbols, including the central type of this increment, which was shipping undocumented on the public interface. A stale note claiming a gap that this same change had already closed is corrected, and a paragraph duplicated onto the wrong guard is removed.
+
+Eleventh review round — five findings, none high, all closed before merge:
+
+- **The assurance class now reaches the signed receipt.** It travelled on the locally-kept pointer and stopped there, and absence of that class means the strong rung — so the artifact a stranger verifies would have claimed more than the one kept at home, for the same call. Latent, since nothing declares the weaker rung yet, but it is exactly the sibling boundary this repo's own rule says to audit in the same pass. Threaded through the tool result, the service, the receipt builder, the wire schema and the committed JSON Schema.
+- The evidence flush counts only rows confirmed to exist. A sink that cannot count is erased anyway, and counting there reported a flush for every audit row when none existed — a counter added to stop this cycle misreporting itself, misreporting itself.
+- The pause row carries the counts from before the pause, like the completion row already did.
+- The return view shows the union of a run's outcomes rather than one source or the other, so a legacy row written before the run link existed is not hidden behind a recovery row.
+- The horizon sweep has an index on the column it selects. It was a full scan bounded only by the horizon, which degrades quietly rather than failing — the kind of cost that never gets found.

@@ -14,7 +14,7 @@
  */
 
 import { hash as sha256, signExecutionReceipt, verifyExecutionReceipt } from "@motebit/encryption";
-import type { ExecutionReceipt, IntentOrigin, DigestRef } from "@motebit/sdk";
+import type { ExecutionReceipt, IntentOrigin, DigestRef, ProjectionClass } from "@motebit/sdk";
 
 export interface BuildServiceReceiptInput {
   /** Service's motebit identity (same for every receipt this service signs). */
@@ -75,6 +75,8 @@ export interface BuildServiceReceiptInput {
    * recipe path; omitted on the raw-byte path. Signature-bound on the receipt.
    */
   sourceProjection?: string;
+  /** Assurance class of {@link sourceProjection}; absent ⇒ spec-reproducible. */
+  sourceProjectionClass?: ProjectionClass;
 }
 
 /**
@@ -109,6 +111,9 @@ export async function buildServiceReceipt(
     ...(input.invocationOrigin != null ? { invocation_origin: input.invocationOrigin } : {}),
     ...(input.sourceDigest != null ? { source_digest: input.sourceDigest } : {}),
     ...(input.sourceProjection != null ? { source_projection: input.sourceProjection } : {}),
+    ...(input.sourceProjectionClass != null
+      ? { source_projection_class: input.sourceProjectionClass }
+      : {}),
   };
 
   const signed = (await signExecutionReceipt(
