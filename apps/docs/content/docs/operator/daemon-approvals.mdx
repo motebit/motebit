@@ -171,8 +171,11 @@ not what a halt is for.
 A goal-scoped halt is genuinely scoped: it stops that goal's next run and
 that goal's pending approval, and leaves every other goal alone. The id
 is resolved before anything is recorded — the 8-character prefix
-`motebit goal list` prints is enough, and an id that matches no goal is
-refused rather than written as a halt that would match nothing.
+`motebit goal list` prints is enough — and a scope naming a goal that
+does not exist is refused at the store, not merely at the command that
+happened to be written first. A halt that matched no goal would report a
+stop while the goal kept running, so that state cannot be recorded at
+all.
 
 `motebit serve` is covered too: a halted worker refuses relay-dispatched
 tasks, and says so.

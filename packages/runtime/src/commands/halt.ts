@@ -80,11 +80,21 @@ export async function cmdHalt(
     }
   }
 
-  const halt = await runtime.requestHalt({
-    ...(goalId != null ? { goalId } : {}),
-    origin,
-    ...(reason !== "" ? { reason } : {}),
-  });
+  let halt;
+  try {
+    halt = await runtime.requestHalt({
+      ...(goalId != null ? { goalId } : {}),
+      origin,
+      ...(reason !== "" ? { reason } : {}),
+    });
+  } catch (err) {
+    // The store refuses a scope that cannot match — a halt naming a goal
+    // that does not exist would report a stop while the goal kept
+    // running. Say that plainly rather than surfacing a raw throw.
+    return {
+      summary: `Nothing was halted: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
   if (halt == null) return { summary: "Halt could not be recorded." };
 
   await runtime.honorHalts();

@@ -1554,8 +1554,12 @@ export class SqliteHaltStore implements HaltStoreAdapter {
   private stmtLift: PreparedStatement;
   private stmtListActive: PreparedStatement;
   private stmtListRecent: PreparedStatement;
+  private stmtGoalExists: PreparedStatement;
 
   constructor(db: DatabaseDriver) {
+    this.stmtGoalExists = db.prepare(
+      `SELECT goal_id FROM goals WHERE goal_id = ? AND motebit_id = ?`,
+    );
     this.stmtRequest = db.prepare(
       `INSERT OR REPLACE INTO halt_state
        (halt_id, motebit_id, goal_id, requested_at, origin, reason, acknowledged_at, acknowledgement, lifted_at)
@@ -1576,7 +1580,32 @@ export class SqliteHaltStore implements HaltStoreAdapter {
     );
   }
 
+  /**
+   * Record a request to stop.
+   *
+   * A goal-scoped halt is validated against the goals table here rather
+   * than trusted from the caller, because three separate review rounds
+   * found three separate ways to write a halt whose scope matched
+   * nothing: a reason parsed as a goal name, an 8-character prefix left
+   * unresolved, and an id that simply did not exist. Each produced the
+   * one failure a stop command must never have — the record said a goal
+   * was halted, `halt-status` listed it as in force, and the goal kept
+   * firing.
+   *
+   * Fixing the fourth call site would have been the fourth fix. A scope
+   * that cannot match is refused at the boundary instead, so no caller —
+   * CLI, command layer, phone, or one not written yet — can record one.
+   */
   request(halt: HaltRequest): void {
+    if (halt.goal_id != null) {
+      const found = this.stmtGoalExists.get(halt.goal_id, halt.motebit_id) as
+        { goal_id: string } | undefined;
+      if (found === undefined) {
+        throw new Error(
+          `refusing to record a halt scoped to goal "${halt.goal_id}", which does not exist for this motebit — a halt that matches no goal would report a stop while the goal kept running`,
+        );
+      }
+    }
     this.stmtRequest.run(
       halt.halt_id,
       halt.motebit_id,

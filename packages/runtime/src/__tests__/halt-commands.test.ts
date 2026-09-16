@@ -197,6 +197,17 @@ describe("cmdHalt", () => {
     expect(r.detail).toContain("aborted run 9z");
   });
 
+  it("a scope the store refuses is reported as nothing halted, not as a raw throw", async () => {
+    const { runtime } = makeRuntime({ stopper: () => "stopped" });
+    (runtime as unknown as { requestHalt: () => Promise<never> }).requestHalt = () =>
+      Promise.reject(
+        new Error('refusing to record a halt scoped to goal "ghost", which does not exist'),
+      );
+    const r = await cmdHalt(runtime, JSON.stringify({ goal_id: "ghost" }), "remote");
+    expect(r.summary).toContain("Nothing was halted");
+    expect(r.summary).toContain("does not exist");
+  });
+
   it("a surface with no halt store refuses honestly instead of succeeding", async () => {
     const { runtime } = makeRuntime({ halts: false });
     const r = await cmdHalt(runtime, undefined, "remote");

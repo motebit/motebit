@@ -30,6 +30,26 @@ describe("SqliteHaltStore", () => {
     db = createMotebitDatabase(":memory:");
   });
 
+  /** A goal-scoped halt is validated against real goals, so make them real. */
+  function addGoal(goalId: string, motebitId = "mote-1"): void {
+    db.goalStore.add({
+      goal_id: goalId,
+      motebit_id: motebitId,
+      prompt: "p",
+      interval_ms: 1000,
+      last_run_at: null,
+      enabled: true,
+      created_at: Date.now(),
+      mode: "recurring",
+      status: "active",
+      parent_goal_id: null,
+      max_retries: 3,
+      consecutive_failures: 0,
+      wall_clock_ms: null,
+      project_id: null,
+    });
+  }
+
   it("a requested halt is in force before anyone acknowledges it", () => {
     db.haltStore.request(halt({ halt_id: "h1" }));
     const active = db.haltStore.activeFor("mote-1");
@@ -58,6 +78,8 @@ describe("SqliteHaltStore", () => {
   });
 
   it("a motebit-wide halt covers every goal; a goal-scoped halt covers only its own", () => {
+    addGoal("goal-A");
+    addGoal("goal-B");
     db.haltStore.request(halt({ halt_id: "g1", goal_id: "goal-A" }));
     expect(db.haltStore.activeFor("mote-1", "goal-A")?.halt_id).toBe("g1");
     expect(db.haltStore.activeFor("mote-1", "goal-B")).toBeNull();
@@ -82,6 +104,32 @@ describe("SqliteHaltStore", () => {
     db.haltStore.request(halt({ halt_id: "new", requested_at: 2 }));
     expect(db.haltStore.listActive("mote-1").map((h) => h.halt_id)).toEqual(["new"]);
     expect(db.haltStore.listRecent("mote-1").map((h) => h.halt_id)).toEqual(["new", "old"]);
+  });
+
+  it("refuses a scope that cannot match — the boundary, not each caller, enforces it", () => {
+    // Three review rounds found three ways to write a halt whose scope
+    // matched nothing (a reason parsed as a goal name, an unresolved
+    // prefix, a nonexistent id). Each reported a stop while the goal
+    // kept firing. The store refuses, so no caller can produce a fourth.
+    expect(() => db.haltStore.request(halt({ halt_id: "bad", goal_id: "no-such-goal" }))).toThrow(
+      /does not exist/,
+    );
+    expect(db.haltStore.get("bad")).toBeNull();
+    expect(db.haltStore.activeFor("mote-1", "no-such-goal")).toBeNull();
+  });
+
+  it("accepts a scope that resolves, and is scoped per motebit", () => {
+    addGoal("goal-real");
+    db.haltStore.request(halt({ halt_id: "ok", goal_id: "goal-real" }));
+    expect(db.haltStore.activeFor("mote-1", "goal-real")?.halt_id).toBe("ok");
+    // …and another motebit cannot halt it by naming the same id.
+    expect(() =>
+      db.haltStore.request(halt({ halt_id: "x", goal_id: "goal-real", motebit_id: "mote-2" })),
+    ).toThrow(/does not exist/);
+  });
+
+  it("a motebit-wide halt needs no goal to exist", () => {
+    expect(() => db.haltStore.request(halt({ halt_id: "all", goal_id: null }))).not.toThrow();
   });
 
   it("origin round-trips, and an unknown origin reads as local rather than throwing", () => {
