@@ -822,14 +822,33 @@ async function flushPhase(
         });
         deps.toolAuditSink.erase(candidate.callId);
         flushedToolAudits++;
-        // The evidence pointer beside this call goes under the same
-        // certificate — but in its OWN guard. Inside the audit row's
-        // try it would report a locked-database failure here as
-        // "tool_audit erase failed" and skip the increment, blaming a
-        // primary success for a secondary fault and undercounting the
-        // flush.
+        // The evidence pointer beside this call gets its OWN
+        // certificate, naming the record the horizon sweep names.
+        //
+        // It was erased under the tool-audit certificate, whose target
+        // is the bare call id — so a record this codebase identifies as
+        // `run_evidence:<call id>` was destroyed with nothing attesting
+        // to it, while the certificate that WAS signed spoke only for
+        // the audit row. The two erase paths disagreed about what
+        // identifies an evidence row, which is how one of them came to
+        // delete without a proof.
+        //
+        // In its own guard, too: inside the audit row's try, a locked
+        // database here would be reported as "tool_audit erase failed"
+        // and skip the increment, blaming a primary success for a
+        // secondary fault.
         try {
-          deps.runEvidenceSink?.eraseForCall?.(candidate.callId);
+          if (deps.runEvidenceSink?.eraseForCall != null) {
+            await deps.privacy.signFlushCert({
+              targetKind: "run_evidence",
+              targetId: `run_evidence:${candidate.callId}`,
+              sensitivity: recordSensitivity,
+              reason: lazyClassified
+                ? "retention_enforcement_post_classification"
+                : "self_enforcement",
+            });
+            deps.runEvidenceSink.eraseForCall(candidate.callId);
+          }
         } catch (err: unknown) {
           deps.logger.warn("flush phase: run_evidence erase failed", {
             callId: candidate.callId,

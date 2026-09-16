@@ -52,8 +52,20 @@ class HaltAbort extends Error {
  */
 function withTextBeforePause(turn: SuspendedTurn, result: GoalStreamResult): GoalStreamResult {
   const before = turn.textBeforePause ?? "";
-  if (before === "") return result;
-  return { ...result, responseText: `${before}${result.responseText}` };
+  const tools = turn.toolCallsBeforePause ?? 0;
+  const memories = turn.memoriesBeforePause ?? 0;
+  if (before === "" && tools === 0 && memories === 0) return result;
+  // The COUNTS rejoin too. `consumeDaemonStream` resets both on entry,
+  // so an outcome built from the continuation alone reported the tool
+  // calls made after the pause and silently dropped the ones before it
+  // — the same tail-presented-as-whole defect the text carry fixed,
+  // left in the numbers that `runs show` prints and the next run reads.
+  return {
+    ...result,
+    responseText: `${before}${result.responseText}`,
+    toolCallsMade: result.toolCallsMade + tools,
+    memoriesFormed: result.memoriesFormed + memories,
+  };
 }
 
 interface SuspendedTurn {
@@ -74,6 +86,9 @@ interface SuspendedTurn {
    * failure this arc exists to remove.
    */
   textBeforePause?: string;
+  /** Tool calls and memories from before the pause — see `withTextBeforePause`. */
+  toolCallsBeforePause?: number;
+  memoriesBeforePause?: number;
   /** The runtime gate's tool_call_id for the approval this turn suspended on.
    *  Resume/deny is BOUND to it (#462): the scheduler may only resolve the
    *  pending approval it owns, never whatever happens to be pending — in
@@ -918,6 +933,8 @@ export class GoalScheduler {
      * lose its first segment — see the suspend site below.
      */
     carriedText = "",
+    carriedTools = 0,
+    carriedMemories = 0,
   ): Promise<GoalStreamResult> {
     let toolCallsMade = 0;
     let memoriesFormed = 0;
@@ -985,6 +1002,12 @@ export class GoalScheduler {
             // written to close, one pause further in.
             ...(carriedText + responseText !== ""
               ? { textBeforePause: carriedText + responseText }
+              : {}),
+            ...(carriedTools + toolCallsMade > 0
+              ? { toolCallsBeforePause: carriedTools + toolCallsMade }
+              : {}),
+            ...(carriedMemories + memoriesFormed > 0
+              ? { memoriesBeforePause: carriedMemories + memoriesFormed }
               : {}),
           });
 
@@ -1269,21 +1292,32 @@ export class GoalScheduler {
           const resumeStream = this.runtime.resumeAfterApproval(false);
           const expiredGoalId = turn.goalId;
           const expiredRunId = turn.runId;
-          // The goal tools fail closed on a null `currentGoalId`, so
-          // without these a continuation that calls `complete_goal` or
-          // `progress` silently refuses — while this path nonetheless
-          // records the run as having reached an outcome. The sibling
-          // resume path sets both for the same reason.
-          const priorGoalId = this.currentGoalId;
-          const priorRunId = this.currentRunId;
-          this.currentGoalId = expiredGoalId;
-          this.currentRunId = expiredRunId;
+          // This path deliberately does NOT touch `currentGoalId` /
+          // `currentRunId`, and an earlier version of it did.
+          //
+          // The reason given for setting them was that the goal tools
+          // fail closed without them. They do — but this runs in the
+          // approval phase, and `registerGoalTools` runs in the goal
+          // phase after it, so during this continuation those tools are
+          // not registered at all. Setting the ids bought nothing.
+          //
+          // It cost something, though. This continuation is
+          // fire-and-forget, so its cleanup lands at an arbitrary later
+          // moment — by which time the goal phase may have started a
+          // real run and put ITS ids there. Writing anything back then
+          // strips a live run of the context a stop uses to abort it and
+          // a graceful shutdown uses to close it, leaving it to be
+          // reclassified as interrupted and held behind a human. Two
+          // versions of the write-back were wrong in opposite
+          // directions; the third is not to write.
           void this.consumeDaemonStream(
             resumeStream,
             expiredGoalId,
             expiredRunId,
             undefined,
             turn.textBeforePause ?? "",
+            turn.toolCallsBeforePause ?? 0,
+            turn.memoriesBeforePause ?? 0,
           )
             .then(async (result) => {
               // `!result.suspended`, like the sibling path. A denied
@@ -1312,19 +1346,6 @@ export class GoalScheduler {
                     "the approval expired before it was decided; the action did not run",
                 },
               );
-            })
-            .finally(() => {
-              // RESTORED, not nulled. This runs off a fire-and-forget
-              // promise while the run is `running` rather than blocking,
-              // so a later tick can start a fresh run and set these to
-              // ITS ids — and nulling then stripped the live run's
-              // context from under it. `halt` reads `currentRunId` to
-              // abort, and a graceful stop reads it to close the run, so
-              // both would have silently stopped working on a run that
-              // was genuinely in flight, leaving it to be reclassified
-              // as interrupted and held behind a human.
-              this.currentGoalId = priorGoalId;
-              this.currentRunId = priorRunId;
             })
             .catch((err: unknown) => {
               // Every `running` transition needs a failure transition.
@@ -1409,6 +1430,8 @@ export class GoalScheduler {
             turn.runId,
             undefined,
             turn.textBeforePause ?? "",
+            turn.toolCallsBeforePause ?? 0,
+            turn.memoriesBeforePause ?? 0,
           );
           if (!result.suspended) {
             // The resumed turn ran to its end (a second pause would have

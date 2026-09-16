@@ -545,7 +545,15 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
         span TEXT NOT NULL,
         locator_start INTEGER,
         locator_end INTEGER,
-        recorded_at INTEGER NOT NULL
+        recorded_at INTEGER NOT NULL,
+        -- Null by default, and honestly so: nothing classifies content
+        -- fetched from somewhere else. The flush lazy-classifies a null
+        -- to the operator's declared default tier, exactly as it does
+        -- for the sibling audit rows. The column exists so a classifier
+        -- has somewhere to write when one arrives, and so this store's
+        -- at-rest shape matches the consolidation_flush contract it
+        -- declares rather than quietly diverging from it.
+        sensitivity TEXT
       )`,
       "CREATE INDEX IF NOT EXISTS idx_run_evidence_run ON run_evidence (run_id, recorded_at)",
       "CREATE INDEX IF NOT EXISTS idx_run_evidence_call ON run_evidence (call_id)",

@@ -108,6 +108,19 @@ export const DEFAULT_POLICY: PolicyConfig = {
 const EVIDENCE_SPAN_MAX_CHARS = 512;
 
 /**
+ * Where an evidence-write failure goes when nobody wired anywhere else.
+ * Console rather than nothing: a surface that forgot to inject a logger
+ * should still see the failure, because the alternative is a record
+ * that goes quiet and reads as though nothing was retrieved.
+ */
+const defaultEvidenceLogger = {
+  warn(message: string): void {
+    // eslint-disable-next-line no-console -- last-resort channel; see above
+    console.warn(message);
+  },
+};
+
+/**
  * Does this reference carry a secret in its query string?
  *
  * Name-keyed on purpose: in a URL the parameter name says what the
@@ -115,11 +128,23 @@ const EVIDENCE_SPAN_MAX_CHARS = 512;
  * Deliberately conservative about what counts as a value — a one or two
  * character parameter is a page number, not a key.
  */
-const CREDENTIAL_QUERY_PARAM =
-  /[?&](?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth|authorization|token|secret|password|passwd|pwd|sig|signature|session|credential)=[^&\s]{8,}/i;
+const CREDENTIAL_PARAM =
+  /[?&#](?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth|authorization|token|secret|password|passwd|pwd|sig|signature|session|credential)=[^&\s]{8,}/i;
+
+/**
+ * Userinfo credentials — `https://user:pass@host/…`. A different place
+ * to hide the same thing.
+ */
+const URL_USERINFO = /^[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i;
 
 function looksLikeCredentialBearingUrl(ref: string): boolean {
-  return CREDENTIAL_QUERY_PARAM.test(ref);
+  // Query AND fragment AND userinfo. The first version anchored on
+  // `[?&]` alone, which reads the query string and nothing else — so an
+  // OAuth implicit-grant callback (`…/cb#access_token=…`) and a userinfo
+  // URL both walked past a guard whose stated purpose is that a
+  // credential in a reference is never stored. Checking only the part
+  // one happens to think of is the mistake this guard already made once.
+  return CREDENTIAL_PARAM.test(ref) || URL_USERINFO.test(ref);
 }
 
 /**
@@ -155,7 +180,7 @@ export class PolicyGate {
    * happen is the failure going nowhere at all, because a missing
    * pointer then reads as "nothing was retrieved".
    */
-  private evidenceLogger: { warn(message: string): void } | null = null;
+  private evidenceLogger: { warn(message: string): void } | null = defaultEvidenceLogger;
 
   /**
    * `evidenceSink` is a CONSTRUCTOR parameter, not only a setter.
@@ -174,6 +199,13 @@ export class PolicyGate {
     config?: Partial<PolicyConfig>,
     auditSink?: AuditLogSink,
     evidenceSink?: RunEvidenceSink | null,
+    /**
+     * Arrives WITH the sink, not after it. A gate holding a sink and no
+     * logger swallows a store refusal with no output anywhere, which is
+     * the silence-as-absence this record must never produce; the
+     * default keeps that from being the easy thing to build.
+     */
+    evidenceLogger: { warn(message: string): void } | null = defaultEvidenceLogger,
   ) {
     // Deep-copy config to prevent external mutation
     const merged = { ...DEFAULT_POLICY, ...config };
@@ -191,6 +223,7 @@ export class PolicyGate {
     this.sanitizer = new ContentSanitizer();
     this.audit = new AuditLogger(auditSink);
     this.evidenceSink = evidenceSink ?? null;
+    this.evidenceLogger = evidenceLogger;
   }
 
   /**

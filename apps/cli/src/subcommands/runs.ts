@@ -197,12 +197,24 @@ export async function handleRunsShow(config: CliConfig): Promise<void> {
     // purpose, so an id lookup found only half of them — and reported
     // "the run did not reach an outcome row" for exactly the interrupted
     // and recovered runs this command exists to explain.
+    // EVERY outcome for the run, not the newest one.
+    //
+    // A run can leave more than one row: the result, and then a failure
+    // written by a catch that wraps the successful path too. Those were
+    // given distinct ids precisely so the failure could not overwrite
+    // the signed result — and then taking `[0]` by recency hid the
+    // result behind the failure anyway, printing "NOT signed" while the
+    // manifest sat in a sibling row no reader could reach. Preserving a
+    // record and then not showing it is the same outcome as losing it.
     const outcomes = moteDb.goalOutcomeStore.listForRun(run.run_id);
-    const outcome = outcomes[0] ?? moteDb.goalOutcomeStore.get(run.run_id);
+    const fallback = moteDb.goalOutcomeStore.get(run.run_id);
+    const all = outcomes.length > 0 ? outcomes : fallback != null ? [fallback] : [];
     console.log("\nResult");
-    if (outcome == null) {
+    if (all.length === 0) {
       console.log(dim("  none recorded — the run did not reach an outcome row."));
-    } else {
+    }
+    for (const [i, outcome] of all.entries()) {
+      if (i > 0) console.log(dim("  ── and also ──"));
       // The outcome's own status and reason, before its text. A failed
       // or partial outcome rendered under a bare "Result" heading with
       // an empty body reads as a run that produced nothing, when what

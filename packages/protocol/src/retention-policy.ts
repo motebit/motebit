@@ -608,15 +608,25 @@ export const RUNTIME_RETENTION_REGISTRY: Readonly<
   // once: a registry the gate iterates cannot go red about a store that
   // is not in it, so omission is invisible by construction.
   //
-  // `append_only_horizon`, not `consolidation_flush`, because that is
-  // what it does: rows are never rewritten, and they age out on a fixed
-  // horizon rather than a per-record sensitivity tier — deliberately,
-  // since nothing can classify content fetched from somewhere else, and
-  // "unknown" must mean held for LESS time rather than forever.
+  // `consolidation_flush`, because that is what the code performs.
+  //
+  // It was declared `append_only_horizon` first, which sounded right —
+  // rows are never rewritten — but that shape commits a store to
+  // whole-prefix truncation under signed HORIZON certs, and this one
+  // deletes scattered rows by call id under `consolidation_flush` certs.
+  // A published manifest projecting the registry would have claimed a
+  // motion the code does not make, which is the same class of error as
+  // a certificate naming the wrong record: an attestation about
+  // something that did not happen that way.
+  //
+  // The flat 90-day ceiling this store also applies is a STRICTER floor
+  // than the per-tier default, which the doctrine explicitly permits.
+  // It exists because nothing can classify content fetched from
+  // somewhere else, and unknown must mean held for less time.
   run_evidence: {
-    kind: "append_only_horizon",
-    horizon_advance_period_days: 90,
-    witness_required: false,
+    kind: "consolidation_flush",
+    flush_to: "expire",
+    has_min_floor_resolver: false,
   },
 });
 
