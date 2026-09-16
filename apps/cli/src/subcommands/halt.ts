@@ -71,10 +71,20 @@ async function logHaltEvent(
       },
       tombstoned: false,
     });
-  } catch {
+  } catch (err: unknown) {
     // The halt row is already durable; the event log is the audit trail,
     // not the enforcement. Never let its failure make a stop look like
-    // it did not happen.
+    // it did not happen — but never let it pass in silence either.
+    //
+    // This command is the ONLY producer of `halt_requested` and
+    // `halt_lifted` on the local path; the runtime emits only
+    // `halt_acknowledged` there. So a persistently failing append — a
+    // busy database, a full disk — leaves a history with stops in it
+    // and no record of who asked or who gave the permission back, and
+    // nothing anywhere says so. The runtime's twin warns; so does this.
+    console.error(
+      `Warning: the halt is recorded and in force, but its audit event could not be written: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 
@@ -246,7 +256,19 @@ export async function handleHalt(config: CliConfig): Promise<void> {
       reason: reason ?? null,
       lifted_at: null,
     };
-    moteDb.haltStore.request(halt);
+    try {
+      moteDb.haltStore.request(halt);
+    } catch (err: unknown) {
+      // The store refuses a scope that cannot match, and a busy
+      // database throws here too. Letting it escape printed
+      // "Fatal error: Error: refusing to record a halt scoped to..."
+      // from the top-level catch — a stack-trace register on the one
+      // command where the person most needs a plain sentence about
+      // whether anything stopped. `cmdHalt` already converts this.
+      console.error(`Nothing was halted: ${err instanceof Error ? err.message : String(err)}`);
+      process.exitCode = 1;
+      return;
+    }
     await logHaltEvent(moteDb, motebitId, EventType.HaltRequested, halt);
     const scope = goalId == null ? "all unattended execution" : `goal ${goalId.slice(0, 8)}`;
     console.log(`Stop requested for ${scope} (${halt.halt_id.slice(0, 8)}).`);
@@ -299,7 +321,11 @@ export async function handleResume(config: CliConfig): Promise<void> {
       console.log("Nothing is halted.");
       return;
     }
-    if (target === "all") {
+    // Case-insensitive, like the command layer's twin. Both surfaces
+    // document `resume [<halt_id>|all]`, and they disagreed on "All":
+    // the phone lifted every halt, the terminal exited 1 saying no halt
+    // matched. One grammar, one answer.
+    if (target.toLowerCase() === "all") {
       let lifted = 0;
       for (const h of active) {
         if (!moteDb.haltStore.lift(h.halt_id)) continue;

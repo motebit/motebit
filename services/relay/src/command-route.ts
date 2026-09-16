@@ -272,10 +272,23 @@ async function forwardCommandToAgent(
       const declared = unattended.filter((p) => p.deviceIdDeclared === true);
       const devices = new Set(declared.map((p) => p.deviceId));
       const allDeclared = declared.length === unattended.length;
-      const manyMachines = allDeclared && devices.size > 1;
+      // ...and the refusal belongs to `approvals` ALONE, because the
+      // reasoning above is about queues.
+      //
+      // A halt delivered to either machine is truthful: the
+      // acknowledgement is per executor and says what THAT executor
+      // stopped, and the halt is durable state the other machine's
+      // executor honors on its own next tick. Refusing it bought
+      // nothing and cost everything — a sovereign running the daemon on
+      // a laptop and the worker on a VPS got 404 "run this command on
+      // the machine you mean" for every remote halt, which is unusable
+      // advice for someone away from both machines. That is precisely
+      // the situation this arc exists for, so the guard was breaking
+      // the feature to protect a different one.
+      const manyMachines = command === "approvals" && allDeclared && devices.size > 1;
       candidates = manyMachines ? [] : unattended;
       emptyReason = manyMachines
-        ? `This motebit has unattended runtimes on ${devices.size} different machines, each with its own queue, so the relay cannot choose one — run this command on the machine you mean, or stop the runtime you do not`
+        ? `This motebit has unattended runtimes on ${devices.size} different machines, each with its own approval queue, so the relay cannot choose one — run this command on the machine you mean, or stop the runtime you do not`
         : "No unattended runtime is connected";
     } else if (command !== "approvals") {
       // `halt`/`resume` get no fallback: a daemon too old to announce

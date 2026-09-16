@@ -227,13 +227,17 @@ export async function handleRun(config: CliConfig): Promise<void> {
 
   await runtime.init();
 
-  // Advertise full CLI/desktop capabilities
+  // Advertise full CLI/desktop capabilities. Kept in step with the
+  // WebSocket announcement below — routing reads only the WS set, but
+  // two lists disagreeing about what this process IS is how the next
+  // reader picks the wrong one.
   runtime.setLocalCapabilities([
     DeviceCapability.StdioMcp,
     DeviceCapability.HttpMcp,
     DeviceCapability.FileSystem,
     DeviceCapability.Keyring,
     DeviceCapability.Background,
+    DeviceCapability.UnattendedRuntime,
   ]);
 
   // The goal daemon is ONE executor across restarts. Without a stable

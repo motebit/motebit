@@ -340,6 +340,30 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     expect(a.sentTo.length + b.sentTo.length).toBeGreaterThan(0);
   });
 
+  it("a HALT still reaches a runtime when the two are on different machines", async () => {
+    // The many-machines refusal is about QUEUES, and it belongs to
+    // `approvals` alone. A halt delivered to either machine is
+    // truthful — the acknowledgement is per executor and names what
+    // that executor stopped — and the halt is durable state the other
+    // machine honors on its own next tick. Refusing it told a sovereign
+    // running the daemon on a laptop and the worker on a VPS to "run
+    // this command on the machine you mean", which is unusable advice
+    // for someone away from both. That is the situation this arc is for.
+    const laptop = fakePeer("dev-1", ["background", "unattended_runtime"]);
+    const vps = fakePeer("dev-2", ["background", "unattended_runtime"]);
+    relay.connections.set(AGENT_ID, [laptop.peer, vps.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "halt",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    void postCommand(AGENT_ID, { command: "halt", envelope });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(laptop.sentTo.length + vps.sentTo.length).toBeGreaterThan(0);
+  });
+
   it("a read-only command may still be answered by any connected surface", async () => {
     const phone = fakePeer("phone", ["push_wake"]);
     relay.connections.set(AGENT_ID, [phone.peer] as unknown as Parameters<
