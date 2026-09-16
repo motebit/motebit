@@ -251,8 +251,20 @@ async function forwardCommandToAgent(
       candidates = peers;
       emptyReason = "No reachable device";
     } else if (unattended.length > 0) {
-      candidates = unattended;
-      emptyReason = "No unattended runtime is connected";
+      // One machine may announce this twice — `motebit run` and
+      // `motebit serve` are two executors sharing one device id and one
+      // database, so either can answer for both and first-wins is
+      // harmless. Two DEVICES is a different fact: a worker running on
+      // another machine has its own database, so it would answer
+      // `/pending` with "No pending approvals" while the laptop daemon
+      // held a real one — a false empty, which is the answer this whole
+      // block exists to prevent. Refuse rather than pick.
+      const devices = new Set(unattended.map((p) => p.deviceId));
+      candidates = devices.size <= 1 ? unattended : [];
+      emptyReason =
+        devices.size > 1
+          ? `This motebit has unattended runtimes on ${devices.size} different machines, each with its own queue, so the relay cannot choose one — run this command on the machine you mean, or stop the runtime you do not`
+          : "No unattended runtime is connected";
     } else if (command !== "approvals") {
       // `halt`/`resume` get no fallback: a daemon too old to announce
       // the capability is too old to honor them, and "not delivered" is

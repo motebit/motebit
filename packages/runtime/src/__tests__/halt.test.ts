@@ -130,6 +130,29 @@ describe("MotebitRuntime — halt", () => {
     expect(ack!.acknowledgement).toContain("a stopper failed: abort exploded");
   });
 
+  it("a stopper answers for THE halt it was handed, not for halts in general", async () => {
+    // A stopper that ignores its argument writes the same sentence for
+    // every scope. The worker daemon's did: it claimed "no further
+    // dispatched tasks will be accepted" for a GOAL-scoped halt, while
+    // its enforcement only ever consults the motebit-wide one — so the
+    // record said a goal was halted, a process was listed as stopped,
+    // and every dispatched task kept running.
+    ctx.runtime.onHalt((halt) =>
+      halt.goal_id == null ? "stopped everything" : `nothing here runs under ${halt.goal_id}`,
+    );
+    const wide = await ctx.runtime.requestHalt({ origin: "local" });
+    await ctx.runtime.honorHalts();
+    expect(ctx.haltStore.acknowledgements(wide!.halt_id)[0]!.acknowledgement).toBe(
+      "stopped everything",
+    );
+
+    const scoped = await ctx.runtime.requestHalt({ goalId: "goal-B", origin: "local" });
+    await ctx.runtime.honorHalts();
+    expect(ctx.haltStore.acknowledgements(scoped!.halt_id)[0]!.acknowledgement).toBe(
+      "nothing here runs under goal-B",
+    );
+  });
+
   it("with no stoppers the acknowledgement is honest about there being nothing to stop", async () => {
     const halt = await ctx.runtime.requestHalt({ origin: "local" });
     await ctx.runtime.honorHalts();

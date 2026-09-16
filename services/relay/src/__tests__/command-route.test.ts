@@ -271,6 +271,52 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     expect(desktop.sentTo).toEqual([]);
   });
 
+  it("two unattended runtimes on ONE machine are interchangeable", async () => {
+    // `motebit run` and `motebit serve` share a device id and a
+    // database, so either can answer for both.
+    const run = fakePeer("dev-1", ["background", "unattended_runtime"]);
+    const serve = fakePeer("dev-1", ["background", "unattended_runtime"]);
+    relay.connections.set(AGENT_ID, [run.peer, serve.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "approvals",
+      args: "list",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    void postCommand(AGENT_ID, { command: "approvals", args: "list", envelope });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(run.sentTo.length + serve.sentTo.length).toBeGreaterThan(0);
+  });
+
+  it("two unattended runtimes on DIFFERENT machines are refused, not guessed between", async () => {
+    // Different devices mean different databases. Picking one would
+    // answer `/pending` with "No pending approvals" from the worker
+    // while the laptop daemon held a real one — a false empty, the
+    // answer this routing block exists to prevent.
+    const laptop = fakePeer("dev-1", ["background", "unattended_runtime"]);
+    const worker = fakePeer("dev-2", ["background", "unattended_runtime"]);
+    relay.connections.set(AGENT_ID, [worker.peer, laptop.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "approvals",
+      args: "list",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    const { status, json } = await postCommand(AGENT_ID, {
+      command: "approvals",
+      args: "list",
+      envelope,
+    });
+    expect(status).toBe(404);
+    expect(JSON.stringify(json)).toMatch(/2 different machines/i);
+    expect(laptop.sentTo).toEqual([]);
+    expect(worker.sentTo).toEqual([]);
+  });
+
   it("a read-only command may still be answered by any connected surface", async () => {
     const phone = fakePeer("phone", ["push_wake"]);
     relay.connections.set(AGENT_ID, [phone.peer] as unknown as Parameters<

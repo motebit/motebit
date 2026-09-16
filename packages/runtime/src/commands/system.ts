@@ -85,6 +85,13 @@ export function cmdApprovals(runtime: MotebitRuntime, args?: string): CommandRes
       };
     }
     if (Date.now() > match.expires_at) {
+      // Sweep, then refuse. The TTL bounds the decision, not the
+      // daemon's sweep — and a remote surface is used precisely when the
+      // daemon may be down, so nothing else has flipped this row. Left
+      // unswept it keeps appearing in `/pending` and every `/approve` is
+      // refused, which reads as the command being broken rather than the
+      // approval being over. The local CLI already sweeps here.
+      store.expireStale?.(Date.now());
       return {
         summary: `Approval ${match.approval_id.slice(0, 8)} expired at ${new Date(match.expires_at).toISOString()} and can no longer be decided.`,
       };

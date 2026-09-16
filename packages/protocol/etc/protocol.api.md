@@ -502,6 +502,7 @@ export interface ApprovalStoreAdapter {
         met: boolean;
         collected: string[];
     };
+    expireStale?(now: number): number;
     // (undocumented)
     get?(approvalId: string): ApprovalItem | null;
     listPending?(motebitId: string): ApprovalItem[];

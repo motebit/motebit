@@ -3403,6 +3403,16 @@ export interface ApprovalStoreAdapter {
   get?(approvalId: string): ApprovalItem | null;
   /** Record a human's decision. */
   resolve?(approvalId: string, status: "approved" | "denied", deniedReason?: string): void;
+  /**
+   * Flip rows past their TTL to `expired`, and report how many.
+   *
+   * The daemon sweeps on every tick, so a consent surface would not
+   * normally need this — except that a remote surface is used exactly
+   * when the daemon may be down, and nothing else flips the row. Without
+   * a sweep at the decision point, a past-TTL approval keeps appearing
+   * as pending and every attempt to decide it is refused.
+   */
+  expireStale?(now: number): number;
 }
 
 // ── Halt ───────────────────────────────────────────────────────────

@@ -78,6 +78,26 @@ async function logHaltEvent(
   }
 }
 
+/**
+ * The relay's own explanation for a refusal, or "" when it gave none.
+ * Its body is JSON with the reason under `message`; a proxy in front of
+ * it may answer plain text.
+ */
+function relayReason(body: string | undefined): string {
+  if (body == null || body.trim() === "") return "";
+  try {
+    const parsed = JSON.parse(body) as Record<string, unknown>;
+    for (const key of ["message", "summary", "error"]) {
+      const v = parsed[key];
+      if (typeof v === "string" && v.trim() !== "") return v.trim();
+    }
+    return "";
+  } catch {
+    const trimmed = body.trim();
+    return trimmed.length <= 400 ? trimmed : "";
+  }
+}
+
 /** How long a local `halt` waits for a running daemon to acknowledge. */
 const ACK_WAIT_MS = 3_000;
 const ACK_POLL_MS = 150;
@@ -144,12 +164,20 @@ async function sendRemote(config: CliConfig, command: string, args?: string): Pr
       // exactly when a halt is most likely to have been applied (the
       // stopper racing a slow abort). Calling that "not delivered" would
       // tell someone their motebit is still running when it has stopped.
+      // `err.message` is only `POST <path> → <status>`. The relay's own
+      // reason lives in `body`, and on a 404 it is frequently the only
+      // actionable sentence there is — "runtimes on 2 different
+      // machines, run this on the machine you mean". Printing the
+      // status line alone threw it away, which is the same defect the
+      // phone's handler was fixed for in this branch.
+      const reason = relayReason(err.body);
+      const detail = reason !== "" ? `${err.message} — ${reason}` : err.message;
       console.error(
         err.status === 504
-          ? `Delivered, no answer yet: ${err.message}\nThe runtime received this command and did not reply in time. It may well have stopped — check \`motebit halt-status --remote\` rather than assuming either way.`
+          ? `Delivered, no answer yet: ${detail}\nThe runtime received this command and did not reply in time. It may well have stopped — check \`motebit halt-status --remote\` rather than assuming either way.`
           : err.kind === "http" || err.kind === "network"
-            ? `Not delivered: ${err.message}\nThe runtime did not answer, so nothing has been stopped remotely. A halt written locally (\`motebit halt\` without --remote) is in force on this machine regardless.`
-            : `Command failed: ${err.message}`,
+            ? `Not delivered: ${detail}\nThe runtime did not answer, so nothing has been stopped remotely. A halt written locally (\`motebit halt\` without --remote) is in force on this machine regardless.`
+            : `Command failed: ${detail}`,
       );
       process.exitCode = 1;
       return;
