@@ -804,6 +804,34 @@ describe("runSlashCommand — signed remote commands", () => {
     expect(deps._messages[0]).toContain("aborted run 1a2b3c4d");
   });
 
+  it("a reason that begins with the word 'goal' stays a reason", async () => {
+    // This branch's first review round removed a `goal <id> <reason>`
+    // grammar from the command line because it read
+    // `--reason "goal cleanup done"` as a halt of a goal named
+    // "cleanup". Reintroducing it here was worse: on the consent root
+    // the store refuses the unmatched scope, so the person asking for a
+    // stop gets silence. "is", "cleanup" and "finished," are all things
+    // someone writes after the word goal, and none is a goal id.
+    const sendRemoteCommand = vi.fn(() => Promise.resolve({ summary: "Stop requested." }));
+    const deps = makeDeps({ sendRemoteCommand });
+    runSlashCommand("halt", "goal is done", deps);
+    await settle();
+    expect(sendRemoteCommand).toHaveBeenCalledWith("halt", "goal is done");
+  });
+
+  it("an explicit --goal marker carries scope the runtime can read", async () => {
+    // A reason never begins with `--goal`, so the marker is unambiguous
+    // in a way the bare keyword cannot be.
+    const sendRemoteCommand = vi.fn(() => Promise.resolve({ summary: "Stop requested." }));
+    const deps = makeDeps({ sendRemoteCommand });
+    runSlashCommand("halt", "--goal a1b2c3d4 too noisy", deps);
+    await settle();
+    expect(sendRemoteCommand).toHaveBeenCalledWith(
+      "halt",
+      JSON.stringify({ goal_id: "a1b2c3d4", reason: "too noisy" }),
+    );
+  });
+
   it("/halted maps to halt-status, and /pending to the approvals queue", async () => {
     const sendRemoteCommand = vi.fn(() =>
       Promise.resolve({ summary: "Running — nothing is halted." }),

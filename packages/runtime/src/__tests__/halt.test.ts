@@ -153,7 +153,30 @@ describe("MotebitRuntime — halt", () => {
     );
   });
 
-  it("with no stoppers the acknowledgement is honest about there being nothing to stop", async () => {
+  it("a process with NO stoppers does not acknowledge at all", async () => {
+    // It asserted the opposite: that a stopper-less runtime wrote
+    // "nothing was running". That row said "I stopped my work" on
+    // behalf of a process that had none, and then answered for the one
+    // that did. The interactive REPL wires the halt store and registers
+    // no stopper, so `/halt` there reported "This runtime has stopped
+    // all unattended execution" while the goal daemon kept firing, and
+    // halt-status counted it as a process that had stopped.
+    //
+    // Not acknowledging is both honest and safe: the halt is in force
+    // from the instant it is written, and every surface reports it as
+    // not yet acknowledged, which is true.
+    const halt = await ctx.runtime.requestHalt({ origin: "local" });
+    const honored = await ctx.runtime.honorHalts();
+    expect(honored).toEqual([]);
+    expect(ctx.haltStore.acknowledgements(halt!.halt_id)).toEqual([]);
+    // Still in force — enforcement never depended on acknowledgement.
+    expect(ctx.runtime.haltInForce()?.halt_id).toBe(halt!.halt_id);
+  });
+
+  it("a stopper that reports nothing to stop still acknowledges", async () => {
+    // The distinction is having a stopper at all, not what it says: a
+    // real executor whose queue happened to be empty DID stop its work.
+    ctx.runtime.onHalt(() => "");
     const halt = await ctx.runtime.requestHalt({ origin: "local" });
     await ctx.runtime.honorHalts();
     expect(ctx.haltStore.acknowledgements(halt!.halt_id)[0]!.acknowledgement).toBe(

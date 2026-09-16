@@ -63,15 +63,22 @@ export interface SlashCommandDeps {
 /**
  * Turn what someone typed after `/halt` into a command payload.
  *
- * `goal <id> [reason...]` becomes the structured scope the runtime
- * reads; anything else is a reason and only a reason. Widening a
- * goal-scoped stop into a motebit-wide one silently would be a stop
- * that did more than it was asked, which is the mirror of the failure
- * this arc is built around.
+ * Scope is carried by an explicit `--goal <id>` marker, never by the
+ * bare word "goal". This branch's first review round removed a
+ * `goal <id> <reason>` grammar from the command line for a reason that
+ * applies twice over on the consent root: it reads "/halt goal is done"
+ * as a halt of a goal named "is", which matches nothing, so the store
+ * refuses and NOTHING stops — a person asking for a stop and getting
+ * silence. "cleanup", "finished," and "is" are all things someone
+ * writes after the word goal, and none of them is a goal id.
+ *
+ * A reason never begins with `--goal`, so the marker is unambiguous in
+ * a way the keyword cannot be. Anything else is a reason and only a
+ * reason, exactly as the command layer documents.
  */
 function haltRemote(args?: string): { cmd: string; args?: string } {
   const raw = (args ?? "").trim();
-  const scoped = /^goal\s+(\S+)\s*(.*)$/i.exec(raw);
+  const scoped = /^--goal(?:=|\s+)(\S+)\s*(.*)$/i.exec(raw);
   if (!scoped) return { cmd: "halt", ...(raw !== "" ? { args: raw } : {}) };
   const reason = (scoped[2] ?? "").trim();
   return {
@@ -620,15 +627,8 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
     case "deny": {
       const remote: { cmd: string; args?: string } =
         command === "halt"
-          ? // Free text is a REASON and only a reason — scope never
-            // rides inside it, so "/halt goal is done" would halt
-            // everything with that reason rather than a goal named
-            // "is". But `halt goal <id>` is the syntax the CLI and the
-            // docs teach, so a person WILL type it here. Rather than
-            // quietly widening a goal-scoped stop into a
-            // motebit-wide one, recognise the form and send the
-            // structured scope the runtime actually reads. The runtime
-            // resolves the short id against its own goals.
+          ? // Free text is a REASON and only a reason; scope rides in an
+            // explicit `--goal` marker. See `haltRemote`.
             haltRemote(args)
           : command === "resume"
             ? { cmd: "resume", ...(args ? { args } : {}) }
@@ -764,6 +764,7 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
           "/pending — approvals waiting on you at the running runtime\n" +
           "/approve <id> · /deny <id> [reason] — decide one of them\n" +
           "/halt [reason] — stop the runtime acting unattended\n" +
+          "/halt --goal <id> [reason] — stop one goal, leave the rest\n" +
           "/resume [id|all] — give that permission back\n" +
           "/halted — what is stopped, and whether it acknowledged\n" +
           "/proposals — active proposals\n" +

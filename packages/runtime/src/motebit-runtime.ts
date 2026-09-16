@@ -3030,6 +3030,25 @@ export class MotebitRuntime {
 
   private async honorHaltsSerialized(): Promise<import("@motebit/sdk").HaltRequest[]> {
     if (!this.haltStore) return [];
+    // A process with no stoppers is not an executor of unattended work,
+    // and must not sign the register as one.
+    //
+    // Acknowledging means "I stopped my work". A surface that wired the
+    // halt store but registered nothing to stop — the interactive REPL
+    // does exactly this — was writing "nothing was running" for a halt
+    // it had no part in, which then answered for the daemon: `/halt` in
+    // the REPL reported "This runtime has stopped all unattended
+    // execution" while the goal daemon kept firing, and `halt-status`
+    // counted that row as a process that had stopped. One
+    // acknowledgement standing in for the executor that actually
+    // matters is the failure migration #46 exists to prevent, arriving
+    // through a different door.
+    //
+    // Silence here is the honest reading and the safe one: the halt is
+    // still in force from the instant it was written (enforcement is at
+    // the chokepoints, not at the acknowledgement), and every surface
+    // reports it as not yet acknowledged, which is true.
+    if (this.haltListeners.size === 0) return [];
     // Per-executor, not per-halt: another process acknowledging says
     // nothing about whether THIS process has stopped its own work.
     const pending = this.haltStore
@@ -3564,7 +3583,23 @@ export class MotebitRuntime {
     // acknowledgement promises none of them will start. Guarding the
     // callers one at a time is what left the runtime's two ungated after
     // the scheduler's two were fixed.
-    if (this.haltInForce() != null || !this.presence.canStartCycle()) {
+    // Guarded: `haltInForce` reads SQLite, which throws on a busy
+    // database, and this sits outside the try below. Both scheduler
+    // call sites are `void`-ed with no handler and the CLI registers no
+    // unhandledRejection handler, so a locked read here would take the
+    // daemon down — the one process whose staying up is the whole
+    // point. Failing toward halted matches the store's fail-closed
+    // posture: an idle cycle skipped is nothing lost.
+    let halted: boolean;
+    try {
+      halted = this.haltInForce() != null;
+    } catch (err) {
+      this._logger.warn(
+        `[runtime] halt check failed before consolidation, skipping the cycle: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      halted = true;
+    }
+    if (halted || !this.presence.canStartCycle()) {
       const now = Date.now();
       return {
         cycleId: "",

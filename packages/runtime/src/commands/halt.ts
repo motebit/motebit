@@ -130,10 +130,16 @@ export async function cmdHalt(
   const scope = goalId == null ? "all unattended execution" : `goal ${goalId.slice(0, 8)}`;
 
   if (mine == null) {
-    // Recorded but not yet honored by this process — the honest reading.
+    // Recorded, and this process has not reported stopping anything —
+    // either because it has nothing to stop (a chat surface that wired
+    // the store but runs no unattended work) or because it has not got
+    // there yet. Both read the same way to the person asking, and both
+    // are honestly "not acknowledged". Saying otherwise on the strength
+    // of a process that was never doing the work is how a stop comes to
+    // report a stop that did not happen.
     return {
       summary: `Stop requested for ${scope}. Not yet acknowledged.`,
-      detail: `Halt ${halt.halt_id.slice(0, 8)} is in force from now — nothing new starts — but this process has not reported what it stopped. If a daemon is running elsewhere on this machine it will acknowledge on its next tick.`,
+      detail: `Halt ${halt.halt_id.slice(0, 8)} is in force from now — nothing new starts. This process has not reported stopping anything; if it runs no unattended work, it never will, and the daemon that does will acknowledge on its next tick.`,
       data: { halt_id: halt.halt_id, acknowledged: false, scope: goalId ?? "all" },
     };
   }

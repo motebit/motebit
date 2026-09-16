@@ -338,7 +338,20 @@ async function forwardCommandToAgent(
     if (!sent) {
       clearTimeout(timer);
       pendingCommands.delete(commandId);
-      reject(new Error("No reachable device"));
+      // 404, like the no-candidate path above, and for the same reason.
+      // Every send throwing means the socket is dead but not yet reaped
+      // — the ordinary case moments after a daemon dies — so nothing
+      // was delivered. A plain Error falls through to a 500, and both
+      // clients special-case only 401/404/503/504, so the phone showed
+      // a bare "500:" for a halt that demonstrably did not land: the
+      // relay looking broken instead of the command looking undelivered.
+      reject(
+        new HTTPException(404, {
+          message: UNATTENDED_RUNTIME_COMMANDS.has(command)
+            ? "The runtime's connection is gone — nothing was delivered, so nothing was stopped or decided"
+            : "No reachable device",
+        }),
+      );
     }
   });
 }
