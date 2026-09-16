@@ -68,6 +68,7 @@ function mockRuntime(opts: {
     haltInForce: () => null,
     honorHalts: async () => [],
     liftHalt: async () => false,
+    setGoalIdResolver: () => undefined,
     setGoalStatusResolver: () => undefined,
     getToolRegistry: () => ({ register: () => undefined, replace: () => undefined }),
     stop: () => undefined,

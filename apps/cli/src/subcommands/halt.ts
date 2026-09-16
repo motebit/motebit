@@ -89,7 +89,9 @@ function describe(halt: HaltRequest): string {
     halt.lifted_at != null
       ? "lifted"
       : halt.acknowledged_at != null
-        ? "stopped"
+        ? // Never the bare word "stopped": this column names whichever
+          // process acknowledged FIRST, and says nothing about the rest.
+          "acknowledged by at least one process"
         : "stop requested (not acknowledged)";
   const reason = halt.reason != null && halt.reason !== "" ? ` · ${halt.reason}` : "";
   return `  ${halt.halt_id.slice(0, 8)}  ${scope.padEnd(26)}${state}  (${halt.origin})${reason}`;
@@ -215,19 +217,25 @@ export async function handleHalt(config: CliConfig): Promise<void> {
 
     // In force immediately; waiting only to learn whether something was
     // actually running and has now stopped.
+    // Who has stopped, by name — never a bare "Stopped". More than one
+    // process can run unattended work for this motebit, and this command
+    // is not one of them, so it cannot know the full set. Reporting the
+    // first acknowledgement as if it spoke for all of them is exactly
+    // what let one process keep working under the word "Stopped".
     const deadline = Date.now() + ACK_WAIT_MS;
-    let acknowledged: HaltRequest | null = null;
-    while (Date.now() < deadline) {
-      const current = moteDb.haltStore.get(halt.halt_id);
-      if (current?.acknowledged_at != null) {
-        acknowledged = current;
-        break;
-      }
+    let acks = moteDb.haltStore.acknowledgements(halt.halt_id);
+    while (Date.now() < deadline && acks.length === 0) {
       await new Promise((r) => setTimeout(r, ACK_POLL_MS));
+      acks = moteDb.haltStore.acknowledgements(halt.halt_id);
     }
 
-    if (acknowledged != null) {
-      console.log(`Stopped: ${acknowledged.acknowledgement ?? "acknowledged"}`);
+    if (acks.length > 0) {
+      console.log(
+        `Acknowledged by ${acks.length} process(es):\n${acks.map((a) => `  ${a.executor_id}: ${a.acknowledgement}`).join("\n")}`,
+      );
+      console.log(
+        "Any other process running unattended work for this motebit stops on its own next check.",
+      );
     } else {
       console.log(
         "In force from now — nothing new starts. No running daemon acknowledged within " +

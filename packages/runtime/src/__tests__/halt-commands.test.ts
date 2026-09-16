@@ -20,6 +20,16 @@ function makeRuntime(
   } = {},
 ) {
   const rows = new Map<string, HaltRequest>();
+  const acks = new Map<
+    string,
+    Array<{
+      halt_id: string;
+      executor_id: string;
+      acknowledged_at: number;
+      acknowledgement: string;
+    }>
+  >();
+  const EXECUTOR = "test-executor";
   const resolved: Array<{ id: string; status: string; reason?: string }> = [];
   const listeners = new Set<(h: HaltRequest) => string | Promise<string>>();
   if (opts.stopper) listeners.add(opts.stopper);
@@ -29,13 +39,26 @@ function makeRuntime(
       ? null
       : {
           request: (h: HaltRequest) => void rows.set(h.halt_id, { ...h }),
-          acknowledge: (id: string, ack: string, at = Date.now()) => {
+          acknowledge: (id: string, executorId: string, ack: string, at = Date.now()) => {
+            const list = acks.get(id) ?? [];
+            if (!list.some((a) => a.executor_id === executorId)) {
+              list.push({
+                halt_id: id,
+                executor_id: executorId,
+                acknowledged_at: at,
+                acknowledgement: ack,
+              });
+              acks.set(id, list);
+            }
             const r = rows.get(id);
             if (r && r.acknowledged_at == null) {
               r.acknowledged_at = at;
               r.acknowledgement = ack;
             }
           },
+          hasAcknowledged: (id: string, executorId: string) =>
+            (acks.get(id) ?? []).some((a) => a.executor_id === executorId),
+          acknowledgements: (id: string) => acks.get(id) ?? [],
           lift: (id: string) => {
             const r = rows.get(id);
             if (!r || r.lifted_at != null) return false;
@@ -57,6 +80,8 @@ function makeRuntime(
   const runtime = {
     motebitId: "mote-1",
     halts: store,
+    haltExecutorId: EXECUTOR,
+    resolveGoalId: (prefix: string) => prefix,
     approvals: {
       collectApproval: () => ({ met: false, collected: [] }),
       setQuorum: () => undefined,
@@ -87,10 +112,12 @@ function makeRuntime(
     },
     honorHalts: async () => {
       const out: HaltRequest[] = [];
-      for (const h of (store?.listActive() ?? []).filter((r) => r.acknowledged_at == null)) {
+      for (const h of (store?.listActive() ?? []).filter(
+        (r) => !(acks.get(r.halt_id) ?? []).some((a) => a.executor_id === EXECUTOR),
+      )) {
         const parts: string[] = [];
         for (const l of listeners) parts.push(await l(h));
-        store!.acknowledge(h.halt_id, parts.join("; ") || "nothing was running");
+        store!.acknowledge(h.halt_id, EXECUTOR, parts.join("; ") || "nothing was running");
         out.push(store!.get(h.halt_id)!);
       }
       return out;
@@ -122,7 +149,13 @@ describe("cmdHalt", () => {
   it("reports the acknowledgement when this process is the one that stopped", async () => {
     const { runtime } = makeRuntime({ stopper: () => "aborted run 1a2b3c4d" });
     const r = await cmdHalt(runtime, "going out", "remote");
-    expect(r.summary).toBe("Stopped all unattended execution.");
+    // "This runtime", not "Stopped": several processes can run
+    // unattended work for one motebit, and this one speaks only for
+    // itself. `acknowledged_by` carries the full set.
+    expect(r.summary).toBe("This runtime has stopped all unattended execution.");
+    expect(r.data?.acknowledged_by).toEqual([
+      { executor_id: "test-executor", acknowledgement: "aborted run 1a2b3c4d" },
+    ]);
     expect(r.detail).toContain("aborted run 1a2b3c4d");
     expect(r.data?.acknowledged).toBe(true);
   });

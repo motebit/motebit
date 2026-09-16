@@ -1644,6 +1644,9 @@ export class MobileApp {
       ...(args !== undefined && args !== "" ? { args } : {}),
       motebitId: this.motebitId,
       identityPrivateKey: privBytes,
+      // Distinguishes two identical commands sent in the same
+      // millisecond; without it the replay guard refuses the second.
+      nonce: crypto.randomUUID(),
     });
     secureErase(privBytes);
     // Transport auth for `/api/v1/agents/*`, which this path sits behind.

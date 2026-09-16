@@ -1898,6 +1898,8 @@ export class MotebitRuntime {
    * closure over its `SqliteGoalStore`. Absent a resolver, the goals
    * primitive trusts the caller and emits every event.
    */
+  private goalIdResolver: ((prefix: string) => string | null) | null = null;
+
   setGoalStatusResolver(resolver: (goalId: string) => GoalLifecycleStatus): void {
     this._goalStatusResolver = resolver;
   }
@@ -2822,8 +2824,45 @@ export class MotebitRuntime {
     publicKey?: Uint8Array,
     options?: { delegatedScope?: string },
   ): AsyncGenerator<StreamChunk> {
+    // THE chokepoint for dispatched work. Ahead of the provider check
+    // deliberately: being stopped is a refusal that does not depend on
+    // having an AI configured, and a halted runtime that answered "AI
+    // not initialized" would name the wrong reason. Three callers reach it — the
+    // daemon's relay socket, serve's relay socket, and serve's MCP
+    // `motebit_task` tool — and guarding each of them separately is how
+    // five review rounds each found one more that had been missed. A
+    // halt is enforced where the work begins, once, so a path added
+    // later inherits it instead of having to remember.
+    const halted = this.haltInForce();
+    if (halted != null) {
+      yield {
+        type: "text" as const,
+        text: `Refused: this motebit has been stopped by its owner (halt ${halted.halt_id.slice(0, 8)}).`,
+      };
+      return;
+    }
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
     yield* handleAgentTaskFn(this.agentTaskDeps, task, privateKey, deviceId, publicKey, options);
+  }
+
+  /**
+   * Resolve a goal-id prefix the way every goal-facing command does.
+   * Registered by whichever process owns the goal store (the daemon's
+   * scheduler). `cmdHalt` needs it because a remote halt names a goal on
+   * THIS runtime's machine, which the calling machine cannot resolve.
+   */
+  setGoalIdResolver(resolver: (prefix: string) => string | null): void {
+    this.goalIdResolver = resolver;
+  }
+
+  /** The full goal id for a prefix, or null when nothing matches. */
+  resolveGoalId(prefix: string): string | null {
+    return this.goalIdResolver?.(prefix) ?? null;
+  }
+
+  /** Identifies this PROCESS — see `executorId`. Readers use it to ask "have I stopped". */
+  get haltExecutorId(): string {
+    return this.executorId;
   }
 
   async *resumeAfterApproval(approved: boolean): AsyncGenerator<StreamChunk> {
@@ -3472,7 +3511,13 @@ export class MotebitRuntime {
   async consolidationCycle(
     config: ConsolidationCycleConfig = {},
   ): Promise<ConsolidationCycleResult> {
-    if (!this.presence.canStartCycle()) {
+    // THE chokepoint for idle work. Four callers reach it — the
+    // scheduler's periodic tick and its shutdown path, the runtime's own
+    // idle tick, and the startup catch-up — and the halt's
+    // acknowledgement promises none of them will start. Guarding the
+    // callers one at a time is what left the runtime's two ungated after
+    // the scheduler's two were fixed.
+    if (this.haltInForce() != null || !this.presence.canStartCycle()) {
       const now = Date.now();
       return {
         cycleId: "",

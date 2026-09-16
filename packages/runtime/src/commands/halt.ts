@@ -72,7 +72,10 @@ export async function cmdHalt(
       // discard what the person typed from the durable record and every
       // surface that renders it.
       if (typeof parsed.goal_id === "string" && parsed.goal_id !== "") {
-        goalId = parsed.goal_id;
+        // The caller may be on another machine and can only send what a
+        // person read off `motebit goal list` — an 8-char prefix. This
+        // runtime owns the goals, so this is where it resolves.
+        goalId = runtime.resolveGoalId(parsed.goal_id) ?? parsed.goal_id;
         reason = typeof parsed.reason === "string" ? parsed.reason : "";
       }
     } catch {
@@ -109,10 +112,19 @@ export async function cmdHalt(
   // only what THIS call acknowledged, so a halt the scheduler's own
   // phase 0 honored a moment earlier would otherwise be reported as
   // un-acknowledged when the record plainly says it stopped.
-  const mine = runtime.halts.get(halt.halt_id) ?? halt;
+  // Read THIS executor's acknowledgement, never the display column. That
+  // column holds whichever process acknowledged first, so on a machine
+  // running both `motebit run` and `motebit serve` it would report the
+  // whole motebit stopped on the strength of the other one's answer.
+  const mine = runtime.halts
+    .acknowledgements(halt.halt_id)
+    .find((a) => a.executor_id === runtime.haltExecutorId);
+  const others = runtime.halts
+    .acknowledgements(halt.halt_id)
+    .filter((a) => a.executor_id !== runtime.haltExecutorId);
   const scope = goalId == null ? "all unattended execution" : `goal ${goalId.slice(0, 8)}`;
 
-  if (mine.acknowledged_at == null) {
+  if (mine == null) {
     // Recorded but not yet honored by this process — the honest reading.
     return {
       summary: `Stop requested for ${scope}. Not yet acknowledged.`,
@@ -122,13 +134,24 @@ export async function cmdHalt(
   }
 
   return {
-    summary: `Stopped ${scope}.`,
-    detail: `${mine.acknowledgement}\nLift with: motebit resume ${halt.halt_id.slice(0, 8)}`,
+    summary: `This runtime has stopped ${scope}.`,
+    detail:
+      `${mine.acknowledgement}` +
+      (others.length > 0
+        ? `\nAlso stopped: ${others.map((a) => a.acknowledgement).join("; ")}`
+        : "") +
+      `\nLift with: motebit resume ${halt.halt_id.slice(0, 8)}`,
     data: {
       halt_id: halt.halt_id,
       acknowledged: true,
       acknowledged_at: mine.acknowledged_at,
       acknowledgement: mine.acknowledgement,
+      // Every process that has stopped, so a surface never renders one
+      // executor's answer as the whole motebit's.
+      acknowledged_by: runtime.halts.acknowledgements(halt.halt_id).map((a) => ({
+        executor_id: a.executor_id,
+        acknowledgement: a.acknowledgement,
+      })),
       scope: goalId ?? "all",
     },
   };

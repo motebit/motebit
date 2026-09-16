@@ -94,6 +94,7 @@ describe("durable execution — a real process death after the effect, before th
         haltInForce: () => null,
         honorHalts: async () => [],
         liftHalt: async () => false,
+        setGoalIdResolver: () => undefined,
         setGoalStatusResolver: () => undefined,
         getToolRegistry: () => ({ register: () => undefined, replace: () => undefined }),
         stop: () => undefined,

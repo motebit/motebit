@@ -135,6 +135,16 @@ export class GoalScheduler {
     // already in force when the daemon starts must be honored before any
     // goal fires, not after one slips through.
     this.unregisterHaltListener = this.runtime.onHalt((halt) => this.stopForHalt(halt));
+    // Only this process holds the goal store, so only it can turn the
+    // 8-char prefix a person reads off `motebit goal list` into a full
+    // id. A remote halt names a goal on THIS machine; the calling
+    // machine has no way to resolve it.
+    this.runtime.setGoalIdResolver((prefix) => {
+      const match = this.goalStore
+        .list(this.motebitId)
+        .find((g) => g.goal_id === prefix || g.goal_id.startsWith(prefix));
+      return match?.goal_id ?? null;
+    });
     this.recoverInterruptedRuns();
     this.ensureMaintenanceGoal();
     this.timer = setInterval(() => {
@@ -1166,6 +1176,14 @@ export class GoalScheduler {
         // money prompt in daemon-coordinated setups. And never silently — the
         // old path discarded the resume stream with zero output.
         const pending = this.runtime.pendingApprovalInfo;
+        // Resuming with a denial is a MODEL TURN: the continuation can
+        // make further, non-approval-gated tool calls. Under a halt that
+        // is unattended work starting, which the acknowledgement says
+        // will not happen — so the record is expired but the turn is left
+        // suspended until the halt lifts.
+        if (pending != null && this.runtime.haltInForce(turn.goalId) != null) {
+          continue;
+        }
         if (pending != null && pending.toolCallId === turn.toolCallId) {
           logLine(
             `[approval] expired → denying suspended turn ${id.slice(0, 8)} (${pending.toolName}) to release the runtime`,

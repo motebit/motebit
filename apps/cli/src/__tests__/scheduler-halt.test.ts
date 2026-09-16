@@ -161,6 +161,7 @@ function mockRuntime(
       completed: vi.fn().mockResolvedValue(undefined),
       removed: vi.fn().mockResolvedValue(undefined),
     },
+    setGoalIdResolver: vi.fn(),
     setGoalStatusResolver: vi.fn(),
     getToolRegistry: vi.fn().mockReturnValue({
       register: vi

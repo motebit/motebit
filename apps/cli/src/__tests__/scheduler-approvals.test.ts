@@ -140,6 +140,7 @@ function createMockRuntime(
     haltInForce: () => null,
     honorHalts: async () => [],
     liftHalt: async () => false,
+    setGoalIdResolver: vi.fn(),
     setGoalStatusResolver: vi.fn(),
     getToolRegistry: vi.fn().mockReturnValue({
       register: vi.fn().mockImplementation((def: ToolDefinition, handler: ToolHandler) => {

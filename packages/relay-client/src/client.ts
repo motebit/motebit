@@ -323,6 +323,12 @@ export class RelayClient {
       motebitId: opts.motebitId,
       identityPrivateKey: opts.identityPrivateKey,
       now: this.now,
+      // Without it the signature is deterministic over {command, args,
+      // ts(ms), aud}, so two genuinely separate identical commands in
+      // the same millisecond collide — and the replay guard refuses the
+      // second as already-seen. A false "this did not happen" on the one
+      // vocabulary where that is most costly.
+      nonce: crypto.randomUUID(),
     });
     const body = await this.requestJson("POST", path, {
       // The envelope is the end-to-end AUTHORIZATION; the bearer is

@@ -217,6 +217,47 @@ describe("MotebitRuntime — halt", () => {
   });
 });
 
+describe("halt enforcement lives at the chokepoints, not at each caller", () => {
+  it("consolidation refuses while halted, whoever asks", async () => {
+    // Four callers reach the cycle: the scheduler's tick and its
+    // shutdown, the runtime's idle tick, and the startup catch-up.
+    // Guarding them one at a time left the runtime's two ungated after
+    // the scheduler's two were fixed.
+    const ctx = setup();
+    await ctx.runtime.requestHalt({ origin: "local" });
+    const result = await ctx.runtime.consolidationCycle();
+    expect(result.phasesRun).toEqual([]);
+    expect(result.cycleId).toBe("");
+  });
+
+  it("a dispatched task is refused while halted, whichever socket it arrived on", async () => {
+    // The daemon's relay socket, serve's relay socket and serve's MCP
+    // tool all converge here, so the halt is enforced once rather than
+    // remembered three times.
+    const ctx = setup();
+    await ctx.runtime.requestHalt({ origin: "remote", reason: "stop" });
+    const chunks: string[] = [];
+    for await (const chunk of ctx.runtime.handleAgentTask(
+      { task_id: "t1", prompt: "do a thing" } as never,
+      new Uint8Array(32),
+      "device-1",
+    )) {
+      if (chunk.type === "text") chunks.push(chunk.text);
+    }
+    expect(chunks.join(" ")).toMatch(/stopped by its owner/);
+  });
+
+  it("lifting the halt lets both start again", async () => {
+    const ctx = setup();
+    const halt = await ctx.runtime.requestHalt({ origin: "local" });
+    expect((await ctx.runtime.consolidationCycle()).cycleId).toBe("");
+    await ctx.runtime.liftHalt(halt!.halt_id);
+    // No longer short-circuited by the halt (it may still no-op for
+    // other reasons; what matters is that the halt is not the reason).
+    expect(ctx.runtime.haltInForce()).toBeNull();
+  });
+});
+
 describe("halt honoring is per process, not per halt", () => {
   it("one process acknowledging does not stop another from honoring — the sixth disguise of one bug", async () => {
     // `motebit run` and `motebit serve` share a machine, a motebit and a

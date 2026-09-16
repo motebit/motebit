@@ -6974,6 +6974,14 @@ happened to be written first. A halt that matched no goal would report a
 stop while the goal kept running, so that state cannot be recorded at
 all.
 
+**Where a halt is enforced.** Two chokepoints, not a list of call sites:
+every dispatched task passes through the runtime's task entry, and every
+idle cycle through the consolidation entry, so a path added later
+inherits the refusal instead of having to remember it. On top of those
+the scheduler will not fire a goal, execute a recovered approval, or
+resume a turn whose approval expired — that resume is a model turn, and
+under a halt it is unattended work starting.
+
 `motebit serve` is covered too: a halted worker does not claim
 relay-dispatched tasks. One limitation is worth stating plainly — the
 relay's task protocol has no decline verb, so an unclaimed task is
@@ -6985,9 +6993,12 @@ verb, which belongs to the task protocol rather than to halt.
 can run unattended work for one motebit — `motebit run` and
 `motebit serve` on the same machine, against the same database — and
 each stops different work. So each acknowledges for itself, and
-`halt-status` lists them. One process acknowledging never meant that
-everything had stopped; treating it as if it did let the other keep
-working under a surface that said "Stopped".
+`halt-status` lists them by name. One process acknowledging never meant
+that everything had stopped; treating it as if it did let the other keep
+working under a surface that said "Stopped". So no surface here says a
+bare "Stopped" — `motebit halt` names which processes acknowledged and
+what each of them stopped, and a remote `halt` answers for the runtime
+that received it while listing the rest.
 
 **Requested is not stopped.** The record keeps two timestamps because they
 are two facts. `requested_at` is what you know when you ask;
