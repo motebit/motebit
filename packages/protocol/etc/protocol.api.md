@@ -3676,8 +3676,19 @@ export interface RunLedgerDetail extends RunLedgerSummary {
 }
 
 // @public
+export type RunLedgerLookup = {
+    readonly kind: "found";
+    readonly run: RunLedgerDetail;
+} | {
+    readonly kind: "ambiguous";
+    readonly matches: readonly string[];
+} | {
+    readonly kind: "missing";
+};
+
+// @public (undocumented)
 export interface RunLedgerReader {
-    get(runIdOrPrefix: string): RunLedgerDetail | null;
+    get(runIdOrPrefix: string): RunLedgerLookup;
     // (undocumented)
     listRecent(limit: number): RunLedgerSummary[];
 }

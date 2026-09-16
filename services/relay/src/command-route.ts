@@ -57,6 +57,9 @@ const RELAY_SIDE_COMMANDS = new Set(["balance", "deposits", "discover", "proposa
  * fails as undelivered, which is the honest answer: nothing was stopped
  * and nothing was decided.
  */
+/** The subset of the above that can change something. See the 404 copy. */
+const MUTATING_UNATTENDED_COMMANDS = new Set(["halt", "resume", "approvals"]);
+
 const UNATTENDED_RUNTIME_COMMANDS = new Set([
   "halt",
   "resume",
@@ -345,9 +348,16 @@ async function forwardCommandToAgent(
       // not-connected from server fault by status.
       reject(
         new HTTPException(404, {
-          message: UNATTENDED_RUNTIME_COMMANDS.has(command)
-            ? `${emptyReason} — nothing was delivered, so nothing was stopped or decided`
-            : emptyReason,
+          message: !UNATTENDED_RUNTIME_COMMANDS.has(command)
+            ? emptyReason
+            : MUTATING_UNATTENDED_COMMANDS.has(command)
+              ? // Only a verb that could have CHANGED something gets the
+                // reassurance that nothing was changed. Saying "nothing
+                // was stopped or decided" about a read-only question
+                // answers something nobody asked, and implies an attempt
+                // that was never made.
+                `${emptyReason} — nothing was delivered, so nothing was stopped or decided`
+              : `${emptyReason} — nothing was delivered, so this is not a report that nothing happened`,
         }),
       );
       return;

@@ -53,7 +53,9 @@ describe("runs — the return view from another surface", () => {
   it("an empty ledger is allowed to say the ledger is empty", () => {
     // The other absence, and it IS knowable here: this process holds
     // the record and the record is empty.
-    const r = cmdRuns(runtimeWith({ listRecent: () => [], get: () => null }));
+    const r = cmdRuns(
+      runtimeWith({ listRecent: () => [], get: () => ({ kind: "missing" as const }) }),
+    );
     expect(r.summary).toBe("No runs recorded yet.");
   });
 
@@ -71,7 +73,7 @@ describe("runs — the return view from another surface", () => {
             withheld_count: 1,
           },
         ],
-        get: () => null,
+        get: () => ({ kind: "missing" as const }),
       }),
     );
     expect(r.detail).toContain("signed");
@@ -83,21 +85,30 @@ describe("runs — the return view from another surface", () => {
     // A copy crossing a relay cannot be checked against the signature by
     // the surface that receives it, so presenting it as the result would
     // offer proof that is not there.
-    const r = cmdRuns(runtimeWith({ listRecent: () => [], get: () => DETAIL }), "run-abcd");
+    const r = cmdRuns(
+      runtimeWith({ listRecent: () => [], get: () => ({ kind: "found" as const, run: DETAIL }) }),
+      "run-abcd",
+    );
     expect(r.detail).toContain("read it in full on the machine that signed it");
     expect(r.detail).toContain("Reviewed three filings.");
     expect(r.detail).not.toContain("response_full");
   });
 
   it("carries the source and the WHOLE digest, so the pointer can be acted on", () => {
-    const r = cmdRuns(runtimeWith({ listRecent: () => [], get: () => DETAIL }), "run-abcd");
+    const r = cmdRuns(
+      runtimeWith({ listRecent: () => [], get: () => ({ kind: "found" as const, run: DETAIL }) }),
+      "run-abcd",
+    );
     expect(r.detail).toContain("https://example.gov/filing");
     expect(r.detail).toContain("sha-256:" + "a".repeat(64));
     expect(r.detail).toContain("agency.html-text.v1");
   });
 
   it("shows a withholding as a withholding, not as an absence", () => {
-    const r = cmdRuns(runtimeWith({ listRecent: () => [], get: () => DETAIL }), "run-abcd");
+    const r = cmdRuns(
+      runtimeWith({ listRecent: () => [], get: () => ({ kind: "found" as const, run: DETAIL }) }),
+      "run-abcd",
+    );
     expect(r.detail).toContain("Withheld (1)");
     expect(r.detail).toContain("deliberately not kept");
   });
@@ -113,13 +124,58 @@ describe("runs — the return view from another surface", () => {
         { tool: "read_url", ref: "https://host/x?k=sk-live-CCCCCCCCCCCCCCCC", digest: "sha-256:x" },
       ],
     };
-    const r = cmdRuns(runtimeWith({ listRecent: () => [], get: () => leaky }), "run-abcd");
+    const r = cmdRuns(
+      runtimeWith({ listRecent: () => [], get: () => ({ kind: "found" as const, run: leaky }) }),
+      "run-abcd",
+    );
     expect(r.detail).not.toContain("sk-live");
     expect(r.detail).toContain("[REDACTED]");
   });
 
+  it("the structured payload passes the membrane too, not just the text", () => {
+    // `data` is serialized whole and returned through the relay, so a
+    // redacted string beside a raw object is no protection at all —
+    // the defect this arc found in the approvals command, reproduced
+    // here until both were derived from one redacted value. The first
+    // version of the test above asserted only on `detail`, which is
+    // exactly how it went unnoticed.
+    const leaky: RunLedgerDetail = {
+      ...DETAIL,
+      note: "paused on sk-live-AAAAAAAAAAAAAAAA",
+      outcomes: [
+        { status: "failed", error_message: "key sk-live-BBBBBBBBBBBBBBBB", signed: false },
+      ],
+      evidence: [
+        { tool: "read_url", ref: "https://host/x?k=sk-live-CCCCCCCCCCCCCCCC", digest: "sha-256:x" },
+      ],
+    };
+    const r = cmdRuns(
+      runtimeWith({ listRecent: () => [], get: () => ({ kind: "found" as const, run: leaky }) }),
+      "run-abcd",
+    );
+    expect(JSON.stringify(r.data)).not.toContain("sk-live");
+    expect(JSON.stringify(r.data)).toContain("[REDACTED]");
+  });
+
+  it("an ambiguous prefix is refused, not reported as no such run", () => {
+    // It matched several. Saying "no run matching" would deny a run the
+    // list had just printed.
+    const r = cmdRuns(
+      runtimeWith({
+        listRecent: () => [],
+        get: () => ({ kind: "ambiguous" as const, matches: ["run-a1", "run-a2"] }),
+      }),
+      "run-a",
+    );
+    expect(r.summary).toContain("matches 2 runs");
+    expect(r.summary).not.toContain("No run matching");
+  });
+
   it("an unknown run is not reported as an empty one", () => {
-    const r = cmdRuns(runtimeWith({ listRecent: () => [], get: () => null }), "nope");
+    const r = cmdRuns(
+      runtimeWith({ listRecent: () => [], get: () => ({ kind: "missing" as const }) }),
+      "nope",
+    );
     expect(r.summary).toContain('No run matching "nope"');
   });
 });

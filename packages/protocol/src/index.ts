@@ -3517,10 +3517,23 @@ export interface RunLedgerDetail extends RunLedgerSummary {
  * a process that did not do the work, and is not the same as saying
  * nothing happened.
  */
+/**
+ * What a lookup found — three outcomes, never collapsed into two.
+ *
+ * A prefix that matches several runs is not a prefix that matches none.
+ * Returning nothing for both would make this view answer "no such run"
+ * about a run the list had just printed, which is the ambiguous absence
+ * the whole vocabulary exists to remove, reproduced in its own reader.
+ */
+export type RunLedgerLookup =
+  | { readonly kind: "found"; readonly run: RunLedgerDetail }
+  | { readonly kind: "ambiguous"; readonly matches: readonly string[] }
+  | { readonly kind: "missing" };
+
 export interface RunLedgerReader {
   listRecent(limit: number): RunLedgerSummary[];
   /** Accepts a full id or the short prefix a person reads off a list. */
-  get(runIdOrPrefix: string): RunLedgerDetail | null;
+  get(runIdOrPrefix: string): RunLedgerLookup;
 }
 
 export interface RunEvidenceSink {

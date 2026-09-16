@@ -26,6 +26,7 @@
 
 import type { MotebitRuntime } from "../index.js";
 import type { CommandResult } from "./types.js";
+import type { RunLedgerDetail } from "@motebit/sdk";
 
 /** How many runs a list answers with. A return view, not an archive. */
 const RECENT_LIMIT = 10;
@@ -76,21 +77,71 @@ export function cmdRuns(runtime: MotebitRuntime, args?: string): CommandResult {
   };
 }
 
+/**
+ * Pass a run through the membrane, field by field, once.
+ *
+ * Explicit rather than a blanket walk so that adding a field to
+ * `RunLedgerDetail` without deciding what it means here is a type error
+ * rather than a quiet leak.
+ */
+function redactRun(run: RunLedgerDetail, redact: (t: string) => string): RunLedgerDetail {
+  return {
+    run_id: run.run_id,
+    goal_id: run.goal_id,
+    status: run.status,
+    started_at: run.started_at,
+    ...(run.note != null ? { note: redact(run.note) } : {}),
+    signed: run.signed,
+    evidence_count: run.evidence_count,
+    withheld_count: run.withheld_count,
+    outcomes: run.outcomes.map((o) => ({
+      status: o.status,
+      ...(o.error_message != null ? { error_message: redact(o.error_message) } : {}),
+      ...(o.summary_preview != null ? { summary_preview: redact(o.summary_preview) } : {}),
+      signed: o.signed,
+    })),
+    tool_calls: run.tool_calls.map((c) => ({ tool: c.tool, verdict: c.verdict })),
+    evidence: run.evidence.map((e) => ({
+      tool: e.tool,
+      ref: redact(e.ref),
+      digest: e.digest,
+      ...(e.projection != null ? { projection: e.projection } : {}),
+    })),
+    withheld: run.withheld.map((w) => ({ tool: w.tool, reason: w.reason })),
+  };
+}
+
 function showRun(
   runtime: MotebitRuntime,
   ledger: NonNullable<MotebitRuntime["runLedger"]>,
   target: string,
 ): CommandResult {
-  const run = ledger.get(target);
-  if (run == null) {
+  const found = ledger.get(target);
+  if (found.kind === "ambiguous") {
+    // Not "no such run" — it matched several, and saying otherwise
+    // would deny the existence of a run the list had just printed.
+    return {
+      summary: `"${target}" matches ${found.matches.length} runs — name one exactly.`,
+      detail: found.matches.map((id) => `  ${id}`).join("\n"),
+    };
+  }
+  if (found.kind === "missing") {
     return { summary: `No run matching "${target}".` };
   }
+  const raw = found.run;
 
-  // Every piece of text below crosses the relay, so every piece of it
-  // goes through the membrane — the same one an approval's arguments
-  // pass through. The membrane is applied HERE rather than trusted from
-  // the reader, because this is the boundary.
+  // ONE redacted object, and both outputs derive from it.
+  //
+  // The first version redacted while building the text and assigned the
+  // reader's object to `data` untouched — and `data` is serialized whole
+  // and returned through the relay, so every field the prose was careful
+  // about rode along beside it in the clear. That is the same defect
+  // this arc's second increment found in the approvals command, whose
+  // comment says it in as many words: the raw object must not ride
+  // beside a redacted string. Deriving both from one redacted value is
+  // what stops a field added later from arriving unredacted by default.
   const redact = (t: string): string => runtime.redactForRemoteDisclosure(t);
+  const run = redactRun(raw, redact);
 
   const sections: string[] = [];
 
@@ -99,7 +150,7 @@ function showRun(
       `run     ${run.run_id}`,
       `goal    ${run.goal_id}`,
       `status  ${run.status}`,
-      ...(run.note != null && run.note !== "" ? [`note    ${redact(run.note)}`] : []),
+      ...(run.note != null && run.note !== "" ? [`note    ${run.note}`] : []),
     ].join("\n"),
   );
 
@@ -110,16 +161,23 @@ function showRun(
       .map((o) => {
         const rows = [`  status  ${o.status}`];
         if (o.error_message != null && o.error_message !== "") {
-          rows.push(`  reason  ${redact(o.error_message)}`);
+          rows.push(`  reason  ${o.error_message}`);
         }
         if (o.summary_preview != null && o.summary_preview !== "") {
-          rows.push(`  ${redact(o.summary_preview)}`);
+          rows.push(`  ${o.summary_preview}`);
         }
-        rows.push(
-          o.signed
-            ? "  signed — read it in full on the machine that signed it"
-            : "  NOT signed — this is the motebit's own account, not a signed artifact",
-        );
+        // Only for rows that could carry a signature. A `suspended` row
+        // is written at every approval pause and can never hold a
+        // manifest, so emitting this unconditionally showed an
+        // approval-gated run as signed AND not signed — two verdicts for
+        // one run, which the terminal view was already corrected for.
+        if (o.status === "completed" || o.status === "partial") {
+          rows.push(
+            o.signed
+              ? "  signed — read it in full on the machine that signed it"
+              : "  NOT signed — this is the motebit's own account, not a signed artifact",
+          );
+        }
         return rows.join("\n");
       })
       .join("\n  ──\n");
@@ -141,7 +199,7 @@ function showRun(
           run.evidence
             .map(
               (e) =>
-                `  ${e.tool} · ${redact(e.ref)}\n    ${e.digest}` +
+                `  ${e.tool} · ${e.ref}\n    ${e.digest}` +
                 (e.projection != null ? `\n    projection ${e.projection}` : ""),
             )
             .join("\n") +
