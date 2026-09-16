@@ -3630,6 +3630,7 @@ export interface RunEvidenceEntry {
 
 // @public
 export interface RunEvidenceSink {
+    enumerateStale?(beforeTimestamp: number): string[];
     eraseForCall?(callId: string): void;
     listForRun(runId: string): RunEvidenceEntry[];
     // (undocumented)

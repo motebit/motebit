@@ -1618,10 +1618,17 @@ export class SqliteRunEvidenceStore implements RunEvidenceSink {
   private stmtRecord: PreparedStatement;
   private stmtListForRun: PreparedStatement;
   private stmtEraseForCall: PreparedStatement;
+  private stmtStale: PreparedStatement;
 
   constructor(db: DatabaseDriver) {
     this.stmtRecord = db.prepare(
-      `INSERT OR IGNORE INTO run_evidence
+      // Plain INSERT. `OR IGNORE` bought no dedup here — the primary key
+      // is a fresh uuid per call, so it can never collide — while
+      // silently swallowing a NOT NULL violation, which would drop the
+      // row and leave a reader saying "none recorded" about evidence
+      // that was produced. That is the one failure this record must not
+      // have, so a broken write raises instead.
+      `INSERT INTO run_evidence
        (evidence_id, run_id, turn_id, call_id, tool, kind, ref,
         digest_algorithm, digest_value, projection, projection_class,
         span, locator_start, locator_end, recorded_at)
@@ -1631,6 +1638,7 @@ export class SqliteRunEvidenceStore implements RunEvidenceSink {
       `SELECT * FROM run_evidence WHERE run_id = ? ORDER BY recorded_at ASC`,
     );
     this.stmtEraseForCall = db.prepare(`DELETE FROM run_evidence WHERE call_id = ?`);
+    this.stmtStale = db.prepare(`SELECT DISTINCT call_id FROM run_evidence WHERE recorded_at < ?`);
   }
 
   record(entry: RunEvidenceEntry): void {
@@ -1668,6 +1676,11 @@ export class SqliteRunEvidenceStore implements RunEvidenceSink {
    */
   eraseForCall(callId: string): void {
     this.stmtEraseForCall.run(callId);
+  }
+
+  /** Call ids with pointers older than the horizon. See the port's doc. */
+  enumerateStale(beforeTimestamp: number): string[] {
+    return (this.stmtStale.all(beforeTimestamp) as { call_id: string }[]).map((r) => r.call_id);
   }
 }
 

@@ -197,12 +197,24 @@ export async function handleRunsShow(config: CliConfig): Promise<void> {
     if (outcome == null) {
       console.log(dim("  none recorded — the run did not reach an outcome row."));
     } else {
+      // The outcome's own status and reason, before its text. A failed
+      // or partial outcome rendered under a bare "Result" heading with
+      // an empty body reads as a run that produced nothing, when what
+      // happened is recorded right here.
+      console.log(`  status    ${outcome.status}`);
+      if (outcome.error_message != null && outcome.error_message !== "") {
+        console.log(`  reason    ${outcome.error_message}`);
+      }
       const body = outcome.response_full ?? outcome.summary;
       if (body == null || body === "") {
         console.log(dim("  empty."));
       } else {
         for (const line of body.split("\n")) console.log(`  ${line}`);
-        if (outcome.response_full == null) {
+        // Only a COMPLETED run was ever expected to carry a whole
+        // result. A halted or failed run stores a summary by design, so
+        // this line would date a run that happened today to before a
+        // feature that shipped with it.
+        if (outcome.response_full == null && outcome.status === "completed") {
           console.log(dim("  (summary only — this run predates full-result retention)"));
         }
       }

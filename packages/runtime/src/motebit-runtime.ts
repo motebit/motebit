@@ -1317,18 +1317,34 @@ export class MotebitRuntime {
           p.args,
           "human-approved",
         ),
-      recordApprovedToolResult: (p) =>
-        this.policy.recordResult(
+      recordApprovedToolResult: (p) => {
+        const ctx = { turnId: p.turnId ?? p.runId ?? "resume", runId: p.runId };
+        const decision = {
+          allowed: true,
+          requiresApproval: true,
+          reason: "approved",
+          callId: p.auditCallId,
+        };
+        // The third path that closes the ledger, and so the third that
+        // mints evidence. A `read_url` the owner had to approve
+        // content-addresses the same bytes as one that ran unattended;
+        // recording the pointer for two of the three paths made what a
+        // run can prove depend on who had to say yes.
+        if (p.result != null) {
+          this.policy.recordEvidence(ctx, decision, p.toolName, p.result);
+        }
+        return this.policy.recordResult(
           { turnId: p.turnId ?? p.runId ?? "resume", runId: p.runId },
           // The decision that paused was approval-gated; the human's
           // signed consent (signAndEmitApprovalDecision) is the authority
           // record — this row is only the execution completion.
-          { allowed: true, requiresApproval: true, reason: "approved", callId: p.auditCallId },
+          decision,
           p.toolName,
           p.args,
           p.ok,
           p.durationMs,
-        ),
+        );
+      },
       // #493: non-draining stash view for the delegate_to_agent receipt
       // beat. Lazy closures — interactiveDelegation is constructed before
       // the StreamingManager, but the indirection keeps that ordering a

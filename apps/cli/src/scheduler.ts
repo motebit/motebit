@@ -1270,7 +1270,16 @@ export class GoalScheduler {
             // green because it matches the call once per file: the
             // aperture blindness this increment was written to correct,
             // reproduced one level down inside the fix for it.
-            await this.recordCompletedOutcome(turn.goalId, turn.runId, result);
+            // `approved`, not unconditionally. A refusal is not a
+            // completion, and writing one as `completed` — signed, no
+            // less — put a denial into `goal_outcomes`, which
+            // `buildGoalContext` reads back into the NEXT run's prompt.
+            // The agent would have learned that work a human refused was
+            // finished work.
+            await this.recordCompletedOutcome(turn.goalId, turn.runId, result, {
+              status: approved ? "completed" : "partial",
+              errorMessage: approved ? null : "the approved action was denied by its owner",
+            });
             if (approved) {
               this.goalStore.updateLastRun(turn.goalId, Date.now());
             }
@@ -1283,7 +1292,11 @@ export class GoalScheduler {
           errorLine(`[approval] resume of ${approvalId.slice(0, 8)} failed: ${msg}`);
           this.runStore.setStatus(turn.runId, "failed", { note: `resume failed: ${msg}` });
           this.goalOutcomeStore.add({
-            outcome_id: crypto.randomUUID(),
+            // Keyed by the run, like every other outcome this scheduler
+            // writes. A fresh id made this row unreachable from the run
+            // that produced it, so `runs show` reported "the run did not
+            // reach an outcome row" about a failure sitting in the table.
+            outcome_id: turn.runId,
             goal_id: turn.goalId,
             motebit_id: this.motebitId,
             ran_at: Date.now(),
@@ -1686,6 +1699,7 @@ export class GoalScheduler {
     goalId: string,
     runId: string,
     result: GoalStreamResult,
+    opts: { status?: GoalOutcome["status"]; errorMessage?: string | null } = {},
   ): Promise<void> {
     const full = result.responseText;
     let signedManifest: string | null = null;
@@ -1704,11 +1718,11 @@ export class GoalScheduler {
       goal_id: goalId,
       motebit_id: this.motebitId,
       ran_at: Date.now(),
-      status: "completed",
+      status: opts.status ?? "completed",
       summary: full.slice(0, 500) || null,
       tool_calls_made: result.toolCallsMade,
       memories_formed: result.memoriesFormed,
-      error_message: null,
+      error_message: opts.errorMessage ?? null,
       ...(full !== "" ? { response_full: full } : {}),
       ...(signedManifest != null ? { signed_manifest: signedManifest } : {}),
     });

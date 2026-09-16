@@ -155,6 +155,13 @@ export interface StreamingDeps {
     args: Record<string, unknown>;
     ok: boolean;
     durationMs: number;
+    /**
+     * The whole result, so the evidence pointer can be minted here too.
+     * A tool that content-addressed its bytes did so whether the call
+     * was approval-gated or not; without this, what a run can prove
+     * depended on whether a human had to say yes first.
+     */
+    result?: import("@motebit/sdk").ToolResult;
   }): void;
   /** Approval timeout in ms. */
   approvalTimeoutMs: number;
@@ -900,6 +907,7 @@ export class StreamingManager {
           args: pending.args,
           ok: result.ok,
           durationMs: Date.now() - dispatchedAt,
+          result,
         });
 
         // Sanitize through policy if available

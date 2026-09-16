@@ -100,6 +100,46 @@ describe("PolicyGate.recordEvidence — the sibling artifact recordResult names"
     expect(sink.entries[0]!.evidence.ref).toBe("https://example.gov/filing");
   });
 
+  it("keeps recording through ordinary content that looks secret-ish", () => {
+    // The guard used the FULL redaction set, which deliberately includes
+    // low-precision patterns — a 40-char token, a bare 9-digit run. A
+    // page whose first 512 characters held a commit hash recorded no
+    // pointer at all, and the person was told "none recorded". A guard
+    // that suppresses honest evidence at that rate empties the record it
+    // is meant to protect.
+    const { gate, sink, ctx, decision } = setup();
+    const realistic =
+      "Fixed in commit a1b2c3d4e5f60718293a4b5c6d7e8f9012345678. Filing 123456789 was accepted.";
+    gate.recordEvidence(ctx, decision, "read_url", {
+      ok: true,
+      data: realistic,
+      source_digest: DIGEST,
+      source_ref: "https://example.com/changelog",
+    });
+    expect(sink.entries).toHaveLength(1);
+    expect(sink.entries[0]!.evidence.provenance!.span).toBe(realistic);
+  });
+
+  it("does not split a character when it bounds the span", () => {
+    // `slice` counts UTF-16 units, so a cut through an astral character
+    // leaves a lone surrogate. SQLite stores TEXT as UTF-8 and turns
+    // that into U+FFFD, so the span read back is not the span written —
+    // and the pointer fails its own law.
+    const { gate, sink, ctx, decision } = setup();
+    const data = "a".repeat(511) + "😀" + "tail";
+    gate.recordEvidence(ctx, decision, "read_url", {
+      ok: true,
+      data,
+      source_digest: DIGEST,
+    });
+    const span = sink.entries[0]!.evidence.provenance!.span;
+    expect(span).toBe("a".repeat(511));
+    // No unpaired surrogate survived the cut, and it is still a
+    // substring — which is the whole law.
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(span)).toBe(false);
+    expect(data.includes(span)).toBe(true);
+  });
+
   it("records NOTHING when the retrieved text carries credential-class content", () => {
     // Redacting the span is not an option: the law is that the span is
     // an exact substring of the bytes, so a redacted span is a pointer
@@ -108,11 +148,27 @@ describe("PolicyGate.recordEvidence — the sibling artifact recordResult names"
     const { gate, sink, ctx, decision } = setup();
     gate.recordEvidence(ctx, decision, "read_url", {
       ok: true,
-      data: "token sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      data: "authorization: Bearer AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\naws_access_key_id = AKIAIOSFODNN7EXAMPLE",
       source_digest: DIGEST,
       source_ref: "https://example.com/secret",
     });
     expect(sink.entries).toEqual([]);
+  });
+
+  it("does NOT catch every key format — the residual, stated rather than implied", () => {
+    // The credential-class set keys on a shared pattern table whose
+    // API_KEY rule allows a single separator, so `sk-proj-…` and `ghp_…`
+    // slip past it. Widening that rule changes what is stripped from
+    // every outbound message to a cloud provider, so it belongs to that
+    // table's own change. This test exists so the gap is a recorded
+    // fact rather than something a later reader assumes is covered.
+    const { gate, sink, ctx, decision } = setup();
+    gate.recordEvidence(ctx, decision, "read_url", {
+      ok: true,
+      data: "OPENAI_API_KEY=sk-proj-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      source_digest: DIGEST,
+    });
+    expect(sink.entries).toHaveLength(1);
   });
 
   it("survives a policy-config change — the sink travels with the swap", () => {

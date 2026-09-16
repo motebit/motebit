@@ -3414,6 +3414,18 @@ export interface RunEvidenceSink {
    * content indefinitely.
    */
   eraseForCall?(callId: string): void;
+  /**
+   * Call ids whose pointers were recorded before `beforeTimestamp`.
+   *
+   * Evidence needs a horizon of its OWN, not only the audit row's. A
+   * tool call's retention floor comes from its sensitivity, and nothing
+   * classifies tool calls today, so every one falls to the `None` tier —
+   * which is `Infinity`. Inheriting that meant verbatim third-party
+   * content, the most revealing thing in the database, was the one
+   * record kept forever by default. Unclassified is a reason to hold it
+   * for less time, never for more.
+   */
+  enumerateStale?(beforeTimestamp: number): string[];
 }
 
 export interface PlanStoreAdapter {

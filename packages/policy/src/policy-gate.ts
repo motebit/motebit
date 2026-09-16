@@ -106,6 +106,25 @@ export const DEFAULT_POLICY: PolicyConfig = {
  */
 const EVIDENCE_SPAN_MAX_CHARS = 512;
 
+/**
+ * Cut the span to the bound WITHOUT splitting a character.
+ *
+ * `slice` counts UTF-16 code units, so a cut landing between the halves
+ * of an astral character (an emoji, a rarer CJK glyph) leaves a lone
+ * surrogate. SQLite stores TEXT as UTF-8 and turns that into U+FFFD, so
+ * the span read back is not the span written — and
+ * `verifyEvidenceProvenance` reports `span_absent` for a pointer this
+ * producer made. A record that fails its own law is worse than a shorter
+ * one, so the cut retreats to a whole character.
+ */
+function boundSpan(data: string): string {
+  if (data.length <= EVIDENCE_SPAN_MAX_CHARS) return data;
+  const cut = data.slice(0, EVIDENCE_SPAN_MAX_CHARS);
+  const last = cut.charCodeAt(cut.length - 1);
+  // A high surrogate at the end has lost its pair to the cut.
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
+
 export class PolicyGate {
   private config: PolicyConfig;
   private budget: BudgetEnforcer;
@@ -189,7 +208,7 @@ export class PolicyGate {
     if (!result.ok || result.source_digest == null) return;
     if (typeof result.data !== "string" || result.data === "") return;
 
-    const span = result.data.slice(0, EVIDENCE_SPAN_MAX_CHARS);
+    const span = boundSpan(result.data);
     // Credential-class content means NO pointer, not a redacted one.
     //
     // The sibling audit row redacts its args before persisting, and this
@@ -205,13 +224,28 @@ export class PolicyGate {
     // cannot back. The tool's own result is unaffected; only the
     // durable pointer is withheld.
     //
-    // Measured against realistic content before being adopted, because a
-    // guard this blunt is only acceptable if it rarely fires by
-    // accident: prose, extracted HTML, JSON bodies and long accession
-    // numbers all redact zero. What does fire is an API key and a base64
-    // blob — the first is the case this exists for, and the second is
-    // not evidence anyone can read anyway.
-    if (this.redaction.redact(span).redactionCount > 0) return;
+    // The CREDENTIAL-class set, not the full one.
+    //
+    // `redact` deliberately includes three low-precision patterns —
+    // bare 9-digit runs, any 40+ character alphanumeric token, and
+    // Luhn-passing digit runs — which the pattern table itself marks
+    // `cloudEgress: false` for exactly that reason. Using them here
+    // withheld a pointer whenever a page's first 512 characters held a
+    // commit hash, a reference number, or a long identifier, and the
+    // person was told "none recorded". A guard that suppresses honest
+    // evidence at that rate does not protect the record, it empties it.
+    //
+    // (I measured this the wrong way round first — the inputs I checked
+    // happened to avoid all three patterns, so the full set looked
+    // clean. A git SHA is 40 hex characters and fires immediately.)
+    //
+    // Residual, stated rather than hidden: the credential-class subset
+    // misses some real key formats (`sk-proj-…`, `ghp_…`) because the
+    // shared API_KEY pattern allows only one separator. Widening it
+    // changes what is stripped from every outbound message to a cloud
+    // provider, so it belongs to that pattern table's own change, not
+    // to this one.
+    if (this.redaction.redactForCloudEgress(span).redactionCount > 0) return;
     this.evidenceSink.record({
       evidence_id: crypto.randomUUID(),
       ...(ctx.runId != null ? { run_id: ctx.runId } : {}),

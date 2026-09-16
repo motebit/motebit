@@ -821,12 +821,21 @@ async function flushPhase(
           reason: lazyClassified ? "retention_enforcement_post_classification" : "self_enforcement",
         });
         deps.toolAuditSink.erase(candidate.callId);
-        // The evidence pointer beside this call goes in the same act,
-        // under the certificate just signed. It carries more than the
-        // audit row does, so leaving it behind would invert the policy
-        // this loop exists to enforce.
-        deps.runEvidenceSink?.eraseForCall?.(candidate.callId);
         flushedToolAudits++;
+        // The evidence pointer beside this call goes under the same
+        // certificate — but in its OWN guard. Inside the audit row's
+        // try it would report a locked-database failure here as
+        // "tool_audit erase failed" and skip the increment, blaming a
+        // primary success for a secondary fault and undercounting the
+        // flush.
+        try {
+          deps.runEvidenceSink?.eraseForCall?.(candidate.callId);
+        } catch (err: unknown) {
+          deps.logger.warn("flush phase: run_evidence erase failed", {
+            callId: candidate.callId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       } catch (err: unknown) {
         deps.logger.warn("flush phase: tool_audit erase failed", {
           callId: candidate.callId,
@@ -836,8 +845,51 @@ async function flushPhase(
     }
   }
 
+  // Evidence has a horizon of its own, independent of any
+  // classification.
+  //
+  // A tool call's retention floor comes from its sensitivity, nothing
+  // classifies tool calls today, so every one reads as `None` — which is
+  // `Infinity`. Inheriting that made verbatim retrieved third-party
+  // content the single record this motebit kept forever by default,
+  // which is the inverse of what not knowing its sensitivity should
+  // mean. Unclassified is a reason to hold something for LESS time.
+  //
+  // The certificate names the call, because the pointer is part of that
+  // call's record — the audit row itself may legitimately outlive it.
+  if (deps.runEvidenceSink?.enumerateStale && deps.runEvidenceSink.eraseForCall) {
+    const cutoffTs = ctx.now - EVIDENCE_HORIZON_DAYS * MS_PER_DAY;
+    for (const callId of deps.runEvidenceSink.enumerateStale(cutoffTs)) {
+      if (ctx.signal.aborted) break;
+      try {
+        await deps.privacy.signFlushCert({
+          targetKind: "tool_audit",
+          targetId: callId,
+          sensitivity: defaultSensitivity,
+          reason: "retention_enforcement_post_classification",
+        });
+        deps.runEvidenceSink.eraseForCall(callId);
+      } catch (err: unknown) {
+        deps.logger.warn("flush phase: run_evidence horizon erase failed", {
+          callId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
   return { flushedConversations, flushedToolAudits };
 }
+
+/**
+ * How long a re-checkable evidence pointer is kept.
+ *
+ * Matched to the medical/financial floor, the strictest finite tier,
+ * because this row holds content retrieved from somewhere else and
+ * nothing here can say what it contains. Long enough to answer "what did
+ * it do while I was away" on any realistic return; far short of forever.
+ */
+const EVIDENCE_HORIZON_DAYS = 90;
 
 /**
  * Reference flush ceilings, in days, per sensitivity tier. Mirrors
