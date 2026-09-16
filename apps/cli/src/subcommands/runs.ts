@@ -160,8 +160,13 @@ export async function handleRunsShow(config: CliConfig): Promise<void> {
   const motebitId = requireMotebitId(loadFullConfig());
   const moteDb = await openMotebitDatabase(getDbPath(config.dbPath));
   try {
+    // Exact ids go through the indexed lookup, like `runs ack` does. A
+    // window-only scan failed to find a full run id pasted from an older
+    // run that `ack` resolves without trouble — two commands disagreeing
+    // about whether the same row exists.
+    const indexed = moteDb.goalRunStore.get(target);
     const recent = moteDb.goalRunStore.listRecent(motebitId, 200);
-    const exact = recent.find((r) => r.run_id === target);
+    const exact = indexed ?? recent.find((r) => r.run_id === target);
     const prefixed = recent.filter((r) => r.run_id.startsWith(target));
     if (exact == null && prefixed.length > 1) {
       console.error(`Error: "${target}" matches ${prefixed.length} runs — name one exactly.`);
@@ -181,9 +186,13 @@ export async function handleRunsShow(config: CliConfig): Promise<void> {
     if (run.note != null && run.note !== "") console.log(`  note      ${run.note}`);
 
     // --- Result, and whether it is signed ---
-    const outcome = moteDb.goalOutcomeStore
-      .listForGoal(run.goal_id, 50)
-      .find((o) => o.outcome_id === run.run_id);
+    // By id, not by scanning a window of this goal's recent outcomes: a
+    // goal on a short cadence pushes its own outcome out of any fixed
+    // window within hours, and this command would then report "the run
+    // did not reach an outcome row" about a row that exists and is
+    // signed. Stated that confidently, a false negative is worse here
+    // than a vague answer.
+    const outcome = moteDb.goalOutcomeStore.get(run.run_id);
     console.log("\nResult");
     if (outcome == null) {
       console.log(dim("  none recorded — the run did not reach an outcome row."));

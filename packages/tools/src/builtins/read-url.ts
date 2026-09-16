@@ -259,7 +259,9 @@ export function createReadUrlHandler(opts?: {
           algorithm: "sha-256" as const,
           value: await sha256Hex(new TextEncoder().encode(body)),
         };
-        return { ok: true, data: body.slice(0, 64_000), source_digest };
+        // `source_ref` names WHAT was read, so a stored evidence pointer
+        // can actually be re-fetched. Only this tool knows it.
+        return { ok: true, data: body.slice(0, 64_000), source_digest, source_ref: url };
       }
 
       // HTML: extracted, NOT raw-byte-addressable as served — but re-derivable via a
@@ -281,6 +283,12 @@ export function createReadUrlHandler(opts?: {
         data: projected.slice(0, 8000),
         source_digest: { algorithm: "sha-256" as const, value: await sha256Hex(rawBytes) },
         source_projection: AGENCY_HTML_TEXT_V1_RECIPE_ID,
+        source_ref: url,
+        // `source_projection_class` is deliberately ABSENT:
+        // `agency.html-text.v1` is world-public and spec-reproducible to
+        // byte identity, which is what absence means. A recipe that is
+        // only tool-pinned must say so here, and omitting it then would
+        // be an over-claim.
       };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);

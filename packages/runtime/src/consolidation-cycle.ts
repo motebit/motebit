@@ -134,6 +134,11 @@ export interface ConsolidationCycleDeps {
    */
   toolAuditSink?: AuditLogSink | null;
   /**
+   * Run evidence, flushed in lockstep with the audit rows it sits beside
+   * — see `RunEvidenceSink.eraseForCall`.
+   */
+  runEvidenceSink?: import("@motebit/sdk").RunEvidenceSink | null;
+  /**
    * Settlement-floor resolver for tool-audit records per
    * docs/doctrine/retention-policy.md §"Decision 3". Returns the
    * minimum-retention floor in milliseconds for a given record. The
@@ -816,6 +821,11 @@ async function flushPhase(
           reason: lazyClassified ? "retention_enforcement_post_classification" : "self_enforcement",
         });
         deps.toolAuditSink.erase(candidate.callId);
+        // The evidence pointer beside this call goes in the same act,
+        // under the certificate just signed. It carries more than the
+        // audit row does, so leaving it behind would invert the policy
+        // this loop exists to enforce.
+        deps.runEvidenceSink?.eraseForCall?.(candidate.callId);
         flushedToolAudits++;
       } catch (err: unknown) {
         deps.logger.warn("flush phase: tool_audit erase failed", {

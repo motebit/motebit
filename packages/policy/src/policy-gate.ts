@@ -115,7 +115,24 @@ export class PolicyGate {
   private profileCache = new Map<string, ToolRiskProfile>();
   private evidenceSink: RunEvidenceSink | null = null;
 
-  constructor(config?: Partial<PolicyConfig>, auditSink?: AuditLogSink) {
+  /**
+   * `evidenceSink` is a CONSTRUCTOR parameter, not only a setter.
+   *
+   * It was setter-only, wired once at runtime construction — and
+   * `updatePolicyConfig` builds a whole new gate, so changing any policy
+   * setting silently produced a gate that recorded no evidence. Nothing
+   * errored; `runs show` simply began printing "none recorded", which
+   * this vocabulary insists must never read as "nothing was read". A
+   * config-induced loss that is indistinguishable from an honest absence
+   * is the worst shape this record can take. Passing it through the
+   * constructor makes a gate that forgot it hard to build; the setter
+   * stays for surfaces that wire storage after construction.
+   */
+  constructor(
+    config?: Partial<PolicyConfig>,
+    auditSink?: AuditLogSink,
+    evidenceSink?: RunEvidenceSink | null,
+  ) {
     // Deep-copy config to prevent external mutation
     const merged = { ...DEFAULT_POLICY, ...config };
     this.config = {
@@ -131,6 +148,7 @@ export class PolicyGate {
     this.redaction = new RedactionEngine();
     this.sanitizer = new ContentSanitizer();
     this.audit = new AuditLogger(auditSink);
+    this.evidenceSink = evidenceSink ?? null;
   }
 
   /**
@@ -172,6 +190,28 @@ export class PolicyGate {
     if (typeof result.data !== "string" || result.data === "") return;
 
     const span = result.data.slice(0, EVIDENCE_SPAN_MAX_CHARS);
+    // Credential-class content means NO pointer, not a redacted one.
+    //
+    // The sibling audit row redacts its args before persisting, and this
+    // row carries something stronger: verbatim retrieved content, which
+    // `runs show` prints. But redacting a span would be worse than
+    // either alternative — the law is that the span is an exact
+    // substring of the bytes, so a `[REDACTED:…]` span is a claim that
+    // fails re-verification, i.e. a pointer asserting something untrue.
+    //
+    // A pointer that is both safe and true is not available here, so we
+    // record neither. Absence is the honest answer and the one this
+    // vocabulary is built for: the producer never makes a claim it
+    // cannot back. The tool's own result is unaffected; only the
+    // durable pointer is withheld.
+    //
+    // Measured against realistic content before being adopted, because a
+    // guard this blunt is only acceptable if it rarely fires by
+    // accident: prose, extracted HTML, JSON bodies and long accession
+    // numbers all redact zero. What does fire is an API key and a base64
+    // blob — the first is the case this exists for, and the second is
+    // not evidence anyone can read anyway.
+    if (this.redaction.redact(span).redactionCount > 0) return;
     this.evidenceSink.record({
       evidence_id: crypto.randomUUID(),
       ...(ctx.runId != null ? { run_id: ctx.runId } : {}),
@@ -181,10 +221,22 @@ export class PolicyGate {
       recorded_at: Date.now(),
       evidence: {
         kind: "tool_result",
-        ref: decision.callId,
+        // What was read, in the producing tool's own terms. Falls back
+        // to the call id only when the tool named nothing — such a
+        // pointer is still worth keeping beside its call, but it cannot
+        // be re-fetched and no surface may imply it can.
+        ref: result.source_ref ?? decision.callId,
         provenance: {
           digest: result.source_digest,
           ...(result.source_projection != null ? { projection: result.source_projection } : {}),
+          // Carried only when the TOOL declares it. Absent means
+          // spec-reproducible, the strong rung, so this producer must
+          // never supply a default — defaulting would claim the strong
+          // rung on behalf of a recipe that may meet only the weaker
+          // one, which is the over-claim the class exists to prevent.
+          ...(result.source_projection_class != null
+            ? { projectionClass: result.source_projection_class }
+            : {}),
           span,
           locator: { start: 0, end: span.length },
         },

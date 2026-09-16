@@ -1494,6 +1494,7 @@ function rowToGoalOutcome(row: GoalOutcomeRow): GoalOutcome {
 
 export class SqliteGoalOutcomeStore {
   private stmtAdd: PreparedStatement;
+  private stmtGet: PreparedStatement;
   private stmtListForGoal: PreparedStatement;
   private stmtListRecent: PreparedStatement;
 
@@ -1503,6 +1504,7 @@ export class SqliteGoalOutcomeStore {
        (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full, signed_manifest)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
+    this.stmtGet = db.prepare(`SELECT * FROM goal_outcomes WHERE outcome_id = ?`);
     this.stmtListForGoal = db.prepare(
       `SELECT * FROM goal_outcomes WHERE goal_id = ? ORDER BY ran_at DESC LIMIT ?`,
     );
@@ -1526,6 +1528,18 @@ export class SqliteGoalOutcomeStore {
       outcome.response_full ?? null,
       outcome.signed_manifest ?? null,
     );
+  }
+
+  /**
+   * One outcome by id. Indexed, so a reader never has to decide how far
+   * back to look — a windowed scan reports "no outcome" for a row that
+   * exists just outside the window, which on this table means telling
+   * someone their run produced nothing when it produced and signed a
+   * result.
+   */
+  get(outcomeId: string): GoalOutcome | null {
+    const row = this.stmtGet.get(outcomeId) as GoalOutcomeRow | undefined;
+    return row === undefined ? null : rowToGoalOutcome(row);
   }
 
   listForGoal(goalId: string, limit = 10): GoalOutcome[] {
@@ -1603,6 +1617,7 @@ function rowToRunEvidence(row: RunEvidenceRow): RunEvidenceEntry {
 export class SqliteRunEvidenceStore implements RunEvidenceSink {
   private stmtRecord: PreparedStatement;
   private stmtListForRun: PreparedStatement;
+  private stmtEraseForCall: PreparedStatement;
 
   constructor(db: DatabaseDriver) {
     this.stmtRecord = db.prepare(
@@ -1615,6 +1630,7 @@ export class SqliteRunEvidenceStore implements RunEvidenceSink {
     this.stmtListForRun = db.prepare(
       `SELECT * FROM run_evidence WHERE run_id = ? ORDER BY recorded_at ASC`,
     );
+    this.stmtEraseForCall = db.prepare(`DELETE FROM run_evidence WHERE call_id = ?`);
   }
 
   record(entry: RunEvidenceEntry): void {
@@ -1641,6 +1657,17 @@ export class SqliteRunEvidenceStore implements RunEvidenceSink {
 
   listForRun(runId: string): RunEvidenceEntry[] {
     return (this.stmtListForRun.all(runId) as RunEvidenceRow[]).map(rowToRunEvidence);
+  }
+
+  /**
+   * Physical removal of every pointer beside one tool call — the storage
+   * operation behind the flush's deletion certificate. Also the only
+   * path that reaches rows written outside a goal run (`run_id IS
+   * NULL`), which `listForRun` can never return: they still sit beside
+   * an audit row, so they still die with it.
+   */
+  eraseForCall(callId: string): void {
+    this.stmtEraseForCall.run(callId);
   }
 }
 

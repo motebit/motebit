@@ -3630,6 +3630,7 @@ export interface RunEvidenceEntry {
 
 // @public
 export interface RunEvidenceSink {
+    eraseForCall?(callId: string): void;
     listForRun(runId: string): RunEvidenceEntry[];
     // (undocumented)
     record(entry: RunEvidenceEntry): void;
@@ -4549,6 +4550,8 @@ export interface ToolResult {
     _sanitized?: boolean;
     source_digest?: DigestRef;
     source_projection?: string;
+    source_projection_class?: ProjectionClass;
+    source_ref?: string;
 }
 
 // @public (undocumented)

@@ -70,14 +70,74 @@ describe("PolicyGate.recordEvidence — the sibling artifact recordResult names"
     });
     const p = sink.entries[0]!.evidence.provenance!;
     expect(p.projection).toBe("agency.html-text.v1");
-    // Absent projectionClass means spec-reproducible — the strong rung.
-    // The weak one is opt-in and must never be claimed by omission.
+    // Absent because the TOOL declared nothing, not because this
+    // producer chose a default. Absence means spec-reproducible, the
+    // strong rung, so a default here would claim it on behalf of a
+    // recipe that may meet only the weaker one.
     expect(p.projectionClass).toBeUndefined();
+  });
+
+  it("carries the weaker assurance rung when the tool declares it", () => {
+    const { gate, sink, ctx, decision } = setup();
+    gate.recordEvidence(ctx, decision, "read_pdf", {
+      ok: true,
+      data: "extracted text",
+      source_digest: DIGEST,
+      source_projection: "some.pdf-text.v1",
+      source_projection_class: "tool-pinned",
+    });
+    expect(sink.entries[0]!.evidence.provenance!.projectionClass).toBe("tool-pinned");
+  });
+
+  it("names what was read, so the pointer can actually be re-fetched", () => {
+    const { gate, sink, ctx, decision } = setup();
+    gate.recordEvidence(ctx, decision, "read_url", {
+      ok: true,
+      data: "body text",
+      source_digest: DIGEST,
+      source_ref: "https://example.gov/filing",
+    });
+    expect(sink.entries[0]!.evidence.ref).toBe("https://example.gov/filing");
+  });
+
+  it("records NOTHING when the retrieved text carries credential-class content", () => {
+    // Redacting the span is not an option: the law is that the span is
+    // an exact substring of the bytes, so a redacted span is a pointer
+    // asserting something that fails re-verification. A pointer that is
+    // both safe and true is unavailable here, so neither is recorded.
+    const { gate, sink, ctx, decision } = setup();
+    gate.recordEvidence(ctx, decision, "read_url", {
+      ok: true,
+      data: "token sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      source_digest: DIGEST,
+      source_ref: "https://example.com/secret",
+    });
+    expect(sink.entries).toEqual([]);
+  });
+
+  it("survives a policy-config change — the sink travels with the swap", () => {
+    // It did not, and the loss was silent: a user changing any policy
+    // setting produced a fresh gate with no sink, after which every run
+    // reported "none recorded" — indistinguishable from an honest
+    // absence, which is the one thing this record must never be.
+    const sink = new MemorySink();
+    const gate = new PolicyGate({}, undefined, sink);
+    const ctx = { turnId: "t", runId: "r" };
+    const decision = { callId: "c" } as unknown as Parameters<typeof gate.recordEvidence>[1];
+    gate.recordEvidence(ctx, decision, "read_url", {
+      ok: true,
+      data: "body",
+      source_digest: DIGEST,
+    });
+    expect(sink.entries).toHaveLength(1);
   });
 
   it("bounds the span, and a bounded prefix is still a substring", () => {
     const { gate, sink, ctx, decision } = setup();
-    const long = "x".repeat(5000);
+    // Realistic document text. A long run of one character reads as an
+    // encoded secret to the redaction engine and is withheld — correctly,
+    // but it makes a poor stand-in for a document.
+    const long = "Quarterly revenue fell four percent year over year. ".repeat(120);
     gate.recordEvidence(ctx, decision, "read_url", {
       ok: true,
       data: long,

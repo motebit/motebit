@@ -6,7 +6,12 @@ import type { MemorySource } from "./memory-source.js";
 // Local bindings for `Citation.provenance` + the producer-side `source_digest`
 // fields below (re-exported with the rest of the evidence-provenance vocabulary
 // near the bottom of this barrel).
-import type { EvidenceProvenance, EvidenceRef, DigestRef } from "./evidence-provenance.js";
+import type {
+  EvidenceProvenance,
+  EvidenceRef,
+  DigestRef,
+  ProjectionClass,
+} from "./evidence-provenance.js";
 
 // === Branded ID Types ===
 //
@@ -1214,6 +1219,28 @@ export interface ToolResult {
    * resolves it via an injected `resolveProjection`. Back-compat by absence.
    */
   source_projection?: string;
+  /**
+   * What was read, named by the producing tool in its OWN terms — a URL
+   * for `read_url`, a path for a file reader.
+   *
+   * Set alongside {@link source_digest}. Without it a stored evidence
+   * pointer carries a digest and a span but no source, so "re-fetch the
+   * record and check the span is present" names nothing to re-fetch and
+   * the whole affordance is unusable. The tool names it because only the
+   * tool knows: a consumer that guessed from an argument key would be
+   * putting domain knowledge in the layer that must not have it.
+   */
+  source_ref?: string;
+  /**
+   * How re-checkable {@link source_projection} is, when the recipe is
+   * NOT reimplementable from a published spec to byte identity.
+   *
+   * Absent means `spec-reproducible`, the strong rung — so the weaker
+   * one is opt-in and can never be claimed by omission. A `tool-pinned`
+   * recipe that omits this over-claims. Only the tool knows which rung
+   * its recipe meets, so only the tool may say.
+   */
+  source_projection_class?: ProjectionClass;
 }
 
 export type ToolHandler = (args: Record<string, unknown>) => Promise<ToolResult>;
@@ -3371,6 +3398,22 @@ export interface RunEvidenceSink {
   record(entry: RunEvidenceEntry): void;
   /** Every pointer produced by one run, oldest first. */
   listForRun(runId: string): RunEvidenceEntry[];
+  /**
+   * Erase every pointer sitting beside one tool call.
+   *
+   * An evidence row is a sibling of the audit row for the same
+   * `call_id`, and it carries strictly MORE than that row does —
+   * verbatim retrieved content, where the audit row holds redacted
+   * args. So it inherits that row's retention floor and dies in the
+   * same act, under the same deletion certificate. Without this the
+   * flush erased the audit row and left the more revealing sibling
+   * behind forever, which inverts the retention policy it was enforcing.
+   *
+   * Optional — a sink without it is never flushed, which a surface must
+   * treat as a reason not to wire it rather than as a licence to keep
+   * content indefinitely.
+   */
+  eraseForCall?(callId: string): void;
 }
 
 export interface PlanStoreAdapter {

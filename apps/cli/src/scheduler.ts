@@ -755,46 +755,8 @@ export class GoalScheduler {
           // rather than a completed outcome under a `running` row that the
           // next start would reclassify as interrupted.
           this.runStore.setStatus(runId, "completed");
-          // Sign the artifact, and keep it whole.
-          //
-          // Every other goal-running surface has done both since the
-          // goal-results arc; the daemon — the one surface that runs
-          // goals while nobody is watching — kept a 500-character
-          // summary, discarded the rest, and signed nothing. So the only
-          // record of unattended work was the motebit's own word for it,
-          // on exactly the surface where there is no one present to have
-          // seen otherwise.
-          //
-          // `signGoalArtifact` returns null when no identity is loaded.
-          // That stays null: an unsigned result recorded honestly is a
-          // record; a placeholder signature is a lie with a checksum.
           const full = result.responseText;
-          let signedManifest: string | null = null;
-          try {
-            const manifest = await this.runtime.signGoalArtifact(full, {
-              goalId: goal.goal_id,
-              runId,
-            });
-            signedManifest = manifest == null ? null : JSON.stringify(manifest);
-          } catch (err: unknown) {
-            logLine(
-              `[scheduler] goal artifact could not be signed: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-          // Record outcome (runId = outcome_id for audit correlation)
-          this.goalOutcomeStore.add({
-            outcome_id: runId,
-            goal_id: goal.goal_id,
-            motebit_id: this.motebitId,
-            ran_at: Date.now(),
-            status: "completed",
-            summary: full.slice(0, 500) || null,
-            tool_calls_made: result.toolCallsMade,
-            memories_formed: result.memoriesFormed,
-            error_message: null,
-            ...(full !== "" ? { response_full: full } : {}),
-            ...(signedManifest != null ? { signed_manifest: signedManifest } : {}),
-          });
+          await this.recordCompletedOutcome(goal.goal_id, runId, result);
           this.goalStore.updateLastRun(goal.goal_id, Date.now());
           this.goalStore.resetFailures(goal.goal_id);
 
@@ -1298,6 +1260,17 @@ export class GoalScheduler {
             this.runStore.setStatus(turn.runId, "completed", {
               note: approved ? "resumed after approval" : "resumed after denial",
             });
+            // Write the outcome, sign it, keep it whole — the same three
+            // things the ordinary completion path does.
+            //
+            // This path wrote NO outcome row at all, so a goal run that
+            // paused for a human's yes and then ran to its end produced
+            // no result, nothing signed, and `runs show` reporting "the
+            // run did not reach an outcome row". The signing gate stayed
+            // green because it matches the call once per file: the
+            // aperture blindness this increment was written to correct,
+            // reproduced one level down inside the fix for it.
+            await this.recordCompletedOutcome(turn.goalId, turn.runId, result);
             if (approved) {
               this.goalStore.updateLastRun(turn.goalId, Date.now());
             }
@@ -1690,6 +1663,57 @@ export class GoalScheduler {
   /**
    * Form a memory from a completed goal outcome so the agent learns from its work.
    */
+  /**
+   * The ONE place a completed goal run becomes a record.
+   *
+   * Two paths reach completion — an ordinary fire, and a run that paused
+   * for a human's yes and then finished — and only the first of them
+   * wrote an outcome at all. So a goal that needed approval produced no
+   * result, nothing signed, and `runs show` reporting that the run never
+   * reached an outcome row. The signing drift gate stayed green because
+   * it matches the call once per FILE, which is the same aperture
+   * blindness this increment set out to correct, one level down.
+   *
+   * Fixing the second call site would have been the second fix. There is
+   * one writer instead, so a third path inherits signing and whole-result
+   * retention rather than having to remember them.
+   *
+   * `signGoalArtifact` returns null when no identity is loaded, and that
+   * stays null: an unsigned result recorded honestly is a record; a
+   * placeholder signature is a lie with a checksum.
+   */
+  private async recordCompletedOutcome(
+    goalId: string,
+    runId: string,
+    result: GoalStreamResult,
+  ): Promise<void> {
+    const full = result.responseText;
+    let signedManifest: string | null = null;
+    try {
+      const manifest = await this.runtime.signGoalArtifact(full, { goalId, runId });
+      signedManifest = manifest == null ? null : JSON.stringify(manifest);
+    } catch (err: unknown) {
+      logLine(
+        `[scheduler] goal artifact could not be signed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    // runId = outcome_id, so the run, its outcome and its tool-audit rows
+    // all join on one id.
+    this.goalOutcomeStore.add({
+      outcome_id: runId,
+      goal_id: goalId,
+      motebit_id: this.motebitId,
+      ran_at: Date.now(),
+      status: "completed",
+      summary: full.slice(0, 500) || null,
+      tool_calls_made: result.toolCallsMade,
+      memories_formed: result.memoriesFormed,
+      error_message: null,
+      ...(full !== "" ? { response_full: full } : {}),
+      ...(signedManifest != null ? { signed_manifest: signedManifest } : {}),
+    });
+  }
+
   private async formGoalOutcomeMemory(goal: Goal, result: GoalStreamResult): Promise<void> {
     if (!result.responseText) return;
     try {

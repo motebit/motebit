@@ -654,6 +654,8 @@ export class MotebitRuntime {
   private planExecution!: PlanExecutionManager;
   private approvalStore: import("@motebit/sdk").ApprovalStoreAdapter | null = null;
   private haltStore: import("@motebit/sdk").HaltStoreAdapter | null = null;
+  /** Held so a policy-config swap cannot drop it. See `updatePolicyConfig`. */
+  private runEvidenceSink: import("@motebit/sdk").RunEvidenceSink | null = null;
   /**
    * What the executor does when a halt must be honored. Each listener
    * stops what it owns and returns a description of what it stopped —
@@ -1051,7 +1053,8 @@ export class MotebitRuntime {
     // Handed to the gate rather than held here: the gate is where a tool
     // result's content-addressed bytes are still in hand, and where the
     // completion row it sits beside is written.
-    this.policy.setEvidenceSink(adapters.storage.runEvidenceSink ?? null);
+    this.runEvidenceSink = adapters.storage.runEvidenceSink ?? null;
+    this.policy.setEvidenceSink(this.runEvidenceSink);
 
     // Agent graph — algebraic routing substrate
     this.agentGraph = new AgentGraphManager(
@@ -1726,6 +1729,12 @@ export class MotebitRuntime {
     // Completion row for the decision the gate wrote above — closes the
     // durable-execution ledger for this call before any sink can throw.
     this.policy.recordResult(turnCtx, decision, name, args, result.ok, completedAt - startedAt);
+    // The deterministic-affordance path closes the ledger, so it records
+    // its evidence too. A `read_url` fired from a chip tap or a slash
+    // command content-addresses the same bytes as one the model asked
+    // for, and discarding that pointer would make what a run can prove
+    // depend on who started it.
+    this.policy.recordEvidence(turnCtx, decision, name, result);
     const visibleResult = result.ok ? (result.data ?? null) : (result.error ?? null);
 
     // Fire the live activity channel first — the slab renders
@@ -1967,7 +1976,11 @@ export class MotebitRuntime {
    * Immutable swap — no mutation of the existing PolicyGate.
    */
   updatePolicyConfig(config: Partial<PolicyConfig>): void {
-    this.policy = new PolicyGate(config, this.toolAuditSink);
+    // The evidence sink travels with the swap. It did not, and the
+    // result was a runtime that stopped recording evidence the moment a
+    // user changed any policy setting — silently, and reported
+    // afterwards as "none recorded".
+    this.policy = new PolicyGate(config, this.toolAuditSink, this.runEvidenceSink);
     this.wireLoopDeps();
   }
 
@@ -3691,6 +3704,7 @@ export class MotebitRuntime {
           // the desktop renderer's IPC-async cache) silently no-op.
           conversationStore: this.conversationStore,
           toolAuditSink: this.toolAuditSink,
+          runEvidenceSink: this.runEvidenceSink,
           logger: this._logger,
         },
         {
