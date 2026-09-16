@@ -102,7 +102,23 @@ async function sendRemote(config: CliConfig, command: string, args?: string): Pr
   const active = await loadActiveSigningKey(full, {
     promptLabel: "Passphrase (to sign the command): ",
   });
-  const client = new RelayClient({ baseUrl: relayUrl });
+  const deviceId = full.device_id;
+  if (deviceId == null || deviceId === "") {
+    secureErase(active.privateKey);
+    console.error(
+      "Error: no device_id in config — the relay needs transport auth for this route. Run `motebit register` first.",
+    );
+    process.exit(1);
+  }
+  // Two credentials, two jobs. `deviceKey` mints the short-lived
+  // audience-bound bearer the `/api/v1/agents/*` middleware requires;
+  // without it the relay refuses before it ever examines the envelope,
+  // and the failure reads as "not delivered". The envelope itself,
+  // signed with the same key below, is the end-to-end authorization.
+  const client = new RelayClient({
+    baseUrl: relayUrl,
+    auth: { deviceKey: { motebitId, deviceId, privateKey: active.privateKey } },
+  });
   try {
     const result = await client.sendAgentCommand({
       motebitId,

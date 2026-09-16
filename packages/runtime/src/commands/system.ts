@@ -37,10 +37,13 @@ export function cmdTools(runtime: MotebitRuntime): CommandResult {
  * things matter more than they would in a read-only command.
  *
  * **It must show the real action.** A tool name is not a decision; the
- * destination, the path, the amount are. The queue stores a 500-char
- * preview of the full arguments alongside a hash over all of them, and
- * both are surfaced, so a preview that differs from what would execute
- * is detectable rather than merely trusted.
+ * destination, the path, the amount are. The queue stores a preview of
+ * the arguments alongside a hash over all of them, and both are
+ * surfaced — but note precisely what the hash buys: the remote surface
+ * holds neither the full arguments nor the un-redacted preview, so it
+ * cannot recompute anything. The hash lets a LATER LOCAL check, on the
+ * machine that holds the arguments, detect a preview that diverged from
+ * what would execute. It is carried forward, not verified here.
  *
  * **It must not leak while doing so.** This output crosses the relay,
  * which is not a sovereign party, so argument text goes through the

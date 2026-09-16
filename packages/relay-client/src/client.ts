@@ -325,7 +325,13 @@ export class RelayClient {
       now: this.now,
     });
     const body = await this.requestJson("POST", path, {
-      // The envelope IS the authorization; the bearer is transport auth.
+      // The envelope is the end-to-end AUTHORIZATION; the bearer is
+      // transport auth, and the route requires it — `/agents/*` is
+      // behind the agent auth middleware and this path is not in
+      // `PUBLIC_AGENT_ROUTES`, so without a token the request is
+      // rejected before the envelope is ever examined. The audience is
+      // the route's default for a path with no more specific one.
+      audience: "admin:query",
       // Retry is off: these verbs mutate, and the envelope carries a
       // freshness window a blind retry would race.
       retry: false,

@@ -118,6 +118,8 @@ vi.mock("expo-three", () => ({
 }));
 
 // @motebit/crypto
+// `vi.mock` is hoisted above module scope, so the spy is created inside
+// the factory and read back through the mocked module in the tests.
 vi.mock("@motebit/encryption", () => ({
   mintAudienceToken: vi.fn(function () {
     return Promise.resolve({ token: "mock-signed-token", payload: {} });
@@ -750,9 +752,27 @@ describe("MobileApp.sendRemoteCommand", () => {
     expect("args" in body).toBe(false);
   });
 
-  it("a 401 says the device key is not the identity key, not that the command was refused", async () => {
-    stubFetch(401, { message: "envelope verification failed" });
-    await expect(app.sendRemoteCommand("halt")).rejects.toThrow(/not the motebit's identity key/);
+  it("mints the audience the route requires — `sync` is rejected by exact-match verification", async () => {
+    const { mintAudienceToken } = await import("@motebit/encryption");
+    const spy = vi.mocked(mintAudienceToken);
+    const calls = stubFetch(200, { summary: "ok" });
+    spy.mockClear();
+    await app.sendRemoteCommand("halt");
+    expect(new Headers(calls[0]!.init?.headers).get("Authorization")).toMatch(/^Bearer /);
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({ aud: "admin:query" }),
+      expect.anything(),
+    );
+  });
+
+  it("a 401 carries the relay's own reason rather than a confident wrong diagnosis", async () => {
+    // Two different rejections land on 401: the transport token and the
+    // command envelope. The earlier version blamed the device key for
+    // what was an audience mismatch.
+    stubFetch(401, { message: "Token verification failed" });
+    const err = (await app.sendRemoteCommand("halt").catch((e: unknown) => e)) as Error;
+    expect(err.message).toContain("Token verification failed");
+    expect(err.message).toContain("If it names the envelope");
   });
 
   it("a disconnected runtime says NOT DELIVERED — never that something stopped", async () => {

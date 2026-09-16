@@ -48,10 +48,14 @@ const RELAY_SIDE_COMMANDS = new Set(["balance", "deposits", "discover", "proposa
  * indistinguishable from a genuine refusal, on exactly the commands
  * where a false negative is most costly.
  *
- * So these are routed to a peer announcing `background` (the capability
- * the CLI daemon announces and a phone does not). If no such peer is
- * connected the request fails as undelivered, which is the honest
- * answer: nothing was stopped and nothing was decided.
+ * So these are routed to a peer announcing `unattended_runtime` — the
+ * capability a surface announces only when it has actually wired the
+ * durable halt and approval stores. `background` is not that signal:
+ * the desktop app announces it and wires neither, so a halt routed by
+ * `background` could be answered "this surface cannot be halted" while
+ * the daemon kept running. If no such peer is connected the request
+ * fails as undelivered, which is the honest answer: nothing was stopped
+ * and nothing was decided.
  */
 const UNATTENDED_RUNTIME_COMMANDS = new Set(["halt", "resume", "halt-status", "approvals"]);
 
@@ -169,6 +173,11 @@ export function registerCommandRoutes(deps: CommandRouteDeps): void {
         const result = await forwardCommandToAgent(peers, command, args, body.envelope);
         return c.json(result);
       } catch (err: unknown) {
+        // A typed rejection already says what happened and with what
+        // status — re-wrapping it as a 500 would turn "nothing was
+        // delivered" into "the relay broke", and a consent surface
+        // cannot tell those apart.
+        if (err instanceof HTTPException) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         if (msg === "Command timed out") {
           return c.json({ summary: "Agent did not respond in time." }, 504);
@@ -235,18 +244,21 @@ async function forwardCommandToAgent(
     // unattended-runtime set, only a peer that actually runs unattended
     // work can — see UNATTENDED_RUNTIME_COMMANDS.
     const candidates = UNATTENDED_RUNTIME_COMMANDS.has(command)
-      ? peers.filter((p) => p.capabilities?.includes("background") === true)
+      ? peers.filter((p) => p.capabilities?.includes("unattended_runtime") === true)
       : peers;
 
     if (candidates.length === 0) {
       clearTimeout(timer);
       pendingCommands.delete(commandId);
+      // 404, not 500: "nothing was delivered" is the honest reading a
+      // consent surface must be able to show, and clients distinguish
+      // not-connected from server fault by status.
       reject(
-        new Error(
-          UNATTENDED_RUNTIME_COMMANDS.has(command)
+        new HTTPException(404, {
+          message: UNATTENDED_RUNTIME_COMMANDS.has(command)
             ? "No unattended runtime is connected — nothing was delivered, so nothing was stopped or decided"
             : "No reachable device",
-        ),
+        }),
       );
       return;
     }

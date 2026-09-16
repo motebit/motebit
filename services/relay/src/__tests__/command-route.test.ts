@@ -170,7 +170,9 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
       identityPrivateKey: keys.privateKey,
     });
     const { status, json } = await postCommand(AGENT_ID, { command: "halt", envelope });
-    expect(status).toBeGreaterThanOrEqual(400);
+    // 404, not 500: a consent surface must be able to read this as
+    // "nothing was delivered", which is not the same as "the relay broke".
+    expect(status).toBe(404);
     expect(JSON.stringify(json)).toMatch(/No unattended runtime is connected|not connected/i);
     // Crucially: the phone was never asked.
     expect(phone.sentTo).toEqual([]);
@@ -178,7 +180,7 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
 
   it("a halt IS sent to the peer that runs unattended work", async () => {
     const phone = fakePeer("phone", ["push_wake"]);
-    const daemon = fakePeer("daemon", ["file_system", "background"]);
+    const daemon = fakePeer("daemon", ["file_system", "background", "unattended_runtime"]);
     relay.connections.set(AGENT_ID, [phone.peer, daemon.peer] as unknown as Parameters<
       typeof relay.connections.set
     >[1]);
@@ -194,6 +196,25 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     expect(daemon.sentTo).toHaveLength(1);
     expect(phone.sentTo).toEqual([]);
     expect(daemon.sentTo[0]).toContain('"command":"halt"');
+  });
+
+  it("a surface that merely works in the background is not treated as the runtime", async () => {
+    // The desktop app announces `background` and wires neither the halt
+    // store nor a decidable approval queue. Routing by `background`
+    // would let it answer "this surface cannot be halted" while the
+    // daemon kept running — indistinguishable from a refusal.
+    const desktop = fakePeer("desktop", ["background", "file_system"]);
+    relay.connections.set(AGENT_ID, [desktop.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "halt",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    const { status } = await postCommand(AGENT_ID, { command: "halt", envelope });
+    expect(status).toBe(404); // not delivered — never a 500
+    expect(desktop.sentTo).toEqual([]);
   });
 
   it("a read-only command may still be answered by any connected surface", async () => {

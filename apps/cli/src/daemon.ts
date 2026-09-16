@@ -6,6 +6,7 @@ import * as path from "node:path";
 import {
   MotebitRuntime,
   NullRenderer,
+  CommandReplayGuard,
   executeCommand,
   cmdSelfTest,
   PLANNING_TASK_ROUTER,
@@ -67,6 +68,13 @@ import {
   buildStorageAdapters,
   deriveGovernanceForRuntime,
 } from "./runtime-factory.js";
+
+/**
+ * Per-process replay memory for remote commands. The daemon is the only
+ * surface the relay routes the mutating verbs to, so this is where a
+ * replayed envelope has to be caught.
+ */
+const commandReplayGuard = new CommandReplayGuard();
 
 export async function handleRun(config: CliConfig): Promise<void> {
   const explicitIdentity = config.identity != null && config.identity !== "";
@@ -359,6 +367,10 @@ export async function handleRun(config: CliConfig): Promise<void> {
       DeviceCapability.FileSystem,
       DeviceCapability.Keyring,
       DeviceCapability.Background,
+      // The daemon wires the durable halt + approval stores, so it can
+      // honor a stop and decide a queued approval. Announced here and
+      // nowhere else; the relay routes those verbs by it.
+      DeviceCapability.UnattendedRuntime,
     ];
 
     wsAdapter = new WebSocketEventStoreAdapter({
@@ -441,6 +453,21 @@ export async function handleRun(config: CliConfig): Promise<void> {
               // envelope verified above is the authorization. It exists
               // so a halt's durable record says the sovereign stopped
               // their motebit from somewhere else.
+              const sig = (cmdMsg.envelope as { signature?: string } | undefined)?.signature;
+              if (typeof sig === "string" && commandReplayGuard.isReplay(sig)) {
+                wsAdapter!.sendRaw(
+                  JSON.stringify({
+                    type: "command_response",
+                    id: cmdMsg.id,
+                    result: {
+                      summary:
+                        "command_request rejected: this envelope has already been accepted (replay)",
+                    },
+                  }),
+                );
+                return;
+              }
+              // `origin: "remote"` is recorded, never trusted.
               const result = await executeCommand(runtime, cmdMsg.command, cmdMsg.args, undefined, {
                 origin: "remote",
               });
@@ -1360,6 +1387,20 @@ export async function handleServe(config: CliConfig): Promise<void> {
                     type: "command_response",
                     id: cmdMsg.id,
                     result: { summary: verdict.reason },
+                  }),
+                );
+                return;
+              }
+              const sig = (cmdMsg.envelope as { signature?: string } | undefined)?.signature;
+              if (typeof sig === "string" && commandReplayGuard.isReplay(sig)) {
+                serveWsAdapter!.sendRaw(
+                  JSON.stringify({
+                    type: "command_response",
+                    id: cmdMsg.id,
+                    result: {
+                      summary:
+                        "command_request rejected: this envelope has already been accepted (replay)",
+                    },
                   }),
                 );
                 return;

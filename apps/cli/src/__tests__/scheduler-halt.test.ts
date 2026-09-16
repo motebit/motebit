@@ -338,6 +338,21 @@ describe("halt at the scheduler", () => {
     s2.stop();
   });
 
+  it("a halt store that throws logs and keeps ticking — it must not take the daemon down", async () => {
+    db.goalStore.add(goal());
+    const m = mockRuntime(db);
+    (m.runtime as unknown as { honorHalts: () => Promise<never> }).honorHalts = () =>
+      Promise.reject(new Error("database is locked"));
+    const s = scheduler(db, m);
+    s.start(999_999);
+    // Phase 0 sits outside the tick body's try/catch, and the interval
+    // calls `void this.tick()` with no unhandledRejection handler — an
+    // unguarded throw here would end the process.
+    await expect(s.tickOnce()).resolves.toBeUndefined();
+    expect(m.streams).toBeGreaterThan(0); // the tick continued
+    s.stop();
+  });
+
   it("a goal-scoped halt stops that goal and leaves the others running", async () => {
     db.goalStore.add(goal({ goal_id: "goal-A" }));
     db.goalStore.add(goal({ goal_id: "goal-B" }));

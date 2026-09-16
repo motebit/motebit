@@ -162,6 +162,15 @@ describe("cmdHalt", () => {
     expect([...rows.values()][0]).toMatchObject({ goal_id: null, reason: "goal cleanup done" });
   });
 
+  it("a reason that PARSES as JSON but names no goal is still a reason — never silently discarded", async () => {
+    const { runtime, rows } = makeRuntime({ stopper: () => "stopped" });
+    await cmdHalt(runtime, '{"deploy":"done"}', "local");
+    expect([...rows.values()][0]).toMatchObject({
+      goal_id: null,
+      reason: '{"deploy":"done"}',
+    });
+  });
+
   it("a reason that merely starts with a brace is still a reason", async () => {
     const { runtime, rows } = makeRuntime({ stopper: () => "stopped" });
     await cmdHalt(runtime, "{not json after all", "local");

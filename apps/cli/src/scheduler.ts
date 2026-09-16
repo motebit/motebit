@@ -572,7 +572,20 @@ export class GoalScheduler {
     // interrupt work in progress, not queue behind it. `honorHalts` is
     // idempotent and reads one row, so running it on every interval
     // costs nothing once the work is stopped.
-    await this.runtime.honorHalts();
+    // …and inside its OWN try/catch, because it is now outside the one
+    // that wraps the tick body. `tick()` is invoked as `void this.tick()`
+    // from the interval and the daemon registers no unhandledRejection
+    // handler, so a throw here — a busy SQLite write, a malformed row, a
+    // rejecting stopper — would kill the daemon rather than log a failed
+    // tick. A halt that cannot be honored must not take the process down
+    // with it.
+    try {
+      await this.runtime.honorHalts();
+    } catch (err: unknown) {
+      errorLine(
+        `[halt] honoring failed (will retry next tick): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
 
     // Single-flight guard — prevent re-entry if previous tick is still running
     if (this.ticking) return;

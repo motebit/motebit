@@ -1419,6 +1419,18 @@ export enum DeviceCapability {
    * (spec/credential-v1.md §3.4).
    */
   SecureEnclave = "secure_enclave",
+  /**
+   * This surface runs unattended work AND wires the durable halt and
+   * approval stores, so it can honor a stop and decide a queued
+   * approval. Distinct from `Background`, which several surfaces
+   * announce because they can do work in the background — the desktop
+   * app announces `Background` and cannot be halted, so routing a stop
+   * by that capability would let a surface answer "cannot be halted"
+   * while the real runtime kept running, which reads exactly like a
+   * refusal. A surface announces this only when the stores are wired;
+   * saying so falsely is worse than not saying it.
+   */
+  UnattendedRuntime = "unattended_runtime",
 }
 
 /** Push notification platform for wake-on-demand mobile execution. */

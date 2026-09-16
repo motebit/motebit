@@ -1646,7 +1646,11 @@ export class MobileApp {
       identityPrivateKey: privBytes,
     });
     secureErase(privBytes);
-    const token = await this.createSyncToken();
+    // Transport auth for `/api/v1/agents/*`, which this path sits behind.
+    // The audience must be the route's (`admin:query`) — the default
+    // `sync` audience is rejected by exact-match verification, which
+    // looks identical to a refused command.
+    const token = await this.createSyncToken("admin:query");
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (token) headers["Authorization"] = `Bearer ${token}`;
     const res = await fetch(`${syncUrl}/api/v1/agents/${this.motebitId}/command`, {
@@ -1661,9 +1665,15 @@ export class MobileApp {
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       if (res.status === 401) {
+        // Two different rejections land here: the transport token, and
+        // the command envelope. Naming only one of them would be a
+        // confident wrong diagnosis — the earlier version blamed the
+        // device key for what was an audience mismatch. Carry the
+        // relay's own reason and offer the key as a possibility.
         throw new Error(
-          "This device's key is not the motebit's identity key, so the runtime will not accept commands from it. " +
-            "Re-pair with key transfer from the device that holds the identity.",
+          `The relay rejected this command: ${text || "unauthorized"}. ` +
+            "If it names the envelope, this device's key is not the motebit's identity key — " +
+            "re-pair with key transfer from the device that holds the identity.",
         );
       }
       if (res.status === 404 || res.status === 503) {

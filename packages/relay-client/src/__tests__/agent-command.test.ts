@@ -33,7 +33,11 @@ describe("sendAgentCommand", () => {
       return jsonResponse({ summary: "Stopped all unattended execution." });
     }) as unknown as typeof fetch;
 
-    const client = new RelayClient({ baseUrl: "https://relay.example", fetchImpl });
+    const client = new RelayClient({
+      baseUrl: "https://relay.example",
+      fetchImpl,
+      auth: { staticToken: "t" },
+    });
     const result = await client.sendAgentCommand({
       motebitId: MOTEBIT_ID,
       command: "halt",
@@ -65,7 +69,11 @@ describe("sendAgentCommand", () => {
       >;
       return jsonResponse({ summary: "ok" });
     }) as unknown as typeof fetch;
-    const client = new RelayClient({ baseUrl: "https://relay.example", fetchImpl });
+    const client = new RelayClient({
+      baseUrl: "https://relay.example",
+      fetchImpl,
+      auth: { staticToken: "t" },
+    });
     await client.sendAgentCommand({
       motebitId: MOTEBIT_ID,
       command: "halt",
@@ -93,12 +101,53 @@ describe("sendAgentCommand", () => {
     expect(foreign.ok).toBe(false);
   });
 
+  it("carries transport auth — without it the relay refuses before it ever looks at the envelope", async () => {
+    const kp = await generateKeypair();
+    let headers: Headers | undefined;
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      headers = new Headers(init?.headers);
+      return jsonResponse({ summary: "ok" });
+    }) as unknown as typeof fetch;
+    const client = new RelayClient({
+      baseUrl: "https://relay.example",
+      fetchImpl,
+      auth: { staticToken: "operator-token" },
+    });
+    await client.sendAgentCommand({
+      motebitId: MOTEBIT_ID,
+      command: "halt",
+      identityPrivateKey: kp.privateKey,
+    });
+    // `/api/v1/agents/*` is behind the agent auth middleware and this
+    // path is not public: no header, no handler, and the whole feature
+    // silently fails with "not delivered".
+    expect(headers?.get("Authorization")).toBe("Bearer operator-token");
+  });
+
+  it("without any credential it fails as an auth error rather than sending an unauthenticated request", async () => {
+    const kp = await generateKeypair();
+    const fetchImpl = vi.fn(async () => jsonResponse({ summary: "ok" })) as unknown as typeof fetch;
+    const client = new RelayClient({ baseUrl: "https://relay.example", fetchImpl });
+    await expect(
+      client.sendAgentCommand({
+        motebitId: MOTEBIT_ID,
+        command: "halt",
+        identityPrivateKey: kp.privateKey,
+      }),
+    ).rejects.toMatchObject({ kind: "auth" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("a runtime that is not connected surfaces as an http error, never as a result", async () => {
     const kp = await generateKeypair();
     const fetchImpl = vi.fn(async () =>
       jsonResponse({ message: "Agent not connected" }, 503),
     ) as unknown as typeof fetch;
-    const client = new RelayClient({ baseUrl: "https://relay.example", fetchImpl });
+    const client = new RelayClient({
+      baseUrl: "https://relay.example",
+      fetchImpl,
+      auth: { staticToken: "t" },
+    });
     await expect(
       client.sendAgentCommand({
         motebitId: MOTEBIT_ID,
@@ -111,7 +160,11 @@ describe("sendAgentCommand", () => {
   it("a response without a summary is a parse failure, not a silent success", async () => {
     const kp = await generateKeypair();
     const fetchImpl = vi.fn(async () => jsonResponse({ nope: true })) as unknown as typeof fetch;
-    const client = new RelayClient({ baseUrl: "https://relay.example", fetchImpl });
+    const client = new RelayClient({
+      baseUrl: "https://relay.example",
+      fetchImpl,
+      auth: { staticToken: "t" },
+    });
     await expect(
       client.sendAgentCommand({
         motebitId: MOTEBIT_ID,

@@ -66,11 +66,17 @@ export async function cmdHalt(
   if (raw.startsWith("{")) {
     try {
       const parsed = JSON.parse(raw) as { goal_id?: unknown; reason?: unknown };
-      if (typeof parsed.goal_id === "string" && parsed.goal_id !== "") goalId = parsed.goal_id;
-      reason = typeof parsed.reason === "string" ? parsed.reason : "";
+      // `goal_id` is the marker. Without it this is not the structured
+      // form, however well it parses — a reason like `{"deploy":"done"}`
+      // would otherwise parse, find no `reason` field, and silently
+      // discard what the person typed from the durable record and every
+      // surface that renders it.
+      if (typeof parsed.goal_id === "string" && parsed.goal_id !== "") {
+        goalId = parsed.goal_id;
+        reason = typeof parsed.reason === "string" ? parsed.reason : "";
+      }
     } catch {
-      // Not the structured form after all — it is a reason that happens
-      // to start with a brace. Treat it as one rather than guessing.
+      // Not JSON — a reason that happens to start with a brace.
     }
   }
 

@@ -1501,7 +1501,8 @@ export enum DeviceCapability {
     PushWake = "push_wake",
     SecureEnclave = "secure_enclave",
     // (undocumented)
-    StdioMcp = "stdio_mcp"
+    StdioMcp = "stdio_mcp",
+    UnattendedRuntime = "unattended_runtime"
 }
 
 // @public (undocumented)

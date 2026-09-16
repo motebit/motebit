@@ -222,8 +222,11 @@ What the phone is shown is redacted the way any egress to a non-sovereign
 party is: the destination, the path and the amount are visible so the
 decision is real, while credential-class values are masked, and the full
 arguments never leave the machine. The preview is accompanied by a hash
-over the *whole* argument set, so a preview that differs from what would
-execute is detectable rather than merely trusted.
+over the *whole* argument set. Note precisely what that hash buys: the
+phone holds neither the full arguments nor the un-redacted preview, so it
+cannot recompute anything. The hash lets a later check **on the machine
+that holds the arguments** detect a preview that diverged from what would
+execute; the phone carries it forward rather than verifying it.
 
 ## Governance enforcement
 

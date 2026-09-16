@@ -374,6 +374,7 @@ export type { MoneyMeter, MeterVerdict } from "./money-meter.js";
 // executeCommand. See docs/doctrine/daemon-desktop-unification.md
 // increment 4.
 export { verifyAgentCommandEnvelope, agentCommandAudience } from "@motebit/crypto";
+export { CommandReplayGuard } from "./command-replay-guard.js";
 export type { AgentCommandVerdict } from "@motebit/crypto";
 
 // Slab projection policy + band narration (motebit-computer.md §"Not on the slab").

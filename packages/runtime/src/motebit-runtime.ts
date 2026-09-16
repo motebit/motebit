@@ -406,6 +406,13 @@ export interface ToolRecallResult {
   supersededAt?: number;
 }
 
+/**
+ * How long one halt stopper may take before the acknowledgement records
+ * that it did not finish. Generous — a stopper aborts in-flight work, it
+ * does not wait for it — but bounded, because honoring is serialized.
+ */
+const HALT_STOPPER_TIMEOUT_MS = 10_000;
+
 export class MotebitRuntime {
   readonly motebitId: string;
   readonly state: StateVectorEngine;
@@ -2943,7 +2950,21 @@ export class MotebitRuntime {
       const stopped: string[] = [];
       for (const listener of this.haltListeners) {
         try {
-          stopped.push(await listener(halt));
+          // Bounded: honoring is serialized, so a stopper that never
+          // settles would wedge every later halt behind it — turning a
+          // stuck abort into a motebit that can no longer be stopped at
+          // all. The timeout records the truth instead of hanging.
+          stopped.push(
+            await Promise.race([
+              Promise.resolve(listener(halt)),
+              new Promise<string>((resolve) =>
+                setTimeout(
+                  () => resolve("a stopper did not finish in time — it may still be running"),
+                  HALT_STOPPER_TIMEOUT_MS,
+                ),
+              ),
+            ]),
+          );
         } catch (err) {
           // A stopper that throws must not leave the halt unacknowledged
           // — that would read as "still running" forever. Record the
