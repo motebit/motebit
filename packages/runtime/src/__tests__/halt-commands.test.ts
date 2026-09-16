@@ -313,7 +313,12 @@ describe("cmdResume / cmdHaltStatus", () => {
     await cmdHalt(runtime, undefined, "local");
     const s = cmdHaltStatus(runtime);
     expect(s.summary).not.toMatch(/^Stopped\b/);
-    expect(s.summary).toContain("1 process(es) have stopped");
+    // "acknowledged", not "stopped": a process answering says it looked,
+    // not that it had work to stop. The worker answers a goal-scoped
+    // halt with "nothing here runs under that goal", and counting that
+    // under "stopped" read as the goal having stopped.
+    expect(s.summary).toContain("1 process(es) have acknowledged");
+    expect(s.summary).not.toContain("have stopped");
     expect(s.summary).toContain("has not acknowledged is still running");
     const active = (s.data as { active: Array<Record<string, unknown>> }).active;
     expect(active[0]!["acknowledged_at"]).toBeUndefined();
@@ -327,6 +332,36 @@ describe("cmdResume / cmdHaltStatus", () => {
 });
 
 describe("cmdApprovals — the consent surface", () => {
+  it("an ambiguous approval prefix is refused — nothing is decided", () => {
+    // `listPending` is oldest-first, so resolving to the first match
+    // meant `/approve 1` approved whichever queued call happened to be
+    // oldest among those starting with "1" — possibly a money action
+    // nobody named — and confirmed it by tool name as though it were
+    // the one asked for. `resume` already refuses an ambiguous halt
+    // prefix; deciding an approval is the more consequential verb.
+    const { runtime, resolved } = makeRuntime({
+      pending: [
+        approval({ approval_id: "1aaa0000", tool_name: "send_payment" }),
+        approval({ approval_id: "1bbb0000", tool_name: "web_search" }),
+      ],
+    });
+    const r = cmdApprovals(runtime, "approve 1");
+    expect(r.summary).toContain("matches 2 pending approvals");
+    expect(r.summary).toContain("Nothing was decided");
+    expect(resolved).toEqual([]);
+  });
+
+  it("an exact id still decides, even when it prefixes another", () => {
+    const { runtime, resolved } = makeRuntime({
+      pending: [
+        approval({ approval_id: "1aaa", tool_name: "web_search" }),
+        approval({ approval_id: "1aaa0000", tool_name: "send_payment" }),
+      ],
+    });
+    cmdApprovals(runtime, "approve 1aaa");
+    expect(resolved).toEqual([{ id: "1aaa", status: "approved" }]);
+  });
+
   it("a surface with no readable queue says so rather than reporting an empty one", () => {
     // The relay's compatibility fallback can deliver `approvals list` to
     // a surface that is not the daemon. Answering "No pending

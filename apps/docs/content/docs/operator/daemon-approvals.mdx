@@ -152,7 +152,7 @@ an approval granted before it.
 ```bash
 motebit halt --reason "going out"        # stop all unattended execution
 motebit halt goal a1b2c3d4               # stop one goal, leave the rest
-motebit halt-status                      # what is stopped, and whether it acknowledged
+motebit halt-status                      # what was asked, and which processes acknowledged
 motebit resume a1b2c3d4                  # give the permission back
 motebit resume all
 ```
@@ -202,6 +202,14 @@ working under a surface that said "Stopped". So no surface here says a
 bare "Stopped" — `motebit halt` names which processes acknowledged and
 what each of them stopped, and a remote `halt` answers for the runtime
 that received it while listing the rest.
+
+**Acknowledged is not stopped either.** A process acknowledging says it
+answered for itself, not that it had work to stop: the worker answers a
+goal-scoped halt with "nothing here runs under that goal — dispatched
+tasks continue", which is true, useful, and not the goal having
+stopped. So `halt-status` counts processes that ACKNOWLEDGED and prints
+what each one stopped underneath, rather than folding both facts into
+one word.
 
 **Requested is not stopped, and neither is one acknowledgement.** The
 request carries only the ask: who asked, what for, and when. Whether

@@ -1731,7 +1731,25 @@ export class MobileApp {
       }
       throw new Error(`${res.status}: ${text}`);
     }
-    return (await res.json()) as CommandResult;
+    // Validated, not trusted. `executeCommand` returns null for any
+    // verb it does not know, the daemon serializes that as
+    // `result: null`, and the relay passes it through as a 200. Casting
+    // it meant the caller dereferenced null and the person saw a raw
+    // TypeError instead of being told the runtime did not recognise the
+    // command. That skew is exactly what the relay's compatibility
+    // fallback exists to tolerate, so it is reachable. `RelayClient`
+    // already guards the same case on the desktop path.
+    const body: unknown = await res.json();
+    if (
+      body == null ||
+      typeof body !== "object" ||
+      typeof (body as { summary?: unknown }).summary !== "string"
+    ) {
+      throw new Error(
+        `The runtime did not recognise "${command}" — it answered without a result. This phone may be newer than the runtime; update it (npm i -g motebit@latest) and try again.`,
+      );
+    }
+    return body as CommandResult;
   }
 
   subscribe(fn: (state: MotebitState) => void): () => void {

@@ -79,9 +79,25 @@ export function cmdApprovals(runtime: MotebitRuntime, args?: string): CommandRes
       };
     }
     const pending = store.listPending(runtime.motebitId);
-    const match = pending.find(
-      (a) => a.approval_id === idPrefix || a.approval_id.startsWith(idPrefix),
-    );
+    // An ambiguous prefix is refused, never resolved to the oldest
+    // match. `listPending` is oldest-first, so `/approve 1` would have
+    // approved whichever queued call happened to be oldest among those
+    // starting with "1" — possibly a money action nobody named — and
+    // then confirmed it by tool name as though it were the one asked
+    // for. `resume` already refuses an ambiguous halt prefix for this
+    // reason; deciding an approval is the more consequential verb of
+    // the two and was the one without the guard.
+    const exact = pending.find((a) => a.approval_id === idPrefix);
+    const prefixed = pending.filter((a) => a.approval_id.startsWith(idPrefix));
+    if (exact == null && prefixed.length > 1) {
+      return {
+        summary: `"${idPrefix}" matches ${prefixed.length} pending approvals — name one exactly. Nothing was decided.`,
+        detail: prefixed
+          .map((a) => `${a.approval_id.slice(0, 8)} (${a.tool_name}, ${a.risk_level})`)
+          .join("\n"),
+      };
+    }
+    const match = exact ?? prefixed[0];
     if (!match) {
       return {
         summary: `No pending approval matching "${idPrefix}".`,

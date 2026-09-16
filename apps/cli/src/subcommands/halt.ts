@@ -103,10 +103,16 @@ const ACK_WAIT_MS = 3_000;
 const ACK_POLL_MS = 150;
 
 /**
- * One line per halt. Never the bare word "stopped": each process
- * acknowledges for itself, and this command cannot enumerate the
- * processes that exist, so it reports how many have answered rather
- * than implying that is all of them.
+ * One line per halt.
+ *
+ * The state word is "acknowledged", never "stopped". An acknowledgement
+ * says a process answered for itself; it does not say that process had
+ * anything to stop — the worker answers a goal-scoped halt with
+ * "nothing here runs under that goal", which counted under the word
+ * "stopped" read as the goal having stopped while it kept firing.
+ * Each process also answers only for itself, and this command cannot
+ * enumerate the processes that exist, so it reports how many have
+ * answered rather than implying that is all of them.
  */
 function describe(halt: HaltRequest, acks: HaltAcknowledgement[]): string {
   const scope =
@@ -115,7 +121,7 @@ function describe(halt: HaltRequest, acks: HaltAcknowledgement[]): string {
     halt.lifted_at != null
       ? "lifted"
       : acks.length > 0
-        ? `${acks.length} process(es) stopped`
+        ? `${acks.length} process(es) acknowledged`
         : "stop requested (no process has acknowledged)";
   const reason = halt.reason != null && halt.reason !== "" ? ` · ${halt.reason}` : "";
   return `  ${halt.halt_id.slice(0, 8)}  ${scope.padEnd(26)}${state}  (${halt.origin})${reason}`;
@@ -381,7 +387,7 @@ export async function handleHaltStatus(config: CliConfig): Promise<void> {
       console.log(
         silent > 0
           ? `Stop requested for ${scopeWord} — ${silent} of ${active.length} with no acknowledgement yet.`
-          : `Stop requested for ${scopeWord} — ${stopped} process(es) stopped. A process that has not acknowledged is still running.`,
+          : `Stop requested for ${scopeWord} — ${stopped} process(es) acknowledged. What each stopped is listed below; a process that has not acknowledged is still running.`,
       );
       for (const e of withAcks) console.log(describe(e.halt, e.acks));
     }

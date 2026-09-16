@@ -20,10 +20,20 @@ import type { CommandResult } from "./types.js";
 import type { HaltAcknowledgement, HaltRequest } from "@motebit/sdk";
 
 /**
- * One line per halt. The state never renders as a bare "stopped":
- * acknowledgements are per process, and this command cannot know how
- * many processes run unattended work for this motebit, so it reports
- * the count it can see rather than a totality it cannot.
+ * One line per halt.
+ *
+ * The state word is "acknowledged", never "stopped", and the two are
+ * not the same fact. An acknowledgement says a process answered for
+ * itself; it does not say that process had anything to stop. The
+ * worker's stopper answers a goal-scoped halt with "nothing here runs
+ * under that goal — dispatched tasks continue", which is true and
+ * useful and is emphatically not the goal having stopped. Counting it
+ * under the word "stopped" turned that into "1 process(es) stopped"
+ * while the goal kept firing under the daemon.
+ *
+ * Acknowledgements are also per process, and this command cannot know
+ * how many processes run unattended work for this motebit, so it
+ * reports the count it can see rather than a totality it cannot.
  */
 function describe(halt: HaltRequest, acks: HaltAcknowledgement[]): string {
   const scope =
@@ -32,7 +42,7 @@ function describe(halt: HaltRequest, acks: HaltAcknowledgement[]): string {
     halt.lifted_at != null
       ? "lifted"
       : acks.length > 0
-        ? `${acks.length} process(es) stopped`
+        ? `${acks.length} process(es) acknowledged`
         : "stop requested — no process has acknowledged";
   const reason = halt.reason != null && halt.reason !== "" ? ` · ${halt.reason}` : "";
   return `${halt.halt_id.slice(0, 8)}  ${scope}  ${state}  (${halt.origin})${reason}`;
@@ -268,7 +278,7 @@ export function cmdHaltStatus(runtime: MotebitRuntime): CommandResult {
     summary:
       silent.length > 0
         ? `Stop requested for ${scopeWord}. ${silent.length} of ${active.length} halt(s) have no acknowledgement yet.`
-        : `Stop requested for ${scopeWord}. ${stoppedCount} process(es) have stopped; any process that has not acknowledged is still running.`,
+        : `Stop requested for ${scopeWord}. ${stoppedCount} process(es) have acknowledged; what each one stopped is below, and any process that has not acknowledged is still running.`,
     detail: withAcks.map((e) => describe(e.halt, e.acks)).join("\n"),
     data: {
       halted: true,

@@ -137,3 +137,9 @@ Thirteenth review round — seven findings, none high:
 - The shutdown path's halt read is guarded, so a locked database cannot skip the socket close, the database close and the private-key erase that follow it.
 - The dispatch path logs both its halt-read and honoring failures. It runs inside a handler that swallows exceptions, so an unlogged throw there dropped the task with no record — a refusal indistinguishable from never having arrived.
 - A surface with no approval queue at all is told that, rather than that its queue is read-only.
+
+Fourteenth review round — three findings, none high:
+
+- **An ambiguous approval prefix is refused, and nothing is decided.** Pending approvals list oldest-first, so resolving to the first match meant `/approve 1` approved whichever queued call happened to be oldest among those starting with "1" — possibly a money action nobody named — and then confirmed it by tool name as though it were the one asked for. Resuming already refused an ambiguous halt prefix; deciding an approval is the more consequential of the two and was the one without the guard.
+- **Acknowledged is not stopped, and the readers no longer say it is.** A process acknowledging says it answered for itself, not that it had work to stop: the worker answers a goal-scoped halt with "nothing here runs under that goal — dispatched tasks continue", which is true and is not the goal having stopped. Counted under the word "stopped" it read as one, while the goal kept firing under the daemon. The status readers now count processes that acknowledged and print what each one stopped underneath.
+- The phone validates the shape of a command response instead of trusting it, so a runtime that does not recognise a verb produces an honest message rather than a raw type error.
