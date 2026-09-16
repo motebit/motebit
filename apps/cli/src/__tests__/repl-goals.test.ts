@@ -48,6 +48,7 @@ const stubConfig = {
   project: undefined,
   reason: undefined,
   allowFreshRun: false,
+  remote: false,
   destination: undefined,
   capability: undefined,
   scope: undefined,

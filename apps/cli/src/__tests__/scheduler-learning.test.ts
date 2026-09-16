@@ -131,6 +131,13 @@ function createMockRuntime(
         eventsAppended.push({ event_type: "goal_removed", payload });
       }),
     },
+    // Halt contract (increment 2): a mock runtime that does not answer
+    // these makes the scheduler's halt checks throw. Never halted here.
+    onHalt: () => () => undefined,
+    halts: null,
+    haltInForce: () => null,
+    honorHalts: async () => [],
+    liftHalt: async () => false,
     setGoalStatusResolver: vi.fn(),
     memory: memoryGraph,
     getToolRegistry: vi.fn().mockReturnValue({

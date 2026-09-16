@@ -1,0 +1,214 @@
+/**
+ * `motebit halt` / `motebit resume` — withdrawing the standing
+ * permission to act unattended, and giving it back.
+ *
+ * Two reaches, and the difference between them is the whole point.
+ *
+ * **Local** (the default) writes the halt into this machine's durable
+ * state. It is in force from the instant it is written — nothing new
+ * starts — but this process is not the thing doing the work, so it
+ * cannot say the work has stopped. It waits briefly for the daemon to
+ * acknowledge and reports honestly either way.
+ *
+ * **`--remote`** sends a signed command to the runtime over the relay.
+ * The response IS the acknowledgement: the runtime stopped and said
+ * what stopping entailed. If the runtime is not connected the command
+ * fails, and the honest reading of that failure is "not delivered" —
+ * never "stopped".
+ */
+
+import { openMotebitDatabase } from "@motebit/persistence";
+import type { HaltRequest } from "@motebit/sdk";
+import { RelayClient, RelayClientError } from "@motebit/relay-client";
+
+import type { CliConfig } from "../args.js";
+import { loadFullConfig } from "../config.js";
+import { loadActiveSigningKey } from "../identity.js";
+import { secureErase } from "@motebit/encryption";
+import { getDbPath } from "../runtime-factory.js";
+import { requireMotebitId, getRelayUrl } from "./_helpers.js";
+
+/** How long a local `halt` waits for a running daemon to acknowledge. */
+const ACK_WAIT_MS = 3_000;
+const ACK_POLL_MS = 150;
+
+function describe(halt: HaltRequest): string {
+  const scope =
+    halt.goal_id == null ? "all unattended execution" : `goal ${halt.goal_id.slice(0, 8)}`;
+  const state =
+    halt.lifted_at != null
+      ? "lifted"
+      : halt.acknowledged_at != null
+        ? "stopped"
+        : "stop requested (not acknowledged)";
+  const reason = halt.reason != null && halt.reason !== "" ? ` · ${halt.reason}` : "";
+  return `  ${halt.halt_id.slice(0, 8)}  ${scope.padEnd(26)}${state}  (${halt.origin})${reason}`;
+}
+
+async function sendRemote(config: CliConfig, command: string, args?: string): Promise<void> {
+  const full = loadFullConfig();
+  const motebitId = requireMotebitId(full);
+  const relayUrl = getRelayUrl(config);
+  const active = await loadActiveSigningKey(full, {
+    promptLabel: "Passphrase (to sign the command): ",
+  });
+  const client = new RelayClient({ baseUrl: relayUrl });
+  try {
+    const result = await client.sendAgentCommand({
+      motebitId,
+      command,
+      ...(args !== undefined ? { args } : {}),
+      identityPrivateKey: active.privateKey,
+    });
+    console.log(result.summary);
+    if (result.detail != null && result.detail !== "") console.log(result.detail);
+  } catch (err: unknown) {
+    if (err instanceof RelayClientError) {
+      // Name the failure for what it is. A command that did not arrive
+      // did not stop anything, and saying otherwise is the one thing a
+      // halt surface must never do.
+      console.error(
+        err.kind === "http" || err.kind === "network"
+          ? `Not delivered: ${err.message}\nThe runtime did not answer, so nothing has been stopped remotely. A halt written locally (\`motebit halt\` without --remote) is in force on this machine regardless.`
+          : `Command failed: ${err.message}`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+    throw err;
+  } finally {
+    secureErase(active.privateKey);
+  }
+}
+
+export async function handleHalt(config: CliConfig): Promise<void> {
+  // positionals: ["halt", ("goal", "<goal_id>")?]
+  const isGoalScoped = config.positionals[1] === "goal";
+  const goalId = isGoalScoped ? config.positionals[2] : undefined;
+  if (isGoalScoped && (goalId == null || goalId === "")) {
+    console.error('Usage: motebit halt [goal <goal_id>] [--reason "..."] [--remote]');
+    process.exit(1);
+  }
+  const reason = config.reason;
+  const commandArgs = [
+    ...(goalId != null ? ["goal", goalId] : []),
+    ...(reason != null && reason !== "" ? [reason] : []),
+  ].join(" ");
+
+  if (config.remote) {
+    await sendRemote(config, "halt", commandArgs === "" ? undefined : commandArgs);
+    return;
+  }
+
+  const motebitId = requireMotebitId(loadFullConfig());
+  const moteDb = await openMotebitDatabase(getDbPath(config.dbPath));
+  try {
+    const halt: HaltRequest = {
+      halt_id: crypto.randomUUID(),
+      motebit_id: motebitId,
+      goal_id: goalId ?? null,
+      requested_at: Date.now(),
+      origin: "local",
+      reason: reason ?? null,
+      acknowledged_at: null,
+      acknowledgement: null,
+      lifted_at: null,
+    };
+    moteDb.haltStore.request(halt);
+    const scope = goalId == null ? "all unattended execution" : `goal ${goalId.slice(0, 8)}`;
+    console.log(`Stop requested for ${scope} (${halt.halt_id.slice(0, 8)}).`);
+
+    // In force immediately; waiting only to learn whether something was
+    // actually running and has now stopped.
+    const deadline = Date.now() + ACK_WAIT_MS;
+    let acknowledged: HaltRequest | null = null;
+    while (Date.now() < deadline) {
+      const current = moteDb.haltStore.get(halt.halt_id);
+      if (current?.acknowledged_at != null) {
+        acknowledged = current;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, ACK_POLL_MS));
+    }
+
+    if (acknowledged != null) {
+      console.log(`Stopped: ${acknowledged.acknowledgement ?? "acknowledged"}`);
+    } else {
+      console.log(
+        "In force from now — nothing new starts. No running daemon acknowledged within " +
+          `${ACK_WAIT_MS / 1000}s; a daemon that is running will acknowledge on its next tick (up to 60s), ` +
+          "and one that is not running has nothing to stop.",
+      );
+    }
+    console.log(`Give the permission back with: motebit resume ${halt.halt_id.slice(0, 8)}`);
+  } finally {
+    moteDb.close();
+  }
+}
+
+export async function handleResume(config: CliConfig): Promise<void> {
+  const target = config.positionals[1] ?? "all";
+  if (config.remote) {
+    await sendRemote(config, "resume", target);
+    return;
+  }
+  const motebitId = requireMotebitId(loadFullConfig());
+  const moteDb = await openMotebitDatabase(getDbPath(config.dbPath));
+  try {
+    const active = moteDb.haltStore.listActive(motebitId);
+    if (active.length === 0) {
+      console.log("Nothing is halted.");
+      return;
+    }
+    if (target === "all") {
+      let lifted = 0;
+      for (const h of active) if (moteDb.haltStore.lift(h.halt_id)) lifted++;
+      console.log(`Resumed — ${lifted} halt(s) lifted.`);
+      return;
+    }
+    const match = active.find((h) => h.halt_id === target || h.halt_id.startsWith(target));
+    if (!match) {
+      console.error(`Error: no halt in force matching "${target}".`);
+      console.error(active.map(describe).join("\n"));
+      process.exit(1);
+    }
+    moteDb.haltStore.lift(match.halt_id);
+    console.log(
+      `Resumed ${match.goal_id == null ? "unattended execution" : `goal ${match.goal_id.slice(0, 8)}`} (${match.halt_id.slice(0, 8)}).`,
+    );
+  } finally {
+    moteDb.close();
+  }
+}
+
+/** `motebit halt-status` — what is stopped, and whether it has acknowledged. */
+export async function handleHaltStatus(config: CliConfig): Promise<void> {
+  if (config.remote) {
+    await sendRemote(config, "halt-status");
+    return;
+  }
+  const motebitId = requireMotebitId(loadFullConfig());
+  const moteDb = await openMotebitDatabase(getDbPath(config.dbPath));
+  try {
+    const active = moteDb.haltStore.listActive(motebitId);
+    const recent = moteDb.haltStore.listRecent(motebitId, 10);
+    if (active.length === 0) {
+      console.log("Running — nothing is halted.");
+    } else {
+      const waiting = active.filter((h) => h.acknowledged_at == null).length;
+      console.log(
+        waiting > 0
+          ? `Stop requested — ${waiting} of ${active.length} not yet acknowledged.`
+          : `Stopped — ${active.length} halt(s) in force.`,
+      );
+      for (const h of active) console.log(describe(h));
+    }
+    const past = recent.filter((h) => !active.some((a) => a.halt_id === h.halt_id));
+    if (past.length > 0) {
+      console.log("\nRecent:");
+      for (const h of past) console.log(describe(h));
+    }
+  } finally {
+    moteDb.close();
+  }
+}

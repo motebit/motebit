@@ -87,6 +87,9 @@ import {
   handleApprovalDeny,
   handleRunsList,
   handleRunsAck,
+  handleHalt,
+  handleResume,
+  handleHaltStatus,
   handleId,
   handleInit,
   handleLedger,
@@ -388,6 +391,21 @@ async function main(): Promise<void> {
 
   if (subcommand === "ps") {
     await handlePs(config);
+    return;
+  }
+
+  if (subcommand === "halt") {
+    await handleHalt(config);
+    return;
+  }
+
+  if (subcommand === "resume") {
+    await handleResume(config);
+    return;
+  }
+
+  if (subcommand === "halt-status") {
+    await handleHaltStatus(config);
     return;
   }
 

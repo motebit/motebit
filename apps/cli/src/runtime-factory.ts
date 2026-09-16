@@ -154,6 +154,7 @@ export function buildStorageAdapters(moteDb: MotebitDatabase): StorageAdapters {
     latencyStatsStore: moteDb.latencyStatsStore,
     credentialStore: moteDb.credentialStore,
     approvalStore: moteDb.approvalStore,
+    haltStore: moteDb.haltStore,
   };
 }
 

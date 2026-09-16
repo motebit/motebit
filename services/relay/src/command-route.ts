@@ -50,6 +50,14 @@ const RUNTIME_SIDE_COMMANDS = new Set([
   "summarize",
   "approvals",
   "conversations",
+  // Mutating. Safe to forward because the envelope is signed by the
+  // agent's OWN identity key — the caller already holds sovereign
+  // authority, so what these add is reach, not privilege. The relay
+  // still never decides: it forwards the envelope verbatim and the
+  // runtime re-verifies fail-closed before acting.
+  "halt",
+  "resume",
+  "halt-status",
 ]);
 
 /** Informational commands that need no runtime or relay. */

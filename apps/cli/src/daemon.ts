@@ -437,7 +437,13 @@ export async function handleRun(config: CliConfig): Promise<void> {
                 );
                 return;
               }
-              const result = await executeCommand(runtime, cmdMsg.command, cmdMsg.args);
+              // `origin: "remote"` is recorded, never trusted: the
+              // envelope verified above is the authorization. It exists
+              // so a halt's durable record says the sovereign stopped
+              // their motebit from somewhere else.
+              const result = await executeCommand(runtime, cmdMsg.command, cmdMsg.args, undefined, {
+                origin: "remote",
+              });
               wsAdapter!.sendRaw(
                 JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
               );
@@ -1358,7 +1364,13 @@ export async function handleServe(config: CliConfig): Promise<void> {
                 );
                 return;
               }
-              const result = await executeCommand(runtimeRef.current!, cmdMsg.command, cmdMsg.args);
+              const result = await executeCommand(
+                runtimeRef.current!,
+                cmdMsg.command,
+                cmdMsg.args,
+                undefined,
+                { origin: "remote" },
+              );
               serveWsAdapter!.sendRaw(
                 JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
               );

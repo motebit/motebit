@@ -458,6 +458,35 @@ export interface ApprovalDecision {
 }
 
 // @public
+export interface ApprovalItem {
+    // (undocumented)
+    approval_id: string;
+    // (undocumented)
+    args_hash: string;
+    args_json?: string | null;
+    // (undocumented)
+    args_preview: string;
+    // (undocumented)
+    created_at: number;
+    // (undocumented)
+    denied_reason: string | null;
+    // (undocumented)
+    expires_at: number;
+    // (undocumented)
+    goal_id: string;
+    // (undocumented)
+    motebit_id: string;
+    // (undocumented)
+    resolved_at: number | null;
+    // (undocumented)
+    risk_level: number;
+    // (undocumented)
+    status: ApprovalStatus;
+    // (undocumented)
+    tool_name: string;
+}
+
+// @public
 export interface ApprovalQuorum {
     approvers: string[];
     risk_floor?: string;
@@ -465,11 +494,18 @@ export interface ApprovalQuorum {
 }
 
 // @public (undocumented)
+export type ApprovalStatus = "pending" | "approved" | "denied" | "expired";
+
+// @public (undocumented)
 export interface ApprovalStoreAdapter {
     collectApproval(approvalId: string, approverId: string): {
         met: boolean;
         collected: string[];
     };
+    // (undocumented)
+    get?(approvalId: string): ApprovalItem | null;
+    listPending?(motebitId: string): ApprovalItem[];
+    resolve?(approvalId: string, status: "approved" | "denied", deniedReason?: string): void;
     setQuorum(approvalId: string, required: number, approvers: string[]): void;
 }
 
@@ -1809,6 +1845,12 @@ export enum EventType {
     // (undocumented)
     GoalRemoved = "goal_removed",
     // (undocumented)
+    HaltAcknowledged = "halt_acknowledged",
+    // (undocumented)
+    HaltLifted = "halt_lifted",
+    // (undocumented)
+    HaltRequested = "halt_requested",
+    // (undocumented)
     HousekeepingRun = "housekeeping_run",
     // (undocumented)
     IdentityCreated = "identity_created",
@@ -2218,6 +2260,38 @@ export interface GuestRail extends SettlementRail {
     readonly supportsBatch: boolean;
     readonly supportsDeposit: boolean;
     readonly supportsWithdraw: boolean;
+}
+
+// @public (undocumented)
+export type HaltOrigin = "local" | "remote";
+
+// @public
+export interface HaltRequest {
+    acknowledged_at: number | null;
+    acknowledgement: string | null;
+    goal_id: string | null;
+    // (undocumented)
+    halt_id: string;
+    lifted_at: number | null;
+    // (undocumented)
+    motebit_id: string;
+    origin: HaltOrigin;
+    reason: string | null;
+    // (undocumented)
+    requested_at: number;
+}
+
+// @public
+export interface HaltStoreAdapter {
+    acknowledge(haltId: string, acknowledgement: string, at?: number): void;
+    activeFor(motebitId: string, goalId?: string): HaltRequest | null;
+    // (undocumented)
+    get(haltId: string): HaltRequest | null;
+    lift(haltId: string, at?: number): boolean;
+    listActive(motebitId: string): HaltRequest[];
+    // (undocumented)
+    listRecent(motebitId: string, limit?: number): HaltRequest[];
+    request(halt: HaltRequest): void;
 }
 
 // @public

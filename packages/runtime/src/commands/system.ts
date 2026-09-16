@@ -29,14 +29,113 @@ export function cmdTools(runtime: MotebitRuntime): CommandResult {
   };
 }
 
-export function cmdApprovals(runtime: MotebitRuntime): CommandResult {
-  if (!runtime.hasPendingApproval) return { summary: "No pending approvals." };
-  const info = runtime.pendingApprovalInfo;
-  if (!info) return { summary: "No pending approvals." };
+/**
+ * `approvals` / `approvals approve <id>` / `approvals deny <id> [reason]`
+ *
+ * The consent surface. This is what a person somewhere else is shown
+ * before they decide, and what carries their decision back — so two
+ * things matter more than they would in a read-only command.
+ *
+ * **It must show the real action.** A tool name is not a decision; the
+ * destination, the path, the amount are. The queue stores a 500-char
+ * preview of the full arguments alongside a hash over all of them, and
+ * both are surfaced, so a preview that differs from what would execute
+ * is detectable rather than merely trusted.
+ *
+ * **It must not leak while doing so.** This output crosses the relay,
+ * which is not a sovereign party, so argument text goes through the
+ * same credential-class redaction the runtime applies to cloud egress:
+ * a person sees the destination, the relay does not see an API key.
+ * Full arguments never leave the machine — `motebit approvals show`
+ * reads them locally.
+ *
+ * Deciding here does not execute anything. It writes the verdict into
+ * the same queue a terminal decision writes to; the daemon's scheduler
+ * picks it up on its next tick, through the same policy gate, and a
+ * halt in force outranks it.
+ */
+export function cmdApprovals(runtime: MotebitRuntime, args?: string): CommandResult {
+  const store = runtime.approvals;
+  const raw = (args ?? "").trim();
+  const verb = /^(approve|deny)\s+(\S+)\s*(.*)$/i.exec(raw);
+
+  if (verb) {
+    const decision = verb[1]!.toLowerCase() === "approve" ? "approved" : "denied";
+    const idPrefix = verb[2]!;
+    const reason = (verb[3] ?? "").trim();
+    if (store?.listPending == null || store.resolve == null) {
+      return {
+        summary: "This surface cannot decide approvals — its approval store is read-only.",
+      };
+    }
+    const pending = store.listPending(runtime.motebitId);
+    const match = pending.find(
+      (a) => a.approval_id === idPrefix || a.approval_id.startsWith(idPrefix),
+    );
+    if (!match) {
+      return {
+        summary: `No pending approval matching "${idPrefix}".`,
+        detail:
+          pending.length === 0
+            ? "The queue is empty."
+            : `Pending: ${pending.map((a) => `${a.approval_id.slice(0, 8)} (${a.tool_name})`).join(", ")}`,
+      };
+    }
+    if (Date.now() > match.expires_at) {
+      return {
+        summary: `Approval ${match.approval_id.slice(0, 8)} expired at ${new Date(match.expires_at).toISOString()} and can no longer be decided.`,
+      };
+    }
+    store.resolve(match.approval_id, decision, reason !== "" ? reason : undefined);
+    return {
+      summary: `${decision === "approved" ? "Approved" : "Denied"}: ${match.tool_name} (${match.approval_id.slice(0, 8)}).`,
+      detail:
+        decision === "approved"
+          ? "The daemon executes it on its next tick, through the same policy gate. A halt in force outranks this."
+          : "Nothing will run.",
+      data: { approval_id: match.approval_id, decision, tool_name: match.tool_name },
+    };
+  }
+
+  // ── List ──
+  const pending = store?.listPending?.(runtime.motebitId) ?? [];
+  if (pending.length === 0) {
+    // Fall back to the live in-turn approval (a surface with no queue).
+    if (!runtime.hasPendingApproval) return { summary: "No pending approvals." };
+    const info = runtime.pendingApprovalInfo;
+    if (!info) return { summary: "No pending approvals." };
+    return {
+      summary: `Pending approval: ${info.toolName}`,
+      detail: `Args: ${runtime.redactForRemoteDisclosure(JSON.stringify(info.args, null, 2))}`,
+      data: { toolName: info.toolName, args: info.args },
+    };
+  }
+
+  const rows = pending.map((a) => ({
+    approval_id: a.approval_id,
+    tool_name: a.tool_name,
+    risk_level: a.risk_level,
+    goal_id: a.goal_id,
+    created_at: a.created_at,
+    expires_at: a.expires_at,
+    /** Credential-class values masked — this crosses the relay. */
+    args_preview: runtime.redactForRemoteDisclosure(a.args_preview),
+    /** Over the FULL arguments, so a truncated preview is still checkable. */
+    args_hash: a.args_hash,
+    args_truncated: a.args_preview.length >= 500,
+  }));
+  const detail = rows
+    .map(
+      (r) =>
+        `${r.approval_id.slice(0, 8)}  ${r.tool_name}  R${r.risk_level}\n` +
+        `  ${r.args_preview}${r.args_truncated ? " …(truncated; full args stay on the machine)" : ""}\n` +
+        `  expires ${new Date(r.expires_at).toISOString()}`,
+    )
+    .join("\n");
   return {
-    summary: `Pending approval: ${info.toolName}`,
-    detail: `Args: ${JSON.stringify(info.args, null, 2)}`,
-    data: { toolName: info.toolName, args: info.args },
+    summary: `${rows.length} approval(s) waiting on you.`,
+    detail: `${detail}\n\nDecide with: approvals approve <id> | approvals deny <id> [reason]`,
+    data: { approvals: rows },
   };
 }
 

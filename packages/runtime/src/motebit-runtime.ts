@@ -631,6 +631,18 @@ export class MotebitRuntime {
   private credentialStore: import("@motebit/sdk").CredentialStoreAdapter | null = null;
   private planExecution!: PlanExecutionManager;
   private approvalStore: import("@motebit/sdk").ApprovalStoreAdapter | null = null;
+  private haltStore: import("@motebit/sdk").HaltStoreAdapter | null = null;
+  /**
+   * What the executor does when a halt must be honored. Each listener
+   * stops what it owns and returns a description of what it stopped —
+   * those descriptions become the halt's acknowledgement, so the record
+   * says what stopping actually entailed rather than merely that it
+   * happened. A process with no listeners still acknowledges: the halt
+   * is recorded and nothing of this runtime's was running.
+   */
+  private haltListeners = new Set<
+    (halt: import("@motebit/sdk").HaltRequest) => string | Promise<string>
+  >();
   private _signingKeysErased = false;
   private _logger: { warn(message: string, context?: Record<string, unknown>): void };
   /**
@@ -981,6 +993,7 @@ export class MotebitRuntime {
 
     // Approval store — persistence-backed quorum state (source of truth for multi-party approval)
     this.approvalStore = adapters.storage.approvalStore ?? null;
+    this.haltStore = adapters.storage.haltStore ?? null;
 
     // Agent graph — algebraic routing substrate
     this.agentGraph = new AgentGraphManager(
@@ -2795,6 +2808,179 @@ export class MotebitRuntime {
       yield* this.streaming.resumeAfterApproval(approved);
     } finally {
       this._isProcessing = false;
+    }
+  }
+
+  // ── Halt: withdrawing the standing permission to act unattended ──
+  //
+  // Three verbs, deliberately not one. `requestHalt` records that
+  // someone asked; `honorHalts` is the executor stopping and saying so;
+  // `liftHalt` is a human giving the permission back. Any process can
+  // ask. Only the process that actually runs unattended work can honor,
+  // which is why the request and the acknowledgement are separate rows
+  // and separate events — a daemon that is offline has been asked and
+  // has not stopped, and no surface may render the first as the second.
+
+  /**
+   * Register a stopper. Returns an unsubscribe. The daemon's scheduler
+   * registers one that aborts the in-flight run and blocks new fires.
+   */
+  onHalt(
+    listener: (halt: import("@motebit/sdk").HaltRequest) => string | Promise<string>,
+  ): () => void {
+    this.haltListeners.add(listener);
+    return () => this.haltListeners.delete(listener);
+  }
+
+  /**
+   * The approval queue, or `null` on a surface that wired no store.
+   * The command layer reads and decides through this port so a remote
+   * consent surface and the local terminal write to the same queue.
+   */
+  get approvals(): import("@motebit/sdk").ApprovalStoreAdapter | null {
+    return this.approvalStore;
+  }
+
+  /**
+   * Mask credential-class values in text bound for a non-sovereign
+   * party. The command layer uses it on approval arguments before they
+   * cross the relay to a remote consent surface: a person deciding
+   * needs the destination, the path, the amount — and does not need,
+   * and the relay must not see, an API key that happened to be an
+   * argument. Same membrane as the cloud-egress redactor, applied at
+   * the same kind of boundary.
+   */
+  redactForRemoteDisclosure(text: string): string {
+    return this.policy.redactForCloudEgress(text).text;
+  }
+
+  /** Durable halt state, or `null` on a surface that supplied no store. */
+  get halts(): import("@motebit/sdk").HaltStoreAdapter | null {
+    return this.haltStore;
+  }
+
+  /**
+   * The halt in force for this goal (or for unattended execution in
+   * general when `goalId` is omitted), or `null`. A runtime with no halt
+   * store is never halted — it also has no way to be halted, which is
+   * the honest reading of a surface that did not wire the port.
+   */
+  haltInForce(goalId?: string): import("@motebit/sdk").HaltRequest | null {
+    return this.haltStore?.activeFor(this.motebitId, goalId) ?? null;
+  }
+
+  /**
+   * Ask this motebit to stop acting unattended. Records the request and
+   * nothing more — the caller may be a one-shot CLI process that is not
+   * the thing doing the work. `honorHalts()` is what stops.
+   *
+   * Returns the recorded request, whose `acknowledged_at` is null.
+   */
+  async requestHalt(opts: {
+    /** Omit to halt every goal. */
+    goalId?: string;
+    origin: import("@motebit/sdk").HaltOrigin;
+    reason?: string;
+  }): Promise<import("@motebit/sdk").HaltRequest | null> {
+    if (!this.haltStore) return null;
+    const halt: import("@motebit/sdk").HaltRequest = {
+      halt_id: crypto.randomUUID(),
+      motebit_id: this.motebitId,
+      goal_id: opts.goalId ?? null,
+      requested_at: Date.now(),
+      origin: opts.origin,
+      reason: opts.reason ?? null,
+      acknowledged_at: null,
+      acknowledgement: null,
+      lifted_at: null,
+    };
+    this.haltStore.request(halt);
+    await this.emitHaltEvent(EventType.HaltRequested, halt);
+    return halt;
+  }
+
+  /**
+   * Honor every halt this runtime has not yet acknowledged: run the
+   * stoppers, then record what stopping entailed. Idempotent — an
+   * already-acknowledged halt is skipped, so calling this every tick
+   * costs nothing once the work is stopped.
+   *
+   * Returns the halts acknowledged by THIS call (empty when there was
+   * nothing new to honor).
+   */
+  async honorHalts(): Promise<import("@motebit/sdk").HaltRequest[]> {
+    if (!this.haltStore) return [];
+    const pending = this.haltStore
+      .listActive(this.motebitId)
+      .filter((h) => h.acknowledged_at == null);
+    const honored: import("@motebit/sdk").HaltRequest[] = [];
+    for (const halt of pending) {
+      const stopped: string[] = [];
+      for (const listener of this.haltListeners) {
+        try {
+          stopped.push(await listener(halt));
+        } catch (err) {
+          // A stopper that throws must not leave the halt unacknowledged
+          // — that would read as "still running" forever. Record the
+          // failure IN the acknowledgement instead of swallowing it.
+          const msg = err instanceof Error ? err.message : String(err);
+          stopped.push(`a stopper failed: ${msg}`);
+        }
+      }
+      const acknowledgement =
+        stopped.filter((s) => s.length > 0).join("; ") || "nothing was running";
+      this.haltStore.acknowledge(halt.halt_id, acknowledgement);
+      const acknowledged = this.haltStore.get(halt.halt_id) ?? {
+        ...halt,
+        acknowledged_at: Date.now(),
+        acknowledgement,
+      };
+      await this.emitHaltEvent(EventType.HaltAcknowledged, acknowledged);
+      honored.push(acknowledged);
+    }
+    return honored;
+  }
+
+  /** Give the permission back. Returns false when no such halt is in force. */
+  async liftHalt(haltId: string): Promise<boolean> {
+    if (!this.haltStore) return false;
+    const lifted = this.haltStore.lift(haltId);
+    if (!lifted) return false;
+    const halt = this.haltStore.get(haltId);
+    if (halt) await this.emitHaltEvent(EventType.HaltLifted, halt);
+    return true;
+  }
+
+  private async emitHaltEvent(
+    eventType: EventType,
+    halt: import("@motebit/sdk").HaltRequest,
+  ): Promise<void> {
+    try {
+      await this.events.appendWithClock({
+        event_id: crypto.randomUUID(),
+        motebit_id: this.motebitId,
+        timestamp: Date.now(),
+        event_type: eventType,
+        payload: {
+          halt_id: halt.halt_id,
+          scope: halt.goal_id ?? "all",
+          origin: halt.origin,
+          requested_at: halt.requested_at,
+          ...(halt.reason != null ? { reason: halt.reason } : {}),
+          ...(halt.acknowledged_at != null
+            ? { acknowledged_at: halt.acknowledged_at, acknowledgement: halt.acknowledgement }
+            : {}),
+          ...(halt.lifted_at != null ? { lifted_at: halt.lifted_at } : {}),
+        },
+        tombstoned: false,
+      });
+    } catch (err) {
+      // The halt itself is already durable in `halt_state`; the event log
+      // is the audit trail, not the enforcement. Never let its failure
+      // make a stop look like it did not happen.
+      this._logger.warn(
+        `[runtime] halt event append failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 

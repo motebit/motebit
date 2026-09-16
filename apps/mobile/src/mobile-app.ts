@@ -52,7 +52,19 @@ import {
   type AppearanceConfig,
   type DeletionCertificate,
 } from "@motebit/sdk";
-import { mintAudienceToken, secureErase, bytesToHex } from "@motebit/encryption";
+import {
+  mintAudienceToken,
+  secureErase,
+  bytesToHex,
+  signAgentCommandEnvelope,
+} from "@motebit/encryption";
+
+/** The runtime's answer to a remote command (mirrors `@motebit/runtime`). */
+export interface CommandResult {
+  summary: string;
+  detail?: string;
+  data?: Record<string, unknown>;
+}
 import {
   bootstrapIdentity as sharedBootstrapIdentity,
   rotateIdentityKeys,
@@ -1597,6 +1609,72 @@ export class MobileApp {
       throw new Error(`${res.status}: ${text}`);
     }
     return res.json() as Promise<unknown>;
+  }
+
+  /**
+   * Reach the motebit's RUNNING runtime — the daemon on the laptop —
+   * from the phone, over a signed command envelope.
+   *
+   * The phone is the consent root ([`surface-authority-model.md`]): it
+   * is where the human is, and after a key-transfer pairing it holds
+   * the motebit's identity private key, which is what an
+   * `agent-command/{motebit_id}` envelope must be signed with. That is
+   * the whole authorization — the relay verifies at ingress as defence
+   * in depth, forwards the envelope verbatim, and the runtime
+   * re-verifies fail-closed before acting.
+   *
+   * A phone that was paired WITHOUT key transfer (the wallet-funds
+   * guard, or a failed decrypt) still holds its own device key. Its
+   * envelopes will not verify, and this says so rather than looking
+   * like the command was refused.
+   */
+  async sendRemoteCommand(command: string, args?: string): Promise<CommandResult> {
+    const syncUrl = await this.getSyncUrl();
+    if (!syncUrl) throw new Error("No relay configured — connect in Settings > Sync");
+    const privHex = await this.keyring.get("device_private_key");
+    if (privHex == null || privHex === "") {
+      throw new Error("No signing key on this device — remote commands must be signed.");
+    }
+    const privBytes = new Uint8Array(privHex.length / 2);
+    for (let i = 0; i < privHex.length; i += 2) {
+      privBytes[i / 2] = parseInt(privHex.slice(i, i + 2), 16);
+    }
+    const envelope = await signAgentCommandEnvelope({
+      command,
+      ...(args !== undefined && args !== "" ? { args } : {}),
+      motebitId: this.motebitId,
+      identityPrivateKey: privBytes,
+    });
+    secureErase(privBytes);
+    const token = await this.createSyncToken();
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const res = await fetch(`${syncUrl}/api/v1/agents/${this.motebitId}/command`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        command,
+        ...(args !== undefined && args !== "" ? { args } : {}),
+        envelope,
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      if (res.status === 401) {
+        throw new Error(
+          "This device's key is not the motebit's identity key, so the runtime will not accept commands from it. " +
+            "Re-pair with key transfer from the device that holds the identity.",
+        );
+      }
+      if (res.status === 404 || res.status === 503) {
+        // Not delivered is not stopped. Say which one happened.
+        throw new Error(
+          `The runtime is not connected, so nothing was delivered (${res.status}). Nothing has been stopped or decided.`,
+        );
+      }
+      throw new Error(`${res.status}: ${text}`);
+    }
+    return (await res.json()) as CommandResult;
   }
 
   subscribe(fn: (state: MotebitState) => void): () => void {

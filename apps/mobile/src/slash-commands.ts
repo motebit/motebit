@@ -18,6 +18,8 @@
  *   - Agents: /agents, /discover, /serve
  *   - Goals: /goals, /plan
  *   - Economy: /balance, /deposits, /approvals, /proposals, /withdraw
+ *   - Reaching the runtime elsewhere (signed remote commands):
+ *     /pending, /approve, /deny, /halt, /resume, /halted
  *   - Federation: /sync, /export, /delegate, /propose
  */
 
@@ -584,6 +586,46 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
       }
       break;
     }
+    // ── Reaching the runtime elsewhere ──────────────────────────────
+    // The phone is the consent root. These six send a SIGNED command to
+    // the motebit's running runtime (the daemon on the laptop) and show
+    // what it answered — not what the relay accepted. A command that did
+    // not arrive stopped nothing and decided nothing, and the error says
+    // so in those words.
+    case "halt":
+    case "resume":
+    case "halted":
+    case "pending":
+    case "approve":
+    case "deny": {
+      const remote: { cmd: string; args?: string } =
+        command === "halt"
+          ? { cmd: "halt", ...(args ? { args } : {}) }
+          : command === "resume"
+            ? { cmd: "resume", ...(args ? { args } : {}) }
+            : command === "halted"
+              ? { cmd: "halt-status" }
+              : command === "pending"
+                ? { cmd: "approvals" }
+                : { cmd: "approvals", args: `${command} ${args ?? ""}`.trim() };
+      if ((command === "approve" || command === "deny") && !args) {
+        addSystemMessage(`/${command} <approval_id> — which one?`);
+        break;
+      }
+      void (async () => {
+        try {
+          const result = await a.sendRemoteCommand(remote.cmd, remote.args);
+          addSystemMessage(
+            result.detail != null && result.detail !== ""
+              ? `${result.summary}\n${result.detail}`
+              : result.summary,
+          );
+        } catch (err: unknown) {
+          addSystemMessage(err instanceof Error ? err.message : String(err));
+        }
+      })();
+      break;
+    }
     case "proposals":
       void (async () => {
         try {
@@ -689,7 +731,12 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
           "/plan <goal> — decompose into steps\n" +
           "/balance — show account balance\n" +
           "/deposits — show deposit history\n" +
-          "/approvals — pending approvals\n" +
+          "/approvals — pending approvals on THIS device\n" +
+          "/pending — approvals waiting on you at the running runtime\n" +
+          "/approve <id> · /deny <id> [reason] — decide one of them\n" +
+          "/halt [reason] — stop the runtime acting unattended\n" +
+          "/resume [id|all] — give that permission back\n" +
+          "/halted — what is stopped, and whether it acknowledged\n" +
           "/proposals — active proposals\n" +
           "/forget <nodeId> — delete a memory\n" +
           "/clear — clear conversation\n" +

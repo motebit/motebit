@@ -10,6 +10,7 @@ import type {
   GoalRun,
   UncertainAction,
 } from "@motebit/persistence";
+import type { HaltRequest } from "@motebit/sdk";
 import { EventType, RiskLevel, PlanStatus, SensitivityLevel } from "@motebit/sdk";
 import type { ToolHandler, AuditLogSink } from "@motebit/sdk";
 import { findUnresolvedActions, countCompletedActions } from "@motebit/policy";
@@ -72,6 +73,10 @@ export class GoalScheduler {
 
   /** Runs already logged as held this process — log the hold once, not every tick. */
   private heldLogged = new Set<string>();
+  /** Un-register the halt stopper on stop(). */
+  private unregisterHaltListener: (() => void) | null = null;
+  /** Halt ids already logged as blocking this process. */
+  private haltLogged = new Set<string>();
 
   constructor(
     private runtime: MotebitRuntime,
@@ -114,6 +119,10 @@ export class GoalScheduler {
       const g = this.goalStore.get(goalId);
       return g == null ? null : g.status;
     });
+    // Register the stopper BEFORE recovery or the first tick: a halt
+    // already in force when the daemon starts must be honored before any
+    // goal fires, not after one slips through.
+    this.unregisterHaltListener = this.runtime.onHalt((halt) => this.stopForHalt(halt));
     this.recoverInterruptedRuns();
     this.ensureMaintenanceGoal();
     this.timer = setInterval(() => {
@@ -240,6 +249,8 @@ export class GoalScheduler {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.unregisterHaltListener?.();
+    this.unregisterHaltListener = null;
     // On shutdown the pending approvals STAY pending and their runs stay
     // `awaiting_approval` in the ledger — a human's decision survives the
     // process. Only the in-memory resume handles are dropped; after a
@@ -558,6 +569,23 @@ export class GoalScheduler {
     this.ticking = true;
 
     try {
+      // Phase 0: honor any halt that has been asked for and not yet
+      // acted on. FIRST, before approvals are drained or a goal fires —
+      // a halt that arrives between ticks must stop the next tick, not
+      // the one after it. `honorHalts` is idempotent, so the steady
+      // halted state costs one store read per tick.
+      await this.runtime.honorHalts();
+      const halted = this.runtime.haltInForce();
+      if (halted != null) {
+        if (!this.haltLogged.has(halted.halt_id)) {
+          this.haltLogged.add(halted.halt_id);
+          warnLine(
+            `[halt] unattended execution is stopped (${halted.halt_id.slice(0, 8)}, ${halted.origin}${halted.reason != null ? `: ${halted.reason}` : ""}) — \`motebit resume ${halted.halt_id.slice(0, 8)}\` to give the permission back`,
+          );
+        }
+        return;
+      }
+
       // Phase 1: expire stale approvals
       this.expireStaleApprovals();
 
@@ -578,6 +606,18 @@ export class GoalScheduler {
 
         const elapsed = goal.last_run_at != null ? now - goal.last_run_at : Infinity;
         if (elapsed < goal.interval_ms) continue;
+
+        // A goal-scoped halt stops this goal and nothing else.
+        const goalHalt = this.runtime.haltInForce(goal.goal_id);
+        if (goalHalt != null) {
+          if (!this.haltLogged.has(goalHalt.halt_id)) {
+            this.haltLogged.add(goalHalt.halt_id);
+            warnLine(
+              `[halt] goal ${goal.goal_id.slice(0, 8)} is stopped (${goalHalt.halt_id.slice(0, 8)}) — \`motebit resume ${goalHalt.halt_id.slice(0, 8)}\` to give the permission back`,
+            );
+          }
+          continue;
+        }
 
         // Never start a replacement run while an existing run is unresolved:
         // paused on a human, or interrupted with side effects nobody has
@@ -735,7 +775,7 @@ export class GoalScheduler {
       }
       // Phase 5: periodic memory consolidation (every 10 ticks ≈ 10 min at default 60s)
       this.tickCount++;
-      if (this.tickCount % 10 === 0) {
+      if (this.tickCount % 10 === 0 && this.runtime.haltInForce() == null) {
         void this.runtime.consolidationCycle();
       }
     } catch (err: unknown) {
@@ -1209,6 +1249,11 @@ export class GoalScheduler {
    * its own cadence.
    */
   private async drainRecoveredApprovals(): Promise<void> {
+    // A halt outranks an approval. The human granted permission for one
+    // action and then withdrew permission to act unattended at all; the
+    // later word wins. The approval stays `approved` — nothing is
+    // executed, and nothing is thrown away.
+    if (this.runtime.haltInForce() != null) return;
     const waiting = this.runStore.listByStatus(this.motebitId, "awaiting_approval");
     for (const run of waiting) {
       if (run.approval_id == null) continue;
@@ -1353,6 +1398,35 @@ export class GoalScheduler {
         toolCallsMade: 1,
       });
     }
+  }
+
+  /**
+   * Stop what this scheduler owns, and say what stopping entailed. The
+   * runtime calls this from `honorHalts`; the returned text becomes the
+   * halt's acknowledgement, which is the only honest record that the
+   * motebit actually stopped rather than merely being asked to.
+   *
+   * A goal-scoped halt aborts the in-flight run only when that run
+   * belongs to the halted goal — halting one goal must not kill another
+   * goal's work mid-call.
+   */
+  private stopForHalt(halt: HaltRequest): string {
+    const stopped: string[] = [];
+    const runId = this.currentRunId;
+    if (runId != null) {
+      const run = this.runStore.get(runId);
+      const coversThisRun = halt.goal_id == null || run?.goal_id === halt.goal_id;
+      if (coversThisRun) {
+        this.currentAbort?.abort(new Error(`halted (${halt.halt_id.slice(0, 8)})`));
+        stopped.push(`aborted run ${runId.slice(0, 8)}`);
+      }
+    }
+    stopped.push(
+      halt.goal_id == null
+        ? "no further goal runs, recovered approvals, or consolidation will start"
+        : `goal ${halt.goal_id.slice(0, 8)} will not fire`,
+    );
+    return stopped.join("; ");
   }
 
   /**

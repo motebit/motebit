@@ -449,4 +449,28 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE approval_queue ADD COLUMN args_json TEXT",
     ],
   },
+  {
+    version: 44,
+    description: "halt_state — durable withdrawal of unattended autonomy",
+    statements: [
+      // A halt is state, not a message: a message a stopped process never
+      // receives is not a stop, and a stop a restart forgets is not a stop.
+      // `acknowledged_at` is deliberately separate from `requested_at` —
+      // a daemon that is offline has been ASKED to stop and has not
+      // stopped, and no surface may render the first as the second.
+      // `goal_id` NULL = every goal. Local private state, never on a wire.
+      `CREATE TABLE IF NOT EXISTS halt_state (
+        halt_id TEXT PRIMARY KEY,
+        motebit_id TEXT NOT NULL,
+        goal_id TEXT,
+        requested_at INTEGER NOT NULL,
+        origin TEXT NOT NULL,
+        reason TEXT,
+        acknowledged_at INTEGER,
+        acknowledgement TEXT,
+        lifted_at INTEGER
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_halt_state_active ON halt_state (motebit_id, lifted_at)",
+    ],
+  },
 ];

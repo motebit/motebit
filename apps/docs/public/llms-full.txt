@@ -6053,6 +6053,9 @@ The CLI supports several subcommands beyond the default interactive REPL:
 | `motebit doctor` | Diagnose configuration and connectivity issues |
 | `motebit goal add/list/remove/pause/resume` | Manage scheduled goals |
 | `motebit approvals list/show/approve/deny` | Manage the tool approval queue |
+| `motebit halt [goal <id>] [--reason "..."] [--remote]` | Withdraw the permission to act unattended; `--remote` signs a command to the running runtime and returns its acknowledgement |
+| `motebit resume [<halt_id>\|all] [--remote]` | Give that permission back |
+| `motebit halt-status [--remote]` | What is stopped, and whether the motebit has acknowledged it |
 | `motebit runs [list\|ack <run_id> --allow-fresh-run]` | Goal-run ledger: runs holding their goal (paused on you, or interrupted with side effects) and recent runs; `ack --allow-fresh-run` releases a reviewed interrupted run, accepting that its goal's next run may repeat effects |
 | `motebit rotate [--reason "..."]` | Rotate Ed25519 keypair with signed succession record |
 
@@ -6935,6 +6938,77 @@ Error: approval a1b2c3d4 is already denied.
 **Interrupted runs:** If the daemon dies mid-run, the next start marks that run `interrupted` and reads the tool audit log for it: how many allowed tool calls recorded a completion, and how many have a decision row but no completion row (the process died between dispatch and recording — their external effect is unknown). If either count is non-zero the goal is **held**: it will not fire again until you run `motebit runs ack <run_id>`, because re-firing would repeat the completed calls and nobody can say what the unknown ones did. A run with no allowed tool calls at all resolves itself. `motebit ps` shows held goals; `motebit runs` lists the runs holding them. `motebit runs ack <run_id> --allow-fresh-run` retries nothing — it records that you looked and accepts that the goal's next run starts from scratch, which may repeat effects the interrupted run already caused; without the flag the command prints that consequence and releases nothing. A decision applied after a restart closes its run as `partial`, never `completed`: the one approved action ran (or was refused), and the goal's remaining work was not resumed.
 
 **What a restart cannot do:** it cannot resume the paused turn itself (its stream died with the old process), which is why a post-restart decision applies to the one approved call only and the run closes as `partial`. The 1-hour TTL bounds the decision, not the sweep: an approval granted after its expiry — for example while the daemon was down — is refused by `motebit approvals approve` and, if it slipped through, is never executed by the daemon.
+
+## Stopping it
+
+A halt withdraws the standing permission to act unattended. It is not the
+opposite of an approval — an approval authorizes one exact pending call,
+a halt revokes the permission to act at all, and a halt in force outranks
+an approval granted before it.
+
+```bash
+motebit halt --reason "going out"        # stop all unattended execution
+motebit halt goal a1b2c3d4               # stop one goal, leave the rest
+motebit halt-status                      # what is stopped, and whether it acknowledged
+motebit resume a1b2c3d4                  # give the permission back
+motebit resume all
+```
+
+A halt stops new goal runs, recovered approvals, and idle consolidation,
+and aborts the run in flight. A live conversation you are having at the
+keyboard is not unattended work and is not what a halt is for.
+
+**Requested is not stopped.** The record keeps two timestamps because they
+are two facts. `requested_at` is what you know when you ask;
+`acknowledged_at` is when the motebit stopped, and it carries what
+stopping entailed (`aborted run 1a2b3c4d; no further goal runs will
+start`). A daemon that is offline, wedged, or mid-tool has been asked and
+has not stopped. `motebit halt` waits a few seconds for an
+acknowledgement and then tells you plainly which of the two happened. No
+surface may render the first as the second.
+
+The halt is durable and in force from the instant it is written — before
+anyone acknowledges it, and across a restart. A stop a restart forgets is
+not a stop.
+
+### From somewhere else
+
+`--remote` signs the command with the motebit's identity key and sends it
+to the running runtime over the relay
+(`signed-request-envelope@1.0`, audience `agent-command/{motebit_id}`).
+The relay verifies at ingress as defence in depth, forwards the envelope
+verbatim, and the runtime re-verifies fail-closed before acting.
+
+```bash
+motebit halt --remote --reason "from the train"
+motebit halt-status --remote
+motebit resume all --remote
+```
+
+Because that request reaches the process that is doing the work, the
+response **is** the acknowledgement: it says what was stopped, not that a
+message was delivered. If the runtime is not connected the command fails,
+and the honest reading of that failure is "not delivered" — never
+"stopped". A halt written locally is in force on that machine regardless.
+
+The phone speaks the same verbs as chat commands in the mobile app —
+halt, resume and halted, plus pending, approve and deny for the approval
+queue. (Those are mobile-app commands, not `motebit` CLI subcommands.)
+The phone can sign them because after a key-transfer pairing it holds the
+motebit's identity key; a device paired without key transfer will be told
+so rather than silently refused.
+
+Deciding an approval from the phone does not execute anything there. It
+writes the verdict into the same queue a terminal decision writes to; the
+daemon picks it up on its next tick, through the same policy gate, and a
+money action is still never executed from a recovered run.
+
+What the phone is shown is redacted the way any egress to a non-sovereign
+party is: the destination, the path and the amount are visible so the
+decision is real, while credential-class values are masked, and the full
+arguments never leave the machine. The preview is accompanied by a hash
+over the *whole* argument set, so a preview that differs from what would
+execute is detectable rather than merely trusted.
 
 ## Governance enforcement
 
