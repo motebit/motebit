@@ -34,6 +34,18 @@ const logLine = (msg: string): void => writeLine(dim(msg));
 const warnLine = (msg: string): void => writeLine(warnColor(msg));
 const errorLine = (msg: string): void => writeLine(errorColor(msg));
 
+/**
+ * The abort reason a halt uses, so the goal-run catch can tell a stop
+ * the human asked for from a genuine failure. A halt must not spend the
+ * goal's retry budget.
+ */
+class HaltAbort extends Error {
+  constructor(readonly haltId: string) {
+    super(`halted (${haltId.slice(0, 8)})`);
+    this.name = "HaltAbort";
+  }
+}
+
 interface SuspendedTurn {
   approvalId: string;
   goalId: string;
@@ -594,6 +606,10 @@ export class GoalScheduler {
     try {
       const halted = this.runtime.haltInForce();
       if (halted != null) {
+        // Keep the approval TTL running. Freezing it would leave a
+        // decidable-looking approval on the phone all night and then
+        // expire a pile of them the instant the halt lifted.
+        this.expireStaleApprovals();
         if (!this.haltLogged.has(halted.halt_id)) {
           this.haltLogged.add(halted.halt_id);
           warnLine(
@@ -753,6 +769,19 @@ export class GoalScheduler {
           logLine(`[goal] completed: ${goal.goal_id.slice(0, 8)}`);
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
+          // A stop the human asked for is not a failure of the goal.
+          // Counting it would burn the retry budget and eventually
+          // auto-pause the goal, so lifting the halt would silently not
+          // be enough to start it again.
+          if (err instanceof HaltAbort) {
+            this.runStore.setStatus(runId, "failed", {
+              note: `halted (${err.haltId.slice(0, 8)})`,
+            });
+            logLine(
+              `[goal] ${goal.goal_id.slice(0, 8)} stopped by halt ${err.haltId.slice(0, 8)} — not counted as a failure`,
+            );
+            continue;
+          }
           errorLine(`[goal] error for ${goal.goal_id.slice(0, 8)}: ${msg}`);
 
           this.runStore.setStatus(runId, "failed", { note: msg });
@@ -1442,8 +1471,14 @@ export class GoalScheduler {
       const run = this.runStore.get(runId);
       const coversThisRun = halt.goal_id == null || run?.goal_id === halt.goal_id;
       if (coversThisRun) {
-        this.currentAbort?.abort(new Error(`halted (${halt.halt_id.slice(0, 8)})`));
-        stopped.push(`aborted run ${runId.slice(0, 8)}`);
+        this.currentAbort?.abort(new HaltAbort(halt.halt_id));
+        // "signalled", not "aborted": the signal is observed between
+        // stream chunks, so a tool call already in flight runs to its
+        // end. Claiming the run was aborted would be the same overclaim
+        // the two-timestamp design exists to prevent — one layer down.
+        stopped.push(
+          `signalled abort of run ${runId.slice(0, 8)} (a tool call already in flight finishes)`,
+        );
       }
     }
     stopped.push(

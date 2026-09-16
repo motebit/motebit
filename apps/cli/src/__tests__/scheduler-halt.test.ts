@@ -283,7 +283,7 @@ describe("halt at the scheduler", () => {
     // The daemon honors it out of band (as the websocket path does).
     await m.runtime.honorHalts();
     expect(db.haltStore.get(halt.halt_id)?.acknowledgement).toContain(
-      `aborted run ${run!.run_id.slice(0, 8)}`,
+      `signalled abort of run ${run!.run_id.slice(0, 8)}`,
     );
 
     release();
@@ -309,7 +309,7 @@ describe("halt at the scheduler", () => {
 
     const acked = db.haltStore.get(halt.halt_id)!;
     expect(acked.acknowledged_at).not.toBeNull();
-    expect(acked.acknowledgement).toContain(`aborted run ${run!.run_id.slice(0, 8)}`);
+    expect(acked.acknowledgement).toContain(`signalled abort of run ${run!.run_id.slice(0, 8)}`);
 
     release();
     s.stop();
@@ -350,6 +350,74 @@ describe("halt at the scheduler", () => {
     // unguarded throw here would end the process.
     await expect(s.tickOnce()).resolves.toBeUndefined();
     expect(m.streams).toBeGreaterThan(0); // the tick continued
+    s.stop();
+  });
+
+  it("a halt is not counted as a goal failure — three stops must not auto-pause the goal", async () => {
+    db.goalStore.add(goal({ interval_ms: 3_600_000, max_retries: 3 }));
+    for (let i = 0; i < 3; i++) {
+      let release!: () => void;
+      const hold = new Promise<void>((r) => (release = r));
+      const m = mockRuntime(db, { holdStream: hold });
+      const s = scheduler(db, m);
+      s.start(999_999);
+      await settle(() => db.goalRunStore.listByStatus("mote-test", "running").length > 0);
+      m.requestHalt({ reason: `stop ${i}` });
+      await s.tickOnce();
+      release();
+      await new Promise((r) => setTimeout(r, 20));
+      // Lift so the next iteration can run.
+      for (const h of db.haltStore.listActive("mote-test")) db.haltStore.lift(h.halt_id);
+      db.goalStore.updateLastRun("goal-001", 0);
+      s.stop();
+    }
+    const g = db.goalStore.get("goal-001")!;
+    expect(g.consecutive_failures).toBe(0);
+    expect(g.status).toBe("active"); // never auto-paused by the user's own stops
+  });
+
+  it("the acknowledgement says the abort was SIGNALLED — an in-flight tool call is not cancelled", async () => {
+    db.goalStore.add(goal({ interval_ms: 3_600_000 }));
+    let release!: () => void;
+    const hold = new Promise<void>((r) => (release = r));
+    const m = mockRuntime(db, { holdStream: hold });
+    const s = scheduler(db, m);
+    s.start(999_999);
+    await settle(() => db.goalRunStore.listByStatus("mote-test", "running").length > 0);
+    const halt = m.requestHalt({});
+    await s.tickOnce();
+    const ack = db.haltStore.get(halt.halt_id)!.acknowledgement ?? "";
+    expect(ack).toContain("signalled abort");
+    expect(ack).toContain("already in flight finishes");
+    expect(ack).not.toContain("aborted run ");
+    release();
+    s.stop();
+  });
+
+  it("approvals keep expiring while halted — the queue is not frozen overnight", async () => {
+    const now = Date.now();
+    db.approvalStore.add({
+      approval_id: "stale-1",
+      motebit_id: "mote-test",
+      goal_id: "goal-001",
+      tool_name: "shell_exec",
+      args_preview: "{}",
+      args_hash: "h",
+      risk_level: RiskLevel.R3_EXECUTE,
+      status: "pending",
+      created_at: now - 7_200_000,
+      expires_at: now - 3_600_000,
+      resolved_at: null,
+      denied_reason: null,
+    });
+    const m = mockRuntime(db);
+    const s = scheduler(db, m);
+    m.requestHalt({ reason: "overnight" });
+    s.start(999_999);
+    await s.tickOnce();
+    // Otherwise the phone shows it as decidable all night and the whole
+    // backlog expires the instant the halt lifts.
+    expect(db.approvalStore.get("stale-1")!.status).toBe("expired");
     s.stop();
   });
 

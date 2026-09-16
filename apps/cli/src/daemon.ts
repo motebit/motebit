@@ -1346,7 +1346,12 @@ export async function handleServe(config: CliConfig): Promise<void> {
         url: wsUrl,
         motebitId,
         authToken: wsAuthToken,
-        capabilities: [DeviceCapability.HttpMcp],
+        // Serve mode wires the halt store and executes relay-dispatched
+        // work, so it is an unattended runtime and says so — without
+        // this the relay refuses to route a halt here at all, and a
+        // worker that cannot be reached is a worker that cannot be
+        // stopped.
+        capabilities: [DeviceCapability.HttpMcp, DeviceCapability.UnattendedRuntime],
         httpFallback: httpAdapter,
         localStore: moteDb.eventStore,
       });
@@ -1432,6 +1437,19 @@ export async function handleServe(config: CliConfig): Promise<void> {
 
         if (msg.type !== "task_request" || msg.task == null) return;
         const task = msg.task as AgentTask;
+        // A halt covers relay-dispatched work too. Serve mode has no
+        // goal scheduler, so this is the only place it can be honored —
+        // without it, `motebit halt` would record a stop, print "in
+        // force from now", and the worker would keep accepting and
+        // executing tasks.
+        const serveHalt = runtimeRef.current?.haltInForce() ?? null;
+        if (serveHalt != null) {
+          void runtimeRef.current?.honorHalts();
+          log(
+            `Agent task ${task.task_id.slice(0, 8)}... refused — halted (${serveHalt.halt_id.slice(0, 8)})`,
+          );
+          return;
+        }
         log(
           `Agent task received: ${task.task_id.slice(0, 8)}... prompt: "${task.prompt.slice(0, 80)}"`,
         );
@@ -1467,6 +1485,24 @@ export async function handleServe(config: CliConfig): Promise<void> {
 
       serveWsAdapter.connect();
       log("Task dispatch: connected (WebSocket)");
+
+      // Serve mode has no goal scheduler, so nothing would otherwise
+      // honor a halt written by a local `motebit halt` — the row would
+      // sit un-acknowledged forever while the CLI said "in force from
+      // now". The stopper reports what stopping actually means here:
+      // no new relay-dispatched task is accepted. A task already
+      // running is not cancelled, and the wording says so.
+      runtimeRef.current?.onHalt(
+        () => "no further relay-dispatched tasks will be accepted (one already running finishes)",
+      );
+      const serveHaltTicker = setInterval(() => {
+        void runtimeRef.current?.honorHalts().catch((err: unknown) => {
+          log(
+            `[halt] honoring failed (will retry): ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+      }, 15_000);
+      serveHaltTicker.unref?.();
     }
 
     try {

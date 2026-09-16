@@ -6955,14 +6955,24 @@ motebit resume all
 ```
 
 A halt stops new goal runs, recovered approvals, and idle consolidation,
-and aborts the run in flight — the daemon checks for halts on its own
-interval, outside the guard that a long-running goal holds, so a stop can
-interrupt work in progress rather than queueing behind it. A live
+and signals an abort of the run in flight — the daemon checks for halts
+on its own interval, outside the guard that a long-running goal holds, so
+a stop reaches work in progress rather than queueing behind it. The
+signal is observed between steps, so a tool call already dispatched runs
+to its end; the acknowledgement says exactly that rather than claiming
+the run was cut off. A run stopped this way is not counted against the
+goal's retry budget — a stop you asked for is not a failure of the goal. A live
 conversation you are having at the keyboard is not unattended work and is
 not what a halt is for.
 
 A goal-scoped halt is genuinely scoped: it stops that goal's next run and
-that goal's pending approval, and leaves every other goal alone.
+that goal's pending approval, and leaves every other goal alone. The id
+is resolved before anything is recorded — the 8-character prefix
+`motebit goal list` prints is enough, and an id that matches no goal is
+refused rather than written as a halt that would match nothing.
+
+`motebit serve` is covered too: a halted worker refuses relay-dispatched
+tasks, and says so.
 
 **Requested is not stopped.** The record keeps two timestamps because they
 are two facts. `requested_at` is what you know when you ask;

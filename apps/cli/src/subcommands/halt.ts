@@ -150,20 +150,42 @@ async function sendRemote(config: CliConfig, command: string, args?: string): Pr
 export async function handleHalt(config: CliConfig): Promise<void> {
   // positionals: ["halt", ("goal", "<goal_id>")?]
   const isGoalScoped = config.positionals[1] === "goal";
-  const goalId = isGoalScoped ? config.positionals[2] : undefined;
-  if (isGoalScoped && (goalId == null || goalId === "")) {
+  const goalArg = isGoalScoped ? config.positionals[2] : undefined;
+  if (isGoalScoped && (goalArg == null || goalArg === "")) {
     console.error('Usage: motebit halt [goal <goal_id>] [--reason "..."] [--remote]');
     process.exit(1);
   }
   const reason = config.reason;
+  const motebitId = requireMotebitId(loadFullConfig());
+  const moteDb = await openMotebitDatabase(getDbPath(config.dbPath));
+
+  // Resolve the id BEFORE anything is recorded or sent. Every other
+  // goal-targeting command accepts the 8-char prefix `motebit goal list`
+  // prints, and the scope check downstream is an exact match — so an
+  // unresolved prefix would write a halt that matches no goal, report a
+  // stop, and let the goal keep firing. A stop that reports stopping
+  // must have stopped something.
+  let goalId: string | undefined;
+  if (goalArg != null) {
+    const match = moteDb.goalStore
+      .list(motebitId)
+      .find((g) => g.goal_id === goalArg || g.goal_id.startsWith(goalArg));
+    if (!match) {
+      moteDb.close();
+      console.error(
+        `Error: no goal matching "${goalArg}". Nothing has been halted — run \`motebit goal list\` to see the ids.`,
+      );
+      process.exit(1);
+    }
+    goalId = match.goal_id;
+  }
 
   if (config.remote) {
+    moteDb.close();
     await sendRemote(config, "halt", haltArgs(goalId, reason));
     return;
   }
 
-  const motebitId = requireMotebitId(loadFullConfig());
-  const moteDb = await openMotebitDatabase(getDbPath(config.dbPath));
   try {
     const halt: HaltRequest = {
       halt_id: crypto.randomUUID(),

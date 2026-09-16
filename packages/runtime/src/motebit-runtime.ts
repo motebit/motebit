@@ -2954,17 +2954,25 @@ export class MotebitRuntime {
           // settles would wedge every later halt behind it — turning a
           // stuck abort into a motebit that can no longer be stopped at
           // all. The timeout records the truth instead of hanging.
-          stopped.push(
-            await Promise.race([
-              Promise.resolve(listener(halt)),
-              new Promise<string>((resolve) =>
-                setTimeout(
-                  () => resolve("a stopper did not finish in time — it may still be running"),
-                  HALT_STOPPER_TIMEOUT_MS,
-                ),
-              ),
-            ]),
-          );
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            stopped.push(
+              await Promise.race([
+                Promise.resolve(listener(halt)),
+                new Promise<string>((resolve) => {
+                  timer = setTimeout(
+                    () => resolve("a stopper did not finish in time — it may still be running"),
+                    HALT_STOPPER_TIMEOUT_MS,
+                  );
+                }),
+              ]),
+            );
+          } finally {
+            // Left pending, this timer keeps the event loop alive for
+            // its full duration — fine in a daemon, a ten-second hang
+            // on exit for any short-lived process that honors inline.
+            if (timer !== undefined) clearTimeout(timer);
+          }
         } catch (err) {
           // A stopper that throws must not leave the halt unacknowledged
           // — that would read as "still running" forever. Record the
