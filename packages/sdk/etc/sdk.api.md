@@ -18,6 +18,7 @@ import type { ConversationStoreAdapter } from '@motebit/protocol';
 import type { CredentialStoreAdapter } from '@motebit/protocol';
 import type { EventLogEntry } from '@motebit/protocol';
 import type { EventStoreAdapter } from '@motebit/protocol';
+import type { HaltStoreAdapter } from '@motebit/protocol';
 import type { IdentityStorage } from '@motebit/protocol';
 import type { LatencyStatsStoreAdapter } from '@motebit/protocol';
 import type { MemoryCandidate } from '@motebit/protocol';
@@ -895,6 +896,7 @@ export interface StorageAdapters {
     eventStore: EventStoreAdapter;
     // (undocumented)
     gradientStore?: GradientStoreAdapter;
+    haltStore?: HaltStoreAdapter;
     // (undocumented)
     identityStorage: IdentityStorage;
     // (undocumented)

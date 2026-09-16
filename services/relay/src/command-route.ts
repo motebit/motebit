@@ -35,6 +35,26 @@ import type { createLogger } from "./logger.js";
 /** Commands the relay can answer from its own database. */
 const RELAY_SIDE_COMMANDS = new Set(["balance", "deposits", "discover", "proposals"]);
 
+/**
+ * Commands that only an UNATTENDED runtime can meaningfully serve.
+ *
+ * Every surface of a motebit holds an open socket and handles
+ * `command_request` — the phone, the web app, the desktop app, and the
+ * daemon. For a read that is harmless: any of them can report state. For
+ * these it is not. A halt sent to the phone that sent it would be
+ * answered "this surface cannot be halted" while the daemon kept
+ * running, and an approval decision sent to a surface with no queue
+ * would be answered "no pending approval matching …" — both
+ * indistinguishable from a genuine refusal, on exactly the commands
+ * where a false negative is most costly.
+ *
+ * So these are routed to a peer announcing `background` (the capability
+ * the CLI daemon announces and a phone does not). If no such peer is
+ * connected the request fails as undelivered, which is the honest
+ * answer: nothing was stopped and nothing was decided.
+ */
+const UNATTENDED_RUNTIME_COMMANDS = new Set(["halt", "resume", "halt-status", "approvals"]);
+
 /** Commands that require the agent's runtime (forwarded via WebSocket). */
 const RUNTIME_SIDE_COMMANDS = new Set([
   "state",
@@ -50,6 +70,14 @@ const RUNTIME_SIDE_COMMANDS = new Set([
   "summarize",
   "approvals",
   "conversations",
+  // Mutating. Safe to forward because the envelope is signed by the
+  // agent's OWN identity key — the caller already holds sovereign
+  // authority, so what these add is reach, not privilege. The relay
+  // still never decides: it forwards the envelope verbatim and the
+  // runtime re-verifies fail-closed before acting.
+  "halt",
+  "resume",
+  "halt-status",
 ]);
 
 /** Informational commands that need no runtime or relay. */
@@ -203,8 +231,27 @@ async function forwardCommandToAgent(
 
     pendingCommands.set(commandId, { resolve, timer });
 
-    // Send to first connected device (any device can answer)
-    const sent = peers.some((peer) => {
+    // For most commands any connected surface can answer. For the
+    // unattended-runtime set, only a peer that actually runs unattended
+    // work can — see UNATTENDED_RUNTIME_COMMANDS.
+    const candidates = UNATTENDED_RUNTIME_COMMANDS.has(command)
+      ? peers.filter((p) => p.capabilities?.includes("background") === true)
+      : peers;
+
+    if (candidates.length === 0) {
+      clearTimeout(timer);
+      pendingCommands.delete(commandId);
+      reject(
+        new Error(
+          UNATTENDED_RUNTIME_COMMANDS.has(command)
+            ? "No unattended runtime is connected — nothing was delivered, so nothing was stopped or decided"
+            : "No reachable device",
+        ),
+      );
+      return;
+    }
+
+    const sent = candidates.some((peer) => {
       try {
         peer.ws.send(payload);
         return true;

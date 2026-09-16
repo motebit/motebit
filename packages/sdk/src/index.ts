@@ -38,6 +38,7 @@ import type {
   LatencyStatsStoreAdapter,
   CredentialStoreAdapter,
   ApprovalStoreAdapter,
+  HaltStoreAdapter,
   MotebitIdentity,
   AuditRecord,
 } from "@motebit/protocol";
@@ -544,6 +545,13 @@ export interface StorageAdapters {
   latencyStatsStore?: LatencyStatsStoreAdapter;
   credentialStore?: CredentialStoreAdapter;
   approvalStore?: ApprovalStoreAdapter;
+  /**
+   * Durable halt state — the withdrawal of unattended autonomy. Optional
+   * for the same reason `approvalStore` is: a surface without it simply
+   * cannot be halted remotely, which is honest rather than silently
+   * unenforced. The daemon always supplies one.
+   */
+  haltStore?: HaltStoreAdapter;
 }
 
 // === Credential & Verification Boundaries ===

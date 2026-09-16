@@ -21,12 +21,14 @@ import {
 import { cmdMemories, cmdGraph, cmdCurious, cmdForget, cmdAudit } from "./memory.js";
 import { cmdGradient, cmdReflect } from "./intelligence.js";
 import { cmdBalance, cmdDeposits, cmdDiscover, cmdProposals } from "./market.js";
+import { cmdHalt, cmdResume, cmdHaltStatus } from "./halt.js";
 
 // Re-export types and plan aggregator
 export type { CommandResult, RelayConfig } from "./types.js";
 export type { SelfTestConfig, MintToken } from "./self-test.js";
 export { cmdSelfTest } from "./self-test.js";
-export { cmdWelcome } from "./system.js";
+export { cmdWelcome, cmdApprovals } from "./system.js";
+export { cmdHalt, cmdResume, cmdHaltStatus } from "./halt.js";
 export { PlanExecutionVM, type PlanSnapshot, type PlanEvent } from "./plans.js";
 
 /**
@@ -64,6 +66,12 @@ export const COMMAND_DEFINITIONS: ReadonlyArray<{ name: string; description: str
   { name: "delegate", description: "Delegate task to agent" },
   { name: "propose", description: "Propose collaborative plan" },
   { name: "self-test", description: "Run adversarial self-test via relay" },
+  {
+    name: "halt",
+    description: "Stop acting unattended (optionally: goal <id>) — reachable remotely",
+  },
+  { name: "resume", description: "Give the permission to act unattended back" },
+  { name: "halt-status", description: "What is stopped, and whether the motebit has acknowledged" },
 ];
 
 /**
@@ -77,6 +85,16 @@ export async function executeCommand(
   command: string,
   args?: string,
   relay?: RelayConfig,
+  options?: {
+    /**
+     * Where the command came in. Only recorded, never trusted for
+     * authorization — the signed envelope is the authorization. A halt
+     * carries it into the durable record so the history says whether
+     * the sovereign stopped their motebit from this machine or from
+     * somewhere else.
+     */
+    origin?: "local" | "remote";
+  },
 ): Promise<CommandResult | null> {
   switch (command) {
     // System
@@ -87,7 +105,18 @@ export async function executeCommand(
     case "tools":
       return cmdTools(runtime);
     case "approvals":
-      return cmdApprovals(runtime);
+      return cmdApprovals(runtime, args);
+
+    // Halt — the only mutating verbs in the vocabulary. Safe to expose
+    // remotely because the envelope is signed by the motebit's own
+    // identity key: the caller already holds sovereign authority, and
+    // what is added is reach, not privilege.
+    case "halt":
+      return cmdHalt(runtime, args, options?.origin ?? "local");
+    case "resume":
+      return cmdResume(runtime, args);
+    case "halt-status":
+      return cmdHaltStatus(runtime);
     case "conversations":
       return cmdConversations(runtime);
     case "summarize":

@@ -754,6 +754,15 @@ export enum EventType {
   // `perception.ts`. STRICTLY metadata — count + credential-class label names, never
   // the secret content. Doctrine: security-boundaries.md.
   SecretRedactedFromEgress = "secret_redacted_from_egress",
+  // Halt — withdrawing the standing permission to act unattended.
+  // Three events, never two: the request and the acknowledgement are
+  // separate facts (a daemon that is offline has been asked and has not
+  // stopped), and lifting is its own authority act. Payloads carry
+  // halt_id + scope + origin; `HaltAcknowledged` also carries what
+  // stopping entailed. See `HaltRequest`.
+  HaltRequested = "halt_requested",
+  HaltAcknowledged = "halt_acknowledged",
+  HaltLifted = "halt_lifted",
 }
 
 export enum MemoryType {
@@ -3333,11 +3342,129 @@ export interface CredentialStoreAdapter {
   list(motebitId: string, type?: string, limit?: number): StoredCredential[];
 }
 
+export type ApprovalStatus = "pending" | "approved" | "denied" | "expired";
+
+/**
+ * One queued tool call awaiting a human decision.
+ *
+ * Wire-facing: this is what a remote consent surface (the phone) is
+ * shown before it decides, so `args_preview` must carry enough of the
+ * real call — destination, payload, the parameters that make it
+ * consequential — that a person is deciding on the action rather than
+ * on its name. `args_hash` is over the full arguments, so a preview
+ * that differs from what would execute is detectable; `args_json`
+ * (local only) is what an out-of-band decision actually runs.
+ */
+export interface ApprovalItem {
+  approval_id: string;
+  motebit_id: string;
+  goal_id: string;
+  tool_name: string;
+  args_preview: string;
+  args_hash: string;
+  risk_level: number;
+  status: ApprovalStatus;
+  created_at: number;
+  expires_at: number;
+  resolved_at: number | null;
+  denied_reason: string | null;
+  /**
+   * Full JSON of the paused call's arguments — what a decision made
+   * after a restart executes EXACTLY. Local state: it is deliberately
+   * NOT sent to a remote consent surface, which receives the preview
+   * and the hash.
+   */
+  args_json?: string | null;
+}
+
 export interface ApprovalStoreAdapter {
   /** Collect a quorum approval vote. Returns whether threshold is met and collected voter IDs. */
   collectApproval(approvalId: string, approverId: string): { met: boolean; collected: string[] };
   /** Set quorum metadata on a pending approval item. */
   setQuorum(approvalId: string, required: number, approvers: string[]): void;
+  // The decision surface. Optional because the port shipped narrower
+  // (quorum only) and an implementer may still be at that shape; a
+  // consent surface that cannot read the queue says so rather than
+  // pretending it is empty.
+  /** Queued calls still awaiting a decision, oldest first. */
+  listPending?(motebitId: string): ApprovalItem[];
+  get?(approvalId: string): ApprovalItem | null;
+  /** Record a human's decision. */
+  resolve?(approvalId: string, status: "approved" | "denied", deniedReason?: string): void;
+}
+
+// ── Halt ───────────────────────────────────────────────────────────
+// Withdrawing autonomy. A halt is durable state, not a message: a
+// message a stopped process never receives is not a stop, and a stop a
+// restart forgets is not a stop either.
+//
+// Halt is not approval's sibling. Approval AUTHORIZES one exact pending
+// action; halt REVOKES the standing permission to act unattended, and
+// aborts whatever is in flight. They compose: a halted motebit does not
+// execute an approval the human granted before the halt.
+
+/**
+ * A request to stop acting unattended, and the daemon's answer to it.
+ *
+ * The two timestamps are the whole point. `requested_at` is what the
+ * asker knows; `acknowledged_at` is what the motebit did. A surface
+ * that renders the first as if it were the second is lying: a daemon
+ * that is offline, wedged, or mid-tool has been ASKED to stop and has
+ * not yet stopped. Until the acknowledgement lands, the honest reading
+ * is "stop requested".
+ */
+export interface HaltRequest {
+  halt_id: string;
+  motebit_id: string;
+  /**
+   * `null` halts ALL unattended execution for this motebit. A goal id
+   * halts only that goal — the rest of the interior keeps running.
+   */
+  goal_id: string | null;
+  requested_at: number;
+  /**
+   * Where the request came in. `local` is this machine (a terminal
+   * command); `remote` is a signed command envelope that arrived over
+   * the relay — the consent root reaching the runtime.
+   */
+  origin: HaltOrigin;
+  /** Free text the requester attached, shown wherever the halt is shown. */
+  reason: string | null;
+  /**
+   * When the motebit actually stopped. `null` means requested-not-yet-
+   * honored. Never set optimistically at request time.
+   */
+  acknowledged_at: number | null;
+  /** What stopping actually entailed — e.g. "aborted run 1a2b3c4d". */
+  acknowledgement: string | null;
+  /** When a human lifted it. A lifted halt no longer blocks anything. */
+  lifted_at: number | null;
+}
+
+export type HaltOrigin = "local" | "remote";
+
+/**
+ * Durable halt state. Mirrors `ApprovalStoreAdapter`'s shape: the
+ * runtime holds the port, a surface supplies the implementation.
+ */
+export interface HaltStoreAdapter {
+  /** Record a request to stop. Not yet a stop — see `HaltRequest`. */
+  request(halt: HaltRequest): void;
+  /** Record that the motebit has actually stopped, and what that took. */
+  acknowledge(haltId: string, acknowledgement: string, at?: number): void;
+  /** Lift a halt. Returns false when no un-lifted halt has that id. */
+  lift(haltId: string, at?: number): boolean;
+  /**
+   * The halt in force for this goal right now, or `null`. A motebit-wide
+   * halt (`goal_id === null`) covers every goal; a goal-scoped halt
+   * covers only its own. Omit `goalId` to ask about unattended execution
+   * in general — which only a motebit-wide halt blocks.
+   */
+  activeFor(motebitId: string, goalId?: string): HaltRequest | null;
+  /** Every halt in force, motebit-wide and per-goal. */
+  listActive(motebitId: string): HaltRequest[];
+  get(haltId: string): HaltRequest | null;
+  listRecent(motebitId: string, limit?: number): HaltRequest[];
 }
 
 // ── Semiring Algebra (protocol-level) ──────────────────────────────
