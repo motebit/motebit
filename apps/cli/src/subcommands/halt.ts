@@ -308,7 +308,22 @@ export async function handleResume(config: CliConfig): Promise<void> {
       console.log(`Resumed — ${lifted} halt(s) lifted.`);
       return;
     }
-    const match = active.find((h) => h.halt_id === target || h.halt_id.startsWith(target));
+    // An ambiguous prefix is refused, not resolved arbitrarily —
+    // repeated `halt` calls each write a row, so several active halts
+    // sharing a short prefix is ordinary, and lifting whichever came
+    // first would hand back permission the person did not name.
+    const exact = active.find((h) => h.halt_id === target);
+    const prefixed = active.filter((h) => h.halt_id.startsWith(target));
+    if (exact == null && prefixed.length > 1) {
+      console.error(
+        `Error: "${target}" matches ${prefixed.length} halts in force — name one exactly.`,
+      );
+      console.error(
+        prefixed.map((h) => describe(h, moteDb.haltStore.acknowledgements(h.halt_id))).join("\n"),
+      );
+      process.exit(1);
+    }
+    const match = exact ?? prefixed[0];
     if (!match) {
       console.error(`Error: no halt in force matching "${target}".`);
       console.error(
@@ -316,7 +331,14 @@ export async function handleResume(config: CliConfig): Promise<void> {
       );
       process.exit(1);
     }
-    moteDb.haltStore.lift(match.halt_id);
+    // Read the return value: `lift` refuses a halt already lifted, and
+    // printing "Resumed" regardless would report giving permission back
+    // that this command did not give. The runtime's `cmdResume` reads it.
+    const lifted = moteDb.haltStore.lift(match.halt_id);
+    if (!lifted) {
+      console.log(`Halt ${match.halt_id.slice(0, 8)} was already lifted — nothing changed.`);
+      return;
+    }
     await logHaltEvent(
       moteDb,
       motebitId,

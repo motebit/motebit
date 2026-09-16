@@ -311,7 +311,20 @@ export class GoalScheduler {
     // Best-effort memory consolidation on shutdown — unless a halt is in
     // force, whose acknowledgement promised that no further consolidation
     // would start. A promise that lapses at shutdown is not a promise.
-    if (this.runtime.haltInForce() == null) {
+    //
+    // Guarded because this is a SYNCHRONOUS SQLite read and it is the
+    // last statement in `stop()`. A busy-database throw would propagate
+    // into the daemon's shutdown block and skip everything after it —
+    // the socket disconnect, the runtime-host close, the database
+    // close, and the private-key erase. Failing toward "halted" costs
+    // one best-effort cycle; failing open costs the key still in memory.
+    let haltedAtShutdown = true;
+    try {
+      haltedAtShutdown = this.runtime.haltInForce() != null;
+    } catch {
+      // Treated as halted: skip the cycle, let shutdown finish.
+    }
+    if (!haltedAtShutdown) {
       void this.runtime.consolidationCycle();
     }
   }

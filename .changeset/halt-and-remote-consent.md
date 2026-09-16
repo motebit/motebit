@@ -128,3 +128,12 @@ Twelfth review round — four findings, one high, and one of them a defect this 
 - **A reason that begins with the word "goal" is a reason.** The phone had gained a `goal <id> <reason>` grammar — the same grammar this branch's first review round removed from the command line, reintroduced on the one surface that is the consent root, where it is worse: an unmatched scope is refused by the store, so a person asking for a stop gets silence. Scope now travels in an explicit `--goal` marker, which a reason never begins with.
 - **A send that fails on a dead socket reports as undelivered, not as a relay fault.** Every send throwing is the ordinary case moments after a daemon dies, and it was surfacing to the phone as a bare server error for a halt that demonstrably did not land.
 - The halt read guarding idle consolidation is wrapped, so a locked database cannot take down the one process whose staying up is the point.
+
+Thirteenth review round — seven findings, none high:
+
+- **The success summary reports what this runtime stopped, never what was asked.** Both the goal daemon and the worker announce the unattended-runtime capability and share a device id, so the relay may deliver a motebit-wide halt to either. Landing on the worker, whose stopper only declines further dispatched tasks, the summary said "This runtime has stopped all unattended execution" while the goal daemon had not acknowledged and kept firing until its next tick. The ask rendered as the stop, one last time.
+- **An ambiguous resume prefix is refused rather than resolved arbitrarily.** Repeated halts each write a row, so several active halts sharing a short prefix is ordinary, and lifting whichever came first while reporting success gives back permission nobody named. The command line also reads the lift's result instead of printing "Resumed" regardless.
+- **An empty `device_id` on the wire counts as undeclared.** Otherwise every such peer would share one id and the machine-grouping would read unrelated machines as one.
+- The shutdown path's halt read is guarded, so a locked database cannot skip the socket close, the database close and the private-key erase that follow it.
+- The dispatch path logs both its halt-read and honoring failures. It runs inside a handler that swallows exceptions, so an unlogged throw there dropped the task with no record — a refusal indistinguishable from never having arrived.
+- A surface with no approval queue at all is told that, rather than that its queue is read-only.

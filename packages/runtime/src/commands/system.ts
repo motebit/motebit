@@ -66,7 +66,14 @@ export function cmdApprovals(runtime: MotebitRuntime, args?: string): CommandRes
     const decision = verb[1]!.toLowerCase() === "approve" ? "approved" : "denied";
     const idPrefix = verb[2]!;
     const reason = (verb[3] ?? "").trim();
-    if (store?.listPending == null || store.resolve == null) {
+    if (store == null) {
+      return {
+        summary: "This surface cannot decide approvals — it has no approval queue.",
+        detail:
+          "Nothing was approved or denied. Ask the process that runs unattended work (`motebit run`), which owns the queue.",
+      };
+    }
+    if (store.listPending == null || store.resolve == null) {
       return {
         summary: "This surface cannot decide approvals — its approval store is read-only.",
       };

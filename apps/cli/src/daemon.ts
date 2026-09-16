@@ -520,9 +520,28 @@ export async function handleRun(config: CliConfig): Promise<void> {
           // the submitter (who cleared the settlement gates to get here)
           // would learn nothing until it timed out. Leaving it unclaimed
           // lets the relay offer it elsewhere.
-          const runHalt = runtime.haltInForce();
+          // Both reads are guarded, and neither failure is swallowed.
+          // This handler runs inside the ws-adapter's
+          // `catch { /* ignore malformed messages */ }`, so a throw
+          // here would drop the task with no log at all — a refusal
+          // indistinguishable from never having arrived. Every sibling
+          // honoring call in this file logs its failure; this one used
+          // to discard it.
+          let runHalt: import("@motebit/sdk").HaltRequest | null = null;
+          try {
+            runHalt = runtime.haltInForce();
+          } catch (err: unknown) {
+            console.log(
+              `[halt] could not read halt state, refusing the task to be safe: ${err instanceof Error ? err.message : String(err)}`,
+            );
+            return;
+          }
           if (runHalt != null) {
-            void runtime.honorHalts().catch(() => undefined);
+            void runtime.honorHalts().catch((err: unknown) => {
+              console.log(
+                `[halt] honoring failed (will retry): ${err instanceof Error ? err.message : String(err)}`,
+              );
+            });
             console.log(`\nAgent task not claimed — halted (${runHalt.halt_id.slice(0, 8)})`);
             return;
           }

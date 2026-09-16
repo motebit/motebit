@@ -99,7 +99,15 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
       // Route param is guaranteed by /ws/sync/:motebitId pattern; guard in onOpen for defense-in-depth
       const motebitId = asMotebitId(c.req.param("motebitId") as string);
       const url = new URL(c.req.url, "http://localhost");
-      const declaredDeviceId = url.searchParams.get("device_id");
+      // Empty is not declared. `?device_id=` yields "" rather than
+      // null, which would mark the peer as having declared an id AND
+      // give every such peer the same one — so the machine-grouping in
+      // command-route would read unrelated machines as one and deliver
+      // a halt or an approval decision to the wrong queue instead of
+      // refusing. The client guards against sending empty; the relay
+      // must not depend on that.
+      const rawDeviceId = url.searchParams.get("device_id");
+      const declaredDeviceId = rawDeviceId != null && rawDeviceId !== "" ? rawDeviceId : null;
       const deviceId = declaredDeviceId ?? crypto.randomUUID();
       // Backwards compat: accept token from query param during migration.
       // Preferred path: post-connect auth frame (token never in URL).

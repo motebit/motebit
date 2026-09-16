@@ -407,11 +407,6 @@ export interface ToolRecallResult {
 }
 
 /**
- * How long one halt stopper may take before the acknowledgement records
- * that it did not finish. Generous — a stopper aborts in-flight work, it
- * does not wait for it — but bounded, because honoring is serialized.
- */
-/**
  * A short random suffix that never throws.
  *
  * `crypto.randomUUID` is secure-context-only in browsers and arrives
@@ -426,6 +421,11 @@ function randomSuffix(): string {
     : Math.random().toString(36).slice(2, 10);
 }
 
+/**
+ * How long one halt stopper may take before the acknowledgement records
+ * that it did not finish. Generous — a stopper aborts in-flight work, it
+ * does not wait for it — but bounded, because honoring is serialized.
+ */
 const HALT_STOPPER_TIMEOUT_MS = 10_000;
 
 export class MotebitRuntime {

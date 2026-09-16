@@ -147,10 +147,14 @@ describe("cmdHalt", () => {
   it("reports the acknowledgement when this process is the one that stopped", async () => {
     const { runtime } = makeRuntime({ stopper: () => "aborted run 1a2b3c4d" });
     const r = await cmdHalt(runtime, "going out", "remote");
-    // "This runtime", not "Stopped": several processes can run
-    // unattended work for one motebit, and this one speaks only for
-    // itself. `acknowledged_by` carries the full set.
-    expect(r.summary).toBe("This runtime has stopped all unattended execution.");
+    // The summary names the ASK and this runtime's acknowledgement; the
+    // detail carries what was actually stopped. It deliberately does
+    // not say "has stopped all unattended execution", because this
+    // process speaks only for itself and a relay may have delivered the
+    // halt to whichever runtime it reached first.
+    expect(r.summary).toBe(
+      "Stop requested for all unattended execution. This runtime has acknowledged.",
+    );
     expect(r.data?.acknowledged_by).toEqual([
       { executor_id: "test-executor", acknowledgement: "aborted run 1a2b3c4d" },
     ]);
@@ -253,6 +257,40 @@ describe("cmdResume / cmdHaltStatus", () => {
     const r = await cmdResume(runtime, "h1");
     expect(r.data?.lifted).toBe(true);
     expect((await cmdResume(runtime, "all")).summary).toBe("Nothing is halted.");
+  });
+
+  it("the summary reports what THIS runtime stopped, never what was asked", async () => {
+    // Both `motebit run` and `motebit serve` announce the
+    // unattended-runtime capability and share a device id, so the relay
+    // may deliver a motebit-wide halt to either. Landing on the worker,
+    // whose stopper only declines further dispatched tasks, the old
+    // summary answered "This runtime has stopped all unattended
+    // execution" while the goal daemon had not acknowledged and kept
+    // firing — the ask rendered as the stop.
+    const { runtime } = makeRuntime({
+      stopper: () => "no further dispatched tasks will be accepted",
+    });
+    const r = await cmdHalt(runtime, "going out", "remote");
+    expect(r.summary).not.toContain("has stopped all unattended execution");
+    expect(r.summary).toContain("This runtime has acknowledged");
+    expect(r.detail).toContain("no further dispatched tasks will be accepted");
+    expect(r.detail).toContain("has not acknowledged is still running");
+  });
+
+  it("an ambiguous resume prefix is refused, not resolved arbitrarily", async () => {
+    // Repeated halts each write a row, so several active halts sharing
+    // a short prefix is ordinary. Lifting whichever came first while
+    // reporting success gives back permission nobody named.
+    const { runtime, rows } = makeRuntime();
+    await cmdHalt(runtime, "first", "local");
+    await cmdHalt(runtime, "second", "local");
+    const ids = [...rows.keys()];
+    expect(ids.length).toBe(2);
+    // Both stub ids start with "h", so "h" is ambiguous.
+    const r = await cmdResume(runtime, "h");
+    expect(r.summary).toContain("matches 2 halts in force");
+    // Nothing was lifted.
+    expect([...rows.values()].every((h) => h.lifted_at == null)).toBe(true);
   });
 
   it("halt-status distinguishes requested from stopped", async () => {

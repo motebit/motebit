@@ -144,13 +144,23 @@ export async function cmdHalt(
     };
   }
 
+  // The summary reports what THIS executor stopped, never what the halt
+  // asked for. Both `motebit run` and `motebit serve` announce the
+  // unattended-runtime capability and share a device id, so the relay
+  // may deliver a motebit-wide halt to either. If it lands on the
+  // worker, whose stopper only declines further dispatched tasks, the
+  // old summary answered "This runtime has stopped all unattended
+  // execution" while the goal daemon had not acknowledged and kept
+  // firing until its next tick — the ask rendered as the stop, which is
+  // the conflation this arc exists to remove.
   return {
-    summary: `This runtime has stopped ${scope}.`,
+    summary: `Stop requested for ${scope}. This runtime has acknowledged.`,
     detail:
-      `${mine.acknowledgement}` +
+      `This runtime stopped: ${mine.acknowledgement}` +
       (others.length > 0
-        ? `\nAlso stopped: ${others.map((a) => a.acknowledgement).join("; ")}`
+        ? `\nAlso stopped: ${others.map((a) => `${a.executor_id}: ${a.acknowledgement}`).join("; ")}`
         : "") +
+      `\nAny process that has not acknowledged is still running.` +
       `\nLift with: motebit resume ${halt.halt_id.slice(0, 8)}`,
     data: {
       halt_id: halt.halt_id,
@@ -187,7 +197,20 @@ export async function cmdResume(runtime: MotebitRuntime, args?: string): Promise
     };
   }
 
-  const match = active.find((h) => h.halt_id === target || h.halt_id.startsWith(target));
+  // An ambiguous prefix is refused, not resolved arbitrarily. Repeated
+  // `halt` calls each write a new row, so several active halts sharing
+  // a short prefix is ordinary — and lifting an arbitrary one of them
+  // while reporting success is a resume that gave back permission the
+  // person did not name.
+  const exact = active.find((h) => h.halt_id === target);
+  const prefixed = active.filter((h) => h.halt_id.startsWith(target));
+  if (exact == null && prefixed.length > 1) {
+    return {
+      summary: `"${target}" matches ${prefixed.length} halts in force — name one exactly.`,
+      detail: prefixed.map((h) => describe(h, halts.acknowledgements(h.halt_id))).join("\n"),
+    };
+  }
+  const match = exact ?? prefixed[0];
   if (!match) {
     return {
       summary: `No halt in force matching "${target}".`,
