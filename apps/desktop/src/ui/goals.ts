@@ -331,7 +331,6 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
   // === Audit Entries for Outcomes ===
 
   function loadOutcomeAuditEntries(
-    outcomeId: string,
     ranAt: number,
     allOutcomes: Array<Record<string, unknown>>,
     currentIndex: number,
@@ -340,8 +339,21 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
   ): void {
     container.innerHTML = "";
 
-    // Helper: timestamp-range fallback for legacy rows without run_id
-    const loadFallback = (): void => {
+    // The tool calls are time-correlated on this surface, and that is
+    // the whole story rather than a fallback.
+    //
+    // `tool_audit_log` here is the Rust schema in `src-tauri/src/main.rs`
+    // and it has no `run_id` column — no desktop migration adds one. So
+    // the run-id query that used to lead this function could not return
+    // zero rows, it THREW, and every expansion showed "Failed to load"
+    // where the tool calls belong. Catching the throw made it work, but
+    // made a permanent condition look like an exception: every
+    // expansion paid a failing IPC round-trip first, and the catch that
+    // covered it also swallowed genuine database failures into a
+    // silently different answer. A query that cannot succeed is not a
+    // primary path. If a migration ever adds the column, restore it
+    // here as the primary and keep this as the pre-migration path.
+    const loadByTimestamp = (): void => {
       const startTs = ranAt - 5000;
       const endTs =
         currentIndex > 0 ? Number(allOutcomes[currentIndex - 1]!.ran_at) || Date.now() : Date.now();
@@ -350,8 +362,8 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
         sql: `SELECT tool, decision, result, timestamp FROM tool_audit_log WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC LIMIT 50`,
         params: [startTs, endTs],
       })
-        .then((fallbackEntries: Array<Record<string, unknown>>) => {
-          renderAuditEntries(fallbackEntries, container, true);
+        .then((entries: Array<Record<string, unknown>>) => {
+          renderAuditEntries(entries, container, true);
         })
         .catch(() => {
           container.innerHTML =
@@ -359,35 +371,7 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
         });
     };
 
-    // Skip run_id query if outcomeId is empty (legacy row)
-    if (!outcomeId || !outcomeId.trim()) {
-      loadFallback();
-      return;
-    }
-
-    // Primary: query by run_id (= outcome_id). Falls back to timestamp range for pre-migration data.
-    void invoke<Array<Record<string, unknown>>>("db_query", {
-      sql: `SELECT tool, decision, result, timestamp FROM tool_audit_log WHERE run_id = ? ORDER BY timestamp ASC LIMIT 50`,
-      params: [outcomeId],
-    })
-      .then((entries: Array<Record<string, unknown>>) => {
-        if (entries.length > 0) {
-          renderAuditEntries(entries, container, false);
-          return;
-        }
-        loadFallback();
-      })
-      .catch(() => {
-        // The fallback, not an error message. This surface's
-        // `tool_audit_log` has no `run_id` column at all — it is in the
-        // Rust schema and no desktop migration adds one — so the query
-        // above does not return zero rows, it THROWS, and every
-        // expansion of a recent outcome showed "Failed to load" where
-        // the tool calls should be. The comment above already calls the
-        // timestamp range the pre-migration path; a missing column is
-        // exactly that case, so it belongs on this branch too.
-        loadFallback();
-      });
+    loadByTimestamp();
   }
 
   function renderAuditEntries(
@@ -841,9 +825,8 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
             row.classList.toggle("expanded");
             if (row.classList.contains("expanded") && toolCalls > 0 && !auditLoaded) {
               auditLoaded = true;
-              const oId = ipcString(outcome.outcome_id);
               const ranAt = Number(outcome.ran_at) || 0;
-              loadOutcomeAuditEntries(oId, ranAt, outcomes, outcomeIndex, auditContainer, invoke);
+              loadOutcomeAuditEntries(ranAt, outcomes, outcomeIndex, auditContainer, invoke);
             }
           });
 

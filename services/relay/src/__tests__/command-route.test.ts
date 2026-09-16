@@ -390,6 +390,76 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     expect(vps.sentTo).toEqual([]);
   });
 
+  it("a HALT reaches EVERY machine, not the first that answers", async () => {
+    // The halt store is local and nothing replicates it, so a halt
+    // delivered to one of two machines stopped one of them — and
+    // answered with that one's acknowledgement, which reads as
+    // "stopped" for a motebit that is still working. The act is
+    // idempotent and machine-local, so the delivery that matches what
+    // was asked for is to all of them.
+    const laptop = fakePeer("dev-1", ["background", "unattended_runtime"]);
+    const vps = fakePeer("dev-2", ["background", "unattended_runtime"]);
+    relay.connections.set(AGENT_ID, [laptop.peer, vps.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "halt",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    void postCommand(AGENT_ID, { command: "halt", envelope });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(laptop.sentTo.length).toBeGreaterThan(0);
+    expect(vps.sentTo.length).toBeGreaterThan(0);
+  });
+
+  it("an `approvals` decision is never broadcast — two queues are two decisions", async () => {
+    // Repeating a halt is the same act; deciding an approval twice is
+    // two decisions on two records. That is why this command refuses a
+    // many-machine motebit rather than delivering to both.
+    const laptop = fakePeer("dev-1", ["background", "unattended_runtime"]);
+    const vps = fakePeer("dev-2", ["background", "unattended_runtime"]);
+    relay.connections.set(AGENT_ID, [laptop.peer, vps.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "approvals",
+      args: "list",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    const { status } = await postCommand(AGENT_ID, {
+      command: "approvals",
+      args: "list",
+      envelope,
+    });
+    expect(status).toBe(404);
+    expect(laptop.sentTo).toEqual([]);
+    expect(vps.sentTo).toEqual([]);
+  });
+
+  it("`halt-status` is a per-machine READ, so two machines are refused", async () => {
+    // It reads this machine's halt store. Routed to whichever the relay
+    // picked, it answered "Running — nothing is halted" from the VPS
+    // while the laptop sat halted — the same false negative the
+    // approvals queue has, about the question this whole arc is for.
+    const laptop = fakePeer("dev-1", ["background", "unattended_runtime"]);
+    const vps = fakePeer("dev-2", ["background", "unattended_runtime"]);
+    relay.connections.set(AGENT_ID, [laptop.peer, vps.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "halt-status",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    const { status, json } = await postCommand(AGENT_ID, { command: "halt-status", envelope });
+    expect(status).toBe(404);
+    expect(JSON.stringify(json)).toMatch(/2 different machines/i);
+    expect(laptop.sentTo).toEqual([]);
+    expect(vps.sentTo).toEqual([]);
+  });
+
   it("a `runs` question goes to the runtime that HAS the ledger", async () => {
     // Read-only, but not answerable by just anyone: the run ledger
     // lives where goals actually fire. Answered by the phone that asked,

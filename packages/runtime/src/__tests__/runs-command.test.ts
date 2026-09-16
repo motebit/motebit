@@ -26,6 +26,7 @@ const DETAIL: RunLedgerDetail = {
   goal_id: "goal-123456",
   status: "completed",
   started_at: 1_000,
+  holding: false,
   signed: true,
   evidence_count: 1,
   withheld_count: 1,
@@ -68,6 +69,7 @@ describe("runs — the return view from another surface", () => {
             goal_id: "goal-123456",
             status: "completed",
             started_at: 1,
+            holding: false,
             signed: true,
             evidence_count: 2,
             withheld_count: 1,
@@ -184,6 +186,7 @@ describe("runs — the return view from another surface", () => {
             goal_id: "goal-123456",
             status: "interrupted",
             started_at: 1,
+            holding: true,
             signed: false,
             evidence_count: 0,
             withheld_count: 0,
@@ -216,6 +219,77 @@ describe("runs — the return view from another surface", () => {
     expect(cmdRuns(runtimeWith(ledger), "list").summary).toBe("No runs recorded yet.");
     expect(cmdRuns(runtimeWith(ledger), "show run-abcd").summary).toContain("run-abcd");
     expect(cmdRuns(runtimeWith(ledger), "run-abcd").summary).toContain("run-abcd");
+  });
+
+  it("a held run is marked as needing a person, and every line carries a time", () => {
+    // `status` alone cannot say it: an `interrupted` run that has been
+    // acknowledged and one still waiting read identically, and only one
+    // of them is something the returning owner has to act on. The
+    // reader sorted these first and nothing rendered the fact.
+    const r = cmdRuns(
+      runtimeWith({
+        listRecent: () => [
+          {
+            run_id: "run-held0001",
+            goal_id: "goal-1",
+            status: "interrupted",
+            started_at: Date.now() - 3 * 60 * 60 * 1000,
+            holding: true,
+            signed: false,
+            evidence_count: 0,
+            withheld_count: 0,
+          },
+        ],
+        get: () => ({ kind: "missing" as const }),
+      }),
+    );
+    expect(r.detail).toContain("needs you");
+    expect(r.detail).toContain("3h ago");
+  });
+
+  it("a refusal is redacted and bounded in that order, not bounded and then read", () => {
+    // Every credential pattern is length-anchored, so a secret
+    // straddling the cut is reduced to a stub nothing matches. The
+    // reader hands the body over whole precisely so the membrane reads
+    // it whole; bounding first put the tail of a key on the wire.
+    const straddling: RunLedgerDetail = {
+      ...DETAIL,
+      outcomes: [
+        {
+          status: "completed",
+          summary_preview: `${"x".repeat(275)}sk-live-AAAAAAAAAAAAAAAAAAAA tail`,
+          signed: false,
+        },
+      ],
+    };
+    const r = cmdRuns(
+      runtimeWith({
+        listRecent: () => [],
+        get: () => ({ kind: "found" as const, run: straddling }),
+      }),
+      "run-abcd",
+    );
+    expect(JSON.stringify(r.data)).not.toContain("sk-live");
+    // Still bounded — the redaction does not license an unbounded body.
+    const preview = (r.data as { run: RunLedgerDetail }).run.outcomes[0]?.summary_preview ?? "";
+    expect(preview.length).toBeLessThanOrEqual(281);
+  });
+
+  it("`ack` is answered as a local act, not as a missing run", () => {
+    const r = cmdRuns(
+      runtimeWith({ listRecent: () => [], get: () => ({ kind: "missing" as const }) }),
+      "ack run-abcd",
+    );
+    expect(r.summary).not.toContain("No run matching");
+    expect(r.detail).toContain("motebit runs ack");
+  });
+
+  it("a bare `show` is the list, not a run called show", () => {
+    const r = cmdRuns(
+      runtimeWith({ listRecent: () => [], get: () => ({ kind: "missing" as const }) }),
+      "show",
+    );
+    expect(r.summary).toBe("No runs recorded yet.");
   });
 
   it("an unknown run is not reported as an empty one", () => {

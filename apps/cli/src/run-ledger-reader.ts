@@ -22,9 +22,6 @@ import type {
   RunLedgerLookup,
 } from "@motebit/sdk";
 
-/** Enough of a result to recognise it; far short of standing in for it. */
-const PREVIEW_MAX_CHARS = 280;
-
 export function createRunLedgerReader(moteDb: MotebitDatabase, motebitId: string): RunLedgerReader {
   /**
    * Every outcome a run produced — the run-linked rows AND the legacy
@@ -43,12 +40,24 @@ export function createRunLedgerReader(moteDb: MotebitDatabase, motebitId: string
       : linked;
   };
 
+  /**
+   * A pointer only counts as checkable if it can actually be re-checked.
+   *
+   * A row with no provenance has no digest, so counting it and then
+   * printing "re-fetch the source and hash its text" under a blank one
+   * instructs the owner to verify something that was never recorded.
+   * Not withheld either — withholding is a decision, this is an absence.
+   */
+  const checkable = (e: { withheld_reason?: string | null; evidence: { provenance?: unknown } }) =>
+    e.withheld_reason == null && e.evidence.provenance != null;
+
   const summarise = (
     runId: string,
     goalId: string,
     status: string,
     startedAt: number,
     note: string | null,
+    holding: boolean,
   ): RunLedgerSummary => {
     const outcomes = outcomesFor(runId);
     const evidence = moteDb.runEvidenceStore.listForRun(runId);
@@ -57,9 +66,10 @@ export function createRunLedgerReader(moteDb: MotebitDatabase, motebitId: string
       goal_id: goalId,
       status,
       started_at: startedAt,
+      holding,
       ...(note != null && note !== "" ? { note } : {}),
       signed: outcomes.some((o) => o.signed_manifest != null),
-      evidence_count: evidence.filter((e) => e.withheld_reason == null).length,
+      evidence_count: evidence.filter(checkable).length,
       withheld_count: evidence.filter((e) => e.withheld_reason != null).length,
     };
   };
@@ -69,13 +79,31 @@ export function createRunLedgerReader(moteDb: MotebitDatabase, motebitId: string
       // Runs holding their goal first — those are the ones waiting on a
       // person, which is what a returning owner needs to see before
       // anything that already finished.
-      const blocking = moteDb.goalRunStore.listBlocking(motebitId);
+      //
+      // Each group is bounded separately, and the held group is newest
+      // first like the other. Prepending an UNBOUNDED held group before
+      // one slice meant a motebit with ten or more runs waiting answered
+      // "what happened while you were away" with ten held runs and
+      // nothing that happened — and, because the store returns held runs
+      // oldest-first, with the ten oldest, under a reader documented
+      // "newest first".
+      const half = Math.max(1, Math.ceil(limit / 2));
+      const blocking = moteDb.goalRunStore
+        .listBlocking(motebitId)
+        .slice()
+        .sort((a, b) => b.started_at - a.started_at);
+      const heldIds = new Set(blocking.map((b) => b.run_id));
       const recent = moteDb.goalRunStore
         .listRecent(motebitId, limit)
-        .filter((r) => !blocking.some((b) => b.run_id === r.run_id));
-      return [...blocking, ...recent]
+        .filter((r) => !heldIds.has(r.run_id));
+      // The held group may take the whole page when there is nothing
+      // else to show, but never crowds out everything that finished.
+      const heldShown = blocking.slice(0, Math.max(half, limit - recent.length));
+      return [...heldShown, ...recent]
         .slice(0, limit)
-        .map((r) => summarise(r.run_id, r.goal_id, r.status, r.started_at, r.note));
+        .map((r) =>
+          summarise(r.run_id, r.goal_id, r.status, r.started_at, r.note, heldIds.has(r.run_id)),
+        );
     },
 
     get(target: string): RunLedgerLookup {
@@ -106,41 +134,62 @@ export function createRunLedgerReader(moteDb: MotebitDatabase, motebitId: string
       const run = scoped ?? prefixed[0];
       if (run == null) return { kind: "missing" };
 
+      const holding = moteDb.goalRunStore
+        .listBlocking(motebitId)
+        .some((b) => b.run_id === run.run_id);
       const all = outcomesFor(run.run_id);
       const evidence = moteDb.runEvidenceStore.listForRun(run.run_id);
       const calls = moteDb.toolAuditSink.queryByRunId?.(run.run_id) ?? [];
 
       const detail = {
-        ...summarise(run.run_id, run.goal_id, run.status, run.started_at, run.note),
+        ...summarise(run.run_id, run.goal_id, run.status, run.started_at, run.note, holding),
         outcomes: all.map((o) => {
           const body = o.response_full ?? o.summary;
           return {
             status: o.status,
             ...(o.error_message != null ? { error_message: o.error_message } : {}),
-            ...(body != null && body !== ""
-              ? {
-                  summary_preview:
-                    body.length > PREVIEW_MAX_CHARS ? `${body.slice(0, PREVIEW_MAX_CHARS)}…` : body,
-                }
-              : {}),
+            // Whole, not cut. The bound is applied AFTER the membrane,
+            // in `cmdRuns`, because every credential pattern is
+            // length-anchored — a vendor key needs sixteen more
+            // characters after its separator, a seed phrase twelve
+            // whole words — so a secret straddling a cut made here is
+            // reduced to a stub no pattern matches, and crosses the
+            // relay in the clear through the one boundary built to stop
+            // it. This hands the whole body across a function call
+            // inside one process; the wire sees only what the redactor
+            // has already read in full.
+            ...(body != null && body !== "" ? { summary_preview: body } : {}),
             signed: o.signed_manifest != null,
           };
         }),
         tool_calls: calls.map((c) => ({
           tool: c.tool,
-          verdict: c.result == null ? "prepared; effect unknown" : c.result.ok ? "ok" : "failed",
+          // A refusal is not an unknown. The gate writes its audit row
+          // BEFORE execution, so a denied call — deny-list, out of
+          // delegated scope, over the risk ceiling, out of budget — has
+          // a decision and never a result. Reading the result alone
+          // reported every one of those to a returning owner as
+          // "prepared; effect unknown", which says the outside world may
+          // have been touched by a call that was refused before it ran.
+          verdict: !c.decision.allowed
+            ? "refused by the policy gate — never attempted"
+            : c.result == null
+              ? "prepared; effect unknown"
+              : c.result.ok
+                ? "ok"
+                : "failed",
         })),
-        evidence: evidence
-          .filter((e) => e.withheld_reason == null)
-          .map((e) => {
-            const p = e.evidence.provenance;
-            return {
-              tool: e.tool,
-              ref: e.evidence.ref,
-              digest: p != null ? `${p.digest.algorithm}:${p.digest.value}` : "",
-              ...(p?.projection != null ? { projection: p.projection } : {}),
-            };
-          }),
+        evidence: evidence.filter(checkable).map((e) => {
+          const p = e.evidence.provenance;
+          return {
+            tool: e.tool,
+            ref: e.evidence.ref,
+            // Non-null by `checkable`; the fallback keeps the shape
+            // total rather than asserting.
+            digest: p != null ? `${p.digest.algorithm}:${p.digest.value}` : "",
+            ...(p?.projection != null ? { projection: p.projection } : {}),
+          };
+        }),
         withheld: evidence
           .filter((e) => e.withheld_reason != null)
           .map((e) => ({

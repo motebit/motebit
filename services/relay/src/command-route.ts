@@ -71,7 +71,26 @@ const MUTATING_UNATTENDED_COMMANDS = new Set(["halt", "resume", "approvals"]);
  * adding `runs` to the unattended set silently made this say "each with
  * its own approval queue" about a question with no queue in it.
  */
-const PER_MACHINE_DATABASE_COMMANDS = new Set(["approvals", "runs"]);
+const PER_MACHINE_DATABASE_COMMANDS = new Set(["approvals", "runs", "halt-status"]);
+
+/**
+ * Verbs the relay delivers to EVERY unattended runtime, not the first
+ * that answers.
+ *
+ * A halt is written to the halt store of the machine that receives it,
+ * and that store is local — nothing replicates it. So first-wins
+ * delivery to a sovereign with a daemon on a laptop and a worker on a
+ * VPS stopped one of them and answered with that one's acknowledgement,
+ * which reads as "stopped" for a motebit that is still working. The
+ * act is idempotent and machine-local, so the delivery that matches
+ * what the person asked for is to all of them.
+ *
+ * `approvals` is mutating too and is deliberately NOT here: deciding an
+ * approval twice, once per queue, is not the same act repeated — it is
+ * two different decisions on two different records, which is why that
+ * command refuses a many-machine motebit instead.
+ */
+const BROADCAST_UNATTENDED_COMMANDS = new Set(["halt", "resume"]);
 
 const UNATTENDED_RUNTIME_COMMANDS = new Set([
   "halt",
@@ -126,7 +145,16 @@ const INFO_COMMANDS: Record<string, string> = {
 /** Pending command requests waiting for WebSocket response. */
 const pendingCommands = new Map<
   string,
-  { resolve: (result: unknown) => void; timer: ReturnType<typeof setTimeout> }
+  {
+    resolve: (result: unknown) => void;
+    timer: ReturnType<typeof setTimeout>;
+    /**
+     * How many runtimes the request was sent to. One answer comes back
+     * and it speaks only for its own machine, so a reader of that answer
+     * has to be told when there were others.
+     */
+    deliveredTo: number;
+  }
 >();
 
 const COMMAND_TIMEOUT_MS = 30_000;
@@ -241,7 +269,28 @@ export function handleCommandResponse(commandId: string, result: unknown): void 
   if (!pending) return;
   clearTimeout(pending.timer);
   pendingCommands.delete(commandId);
-  pending.resolve(result);
+  pending.resolve(annotateDelivery(result, pending.deliveredTo));
+}
+
+/**
+ * Say that the answer speaks for one machine of several.
+ *
+ * A broadcast halt reaches every runtime and exactly one of them wins
+ * the race to answer. Its acknowledgement names what IT stopped, so
+ * presenting it unqualified would report a motebit-wide stop from a
+ * single machine's account of itself — the acknowledged-is-not-stopped
+ * confusion this arc removed from the halt record, re-introduced by the
+ * transport.
+ */
+function annotateDelivery(result: unknown, deliveredTo: number): unknown {
+  if (deliveredTo <= 1) return result;
+  if (typeof result !== "object" || result === null) return result;
+  const r = result as { summary?: unknown };
+  if (typeof r.summary !== "string") return result;
+  return {
+    ...result,
+    summary: `${r.summary} (sent to ${deliveredTo} runtimes; this is one machine's answer — ask \`halt-status\` on each to see what every one of them stopped)`,
+  };
 }
 
 // --- WebSocket forwarding ---
@@ -268,7 +317,7 @@ async function forwardCommandToAgent(
       reject(new Error("Command timed out"));
     }, COMMAND_TIMEOUT_MS);
 
-    pendingCommands.set(commandId, { resolve, timer });
+    pendingCommands.set(commandId, { resolve, timer, deliveredTo: 0 });
 
     // For most commands any connected surface can answer. For the
     // unattended-runtime set, only a peer that actually runs unattended
@@ -377,16 +426,25 @@ async function forwardCommandToAgent(
       return;
     }
 
-    const sent = candidates.some((peer) => {
+    // Broadcast for the verbs that must reach every machine; first-wins
+    // for everything else, where a second delivery is a second act.
+    const broadcast = BROADCAST_UNATTENDED_COMMANDS.has(command);
+    let delivered = 0;
+    for (const peer of candidates) {
       try {
         peer.ws.send(payload);
-        return true;
+        delivered += 1;
+        if (!broadcast) break;
       } catch {
-        return false;
+        // A dead-but-unreaped socket. Keep going: under broadcast the
+        // other machines still must be stopped, and under first-wins
+        // the next peer is the one that answers.
       }
-    });
+    }
+    const pending = pendingCommands.get(commandId);
+    if (pending != null) pending.deliveredTo = delivered;
 
-    if (!sent) {
+    if (delivered === 0) {
       clearTimeout(timer);
       pendingCommands.delete(commandId);
       // 404, like the no-candidate path above, and for the same reason.

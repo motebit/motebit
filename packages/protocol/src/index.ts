@@ -3439,12 +3439,6 @@ export interface RunEvidenceEntry {
   withheld_reason?: RunEvidenceWithheldReason;
 }
 
-/**
- * Where run evidence is kept. Mirrors `ToolAuditSink`'s shape: the
- * runtime holds the port, a surface supplies the implementation. A
- * surface that wires none records no evidence, which every reader must
- * render as "none recorded", never as "nothing was read".
- */
 // ── The return view ────────────────────────────────────────────────
 // What a person sees when they come back, from a surface that is not
 // the one that did the work.
@@ -3470,6 +3464,16 @@ export interface RunLedgerSummary {
   goal_id: string;
   status: string;
   started_at: number;
+  /**
+   * True when this run is holding its goal open, waiting on a person.
+   *
+   * Distinct from `status`: an `interrupted` run that has been
+   * acknowledged and one that is still waiting read identically by
+   * status alone, and only one of them is something the returning owner
+   * has to act on. The reader sorts these first; without the flag the
+   * order carries the fact and nothing renders it.
+   */
+  holding: boolean;
   /** Why it is holding its goal, when it is. */
   note?: string;
   /** True when this run's result carries a signature. */
@@ -3539,6 +3543,11 @@ export interface RunLedgerReader {
 
 /**
  * Where an evidence pointer is kept, and erased.
+ *
+ * Mirrors `ToolAuditSink`'s shape: the runtime holds the port, a
+ * surface supplies the implementation. A surface that wires none
+ * records no evidence, which every reader must render as "none
+ * recorded", never as "nothing was read".
  *
  * Separate from the audit sink because the two have different retention
  * floors: an evidence row carries verbatim retrieved content where the

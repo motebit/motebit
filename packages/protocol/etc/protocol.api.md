@@ -3697,6 +3697,7 @@ export interface RunLedgerSummary {
     evidence_count: number;
     // (undocumented)
     goal_id: string;
+    holding: boolean;
     note?: string;
     // (undocumented)
     run_id: string;

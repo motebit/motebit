@@ -32,18 +32,63 @@ import type { RunLedgerDetail } from "@motebit/sdk";
 const RECENT_LIMIT = 10;
 
 /**
- * The run this was asked about, or "" for the list.
+ * Enough of a result to recognise it; far short of standing in for it.
+ *
+ * Applied AFTER redaction, never before. Every credential pattern the
+ * membrane knows is length-anchored — a vendor key needs sixteen more
+ * characters after its separator, an API key twenty, a seed phrase
+ * twelve whole words — so a secret straddling the cut would be reduced
+ * to a stub no pattern matches and would cross in the clear.
+ */
+const PREVIEW_MAX_CHARS = 280;
+
+/** Redact first, then bound. The order is the whole point. */
+function bounded(text: string, redact: (t: string) => string): string {
+  const clean = redact(text);
+  return clean.length > PREVIEW_MAX_CHARS ? `${clean.slice(0, PREVIEW_MAX_CHARS)}…` : clean;
+}
+
+/** A time a person can place without doing arithmetic. */
+function whenLabel(startedAt: number, now: number): string {
+  const mins = Math.max(0, Math.round((now - startedAt) / 60_000));
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  return hours < 48 ? `${hours}h ago` : `${Math.round(hours / 24)}d ago`;
+}
+
+/**
+ * Verbs of the local `motebit runs` command that this surface cannot
+ * carry out, answered as what they are.
+ *
+ * `runs ack <id>` acknowledges a held run, and acknowledging is a local
+ * act against a local record. Reading `ack` as a run id answered `No
+ * run matching "ack abc123"` — an absence about a run nobody asked
+ * about, which is the exact defect the list verb had, in the command
+ * whose whole subject is not manufacturing absences.
+ */
+const LOCAL_ONLY_VERBS = new Set(["ack", "acknowledge"]);
+
+/**
+ * What this was asked for: the list, one run, or a verb that belongs
+ * to the machine holding the record.
  *
  * `runs`, `runs list`, `runs show <id>` and the bare `runs <id>` all
  * reach the same two answers. An id is never one of the verbs: run ids
  * are uuids, so nothing is shadowed by accepting them.
  */
-function parseTarget(args?: string): string {
+function parseTarget(
+  args?: string,
+): { kind: "list" } | { kind: "run"; id: string } | { kind: "local"; verb: string } {
   const raw = (args ?? "").trim();
-  if (raw === "" || raw.toLowerCase() === "list") return "";
+  // A bare `show` is the list, not a run called "show". Same for the
+  // empty string and the list verb itself.
+  if (raw === "" || /^(list|show)$/i.test(raw)) return { kind: "list" };
+  const verb = (raw.split(/\s+/)[0] ?? "").toLowerCase();
+  if (LOCAL_ONLY_VERBS.has(verb)) return { kind: "local", verb };
   const show = /^show\s+(\S+)$/i.exec(raw);
-  if (show?.[1] != null) return show[1];
-  return raw;
+  if (show?.[1] != null) return { kind: "run", id: show[1] };
+  return { kind: "run", id: raw };
 }
 
 function noLedger(): CommandResult {
@@ -71,8 +116,15 @@ export function cmdRuns(runtime: MotebitRuntime, args?: string): CommandResult {
   // "list"`, an absence about a run nobody asked for. The absence
   // vocabulary this file is careful about is worth nothing if the
   // parser manufactures one.
-  const target = parseTarget(args);
-  if (target !== "") return showRun(runtime, ledger, target);
+  const parsed = parseTarget(args);
+  if (parsed.kind === "local") {
+    return {
+      summary: `\`${parsed.verb}\` happens where the run is.`,
+      detail:
+        "Acknowledging a held run writes to that machine's record, so it is not something this surface can do for you. Run `motebit runs ack <id>` there — or `halt` from here, which does reach it.",
+    };
+  }
+  if (parsed.kind === "run") return showRun(runtime, ledger, parsed.id);
 
   // The LIST crosses the membrane too, not only the detail.
   //
@@ -92,12 +144,18 @@ export function cmdRuns(runtime: MotebitRuntime, args?: string): CommandResult {
     };
   }
 
+  const now = Date.now();
   const lines = runs.map((r) => {
     const marks: string[] = [];
+    // First, because it is the only mark that asks something of the
+    // reader. Status alone cannot say it: an `interrupted` run that has
+    // been acknowledged and one still waiting read identically.
+    if (r.holding) marks.push("needs you");
+    marks.push(whenLabel(r.started_at, now));
     if (r.signed) marks.push("signed");
     if (r.evidence_count > 0) marks.push(`${r.evidence_count} checkable`);
     if (r.withheld_count > 0) marks.push(`${r.withheld_count} withheld`);
-    const suffix = marks.length > 0 ? ` · ${marks.join(" · ")}` : "";
+    const suffix = ` · ${marks.join(" · ")}`;
     // The note is rendered, not merely fetched. Blocking runs are listed
     // first BECAUSE they are waiting on a person, and a line that says
     // `interrupted` without saying what is needed sends that person
@@ -126,6 +184,7 @@ function redactRun(run: RunLedgerDetail, redact: (t: string) => string): RunLedg
     goal_id: run.goal_id,
     status: run.status,
     started_at: run.started_at,
+    holding: run.holding,
     ...(run.note != null ? { note: redact(run.note) } : {}),
     signed: run.signed,
     evidence_count: run.evidence_count,
@@ -133,7 +192,9 @@ function redactRun(run: RunLedgerDetail, redact: (t: string) => string): RunLedg
     outcomes: run.outcomes.map((o) => ({
       status: o.status,
       ...(o.error_message != null ? { error_message: redact(o.error_message) } : {}),
-      ...(o.summary_preview != null ? { summary_preview: redact(o.summary_preview) } : {}),
+      // Redacted, THEN bounded — the reader hands the whole body over
+      // precisely so the membrane reads it whole.
+      ...(o.summary_preview != null ? { summary_preview: bounded(o.summary_preview, redact) } : {}),
       signed: o.signed,
     })),
     tool_calls: run.tool_calls.map((c) => ({ tool: c.tool, verdict: c.verdict })),
@@ -185,7 +246,8 @@ function showRun(
     [
       `run     ${run.run_id}`,
       `goal    ${run.goal_id}`,
-      `status  ${run.status}`,
+      `status  ${run.status}${run.holding ? " — holding its goal, waiting on you" : ""}`,
+      `started ${new Date(run.started_at).toISOString()}`,
       ...(run.note != null && run.note !== "" ? [`note    ${run.note}`] : []),
     ].join("\n"),
   );
