@@ -46,12 +46,34 @@ class HaltAbort extends Error {
   }
 }
 
+/**
+ * Rejoin a resumed turn's continuation to what preceded the pause, so an
+ * outcome and its signature cover the run rather than its tail.
+ */
+function withTextBeforePause(turn: SuspendedTurn, result: GoalStreamResult): GoalStreamResult {
+  const before = turn.textBeforePause ?? "";
+  if (before === "") return result;
+  return { ...result, responseText: `${before}${result.responseText}` };
+}
+
 interface SuspendedTurn {
   approvalId: string;
   goalId: string;
   /** The persisted goal run this turn belongs to (goal_runs.run_id). */
   runId: string;
   createdAt: number;
+  /**
+   * What the model had already produced when this turn paused.
+   *
+   * A resumed turn's stream carries only the CONTINUATION, so an
+   * outcome built from it alone covered the fragment after the pause —
+   * and the `ContentArtifactManifest` signed over it covered that
+   * fragment too, while the return view presented it as the result
+   * whole. The same fragment became the summary the next run reads. A
+   * signature over part of a thing, presented as the thing, is the
+   * failure this arc exists to remove.
+   */
+  textBeforePause?: string;
   /** The runtime gate's tool_call_id for the approval this turn suspended on.
    *  Resume/deny is BOUND to it (#462): the scheduler may only resolve the
    *  pending approval it owns, never whatever happens to be pending — in
@@ -933,6 +955,7 @@ export class GoalScheduler {
             runId,
             createdAt: now,
             toolCallId: chunk.tool_call_id,
+            ...(responseText !== "" ? { textBeforePause: responseText } : {}),
           });
 
           logLine(`\n  [approval-pending] ${chunk.name} — approval_id: ${approvalId.slice(0, 8)}`);
@@ -1211,6 +1234,13 @@ export class GoalScheduler {
           const resumeStream = this.runtime.resumeAfterApproval(false);
           const expiredGoalId = turn.goalId;
           const expiredRunId = turn.runId;
+          // The goal tools fail closed on a null `currentGoalId`, so
+          // without these a continuation that calls `complete_goal` or
+          // `progress` silently refuses — while this path nonetheless
+          // records the run as having reached an outcome. The sibling
+          // resume path sets both for the same reason.
+          this.currentGoalId = expiredGoalId;
+          this.currentRunId = expiredRunId;
           void this.consumeDaemonStream(resumeStream, expiredGoalId, expiredRunId)
             .then(async (result) => {
               // `!result.suspended`, like the sibling path. A denied
@@ -1229,10 +1259,20 @@ export class GoalScheduler {
               // `partial`, never `completed`: the action the human never
               // decided did not run, so this is not the goal's work
               // finished.
-              await this.recordCompletedOutcome(expiredGoalId, expiredRunId, result, {
-                status: "partial",
-                errorMessage: "the approval expired before it was decided; the action did not run",
-              });
+              await this.recordCompletedOutcome(
+                expiredGoalId,
+                expiredRunId,
+                withTextBeforePause(turn, result),
+                {
+                  status: "partial",
+                  errorMessage:
+                    "the approval expired before it was decided; the action did not run",
+                },
+              );
+            })
+            .finally(() => {
+              this.currentGoalId = null;
+              this.currentRunId = null;
             })
             .catch((err: unknown) => {
               // Every `running` transition needs a failure transition.
@@ -1334,10 +1374,15 @@ export class GoalScheduler {
             // `buildGoalContext` reads back into the NEXT run's prompt.
             // The agent would have learned that work a human refused was
             // finished work.
-            await this.recordCompletedOutcome(turn.goalId, turn.runId, result, {
-              status: approved ? "completed" : "partial",
-              errorMessage: approved ? null : "the approved action was denied by its owner",
-            });
+            await this.recordCompletedOutcome(
+              turn.goalId,
+              turn.runId,
+              withTextBeforePause(turn, result),
+              {
+                status: approved ? "completed" : "partial",
+                errorMessage: approved ? null : "the approved action was denied by its owner",
+              },
+            );
             if (approved) {
               this.goalStore.updateLastRun(turn.goalId, Date.now());
             }

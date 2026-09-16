@@ -1082,6 +1082,7 @@ export class MotebitRuntime {
     // completion row it sits beside is written.
     this.runEvidenceSink = adapters.storage.runEvidenceSink ?? null;
     this.policy.setEvidenceSink(this.runEvidenceSink);
+    this.policy.setEvidenceLogger(this._logger);
 
     // Agent graph — algebraic routing substrate
     this.agentGraph = new AgentGraphManager(
@@ -2033,6 +2034,7 @@ export class MotebitRuntime {
     // user changed any policy setting — silently, and reported
     // afterwards as "none recorded".
     this.policy = new PolicyGate(config, this.toolAuditSink, this.runEvidenceSink);
+    this.policy.setEvidenceLogger(this._logger);
     this.wireLoopDeps();
   }
 

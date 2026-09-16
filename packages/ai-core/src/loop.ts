@@ -1475,11 +1475,11 @@ export async function* runTurnStreaming(
         try {
           deps.policyGate.recordEvidence?.(turnCtx, decision, toolCall.name, result);
         } catch {
-          // Swallowed HERE and nowhere else: this module has no logger,
-          // and the alternative is aborting a turn whose tool already
-          // ran. The pointer's absence is still visible where it
-          // matters — `runs show` reports evidence it does not have, and
-          // never infers that nothing was read.
+          // Absorbed, not silenced: the gate reports the failure through
+          // its own logger before rethrowing, and this catch exists only
+          // so a pointer cannot abort a turn whose tool already ran.
+          // Without the gate's report this would be silence, which is
+          // the one thing this record must never produce.
         }
         turnCtx = deps.policyGate.recordToolCall(turnCtx);
 

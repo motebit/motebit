@@ -1442,14 +1442,6 @@ export interface GoalOutcome {
   error_message: string | null;
   tokens_used?: number;
   /**
-   * The result text WHOLE, not the 500-character `summary`.
-   *
-   * `summary` is for a table row; this is the artifact. A daemon that
-   * kept only the summary discarded the thing it had just produced, so
-   * there was nothing left to sign and nothing for a returning owner to
-   * read — the motebit's word for what it did was the only record.
-   */
-  /**
    * The run that produced this outcome.
    *
    * A field, not the id: live paths set `outcome_id = run_id` while the
@@ -1457,6 +1449,14 @@ export interface GoalOutcome {
    * half the outcomes from a run.
    */
   run_id?: string;
+  /**
+   * The result text WHOLE, not the 500-character `summary`.
+   *
+   * `summary` is for a table row; this is the artifact. A daemon that
+   * kept only the summary discarded the thing it had just produced, so
+   * there was nothing left to sign and nothing for a returning owner to
+   * read.
+   */
   response_full?: string;
   /**
    * The serialized `ContentArtifactManifest` over `response_full`, or

@@ -8,6 +8,7 @@ import type {
   InjectionWarning,
   ApprovalQuorum,
   RunEvidenceSink,
+  RunEvidenceEntry,
 } from "@motebit/protocol";
 import { classifyTool, isToolAllowed } from "./risk-model.js";
 import { BudgetEnforcer } from "./budget.js";
@@ -148,6 +149,13 @@ export class PolicyGate {
   readonly audit: AuditLogger;
   private profileCache = new Map<string, ToolRiskProfile>();
   private evidenceSink: RunEvidenceSink | null = null;
+  /**
+   * Where an evidence-write failure is reported. Optional, and when it
+   * is absent the failure still throws to the caller — what must never
+   * happen is the failure going nowhere at all, because a missing
+   * pointer then reads as "nothing was retrieved".
+   */
+  private evidenceLogger: { warn(message: string): void } | null = null;
 
   /**
    * `evidenceSink` is a CONSTRUCTOR parameter, not only a setter.
@@ -195,6 +203,11 @@ export class PolicyGate {
     this.evidenceSink = sink;
   }
 
+  /** Report evidence-write failures somewhere. See `evidenceLogger`. */
+  setEvidenceLogger(logger: { warn(message: string): void } | null): void {
+    this.evidenceLogger = logger;
+  }
+
   /**
    * Mint the evidence pointer for a tool call that content-addressed
    * what it read, and nothing otherwise.
@@ -219,6 +232,7 @@ export class PolicyGate {
     result: ToolResult,
   ): void {
     if (this.evidenceSink == null) return;
+    const sink = this.evidenceSink;
     if (decision.callId == null) return;
     if (!result.ok || result.source_digest == null) return;
     if (typeof result.data !== "string" || result.data === "") return;
@@ -250,9 +264,16 @@ export class PolicyGate {
     // person was told "none recorded". A guard that suppresses honest
     // evidence at that rate does not protect the record, it empties it.
     //
-    // (I measured this the wrong way round first — the inputs I checked
-    // happened to avoid all three patterns, so the full set looked
-    // clean. A git SHA is 40 hex characters and fires immediately.)
+    // Narrowed twice. The full set fired on a git SHA and a bare
+    // nine-digit reference. The cloud-egress subset still carried two
+    // KEYWORD-keyed patterns — a connection-string URL and the word
+    // "password" near a colon — which are about a user's own typed
+    // message, not a stranger's web page: a docs page printing
+    // `postgres://localhost/mydb` as an example, or a help page reading
+    // `Password: required`, cost the owner the evidence for that fetch
+    // and reported nothing retrieved. What is left keys on the secret's
+    // own shape, which is the property that travels across whose words
+    // these are.
     //
     // Residual, stated rather than hidden: the credential-class subset
     // misses some real key formats (`sk-proj-…`, `ghp_…`) because the
@@ -266,7 +287,7 @@ export class PolicyGate {
     // the guard whose whole point is that credential-class content
     // produces no pointer at all. A guard that inspects only the part
     // one happens to think of is not a guard.
-    if (this.redaction.redactForCloudEgress(span).redactionCount > 0) return;
+    if (this.redaction.redactCredentialShapes(span).redactionCount > 0) return;
     // The SOURCE is guarded separately, by its own rule.
     //
     // `read_url` passes the request URL, and a URL carries credentials
@@ -282,7 +303,7 @@ export class PolicyGate {
     // rather than in the shared table because it is true of URLs, not of
     // prose, and the shared table is applied to prose.
     if (result.source_ref != null && looksLikeCredentialBearingUrl(result.source_ref)) return;
-    this.evidenceSink.record({
+    this.recordOrReport(sink, {
       evidence_id: crypto.randomUUID(),
       ...(ctx.runId != null ? { run_id: ctx.runId } : {}),
       turn_id: ctx.turnId,
@@ -318,6 +339,26 @@ export class PolicyGate {
         },
       },
     });
+  }
+
+  /**
+   * Write the pointer, and if the store refuses, say so.
+   *
+   * The store raises rather than dropping rows, so the failure has to
+   * land somewhere it can be seen. Reported here AND rethrown: the
+   * primary tool path absorbs it (a pointer must not take down the work
+   * it describes), and this is what stops the absorbing from becoming
+   * silence.
+   */
+  private recordOrReport(sink: RunEvidenceSink, entry: RunEvidenceEntry): void {
+    try {
+      sink.record(entry);
+    } catch (err: unknown) {
+      this.evidenceLogger?.warn(
+        `[policy] evidence not recorded for ${entry.tool}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      throw err;
+    }
   }
 
   // === Configuration ===

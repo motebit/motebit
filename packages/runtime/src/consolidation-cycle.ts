@@ -855,14 +855,22 @@ async function flushPhase(
   // which is the inverse of what not knowing its sensitivity should
   // mean. Unclassified is a reason to hold something for LESS time.
   //
-  // The certificate names `run_evidence`, because that is what is
-  // deleted. It named `tool_audit` and erased only the evidence, which
-  // emitted a SIGNED, verifiable attestation that a tool-audit record
-  // had been flushed while that row was still there — and minted a
-  // second certificate for the same target when it later aged out. A
-  // deletion certificate is the proof of deletion under this repo's own
-  // self-attesting doctrine, so a mislabelled one is not a cosmetic
-  // slip; it is a false signed claim, which is worse than no claim.
+  // The certificate's TARGET ID names the record, because the signed
+  // certificate has nowhere else to say it.
+  //
+  // First attempt set `targetKind: "run_evidence"` and called this
+  // fixed. It was not: `targetKind` reaches only the local audit row's
+  // `target_type`. The signed `consolidation_flush` variant carries
+  // `target_id`, `sensitivity`, `reason`, `flushed_to` and `flushed_at`
+  // — no kind at all. So the signed attestation still said only "the
+  // record identified by this call id was flushed" while the tool-audit
+  // row for that call was still there, and a second, byte-indistinguish-
+  // able certificate followed when the audit row aged out. Two signed
+  // claims for one identifier, one of them false.
+  //
+  // A deletion certificate is the proof of deletion under this repo's
+  // own self-attesting doctrine, so the identifier has to distinguish
+  // the two records. It does now.
   if (deps.runEvidenceSink?.enumerateStale && deps.runEvidenceSink.eraseForCall) {
     const cutoffTs = ctx.now - EVIDENCE_HORIZON_DAYS * MS_PER_DAY;
     // Calls still inside a retention OBLIGATION — a settlement or
@@ -874,13 +882,22 @@ async function flushPhase(
     // ignored that and destroyed the re-checkable evidence for a
     // disputed call while the audit row beside it was being kept on
     // purpose — the one case where being able to re-check matters most.
+    // INERT TODAY, and deliberately kept. Nothing in this repo supplies
+    // `toolAuditObligationFloorMs` yet — the resolver is declared for
+    // decision 3 and has no producer — so this set is empty and evidence
+    // for a settlement- or dispute-bound call IS erased at the horizon.
+    // That is the honest state: the guard is the shape the obligation
+    // will arrive into, not a protection in force. Saying so here beats
+    // a comment that reads as though it were.
+    //
+    // Bounded like its sibling above. Enumerating to `now` would parse
+    // every audit row in the table on every cycle. The same cutoff does:
+    // a call whose EVIDENCE is stale has an audit row at least as old,
+    // since both are written when the call runs.
     const obligationHeld = new Set<string>();
     const obligationFloor = deps.toolAuditObligationFloorMs;
     if (obligationFloor != null && deps.toolAuditSink?.enumerateForFlush) {
-      // Enumerated to `now` rather than to a floor, because an
-      // obligation may outrun every sensitivity ceiling — which is the
-      // whole reason it exists.
-      for (const entry of deps.toolAuditSink.enumerateForFlush(ctx.now)) {
+      for (const entry of deps.toolAuditSink.enumerateForFlush(cutoffTs)) {
         const held = obligationFloor(entry);
         if (held > 0 && ctx.now - entry.timestamp <= held) obligationHeld.add(entry.callId);
       }
@@ -891,7 +908,7 @@ async function flushPhase(
       try {
         await deps.privacy.signFlushCert({
           targetKind: "run_evidence",
-          targetId: callId,
+          targetId: `run_evidence:${callId}`,
           sensitivity: defaultSensitivity,
           reason: "retention_enforcement_post_classification",
         });

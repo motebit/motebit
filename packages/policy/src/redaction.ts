@@ -34,22 +34,44 @@ function passesLuhn(digits: string): boolean {
 // session sensitivity tier or use an on-device provider). Storage/memory/tool-
 // result redaction (`redact`) still runs the FULL set; egress redaction is the
 // narrower, near-zero-false-positive subset. Doctrine: docs/doctrine/security-boundaries.md.
-const SECRET_PATTERNS: { pattern: RegExp; label: string; cloudEgress: boolean }[] = [
+// `shapeKeyed: true` marks the patterns that match a secret by its OWN
+// shape rather than by an English word standing near it. That axis is
+// what makes a pattern safe to run over THIRD-PARTY RETRIEVED CONTENT,
+// where the words are someone else's: a documentation page that prints
+// `postgres://localhost/mydb` as an example, or a help page with the
+// line `Password: required`, is not a leak — but a keyword-keyed pattern
+// cannot tell it from one. Used by `redactCredentialShapes`, which the
+// run-evidence producer applies to fetched page text. Orthogonal to
+// `cloudEgress`: a pattern can be high-precision for a user's own typed
+// message and still wrong for a stranger's web page.
+const SECRET_PATTERNS: {
+  pattern: RegExp;
+  label: string;
+  cloudEgress: boolean;
+  shapeKeyed: boolean;
+}[] = [
   // API keys (various formats)
   {
     pattern: /\b(sk|pk|api|key|token|secret)[_-]?[a-zA-Z0-9]{20,}\b/gi,
     label: "API_KEY",
     cloudEgress: true,
+    shapeKeyed: true,
   },
   // AWS keys
-  { pattern: /\bAKIA[0-9A-Z]{16}\b/g, label: "AWS_KEY", cloudEgress: true },
+  { pattern: /\bAKIA[0-9A-Z]{16}\b/g, label: "AWS_KEY", cloudEgress: true, shapeKeyed: true },
   // Bearer tokens
-  { pattern: /\bBearer\s+[A-Za-z0-9\-._~+/]+=*\b/g, label: "BEARER_TOKEN", cloudEgress: true },
+  {
+    pattern: /\bBearer\s+[A-Za-z0-9\-._~+/]+=*\b/g,
+    label: "BEARER_TOKEN",
+    cloudEgress: true,
+    shapeKeyed: true,
+  },
   // JWTs
   {
     pattern: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
     label: "JWT",
     cloudEgress: true,
+    shapeKeyed: true,
   },
   // Private keys (PEM) — capped at 10KB to avoid catastrophic backtracking
   {
@@ -57,18 +79,30 @@ const SECRET_PATTERNS: { pattern: RegExp; label: string; cloudEgress: boolean }[
       /-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----[\s\S]{0,10000}?-----END\s+(RSA\s+)?PRIVATE\s+KEY-----/g,
     label: "PRIVATE_KEY",
     cloudEgress: true,
+    shapeKeyed: true,
   },
   // US SSN — financial/PII, often legitimately used; NOT egress-redacted.
-  { pattern: /\b\d{3}[- ]?\d{2}[- ]?\d{4}\b/g, label: "SSN", cloudEgress: false },
+  {
+    pattern: /\b\d{3}[- ]?\d{2}[- ]?\d{4}\b/g,
+    label: "SSN",
+    cloudEgress: false,
+    shapeKeyed: false,
+  },
   // Hex secrets: only match when preceded by an assignment-like context (key=, secret:, token=, etc.)
   {
     pattern: /\b(?:key|secret|token|password|credential)\s*[:=]\s*[0-9a-f]{32,}\b/gi,
     label: "HEX_SECRET",
     cloudEgress: true,
+    shapeKeyed: true,
   },
   // Base64 encoded secrets — low-precision (false-positives on legitimate base64);
   // NOT egress-redacted so a user can paste a base64 blob to a cloud model.
-  { pattern: /\b[A-Za-z0-9+/]{40,}={0,2}\b/g, label: "ENCODED_SECRET", cloudEgress: false },
+  {
+    pattern: /\b[A-Za-z0-9+/]{40,}={0,2}\b/g,
+    label: "ENCODED_SECRET",
+    cloudEgress: false,
+    shapeKeyed: false,
+  },
   // Seed phrases: require exactly 12 or 24 BIP-39-length words (3-8 chars each)
   // \b anchors to word boundaries. Negative lookaround prevents matching a
   // substring of a longer sentence (no preceding/following lowercase word).
@@ -76,20 +110,24 @@ const SECRET_PATTERNS: { pattern: RegExp; label: string; cloudEgress: boolean }[
     pattern: /\b(?<![a-z] )(?:[a-z]{3,8} ){11}[a-z]{3,8}\b(?! [a-z])/g,
     label: "SEED_PHRASE",
     cloudEgress: true,
+    shapeKeyed: true,
   },
   {
     pattern: /\b(?<![a-z] )(?:[a-z]{3,8} ){23}[a-z]{3,8}\b(?! [a-z])/g,
     label: "SEED_PHRASE",
     cloudEgress: true,
+    shapeKeyed: true,
   },
   // Connection strings
   {
     pattern: /\b(?:postgres|mysql|mongodb|redis):\/\/[^\s]+/gi,
     label: "CONNECTION_STRING",
     cloudEgress: true,
+    // Keyword-keyed: a docs page printing an example URL is not a leak.
+    shapeKeyed: false,
   },
   // Generic password patterns
-  { pattern: /\bpassword\s*[:=]\s*\S+/gi, label: "PASSWORD", cloudEgress: true },
+  { pattern: /\bpassword\s*[:=]\s*\S+/gi, label: "PASSWORD", cloudEgress: true, shapeKeyed: false },
 ];
 
 /**
@@ -149,6 +187,32 @@ export class RedactionEngine {
    * blocks a whole call when the SESSION tier is medical/financial/secret; this is
    * the additive floor for secrets typed into an UNMARKED cloud session.
    */
+  /**
+   * Redact only the patterns that identify a secret by its own SHAPE.
+   *
+   * For third-party retrieved content, where the surrounding words
+   * belong to someone else. A keyword-keyed pattern reads a docs page's
+   * `postgres://localhost/mydb` example, or a help page's
+   * `Password: required`, as a credential — and the run-evidence
+   * producer's response to a credential is to record no pointer at all,
+   * so a false positive costs an owner the evidence for that fetch and
+   * tells them nothing was retrieved.
+   */
+  redactCredentialShapes(text: string): { text: string; redactionCount: number } {
+    let result = text;
+    let count = 0;
+    for (const { pattern, label, shapeKeyed } of SECRET_PATTERNS) {
+      if (!shapeKeyed) continue;
+      const re = new RegExp(pattern.source, pattern.flags);
+      const matches = result.match(re);
+      if (matches) {
+        count += matches.length;
+        result = result.replace(re, `[REDACTED:${label}]`);
+      }
+    }
+    return { text: result, redactionCount: count };
+  }
+
   redactForCloudEgress(text: string): {
     text: string;
     redactionCount: number;
