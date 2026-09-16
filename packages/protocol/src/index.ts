@@ -3416,14 +3416,20 @@ export interface ApprovalStoreAdapter {
 // execute an approval the human granted before the halt.
 
 /**
- * A request to stop acting unattended, and the daemon's answer to it.
+ * A request to stop acting unattended.
  *
- * The two timestamps are the whole point. `requested_at` is what the
- * asker knows; `acknowledged_at` is what the motebit did. A surface
- * that renders the first as if it were the second is lying: a daemon
- * that is offline, wedged, or mid-tool has been ASKED to stop and has
- * not yet stopped. Until the acknowledgement lands, the honest reading
- * is "stop requested".
+ * Deliberately only the ASK. Whether anything stopped is not a field
+ * here, and cannot be: more than one process runs unattended work for
+ * one motebit — `motebit run` and `motebit serve` do, on one machine,
+ * against one database — so "has it stopped" is N facts, never one.
+ * Ask `HaltStoreAdapter.acknowledgements(halt_id)`, which returns them
+ * all with the executor that produced each.
+ *
+ * This type once carried the first acknowledger's timestamp for
+ * display. Three separate readers rendered it as "Stopped" while other
+ * processes kept working, each time after a comment on the field said
+ * not to. The field is gone rather than better documented — a reader
+ * that cannot reach the wrong fact cannot report it.
  */
 export interface HaltRequest {
   halt_id: string;
@@ -3442,21 +3448,6 @@ export interface HaltRequest {
   origin: HaltOrigin;
   /** Free text the requester attached, shown wherever the halt is shown. */
   reason: string | null;
-  /**
-   * When the FIRST executor acknowledged. Display only.
-   *
-   * It is deliberately not the answer to "has the motebit stopped",
-   * because more than one process can run unattended work for one
-   * motebit — `motebit run` and `motebit serve` both do, on the same
-   * machine, against the same database. A single column standing in for
-   * N independent facts let the first process to acknowledge mark the
-   * halt honored for all of them, after which the others skipped it
-   * entirely and kept working while the surface said "Stopped". Ask
-   * `acknowledgements(halt_id)` who has actually stopped.
-   */
-  acknowledged_at: number | null;
-  /** What the FIRST executor's stopping entailed. Display only. */
-  acknowledgement: string | null;
   /** When a human lifted it. A lifted halt no longer blocks anything. */
   lifted_at: number | null;
 }

@@ -203,14 +203,16 @@ bare "Stopped" — `motebit halt` names which processes acknowledged and
 what each of them stopped, and a remote `halt` answers for the runtime
 that received it while listing the rest.
 
-**Requested is not stopped.** The record keeps two timestamps because they
-are two facts. `requested_at` is what you know when you ask;
-`acknowledged_at` is when the motebit stopped, and it carries what
-stopping entailed (`aborted run 1a2b3c4d; no further goal runs will
-start`). A daemon that is offline, wedged, or mid-tool has been asked and
-has not stopped. `motebit halt` waits a few seconds for an
-acknowledgement and then tells you plainly which of the two happened. No
-surface may render the first as the second.
+**Requested is not stopped, and neither is one acknowledgement.** The
+request carries only the ask: who asked, what for, and when. Whether
+anything stopped is a separate record, one row per process, each naming
+the process and what stopping entailed there (`aborted run 1a2b3c4d; no
+further goal runs will start`). It is kept apart because a motebit's
+unattended work can run in several processes at once, so "has it
+stopped" is never one fact. A daemon that is offline, wedged, or
+mid-tool has been asked and has not stopped. `motebit halt` waits a few
+seconds, then names the processes that answered, and no surface reports
+a bare "Stopped" on the strength of one of them.
 
 The halt is durable and in force from the instant it is written — before
 anyone acknowledges it, and across a restart. A stop a restart forgets is

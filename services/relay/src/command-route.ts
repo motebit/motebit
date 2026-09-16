@@ -243,24 +243,48 @@ async function forwardCommandToAgent(
     // For most commands any connected surface can answer. For the
     // unattended-runtime set, only a peer that actually runs unattended
     // work can — see UNATTENDED_RUNTIME_COMMANDS.
-    // The relay auto-deploys on merge; installed CLIs update on their
-    // own schedule. Every daemon older than this change announces
-    // `background` and not `unattended_runtime`, so filtering strictly
-    // would 404 the phone's `/pending`, `/approve` and `/deny` against a
-    // perfectly healthy daemon from the moment this ships. `approvals`
-    // therefore accepts the older capability as a fallback for one
-    // release; `halt`/`resume` do not, because an old daemon cannot
-    // honor them anyway and answering "not delivered" is the truth
-    // there.
-    //
-    // REMOVE the fallback once the halt-capable CLI is the published
-    // minimum — tracked with the arc, not left to rot here.
     const unattended = peers.filter((p) => p.capabilities?.includes("unattended_runtime") === true);
-    const candidates = UNATTENDED_RUNTIME_COMMANDS.has(command)
-      ? unattended.length > 0 || command !== "approvals"
-        ? unattended
-        : peers.filter((p) => p.capabilities?.includes("background") === true)
-      : peers;
+    let candidates: ConnectedDevice[];
+    let emptyReason: string;
+
+    if (!UNATTENDED_RUNTIME_COMMANDS.has(command)) {
+      candidates = peers;
+      emptyReason = "No reachable device";
+    } else if (unattended.length > 0) {
+      candidates = unattended;
+      emptyReason = "No unattended runtime is connected";
+    } else if (command !== "approvals") {
+      // `halt`/`resume` get no fallback: a daemon too old to announce
+      // the capability is too old to honor them, and "not delivered" is
+      // the truth there.
+      candidates = [];
+      emptyReason = "No unattended runtime is connected";
+    } else {
+      // The relay auto-deploys on merge; installed CLIs update on their
+      // own schedule. Every daemon older than this change announces
+      // `background` and not `unattended_runtime`, so filtering strictly
+      // would 404 the phone's `/pending`, `/approve` and `/deny` against
+      // a perfectly healthy daemon from the moment this ships.
+      //
+      // The fallback is only safe while it is UNAMBIGUOUS. The desktop
+      // app announces exactly the same five capabilities as the daemon,
+      // so with both connected there is no signal here that tells them
+      // apart — and sending `/approve ap-1234` to the desktop app gets
+      // back "no pending approval matching ap-1234", which a person
+      // cannot distinguish from the daemon genuinely refusing. A false
+      // refusal on the consent vocabulary is worse than an undelivered
+      // one, so more than one legacy candidate is refused rather than
+      // guessed between.
+      //
+      // REMOVE the fallback once the halt-capable CLI is the published
+      // minimum — tracked with the arc, not left to rot here.
+      const legacy = peers.filter((p) => p.capabilities?.includes("background") === true);
+      candidates = legacy.length === 1 ? legacy : [];
+      emptyReason =
+        legacy.length > 1
+          ? "More than one connected surface could answer and none announces unattended_runtime, so the relay cannot tell the daemon from a desktop app — update the daemon (npm i -g motebit@latest) and reconnect"
+          : "No unattended runtime is connected";
+    }
 
     if (candidates.length === 0) {
       clearTimeout(timer);
@@ -271,8 +295,8 @@ async function forwardCommandToAgent(
       reject(
         new HTTPException(404, {
           message: UNATTENDED_RUNTIME_COMMANDS.has(command)
-            ? "No unattended runtime is connected — nothing was delivered, so nothing was stopped or decided"
-            : "No reachable device",
+            ? `${emptyReason} — nothing was delivered, so nothing was stopped or decided`
+            : emptyReason,
         }),
       );
       return;

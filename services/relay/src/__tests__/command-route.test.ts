@@ -223,6 +223,54 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     expect(desktop.sentTo).toEqual([]);
   });
 
+  it("the legacy `approvals` fallback is used when exactly one peer could be the daemon", async () => {
+    // Installed CLIs update on their own schedule, so a daemon older
+    // than the capability still has to be reachable for one release.
+    const daemon = fakePeer("old-daemon", ["stdio_mcp", "file_system", "keyring", "background"]);
+    relay.connections.set(AGENT_ID, [daemon.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "approvals",
+      args: "list",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    void postCommand(AGENT_ID, { command: "approvals", args: "list", envelope });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(daemon.sentTo).toHaveLength(1);
+  });
+
+  it("the fallback refuses rather than guess between two indistinguishable peers", async () => {
+    // The desktop app announces exactly the daemon's five capabilities,
+    // so with both connected there is no signal that tells them apart.
+    // Guessing wrong answers `/approve ap-1234` with "no pending
+    // approval matching ap-1234" — which a person cannot distinguish
+    // from the daemon genuinely refusing. A false refusal on the
+    // consent vocabulary is worse than an undelivered one.
+    const five = ["stdio_mcp", "http_mcp", "file_system", "keyring", "background"];
+    const daemon = fakePeer("old-daemon", five);
+    const desktop = fakePeer("desktop", five);
+    relay.connections.set(AGENT_ID, [desktop.peer, daemon.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "approvals",
+      args: "approve ap-1234",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    const { status, json } = await postCommand(AGENT_ID, {
+      command: "approvals",
+      args: "approve ap-1234",
+      envelope,
+    });
+    expect(status).toBe(404);
+    expect(JSON.stringify(json)).toMatch(/cannot tell the daemon from a desktop app/i);
+    expect(daemon.sentTo).toEqual([]);
+    expect(desktop.sentTo).toEqual([]);
+  });
+
   it("a read-only command may still be answered by any connected surface", async () => {
     const phone = fakePeer("phone", ["push_wake"]);
     relay.connections.set(AGENT_ID, [phone.peer] as unknown as Parameters<

@@ -50,11 +50,6 @@ function makeRuntime(
               });
               acks.set(id, list);
             }
-            const r = rows.get(id);
-            if (r && r.acknowledged_at == null) {
-              r.acknowledged_at = at;
-              r.acknowledgement = ack;
-            }
           },
           hasAcknowledged: (id: string, executorId: string) =>
             (acks.get(id) ?? []).some((a) => a.executor_id === executorId),
@@ -103,8 +98,6 @@ function makeRuntime(
         requested_at: Date.now(),
         origin: o.origin,
         reason: o.reason ?? null,
-        acknowledged_at: null,
-        acknowledgement: null,
         lifted_at: null,
       };
       store?.request(h);
@@ -264,8 +257,24 @@ describe("cmdResume / cmdHaltStatus", () => {
     await cmdHalt(runtime, undefined, "local");
     const s = cmdHaltStatus(runtime);
     expect(s.summary).toContain("Stop requested");
-    expect(s.summary).toContain("not yet acknowledged");
+    expect(s.summary).toContain("no acknowledgement yet");
     expect(s.data?.halted).toBe(true);
+  });
+
+  it("halt-status never reports a bare 'Stopped', however many processes answered", async () => {
+    // The defect this asserts against appeared in three readers, each
+    // reading one process's acknowledgement as the whole motebit's. No
+    // process can enumerate the others, so the summary reports what it
+    // saw and names the residue it cannot see.
+    const { runtime } = makeRuntime({ stopper: () => "aborted the run" });
+    await cmdHalt(runtime, undefined, "local");
+    const s = cmdHaltStatus(runtime);
+    expect(s.summary).not.toMatch(/^Stopped\b/);
+    expect(s.summary).toContain("1 process(es) have stopped");
+    expect(s.summary).toContain("has not acknowledged is still running");
+    const active = (s.data as { active: Array<Record<string, unknown>> }).active;
+    expect(active[0]!["acknowledged_at"]).toBeUndefined();
+    expect(active[0]!["acknowledged_by"]).toHaveLength(1);
   });
 
   it("halt-status on a running motebit says running", () => {

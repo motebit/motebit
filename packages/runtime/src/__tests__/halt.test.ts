@@ -31,11 +31,6 @@ class MemoryHaltStore implements HaltStoreAdapter {
       });
       this.acks.set(id, list);
     }
-    const r = this.rows.get(id);
-    if (r && r.acknowledged_at == null) {
-      r.acknowledged_at = at;
-      r.acknowledgement = ack;
-    }
   }
   hasAcknowledged(id: string, executorId: string): boolean {
     return (this.acks.get(id) ?? []).some((a) => a.executor_id === executorId);
@@ -92,7 +87,7 @@ describe("MotebitRuntime — halt", () => {
   it("requestHalt records a request and does NOT acknowledge it", async () => {
     const halt = await ctx.runtime.requestHalt({ origin: "local", reason: "going out" });
     expect(halt).not.toBeNull();
-    expect(halt!.acknowledged_at).toBeNull();
+    expect(ctx.haltStore.acknowledgements(halt!.halt_id)).toEqual([]);
     expect(halt!.reason).toBe("going out");
     // In force immediately, even though nothing has acknowledged.
     expect(ctx.runtime.haltInForce()?.halt_id).toBe(halt!.halt_id);
@@ -105,11 +100,10 @@ describe("MotebitRuntime — halt", () => {
     const halt = await ctx.runtime.requestHalt({ origin: "remote" });
     const honored = await ctx.runtime.honorHalts();
     expect(honored).toHaveLength(1);
-    expect(honored[0]!.acknowledged_at).not.toBeNull();
-    expect(honored[0]!.acknowledgement).toBe(
-      "aborted run 1a2b3c4d; no further goal runs will start",
-    );
-    expect(ctx.haltStore.get(halt!.halt_id)?.acknowledgement).toContain("aborted run");
+    const acks = ctx.haltStore.acknowledgements(halt!.halt_id);
+    expect(acks).toHaveLength(1);
+    expect(acks[0]!.executor_id).toBe(ctx.runtime.haltExecutorId);
+    expect(acks[0]!.acknowledgement).toBe("aborted run 1a2b3c4d; no further goal runs will start");
     expect(await eventTypes(ctx.eventStore)).toContain(EventType.HaltAcknowledged);
   });
 
@@ -129,16 +123,19 @@ describe("MotebitRuntime — halt", () => {
     ctx.runtime.onHalt(() => {
       throw new Error("abort exploded");
     });
-    await ctx.runtime.requestHalt({ origin: "local" });
+    const halt = await ctx.runtime.requestHalt({ origin: "local" });
     const [honored] = await ctx.runtime.honorHalts();
-    expect(honored!.acknowledged_at).not.toBeNull();
-    expect(honored!.acknowledgement).toContain("a stopper failed: abort exploded");
+    expect(honored!.halt_id).toBe(halt!.halt_id);
+    const [ack] = ctx.haltStore.acknowledgements(halt!.halt_id);
+    expect(ack!.acknowledgement).toContain("a stopper failed: abort exploded");
   });
 
   it("with no stoppers the acknowledgement is honest about there being nothing to stop", async () => {
-    await ctx.runtime.requestHalt({ origin: "local" });
-    const [honored] = await ctx.runtime.honorHalts();
-    expect(honored!.acknowledgement).toBe("nothing was running");
+    const halt = await ctx.runtime.requestHalt({ origin: "local" });
+    await ctx.runtime.honorHalts();
+    expect(ctx.haltStore.acknowledgements(halt!.halt_id)[0]!.acknowledgement).toBe(
+      "nothing was running",
+    );
   });
 
   it("liftHalt takes it out of force and emits the third event", async () => {
@@ -189,7 +186,7 @@ describe("MotebitRuntime — halt", () => {
     const second = await ctx.runtime.requestHalt({ goalId: "goal-B", origin: "local" });
     const [a, b] = await Promise.all([first, ctx.runtime.honorHalts()]);
 
-    expect(ctx.haltStore.get(second!.halt_id)?.acknowledged_at).not.toBeNull();
+    expect(ctx.haltStore.acknowledgements(second!.halt_id)).toHaveLength(1);
     expect([...a, ...b].filter((h) => h.halt_id === second!.halt_id)).toHaveLength(1);
     const acks = (await eventTypes(ctx.eventStore)).filter((t) => t === EventType.HaltAcknowledged);
     expect(acks).toHaveLength(2); // one per halt, never one per pass

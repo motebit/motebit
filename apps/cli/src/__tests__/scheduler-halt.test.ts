@@ -86,8 +86,6 @@ function mockRuntime(
         requested_at: Date.now(),
         origin: "remote",
         reason: o.reason ?? null,
-        acknowledged_at: null,
-        acknowledgement: null,
         lifted_at: null,
       };
       db.haltStore.request(h);
@@ -264,12 +262,12 @@ describe("halt at the scheduler", () => {
     s.start(999_999);
     await settle(() => m.streams > 0); // start()'s own tick has run
     const halt = m.requestHalt({});
-    expect(db.haltStore.get(halt.halt_id)?.acknowledged_at).toBeNull();
+    expect(db.haltStore.acknowledgements(halt.halt_id)).toEqual([]);
 
     await s.tickOnce();
-    const acked = db.haltStore.get(halt.halt_id)!;
-    expect(acked.acknowledged_at).not.toBeNull();
-    expect(acked.acknowledgement).toContain("no further goal runs");
+    const [acked] = db.haltStore.acknowledgements(halt.halt_id);
+    expect(acked).toBeDefined();
+    expect(acked!.acknowledgement).toContain("no further goal runs");
     s.stop();
   });
 
@@ -291,7 +289,7 @@ describe("halt at the scheduler", () => {
     const halt = m.requestHalt({ reason: "stop now" });
     // The daemon honors it out of band (as the websocket path does).
     await m.runtime.honorHalts();
-    expect(db.haltStore.get(halt.halt_id)?.acknowledgement).toContain(
+    expect(db.haltStore.acknowledgements(halt.halt_id)[0]!.acknowledgement).toContain(
       `signalled abort of run ${run!.run_id.slice(0, 8)}`,
     );
 
@@ -316,9 +314,9 @@ describe("halt at the scheduler", () => {
     const halt = m.requestHalt({ reason: "stop now" });
     await s.tickOnce();
 
-    const acked = db.haltStore.get(halt.halt_id)!;
-    expect(acked.acknowledged_at).not.toBeNull();
-    expect(acked.acknowledgement).toContain(`signalled abort of run ${run!.run_id.slice(0, 8)}`);
+    const [acked] = db.haltStore.acknowledgements(halt.halt_id);
+    expect(acked).toBeDefined();
+    expect(acked!.acknowledgement).toContain(`signalled abort of run ${run!.run_id.slice(0, 8)}`);
 
     release();
     s.stop();
@@ -395,7 +393,7 @@ describe("halt at the scheduler", () => {
     await settle(() => db.goalRunStore.listByStatus("mote-test", "running").length > 0);
     const halt = m.requestHalt({});
     await s.tickOnce();
-    const ack = db.haltStore.get(halt.halt_id)!.acknowledgement ?? "";
+    const ack = db.haltStore.acknowledgements(halt.halt_id)[0]?.acknowledgement ?? "";
     expect(ack).toContain("signalled abort");
     expect(ack).toContain("already in flight finishes");
     expect(ack).not.toContain("aborted run ");
@@ -449,7 +447,7 @@ describe("halt at the scheduler", () => {
       // Halt lands while the approved call is executing.
       const h = second.requestHalt({ reason: "stop" });
       await second.runtime.honorHalts();
-      ackDuringCall = db.haltStore.get(h.halt_id)?.acknowledgement ?? "";
+      ackDuringCall = db.haltStore.acknowledgements(h.halt_id)[0]?.acknowledgement ?? "";
       return { ok: true, data: "ran" };
     };
     const s2 = scheduler(db, second);

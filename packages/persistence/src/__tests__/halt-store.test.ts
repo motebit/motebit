@@ -17,8 +17,6 @@ function halt(over: Partial<HaltRequest> & { halt_id: string }): HaltRequest {
     requested_at: Date.now(),
     origin: "local",
     reason: null,
-    acknowledged_at: null,
-    acknowledgement: null,
     lifted_at: null,
     ...over,
   };
@@ -54,20 +52,31 @@ describe("SqliteHaltStore", () => {
     db.haltStore.request(halt({ halt_id: "h1" }));
     const active = db.haltStore.activeFor("mote-1");
     expect(active?.halt_id).toBe("h1");
-    expect(active?.acknowledged_at).toBeNull();
+    expect(db.haltStore.acknowledgements("h1")).toEqual([]);
+  });
+
+  it("the request carries no acknowledgement field for a reader to mistake", () => {
+    // Structural, not stylistic. While `HaltRequest` carried the first
+    // acknowledger's timestamp "for display", three separate readers
+    // rendered it as "Stopped" while other processes kept working. A
+    // reader that cannot reach the wrong fact cannot report it.
+    db.haltStore.request(halt({ halt_id: "h1" }));
+    db.haltStore.acknowledge("h1", "daemon", "aborted run 1a2b3c4d", 5000);
+    const record = db.haltStore.get("h1") as unknown as Record<string, unknown>;
+    expect(record["acknowledged_at"]).toBeUndefined();
+    expect(record["acknowledgement"]).toBeUndefined();
   });
 
   it("acknowledge records what stopping entailed, and is one-way per executor", () => {
     db.haltStore.request(halt({ halt_id: "h1" }));
     db.haltStore.acknowledge("h1", "daemon", "aborted run 1a2b3c4d", 5000);
-    expect(db.haltStore.get("h1")).toMatchObject({
-      acknowledged_at: 5000,
-      acknowledgement: "aborted run 1a2b3c4d",
-    });
+    expect(db.haltStore.acknowledgements("h1")).toMatchObject([
+      { executor_id: "daemon", acknowledged_at: 5000, acknowledgement: "aborted run 1a2b3c4d" },
+    ]);
     // The same executor saying it twice does not rewrite its own record.
     db.haltStore.acknowledge("h1", "daemon", "something else", 9000);
     expect(db.haltStore.acknowledgements("h1")).toHaveLength(1);
-    expect(db.haltStore.get("h1")?.acknowledgement).toBe("aborted run 1a2b3c4d");
+    expect(db.haltStore.acknowledgements("h1")[0]!.acknowledgement).toBe("aborted run 1a2b3c4d");
   });
 
   it("acknowledgement is per EXECUTOR — one process stopping does not speak for another", () => {
@@ -85,8 +94,11 @@ describe("SqliteHaltStore", () => {
     db.haltStore.acknowledge("h1", "daemon", "signalled abort of run 1a2b3c4d", 6000);
     const acks = db.haltStore.acknowledgements("h1");
     expect(acks.map((a) => a.executor_id)).toEqual(["serve", "daemon"]);
-    // The display column still names the first, and only the first.
-    expect(db.haltStore.get("h1")?.acknowledgement).toBe("no further relay tasks accepted");
+    // Both accounts survive, each attributed. Neither stands for the other.
+    expect(acks.map((a) => a.acknowledgement)).toEqual([
+      "no further relay tasks accepted",
+      "signalled abort of run 1a2b3c4d",
+    ]);
   });
 
   it("lift removes it from force, and is idempotent-by-refusal", () => {

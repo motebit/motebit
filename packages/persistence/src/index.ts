@@ -1553,6 +1553,14 @@ interface HaltRow {
   lifted_at: number | null;
 }
 
+/**
+ * `halt_state.acknowledged_at` / `.acknowledgement` are migration #44
+ * columns that migration #46 superseded. They are read by nothing and
+ * written by nothing: a per-halt column cannot hold N executors' answers,
+ * and while it existed every reader that touched it reported one
+ * process's stop as the whole motebit's. The columns stay for the rows
+ * already written; the projection does not carry them out.
+ */
 function rowToHalt(row: HaltRow): HaltRequest {
   return {
     halt_id: row.halt_id,
@@ -1561,8 +1569,6 @@ function rowToHalt(row: HaltRow): HaltRequest {
     requested_at: row.requested_at,
     origin: row.origin === "remote" ? "remote" : "local",
     reason: row.reason,
-    acknowledged_at: row.acknowledged_at,
-    acknowledgement: row.acknowledgement,
     lifted_at: row.lifted_at,
   };
 }
@@ -1578,7 +1584,6 @@ function rowToHalt(row: HaltRow): HaltRequest {
 export class SqliteHaltStore implements HaltStoreAdapter {
   private stmtRequest: PreparedStatement;
   private stmtGet: PreparedStatement;
-  private stmtAcknowledge: PreparedStatement;
   private stmtLift: PreparedStatement;
   private stmtListActive: PreparedStatement;
   private stmtListRecent: PreparedStatement;
@@ -1603,13 +1608,10 @@ export class SqliteHaltStore implements HaltStoreAdapter {
     );
     this.stmtRequest = db.prepare(
       `INSERT OR REPLACE INTO halt_state
-       (halt_id, motebit_id, goal_id, requested_at, origin, reason, acknowledged_at, acknowledgement, lifted_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (halt_id, motebit_id, goal_id, requested_at, origin, reason, lifted_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtGet = db.prepare(`SELECT * FROM halt_state WHERE halt_id = ?`);
-    this.stmtAcknowledge = db.prepare(
-      `UPDATE halt_state SET acknowledged_at = ?, acknowledgement = ? WHERE halt_id = ? AND acknowledged_at IS NULL`,
-    );
     this.stmtLift = db.prepare(
       `UPDATE halt_state SET lifted_at = ? WHERE halt_id = ? AND lifted_at IS NULL`,
     );
@@ -1654,8 +1656,6 @@ export class SqliteHaltStore implements HaltStoreAdapter {
       halt.requested_at,
       halt.origin,
       halt.reason,
-      halt.acknowledged_at,
-      halt.acknowledgement,
       halt.lifted_at,
     );
   }
@@ -1666,13 +1666,12 @@ export class SqliteHaltStore implements HaltStoreAdapter {
   }
 
   /**
-   * Record that ONE executor stopped. The per-executor row is the fact;
-   * `halt_state.acknowledged_at` is kept as the first acknowledgement
-   * for display, which is why that update is conditional on being null.
+   * Record that ONE executor stopped. The per-executor row is the whole
+   * fact — there is no per-halt summary to keep in step with it, by
+   * construction.
    */
   acknowledge(haltId: string, executorId: string, acknowledgement: string, at = Date.now()): void {
     this.stmtAckExecutor.run(haltId, executorId, at, acknowledgement);
-    this.stmtAcknowledge.run(at, acknowledgement, haltId);
   }
 
   hasAcknowledged(haltId: string, executorId: string): boolean {

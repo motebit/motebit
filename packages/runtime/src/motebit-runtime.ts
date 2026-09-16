@@ -411,6 +411,21 @@ export interface ToolRecallResult {
  * that it did not finish. Generous — a stopper aborts in-flight work, it
  * does not wait for it — but bounded, because honoring is serialized.
  */
+/**
+ * A short random suffix that never throws.
+ *
+ * `crypto.randomUUID` is secure-context-only in browsers and arrives
+ * late in some React Native bundles. This runs in a class-field
+ * initializer on every surface, halt wired or not, so an unguarded call
+ * would turn a missing API into a runtime that cannot be constructed at
+ * all. Same guard `invokeLocalTool` already uses for its invocation id.
+ */
+function randomSuffix(): string {
+  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID().slice(0, 8)
+    : Math.random().toString(36).slice(2, 10);
+}
+
 const HALT_STOPPER_TIMEOUT_MS = 10_000;
 
 export class MotebitRuntime {
@@ -670,7 +685,7 @@ export class MotebitRuntime {
    * process got there first mark the halt honored for both, after which
    * the other skipped it and kept working.
    */
-  private readonly executorId = `${typeof process !== "undefined" && process.pid != null ? process.pid : "x"}-${crypto.randomUUID().slice(0, 8)}`;
+  private readonly executorId = `${typeof process !== "undefined" && process.pid != null ? process.pid : "x"}-${randomSuffix()}`;
   private _signingKeysErased = false;
   private _logger: { warn(message: string, context?: Record<string, unknown>): void };
   /**
@@ -1891,6 +1906,9 @@ export class MotebitRuntime {
     return this.planExecution.replayGoal(goalId, privateKey);
   }
 
+  /** Resolves a short goal-id prefix to a full id. See `setGoalIdResolver`. */
+  private goalIdResolver: ((prefix: string) => string | null) | null = null;
+
   /**
    * Register a goal-status resolver so the goals primitive can enforce
    * the §3.4 terminal-state convention. Surface apps call this once
@@ -1898,8 +1916,6 @@ export class MotebitRuntime {
    * closure over its `SqliteGoalStore`. Absent a resolver, the goals
    * primitive trusts the caller and emits every event.
    */
-  private goalIdResolver: ((prefix: string) => string | null) | null = null;
-
   setGoalStatusResolver(resolver: (goalId: string) => GoalLifecycleStatus): void {
     this._goalStatusResolver = resolver;
   }
@@ -2941,7 +2957,9 @@ export class MotebitRuntime {
    * nothing more — the caller may be a one-shot CLI process that is not
    * the thing doing the work. `honorHalts()` is what stops.
    *
-   * Returns the recorded request, whose `acknowledged_at` is null.
+   * Returns the recorded request. It says who asked and what for, and
+   * nothing about whether anything stopped — that is
+   * `acknowledgements(halt_id)`, one row per process.
    */
   async requestHalt(opts: {
     /** Omit to halt every goal. */
@@ -2957,8 +2975,6 @@ export class MotebitRuntime {
       requested_at: Date.now(),
       origin: opts.origin,
       reason: opts.reason ?? null,
-      acknowledged_at: null,
-      acknowledgement: null,
       lifted_at: null,
     };
     this.haltStore.request(halt);
@@ -3034,13 +3050,15 @@ export class MotebitRuntime {
       const acknowledgement =
         stopped.filter((s) => s.length > 0).join("; ") || "nothing was running";
       this.haltStore.acknowledge(halt.halt_id, this.executorId, acknowledgement);
-      const acknowledged = this.haltStore.get(halt.halt_id) ?? {
-        ...halt,
-        acknowledged_at: Date.now(),
-        acknowledgement,
-      };
-      await this.emitHaltEvent(EventType.HaltAcknowledged, acknowledged);
-      honored.push(acknowledged);
+      // This process's own row, never the halt's. Reading the halt back
+      // would attribute whichever executor acknowledged first — so the
+      // log that exists to be the honest record of who stopped would
+      // carry another process's words under this one's stop.
+      const mine = this.haltStore
+        .acknowledgements(halt.halt_id)
+        .find((a) => a.executor_id === this.executorId);
+      await this.emitHaltEvent(EventType.HaltAcknowledged, halt, mine);
+      honored.push(halt);
     }
     return honored;
   }
@@ -3058,6 +3076,7 @@ export class MotebitRuntime {
   private async emitHaltEvent(
     eventType: EventType,
     halt: import("@motebit/sdk").HaltRequest,
+    acknowledgement?: import("@motebit/sdk").HaltAcknowledgement,
   ): Promise<void> {
     try {
       await this.events.appendWithClock({
@@ -3071,8 +3090,12 @@ export class MotebitRuntime {
           origin: halt.origin,
           requested_at: halt.requested_at,
           ...(halt.reason != null ? { reason: halt.reason } : {}),
-          ...(halt.acknowledged_at != null
-            ? { acknowledged_at: halt.acknowledged_at, acknowledgement: halt.acknowledgement }
+          ...(acknowledgement != null
+            ? {
+                executor_id: acknowledgement.executor_id,
+                acknowledged_at: acknowledgement.acknowledged_at,
+                acknowledgement: acknowledgement.acknowledgement,
+              }
             : {}),
           ...(halt.lifted_at != null ? { lifted_at: halt.lifted_at } : {}),
         },

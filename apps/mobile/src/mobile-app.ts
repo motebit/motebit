@@ -1685,6 +1685,16 @@ export class MobileApp {
           `The runtime is not connected, so nothing was delivered (${res.status}). Nothing has been stopped or decided.`,
         );
       }
+      if (res.status === 504) {
+        // The opposite case, and the one that reads worst when it falls
+        // through to a raw status line: 504 means the relay DID deliver
+        // and the runtime did not answer in time. A person told only
+        // "504" cannot tell that from "not delivered", and would send a
+        // stop a second time believing the first did not land.
+        throw new Error(
+          "Delivered, but the runtime did not answer in time. It may have stopped — check with /halted before sending it again.",
+        );
+      }
       throw new Error(`${res.status}: ${text}`);
     }
     return (await res.json()) as CommandResult;

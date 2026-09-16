@@ -17,17 +17,23 @@
 
 import type { MotebitRuntime } from "../index.js";
 import type { CommandResult } from "./types.js";
-import type { HaltRequest } from "@motebit/sdk";
+import type { HaltAcknowledgement, HaltRequest } from "@motebit/sdk";
 
-function describe(halt: HaltRequest): string {
+/**
+ * One line per halt. The state never renders as a bare "stopped":
+ * acknowledgements are per process, and this command cannot know how
+ * many processes run unattended work for this motebit, so it reports
+ * the count it can see rather than a totality it cannot.
+ */
+function describe(halt: HaltRequest, acks: HaltAcknowledgement[]): string {
   const scope =
     halt.goal_id == null ? "all unattended execution" : `goal ${halt.goal_id.slice(0, 8)}`;
   const state =
     halt.lifted_at != null
       ? "lifted"
-      : halt.acknowledged_at != null
-        ? "stopped"
-        : "stop requested — not yet acknowledged";
+      : acks.length > 0
+        ? `${acks.length} process(es) stopped`
+        : "stop requested — no process has acknowledged";
   const reason = halt.reason != null && halt.reason !== "" ? ` · ${halt.reason}` : "";
   return `${halt.halt_id.slice(0, 8)}  ${scope}  ${state}  (${halt.origin})${reason}`;
 }
@@ -112,10 +118,9 @@ export async function cmdHalt(
   // only what THIS call acknowledged, so a halt the scheduler's own
   // phase 0 honored a moment earlier would otherwise be reported as
   // un-acknowledged when the record plainly says it stopped.
-  // Read THIS executor's acknowledgement, never the display column. That
-  // column holds whichever process acknowledged first, so on a machine
-  // running both `motebit run` and `motebit serve` it would report the
-  // whole motebit stopped on the strength of the other one's answer.
+  // THIS executor's acknowledgement. On a machine running both
+  // `motebit run` and `motebit serve`, another process's row says
+  // nothing about whether this one stopped its own work.
   const mine = runtime.halts
     .acknowledgements(halt.halt_id)
     .find((a) => a.executor_id === runtime.haltExecutorId);
@@ -159,9 +164,10 @@ export async function cmdHalt(
 
 /** `resume <halt_id|all>` — give the permission back. */
 export async function cmdResume(runtime: MotebitRuntime, args?: string): Promise<CommandResult> {
-  if (runtime.halts == null) return { summary: "This surface has no halt store wired." };
+  const halts = runtime.halts;
+  if (halts == null) return { summary: "This surface has no halt store wired." };
   const target = (args ?? "").trim();
-  const active = runtime.halts.listActive(runtime.motebitId);
+  const active = halts.listActive(runtime.motebitId);
   if (active.length === 0) return { summary: "Nothing is halted." };
 
   if (target === "" || target.toLowerCase() === "all") {
@@ -179,7 +185,7 @@ export async function cmdResume(runtime: MotebitRuntime, args?: string): Promise
   if (!match) {
     return {
       summary: `No halt in force matching "${target}".`,
-      detail: active.map(describe).join("\n"),
+      detail: active.map((h) => describe(h, halts.acknowledgements(h.halt_id))).join("\n"),
     };
   }
   const ok = await runtime.liftHalt(match.halt_id);
@@ -192,25 +198,36 @@ export async function cmdResume(runtime: MotebitRuntime, args?: string): Promise
 }
 
 /**
- * `halt-status` — what is stopped, when it was asked for, and whether
- * the motebit has actually stopped.
+ * `halt-status` — what was asked for, and which processes have stopped.
  *
- * The two timestamps are rendered separately on purpose. A surface that
- * collapses them tells the user their motebit has stopped when all that
- * is known is that someone asked.
+ * It never answers "the motebit has stopped", because no process can
+ * know that. A motebit's unattended work can run in several processes
+ * at once (`motebit run` and `motebit serve`, same machine, same
+ * database), and each acknowledges for itself. What this command knows
+ * is the set of acknowledgements written so far, so that is what it
+ * reports — named, counted, and never rounded up to a totality.
  */
 export function cmdHaltStatus(runtime: MotebitRuntime): CommandResult {
-  if (runtime.halts == null) return { summary: "This surface has no halt store wired." };
-  const active = runtime.halts.listActive(runtime.motebitId);
-  const recent = runtime.halts.listRecent(runtime.motebitId, 10);
+  const halts = runtime.halts;
+  if (halts == null) return { summary: "This surface has no halt store wired." };
+  const active = halts.listActive(runtime.motebitId);
+  const recent = halts.listRecent(runtime.motebitId, 10);
   if (active.length === 0) {
     return {
       summary: "Running — nothing is halted.",
-      ...(recent.length > 0 ? { detail: `Recent:\n${recent.map(describe).join("\n")}` } : {}),
+      ...(recent.length > 0
+        ? {
+            detail: `Recent:\n${recent
+              .map((h) => describe(h, halts.acknowledgements(h.halt_id)))
+              .join("\n")}`,
+          }
+        : {}),
       data: { halted: false, active: [] },
     };
   }
-  const unacknowledged = active.filter((h) => h.acknowledged_at == null);
+  const withAcks = active.map((h) => ({ halt: h, acks: halts.acknowledgements(h.halt_id) }));
+  const silent = withAcks.filter((e) => e.acks.length === 0);
+  const stoppedCount = withAcks.reduce((n, e) => n + e.acks.length, 0);
   // A goal-scoped halt stops one goal; the rest of the interior keeps
   // running. Summarising it as "Stopped" would be the arc's own failure
   // in the one command whose whole job is to report the truth.
@@ -220,20 +237,26 @@ export function cmdHaltStatus(runtime: MotebitRuntime): CommandResult {
     : `${active.length} goal(s) — the rest of the interior is still running`;
   return {
     summary:
-      unacknowledged.length > 0
-        ? `Stop requested for ${scopeWord} (${unacknowledged.length} of ${active.length} not yet acknowledged).`
-        : `Stopped ${scopeWord}.`,
-    detail: active.map(describe).join("\n"),
+      silent.length > 0
+        ? `Stop requested for ${scopeWord}. ${silent.length} of ${active.length} halt(s) have no acknowledgement yet.`
+        : `Stop requested for ${scopeWord}. ${stoppedCount} process(es) have stopped; any process that has not acknowledged is still running.`,
+    detail: withAcks.map((e) => describe(e.halt, e.acks)).join("\n"),
     data: {
       halted: true,
-      active: active.map((h) => ({
-        halt_id: h.halt_id,
-        scope: h.goal_id ?? "all",
-        origin: h.origin,
-        reason: h.reason,
-        requested_at: h.requested_at,
-        acknowledged_at: h.acknowledged_at,
-        acknowledgement: h.acknowledgement,
+      active: withAcks.map((e) => ({
+        halt_id: e.halt.halt_id,
+        scope: e.halt.goal_id ?? "all",
+        origin: e.halt.origin,
+        reason: e.halt.reason,
+        requested_at: e.halt.requested_at,
+        // Per process. There is no single "acknowledged_at" to report:
+        // one column standing in for N processes is exactly what let a
+        // surface say "Stopped" while another process kept working.
+        acknowledged_by: e.acks.map((a) => ({
+          executor_id: a.executor_id,
+          acknowledged_at: a.acknowledged_at,
+          acknowledgement: a.acknowledgement,
+        })),
       })),
     },
   };

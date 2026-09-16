@@ -2279,8 +2279,6 @@ export type HaltOrigin = "local" | "remote";
 
 // @public
 export interface HaltRequest {
-    acknowledged_at: number | null;
-    acknowledgement: string | null;
     goal_id: string | null;
     // (undocumented)
     halt_id: string;

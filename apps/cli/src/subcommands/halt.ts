@@ -18,7 +18,7 @@
  */
 
 import { openMotebitDatabase } from "@motebit/persistence";
-import type { HaltRequest } from "@motebit/sdk";
+import type { HaltAcknowledgement, HaltRequest } from "@motebit/sdk";
 import { EventType } from "@motebit/sdk";
 import { EventStore } from "@motebit/event-log";
 import { RelayClient, RelayClientError } from "@motebit/relay-client";
@@ -82,17 +82,21 @@ async function logHaltEvent(
 const ACK_WAIT_MS = 3_000;
 const ACK_POLL_MS = 150;
 
-function describe(halt: HaltRequest): string {
+/**
+ * One line per halt. Never the bare word "stopped": each process
+ * acknowledges for itself, and this command cannot enumerate the
+ * processes that exist, so it reports how many have answered rather
+ * than implying that is all of them.
+ */
+function describe(halt: HaltRequest, acks: HaltAcknowledgement[]): string {
   const scope =
     halt.goal_id == null ? "all unattended execution" : `goal ${halt.goal_id.slice(0, 8)}`;
   const state =
     halt.lifted_at != null
       ? "lifted"
-      : halt.acknowledged_at != null
-        ? // Never the bare word "stopped": this column names whichever
-          // process acknowledged FIRST, and says nothing about the rest.
-          "acknowledged by at least one process"
-        : "stop requested (not acknowledged)";
+      : acks.length > 0
+        ? `${acks.length} process(es) stopped`
+        : "stop requested (no process has acknowledged)";
   const reason = halt.reason != null && halt.reason !== "" ? ` · ${halt.reason}` : "";
   return `  ${halt.halt_id.slice(0, 8)}  ${scope.padEnd(26)}${state}  (${halt.origin})${reason}`;
 }
@@ -206,8 +210,6 @@ export async function handleHalt(config: CliConfig): Promise<void> {
       requested_at: Date.now(),
       origin: "local",
       reason: reason ?? null,
-      acknowledged_at: null,
-      acknowledgement: null,
       lifted_at: null,
     };
     moteDb.haltStore.request(halt);
@@ -281,7 +283,9 @@ export async function handleResume(config: CliConfig): Promise<void> {
     const match = active.find((h) => h.halt_id === target || h.halt_id.startsWith(target));
     if (!match) {
       console.error(`Error: no halt in force matching "${target}".`);
-      console.error(active.map(describe).join("\n"));
+      console.error(
+        active.map((h) => describe(h, moteDb.haltStore.acknowledgements(h.halt_id))).join("\n"),
+      );
       process.exit(1);
     }
     moteDb.haltStore.lift(match.halt_id);
@@ -313,23 +317,28 @@ export async function handleHaltStatus(config: CliConfig): Promise<void> {
     if (active.length === 0) {
       console.log("Running — nothing is halted.");
     } else {
-      const waiting = active.filter((h) => h.acknowledged_at == null).length;
+      const withAcks = active.map((h) => ({
+        halt: h,
+        acks: moteDb.haltStore.acknowledgements(h.halt_id),
+      }));
+      const silent = withAcks.filter((e) => e.acks.length === 0).length;
+      const stopped = withAcks.reduce((n, e) => n + e.acks.length, 0);
       // A goal-scoped halt stops one goal, not the motebit.
       const wide = active.some((h) => h.goal_id == null);
       const scopeWord = wide
         ? "unattended execution"
         : `${active.length} goal(s) — the rest of the interior is still running`;
       console.log(
-        waiting > 0
-          ? `Stop requested for ${scopeWord} — ${waiting} of ${active.length} not yet acknowledged.`
-          : `Stopped ${scopeWord}.`,
+        silent > 0
+          ? `Stop requested for ${scopeWord} — ${silent} of ${active.length} with no acknowledgement yet.`
+          : `Stop requested for ${scopeWord} — ${stopped} process(es) stopped. A process that has not acknowledged is still running.`,
       );
-      for (const h of active) console.log(describe(h));
+      for (const e of withAcks) console.log(describe(e.halt, e.acks));
     }
     const past = recent.filter((h) => !active.some((a) => a.halt_id === h.halt_id));
     if (past.length > 0) {
       console.log("\nRecent:");
-      for (const h of past) console.log(describe(h));
+      for (const h of past) console.log(describe(h, moteDb.haltStore.acknowledgements(h.halt_id)));
     }
   } finally {
     moteDb.close();
