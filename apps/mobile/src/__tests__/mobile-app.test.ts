@@ -122,6 +122,21 @@ vi.mock("@motebit/encryption", () => ({
   mintAudienceToken: vi.fn(function () {
     return Promise.resolve({ token: "mock-signed-token", payload: {} });
   }),
+  secureErase: vi.fn(),
+  bytesToHex: (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join(""),
+  // Shape-faithful stub: the envelope's real signing is covered by the
+  // crypto package's own round-trip test and by relay-client's, which
+  // verifies a minted envelope against the runtime's verifier. What this
+  // suite asserts is that the phone SENDS one, bound to this identity.
+  signAgentCommandEnvelope: vi.fn((opts: { command: string; args?: string; motebitId: string }) =>
+    Promise.resolve({
+      motebit_id: opts.motebitId,
+      ts: Date.now(),
+      aud: `agent-command/${opts.motebitId}`,
+      payload_digest: `digest-of:${opts.command}:${opts.args ?? ""}`,
+      signature: "mock-signature",
+    }),
+  ),
 }));
 
 // @motebit/core-identity
@@ -670,5 +685,94 @@ describe("MobileApp.governanceStatus", () => {
     expect(app.governanceStatus.governed).toBe(false);
     expect(app.governanceStatus.reason).toBe("no identity file");
     app.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MobileApp.sendRemoteCommand — the phone reaching the running runtime
+// ---------------------------------------------------------------------------
+
+describe("MobileApp.sendRemoteCommand", () => {
+  let app: MobileApp;
+  let realFetch: typeof globalThis.fetch;
+
+  beforeEach(async () => {
+    secureStoreData.clear();
+    asyncStoreData.clear();
+    realFetch = globalThis.fetch;
+    app = new MobileApp();
+    await app.bootstrap();
+    await app.setSyncUrl("https://relay.example");
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    app.stop();
+  });
+
+  function stubFetch(status: number, body: unknown) {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = ((url: string, init?: RequestInit) => {
+      calls.push({ url, init });
+      return Promise.resolve(
+        new Response(JSON.stringify(body), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }) as unknown as typeof globalThis.fetch;
+    return calls;
+  }
+
+  it("posts a signed envelope with the command to the runtime's command route", async () => {
+    const calls = stubFetch(200, { summary: "Stopped all unattended execution." });
+    const result = await app.sendRemoteCommand("halt", "going out");
+
+    expect(result.summary).toBe("Stopped all unattended execution.");
+    expect(calls[0]!.url).toContain(`/api/v1/agents/${app.motebitId}/command`);
+    const body = JSON.parse(
+      typeof calls[0]!.init?.body === "string" ? calls[0]!.init.body : "{}",
+    ) as Record<string, unknown>;
+    expect(body.command).toBe("halt");
+    expect(body.args).toBe("going out");
+    // The envelope is the authorization — never absent, never unsigned.
+    const envelope = body.envelope as Record<string, unknown>;
+    expect(typeof envelope.signature).toBe("string");
+    expect(envelope.motebit_id).toBe(app.motebitId);
+  });
+
+  it("omits empty args rather than signing over an empty string", async () => {
+    const calls = stubFetch(200, { summary: "ok" });
+    await app.sendRemoteCommand("halt-status");
+    const body = JSON.parse(
+      typeof calls[0]!.init?.body === "string" ? calls[0]!.init.body : "{}",
+    ) as Record<string, unknown>;
+    expect("args" in body).toBe(false);
+  });
+
+  it("a 401 says the device key is not the identity key, not that the command was refused", async () => {
+    stubFetch(401, { message: "envelope verification failed" });
+    await expect(app.sendRemoteCommand("halt")).rejects.toThrow(/not the motebit's identity key/);
+  });
+
+  it("a disconnected runtime says NOT DELIVERED — never that something stopped", async () => {
+    stubFetch(503, { message: "Agent not connected" });
+    await expect(app.sendRemoteCommand("halt")).rejects.toThrow(/nothing was delivered/);
+    stubFetch(404, { message: "no connection" });
+    await expect(app.sendRemoteCommand("halt")).rejects.toThrow(/nothing was delivered/);
+  });
+
+  it("any other failure surfaces the status and body", async () => {
+    stubFetch(500, { message: "boom" });
+    await expect(app.sendRemoteCommand("halt")).rejects.toThrow(/500/);
+  });
+
+  it("refuses when no relay is configured — there is nowhere to reach", async () => {
+    // The stub stores are module-level, so clear what this suite set.
+    asyncStoreData.clear();
+    secureStoreData.clear();
+    const bare = new MobileApp();
+    await expect(bare.sendRemoteCommand("halt")).rejects.toThrow(/No relay configured/);
+    bare.stop();
   });
 });
