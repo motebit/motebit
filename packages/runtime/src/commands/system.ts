@@ -130,6 +130,14 @@ export function cmdApprovals(runtime: MotebitRuntime, args?: string): CommandRes
         "That is not the same as an empty queue. Ask the process that runs unattended work (`motebit run`), which owns the queue this would have read.",
     };
   }
+  // Sweep before listing, for the same reason the decide path does.
+  // `listPending` selects on status, not on expiry, so without this the
+  // phone reports "3 approval(s) waiting on you" for rows whose TTL
+  // lapsed while the daemon was down — and then refuses every one of
+  // them, which reads as a broken command rather than an expired
+  // approval. Fixing only the decide path fixed the half nobody sees
+  // first.
+  store?.expireStale?.(Date.now());
   const pending = store?.listPending?.(runtime.motebitId) ?? [];
   if (pending.length === 0) {
     // Fall back to the live in-turn approval (a surface with no queue).

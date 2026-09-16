@@ -398,6 +398,11 @@ export async function handleRun(config: CliConfig): Promise<void> {
       motebitId,
       authToken,
       capabilities: cliCapabilities,
+      // Declared, not invented. The relay groups peers by machine to
+      // decide whether two unattended runtimes share a database; without
+      // this it assigns a random id per connection and reads this
+      // process and `motebit serve` as two separate machines.
+      ...(fullConfig.device_id != null ? { deviceId: fullConfig.device_id } : {}),
       httpFallback: httpAdapter,
       localStore: moteDb.eventStore,
     });
@@ -1129,6 +1134,16 @@ export async function handleServe(config: CliConfig): Promise<void> {
     motebitId,
     publicKeyHex,
 
+    // The halt gate for EVERY `motebit_task`, including `--direct`,
+    // which replaces `handleAgentTask` and so never reaches the
+    // runtime's own chokepoint.
+    haltRefusal: () => {
+      const halted = runtimeRef.current?.haltInForce() ?? null;
+      return halted == null
+        ? null
+        : `this motebit has been stopped by its owner (halt ${halted.halt_id.slice(0, 8)})`;
+    },
+
     listTools: () => runtime.getToolRegistry().list(),
     filterTools: (tools) => runtime.policy.filterTools(tools),
     validateTool: (tool, args) =>
@@ -1435,6 +1450,9 @@ export async function handleServe(config: CliConfig): Promise<void> {
         // worker that cannot be reached is a worker that cannot be
         // stopped.
         capabilities: [DeviceCapability.HttpMcp, DeviceCapability.UnattendedRuntime],
+        // Same machine as `motebit run` when both are local — see the
+        // daemon's own socket above.
+        ...(fullConfigForServe.device_id != null ? { deviceId: fullConfigForServe.device_id } : {}),
         httpFallback: httpAdapter,
         localStore: moteDb.eventStore,
       });

@@ -22,6 +22,15 @@ export interface WebSocketAdapterConfig {
   credentialSource?: CredentialSource;
   /** Device capabilities to advertise on connect. */
   capabilities?: string[];
+  /**
+   * This device's id, declared on connect.
+   *
+   * The relay uses it to tell "two processes on one machine" (which
+   * share a database, so either can answer for both) from "two
+   * machines" (which do not). Without it the relay assigns a fresh
+   * random id per connection, and the two cases are indistinguishable.
+   */
+  deviceId?: string;
   /** Reconnect delay base (ms). Doubles on each retry. */
   reconnectBaseMs?: number;
   /** Max reconnect delay (ms). */
@@ -57,6 +66,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       | "authToken"
       | "credentialSource"
       | "capabilities"
+      | "deviceId"
       | "httpFallback"
       | "localStore"
       | "onCatchUp"
@@ -67,6 +77,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       | "authToken"
       | "credentialSource"
       | "capabilities"
+      | "deviceId"
       | "httpFallback"
       | "localStore"
       | "onCatchUp"
@@ -117,6 +128,10 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     if (this.config.capabilities && this.config.capabilities.length > 0) {
       const sep = url.includes("?") ? "&" : "?";
       url += `${sep}capabilities=${encodeURIComponent(this.config.capabilities.join(","))}`;
+    }
+    if (this.config.deviceId != null && this.config.deviceId !== "") {
+      const sep = url.includes("?") ? "&" : "?";
+      url += `${sep}device_id=${encodeURIComponent(this.config.deviceId)}`;
     }
 
     // Resolve WebSocket impl (async for Node <22 where ws must be imported).

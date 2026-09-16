@@ -1656,16 +1656,24 @@ export class MobileApp {
     for (let i = 0; i < privHex.length; i += 2) {
       privBytes[i / 2] = parseInt(privHex.slice(i, i + 2), 16);
     }
-    const envelope = await signAgentCommandEnvelope({
-      command,
-      ...(args !== undefined && args !== "" ? { args } : {}),
-      motebitId: this.motebitId,
-      identityPrivateKey: privBytes,
-      // Distinguishes two identical commands sent in the same
-      // millisecond; without it the replay guard refuses the second.
-      nonce: crypto.randomUUID(),
-    });
-    secureErase(privBytes);
+    // `finally`, not a straight line: if signing throws — bad key
+    // material, a missing WebCrypto path — the decoded identity private
+    // key would otherwise stay live in the JS heap for the life of the
+    // process. `createSyncToken` in this file already erases this way.
+    let envelope;
+    try {
+      envelope = await signAgentCommandEnvelope({
+        command,
+        ...(args !== undefined && args !== "" ? { args } : {}),
+        motebitId: this.motebitId,
+        identityPrivateKey: privBytes,
+        // Distinguishes two identical commands sent in the same
+        // millisecond; without it the replay guard refuses the second.
+        nonce: crypto.randomUUID(),
+      });
+    } finally {
+      secureErase(privBytes);
+    }
     // Transport auth for `/api/v1/agents/*`, which this path sits behind.
     // The audience must be the route's (`admin:query`) — the default
     // `sync` audience is rejected by exact-match verification, which

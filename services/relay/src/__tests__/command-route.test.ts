@@ -147,7 +147,7 @@ describe("command ingress envelope verification", () => {
  * the most.
  */
 describe("unattended-runtime commands are routed to a runtime that can serve them", () => {
-  function fakePeer(deviceId: string, capabilities: string[]) {
+  function fakePeer(deviceId: string, capabilities: string[], declared = true) {
     const sentTo: string[] = [];
     return {
       peer: {
@@ -157,6 +157,7 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
           },
         },
         deviceId,
+        deviceIdDeclared: declared,
         capabilities,
       },
       sentTo,
@@ -315,6 +316,28 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     expect(JSON.stringify(json)).toMatch(/2 different machines/i);
     expect(laptop.sentTo).toEqual([]);
     expect(worker.sentTo).toEqual([]);
+  });
+
+  it("peers that did NOT declare a device id are delivered to, never refused", async () => {
+    // The relay invents a fresh id per connection for a peer that
+    // declares none, so counting those would read one machine's two
+    // processes as two machines — and a reconnect racing a
+    // not-yet-observed close as a third — refusing every remote halt in
+    // exactly the configuration this arc exists for. Undeclared is
+    // unknown, and unknown delivers.
+    const a = fakePeer("generated-1", ["background", "unattended_runtime"], false);
+    const b = fakePeer("generated-2", ["background", "unattended_runtime"], false);
+    relay.connections.set(AGENT_ID, [a.peer, b.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "halt",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    void postCommand(AGENT_ID, { command: "halt", envelope });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(a.sentTo.length + b.sentTo.length).toBeGreaterThan(0);
   });
 
   it("a read-only command may still be answered by any connected surface", async () => {

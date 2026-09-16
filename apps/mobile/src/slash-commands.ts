@@ -60,6 +60,26 @@ export interface SlashCommandDeps {
   setShowActivityPanel: (show: boolean) => void;
 }
 
+/**
+ * Turn what someone typed after `/halt` into a command payload.
+ *
+ * `goal <id> [reason...]` becomes the structured scope the runtime
+ * reads; anything else is a reason and only a reason. Widening a
+ * goal-scoped stop into a motebit-wide one silently would be a stop
+ * that did more than it was asked, which is the mirror of the failure
+ * this arc is built around.
+ */
+function haltRemote(args?: string): { cmd: string; args?: string } {
+  const raw = (args ?? "").trim();
+  const scoped = /^goal\s+(\S+)\s*(.*)$/i.exec(raw);
+  if (!scoped) return { cmd: "halt", ...(raw !== "" ? { args: raw } : {}) };
+  const reason = (scoped[2] ?? "").trim();
+  return {
+    cmd: "halt",
+    args: JSON.stringify({ goal_id: scoped[1]!, ...(reason !== "" ? { reason } : {}) }),
+  };
+}
+
 export function runSlashCommand(command: string, args: string, deps: SlashCommandDeps): void {
   const {
     app: a,
@@ -600,11 +620,16 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
     case "deny": {
       const remote: { cmd: string; args?: string } =
         command === "halt"
-          ? // Free text is a REASON and only a reason. Scope never rides
-            // inside it — the runtime reads a structured form, so
-            // "/halt goal is done" halts everything with that reason
-            // rather than a goal named "is".
-            { cmd: "halt", ...(args ? { args } : {}) }
+          ? // Free text is a REASON and only a reason — scope never
+            // rides inside it, so "/halt goal is done" would halt
+            // everything with that reason rather than a goal named
+            // "is". But `halt goal <id>` is the syntax the CLI and the
+            // docs teach, so a person WILL type it here. Rather than
+            // quietly widening a goal-scoped stop into a
+            // motebit-wide one, recognise the form and send the
+            // structured scope the runtime actually reads. The runtime
+            // resolves the short id against its own goals.
+            haltRemote(args)
           : command === "resume"
             ? { cmd: "resume", ...(args ? { args } : {}) }
             : command === "halted"

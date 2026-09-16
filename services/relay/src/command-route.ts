@@ -259,12 +259,24 @@ async function forwardCommandToAgent(
       // `/pending` with "No pending approvals" while the laptop daemon
       // held a real one — a false empty, which is the answer this whole
       // block exists to prevent. Refuse rather than pick.
-      const devices = new Set(unattended.map((p) => p.deviceId));
-      candidates = devices.size <= 1 ? unattended : [];
-      emptyReason =
-        devices.size > 1
-          ? `This motebit has unattended runtimes on ${devices.size} different machines, each with its own queue, so the relay cannot choose one — run this command on the machine you mean, or stop the runtime you do not`
-          : "No unattended runtime is connected";
+      //
+      // Only peers that DECLARED an id can be grouped. The relay invents
+      // one per connection for peers that did not, so counting those
+      // would read one machine's two processes as two machines — and a
+      // reconnect racing a not-yet-observed close as a third — refusing
+      // every remote halt in exactly the configuration this arc is for.
+      // Undeclared means unknown, and unknown falls back to delivering
+      // rather than to refusing: a first-wins answer from a peer that
+      // shares the database is right, and this is the same machine in
+      // every deployment that exists today.
+      const declared = unattended.filter((p) => p.deviceIdDeclared === true);
+      const devices = new Set(declared.map((p) => p.deviceId));
+      const allDeclared = declared.length === unattended.length;
+      const manyMachines = allDeclared && devices.size > 1;
+      candidates = manyMachines ? [] : unattended;
+      emptyReason = manyMachines
+        ? `This motebit has unattended runtimes on ${devices.size} different machines, each with its own queue, so the relay cannot choose one — run this command on the machine you mean, or stop the runtime you do not`
+        : "No unattended runtime is connected";
     } else if (command !== "approvals") {
       // `halt`/`resume` get no fallback: a daemon too old to announce
       // the capability is too old to honor them, and "not delivered" is
