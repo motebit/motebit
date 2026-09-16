@@ -558,6 +558,20 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       // that is not signed is the motebit's word for what it did.
       "ALTER TABLE goal_outcomes ADD COLUMN response_full TEXT",
       "ALTER TABLE goal_outcomes ADD COLUMN signed_manifest TEXT",
+      // The link from an outcome to the run that produced it, as a
+      // FIELD rather than an id-equality convention.
+      //
+      // The live paths key `outcome_id = run_id`; the recovery paths
+      // deliberately mint a fresh id, because a death between their
+      // write and the run-status transition must not let their row
+      // REPLACE a genuine outcome. Both are right, and together they
+      // meant a reader could only find half the outcomes from a run —
+      // so `runs show` reported "the run did not reach an outcome row"
+      // for exactly the interrupted and recovered runs it exists to
+      // explain. A column serves both: unique ids where they are needed,
+      // and one way to ask.
+      "ALTER TABLE goal_outcomes ADD COLUMN run_id TEXT",
+      "CREATE INDEX IF NOT EXISTS idx_goal_outcomes_run ON goal_outcomes (run_id)",
     ],
   },
 ];

@@ -107,6 +107,21 @@ export const DEFAULT_POLICY: PolicyConfig = {
 const EVIDENCE_SPAN_MAX_CHARS = 512;
 
 /**
+ * Does this reference carry a secret in its query string?
+ *
+ * Name-keyed on purpose: in a URL the parameter name says what the
+ * value is, and an opaque token has no shape a value-matcher can find.
+ * Deliberately conservative about what counts as a value — a one or two
+ * character parameter is a page number, not a key.
+ */
+const CREDENTIAL_QUERY_PARAM =
+  /[?&](?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth|authorization|token|secret|password|passwd|pwd|sig|signature|session|credential)=[^&\s]{8,}/i;
+
+function looksLikeCredentialBearingUrl(ref: string): boolean {
+  return CREDENTIAL_QUERY_PARAM.test(ref);
+}
+
+/**
  * Cut the span to the bound WITHOUT splitting a character.
  *
  * `slice` counts UTF-16 code units, so a cut landing between the halves
@@ -245,7 +260,28 @@ export class PolicyGate {
     // changes what is stripped from every outbound message to a cloud
     // provider, so it belongs to that pattern table's own change, not
     // to this one.
+    // The REF as well as the span. `read_url` passes the request URL,
+    // and a URL carries credentials in query parameters — so a fetch of
+    // `…/export?api_key=…` wrote the key into the pointer's `ref`, past
+    // the guard whose whole point is that credential-class content
+    // produces no pointer at all. A guard that inspects only the part
+    // one happens to think of is not a guard.
     if (this.redaction.redactForCloudEgress(span).redactionCount > 0) return;
+    // The SOURCE is guarded separately, by its own rule.
+    //
+    // `read_url` passes the request URL, and a URL carries credentials
+    // in query parameters — so a fetch of `…/export?api_key=…` wrote the
+    // key into the pointer's `ref`, past a guard that only looked at the
+    // span. The shared credential patterns catch none of those forms:
+    // measured, `api_key=`, `token=`, `access_token=` and `sig=` all
+    // pass untouched, because the patterns key on the VALUE's shape and
+    // a bare opaque string has none.
+    //
+    // In a URL the parameter NAME is the strong signal, which makes this
+    // rule precise where a value-shape rule cannot be. It lives here
+    // rather than in the shared table because it is true of URLs, not of
+    // prose, and the shared table is applied to prose.
+    if (result.source_ref != null && looksLikeCredentialBearingUrl(result.source_ref)) return;
     this.evidenceSink.record({
       evidence_id: crypto.randomUUID(),
       ...(ctx.runId != null ? { run_id: ctx.runId } : {}),

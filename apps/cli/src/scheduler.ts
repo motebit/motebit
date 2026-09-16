@@ -212,6 +212,7 @@ export class GoalScheduler {
       // transition must not let this row REPLACE a genuine outcome.
       this.goalOutcomeStore.add({
         outcome_id: crypto.randomUUID(),
+        run_id: run.run_id,
         goal_id: run.goal_id,
         motebit_id: this.motebitId,
         ran_at: Date.now(),
@@ -292,6 +293,7 @@ export class GoalScheduler {
       if (goalId != null) {
         this.goalOutcomeStore.add({
           outcome_id: crypto.randomUUID(),
+          run_id: runId,
           goal_id: goalId,
           motebit_id: this.motebitId,
           ran_at: Date.now(),
@@ -945,6 +947,7 @@ export class GoalScheduler {
           // Record suspended outcome
           this.goalOutcomeStore.add({
             outcome_id: crypto.randomUUID(),
+            ...(runId != null ? { run_id: runId } : {}),
             goal_id: goalId,
             motebit_id: this.motebitId,
             ran_at: now,
@@ -1197,12 +1200,35 @@ export class GoalScheduler {
           this.runStore.setStatus(turn.runId, "running", {
             note: "approval expired; continuing after denial",
           });
+          // Consumed, not discarded: this is a THIRD path that reaches
+          // `completed`, and it wrote no outcome row at all — so a run
+          // that produced work after an approval lapsed reported "the
+          // run did not reach an outcome row", with nothing signed. The
+          // drift gate stayed green because it matches the signing call
+          // once per file, which is the aperture blindness this whole
+          // increment set out to correct, found for the second time
+          // inside the increment itself.
           const resumeStream = this.runtime.resumeAfterApproval(false);
-          void this.consumeAndDiscard(resumeStream).then(() => {
-            this.runStore.setStatus(turn.runId, "completed", {
-              note: "approval expired; the turn continued after the denial",
+          const expiredGoalId = turn.goalId;
+          const expiredRunId = turn.runId;
+          void this.consumeDaemonStream(resumeStream, expiredGoalId, expiredRunId)
+            .then(async (result) => {
+              this.runStore.setStatus(expiredRunId, "completed", {
+                note: "approval expired; the turn continued after the denial",
+              });
+              // `partial`, never `completed`: the action the human never
+              // decided did not run, so this is not the goal's work
+              // finished.
+              await this.recordCompletedOutcome(expiredGoalId, expiredRunId, result, {
+                status: "partial",
+                errorMessage: "the approval expired before it was decided; the action did not run",
+              });
+            })
+            .catch((err: unknown) => {
+              errorLine(
+                `[approval] expired-continuation of ${id.slice(0, 8)} failed: ${err instanceof Error ? err.message : String(err)}`,
+              );
             });
-          });
         } else {
           if (pending != null) {
             logLine(
@@ -1292,11 +1318,14 @@ export class GoalScheduler {
           errorLine(`[approval] resume of ${approvalId.slice(0, 8)} failed: ${msg}`);
           this.runStore.setStatus(turn.runId, "failed", { note: `resume failed: ${msg}` });
           this.goalOutcomeStore.add({
-            // Keyed by the run, like every other outcome this scheduler
-            // writes. A fresh id made this row unreachable from the run
-            // that produced it, so `runs show` reported "the run did not
-            // reach an outcome row" about a failure sitting in the table.
-            outcome_id: turn.runId,
+            // Fresh id, as the recovery writers use, because this runs
+            // in a catch: if `recordCompletedOutcome` already wrote a
+            // genuine result and a later statement threw, keying this
+            // row by the run would REPLACE that result and destroy the
+            // signed artifact with it. `run_id` is what makes it
+            // findable; the id only has to be unique.
+            outcome_id: crypto.randomUUID(),
+            run_id: turn.runId,
             goal_id: turn.goalId,
             motebit_id: this.motebitId,
             ran_at: Date.now(),
@@ -1598,6 +1627,7 @@ export class GoalScheduler {
     this.runStore.setStatus(run.run_id, status, { note: verdict.summary });
     this.goalOutcomeStore.add({
       outcome_id: crypto.randomUUID(),
+      run_id: run.run_id,
       goal_id: run.goal_id,
       motebit_id: this.motebitId,
       ran_at: Date.now(),
@@ -1626,21 +1656,6 @@ export class GoalScheduler {
         : { goal_id: run.goal_id, error: verdict.summary },
     );
     logLine(`[goal] recovered run ${run.run_id.slice(0, 8)} → ${status}`);
-  }
-
-  private async consumeAndDiscard(stream: AsyncGenerator<StreamChunk>): Promise<void> {
-    // Never let a drain reject escape — callers fire-and-forget (`void ...`),
-    // so a throw here (e.g. resumeAfterApproval's single-writer "Already
-    // processing" guard, #462, when a human turn is mid-flight on the shared
-    // runtime) would be an unhandled rejection. Log and retry next tick.
-    try {
-      for await (const _chunk of stream) {
-        // drain
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      errorLine(`[approval] release drain failed (will retry next tick): ${msg}`);
-    }
   }
 
   /**
@@ -1703,8 +1718,13 @@ export class GoalScheduler {
   ): Promise<void> {
     const full = result.responseText;
     let signedManifest: string | null = null;
+    // Nothing to sign is not something to sign. Signing an empty result
+    // produced a manifest over zero bytes, which `runs show` then
+    // rendered as "empty." immediately followed by "signed" — a
+    // signature presented as backing an artifact that does not exist.
     try {
-      const manifest = await this.runtime.signGoalArtifact(full, { goalId, runId });
+      const manifest =
+        full === "" ? null : await this.runtime.signGoalArtifact(full, { goalId, runId });
       signedManifest = manifest == null ? null : JSON.stringify(manifest);
     } catch (err: unknown) {
       logLine(
@@ -1715,6 +1735,7 @@ export class GoalScheduler {
     // all join on one id.
     this.goalOutcomeStore.add({
       outcome_id: runId,
+      run_id: runId,
       goal_id: goalId,
       motebit_id: this.motebitId,
       ran_at: Date.now(),

@@ -192,7 +192,13 @@ export async function handleRunsShow(config: CliConfig): Promise<void> {
     // did not reach an outcome row" about a row that exists and is
     // signed. Stated that confidently, a false negative is worse here
     // than a vague answer.
-    const outcome = moteDb.goalOutcomeStore.get(run.run_id);
+    // By the run LINK, not by id-equality. The live paths key the
+    // outcome by the run id and the recovery paths mint a fresh one on
+    // purpose, so an id lookup found only half of them — and reported
+    // "the run did not reach an outcome row" for exactly the interrupted
+    // and recovered runs this command exists to explain.
+    const outcomes = moteDb.goalOutcomeStore.listForRun(run.run_id);
+    const outcome = outcomes[0] ?? moteDb.goalOutcomeStore.get(run.run_id);
     console.log("\nResult");
     if (outcome == null) {
       console.log(dim("  none recorded — the run did not reach an outcome row."));
@@ -253,7 +259,13 @@ export async function handleRunsShow(config: CliConfig): Promise<void> {
       for (const e of evidence) {
         const p = e.evidence.provenance;
         if (p == null) continue;
-        console.log(`  ${e.tool} · ${p.digest.algorithm}:${p.digest.value.slice(0, 16)}…`);
+        // The source first, and the WHOLE digest. The instruction below
+        // says to re-fetch the record and compare — an abbreviated
+        // digest cannot be compared, and without the source there is
+        // nothing to fetch, which left the affordance unusable from the
+        // only reader that ships.
+        console.log(`  ${e.tool} · ${e.evidence.ref}`);
+        console.log(dim(`    ${p.digest.algorithm}:${p.digest.value}`));
         if (p.projection != null) console.log(dim(`    projection ${p.projection}`));
         const preview = p.span.replace(/\s+/g, " ").slice(0, 100);
         console.log(dim(`    span "${preview}${p.span.length > 100 ? "…" : ""}"`));

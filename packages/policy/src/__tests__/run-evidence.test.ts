@@ -155,6 +155,34 @@ describe("PolicyGate.recordEvidence — the sibling artifact recordResult names"
     expect(sink.entries).toEqual([]);
   });
 
+  it("guards the SOURCE too, not only the span", () => {
+    // A URL carries credentials in query parameters, so a fetch of
+    // `…?api_key=…` wrote the key into the pointer's ref, past a guard
+    // that only ever looked at the span.
+    const { gate, sink, ctx, decision } = setup();
+    gate.recordEvidence(ctx, decision, "read_url", {
+      ok: true,
+      data: "an ordinary page of text with nothing sensitive in it",
+      source_digest: DIGEST,
+      source_ref: "https://host/export?api_key=sk-live-AAAAAAAAAAAAAAAAAAAA",
+    });
+    expect(sink.entries).toEqual([]);
+  });
+
+  it("an ordinary query string is not mistaken for a credential", () => {
+    // The rule keys on the parameter NAME and needs a value of real
+    // length, so a search term or a page number does not cost anyone
+    // their evidence.
+    const { gate, sink, ctx, decision } = setup();
+    gate.recordEvidence(ctx, decision, "read_url", {
+      ok: true,
+      data: "results page",
+      source_digest: DIGEST,
+      source_ref: "https://host/search?q=quarterly+revenue&page=2&session=1",
+    });
+    expect(sink.entries).toHaveLength(1);
+  });
+
   it("does NOT catch every key format — the residual, stated rather than implied", () => {
     // The credential-class set keys on a shared pattern table whose
     // API_KEY rule allows a single separator, so `sk-proj-…` and `ghp_…`

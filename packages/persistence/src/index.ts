@@ -1449,6 +1449,14 @@ export interface GoalOutcome {
    * there was nothing left to sign and nothing for a returning owner to
    * read — the motebit's word for what it did was the only record.
    */
+  /**
+   * The run that produced this outcome.
+   *
+   * A field, not the id: live paths set `outcome_id = run_id` while the
+   * recovery paths mint a fresh id on purpose, so id-equality found only
+   * half the outcomes from a run.
+   */
+  run_id?: string;
   response_full?: string;
   /**
    * The serialized `ContentArtifactManifest` over `response_full`, or
@@ -1473,6 +1481,7 @@ interface GoalOutcomeRow {
   tokens_used: number | null;
   response_full: string | null;
   signed_manifest: string | null;
+  run_id: string | null;
 }
 
 function rowToGoalOutcome(row: GoalOutcomeRow): GoalOutcome {
@@ -1487,6 +1496,7 @@ function rowToGoalOutcome(row: GoalOutcomeRow): GoalOutcome {
     memories_formed: row.memories_formed,
     error_message: row.error_message,
     ...(row.tokens_used != null ? { tokens_used: row.tokens_used } : {}),
+    ...(row.run_id != null ? { run_id: row.run_id } : {}),
     ...(row.response_full != null ? { response_full: row.response_full } : {}),
     ...(row.signed_manifest != null ? { signed_manifest: row.signed_manifest } : {}),
   };
@@ -1495,16 +1505,20 @@ function rowToGoalOutcome(row: GoalOutcomeRow): GoalOutcome {
 export class SqliteGoalOutcomeStore {
   private stmtAdd: PreparedStatement;
   private stmtGet: PreparedStatement;
+  private stmtForRun: PreparedStatement;
   private stmtListForGoal: PreparedStatement;
   private stmtListRecent: PreparedStatement;
 
   constructor(db: DatabaseDriver) {
     this.stmtAdd = db.prepare(
       `INSERT OR REPLACE INTO goal_outcomes
-       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full, signed_manifest)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full, signed_manifest, run_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtGet = db.prepare(`SELECT * FROM goal_outcomes WHERE outcome_id = ?`);
+    this.stmtForRun = db.prepare(
+      `SELECT * FROM goal_outcomes WHERE run_id = ? ORDER BY ran_at DESC`,
+    );
     this.stmtListForGoal = db.prepare(
       `SELECT * FROM goal_outcomes WHERE goal_id = ? ORDER BY ran_at DESC LIMIT ?`,
     );
@@ -1527,6 +1541,7 @@ export class SqliteGoalOutcomeStore {
       outcome.tokens_used ?? null,
       outcome.response_full ?? null,
       outcome.signed_manifest ?? null,
+      outcome.run_id ?? null,
     );
   }
 
@@ -1540,6 +1555,15 @@ export class SqliteGoalOutcomeStore {
   get(outcomeId: string): GoalOutcome | null {
     const row = this.stmtGet.get(outcomeId) as GoalOutcomeRow | undefined;
     return row === undefined ? null : rowToGoalOutcome(row);
+  }
+
+  /**
+   * Every outcome a run produced, newest first. The reader's question is
+   * "what came of this run", and it must not depend on which code path
+   * happened to close it.
+   */
+  listForRun(runId: string): GoalOutcome[] {
+    return (this.stmtForRun.all(runId) as GoalOutcomeRow[]).map(rowToGoalOutcome);
   }
 
   listForGoal(goalId: string, limit = 10): GoalOutcome[] {

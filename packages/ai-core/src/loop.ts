@@ -403,12 +403,6 @@ export interface LoopPolicyGate {
   ): void;
   createTurnContext(runId?: string): TurnContext;
   /**
-   * Close the audit row `validate` opened for this call with the tool's
-   * outcome — the completion half of the intent/completion ledger. The
-   * loop calls it right after `tools.execute` returns or throws. Optional
-   * for duck-typed gates; the real `PolicyGate` implements it.
-   */
-  /**
    * Record the re-checkable evidence pointer for a call that content-
    * addressed what it read. Called right after `recordResult`, with the
    * tool's whole result rather than a verdict, because the digest and
@@ -420,6 +414,12 @@ export interface LoopPolicyGate {
     tool: string,
     result: ToolResult,
   ): void;
+  /**
+   * Close the audit row `validate` opened for this call with the tool's
+   * outcome — the completion half of the intent/completion ledger. The
+   * loop calls it right after `tools.execute` returns or throws. Optional
+   * for duck-typed gates; the real `PolicyGate` implements it.
+   */
   recordResult?(
     ctx: TurnContext,
     decision: PolicyDecision,
@@ -1469,7 +1469,18 @@ export async function* runTurnStreaming(
         // time a summary is written they are gone, and a span nobody
         // fetched must not be able to enter the record. No-ops unless the
         // tool attested a digest.
-        deps.policyGate.recordEvidence?.(turnCtx, decision, toolCall.name, result);
+        // Guarded: the evidence store raises on a bad write by design,
+        // and a secondary record must not be able to abort the turn
+        // whose tool has already run.
+        try {
+          deps.policyGate.recordEvidence?.(turnCtx, decision, toolCall.name, result);
+        } catch {
+          // Swallowed HERE and nowhere else: this module has no logger,
+          // and the alternative is aborting a turn whose tool already
+          // ran. The pointer's absence is still visible where it
+          // matters — `runs show` reports evidence it does not have, and
+          // never infers that nothing was read.
+        }
         turnCtx = deps.policyGate.recordToolCall(turnCtx);
 
         // Project the tool result into the AI-visible shape BEFORE

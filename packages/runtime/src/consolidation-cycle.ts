@@ -855,15 +855,21 @@ async function flushPhase(
   // which is the inverse of what not knowing its sensitivity should
   // mean. Unclassified is a reason to hold something for LESS time.
   //
-  // The certificate names the call, because the pointer is part of that
-  // call's record — the audit row itself may legitimately outlive it.
+  // The certificate names `run_evidence`, because that is what is
+  // deleted. It named `tool_audit` and erased only the evidence, which
+  // emitted a SIGNED, verifiable attestation that a tool-audit record
+  // had been flushed while that row was still there — and minted a
+  // second certificate for the same target when it later aged out. A
+  // deletion certificate is the proof of deletion under this repo's own
+  // self-attesting doctrine, so a mislabelled one is not a cosmetic
+  // slip; it is a false signed claim, which is worse than no claim.
   if (deps.runEvidenceSink?.enumerateStale && deps.runEvidenceSink.eraseForCall) {
     const cutoffTs = ctx.now - EVIDENCE_HORIZON_DAYS * MS_PER_DAY;
     for (const callId of deps.runEvidenceSink.enumerateStale(cutoffTs)) {
       if (ctx.signal.aborted) break;
       try {
         await deps.privacy.signFlushCert({
-          targetKind: "tool_audit",
+          targetKind: "run_evidence",
           targetId: callId,
           sensitivity: defaultSensitivity,
           reason: "retention_enforcement_post_classification",
@@ -884,10 +890,13 @@ async function flushPhase(
 /**
  * How long a re-checkable evidence pointer is kept.
  *
- * Matched to the medical/financial floor, the strictest finite tier,
- * because this row holds content retrieved from somewhere else and
- * nothing here can say what it contains. Long enough to answer "what did
- * it do while I was away" on any realistic return; far short of forever.
+ * Matched to the medical/financial tier. That is not the strictest
+ * finite tier — `Secret` is thirty days — and the choice is deliberate
+ * rather than maximal: this row holds content retrieved from somewhere
+ * else, which nothing here can classify, so it takes the floor used for
+ * the sensitive-but-not-secret tiers. Long enough to answer "what did it
+ * do while I was away" on any realistic return; far short of forever,
+ * which is what it inherited before.
  */
 const EVIDENCE_HORIZON_DAYS = 90;
 
