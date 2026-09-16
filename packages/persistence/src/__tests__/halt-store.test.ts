@@ -137,3 +137,24 @@ describe("SqliteHaltStore", () => {
     expect(db.haltStore.get("r")).toMatchObject({ origin: "remote", reason: "from my phone" });
   });
 });
+
+describe("SqliteCommandReplayStore", () => {
+  let db: MotebitDatabase;
+  beforeEach(() => {
+    db = createMotebitDatabase(":memory:");
+  });
+
+  it("records and refuses a repeat atomically", () => {
+    const now = Date.now();
+    expect(db.commandReplayStore.isReplay("sig-A", now, 600_000)).toBe(false);
+    expect(db.commandReplayStore.isReplay("sig-A", now, 600_000)).toBe(true);
+    expect(db.commandReplayStore.isReplay("sig-B", now, 600_000)).toBe(false);
+  });
+
+  it("forgets past the window — outside it the verifier has already refused the envelope", () => {
+    const t0 = 1_000_000;
+    expect(db.commandReplayStore.isReplay("sig-A", t0, 1000)).toBe(false);
+    expect(db.commandReplayStore.isReplay("sig-A", t0 + 500, 1000)).toBe(true);
+    expect(db.commandReplayStore.isReplay("sig-A", t0 + 2000, 1000)).toBe(false);
+  });
+});

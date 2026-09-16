@@ -421,6 +421,66 @@ describe("halt at the scheduler", () => {
     s.stop();
   });
 
+  it("when there is no abort channel the acknowledgement says so — it never claims a signal it did not send", async () => {
+    // The approval drains set `currentRunId` without a controller, so a
+    // halt landing there can stop nothing in flight. Claiming otherwise
+    // is the same overclaim in a new place.
+    db.goalStore.add(goal({ interval_ms: 3_600_000 }));
+    const first = mockRuntime(db, { pause: true });
+    const s1 = scheduler(db, first);
+    s1.start(999_999);
+    await settle(() => db.approvalStore.listAll("mote-test").length > 0);
+    s1.stop();
+    const [approval] = db.approvalStore.listAll("mote-test");
+    db.approvalStore.resolve(approval!.approval_id, "approved");
+
+    const second = mockRuntime(db);
+    let ackDuringCall: string | undefined;
+    (second.runtime as unknown as { invokeLocalTool: unknown }).invokeLocalTool = async () => {
+      // Halt lands while the approved call is executing.
+      const h = second.requestHalt({ reason: "stop" });
+      await second.runtime.honorHalts();
+      ackDuringCall = db.haltStore.get(h.halt_id)?.acknowledgement ?? "";
+      return { ok: true, data: "ran" };
+    };
+    const s2 = scheduler(db, second);
+    s2.start(999_999); // fires its own tick detached
+    await settle(() => ackDuringCall !== undefined);
+
+    expect(ackDuringCall).toContain("cannot be interrupted");
+    expect(ackDuringCall).not.toContain("signalled abort");
+    s2.stop();
+  });
+
+  it("a halted run still leaves a ledger record — only the failure COUNT is skipped", async () => {
+    db.goalStore.add(goal({ interval_ms: 3_600_000 }));
+    let release!: () => void;
+    const hold = new Promise<void>((r) => (release = r));
+    const m = mockRuntime(db, { holdStream: hold });
+    const s = scheduler(db, m);
+    s.start(999_999);
+    await settle(() => db.goalRunStore.listByStatus("mote-test", "running").length > 0);
+    m.requestHalt({});
+    await s.tickOnce();
+    release();
+    await new Promise((r) => setTimeout(r, 30));
+
+    const outcomes = db.goalOutcomeStore.listForGoal("goal-001");
+    expect(outcomes.some((o) => o.summary?.includes("stopped by halted"))).toBe(true);
+    expect(db.goalStore.get("goal-001")!.consecutive_failures).toBe(0);
+    s.stop();
+  });
+
+  it("stop() does not start consolidation while halted — the acknowledgement promised it would not", async () => {
+    const m = mockRuntime(db);
+    const s = scheduler(db, m);
+    m.requestHalt({});
+    s.start(999_999);
+    await s.tickOnce();
+    s.stop();
+    expect(m.consolidations).toBe(0);
+  });
+
   it("a goal-scoped halt stops that goal and leaves the others running", async () => {
     db.goalStore.add(goal({ goal_id: "goal-A" }));
     db.goalStore.add(goal({ goal_id: "goal-B" }));

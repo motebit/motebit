@@ -473,4 +473,23 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       "CREATE INDEX IF NOT EXISTS idx_halt_state_active ON halt_state (motebit_id, lifted_at)",
     ],
   },
+  {
+    version: 45,
+    description: "command_replay — shared replay memory for signed remote commands",
+    statements: [
+      // An in-memory guard is per-process, and a machine can run both
+      // `motebit run` and `motebit serve` — two peers announcing the
+      // same capability, either of which the relay may pick. A replayed
+      // `resume` landing on the sibling would lift a halt the sovereign
+      // had just applied, which is the act the guard exists to prevent.
+      // Shared and durable for the same reason the halt itself is.
+      // Rows live only as long as the envelope's freshness window;
+      // outside it the verifier has already refused the envelope.
+      `CREATE TABLE IF NOT EXISTS command_replay (
+        signature TEXT PRIMARY KEY,
+        seen_at INTEGER NOT NULL
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_command_replay_seen ON command_replay (seen_at)",
+    ],
+  },
 ];

@@ -33,6 +33,39 @@ describe("CommandReplayGuard", () => {
     expect(g.isReplay("sig-A", t0 + 2000)).toBe(false);
   });
 
+  it("uses a shared store when given one — a sibling process must see the same replay", () => {
+    // `motebit run` and `motebit serve` both announce
+    // `unattended_runtime`; the relay may route to either. A purely
+    // in-memory guard would let a replayed `resume` sail through the
+    // sibling of the process that saw the original.
+    const rows = new Map<string, number>();
+    const store = {
+      isReplay: (sig: string, now: number, windowMs: number) => {
+        for (const [k, at] of rows) if (now - at > windowMs) rows.delete(k);
+        if (rows.has(sig)) return true;
+        rows.set(sig, now);
+        return false;
+      },
+    };
+    const processA = new CommandReplayGuard(600_000, store);
+    const processB = new CommandReplayGuard(600_000, store);
+    expect(processA.isReplay("sig-A")).toBe(false);
+    expect(processB.isReplay("sig-A")).toBe(true);
+  });
+
+  it("a failing store falls back to in-memory rather than opening the door", () => {
+    const store = {
+      isReplay: () => {
+        throw new Error("database is locked");
+      },
+    };
+    const g = new CommandReplayGuard(600_000, store);
+    // Narrower than the shared set, never wider: the first call is new,
+    // the repeat is still caught.
+    expect(g.isReplay("sig-A")).toBe(false);
+    expect(g.isReplay("sig-A")).toBe(true);
+  });
+
   it("does not grow without bound", () => {
     const g = new CommandReplayGuard(1000);
     for (let i = 0; i < 50; i++) g.isReplay(`sig-${i}`, 1_000_000 + i);

@@ -262,6 +262,20 @@ export async function resolveAttachedAct(
       if (args !== undefined && typeof args !== "string") {
         throw bad(kind, 'param "args" must be a string');
       }
+      // The attached read/act surface carries no approval channel —
+      // the very next arm refuses `tool_execute` for anything needing
+      // approval on exactly that ground. `approvals` stopped being a
+      // read-only listing when it gained `approve`/`deny`, so the same
+      // refusal has to hold here: otherwise a frontend frame could
+      // resolve a queued R3/R4 call that the daemon then executes,
+      // routing around the consent surface rather than through it.
+      if (command === "approvals" && /^\s*(approve|deny)\b/i.test(args ?? "")) {
+        return {
+          ok: false,
+          error:
+            "deciding an approval requires a consent surface — the attached read/act surface carries no approval channel; decide from a chat-connected surface or the phone",
+        };
+      }
       // Relay-backed commands answer with the command layer's own
       // honest "relay not configured" copy — the coordinator's relay
       // credentials are never minted on behalf of a frontend frame.

@@ -1511,6 +1511,33 @@ export class SqliteGoalOutcomeStore {
   }
 }
 
+// === Command replay memory (shared across this machine's processes) ===
+
+/**
+ * Durable seen-signature set for signed remote commands (migration #45).
+ *
+ * `INSERT OR IGNORE` makes the check-and-record one atomic statement, so
+ * two processes racing the same replayed envelope cannot both conclude
+ * it is new.
+ */
+export class SqliteCommandReplayStore {
+  private stmtInsert: PreparedStatement;
+  private stmtPrune: PreparedStatement;
+
+  constructor(db: DatabaseDriver) {
+    this.stmtInsert = db.prepare(
+      `INSERT OR IGNORE INTO command_replay (signature, seen_at) VALUES (?, ?)`,
+    );
+    this.stmtPrune = db.prepare(`DELETE FROM command_replay WHERE seen_at < ?`);
+  }
+
+  /** True when this exact envelope was already recorded. Atomic. */
+  isReplay(signature: string, now: number, windowMs: number): boolean {
+    this.stmtPrune.run(now - windowMs);
+    return this.stmtInsert.run(signature, now).changes === 0;
+  }
+}
+
 // === Halt (withdrawing unattended autonomy) ===
 
 interface HaltRow {
@@ -3318,6 +3345,7 @@ export interface MotebitDatabase {
   approvalStore: SqliteApprovalStore;
   goalRunStore: SqliteGoalRunStore;
   haltStore: SqliteHaltStore;
+  commandReplayStore: SqliteCommandReplayStore;
   conversationStore: SqliteConversationStore;
   planStore: SqlitePlanStore;
   gradientStore: SqliteGradientStore;
@@ -3356,6 +3384,7 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   const approvalStore = new SqliteApprovalStore(driver);
   const goalRunStore = new SqliteGoalRunStore(driver);
   const haltStore = new SqliteHaltStore(driver);
+  const commandReplayStore = new SqliteCommandReplayStore(driver);
   const conversationStore = new SqliteConversationStore(driver);
   const planStore = new SqlitePlanStore(driver);
   const gradientStore = new SqliteGradientStore(driver);
@@ -3381,6 +3410,7 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     approvalStore,
     goalRunStore,
     haltStore,
+    commandReplayStore,
     conversationStore,
     planStore,
     gradientStore,

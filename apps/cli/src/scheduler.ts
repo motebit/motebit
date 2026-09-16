@@ -298,8 +298,12 @@ export class GoalScheduler {
         `[scheduler] stopped mid-run ${runId.slice(0, 8)} — closed as failed, will re-fire on schedule`,
       );
     }
-    // Best-effort memory consolidation on shutdown
-    void this.runtime.consolidationCycle();
+    // Best-effort memory consolidation on shutdown — unless a halt is in
+    // force, whose acknowledgement promised that no further consolidation
+    // would start. A promise that lapses at shutdown is not a promise.
+    if (this.runtime.haltInForce() == null) {
+      void this.runtime.consolidationCycle();
+    }
   }
 
   /** Run a single scheduler tick. Exposed for deterministic testing. */
@@ -774,8 +778,27 @@ export class GoalScheduler {
           // auto-pause the goal, so lifting the halt would silently not
           // be enough to start it again.
           if (err instanceof HaltAbort) {
-            this.runStore.setStatus(runId, "failed", {
-              note: `halted (${err.haltId.slice(0, 8)})`,
+            const note = `halted (${err.haltId.slice(0, 8)})`;
+            this.runStore.setStatus(runId, "failed", { note });
+            // Every run leaves a wire record regardless of outcome — the
+            // ledger is the semantic source of truth, and a run that was
+            // stopped is still a run that happened. Only the FAILURE
+            // COUNT is skipped: a stop the human asked for must not burn
+            // the goal's retry budget.
+            this.goalOutcomeStore.add({
+              outcome_id: runId,
+              goal_id: goal.goal_id,
+              motebit_id: this.motebitId,
+              ran_at: Date.now(),
+              status: "partial",
+              summary: `stopped by ${note}`,
+              tool_calls_made: 0,
+              memories_formed: 0,
+              error_message: null,
+            });
+            void this.runtime.goals.executed({
+              goal_id: goal.goal_id,
+              error: `stopped by ${note}`,
             });
             logLine(
               `[goal] ${goal.goal_id.slice(0, 8)} stopped by halt ${err.haltId.slice(0, 8)} — not counted as a failure`,
@@ -1471,14 +1494,27 @@ export class GoalScheduler {
       const run = this.runStore.get(runId);
       const coversThisRun = halt.goal_id == null || run?.goal_id === halt.goal_id;
       if (coversThisRun) {
-        this.currentAbort?.abort(new HaltAbort(halt.halt_id));
-        // "signalled", not "aborted": the signal is observed between
-        // stream chunks, so a tool call already in flight runs to its
-        // end. Claiming the run was aborted would be the same overclaim
-        // the two-timestamp design exists to prevent — one layer down.
-        stopped.push(
-          `signalled abort of run ${runId.slice(0, 8)} (a tool call already in flight finishes)`,
-        );
+        // Report what was DONE, never what was attempted. `currentRunId`
+        // is set by three paths but `currentAbort` by only one (the goal
+        // fire) — both approval drains execute with no abort channel at
+        // all. Deriving the sentence from the run id claimed a signal
+        // was sent while a recovered call ran to completion: this arc's
+        // recurring failure wearing one more disguise. The controller's
+        // presence is the fact, so it is what the sentence reads from.
+        const abort = this.currentAbort;
+        if (abort != null) {
+          abort.abort(new HaltAbort(halt.halt_id));
+          // "signalled", not "aborted": the signal is observed between
+          // stream chunks, so a tool call already in flight runs to its
+          // end.
+          stopped.push(
+            `signalled abort of run ${runId.slice(0, 8)} (a tool call already in flight finishes)`,
+          );
+        } else {
+          stopped.push(
+            `run ${runId.slice(0, 8)} is executing an approved call and cannot be interrupted — it will finish`,
+          );
+        }
       }
     }
     stopped.push(

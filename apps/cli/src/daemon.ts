@@ -7,6 +7,7 @@ import {
   MotebitRuntime,
   NullRenderer,
   CommandReplayGuard,
+  type CommandReplayStore,
   executeCommand,
   cmdSelfTest,
   PLANNING_TASK_ROUTER,
@@ -75,6 +76,18 @@ import {
  * replayed envelope has to be caught.
  */
 const commandReplayGuard = new CommandReplayGuard();
+
+/**
+ * Point the guard at this machine's shared store once the database is
+ * open. Both `motebit run` and `motebit serve` announce
+ * `unattended_runtime`, and the relay may route a command to either —
+ * so a replay must be visible to whichever process receives it.
+ */
+function useSharedReplayMemory(moteDb: { commandReplayStore: CommandReplayStore }): void {
+  sharedReplayGuard = new CommandReplayGuard(600_000, moteDb.commandReplayStore);
+}
+let sharedReplayGuard: CommandReplayGuard | null = null;
+const replayGuard = (): CommandReplayGuard => sharedReplayGuard ?? commandReplayGuard;
 
 export async function handleRun(config: CliConfig): Promise<void> {
   const explicitIdentity = config.identity != null && config.identity !== "";
@@ -180,6 +193,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
   // does not carry — absent means DEFAULT_GOVERNANCE_CONFIG.
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
+  useSharedReplayMemory(moteDb);
   const provider = createProvider(config, personalityConfig);
   const governance = deriveGovernanceForRuntime(fullConfig.governance);
 
@@ -454,7 +468,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
               // so a halt's durable record says the sovereign stopped
               // their motebit from somewhere else.
               const sig = (cmdMsg.envelope as { signature?: string } | undefined)?.signature;
-              if (typeof sig === "string" && commandReplayGuard.isReplay(sig)) {
+              if (typeof sig === "string" && replayGuard().isReplay(sig)) {
                 wsAdapter!.sendRaw(
                   JSON.stringify({
                     type: "command_response",
@@ -1000,6 +1014,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
   // provided, `governance` also drives approval thresholds.
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
+  useSharedReplayMemory(moteDb);
   // Direct mode doesn't need an LLM — skip provider creation to avoid requiring an API key
   const provider = config.direct ? undefined : createProvider(config, personalityConfig);
   const governance = deriveGovernanceForRuntime(fullConfig.governance);
@@ -1397,7 +1412,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
                 return;
               }
               const sig = (cmdMsg.envelope as { signature?: string } | undefined)?.signature;
-              if (typeof sig === "string" && commandReplayGuard.isReplay(sig)) {
+              if (typeof sig === "string" && replayGuard().isReplay(sig)) {
                 serveWsAdapter!.sendRaw(
                   JSON.stringify({
                     type: "command_response",
@@ -1444,7 +1459,13 @@ export async function handleServe(config: CliConfig): Promise<void> {
         // executing tasks.
         const serveHalt = runtimeRef.current?.haltInForce() ?? null;
         if (serveHalt != null) {
-          void runtimeRef.current?.honorHalts();
+          // Guarded like every other call site: the CLI registers no
+          // unhandledRejection handler, and `honorHalts` writes to
+          // SQLite, which throws on a busy database. A halted worker
+          // must refuse the task, not take the process down.
+          void runtimeRef.current?.honorHalts().catch((err: unknown) => {
+            log(`[halt] honoring failed: ${err instanceof Error ? err.message : String(err)}`);
+          });
           log(
             `Agent task ${task.task_id.slice(0, 8)}... refused — halted (${serveHalt.halt_id.slice(0, 8)})`,
           );

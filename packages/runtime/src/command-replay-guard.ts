@@ -18,11 +18,21 @@
  * genuinely separate commands carry different timestamps and so
  * different signatures.
  *
- * In-memory and per-process by design. It is a companion to the
- * freshness window, not a substitute for it: outside that window the
- * verifier has already refused the envelope, so nothing needs to be
- * remembered longer than the window itself.
+ * A companion to the freshness window, not a substitute for it: outside
+ * that window the verifier has already refused the envelope, so nothing
+ * needs to be remembered longer than the window itself.
+ *
+ * Supply a `store` wherever more than one process on a machine can
+ * receive these commands — `motebit run` and `motebit serve` both
+ * announce `unattended_runtime`, and the relay may pick either, so a
+ * replay landing on the sibling of the process that saw the original
+ * would sail through a purely in-memory guard.
  */
+export interface CommandReplayStore {
+  /** Record and report in one atomic step. */
+  isReplay(signature: string, now: number, windowMs: number): boolean;
+}
+
 export class CommandReplayGuard {
   private seen = new Map<string, number>();
 
@@ -30,8 +40,14 @@ export class CommandReplayGuard {
    * @param windowMs How long a signature is remembered. Defaults to
    * twice the verifier's freshness window, so an envelope can never age
    * out of here while it would still be accepted there.
+   * @param store Shared, durable memory. Without one the guard is
+   * per-process, which is only sufficient when this process is the only
+   * one that can receive these commands.
    */
-  constructor(private readonly windowMs = 600_000) {}
+  constructor(
+    private readonly windowMs = 600_000,
+    private readonly store?: CommandReplayStore,
+  ) {}
 
   /**
    * Record this envelope and report whether it has been accepted
@@ -40,6 +56,14 @@ export class CommandReplayGuard {
    * stranger fill the set.
    */
   isReplay(signature: string, now = Date.now()): boolean {
+    if (this.store) {
+      try {
+        return this.store.isReplay(signature, now, this.windowMs);
+      } catch {
+        // A storage failure must not open the door: fall back to the
+        // in-memory set, which is narrower but never wider.
+      }
+    }
     this.prune(now);
     if (this.seen.has(signature)) return true;
     this.seen.set(signature, now);
