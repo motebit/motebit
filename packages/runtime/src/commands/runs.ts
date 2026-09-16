@@ -31,6 +31,21 @@ import type { RunLedgerDetail } from "@motebit/sdk";
 /** How many runs a list answers with. A return view, not an archive. */
 const RECENT_LIMIT = 10;
 
+/**
+ * The run this was asked about, or "" for the list.
+ *
+ * `runs`, `runs list`, `runs show <id>` and the bare `runs <id>` all
+ * reach the same two answers. An id is never one of the verbs: run ids
+ * are uuids, so nothing is shadowed by accepting them.
+ */
+function parseTarget(args?: string): string {
+  const raw = (args ?? "").trim();
+  if (raw === "" || raw.toLowerCase() === "list") return "";
+  const show = /^show\s+(\S+)$/i.exec(raw);
+  if (show?.[1] != null) return show[1];
+  return raw;
+}
+
 function noLedger(): CommandResult {
   return {
     summary: "This surface cannot see the run ledger.",
@@ -50,10 +65,26 @@ export function cmdRuns(runtime: MotebitRuntime, args?: string): CommandResult {
   const ledger = runtime.runLedger;
   if (ledger == null) return noLedger();
 
-  const target = (args ?? "").trim();
+  // `runs list` and `runs show <id>` are what a person types who has
+  // ever used another tool, and every word after the verb was being
+  // read as a run id — so the list verb answered `No run matching
+  // "list"`, an absence about a run nobody asked for. The absence
+  // vocabulary this file is careful about is worth nothing if the
+  // parser manufactures one.
+  const target = parseTarget(args);
   if (target !== "") return showRun(runtime, ledger, target);
 
-  const runs = ledger.listRecent(RECENT_LIMIT);
+  // The LIST crosses the membrane too, not only the detail.
+  //
+  // Fixed on one of two paths first. `note` is free text written from a
+  // caught error — the scheduler sets it to `err.message` — so a run
+  // that failed against a token-bearing URL put that token in the
+  // summary, and `data` is serialized whole and returned through the
+  // relay. Same defect, same file, one function along.
+  const redact = (t: string): string => runtime.redactForRemoteDisclosure(t);
+  const runs = ledger
+    .listRecent(RECENT_LIMIT)
+    .map((r) => (r.note != null ? { ...r, note: redact(r.note) } : r));
   if (runs.length === 0) {
     return {
       summary: "No runs recorded yet.",
@@ -67,7 +98,12 @@ export function cmdRuns(runtime: MotebitRuntime, args?: string): CommandResult {
     if (r.evidence_count > 0) marks.push(`${r.evidence_count} checkable`);
     if (r.withheld_count > 0) marks.push(`${r.withheld_count} withheld`);
     const suffix = marks.length > 0 ? ` · ${marks.join(" · ")}` : "";
-    return `${r.run_id.slice(0, 8)}  ${r.goal_id.slice(0, 8)}  ${r.status}${suffix}`;
+    // The note is rendered, not merely fetched. Blocking runs are listed
+    // first BECAUSE they are waiting on a person, and a line that says
+    // `interrupted` without saying what is needed sends that person
+    // looking for the reason the row already has.
+    const why = r.note != null && r.note !== "" ? `\n    ${r.note}` : "";
+    return `${r.run_id.slice(0, 8)}  ${r.goal_id.slice(0, 8)}  ${r.status}${suffix}${why}`;
   });
 
   return {

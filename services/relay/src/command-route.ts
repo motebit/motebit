@@ -60,6 +60,19 @@ const RELAY_SIDE_COMMANDS = new Set(["balance", "deposits", "discover", "proposa
 /** The subset of the above that can change something. See the 404 copy. */
 const MUTATING_UNATTENDED_COMMANDS = new Set(["halt", "resume", "approvals"]);
 
+/**
+ * The subset whose answer is a per-machine DATABASE, not a per-motebit
+ * fact — so which runtime answers changes what the answer is.
+ *
+ * `halt` and `resume` are the same act wherever they land, so the relay
+ * may pick. An approval queue and a run ledger are local records: a
+ * laptop's ledger answered from a VPS is a different, and wrong, answer.
+ * Keyed by that property rather than by "is unattended", which is why
+ * adding `runs` to the unattended set silently made this say "each with
+ * its own approval queue" about a question with no queue in it.
+ */
+const PER_MACHINE_DATABASE_COMMANDS = new Set(["approvals", "runs"]);
+
 const UNATTENDED_RUNTIME_COMMANDS = new Set([
   "halt",
   "resume",
@@ -302,15 +315,16 @@ async function forwardCommandToAgent(
       // advice for someone away from both machines. That is precisely
       // the situation this arc exists for, so the guard was breaking
       // the feature to protect a different one.
-      const manyMachines = command === "approvals" && allDeclared && devices.size > 1;
+      const manyMachines =
+        PER_MACHINE_DATABASE_COMMANDS.has(command) && allDeclared && devices.size > 1;
       candidates = manyMachines ? [] : unattended;
       emptyReason = manyMachines
-        ? `This motebit has unattended runtimes on ${devices.size} different machines, each with its own approval queue, so the relay cannot choose one — run this command on the machine you mean, or stop the runtime you do not`
+        ? `This motebit has unattended runtimes on ${devices.size} different machines, each with its own records, so the relay cannot choose one — run this command on the machine you mean, or stop the runtime you do not`
         : "No unattended runtime is connected";
     } else if (command !== "approvals") {
-      // `halt`/`resume` get no fallback: a daemon too old to announce
-      // the capability is too old to honor them, and "not delivered" is
-      // the truth there.
+      // Everything but `approvals` gets no fallback: a daemon too old to
+      // announce the capability is too old to honor a halt or to hold a
+      // run ledger, and "not delivered" is the truth there.
       candidates = [];
       emptyReason = "No unattended runtime is connected";
     } else {
@@ -384,9 +398,15 @@ async function forwardCommandToAgent(
       // relay looking broken instead of the command looking undelivered.
       reject(
         new HTTPException(404, {
-          message: UNATTENDED_RUNTIME_COMMANDS.has(command)
-            ? "The runtime's connection is gone — nothing was delivered, so nothing was stopped or decided"
-            : "No reachable device",
+          // Split like its sibling above: only a verb that could have
+          // CHANGED something gets told nothing was changed. The other
+          // branch was corrected for this and this one was left saying
+          // it, which answers a question a reader never asked.
+          message: !UNATTENDED_RUNTIME_COMMANDS.has(command)
+            ? "No reachable device"
+            : MUTATING_UNATTENDED_COMMANDS.has(command)
+              ? "The runtime's connection is gone — nothing was delivered, so nothing was stopped or decided"
+              : "The runtime's connection is gone — nothing was delivered, so this is not a report that nothing happened",
         }),
       );
     }

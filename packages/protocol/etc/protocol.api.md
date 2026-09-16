@@ -3636,7 +3636,7 @@ export interface RunEvidenceEntry {
     withheld_reason?: RunEvidenceWithheldReason;
 }
 
-// @public (undocumented)
+// @public
 export interface RunEvidenceSink {
     countForCall?(callId: string): number;
     enumerateStale?(beforeTimestamp: number): string[];
@@ -3686,10 +3686,9 @@ export type RunLedgerLookup = {
     readonly kind: "missing";
 };
 
-// @public (undocumented)
+// @public
 export interface RunLedgerReader {
     get(runIdOrPrefix: string): RunLedgerLookup;
-    // (undocumented)
     listRecent(limit: number): RunLedgerSummary[];
 }
 

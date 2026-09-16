@@ -171,6 +171,53 @@ describe("runs — the return view from another surface", () => {
     expect(r.summary).not.toContain("No run matching");
   });
 
+  it("the list payload crosses the membrane too, not only the detail's", () => {
+    // `note` is written from a caught error, so a run that failed
+    // against a token-bearing URL carried that token into the summary
+    // row — and `data` is serialized whole through the relay. The
+    // detail path was fixed first and this sibling was not.
+    const r = cmdRuns(
+      runtimeWith({
+        listRecent: () => [
+          {
+            run_id: "run-abcdef0123",
+            goal_id: "goal-123456",
+            status: "interrupted",
+            started_at: 1,
+            signed: false,
+            evidence_count: 0,
+            withheld_count: 0,
+            note: "fetch failed for key sk-live-AAAAAAAAAAAAAAAA",
+          },
+        ],
+        get: () => ({ kind: "missing" as const }),
+      }),
+    );
+    expect(JSON.stringify(r.data)).not.toContain("sk-live");
+    expect(r.detail).not.toContain("sk-live");
+    // And it is RENDERED, not merely fetched and dropped: a line that
+    // says `interrupted` without saying why sends the reader looking
+    // for a reason the row already holds.
+    expect(r.detail).toContain("fetch failed");
+  });
+
+  it("`list` and `show <id>` are verbs, not run ids", () => {
+    // Every word after the verb used to be read as an id, so `runs
+    // list` answered "No run matching \"list\"" — an absence about a
+    // run nobody asked about, from the command built to stop exactly
+    // that.
+    const ledger = {
+      listRecent: () => [],
+      get: (id: string) =>
+        id === "run-abcd"
+          ? ({ kind: "found", run: DETAIL } as const)
+          : ({ kind: "missing" } as const),
+    };
+    expect(cmdRuns(runtimeWith(ledger), "list").summary).toBe("No runs recorded yet.");
+    expect(cmdRuns(runtimeWith(ledger), "show run-abcd").summary).toContain("run-abcd");
+    expect(cmdRuns(runtimeWith(ledger), "run-abcd").summary).toContain("run-abcd");
+  });
+
   it("an unknown run is not reported as an empty one", () => {
     const r = cmdRuns(
       runtimeWith({ listRecent: () => [], get: () => ({ kind: "missing" as const }) }),

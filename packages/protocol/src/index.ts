@@ -3509,15 +3509,6 @@ export interface RunLedgerDetail extends RunLedgerSummary {
 }
 
 /**
- * Where the return view gets its answer.
- *
- * Registered by the surface that owns the run ledger — today the
- * daemon, which is the only one that has it. A runtime with no reader
- * answers that it cannot see the ledger, which is the honest reply from
- * a process that did not do the work, and is not the same as saying
- * nothing happened.
- */
-/**
  * What a lookup found — three outcomes, never collapsed into two.
  *
  * A prefix that matches several runs is not a prefix that matches none.
@@ -3530,12 +3521,33 @@ export type RunLedgerLookup =
   | { readonly kind: "ambiguous"; readonly matches: readonly string[] }
   | { readonly kind: "missing" };
 
+/**
+ * Where the return view gets its answer.
+ *
+ * Registered by the surface that owns the run ledger — today the
+ * daemon, which is the only one that has it. A runtime with no reader
+ * answers that it cannot see the ledger, which is the honest reply from
+ * a process that did not do the work, and is not the same as saying
+ * nothing happened.
+ */
 export interface RunLedgerReader {
+  /** Newest first, with runs that are holding a goal raised to the top. */
   listRecent(limit: number): RunLedgerSummary[];
   /** Accepts a full id or the short prefix a person reads off a list. */
   get(runIdOrPrefix: string): RunLedgerLookup;
 }
 
+/**
+ * Where an evidence pointer is kept, and erased.
+ *
+ * Separate from the audit sink because the two have different retention
+ * floors: an evidence row carries verbatim retrieved content where the
+ * audit row carries redacted arguments, so it is the more revealing of
+ * the pair and must die at least as early. Implemented by the surface
+ * that owns durable storage; a runtime with no sink records nothing,
+ * which the return view reports as "no pointer was kept" rather than as
+ * "nothing was read".
+ */
 export interface RunEvidenceSink {
   record(entry: RunEvidenceEntry): void;
   /** Every pointer produced by one run, oldest first. */

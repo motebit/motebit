@@ -341,8 +341,8 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
   });
 
   it("a HALT still reaches a runtime when the two are on different machines", async () => {
-    // The many-machines refusal is about QUEUES, and it belongs to
-    // `approvals` alone. A halt delivered to either machine is
+    // The many-machines refusal is about per-machine RECORDS, so it
+    // belongs to `approvals` and `runs`. A halt delivered to either is
     // truthful — the acknowledgement is per executor and names what
     // that executor stopped — and the halt is durable state the other
     // machine honors on its own next tick. Refusing it told a sovereign
@@ -362,6 +362,32 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     void postCommand(AGENT_ID, { command: "halt", envelope });
     await new Promise((r) => setTimeout(r, 50));
     expect(laptop.sentTo.length + vps.sentTo.length).toBeGreaterThan(0);
+  });
+
+  it("two run LEDGERS on different machines are refused, like two queues", async () => {
+    // The guard was keyed on "is this the approvals command", so adding
+    // `runs` to the unattended set let the relay pick a machine for a
+    // question whose answer IS that machine's database — and the
+    // laptop's night of work would read as an empty ledger from the
+    // VPS. Same false empty, one command along.
+    const laptop = fakePeer("dev-1", ["background", "unattended_runtime"]);
+    const vps = fakePeer("dev-2", ["background", "unattended_runtime"]);
+    relay.connections.set(AGENT_ID, [laptop.peer, vps.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "runs",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    const { status, json } = await postCommand(AGENT_ID, { command: "runs", envelope });
+    expect(status).toBe(404);
+    expect(JSON.stringify(json)).toMatch(/2 different machines/i);
+    // And it does not tell a reader of a read-only question that
+    // nothing was stopped or decided.
+    expect(JSON.stringify(json)).not.toMatch(/stopped or decided/i);
+    expect(laptop.sentTo).toEqual([]);
+    expect(vps.sentTo).toEqual([]);
   });
 
   it("a `runs` question goes to the runtime that HAS the ledger", async () => {
