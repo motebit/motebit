@@ -53,17 +53,41 @@ describe("CommandReplayGuard", () => {
     expect(processB.isReplay("sig-A")).toBe(true);
   });
 
-  it("a failing store falls back to in-memory rather than opening the door", () => {
+  it("a failing store refuses rather than degrading to the per-process set", () => {
+    // This test asserted the opposite, and the comment it asserted said
+    // the fallback was "narrower, never wider". It is wider exactly
+    // where it matters: the shared store exists to catch a replay
+    // landing on the SIBLING process, which a per-process set cannot
+    // see at all. A busy database would have let a captured `resume`
+    // accepted by `motebit run` be replayed to `motebit serve` inside
+    // the freshness window, lifting a halt the sovereign had applied.
     const store = {
       isReplay: () => {
         throw new Error("database is locked");
       },
     };
     const g = new CommandReplayGuard(600_000, store);
-    // Narrower than the shared set, never wider: the first call is new,
-    // the repeat is still caught.
-    expect(g.isReplay("sig-A")).toBe(false);
     expect(g.isReplay("sig-A")).toBe(true);
+    expect(g.isReplay("sig-never-seen")).toBe(true);
+  });
+
+  it("a refusal says WHICH refusal it is", () => {
+    // "You already sent this" and "I could not check" mean opposite
+    // things to whoever sent the command, and reporting the first for
+    // the second is a confident wrong diagnosis on the one vocabulary
+    // where being told nothing happened matters most.
+    const seen = new CommandReplayGuard(600_000);
+    expect(seen.check("sig-A")).toEqual({ accepted: true });
+    expect(seen.check("sig-A")).toMatchObject({ accepted: false, reason: "replay" });
+
+    const broken = new CommandReplayGuard(600_000, {
+      isReplay: () => {
+        throw new Error("database is locked");
+      },
+    });
+    const verdict = broken.check("sig-A");
+    expect(verdict).toMatchObject({ accepted: false, reason: "store_unavailable" });
+    expect(verdict.accepted === false && verdict.message).toContain("database is locked");
   });
 
   it("does not grow without bound", () => {

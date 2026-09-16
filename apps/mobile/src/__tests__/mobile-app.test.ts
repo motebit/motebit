@@ -777,9 +777,35 @@ describe("MobileApp.sendRemoteCommand", () => {
 
   it("a disconnected runtime says NOT DELIVERED — never that something stopped", async () => {
     stubFetch(503, { message: "Agent not connected" });
-    await expect(app.sendRemoteCommand("halt")).rejects.toThrow(/nothing was delivered/);
+    await expect(app.sendRemoteCommand("halt")).rejects.toThrow(/nothing was delivered/i);
     stubFetch(404, { message: "no connection" });
-    await expect(app.sendRemoteCommand("halt")).rejects.toThrow(/nothing was delivered/);
+    await expect(app.sendRemoteCommand("halt")).rejects.toThrow(/nothing was delivered/i);
+  });
+
+  it("an undelivered command carries the relay's OWN reason, not a guess", async () => {
+    // "Not connected" is only one reason the relay refuses. It also
+    // refuses when several surfaces could answer and it cannot tell
+    // which is the daemon — and that refusal names the fix. Replacing
+    // it with "the runtime is not connected" was a confident wrong
+    // diagnosis that threw away the only actionable sentence.
+    stubFetch(404, {
+      message:
+        "More than one connected surface could answer and none announces unattended_runtime — update the daemon (npm i -g motebit@latest) and reconnect",
+    });
+    const err = (await app.sendRemoteCommand("halt").catch((e: unknown) => e)) as Error;
+    expect(err.message).toContain("update the daemon");
+    expect(err.message).toMatch(/nothing (was delivered|has been stopped)/i);
+    expect(err.message).not.toContain("The runtime is not connected");
+  });
+
+  it("a delivered-but-unanswered command is not reported as undelivered", async () => {
+    // 504 means the relay DID deliver and the runtime did not answer in
+    // time. Falling through to a raw status line let a person read that
+    // as "nothing landed" and send the stop again.
+    stubFetch(504, { summary: "Agent did not respond in time." });
+    const err = (await app.sendRemoteCommand("halt").catch((e: unknown) => e)) as Error;
+    expect(err.message).toContain("Delivered");
+    expect(err.message).not.toMatch(/nothing was delivered/i);
   });
 
   it("any other failure surfaces the status and body", async () => {

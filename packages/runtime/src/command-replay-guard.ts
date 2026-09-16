@@ -33,6 +33,10 @@ export interface CommandReplayStore {
   isReplay(signature: string, now: number, windowMs: number): boolean;
 }
 
+/** Why a command was refused — "already sent" and "could not check" are not the same answer. */
+export type ReplayVerdict =
+  { accepted: true } | { accepted: false; reason: "replay" | "store_unavailable"; message: string };
+
 export class CommandReplayGuard {
   private seen = new Map<string, number>();
 
@@ -42,7 +46,9 @@ export class CommandReplayGuard {
    * out of here while it would still be accepted there.
    * @param store Shared, durable memory. Without one the guard is
    * per-process, which is only sufficient when this process is the only
-   * one that can receive these commands.
+   * one that can receive these commands. When a store IS wired and it
+   * throws, the command is refused rather than checked against the
+   * narrower per-process set — see `isReplay`.
    */
   constructor(
     private readonly windowMs = 600_000,
@@ -56,18 +62,56 @@ export class CommandReplayGuard {
    * stranger fill the set.
    */
   isReplay(signature: string, now = Date.now()): boolean {
+    return !this.check(signature, now).accepted;
+  }
+
+  /**
+   * The same decision, with the REASON attached.
+   *
+   * A refusal has two causes that mean opposite things to whoever sent
+   * the command — "you already sent this" and "I could not check" — and
+   * reporting the first for the second is a confident wrong diagnosis
+   * about the one vocabulary where being told nothing happened matters
+   * most. Callers that surface a message use this; `isReplay` is the
+   * boolean shorthand for callers that only gate.
+   */
+  check(signature: string, now = Date.now()): ReplayVerdict {
     if (this.store) {
       try {
-        return this.store.isReplay(signature, now, this.windowMs);
-      } catch {
-        // A storage failure must not open the door: fall back to the
-        // in-memory set, which is narrower but never wider.
+        return this.store.isReplay(signature, now, this.windowMs)
+          ? {
+              accepted: false,
+              reason: "replay",
+              message: "this envelope has already been accepted (replay)",
+            }
+          : { accepted: true };
+      } catch (err) {
+        // Refuse, do not degrade. The shared store exists precisely to
+        // catch a replay landing on the SIBLING process, which a
+        // per-process set cannot see: with `motebit run` and
+        // `motebit serve` on one machine, a busy database would let a
+        // captured `resume` accepted by one be replayed to the other
+        // inside the freshness window, lifting a halt the sovereign had
+        // just applied. Falling back is not "narrower" there, it is
+        // exactly the hole the store was added for. Refusing costs a
+        // retry of a legitimate command; degrading costs the guarantee.
+        return {
+          accepted: false,
+          reason: "store_unavailable",
+          message: `the replay record could not be read, so this command was refused rather than run unchecked (${err instanceof Error ? err.message : String(err)})`,
+        };
       }
     }
     this.prune(now);
-    if (this.seen.has(signature)) return true;
+    if (this.seen.has(signature)) {
+      return {
+        accepted: false,
+        reason: "replay",
+        message: "this envelope has already been accepted (replay)",
+      };
+    }
     this.seen.set(signature, now);
-    return false;
+    return { accepted: true };
   }
 
   /**

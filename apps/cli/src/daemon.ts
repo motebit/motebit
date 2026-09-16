@@ -236,6 +236,12 @@ export async function handleRun(config: CliConfig): Promise<void> {
     DeviceCapability.Background,
   ]);
 
+  // The goal daemon is ONE executor across restarts. Without a stable
+  // id, every restart re-honors an active halt and appends another
+  // acknowledgement, so a night of three restarts reports three
+  // processes stopped on a machine that ran one.
+  runtime.setHaltExecutorId(`run@${fullConfig.device_id ?? "unknown"}`);
+
   // Start goal scheduler
   const goals = moteDb.goalStore.list(motebitId);
   const scheduler = new GoalScheduler(
@@ -468,15 +474,14 @@ export async function handleRun(config: CliConfig): Promise<void> {
               // so a halt's durable record says the sovereign stopped
               // their motebit from somewhere else.
               const sig = (cmdMsg.envelope as { signature?: string } | undefined)?.signature;
-              if (typeof sig === "string" && replayGuard().isReplay(sig)) {
+              const replay =
+                typeof sig === "string" ? replayGuard().check(sig) : ({ accepted: true } as const);
+              if (!replay.accepted) {
                 wsAdapter!.sendRaw(
                   JSON.stringify({
                     type: "command_response",
                     id: cmdMsg.id,
-                    result: {
-                      summary:
-                        "command_request rejected: this envelope has already been accepted (replay)",
-                    },
+                    result: { summary: `command_request rejected: ${replay.message}` },
                   }),
                 );
                 return;
@@ -1424,15 +1429,14 @@ export async function handleServe(config: CliConfig): Promise<void> {
                 return;
               }
               const sig = (cmdMsg.envelope as { signature?: string } | undefined)?.signature;
-              if (typeof sig === "string" && replayGuard().isReplay(sig)) {
+              const replay =
+                typeof sig === "string" ? replayGuard().check(sig) : ({ accepted: true } as const);
+              if (!replay.accepted) {
                 serveWsAdapter!.sendRaw(
                   JSON.stringify({
                     type: "command_response",
                     id: cmdMsg.id,
-                    result: {
-                      summary:
-                        "command_request rejected: this envelope has already been accepted (replay)",
-                    },
+                    result: { summary: `command_request rejected: ${replay.message}` },
                   }),
                 );
                 return;
@@ -1532,42 +1536,6 @@ export async function handleServe(config: CliConfig): Promise<void> {
       log("Task dispatch: connected (WebSocket)");
     }
 
-    // Deliberately outside the relay branch above. Serve executes work
-    // through its MCP `motebit_task` tool whether or not a relay URL is
-    // configured, and enforcement already refuses at the runtime
-    // chokepoint either way — but nothing here would CALL `honorHalts`,
-    // so a local `motebit halt` would sit un-acknowledged forever and
-    // every surface would report "stop requested, no acknowledgement"
-    // about a worker that was in fact refusing every task. Silence that
-    // means the opposite of what happened is the defect this whole
-    // branch exists to remove.
-    //
-    // The stopper says what stopping means here: no new dispatched task
-    // is accepted. One already running is not cancelled, and the
-    // wording says so rather than implying a kill.
-    runtimeRef.current?.onHalt(
-      () => "no further dispatched tasks will be accepted (one already running finishes)",
-    );
-    // Serve announces `unattended_runtime`, so the relay may route a
-    // goal-scoped halt here — and a person can only send the 8-char
-    // prefix `motebit goal list` prints. Without a resolver in this
-    // process too, the same command would succeed or fail depending on
-    // which peer the relay happened to pick.
-    runtimeRef.current?.setGoalIdResolver((prefix) => {
-      const match = moteDb.goalStore
-        .list(motebitId)
-        .find((g) => g.goal_id === prefix || g.goal_id.startsWith(prefix));
-      return match?.goal_id ?? null;
-    });
-    const serveHaltTicker = setInterval(() => {
-      void runtimeRef.current?.honorHalts().catch((err: unknown) => {
-        log(
-          `[halt] honoring failed (will retry): ${err instanceof Error ? err.message : String(err)}`,
-        );
-      });
-    }, 15_000);
-    serveHaltTicker.unref?.();
-
     try {
       const toolNames = runtime
         .getToolRegistry()
@@ -1658,6 +1626,47 @@ export async function handleServe(config: CliConfig): Promise<void> {
     }
   }
 
+  // Serve honors halts on EVERY transport, not just the relay-connected
+  // one. It executes work through its MCP `motebit_task` tool whether a
+  // relay URL is configured or not, and over stdio as well as http —
+  // enforcement already refuses at the runtime chokepoint in all of
+  // them, but nothing here would CALL `honorHalts`, so a local
+  // `motebit halt` would sit un-acknowledged forever and every surface
+  // would report "stop requested, no acknowledgement" about a worker
+  // that was in fact refusing every task. Silence that means the
+  // opposite of what happened is the defect this branch exists to
+  // remove.
+  //
+  // Serve is the OTHER long-lived executor on this machine and stops
+  // different work, so it takes its own stable id — never the daemon's,
+  // never a fresh one per restart.
+  runtimeRef.current?.setHaltExecutorId(`serve@${deviceId}`);
+  // The stopper says what stopping means here: no new dispatched task
+  // is accepted. One already running is not cancelled, and the wording
+  // says so rather than implying a kill.
+  const unregisterServeHalt = runtimeRef.current?.onHalt(
+    () => "no further dispatched tasks will be accepted (one already running finishes)",
+  );
+  // Serve announces `unattended_runtime`, so the relay may route a
+  // goal-scoped halt here — and a person can only send the 8-char
+  // prefix `motebit goal list` prints. Without a resolver in this
+  // process too, the same command would succeed or fail depending on
+  // which peer the relay happened to pick.
+  runtimeRef.current?.setGoalIdResolver((prefix) => {
+    const match = moteDb.goalStore
+      .list(motebitId)
+      .find((g) => g.goal_id === prefix || g.goal_id.startsWith(prefix));
+    return match?.goal_id ?? null;
+  });
+  const serveHaltTicker = setInterval(() => {
+    void runtimeRef.current?.honorHalts().catch((err: unknown) => {
+      log(
+        `[halt] honoring failed (will retry): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+  }, 15_000);
+  serveHaltTicker.unref?.();
+
   // Graceful shutdown with safety timeout
   const shutdown = async (): Promise<void> => {
     log("\nShutting down MCP server...");
@@ -1669,6 +1678,12 @@ export async function handleServe(config: CliConfig): Promise<void> {
       await mcpServer.stop();
       // Release the runtime-host socket so a successor can elect.
       await runtimeHostServer.close().catch(() => {});
+      // Released explicitly: if handleServe is ever re-entered in this
+      // process, a surviving ticker would keep honoring halts against a
+      // stale runtime and each surviving stopper would add another
+      // sentence to every future acknowledgement.
+      clearInterval(serveHaltTicker);
+      unregisterServeHalt?.();
       runtime.stop();
       moteDb.close();
     } catch (err: unknown) {

@@ -678,14 +678,25 @@ export class MotebitRuntime {
    */
   private honorQueue: Promise<void> = Promise.resolve();
   /**
-   * Identifies THIS PROCESS, not this device. A machine can run
+   * Identifies THIS EXECUTOR, not this device. A machine can run
    * `motebit run` and `motebit serve` at once — same device id, same
    * database, different unattended work — and each must honor a halt
    * for itself. Keying acknowledgement by device would let whichever
    * process got there first mark the halt honored for both, after which
    * the other skipped it and kept working.
+   *
+   * An executor is a ROLE, not a process lifetime. A long-lived surface
+   * passes a stable id (`setHaltExecutorId`) so a daemon that restarts
+   * three times overnight is still one executor — otherwise every
+   * restart re-honors the same active halt, appends another
+   * acknowledgement row, and `halt-status` reports "3 processes
+   * stopped" on a machine that only ever ran one. That is the same
+   * over-reporting the per-halt acknowledgement column was removed for.
+   *
+   * The default is per-process, which is the honest id for a surface
+   * that really is one of many short-lived ones (a REPL session).
    */
-  private readonly executorId = `${typeof process !== "undefined" && process.pid != null ? process.pid : "x"}-${randomSuffix()}`;
+  private executorId = `${typeof process !== "undefined" && process.pid != null ? process.pid : "x"}-${randomSuffix()}`;
   private _signingKeysErased = false;
   private _logger: { warn(message: string, context?: Record<string, unknown>): void };
   /**
@@ -2876,9 +2887,22 @@ export class MotebitRuntime {
     return this.goalIdResolver?.(prefix) ?? null;
   }
 
-  /** Identifies this PROCESS — see `executorId`. Readers use it to ask "have I stopped". */
+  /** Identifies this EXECUTOR — see `executorId`. Readers use it to ask "have I stopped". */
   get haltExecutorId(): string {
     return this.executorId;
+  }
+
+  /**
+   * Name this executor by its ROLE, so it survives a restart.
+   *
+   * Call it once at startup, before anything honors a halt, with an id
+   * that is stable for this role on this machine — the CLI daemon uses
+   * `run@<device>` and `serve@<device>`. Two roles on one machine must
+   * not share an id (that was the original defect); one role across
+   * restarts must not have two (that is this one).
+   */
+  setHaltExecutorId(id: string): void {
+    this.executorId = id;
   }
 
   async *resumeAfterApproval(approved: boolean): AsyncGenerator<StreamChunk> {

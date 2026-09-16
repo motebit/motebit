@@ -1628,6 +1628,23 @@ export class MobileApp {
    * envelopes will not verify, and this says so rather than looking
    * like the command was refused.
    */
+  private static extractRelayReason(body: string): string {
+    // The relay answers JSON with its reason under `message` or
+    // `summary`; a proxy in front of it may answer plain text. Take
+    // whichever is there, and nothing if neither is.
+    try {
+      const parsed = JSON.parse(body) as Record<string, unknown>;
+      for (const key of ["message", "summary", "error"]) {
+        const v = parsed[key];
+        if (typeof v === "string" && v.trim() !== "") return v.trim();
+      }
+      return "";
+    } catch {
+      const trimmed = body.trim();
+      return trimmed.length > 0 && trimmed.length <= 400 ? trimmed : "";
+    }
+  }
+
   async sendRemoteCommand(command: string, args?: string): Promise<CommandResult> {
     const syncUrl = await this.getSyncUrl();
     if (!syncUrl) throw new Error("No relay configured — connect in Settings > Sync");
@@ -1680,9 +1697,18 @@ export class MobileApp {
         );
       }
       if (res.status === 404 || res.status === 503) {
-        // Not delivered is not stopped. Say which one happened.
+        // Not delivered is not stopped. Say which one happened — and
+        // carry the relay's own reason, because "not connected" is only
+        // one of them. The relay also refuses when several surfaces
+        // could answer and it cannot tell which is the daemon, and that
+        // refusal names the fix. Overwriting it with "not connected"
+        // was a confident wrong diagnosis that threw away the only
+        // actionable sentence.
+        const reason = MobileApp.extractRelayReason(text);
         throw new Error(
-          `The runtime is not connected, so nothing was delivered (${res.status}). Nothing has been stopped or decided.`,
+          reason !== ""
+            ? `Nothing was delivered (${res.status}), so nothing has been stopped or decided. ${reason}`
+            : `The runtime is not connected, so nothing was delivered (${res.status}). Nothing has been stopped or decided.`,
         );
       }
       if (res.status === 504) {

@@ -109,6 +109,20 @@ export function cmdApprovals(runtime: MotebitRuntime, args?: string): CommandRes
   }
 
   // ── List ──
+  // A surface with no readable queue must say so, never report an empty
+  // one. The two are opposite answers to "is anything waiting on me",
+  // and the relay's compatibility fallback can deliver this command to
+  // a surface that is not the daemon — which would then answer "No
+  // pending approvals" while the daemon held a real one. The decide
+  // path above already refuses honestly; this one used to agree with
+  // whatever the caller feared least.
+  if (store?.listPending == null && !runtime.hasPendingApproval) {
+    return {
+      summary: "This surface cannot list approvals — it has no readable approval queue.",
+      detail:
+        "That is not the same as an empty queue. Ask the process that runs unattended work (`motebit run`), which owns the queue this would have read.",
+    };
+  }
   const pending = store?.listPending?.(runtime.motebitId) ?? [];
   if (pending.length === 0) {
     // Fall back to the live in-turn approval (a surface with no queue).

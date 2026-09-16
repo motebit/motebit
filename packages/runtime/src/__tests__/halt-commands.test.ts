@@ -15,6 +15,8 @@ import type { ApprovalItem, HaltRequest } from "@motebit/sdk";
 function makeRuntime(
   opts: {
     halts?: boolean;
+    /** `false` models a surface that wired no decidable approval queue. */
+    approvals?: boolean;
     pending?: ApprovalItem[];
     stopper?: () => string;
   } = {},
@@ -77,14 +79,17 @@ function makeRuntime(
     halts: store,
     haltExecutorId: EXECUTOR,
     resolveGoalId: (prefix: string) => prefix,
-    approvals: {
-      collectApproval: () => ({ met: false, collected: [] }),
-      setQuorum: () => undefined,
-      listPending: () => opts.pending ?? [],
-      get: (id: string) => (opts.pending ?? []).find((a) => a.approval_id === id) ?? null,
-      resolve: (id: string, status: "approved" | "denied", reason?: string) =>
-        void resolved.push({ id, status, ...(reason !== undefined ? { reason } : {}) }),
-    },
+    approvals:
+      opts.approvals === false
+        ? { collectApproval: () => ({ met: false, collected: [] }), setQuorum: () => undefined }
+        : {
+            collectApproval: () => ({ met: false, collected: [] }),
+            setQuorum: () => undefined,
+            listPending: () => opts.pending ?? [],
+            get: (id: string) => (opts.pending ?? []).find((a) => a.approval_id === id) ?? null,
+            resolve: (id: string, status: "approved" | "denied", reason?: string) =>
+              void resolved.push({ id, status, ...(reason !== undefined ? { reason } : {}) }),
+          },
     hasPendingApproval: false,
     pendingApprovalInfo: null,
     // The real membrane masks credential-class values; the stub proves
@@ -284,6 +289,19 @@ describe("cmdResume / cmdHaltStatus", () => {
 });
 
 describe("cmdApprovals — the consent surface", () => {
+  it("a surface with no readable queue says so rather than reporting an empty one", () => {
+    // The relay's compatibility fallback can deliver `approvals list` to
+    // a surface that is not the daemon. Answering "No pending
+    // approvals" there tells the phone the opposite of the truth while
+    // the daemon holds a real pending call — and the person cannot tell
+    // that from a genuinely empty queue.
+    const { runtime } = makeRuntime({ approvals: false });
+    const r = cmdApprovals(runtime, "list");
+    expect(r.summary).toContain("cannot list approvals");
+    expect(r.summary).not.toContain("No pending approvals");
+    expect(r.detail).toContain("not the same as an empty queue");
+  });
+
   it("lists the real action, masks credential-class values, and carries the hash over the FULL args", () => {
     const { runtime } = makeRuntime({
       pending: [
