@@ -212,6 +212,8 @@ describe("GoalScheduler — learning loop", () => {
         moteDb.goalStore,
         moteDb.approvalStore,
         moteDb.goalOutcomeStore,
+        moteDb.goalRunStore,
+        moteDb.toolAuditSink,
         "mote-test",
         RiskLevel.R3_EXECUTE,
       );
@@ -242,6 +244,8 @@ describe("GoalScheduler — learning loop", () => {
         moteDb.goalStore,
         moteDb.approvalStore,
         moteDb.goalOutcomeStore,
+        moteDb.goalRunStore,
+        moteDb.toolAuditSink,
         "mote-test",
         RiskLevel.R3_EXECUTE,
       );
@@ -317,6 +321,8 @@ describe("GoalScheduler — learning loop", () => {
         moteDb.goalStore,
         moteDb.approvalStore,
         moteDb.goalOutcomeStore,
+        moteDb.goalRunStore,
+        moteDb.toolAuditSink,
         "mote-test",
         RiskLevel.R3_EXECUTE,
       );
@@ -392,6 +398,8 @@ describe("GoalScheduler — learning loop", () => {
         moteDb.goalStore,
         moteDb.approvalStore,
         moteDb.goalOutcomeStore,
+        moteDb.goalRunStore,
+        moteDb.toolAuditSink,
         "mote-test",
         RiskLevel.R3_EXECUTE,
       );
@@ -468,6 +476,8 @@ describe("GoalScheduler — learning loop", () => {
         moteDb.goalStore,
         moteDb.approvalStore,
         moteDb.goalOutcomeStore,
+        moteDb.goalRunStore,
+        moteDb.toolAuditSink,
         "mote-test",
         RiskLevel.R3_EXECUTE,
       );
@@ -521,6 +531,8 @@ describe("GoalScheduler — learning loop", () => {
         moteDb.goalStore,
         moteDb.approvalStore,
         moteDb.goalOutcomeStore,
+        moteDb.goalRunStore,
+        moteDb.toolAuditSink,
         "mote-test",
         RiskLevel.R3_EXECUTE,
       );
@@ -567,6 +579,8 @@ describe("GoalScheduler — learning loop", () => {
         moteDb.goalStore,
         moteDb.approvalStore,
         moteDb.goalOutcomeStore,
+        moteDb.goalRunStore,
+        moteDb.toolAuditSink,
         "mote-test",
         RiskLevel.R3_EXECUTE,
       );

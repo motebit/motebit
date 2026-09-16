@@ -942,6 +942,16 @@ export interface PolicyDecision {
   /** Owner-facing typed residual of a refusal/raise. See `AuthorityDelta`
    *  for the asymmetry + predictor invariants. */
   missing_authority?: AuthorityDelta;
+  /**
+   * Audit call id the gate wrote this decision under (the `callId` of the
+   * `ToolAuditEntry` row appended BEFORE execution). Lets the executor
+   * record the completion (`PolicyGate.recordResult`) against the same
+   * row, so an allowed decision with no completion is a re-checkable
+   * "intended, outcome unknown" state after a crash — never silently
+   * retried. Optional for source-compat with hand-built decisions; the
+   * gate sets it on every decision it returns.
+   */
+  callId?: string;
 }
 
 export interface TurnContext {
@@ -3254,6 +3264,18 @@ export interface AuditChainStoreAdapter {
 
 export interface AuditLogSink {
   append(entry: ToolAuditEntry): void;
+  /**
+   * Apply a COMPLETION (an entry carrying `result`) to the entry already
+   * recorded under the same `callId`: only `result` and `timestamp` are
+   * written onto the existing entry — the decision as recorded (including
+   * an `approval_satisfied:*` reason) is preserved. Keyed stores update the
+   * row in place, unkeyed stores merge by `callId`; when no entry is known
+   * the completion is appended whole. Optional — a sink without it receives
+   * the completion via `append`, which in an unkeyed store leaves two
+   * entries per call and double-counts `queryStatsSince`. Every shipped
+   * sink implements it.
+   */
+  complete?(entry: ToolAuditEntry): void;
   query(turnId: string): ToolAuditEntry[];
   getAll(): ToolAuditEntry[];
   queryStatsSince(afterTimestamp: number): AuditStatsSince;

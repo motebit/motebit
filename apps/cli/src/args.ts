@@ -46,6 +46,8 @@ export interface CliConfig {
   wallClock: string | undefined;
   project: string | undefined;
   reason: string | undefined;
+  /** `motebit runs ack`: explicit acceptance that the goal's next run may repeat effects. */
+  allowFreshRun: boolean;
   destination: string | undefined;
   capability: string | undefined;
   /** `grant create` minting flags + the chat `--grant` presentation id. */
@@ -145,6 +147,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       "wall-clock": { type: "string" },
       project: { type: "string" },
       reason: { type: "string" },
+      "allow-fresh-run": { type: "boolean", default: false },
       destination: { type: "string" },
       capability: { type: "string" },
       target: { type: "string" },
@@ -272,6 +275,7 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     wallClock: values["wall-clock"],
     project: values.project,
     reason: values.reason,
+    allowFreshRun: values["allow-fresh-run"],
     destination: values.destination,
     capability: values.capability,
     scope: values.scope,
@@ -505,6 +509,8 @@ Commands:
   approvals show <id>       Show approval detail
   approvals approve <id>    Approve a pending tool call
   approvals deny <id> [--reason <text>]  Deny a pending tool call
+  runs                      Goal runs holding their goal (paused on you, or interrupted with side effects), then recent runs
+  runs ack <id> --allow-fresh-run  Release an interrupted run's goal; its next run starts from scratch and may repeat effects — nothing is retried
   federation status           Show relay identity (motebit_id, DID, public key)
   federation peers            List active federation peers
   federation peer <url>       Peer with another relay (mutual handshake)

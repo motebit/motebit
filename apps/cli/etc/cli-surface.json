@@ -46,6 +46,10 @@
     "restore": [],
     "rotate": [],
     "run": [],
+    "runs": [
+      "ack",
+      "list"
+    ],
     "schema": [],
     "seed": [],
     "serve": [],
@@ -73,6 +77,11 @@
     {
       "name": "allow-commands",
       "type": "string"
+    },
+    {
+      "name": "allow-fresh-run",
+      "type": "boolean",
+      "default": false
     },
     {
       "name": "allowed-paths",

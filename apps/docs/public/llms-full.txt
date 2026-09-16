@@ -6053,6 +6053,7 @@ The CLI supports several subcommands beyond the default interactive REPL:
 | `motebit doctor` | Diagnose configuration and connectivity issues |
 | `motebit goal add/list/remove/pause/resume` | Manage scheduled goals |
 | `motebit approvals list/show/approve/deny` | Manage the tool approval queue |
+| `motebit runs [list\|ack <run_id> --allow-fresh-run]` | Goal-run ledger: runs holding their goal (paused on you, or interrupted with side effects) and recent runs; `ack --allow-fresh-run` releases a reviewed interrupted run, accepting that its goal's next run may repeat effects |
 | `motebit rotate [--reason "..."]` | Rotate Ed25519 keypair with signed succession record |
 
 ### Serve flags
@@ -6822,7 +6823,7 @@ On startup, the daemon:
 Daemon running. motebit_id: a1b2c3d4... Goals: 3. Policy: max_risk_auto=R1_DRAFT, deny_above=R4_MONEY
 ```
 
-Stop the daemon with `SIGINT` (Ctrl-C) or `SIGTERM`. On shutdown, all pending approvals are denied with reason `"daemon_shutdown"`.
+Stop the daemon with `SIGINT` (Ctrl-C) or `SIGTERM`. Pending approvals stay pending across a stop (see "Shutdown and restart" below); a run that was mid-turn at a graceful stop is closed as failed and re-fires on schedule.
 
 ## Managing goals
 
@@ -6929,9 +6930,11 @@ Error: approval a1b2c3d4 is already denied.
 
 **Expiry:** Pending approvals expire after 1 hour (3,600,000 ms). On each tick, the scheduler runs `expireStale()` before processing any goals. Expired approvals remain visible in `approvals list` with status `expired`.
 
-**Shutdown:** When the daemon stops (SIGINT/SIGTERM), all pending approvals in the suspended map are denied with reason `"daemon_shutdown"`.
+**Shutdown and restart:** A pending approval is a human's decision to make, and it survives the daemon. When the daemon stops, pending approvals stay `pending` and their goal runs stay `awaiting_approval` in the run ledger (`goal_runs`); the goal does not fire again while that run is unresolved. When the daemon comes back and you approve, the paused turn itself is gone with the old process, so the daemon executes **exactly the one call you approved** (full arguments are persisted alongside the preview, and their hash is re-checked) through the same policy gate, records the outcome, and closes the run. It does not re-run the rest of the goal's turn — the tool calls before the pause already happened. Denying closes the run without executing anything. A money action (R4) is never executed from a recovered run.
 
-**Restart:** After a daemon restart, previously expired or denied approvals are visible in the history but are not resumable. The current daemon does not resume suspended turns across restarts — the goal simply runs fresh on its next scheduled tick. Cross-restart resume is on the roadmap; track progress against the `motebit/goal-lifecycle@1.0` spec.
+**Interrupted runs:** If the daemon dies mid-run, the next start marks that run `interrupted` and reads the tool audit log for it: how many allowed tool calls recorded a completion, and how many have a decision row but no completion row (the process died between dispatch and recording — their external effect is unknown). If either count is non-zero the goal is **held**: it will not fire again until you run `motebit runs ack <run_id>`, because re-firing would repeat the completed calls and nobody can say what the unknown ones did. A run with no allowed tool calls at all resolves itself. `motebit ps` shows held goals; `motebit runs` lists the runs holding them. `motebit runs ack <run_id> --allow-fresh-run` retries nothing — it records that you looked and accepts that the goal's next run starts from scratch, which may repeat effects the interrupted run already caused; without the flag the command prints that consequence and releases nothing. A decision applied after a restart closes its run as `partial`, never `completed`: the one approved action ran (or was refused), and the goal's remaining work was not resumed.
+
+**What a restart cannot do:** it cannot resume the paused turn itself (its stream died with the old process), which is why a post-restart decision applies to the one approved call only and the run closes as `partial`. The 1-hour TTL bounds the decision, not the sweep: an approval granted after its expiry — for example while the daemon was down — is refused by `motebit approvals approve` and, if it slipped through, is never executed by the daemon.
 
 ## Governance enforcement
 

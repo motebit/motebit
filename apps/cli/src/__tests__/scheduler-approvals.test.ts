@@ -197,6 +197,8 @@ describe("GoalScheduler — approval lifecycle", () => {
       moteDb.goalStore,
       moteDb.approvalStore,
       moteDb.goalOutcomeStore,
+      moteDb.goalRunStore,
+      moteDb.toolAuditSink,
       "mote-test",
       RiskLevel.R3_EXECUTE,
     );
@@ -214,7 +216,7 @@ describe("GoalScheduler — approval lifecycle", () => {
     expect(goals[0]!.last_run_at).toBeNull();
   });
 
-  it("stop() marks pending approvals as denied with daemon_shutdown", async () => {
+  it("stop() leaves pending approvals pending — a human's decision survives the daemon", async () => {
     const { runtime } = createMockRuntime({ yieldApproval: true });
     moteDb.goalStore.add(makeGoal());
 
@@ -223,13 +225,14 @@ describe("GoalScheduler — approval lifecycle", () => {
       moteDb.goalStore,
       moteDb.approvalStore,
       moteDb.goalOutcomeStore,
+      moteDb.goalRunStore,
+      moteDb.toolAuditSink,
       "mote-test",
       RiskLevel.R3_EXECUTE,
     );
     scheduler.registerGoalTools();
     await scheduler.tickOnce();
 
-    // Should have a pending approval
     const all = moteDb.approvalStore.listAll("mote-test");
     expect(all).toHaveLength(1);
     const approvalId = all[0]!.approval_id;
@@ -237,8 +240,10 @@ describe("GoalScheduler — approval lifecycle", () => {
     scheduler.stop();
 
     const item = moteDb.approvalStore.get(approvalId);
-    expect(item!.status).toBe("denied");
-    expect(item!.denied_reason).toBe("daemon_shutdown");
+    expect(item!.status).toBe("pending");
+    // …and the run that paused on it is still awaiting, so the goal stays held.
+    const run = moteDb.goalRunStore.getByApproval(approvalId);
+    expect(run?.status).toBe("awaiting_approval");
   });
 
   it("expireStale expires old approvals via store", () => {
@@ -296,6 +301,8 @@ describe("GoalScheduler — approval lifecycle", () => {
       moteDb.goalStore,
       moteDb.approvalStore,
       moteDb.goalOutcomeStore,
+      moteDb.goalRunStore,
+      moteDb.toolAuditSink,
       "mote-test",
       RiskLevel.R3_EXECUTE,
     );
@@ -332,6 +339,8 @@ describe("GoalScheduler — report_progress invariant", () => {
       moteDb.goalStore,
       moteDb.approvalStore,
       moteDb.goalOutcomeStore,
+      moteDb.goalRunStore,
+      moteDb.toolAuditSink,
       "mote-test",
       RiskLevel.R3_EXECUTE,
     );
@@ -374,6 +383,8 @@ describe("GoalScheduler — report_progress invariant", () => {
       moteDb.goalStore,
       moteDb.approvalStore,
       moteDb.goalOutcomeStore,
+      moteDb.goalRunStore,
+      moteDb.toolAuditSink,
       "mote-test",
       RiskLevel.R3_EXECUTE,
     );
@@ -393,7 +404,7 @@ describe("GoalScheduler — report_progress invariant", () => {
   });
 });
 
-describe("GoalScheduler — orphan approval cleanup on start", () => {
+describe("GoalScheduler — pending approvals survive a restart", () => {
   let moteDb: MotebitDatabase;
 
   beforeEach(() => {
@@ -404,36 +415,27 @@ describe("GoalScheduler — orphan approval cleanup on start", () => {
     vi.spyOn(process.stdout, "write").mockImplementation(() => true);
   });
 
-  it("start() denies pending approvals left over from a previous run", () => {
+  it("start() does NOT deny approvals left over from a previous process", () => {
     const now = Date.now();
-    moteDb.approvalStore.add({
-      approval_id: "orphan-1",
-      motebit_id: "mote-test",
-      goal_id: "goal-001",
-      tool_name: "shell_exec",
-      args_preview: "{}",
-      args_hash: "abc",
-      risk_level: 3,
-      status: "pending",
-      created_at: now - 120_000,
-      expires_at: now + 3_600_000,
-      resolved_at: null,
-      denied_reason: null,
-    });
-    moteDb.approvalStore.add({
-      approval_id: "orphan-2",
-      motebit_id: "mote-test",
-      goal_id: "goal-002",
-      tool_name: "write_file",
-      args_preview: "{}",
-      args_hash: "def",
-      risk_level: 2,
-      status: "pending",
-      created_at: now - 60_000,
-      expires_at: now + 3_600_000,
-      resolved_at: null,
-      denied_reason: null,
-    });
+    for (const [id, tool] of [
+      ["orphan-1", "shell_exec"],
+      ["orphan-2", "write_file"],
+    ] as const) {
+      moteDb.approvalStore.add({
+        approval_id: id,
+        motebit_id: "mote-test",
+        goal_id: "goal-001",
+        tool_name: tool,
+        args_preview: "{}",
+        args_hash: "abc",
+        risk_level: 2,
+        status: "pending",
+        created_at: now - 120_000,
+        expires_at: now + 3_600_000,
+        resolved_at: null,
+        denied_reason: null,
+      });
+    }
 
     const { runtime } = createMockRuntime();
     const scheduler = new GoalScheduler(
@@ -441,20 +443,16 @@ describe("GoalScheduler — orphan approval cleanup on start", () => {
       moteDb.goalStore,
       moteDb.approvalStore,
       moteDb.goalOutcomeStore,
+      moteDb.goalRunStore,
+      moteDb.toolAuditSink,
       "mote-test",
       RiskLevel.R3_EXECUTE,
     );
-    // start() triggers cleanup before first tick
-    scheduler.start(999_999); // long interval so tick doesn't re-fire
+    scheduler.start(999_999);
     scheduler.stop();
 
-    const a1 = moteDb.approvalStore.get("orphan-1");
-    expect(a1!.status).toBe("denied");
-    expect(a1!.denied_reason).toBe("daemon_restart");
-
-    const a2 = moteDb.approvalStore.get("orphan-2");
-    expect(a2!.status).toBe("denied");
-    expect(a2!.denied_reason).toBe("daemon_restart");
+    expect(moteDb.approvalStore.get("orphan-1")!.status).toBe("pending");
+    expect(moteDb.approvalStore.get("orphan-2")!.status).toBe("pending");
   });
 
   it("start() leaves already-resolved approvals untouched", () => {
@@ -473,21 +471,20 @@ describe("GoalScheduler — orphan approval cleanup on start", () => {
       resolved_at: now - 60_000,
       denied_reason: null,
     });
-
     const { runtime } = createMockRuntime();
     const scheduler = new GoalScheduler(
       runtime,
       moteDb.goalStore,
       moteDb.approvalStore,
       moteDb.goalOutcomeStore,
+      moteDb.goalRunStore,
+      moteDb.toolAuditSink,
       "mote-test",
       RiskLevel.R3_EXECUTE,
     );
     scheduler.start(999_999);
     scheduler.stop();
-
-    const a = moteDb.approvalStore.get("resolved-1");
-    expect(a!.status).toBe("approved");
+    expect(moteDb.approvalStore.get("resolved-1")!.status).toBe("approved");
   });
 });
 
@@ -508,6 +505,8 @@ describe("GoalScheduler — approval resolution is bound to the owned toolCallId
       moteDb.goalStore,
       moteDb.approvalStore,
       moteDb.goalOutcomeStore,
+      moteDb.goalRunStore,
+      moteDb.toolAuditSink,
       "mote-test",
       RiskLevel.R3_EXECUTE,
     );
@@ -532,14 +531,15 @@ describe("GoalScheduler — approval resolution is bound to the owned toolCallId
     expect(mock.resumeCalls).toEqual([true]);
   });
 
-  it("NEVER resumes when the runtime's pending approval belongs to another actor", async () => {
+  it("NEVER resumes when the runtime's pending approval belongs to another actor — and closes the voided run instead of executing it later", async () => {
     const mock = createMockRuntime({ yieldApproval: true });
-    moteDb.goalStore.add(makeGoal());
+    moteDb.goalStore.add(makeGoal({ interval_ms: 3_600_000 }));
     const scheduler = makeScheduler(mock.runtime);
     await scheduler.tickOnce();
 
     const approvalId = moteDb.approvalStore.listAll("mote-test")[0]!.approval_id;
     moteDb.approvalStore.resolve(approvalId, "approved");
+    const runId = moteDb.goalRunStore.getByApproval(approvalId)!.run_id;
 
     // Another actor's approval is now pending in the runtime — in a
     // daemon-coordinated setup this can be a HUMAN's live money prompt.
@@ -549,6 +549,13 @@ describe("GoalScheduler — approval resolution is bound to the owned toolCallId
     // The stored verdict must NOT be applied to the foreign approval.
     expect(mock.resumeCalls).toEqual([]);
     expect(mock.runtime.hasPendingApproval).toBe(true);
+    // The voided run is closed, so the recovered-approval drain never
+    // executes the approved call out of band on a later tick.
+    const run = moteDb.goalRunStore.get(runId)!;
+    expect(run.status).toBe("failed");
+    expect(run.note).toContain("not executed");
+    await scheduler.tickOnce();
+    expect(mock.resumeCalls).toEqual([]);
   });
 
   it("expiry deny-release also skips a foreign pending approval", async () => {

@@ -1109,6 +1109,14 @@ export class SqliteToolAuditSink implements AuditLogSink {
     );
   }
 
+  /** Update the recorded row's result in place; the decision as recorded is kept. */
+  complete(entry: ToolAuditEntry): void {
+    const info = this.db
+      .prepare(`UPDATE tool_audit_log SET result = ?, timestamp = ? WHERE call_id = ?`)
+      .run(entry.result ? JSON.stringify(entry.result) : null, entry.timestamp, entry.callId);
+    if (info.changes === 0) this.append(entry);
+  }
+
   enumerateForFlush(beforeTimestamp: number): ToolAuditEntry[] {
     const rows = this.db
       .prepare(`SELECT * FROM tool_audit_log WHERE timestamp < ? ORDER BY timestamp ASC`)
@@ -1409,7 +1417,13 @@ export interface GoalOutcome {
   goal_id: string;
   motebit_id: string;
   ran_at: number;
-  status: "completed" | "failed" | "suspended";
+  /**
+   * `partial` (migration #43 era): the human's decision on a paused call was
+   * applied after a restart — the one approved action ran (or was refused)
+   * but the goal's REMAINING work was not resumed. Structurally distinct
+   * from `completed` so no projection counts it as goal success.
+   */
+  status: "completed" | "failed" | "suspended" | "partial";
   summary: string | null;
   tool_calls_made: number;
   memories_formed: number;
@@ -1490,6 +1504,218 @@ export class SqliteGoalOutcomeStore {
   }
 }
 
+// === Goal Runs (durable unattended execution) ===
+
+/**
+ * Lifecycle of one goal run (migration #43).
+ *
+ *   running            — the daemon is executing it right now
+ *   awaiting_approval  — paused on a tool call that needs a human (approval_id set)
+ *   completed          — the run's turn ran to its end
+ *   partial            — a decision was applied after a restart: the one
+ *                        approved action ran (or was refused); the goal's
+ *                        remaining work was NOT resumed. Not goal success.
+ *   failed             — errored, expired, or could not be recovered
+ *   interrupted        — the process died mid-run; `completed_actions` /
+ *                        `uncertain_actions` say whether anything external
+ *                        happened, `reviewed_at` whether a human looked
+ */
+export type GoalRunStatus =
+  "running" | "awaiting_approval" | "completed" | "partial" | "failed" | "interrupted";
+
+/** An allowed tool call whose completion was never recorded — effect unknown. */
+export interface UncertainAction {
+  call_id: string;
+  tool: string;
+  intended_at: number;
+}
+
+export interface GoalRun {
+  run_id: string;
+  goal_id: string;
+  motebit_id: string;
+  status: GoalRunStatus;
+  approval_id: string | null;
+  started_at: number;
+  updated_at: number;
+  /** Allowed tool calls that DID record a completion before the interruption. */
+  completed_actions: number;
+  /** Allowed tool calls with no completion row — external effect unknown. */
+  uncertain_actions: UncertainAction[] | null;
+  reviewed_at: number | null;
+  note: string | null;
+}
+
+interface GoalRunRow {
+  run_id: string;
+  goal_id: string;
+  motebit_id: string;
+  status: string;
+  approval_id: string | null;
+  started_at: number;
+  updated_at: number;
+  completed_actions: number;
+  uncertain_actions: string | null;
+  reviewed_at: number | null;
+  note: string | null;
+}
+
+function rowToGoalRun(row: GoalRunRow): GoalRun {
+  return {
+    run_id: row.run_id,
+    goal_id: row.goal_id,
+    motebit_id: row.motebit_id,
+    status: row.status as GoalRunStatus,
+    approval_id: row.approval_id,
+    started_at: row.started_at,
+    updated_at: row.updated_at,
+    completed_actions: row.completed_actions,
+    uncertain_actions:
+      row.uncertain_actions == null
+        ? null
+        : (JSON.parse(row.uncertain_actions) as UncertainAction[]),
+    reviewed_at: row.reviewed_at,
+    note: row.note,
+  };
+}
+
+/**
+ * Is this run still in the way of a replacement run for its goal?
+ *
+ * A run blocks while it is live (`running` / `awaiting_approval`), and an
+ * `interrupted` run blocks until a human reviews it IF it had any
+ * external side effects — completed actions a re-run would repeat, or
+ * uncertain ones whose effect nobody knows. An interrupted run with no
+ * allowed tool calls at all (pure inference) resolves itself: re-running
+ * repeats nothing.
+ */
+export function goalRunBlocksGoal(run: GoalRun): boolean {
+  if (run.status === "running" || run.status === "awaiting_approval") return true;
+  if (run.status !== "interrupted") return false;
+  if (run.reviewed_at != null) return false;
+  return run.completed_actions > 0 || (run.uncertain_actions?.length ?? 0) > 0;
+}
+
+export class SqliteGoalRunStore {
+  private stmtStart: PreparedStatement;
+  private stmtGet: PreparedStatement;
+  private stmtGetByApproval: PreparedStatement;
+  private stmtListByStatus: PreparedStatement;
+  private stmtListForGoal: PreparedStatement;
+  private stmtListRecent: PreparedStatement;
+  private stmtSetStatus: PreparedStatement;
+  private stmtMarkInterrupted: PreparedStatement;
+  private stmtAck: PreparedStatement;
+
+  constructor(db: DatabaseDriver) {
+    this.stmtStart = db.prepare(
+      `INSERT INTO goal_runs
+       (run_id, goal_id, motebit_id, status, approval_id, started_at, updated_at, completed_actions, uncertain_actions, reviewed_at, note)
+       VALUES (?, ?, ?, 'running', NULL, ?, ?, 0, NULL, NULL, NULL)`,
+    );
+    this.stmtGet = db.prepare(`SELECT * FROM goal_runs WHERE run_id = ?`);
+    this.stmtGetByApproval = db.prepare(`SELECT * FROM goal_runs WHERE approval_id = ?`);
+    this.stmtListByStatus = db.prepare(
+      `SELECT * FROM goal_runs WHERE motebit_id = ? AND status = ? ORDER BY started_at ASC`,
+    );
+    this.stmtListForGoal = db.prepare(
+      `SELECT * FROM goal_runs WHERE goal_id = ? ORDER BY started_at DESC LIMIT ?`,
+    );
+    this.stmtListRecent = db.prepare(
+      `SELECT * FROM goal_runs WHERE motebit_id = ? ORDER BY started_at DESC LIMIT ?`,
+    );
+    this.stmtSetStatus = db.prepare(
+      `UPDATE goal_runs SET status = ?, approval_id = COALESCE(?, approval_id), note = COALESCE(?, note), updated_at = ? WHERE run_id = ?`,
+    );
+    this.stmtMarkInterrupted = db.prepare(
+      `UPDATE goal_runs SET status = 'interrupted', completed_actions = ?, uncertain_actions = ?, reviewed_at = ?, note = ?, updated_at = ? WHERE run_id = ?`,
+    );
+    this.stmtAck = db.prepare(
+      `UPDATE goal_runs SET reviewed_at = ?, updated_at = ? WHERE run_id = ? AND status = 'interrupted'`,
+    );
+  }
+
+  /** Open a run as `running`. Called BEFORE the first model call of the run. */
+  start(run: { run_id: string; goal_id: string; motebit_id: string; started_at?: number }): void {
+    const at = run.started_at ?? Date.now();
+    this.stmtStart.run(run.run_id, run.goal_id, run.motebit_id, at, at);
+  }
+
+  get(runId: string): GoalRun | null {
+    const row = this.stmtGet.get(runId) as GoalRunRow | undefined;
+    return row === undefined ? null : rowToGoalRun(row);
+  }
+
+  getByApproval(approvalId: string): GoalRun | null {
+    const row = this.stmtGetByApproval.get(approvalId) as GoalRunRow | undefined;
+    return row === undefined ? null : rowToGoalRun(row);
+  }
+
+  listByStatus(motebitId: string, status: GoalRunStatus): GoalRun[] {
+    const rows = this.stmtListByStatus.all(motebitId, status) as GoalRunRow[];
+    return rows.map(rowToGoalRun);
+  }
+
+  listForGoal(goalId: string, limit = 10): GoalRun[] {
+    const rows = this.stmtListForGoal.all(goalId, limit) as GoalRunRow[];
+    return rows.map(rowToGoalRun);
+  }
+
+  listRecent(motebitId: string, limit = 20): GoalRun[] {
+    const rows = this.stmtListRecent.all(motebitId, limit) as GoalRunRow[];
+    return rows.map(rowToGoalRun);
+  }
+
+  /** Every run that currently blocks its goal (see `goalRunBlocksGoal`). */
+  listBlocking(motebitId: string): GoalRun[] {
+    return [
+      ...this.listByStatus(motebitId, "running"),
+      ...this.listByStatus(motebitId, "awaiting_approval"),
+      ...this.listByStatus(motebitId, "interrupted"),
+    ].filter(goalRunBlocksGoal);
+  }
+
+  /** The run blocking this goal, if any. */
+  blockingRunForGoal(goalId: string): GoalRun | null {
+    return this.listForGoal(goalId, 50).find(goalRunBlocksGoal) ?? null;
+  }
+
+  setStatus(
+    runId: string,
+    status: Exclude<GoalRunStatus, "interrupted">,
+    opts: { approval_id?: string; note?: string } = {},
+  ): void {
+    this.stmtSetStatus.run(status, opts.approval_id ?? null, opts.note ?? null, Date.now(), runId);
+  }
+
+  /**
+   * Mark a run the process died inside. `reviewed_at` is set immediately
+   * when the run had no side effects at all (nothing to review); left
+   * NULL otherwise so the goal stays held until `ack`.
+   */
+  markInterrupted(
+    runId: string,
+    facts: { completed_actions: number; uncertain_actions: UncertainAction[]; note?: string },
+  ): void {
+    const now = Date.now();
+    const hadSideEffects = facts.completed_actions > 0 || facts.uncertain_actions.length > 0;
+    this.stmtMarkInterrupted.run(
+      facts.completed_actions,
+      JSON.stringify(facts.uncertain_actions),
+      hadSideEffects ? null : now,
+      facts.note ?? null,
+      now,
+      runId,
+    );
+  }
+
+  /** A human reviewed an interrupted run; the goal may fire again. Returns false if no such run. */
+  ack(runId: string, at = Date.now()): boolean {
+    const info = this.stmtAck.run(at, at, runId);
+    return info.changes > 0;
+  }
+}
+
 // === Approval Queue ===
 
 export type ApprovalStatus = "pending" | "approved" | "denied" | "expired";
@@ -1507,6 +1733,13 @@ export interface ApprovalItem {
   expires_at: number;
   resolved_at: number | null;
   denied_reason: string | null;
+  /**
+   * Full JSON of the paused call's arguments — what a post-restart
+   * resolution executes EXACTLY (migration #43). Optional/null for rows
+   * written before it existed; such an approval can be shown but never
+   * executed after the paused turn is gone.
+   */
+  args_json?: string | null;
 }
 
 interface ApprovalRow {
@@ -1522,6 +1755,7 @@ interface ApprovalRow {
   expires_at: number;
   resolved_at: number | null;
   denied_reason: string | null;
+  args_json: string | null;
 }
 
 function rowToApproval(row: ApprovalRow): ApprovalItem {
@@ -1538,6 +1772,7 @@ function rowToApproval(row: ApprovalRow): ApprovalItem {
     expires_at: row.expires_at,
     resolved_at: row.resolved_at,
     denied_reason: row.denied_reason,
+    args_json: row.args_json ?? null,
   };
 }
 
@@ -1554,8 +1789,8 @@ export class SqliteApprovalStore {
     this.db = db;
     this.stmtAdd = db.prepare(
       `INSERT OR REPLACE INTO approval_queue
-       (approval_id, motebit_id, goal_id, tool_name, args_preview, args_hash, risk_level, status, created_at, expires_at, resolved_at, denied_reason)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (approval_id, motebit_id, goal_id, tool_name, args_preview, args_hash, risk_level, status, created_at, expires_at, resolved_at, denied_reason, args_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtGet = db.prepare(`SELECT * FROM approval_queue WHERE approval_id = ?`);
     this.stmtListPending = db.prepare(
@@ -1586,6 +1821,7 @@ export class SqliteApprovalStore {
       item.expires_at,
       item.resolved_at,
       item.denied_reason,
+      item.args_json ?? null,
     );
   }
 
@@ -2952,6 +3188,7 @@ export interface MotebitDatabase {
   goalStore: SqliteGoalStore;
   goalOutcomeStore: SqliteGoalOutcomeStore;
   approvalStore: SqliteApprovalStore;
+  goalRunStore: SqliteGoalRunStore;
   conversationStore: SqliteConversationStore;
   planStore: SqlitePlanStore;
   gradientStore: SqliteGradientStore;
@@ -2988,6 +3225,7 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   const goalStore = new SqliteGoalStore(driver);
   const goalOutcomeStore = new SqliteGoalOutcomeStore(driver);
   const approvalStore = new SqliteApprovalStore(driver);
+  const goalRunStore = new SqliteGoalRunStore(driver);
   const conversationStore = new SqliteConversationStore(driver);
   const planStore = new SqlitePlanStore(driver);
   const gradientStore = new SqliteGradientStore(driver);
@@ -3011,6 +3249,7 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     goalStore,
     goalOutcomeStore,
     approvalStore,
+    goalRunStore,
     conversationStore,
     planStore,
     gradientStore,

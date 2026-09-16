@@ -114,6 +114,7 @@ const SUB_SUBCOMMAND_FAMILIES: Record<string, string> = {
   fedCmd: "federation",
   relayCmd: "relay",
   goalCmd: "goal",
+  runsCmd: "runs",
 };
 
 function extractSubcommands(): Record<string, string[]> {

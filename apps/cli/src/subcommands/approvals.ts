@@ -110,6 +110,16 @@ export async function handleApprovalApprove(config: CliConfig): Promise<void> {
     moteDb.close();
     process.exit(1);
   }
+  if (Date.now() > match.expires_at) {
+    // The TTL bounds the decision, not the daemon's sweep: while the daemon
+    // was down nothing flipped this row to `expired`. Flip it now and refuse.
+    moteDb.approvalStore.expireStale(Date.now());
+    console.error(
+      `Error: approval ${match.approval_id.slice(0, 8)} expired at ${new Date(match.expires_at).toISOString()} and can no longer be decided.`,
+    );
+    moteDb.close();
+    process.exit(1);
+  }
 
   moteDb.approvalStore.resolve(match.approval_id, "approved");
   moteDb.close();
@@ -142,6 +152,16 @@ export async function handleApprovalDeny(config: CliConfig): Promise<void> {
 
   if (match.status !== "pending") {
     console.error(`Error: approval ${match.approval_id.slice(0, 8)} is already ${match.status}.`);
+    moteDb.close();
+    process.exit(1);
+  }
+  if (Date.now() > match.expires_at) {
+    // The TTL bounds the decision, not the daemon's sweep: while the daemon
+    // was down nothing flipped this row to `expired`. Flip it now and refuse.
+    moteDb.approvalStore.expireStale(Date.now());
+    console.error(
+      `Error: approval ${match.approval_id.slice(0, 8)} expired at ${new Date(match.expires_at).toISOString()} and can no longer be decided.`,
+    );
     moteDb.close();
     process.exit(1);
   }

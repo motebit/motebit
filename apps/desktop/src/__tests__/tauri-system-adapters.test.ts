@@ -72,6 +72,62 @@ describe("TauriToolAuditSink", () => {
     expect(call[1].params).toBeDefined();
   });
 
+  it("complete() updates the recorded row's result in place, then no-ops the insert", async () => {
+    const invoke = vi.fn(async () => 1);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sink = new TauriToolAuditSink(invoke as any);
+    sink.complete({
+      callId: "call1",
+      turnId: "turn1",
+      runId: "run1",
+      tool: "write_file",
+      args: { path: "/tmp/x" },
+      decision: { allowed: true, requiresApproval: false },
+      result: { ok: true, durationMs: 4 },
+      costUnits: 2,
+      timestamp: 2000,
+      sensitivity: "none",
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    // Two ordered IPC writes: UPDATE result, then INSERT OR IGNORE.
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const update = invoke.mock.calls[0] as any;
+    expect(update[0]).toBe("db_execute");
+    expect(update[1].sql).toContain("UPDATE tool_audit_log SET result");
+    expect(update[1].params).toEqual([JSON.stringify({ ok: true, durationMs: 4 }), 2000, "call1"]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const insert = invoke.mock.calls[1] as any;
+    expect(insert[1].sql).toContain("INSERT OR IGNORE INTO tool_audit_log");
+  });
+
+  it("complete() with no result / runId / injection / sensitivity writes nulls", async () => {
+    const invoke = vi.fn(async () => 1);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sink = new TauriToolAuditSink(invoke as any);
+    sink.complete({
+      callId: "call2",
+      turnId: "turn2",
+      tool: "read_file",
+      args: {},
+      decision: { allowed: true, requiresApproval: false },
+      timestamp: 3000,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const update = invoke.mock.calls[0] as any;
+    expect(update[1].params).toEqual([null, 3000, "call2"]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const insert = invoke.mock.calls[1] as any;
+    // run_id, result, injection, sensitivity all null; cost_units defaults to 0.
+    expect(insert[1].params[2]).toBeNull();
+    expect(insert[1].params[6]).toBeNull();
+    expect(insert[1].params[7]).toBeNull();
+    expect(insert[1].params[8]).toBe(0);
+    expect(insert[1].params[10]).toBeNull();
+  });
+
   it("append() handles missing runId / result / injection / costUnits", () => {
     const invoke = vi.fn(async () => 1);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

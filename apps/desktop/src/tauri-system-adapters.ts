@@ -76,6 +76,37 @@ export class TauriToolAuditSink implements AuditLogSink {
     });
   }
 
+  /**
+   * Update the recorded row's result in place (decision kept); if no row
+   * exists yet, insert the whole entry. Two ordered IPC writes — the
+   * INSERT OR IGNORE is a no-op when the UPDATE matched (call_id is the PK).
+   */
+  complete(entry: ToolAuditEntry): void {
+    void (async () => {
+      await this.invoke("db_execute", {
+        sql: `UPDATE tool_audit_log SET result = ?, timestamp = ? WHERE call_id = ?`,
+        params: [entry.result ? JSON.stringify(entry.result) : null, entry.timestamp, entry.callId],
+      });
+      await this.invoke("db_execute", {
+        sql: `INSERT OR IGNORE INTO tool_audit_log (call_id, turn_id, run_id, tool, args, decision, result, injection, cost_units, timestamp, sensitivity)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        params: [
+          entry.callId,
+          entry.turnId,
+          entry.runId ?? null,
+          entry.tool,
+          JSON.stringify(entry.args),
+          JSON.stringify(entry.decision),
+          entry.result ? JSON.stringify(entry.result) : null,
+          entry.injection ? JSON.stringify(entry.injection) : null,
+          entry.costUnits ?? 0,
+          entry.timestamp,
+          entry.sensitivity ?? null,
+        ],
+      });
+    })();
+  }
+
   // === consolidation_flush retention shape ===
   // Phase 5-ship — docs/doctrine/retention-policy.md §"Consolidation flush".
   //

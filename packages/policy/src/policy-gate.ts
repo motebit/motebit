@@ -236,11 +236,102 @@ export class PolicyGate {
   /**
    * Validate a tool call before execution.
    * Returns the policy decision: allowed, needs approval, or denied.
+   *
+   * Every decision is written to the audit sink BEFORE the caller can
+   * execute, under a fresh `callId` that the returned decision carries
+   * (`PolicyDecision.callId`). The executor closes the row with
+   * `recordResult` once the tool returns. The pair is the durable
+   * execution ledger: an allowed decision with no result after a
+   * process death is an action whose external effect is UNKNOWN — it
+   * proves the call was prepared, never that it happened. Recovery must
+   * hold that ambiguity (`findUnresolvedActions` in audit.ts), never
+   * treat it as safe to retry.
    */
   validate(tool: ToolDefinition, args: Record<string, unknown>, ctx: TurnContext): PolicyDecision {
+    const callId = crypto.randomUUID();
+    const decision = this.evaluate(tool, args, ctx, callId);
+    return { ...decision, callId };
+  }
+
+  /**
+   * Record that a decision which PAUSED for approval is now proceeding to
+   * execution because a human satisfied the band out of band (a genuine
+   * user tap, or a persisted approval applied after a restart). Appended
+   * under the same `callId` BEFORE the call, as an allowed, un-paused
+   * decision (`reason: "approval_satisfied:<by>"`). Without it the ledger
+   * would show only the paused row, which `findUnresolvedActions`
+   * deliberately ignores (the approval queue owns paused state) — so a
+   * death between this execution and its completion row would read as
+   * "nothing happened" instead of "prepared; effect unknown".
+   */
+  recordApprovalSatisfied(
+    ctx: Pick<TurnContext, "turnId" | "runId">,
+    decision: PolicyDecision,
+    tool: string,
+    args: Record<string, unknown>,
+    by: "user-tap" | "human-approved",
+  ): void {
+    if (decision.callId == null) return;
+    this.audit.logDecision(
+      ctx.turnId,
+      decision.callId,
+      tool,
+      args,
+      { ...decision, allowed: true, requiresApproval: false, reason: `approval_satisfied:${by}` },
+      ctx.runId,
+    );
+  }
+
+  /**
+   * Record the outcome of a tool execution against the decision row the
+   * gate wrote for it. The completion half of the intent/completion pair
+   * (see `validate`). No-op when the decision carries no `callId` (a
+   * hand-built decision that never went through `validate`): a fresh id
+   * here would mint an orphan row that correlates with nothing, which is
+   * worse than an honest gap.
+   *
+   * `ok` is the tool's own verdict. It is attribution + the tool's report,
+   * not an independent verification of the external effect — a claimed
+   * result should link to evidence from the affected system
+   * (docs/doctrine/evidence-provenance.md); that pointer is a sibling
+   * artifact, never inferred from this row.
+   *
+   * Which executors close rows today: the AI loop, the resume-after-approval
+   * path, and `invokeLocalTool`. The MCP-server, attached-surface and
+   * grant-delegation executors validate without closing; their rows stay
+   * open. Restart recovery scopes by `run_id`, which those paths do not
+   * set, so they cannot cause a spurious hold — but the ledger invariant is
+   * not yet enforced by a gate. See docs/drift-defenses.md.
+   */
+  recordResult(
+    ctx: Pick<TurnContext, "turnId" | "runId">,
+    decision: PolicyDecision,
+    tool: string,
+    args: Record<string, unknown>,
+    ok: boolean,
+    durationMs: number,
+  ): void {
+    if (decision.callId == null) return;
+    this.audit.logResult(
+      ctx.turnId,
+      decision.callId,
+      tool,
+      args,
+      decision,
+      ok,
+      durationMs,
+      ctx.runId,
+    );
+  }
+
+  private evaluate(
+    tool: ToolDefinition,
+    args: Record<string, unknown>,
+    ctx: TurnContext,
+    callId: string,
+  ): PolicyDecision {
     const profile = this.classify(tool);
     const maxRisk = this.getEffectiveMaxRisk();
-    const callId = crypto.randomUUID();
 
     // 1. Denylist check
     if (this.config.toolDenyList?.includes(tool.name)) {

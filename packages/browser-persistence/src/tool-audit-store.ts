@@ -33,6 +33,28 @@ export class IdbToolAuditSink implements AuditLogSink {
     void this._persistEntry(entry);
   }
 
+  /**
+   * One entry per call: merge the completion into the cached entry with the
+   * same `callId` and update the stored record in place (the store is
+   * autoIncrement-keyed, so the update walks a cursor). Falls back to
+   * append when no decision entry is known.
+   */
+  complete(entry: ToolAuditEntry): void {
+    const idx = this._entries.findIndex((e) => e.callId === entry.callId);
+    if (idx === -1) {
+      this.append(entry);
+      return;
+    }
+    const merged: ToolAuditEntry = {
+      ...this._entries[idx]!,
+      result: entry.result,
+      timestamp: entry.timestamp,
+    };
+    this._entries[idx] = merged;
+    // eslint-disable-next-line @typescript-eslint/no-floating-promises -- fire-and-forget IDB update
+    void this._persistCompletion(merged);
+  }
+
   query(turnId: string): ToolAuditEntry[] {
     return this._entries.filter((e) => e.turnId === turnId);
   }
@@ -77,5 +99,30 @@ export class IdbToolAuditSink implements AuditLogSink {
   private _persistEntry(entry: ToolAuditEntry): void {
     const tx = this.db.transaction("tool_audit", "readwrite");
     tx.objectStore("tool_audit").add({ ...entry });
+  }
+
+  private _persistCompletion(merged: ToolAuditEntry): Promise<void> {
+    const tx = this.db.transaction("tool_audit", "readwrite");
+    const store = tx.objectStore("tool_audit");
+    const req = store.openCursor();
+    return new Promise<void>((resolve, reject) => {
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (!cursor) {
+          // No stored decision entry (evicted or never persisted) — add.
+          store.add({ ...merged });
+          resolve();
+          return;
+        }
+        const stored = cursor.value as ToolAuditEntry;
+        if (stored.callId === merged.callId) {
+          cursor.update({ ...merged });
+          resolve();
+          return;
+        }
+        cursor.continue();
+      };
+      req.onerror = () => reject(req.error ?? new Error("tool_audit cursor failed"));
+    });
   }
 }

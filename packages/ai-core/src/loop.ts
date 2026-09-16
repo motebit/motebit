@@ -402,6 +402,20 @@ export interface LoopPolicyGate {
     runId?: string,
   ): void;
   createTurnContext(runId?: string): TurnContext;
+  /**
+   * Close the audit row `validate` opened for this call with the tool's
+   * outcome — the completion half of the intent/completion ledger. The
+   * loop calls it right after `tools.execute` returns or throws. Optional
+   * for duck-typed gates; the real `PolicyGate` implements it.
+   */
+  recordResult?(
+    ctx: TurnContext,
+    decision: PolicyDecision,
+    tool: string,
+    args: Record<string, unknown>,
+    ok: boolean,
+    durationMs: number,
+  ): void;
   recordToolCall(ctx: TurnContext, cost?: number): TurnContext;
 }
 
@@ -765,6 +779,16 @@ export type AgenticChunk =
       args: Record<string, unknown>;
       risk_level?: number;
       quorum?: { required: number; approvers: string[]; collected: string[] };
+      /**
+       * The gate's audit `callId` for the decision that paused here
+       * (`PolicyDecision.callId`) and the turn it belongs to. A resume
+       * path that executes the approved call outside the loop records
+       * the completion against the same row (`recordResult`), so an
+       * approved-then-executed action is never left looking "intended,
+       * outcome unknown" in the ledger.
+       */
+      audit_call_id?: string;
+      turn_id?: string;
     }
   | { type: "injection_warning"; tool_name: string; patterns: string[] }
   | {
@@ -1294,6 +1318,8 @@ export async function* runTurnStreaming(
             args: toolCall.args,
             risk_level: profile.risk,
             ...(decision.quorum ? { quorum: decision.quorum } : {}),
+            ...(decision.callId != null ? { audit_call_id: decision.callId } : {}),
+            turn_id: turnCtx.turnId,
           };
           conversationHistory.push({
             role: "tool",
@@ -1353,8 +1379,13 @@ export async function* runTurnStreaming(
           }
         }
 
-        // Allowed — execute and record
+        // Allowed — execute and record. The gate already appended the
+        // decision row (intent) under `decision.callId` BEFORE this point;
+        // the "calling" chunk below is consumed by the streaming wrapper
+        // before the generator resumes, so any consumer-side persistence
+        // of the intent also lands strictly before `execute`.
         allBlocked = false;
+        const dispatchedAt = Date.now();
         yield {
           type: "tool_status",
           name: toolCall.name,
@@ -1362,7 +1393,7 @@ export async function* runTurnStreaming(
           context: toolContext(toolCall.name, toolCall.args),
           tool_call_id: toolCall.id,
           args: toolCall.args,
-          started_at: Date.now(),
+          started_at: dispatchedAt,
           mode: toolDef.embodimentMode,
           slabProjection: toolDef.slabProjection,
         };
@@ -1372,6 +1403,17 @@ export async function* runTurnStreaming(
           result = await deps.tools.execute(toolCall.name, toolCall.args);
         } catch (err: unknown) {
           toolCallsFailed++;
+          // Completion row: the handler threw, so the tool reports failure.
+          // Written BEFORE anything else so a crash in the yield below still
+          // leaves the ledger closed.
+          deps.policyGate.recordResult?.(
+            turnCtx,
+            decision,
+            toolCall.name,
+            toolCall.args,
+            false,
+            Date.now() - dispatchedAt,
+          );
           const msg = err instanceof Error ? err.message : String(err);
           // Thrown errors with a typed `.reason` (e.g.
           // ComputerDispatcherError) propagate the category onto the
@@ -1396,6 +1438,18 @@ export async function* runTurnStreaming(
           });
           continue;
         }
+        // Completion row for the intent the gate wrote — the tool's own
+        // verdict, recorded the moment execution returns and before any
+        // projection/sanitization can throw. Attribution + the tool's
+        // report, never an independent proof of the external effect.
+        deps.policyGate.recordResult?.(
+          turnCtx,
+          decision,
+          toolCall.name,
+          toolCall.args,
+          result.ok,
+          Date.now() - dispatchedAt,
+        );
         turnCtx = deps.policyGate.recordToolCall(turnCtx);
 
         // Project the tool result into the AI-visible shape BEFORE

@@ -1235,6 +1235,26 @@ export class MotebitRuntime {
         this.assertSensitivityPermitsAiCall(entry, toolName),
       getLatestCues: () => this.latestCues,
       getApprovalStore: () => this.approvalStore,
+      recordApprovalSatisfied: (p) =>
+        this.policy.recordApprovalSatisfied(
+          { turnId: p.turnId ?? p.runId ?? "resume", runId: p.runId },
+          { allowed: true, requiresApproval: true, callId: p.auditCallId },
+          p.toolName,
+          p.args,
+          "human-approved",
+        ),
+      recordApprovedToolResult: (p) =>
+        this.policy.recordResult(
+          { turnId: p.turnId ?? p.runId ?? "resume", runId: p.runId },
+          // The decision that paused was approval-gated; the human's
+          // signed consent (signAndEmitApprovalDecision) is the authority
+          // record — this row is only the execution completion.
+          { allowed: true, requiresApproval: true, reason: "approved", callId: p.auditCallId },
+          p.toolName,
+          p.args,
+          p.ok,
+          p.durationMs,
+        ),
       // #493: non-draining stash view for the delegate_to_agent receipt
       // beat. Lazy closures — interactiveDelegation is constructed before
       // the StreamingManager, but the indirection keeps that ordering a
@@ -1550,7 +1570,26 @@ export class MotebitRuntime {
   async invokeLocalTool(
     name: string,
     args: Record<string, unknown>,
-    options: { invocationOrigin?: IntentOrigin } = {},
+    options: {
+      invocationOrigin?: IntentOrigin;
+      /**
+       * A human already approved THIS exact action out of band (the
+       * daemon's persisted approval queue, resolved after a restart when
+       * the paused turn can no longer resume). Satisfies the approval
+       * band the same way a user tap does — and, like a tap, never a
+       * hard deny and never R4_MONEY. The receipt's `invocation_origin`
+       * stays whatever the caller passes (e.g. "scheduled"); the consent
+       * itself is a separate signed artifact.
+       */
+      humanApproved?: boolean;
+      /**
+       * The goal run this invocation belongs to, stamped on the audit row
+       * (`run_id`) so a restart can classify the call by run: a decision row
+       * with no completion row under this run means "prepared; effect
+       * unknown" and holds the goal instead of repeating the call.
+       */
+      runId?: string;
+    } = {},
   ): Promise<ToolResult> {
     const invocationId =
       typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
@@ -1576,13 +1615,15 @@ export class MotebitRuntime {
       // so the gate cannot risk-assess it. Fail closed — it must not run.
       return { ok: false, error: `Tool "${name}" is not available` };
     }
-    const decision = this.policy.validate(toolDef, args, this.policy.createTurnContext());
+    const turnCtx = this.policy.createTurnContext(options.runId);
+    const decision = this.policy.validate(toolDef, args, turnCtx);
     if (!decision.allowed) {
       return { ok: false, error: decision.reason ?? `Tool "${name}" blocked by policy` };
     }
     if (decision.requiresApproval) {
       const tapSatisfiesApproval =
-        origin === "user-tap" && classifyTool(toolDef).risk < RiskLevel.R4_MONEY;
+        (origin === "user-tap" || options.humanApproved === true) &&
+        classifyTool(toolDef).risk < RiskLevel.R4_MONEY;
       if (!tapSatisfiesApproval) {
         return {
           ok: false,
@@ -1591,6 +1632,15 @@ export class MotebitRuntime {
             `Tool "${name}" requires approval a ${origin} invocation cannot grant`,
         };
       }
+      // Ledger: the paused decision is proceeding on a human's say-so.
+      // Written BEFORE the call so a death after it holds as unknown.
+      this.policy.recordApprovalSatisfied(
+        turnCtx,
+        decision,
+        name,
+        args,
+        options.humanApproved === true ? "human-approved" : "user-tap",
+      );
     }
 
     let result: ToolResult;
@@ -1602,6 +1652,9 @@ export class MotebitRuntime {
     }
 
     const completedAt = Date.now();
+    // Completion row for the decision the gate wrote above — closes the
+    // durable-execution ledger for this call before any sink can throw.
+    this.policy.recordResult(turnCtx, decision, name, args, result.ok, completedAt - startedAt);
     const visibleResult = result.ok ? (result.data ?? null) : (result.error ?? null);
 
     // Fire the live activity channel first — the slab renders
