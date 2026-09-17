@@ -9,6 +9,7 @@ import {
   CommandReplayGuard,
   type CommandReplayStore,
   executeCommand,
+  executeRemoteCommand,
   cmdSelfTest,
   PLANNING_TASK_ROUTER,
   createRelayCapabilitiesFetcher,
@@ -507,9 +508,8 @@ export async function handleRun(config: CliConfig): Promise<void> {
                 return;
               }
               // `origin: "remote"` is recorded, never trusted.
-              const result = await executeCommand(runtime, cmdMsg.command, cmdMsg.args, undefined, {
-                origin: "remote",
-              });
+              // The one door for a relay frame.
+              const result = await executeRemoteCommand(runtime, cmdMsg.command, cmdMsg.args);
               wsAdapter!.sendRaw(
                 JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
               );

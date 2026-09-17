@@ -341,7 +341,37 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
    */
   const RUN_CORRELATION_WINDOW_MS = 60 * 60 * 1000;
 
+  /**
+   * Whether this machine's `tool_audit_log` carries `run_id`.
+   *
+   * `null` until asked. Probed rather than assumed, because the answer
+   * depends on whether the CLI has ever opened this database — the
+   * desktop and the CLI share `~/.motebit/motebit.db`, and the column
+   * arrives with the CLI's migration registry. A probe is one query per
+   * session; assuming either way was wrong once in each direction.
+   */
+  let hasRunIdColumn: boolean | null = null;
+
+  async function probeRunIdColumn(
+    invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>,
+  ): Promise<boolean> {
+    if (hasRunIdColumn != null) return hasRunIdColumn;
+    try {
+      const cols = await invoke<Array<Record<string, unknown>>>("db_query", {
+        sql: `PRAGMA table_info(tool_audit_log)`,
+        params: [],
+      });
+      hasRunIdColumn = cols.some((c) => c.name === "run_id");
+    } catch {
+      // Unknown stays unknown for this attempt, but the timestamp scan
+      // is a real answer, so the expansion is not left empty.
+      hasRunIdColumn = false;
+    }
+    return hasRunIdColumn;
+  }
+
   function loadOutcomeAuditEntries(
+    outcomeId: string,
     ranAt: number,
     allOutcomes: Array<Record<string, unknown>>,
     currentIndex: number,
@@ -350,20 +380,26 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
   ): void {
     container.innerHTML = "";
 
-    // The tool calls are time-correlated on this surface, and that is
-    // the whole story rather than a fallback.
+    // The exact join is the primary path, and the timestamp scan is the
+    // fallback it was always documented to be.
     //
-    // `tool_audit_log` here is the Rust schema in `src-tauri/src/main.rs`
-    // and it has no `run_id` column — no desktop migration adds one. So
-    // the run-id query that used to lead this function could not return
-    // zero rows, it THREW, and every expansion showed "Failed to load"
-    // where the tool calls belong. Catching the throw made it work, but
-    // made a permanent condition look like an exception: every
-    // expansion paid a failing IPC round-trip first, and the catch that
-    // covered it also swallowed genuine database failures into a
-    // silently different answer. A query that cannot succeed is not a
-    // primary path. If a migration ever adds the column, restore it
-    // here as the primary and keep this as the pre-migration path.
+    // A previous pass removed the `run_id` query on the premise that
+    // the column cannot exist here, because the Rust schema in
+    // `src-tauri/src/main.rs` does not declare it. That premise was
+    // wrong, and wrong in the direction that matters: the desktop opens
+    // `~/.motebit/motebit.db`, the same file the CLI opens, and the
+    // CLI's migration registry adds the column (`tool_audit_log.run_id`
+    // + index). This surface's OWN audit writer already inserts into
+    // it. So on every machine where the goal daemon has ever run — which
+    // is the only place run-linked rows come from — the query returned
+    // the exact rows, and it was replaced by a time window that is not
+    // filtered by goal or by run.
+    //
+    // What was true in that pass is that a THROW is not a fallback
+    // signal: it made every expansion pay a failing round-trip and let
+    // the catch swallow real database failures into a silently
+    // different answer. So the column is probed once and remembered,
+    // and the two paths stay honestly ordered behind it.
     const loadByTimestamp = (): void => {
       const startTs = ranAt - 5000;
       // The window CLOSES, even for the newest outcome.
@@ -402,7 +438,31 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
         });
     };
 
-    loadByTimestamp();
+    // Asked once per session, not once per expansion.
+    if (hasRunIdColumn === false) {
+      loadByTimestamp();
+      return;
+    }
+    void probeRunIdColumn(invoke).then((present) => {
+      if (!present) {
+        loadByTimestamp();
+        return;
+      }
+      void invoke<Array<Record<string, unknown>>>("db_query", {
+        sql: `SELECT tool, decision, result, timestamp FROM tool_audit_log WHERE run_id = ? ORDER BY timestamp ASC LIMIT 50`,
+        params: [outcomeId],
+      })
+        .then((entries: Array<Record<string, unknown>>) => {
+          // Zero rows is the pre-migration case the timestamp scan is
+          // for: a run whose audit rows predate the column.
+          if (entries.length > 0) renderAuditEntries(entries, container, false);
+          else loadByTimestamp();
+        })
+        .catch(() => {
+          container.innerHTML =
+            '<span style="font-size:10px;color:var(--text-ghost)">Failed to load</span>';
+        });
+    });
   }
 
   function renderAuditEntries(
@@ -857,7 +917,14 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
             if (row.classList.contains("expanded") && toolCalls > 0 && !auditLoaded) {
               auditLoaded = true;
               const ranAt = Number(outcome.ran_at) || 0;
-              loadOutcomeAuditEntries(ranAt, outcomes, outcomeIndex, auditContainer, invoke);
+              loadOutcomeAuditEntries(
+                ipcString(outcome.outcome_id),
+                ranAt,
+                outcomes,
+                outcomeIndex,
+                auditContainer,
+                invoke,
+              );
             }
           });
 

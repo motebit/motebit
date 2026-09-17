@@ -20,6 +20,7 @@ export { performMigration } from "./migration-client.js";
 export type { MigrationClientDeps, MigrationResult, MigrationStep } from "./migration-client.js";
 export {
   executeCommand,
+  executeRemoteCommand,
   cmdSelfTest,
   cmdWelcome,
   COMMAND_DEFINITIONS,

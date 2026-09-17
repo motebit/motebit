@@ -81,6 +81,30 @@ export const COMMAND_DEFINITIONS: ReadonlyArray<{ name: string; description: str
 ];
 
 /**
+ * Execute a command that ARRIVED OVER THE RELAY.
+ *
+ * The one door for a `command_request` frame, and the reason it exists
+ * is that `executeCommand`'s `origin` has to default to `local` — that
+ * is what almost every call site is, and a halt mislabelled `remote`
+ * would be its own untruth in the record. But the return view reads
+ * `origin` to decide whether a membrane applies, and a default of
+ * `local` there means "disclose". Two opposite safe defaults on one
+ * parameter is a thing a reader gets wrong, so the wire gets a named
+ * door instead of a remembered argument.
+ *
+ * Every surface that handles a relay frame calls this.
+ * `check-relay-frame-origin` keeps it that way.
+ */
+export async function executeRemoteCommand(
+  runtime: MotebitRuntime,
+  command: string,
+  args?: string,
+  relay?: RelayConfig,
+): Promise<CommandResult | null> {
+  return executeCommand(runtime, command, args, relay, { origin: "remote" });
+}
+
+/**
  * Execute a runtime command and return a structured result.
  *
  * Returns null if the command is not recognized by this layer (surface should handle it).

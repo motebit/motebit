@@ -1,7 +1,7 @@
 import {
   MotebitRuntime,
   RelayDelegationAdapter,
-  executeCommand,
+  executeRemoteCommand,
   cmdSelfTest,
   PLANNING_TASK_ROUTER,
   resolveProactiveAnchor,
@@ -3806,14 +3806,8 @@ export class UnbootedWebApp {
               );
               return;
             }
-            const result = await executeCommand(
-              this.runtime!,
-              cmdMsg.command,
-              cmdMsg.args,
-              undefined,
-              // This IS the relay frame. Recorded, never trusted.
-              { origin: "remote" },
-            );
+            // The one door for a relay frame.
+            const result = await executeRemoteCommand(this.runtime!, cmdMsg.command, cmdMsg.args);
             this._wsAdapter?.sendRaw(
               JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
             );

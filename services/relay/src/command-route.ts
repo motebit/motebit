@@ -96,10 +96,21 @@ function requiredCapability(command: string): string {
   return command === "runs" ? "run_ledger" : "unattended_runtime";
 }
 
-/** What is missing, named as the thing the question needed. */
+/**
+ * What is missing, named as the thing the question needed — and how to
+ * fix it when the cause is a version skew rather than an absence.
+ *
+ * The relay auto-deploys on merge and installed CLIs update on their
+ * own schedule, so for a while every connected daemon runs unattended
+ * work and announces no `run_ledger`. `runs` gets no legacy fallback on
+ * purpose — guessing a peer for a question whose answer IS that peer's
+ * database is the false empty this routing exists to stop — but a 404
+ * that names neither the cause nor the remedy leaves a person staring
+ * at a healthy daemon.
+ */
 function noPeerReason(command: string): string {
   return command === "runs"
-    ? "No runtime that keeps a run ledger is connected"
+    ? "No runtime that keeps a run ledger is connected — a daemon older than this feature runs unattended work but does not announce one, so update it (npm i -g motebit@latest) and reconnect"
     : "No unattended runtime is connected";
 }
 
@@ -671,8 +682,18 @@ async function forwardCommandToAgent(
         if (bucket == null) byMachine.set(key, [peer]);
         else bucket.push(peer);
       }
+      // The target list is complete BEFORE the first send, and the
+      // pending entry knows it.
+      //
+      // Assigning it afterwards left a window where an answer arriving
+      // during the loop read `targets` as empty, so `expected` was zero,
+      // the gather short-circuited and one machine's `Stopped.` was
+      // handed back as the motebit's — the failure the broadcast was
+      // built to remove, reachable through a fast enough transport.
+      aimedAt.push(...byMachine.keys());
+      const early = pendingCommands.get(commandId);
+      if (early != null) early.targets = [...aimedAt];
       for (const [key, machinePeers] of byMachine) {
-        aimedAt.push(key);
         const landed = machinePeers.some((peer) => {
           try {
             peer.ws.send(payload);
