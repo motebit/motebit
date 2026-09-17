@@ -195,9 +195,10 @@ describe("two runtimes, one relay — what a frame actually does", () => {
       command: "halt",
       envelope,
     });
-    run.deliver(frame);
-    serve.deliver(frame);
-    await new Promise((r) => setTimeout(r, 30));
+    // Sequenced, not raced: "the SECOND one refuses" is a statement
+    // about order, and envelope verification is async.
+    await run.deliver(frame);
+    await serve.deliver(frame);
 
     expect(JSON.stringify(run.replied)).not.toMatch(/replay/i);
     expect(JSON.stringify(serve.replied)).toMatch(/replay/i);
@@ -237,9 +238,8 @@ describe("two runtimes, one relay — what a frame actually does", () => {
       command: "halt",
       envelope,
     });
-    laptop.deliver(frame);
-    vps.deliver(frame);
-    await new Promise((r) => setTimeout(r, 30));
+    await laptop.deliver(frame);
+    await vps.deliver(frame);
 
     expect(JSON.stringify(laptop.replied)).not.toMatch(/replay/i);
     expect(JSON.stringify(vps.replied)).not.toMatch(/replay/i);
@@ -304,6 +304,44 @@ describe("two runtimes, one relay — what a frame actually does", () => {
     expect(vps.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(1);
   });
 
+  it("a machine still STOPPING is not reported as silent", async () => {
+    // The grace must outlast the slowest HONEST answer. `cmdHalt`
+    // awaits every registered stopper under a 10s ceiling, while a
+    // machine with nothing to stop returns immediately — so the first
+    // answer is systematically from the machine with least to do, and a
+    // grace shorter than that ceiling arms on it and then calls the
+    // machine that is actually aborting work silent, with
+    // `acknowledged: false`, mid-stop. That is the fast-answerer bias
+    // this whole change removes, inverted into a false negative on the
+    // one verb where it costs most.
+    attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "idle",
+        deviceId: "dev-1",
+        capabilities: ["background", "unattended_runtime"],
+      },
+    );
+    attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "busy",
+        deviceId: "dev-2",
+        capabilities: ["background", "unattended_runtime"],
+        configure: (rt) =>
+          rt.onHalt(async () => {
+            await new Promise((r) => setTimeout(r, 6_000));
+            return "aborted the long job";
+          }),
+      },
+    );
+
+    const { body } = await ask("halt");
+    const text = JSON.stringify(body);
+    expect(text).not.toMatch(/silence is not a stop/i);
+    expect(text).toMatch(/aborted the long job/i);
+  }, 40_000);
+
   it("a machine that never answers is named as silent, not quietly dropped", async () => {
     // An unanswered halt is the one outcome a reader must not take for
     // a stop. Dropping it from the report would hand back the answering
@@ -328,12 +366,18 @@ describe("two runtimes, one relay — what a frame actually does", () => {
 
     const { body } = await ask("halt");
     const text = JSON.stringify(body);
-    expect(text).toMatch(/did not answer in time/i);
+    expect(text).toMatch(/no answer in time/i);
     expect(text).toMatch(/silence is not a stop/i);
     // And the machine that did answer is still reported.
     expect(text).toMatch(/stop requested/i);
     expect(laptop.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(1);
-  }, 15_000);
+    // And it NAMES the machine, because "1 runtime did not answer"
+    // leaves a reader knowing something is still running and not where.
+    expect(text).toContain("dev-2");
+    // The grace outlasts the runtime's 10s stopper ceiling, so this
+    // test spends it. That cost buys never calling a machine silent
+    // while it is still stopping.
+  }, 25_000);
 
   it("a resume reports the machine that ACTED, not the one with nothing to do", async () => {
     // `cmdResume` answers "Nothing is halted." synchronously when
@@ -369,6 +413,100 @@ describe("two runtimes, one relay — what a frame actually does", () => {
     expect(text).toMatch(/Sent to 2 runtimes/i);
     expect(text).toMatch(/nothing is halted/i);
   }, 15_000);
+
+  it("an unreachable machine is reported, not vanished — and does not let one answer stand in", async () => {
+    // Counting only successful sends made an unreachable machine
+    // disappear from `targets`, so the composed path was skipped and
+    // the caller got the live machine's raw `acknowledged: true` with
+    // no sign a second machine existed. That is one machine's
+    // acknowledgement standing in for the motebit's — this change's
+    // whole subject, coming back through the accounting.
+    const live = attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "dev-1",
+        capabilities: ["background", "unattended_runtime"],
+      },
+    );
+    attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "dev-2",
+        capabilities: ["background", "unattended_runtime"],
+        socketIsDead: true,
+      },
+    );
+
+    const { body } = await ask("halt");
+    const text = JSON.stringify(body);
+    expect(text).toMatch(/Sent to 2 runtimes/i);
+    expect(text).toMatch(/not reached/i);
+    expect(text).toContain("dev-2");
+    // Reached one machine, so the motebit is NOT acknowledged stopped.
+    expect((body as { data?: { acknowledged?: boolean } }).data?.acknowledged).toBe(false);
+    expect(live.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(1);
+  }, 25_000);
+
+  it("two undeclared connections are folded into one delivery, and that makes acknowledged unprovable", async () => {
+    // They are bucketed together because they might equally be one
+    // host's two processes sharing a replay store, and delivering twice
+    // into that store is the worse error. But they might be two hosts —
+    // so the fold is reported and `acknowledged` is not claimed.
+    const a = attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "generated-1",
+        capabilities: ["background", "unattended_runtime"],
+        deviceIdDeclared: false,
+      },
+    );
+    const b = attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "generated-2",
+        capabilities: ["background", "unattended_runtime"],
+        deviceIdDeclared: false,
+      },
+    );
+
+    const { body } = await ask("halt");
+    expect(a.received.length + b.received.length).toBe(1);
+    const text = JSON.stringify(body);
+    expect(text).toMatch(/folded into the one above/i);
+    expect((body as { data?: { acknowledged?: boolean } }).data?.acknowledged).toBe(false);
+  }, 25_000);
+
+  it("says the halt ids are machine-local, because each machine wrote its own", async () => {
+    // Broadcasting a halt makes each machine write its own row with its
+    // own id, so the composed detail carries two `resume <id>` lines
+    // that each reach only one machine. Saying so beats letting a
+    // reader discover it by half-resuming their motebit.
+    attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "dev-1",
+        capabilities: ["background", "unattended_runtime"],
+      },
+    );
+    attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "dev-2",
+        capabilities: ["background", "unattended_runtime"],
+      },
+    );
+
+    const { body } = await ask("halt");
+    const text = JSON.stringify(body);
+    expect(text).toMatch(/machine-local/i);
+    expect(text).toMatch(/resume all/i);
+  }, 25_000);
 
   it("`runs` goes to the ledger-holder, never to a task worker that can be stopped", async () => {
     // `motebit serve` announces `unattended_runtime` truthfully and

@@ -127,8 +127,15 @@ export interface HarnessRuntime {
    * through the relay — and that one fact is the reason delivery is per
    * machine and not per connection, so a harness that cannot state it
    * cannot hold the thing issue #681 is blocked on.
+   *
+   * AWAITABLE, because "the second process refuses" is a statement
+   * about order. Envelope verification is async, so two deliveries
+   * started back-to-back race through it and either may reach the
+   * replay guard first — a test asserting which one refused then passes
+   * or fails on scheduling. Awaiting each delivery makes the sequence
+   * the test's, not the event loop's.
    */
-  deliver(payload: string): void;
+  deliver(payload: string): Promise<void>;
 }
 
 export interface HarnessDeps {
@@ -247,7 +254,7 @@ export function attachRuntime(
   const received: string[] = [];
   const replied: unknown[] = [];
 
-  const deliverToRuntime = (payload: string): void => {
+  const deliverToRuntime = async (payload: string): Promise<void> => {
     received.push(payload);
     const frame = JSON.parse(payload) as {
       type: string;
@@ -260,7 +267,7 @@ export function attachRuntime(
     if (opts.neverReplies === true) return;
     // The real handler, on the real runtime, with this MACHINE's
     // replay guard.
-    void handleRelayCommandFrame(frame, {
+    await handleRelayCommandFrame(frame, {
       runtime,
       motebitId: deps.motebitId,
       identityPublicKey: deps.identityPublicKey,
@@ -268,14 +275,15 @@ export function attachRuntime(
       reply: (raw) => {
         const msg = JSON.parse(raw) as { id: string; result: unknown };
         replied.push(msg.result);
-        // Back up the wire. Delivery is first-wins today, so one answer
-        // settles the request and the relay does not need to know which
-        // machine sent it. When issue #681 lands the broadcast, an
-        // answer carries the device that sent it and this call gains
-        // that argument — the point at which this harness starts being
-        // able to assert who answered and who stayed silent.
+        // Back up the wire, named by the machine that answered — the
+        // relay attributes an answer by the device that sent it, and an
+        // undeclared peer stays undeclared so its bucket is not split.
         try {
-          handleCommandResponse(msg.id, msg.result);
+          handleCommandResponse(
+            msg.id,
+            msg.result,
+            opts.deviceIdDeclared === false ? undefined : opts.deviceId,
+          );
         } catch (err) {
           // Never swallowed. A reply that cannot be delivered is the
           // harness being broken, not the subject.
@@ -295,7 +303,10 @@ export function attachRuntime(
         // Swallowed, exactly as a closed socket swallows it — not
         // thrown. See `socketIsDead`.
         if (opts.socketIsDead === true) return;
-        deliverToRuntime(payload);
+        // The relay's own send is synchronous and does not await a
+        // peer; the promise matters only to a test sequencing
+        // deliveries by hand.
+        void deliverToRuntime(payload);
       },
     },
     deviceId: opts.deviceId,

@@ -203,8 +203,18 @@ const pendingCommands = new Map<
      * where exactly one peer was ever addressed.
      */
     targets: string[];
+    /** Aimed at, but no socket on that machine was open. */
+    unreached: string[];
+    /**
+     * How many connections beyond the first declared no device id and
+     * were therefore folded into one delivery. They MIGHT be separate
+     * hosts, so a fold makes `acknowledged` unprovable.
+     */
+    collapsedUndeclared: number;
+    /** Shorthand for `collapsedUndeclared > 0`, read on every answer. */
+    wasFolded: boolean;
     /** Answers received so far, in arrival order. */
-    answers: unknown[];
+    answers: Array<{ from: string; result: unknown }>;
     /** Armed on the first answer, to bound the wait for the rest. */
     graceTimer?: ReturnType<typeof setTimeout>;
   }
@@ -214,15 +224,27 @@ const pendingCommands = new Map<
  * How long a broadcast waits for the other machines after the first
  * answer.
  *
- * Short, because the alternative is resolving on a race whose winner is
- * systematically the machine with the LEAST to do: `cmdResume` answers
- * "Nothing is halted." synchronously when nothing is active, while the
- * machine that actually holds the halt awaits its store. Resolving on
- * first reply also returns before the other machines have acted at all,
- * so a caller asserting on what was stopped is asking too early — which
- * is how the multi-runtime harness found this.
+ * It must OUTLAST the slowest honest answer, and the runtime tells us
+ * what that is: `cmdHalt` awaits `honorHalts()`, which runs every
+ * registered stopper under a 10-second ceiling
+ * (`HALT_STOPPER_TIMEOUT_MS` in `packages/runtime/src/motebit-runtime.ts`),
+ * while a machine with nothing to stop returns immediately.
+ *
+ * So the first answer is systematically from the machine with the LEAST
+ * to do, and a grace shorter than that ceiling arms on it and then
+ * reports the machine that is actually aborting work as "did not answer
+ * — silence is not a stop", with `acknowledged: false`, while it is
+ * still stopping. That is the fast-answerer bias this whole change
+ * exists to remove, inverted into a false negative on the one verb
+ * where a false negative is most costly.
+ *
+ * Twelve seconds: past the stopper ceiling with headroom, and still far
+ * inside `COMMAND_TIMEOUT_MS`, which remains the real bound. A caller
+ * waits longer only when a machine is genuinely wedged — and for a halt
+ * that is the right trade, because the alternative is being told a
+ * machine is silent while it is in the middle of stopping.
  */
-const BROADCAST_GRACE_MS = 3_000;
+const BROADCAST_GRACE_MS = 12_000;
 
 const COMMAND_TIMEOUT_MS = 30_000;
 
@@ -331,20 +353,30 @@ export function registerCommandRoutes(deps: CommandRouteDeps): void {
  * Called by the WebSocket message handler when an agent sends a command_response.
  * Resolves the pending Promise so the HTTP handler can return the result.
  */
-export function handleCommandResponse(commandId: string, result: unknown): void {
+export function handleCommandResponse(commandId: string, result: unknown, from?: string): void {
   const pending = pendingCommands.get(commandId);
   if (!pending) return;
-  pending.answers.push(result);
+  // An answer with no machine id came from a peer that declared none,
+  // which is exactly the bucket a broadcast aims its one undeclared
+  // delivery at — so it is attributable after all, to that bucket.
+  pending.answers.push({ from: from ?? UNDECLARED_MACHINE, result });
 
-  // First-wins addressed one peer: one answer settles it.
-  if (pending.targets.length <= 1) {
+  // First-wins addressed one peer, nothing was left unreached, and no
+  // undeclared connections were folded: one answer settles it.
+  //
+  // The fold has to be in this condition. Two undeclared peers collapse
+  // to ONE bucket, so a broadcast to them looked like a single target
+  // and took this path — handing back that one machine's raw
+  // `acknowledged: true` while a possible second host was never
+  // reached, which is the very claim the fold makes unprovable.
+  if (pending.targets.length <= 1 && pending.unreached.length === 0 && !pending.wasFolded) {
     finishCommand(commandId);
     return;
   }
   // A broadcast is NOT a race — gather every machine's answer, bounded
   // by a short grace after the first so one slow runtime cannot hold
   // the request open.
-  if (pending.answers.length >= pending.targets.length) {
+  if (pending.answers.length >= pending.targets.length - pending.unreached.length) {
     finishCommand(commandId);
     return;
   }
@@ -358,9 +390,9 @@ function finishCommand(commandId: string): void {
   if (pending.graceTimer != null) clearTimeout(pending.graceTimer);
   pendingCommands.delete(commandId);
   pending.resolve(
-    pending.targets.length <= 1
-      ? pending.answers[0]
-      : composeAnswers(pending.targets, pending.answers),
+    pending.targets.length <= 1 && pending.unreached.length === 0 && !pending.wasFolded
+      ? pending.answers[0]?.result
+      : composeAnswers(pending),
   );
 }
 
@@ -372,49 +404,96 @@ function asReply(value: unknown): { summary: string; detail?: string } | null {
   return { summary: r.summary, ...(typeof r.detail === "string" ? { detail: r.detail } : {}) };
 }
 
+/** How a machine is named to the person reading the answer. */
+function machineLabel(id: string): string {
+  return id === UNDECLARED_MACHINE ? "an unidentified runtime" : id;
+}
+
 /**
  * One answer from several machines, without pretending it was one.
  *
- * Every machine the request was aimed at gets a line, and one that did
- * not answer in time is named as silent rather than dropped — an
- * unanswered halt is the one case a reader must not take for "stopped".
- * An answer this cannot parse is shown as that machine's answer rather
- * than replacing the report.
+ * Every machine the request was aimed at gets a line — answered,
+ * unreachable, or silent — and each is NAMED, because "1 runtime did
+ * not answer" tells a sovereign with a laptop and a VPS the one thing
+ * they cannot act on: something is still running and they do not know
+ * where. An answer this cannot parse is shown as that machine's answer
+ * rather than replacing the report.
  */
-function composeAnswers(targets: string[], answers: unknown[]): unknown {
+function composeAnswers(pending: {
+  targets: string[];
+  unreached: string[];
+  collapsedUndeclared: number;
+  wasFolded?: boolean;
+  answers: Array<{ from: string; result: unknown }>;
+}): unknown {
+  const { targets, unreached, collapsedUndeclared, answers } = pending;
   const lines: string[] = [];
   const details: string[] = [];
-  answers.forEach((a, i) => {
-    const reply = asReply(a);
-    const who = `runtime ${i + 1}`;
+  const answered = new Set(answers.map((a) => a.from));
+
+  for (const a of answers) {
+    const who = machineLabel(a.from);
+    const reply = asReply(a.result);
     if (reply == null) {
       lines.push(`  ${who}: answered in a shape this relay could not read`);
-      return;
+      continue;
     }
     lines.push(`  ${who}: ${reply.summary}`);
     if (reply.detail != null && reply.detail !== "") details.push(`${who}:\n${reply.detail}`);
-  });
-  const silent = targets.length - answers.length;
-  if (silent > 0) {
+  }
+
+  // Unreachable and silent are different facts and both are the
+  // reader's business: an unanswered halt is the one case that must not
+  // be taken for a stop.
+  for (const t of targets) {
+    if (unreached.includes(t)) {
+      lines.push(`  ${machineLabel(t)}: not reached — its connection was already gone`);
+      continue;
+    }
+    if (answered.has(t)) continue;
     lines.push(
-      `  ${silent} runtime(s) did not answer in time — what they did is unknown, and silence is not a stop`,
+      `  ${machineLabel(t)}: no answer in time — what it did is unknown, and silence is not a stop`,
+    );
+  }
+  if (collapsedUndeclared > 0) {
+    lines.push(
+      `  ${collapsedUndeclared} further connection(s) declared no machine id and were folded into the one above — if any is a different host, it was not reached`,
     );
   }
 
-  // `acknowledged` survives composition, and gets stricter: true only
-  // when every machine aimed at came back saying so. One machine's
-  // acknowledgement is not the motebit's — the sentence `cmdHalt` is
-  // built around.
+  // `acknowledged` survives composition and gets STRICTER: true only
+  // when every machine aimed at was reached, answered, and said so. One
+  // machine's acknowledgement is not the motebit's — the sentence
+  // `cmdHalt` is built around. A folded undeclared bucket makes it
+  // unprovable, so it is not claimed.
   const acknowledged =
+    unreached.length === 0 &&
+    collapsedUndeclared === 0 &&
     answers.length === targets.length &&
     answers.every(
-      (a) => (a as { data?: { acknowledged?: unknown } } | null)?.data?.acknowledged === true,
+      (a) =>
+        (a.result as { data?: { acknowledged?: unknown } } | null)?.data?.acknowledged === true,
     );
+
+  // A halt id is written per machine, so there is no single one to lift.
+  const haltIds = answers
+    .map((a) => (a.result as { data?: { halt_id?: unknown } } | null)?.data?.halt_id)
+    .filter((h): h is string => typeof h === "string");
+  const note =
+    haltIds.length > 1
+      ? "\n\nEach machine wrote its own halt, so the ids above are machine-local — `resume all` lifts them everywhere; `resume <id>` reaches only the machine that wrote it."
+      : "";
 
   return {
     summary: `Sent to ${targets.length} runtimes; ${answers.length} answered.`,
-    detail: [lines.join("\n"), ...details].join("\n\n"),
-    data: { acknowledged, sent_to: targets.length, answered: answers.length, answers },
+    detail: [lines.join("\n"), ...details].join("\n\n") + note,
+    data: {
+      acknowledged,
+      sent_to: targets.length,
+      answered: answers.length,
+      unreached,
+      answers: answers.map((a) => ({ from: a.from, result: a.result })),
+    },
   };
 }
 
@@ -438,11 +517,25 @@ async function forwardCommandToAgent(
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
+      // The grace timer can still be armed here — a first answer landing
+      // just under the ceiling arms one that outlives this. Left alone
+      // it holds the event loop open and then fires into a deleted
+      // entry.
+      const held = pendingCommands.get(commandId);
+      if (held?.graceTimer != null) clearTimeout(held.graceTimer);
       pendingCommands.delete(commandId);
       reject(new Error("Command timed out"));
     }, COMMAND_TIMEOUT_MS);
 
-    pendingCommands.set(commandId, { resolve, timer, targets: [], answers: [] });
+    pendingCommands.set(commandId, {
+      resolve,
+      timer,
+      targets: [],
+      unreached: [],
+      collapsedUndeclared: 0,
+      wasFolded: false,
+      answers: [],
+    });
 
     // For most commands any connected surface can answer. For the
     // unattended-runtime set, only a peer that actually runs unattended
@@ -572,9 +665,41 @@ async function forwardCommandToAgent(
         if (bucket == null) byMachine.set(key, [peer]);
         else bucket.push(peer);
       }
-      // The target list is complete BEFORE the first send, so an answer
-      // arriving mid-loop cannot read it as empty and settle early.
-      const landedMachines: string[] = [];
+
+      // Every machine the command was AIMED at is a target, including
+      // one whose only socket turns out to be shut.
+      //
+      // Counting only successful sends made an unreachable machine
+      // vanish: with a laptop whose connection was closed-but-unreaped
+      // and a live VPS, `targets` held one machine, the composed path
+      // was skipped, and the caller got the VPS's raw `acknowledged:
+      // true` with no sign that a second machine existed and was never
+      // reached. That is one machine's acknowledgement standing in for
+      // the motebit's — the defect this change exists to close, coming
+      // back through the accounting.
+      //
+      // And the list is complete BEFORE the first send, assigned rather
+      // than derived afterwards, so an answer arriving during the loop
+      // cannot read it as empty and settle first-wins. The previous
+      // version held only because every reply path crosses an `await`,
+      // which is a property of today's transport and not an invariant.
+      const pending = pendingCommands.get(commandId);
+      const aimedAt = [...byMachine.keys()];
+      if (pending != null) {
+        pending.targets = aimedAt;
+        // Two undeclared connections might be two hosts. They are folded
+        // into one delivery because they might equally be one host's two
+        // processes sharing a replay store, and delivering twice into
+        // that store is the worse error — but the fold makes
+        // `acknowledged` unprovable, so it is recorded and reported.
+        pending.collapsedUndeclared = Math.max(
+          0,
+          (byMachine.get(UNDECLARED_MACHINE)?.length ?? 0) - 1,
+        );
+        pending.wasFolded = pending.collapsedUndeclared > 0;
+      }
+
+      const unreached: string[] = [];
       for (const [key, machinePeers] of byMachine) {
         const ok = machinePeers.some((peer) => {
           if (peer.ws.readyState !== 1) return false;
@@ -585,11 +710,10 @@ async function forwardCommandToAgent(
             return false;
           }
         });
-        if (ok) landedMachines.push(key);
+        if (!ok) unreached.push(key);
       }
-      const pending = pendingCommands.get(commandId);
-      if (pending != null) pending.targets = landedMachines;
-      if (landedMachines.length === 0) {
+      if (pending != null) pending.unreached = unreached;
+      if (unreached.length === aimedAt.length) {
         clearTimeout(timer);
         pendingCommands.delete(commandId);
         reject(
