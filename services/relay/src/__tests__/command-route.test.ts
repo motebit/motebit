@@ -724,6 +724,43 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     expect(body).toMatch(/no answer yet|carried no machine id/i);
   }, 10_000);
 
+  it("`acknowledged` survives composition, and gets stricter", async () => {
+    // `sendAgentCommand` documents that a result whose data says
+    // `acknowledged: true` is the motebit reporting it stopped, not the
+    // relay reporting a delivery. Replacing the runtime's `data`
+    // wholesale dropped the field on exactly the multi-machine
+    // deployment this arc is for. One machine's acknowledgement is not
+    // the motebit's, so the aggregate is the strict one.
+    const laptop = fakePeer("dev-1", ["background", "unattended_runtime"]);
+    const vps = fakePeer("dev-2", ["background", "unattended_runtime"]);
+    relay.connections.set(AGENT_ID, [laptop.peer, vps.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "halt",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    const posted = postCommand(AGENT_ID, { command: "halt", envelope });
+    await new Promise((r) => setTimeout(r, 50));
+    const commandId = (JSON.parse(laptop.sentTo[0] ?? "{}") as { id?: string }).id ?? "";
+    handleCommandResponse(
+      commandId,
+      { summary: "Stopped.", data: { acknowledged: true } },
+      "dev-1",
+    );
+    handleCommandResponse(
+      commandId,
+      { summary: "Not yet acknowledged.", data: { acknowledged: false } },
+      "dev-2",
+    );
+    const { json } = await posted;
+    const data = (json as { data?: { acknowledged?: boolean } }).data;
+    expect(data).toBeDefined();
+    // One of two acknowledged, so the motebit has not stopped.
+    expect(data?.acknowledged).toBe(false);
+  });
+
   it("a broadcast halt is delivered once per MACHINE, not once per process", async () => {
     // `motebit run` and `motebit serve` on one host share a device id, a
     // database and one replay store, and the envelope carries a single

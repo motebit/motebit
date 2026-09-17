@@ -446,10 +446,30 @@ function combineAnswers(
     lines.push(`  ${machineLabel(t)}: no answer yet — what it stopped is unknown`);
   }
 
+  // `acknowledged` survives composition, because a client codes against
+  // it.
+  //
+  // `sendAgentCommand` documents that a result whose data says
+  // `acknowledged: true` is the motebit reporting that it stopped, not
+  // the relay reporting a delivery. Replacing the runtime's `data`
+  // wholesale dropped that field on exactly the multi-machine
+  // deployment this arc is for, so a consumer reading the documented
+  // contract saw a successful halt as unacknowledged. The aggregate is
+  // the strict one: true only when every machine the request was aimed
+  // at came back saying so. One machine's acknowledgement is not the
+  // motebit's — which is the sentence the halt command itself is built
+  // around.
+  const everyMachineAnswered = answers.length === targets.length && unreached.length === 0;
+  const everyAnswerAcknowledged = answers.every(
+    (a) => (a.result as { data?: { acknowledged?: unknown } } | null)?.data?.acknowledged === true,
+  );
+  const acknowledged = everyMachineAnswered && everyAnswerAcknowledged;
+
   return {
     summary: `Sent to ${targets.length} runtimes; ${answers.length} answered.`,
     detail: [lines.join("\n"), ...details].join("\n\n"),
     data: {
+      acknowledged,
       sent_to: targets.length,
       answered: answers.length,
       unreached,

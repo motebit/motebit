@@ -376,10 +376,18 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
       // days ago, that is three days of someone else's work presented
       // as the goal's. A correlation that widens without bound is not a
       // correlation.
+      //
+      // The ceiling applies on BOTH branches. Capping only the newest
+      // outcome left the others bounded by the next outcome's start —
+      // and this list is every goal's outcomes, so on a quiet motebit
+      // with a weekly goal that is a seven-day window, from which the
+      // query returns the earliest fifty rows it finds. The unbounded
+      // case just moved one branch over.
       const nextRanAt = currentIndex > 0 ? Number(allOutcomes[currentIndex - 1]!.ran_at) : NaN;
+      const ceiling = ranAt + RUN_CORRELATION_WINDOW_MS;
       const endTs = Number.isFinite(nextRanAt)
-        ? nextRanAt
-        : Math.min(Date.now(), ranAt + RUN_CORRELATION_WINDOW_MS);
+        ? Math.min(nextRanAt, ceiling)
+        : Math.min(Date.now(), ceiling);
 
       void invoke<Array<Record<string, unknown>>>("db_query", {
         sql: `SELECT tool, decision, result, timestamp FROM tool_audit_log WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC LIMIT 50`,
