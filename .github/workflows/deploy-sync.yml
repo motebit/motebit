@@ -85,10 +85,32 @@ jobs:
 
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master
 
+      # A HANG must fail, not vanish.
+      #
+      # A successful deploy of this app takes under three minutes. On
+      # 2026-09-17 one ran for thirty and was killed by the job ceiling,
+      # which GitHub reports as `cancelled` — a conclusion that reads
+      # like an operator stopped it, that no `if: failure()` alert
+      # matches, and that left production two increments behind with a
+      # green-looking pipeline above it. Raising the ceiling would only
+      # have bought a longer silence, so the deploy carries its own
+      # deadline and exits non-zero when it passes one.
       - name: Deploy to Fly.io
-        run: flyctl deploy --config services/relay/fly.toml --remote-only
+        timeout-minutes: 15
+        run: |
+          set -o pipefail
+          flyctl deploy --config services/relay/fly.toml --remote-only \
+            --wait-timeout 10m
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      # `cancelled` is not `failure`, so an alert keyed on failure alone
+      # is silent on exactly the outcome that hid this one.
+      - name: Say so when the deploy did not land
+        if: cancelled() || failure()
+        run: |
+          echo "::error title=Relay deploy did not land::The relay deploy ended as ${{ job.status }} — production is still on its previous release. A deploy of this app normally takes under three minutes, so this is a hang, not slowness. Check the fleet with \`flyctl releases -a motebit-sync\`, never the workflow colour."
+          exit 1
 
       # A deploy that did not land must not read as one that did. The job
       # summary is where an operator looks first, so it carries the release

@@ -37,6 +37,12 @@ jobs:
       #                   ANTHROPIC_API_KEY=... \
       #                   MOTEBIT_WEB_SEARCH_URL=... MOTEBIT_READ_URL_URL=...
       - name: Deploy to Fly.io
-        run: flyctl deploy --config services/research/fly.toml --remote-only
+        # A HANG must fail, not vanish: a job killed by the ceiling
+        # reports as `cancelled`, which no `if: failure()` alert
+        # matches. See deploy-sync.yml for the incident that showed it.
+        timeout-minutes: 15
+        run: |
+          set -o pipefail
+          flyctl deploy --config services/research/fly.toml --remote-only --wait-timeout 10m
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
