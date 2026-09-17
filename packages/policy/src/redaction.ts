@@ -237,6 +237,44 @@ export class RedactionEngine {
   }
 
   /**
+   * Redact a RETRIEVED SOURCE — a URL an owner is told to re-fetch.
+   *
+   * Two failure modes pull in opposite directions, and one membrane
+   * cannot serve both, so this splits the string where the risk splits.
+   *
+   * A path is STRUCTURE, written by whoever published the page, and
+   * running keyword-keyed patterns over it destroys the affordance the
+   * URL exists for: `API_KEY` matches any long word beginning `key`,
+   * `api`, `token` or `secret`, so
+   * `…/apidocumentationandreference/v2` came back as
+   * `…/[REDACTED:API_KEY]/v2` and the owner was handed a digest beside
+   * a source they cannot see. So the path gets the shape-keyed set,
+   * which recognises a secret by its own form and cannot be fooled by
+   * someone else's vocabulary.
+   *
+   * A query is DATA, and it is where `?ssn=` and `?card=` live. The
+   * credential-class sets both exclude those deliberately — for a
+   * different boundary — so a statement URL crossed the relay with a
+   * social-security number and a card number in the clear. The query
+   * and fragment get the FULL set: a false positive there costs a
+   * parameter, and being wrong the other way costs someone's PII.
+   *
+   * A `ref` that is not a URL at all gets the full set, because
+   * unparseable is not a reason to disclose.
+   */
+  redactRetrievedSource(ref: string): string {
+    let url: URL;
+    try {
+      url = new URL(ref);
+    } catch {
+      return this.redact(ref).text;
+    }
+    const head = `${url.origin}${url.pathname}`;
+    const tail = `${url.search}${url.hash}`;
+    return this.redactCredentialShapes(head).text + (tail === "" ? "" : this.redact(tail).text);
+  }
+
+  /**
    * Redact ONLY the high-precision credential-class patterns (`cloudEgress: true`)
    * — for masking a user's own typed message before it reaches a NON-SOVEREIGN
    * (cloud) provider. Deliberately narrower than {@link redact}: it does NOT touch

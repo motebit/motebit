@@ -43,6 +43,53 @@ describe("redactForRemoteDisclosure — read to DECIDE", () => {
   });
 });
 
+describe("redactSourceForRemoteDisclosure — a URL to RE-FETCH", () => {
+  it("leaves an ordinary documentation path legible", () => {
+    // The credential-class set is keyword-keyed: `API_KEY` matches any
+    // long word beginning `key`, `api`, `token` or `secret`, so this
+    // path came back as `…/[REDACTED:API_KEY]/v2` and the owner was
+    // handed a digest beside a source they cannot see — the exact case
+    // the affordance exists to avoid.
+    const r = makeRuntime();
+    const url = "https://developer.example.com/apidocumentationandreference/v2";
+    expect(r.redactSourceForRemoteDisclosure(url)).toBe(url);
+  });
+
+  it("leaves a long object key and a numeric document id alone", () => {
+    const r = makeRuntime();
+    const url = "https://example.gov/edgar/data/320193/000032019324000123-index.htm";
+    expect(r.redactSourceForRemoteDisclosure(url)).toBe(url);
+  });
+
+  it("masks PII in the QUERY, which the credential sets let through", () => {
+    // A statement URL crossed the relay with a social-security number
+    // and a card number in the clear: both sets exclude them, for a
+    // boundary this is not.
+    const r = makeRuntime();
+    const out = r.redactSourceForRemoteDisclosure(
+      "https://portal.example.com/statement?ssn=123-45-6789&card=4111111111111111",
+    );
+    expect(out).toContain("https://portal.example.com/statement");
+    expect(out).not.toContain("123-45-6789");
+    expect(out).not.toContain("4111111111111111");
+  });
+
+  it("masks a credential shape wherever it sits", () => {
+    const r = makeRuntime();
+    const token = ["sk", "live", "NOTAREALKEYJUSTAFIXTURE"].join("_");
+    expect(r.redactSourceForRemoteDisclosure(`https://host/x?k=${token}`)).not.toContain(
+      "NOTAREALKEYJUSTAFIXTURE",
+    );
+  });
+
+  it("a ref that is not a URL takes the full set — unparseable is not a licence", () => {
+    const r = makeRuntime();
+    expect(r.redactSourceForRemoteDisclosure("call-1 filed under 123-45-6789")).not.toContain(
+      "123-45-6789",
+    );
+  });
+});
+
 describe("redactReportForRemoteDisclosure — read as a REPORT", () => {
   it("masks a card number, which the decision seam lets through", () => {
     // A nightly goal summarising a bank portal puts this in

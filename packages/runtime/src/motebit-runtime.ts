@@ -3083,6 +3083,21 @@ export class MotebitRuntime {
     return this.policy.redact(text);
   }
 
+  /**
+   * Mask a RETRIEVED SOURCE — a URL the owner is told to re-fetch.
+   *
+   * The third kind of text at this boundary, and it needed its own
+   * membrane because the other two are each wrong for it in opposite
+   * directions. The credential-class set is keyword-keyed, so it
+   * erased ordinary documentation paths and left the owner a digest
+   * beside a source they cannot see; the report set leaves a URL
+   * unreadable for the same reason it is right for prose. See
+   * `RedactionEngine.redactRetrievedSource` for the split.
+   */
+  redactSourceForRemoteDisclosure(ref: string): string {
+    return this.policy.redactRetrievedSource(ref);
+  }
+
   /** Durable halt state, or `null` on a surface that supplied no store. */
   get halts(): import("@motebit/sdk").HaltStoreAdapter | null {
     return this.haltStore;

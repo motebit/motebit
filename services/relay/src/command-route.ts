@@ -192,6 +192,8 @@ const pendingCommands = new Map<
   {
     resolve: (result: unknown) => void;
     timer: ReturnType<typeof setTimeout>;
+    /** The verb, so a composed report can word itself for it. */
+    command: string;
     /**
      * Whether this request was aimed at every machine. Only a broadcast
      * reports per-machine; first-wins reached exactly one runtime and
@@ -375,7 +377,7 @@ function finishCommand(commandId: string): void {
   pendingCommands.delete(commandId);
   pending.resolve(
     pending.broadcast
-      ? combineAnswers(pending.targets, pending.unreached, pending.answers)
+      ? combineAnswers(pending.command, pending.targets, pending.unreached, pending.answers)
       : // First-wins delivered to exactly ONE runtime, whatever it had
         // to walk past to get there. Wrapping that in a per-machine
         // report invented a second target the command never addressed —
@@ -410,7 +412,22 @@ function machineLabel(id: string | null): string {
  * did stop and left the reader with no evidence of it at all — the
  * inverse of the invariant the function exists for.
  */
+/**
+ * What a machine's silence leaves unknown, in the verb that was asked.
+ *
+ * One hardcoded halt sentence served all three broadcast verbs, so a
+ * `/resume` against a slow machine reported "what it stopped is
+ * unknown" about a command that stopped nothing — an untrue sentence
+ * about the one machine the reader most needs the truth about.
+ */
+function silenceWording(command: string): string {
+  if (command === "resume") return "whether it resumed is unknown";
+  if (command === "halt-status") return "what it has stopped is unknown";
+  return "what it stopped is unknown";
+}
+
 function combineAnswers(
+  command: string,
   targets: string[],
   unreached: string[],
   answers: Array<{ from: string | null; result: unknown }>,
@@ -450,7 +467,7 @@ function combineAnswers(
       continue;
     }
     if (answered.has(t)) continue;
-    lines.push(`  ${machineLabel(t)}: no answer yet — what it stopped is unknown`);
+    lines.push(`  ${machineLabel(t)}: no answer yet — ${silenceWording(command)}`);
   }
 
   // `acknowledged` survives composition, because a client codes against
@@ -524,6 +541,7 @@ async function forwardCommandToAgent(
     pendingCommands.set(commandId, {
       resolve,
       timer,
+      command,
       broadcast: BROADCAST_UNATTENDED_COMMANDS.has(command),
       targets: [],
       unreached: [],

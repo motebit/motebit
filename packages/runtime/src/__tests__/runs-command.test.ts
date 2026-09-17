@@ -20,6 +20,11 @@ function runtimeWith(ledger: RunLedgerReader | null): MotebitRuntime {
     redactForRemoteDisclosure: (t: string) => t.replace(/sk-[A-Za-z0-9-]+/g, "[REDACTED]"),
     // The REPORT seam, wider than the decision seam beside it.
     redactReportForRemoteDisclosure: (t: string) => t.replace(/sk-[A-Za-z0-9-]+/g, "[REDACTED]"),
+    // And the SOURCE seam: a URL the owner is told to re-fetch, which
+    // has to survive masking to be worth anything. The real one splits
+    // path from query; this stub only has to prove the command routes
+    // through it rather than around it.
+    redactSourceForRemoteDisclosure: (t: string) => t.replace(/sk-[A-Za-z0-9-]+/g, "[REDACTED]"),
   } as unknown as MotebitRuntime;
 }
 
@@ -285,9 +290,11 @@ describe("runs — the return view from another surface", () => {
     expect(r.summary).not.toContain("No run matching");
     expect(r.detail).toContain("motebit runs ack");
     // And it does not tell someone standing on the machine that holds
-    // the record to go run it there — this reader is wired on the
-    // interactive terminal too.
+    // the record to go somewhere else — this reader is wired on the
+    // interactive terminal too, so the sentence has to be true read
+    // from either side.
     expect(r.summary).not.toMatch(/happens where the run is/i);
+    expect(r.detail).not.toMatch(/on that machine|run it there/i);
   });
 
   it("a stray word after `show` does not become part of the id", () => {

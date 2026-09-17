@@ -1023,6 +1023,16 @@ export class PolicyGate {
   }
 
   /**
+   * Redact a retrieved SOURCE — a URL the owner is told to re-fetch.
+   * Path by shape, query by the full set; see
+   * `RedactionEngine.redactRetrievedSource` for why neither credential
+   * set serves it.
+   */
+  redactRetrievedSource(ref: string): string {
+    return this.redaction.redactRetrievedSource(ref);
+  }
+
+  /**
    * Redact ONLY the high-precision credential-class secrets — for masking a user's
    * own typed message before it reaches a non-sovereign (cloud) provider. Narrower
    * than {@link redact} (no SSN / card / bare-base64). See

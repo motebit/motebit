@@ -22,13 +22,16 @@
  * of text that does cross is masked at the boundary, because the relay
  * is not a sovereign party.
  *
- * Two membranes, not one, because text splits by what a person does
+ * Three membranes, not one, because text splits by what a person does
  * with it. A run's result is read as a REPORT, so it goes through the
  * full set — losing a field there costs legibility, keeping one can
- * cost a card number. An evidence source is read TO ACT ON, like an
- * approval's arguments, so it goes through the narrow credential-class
- * set: the prose beside it says to re-fetch and hash, and a digest next
- * to an erased URL proves nothing to anybody.
+ * cost a card number. An approval's arguments are read TO DECIDE, so
+ * they keep the narrow credential-class set: mask the destination or
+ * the amount and there is nothing left to consent to. And an evidence
+ * source is read TO RE-FETCH, so it is split where its own risk splits
+ * — path by shape, query by the full set, because a keyword-keyed
+ * pattern erases an ordinary documentation path and neither credential
+ * set catches an account number in a query string.
  *
  * And asked from the machine that holds the ledger, nothing is masked:
  * no wire is being crossed, and the owner reading their own record
@@ -167,7 +170,7 @@ export function cmdRuns(
     return {
       summary: `\`${parsed.verb}\` is not part of the return view.`,
       detail:
-        "Acknowledging a held run writes to the record on the machine that holds it. Run `motebit runs ack <id>` on that machine — or `halt` from here, which does reach it.",
+        "Acknowledging a held run writes to the record that holds it, so it is a local act: `motebit runs ack <id>`, run where that record is. From here the verbs that do travel are `halt` and `resume`.",
     };
   }
   if (parsed.kind === "run") return showRun(runtime, ledger, parsed.id, origin);
@@ -250,16 +253,18 @@ function redactRun(
     tool_calls: run.tool_calls.map((c) => ({ tool: c.tool, verdict: c.verdict })),
     evidence: run.evidence.map((e) => ({
       tool: e.tool,
-      // The source goes through the DECISION seam, not the report one.
+      // The source has its own membrane, split where its risk splits.
       //
-      // A ref is read to act on, like an approval's arguments: the
-      // prose beside it says to re-fetch the source and hash the
-      // result, and a digest next to an erased URL proves nothing to
-      // anybody. The report set would mask a forty-character object key
-      // as base64 and a nine-digit document id as an SSN and break
-      // exactly that. The credential-class set catches a token in a
-      // query parameter and leaves an ordinary URL legible, which is
-      // the same asymmetry the two seams exist for.
+      // Neither of the other two serves it. The report set masks a
+      // forty-character object key as base64 and a nine-digit document
+      // id as an SSN, erasing the URL the prose beside it tells the
+      // owner to re-fetch. The credential-class set is keyword-keyed
+      // and did the same thing for a different reason — `API_KEY`
+      // matches any long word starting `key`, `api`, `token` or
+      // `secret`, so `…/apidocumentationandreference/v2` came back
+      // redacted — while letting `?ssn=` and `?card=` through, because
+      // that set excludes them for a boundary this is not. Path by
+      // shape, query by the full set.
       ref: redactRef(e.ref),
       digest: e.digest,
       ...(e.projection != null ? { projection: e.projection } : {}),
@@ -300,7 +305,9 @@ function showRun(
   // what stops a field added later from arriving unredacted by default.
   const redact = redactorFor(runtime, origin);
   const redactRef =
-    origin === "local" ? (t: string) => t : (t: string) => runtime.redactForRemoteDisclosure(t);
+    origin === "local"
+      ? (t: string) => t
+      : (t: string) => runtime.redactSourceForRemoteDisclosure(t);
   const run = redactRun(raw, redact, redactRef);
 
   const sections: string[] = [];

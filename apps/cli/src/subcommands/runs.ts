@@ -179,7 +179,21 @@ export async function handleRunsShow(config: CliConfig): Promise<void> {
     // identity's content while `motebit runs` listed nothing for it.
     const indexedRun = moteDb.goalRunStore.get(target);
     const indexed = indexedRun?.motebit_id === motebitId ? indexedRun : null;
-    const recent = moteDb.goalRunStore.listRecent(motebitId, 200);
+    // The same set the LIST draws from, not a window — the union its
+    // two siblings already search. A held run is exactly the kind that
+    // stays open while newer ones accumulate, so it scrolls out of any
+    // fixed window; `motebit runs` listed it, `/runs <prefix>` opened
+    // it and `motebit runs ack <prefix>` released it, while this one
+    // answered "no run matching" about the id printed right there. A
+    // view whose halves disagree about what exists is the failure this
+    // command's own reader was built to remove, fixed on two of three.
+    const searchable = [
+      ...moteDb.goalRunStore.listBlocking(motebitId),
+      ...moteDb.goalRunStore.listRecent(motebitId, 200),
+    ];
+    const recent = searchable.filter(
+      (r, i, xs) => xs.findIndex((y) => y.run_id === r.run_id) === i,
+    );
     const exact = indexed ?? recent.find((r) => r.run_id === target);
     const prefixed = recent.filter((r) => r.run_id.startsWith(target));
     if (exact == null && prefixed.length > 1) {
