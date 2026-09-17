@@ -341,7 +341,10 @@ export function registerCommandRoutes(deps: CommandRouteDeps): void {
 export function handleCommandResponse(commandId: string, result: unknown, from?: string): void {
   const pending = pendingCommands.get(commandId);
   if (!pending) return;
-  pending.answers.push({ from: from ?? null, result });
+  // An answer with no machine id came from a peer that declared none,
+  // which is exactly the bucket a broadcast aimed its one undeclared
+  // delivery at — so it is attributable after all, to that bucket.
+  pending.answers.push({ from: from ?? UNDECLARED_MACHINE, result });
 
   // A single delivery is a single answer; nothing to gather.
   if (!pending.broadcast) {
@@ -433,27 +436,20 @@ function combineAnswers(
   // reader's business: an unanswered halt is the one case that must not
   // read as "stopped".
   //
-  // An answer carrying no machine id (an older surface) could have come
-  // from any target, so it can only be subtracted from a count — but it
-  // must not silence the NAMING of the targets it demonstrably did not
-  // come from. Gating the names on a whole-set predicate let one
-  // undeclared answer reduce every silent machine to a tally, which is
-  // precisely the "something is still running and I don't know where"
-  // gap the attribution was added to close.
-  let unattributed = answers.filter((a) => a.from == null).length;
+  // Every answer IS attributable: one carrying no machine id came from a
+  // peer that declared none, which is exactly the bucket a broadcast
+  // aimed its one undeclared delivery at. Treating it as unplaceable
+  // and spending a generic credit on the first target named the WRONG
+  // machine — with one declared daemon and one older runtime, an answer
+  // from the older one printed under the declared one's id and left the
+  // bucket that actually replied listed as silent, so the same report
+  // said one machine had stopped and had not answered.
   for (const t of targets) {
     if (unreached.includes(t)) {
       lines.push(`  ${machineLabel(t)}: not reached — its connection was already gone`);
       continue;
     }
     if (answered.has(t)) continue;
-    // An unattributed answer might have been this machine's. Spend one
-    // on it and say so, rather than claiming a silence we cannot prove.
-    if (unattributed > 0) {
-      unattributed -= 1;
-      lines.push(`  ${machineLabel(t)}: answered, or did not — its answer carried no machine id`);
-      continue;
-    }
     lines.push(`  ${machineLabel(t)}: no answer yet — what it stopped is unknown`);
   }
 

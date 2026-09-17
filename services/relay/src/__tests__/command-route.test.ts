@@ -694,6 +694,38 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     expect(live.sentTo).toHaveLength(1);
   });
 
+  it("an undeclared machine's answer is credited to IT, not to a declared sibling", async () => {
+    // Spending a generic credit on the first target named the wrong
+    // machine: with one declared daemon and one older runtime, an answer
+    // from the older one printed under the declared one's id and left
+    // the bucket that actually replied listed as silent — the same
+    // report saying one machine had stopped and had not answered.
+    const daemon = fakePeer("dev-1", ["background", "unattended_runtime"]);
+    const legacy = fakePeer("legacy", ["background", "unattended_runtime"], false);
+    relay.connections.set(AGENT_ID, [daemon.peer, legacy.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "halt",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    const posted = postCommand(AGENT_ID, { command: "halt", envelope });
+    await new Promise((r) => setTimeout(r, 50));
+    const commandId = (JSON.parse(daemon.sentTo[0] ?? "{}") as { id?: string }).id ?? "";
+    // Only the undeclared one answers, and it cannot say who it is.
+    handleCommandResponse(commandId, { summary: "Stopped. 1 acknowledged." });
+    const { json } = await posted;
+    const detail = (json as { detail?: string }).detail ?? "";
+    const forDev1 = detail.split("\n").filter((l) => l.includes("dev-1"));
+    // The declared daemon is the one that is silent, and is named so —
+    // exactly once, not as both stopped and silent.
+    expect(forDev1).toHaveLength(1);
+    expect(forDev1[0]).toMatch(/no answer yet/);
+    // And the machine that DID answer is credited, under its own label.
+    expect(detail).toMatch(/unidentified runtime: Stopped/);
+  }, 10_000);
+
   it("one unattributed answer does not reduce every silent machine to a tally", async () => {
     // An answer with no machine id could have come from any target, so
     // it can only be subtracted from a count — but gating the NAMES on

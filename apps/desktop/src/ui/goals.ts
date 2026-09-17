@@ -363,9 +363,12 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
       });
       hasRunIdColumn = cols.some((c) => c.name === "run_id");
     } catch {
-      // Unknown stays unknown for this attempt, but the timestamp scan
-      // is a real answer, so the expansion is not left empty.
-      hasRunIdColumn = false;
+      // Unknown stays unknown — for THIS attempt only. Writing `false`
+      // into the memo made one transient failure (the database locked
+      // while the daemon writes, say) permanently downgrade every later
+      // expansion in the session to the unfiltered time scan, which is
+      // the opposite of what the sentence above it promised.
+      return false;
     }
     return hasRunIdColumn;
   }
@@ -419,11 +422,16 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
       // with a weekly goal that is a seven-day window, from which the
       // query returns the earliest fifty rows it finds. The unbounded
       // case just moved one branch over.
-      const nextRanAt = currentIndex > 0 ? Number(allOutcomes[currentIndex - 1]!.ran_at) : NaN;
+      // `> 0`, not `Number.isFinite`. `db_query` maps SQL NULL to JSON
+      // null and `Number(null)` is 0, which IS finite — so a neighbour
+      // row with a null `ran_at` gave `endTs = 0` against a start of
+      // `ranAt - 5000`, an inverted window returning nothing, and a run
+      // that demonstrably made tool calls (the row only expands when it
+      // did) rendered an empty list. The `|| Date.now()` this replaced
+      // guarded exactly that.
+      const nextRanAt = currentIndex > 0 ? Number(allOutcomes[currentIndex - 1]!.ran_at) : 0;
       const ceiling = ranAt + RUN_CORRELATION_WINDOW_MS;
-      const endTs = Number.isFinite(nextRanAt)
-        ? Math.min(nextRanAt, ceiling)
-        : Math.min(Date.now(), ceiling);
+      const endTs = nextRanAt > 0 ? Math.min(nextRanAt, ceiling) : Math.min(Date.now(), ceiling);
 
       void invoke<Array<Record<string, unknown>>>("db_query", {
         sql: `SELECT tool, decision, result, timestamp FROM tool_audit_log WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC LIMIT 50`,
