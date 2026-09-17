@@ -308,14 +308,6 @@ export class RelayClient {
    * runtime is not connected, this throws `kind: "http"` with the
    * relay's status — and the honest reading of that is "not delivered",
    * never "stopped".
-   *
-   * On a motebit with unattended runtimes on more than one MACHINE, a
-   * halt is delivered to every one of them and the answers are composed
-   * rather than raced: `data` then also carries `sent_to`, `answered`,
-   * `unreached` and the per-machine `answers`, and `detail` names each
-   * machine. `acknowledged` keeps its meaning and gets stricter — it is
-   * true only when every machine the halt was aimed at came back saying
-   * so, because one machine's acknowledgement is not the motebit's.
    */
   async sendAgentCommand(opts: {
     motebitId: string;

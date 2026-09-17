@@ -17,7 +17,6 @@ import {
 import type { TokenAudience } from "@motebit/protocol";
 import type { KeyPair } from "@motebit/crypto";
 import { JSON_AUTH, createTestRelay, createAgent } from "./test-helpers.js";
-import { handleCommandResponse } from "../command-route.js";
 
 const AGENT_ID = "36080ffe-cmd4-8000-a000-0000000000aa";
 
@@ -342,8 +341,9 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
   });
 
   it("a HALT still reaches a runtime when the two are on different machines", async () => {
-    // The many-machines refusal is about per-machine RECORDS, so it
-    // belongs to `approvals` and `runs`. A halt delivered to either is
+    // The many-machines refusal is about per-machine RECORDS. A halt is
+    // not one of those — it is the same act wherever it lands, so a
+    // halt delivered to either machine is
     // truthful — the acknowledgement is per executor and names what
     // that executor stopped — and the halt is durable state the other
     // machine honors on its own next tick. Refusing it told a sovereign
@@ -391,61 +391,11 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     expect(vps.sentTo).toEqual([]);
   });
 
-  it("a HALT reaches EVERY machine, not the first that answers", async () => {
-    // The halt store is local and nothing replicates it, so a halt
-    // delivered to one of two machines stopped one of them — and
-    // answered with that one's acknowledgement, which reads as
-    // "stopped" for a motebit that is still working. The act is
-    // idempotent and machine-local, so the delivery that matches what
-    // was asked for is to all of them.
-    const laptop = fakePeer("dev-1", ["background", "unattended_runtime"]);
-    const vps = fakePeer("dev-2", ["background", "unattended_runtime"]);
-    relay.connections.set(AGENT_ID, [laptop.peer, vps.peer] as unknown as Parameters<
-      typeof relay.connections.set
-    >[1]);
-    const envelope = await signAgentCommandEnvelope({
-      command: "halt",
-      motebitId: AGENT_ID,
-      identityPrivateKey: keys.privateKey,
-    });
-    void postCommand(AGENT_ID, { command: "halt", envelope });
-    await new Promise((r) => setTimeout(r, 50));
-    expect(laptop.sentTo.length).toBeGreaterThan(0);
-    expect(vps.sentTo.length).toBeGreaterThan(0);
-  });
-
-  it("an `approvals` decision is never broadcast — two queues are two decisions", async () => {
-    // Repeating a halt is the same act; deciding an approval twice is
-    // two decisions on two records. That is why this command refuses a
-    // many-machine motebit rather than delivering to both.
-    const laptop = fakePeer("dev-1", ["background", "unattended_runtime"]);
-    const vps = fakePeer("dev-2", ["background", "unattended_runtime"]);
-    relay.connections.set(AGENT_ID, [laptop.peer, vps.peer] as unknown as Parameters<
-      typeof relay.connections.set
-    >[1]);
-    const envelope = await signAgentCommandEnvelope({
-      command: "approvals",
-      args: "list",
-      motebitId: AGENT_ID,
-      identityPrivateKey: keys.privateKey,
-    });
-    const { status } = await postCommand(AGENT_ID, {
-      command: "approvals",
-      args: "list",
-      envelope,
-    });
-    expect(status).toBe(404);
-    expect(laptop.sentTo).toEqual([]);
-    expect(vps.sentTo).toEqual([]);
-  });
-
-  it("`halt-status` asks BOTH machines, because the two answers compose", async () => {
-    // It reads this machine's halt store, so routed to whichever the
-    // relay picked it answered "Running — nothing is halted" from the
-    // VPS while the laptop sat halted. Refusing it instead left a
-    // person who had just halted a two-machine motebit with no way to
-    // see what stopped — and unlike an approval queue, these two
-    // answers compose: what each runtime has stopped IS the picture.
+  it("`halt-status` is a per-machine READ, so two machines are refused", async () => {
+    // It reads this machine's halt store. Routed to whichever the relay
+    // picked, it answered "Running — nothing is halted" from the VPS
+    // while the laptop sat halted — the same false negative the
+    // approvals queue has, about the question this whole arc is for.
     const laptop = fakePeer("dev-1", ["background", "unattended_runtime"]);
     const vps = fakePeer("dev-2", ["background", "unattended_runtime"]);
     relay.connections.set(AGENT_ID, [laptop.peer, vps.peer] as unknown as Parameters<
@@ -456,21 +406,11 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
       motebitId: AGENT_ID,
       identityPrivateKey: keys.privateKey,
     });
-    const posted = postCommand(AGENT_ID, { command: "halt-status", envelope });
-    await new Promise((r) => setTimeout(r, 50));
-    expect(laptop.sentTo).toHaveLength(1);
-    expect(vps.sentTo).toHaveLength(1);
-    const commandId = (JSON.parse(laptop.sentTo[0] ?? "{}") as { id?: string }).id ?? "";
-    handleCommandResponse(
-      commandId,
-      { summary: "Stop requested for unattended execution." },
-      "dev-1",
-    );
-    handleCommandResponse(commandId, { summary: "Running — nothing is halted." }, "dev-2");
-    const { json } = await posted;
-    const body = JSON.stringify(json);
-    expect(body).toContain("Stop requested");
-    expect(body).toContain("nothing is halted");
+    const { status, json } = await postCommand(AGENT_ID, { command: "halt-status", envelope });
+    expect(status).toBe(404);
+    expect(JSON.stringify(json)).toMatch(/2 different machines/i);
+    expect(laptop.sentTo).toEqual([]);
+    expect(vps.sentTo).toEqual([]);
   });
 
   it("a `runs` question goes to the runtime that HAS the ledger", async () => {
@@ -525,328 +465,6 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     void postCommand(AGENT_ID, { command: "halt", envelope: haltEnvelope });
     await new Promise((r) => setTimeout(r, 50));
     expect(worker.sentTo.length).toBeGreaterThan(0);
-  });
-
-  it("a broadcast is not a race — every machine's answer is gathered", async () => {
-    // Resolving on the first reply hands back whichever machine had
-    // least to do. `cmdResume` returns "Nothing is halted." synchronously
-    // when nothing is active, while the machine that HAS the halt awaits
-    // its store — so the one with nothing to do reliably won, and a
-    // successful remote resume rendered as a no-op.
-    const laptop = fakePeer("dev-1", ["background", "unattended_runtime"]);
-    const vps = fakePeer("dev-2", ["background", "unattended_runtime"]);
-    relay.connections.set(AGENT_ID, [laptop.peer, vps.peer] as unknown as Parameters<
-      typeof relay.connections.set
-    >[1]);
-    const envelope = await signAgentCommandEnvelope({
-      command: "resume",
-      motebitId: AGENT_ID,
-      identityPrivateKey: keys.privateKey,
-    });
-    const posted = postCommand(AGENT_ID, { command: "resume", envelope });
-    await new Promise((r) => setTimeout(r, 50));
-    const commandId = (JSON.parse(vps.sentTo[0] ?? "{}") as { id?: string }).id ?? "";
-    expect(commandId).not.toBe("");
-
-    // The machine with nothing to do answers first, as it always will.
-    handleCommandResponse(commandId, { summary: "Nothing is halted." }, "dev-2");
-    handleCommandResponse(commandId, { summary: "Resumed. 1 halt lifted." }, "dev-1");
-    const { json } = await posted;
-    const body = JSON.stringify(json);
-    expect(body).toContain("Nothing is halted.");
-    expect(body).toContain("1 halt lifted");
-    expect(body).toMatch(/2 runtimes/i);
-  });
-
-  it("a machine that never answers is named as silent, not quietly dropped", async () => {
-    // An unanswered halt is the one case the reader must not read as
-    // "stopped".
-    const laptop = fakePeer("dev-1", ["background", "unattended_runtime"]);
-    const vps = fakePeer("dev-2", ["background", "unattended_runtime"]);
-    relay.connections.set(AGENT_ID, [laptop.peer, vps.peer] as unknown as Parameters<
-      typeof relay.connections.set
-    >[1]);
-    const envelope = await signAgentCommandEnvelope({
-      command: "halt",
-      motebitId: AGENT_ID,
-      identityPrivateKey: keys.privateKey,
-    });
-    const posted = postCommand(AGENT_ID, { command: "halt", envelope });
-    await new Promise((r) => setTimeout(r, 50));
-    const commandId = (JSON.parse(laptop.sentTo[0] ?? "{}") as { id?: string }).id ?? "";
-    handleCommandResponse(commandId, { summary: "Stopped. 1 executor acknowledged." }, "dev-1");
-    const { json } = await posted;
-    const body = JSON.stringify(json);
-    expect(body).toMatch(/no answer yet/i);
-    // And it names WHICH machine, because a reader told something is
-    // still running needs to know where.
-    expect(body).toContain("dev-2");
-  }, 10_000);
-
-  it("an unreadable answer from one machine does not erase the other's", async () => {
-    // The first version returned the unparseable answer ALONE, which
-    // threw away the acknowledgement from the machine that did stop and
-    // left the reader with no evidence of it — the inverse of the
-    // invariant this gathering exists for.
-    const laptop = fakePeer("dev-1", ["background", "unattended_runtime"]);
-    const vps = fakePeer("dev-2", ["background", "unattended_runtime"]);
-    relay.connections.set(AGENT_ID, [laptop.peer, vps.peer] as unknown as Parameters<
-      typeof relay.connections.set
-    >[1]);
-    const envelope = await signAgentCommandEnvelope({
-      command: "halt",
-      motebitId: AGENT_ID,
-      identityPrivateKey: keys.privateKey,
-    });
-    const posted = postCommand(AGENT_ID, { command: "halt", envelope });
-    await new Promise((r) => setTimeout(r, 50));
-    const commandId = (JSON.parse(laptop.sentTo[0] ?? "{}") as { id?: string }).id ?? "";
-    handleCommandResponse(commandId, { summary: "Stopped. 1 executor acknowledged." }, "dev-1");
-    handleCommandResponse(commandId, undefined, "dev-2");
-    const { json } = await posted;
-    const body = JSON.stringify(json);
-    expect(body).toContain("1 executor acknowledged");
-    expect(body).toMatch(/could not read/i);
-  });
-
-  it("a machine whose socket is already dead is reported, not silently dropped", async () => {
-    // Counting only successful sends made that machine disappear from
-    // the report, so a halt to two machines came back as a plain
-    // "Stopped." for a motebit still working on the other one.
-    const laptop = fakePeer("dev-1", ["background", "unattended_runtime"]);
-    const vps = fakePeer("dev-2", ["background", "unattended_runtime"]);
-    vps.peer.ws.send = () => {
-      throw new Error("socket is gone");
-    };
-    relay.connections.set(AGENT_ID, [laptop.peer, vps.peer] as unknown as Parameters<
-      typeof relay.connections.set
-    >[1]);
-    const envelope = await signAgentCommandEnvelope({
-      command: "halt",
-      motebitId: AGENT_ID,
-      identityPrivateKey: keys.privateKey,
-    });
-    const posted = postCommand(AGENT_ID, { command: "halt", envelope });
-    await new Promise((r) => setTimeout(r, 50));
-    const commandId = (JSON.parse(laptop.sentTo[0] ?? "{}") as { id?: string }).id ?? "";
-    handleCommandResponse(commandId, { summary: "Stopped. 1 executor acknowledged." }, "dev-1");
-    const { json } = await posted;
-    const body = JSON.stringify(json);
-    expect(body).toContain("1 executor acknowledged");
-    expect(body).toMatch(/not reached/i);
-    expect(body).toContain("dev-2");
-  });
-
-  it("a first-wins command with a dead socket beside it is NOT wrapped in a report", async () => {
-    // Only one delivery was ever intended. Reporting the dead
-    // connections walked past invents targets the command never
-    // addressed — and on `approve`/`deny` it reads as one decision
-    // fanned out to two queues, the thing this routing refuses to do.
-    const stale = fakePeer("dev-1", ["background", "unattended_runtime", "run_ledger"]);
-    stale.peer.ws.send = () => {
-      throw new Error("socket is gone");
-    };
-    const daemon = fakePeer("dev-1", ["background", "unattended_runtime", "run_ledger"]);
-    relay.connections.set(AGENT_ID, [stale.peer, daemon.peer] as unknown as Parameters<
-      typeof relay.connections.set
-    >[1]);
-    const envelope = await signAgentCommandEnvelope({
-      command: "runs",
-      motebitId: AGENT_ID,
-      identityPrivateKey: keys.privateKey,
-    });
-    const posted = postCommand(AGENT_ID, { command: "runs", envelope });
-    await new Promise((r) => setTimeout(r, 50));
-    const commandId = (JSON.parse(daemon.sentTo[0] ?? "{}") as { id?: string }).id ?? "";
-    handleCommandResponse(commandId, { summary: "2 recent run(s).", data: { runs: [] } }, "dev-1");
-    const { json } = await posted;
-    const body = JSON.stringify(json);
-    expect(body).toContain("2 recent run(s).");
-    expect(body).not.toMatch(/Sent to \d+ runtimes/i);
-    expect(body).not.toMatch(/not reached/i);
-    // The handler's own payload survives, rather than being replaced by
-    // the delivery report's.
-    expect(body).toContain('"runs"');
-  });
-
-  it("a machine's OTHER connection is tried when the first socket is dead", async () => {
-    // One delivery per machine is about the replay store the two
-    // processes share, not about which of their sockets is alive.
-    // Choosing a peer up front and giving up on a throw lost the halt
-    // where first-wins would have landed it: a stale `motebit run`
-    // socket beside a live `motebit serve` reported "not reached" and
-    // the laptop was never stopped.
-    const stale = fakePeer("dev-1", ["background", "unattended_runtime"]);
-    stale.peer.ws.send = () => {
-      throw new Error("socket is gone");
-    };
-    const live = fakePeer("dev-1", ["background", "unattended_runtime"]);
-    relay.connections.set(AGENT_ID, [stale.peer, live.peer] as unknown as Parameters<
-      typeof relay.connections.set
-    >[1]);
-    const envelope = await signAgentCommandEnvelope({
-      command: "halt",
-      motebitId: AGENT_ID,
-      identityPrivateKey: keys.privateKey,
-    });
-    void postCommand(AGENT_ID, { command: "halt", envelope });
-    await new Promise((r) => setTimeout(r, 50));
-    expect(live.sentTo).toHaveLength(1);
-  });
-
-  it("an undeclared machine's answer is credited to IT, not to a declared sibling", async () => {
-    // Spending a generic credit on the first target named the wrong
-    // machine: with one declared daemon and one older runtime, an answer
-    // from the older one printed under the declared one's id and left
-    // the bucket that actually replied listed as silent — the same
-    // report saying one machine had stopped and had not answered.
-    const daemon = fakePeer("dev-1", ["background", "unattended_runtime"]);
-    const legacy = fakePeer("legacy", ["background", "unattended_runtime"], false);
-    relay.connections.set(AGENT_ID, [daemon.peer, legacy.peer] as unknown as Parameters<
-      typeof relay.connections.set
-    >[1]);
-    const envelope = await signAgentCommandEnvelope({
-      command: "halt",
-      motebitId: AGENT_ID,
-      identityPrivateKey: keys.privateKey,
-    });
-    const posted = postCommand(AGENT_ID, { command: "halt", envelope });
-    await new Promise((r) => setTimeout(r, 50));
-    const commandId = (JSON.parse(daemon.sentTo[0] ?? "{}") as { id?: string }).id ?? "";
-    // Only the undeclared one answers, and it cannot say who it is.
-    handleCommandResponse(commandId, { summary: "Stopped. 1 acknowledged." });
-    const { json } = await posted;
-    const detail = (json as { detail?: string }).detail ?? "";
-    const forDev1 = detail.split("\n").filter((l) => l.includes("dev-1"));
-    // The declared daemon is the one that is silent, and is named so —
-    // exactly once, not as both stopped and silent.
-    expect(forDev1).toHaveLength(1);
-    expect(forDev1[0]).toMatch(/no answer yet/);
-    // And the machine that DID answer is credited, under its own label.
-    expect(detail).toMatch(/unidentified runtime: Stopped/);
-  }, 10_000);
-
-  it("one unattributed answer does not reduce every silent machine to a tally", async () => {
-    // An answer with no machine id could have come from any target, so
-    // it can only be subtracted from a count — but gating the NAMES on
-    // a whole-set predicate let it silence them all, which is the
-    // "something is still running and I don't know where" gap the
-    // attribution was added to close.
-    const laptop = fakePeer("dev-1", ["background", "unattended_runtime"]);
-    const vps = fakePeer("dev-2", ["background", "unattended_runtime"]);
-    const old = fakePeer("legacy", ["background", "unattended_runtime"], false);
-    relay.connections.set(AGENT_ID, [laptop.peer, vps.peer, old.peer] as unknown as Parameters<
-      typeof relay.connections.set
-    >[1]);
-    const envelope = await signAgentCommandEnvelope({
-      command: "halt",
-      motebitId: AGENT_ID,
-      identityPrivateKey: keys.privateKey,
-    });
-    const posted = postCommand(AGENT_ID, { command: "halt", envelope });
-    await new Promise((r) => setTimeout(r, 50));
-    const commandId = (JSON.parse(laptop.sentTo[0] ?? "{}") as { id?: string }).id ?? "";
-    handleCommandResponse(commandId, { summary: "Stopped. 1 acknowledged." }, "dev-1");
-    // The legacy surface answers without saying who it is.
-    handleCommandResponse(commandId, { summary: "Stopped. 1 acknowledged." });
-    const { json } = await posted;
-    const body = JSON.stringify(json);
-    // dev-2 stayed silent and is still named.
-    expect(body).toContain("dev-2");
-    expect(body).toMatch(/no answer yet|carried no machine id/i);
-  }, 10_000);
-
-  it("`acknowledged` survives composition, and gets stricter", async () => {
-    // `sendAgentCommand` documents that a result whose data says
-    // `acknowledged: true` is the motebit reporting it stopped, not the
-    // relay reporting a delivery. Replacing the runtime's `data`
-    // wholesale dropped the field on exactly the multi-machine
-    // deployment this arc is for. One machine's acknowledgement is not
-    // the motebit's, so the aggregate is the strict one.
-    const laptop = fakePeer("dev-1", ["background", "unattended_runtime"]);
-    const vps = fakePeer("dev-2", ["background", "unattended_runtime"]);
-    relay.connections.set(AGENT_ID, [laptop.peer, vps.peer] as unknown as Parameters<
-      typeof relay.connections.set
-    >[1]);
-    const envelope = await signAgentCommandEnvelope({
-      command: "halt",
-      motebitId: AGENT_ID,
-      identityPrivateKey: keys.privateKey,
-    });
-    const posted = postCommand(AGENT_ID, { command: "halt", envelope });
-    await new Promise((r) => setTimeout(r, 50));
-    const commandId = (JSON.parse(laptop.sentTo[0] ?? "{}") as { id?: string }).id ?? "";
-    handleCommandResponse(
-      commandId,
-      { summary: "Stopped.", data: { acknowledged: true } },
-      "dev-1",
-    );
-    handleCommandResponse(
-      commandId,
-      { summary: "Not yet acknowledged.", data: { acknowledged: false } },
-      "dev-2",
-    );
-    const { json } = await posted;
-    const data = (json as { data?: { acknowledged?: boolean } }).data;
-    expect(data).toBeDefined();
-    // One of two acknowledged, so the motebit has not stopped.
-    expect(data?.acknowledged).toBe(false);
-  });
-
-  it("two undeclared connections are folded into one delivery, and the fold is REPORTED", async () => {
-    // They are bucketed together because they might equally be one
-    // host's two processes sharing a replay store, and delivering twice
-    // into that store is the worse error. But with a single target the
-    // composed report used to short-circuit and hand back that one
-    // machine's `Stopped.` as the motebit's — the failure the broadcast
-    // exists to remove, arriving silently through the grouping.
-    const a = fakePeer("generated-1", ["background", "unattended_runtime"], false);
-    const b = fakePeer("generated-2", ["background", "unattended_runtime"], false);
-    relay.connections.set(AGENT_ID, [a.peer, b.peer] as unknown as Parameters<
-      typeof relay.connections.set
-    >[1]);
-    const envelope = await signAgentCommandEnvelope({
-      command: "halt",
-      motebitId: AGENT_ID,
-      identityPrivateKey: keys.privateKey,
-    });
-    const posted = postCommand(AGENT_ID, { command: "halt", envelope });
-    await new Promise((r) => setTimeout(r, 50));
-    // One delivery, as the replay store requires.
-    expect(a.sentTo.length + b.sentTo.length).toBe(1);
-    const sent = a.sentTo[0] ?? b.sentTo[0] ?? "{}";
-    const commandId = (JSON.parse(sent) as { id?: string }).id ?? "";
-    handleCommandResponse(commandId, { summary: "Stopped. 1 executor acknowledged." });
-    const { json } = await posted;
-    const body = JSON.stringify(json);
-    // Not handed back raw as the motebit's answer.
-    expect(body).toMatch(/folded into the one above/i);
-    expect(body).toMatch(/what it stopped is unknown/i);
-  }, 10_000);
-
-  it("a broadcast halt is delivered once per MACHINE, not once per process", async () => {
-    // `motebit run` and `motebit serve` on one host share a device id, a
-    // database and one replay store, and the envelope carries a single
-    // signature. Sending it to both means the second rejects its own
-    // motebit's halt as a replay — and that rejection was a candidate
-    // for the answer the person read. The replay guard names this
-    // sibling-delivery case as the hole it closes; the relay must not
-    // manufacture it.
-    const run = fakePeer("dev-1", ["background", "unattended_runtime"]);
-    const serve = fakePeer("dev-1", ["background", "unattended_runtime"]);
-    const vps = fakePeer("dev-2", ["background", "unattended_runtime"]);
-    relay.connections.set(AGENT_ID, [run.peer, serve.peer, vps.peer] as unknown as Parameters<
-      typeof relay.connections.set
-    >[1]);
-    const envelope = await signAgentCommandEnvelope({
-      command: "halt",
-      motebitId: AGENT_ID,
-      identityPrivateKey: keys.privateKey,
-    });
-    void postCommand(AGENT_ID, { command: "halt", envelope });
-    await new Promise((r) => setTimeout(r, 50));
-    expect(run.sentTo.length + serve.sentTo.length).toBe(1);
-    expect(vps.sentTo).toHaveLength(1);
   });
 
   it("a read-only command may still be answered by any connected surface", async () => {

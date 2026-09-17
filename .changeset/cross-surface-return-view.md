@@ -18,6 +18,18 @@ What comes back is the shape the terminal already shows: the run's status, what 
 
 **Found on the way, and fixed in the same pass:** the desktop's recent-outcomes view queries its tool audit by run id, and that column does not exist in the desktop schema — so the query did not return nothing, it threw, and every expansion showed "Failed to load" where the tool calls belong. The timestamp fallback beside it already handled exactly this case and was never reached.
 
+## What this increment does NOT ship, and why
+
+A halt reaching only one machine of several is a real defect in the increment before this one, found while reviewing this PR. It was fixed here, and the fix is now withdrawn to [its own branch](https://github.com/motebit/motebit/tree/unattended/halt-broadcast-multi-machine), unmerged.
+
+The reason is a measurement, not a preference. Fixing it meant changing what delivery MEANS — first-wins became a broadcast, with answer-gathering, a grace window, per-machine attribution, a composed report and a strictened `acknowledged` aggregate. Ten review rounds went into that code and each of them found three to five defects, most of them introduced by the round before. It never converged, because nothing in it can be caught by a test that fails: the repo has no harness that stands two runtimes against one relay, so every one of those defects had to be found by a person reading, and every fix was written blind.
+
+Weighed against that: on a motebit with unattended runtimes on ONE machine — every deployment that exists today — the broadcast is a no-op. It delivers one frame, takes the single-target path and hands the answer back exactly as first-wins does. So the trade on offer was four hundred lines of unexercised coordination machinery, changing the semantics of the most safety-critical verb in the product, to fix a bug no current deployment can hit. That is the wrong side of the trade, and the multi-machine case is the same case the persistent-service installer will make common — which is the increment that should carry it, behind the harness that can test it.
+
+What ships here is the return view and the routing it needs. All of it is a read, all of it is additive, and all of it has tests that can fail.
+
+Review rounds — the findings that shaped what ships:
+
 Review round — six findings, one of them this arc's own defect reproduced:
 
 - **The structured payload bypassed the membrane the text went through.** The result object is serialized whole and returned through the relay, so a carefully redacted string beside a raw object is no protection at all. That is precisely what the second increment found in the approvals command, whose comment says so in as many words, and the test I wrote asserted only on the text — which is exactly how it went unnoticed. Both outputs now derive from one redacted value, passed field by field so that adding a field without deciding what it means here is a type error rather than a quiet leak.
@@ -134,3 +146,5 @@ Thirteenth review round. Five findings, every one in the last three rounds' own 
 - **A `no` from the column probe was remembered for the session.** The transient-failure path was fixed for exactly this staleness and the genuine-absent path had the same shape: a desktop window opened before the daemon had ever run would keep scanning by timestamp after the migration landed beneath it. A column never disappears, so only a `yes` is remembered.
 - **A comment claimed a guarantee the parameter does not give.** `cmdRuns`'s `origin` defaults to `remote`, but the only dispatcher passes `?? "local"` — so a caller reaching it through `executeCommand` and forgetting gets `local`. The default protects a direct import; what protects the wire is `executeRemoteCommand` and the gate that requires it, and the comment now says so.
 - **Two undeclared connections could be two hosts, and the fold hid it.** They are bucketed together on purpose — they might equally be one host's two processes sharing a replay store, and delivering twice into that store is the worse error — but with a single target the composed report short-circuited and handed back that one machine's `Stopped.` as the motebit's. The fold is reported now, and it forces the composed report even at one target.
+
+**Withdrawn with the broadcast, and preserved on its branch:** the per-machine delivery, the answer gathering and its grace window, the composed per-machine report, the silence and unreached lines, the undeclared-bucket attribution and collapse notice, and the strictened `acknowledged` aggregate. Rounds four through thirteen above narrate their defects as they were found; they are recorded because the pattern is the lesson, not because the code ships.
