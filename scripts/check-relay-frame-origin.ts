@@ -47,8 +47,18 @@ const SCAN_ROOTS = ["apps", "services", "packages"];
  * barrel export as handlers and claimed to have checked them. A gate
  * that overstates what it looked at is the drift `hasApertureDisclosure`
  * exists to catch, in the gate that was just added to catch another one.
+ *
+ * The second version then matched only the TYPE COMPARISON, and the
+ * moment the CLI's two handlers were collapsed into one shared
+ * function, that function stopped matching — it answers a frame without
+ * ever comparing the string, so the file that actually calls
+ * `executeRemoteCommand` left the aperture while the files that merely
+ * delegate stayed in it. The gate went green over the wrong set. So a
+ * frame handler is also anything that REPLIES with a `command_response`,
+ * which is what handling one means.
  */
-const FRAME_MARKER = /[=!]==?\s*["']command_request["']|["']command_request["']\s*[=!]==?/;
+const FRAME_MARKER =
+  /[=!]==?\s*["']command_request["']|["']command_request["']\s*[=!]==?|type:\s*["']command_response["']/;
 
 /** The door. A different identifier, so it never matches DIRECT_CALL. */
 const DIRECT_CALL = /\bexecuteCommand\s*\(/g;

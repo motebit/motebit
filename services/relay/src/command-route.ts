@@ -420,7 +420,23 @@ async function forwardCommandToAgent(
       return;
     }
 
+    // A CLOSED socket does not throw — it swallows.
+    //
+    // `ws@8` only throws from `send` while CONNECTING; on CLOSING or
+    // CLOSED it calls `sendAfterClose` and returns silently, with no
+    // callback to surface an error. So a try/catch counted a stale
+    // connection as a delivery, `some` short-circuited, the live
+    // process beside it on the same machine was never tried, and the
+    // halt was lost — the caller learning nothing until a 30-second
+    // timeout answered "the agent did not respond", about a runtime
+    // that was connected and willing the whole time. That is the
+    // ordinary case moments after a process restarts, and it is the
+    // worst possible verb to lose.
+    //
+    // Every other send site in this relay already asks. The catch stays
+    // for the CONNECTING case, which does throw.
     const sent = candidates.some((peer) => {
+      if (peer.ws.readyState !== 1) return false;
       try {
         peer.ws.send(payload);
         return true;

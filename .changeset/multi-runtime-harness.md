@@ -1,5 +1,5 @@
 ---
-"@motebit/relay": minor
+"motebit": minor
 ---
 
 A harness that stands two real runtimes against one relay — the prerequisite the return view's review rounds kept asking for.
@@ -21,5 +21,9 @@ Seven sentences the repo could not previously assert, each one a defect a review
 - a runtime with no identity key refuses rather than trusting the relay's forwarding.
 
 Both halves were tamper-proven: routing `runs` by the wrong capability, and dropping the identity-key guard, each turn exactly one test red.
+
+**A live defect, found on day one by the harness being wrong.** It modelled a dead socket as one whose `send` throws. `ws@8` only throws while CONNECTING; on CLOSING or CLOSED it swallows the frame and returns. So the relay's `try/catch` counted a stale connection as a delivery, short-circuited, never tried the live process beside it on the same machine, and the caller learned nothing until a thirty-second timeout answered "the agent did not respond" — about a runtime that was connected and willing the whole time. That is the ordinary case moments after a process restarts, and a halt is the worst verb to lose. Every other send site in the relay already checked `readyState`; this one did not. The harness models the transport truthfully now, and reproduces the production symptom exactly when the guard is removed.
+
+**The `motebit run` behaviour change this ships:** the daemon refuses a relay command when no registered identity key is available to verify the envelope against, where before it executed. `motebit serve` already refused; the copies had drifted, and the guard is structural in the shared handler now.
 
 Next on this harness: issue #681, the multi-machine halt broadcast, which is blocked on it.

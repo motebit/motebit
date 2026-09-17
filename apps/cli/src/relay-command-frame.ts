@@ -63,7 +63,9 @@ export interface RelayCommandFrameDeps {
 
 /**
  * Answer one frame. Never throws — a thrown error becomes a reply,
- * because a caller that hears nothing cannot tell a crash from a refusal.
+ * because a caller that hears nothing cannot tell a crash from a
+ * refusal, and a socket that has gone away in the meantime is not a
+ * reason to take the process down with it.
  */
 export async function handleRelayCommandFrame(
   frame: RelayCommandFrame,
@@ -108,6 +110,15 @@ export async function handleRelayCommandFrame(
     // else, and so the return view knows a wire is being crossed.
     respond(await executeRemoteCommand(deps.runtime, frame.command, frame.args));
   } catch (err: unknown) {
-    respond({ summary: `Error: ${err instanceof Error ? err.message : String(err)}` });
+    // The last reply is guarded too, so the docstring above stays true.
+    // Both call sites `void` this, and the CLI registers no
+    // `unhandledRejection` handler — so a throw from `reply` here would
+    // take the process down while answering a frame, which is a very
+    // expensive way to fail to send an error message.
+    try {
+      respond({ summary: `Error: ${err instanceof Error ? err.message : String(err)}` });
+    } catch {
+      // Nothing left to say it to.
+    }
   }
 }

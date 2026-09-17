@@ -118,6 +118,17 @@ export interface HarnessRuntime {
   readonly received: string[];
   /** Replies it sent back. */
   readonly replied: unknown[];
+  /**
+   * Hand this process a frame directly, bypassing the relay's choice of
+   * peer.
+   *
+   * What a BROADCAST does. Under first-wins only one process is ever
+   * delivered to, so the machine-wide replay guard is never exercised
+   * through the relay — and that one fact is the reason delivery is per
+   * machine and not per connection, so a harness that cannot state it
+   * cannot hold the thing issue #681 is blocked on.
+   */
+  deliver(payload: string): void;
 }
 
 export interface HarnessDeps {
@@ -172,7 +183,17 @@ export function attachRuntime(
     deviceIdDeclared?: boolean;
     /** Wire the runtime's stores before it answers anything. */
     configure?: (runtime: MotebitRuntime) => void;
-    /** Refuse to send, as a dead-but-unreaped socket does. */
+    /**
+     * A stale-but-unreaped connection, modelled as the transport
+     * actually behaves.
+     *
+     * NOT a throw. `ws@8` only throws from `send` while CONNECTING; on
+     * CLOSING or CLOSED it swallows the frame and returns. Modelling it
+     * as a throw let the relay's try/catch look correct and hid a live
+     * defect — the relay counted a dead socket as a delivery and never
+     * tried the live process beside it. A harness that models the
+     * transport wrongly agrees with the bug.
+     */
     socketIsDead?: boolean;
   },
 ): HarnessRuntime {
@@ -191,39 +212,46 @@ export function attachRuntime(
   const received: string[] = [];
   const replied: unknown[] = [];
 
+  const deliverToRuntime = (payload: string): void => {
+    received.push(payload);
+    const frame = JSON.parse(payload) as {
+      type: string;
+      id: string;
+      command: string;
+      args?: string;
+      envelope?: unknown;
+    };
+    if (frame.type !== "command_request") return;
+    // The real handler, on the real runtime, with this MACHINE's
+    // replay guard.
+    void handleRelayCommandFrame(frame, {
+      runtime,
+      motebitId: deps.motebitId,
+      identityPublicKey: deps.identityPublicKey,
+      checkReplay: replayFor(opts.deviceId),
+      reply: (raw) => {
+        const msg = JSON.parse(raw) as { id: string; result: unknown };
+        replied.push(msg.result);
+        // Back up the wire. Delivery is first-wins today, so one answer
+        // settles the request and the relay does not need to know which
+        // machine sent it. When issue #681 lands the broadcast, an
+        // answer carries the device that sent it and this call gains
+        // that argument — the point at which this harness starts being
+        // able to assert who answered and who stayed silent.
+        handleCommandResponse(msg.id, msg.result);
+      },
+    });
+  };
+
   const peer = {
     ws: {
+      // 1 = OPEN, 3 = CLOSED, the values the relay reads.
+      readyState: opts.socketIsDead === true ? 3 : 1,
       send: (payload: string) => {
-        if (opts.socketIsDead === true) throw new Error("socket is gone");
-        received.push(payload);
-        const frame = JSON.parse(payload) as {
-          type: string;
-          id: string;
-          command: string;
-          args?: string;
-          envelope?: unknown;
-        };
-        if (frame.type !== "command_request") return;
-        // The real handler, on the real runtime, with this MACHINE's
-        // replay guard.
-        void handleRelayCommandFrame(frame, {
-          runtime,
-          motebitId: deps.motebitId,
-          identityPublicKey: deps.identityPublicKey,
-          checkReplay: replayFor(opts.deviceId),
-          reply: (raw) => {
-            const msg = JSON.parse(raw) as { id: string; result: unknown };
-            replied.push(msg.result);
-            // Back up the wire. Delivery is first-wins today, so one
-            // answer settles the request and the relay does not need to
-            // know which machine sent it. When issue #681 lands the
-            // broadcast, an answer carries the device that sent it and
-            // this call gains that argument — which is the point at
-            // which this harness starts being able to assert who
-            // answered and who stayed silent.
-            handleCommandResponse(msg.id, msg.result);
-          },
-        });
+        // Swallowed, exactly as a closed socket swallows it — not
+        // thrown. See `socketIsDead`.
+        if (opts.socketIsDead === true) return;
+        deliverToRuntime(payload);
       },
     },
     deviceId: opts.deviceId,
@@ -236,5 +264,13 @@ export function attachRuntime(
     typeof deps.relay.connections.set
   >[1]);
 
-  return { deviceId: opts.deviceId, label: opts.label, runtime, received, replied };
+  return {
+    deviceId: opts.deviceId,
+    label: opts.label,
+    runtime,
+    received,
+    replied,
+    // The same path the relay's send takes, minus the relay's choosing.
+    deliver: (payload: string) => deliverToRuntime(payload),
+  };
 }

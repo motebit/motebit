@@ -152,6 +152,11 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     return {
       peer: {
         ws: {
+          // The relay only delivers to an OPEN socket, because `ws@8`
+          // swallows a send on a closed one rather than throwing. A
+          // double with no `readyState` is a double that does not model
+          // the transport — which is how the swallow went unnoticed.
+          readyState: 1,
           send: (payload: string) => {
             sentTo.push(payload);
           },

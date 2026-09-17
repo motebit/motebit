@@ -149,6 +149,96 @@ describe("two runtimes, one relay — what a frame actually does", () => {
     expect(stopped).toHaveLength(1);
   });
 
+  it("delivering ONE envelope to both processes makes the second refuse it as a replay", async () => {
+    // The fact the harness exists to hold, and the reason delivery is
+    // per machine rather than per connection.
+    //
+    // First-wins never exercises it — only one process is ever
+    // delivered to, so every assertion above holds identically with a
+    // per-process guard. This states it directly, the way a broadcast
+    // will: one signed envelope, both processes, one shared guard.
+    // Without it, issue #681 would be built against a harness that
+    // agrees with the bug it is meant to prevent.
+    const run = attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "dev-1",
+        capabilities: ["background", "unattended_runtime"],
+      },
+    );
+    const serve = attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "serve",
+        deviceId: "dev-1",
+        capabilities: ["background", "unattended_runtime"],
+      },
+    );
+
+    const envelope = await signAgentCommandEnvelope({
+      command: "halt",
+      motebitId,
+      identityPrivateKey: keys.privateKey,
+    });
+    const frame = JSON.stringify({
+      type: "command_request",
+      id: crypto.randomUUID(),
+      command: "halt",
+      envelope,
+    });
+    run.deliver(frame);
+    serve.deliver(frame);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(JSON.stringify(run.replied)).not.toMatch(/replay/i);
+    expect(JSON.stringify(serve.replied)).toMatch(/replay/i);
+    // And a machine's OWN halt is not what got refused: the first
+    // process stopped.
+    expect(run.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(1);
+  });
+
+  it("two processes on DIFFERENT machines each accept the same envelope", async () => {
+    // The guard is per machine, not global — otherwise a broadcast
+    // could never stop the second host at all, and the fix for #681
+    // would be impossible rather than merely untested.
+    const laptop = attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "dev-1",
+        capabilities: ["background", "unattended_runtime"],
+      },
+    );
+    const vps = attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "dev-2",
+        capabilities: ["background", "unattended_runtime"],
+      },
+    );
+    const envelope = await signAgentCommandEnvelope({
+      command: "halt",
+      motebitId,
+      identityPrivateKey: keys.privateKey,
+    });
+    const frame = JSON.stringify({
+      type: "command_request",
+      id: crypto.randomUUID(),
+      command: "halt",
+      envelope,
+    });
+    laptop.deliver(frame);
+    vps.deliver(frame);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(JSON.stringify(laptop.replied)).not.toMatch(/replay/i);
+    expect(JSON.stringify(vps.replied)).not.toMatch(/replay/i);
+    expect(laptop.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(1);
+    expect(vps.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(1);
+  });
+
   it("a dead socket beside a live one on the same machine does not lose the halt", async () => {
     // A stale-but-unreaped connection is the ordinary case moments
     // after a process dies. First-wins walks past it.
