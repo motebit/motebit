@@ -2051,11 +2051,26 @@ function rowToGoalRun(row: GoalRunRow): GoalRun {
  * allowed tool calls at all (pure inference) resolves itself: re-running
  * repeats nothing.
  */
-export function goalRunBlocksGoal(run: GoalRun): boolean {
-  if (run.status === "running" || run.status === "awaiting_approval") return true;
+/**
+ * This run is waiting on a PERSON — not merely open.
+ *
+ * Split out of `goalRunBlocksGoal` because the two facts are different
+ * and a reader that conflates them says something untrue. A `running`
+ * run blocks its goal and asks nothing of anyone; a run raised to the
+ * top of the return view and labelled "needs you" while it is
+ * mid-execution sends its owner looking for an acknowledgement that
+ * does not exist. Blocking is defined in terms of this so the two
+ * cannot drift.
+ */
+export function goalRunNeedsPerson(run: GoalRun): boolean {
+  if (run.status === "awaiting_approval") return true;
   if (run.status !== "interrupted") return false;
   if (run.reviewed_at != null) return false;
   return run.completed_actions > 0 || (run.uncertain_actions?.length ?? 0) > 0;
+}
+
+export function goalRunBlocksGoal(run: GoalRun): boolean {
+  return run.status === "running" || goalRunNeedsPerson(run);
 }
 
 export class SqliteGoalRunStore {

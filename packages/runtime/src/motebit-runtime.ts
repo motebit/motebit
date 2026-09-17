@@ -3039,16 +3039,27 @@ export class MotebitRuntime {
   }
 
   /**
-   * Mask credential-class values in text bound for a non-sovereign
-   * party. The command layer uses it on approval arguments before they
-   * cross the relay to a remote consent surface: a person deciding
-   * needs the destination, the path, the amount — and does not need,
-   * and the relay must not see, an API key that happened to be an
-   * argument. Same membrane as the cloud-egress redactor, applied at
-   * the same kind of boundary.
+   * Mask sensitive values in text bound for a non-sovereign party.
+   *
+   * The command layer uses it on approval arguments and on the return
+   * view before either crosses the relay to a remote consent surface: a
+   * person deciding needs the destination, the path, the amount — and
+   * does not need, and the relay must not see, an API key that happened
+   * to be an argument.
+   *
+   * The FULL set, not the cloud-egress subset. That subset deliberately
+   * leaves SSNs, card numbers and bare base64 alone, and its stated
+   * reason is about a user's OWN typed message to a model they chose:
+   * financial and personal detail they often mean the model to use.
+   * Nothing about that reasoning survives the move to this boundary —
+   * the text here is a goal's retrieved output and the reader is a
+   * relay operator the sovereign did not choose, where fail-closed
+   * privacy says medical and financial never cross. The cost of the
+   * wider set is over-redaction in a view, which is legibility; the
+   * cost of the narrower one is a card number on someone else's wire.
    */
   redactForRemoteDisclosure(text: string): string {
-    return this.policy.redactForCloudEgress(text).text;
+    return this.policy.redact(text);
   }
 
   /** Durable halt state, or `null` on a surface that supplied no store. */

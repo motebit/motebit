@@ -180,8 +180,13 @@ const pendingCommands = new Map<
   string,
   {
     resolve: (result: unknown) => void;
-    reject: (err: unknown) => void;
     timer: ReturnType<typeof setTimeout>;
+    /**
+     * Whether this request was aimed at every machine. Only a broadcast
+     * reports per-machine; first-wins reached exactly one runtime and
+     * says so by handing that runtime's answer back unchanged.
+     */
+    broadcast: boolean;
     /**
      * The machines the request was AIMED at, in send order — not the
      * ones it reached. Counting only successful sends made a target
@@ -327,12 +332,12 @@ export function handleCommandResponse(commandId: string, result: unknown, from?:
   if (!pending) return;
   pending.answers.push({ from: from ?? null, result });
 
-  const expected = pending.targets.length - pending.unreached.length;
   // A single delivery is a single answer; nothing to gather.
-  if (expected <= 1 && pending.unreached.length === 0) {
+  if (!pending.broadcast) {
     finishCommand(commandId);
     return;
   }
+  const expected = pending.targets.length - pending.unreached.length;
 
   // A broadcast is NOT a race. Resolving on the first reply hands back
   // whichever machine had least to do: a `resume` returns "Nothing is
@@ -354,7 +359,16 @@ function finishCommand(commandId: string): void {
   clearTimeout(pending.timer);
   if (pending.graceTimer != null) clearTimeout(pending.graceTimer);
   pendingCommands.delete(commandId);
-  pending.resolve(combineAnswers(pending.targets, pending.unreached, pending.answers));
+  pending.resolve(
+    pending.broadcast
+      ? combineAnswers(pending.targets, pending.unreached, pending.answers)
+      : // First-wins delivered to exactly ONE runtime, whatever it had
+        // to walk past to get there. Wrapping that in a per-machine
+        // report invented a second target the command never addressed —
+        // and for `approve`/`deny` it read as one decision fanned out to
+        // two queues, the thing this routing refuses to do.
+        pending.answers[0]?.result,
+  );
 }
 
 /** A `{ summary, detail? }` reply, as far as this needs to read it. */
@@ -387,9 +401,7 @@ function combineAnswers(
   unreached: string[],
   answers: Array<{ from: string | null; result: unknown }>,
 ): unknown {
-  if (targets.length - unreached.length <= 1 && unreached.length === 0) {
-    return answers[0]?.result;
-  }
+  if (targets.length <= 1) return answers[0]?.result;
 
   const answered = new Set(answers.map((a) => a.from).filter((f): f is string => f != null));
   const lines: string[] = [];
@@ -475,8 +487,8 @@ async function forwardCommandToAgent(
 
     pendingCommands.set(commandId, {
       resolve,
-      reject,
       timer,
+      broadcast: BROADCAST_UNATTENDED_COMMANDS.has(command),
       targets: [],
       unreached: [],
       answers: [],
@@ -627,16 +639,27 @@ async function forwardCommandToAgent(
     const unreached: string[] = [];
     for (const peer of targets) {
       const label = peer.deviceIdDeclared === true ? peer.deviceId : UNDECLARED_MACHINE;
-      aimedAt.push(label);
       try {
         peer.ws.send(payload);
-        if (!broadcast) break;
+        // Under first-wins only the peer that ACCEPTED was ever a
+        // target; the dead sockets walked past on the way are not
+        // machines the command was aimed at.
+        if (!broadcast) {
+          aimedAt.length = 0;
+          unreached.length = 0;
+          aimedAt.push(label);
+          break;
+        }
+        aimedAt.push(label);
       } catch {
+        if (broadcast) aimedAt.push(label);
         // A dead-but-unreaped socket. Recorded, not skipped: under
         // broadcast this machine is one the halt did NOT reach and the
         // reader has to be told, and under first-wins the next peer is
         // the one that answers.
-        unreached.push(label);
+        // Under first-wins a dead socket is one walked past, not a
+        // machine left unreached; the loop simply tries the next peer.
+        if (broadcast) unreached.push(label);
       }
     }
     const pending = pendingCommands.get(commandId);
@@ -645,7 +668,7 @@ async function forwardCommandToAgent(
       pending.unreached = unreached;
     }
 
-    if (aimedAt.length === unreached.length) {
+    if (aimedAt.length === 0 || aimedAt.length === unreached.length) {
       clearTimeout(timer);
       pendingCommands.delete(commandId);
       // 404, like the no-candidate path above, and for the same reason.

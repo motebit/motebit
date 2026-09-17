@@ -81,18 +81,19 @@ function parseTarget(
   args?: string,
 ): { kind: "list" } | { kind: "run"; id: string } | { kind: "local"; verb: string } {
   const raw = (args ?? "").trim();
-  // A bare `show` is the list, not a run called "show". Same for the
-  // empty string and the list verb itself.
-  if (raw === "" || /^(list|show)$/i.test(raw)) return { kind: "list" };
+  if (raw === "") return { kind: "list" };
   const words = raw.split(/\s+/);
   const verb = (words[0] ?? "").toLowerCase();
   if (LOCAL_ONLY_VERBS.has(verb)) return { kind: "local", verb };
-  // After a recognised verb, the FIRST token is the id. Anchoring on a
-  // single trailing token instead meant `show abc123 please` fell
-  // through to being read whole as an id and answered `No run matching
-  // "show abc123 please"` — the manufactured absence this function was
-  // written to remove, one stray word away.
-  if (verb === "show" && words[1] != null) return { kind: "run", id: words[1] };
+  // A VERB decides the shape, and the rest is its argument — no word
+  // after one is ever read as an id in its own right. Special-casing
+  // the exact strings instead left `runs list abc123` and `runs show
+  // abc123 please` falling through to be read whole, answering `No run
+  // matching "list"` about a run nobody named: the manufactured
+  // absence this function exists to remove, one stray word away in
+  // both directions.
+  if (verb === "list") return { kind: "list" };
+  if (verb === "show") return words[1] != null ? { kind: "run", id: words[1] } : { kind: "list" };
   return { kind: "run", id: words[0] ?? raw };
 }
 
@@ -112,9 +113,6 @@ function noLedger(): CommandResult {
  * owner actually has and the two a list can answer honestly.
  */
 export function cmdRuns(runtime: MotebitRuntime, args?: string): CommandResult {
-  const ledger = runtime.runLedger;
-  if (ledger == null) return noLedger();
-
   // `runs list` and `runs show <id>` are what a person types who has
   // ever used another tool, and every word after the verb was being
   // read as a run id — so the list verb answered `No run matching
@@ -122,11 +120,18 @@ export function cmdRuns(runtime: MotebitRuntime, args?: string): CommandResult {
   // vocabulary this file is careful about is worth nothing if the
   // parser manufactures one.
   const parsed = parseTarget(args);
+  const ledger = runtime.runLedger;
+  if (ledger == null) return noLedger();
+
   if (parsed.kind === "local") {
+    // Named as what it is, without telling the reader to go somewhere
+    // else. This is reached on the surface that DOES hold the ledger
+    // too — the interactive terminal wires the reader — and "run it
+    // there" said to someone standing there is its own small untruth.
     return {
-      summary: `\`${parsed.verb}\` happens where the run is.`,
+      summary: `\`${parsed.verb}\` is not part of the return view.`,
       detail:
-        "Acknowledging a held run writes to that machine's record, so it is not something this surface can do for you. Run `motebit runs ack <id>` there — or `halt` from here, which does reach it.",
+        "Acknowledging a held run writes to the record on the machine that holds it. Run `motebit runs ack <id>` on that machine — or `halt` from here, which does reach it.",
     };
   }
   if (parsed.kind === "run") return showRun(runtime, ledger, parsed.id);

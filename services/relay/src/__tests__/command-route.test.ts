@@ -637,6 +637,38 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     expect(body).toContain("dev-2");
   });
 
+  it("a first-wins command with a dead socket beside it is NOT wrapped in a report", async () => {
+    // Only one delivery was ever intended. Reporting the dead
+    // connections walked past invents targets the command never
+    // addressed — and on `approve`/`deny` it reads as one decision
+    // fanned out to two queues, the thing this routing refuses to do.
+    const stale = fakePeer("dev-1", ["background", "unattended_runtime", "run_ledger"]);
+    stale.peer.ws.send = () => {
+      throw new Error("socket is gone");
+    };
+    const daemon = fakePeer("dev-1", ["background", "unattended_runtime", "run_ledger"]);
+    relay.connections.set(AGENT_ID, [stale.peer, daemon.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "runs",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    const posted = postCommand(AGENT_ID, { command: "runs", envelope });
+    await new Promise((r) => setTimeout(r, 50));
+    const commandId = (JSON.parse(daemon.sentTo[0] ?? "{}") as { id?: string }).id ?? "";
+    handleCommandResponse(commandId, { summary: "2 recent run(s).", data: { runs: [] } }, "dev-1");
+    const { json } = await posted;
+    const body = JSON.stringify(json);
+    expect(body).toContain("2 recent run(s).");
+    expect(body).not.toMatch(/Sent to \d+ runtimes/i);
+    expect(body).not.toMatch(/not reached/i);
+    // The handler's own payload survives, rather than being replaced by
+    // the delivery report's.
+    expect(body).toContain('"runs"');
+  });
+
   it("a broadcast halt is delivered once per MACHINE, not once per process", async () => {
     // `motebit run` and `motebit serve` on one host share a device id, a
     // database and one replay store, and the envelope carries a single

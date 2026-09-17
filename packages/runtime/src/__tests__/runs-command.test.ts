@@ -282,6 +282,10 @@ describe("runs — the return view from another surface", () => {
     );
     expect(r.summary).not.toContain("No run matching");
     expect(r.detail).toContain("motebit runs ack");
+    // And it does not tell someone standing on the machine that holds
+    // the record to go run it there — this reader is wired on the
+    // interactive terminal too.
+    expect(r.summary).not.toMatch(/happens where the run is/i);
   });
 
   it("a stray word after `show` does not become part of the id", () => {
@@ -295,6 +299,17 @@ describe("runs — the return view from another surface", () => {
     );
     expect(r.summary).toContain("run-abcd");
     expect(r.summary).not.toContain("No run matching");
+  });
+
+  it("a word after a verb is never read as an id in its own right", () => {
+    // `runs list abc123` answered `No run matching "list"` — an absence
+    // about a run nobody named, from the parser written to stop that.
+    const ledger = {
+      listRecent: () => [],
+      get: () => ({ kind: "missing" as const }),
+    };
+    expect(cmdRuns(runtimeWith(ledger), "list abc123").summary).toBe("No runs recorded yet.");
+    expect(cmdRuns(runtimeWith(ledger), "list abc123").summary).not.toContain("No run matching");
   });
 
   it("a bare `show` is the list, not a run called show", () => {

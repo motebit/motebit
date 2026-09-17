@@ -14,7 +14,7 @@
  * surface receives it, and presenting it as the result would offer proof
  * that is not there. A bounded preview travels instead, and says so.
  */
-import type { MotebitDatabase } from "@motebit/persistence";
+import { goalRunNeedsPerson, type MotebitDatabase } from "@motebit/persistence";
 import type {
   RunLedgerReader,
   RunLedgerSummary,
@@ -93,6 +93,15 @@ export function createRunLedgerReader(moteDb: MotebitDatabase, motebitId: string
         .slice()
         .sort((a, b) => b.started_at - a.started_at);
       const heldIds = new Set(blocking.map((b) => b.run_id));
+      // Blocking is not the same as waiting on a person. `listBlocking`
+      // includes `running`, and a run raised to the top and marked
+      // "needs you" while it is mid-execution sends its owner looking
+      // for an acknowledgement that does not exist — and a stale
+      // `running` row from a crash the recovery pass has not reached
+      // reads identically.
+      const needsPerson = new Set(
+        blocking.filter((b) => goalRunNeedsPerson(b)).map((b) => b.run_id),
+      );
       const recent = moteDb.goalRunStore
         .listRecent(motebitId, limit)
         .filter((r) => !heldIds.has(r.run_id));
@@ -102,7 +111,7 @@ export function createRunLedgerReader(moteDb: MotebitDatabase, motebitId: string
       return [...heldShown, ...recent]
         .slice(0, limit)
         .map((r) =>
-          summarise(r.run_id, r.goal_id, r.status, r.started_at, r.note, heldIds.has(r.run_id)),
+          summarise(r.run_id, r.goal_id, r.status, r.started_at, r.note, needsPerson.has(r.run_id)),
         );
     },
 
@@ -134,9 +143,7 @@ export function createRunLedgerReader(moteDb: MotebitDatabase, motebitId: string
       const run = scoped ?? prefixed[0];
       if (run == null) return { kind: "missing" };
 
-      const holding = moteDb.goalRunStore
-        .listBlocking(motebitId)
-        .some((b) => b.run_id === run.run_id);
+      const holding = goalRunNeedsPerson(run);
       const all = outcomesFor(run.run_id);
       const evidence = moteDb.runEvidenceStore.listForRun(run.run_id);
       const calls = moteDb.toolAuditSink.queryByRunId?.(run.run_id) ?? [];

@@ -19,16 +19,21 @@ interface Row {
   status: string;
   started_at: number;
   note: string | null;
+  reviewed_at?: number | null;
+  completed_actions: number;
+  uncertain_actions?: string[];
 }
 
-function run(id: string, startedAt: number, note: string | null = null): Row {
+function run(id: string, startedAt: number, note: string | null = null, status = "completed"): Row {
   return {
     run_id: id,
     goal_id: `goal-${id}`,
     motebit_id: MOTEBIT,
-    status: "completed",
+    status,
     started_at: startedAt,
     note,
+    reviewed_at: null,
+    completed_actions: 1,
   };
 }
 
@@ -143,7 +148,9 @@ describe("run ledger reader", () => {
     // Held runs were prepended unbounded before one slice, so a motebit
     // with ten or more waiting answered "what happened while you were
     // away" with ten held runs and nothing that happened.
-    const blocking = Array.from({ length: 12 }, (_, i) => run(`h${i}`, 1000 + i));
+    const blocking = Array.from({ length: 12 }, (_, i) =>
+      run(`h${i}`, 1000 + i, null, "awaiting_approval"),
+    );
     const recent = Array.from({ length: 6 }, (_, i) => run(`c${i}`, 2000 + i));
     const reader = createRunLedgerReader(dbWith({ blocking, recent }), MOTEBIT);
     const list = reader.listRecent(10);
@@ -156,9 +163,32 @@ describe("run ledger reader", () => {
     expect(list.at(-1)?.holding).toBe(false);
   });
 
+  it("a run that is still RUNNING is not marked as needing a person", () => {
+    // `listBlocking` returns `running` rows too — they block the goal
+    // and ask nothing of anyone. Marked "needs you" and raised to the
+    // top, an in-flight nightly goal sent its owner looking for an
+    // acknowledgement that does not exist, and a stale `running` row
+    // from an unrecovered crash read identically.
+    const reader = createRunLedgerReader(
+      dbWith({
+        blocking: [
+          run("r-running", 200, null, "running"),
+          run("r-waiting", 100, null, "awaiting_approval"),
+        ],
+      }),
+      MOTEBIT,
+    );
+    const list = reader.listRecent(10);
+    expect(list.find((r) => r.run_id === "r-running")?.holding).toBe(false);
+    expect(list.find((r) => r.run_id === "r-waiting")?.holding).toBe(true);
+  });
+
   it("marks which runs are holding, because status cannot say it", () => {
     const reader = createRunLedgerReader(
-      dbWith({ blocking: [run("h1", 100)], recent: [run("c1", 200)] }),
+      dbWith({
+        blocking: [run("h1", 100, null, "awaiting_approval")],
+        recent: [run("c1", 200)],
+      }),
       MOTEBIT,
     );
     const list = reader.listRecent(10);
