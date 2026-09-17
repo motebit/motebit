@@ -793,6 +793,37 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     expect(data?.acknowledged).toBe(false);
   });
 
+  it("two undeclared connections are folded into one delivery, and the fold is REPORTED", async () => {
+    // They are bucketed together because they might equally be one
+    // host's two processes sharing a replay store, and delivering twice
+    // into that store is the worse error. But with a single target the
+    // composed report used to short-circuit and hand back that one
+    // machine's `Stopped.` as the motebit's — the failure the broadcast
+    // exists to remove, arriving silently through the grouping.
+    const a = fakePeer("generated-1", ["background", "unattended_runtime"], false);
+    const b = fakePeer("generated-2", ["background", "unattended_runtime"], false);
+    relay.connections.set(AGENT_ID, [a.peer, b.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "halt",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    const posted = postCommand(AGENT_ID, { command: "halt", envelope });
+    await new Promise((r) => setTimeout(r, 50));
+    // One delivery, as the replay store requires.
+    expect(a.sentTo.length + b.sentTo.length).toBe(1);
+    const sent = a.sentTo[0] ?? b.sentTo[0] ?? "{}";
+    const commandId = (JSON.parse(sent) as { id?: string }).id ?? "";
+    handleCommandResponse(commandId, { summary: "Stopped. 1 executor acknowledged." });
+    const { json } = await posted;
+    const body = JSON.stringify(json);
+    // Not handed back raw as the motebit's answer.
+    expect(body).toMatch(/folded into the one above/i);
+    expect(body).toMatch(/what it stopped is unknown/i);
+  }, 10_000);
+
   it("a broadcast halt is delivered once per MACHINE, not once per process", async () => {
     // `motebit run` and `motebit serve` on one host share a device id, a
     // database and one replay store, and the envelope carries a single

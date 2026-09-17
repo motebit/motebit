@@ -146,9 +146,16 @@ export function cmdRuns(
   runtime: MotebitRuntime,
   args?: string,
   /**
-   * Where the question came in. Defaults to `remote` so a caller that
-   * forgets redacts rather than discloses — the membrane's default
-   * has to be the closed one.
+   * Where the question came in.
+   *
+   * `remote` by default, but say plainly what that does and does not
+   * buy: the only dispatcher passes `options?.origin ?? "local"`, so a
+   * caller reaching this through `executeCommand` and forgetting gets
+   * `local`, not this. The default protects a DIRECT import only. What
+   * actually protects the wire is `executeRemoteCommand` and the gate
+   * that requires it — `check-relay-frame-origin`. Saying "a caller
+   * that forgets redacts rather than discloses" here claimed a
+   * guarantee this parameter does not give.
    */
   origin: "local" | "remote" = "remote",
 ): CommandResult {

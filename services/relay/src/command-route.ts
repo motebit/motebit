@@ -195,6 +195,12 @@ const pendingCommands = new Map<
     /** The verb, so a composed report can word itself for it. */
     command: string;
     /**
+     * How many connections beyond the first declared no machine id and
+     * were therefore folded into one delivery. Reported, because the
+     * fold might have hidden a whole host.
+     */
+    collapsedUndeclared: number;
+    /**
      * Whether this request was aimed at every machine. Only a broadcast
      * reports per-machine; first-wins reached exactly one runtime and
      * says so by handing that runtime's answer back unchanged.
@@ -377,7 +383,13 @@ function finishCommand(commandId: string): void {
   pendingCommands.delete(commandId);
   pending.resolve(
     pending.broadcast
-      ? combineAnswers(pending.command, pending.targets, pending.unreached, pending.answers)
+      ? combineAnswers(
+          pending.command,
+          pending.targets,
+          pending.unreached,
+          pending.answers,
+          pending.collapsedUndeclared,
+        )
       : // First-wins delivered to exactly ONE runtime, whatever it had
         // to walk past to get there. Wrapping that in a per-machine
         // report invented a second target the command never addressed —
@@ -431,8 +443,13 @@ function combineAnswers(
   targets: string[],
   unreached: string[],
   answers: Array<{ from: string | null; result: unknown }>,
+  collapsedUndeclared: number,
 ): unknown {
-  if (targets.length <= 1) return answers[0]?.result;
+  // One target AND nothing folded into it: one answer, handed back as
+  // the runtime wrote it. A fold forces the composed report even at one
+  // target, because the thing the reader must not do is read that one
+  // machine's answer as the motebit's.
+  if (targets.length <= 1 && collapsedUndeclared === 0) return answers[0]?.result;
 
   const answered = new Set(answers.map((a) => a.from).filter((f): f is string => f != null));
   const lines: string[] = [];
@@ -489,6 +506,13 @@ function combineAnswers(
   );
   const acknowledged = everyMachineAnswered && everyAnswerAcknowledged;
 
+  if (collapsedUndeclared > 0) {
+    lines.push(
+      `  ${collapsedUndeclared} further connection(s) declared no machine id and were folded into the one above — ` +
+        `if any of them is a different host, it was not reached, and ${silenceWording(command)}`,
+    );
+  }
+
   return {
     summary: `Sent to ${targets.length} runtimes; ${answers.length} answered.`,
     detail: [lines.join("\n"), ...details].join("\n\n"),
@@ -542,6 +566,7 @@ async function forwardCommandToAgent(
       resolve,
       timer,
       command,
+      collapsedUndeclared: 0,
       broadcast: BROADCAST_UNATTENDED_COMMANDS.has(command),
       targets: [],
       unreached: [],
@@ -707,6 +732,19 @@ async function forwardCommandToAgent(
       aimedAt.push(...byMachine.keys());
       const early = pendingCommands.get(commandId);
       if (early != null) early.targets = [...aimedAt];
+      // Two undeclared connections MIGHT be two hosts.
+      //
+      // They are bucketed together because they might equally be one
+      // host's two processes sharing a replay store, and delivering
+      // twice into that store is the worse error. But when the bucket
+      // holds more than one, the collapse is a fact the reader has to
+      // be told: only one of them was stopped, and with a single target
+      // the composed report short-circuits and hands back that one's
+      // `Stopped.` as the motebit's — the failure the broadcast exists
+      // to remove, arriving silently through the grouping.
+      const collapsed = (byMachine.get(UNDECLARED_MACHINE)?.length ?? 0) - 1;
+      const early0 = pendingCommands.get(commandId);
+      if (early0 != null && collapsed > 0) early0.collapsedUndeclared = collapsed;
       for (const [key, machinePeers] of byMachine) {
         const landed = machinePeers.some((peer) => {
           try {

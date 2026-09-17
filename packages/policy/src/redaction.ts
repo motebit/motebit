@@ -263,14 +263,25 @@ export class RedactionEngine {
    * unparseable is not a reason to disclose.
    */
   redactRetrievedSource(ref: string): string {
-    let url: URL;
     try {
-      url = new URL(ref);
+      new URL(ref);
     } catch {
       return this.redact(ref).text;
     }
-    const head = `${url.origin}${url.pathname}`;
-    const tail = `${url.search}${url.hash}`;
+    // Split the RAW string, never a string rebuilt from `URL` parts.
+    //
+    // `url.origin` is the literal `"null"` for every non-special scheme,
+    // so `s3://reports/q3.csv` came back as `null/q3.csv` and
+    // `file:///Users/d/report.txt` as `null/Users/d/report.txt` — the
+    // bucket and the host silently dropped from the one string the
+    // owner is told to re-fetch. Reassembly also swallowed `user:tok@`
+    // with no marker, so the displayed ref differed from the recorded
+    // one and said nothing about it. Only `read-url` writes an http
+    // source today, but `ref` is a free string and this function is
+    // documented as total.
+    const cut = ref.search(/[?#]/);
+    const head = cut === -1 ? ref : ref.slice(0, cut);
+    const tail = cut === -1 ? "" : ref.slice(cut);
     return this.redactCredentialShapes(head).text + (tail === "" ? "" : this.redact(tail).text);
   }
 

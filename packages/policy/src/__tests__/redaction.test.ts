@@ -99,6 +99,25 @@ describe("RedactionEngine.redactRetrievedSource", () => {
     );
   });
 
+  it("keeps a non-http scheme's host intact — `url.origin` would erase it", () => {
+    // `origin` is the literal "null" for every non-special scheme, so
+    // reassembling from URL parts dropped the bucket and the host from
+    // the one string the owner is told to re-fetch.
+    expect(engine.redactRetrievedSource("s3://reports/q3.csv")).toBe("s3://reports/q3.csv");
+    expect(engine.redactRetrievedSource("file:///Users/d/report.txt")).toBe(
+      "file:///Users/d/report.txt",
+    );
+  });
+
+  it("keeps userinfo visible rather than swallowing it silently", () => {
+    // Reassembly dropped `user:tok@` with no marker, so the displayed
+    // ref differed from the recorded one and said nothing about it. A
+    // credential-SHAPED password is still masked by the shape set; an
+    // ordinary username is not a secret and stays readable.
+    const out = engine.redactRetrievedSource("https://alice@example.gov/filing");
+    expect(out).toContain("alice@example.gov");
+  });
+
   it("keeps a URL with no query byte-identical", () => {
     const url = "https://example.gov/filing";
     expect(engine.redactRetrievedSource(url)).toBe(url);

@@ -342,35 +342,42 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
   const RUN_CORRELATION_WINDOW_MS = 60 * 60 * 1000;
 
   /**
-   * Whether this machine's `tool_audit_log` carries `run_id`.
+   * Which run-linking columns this machine's database actually has.
    *
-   * `null` until asked. Probed rather than assumed, because the answer
-   * depends on whether the CLI has ever opened this database — the
-   * desktop and the CLI share `~/.motebit/motebit.db`, and the column
-   * arrives with the CLI's migration registry. A probe is one query per
-   * session; assuming either way was wrong once in each direction.
+   * Probed rather than assumed, because the answer depends on whether
+   * the CLI has ever opened this database — the desktop and the CLI
+   * share `~/.motebit/motebit.db` and these columns arrive with the
+   * CLI's migration registry. Assuming either way was wrong once in
+   * each direction.
+   *
+   * ONLY a `true` is remembered. A column never disappears, so a `yes`
+   * is permanent; a `no` is a fact about this moment, and a long-lived
+   * desktop window opened before the daemon has ever run would have
+   * spent the rest of the session on the unfiltered time scan after the
+   * migration landed beneath it. That is the same staleness the
+   * transient-failure path was fixed for, in the branch beside it.
    */
-  let hasRunIdColumn: boolean | null = null;
+  const presentColumns = new Set<string>();
 
-  async function probeRunIdColumn(
+  async function hasColumn(
     invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>,
+    table: string,
+    column: string,
   ): Promise<boolean> {
-    if (hasRunIdColumn != null) return hasRunIdColumn;
+    const key = `${table}.${column}`;
+    if (presentColumns.has(key)) return true;
     try {
       const cols = await invoke<Array<Record<string, unknown>>>("db_query", {
-        sql: `PRAGMA table_info(tool_audit_log)`,
+        sql: `PRAGMA table_info(${table})`,
         params: [],
       });
-      hasRunIdColumn = cols.some((c) => c.name === "run_id");
+      const found = cols.some((c) => c.name === column);
+      if (found) presentColumns.add(key);
+      return found;
     } catch {
-      // Unknown stays unknown — for THIS attempt only. Writing `false`
-      // into the memo made one transient failure (the database locked
-      // while the daemon writes, say) permanently downgrade every later
-      // expansion in the session to the unfiltered time scan, which is
-      // the opposite of what the sentence above it promised.
+      // Unknown stays unknown, for this attempt only.
       return false;
     }
-    return hasRunIdColumn;
   }
 
   function loadOutcomeAuditEntries(
@@ -446,19 +453,33 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
         });
     };
 
-    // Asked once per session, not once per expansion.
-    if (hasRunIdColumn === false) {
-      loadByTimestamp();
-      return;
-    }
-    void probeRunIdColumn(invoke).then((present) => {
-      if (!present) {
+    void Promise.all([
+      hasColumn(invoke, "tool_audit_log", "run_id"),
+      hasColumn(invoke, "goal_outcomes", "run_id"),
+    ]).then(([auditHasRun, outcomeHasRun]) => {
+      if (!auditHasRun) {
         loadByTimestamp();
         return;
       }
+      // The outcome id is the run id only for a COMPLETED run.
+      //
+      // `recordCompletedOutcome` reuses it, and every other writer —
+      // interrupted-run recovery above all — mints a fresh outcome id
+      // and carries the run separately. Joining on the outcome id alone
+      // therefore matched exactly the runs a returning owner cares
+      // least about and dropped the interrupted ones, which have tool
+      // calls and do expand, into the unfiltered time scan on a machine
+      // that had the exact key sitting in `goal_outcomes.run_id`.
+      // COALESCE covers both without a second round-trip: the linked
+      // run when the column is there, the outcome id when it is not.
+      const sql = outcomeHasRun
+        ? `SELECT tool, decision, result, timestamp FROM tool_audit_log
+           WHERE run_id = COALESCE((SELECT run_id FROM goal_outcomes WHERE outcome_id = ?), ?)
+           ORDER BY timestamp ASC LIMIT 50`
+        : `SELECT tool, decision, result, timestamp FROM tool_audit_log WHERE run_id = ? ORDER BY timestamp ASC LIMIT 50`;
       void invoke<Array<Record<string, unknown>>>("db_query", {
-        sql: `SELECT tool, decision, result, timestamp FROM tool_audit_log WHERE run_id = ? ORDER BY timestamp ASC LIMIT 50`,
-        params: [outcomeId],
+        sql,
+        params: outcomeHasRun ? [outcomeId, outcomeId] : [outcomeId],
       })
         .then((entries: Array<Record<string, unknown>>) => {
           // Zero rows is the pre-migration case the timestamp scan is
