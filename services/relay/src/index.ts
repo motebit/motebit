@@ -187,6 +187,14 @@ import {
 export { parseTokenPayloadUnsafe, verifySignedTokenForDevice } from "./auth.js";
 export type { TokenPayload } from "./auth.js";
 export type { ConnectedDevice } from "./websocket.js";
+/**
+ * Deliver a `command_response` to the pending request that is waiting
+ * for it. The relay's own WebSocket handler calls this; exported so an
+ * integration harness can close the loop without standing up a real
+ * socket upgrade. The socket plumbing is covered by the relay's own
+ * tests; what a harness is for is what the RUNTIMES do with a frame.
+ */
+export { handleCommandResponse } from "./command-route.js";
 
 // === Config ===
 
