@@ -8,7 +8,6 @@ import {
   NullRenderer,
   CommandReplayGuard,
   type CommandReplayStore,
-  executeCommand,
   executeRemoteCommand,
   cmdSelfTest,
   PLANNING_TASK_ROUTER,
@@ -1556,12 +1555,12 @@ export async function handleServe(config: CliConfig): Promise<void> {
                 );
                 return;
               }
-              const result = await executeCommand(
+              // The one door for a relay frame — serve's handler, the
+              // sibling of the daemon's above.
+              const result = await executeRemoteCommand(
                 runtimeRef.current!,
                 cmdMsg.command,
                 cmdMsg.args,
-                undefined,
-                { origin: "remote" },
               );
               serveWsAdapter!.sendRaw(
                 JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),

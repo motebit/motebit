@@ -58,6 +58,21 @@ const RECENT_LIMIT = 10;
 const PREVIEW_MAX_CHARS = 280;
 
 /**
+ * How much of one run's detail crosses the wire.
+ *
+ * Every other number in this view is bounded — ten runs, a 280-character
+ * preview — and the detail was not: neither the tool-call query nor the
+ * evidence query carries a LIMIT, and a note or an error reason was
+ * redacted but never cut. An overnight run with a few hundred tool
+ * calls therefore produced a `command_response` of hundreds of lines,
+ * pushed through a 30-second relay timeout and rendered on a phone as
+ * one message. A return view is a return view; the rest is read on the
+ * machine that holds the ledger.
+ */
+const MAX_TOOL_CALLS = 40;
+const MAX_EVIDENCE = 20;
+
+/**
  * The membrane, or the identity function when nothing is crossing one.
  *
  * Asked at the terminal, this is the owner reading their own record on
@@ -125,6 +140,23 @@ function parseTarget(
   if (verb === "list") return { kind: "list" };
   if (verb === "show") return words[1] != null ? { kind: "run", id: words[1] } : { kind: "list" };
   return { kind: "run", id: words[0] ?? raw };
+}
+
+/**
+ * Could this be the start of a run id at all?
+ *
+ * Asked only AFTER a lookup has failed, never before it. `runs help`,
+ * `runs recent` and `runs all` answered `No run matching "help"` — an
+ * absence about a run nobody asked about, which is the thing the verb
+ * handling above exists to stop, left open for every word but `ack`.
+ * But pre-judging the target would risk refusing a real id on a guess
+ * about its shape, and the lookup itself is the authority on whether a
+ * run exists. So the shape only chooses the WORDING of a miss: run ids
+ * are minted by `crypto.randomUUID`, so a miss on something that is not
+ * hex was never a run.
+ */
+function couldBeRunId(target: string): boolean {
+  return /^[0-9a-fA-F-]+$/.test(target);
 }
 
 function noLedger(): CommandResult {
@@ -234,31 +266,44 @@ export function cmdRuns(
  * `RunLedgerDetail` without deciding what it means here is a type error
  * rather than a quiet leak.
  */
+interface RedactedRun {
+  readonly run: RunLedgerDetail;
+  /** What the bound dropped, so the text can say so rather than imply completeness. */
+  readonly elided: { tool_calls: number; evidence: number; withheld: number };
+}
+
 function redactRun(
   run: RunLedgerDetail,
   redact: (t: string) => string,
   redactRef: (t: string) => string,
-): RunLedgerDetail {
-  return {
+): RedactedRun {
+  const elided = {
+    tool_calls: Math.max(0, run.tool_calls.length - MAX_TOOL_CALLS),
+    evidence: Math.max(0, run.evidence.length - MAX_EVIDENCE),
+    withheld: Math.max(0, run.withheld.length - MAX_EVIDENCE),
+  };
+  const redacted: RunLedgerDetail = {
     run_id: run.run_id,
     goal_id: run.goal_id,
     status: run.status,
     started_at: run.started_at,
     holding: run.holding,
-    ...(run.note != null ? { note: redact(run.note) } : {}),
+    ...(run.note != null ? { note: bounded(run.note, redact) } : {}),
     signed: run.signed,
     evidence_count: run.evidence_count,
     withheld_count: run.withheld_count,
     outcomes: run.outcomes.map((o) => ({
       status: o.status,
-      ...(o.error_message != null ? { error_message: redact(o.error_message) } : {}),
+      ...(o.error_message != null ? { error_message: bounded(o.error_message, redact) } : {}),
       // Redacted, THEN bounded — the reader hands the whole body over
       // precisely so the membrane reads it whole.
       ...(o.summary_preview != null ? { summary_preview: bounded(o.summary_preview, redact) } : {}),
       signed: o.signed,
     })),
-    tool_calls: run.tool_calls.map((c) => ({ tool: c.tool, verdict: c.verdict })),
-    evidence: run.evidence.map((e) => ({
+    tool_calls: run.tool_calls
+      .slice(0, MAX_TOOL_CALLS)
+      .map((c) => ({ tool: c.tool, verdict: c.verdict })),
+    evidence: run.evidence.slice(0, MAX_EVIDENCE).map((e) => ({
       tool: e.tool,
       // The source has its own membrane, split where its risk splits.
       //
@@ -276,8 +321,9 @@ function redactRun(
       digest: e.digest,
       ...(e.projection != null ? { projection: e.projection } : {}),
     })),
-    withheld: run.withheld.map((w) => ({ tool: w.tool, reason: w.reason })),
+    withheld: run.withheld.slice(0, MAX_EVIDENCE).map((w) => ({ tool: w.tool, reason: w.reason })),
   };
+  return { run: redacted, elided };
 }
 
 function showRun(
@@ -296,7 +342,12 @@ function showRun(
     };
   }
   if (found.kind === "missing") {
-    return { summary: `No run matching "${target}".` };
+    if (couldBeRunId(target)) return { summary: `No run matching "${target}".` };
+    return {
+      summary: `\`${target}\` is not a run id.`,
+      detail:
+        "runs — what happened while you were away\nruns <id> — one run in full\nruns list — the same as `runs`",
+    };
   }
   const raw = found.run;
 
@@ -315,7 +366,9 @@ function showRun(
     origin === "local"
       ? (t: string) => t
       : (t: string) => runtime.redactSourceForRemoteDisclosure(t);
-  const run = redactRun(raw, redact, redactRef);
+  const { run, elided } = redactRun(raw, redact, redactRef);
+  const more = (n: number): string =>
+    n > 0 ? `\n  …and ${n} more, read in full on the machine that holds the ledger.` : "";
 
   const sections: string[] = [];
 
@@ -362,15 +415,16 @@ function showRun(
   sections.push(
     run.tool_calls.length === 0
       ? "Tool calls (0)\n  none recorded."
-      : `Tool calls (${run.tool_calls.length})\n` +
+      : `Tool calls (${run.tool_calls.length + elided.tool_calls})\n` +
           run.tool_calls.map((c) => `  ${c.tool}  ${c.verdict}`).join("\n") +
+          more(elided.tool_calls) +
           "\n  The tool's own verdict — attribution, never proof of an outside effect.",
   );
 
   sections.push(
     run.evidence.length === 0
       ? "Evidence (0)\n  none recorded. That is not 'nothing was read' — it means no tool in\n  this run content-addressed what it retrieved."
-      : `Evidence (${run.evidence.length})\n` +
+      : `Evidence (${run.evidence.length + elided.evidence})\n` +
           run.evidence
             .map(
               (e) =>
@@ -378,14 +432,16 @@ function showRun(
                 (e.projection != null ? `\n    projection ${e.projection}` : ""),
             )
             .join("\n") +
+          more(elided.evidence) +
           "\n  Re-fetch the source and hash its UTF-8 text to confirm the digest.\n" +
           "  It proves the bytes were read — never that what they say is true.",
   );
 
   if (run.withheld.length > 0) {
     sections.push(
-      `Withheld (${run.withheld.length})\n` +
+      `Withheld (${run.withheld.length + elided.withheld})\n` +
         run.withheld.map((w) => `  ${w.tool} · ${w.reason}`).join("\n") +
+        more(elided.withheld) +
         "\n  Read and deliberately not kept, so there is nothing here to re-check.",
     );
   }

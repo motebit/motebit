@@ -38,14 +38,20 @@ const ROOT = process.cwd();
 /** Where a surface could plausibly handle a relay frame. */
 const SCAN_ROOTS = ["apps", "services", "packages"];
 
-/** The marker that says this file handles frames the relay forwards. */
-const FRAME_MARKER = /command_request/;
+/**
+ * A file that actually HANDLES a relay frame, not one that mentions the
+ * word.
+ *
+ * The first version matched the bare string, so the aperture line
+ * counted the crypto package's envelope signer and the runtime's own
+ * barrel export as handlers and claimed to have checked them. A gate
+ * that overstates what it looked at is the drift `hasApertureDisclosure`
+ * exists to catch, in the gate that was just added to catch another one.
+ */
+const FRAME_MARKER = /[=!]==?\s*["']command_request["']|["']command_request["']\s*[=!]==?/;
 
-/** The door, and the explicit-argument escape hatch beside it. */
-const DOOR = /executeRemoteCommand\s*\(/;
-const EXPLICIT_ORIGIN = /origin:\s*"(local|remote)"/;
-
-const DIRECT_CALL = /\bexecuteCommand\s*\(/;
+/** The door. A different identifier, so it never matches DIRECT_CALL. */
+const DIRECT_CALL = /\bexecuteCommand\s*\(/g;
 
 function* walk(dir: string): Generator<string> {
   let entries;
@@ -84,8 +90,29 @@ function* walk(dir: string): Generator<string> {
   }
 }
 
+/** Does THIS call pass an origin? Read its own argument list, nothing else. */
+function callPassesOrigin(src: string, openParenSearchFrom: number): boolean {
+  const start = src.indexOf("(", openParenSearchFrom);
+  if (start === -1) return false;
+  let depth = 0;
+  for (let i = start; i < src.length; i++) {
+    const c = src[i];
+    if (c === "(") depth += 1;
+    else if (c === ")") {
+      depth -= 1;
+      if (depth === 0) return /origin:\s*"(local|remote)"/.test(src.slice(start, i + 1));
+    }
+  }
+  return false;
+}
+
+function lineOf(src: string, index: number): number {
+  return src.slice(0, index).split("\n").length;
+}
+
 const violations: string[] = [];
 let filesScanned = 0;
+let callSites = 0;
 const frameHandlers: string[] = [];
 
 for (const root of SCAN_ROOTS) {
@@ -96,16 +123,23 @@ for (const root of SCAN_ROOTS) {
     const rel = relative(ROOT, file);
     // The APERTURE is every file that handles a frame, not only the ones
     // that could fail. A gate that counts its violations as its scope
-    // reports "2 handlers, all clean" when there are six — the aperture
-    // drift this repo measures for.
+    // reports "2 handlers, all clean" when there are six.
     frameHandlers.push(rel);
-    if (!DIRECT_CALL.test(src)) continue;
-    // The door, or an explicit origin, anywhere in the file. Deliberately
-    // file-scoped rather than call-scoped: a handler that names the
-    // decision once has made it, and the alternative is parsing.
-    if (DOOR.test(src) || EXPLICIT_ORIGIN.test(src)) continue;
-    const line = src.split("\n").findIndex((l) => DIRECT_CALL.test(l)) + 1;
-    violations.push(`${rel}:${line}`);
+    // CALL-scoped, not file-scoped.
+    //
+    // File-scoped meant one door anywhere in a file exempted every other
+    // call in it — and `apps/cli/src/daemon.ts` has TWO independent
+    // frame handlers, so a third could have been added calling
+    // `executeCommand` bare and stayed green forever. That is the
+    // latency this gate exists to close, in the one file that already
+    // has more than one handler.
+    DIRECT_CALL.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = DIRECT_CALL.exec(src)) != null) {
+      callSites += 1;
+      if (callPassesOrigin(src, m.index)) continue;
+      violations.push(`${rel}:${lineOf(src, m.index)}`);
+    }
   }
 }
 
@@ -122,5 +156,6 @@ if (violations.length > 0) {
 
 process.stdout.write(
   `✓ check-relay-frame-origin: ${filesScanned} source file(s) scanned across ${SCAN_ROOTS.length} tree(s); ` +
-    `${frameHandlers.length} relay-frame handler(s) found (${frameHandlers.join(", ")}), each executing through the door that records the origin.\n`,
+    `${frameHandlers.length} file(s) handle a relay frame (${frameHandlers.join(", ")}); ` +
+    `${callSites} \`executeCommand\` call(s) among them, each checked on its OWN argument list rather than on the file, and each either the door or naming its origin.\n`,
 );

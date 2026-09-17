@@ -391,28 +391,6 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     expect(vps.sentTo).toEqual([]);
   });
 
-  it("`halt-status` is a per-machine READ, so two machines are refused", async () => {
-    // It reads this machine's halt store. Routed to whichever the relay
-    // picked, it answered "Running — nothing is halted" from the VPS
-    // while the laptop sat halted — the same false negative the
-    // approvals queue has, about the question this whole arc is for.
-    const laptop = fakePeer("dev-1", ["background", "unattended_runtime"]);
-    const vps = fakePeer("dev-2", ["background", "unattended_runtime"]);
-    relay.connections.set(AGENT_ID, [laptop.peer, vps.peer] as unknown as Parameters<
-      typeof relay.connections.set
-    >[1]);
-    const envelope = await signAgentCommandEnvelope({
-      command: "halt-status",
-      motebitId: AGENT_ID,
-      identityPrivateKey: keys.privateKey,
-    });
-    const { status, json } = await postCommand(AGENT_ID, { command: "halt-status", envelope });
-    expect(status).toBe(404);
-    expect(JSON.stringify(json)).toMatch(/2 different machines/i);
-    expect(laptop.sentTo).toEqual([]);
-    expect(vps.sentTo).toEqual([]);
-  });
-
   it("a `runs` question goes to the runtime that HAS the ledger", async () => {
     // Read-only, but not answerable by just anyone: the run ledger
     // lives where goals actually fire. Answered by the phone that asked,

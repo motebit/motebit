@@ -77,13 +77,23 @@ const MUTATING_UNATTENDED_COMMANDS = new Set(["halt", "resume", "approvals"]);
  * fact — so which runtime answers changes what the answer is.
  *
  * A halt or a resume is the same act wherever it lands. An approval
- * queue, a run ledger and a halt store are local records: a laptop's
- * ledger answered from a VPS is a different, and wrong, answer. Keyed
- * by that property rather than by "is unattended", which is why adding
- * `runs` to the set above without this said "each with its own approval
- * queue" about a question with no queue in it.
+ * queue and a run ledger are local records: a laptop's ledger answered
+ * from a VPS is a different, and wrong, answer. Keyed by that property
+ * rather than by "is unattended", which is why adding `runs` to the set
+ * above without this said "each with its own approval queue" about a
+ * question with no queue in it.
+ *
+ * `halt-status` reads a local store too and is deliberately NOT here.
+ * It would be the same reasoning, and it is the wrong PR for it: on a
+ * two-machine motebit `halt` still delivers to one of them, so refusing
+ * the status leaves a phone able to stop the motebit and unable to see
+ * what stopped — strictly worse than the false negative it replaces,
+ * and a change to an already-shipped verb from an increment that only
+ * adds a read. The multi-machine story is one problem, delivery and
+ * status together, and it belongs to issue #681 behind the harness.
+ * This set gains exactly one member here: `runs`, this increment's own.
  */
-const PER_MACHINE_DATABASE_COMMANDS = new Set(["approvals", "runs", "halt-status"]);
+const PER_MACHINE_DATABASE_COMMANDS = new Set(["approvals", "runs"]);
 
 /**
  * The capability a command's answer actually depends on.

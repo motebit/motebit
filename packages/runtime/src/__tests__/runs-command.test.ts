@@ -228,6 +228,36 @@ describe("runs — the return view from another surface", () => {
     expect(cmdRuns(runtimeWith(ledger), "run-abcd").summary).toContain("run-abcd");
   });
 
+  it("the detail is bounded, and says what it left out", () => {
+    // Everything else in this view is bounded — ten runs, a 280-char
+    // preview — and the detail was not: neither query carries a LIMIT.
+    // An overnight run with hundreds of tool calls produced a response
+    // of hundreds of lines, through a 30-second relay timeout, rendered
+    // on a phone as one message.
+    const many: RunLedgerDetail = {
+      ...DETAIL,
+      tool_calls: Array.from({ length: 120 }, (_, i) => ({ tool: `t${i}`, verdict: "ok" })),
+      evidence: Array.from({ length: 60 }, (_, i) => ({
+        tool: "read_url",
+        ref: `https://example.gov/${i}`,
+        digest: "sha-256:x",
+      })),
+    };
+    const r = cmdRuns(
+      runtimeWith({ listRecent: () => [], get: () => ({ kind: "found" as const, run: many }) }),
+      "run-abcd",
+    );
+    const payload = r.data as { run: RunLedgerDetail };
+    expect(payload.run.tool_calls.length).toBeLessThanOrEqual(40);
+    expect(payload.run.evidence.length).toBeLessThanOrEqual(20);
+    // The COUNT in the header stays the run's true total — a bounded
+    // list must not read as a complete one.
+    expect(r.detail).toContain("Tool calls (120)");
+    expect(r.detail).toContain("Evidence (60)");
+    expect(r.detail).toMatch(/and 80 more/);
+    expect(r.detail).toMatch(/and 40 more/);
+  });
+
   it("a held run is marked as needing a person, and every line carries a time", () => {
     // `status` alone cannot say it: an `interrupted` run that has been
     // acknowledged and one still waiting read identically, and only one
@@ -375,10 +405,27 @@ describe("runs — the return view from another surface", () => {
   });
 
   it("an unknown run is not reported as an empty one", () => {
+    // Run ids are uuids, so a miss on a hex-shaped target is a real
+    // absence: this id was looked for and is not there.
     const r = cmdRuns(
       runtimeWith({ listRecent: () => [], get: () => ({ kind: "missing" as const }) }),
-      "nope",
+      "abc123",
     );
-    expect(r.summary).toContain('No run matching "nope"');
+    expect(r.summary).toContain('No run matching "abc123"');
+  });
+
+  it("a word that was never a run id is told so, not reported as a missing run", () => {
+    // `runs help`, `runs recent`, `runs all` answered `No run matching
+    // "help"` — an absence about a run nobody asked about, which is the
+    // thing the verb handling exists to stop, left open for every word
+    // but `ack`. Judged AFTER the lookup, never before it: the ledger
+    // is the authority on what exists, and the shape only chooses the
+    // wording of a miss.
+    const ledger = { listRecent: () => [], get: () => ({ kind: "missing" as const }) };
+    for (const word of ["help", "recent", "all", "status"]) {
+      const r = cmdRuns(runtimeWith(ledger), word);
+      expect(r.summary).not.toContain("No run matching");
+      expect(r.summary).toContain("is not a run id");
+    }
   });
 });
