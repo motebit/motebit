@@ -18,6 +18,8 @@ function runtimeWith(ledger: RunLedgerReader | null): MotebitRuntime {
     // that masks a recognisable token proves the command routes through
     // it rather than around it.
     redactForRemoteDisclosure: (t: string) => t.replace(/sk-[A-Za-z0-9-]+/g, "[REDACTED]"),
+    // The REPORT seam, wider than the decision seam beside it.
+    redactReportForRemoteDisclosure: (t: string) => t.replace(/sk-[A-Za-z0-9-]+/g, "[REDACTED]"),
   } as unknown as MotebitRuntime;
 }
 
@@ -318,6 +320,51 @@ describe("runs — the return view from another surface", () => {
       "show",
     );
     expect(r.summary).toBe("No runs recorded yet.");
+  });
+
+  it("asked at the terminal, the owner reads their own record unmasked", () => {
+    // Nothing is crossing a wire. Masking here protects no one and made
+    // `/runs <id>` in the REPL disagree with `motebit runs show <id>`
+    // in the same shell about the same run.
+    const leaky: RunLedgerDetail = {
+      ...DETAIL,
+      outcomes: [{ status: "completed", summary_preview: "key sk-live-AAAA", signed: false }],
+    };
+    const ledger = { listRecent: () => [], get: () => ({ kind: "found" as const, run: leaky }) };
+    expect(cmdRuns(runtimeWith(ledger), "run-abcd", "local").detail).toContain("sk-live-AAAA");
+    expect(cmdRuns(runtimeWith(ledger), "run-abcd", "remote").detail).not.toContain("sk-live-AAAA");
+    // And the default is the closed one, so a caller that forgets
+    // redacts rather than discloses.
+    expect(cmdRuns(runtimeWith(ledger), "run-abcd").detail).not.toContain("sk-live-AAAA");
+  });
+
+  it("keeps an ordinary evidence source legible — it is the affordance", () => {
+    // The prose beside it says to re-fetch the source and hash it, so a
+    // digest next to an erased URL proves nothing to anybody. The
+    // report set would mask a long object key as base64 and a nine-digit
+    // document id as an SSN; the credential-class set leaves both.
+    const r = cmdRuns(
+      runtimeWith({
+        listRecent: () => [],
+        get: () => ({
+          kind: "found" as const,
+          run: {
+            ...DETAIL,
+            evidence: [
+              {
+                tool: "read_url",
+                ref: "https://example.gov/edgar/data/320193/000032019324000123-index.htm",
+                digest: "d",
+              },
+            ],
+          },
+        }),
+      }),
+      "run-abcd",
+    );
+    expect(r.detail).toContain(
+      "https://example.gov/edgar/data/320193/000032019324000123-index.htm",
+    );
   });
 
   it("an unknown run is not reported as an empty one", () => {

@@ -19,9 +19,21 @@
  * signed it, because a summary crossing a relay cannot be checked
  * against the signature by the surface that reads it, and offering it as
  * the result would be offering proof that is not there. And every piece
- * of text that does cross goes through the same credential-class
- * membrane as an approval's arguments, because the relay is not a
- * sovereign party.
+ * of text that does cross is masked at the boundary, because the relay
+ * is not a sovereign party.
+ *
+ * Two membranes, not one, because text splits by what a person does
+ * with it. A run's result is read as a REPORT, so it goes through the
+ * full set — losing a field there costs legibility, keeping one can
+ * cost a card number. An evidence source is read TO ACT ON, like an
+ * approval's arguments, so it goes through the narrow credential-class
+ * set: the prose beside it says to re-fetch and hash, and a digest next
+ * to an erased URL proves nothing to anybody.
+ *
+ * And asked from the machine that holds the ledger, nothing is masked:
+ * no wire is being crossed, and the owner reading their own record
+ * through a membrane made this command disagree with `motebit runs
+ * show` in the same shell about the same run.
  */
 
 import type { MotebitRuntime } from "../index.js";
@@ -41,6 +53,21 @@ const RECENT_LIMIT = 10;
  * to a stub no pattern matches and would cross in the clear.
  */
 const PREVIEW_MAX_CHARS = 280;
+
+/**
+ * The membrane, or the identity function when nothing is crossing one.
+ *
+ * Asked at the terminal, this is the owner reading their own record on
+ * the machine that holds it — nothing leaves the process, so masking it
+ * protects no one and makes `/runs <id>` in the REPL disagree with
+ * `motebit runs show <id>` in the same shell about the same run.
+ * Masking is for the wire, and `origin` is how this command knows there
+ * is one.
+ */
+function redactorFor(runtime: MotebitRuntime, origin: "local" | "remote"): (t: string) => string {
+  if (origin === "local") return (t) => t;
+  return (t) => runtime.redactReportForRemoteDisclosure(t);
+}
 
 /** Redact first, then bound. The order is the whole point. */
 function bounded(text: string, redact: (t: string) => string): string {
@@ -112,7 +139,16 @@ function noLedger(): CommandResult {
  * can be re-checked, because those are the two questions a returning
  * owner actually has and the two a list can answer honestly.
  */
-export function cmdRuns(runtime: MotebitRuntime, args?: string): CommandResult {
+export function cmdRuns(
+  runtime: MotebitRuntime,
+  args?: string,
+  /**
+   * Where the question came in. Defaults to `remote` so a caller that
+   * forgets redacts rather than discloses — the membrane's default
+   * has to be the closed one.
+   */
+  origin: "local" | "remote" = "remote",
+): CommandResult {
   // `runs list` and `runs show <id>` are what a person types who has
   // ever used another tool, and every word after the verb was being
   // read as a run id — so the list verb answered `No run matching
@@ -134,7 +170,7 @@ export function cmdRuns(runtime: MotebitRuntime, args?: string): CommandResult {
         "Acknowledging a held run writes to the record on the machine that holds it. Run `motebit runs ack <id>` on that machine — or `halt` from here, which does reach it.",
     };
   }
-  if (parsed.kind === "run") return showRun(runtime, ledger, parsed.id);
+  if (parsed.kind === "run") return showRun(runtime, ledger, parsed.id, origin);
 
   // The LIST crosses the membrane too, not only the detail.
   //
@@ -143,7 +179,7 @@ export function cmdRuns(runtime: MotebitRuntime, args?: string): CommandResult {
   // that failed against a token-bearing URL put that token in the
   // summary, and `data` is serialized whole and returned through the
   // relay. Same defect, same file, one function along.
-  const redact = (t: string): string => runtime.redactForRemoteDisclosure(t);
+  const redact = redactorFor(runtime, origin);
   const runs = ledger
     .listRecent(RECENT_LIMIT)
     .map((r) => (r.note != null ? { ...r, note: redact(r.note) } : r));
@@ -188,7 +224,11 @@ export function cmdRuns(runtime: MotebitRuntime, args?: string): CommandResult {
  * `RunLedgerDetail` without deciding what it means here is a type error
  * rather than a quiet leak.
  */
-function redactRun(run: RunLedgerDetail, redact: (t: string) => string): RunLedgerDetail {
+function redactRun(
+  run: RunLedgerDetail,
+  redact: (t: string) => string,
+  redactRef: (t: string) => string,
+): RunLedgerDetail {
   return {
     run_id: run.run_id,
     goal_id: run.goal_id,
@@ -210,7 +250,17 @@ function redactRun(run: RunLedgerDetail, redact: (t: string) => string): RunLedg
     tool_calls: run.tool_calls.map((c) => ({ tool: c.tool, verdict: c.verdict })),
     evidence: run.evidence.map((e) => ({
       tool: e.tool,
-      ref: redact(e.ref),
+      // The source goes through the DECISION seam, not the report one.
+      //
+      // A ref is read to act on, like an approval's arguments: the
+      // prose beside it says to re-fetch the source and hash the
+      // result, and a digest next to an erased URL proves nothing to
+      // anybody. The report set would mask a forty-character object key
+      // as base64 and a nine-digit document id as an SSN and break
+      // exactly that. The credential-class set catches a token in a
+      // query parameter and leaves an ordinary URL legible, which is
+      // the same asymmetry the two seams exist for.
+      ref: redactRef(e.ref),
       digest: e.digest,
       ...(e.projection != null ? { projection: e.projection } : {}),
     })),
@@ -222,6 +272,7 @@ function showRun(
   runtime: MotebitRuntime,
   ledger: NonNullable<MotebitRuntime["runLedger"]>,
   target: string,
+  origin: "local" | "remote",
 ): CommandResult {
   const found = ledger.get(target);
   if (found.kind === "ambiguous") {
@@ -247,8 +298,10 @@ function showRun(
   // comment says it in as many words: the raw object must not ride
   // beside a redacted string. Deriving both from one redacted value is
   // what stops a field added later from arriving unredacted by default.
-  const redact = (t: string): string => runtime.redactForRemoteDisclosure(t);
-  const run = redactRun(raw, redact);
+  const redact = redactorFor(runtime, origin);
+  const redactRef =
+    origin === "local" ? (t: string) => t : (t: string) => runtime.redactForRemoteDisclosure(t);
+  const run = redactRun(raw, redact, redactRef);
 
   const sections: string[] = [];
 

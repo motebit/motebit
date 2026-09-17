@@ -122,7 +122,7 @@ export async function executeCommand(
     case "resume":
       return cmdResume(runtime, args);
     case "runs":
-      return cmdRuns(runtime, args);
+      return cmdRuns(runtime, args, options?.origin ?? "local");
     case "halt-status":
       return cmdHaltStatus(runtime);
     case "conversations":

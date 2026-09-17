@@ -3039,26 +3039,47 @@ export class MotebitRuntime {
   }
 
   /**
-   * Mask sensitive values in text bound for a non-sovereign party.
+   * Mask credential-class values in text a person must READ TO DECIDE.
    *
-   * The command layer uses it on approval arguments and on the return
-   * view before either crosses the relay to a remote consent surface: a
-   * person deciding needs the destination, the path, the amount — and
-   * does not need, and the relay must not see, an API key that happened
-   * to be an argument.
+   * The command layer uses it on approval arguments before they cross
+   * the relay to a remote consent surface. The narrow set is the point:
+   * a person approving a payment needs the destination and the amount,
+   * and does not need — and the relay must not see — an API key that
+   * happened to be an argument.
    *
-   * The FULL set, not the cloud-egress subset. That subset deliberately
-   * leaves SSNs, card numbers and bare base64 alone, and its stated
-   * reason is about a user's OWN typed message to a model they chose:
-   * financial and personal detail they often mean the model to use.
-   * Nothing about that reasoning survives the move to this boundary —
-   * the text here is a goal's retrieved output and the reader is a
-   * relay operator the sovereign did not choose, where fail-closed
-   * privacy says medical and financial never cross. The cost of the
-   * wider set is over-redaction in a view, which is legibility; the
-   * cost of the narrower one is a card number on someone else's wire.
+   * Widening this to the full set once, to protect the return view,
+   * broke exactly that. A base58 Solana address is forty-four
+   * characters and matches the bare-base64 pattern; a micro-unit amount
+   * of $250 is `250000000` and matches the SSN pattern; roughly one
+   * epoch-millisecond timestamp in ten passes the Luhn check. So the
+   * phone rendered a payment approval as `{"to":"[REDACTED:…]",
+   * "amount_micro":[REDACTED:…]}` and asked someone to consent to it.
+   * A membrane that erases the decision is not protecting the decision.
+   *
+   * Reports go through {@link redactReportForRemoteDisclosure} instead.
    */
   redactForRemoteDisclosure(text: string): string {
+    return this.policy.redactForCloudEgress(text).text;
+  }
+
+  /**
+   * Mask sensitive values in text a person READS AS A REPORT.
+   *
+   * The return view's result previews, error reasons and run notes:
+   * whole goal output, retrieved from somewhere else, crossing to a
+   * relay operator the sovereign did not choose. The FULL set here, not
+   * the cloud-egress subset, because that subset deliberately leaves
+   * SSNs, card numbers and bare base64 alone for a reason that belongs
+   * to a different boundary — a user's OWN typed message to a model
+   * they chose, carrying detail they often mean the model to use.
+   * Nothing of that survives the move here, where fail-closed privacy
+   * says financial and medical never cross.
+   *
+   * The asymmetry with the method above is the whole design: losing a
+   * field from a report costs legibility, losing one from a decision
+   * costs the decision.
+   */
+  redactReportForRemoteDisclosure(text: string): string {
     return this.policy.redact(text);
   }
 
