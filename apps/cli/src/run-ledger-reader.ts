@@ -87,27 +87,28 @@ export function createRunLedgerReader(moteDb: MotebitDatabase, motebitId: string
       // nothing that happened — and, because the store returns held runs
       // oldest-first, with the ten oldest, under a reader documented
       // "newest first".
-      const half = Math.max(1, Math.ceil(limit / 2));
-      const blocking = moteDb.goalRunStore
-        .listBlocking(motebitId)
-        .slice()
-        .sort((a, b) => b.started_at - a.started_at);
-      const heldIds = new Set(blocking.map((b) => b.run_id));
+      //
       // Blocking is not the same as waiting on a person. `listBlocking`
       // includes `running`, and a run raised to the top and marked
       // "needs you" while it is mid-execution sends its owner looking
-      // for an acknowledgement that does not exist — and a stale
-      // `running` row from a crash the recovery pass has not reached
-      // reads identically.
-      const needsPerson = new Set(
-        blocking.filter((b) => goalRunNeedsPerson(b)).map((b) => b.run_id),
-      );
+      // for an acknowledgement that does not exist. Fixing the LABEL
+      // and leaving the priority group as `listBlocking` half-fixed it:
+      // five stale `running` rows from unrecovered crashes still took
+      // the top of the page, saying nothing and asking nothing, and
+      // pushed five finished runs off it. The group and the mark are
+      // the same fact, so they read the same predicate.
+      const half = Math.max(1, Math.ceil(limit / 2));
+      const waiting = moteDb.goalRunStore
+        .listBlocking(motebitId)
+        .filter((b) => goalRunNeedsPerson(b))
+        .sort((a, b) => b.started_at - a.started_at);
+      const needsPerson = new Set(waiting.map((b) => b.run_id));
       const recent = moteDb.goalRunStore
         .listRecent(motebitId, limit)
-        .filter((r) => !heldIds.has(r.run_id));
+        .filter((r) => !needsPerson.has(r.run_id));
       // The held group may take the whole page when there is nothing
       // else to show, but never crowds out everything that finished.
-      const heldShown = blocking.slice(0, Math.max(half, limit - recent.length));
+      const heldShown = waiting.slice(0, Math.max(half, limit - recent.length));
       return [...heldShown, ...recent]
         .slice(0, limit)
         .map((r) =>

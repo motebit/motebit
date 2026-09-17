@@ -534,7 +534,14 @@ export class MobileSyncController {
                     );
                     return;
                   }
-                  const result = await executeCommand(rt, cmdMsg.command, cmdMsg.args);
+                  const result = await executeCommand(
+                    rt,
+                    cmdMsg.command,
+                    cmdMsg.args,
+                    undefined,
+                    // This IS the relay frame. Recorded, never trusted.
+                    { origin: "remote" },
+                  );
                   this._wsAdapter?.sendRaw(
                     JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
                   );

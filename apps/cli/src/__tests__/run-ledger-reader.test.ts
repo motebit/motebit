@@ -169,18 +169,37 @@ describe("run ledger reader", () => {
     // top, an in-flight nightly goal sent its owner looking for an
     // acknowledgement that does not exist, and a stale `running` row
     // from an unrecovered crash read identically.
+    const running = run("r-running", 200, null, "running");
     const reader = createRunLedgerReader(
       dbWith({
-        blocking: [
-          run("r-running", 200, null, "running"),
-          run("r-waiting", 100, null, "awaiting_approval"),
-        ],
+        // The real store returns a `running` row from BOTH — it blocks
+        // its goal and it is also one of the recent runs.
+        blocking: [running, run("r-waiting", 100, null, "awaiting_approval")],
+        recent: [running],
       }),
       MOTEBIT,
     );
     const list = reader.listRecent(10);
     expect(list.find((r) => r.run_id === "r-running")?.holding).toBe(false);
     expect(list.find((r) => r.run_id === "r-waiting")?.holding).toBe(true);
+  });
+
+  it("a RUNNING run does not take the priority group either, only the mark", () => {
+    // Fixing the label and leaving the priority group as `listBlocking`
+    // half-fixed it: five stale `running` rows from unrecovered crashes
+    // still took the top of the page, saying nothing and asking
+    // nothing, and pushed five finished runs off it. The group and the
+    // mark are the same fact and read the same predicate.
+    const stale = Array.from({ length: 6 }, (_, i) => run(`s${i}`, 500 + i, null, "running"));
+    const done = Array.from({ length: 6 }, (_, i) => run(`c${i}`, 2000 + i));
+    const reader = createRunLedgerReader(
+      dbWith({ blocking: stale, recent: [...stale, ...done] }),
+      MOTEBIT,
+    );
+    const list = reader.listRecent(6);
+    expect(list.every((r) => r.holding === false)).toBe(true);
+    // Newest first, with nothing hoisted: the finished runs are newer.
+    expect(list.every((r) => r.run_id.startsWith("c"))).toBe(true);
   });
 
   it("marks which runs are holding, because status cannot say it", () => {

@@ -330,6 +330,17 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
 
   // === Audit Entries for Outcomes ===
 
+  /**
+   * How far past a run's start a tool call may still be read as its
+   * work, when there is no later outcome to close the window.
+   *
+   * A guess, and named as one — this surface has no run id to join on
+   * and no recorded run duration, so the honest bound is a generous
+   * ceiling rather than an open end. Wrong in the direction of showing
+   * too little, which the "correlated by time" note already covers.
+   */
+  const RUN_CORRELATION_WINDOW_MS = 60 * 60 * 1000;
+
   function loadOutcomeAuditEntries(
     ranAt: number,
     allOutcomes: Array<Record<string, unknown>>,
@@ -355,8 +366,20 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
     // here as the primary and keep this as the pre-migration path.
     const loadByTimestamp = (): void => {
       const startTs = ranAt - 5000;
-      const endTs =
-        currentIndex > 0 ? Number(allOutcomes[currentIndex - 1]!.ran_at) || Date.now() : Date.now();
+      // The window CLOSES, even for the newest outcome.
+      //
+      // Ending it at `Date.now()` was harmless while this path was
+      // unreachable; making it the only path made it live. Expanding
+      // the most recent outcome then listed every tool call the person
+      // had made in ordinary chat since that run — attributed to the
+      // goal, disclaimed by nine-pixel grey text. If the run was three
+      // days ago, that is three days of someone else's work presented
+      // as the goal's. A correlation that widens without bound is not a
+      // correlation.
+      const nextRanAt = currentIndex > 0 ? Number(allOutcomes[currentIndex - 1]!.ran_at) : NaN;
+      const endTs = Number.isFinite(nextRanAt)
+        ? nextRanAt
+        : Math.min(Date.now(), ranAt + RUN_CORRELATION_WINDOW_MS);
 
       void invoke<Array<Record<string, unknown>>>("db_query", {
         sql: `SELECT tool, decision, result, timestamp FROM tool_audit_log WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC LIMIT 50`,

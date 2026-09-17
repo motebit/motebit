@@ -421,20 +421,29 @@ function combineAnswers(
   // Silence and a dead socket are different facts and both are the
   // reader's business: an unanswered halt is the one case that must not
   // read as "stopped".
+  //
+  // An answer carrying no machine id (an older surface) could have come
+  // from any target, so it can only be subtracted from a count — but it
+  // must not silence the NAMING of the targets it demonstrably did not
+  // come from. Gating the names on a whole-set predicate let one
+  // undeclared answer reduce every silent machine to a tally, which is
+  // precisely the "something is still running and I don't know where"
+  // gap the attribution was added to close.
+  let unattributed = answers.filter((a) => a.from == null).length;
   for (const t of targets) {
     if (unreached.includes(t)) {
       lines.push(`  ${machineLabel(t)}: not reached — its connection was already gone`);
-    } else if (!answered.has(t) && answers.every((a) => a.from != null)) {
-      lines.push(`  ${machineLabel(t)}: no answer yet — what it stopped is unknown`);
+      continue;
     }
-  }
-  // When answers carry no machine id (an older surface), fall back to
-  // counting rather than naming.
-  const anonymousSilent = targets.length - unreached.length - answers.length;
-  if (anonymousSilent > 0 && answers.some((a) => a.from == null)) {
-    lines.push(
-      `  ${anonymousSilent} runtime(s) did not answer in time — what they stopped is unknown`,
-    );
+    if (answered.has(t)) continue;
+    // An unattributed answer might have been this machine's. Spend one
+    // on it and say so, rather than claiming a silence we cannot prove.
+    if (unattributed > 0) {
+      unattributed -= 1;
+      lines.push(`  ${machineLabel(t)}: answered, or did not — its answer carried no machine id`);
+      continue;
+    }
+    lines.push(`  ${machineLabel(t)}: no answer yet — what it stopped is unknown`);
   }
 
   return {
@@ -618,50 +627,58 @@ async function forwardCommandToAgent(
     // also the right granularity on its own terms: the halt store they
     // would both write is the same file.
     const broadcast = BROADCAST_UNATTENDED_COMMANDS.has(command);
-    const targets: ConnectedDevice[] = [];
+    const aimedAt: string[] = [];
+    const unreached: string[] = [];
+
     if (broadcast) {
-      const seen = new Set<string>();
+      // Grouped by machine, and every connection on a machine is a
+      // candidate for that machine's ONE delivery.
+      //
+      // Choosing a peer per machine up front and giving up when its
+      // send threw lost the halt where first-wins would have landed it:
+      // a laptop with a stale-but-unreaped `motebit run` socket beside
+      // a live `motebit serve` reported "not reached" and was never
+      // stopped. One delivery per machine is about the replay store
+      // they share, not about which of their sockets is alive.
+      const byMachine = new Map<string, ConnectedDevice[]>();
       for (const peer of candidates) {
-        // An undeclared peer cannot be grouped, so it is left in the one
-        // "unknown machine" bucket rather than treated as its own: two
+        // An undeclared peer cannot be grouped, so it joins the one
+        // "unknown machine" bucket rather than becoming its own: two
         // undeclared connections are far more often one host's two
         // processes than two hosts.
         const key = peer.deviceIdDeclared === true ? peer.deviceId : UNDECLARED_MACHINE;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        targets.push(peer);
+        const bucket = byMachine.get(key);
+        if (bucket == null) byMachine.set(key, [peer]);
+        else bucket.push(peer);
+      }
+      for (const [key, machinePeers] of byMachine) {
+        aimedAt.push(key);
+        const landed = machinePeers.some((peer) => {
+          try {
+            peer.ws.send(payload);
+            return true;
+          } catch {
+            return false;
+          }
+        });
+        if (!landed) unreached.push(key);
       }
     } else {
-      targets.push(...candidates);
-    }
-
-    const aimedAt: string[] = [];
-    const unreached: string[] = [];
-    for (const peer of targets) {
-      const label = peer.deviceIdDeclared === true ? peer.deviceId : UNDECLARED_MACHINE;
-      try {
-        peer.ws.send(payload);
-        // Under first-wins only the peer that ACCEPTED was ever a
-        // target; the dead sockets walked past on the way are not
-        // machines the command was aimed at.
-        if (!broadcast) {
-          aimedAt.length = 0;
-          unreached.length = 0;
-          aimedAt.push(label);
+      // First-wins. Only the peer that ACCEPTED was ever a target; the
+      // dead sockets walked past on the way are not machines the
+      // command was aimed at, and reporting them invented targets it
+      // never addressed.
+      for (const peer of candidates) {
+        try {
+          peer.ws.send(payload);
+          aimedAt.push(peer.deviceIdDeclared === true ? peer.deviceId : UNDECLARED_MACHINE);
           break;
+        } catch {
+          // Try the next one.
         }
-        aimedAt.push(label);
-      } catch {
-        if (broadcast) aimedAt.push(label);
-        // A dead-but-unreaped socket. Recorded, not skipped: under
-        // broadcast this machine is one the halt did NOT reach and the
-        // reader has to be told, and under first-wins the next peer is
-        // the one that answers.
-        // Under first-wins a dead socket is one walked past, not a
-        // machine left unreached; the loop simply tries the next peer.
-        if (broadcast) unreached.push(label);
       }
     }
+
     const pending = pendingCommands.get(commandId);
     if (pending != null) {
       pending.targets = aimedAt;

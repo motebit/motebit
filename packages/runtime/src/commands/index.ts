@@ -98,6 +98,14 @@ export async function executeCommand(
      * carries it into the durable record so the history says whether
      * the sovereign stopped their motebit from this machine or from
      * somewhere else.
+     *
+     * Every caller handling a relay frame passes `"remote"`. The
+     * default stays `"local"` because that is what the vast majority of
+     * call sites are — a person at a surface — and a halt mislabelled
+     * `remote` would be its own small untruth in the record. `cmdRuns`
+     * defends itself on top of this by defaulting its OWN parameter to
+     * `remote`, so a direct call that forgets redacts rather than
+     * discloses.
      */
     origin?: "local" | "remote";
   },

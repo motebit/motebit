@@ -669,6 +669,61 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     expect(body).toContain('"runs"');
   });
 
+  it("a machine's OTHER connection is tried when the first socket is dead", async () => {
+    // One delivery per machine is about the replay store the two
+    // processes share, not about which of their sockets is alive.
+    // Choosing a peer up front and giving up on a throw lost the halt
+    // where first-wins would have landed it: a stale `motebit run`
+    // socket beside a live `motebit serve` reported "not reached" and
+    // the laptop was never stopped.
+    const stale = fakePeer("dev-1", ["background", "unattended_runtime"]);
+    stale.peer.ws.send = () => {
+      throw new Error("socket is gone");
+    };
+    const live = fakePeer("dev-1", ["background", "unattended_runtime"]);
+    relay.connections.set(AGENT_ID, [stale.peer, live.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "halt",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    void postCommand(AGENT_ID, { command: "halt", envelope });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(live.sentTo).toHaveLength(1);
+  });
+
+  it("one unattributed answer does not reduce every silent machine to a tally", async () => {
+    // An answer with no machine id could have come from any target, so
+    // it can only be subtracted from a count — but gating the NAMES on
+    // a whole-set predicate let it silence them all, which is the
+    // "something is still running and I don't know where" gap the
+    // attribution was added to close.
+    const laptop = fakePeer("dev-1", ["background", "unattended_runtime"]);
+    const vps = fakePeer("dev-2", ["background", "unattended_runtime"]);
+    const old = fakePeer("legacy", ["background", "unattended_runtime"], false);
+    relay.connections.set(AGENT_ID, [laptop.peer, vps.peer, old.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "halt",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    const posted = postCommand(AGENT_ID, { command: "halt", envelope });
+    await new Promise((r) => setTimeout(r, 50));
+    const commandId = (JSON.parse(laptop.sentTo[0] ?? "{}") as { id?: string }).id ?? "";
+    handleCommandResponse(commandId, { summary: "Stopped. 1 acknowledged." }, "dev-1");
+    // The legacy surface answers without saying who it is.
+    handleCommandResponse(commandId, { summary: "Stopped. 1 acknowledged." });
+    const { json } = await posted;
+    const body = JSON.stringify(json);
+    // dev-2 stayed silent and is still named.
+    expect(body).toContain("dev-2");
+    expect(body).toMatch(/no answer yet|carried no machine id/i);
+  }, 10_000);
+
   it("a broadcast halt is delivered once per MACHINE, not once per process", async () => {
     // `motebit run` and `motebit serve` on one host share a device id, a
     // database and one replay store, and the envelope carries a single
