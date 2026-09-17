@@ -8,11 +8,9 @@ import {
   NullRenderer,
   CommandReplayGuard,
   type CommandReplayStore,
-  executeRemoteCommand,
   cmdSelfTest,
   PLANNING_TASK_ROUTER,
   createRelayCapabilitiesFetcher,
-  verifyAgentCommandEnvelope,
 } from "@motebit/runtime";
 import type { MintToken } from "@motebit/runtime";
 import { buildHardwareVerifiers } from "@motebit/verify";
@@ -56,6 +54,7 @@ import { formatDiagnostic } from "./yaml-config.js";
 import type { CliConfig } from "./args.js";
 import { loadFullConfig, extractPersonality } from "./config.js";
 import { createRunLedgerReader } from "./run-ledger-reader.js";
+import { handleRelayCommandFrame } from "./relay-command-frame.js";
 import { fromHex, loadActiveSigningKey, IdentityKeyError } from "./identity.js";
 import { registerWithRelay, type RelayRegistrationHandle } from "./relay-registration.js";
 import {
@@ -470,60 +469,15 @@ export async function handleRun(config: CliConfig): Promise<void> {
             args?: string;
             envelope?: unknown;
           };
-          void (async () => {
-            try {
-              const verdict = await verifyAgentCommandEnvelope({
-                envelope: cmdMsg.envelope,
-                command: cmdMsg.command,
-                args: cmdMsg.args,
-                motebitId,
-                identityPublicKey: identity.identity.public_key,
-              });
-              if (!verdict.ok) {
-                wsAdapter!.sendRaw(
-                  JSON.stringify({
-                    type: "command_response",
-                    id: cmdMsg.id,
-                    result: { summary: verdict.reason },
-                  }),
-                );
-                return;
-              }
-              // `origin: "remote"` is recorded, never trusted: the
-              // envelope verified above is the authorization. It exists
-              // so a halt's durable record says the sovereign stopped
-              // their motebit from somewhere else.
-              const sig = (cmdMsg.envelope as { signature?: string } | undefined)?.signature;
-              const replay =
-                typeof sig === "string" ? replayGuard().check(sig) : ({ accepted: true } as const);
-              if (!replay.accepted) {
-                wsAdapter!.sendRaw(
-                  JSON.stringify({
-                    type: "command_response",
-                    id: cmdMsg.id,
-                    result: { summary: `command_request rejected: ${replay.message}` },
-                  }),
-                );
-                return;
-              }
-              // `origin: "remote"` is recorded, never trusted.
-              // The one door for a relay frame.
-              const result = await executeRemoteCommand(runtime, cmdMsg.command, cmdMsg.args);
-              wsAdapter!.sendRaw(
-                JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
-              );
-            } catch (err: unknown) {
-              wsAdapter!.sendRaw(
-                JSON.stringify({
-                  type: "command_response",
-                  id: cmdMsg.id,
-                  result: {
-                    summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
-                  },
-                }),
-              );
-            }
-          })();
+          // One handler, shared with serve's below and drivable by the
+          // integration harness — see relay-command-frame.ts.
+          void handleRelayCommandFrame(cmdMsg, {
+            runtime,
+            motebitId,
+            identityPublicKey: identity.identity.public_key,
+            checkReplay: (sig) => replayGuard().check(sig),
+            reply: (payload) => wsAdapter!.sendRaw(payload),
+          });
           return;
         }
 
@@ -1513,70 +1467,15 @@ export async function handleServe(config: CliConfig): Promise<void> {
             args?: string;
             envelope?: unknown;
           };
-          void (async () => {
-            try {
-              // Fail-closed remote ingress: no registered identity key
-              // means nothing to verify against — reject, never trust
-              // the relay's forwarding alone.
-              const verdict =
-                publicKeyHex == null || publicKeyHex === ""
-                  ? {
-                      ok: false as const,
-                      reason:
-                        "command_request rejected: no registered identity public key to verify against",
-                    }
-                  : await verifyAgentCommandEnvelope({
-                      envelope: cmdMsg.envelope,
-                      command: cmdMsg.command,
-                      args: cmdMsg.args,
-                      motebitId,
-                      identityPublicKey: publicKeyHex,
-                    });
-              if (!verdict.ok) {
-                serveWsAdapter!.sendRaw(
-                  JSON.stringify({
-                    type: "command_response",
-                    id: cmdMsg.id,
-                    result: { summary: verdict.reason },
-                  }),
-                );
-                return;
-              }
-              const sig = (cmdMsg.envelope as { signature?: string } | undefined)?.signature;
-              const replay =
-                typeof sig === "string" ? replayGuard().check(sig) : ({ accepted: true } as const);
-              if (!replay.accepted) {
-                serveWsAdapter!.sendRaw(
-                  JSON.stringify({
-                    type: "command_response",
-                    id: cmdMsg.id,
-                    result: { summary: `command_request rejected: ${replay.message}` },
-                  }),
-                );
-                return;
-              }
-              // The one door for a relay frame — serve's handler, the
-              // sibling of the daemon's above.
-              const result = await executeRemoteCommand(
-                runtimeRef.current!,
-                cmdMsg.command,
-                cmdMsg.args,
-              );
-              serveWsAdapter!.sendRaw(
-                JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
-              );
-            } catch (err: unknown) {
-              serveWsAdapter!.sendRaw(
-                JSON.stringify({
-                  type: "command_response",
-                  id: cmdMsg.id,
-                  result: {
-                    summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
-                  },
-                }),
-              );
-            }
-          })();
+          // The same handler the daemon's socket uses, and the one an
+          // integration harness can drive — see relay-command-frame.ts.
+          void handleRelayCommandFrame(cmdMsg, {
+            runtime: runtimeRef.current,
+            motebitId,
+            identityPublicKey: publicKeyHex,
+            checkReplay: (sig) => replayGuard().check(sig),
+            reply: (payload) => serveWsAdapter!.sendRaw(payload),
+          });
           return;
         }
 
