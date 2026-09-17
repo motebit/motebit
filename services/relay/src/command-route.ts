@@ -36,28 +36,9 @@ import type { createLogger } from "./logger.js";
 const RELAY_SIDE_COMMANDS = new Set(["balance", "deposits", "discover", "proposals"]);
 
 /**
- * Commands that only an UNATTENDED runtime can meaningfully serve.
- *
- * Every surface of a motebit holds an open socket and handles
- * `command_request` — the phone, the web app, the desktop app, and the
- * daemon. For a read that is harmless: any of them can report state. For
- * these it is not. A halt sent to the phone that sent it would be
- * answered "this surface cannot be halted" while the daemon kept
- * running, and an approval decision sent to a surface with no queue
- * would be answered "no pending approval matching …" — both
- * indistinguishable from a genuine refusal, on exactly the commands
- * where a false negative is most costly.
- *
- * So these are routed to a peer announcing `unattended_runtime` — the
- * capability a surface announces only when it has actually wired the
- * durable halt and approval stores. `background` is not that signal:
- * the desktop app announces it and wires neither, so a halt routed by
- * `background` could be answered "this surface cannot be halted" while
- * the daemon kept running. If no such peer is connected the request
- * fails as undelivered, which is the honest answer: nothing was stopped
- * and nothing was decided.
+ * The subset of `UNATTENDED_RUNTIME_COMMANDS` that can change
+ * something. See the 404 copy.
  */
-/** The subset of the above that can change something. See the 404 copy. */
 const MUTATING_UNATTENDED_COMMANDS = new Set(["halt", "resume", "approvals"]);
 
 /**
@@ -122,6 +103,28 @@ function noPeerReason(command: string): string {
     : "No unattended runtime is connected";
 }
 
+/**
+ * Commands that only an UNATTENDED runtime can meaningfully serve.
+ *
+ * Every surface of a motebit holds an open socket and handles
+ * `command_request` — the phone, the web app, the desktop app, and the
+ * daemon. For a read that is harmless: any of them can report state. For
+ * these it is not. A halt sent to the phone that sent it would be
+ * answered "this surface cannot be halted" while the daemon kept
+ * running, and an approval decision sent to a surface with no queue
+ * would be answered "no pending approval matching …" — both
+ * indistinguishable from a genuine refusal, on exactly the commands
+ * where a false negative is most costly.
+ *
+ * So these are routed to a peer announcing `unattended_runtime` — the
+ * capability a surface announces only when it has actually wired the
+ * durable halt and approval stores. `background` is not that signal:
+ * the desktop app announces it and wires neither, so a halt routed by
+ * `background` could be answered "this surface cannot be halted" while
+ * the daemon kept running. If no such peer is connected the request
+ * fails as undelivered, which is the honest answer: nothing was stopped
+ * and nothing was decided.
+ */
 const UNATTENDED_RUNTIME_COMMANDS = new Set([
   "halt",
   "resume",
@@ -177,20 +180,33 @@ const pendingCommands = new Map<
   string,
   {
     resolve: (result: unknown) => void;
+    reject: (err: unknown) => void;
     timer: ReturnType<typeof setTimeout>;
     /**
-     * How many runtimes the request was sent to. One answer speaks only
-     * for its own machine, so a reader has to be told when there were
-     * others — and for a broadcast, all of them are gathered rather
-     * than raced.
+     * The machines the request was AIMED at, in send order — not the
+     * ones it reached. Counting only successful sends made a target
+     * whose socket threw disappear from the report, so a halt to two
+     * machines where one socket was dead-but-unreaped came back as a
+     * plain "Stopped." with no sign of the machine still working.
      */
-    deliveredTo: number;
-    /** Answers received so far, in arrival order. */
-    answers: unknown[];
+    targets: string[];
+    /** Aimed at, but the send threw. Reported, never dropped. */
+    unreached: string[];
+    /** Answers received so far, attributed to the machine that sent them. */
+    answers: Array<{ from: string | null; result: unknown }>;
     /** Set once the first answer lands, to bound the wait for the rest. */
     graceTimer?: ReturnType<typeof setTimeout>;
   }
 >();
+
+/**
+ * The one bucket every peer that declared no device id falls into.
+ *
+ * The relay invents an id per connection for those, so treating each as
+ * its own machine would broadcast twice into what is far more often one
+ * host's two processes — and they share a replay store.
+ */
+const UNDECLARED_MACHINE = "__undeclared__";
 
 /**
  * How long a broadcast waits for the other machines after the first
@@ -306,13 +322,14 @@ export function registerCommandRoutes(deps: CommandRouteDeps): void {
  * Called by the WebSocket message handler when an agent sends a command_response.
  * Resolves the pending Promise so the HTTP handler can return the result.
  */
-export function handleCommandResponse(commandId: string, result: unknown): void {
+export function handleCommandResponse(commandId: string, result: unknown, from?: string): void {
   const pending = pendingCommands.get(commandId);
   if (!pending) return;
-  pending.answers.push(result);
+  pending.answers.push({ from: from ?? null, result });
 
+  const expected = pending.targets.length - pending.unreached.length;
   // A single delivery is a single answer; nothing to gather.
-  if (pending.deliveredTo <= 1) {
+  if (expected <= 1 && pending.unreached.length === 0) {
     finishCommand(commandId);
     return;
   }
@@ -320,11 +337,11 @@ export function handleCommandResponse(commandId: string, result: unknown): void 
   // A broadcast is NOT a race. Resolving on the first reply hands back
   // whichever machine had least to do: a `resume` returns "Nothing is
   // halted." from the machine that was never halted, reporting a
-  // success as a no-op, and the machine that actually lifted the halt
+  // success as a no-op, while the machine that actually lifted the halt
   // is still awaiting its store. So every answer is gathered, bounded
   // by a short grace after the first so one slow runtime cannot hold
   // the request open.
-  if (pending.answers.length >= pending.deliveredTo) {
+  if (pending.answers.length >= expected) {
     finishCommand(commandId);
     return;
   }
@@ -337,7 +354,7 @@ function finishCommand(commandId: string): void {
   clearTimeout(pending.timer);
   if (pending.graceTimer != null) clearTimeout(pending.graceTimer);
   pendingCommands.delete(commandId);
-  pending.resolve(combineAnswers(pending.answers, pending.deliveredTo));
+  pending.resolve(combineAnswers(pending.targets, pending.unreached, pending.answers));
 }
 
 /** A `{ summary, detail? }` reply, as far as this needs to read it. */
@@ -348,34 +365,75 @@ function asReply(value: unknown): { summary: string; detail?: string } | null {
   return { summary: r.summary, ...(typeof r.detail === "string" ? { detail: r.detail } : {}) };
 }
 
+/** How a machine is named to the person reading the answer. */
+function machineLabel(id: string | null): string {
+  return id == null || id === UNDECLARED_MACHINE ? "an unidentified runtime" : id;
+}
+
 /**
  * One answer from several machines, without pretending it was one.
  *
- * Every runtime that received the request gets a line, and any that did
- * not answer in time is said to be silent rather than quietly dropped —
- * an unanswered halt is exactly the case the reader must not read as
- * "stopped".
+ * Every machine the request was AIMED at gets a line — answered,
+ * silent, or never reached — because the whole point is that a reader
+ * must not take one machine's "Stopped." for the motebit's. An answer
+ * this cannot parse is shown as that machine's answer rather than
+ * replacing the report: the first version returned the unparseable one
+ * alone, which threw away the acknowledgement from the machine that
+ * did stop and left the reader with no evidence of it at all — the
+ * inverse of the invariant the function exists for.
  */
-function combineAnswers(answers: unknown[], deliveredTo: number): unknown {
-  if (deliveredTo <= 1) return answers[0];
-  const replies = answers.map(asReply);
-  // Anything that is not a plain reply (an error shape, say) is handed
-  // back as-is rather than folded into prose that would lose it.
-  if (replies.some((r) => r === null)) return answers.find((_, i) => replies[i] === null);
-  const silent = deliveredTo - answers.length;
-  const lines = replies.map((r, i) => `  runtime ${i + 1}: ${r?.summary ?? ""}`);
-  if (silent > 0) {
+function combineAnswers(
+  targets: string[],
+  unreached: string[],
+  answers: Array<{ from: string | null; result: unknown }>,
+): unknown {
+  if (targets.length - unreached.length <= 1 && unreached.length === 0) {
+    return answers[0]?.result;
+  }
+
+  const answered = new Set(answers.map((a) => a.from).filter((f): f is string => f != null));
+  const lines: string[] = [];
+  const details: string[] = [];
+
+  answers.forEach((a, i) => {
+    const reply = asReply(a.result);
+    const who = machineLabel(a.from ?? (answers.length === 1 ? null : `answer ${i + 1}`));
+    if (reply == null) {
+      lines.push(`  ${who}: answered in a shape this relay could not read`);
+      return;
+    }
+    lines.push(`  ${who}: ${reply.summary}`);
+    if (reply.detail != null && reply.detail !== "") details.push(`${who}:\n${reply.detail}`);
+  });
+
+  // Silence and a dead socket are different facts and both are the
+  // reader's business: an unanswered halt is the one case that must not
+  // read as "stopped".
+  for (const t of targets) {
+    if (unreached.includes(t)) {
+      lines.push(`  ${machineLabel(t)}: not reached — its connection was already gone`);
+    } else if (!answered.has(t) && answers.every((a) => a.from != null)) {
+      lines.push(`  ${machineLabel(t)}: no answer yet — what it stopped is unknown`);
+    }
+  }
+  // When answers carry no machine id (an older surface), fall back to
+  // counting rather than naming.
+  const anonymousSilent = targets.length - unreached.length - answers.length;
+  if (anonymousSilent > 0 && answers.some((a) => a.from == null)) {
     lines.push(
-      `  ${silent} runtime(s) did not answer in time — what they did or did not stop is unknown`,
+      `  ${anonymousSilent} runtime(s) did not answer in time — what they stopped is unknown`,
     );
   }
+
   return {
-    summary: `Sent to ${deliveredTo} runtimes; ${answers.length} answered.`,
-    detail: [
-      lines.join("\n"),
-      ...replies.flatMap((r) => (r?.detail != null && r.detail !== "" ? [r.detail] : [])),
-    ].join("\n\n"),
-    data: { delivered_to: deliveredTo, answers },
+    summary: `Sent to ${targets.length} runtimes; ${answers.length} answered.`,
+    detail: [lines.join("\n"), ...details].join("\n\n"),
+    data: {
+      sent_to: targets.length,
+      answered: answers.length,
+      unreached,
+      answers: answers.map((a) => ({ from: a.from, result: a.result })),
+    },
   };
 }
 
@@ -399,11 +457,30 @@ async function forwardCommandToAgent(
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
+      // An answer already in hand is not a timeout. A broadcast arms a
+      // grace window on the first reply, and a reply landing near the
+      // ceiling armed one that outlived this timer — so a machine's
+      // acknowledged halt was deleted and reported to its owner as "the
+      // agent did not respond". Report what came back; the composed
+      // answer already names the machines that stayed silent.
+      const held = pendingCommands.get(commandId);
+      if (held != null && held.answers.length > 0) {
+        finishCommand(commandId);
+        return;
+      }
+      if (held?.graceTimer != null) clearTimeout(held.graceTimer);
       pendingCommands.delete(commandId);
       reject(new Error("Command timed out"));
     }, COMMAND_TIMEOUT_MS);
 
-    pendingCommands.set(commandId, { resolve, timer, deliveredTo: 0, answers: [] });
+    pendingCommands.set(commandId, {
+      resolve,
+      reject,
+      timer,
+      targets: [],
+      unreached: [],
+      answers: [],
+    });
 
     // For most commands any connected surface can answer. For the
     // unattended-runtime set, only a peer that actually runs unattended
@@ -537,7 +614,7 @@ async function forwardCommandToAgent(
         // "unknown machine" bucket rather than treated as its own: two
         // undeclared connections are far more often one host's two
         // processes than two hosts.
-        const key = peer.deviceIdDeclared === true ? peer.deviceId : "__undeclared__";
+        const key = peer.deviceIdDeclared === true ? peer.deviceId : UNDECLARED_MACHINE;
         if (seen.has(key)) continue;
         seen.add(key);
         targets.push(peer);
@@ -546,22 +623,29 @@ async function forwardCommandToAgent(
       targets.push(...candidates);
     }
 
-    let delivered = 0;
+    const aimedAt: string[] = [];
+    const unreached: string[] = [];
     for (const peer of targets) {
+      const label = peer.deviceIdDeclared === true ? peer.deviceId : UNDECLARED_MACHINE;
+      aimedAt.push(label);
       try {
         peer.ws.send(payload);
-        delivered += 1;
         if (!broadcast) break;
       } catch {
-        // A dead-but-unreaped socket. Keep going: under broadcast the
-        // other machines still must be stopped, and under first-wins
-        // the next peer is the one that answers.
+        // A dead-but-unreaped socket. Recorded, not skipped: under
+        // broadcast this machine is one the halt did NOT reach and the
+        // reader has to be told, and under first-wins the next peer is
+        // the one that answers.
+        unreached.push(label);
       }
     }
     const pending = pendingCommands.get(commandId);
-    if (pending != null) pending.deliveredTo = delivered;
+    if (pending != null) {
+      pending.targets = aimedAt;
+      pending.unreached = unreached;
+    }
 
-    if (delivered === 0) {
+    if (aimedAt.length === unreached.length) {
       clearTimeout(timer);
       pendingCommands.delete(commandId);
       // 404, like the no-candidate path above, and for the same reason.

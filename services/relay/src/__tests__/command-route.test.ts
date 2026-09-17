@@ -461,8 +461,12 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     expect(laptop.sentTo).toHaveLength(1);
     expect(vps.sentTo).toHaveLength(1);
     const commandId = (JSON.parse(laptop.sentTo[0] ?? "{}") as { id?: string }).id ?? "";
-    handleCommandResponse(commandId, { summary: "Stop requested for unattended execution." });
-    handleCommandResponse(commandId, { summary: "Running — nothing is halted." });
+    handleCommandResponse(
+      commandId,
+      { summary: "Stop requested for unattended execution." },
+      "dev-1",
+    );
+    handleCommandResponse(commandId, { summary: "Running — nothing is halted." }, "dev-2");
     const { json } = await posted;
     const body = JSON.stringify(json);
     expect(body).toContain("Stop requested");
@@ -545,8 +549,8 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     expect(commandId).not.toBe("");
 
     // The machine with nothing to do answers first, as it always will.
-    handleCommandResponse(commandId, { summary: "Nothing is halted." });
-    handleCommandResponse(commandId, { summary: "Resumed. 1 halt lifted." });
+    handleCommandResponse(commandId, { summary: "Nothing is halted." }, "dev-2");
+    handleCommandResponse(commandId, { summary: "Resumed. 1 halt lifted." }, "dev-1");
     const { json } = await posted;
     const body = JSON.stringify(json);
     expect(body).toContain("Nothing is halted.");
@@ -570,10 +574,68 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     const posted = postCommand(AGENT_ID, { command: "halt", envelope });
     await new Promise((r) => setTimeout(r, 50));
     const commandId = (JSON.parse(laptop.sentTo[0] ?? "{}") as { id?: string }).id ?? "";
-    handleCommandResponse(commandId, { summary: "Stopped. 1 executor acknowledged." });
+    handleCommandResponse(commandId, { summary: "Stopped. 1 executor acknowledged." }, "dev-1");
     const { json } = await posted;
-    expect(JSON.stringify(json)).toMatch(/did not answer in time/i);
+    const body = JSON.stringify(json);
+    expect(body).toMatch(/no answer yet/i);
+    // And it names WHICH machine, because a reader told something is
+    // still running needs to know where.
+    expect(body).toContain("dev-2");
   }, 10_000);
+
+  it("an unreadable answer from one machine does not erase the other's", async () => {
+    // The first version returned the unparseable answer ALONE, which
+    // threw away the acknowledgement from the machine that did stop and
+    // left the reader with no evidence of it — the inverse of the
+    // invariant this gathering exists for.
+    const laptop = fakePeer("dev-1", ["background", "unattended_runtime"]);
+    const vps = fakePeer("dev-2", ["background", "unattended_runtime"]);
+    relay.connections.set(AGENT_ID, [laptop.peer, vps.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "halt",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    const posted = postCommand(AGENT_ID, { command: "halt", envelope });
+    await new Promise((r) => setTimeout(r, 50));
+    const commandId = (JSON.parse(laptop.sentTo[0] ?? "{}") as { id?: string }).id ?? "";
+    handleCommandResponse(commandId, { summary: "Stopped. 1 executor acknowledged." }, "dev-1");
+    handleCommandResponse(commandId, undefined, "dev-2");
+    const { json } = await posted;
+    const body = JSON.stringify(json);
+    expect(body).toContain("1 executor acknowledged");
+    expect(body).toMatch(/could not read/i);
+  });
+
+  it("a machine whose socket is already dead is reported, not silently dropped", async () => {
+    // Counting only successful sends made that machine disappear from
+    // the report, so a halt to two machines came back as a plain
+    // "Stopped." for a motebit still working on the other one.
+    const laptop = fakePeer("dev-1", ["background", "unattended_runtime"]);
+    const vps = fakePeer("dev-2", ["background", "unattended_runtime"]);
+    vps.peer.ws.send = () => {
+      throw new Error("socket is gone");
+    };
+    relay.connections.set(AGENT_ID, [laptop.peer, vps.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "halt",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    const posted = postCommand(AGENT_ID, { command: "halt", envelope });
+    await new Promise((r) => setTimeout(r, 50));
+    const commandId = (JSON.parse(laptop.sentTo[0] ?? "{}") as { id?: string }).id ?? "";
+    handleCommandResponse(commandId, { summary: "Stopped. 1 executor acknowledged." }, "dev-1");
+    const { json } = await posted;
+    const body = JSON.stringify(json);
+    expect(body).toContain("1 executor acknowledged");
+    expect(body).toMatch(/not reached/i);
+    expect(body).toContain("dev-2");
+  });
 
   it("a broadcast halt is delivered once per MACHINE, not once per process", async () => {
     // `motebit run` and `motebit serve` on one host share a device id, a

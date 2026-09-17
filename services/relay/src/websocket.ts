@@ -69,7 +69,13 @@ export interface WebSocketDeps {
   ) => Promise<boolean>;
   parseTokenPayloadUnsafe: (token: string) => import("./auth.js").TokenPayload | null;
   logger: ReturnType<typeof createLogger>;
-  onCommandResponse?: (commandId: string, result: unknown) => void;
+  /**
+   * `deviceId` names WHICH machine answered. A broadcast halt gathers an
+   * answer per machine, and a report that says one of them is silent
+   * without saying which leaves the reader knowing something is still
+   * running and not where.
+   */
+  onCommandResponse?: (commandId: string, result: unknown, deviceId?: string) => void;
   /** When true, new WebSocket upgrades are rejected with close code 1001. */
   isDraining?: () => boolean;
 }
@@ -326,7 +332,11 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
               typeof (msg as Record<string, unknown>).id === "string"
             ) {
               const cmdMsg = msg as unknown as { id: string; result: unknown };
-              deps.onCommandResponse?.(cmdMsg.id, cmdMsg.result);
+              deps.onCommandResponse?.(
+                cmdMsg.id,
+                cmdMsg.result,
+                declaredDeviceId != null ? deviceId : undefined,
+              );
             }
 
             // Agent protocol: task_claim

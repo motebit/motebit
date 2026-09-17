@@ -284,6 +284,19 @@ describe("runs — the return view from another surface", () => {
     expect(r.detail).toContain("motebit runs ack");
   });
 
+  it("a stray word after `show` does not become part of the id", () => {
+    // Anchoring on a single trailing token meant `show abc123 please`
+    // fell through and was read whole as an id, answering `No run
+    // matching "show abc123 please"` — the manufactured absence this
+    // parser was written to remove, one stray word away.
+    const r = cmdRuns(
+      runtimeWith({ listRecent: () => [], get: () => ({ kind: "found" as const, run: DETAIL }) }),
+      "show run-abcd please",
+    );
+    expect(r.summary).toContain("run-abcd");
+    expect(r.summary).not.toContain("No run matching");
+  });
+
   it("a bare `show` is the list, not a run called show", () => {
     const r = cmdRuns(
       runtimeWith({ listRecent: () => [], get: () => ({ kind: "missing" as const }) }),

@@ -84,11 +84,16 @@ function parseTarget(
   // A bare `show` is the list, not a run called "show". Same for the
   // empty string and the list verb itself.
   if (raw === "" || /^(list|show)$/i.test(raw)) return { kind: "list" };
-  const verb = (raw.split(/\s+/)[0] ?? "").toLowerCase();
+  const words = raw.split(/\s+/);
+  const verb = (words[0] ?? "").toLowerCase();
   if (LOCAL_ONLY_VERBS.has(verb)) return { kind: "local", verb };
-  const show = /^show\s+(\S+)$/i.exec(raw);
-  if (show?.[1] != null) return { kind: "run", id: show[1] };
-  return { kind: "run", id: raw };
+  // After a recognised verb, the FIRST token is the id. Anchoring on a
+  // single trailing token instead meant `show abc123 please` fell
+  // through to being read whole as an id and answered `No run matching
+  // "show abc123 please"` — the manufactured absence this function was
+  // written to remove, one stray word away.
+  if (verb === "show" && words[1] != null) return { kind: "run", id: words[1] };
+  return { kind: "run", id: words[0] ?? raw };
 }
 
 function noLedger(): CommandResult {
