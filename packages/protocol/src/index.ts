@@ -1458,6 +1458,22 @@ export enum DeviceCapability {
    * saying so falsely is worse than not saying it.
    */
   UnattendedRuntime = "unattended_runtime",
+  /**
+   * This surface OWNS the run ledger — it is the process that fires
+   * goals, so the runs, outcomes, tool audit and evidence are its own
+   * records.
+   *
+   * Narrower than `UnattendedRuntime` on purpose. `motebit serve` runs
+   * unattended work and can be halted, but the work it runs is
+   * relay-dispatched tasks, not goal runs, so its database holds no run
+   * rows of its own making. Co-located with the daemon it shares the
+   * file and sees everything; on its own machine it sees nothing — and
+   * answering "what happened while you were away" from there returns
+   * "No runs recorded yet" about a motebit that worked all night. The
+   * false empty is the exact failure the return view exists to remove,
+   * so the question routes by the record, not by the capability to act.
+   */
+  RunLedger = "run_ledger",
 }
 
 /** Push notification platform for wake-on-demand mobile execution. */
@@ -3439,11 +3455,123 @@ export interface RunEvidenceEntry {
   withheld_reason?: RunEvidenceWithheldReason;
 }
 
+// ── The return view ────────────────────────────────────────────────
+// What a person sees when they come back, from a surface that is not
+// the one that did the work.
+//
+// The run ledger, the outcomes and the evidence all live where the
+// daemon runs. No other surface holds them — not the phone, which is
+// the consent root and can already stop the motebit and decide an
+// approval, and not the desktop, which has no goal stores at all. So
+// "show me evidence when I return" reaches those surfaces the same way
+// stopping does: as a signed request to the runtime that has the
+// answer, which replies with a view of its own record.
+//
+// These shapes are purpose-built for that reply rather than mirrors of
+// the stores. They cross a wire to a surface that cannot check them
+// against anything, so they carry only what a returning owner needs
+// and say plainly what they are not: the verbatim result is elided,
+// because an artifact that must be verified is fetched from the
+// machine that signed it, not summarized across a relay.
+
+/** One run, as it appears in a list of what happened while you were away. */
+export interface RunLedgerSummary {
+  run_id: string;
+  goal_id: string;
+  status: string;
+  started_at: number;
+  /**
+   * True when this run is holding its goal open, waiting on a person.
+   *
+   * Distinct from `status`: an `interrupted` run that has been
+   * acknowledged and one that is still waiting read identically by
+   * status alone, and only one of them is something the returning owner
+   * has to act on. The reader sorts these first; without the flag the
+   * order carries the fact and nothing renders it.
+   */
+  holding: boolean;
+  /** Why it is holding its goal, when it is. */
+  note?: string;
+  /** True when this run's result carries a signature. */
+  signed: boolean;
+  /** Re-checkable pointers this run produced. */
+  evidence_count: number;
+  /** Pointers it produced and deliberately did not keep. */
+  withheld_count: number;
+}
+
+/** One run in full, as far as a remote surface is allowed to see it. */
+export interface RunLedgerDetail extends RunLedgerSummary {
+  /** The outcome's own status and reason, per recorded outcome. */
+  outcomes: ReadonlyArray<{
+    status: string;
+    error_message?: string;
+    /**
+     * A bounded, redaction-passed preview — NOT the artifact.
+     *
+     * The whole result stays on the machine that produced and signed
+     * it. A summary that crossed a relay could not be checked against
+     * the signature by the surface reading it, so presenting it as the
+     * result would offer proof that is not there.
+     */
+    summary_preview?: string;
+    signed: boolean;
+  }>;
+  tool_calls: ReadonlyArray<{ tool: string; verdict: string }>;
+  /** Each pointer's source and digest — enough to re-fetch and re-hash. */
+  evidence: ReadonlyArray<{
+    tool: string;
+    ref: string;
+    digest: string;
+    projection?: string;
+  }>;
+  withheld: ReadonlyArray<{ tool: string; reason: string }>;
+}
+
 /**
- * Where run evidence is kept. Mirrors `ToolAuditSink`'s shape: the
- * runtime holds the port, a surface supplies the implementation. A
- * surface that wires none records no evidence, which every reader must
- * render as "none recorded", never as "nothing was read".
+ * What a lookup found — three outcomes, never collapsed into two.
+ *
+ * A prefix that matches several runs is not a prefix that matches none.
+ * Returning nothing for both would make this view answer "no such run"
+ * about a run the list had just printed, which is the ambiguous absence
+ * the whole vocabulary exists to remove, reproduced in its own reader.
+ */
+export type RunLedgerLookup =
+  | { readonly kind: "found"; readonly run: RunLedgerDetail }
+  | { readonly kind: "ambiguous"; readonly matches: readonly string[] }
+  | { readonly kind: "missing" };
+
+/**
+ * Where the return view gets its answer.
+ *
+ * Registered by the surface that owns the run ledger — today the
+ * daemon, which is the only one that has it. A runtime with no reader
+ * answers that it cannot see the ledger, which is the honest reply from
+ * a process that did not do the work, and is not the same as saying
+ * nothing happened.
+ */
+export interface RunLedgerReader {
+  /** Newest first, with runs that are holding a goal raised to the top. */
+  listRecent(limit: number): RunLedgerSummary[];
+  /** Accepts a full id or the short prefix a person reads off a list. */
+  get(runIdOrPrefix: string): RunLedgerLookup;
+}
+
+/**
+ * Where an evidence pointer is kept, and erased.
+ *
+ * Mirrors `ToolAuditSink`'s shape: the runtime holds the port, a
+ * surface supplies the implementation. A surface that wires none
+ * records no evidence, which every reader must render as "none
+ * recorded", never as "nothing was read".
+ *
+ * Separate from the audit sink because the two have different retention
+ * floors: an evidence row carries verbatim retrieved content where the
+ * audit row carries redacted arguments, so it is the more revealing of
+ * the pair and must die at least as early. Implemented by the surface
+ * that owns durable storage; a runtime with no sink records nothing,
+ * which the return view reports as "no pointer was kept" rather than as
+ * "nothing was read".
  */
 export interface RunEvidenceSink {
   record(entry: RunEvidenceEntry): void;

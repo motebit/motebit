@@ -57,7 +57,77 @@ const RELAY_SIDE_COMMANDS = new Set(["balance", "deposits", "discover", "proposa
  * fails as undelivered, which is the honest answer: nothing was stopped
  * and nothing was decided.
  */
-const UNATTENDED_RUNTIME_COMMANDS = new Set(["halt", "resume", "halt-status", "approvals"]);
+const UNATTENDED_RUNTIME_COMMANDS = new Set([
+  "halt",
+  "resume",
+  "halt-status",
+  "approvals",
+  // The run ledger lives only where goals actually fire, so a `runs`
+  // question answered by any other surface would say "no runs recorded"
+  // about a motebit that had been working all night — the false empty
+  // this routing exists to prevent.
+  "runs",
+]);
+
+/** The subset of the above that can CHANGE something. See the 404 copy. */
+const MUTATING_UNATTENDED_COMMANDS = new Set(["halt", "resume", "approvals"]);
+
+/**
+ * The subset whose answer is a per-machine DATABASE, not a per-motebit
+ * fact — so which runtime answers changes what the answer is.
+ *
+ * A halt or a resume is the same act wherever it lands. An approval
+ * queue and a run ledger are local records: a laptop's ledger answered
+ * from a VPS is a different, and wrong, answer. Keyed by that property
+ * rather than by "is unattended", which is why adding `runs` to the set
+ * above without this said "each with its own approval queue" about a
+ * question with no queue in it.
+ *
+ * `halt-status` reads a local store too and is deliberately NOT here.
+ * It would be the same reasoning, and it is the wrong PR for it: on a
+ * two-machine motebit `halt` still delivers to one of them, so refusing
+ * the status leaves a phone able to stop the motebit and unable to see
+ * what stopped — strictly worse than the false negative it replaces,
+ * and a change to an already-shipped verb from an increment that only
+ * adds a read. The multi-machine story is one problem, delivery and
+ * status together, and it belongs to issue #681 behind the harness.
+ * This set gains exactly one member here: `runs`, this increment's own.
+ */
+const PER_MACHINE_DATABASE_COMMANDS = new Set(["approvals", "runs"]);
+
+/**
+ * The capability a command's answer actually depends on.
+ *
+ * `runs` needs the RECORD, not the ability to act. `motebit serve`
+ * announces `unattended_runtime` truthfully — it runs unattended work
+ * and can be stopped — but the work it runs is relay-dispatched tasks,
+ * not goal runs, so on its own machine its database holds no run rows
+ * and it answered "No runs recorded yet" about a motebit that had
+ * worked all night. The many-machine refusal only catches that when
+ * every peer declared a device id; routing by the record catches it
+ * always.
+ */
+function requiredCapability(command: string): string {
+  return command === "runs" ? "run_ledger" : "unattended_runtime";
+}
+
+/**
+ * What is missing, named as the thing the question needed — and how to
+ * fix it when the cause is a version skew rather than an absence.
+ *
+ * The relay auto-deploys on merge and installed CLIs update on their
+ * own schedule, so for a while every connected daemon runs unattended
+ * work and announces no `run_ledger`. `runs` gets no legacy fallback on
+ * purpose — guessing a peer for a question whose answer IS that peer's
+ * database is the false empty this routing exists to stop — but a 404
+ * that names neither the cause nor the remedy leaves a person staring
+ * at a healthy daemon.
+ */
+function noPeerReason(command: string): string {
+  return command === "runs"
+    ? "No runtime that keeps a run ledger is connected — a daemon older than this feature runs unattended work but does not announce one, so update it (npm i -g motebit@latest) and reconnect"
+    : "No unattended runtime is connected";
+}
 
 /** Commands that require the agent's runtime (forwarded via WebSocket). */
 const RUNTIME_SIDE_COMMANDS = new Set([
@@ -74,6 +144,7 @@ const RUNTIME_SIDE_COMMANDS = new Set([
   "summarize",
   "approvals",
   "conversations",
+  "runs",
   // Mutating. Safe to forward because the envelope is signed by the
   // agent's OWN identity key — the caller already holds sovereign
   // authority, so what these add is reach, not privilege. The relay
@@ -243,7 +314,8 @@ async function forwardCommandToAgent(
     // For most commands any connected surface can answer. For the
     // unattended-runtime set, only a peer that actually runs unattended
     // work can — see UNATTENDED_RUNTIME_COMMANDS.
-    const unattended = peers.filter((p) => p.capabilities?.includes("unattended_runtime") === true);
+    const needed = requiredCapability(command);
+    const unattended = peers.filter((p) => p.capabilities?.includes(needed) === true);
     let candidates: ConnectedDevice[];
     let emptyReason: string;
 
@@ -272,8 +344,9 @@ async function forwardCommandToAgent(
       const declared = unattended.filter((p) => p.deviceIdDeclared === true);
       const devices = new Set(declared.map((p) => p.deviceId));
       const allDeclared = declared.length === unattended.length;
-      // ...and the refusal belongs to `approvals` ALONE, because the
-      // reasoning above is about queues.
+      // ...and the refusal belongs to the commands whose answer IS a
+      // per-machine record, because the reasoning above is about local
+      // databases, not about being unattended.
       //
       // A halt delivered to either machine is truthful: the
       // acknowledgement is per executor and says what THAT executor
@@ -285,17 +358,18 @@ async function forwardCommandToAgent(
       // advice for someone away from both machines. That is precisely
       // the situation this arc exists for, so the guard was breaking
       // the feature to protect a different one.
-      const manyMachines = command === "approvals" && allDeclared && devices.size > 1;
+      const manyMachines =
+        PER_MACHINE_DATABASE_COMMANDS.has(command) && allDeclared && devices.size > 1;
       candidates = manyMachines ? [] : unattended;
       emptyReason = manyMachines
-        ? `This motebit has unattended runtimes on ${devices.size} different machines, each with its own approval queue, so the relay cannot choose one — run this command on the machine you mean, or stop the runtime you do not`
-        : "No unattended runtime is connected";
+        ? `This motebit has unattended runtimes on ${devices.size} different machines, each with its own records, so the relay cannot choose one — run this command on the machine you mean, or stop the runtime you do not`
+        : noPeerReason(command);
     } else if (command !== "approvals") {
-      // `halt`/`resume` get no fallback: a daemon too old to announce
-      // the capability is too old to honor them, and "not delivered" is
-      // the truth there.
+      // Everything but `approvals` gets no fallback: a daemon too old to
+      // announce the capability is too old to honor a halt or to hold a
+      // run ledger, and "not delivered" is the truth there.
       candidates = [];
-      emptyReason = "No unattended runtime is connected";
+      emptyReason = noPeerReason(command);
     } else {
       // The relay auto-deploys on merge; installed CLIs update on their
       // own schedule. Every daemon older than this change announces
@@ -331,9 +405,16 @@ async function forwardCommandToAgent(
       // not-connected from server fault by status.
       reject(
         new HTTPException(404, {
-          message: UNATTENDED_RUNTIME_COMMANDS.has(command)
-            ? `${emptyReason} — nothing was delivered, so nothing was stopped or decided`
-            : emptyReason,
+          message: !UNATTENDED_RUNTIME_COMMANDS.has(command)
+            ? emptyReason
+            : MUTATING_UNATTENDED_COMMANDS.has(command)
+              ? // Only a verb that could have CHANGED something gets the
+                // reassurance that nothing was changed. Saying "nothing
+                // was stopped or decided" about a read-only question
+                // answers something nobody asked, and implies an attempt
+                // that was never made.
+                `${emptyReason} — nothing was delivered, so nothing was stopped or decided`
+              : `${emptyReason} — nothing was delivered, so this is not a report that nothing happened`,
         }),
       );
       return;
@@ -360,9 +441,12 @@ async function forwardCommandToAgent(
       // relay looking broken instead of the command looking undelivered.
       reject(
         new HTTPException(404, {
-          message: UNATTENDED_RUNTIME_COMMANDS.has(command)
-            ? "The runtime's connection is gone — nothing was delivered, so nothing was stopped or decided"
-            : "No reachable device",
+          // Split like its sibling above.
+          message: !UNATTENDED_RUNTIME_COMMANDS.has(command)
+            ? "No reachable device"
+            : MUTATING_UNATTENDED_COMMANDS.has(command)
+              ? "The runtime's connection is gone — nothing was delivered, so nothing was stopped or decided"
+              : "The runtime's connection is gone — nothing was delivered, so this is not a report that nothing happened",
         }),
       );
     }

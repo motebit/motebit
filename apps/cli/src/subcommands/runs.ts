@@ -18,7 +18,7 @@
  * person looked; it does not retry anything.
  */
 
-import { openMotebitDatabase } from "@motebit/persistence";
+import { openMotebitDatabase, goalRunNeedsPerson } from "@motebit/persistence";
 import type { GoalRun } from "@motebit/persistence";
 
 import type { CliConfig } from "../args.js";
@@ -33,18 +33,26 @@ export async function handleRunsList(config: CliConfig): Promise<void> {
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
   try {
+    // Waiting on a person, not merely open. `listBlocking` includes
+    // `running`, and a run the daemon is executing right now printed
+    // under "needs you" with an `ack` that does nothing — while `/runs`
+    // on this same machine, reading this same ledger, correctly left it
+    // unmarked. Two views of one run disagreeing is the failure this
+    // whole arc exists to remove, so both read one predicate. (`ps`
+    // already did the split by hand.)
     const blocking = moteDb.goalRunStore.listBlocking(motebitId);
+    const waiting = blocking.filter((r) => goalRunNeedsPerson(r));
     const recent = moteDb.goalRunStore
       .listRecent(motebitId, 20)
-      .filter((r) => !blocking.some((b) => b.run_id === r.run_id));
+      .filter((r) => !waiting.some((b) => b.run_id === r.run_id));
 
-    if (blocking.length === 0 && recent.length === 0) {
+    if (waiting.length === 0 && recent.length === 0) {
       console.log("No goal runs recorded yet.");
       return;
     }
 
     const header = `  ${"RUN".padEnd(10)}${"GOAL".padEnd(10)}${"STATUS".padEnd(20)}${"STARTED".padEnd(16)}NOTE`;
-    if (blocking.length > 0) {
+    if (waiting.length > 0) {
       console.log("Holding their goal (needs you):");
       console.log(
         dim(
@@ -53,7 +61,7 @@ export async function handleRunsList(config: CliConfig): Promise<void> {
       );
       console.log(header);
       console.log("  " + "-".repeat(header.length - 2));
-      for (const r of blocking) console.log(formatRow(r));
+      for (const r of waiting) console.log(formatRow(r));
       console.log("");
     }
     if (recent.length > 0) {
@@ -171,7 +179,21 @@ export async function handleRunsShow(config: CliConfig): Promise<void> {
     // identity's content while `motebit runs` listed nothing for it.
     const indexedRun = moteDb.goalRunStore.get(target);
     const indexed = indexedRun?.motebit_id === motebitId ? indexedRun : null;
-    const recent = moteDb.goalRunStore.listRecent(motebitId, 200);
+    // The same set the LIST draws from, not a window — the union its
+    // two siblings already search. A held run is exactly the kind that
+    // stays open while newer ones accumulate, so it scrolls out of any
+    // fixed window; `motebit runs` listed it, `/runs <prefix>` opened
+    // it and `motebit runs ack <prefix>` released it, while this one
+    // answered "no run matching" about the id printed right there. A
+    // view whose halves disagree about what exists is the failure this
+    // command's own reader was built to remove, fixed on two of three.
+    const searchable = [
+      ...moteDb.goalRunStore.listBlocking(motebitId),
+      ...moteDb.goalRunStore.listRecent(motebitId, 200),
+    ];
+    const recent = searchable.filter(
+      (r, i, xs) => xs.findIndex((y) => y.run_id === r.run_id) === i,
+    );
     const exact = indexed ?? recent.find((r) => r.run_id === target);
     const prefixed = recent.filter((r) => r.run_id.startsWith(target));
     if (exact == null && prefixed.length > 1) {

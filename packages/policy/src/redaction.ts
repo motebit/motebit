@@ -237,6 +237,55 @@ export class RedactionEngine {
   }
 
   /**
+   * Redact a RETRIEVED SOURCE — a URL an owner is told to re-fetch.
+   *
+   * Two failure modes pull in opposite directions, and one membrane
+   * cannot serve both, so this splits the string where the risk splits.
+   *
+   * A path is STRUCTURE, written by whoever published the page, and
+   * running keyword-keyed patterns over it destroys the affordance the
+   * URL exists for: `API_KEY` matches any long word beginning `key`,
+   * `api`, `token` or `secret`, so
+   * `…/apidocumentationandreference/v2` came back as
+   * `…/[REDACTED:API_KEY]/v2` and the owner was handed a digest beside
+   * a source they cannot see. So the path gets the shape-keyed set,
+   * which recognises a secret by its own form and cannot be fooled by
+   * someone else's vocabulary.
+   *
+   * A query is DATA, and it is where `?ssn=` and `?card=` live. The
+   * credential-class sets both exclude those deliberately — for a
+   * different boundary — so a statement URL crossed the relay with a
+   * social-security number and a card number in the clear. The query
+   * and fragment get the FULL set: a false positive there costs a
+   * parameter, and being wrong the other way costs someone's PII.
+   *
+   * A `ref` that is not a URL at all gets the full set, because
+   * unparseable is not a reason to disclose.
+   */
+  redactRetrievedSource(ref: string): string {
+    try {
+      new URL(ref);
+    } catch {
+      return this.redact(ref).text;
+    }
+    // Split the RAW string, never a string rebuilt from `URL` parts.
+    //
+    // `url.origin` is the literal `"null"` for every non-special scheme,
+    // so `s3://reports/q3.csv` came back as `null/q3.csv` and
+    // `file:///Users/d/report.txt` as `null/Users/d/report.txt` — the
+    // bucket and the host silently dropped from the one string the
+    // owner is told to re-fetch. Reassembly also swallowed `user:tok@`
+    // with no marker, so the displayed ref differed from the recorded
+    // one and said nothing about it. Only `read-url` writes an http
+    // source today, but `ref` is a free string and this function is
+    // documented as total.
+    const cut = ref.search(/[?#]/);
+    const head = cut === -1 ? ref : ref.slice(0, cut);
+    const tail = cut === -1 ? "" : ref.slice(cut);
+    return this.redactCredentialShapes(head).text + (tail === "" ? "" : this.redact(tail).text);
+  }
+
+  /**
    * Redact ONLY the high-precision credential-class patterns (`cloudEgress: true`)
    * — for masking a user's own typed message before it reaches a NON-SOVEREIGN
    * (cloud) provider. Deliberately narrower than {@link redact}: it does NOT touch

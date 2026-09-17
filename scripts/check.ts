@@ -982,6 +982,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-worker-no-master-token",
   },
   {
+    name: "check-relay-frame-origin",
+    defends:
+      "a file that handles a relay `command_request` frame never reaches `executeCommand` without saying where the command came from — it calls `executeRemoteCommand`, or passes `origin` explicitly. `origin` has to default to `local` (that is what nearly every call site is, and a halt mislabelled `remote` is an untruth in the durable record), but the return view reads the SAME field to decide whether the credential membrane applies, where `local` means disclose. One parameter with two opposite safe defaults is a thing a reader gets wrong, and did: five surfaces forwarded a relay frame with no origin at all, so a command that arrived over the wire answered as if typed on the machine — latent only because none of them wired a run ledger yet. Nothing fails when a surface forgets: the command runs, the answer returns, the tests pass, and the only thing wrong is a membrane that did not close. Same permanent-structural-lock shape as `check-affordance-routing`. Invariant #158, added 2026-09-17",
+    script: "check-relay-frame-origin",
+  },
+  {
     name: "check-docs-script-claims",
     defends:
       "every package script a docs page tells the reader to run exists in the manifest it would run against: `pnpm --filter <pkg> <script>` resolves to a workspace package by name and one of its `scripts`; `pnpm run <script>` resolves against the most recent `cd <workspace-dir>` in the same fenced block (else the repo root); `npm run <script>` resolves against the scripts the create-motebit scaffold generates. The 2026-09-14 docs-vs-code cross-audit (#667) found three of the five app pages OPENING with a command that did not exist or did something other than the sentence claimed — the first command a new contributor types was the least-checked sentence on the site; `check-docs-tree` enforced the directory listing and `check-docs-cli-claims` the CLI subcommands, but nothing tied a documented script to a package.json. Invariant #157, added 2026-09-14",

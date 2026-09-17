@@ -619,12 +619,17 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
     // what it answered — not what the relay accepted. A command that did
     // not arrive stopped nothing and decided nothing, and the error says
     // so in those words.
+    // `runs` joins this group because it closes the last clause on the
+    // surface a person is actually holding when they come back: this
+    // phone could already stop the motebit and decide an approval, and
+    // could see nothing of what either was about.
     case "halt":
     case "resume":
     case "halted":
     case "pending":
     case "approve":
-    case "deny": {
+    case "deny":
+    case "runs": {
       const remote: { cmd: string; args?: string } =
         command === "halt"
           ? // Free text is a REASON and only a reason; scope rides in an
@@ -632,11 +637,13 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
             haltRemote(args)
           : command === "resume"
             ? { cmd: "resume", ...(args ? { args } : {}) }
-            : command === "halted"
-              ? { cmd: "halt-status" }
-              : command === "pending"
-                ? { cmd: "approvals" }
-                : { cmd: "approvals", args: `${command} ${args ?? ""}`.trim() };
+            : command === "runs"
+              ? { cmd: "runs", ...(args ? { args } : {}) }
+              : command === "halted"
+                ? { cmd: "halt-status" }
+                : command === "pending"
+                  ? { cmd: "approvals" }
+                  : { cmd: "approvals", args: `${command} ${args ?? ""}`.trim() };
       if ((command === "approve" || command === "deny") && !args) {
         addSystemMessage(`/${command} <approval_id> — which one?`);
         break;
@@ -766,6 +773,7 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
           "/halt [reason] — stop the runtime acting unattended\n" +
           "/halt --goal <id> [reason] — stop one goal, leave the rest\n" +
           "/resume [id|all] — give that permission back\n" +
+          "/runs [id] — what happened while you were away; an id opens one run\n" +
           "/halted — what is stopped, and whether it acknowledged\n" +
           "/proposals — active proposals\n" +
           "/forget <nodeId> — delete a memory\n" +

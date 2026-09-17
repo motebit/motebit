@@ -28,6 +28,8 @@ export type { CommandResult, RelayConfig } from "./types.js";
 export type { SelfTestConfig, MintToken } from "./self-test.js";
 export { cmdSelfTest } from "./self-test.js";
 export { cmdWelcome, cmdApprovals } from "./system.js";
+export { cmdRuns } from "./runs.js";
+import { cmdRuns } from "./runs.js";
 export { cmdHalt, cmdResume, cmdHaltStatus } from "./halt.js";
 export { PlanExecutionVM, type PlanSnapshot, type PlanEvent } from "./plans.js";
 
@@ -72,7 +74,35 @@ export const COMMAND_DEFINITIONS: ReadonlyArray<{ name: string; description: str
   },
   { name: "resume", description: "Give the permission to act unattended back" },
   { name: "halt-status", description: "What is stopped, and whether the motebit has acknowledged" },
+  {
+    name: "runs",
+    description: "What happened while you were away; `runs <id>` opens one in full",
+  },
 ];
+
+/**
+ * Execute a command that ARRIVED OVER THE RELAY.
+ *
+ * The one door for a `command_request` frame, and the reason it exists
+ * is that `executeCommand`'s `origin` has to default to `local` — that
+ * is what almost every call site is, and a halt mislabelled `remote`
+ * would be its own untruth in the record. But the return view reads
+ * `origin` to decide whether a membrane applies, and a default of
+ * `local` there means "disclose". Two opposite safe defaults on one
+ * parameter is a thing a reader gets wrong, so the wire gets a named
+ * door instead of a remembered argument.
+ *
+ * Every surface that handles a relay frame calls this.
+ * `check-relay-frame-origin` keeps it that way.
+ */
+export async function executeRemoteCommand(
+  runtime: MotebitRuntime,
+  command: string,
+  args?: string,
+  relay?: RelayConfig,
+): Promise<CommandResult | null> {
+  return executeCommand(runtime, command, args, relay, { origin: "remote" });
+}
 
 /**
  * Execute a runtime command and return a structured result.
@@ -92,6 +122,14 @@ export async function executeCommand(
      * carries it into the durable record so the history says whether
      * the sovereign stopped their motebit from this machine or from
      * somewhere else.
+     *
+     * Every caller handling a relay frame passes `"remote"`. The
+     * default stays `"local"` because that is what the vast majority of
+     * call sites are — a person at a surface — and a halt mislabelled
+     * `remote` would be its own small untruth in the record. `cmdRuns`
+     * defends itself on top of this by defaulting its OWN parameter to
+     * `remote`, so a direct call that forgets redacts rather than
+     * discloses.
      */
     origin?: "local" | "remote";
   },
@@ -115,6 +153,8 @@ export async function executeCommand(
       return cmdHalt(runtime, args, options?.origin ?? "local");
     case "resume":
       return cmdResume(runtime, args);
+    case "runs":
+      return cmdRuns(runtime, args, options?.origin ?? "local");
     case "halt-status":
       return cmdHaltStatus(runtime);
     case "conversations":

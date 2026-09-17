@@ -330,6 +330,56 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
 
   // === Audit Entries for Outcomes ===
 
+  /**
+   * How far past a run's start a tool call may still be read as its
+   * work, when there is no later outcome to close the window.
+   *
+   * A guess, and named as one — this surface has no run id to join on
+   * and no recorded run duration, so the honest bound is a generous
+   * ceiling rather than an open end. Wrong in the direction of showing
+   * too little, which the "correlated by time" note already covers.
+   */
+  const RUN_CORRELATION_WINDOW_MS = 60 * 60 * 1000;
+
+  /**
+   * Which run-linking columns this machine's database actually has.
+   *
+   * Probed rather than assumed, because the answer depends on whether
+   * the CLI has ever opened this database — the desktop and the CLI
+   * share `~/.motebit/motebit.db` and these columns arrive with the
+   * CLI's migration registry. Assuming either way was wrong once in
+   * each direction.
+   *
+   * ONLY a `true` is remembered. A column never disappears, so a `yes`
+   * is permanent; a `no` is a fact about this moment, and a long-lived
+   * desktop window opened before the daemon has ever run would have
+   * spent the rest of the session on the unfiltered time scan after the
+   * migration landed beneath it. That is the same staleness the
+   * transient-failure path was fixed for, in the branch beside it.
+   */
+  const presentColumns = new Set<string>();
+
+  async function hasColumn(
+    invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>,
+    table: string,
+    column: string,
+  ): Promise<boolean> {
+    const key = `${table}.${column}`;
+    if (presentColumns.has(key)) return true;
+    try {
+      const cols = await invoke<Array<Record<string, unknown>>>("db_query", {
+        sql: `PRAGMA table_info(${table})`,
+        params: [],
+      });
+      const found = cols.some((c) => c.name === column);
+      if (found) presentColumns.add(key);
+      return found;
+    } catch {
+      // Unknown stays unknown, for this attempt only.
+      return false;
+    }
+  }
+
   function loadOutcomeAuditEntries(
     outcomeId: string,
     ranAt: number,
@@ -340,18 +390,62 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
   ): void {
     container.innerHTML = "";
 
-    // Helper: timestamp-range fallback for legacy rows without run_id
-    const loadFallback = (): void => {
+    // The exact join is the primary path, and the timestamp scan is the
+    // fallback it was always documented to be.
+    //
+    // A previous pass removed the `run_id` query on the premise that
+    // the column cannot exist here, because the Rust schema in
+    // `src-tauri/src/main.rs` does not declare it. That premise was
+    // wrong, and wrong in the direction that matters: the desktop opens
+    // `~/.motebit/motebit.db`, the same file the CLI opens, and the
+    // CLI's migration registry adds the column (`tool_audit_log.run_id`
+    // + index). This surface's OWN audit writer already inserts into
+    // it. So on every machine where the goal daemon has ever run — which
+    // is the only place run-linked rows come from — the query returned
+    // the exact rows, and it was replaced by a time window that is not
+    // filtered by goal or by run.
+    //
+    // What was true in that pass is that a THROW is not a fallback
+    // signal: it made every expansion pay a failing round-trip and let
+    // the catch swallow real database failures into a silently
+    // different answer. So the column is probed once and remembered,
+    // and the two paths stay honestly ordered behind it.
+    const loadByTimestamp = (): void => {
       const startTs = ranAt - 5000;
-      const endTs =
-        currentIndex > 0 ? Number(allOutcomes[currentIndex - 1]!.ran_at) || Date.now() : Date.now();
+      // The window CLOSES, even for the newest outcome.
+      //
+      // Ending it at `Date.now()` was harmless while this path was
+      // unreachable; making it the only path made it live. Expanding
+      // the most recent outcome then listed every tool call the person
+      // had made in ordinary chat since that run — attributed to the
+      // goal, disclaimed by nine-pixel grey text. If the run was three
+      // days ago, that is three days of someone else's work presented
+      // as the goal's. A correlation that widens without bound is not a
+      // correlation.
+      //
+      // The ceiling applies on BOTH branches. Capping only the newest
+      // outcome left the others bounded by the next outcome's start —
+      // and this list is every goal's outcomes, so on a quiet motebit
+      // with a weekly goal that is a seven-day window, from which the
+      // query returns the earliest fifty rows it finds. The unbounded
+      // case just moved one branch over.
+      // `> 0`, not `Number.isFinite`. `db_query` maps SQL NULL to JSON
+      // null and `Number(null)` is 0, which IS finite — so a neighbour
+      // row with a null `ran_at` gave `endTs = 0` against a start of
+      // `ranAt - 5000`, an inverted window returning nothing, and a run
+      // that demonstrably made tool calls (the row only expands when it
+      // did) rendered an empty list. The `|| Date.now()` this replaced
+      // guarded exactly that.
+      const nextRanAt = currentIndex > 0 ? Number(allOutcomes[currentIndex - 1]!.ran_at) : 0;
+      const ceiling = ranAt + RUN_CORRELATION_WINDOW_MS;
+      const endTs = nextRanAt > 0 ? Math.min(nextRanAt, ceiling) : Math.min(Date.now(), ceiling);
 
       void invoke<Array<Record<string, unknown>>>("db_query", {
         sql: `SELECT tool, decision, result, timestamp FROM tool_audit_log WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC LIMIT 50`,
         params: [startTs, endTs],
       })
-        .then((fallbackEntries: Array<Record<string, unknown>>) => {
-          renderAuditEntries(fallbackEntries, container, true);
+        .then((entries: Array<Record<string, unknown>>) => {
+          renderAuditEntries(entries, container, true);
         })
         .catch(() => {
           container.innerHTML =
@@ -359,28 +453,45 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
         });
     };
 
-    // Skip run_id query if outcomeId is empty (legacy row)
-    if (!outcomeId || !outcomeId.trim()) {
-      loadFallback();
-      return;
-    }
-
-    // Primary: query by run_id (= outcome_id). Falls back to timestamp range for pre-migration data.
-    void invoke<Array<Record<string, unknown>>>("db_query", {
-      sql: `SELECT tool, decision, result, timestamp FROM tool_audit_log WHERE run_id = ? ORDER BY timestamp ASC LIMIT 50`,
-      params: [outcomeId],
-    })
-      .then((entries: Array<Record<string, unknown>>) => {
-        if (entries.length > 0) {
-          renderAuditEntries(entries, container, false);
-          return;
-        }
-        loadFallback();
+    void Promise.all([
+      hasColumn(invoke, "tool_audit_log", "run_id"),
+      hasColumn(invoke, "goal_outcomes", "run_id"),
+    ]).then(([auditHasRun, outcomeHasRun]) => {
+      if (!auditHasRun) {
+        loadByTimestamp();
+        return;
+      }
+      // The outcome id is the run id only for a COMPLETED run.
+      //
+      // `recordCompletedOutcome` reuses it, and every other writer —
+      // interrupted-run recovery above all — mints a fresh outcome id
+      // and carries the run separately. Joining on the outcome id alone
+      // therefore matched exactly the runs a returning owner cares
+      // least about and dropped the interrupted ones, which have tool
+      // calls and do expand, into the unfiltered time scan on a machine
+      // that had the exact key sitting in `goal_outcomes.run_id`.
+      // COALESCE covers both without a second round-trip: the linked
+      // run when the column is there, the outcome id when it is not.
+      const sql = outcomeHasRun
+        ? `SELECT tool, decision, result, timestamp FROM tool_audit_log
+           WHERE run_id = COALESCE((SELECT run_id FROM goal_outcomes WHERE outcome_id = ?), ?)
+           ORDER BY timestamp ASC LIMIT 50`
+        : `SELECT tool, decision, result, timestamp FROM tool_audit_log WHERE run_id = ? ORDER BY timestamp ASC LIMIT 50`;
+      void invoke<Array<Record<string, unknown>>>("db_query", {
+        sql,
+        params: outcomeHasRun ? [outcomeId, outcomeId] : [outcomeId],
       })
-      .catch(() => {
-        container.innerHTML =
-          '<span style="font-size:10px;color:var(--text-ghost)">Failed to load</span>';
-      });
+        .then((entries: Array<Record<string, unknown>>) => {
+          // Zero rows is the pre-migration case the timestamp scan is
+          // for: a run whose audit rows predate the column.
+          if (entries.length > 0) renderAuditEntries(entries, container, false);
+          else loadByTimestamp();
+        })
+        .catch(() => {
+          container.innerHTML =
+            '<span style="font-size:10px;color:var(--text-ghost)">Failed to load</span>';
+        });
+    });
   }
 
   function renderAuditEntries(
@@ -834,9 +945,15 @@ export function initGoals(ctx: DesktopContext): GoalsAPI {
             row.classList.toggle("expanded");
             if (row.classList.contains("expanded") && toolCalls > 0 && !auditLoaded) {
               auditLoaded = true;
-              const oId = ipcString(outcome.outcome_id);
               const ranAt = Number(outcome.ran_at) || 0;
-              loadOutcomeAuditEntries(oId, ranAt, outcomes, outcomeIndex, auditContainer, invoke);
+              loadOutcomeAuditEntries(
+                ipcString(outcome.outcome_id),
+                ranAt,
+                outcomes,
+                outcomeIndex,
+                auditContainer,
+                invoke,
+              );
             }
           });
 

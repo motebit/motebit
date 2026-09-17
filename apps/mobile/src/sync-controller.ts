@@ -18,7 +18,7 @@ import type { TokenAudience } from "@motebit/sdk";
 import { loadColdStartOptIn } from "./cold-start-optin";
 import type { MotebitRuntime } from "@motebit/runtime";
 import {
-  executeCommand,
+  executeRemoteCommand,
   cmdSelfTest,
   RelayDelegationAdapter,
   getOrPinRelayKey,
@@ -534,7 +534,8 @@ export class MobileSyncController {
                     );
                     return;
                   }
-                  const result = await executeCommand(rt, cmdMsg.command, cmdMsg.args);
+                  // The one door for a relay frame.
+                  const result = await executeRemoteCommand(rt, cmdMsg.command, cmdMsg.args);
                   this._wsAdapter?.sendRaw(
                     JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
                   );

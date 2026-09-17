@@ -2587,6 +2587,24 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-relay-frame-origin",
+    proves:
+      "flags a surface that handles a relay `command_request` and executes it through `executeCommand` without saying where the command came from — the 2026-09-16 class where five surfaces forwarded a relay frame with no origin, so a command that arrived over the wire answered as if typed on the machine and the return view's credential membrane never closed. Drops a fixture handler that reads a `command_request` frame and calls `executeCommand` bare; the gate finds the frame marker and no door and no explicit origin.",
+    perturb: () =>
+      writeFixture(
+        `apps/web/src/${PROBE_PREFIX}relay_frame_handler.ts`,
+        [
+          "// Probe fixture — a relay frame handler that forgets its origin.",
+          "export async function handle(rt: unknown, msg: { type: string; command: string }) {",
+          '  if (msg.type !== "command_request") return null;',
+          "  return await executeCommand(rt as never, msg.command);",
+          "}",
+          "declare function executeCommand(rt: never, command: string): Promise<unknown>;",
+          "",
+        ].join("\n"),
+      ),
+  },
+  {
     script: "check-worker-no-master-token",
     proves:
       "flags a worker reading the relay master token again — the 2026-09-13 blast-radius class (every first-party worker held MOTEBIT_API_TOKEN, so a compromised worker container was a compromised relay). Probe reinstates the env read in research's config loader; byte-identical restoration on cleanup.",

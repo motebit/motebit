@@ -341,8 +341,9 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
   });
 
   it("a HALT still reaches a runtime when the two are on different machines", async () => {
-    // The many-machines refusal is about QUEUES, and it belongs to
-    // `approvals` alone. A halt delivered to either machine is
+    // The many-machines refusal is about per-machine RECORDS. A halt is
+    // not one of those — it is the same act wherever it lands, so a
+    // halt delivered to either machine is
     // truthful — the acknowledgement is per executor and names what
     // that executor stopped — and the halt is durable state the other
     // machine honors on its own next tick. Refusing it told a sovereign
@@ -362,6 +363,86 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     void postCommand(AGENT_ID, { command: "halt", envelope });
     await new Promise((r) => setTimeout(r, 50));
     expect(laptop.sentTo.length + vps.sentTo.length).toBeGreaterThan(0);
+  });
+
+  it("two run LEDGERS on different machines are refused, like two queues", async () => {
+    // The guard was keyed on "is this the approvals command", so adding
+    // `runs` to the unattended set let the relay pick a machine for a
+    // question whose answer IS that machine's database — and the
+    // laptop's night of work would read as an empty ledger from the
+    // VPS. Same false empty, one command along.
+    const laptop = fakePeer("dev-1", ["background", "unattended_runtime", "run_ledger"]);
+    const vps = fakePeer("dev-2", ["background", "unattended_runtime", "run_ledger"]);
+    relay.connections.set(AGENT_ID, [laptop.peer, vps.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "runs",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    const { status, json } = await postCommand(AGENT_ID, { command: "runs", envelope });
+    expect(status).toBe(404);
+    expect(JSON.stringify(json)).toMatch(/2 different machines/i);
+    // And it does not tell a reader of a read-only question that
+    // nothing was stopped or decided.
+    expect(JSON.stringify(json)).not.toMatch(/stopped or decided/i);
+    expect(laptop.sentTo).toEqual([]);
+    expect(vps.sentTo).toEqual([]);
+  });
+
+  it("a `runs` question goes to the runtime that HAS the ledger", async () => {
+    // Read-only, but not answerable by just anyone: the run ledger
+    // lives where goals actually fire. Answered by the phone that asked,
+    // it would report "no runs recorded" about a motebit that had been
+    // working all night — the false empty this routing exists to stop.
+    const phone = fakePeer("phone", ["push_wake"]);
+    const daemon = fakePeer("dev-1", ["background", "unattended_runtime", "run_ledger"]);
+    relay.connections.set(AGENT_ID, [phone.peer, daemon.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "runs",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    void postCommand(AGENT_ID, { command: "runs", envelope });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(daemon.sentTo).toHaveLength(1);
+    expect(phone.sentTo).toEqual([]);
+  });
+
+  it("a worker that can be STOPPED but keeps no ledger is not asked what happened", async () => {
+    // `motebit serve` announces `unattended_runtime` truthfully — it
+    // runs unattended work and can be halted — but the work it runs is
+    // relay-dispatched tasks, not goal runs, so on its own machine its
+    // database holds no run rows. Asked anyway, it answered "No runs
+    // recorded yet" about a motebit that had worked all night. The
+    // question routes by the RECORD, not by the ability to act.
+    const worker = fakePeer("dev-2", ["http_mcp", "unattended_runtime"]);
+    relay.connections.set(AGENT_ID, [worker.peer] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "runs",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    const { status, json } = await postCommand(AGENT_ID, { command: "runs", envelope });
+    expect(status).toBe(404);
+    expect(JSON.stringify(json)).toMatch(/run ledger/i);
+    expect(JSON.stringify(json)).not.toMatch(/stopped or decided/i);
+    expect(worker.sentTo).toEqual([]);
+    // But it is still stoppable from here — the two capabilities are
+    // different questions and only one of them moved.
+    const haltEnvelope = await signAgentCommandEnvelope({
+      command: "halt",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    void postCommand(AGENT_ID, { command: "halt", envelope: haltEnvelope });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(worker.sentTo.length).toBeGreaterThan(0);
   });
 
   it("a read-only command may still be answered by any connected surface", async () => {

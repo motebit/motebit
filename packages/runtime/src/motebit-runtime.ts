@@ -1985,6 +1985,8 @@ export class MotebitRuntime {
 
   /** Resolves a short goal-id prefix to a full id. See `setGoalIdResolver`. */
   private goalIdResolver: ((prefix: string) => string | null) | null = null;
+  /** Answers the return view. See `setRunLedgerReader`. */
+  private runLedgerReader: import("@motebit/sdk").RunLedgerReader | null = null;
 
   /**
    * Register a goal-status resolver so the goals primitive can enforce
@@ -2953,6 +2955,23 @@ export class MotebitRuntime {
     this.goalIdResolver = resolver;
   }
 
+  /**
+   * Register the reader that answers "what happened while I was away".
+   *
+   * The surface that owns the run ledger supplies it — today the
+   * daemon, which is the only one that has it. Same shape as the
+   * goal-id resolver above and for the same reason: the runtime holds
+   * the port, and the process that did the work supplies the answer.
+   */
+  setRunLedgerReader(reader: import("@motebit/sdk").RunLedgerReader | null): void {
+    this.runLedgerReader = reader;
+  }
+
+  /** The return view's source, or `null` on a surface that did not do the work. */
+  get runLedger(): import("@motebit/sdk").RunLedgerReader | null {
+    return this.runLedgerReader;
+  }
+
   /** The full goal id for a prefix, or null when nothing matches. */
   resolveGoalId(prefix: string): string | null {
     return this.goalIdResolver?.(prefix) ?? null;
@@ -3020,16 +3039,63 @@ export class MotebitRuntime {
   }
 
   /**
-   * Mask credential-class values in text bound for a non-sovereign
-   * party. The command layer uses it on approval arguments before they
-   * cross the relay to a remote consent surface: a person deciding
-   * needs the destination, the path, the amount — and does not need,
-   * and the relay must not see, an API key that happened to be an
-   * argument. Same membrane as the cloud-egress redactor, applied at
-   * the same kind of boundary.
+   * Mask credential-class values in text a person must READ TO DECIDE.
+   *
+   * The command layer uses it on approval arguments before they cross
+   * the relay to a remote consent surface. The narrow set is the point:
+   * a person approving a payment needs the destination and the amount,
+   * and does not need — and the relay must not see — an API key that
+   * happened to be an argument.
+   *
+   * Widening this to the full set once, to protect the return view,
+   * broke exactly that. A base58 Solana address is forty-four
+   * characters and matches the bare-base64 pattern; a micro-unit amount
+   * of $250 is `250000000` and matches the SSN pattern; roughly one
+   * epoch-millisecond timestamp in ten passes the Luhn check. So the
+   * phone rendered a payment approval as `{"to":"[REDACTED:…]",
+   * "amount_micro":[REDACTED:…]}` and asked someone to consent to it.
+   * A membrane that erases the decision is not protecting the decision.
+   *
+   * Reports go through {@link redactReportForRemoteDisclosure} instead.
    */
   redactForRemoteDisclosure(text: string): string {
     return this.policy.redactForCloudEgress(text).text;
+  }
+
+  /**
+   * Mask sensitive values in text a person READS AS A REPORT.
+   *
+   * The return view's result previews, error reasons and run notes:
+   * whole goal output, retrieved from somewhere else, crossing to a
+   * relay operator the sovereign did not choose. The FULL set here, not
+   * the cloud-egress subset, because that subset deliberately leaves
+   * SSNs, card numbers and bare base64 alone for a reason that belongs
+   * to a different boundary — a user's OWN typed message to a model
+   * they chose, carrying detail they often mean the model to use.
+   * Nothing of that survives the move here, where fail-closed privacy
+   * says financial and medical never cross.
+   *
+   * The asymmetry with the method above is the whole design: losing a
+   * field from a report costs legibility, losing one from a decision
+   * costs the decision.
+   */
+  redactReportForRemoteDisclosure(text: string): string {
+    return this.policy.redact(text);
+  }
+
+  /**
+   * Mask a RETRIEVED SOURCE — a URL the owner is told to re-fetch.
+   *
+   * The third kind of text at this boundary, and it needed its own
+   * membrane because the other two are each wrong for it in opposite
+   * directions. The credential-class set is keyword-keyed, so it
+   * erased ordinary documentation paths and left the owner a digest
+   * beside a source they cannot see; the report set leaves a URL
+   * unreadable for the same reason it is right for prose. See
+   * `RedactionEngine.redactRetrievedSource` for the split.
+   */
+  redactSourceForRemoteDisclosure(ref: string): string {
+    return this.policy.redactRetrievedSource(ref);
   }
 
   /** Durable halt state, or `null` on a surface that supplied no store. */

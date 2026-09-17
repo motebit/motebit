@@ -28,7 +28,7 @@
 import type { MotebitRuntime } from "@motebit/runtime";
 import type { TokenAudience } from "@motebit/sdk";
 import {
-  executeCommand,
+  executeRemoteCommand,
   cmdSelfTest,
   getOrPinRelayKey,
   verifyAgentCommandEnvelope,
@@ -383,7 +383,10 @@ export class SyncController {
               );
               return;
             }
-            const result = await executeCommand(rt, cmdMsg.command, cmdMsg.args);
+            // The one door for a relay frame: it records the origin and
+            // closes the return view's membrane, neither of which a
+            // caller has to remember.
+            const result = await executeRemoteCommand(rt, cmdMsg.command, cmdMsg.args);
             this._wsAdapter?.sendRaw(
               JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
             );

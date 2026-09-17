@@ -55,9 +55,10 @@ const DeviceCapabilitySchema = z
     "push_wake",
     "secure_enclave",
     "unattended_runtime",
+    "run_ledger",
   ])
   .describe(
-    "Device-side capability the executor must possess. Closed set defined in @motebit/protocol — `stdio_mcp`, `http_mcp` (transports); `file_system`, `keyring` (resources); `background`, `push_wake` (lifecycle); `local_llm` (sovereign mode); `secure_enclave` (hardware-held identity key); `unattended_runtime` (runs unattended work AND wires the durable halt + approval stores, so it can honor a stop and decide a queued approval — distinct from `background`, which several surfaces announce without either store). New capabilities are protocol additions, not free-form strings.",
+    "Device-side capability the executor must possess. Closed set defined in @motebit/protocol — `stdio_mcp`, `http_mcp` (transports); `file_system`, `keyring` (resources); `background`, `push_wake` (lifecycle); `local_llm` (sovereign mode); `secure_enclave` (hardware-held identity key); `unattended_runtime` (runs unattended work AND wires the durable halt + approval stores, so it can honor a stop and decide a queued approval — distinct from `background`, which several surfaces announce without either store); `run_ledger` (owns the run ledger, i.e. fires goals, so the runs, outcomes, tool audit and evidence are its own records — narrower than `unattended_runtime`, which a task worker announces truthfully while keeping no run rows of its own). New capabilities are protocol additions, not free-form strings.",
   );
 
 const IntentOriginSchema = z

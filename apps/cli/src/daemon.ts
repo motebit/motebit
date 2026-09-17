@@ -8,7 +8,7 @@ import {
   NullRenderer,
   CommandReplayGuard,
   type CommandReplayStore,
-  executeCommand,
+  executeRemoteCommand,
   cmdSelfTest,
   PLANNING_TASK_ROUTER,
   createRelayCapabilitiesFetcher,
@@ -55,6 +55,7 @@ import { applyMotebitYaml, resolveYamlPath } from "./subcommands/up.js";
 import { formatDiagnostic } from "./yaml-config.js";
 import type { CliConfig } from "./args.js";
 import { loadFullConfig, extractPersonality } from "./config.js";
+import { createRunLedgerReader } from "./run-ledger-reader.js";
 import { fromHex, loadActiveSigningKey, IdentityKeyError } from "./identity.js";
 import { registerWithRelay, type RelayRegistrationHandle } from "./relay-registration.js";
 import {
@@ -238,6 +239,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
     DeviceCapability.Keyring,
     DeviceCapability.Background,
     DeviceCapability.UnattendedRuntime,
+    DeviceCapability.RunLedger,
   ]);
 
   // The goal daemon is ONE executor across restarts. Without a stable
@@ -245,6 +247,10 @@ export async function handleRun(config: CliConfig): Promise<void> {
   // acknowledgement, so a night of three restarts reports three
   // processes stopped on a machine that ran one.
   runtime.setHaltExecutorId(`run@${fullConfig.device_id ?? "unknown"}`);
+  // The return view's source. Only this process holds the ledger, so
+  // only it can answer "what happened while I was away" — asked from
+  // the phone, or anywhere else the consent root reaches.
+  runtime.setRunLedgerReader(createRunLedgerReader(moteDb, motebitId));
 
   // Start goal scheduler
   const goals = moteDb.goalStore.list(motebitId);
@@ -392,9 +398,14 @@ export async function handleRun(config: CliConfig): Promise<void> {
       DeviceCapability.Keyring,
       DeviceCapability.Background,
       // The daemon wires the durable halt + approval stores, so it can
-      // honor a stop and decide a queued approval. Announced here and
-      // nowhere else; the relay routes those verbs by it.
+      // honor a stop and decide a queued approval. The relay routes
+      // those verbs by it.
       DeviceCapability.UnattendedRuntime,
+      // And this is the process that FIRES goals, so the run ledger is
+      // its own record. `motebit serve` announces the capability above
+      // and not this one — it can be stopped, and it has nothing to
+      // report. Announced here and nowhere else.
+      DeviceCapability.RunLedger,
     ];
 
     wsAdapter = new WebSocketEventStoreAdapter({
@@ -496,9 +507,8 @@ export async function handleRun(config: CliConfig): Promise<void> {
                 return;
               }
               // `origin: "remote"` is recorded, never trusted.
-              const result = await executeCommand(runtime, cmdMsg.command, cmdMsg.args, undefined, {
-                origin: "remote",
-              });
+              // The one door for a relay frame.
+              const result = await executeRemoteCommand(runtime, cmdMsg.command, cmdMsg.args);
               wsAdapter!.sendRaw(
                 JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
               );
@@ -1124,6 +1134,18 @@ export async function handleServe(config: CliConfig): Promise<void> {
   // different work, so it takes its own stable id — never the daemon's,
   // never a fresh one per restart.
   runtime.setHaltExecutorId(`serve@${loadFullConfig().device_id ?? "unknown"}`);
+  // Serve does NOT answer the return view, even though its database is
+  // this machine's.
+  //
+  // It shares the file when it is co-located with the daemon, and holds
+  // an empty one when it is not — and serve on its own machine is the
+  // arc's own deployment story, a daemon on a laptop and a worker on a
+  // VPS. From there this answered "No runs recorded yet" about a
+  // motebit that had worked all night: a confident false empty, which
+  // is the single failure the return view was built to remove. Serve
+  // runs relay-dispatched tasks, not goal runs, so it has no record of
+  // its own to report either way. The relay routes the question by
+  // `run_ledger`, which only the goal daemon announces.
   // The stopper answers for THIS halt, not for halts in general.
   //
   // Serve executes relay-dispatched tasks. Those are not goal runs, and
@@ -1533,12 +1555,12 @@ export async function handleServe(config: CliConfig): Promise<void> {
                 );
                 return;
               }
-              const result = await executeCommand(
+              // The one door for a relay frame — serve's handler, the
+              // sibling of the daemon's above.
+              const result = await executeRemoteCommand(
                 runtimeRef.current!,
                 cmdMsg.command,
                 cmdMsg.args,
-                undefined,
-                { origin: "remote" },
               );
               serveWsAdapter!.sendRaw(
                 JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),

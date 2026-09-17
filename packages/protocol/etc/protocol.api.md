@@ -1503,6 +1503,7 @@ export enum DeviceCapability {
     // (undocumented)
     LocalLlm = "local_llm",
     PushWake = "push_wake",
+    RunLedger = "run_ledger",
     SecureEnclave = "secure_enclave",
     // (undocumented)
     StdioMcp = "stdio_mcp",
@@ -3648,6 +3649,66 @@ export interface RunEvidenceSink {
 
 // @public
 export type RunEvidenceWithheldReason = "credential_in_span" | "credential_in_source";
+
+// @public
+export interface RunLedgerDetail extends RunLedgerSummary {
+    evidence: ReadonlyArray<{
+        tool: string;
+        ref: string;
+        digest: string;
+        projection?: string;
+    }>;
+    outcomes: ReadonlyArray<{
+        status: string;
+        error_message?: string;
+        summary_preview?: string;
+        signed: boolean;
+    }>;
+    // (undocumented)
+    tool_calls: ReadonlyArray<{
+        tool: string;
+        verdict: string;
+    }>;
+    // (undocumented)
+    withheld: ReadonlyArray<{
+        tool: string;
+        reason: string;
+    }>;
+}
+
+// @public
+export type RunLedgerLookup = {
+    readonly kind: "found";
+    readonly run: RunLedgerDetail;
+} | {
+    readonly kind: "ambiguous";
+    readonly matches: readonly string[];
+} | {
+    readonly kind: "missing";
+};
+
+// @public
+export interface RunLedgerReader {
+    get(runIdOrPrefix: string): RunLedgerLookup;
+    listRecent(limit: number): RunLedgerSummary[];
+}
+
+// @public
+export interface RunLedgerSummary {
+    evidence_count: number;
+    // (undocumented)
+    goal_id: string;
+    holding: boolean;
+    note?: string;
+    // (undocumented)
+    run_id: string;
+    signed: boolean;
+    // (undocumented)
+    started_at: number;
+    // (undocumented)
+    status: string;
+    withheld_count: number;
+}
 
 // @public
 export const RUNTIME_ATTACH_AUDIENCE: TokenAudience;
