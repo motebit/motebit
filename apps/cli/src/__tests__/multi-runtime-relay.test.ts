@@ -13,7 +13,12 @@ import { createSyncRelay } from "@motebit/relay";
 import type { SyncRelay } from "@motebit/relay";
 import { generateKeypair, bytesToHex, signAgentCommandEnvelope } from "@motebit/crypto";
 import type { KeyPair } from "@motebit/crypto";
-import { attachRuntime, resetHarness, standUpMotebit } from "./multi-runtime-harness.js";
+import {
+  assertWireHealthy,
+  attachRuntime,
+  resetHarness,
+  standUpMotebit,
+} from "./multi-runtime-harness.js";
 
 const AUTH = { "Content-Type": "application/json", Authorization: "Bearer test-token" };
 
@@ -59,6 +64,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await relay.close();
+  // The wire, not the subject. A silently broken loop makes every
+  // assertion above prove less than it appears to.
+  assertWireHealthy();
 });
 
 describe("two runtimes, one relay — what a frame actually does", () => {
@@ -266,6 +274,101 @@ describe("two runtimes, one relay — what a frame actually does", () => {
     expect(live.received).toHaveLength(1);
     expect(live.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(1);
   });
+
+  it("a halt reaches EVERY machine, not the first that answers", async () => {
+    // The halt store is local and nothing replicates it, so first-wins
+    // stops one machine and leaves the other working — under the
+    // stopped one's acknowledgement, which reads as "stopped" for a
+    // motebit that is still running. The act is idempotent and
+    // machine-local, so the delivery that matches what was asked for is
+    // to all of them.
+    const laptop = attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "dev-1",
+        capabilities: ["background", "unattended_runtime"],
+      },
+    );
+    const vps = attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "dev-2",
+        capabilities: ["background", "unattended_runtime"],
+      },
+    );
+
+    await ask("halt");
+    expect(laptop.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(1);
+    expect(vps.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(1);
+  });
+
+  it("a machine that never answers is named as silent, not quietly dropped", async () => {
+    // An unanswered halt is the one outcome a reader must not take for
+    // a stop. Dropping it from the report would hand back the answering
+    // machine's "Stop requested" as though it spoke for the motebit.
+    const laptop = attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "dev-1",
+        capabilities: ["background", "unattended_runtime"],
+      },
+    );
+    attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "dev-2",
+        capabilities: ["background", "unattended_runtime"],
+        neverReplies: true,
+      },
+    );
+
+    const { body } = await ask("halt");
+    const text = JSON.stringify(body);
+    expect(text).toMatch(/did not answer in time/i);
+    expect(text).toMatch(/silence is not a stop/i);
+    // And the machine that did answer is still reported.
+    expect(text).toMatch(/stop requested/i);
+    expect(laptop.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(1);
+  }, 15_000);
+
+  it("a resume reports the machine that ACTED, not the one with nothing to do", async () => {
+    // `cmdResume` answers "Nothing is halted." synchronously when
+    // nothing is active, while the machine that holds the halt awaits
+    // its store — so the machine with least to do reliably wins a race,
+    // and a successful resume rendered as a no-op.
+    const halted = attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "dev-1",
+        capabilities: ["background", "unattended_runtime"],
+      },
+    );
+    const idle = attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "dev-2",
+        capabilities: ["background", "unattended_runtime"],
+      },
+    );
+    // Halt reaches both; lift it on one so the two have different news.
+    await ask("halt");
+    const onlyOn = halted.runtime.halts?.listActive(motebitId) ?? [];
+    expect(onlyOn).toHaveLength(1);
+    idle.runtime.halts?.lift((idle.runtime.halts.listActive(motebitId)[0] ?? onlyOn[0]!).halt_id);
+
+    const { body } = await ask("resume");
+    const text = JSON.stringify(body);
+    // Both machines' answers are present; neither stands in for the
+    // motebit's.
+    expect(text).toMatch(/Sent to 2 runtimes/i);
+    expect(text).toMatch(/nothing is halted/i);
+  }, 15_000);
 
   it("`runs` goes to the ledger-holder, never to a task worker that can be stopped", async () => {
     // `motebit serve` announces `unattended_runtime` truthfully and

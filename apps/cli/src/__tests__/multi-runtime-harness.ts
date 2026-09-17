@@ -148,8 +148,37 @@ export interface HarnessDeps {
  */
 const machineReplayStores = new Map<string, Set<string>>();
 
+/**
+ * Anything that went wrong in the WIRE itself, as opposed to in the
+ * code under test.
+ *
+ * The harness ran for a whole PR against a stale build of the relay in
+ * which `handleCommandResponse` was not exported, so every reply threw
+ * on its way back and the loop never closed — and nine tests passed
+ * anyway, because most of them assert on runtime-side state and never
+ * noticed the round trip was broken. A harness that can be silently
+ * disconnected from its subject is measuring something else, which is
+ * the whole failure it exists to prevent, one level up.
+ *
+ * So the wire reports its own faults and the suite asserts there were
+ * none. `assertWireHealthy()` in an `afterEach` makes a broken loop a
+ * red test forever, rather than a quietly weaker one.
+ */
+const wireFaults: string[] = [];
+
 export function resetHarness(): void {
   machineReplayStores.clear();
+  wireFaults.length = 0;
+}
+
+/** Fail loudly if the wire, rather than the subject, misbehaved. */
+export function assertWireHealthy(): void {
+  if (wireFaults.length === 0) return;
+  const seen = [...new Set(wireFaults)];
+  wireFaults.length = 0;
+  throw new Error(
+    `harness wire fault — the loop did not close, so any passing assertion above proved less than it appears:\n  ${seen.join("\n  ")}`,
+  );
 }
 
 function replayFor(deviceId: string) {
@@ -195,6 +224,12 @@ export function attachRuntime(
      * transport wrongly agrees with the bug.
      */
     socketIsDead?: boolean;
+    /**
+     * Receives the frame and never answers — a machine that is up,
+     * connected and wedged. Silence is the one outcome a reader must
+     * not take for a stop, so the harness has to be able to produce it.
+     */
+    neverReplies?: boolean;
   },
 ): HarnessRuntime {
   const storage = createInMemoryStorage();
@@ -222,6 +257,7 @@ export function attachRuntime(
       envelope?: unknown;
     };
     if (frame.type !== "command_request") return;
+    if (opts.neverReplies === true) return;
     // The real handler, on the real runtime, with this MACHINE's
     // replay guard.
     void handleRelayCommandFrame(frame, {
@@ -238,7 +274,15 @@ export function attachRuntime(
         // answer carries the device that sent it and this call gains
         // that argument — the point at which this harness starts being
         // able to assert who answered and who stayed silent.
-        handleCommandResponse(msg.id, msg.result);
+        try {
+          handleCommandResponse(msg.id, msg.result);
+        } catch (err) {
+          // Never swallowed. A reply that cannot be delivered is the
+          // harness being broken, not the subject.
+          wireFaults.push(
+            `reply for ${msg.id} could not be delivered: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       },
     });
   };
