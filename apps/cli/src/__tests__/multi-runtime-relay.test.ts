@@ -13,7 +13,12 @@ import { createSyncRelay } from "@motebit/relay";
 import type { SyncRelay } from "@motebit/relay";
 import { generateKeypair, bytesToHex, signAgentCommandEnvelope } from "@motebit/crypto";
 import type { KeyPair } from "@motebit/crypto";
-import { attachRuntime, resetHarness, standUpMotebit } from "./multi-runtime-harness.js";
+import {
+  assertWireHealthy,
+  attachRuntime,
+  resetHarness,
+  standUpMotebit,
+} from "./multi-runtime-harness.js";
 
 const AUTH = { "Content-Type": "application/json", Authorization: "Bearer test-token" };
 
@@ -48,6 +53,9 @@ beforeEach(async () => {
       testnet: true,
     },
     drainGraceMs: 10,
+    // The deadline is the only bound now — there is no grace window to
+    // shorten — so the silent-machine paths would cost 30s each at the
+    // production value. Same motivation as `drainGraceMs`.
     // The harness registers on 127.0.0.1 — the local-development
     // allowance. Production keeps the default: globally-routable only.
     allowPrivateEndpoints: true,
@@ -59,6 +67,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await relay.close();
+  // The wire, not the subject. A silently broken loop makes every
+  // assertion above prove less than it appears to.
+  assertWireHealthy();
 });
 
 describe("two runtimes, one relay — what a frame actually does", () => {
@@ -187,9 +198,10 @@ describe("two runtimes, one relay — what a frame actually does", () => {
       command: "halt",
       envelope,
     });
-    run.deliver(frame);
-    serve.deliver(frame);
-    await new Promise((r) => setTimeout(r, 30));
+    // Sequenced, not raced: "the SECOND one refuses" is a statement
+    // about order, and envelope verification is async.
+    await run.deliver(frame);
+    await serve.deliver(frame);
 
     expect(JSON.stringify(run.replied)).not.toMatch(/replay/i);
     expect(JSON.stringify(serve.replied)).toMatch(/replay/i);
@@ -229,9 +241,8 @@ describe("two runtimes, one relay — what a frame actually does", () => {
       command: "halt",
       envelope,
     });
-    laptop.deliver(frame);
-    vps.deliver(frame);
-    await new Promise((r) => setTimeout(r, 30));
+    await laptop.deliver(frame);
+    await vps.deliver(frame);
 
     expect(JSON.stringify(laptop.replied)).not.toMatch(/replay/i);
     expect(JSON.stringify(vps.replied)).not.toMatch(/replay/i);
@@ -265,6 +276,83 @@ describe("two runtimes, one relay — what a frame actually does", () => {
     expect(stale.received).toEqual([]);
     expect(live.received).toHaveLength(1);
     expect(live.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(1);
+  });
+
+  it("a halt is REFUSED on two machines rather than stopping one of them", async () => {
+    // The halt store is local and nothing replicates it, so delivering
+    // to one machine stops that one and answers with its
+    // acknowledgement — a record saying the motebit stopped while the
+    // other machine keeps working. Refusing is survivable; that is not.
+    const laptop = attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "dev-1",
+        capabilities: ["background", "unattended_runtime"],
+      },
+    );
+    const vps = attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "dev-2",
+        capabilities: ["background", "unattended_runtime"],
+      },
+    );
+
+    const { status, body } = await ask("halt");
+    expect(status).toBe(404);
+    const text = JSON.stringify(body);
+    expect(text).toMatch(/2 different machines/i);
+    // It says WHY, in terms of what would have gone wrong.
+    expect(text).toMatch(/while the other kept working/i);
+    // Neither machine was touched: a refusal that half-acted would be
+    // worse than either choice.
+    expect(laptop.received).toEqual([]);
+    expect(vps.received).toEqual([]);
+    expect(laptop.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(0);
+    expect(vps.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(0);
+  });
+
+  it("a halt on ONE machine is delivered, unchanged — every deployment today", async () => {
+    // The refusal is scoped to the configuration that does not exist
+    // yet. A single-machine motebit must be exactly as it was.
+    const daemon = attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "dev-1",
+        capabilities: ["background", "unattended_runtime"],
+      },
+    );
+    const { status } = await ask("halt");
+    expect(status).toBe(200);
+    expect(daemon.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(1);
+  });
+
+  it("two processes on ONE machine are still interchangeable, not refused", async () => {
+    // `motebit run` and `motebit serve` share a device id. Counting
+    // them as two machines would refuse every remote halt in the
+    // ordinary single-host setup.
+    const run = attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "dev-1",
+        capabilities: ["background", "unattended_runtime"],
+      },
+    );
+    const serve = attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "serve",
+        deviceId: "dev-1",
+        capabilities: ["background", "unattended_runtime"],
+      },
+    );
+    const { status } = await ask("halt");
+    expect(status).toBe(200);
+    expect(run.received.length + serve.received.length).toBe(1);
   });
 
   it("`runs` goes to the ledger-holder, never to a task worker that can be stopped", async () => {

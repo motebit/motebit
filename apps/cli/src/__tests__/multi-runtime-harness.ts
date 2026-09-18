@@ -37,11 +37,26 @@ import { handleRelayCommandFrame } from "../relay-command-frame.js";
  * nothing replicates it, which is the fact the whole multi-machine
  * question turns on.
  */
-export function createInMemoryHaltStore(): HaltStoreAdapter {
+export function createInMemoryHaltStore(
+  knownGoals: ReadonlySet<string> = new Set(),
+): HaltStoreAdapter {
   const halts: HaltRequest[] = [];
   const acks = new Map<string, HaltAcknowledgement[]>();
   return {
-    request: (h) => void halts.push(h),
+    request: (h) => {
+      // The REAL store refuses a halt scoped to a goal it has never
+      // heard of, because a halt matching no goal would report a stop
+      // while the goal kept running (`SqliteHaltStore.request`). A
+      // double that accepts anything makes a test about goal scoping
+      // measure the double instead of the system — the same trap the
+      // socket model fell into before it learned about `readyState`.
+      if (h.goal_id != null && !knownGoals.has(h.goal_id)) {
+        throw new Error(
+          `refusing to record a halt scoped to goal "${h.goal_id}", which does not exist for this motebit — a halt that matches no goal would report a stop while the goal kept running`,
+        );
+      }
+      halts.push(h);
+    },
     acknowledge: (haltId, executorId, acknowledgement, at) => {
       const list = acks.get(haltId) ?? [];
       if (list.some((a) => a.executor_id === executorId)) return;
@@ -127,8 +142,15 @@ export interface HarnessRuntime {
    * through the relay — and that one fact is the reason delivery is per
    * machine and not per connection, so a harness that cannot state it
    * cannot hold the thing issue #681 is blocked on.
+   *
+   * AWAITABLE, because "the second process refuses" is a statement
+   * about order. Envelope verification is async, so two deliveries
+   * started back-to-back race through it and either may reach the
+   * replay guard first — a test asserting which one refused then passes
+   * or fails on scheduling. Awaiting each delivery makes the sequence
+   * the test's, not the event loop's.
    */
-  deliver(payload: string): void;
+  deliver(payload: string): Promise<void>;
 }
 
 export interface HarnessDeps {
@@ -148,8 +170,37 @@ export interface HarnessDeps {
  */
 const machineReplayStores = new Map<string, Set<string>>();
 
+/**
+ * Anything that went wrong in the WIRE itself, as opposed to in the
+ * code under test.
+ *
+ * The harness ran for a whole PR against a stale build of the relay in
+ * which `handleCommandResponse` was not exported, so every reply threw
+ * on its way back and the loop never closed — and nine tests passed
+ * anyway, because most of them assert on runtime-side state and never
+ * noticed the round trip was broken. A harness that can be silently
+ * disconnected from its subject is measuring something else, which is
+ * the whole failure it exists to prevent, one level up.
+ *
+ * So the wire reports its own faults and the suite asserts there were
+ * none. `assertWireHealthy()` in an `afterEach` makes a broken loop a
+ * red test forever, rather than a quietly weaker one.
+ */
+const wireFaults: string[] = [];
+
 export function resetHarness(): void {
   machineReplayStores.clear();
+  wireFaults.length = 0;
+}
+
+/** Fail loudly if the wire, rather than the subject, misbehaved. */
+export function assertWireHealthy(): void {
+  if (wireFaults.length === 0) return;
+  const seen = [...new Set(wireFaults)];
+  wireFaults.length = 0;
+  throw new Error(
+    `harness wire fault — the loop did not close, so any passing assertion above proved less than it appears:\n  ${seen.join("\n  ")}`,
+  );
 }
 
 function replayFor(deviceId: string) {
@@ -194,12 +245,20 @@ export function attachRuntime(
      * tried the live process beside it. A harness that models the
      * transport wrongly agrees with the bug.
      */
+    /** Goals this machine owns. A goal-scoped halt for any other is refused. */
+    goals?: readonly string[];
     socketIsDead?: boolean;
+    /**
+     * Receives the frame and never answers — a machine that is up,
+     * connected and wedged. Silence is the one outcome a reader must
+     * not take for a stop, so the harness has to be able to produce it.
+     */
+    neverReplies?: boolean;
   },
 ): HarnessRuntime {
   const storage = createInMemoryStorage();
   // Per process, never shared — see `createInMemoryHaltStore`.
-  storage.haltStore = createInMemoryHaltStore();
+  storage.haltStore = createInMemoryHaltStore(new Set(opts.goals ?? []));
   const runtime = new MotebitRuntime(
     { motebitId: deps.motebitId, tickRateHz: 0 },
     { storage, renderer: new NullRenderer() },
@@ -212,7 +271,7 @@ export function attachRuntime(
   const received: string[] = [];
   const replied: unknown[] = [];
 
-  const deliverToRuntime = (payload: string): void => {
+  const deliverToRuntime = async (payload: string): Promise<void> => {
     received.push(payload);
     const frame = JSON.parse(payload) as {
       type: string;
@@ -222,9 +281,10 @@ export function attachRuntime(
       envelope?: unknown;
     };
     if (frame.type !== "command_request") return;
+    if (opts.neverReplies === true) return;
     // The real handler, on the real runtime, with this MACHINE's
     // replay guard.
-    void handleRelayCommandFrame(frame, {
+    await handleRelayCommandFrame(frame, {
       runtime,
       motebitId: deps.motebitId,
       identityPublicKey: deps.identityPublicKey,
@@ -232,13 +292,21 @@ export function attachRuntime(
       reply: (raw) => {
         const msg = JSON.parse(raw) as { id: string; result: unknown };
         replied.push(msg.result);
-        // Back up the wire. Delivery is first-wins today, so one answer
+        // Back up the wire. Delivery is first-wins, so one answer
         // settles the request and the relay does not need to know which
-        // machine sent it. When issue #681 lands the broadcast, an
-        // answer carries the device that sent it and this call gains
-        // that argument — the point at which this harness starts being
-        // able to assert who answered and who stayed silent.
-        handleCommandResponse(msg.id, msg.result);
+        // machine sent it. Attribution arrives with the broadcast
+        // (issue #681), and this call gains that argument then — which
+        // is the point at which the harness can assert who answered and
+        // who stayed silent.
+        try {
+          handleCommandResponse(msg.id, msg.result);
+        } catch (err) {
+          // Never swallowed. A reply that cannot be delivered is the
+          // harness being broken, not the subject.
+          wireFaults.push(
+            `reply for ${msg.id} could not be delivered: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       },
     });
   };
@@ -251,7 +319,10 @@ export function attachRuntime(
         // Swallowed, exactly as a closed socket swallows it — not
         // thrown. See `socketIsDead`.
         if (opts.socketIsDead === true) return;
-        deliverToRuntime(payload);
+        // The relay's own send is synchronous and does not await a
+        // peer; the promise matters only to a test sequencing
+        // deliveries by hand.
+        void deliverToRuntime(payload);
       },
     },
     deviceId: opts.deviceId,

@@ -96,6 +96,36 @@ const MUTATING_UNATTENDED_COMMANDS = new Set(["halt", "resume", "approvals"]);
 const PER_MACHINE_DATABASE_COMMANDS = new Set(["approvals", "runs"]);
 
 /**
+ * Verbs the relay REFUSES rather than deliver to one machine of several.
+ *
+ * A halt is written to the halt store of the machine that receives it,
+ * and that store is local — nothing replicates it. So first-wins
+ * delivery to a sovereign with a daemon on a laptop and a worker on a
+ * VPS stops one of them and answers with that one's acknowledgement,
+ * which reads as "stopped" for a motebit that is still working. That is
+ * the worst thing this vocabulary can do, so it is refused instead:
+ * saying "I cannot do this from here" is survivable, saying "stopped"
+ * about a motebit that is running is not.
+ *
+ * REACHING every machine is the right answer and is NOT what this is.
+ * It was built (issue #681) and withdrawn after five review rounds: a
+ * broadcast has to gather answers instead of racing them, name the
+ * machines that stayed silent, decline to synthesize a verdict the
+ * relay is not the authority on, and carry a status that a partial
+ * result cannot be mistaken for success — and each round found another
+ * face of that I had not seen. The whole story also needs `halt-status`
+ * composed (#687), or a sovereign can stop their motebit and not see
+ * what stopped.
+ *
+ * It costs nothing today: no motebit has unattended runtimes on two
+ * machines until the installer ships (#685). That is exactly why the
+ * refusal is affordable and why the broadcast is worth building whole,
+ * once, against the multi-runtime harness rather than under review
+ * pressure.
+ */
+const REFUSE_ON_MANY_MACHINES = new Set(["halt", "resume"]);
+
+/**
  * The capability a command's answer actually depends on.
  *
  * `runs` needs the RECORD, not the ability to act. `motebit serve`
@@ -358,12 +388,20 @@ async function forwardCommandToAgent(
       // advice for someone away from both machines. That is precisely
       // the situation this arc exists for, so the guard was breaking
       // the feature to protect a different one.
-      const manyMachines =
-        PER_MACHINE_DATABASE_COMMANDS.has(command) && allDeclared && devices.size > 1;
+      const perMachineRecord = PER_MACHINE_DATABASE_COMMANDS.has(command);
+      const wouldStopOne = REFUSE_ON_MANY_MACHINES.has(command);
+      const manyMachines = (perMachineRecord || wouldStopOne) && allDeclared && devices.size > 1;
       candidates = manyMachines ? [] : unattended;
-      emptyReason = manyMachines
-        ? `This motebit has unattended runtimes on ${devices.size} different machines, each with its own records, so the relay cannot choose one — run this command on the machine you mean, or stop the runtime you do not`
-        : noPeerReason(command);
+      emptyReason = !manyMachines
+        ? noPeerReason(command)
+        : wouldStopOne
+          ? // Different sentence from the records one: nothing here is
+            // about which database answers. Delivering to one machine
+            // would STOP one and leave the other working, under the
+            // stopped one's acknowledgement — a record that says the
+            // motebit stopped while it is still running.
+            `This motebit has unattended runtimes on ${devices.size} different machines, and a halt is written where it lands — delivering to one would stop that machine and answer as though the motebit had stopped, while the other kept working. Run this on each machine, or stop the runtime you do not want. Reaching every machine at once is tracked in issue #681`
+          : `This motebit has unattended runtimes on ${devices.size} different machines, each with its own records, so the relay cannot choose one — run this command on the machine you mean, or stop the runtime you do not`;
     } else if (command !== "approvals") {
       // Everything but `approvals` gets no fallback: a daemon too old to
       // announce the capability is too old to honor a halt or to hold a
