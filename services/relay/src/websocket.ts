@@ -39,6 +39,21 @@ export interface ConnectedDevice {
    * either refuse when it should deliver or group when it must not.
    */
   deviceIdDeclared?: boolean;
+  /**
+   * True when the declared device id is the `did` of the signed token
+   * this connection authenticated with — so the id was PROVEN, by a key
+   * registered to that device, and not merely typed into a query string.
+   *
+   * `?device_id=` is unauthenticated on its own: any surface holding a
+   * valid sync token for this motebit could declare another machine's
+   * id. For grouping that only decides whether to refuse, a lie costs a
+   * refusal. For a composed answer it would put one runtime's words
+   * under another machine's name and call the picture whole — so
+   * anything that ATTRIBUTES by device id reads this, never
+   * `deviceIdDeclared`. False for the master token and with device auth
+   * off: there is no `did` to bind to, and unproven is not verified.
+   */
+  deviceIdVerified?: boolean;
   capabilities?: string[];
 }
 
@@ -70,10 +85,15 @@ export interface WebSocketDeps {
   parseTokenPayloadUnsafe: (token: string) => import("./auth.js").TokenPayload | null;
   logger: ReturnType<typeof createLogger>;
   /**
-   * `from` is the device id of the connection the answer arrived on —
-   * a transport fact the relay holds, never a claim read from the answer.
+   * `from` is the connection the answer arrived on — the motebit the
+   * socket authenticated for and the device id it was upgraded with.
+   * Transport facts the relay holds, never claims read from the answer.
    */
-  onCommandResponse?: (commandId: string, result: unknown, from?: string) => void;
+  onCommandResponse?: (
+    commandId: string,
+    result: unknown,
+    from?: { motebitId: string; deviceId: string },
+  ) => void;
   /** When true, new WebSocket upgrades are rejected with close code 1001. */
   isDraining?: () => boolean;
 }
@@ -122,6 +142,10 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
 
       // Track whether this connection has been authenticated (via query param or auth frame)
       let authenticated = false;
+      // The `did` of the signed token that authenticated this socket, or
+      // null when none did (master token, device auth off). See
+      // `ConnectedDevice.deviceIdVerified`.
+      let verifiedDid: string | null = null;
       // Track whether we're still waiting for an auth frame (connection not yet finalized)
       let awaitingAuthFrame = false;
 
@@ -173,6 +197,9 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
             ws.close(4003, "Unauthorized");
             return false;
           }
+          // Read only AFTER verification succeeded, so "unsafe" is safe
+          // here: the signature over these claims has just been checked.
+          verifiedDid = deps.parseTokenPayloadUnsafe(token)?.did ?? null;
           return true;
         }
         // No device auth — check apiToken (shared secret)
@@ -198,9 +225,13 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
         if (!connections.has(motebitId)) {
           connections.set(motebitId, []);
         }
-        connections
-          .get(motebitId)!
-          .push({ ws, deviceId, deviceIdDeclared: declaredDeviceId != null, capabilities });
+        connections.get(motebitId)!.push({
+          ws,
+          deviceId,
+          deviceIdDeclared: declaredDeviceId != null,
+          deviceIdVerified: declaredDeviceId != null && verifiedDid === declaredDeviceId,
+          capabilities,
+        });
 
         // Task recovery: re-dispatch any pending tasks for this agent to the
         // newly connected device. Covers reconnection after disconnect (e.g.
@@ -334,7 +365,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
               // fixed at upgrade. A composed question names each machine's
               // answer, and letting the answer name its own machine would
               // let one runtime speak for another.
-              deps.onCommandResponse?.(cmdMsg.id, cmdMsg.result, deviceId);
+              deps.onCommandResponse?.(cmdMsg.id, cmdMsg.result, { motebitId, deviceId });
             }
 
             // Agent protocol: task_claim

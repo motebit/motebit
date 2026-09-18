@@ -234,6 +234,15 @@ export function attachRuntime(
     deviceId: string;
     capabilities: string[];
     deviceIdDeclared?: boolean;
+    /**
+     * Whether the declared id was PROVEN by the socket's signed token
+     * (`did === device_id`). Defaults to `deviceIdDeclared`, which is
+     * what a real daemon is: it mints its token and declares its id
+     * from the same config value. The harness bypasses the socket, so
+     * it has to state this; the relay's own
+     * `websocket-command-response.test.ts` proves how it is earned.
+     */
+    deviceIdVerified?: boolean;
     /** Wire the runtime's stores before it answers anything. */
     configure?: (runtime: MotebitRuntime) => void;
     /**
@@ -299,7 +308,10 @@ export function attachRuntime(
         // on, never by anything the answer says about itself. A machine
         // cannot name itself into another machine's line.
         try {
-          handleCommandResponse(msg.id, msg.result, opts.deviceId);
+          handleCommandResponse(msg.id, msg.result, {
+            motebitId: deps.motebitId,
+            deviceId: opts.deviceId,
+          });
         } catch (err) {
           // Never swallowed. A reply that cannot be delivered is the
           // harness being broken, not the subject.
@@ -327,6 +339,7 @@ export function attachRuntime(
     },
     deviceId: opts.deviceId,
     deviceIdDeclared: opts.deviceIdDeclared ?? true,
+    deviceIdVerified: opts.deviceIdVerified ?? opts.deviceIdDeclared ?? true,
     capabilities: opts.capabilities,
   };
 

@@ -243,7 +243,17 @@ interface MachineLine {
 class ComposedReply {
   constructor(
     readonly body: CommandResult,
-    readonly partial: boolean,
+    /**
+     * 200 for a whole picture. For a partial one, a status whose
+     * EXISTING copy is true of it: every client already renders 504 as
+     * "delivered, and the runtime did not answer", which is exactly
+     * right when every machine was reached and none replied — and false
+     * the moment one was never reached, or one did answer and would be
+     * dropped. Those are 502, which no surface has a sentence for, so an
+     * installed phone older than this change prints the body instead of
+     * asserting "Delivered" about a machine nobody delivered to.
+     */
+    readonly status: 200 | 502 | 504,
   ) {}
 }
 
@@ -255,6 +265,8 @@ const pendingCommands = new Map<
       kind: "composed";
       resolve: (result: ComposedReply) => void;
       timer: ReturnType<typeof setTimeout>;
+      /** Whose question this is. An answer from another motebit's socket is not one. */
+      motebitId: string;
       /**
        * One line per MACHINE the question was aimed at, keyed by device
        * id. Keyed, not pushed to: counting answers rather than machines
@@ -352,7 +364,7 @@ export function registerCommandRoutes(deps: CommandRouteDeps): void {
       }
 
       try {
-        const result = await forwardCommandToAgent(peers, command, args, body.envelope);
+        const result = await forwardCommandToAgent(motebitId, peers, command, args, body.envelope);
         if (result instanceof ComposedReply) {
           // A PARTIAL picture is not a success, and must not be a 2xx.
           // Honest prose at HTTP 200 still lets
@@ -361,7 +373,7 @@ export function registerCommandRoutes(deps: CommandRouteDeps): void {
           // to compare counts. Fail closed at the transport: a caller
           // that forgets gets an error, and the body still carries the
           // per-machine truth, so nothing is lost by the status.
-          return result.partial ? c.json(result.body, 504) : c.json(result.body);
+          return c.json(result.body, result.status);
         }
         return c.json(result);
       } catch (err: unknown) {
@@ -398,11 +410,18 @@ export function registerCommandRoutes(deps: CommandRouteDeps): void {
  * Called by the WebSocket message handler when an agent sends a command_response.
  * Resolves the pending Promise so the HTTP handler can return the result.
  *
- * `from` is the device id of the CONNECTION the answer arrived on —
- * supplied by the socket handler, never read out of the answer. A
- * machine cannot name itself into another machine's line.
+ * `from` is the CONNECTION the answer arrived on — supplied by the
+ * socket handler, never read out of the answer. A machine cannot name
+ * itself into another machine's line, and a socket authenticated for
+ * one motebit cannot answer another's question: pending requests share
+ * one map across motebits, and without this the only thing between
+ * them would be that a command id is hard to guess.
  */
-export function handleCommandResponse(commandId: string, result: unknown, from?: string): void {
+export function handleCommandResponse(
+  commandId: string,
+  result: unknown,
+  from?: { motebitId: string; deviceId: string },
+): void {
   const pending = pendingCommands.get(commandId);
   if (!pending) return;
   if (pending.kind === "first") {
@@ -416,7 +435,10 @@ export function handleCommandResponse(commandId: string, result: unknown, from?:
   // delivered to and has not yet heard from. A stranger's answer is not
   // evidence about this request at all; a repeat must not overwrite the
   // first, or the last writer would get to say what a machine reported.
-  const line = from != null ? pending.machines.get(from) : undefined;
+  const line =
+    from != null && from.motebitId === pending.motebitId
+      ? pending.machines.get(from.deviceId)
+      : undefined;
   if (line == null || line.outcome !== "silent") return;
   line.outcome = carriesRecord(result) ? "answered" : "no_record";
   line.result = result;
@@ -517,7 +539,8 @@ function composeMachines(machines: MachineLine[]): ComposedReply {
         })),
       },
     },
-    partial,
+    // See `ComposedReply.status`: 504 only where its copy is true.
+    !partial ? 200 : machines.every((m) => m.outcome === "silent") ? 504 : 502,
   );
 }
 
@@ -526,7 +549,11 @@ function composeMachines(machines: MachineLine[]): ComposedReply {
  * is not one.
  *
  * Only when there is more than one machine, and only when every
- * unattended peer DECLARED its device id. One machine keeps the
+ * unattended peer's device id is VERIFIED — declared, and equal to the
+ * `did` of the signed token its socket authenticated with. Declared
+ * alone is a query string: any surface holding a sync token for this
+ * motebit could type another machine's id and have its answer
+ * published under that machine's name in a picture called whole. One machine keeps the
  * runtime's own reply, untouched — every deployment that exists today.
  * And an undeclared id is one the relay invented per connection, so
  * grouping by it would read one host's two processes as two machines,
@@ -541,7 +568,7 @@ function machinesToAsk(
   if (!COMPOSED_ACROSS_MACHINES.has(command)) return null;
   const needed = requiredCapability(command);
   const unattended = peers.filter((p) => p.capabilities?.includes(needed) === true);
-  if (unattended.some((p) => p.deviceIdDeclared !== true)) return null;
+  if (unattended.some((p) => p.deviceIdVerified !== true)) return null;
   const byMachine = new Map<string, ConnectedDevice[]>();
   for (const p of unattended) {
     byMachine.set(p.deviceId, [...(byMachine.get(p.deviceId) ?? []), p]);
@@ -575,6 +602,7 @@ function sendToOne(group: ConnectedDevice[], payload: string): boolean {
  * machine is refused as a replay by its own motebit.
  */
 function askEveryMachine(
+  motebitId: string,
   byMachine: Map<string, ConnectedDevice[]>,
   commandId: string,
   payload: string,
@@ -584,7 +612,7 @@ function askEveryMachine(
     // Registered BEFORE anything is sent: a machine may answer inside
     // `send`, and an answer that finds no pending request is dropped.
     const timer = setTimeout(() => settleComposed(commandId), commandTimeoutMs);
-    pendingCommands.set(commandId, { kind: "composed", resolve, timer, machines });
+    pendingCommands.set(commandId, { kind: "composed", resolve, timer, motebitId, machines });
     // Every line exists, and is WAITING, before the first send — for the
     // same reason. A machine answering inside `send` must find the
     // others still owed an answer, or it would settle a request whose
@@ -620,6 +648,7 @@ function askEveryMachine(
 // --- WebSocket forwarding ---
 
 async function forwardCommandToAgent(
+  motebitId: string,
   peers: ConnectedDevice[],
   command: string,
   args: string | undefined,
@@ -636,7 +665,7 @@ async function forwardCommandToAgent(
   });
 
   const byMachine = machinesToAsk(peers, command);
-  if (byMachine != null) return askEveryMachine(byMachine, commandId, payload);
+  if (byMachine != null) return askEveryMachine(motebitId, byMachine, commandId, payload);
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {

@@ -30,7 +30,13 @@ type Answer = { summary: string; detail?: string; data?: Record<string, unknown>
 function machine(
   deviceId: string,
   answer: Answer,
-  opts: { open?: boolean; declared?: boolean; from?: string } = {},
+  opts: {
+    open?: boolean;
+    declared?: boolean;
+    verified?: boolean;
+    from?: string;
+    fromMotebit?: string;
+  } = {},
 ) {
   const frames: Array<{ id: string; command: string }> = [];
   const peer = {
@@ -45,11 +51,18 @@ function machine(
         frames.push(frame);
         if (answer == null) return;
         // Asynchronously, as a socket does.
-        queueMicrotask(() => handleCommandResponse(frame.id, answer, opts.from ?? deviceId));
+        queueMicrotask(() =>
+          handleCommandResponse(frame.id, answer, {
+            motebitId: opts.fromMotebit ?? AGENT_ID,
+            deviceId: opts.from ?? deviceId,
+          }),
+        );
       },
     },
     deviceId,
     deviceIdDeclared: opts.declared ?? true,
+    // What a real daemon is: token `did` and declared id from one config value.
+    deviceIdVerified: opts.verified ?? opts.declared ?? true,
     capabilities: UNATTENDED,
   };
   return { peer, frames };
@@ -158,10 +171,29 @@ describe("halt-status is asked of every machine and composed", () => {
     expect(json).toEqual(running);
   });
 
+  it("an id that was declared but never PROVEN is not composed on", async () => {
+    // A query string is not a machine. Composing on it would let any
+    // holder of a sync token answer in the VPS's name, in a whole picture.
+    const laptop = machine("dev-1", running);
+    const impostor = machine("dev-2", running, { verified: false });
+    connect(laptop, impostor);
+    const { status, json } = await haltStatus();
+    expect(status).toBe(200);
+    expect(laptop.frames.length + impostor.frames.length).toBe(1);
+    expect(json).toEqual(running);
+  });
+
+  it("an answer arriving on ANOTHER motebit's socket fills nothing", async () => {
+    connect(machine("dev-1", running), machine("dev-2", running, { fromMotebit: "someone-else" }));
+    const { status, json } = await haltStatus();
+    expect(status).toBe(502);
+    expect(outcomes(json)).toEqual({ "dev-1": "answered", "dev-2": "silent" });
+  });
+
   it("names an unreached machine and refuses the partial a 2xx", async () => {
     connect(machine("dev-1", running), machine("dev-2", running, { open: false }));
     const { status, json } = await haltStatus();
-    expect(status).toBe(504);
+    expect(status).toBe(502);
     expect(outcomes(json)).toEqual({ "dev-1": "answered", "dev-2": "unreached" });
     expect((json.data as Record<string, unknown>).partial).toBe(true);
     expect(String(json.summary)).toMatch(/NOT the whole picture/);
@@ -170,12 +202,12 @@ describe("halt-status is asked of every machine and composed", () => {
   it("names a silent machine at the deadline, keeping the answer it did get", async () => {
     connect(machine("dev-1", stopped), machine("dev-2", null));
     const { status, json } = await haltStatus();
-    expect(status).toBe(504);
+    expect(status).toBe(502);
     expect(outcomes(json)).toEqual({ "dev-1": "answered", "dev-2": "silent" });
     expect(String(json.detail)).toMatch(/silence is neither a stop nor a run/);
   });
 
-  it("nothing heard is still a 504 — with a body, never an empty 200", async () => {
+  it("everything delivered and NOTHING heard is the one 504 — its existing copy is true of it", async () => {
     connect(machine("dev-1", null), machine("dev-2", null));
     const { status, json } = await haltStatus();
     expect(status).toBe(504);
@@ -197,7 +229,7 @@ describe("halt-status is asked of every machine and composed", () => {
     // dev-2's socket answers, but in the name of a stranger.
     connect(machine("dev-1", running), machine("dev-2", running, { from: "dev-9" }));
     const { status, json } = await haltStatus();
-    expect(status).toBe(504);
+    expect(status).toBe(502);
     expect(outcomes(json)).toEqual({ "dev-1": "answered", "dev-2": "silent" });
   });
 
@@ -209,8 +241,12 @@ describe("halt-status is asked of every machine and composed", () => {
     await expect.poll(() => vps.frames.length).toBe(1);
     const id = vps.frames[0]!.id;
     await Promise.resolve();
-    handleCommandResponse(id, { summary: "overwritten", data: {} }, "dev-1");
-    handleCommandResponse(id, stopped, "dev-2");
+    handleCommandResponse(
+      id,
+      { summary: "overwritten", data: {} },
+      { motebitId: AGENT_ID, deviceId: "dev-1" },
+    );
+    handleCommandResponse(id, stopped, { motebitId: AGENT_ID, deviceId: "dev-2" });
     const { status, json } = await pending;
     expect(status).toBe(200);
     const lines = (json.data as { machines: Array<{ device_id: string; result: unknown }> })
@@ -224,7 +260,7 @@ describe("halt-status is asked of every machine and composed", () => {
       machine("dev-2", { summary: "command_request rejected: replay" }),
     );
     const { status, json } = await haltStatus();
-    expect(status).toBe(504);
+    expect(status).toBe(502);
     expect(outcomes(json)).toEqual({ "dev-1": "answered", "dev-2": "no_record" });
     expect(String(json.detail)).toMatch(/dev-2: did not report — command_request rejected: replay/);
   });
@@ -232,7 +268,7 @@ describe("halt-status is asked of every machine and composed", () => {
   it("a reply that is not even an object is named as unreadable, not dropped", async () => {
     connect(machine("dev-1", running), machine("dev-2", "???" as unknown as Answer));
     const { status, json } = await haltStatus();
-    expect(status).toBe(504);
+    expect(status).toBe(502);
     expect(String(json.detail)).toMatch(/dev-2: did not report — answered in a shape/);
   });
 

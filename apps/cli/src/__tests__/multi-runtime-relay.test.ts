@@ -452,6 +452,9 @@ function machinesOf(body: Record<string, unknown>): MachineLine[] {
 
 const UNATTENDED = ["background", "unattended_runtime"];
 
+/** An answer's origin as the relay's socket handler states it. */
+const at = (deviceId: string) => ({ motebitId, deviceId });
+
 describe("halt-status across machines — the question it exists to answer", () => {
   it("asks EVERY machine, and each machine's own answer comes back under its own name", async () => {
     // The halt store is per machine. First-wins answered from whichever
@@ -542,7 +545,9 @@ describe("halt-status across machines — the question it exists to answer", () 
     });
 
     const { status, body } = await ask("halt-status");
-    expect(status).toBe(504);
+    // 502, not 504: every client already reads 504 as "delivered, the
+    // runtime did not answer", and that is false about dev-2.
+    expect(status).toBe(502);
     expect(gone.received).toEqual([]);
     const byId = new Map(machinesOf(body).map((m) => [m.device_id, m]));
     expect(byId.get("dev-1")?.outcome).toBe("answered");
@@ -564,7 +569,9 @@ describe("halt-status across machines — the question it exists to answer", () 
     });
 
     const { status, body } = await ask("halt-status");
-    expect(status).toBe(504);
+    // 502 here too: the 504 sentence would drop the machine that DID
+    // answer. 504 is kept for the one case its copy is true of, below.
+    expect(status).toBe(502);
     expect(wedged.received).toHaveLength(1);
     const byId = new Map(machinesOf(body).map((m) => [m.device_id, m]));
     expect(byId.get("dev-1")?.outcome).toBe("answered");
@@ -641,7 +648,7 @@ describe("halt-status across machines — the question it exists to answer", () 
     handleCommandResponse(
       frame.id,
       { summary: "the laptop, late", data: { halted: false, active: [] } },
-      "dev-1",
+      at("dev-1"),
     );
 
     const { body } = await pending;
@@ -671,13 +678,13 @@ describe("halt-status across machines — the question it exists to answer", () 
     await expect.poll(() => laptop.replied.length).toBe(1);
     const frame = JSON.parse(vps.received[0] ?? "{}") as { id: string };
     const forged = { summary: "forged", data: { halted: false, active: [] } };
-    handleCommandResponse(frame.id, forged, "dev-1"); // the same machine, again
-    handleCommandResponse(frame.id, forged, "dev-9"); // a machine never asked
+    handleCommandResponse(frame.id, forged, at("dev-1")); // the same machine, again
+    handleCommandResponse(frame.id, forged, at("dev-9")); // a machine never asked
     // Still open: only now does the second machine answer.
     handleCommandResponse(
       frame.id,
       { summary: "the vps, finally", data: { halted: true, active: [] } },
-      "dev-2",
+      at("dev-2"),
     );
 
     const { status, body } = await pending;
@@ -711,10 +718,61 @@ describe("halt-status across machines — the question it exists to answer", () 
     };
     expect((await send()).status).toBe(200);
     const again = await send();
-    expect(again.status).toBe(504);
+    expect(again.status).toBe(502);
     expect(machinesOf(again.body).map((m) => m.outcome)).toEqual(["no_record", "no_record"]);
     // The machine's own reason is carried, not replaced.
     expect(String(again.body.detail)).toMatch(/replay/i);
+  });
+
+  it("a device id that was only DECLARED is not a machine's name — no composition", async () => {
+    // `?device_id=` is a query string. Any surface holding a sync token
+    // for this motebit can type the VPS's id; composing on that would
+    // publish its answer as the VPS's own line in a picture called
+    // whole. Unproven falls back to first-wins, like undeclared.
+    const deps = { relay, motebitId, identityPublicKey: pubHex };
+    const laptop = attachRuntime(deps, {
+      label: "run",
+      deviceId: "dev-1",
+      capabilities: UNATTENDED,
+    });
+    const impostor = attachRuntime(deps, {
+      label: "web",
+      deviceId: "dev-2",
+      capabilities: UNATTENDED,
+      deviceIdVerified: false,
+    });
+
+    const { status, body } = await ask("halt-status");
+    expect(status).toBe(200);
+    expect(laptop.received.length + impostor.received.length).toBe(1);
+    expect((body.data as Record<string, unknown>).composed).toBeUndefined();
+  });
+
+  it("another motebit's socket cannot fill a line, even with the right device id", async () => {
+    // Pending requests share one map across motebits. Without this the
+    // only thing between them is that a command id is hard to guess.
+    const deps = { relay, motebitId, identityPublicKey: pubHex };
+    attachRuntime(deps, { label: "run", deviceId: "dev-1", capabilities: UNATTENDED });
+    const vps = attachRuntime(deps, {
+      label: "run",
+      deviceId: "dev-2",
+      capabilities: UNATTENDED,
+      neverReplies: true,
+    });
+
+    const pending = ask("halt-status");
+    await expect.poll(() => vps.received.length).toBe(1);
+    const frame = JSON.parse(vps.received[0] ?? "{}") as { id: string };
+    handleCommandResponse(
+      frame.id,
+      { summary: "from someone else's motebit", data: { halted: false, active: [] } },
+      { motebitId: "another-motebit", deviceId: "dev-2" },
+    );
+
+    const { status, body } = await pending;
+    expect(status).toBe(502);
+    const byId = new Map(machinesOf(body).map((m) => [m.device_id, m]));
+    expect(byId.get("dev-2")?.outcome).toBe("silent");
   });
 
   it("ONE machine is answered exactly as before — the runtime's own reply, uncomposed", async () => {
@@ -743,7 +801,7 @@ describe("halt-status across machines — the question it exists to answer", () 
     });
 
     const { status, body } = await ask("halt-status");
-    expect(status).toBe(504);
+    expect(status).toBe(502);
     const read = readComposedCommandResult(JSON.stringify(body));
     expect(read).not.toBeNull();
     expect(read?.partial).toBe(true);

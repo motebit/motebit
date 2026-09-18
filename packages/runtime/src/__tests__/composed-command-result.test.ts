@@ -60,16 +60,45 @@ describe("readComposedCommandResult", () => {
     expect(readComposedCommandResult('"a string"')).toBeNull();
   });
 
-  it("refuses a body whose machine lines it cannot read, rather than showing half of them", () => {
-    expect(readComposedCommandResult(composed({}, { machines: "dev-1" }))).toBeNull();
-    expect(readComposedCommandResult(composed({}, { machines: [null] }))).toBeNull();
-    expect(readComposedCommandResult(composed({}, { machines: [{ device_id: 1 }] }))).toBeNull();
-    // An outcome this reader has never heard of is not silently rendered.
-    expect(
-      readComposedCommandResult(
-        composed({}, { machines: [{ device_id: "dev-1", outcome: "stopped" }] }),
+  it("an outcome it has never heard of is SHOWN, and costs the picture its completeness", () => {
+    // The relay deploys on merge; an installed phone updates whenever it
+    // does. Returning null here sent the surface back to "Delivered, no
+    // answer yet" about a machine that was never reached.
+    const read = readComposedCommandResult(
+      composed(
+        {},
+        {
+          partial: false,
+          machines: [
+            { device_id: "dev-1", outcome: "answered", result: { summary: "Running" } },
+            { device_id: "dev-2", outcome: "refused" },
+          ],
+        },
       ),
-    ).toBeNull();
+    );
+    expect(read).not.toBeNull();
+    expect(read?.summary).toBe("Asked 2 machines; 1 reported.");
+    expect(read?.machines[1]).toEqual({ device_id: "dev-2", outcome: "unknown" });
+    // Even though the body said `partial: false`.
+    expect(read?.partial).toBe(true);
+  });
+
+  it("a line it cannot place is dropped from the list, never from the report", () => {
+    for (const bad of [null, "dev-1", { device_id: 1, outcome: "answered" }]) {
+      const read = readComposedCommandResult(
+        composed(
+          {},
+          { partial: false, machines: [bad, { device_id: "dev-2", outcome: "answered" }] },
+        ),
+      );
+      expect(read?.detail).toMatch(/dev-2: not reached/);
+      expect(read?.machines.map((m) => m.device_id)).toEqual(["dev-2"]);
+      expect(read?.partial).toBe(true);
+    }
+  });
+
+  it("refuses only what is not a composed body at all", () => {
+    expect(readComposedCommandResult(composed({}, { machines: "dev-1" }))).toBeNull();
     expect(readComposedCommandResult(composed({ summary: 7 }))).toBeNull();
   });
 

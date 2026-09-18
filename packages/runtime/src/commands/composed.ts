@@ -20,8 +20,15 @@
 
 import type { CommandResult } from "./types.js";
 
-/** What became of the question on one machine. Transport facts only. */
-export type ComposedMachineOutcome = "answered" | "no_record" | "silent" | "unreached";
+/**
+ * What became of the question on one machine. Transport facts only.
+ *
+ * `unknown` is never sent. It is what this reader calls an outcome it
+ * has not heard of: the relay deploys on merge and an installed CLI or
+ * phone updates whenever it does, so a newer relay WILL say something an
+ * older reader cannot name.
+ */
+export type ComposedMachineOutcome = "answered" | "no_record" | "silent" | "unreached" | "unknown";
 
 export interface ComposedMachineLine {
   device_id: string;
@@ -32,9 +39,11 @@ export interface ComposedMachineLine {
 
 export interface ComposedCommandResult extends CommandResult {
   /**
-   * True when any machine did not report. Fail-closed: a body that does
-   * not say `partial: false` outright is read as partial, so a relay
-   * that forgets the field cannot make half a picture look whole.
+   * True when any machine did not report. Fail-closed twice over: a
+   * body that does not say `partial: false` outright is read as
+   * partial, and so is one with a machine line this reader could not
+   * read — half a picture never looks whole because of what a reader
+   * failed to understand.
    */
   partial: boolean;
   machines: ComposedMachineLine[];
@@ -48,6 +57,15 @@ const OUTCOMES: ReadonlySet<string> = new Set(["answered", "no_record", "silent"
  *
  * Takes the raw text because that is what a surface holds when the
  * status was not 2xx. Never throws.
+ *
+ * Lenient about what it RENDERS, strict about what it calls WHOLE. The
+ * first version returned `null` for any line it could not read, which
+ * sent the surface back to the status-keyed sentence this reader exists
+ * to prevent — "Delivered" about a machine never reached — the moment a
+ * newer relay named an outcome an older client had not heard of. The
+ * relay's prose already says everything, so a body marked `composed`
+ * with a summary is always shown; what an unreadable line costs is the
+ * claim of completeness, never the report.
  */
 export function readComposedCommandResult(body: string | undefined): ComposedCommandResult | null {
   if (body == null || body.trim() === "") return null;
@@ -68,14 +86,23 @@ export function readComposedCommandResult(body: string | undefined): ComposedCom
   if (d.composed !== true || !Array.isArray(d.machines)) return null;
 
   const machines: ComposedMachineLine[] = [];
+  let unreadable = false;
   for (const raw of d.machines as unknown[]) {
-    if (typeof raw !== "object" || raw === null) return null;
-    const m = raw as { device_id?: unknown; outcome?: unknown; result?: unknown };
-    if (typeof m.device_id !== "string" || typeof m.outcome !== "string") return null;
-    if (!OUTCOMES.has(m.outcome)) return null;
+    const m = (typeof raw === "object" && raw !== null ? raw : {}) as {
+      device_id?: unknown;
+      outcome?: unknown;
+      result?: unknown;
+    };
+    if (typeof m.device_id !== "string") {
+      // A line with no machine to hang it on cannot be shown as one.
+      unreadable = true;
+      continue;
+    }
+    const known = typeof m.outcome === "string" && OUTCOMES.has(m.outcome);
+    if (!known) unreadable = true;
     machines.push({
       device_id: m.device_id,
-      outcome: m.outcome as ComposedMachineOutcome,
+      outcome: known ? (m.outcome as ComposedMachineOutcome) : "unknown",
       ...(typeof m.result === "object" && m.result !== null
         ? { result: m.result as CommandResult }
         : {}),
@@ -85,7 +112,7 @@ export function readComposedCommandResult(body: string | undefined): ComposedCom
     summary,
     ...(typeof detail === "string" ? { detail } : {}),
     data: data as Record<string, unknown>,
-    partial: d.partial !== false,
+    partial: d.partial !== false || unreadable,
     machines,
   };
 }

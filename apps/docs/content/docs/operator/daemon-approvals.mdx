@@ -227,9 +227,12 @@ back together, one line per machine, each under its device id:
 
 ```
 Asked 2 machines; all 2 reported. Each machine's own answer is below — the relay does not add them up.
-9f3c…: Running — nothing is halted.
-b71e…: Stop requested for unattended execution. 1 process(es) have acknowledged; …
+2b0e6c1a-7d4f-4a55-9c1e-0f3a8d2b9f3c: Running — nothing is halted.
+c94d17e2-51aa-4f0b-8e36-6a7f20d1b71e: Stop requested for unattended execution. 1 process(es) have acknowledged; what each one stopped is below, and any process that has not acknowledged is still running.
 ```
+
+The ids are the full `device_id` from each machine's `~/.motebit/config.json`,
+printed whole because it is the only name the relay has for a machine.
 
 The relay does not add them up. It knows what it sent and what came
 back; it does not know what a goal is or which machine owns one, so
@@ -241,12 +244,25 @@ apart: *not reached* (no open connection — nothing was sent), *no
 answer in time* (delivered, then silence — which is neither a stop nor a
 run), or *did not report* (it replied without a record, for instance
 refusing a replayed envelope). Any of those makes the picture partial,
-and **a partial picture is not a success**: the relay answers 504 with
-the composed body, so `motebit halt-status --remote && next-step` does
-not proceed on half an answer, and both the terminal and the phone print
-the per-machine report rather than their usual timeout sentence. If no
-machine could be reached at all, that is a 404 like any other
-undelivered command. A one-machine motebit — every deployment until the
+and **a partial picture is not a success**: the relay answers non-2xx
+with the composed body, so `motebit halt-status --remote && next-step`
+does not proceed on half an answer, and both the terminal and the phone
+print the per-machine report rather than a sentence keyed on the status.
+The status is 504 only when every machine was reached and none replied —
+the one case "delivered, no answer" is true of. Any other partial is a
+502, which no surface has a stock sentence for, so a phone older than
+this prints what the relay said instead of asserting "Delivered" about a
+machine nobody delivered to. If no machine could be reached at all, that
+is a 404 like any other undelivered command.
+
+**A machine's name has to be proven.** The `device_id` a socket declares
+is a query string; the relay composes only when it equals the `did` of
+the signed token that socket authenticated with, so no other surface
+holding a sync token can answer in a machine's name. `motebit run` and
+`motebit serve` both mint that token from the same config value they
+declare, so this costs a real daemon nothing. Where it cannot be proven —
+an undeclared id, the master token, device auth switched off — the relay
+falls back to delivering to one runtime, as it does for every other verb. A one-machine motebit — every deployment until the
 installer ships — gets its runtime's own reply, exactly as before.
 
 **Acknowledged is not stopped either.** A process acknowledging says it
