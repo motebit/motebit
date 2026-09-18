@@ -190,7 +190,13 @@ async function sendRemote(config: CliConfig, command: string, args?: string): Pr
       const detail = reason !== "" ? `${err.message} — ${reason}` : err.message;
       console.error(
         err.status === 504
-          ? `Delivered, no answer yet: ${detail}\nThe runtime received this command and did not reply in time. It may well have stopped — check \`motebit halt-status --remote\` rather than assuming either way.`
+          ? // 504 covers two shapes now: one runtime that did not answer,
+            // and a multi-machine broadcast where some machine was silent
+            // or never reached. The composed detail names each machine,
+            // so the sentence after it must not assert "the runtime
+            // received this command" — on a partial, one machine
+            // demonstrably did not.
+            `Not confirmed: ${detail}\nSome runtime did not answer, so at least one machine may still be running. The detail above names each one; a halt written locally (\`motebit halt\` without --remote) is in force on this machine regardless.`
           : err.kind === "http" || err.kind === "network"
             ? `Not delivered: ${detail}\nThe runtime did not answer, so nothing has been stopped remotely. A halt written locally (\`motebit halt\` without --remote) is in force on this machine regardless.`
             : `Command failed: ${detail}`,

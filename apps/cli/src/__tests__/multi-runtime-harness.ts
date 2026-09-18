@@ -37,11 +37,26 @@ import { handleRelayCommandFrame } from "../relay-command-frame.js";
  * nothing replicates it, which is the fact the whole multi-machine
  * question turns on.
  */
-export function createInMemoryHaltStore(): HaltStoreAdapter {
+export function createInMemoryHaltStore(
+  knownGoals: ReadonlySet<string> = new Set(),
+): HaltStoreAdapter {
   const halts: HaltRequest[] = [];
   const acks = new Map<string, HaltAcknowledgement[]>();
   return {
-    request: (h) => void halts.push(h),
+    request: (h) => {
+      // The REAL store refuses a halt scoped to a goal it has never
+      // heard of, because a halt matching no goal would report a stop
+      // while the goal kept running (`SqliteHaltStore.request`). A
+      // double that accepts anything makes a test about goal scoping
+      // measure the double instead of the system — the same trap the
+      // socket model fell into before it learned about `readyState`.
+      if (h.goal_id != null && !knownGoals.has(h.goal_id)) {
+        throw new Error(
+          `refusing to record a halt scoped to goal "${h.goal_id}", which does not exist for this motebit — a halt that matches no goal would report a stop while the goal kept running`,
+        );
+      }
+      halts.push(h);
+    },
     acknowledge: (haltId, executorId, acknowledgement, at) => {
       const list = acks.get(haltId) ?? [];
       if (list.some((a) => a.executor_id === executorId)) return;
@@ -230,6 +245,8 @@ export function attachRuntime(
      * tried the live process beside it. A harness that models the
      * transport wrongly agrees with the bug.
      */
+    /** Goals this machine owns. A goal-scoped halt for any other is refused. */
+    goals?: readonly string[];
     socketIsDead?: boolean;
     /**
      * Receives the frame and never answers — a machine that is up,
@@ -241,7 +258,7 @@ export function attachRuntime(
 ): HarnessRuntime {
   const storage = createInMemoryStorage();
   // Per process, never shared — see `createInMemoryHaltStore`.
-  storage.haltStore = createInMemoryHaltStore();
+  storage.haltStore = createInMemoryHaltStore(new Set(opts.goals ?? []));
   const runtime = new MotebitRuntime(
     { motebitId: deps.motebitId, tickRateHz: 0 },
     { storage, renderer: new NullRenderer() },

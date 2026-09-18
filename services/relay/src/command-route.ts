@@ -215,13 +215,12 @@ const pendingCommands = new Map<
     wasFolded: boolean;
     /** Answers received so far, in arrival order. */
     answers: Array<{ from: string; result: unknown }>;
-    /** Armed on the first answer, to bound the wait for the rest. */
   }
 >();
 
 /**
  * A broadcast has ONE deadline, and it is the one the request already
- * had: `COMMAND_TIMEOUT_MS`.
+ * had: `commandTimeoutMs`.
  *
  * There was a grace window here — wait N seconds after the first answer,
  * then call the rest silent — and it was wrong twice. At 3s it armed on
@@ -247,17 +246,29 @@ const pendingCommands = new Map<
  * resolves as soon as the slowest one does.
  */
 
-const COMMAND_TIMEOUT_MS = 30_000;
+const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
+
+/**
+ * The deadline in force. Overridable only through relay config, which
+ * production never sets — see `SyncRelayConfig.commandTimeoutMs`.
+ */
+let commandTimeoutMs = DEFAULT_COMMAND_TIMEOUT_MS;
 
 export interface CommandRouteDeps {
   app: Hono;
   db: DatabaseDriver;
   connections: Map<string, ConnectedDevice[]>;
   logger: ReturnType<typeof createLogger>;
+  /** Test seam; production uses the default. */
+  commandTimeoutMs?: number;
 }
 
 export function registerCommandRoutes(deps: CommandRouteDeps): void {
   const { app, db, connections } = deps;
+  // Module-scoped because the deadline belongs to the forwarding
+  // helper, which the route closes over. One relay per process, so a
+  // single value is honest; the override exists for tests alone.
+  commandTimeoutMs = deps.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
 
   /** @internal */
   app.post("/api/v1/agents/:motebitId/command", async (c) => {
@@ -319,7 +330,20 @@ export function registerCommandRoutes(deps: CommandRouteDeps): void {
 
       try {
         const result = await forwardCommandToAgent(peers, command, args, body.envelope);
-        return c.json(result);
+        // A PARTIAL broadcast is not a success, and must not be a 2xx.
+        //
+        // The composed prose was honest and the status was not: a halt
+        // that reached two machines and heard from one returned 200,
+        // so `motebit halt --remote && <next step>` proceeded with a
+        // machine still running, and every other consumer had to
+        // remember to compare `answered` against `sent_to`. That is one
+        // more "two opposite safe defaults on one value" — the shape
+        // this arc has already paid for twice. Fail closed at the
+        // transport: a caller that forgets gets an error, not a false
+        // success, and the composed body still carries the per-machine
+        // truth so nothing is lost by the status.
+        const partial = isPartialBroadcast(result);
+        return partial ? c.json(result, 504) : c.json(result);
       } catch (err: unknown) {
         // A typed rejection already says what happened and with what
         // status — re-wrapping it as a 500 would turn "nothing was
@@ -412,6 +436,20 @@ function finishCommand(commandId: string): void {
       ? pending.answers[0]?.result
       : composeAnswers(pending),
   );
+}
+
+/**
+ * Did a composed broadcast leave any machine unaccounted for?
+ *
+ * True when a target was never reached or stayed silent. Only a
+ * composed reply can be partial; a single-machine passthrough is the
+ * runtime's own answer and carries its own meaning.
+ */
+function isPartialBroadcast(result: unknown): boolean {
+  if (typeof result !== "object" || result === null) return false;
+  const d = (result as { data?: { sent_to?: unknown; answered?: unknown } }).data;
+  if (d == null || typeof d.sent_to !== "number" || typeof d.answered !== "number") return false;
+  return d.answered < d.sent_to;
 }
 
 /** A `{ summary, detail? }` reply, as far as this needs to read it. */
@@ -536,7 +574,7 @@ function composeAnswers(pending: {
       // Each machine's own answer, verbatim and attributed. The verdict
       // about the interior lives here, per machine, where the runtime
       // put it — never re-derived by the relay.
-      answers: answers.map((a) => ({ from: a.from, result: a.result })),
+      answers: answers.map((a) => ({ from: machineLabel(a.from), result: a.result })),
     },
   };
 }
@@ -580,13 +618,21 @@ async function forwardCommandToAgent(
       // applies to a multi-machine request where every machine stayed
       // silent — an honest prose report at HTTP 200 still tells a
       // script that the halt succeeded.
-      if (held != null && held.answers.length > 0) {
+      // Compose when there is anything to SAY, which includes knowing a
+      // machine was never reached — not only when someone answered.
+      //
+      // Keyed on answers alone, a broadcast where one machine was dead
+      // and the other wedged rejected as a plain timeout, and the CLI
+      // printed "Delivered, no answer yet — the runtime received this
+      // command" about a machine the relay knew it never reached. That
+      // is verbatim the conflation this change exists to remove.
+      if (held != null && (held.answers.length > 0 || held.unreached.length > 0)) {
         finishCommand(commandId);
         return;
       }
       pendingCommands.delete(commandId);
       reject(new Error("Command timed out"));
-    }, COMMAND_TIMEOUT_MS);
+    }, commandTimeoutMs);
 
     pendingCommands.set(commandId, {
       resolve,

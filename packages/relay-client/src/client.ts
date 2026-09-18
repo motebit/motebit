@@ -320,10 +320,18 @@ export class RelayClient {
    * means, so a verdict AND-ed over heterogeneous replies was a claim
    * about the interior that the relay is not the authority on: it made
    * every successful multi-machine resume read as unacknowledged, and
-   * every goal-scoped halt too. Read the per-machine `answers`, or ask
-   * `halt-status` — the command whose job that is. Absent is the
-   * fail-closed reading; a single-machine motebit still returns the
-   * runtime's own reply untouched, `acknowledged` included.
+   * every goal-scoped halt too. Read the per-machine `answers`: each
+   * carries the runtime's own verdict, which is where the answer lives.
+   * (`halt-status` is NOT yet the multi-machine answer — it is still
+   * delivered first-wins, so on two machines it reports one machine's
+   * local store. Composing it belongs with the rest of the
+   * multi-machine story.) Absent is the fail-closed reading; a
+   * single-machine motebit still returns the runtime's own reply
+   * untouched, `acknowledged` included.
+   *
+   * A PARTIAL broadcast — any machine unreached or silent — answers
+   * non-2xx with the composed body, so a caller that never inspects the
+   * counts still cannot mistake it for a stop.
    */
   async sendAgentCommand(opts: {
     motebitId: string;

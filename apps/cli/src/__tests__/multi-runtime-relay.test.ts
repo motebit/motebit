@@ -53,6 +53,10 @@ beforeEach(async () => {
       testnet: true,
     },
     drainGraceMs: 10,
+    // The deadline is the only bound now — there is no grace window to
+    // shorten — so the silent-machine paths would cost 30s each at the
+    // production value. Same motivation as `drainGraceMs`.
+    commandTimeoutMs: 3_000,
     // The harness registers on 127.0.0.1 — the local-development
     // allowance. Production keeps the default: globally-routable only.
     allowPrivateEndpoints: true,
@@ -305,15 +309,15 @@ describe("two runtimes, one relay — what a frame actually does", () => {
   });
 
   it("a machine still STOPPING is not reported as silent", async () => {
-    // The grace must outlast the slowest HONEST answer. `cmdHalt`
-    // awaits every registered stopper under a 10s ceiling, while a
-    // machine with nothing to stop returns immediately — so the first
-    // answer is systematically from the machine with least to do, and a
-    // grace shorter than that ceiling arms on it and then calls the
-    // machine that is actually aborting work silent, with
-    // `acknowledged: false`, mid-stop. That is the fast-answerer bias
-    // this whole change removes, inverted into a false negative on the
-    // one verb where it costs most.
+    // The relay waits for the machine that is still WORKING.
+    //
+    // `cmdHalt` awaits every registered stopper, while a machine with
+    // nothing to stop returns immediately — so the first answer is
+    // systematically from the machine with least to do. Settling on it
+    // reports the machine actually aborting work as silent, mid-stop:
+    // the fast-answerer bias this change removes, inverted into a false
+    // negative on the verb where it costs most. Any re-introduced grace
+    // shorter than this stopper fails here.
     attachRuntime(
       { relay, motebitId, identityPublicKey: pubHex },
       {
@@ -330,7 +334,9 @@ describe("two runtimes, one relay — what a frame actually does", () => {
         capabilities: ["background", "unattended_runtime"],
         configure: (rt) =>
           rt.onHalt(async () => {
-            await new Promise((r) => setTimeout(r, 6_000));
+            // Comfortably under the deadline, comfortably over anything
+            // a re-introduced grace window would plausibly be.
+            await new Promise((r) => setTimeout(r, 900));
             return "aborted the long job";
           }),
       },
@@ -340,7 +346,7 @@ describe("two runtimes, one relay — what a frame actually does", () => {
     const text = JSON.stringify(body);
     expect(text).not.toMatch(/silence is not a stop/i);
     expect(text).toMatch(/aborted the long job/i);
-  }, 40_000);
+  }, 20_000);
 
   it("ONE machine that never answers is a timeout, not an empty 200", async () => {
     // The common deployment — a single unattended runtime. Composing
@@ -373,7 +379,7 @@ describe("two runtimes, one relay — what a frame actually does", () => {
     expect(res.status).toBeGreaterThanOrEqual(500);
     const text = await res.text();
     expect(text.length).toBeGreaterThan(0);
-  }, 45_000);
+  }, 20_000);
 
   it("a broadcast nobody answers is a timeout too — prose at 200 tells a script it worked", async () => {
     // An honest per-machine report at HTTP 200 still leaves
@@ -407,7 +413,7 @@ describe("two runtimes, one relay — what a frame actually does", () => {
       body: JSON.stringify({ command: "halt", envelope }),
     });
     expect(res.status).toBeGreaterThanOrEqual(500);
-  }, 45_000);
+  }, 20_000);
 
   it("a machine that never answers is named as silent, not quietly dropped", async () => {
     // An unanswered halt is the one outcome a reader must not take for
@@ -431,7 +437,12 @@ describe("two runtimes, one relay — what a frame actually does", () => {
       },
     );
 
-    const { body } = await ask("halt");
+    const { status, body } = await ask("halt");
+    // A PARTIAL is not a success. Honest prose at HTTP 200 still leaves
+    // `motebit halt --remote && <next step>` proceeding while a machine
+    // is possibly still running, and puts the burden on every consumer
+    // to remember to compare `answered` against `sent_to`.
+    expect(status).toBe(504);
     const text = JSON.stringify(body);
     expect(text).toMatch(/no answer in time/i);
     expect(text).toMatch(/silence is not a stop/i);
@@ -445,7 +456,7 @@ describe("two runtimes, one relay — what a frame actually does", () => {
     // machine it reached, and composes at the request's own deadline.
     // This test therefore spends that deadline — the cost of never
     // calling a machine silent while it is still stopping.
-  }, 45_000);
+  }, 20_000);
 
   it("a resume reports the machine that ACTED, not the one with nothing to do", async () => {
     // `cmdResume` answers "Nothing is halted." synchronously when
@@ -484,7 +495,7 @@ describe("two runtimes, one relay — what a frame actually does", () => {
     // never `acknowledged`, so AND-ing that field across machines made
     // every successful multi-machine resume look failed.
     expect((body as { data?: { acknowledged?: unknown } }).data?.acknowledged).toBeUndefined();
-  }, 40_000);
+  }, 20_000);
 
   it("an unreachable machine is reported, not vanished — and does not let one answer stand in", async () => {
     // Counting only successful sends made an unreachable machine
@@ -511,10 +522,12 @@ describe("two runtimes, one relay — what a frame actually does", () => {
       },
     );
 
-    const { body } = await ask("halt");
+    const { status, body } = await ask("halt");
     const text = JSON.stringify(body);
     // The summary counts machines REACHED, so it cannot contradict the
     // "not reached" line two rows below it.
+    // Unreached is partial too, and carries the same non-2xx.
+    expect(status).toBe(504);
     expect(text).toMatch(/Reached 1 of 2 machines/i);
     expect(text).toMatch(/not reached/i);
     expect(text).toContain("dev-2");
@@ -557,7 +570,7 @@ describe("two runtimes, one relay — what a frame actually does", () => {
     expect((body as { data?: { acknowledged?: unknown } }).data?.acknowledged).toBeUndefined();
     const answers = (body as { data?: { answers?: unknown[] } }).data?.answers ?? [];
     expect(answers.length).toBeGreaterThan(0);
-  }, 40_000);
+  }, 20_000);
 
   it("says the halt ids are machine-local, because each machine wrote its own", async () => {
     // Broadcasting a halt makes each machine write its own row with its
@@ -599,10 +612,11 @@ describe("two runtimes, one relay — what a frame actually does", () => {
         label: "run",
         deviceId: "dev-1",
         capabilities: ["background", "unattended_runtime"],
+        goals: ["goal-abc"],
         configure: (rt) => rt.setGoalIdResolver?.(() => "goal-abc"),
       },
     );
-    attachRuntime(
+    const stranger = attachRuntime(
       { relay, motebitId, identityPublicKey: pubHex },
       {
         label: "run",
@@ -611,15 +625,27 @@ describe("two runtimes, one relay — what a frame actually does", () => {
       },
     );
 
-    const { body } = await ask("halt", "goal goal-abc");
+    // The structured form — a `goal <id>` grammar was removed because
+    // `--reason "goal cleanup done"` parsed as a halt of a goal called
+    // "cleanup", which halts nothing.
+    const { body } = await ask("halt", JSON.stringify({ goal_id: "goal-abc" }));
     const text = JSON.stringify(body);
-    // Both machines are heard from, each in its own words.
     expect(text).toContain("dev-1");
     expect(text).toContain("dev-2");
-    // And the relay publishes no verdict of its own over the two.
-    expect((body as { data?: { acknowledged?: unknown } }).data?.acknowledged).toBeUndefined();
-    void owner;
-  }, 40_000);
+
+    // The OWNER carries a goal-scoped halt row — the half the test is
+    // named for. Asserting only that both ids appear, and that
+    // `acknowledged` is undefined, was satisfied by any composed reply
+    // at all: it would have passed with goal scoping removed entirely.
+    const ownerHalts = owner.runtime.halts?.listActive(motebitId) ?? [];
+    expect(ownerHalts).toHaveLength(1);
+    expect(ownerHalts[0]?.goal_id).toBe("goal-abc");
+
+    // And the machine that does not own it says so rather than
+    // recording a halt for a goal it has never heard of.
+    const strangerHalts = stranger.runtime.halts?.listActive(motebitId) ?? [];
+    expect(strangerHalts).toHaveLength(0);
+  }, 20_000);
 
   it("`runs` goes to the ledger-holder, never to a task worker that can be stopped", async () => {
     // `motebit serve` announces `unattended_runtime` truthfully and
