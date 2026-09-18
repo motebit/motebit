@@ -11,6 +11,7 @@ import type {
   UncertainAction,
 } from "@motebit/persistence";
 import type { HaltRequest } from "@motebit/sdk";
+import { describeGap, type RuntimeCoverage } from "./runtime-coverage.js";
 import { EventType, RiskLevel, PlanStatus, SensitivityLevel } from "@motebit/sdk";
 import type { ToolHandler, AuditLogSink } from "@motebit/sdk";
 import { findUnresolvedActions, countCompletedActions } from "@motebit/policy";
@@ -25,6 +26,15 @@ import { embedText } from "@motebit/memory-graph";
 import { parseInterval } from "./intervals.js";
 import { writeLine, writeOutput } from "./terminal.js";
 import { dim, warn as warnColor, error as errorColor } from "./colors.js";
+
+/**
+ * How late is late enough to explain.
+ *
+ * The scheduler notices a due goal on its next wake, so being one tick
+ * late is the design rather than a fault. Two ticks plus margin keeps
+ * the explanation for lateness a person would actually notice.
+ */
+const LATE_ENOUGH_TO_EXPLAIN_MS = 150_000;
 
 // Background goal/plan ticks print while the user may be mid-keystroke at
 // the prompt — every line goes through the renderer so it lands above the
@@ -120,6 +130,21 @@ export class GoalScheduler {
   private planStore: PlanStoreAdapter | null = null;
   private tickCount = 0;
 
+  /**
+   * Say we are awake, and never let that stop the work.
+   *
+   * A coverage record exists to explain lateness; it is not
+   * load-bearing for running goals, so a storage failure here must not
+   * take the daemon down with it.
+   */
+  private markAwake(): void {
+    try {
+      this.liveness?.awake(Date.now());
+    } catch {
+      // Deliberately swallowed — see above.
+    }
+  }
+
   /** Runs already logged as held this process — log the hold once, not every tick. */
   private heldLogged = new Set<string>();
   /** Un-register the halt stopper on stop(). */
@@ -147,6 +172,26 @@ export class GoalScheduler {
     private auditSink: AuditLogSink,
     private motebitId: string,
     private denyAbove: RiskLevel,
+    /**
+     * Where this process records that it was AWAKE.
+     *
+     * The scheduler says "I am awake" and nothing more — the caller
+     * knows which device and which executor "I" is, and the scheduler
+     * has no other use for that identity. Optional, so a surface that
+     * wires none still runs; a reader with no rows then answers "this
+     * machine has no record of being awake", which is honest, rather
+     * than claiming coverage it cannot see.
+     *
+     * Written on the SAME tick that fires goals, so the record of being
+     * awake and the firing it explains cannot drift apart.
+     */
+    private liveness?: { awake(at: number): void },
+    /**
+     * Reads back what `liveness` wrote, to explain a late goal. Same
+     * optionality and the same reason: absent, a late goal simply says
+     * nothing extra rather than guessing at a cause.
+     */
+    private coverage?: RuntimeCoverage,
     private defaultTtlMs = 3_600_000, // 1 hour
     private goalWallClockMs = 10 * 60 * 1000, // configurable default wall-clock per goal run
   ) {}
@@ -182,6 +227,11 @@ export class GoalScheduler {
         .find((g) => g.goal_id === prefix || g.goal_id.startsWith(prefix));
       return match?.goal_id ?? null;
     });
+    // A restart opens a NEW session rather than editing the last one,
+    // so the seam between them is visible instead of being smoothed
+    // over by a bumped timestamp. A gap shorter than a couple of ticks
+    // is not treated as downtime — see the coverage reader.
+    this.markAwake();
     this.recoverInterruptedRuns();
     this.ensureMaintenanceGoal();
     this.timer = setInterval(() => {
@@ -641,7 +691,51 @@ export class GoalScheduler {
     return lines.join("\n");
   }
 
+  /**
+   * Why a goal is firing later than its interval asked for, or null
+   * when it is on time.
+   *
+   * Reads the coverage record this process has been writing. With no
+   * reader wired — a surface that records no liveness — the answer is
+   * null rather than a guess: "we do not know" is not "you were
+   * hosted", and inventing either would be the omission this exists to
+   * remove, one layer up.
+   */
+  private explainLateness(
+    goal: { last_run_at: number | null; interval_ms: number },
+    now: number,
+  ): string | null {
+    if (this.coverage == null || goal.last_run_at == null) return null;
+    const dueAt = goal.last_run_at + goal.interval_ms;
+    const lateMs = now - dueAt;
+    // One tick of slack: the scheduler can only notice a goal is due on
+    // its next wake, so being a tick late is the design, not a fault.
+    if (lateMs < LATE_ENOUGH_TO_EXPLAIN_MS) return null;
+    const lateHours = Math.round((lateMs / 3_600_000) * 10) / 10;
+    try {
+      if (this.coverage.wasAwakeAt(dueAt)) {
+        // The machine was up and the goal did not fire. Not a host
+        // problem — say so plainly rather than letting it read as one.
+        return `fired ${lateHours}h late, and this machine was awake when it was due — that is not a hosting gap`;
+      }
+      const window = this.coverage.between(dueAt, now);
+      const gap = window.gaps[0];
+      return gap == null
+        ? `fired ${lateHours}h late — this machine has no record of being awake when it was due`
+        : `fired ${lateHours}h late — nothing was hosting you ${describeGap(gap)}`;
+    } catch {
+      return null;
+    }
+  }
+
   private async tick(): Promise<void> {
+    // Before anything else this tick does. Being awake is a fact about
+    // this instant, not about whether the work that follows succeeded —
+    // recording it after the body would lose exactly the ticks where
+    // something went wrong, which are the ones a late goal most needs
+    // explained.
+    this.markAwake();
+
     // Phase 0 runs OUTSIDE the single-flight guard, and that placement is
     // the whole point: a goal run holds `ticking` for its entire duration
     // (up to the wall-clock limit, ten minutes by default), so a halt
@@ -706,6 +800,21 @@ export class GoalScheduler {
         const elapsed = goal.last_run_at != null ? now - goal.last_run_at : Infinity;
         if (elapsed < goal.interval_ms) continue;
 
+        // WHY it is firing late, recorded before it fires.
+        //
+        // The check above is `elapsed >= interval`, so a daily goal
+        // whose machine slept from 01:00 to 09:00 does not fail — it
+        // fires at 09:00, six hours late, and nothing anywhere says the
+        // motebit was not running. That is a record untrue by omission.
+        //
+        // The distinction is the useful part. Late while the machine
+        // was ASLEEP is the host's story, and the owner can act on it
+        // by hosting somewhere that stays awake. Late while the machine
+        // was AWAKE is a scheduler defect, and it has been invisible:
+        // both look identical in the record today, so the second hides
+        // inside the first.
+        const lateness = this.explainLateness(goal, now);
+
         // A goal-scoped halt stops this goal and nothing else.
         const goalHalt = this.runtime.haltInForce(goal.goal_id);
         if (goalHalt != null) {
@@ -747,6 +856,11 @@ export class GoalScheduler {
         // Ledger row BEFORE the first model call: a death from here on
         // leaves a `running` row that restart recovery classifies.
         this.runStore.start({ run_id: runId, goal_id: goal.goal_id, motebit_id: this.motebitId });
+        // Why it is late, on the row itself, so the return view shows it
+        // without needing to recompute coverage on another surface —
+        // and so the reason survives in the record after the coverage
+        // rows behind it have been pruned.
+        if (lateness != null) this.runStore.setStatus(runId, "running", { note: lateness });
 
         try {
           let result: GoalStreamResult;

@@ -594,4 +594,35 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       "CREATE INDEX IF NOT EXISTS idx_goal_outcomes_run ON goal_outcomes (run_id)",
     ],
   },
+  {
+    version: 48,
+    description: "runtime_liveness — when the daemon was actually awake",
+    statements: [
+      // The record that lets a LATE goal say why.
+      //
+      // `GoalScheduler` fires on `elapsed >= interval_ms`, so a daily
+      // goal whose machine slept from 01:00 to 09:00 does not fail — it
+      // fires at 09:00, six hours late, and nothing anywhere says the
+      // motebit was not running. That is a record untrue by omission,
+      // the same class this arc has been removing, arriving through the
+      // host layer instead of the routing layer.
+      //
+      // One row per PROCESS-RUN, not per machine and not per motebit: a
+      // machine's coverage is the union of its processes' intervals, and
+      // a restart is a new row rather than an edit, so a gap between
+      // sessions is visible instead of being smoothed over by a bumped
+      // timestamp. `last_seen_at` is refreshed on the scheduler's tick,
+      // which is why a gap shorter than a couple of ticks is not a gap —
+      // see `LIVENESS_TICK_TOLERANCE_MS` at the reader.
+      `CREATE TABLE IF NOT EXISTS runtime_liveness (
+        session_id TEXT PRIMARY KEY,
+        motebit_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        executor TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_runtime_liveness_window ON runtime_liveness (motebit_id, started_at)",
+    ],
+  },
 ];

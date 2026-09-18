@@ -54,6 +54,7 @@ import { formatDiagnostic } from "./yaml-config.js";
 import type { CliConfig } from "./args.js";
 import { loadFullConfig, extractPersonality } from "./config.js";
 import { createRunLedgerReader } from "./run-ledger-reader.js";
+import { createRuntimeCoverage } from "./runtime-coverage.js";
 import { handleRelayCommandFrame } from "./relay-command-frame.js";
 import { fromHex, loadActiveSigningKey, IdentityKeyError } from "./identity.js";
 import { registerWithRelay, type RelayRegistrationHandle } from "./relay-registration.js";
@@ -253,6 +254,30 @@ export async function handleRun(config: CliConfig): Promise<void> {
 
   // Start goal scheduler
   const goals = moteDb.goalStore.list(motebitId);
+  // One liveness session per PROCESS RUN: a restart opens a new row
+  // rather than editing the last, so the seam between them stays
+  // visible instead of being smoothed over by a bumped timestamp. The
+  // scheduler only says it is awake; this closure knows which device
+  // and which executor "awake" refers to.
+  const livenessSessionId = crypto.randomUUID();
+  let livenessOpened = false;
+  const liveness = {
+    awake: (at: number): void => {
+      if (!livenessOpened) {
+        moteDb.runtimeLivenessStore.open({
+          session_id: livenessSessionId,
+          motebit_id: motebitId,
+          device_id: loadFullConfig().device_id ?? "unknown",
+          executor: "run",
+          at,
+        });
+        livenessOpened = true;
+        return;
+      }
+      moteDb.runtimeLivenessStore.touch(livenessSessionId, at);
+    },
+  };
+
   const scheduler = new GoalScheduler(
     runtime,
     moteDb.goalStore,
@@ -262,6 +287,8 @@ export async function handleRun(config: CliConfig): Promise<void> {
     moteDb.toolAuditSink,
     motebitId,
     denyAbove,
+    liveness,
+    createRuntimeCoverage(moteDb, motebitId),
   );
   scheduler.setPlanEngine(new PlanEngine(moteDb.planStore), moteDb.planStore);
   scheduler.start();
