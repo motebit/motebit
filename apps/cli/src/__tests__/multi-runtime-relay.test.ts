@@ -342,6 +342,73 @@ describe("two runtimes, one relay — what a frame actually does", () => {
     expect(text).toMatch(/aborted the long job/i);
   }, 40_000);
 
+  it("ONE machine that never answers is a timeout, not an empty 200", async () => {
+    // The common deployment — a single unattended runtime. Composing
+    // every expired broadcast resolved this with `answers[0]` of an
+    // empty array: `undefined`, serialized as HTTP 200 with an empty
+    // body. The CLI's 504 branch ("Delivered, no answer yet — it may
+    // well have stopped") became a JSON parse error, and the phone said
+    // "The runtime did not recognise \"halt\" — update it": a confident
+    // wrong diagnosis on the verb this arc exists to protect.
+    attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "dev-1",
+        capabilities: ["background", "unattended_runtime"],
+        neverReplies: true,
+      },
+    );
+    const envelope = await signAgentCommandEnvelope({
+      command: "halt",
+      motebitId,
+      identityPrivateKey: keys.privateKey,
+    });
+    const res = await relay.app.request(`/api/v1/agents/${motebitId}/command`, {
+      method: "POST",
+      headers: AUTH,
+      body: JSON.stringify({ command: "halt", envelope }),
+    });
+    // Not 200, and not an empty body.
+    expect(res.status).toBeGreaterThanOrEqual(500);
+    const text = await res.text();
+    expect(text.length).toBeGreaterThan(0);
+  }, 45_000);
+
+  it("a broadcast nobody answers is a timeout too — prose at 200 tells a script it worked", async () => {
+    // An honest per-machine report at HTTP 200 still leaves
+    // `motebit halt --remote && …` exiting 0 when nothing was heard.
+    attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "dev-1",
+        capabilities: ["background", "unattended_runtime"],
+        neverReplies: true,
+      },
+    );
+    attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "dev-2",
+        capabilities: ["background", "unattended_runtime"],
+        neverReplies: true,
+      },
+    );
+    const envelope = await signAgentCommandEnvelope({
+      command: "halt",
+      motebitId,
+      identityPrivateKey: keys.privateKey,
+    });
+    const res = await relay.app.request(`/api/v1/agents/${motebitId}/command`, {
+      method: "POST",
+      headers: AUTH,
+      body: JSON.stringify({ command: "halt", envelope }),
+    });
+    expect(res.status).toBeGreaterThanOrEqual(500);
+  }, 45_000);
+
   it("a machine that never answers is named as silent, not quietly dropped", async () => {
     // An unanswered halt is the one outcome a reader must not take for
     // a stop. Dropping it from the report would hand back the answering

@@ -374,14 +374,29 @@ export function handleCommandResponse(commandId: string, result: unknown, from?:
     finishCommand(commandId);
     return;
   }
-  // A broadcast is NOT a race — gather every machine's answer, bounded
-  // by a short grace after the first so one slow runtime cannot hold
-  // the request open.
+  // A broadcast is NOT a race — gather every machine's answer. There is
+  // no grace window: the relay cannot compute one, so it waits for the
+  // machines it reached and composes at the request's own deadline. See
+  // the note on the single deadline above.
   // Count MACHINES, not answers. A runtime replying twice, or a host
   // whose second process landed in the undeclared bucket, satisfied a
   // quorum counted on the raw array — closing the request before a real
   // target had been heard from. An answer from a machine this request
   // never aimed at is not evidence about this request at all.
+  settleIfAllHeard(commandId);
+}
+
+/**
+ * Settle once every machine the request actually REACHED has been heard
+ * from. Counts machines, not answers: a runtime replying twice, or a
+ * host whose second process landed in the undeclared bucket, satisfied
+ * a quorum counted on the raw array and closed the request before a
+ * real target had answered. An answer from a machine this request never
+ * aimed at is not evidence about this request at all.
+ */
+function settleIfAllHeard(commandId: string): void {
+  const pending = pendingCommands.get(commandId);
+  if (pending == null) return;
   const reached = pending.targets.filter((t) => !pending.unreached.includes(t));
   const heardFrom = new Set(pending.answers.map((a) => a.from).filter((f) => reached.includes(f)));
   if (heardFrom.size >= reached.length) finishCommand(commandId);
@@ -508,13 +523,16 @@ function composeAnswers(pending: {
     summary:
       unreached.length > 0
         ? `Reached ${reachedCount} of ${targets.length} machines; ${heardCount} answered.`
-        : `Sent to ${targets.length} machines; ${heardCount} answered.`,
+        : `Sent to ${targets.length} ${targets.length === 1 ? "machine" : "machines"}; ${heardCount} answered.`,
     detail: [lines.join("\n"), ...details].join("\n\n") + note,
     data: {
       sent_to: targets.length,
       reached: reachedCount,
       answered: heardCount,
-      unreached,
+      // Rendered, not raw: `__undeclared__` is this relay's internal
+      // bucket key, and a consumer reading the structured field should
+      // see what the prose beside it says.
+      unreached: unreached.map(machineLabel),
       // Each machine's own answer, verbatim and attributed. The verdict
       // about the interior lives here, per machine, where the runtime
       // put it — never re-derived by the relay.
@@ -548,7 +566,21 @@ async function forwardCommandToAgent(
       // silent. Rejecting threw those answers away and let the CLI print
       // "Delivered, no answer yet" about a machine never reached.
       const held = pendingCommands.get(commandId);
-      if (held != null && held.targets.length > 0) {
+      // Compose only what there is something to compose. NOTHING heard
+      // is a timeout, and must stay one.
+      //
+      // Routing every expired broadcast here resolved a single-machine
+      // request — every deployment that exists today — with
+      // `answers[0]` of an empty array: `undefined`, serialized as a
+      // 200 with an empty body. The CLI's carefully written 504 branch
+      // ("Delivered, no answer yet — it may well have stopped") was
+      // replaced by a JSON parse error, and the phone by "The runtime
+      // did not recognise \"halt\" — update it": a confident wrong
+      // diagnosis on the one verb this arc exists to protect. The same
+      // applies to a multi-machine request where every machine stayed
+      // silent — an honest prose report at HTTP 200 still tells a
+      // script that the halt succeeded.
+      if (held != null && held.answers.length > 0) {
         finishCommand(commandId);
         return;
       }
@@ -741,7 +773,17 @@ async function forwardCommandToAgent(
         });
         if (!ok) unreached.push(key);
       }
-      if (pending != null) pending.unreached = unreached;
+      if (pending != null) {
+        pending.unreached = unreached;
+        // `targets` is complete before the first send; `unreached` can
+        // only be known after it. So the quorum is re-evaluated here:
+        // an answer that arrived DURING the loop computed `reached`
+        // against an empty `unreached`, missed the threshold, and
+        // nothing re-checked — leaving the request to stall for the
+        // whole timeout instead of composing at once. No transport does
+        // that today; the invariant should not depend on it.
+        if (pending.answers.length > 0) settleIfAllHeard(commandId);
+      }
       if (unreached.length === aimedAt.length) {
         clearTimeout(timer);
         pendingCommands.delete(commandId);
