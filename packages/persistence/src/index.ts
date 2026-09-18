@@ -2094,6 +2094,7 @@ export class SqliteRuntimeLivenessStore {
   private stmtOpen: PreparedStatement;
   private stmtTouch: PreparedStatement;
   private stmtWindow: PreparedStatement;
+  private stmtFirst: PreparedStatement;
 
   constructor(db: DatabaseDriver) {
     this.stmtOpen = db.prepare(
@@ -2106,6 +2107,9 @@ export class SqliteRuntimeLivenessStore {
     // Overlapping rather than contained: a session that began before the
     // window and is still open covers it, and asking otherwise would
     // report the currently-running daemon as absent.
+    this.stmtFirst = db.prepare(
+      `SELECT started_at FROM runtime_liveness WHERE motebit_id = ? ORDER BY started_at ASC LIMIT 1`,
+    );
     this.stmtWindow = db.prepare(
       `SELECT started_at, last_seen_at FROM runtime_liveness
        WHERE motebit_id = ? AND last_seen_at >= ? AND started_at <= ?
@@ -2134,6 +2138,20 @@ export class SqliteRuntimeLivenessStore {
   /** Still here. Called on the scheduler's tick. */
   touch(sessionId: string, at: number): void {
     this.stmtTouch.run(at, sessionId);
+  }
+
+  /**
+   * When this machine first recorded being awake, or null if never.
+   *
+   * The boundary between "we have no record" and "the record says
+   * asleep". Without it a reader reports the time before its first row
+   * as downtime — so an install that had been hosting for weeks is told
+   * it was not hosted for six days, because that is when the table was
+   * created.
+   */
+  firstRecordAt(motebitId: string): number | null {
+    const row = this.stmtFirst.get(motebitId) as { started_at: number } | undefined;
+    return row?.started_at ?? null;
   }
 
   /** Raw session intervals overlapping a window, oldest first. */

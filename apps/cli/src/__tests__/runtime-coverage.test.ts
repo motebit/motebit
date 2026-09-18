@@ -24,6 +24,10 @@ function dbWith(intervals: Array<[number, number]>): MotebitDatabase {
     runtimeLivenessStore: {
       intervalsBetween: (_m: string, from: number, to: number) =>
         intervals.filter(([s, e]) => e >= from && s <= to),
+      // The real store has this, and a reader clamps its window to it.
+      // A double without it reports downtime for time before any record
+      // existed — which is the defect the clamp was added for.
+      firstRecordAt: () => (intervals.length === 0 ? null : Math.min(...intervals.map(([s]) => s))),
     },
   } as unknown as MotebitDatabase;
 }
@@ -87,14 +91,58 @@ describe("runtime coverage", () => {
     expect(w.gaps).toHaveLength(0);
   });
 
-  it("a machine that never ran has no coverage and one whole gap", () => {
-    // Not an error, and not silence: the honest answer to "were you
-    // hosting me" when nothing ever was.
+  it("no record is NOT a reported gap — absence of evidence is not evidence of absence", () => {
+    // This test used to assert the opposite, and the behaviour it
+    // asserted was the defect: a machine with no rows reported the
+    // whole window as "not hosted". On upgrade that told an install
+    // which had been hosting for weeks it was not hosted for six days,
+    // because that is when the table was created.
+    //
+    // The honest answer is an EMPTY window — we have no records, so we
+    // report nothing — and a caller renders that as "no record of
+    // running", never as downtime.
     const cov = createRuntimeCoverage(dbWith([]), MOTEBIT);
     const w = cov.between(0, 6 * HOUR);
+    expect(w.gaps).toEqual([]);
+    expect(w.windowMs).toBe(0);
     expect(w.awakeMs).toBe(0);
-    expect(w.gaps).toEqual([{ from: 0, to: 6 * HOUR }]);
+    // And no instant in it is claimed either way.
     expect(cov.wasAwakeAt(3 * HOUR)).toBe(false);
+  });
+
+  it("a window reaching back before the first record is clamped to it", () => {
+    // Asked for 7 days on a machine whose first row is 1 day old: the
+    // answer is about that day, and says so.
+    const DAY = 24 * HOUR;
+    const cov = createRuntimeCoverage(dbWith([[6 * DAY, 7 * DAY]]), MOTEBIT);
+    const w = cov.between(0, 7 * DAY);
+    expect(w.clamped).toBe(true);
+    expect(w.observedFrom).toBe(6 * DAY);
+    expect(w.windowMs).toBe(1 * DAY);
+    // No gap invented for the six days before the record existed.
+    expect(w.gaps).toEqual([]);
+    expect(w.awakeMs).toBe(1 * DAY);
+  });
+
+  it("wasAwakeAt and between never disagree about one instant", () => {
+    // They did: `wasAwakeAt` granted an unconditional grace after a
+    // session ended, while `between` only forgave a seam when a
+    // FOLLOWING session began within tolerance. So for up to one
+    // tolerance after the last tick before a real sleep, an instant was
+    // inside a reported gap AND reported awake.
+    const cov = createRuntimeCoverage(
+      dbWith([
+        [0, 1 * HOUR],
+        [9 * HOUR, 12 * HOUR],
+      ]),
+      MOTEBIT,
+    );
+    const w = cov.between(0, 12 * HOUR);
+    const gap = w.gaps[0]!;
+    // Sample across the whole gap, including right after it opens.
+    for (const t of [gap.from + 1_000, gap.from + 100_000, gap.from + 149_000, 5 * HOUR]) {
+      expect(cov.wasAwakeAt(t)).toBe(false);
+    }
   });
 
   it("describes a gap in words a person can act on", () => {
@@ -124,7 +172,8 @@ describe("the writer, across a sleep", () => {
     let session: { id: string; lastSeen: number } | null = null;
     let n = 0;
     const awake = (at: number): void => {
-      if (session != null && at - session.lastSeen <= LIVENESS_SESSION_GAP_MS) {
+      const delta = at - (session?.lastSeen ?? 0);
+      if (session != null && delta >= 0 && delta <= LIVENESS_SESSION_GAP_MS) {
         rows.find((r) => r.id === session!.id)!.last = at;
         session.lastSeen = at;
         return;
@@ -137,6 +186,7 @@ describe("the writer, across a sleep", () => {
       runtimeLivenessStore: {
         intervalsBetween: (_m: string, from: number, to: number) =>
           rows.filter((r) => r.last >= from && r.started <= to).map((r) => [r.started, r.last]),
+        firstRecordAt: () => (rows.length === 0 ? null : Math.min(...rows.map((r) => r.started))),
       },
     } as unknown as MotebitDatabase;
     return { awake, db, rows };
@@ -155,6 +205,18 @@ describe("the writer, across a sleep", () => {
     expect(w.gaps).toHaveLength(1);
     expect(w.gaps[0]!.from).toBe(1 * HOUR);
     expect(w.gaps[0]!.to).toBe(9 * HOUR);
+  });
+
+  it("a clock stepping BACKWARD starts a new session, not an inverted row", () => {
+    // `at - lastSeen <= gap` is true for negative deltas, so an NTP
+    // correction kept touching the same row with an earlier timestamp —
+    // leaving `last_seen_at < started_at`, an interval that reports
+    // downtime over time the machine was awake.
+    const { awake, rows } = recorder();
+    for (let t = 2 * HOUR; t <= 3 * HOUR; t += MIN) awake(t);
+    awake(1 * HOUR); // the clock steps back an hour
+    expect(rows).toHaveLength(2);
+    for (const r of rows) expect(r.last).toBeGreaterThanOrEqual(r.started);
   });
 
   it("ordinary ticking is ONE session, not one per tick", () => {

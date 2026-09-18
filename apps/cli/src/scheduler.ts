@@ -130,10 +130,25 @@ export class GoalScheduler {
   private markAwake(): void {
     try {
       this.liveness?.awake(Date.now());
-    } catch {
-      // Deliberately swallowed — see above.
+    } catch (err: unknown) {
+      // Not silent. Swallowing kept the daemon alive, which is right —
+      // but a liveness write that fails persistently (a full disk, a
+      // busy database, a surface whose store is missing) makes `doctor`
+      // report hours of "not hosted" for a machine that was awake and
+      // ticking the whole time, with nothing anywhere saying why. Once
+      // per process: a failure every tick would bury the log it belongs
+      // in.
+      if (!this.livenessFailureLogged) {
+        this.livenessFailureLogged = true;
+        errorLine(
+          `[hosting] the awake record is not being written (${err instanceof Error ? err.message : String(err)}) — coverage will under-report until this is fixed`,
+        );
+      }
     }
   }
+
+  /** So a broken liveness write is reported once, not every minute. */
+  private livenessFailureLogged = false;
 
   /** Runs already logged as held this process — log the hold once, not every tick. */
   private heldLogged = new Set<string>();

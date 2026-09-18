@@ -43,8 +43,19 @@ export const LIVENESS_SESSION_GAP_MS = LIVENESS_TICK_TOLERANCE_MS;
 export interface CoverageWindow {
   /** Milliseconds in the window this machine was awake. */
   readonly awakeMs: number;
-  /** The window's own length, so a caller need not recompute it. */
+  /**
+   * The OBSERVED window's length, which is not always what was asked
+   * for — see `observedFrom`.
+   */
   readonly windowMs: number;
+  /**
+   * Where the answer actually starts: the later of the requested start
+   * and this machine's first record. A reader cannot report downtime
+   * for a period it has no records of.
+   */
+  readonly observedFrom: number;
+  /** True when the answer covers less than was asked for. */
+  readonly clamped: boolean;
   /** Gaps long enough to be real, oldest first. */
   readonly gaps: ReadonlyArray<{ readonly from: number; readonly to: number }>;
 }
@@ -82,37 +93,58 @@ export function createRuntimeCoverage(moteDb: MotebitDatabase, motebitId: string
   const merged = (from: number, to: number): Array<[number, number]> =>
     merge(moteDb.runtimeLivenessStore.intervalsBetween(motebitId, from, to));
 
+  const between = (from: number, to: number): CoverageWindow => {
+    // Never answer about time before the first record exists.
+    //
+    // A reader cannot report downtime for a period it has no records
+    // of. Asked for seven days on a machine whose first row is a day
+    // old, it answers about that day — otherwise an install that had
+    // been hosting for weeks is told it was not hosted for six of them,
+    // because that is when the table was created. Fabricating absence
+    // out of missing records is the error this arc exists to remove, so
+    // the clamp lives HERE rather than in each caller's arithmetic.
+    const first = moteDb.runtimeLivenessStore.firstRecordAt(motebitId);
+    const observedFrom = first == null ? to : Math.max(from, first);
+    const clamped = observedFrom > from;
+    const windowMs = Math.max(0, to - observedFrom);
+
+    const gaps: Array<{ from: number; to: number }> = [];
+    let cursor = observedFrom;
+    for (const [start, end] of merged(observedFrom, to)) {
+      const s = Math.max(start, observedFrom);
+      const e = Math.min(end, to);
+      if (s - cursor > LIVENESS_TICK_TOLERANCE_MS) gaps.push({ from: cursor, to: s });
+      cursor = Math.max(cursor, e);
+    }
+    // The tail: asleep from the last session until the window closed.
+    if (to - cursor > LIVENESS_TICK_TOLERANCE_MS) gaps.push({ from: cursor, to });
+
+    // Awake is the window MINUS the gaps, so the two numbers cannot
+    // disagree. Summing session lengths counted sub-tolerance seams as
+    // downtime while the gap list — which applies the tolerance —
+    // called them nothing, rendering "97% awake, gaps: none".
+    const gapMs = gaps.reduce((n, g) => n + (g.to - g.from), 0);
+    return { awakeMs: Math.max(0, windowMs - gapMs), windowMs, observedFrom, clamped, gaps };
+  };
+
   return {
+    between,
+
+    /**
+     * Derived from `between`, so the two can never disagree about one
+     * instant.
+     *
+     * They did: this granted an unconditional grace after a session's
+     * end while `between` only forgave a seam when a FOLLOWING session
+     * began within tolerance. For up to one tolerance after the last
+     * tick before a real sleep, an instant was inside a reported gap
+     * and reported awake at the same time — two answers about one fact,
+     * on exactly the distinction this module exists to draw.
+     */
     wasAwakeAt(at: number): boolean {
-      // A window of one tolerance either side, so the question is
-      // answered against sessions that could contain the instant even
-      // when their `last_seen_at` lags it.
-      const near = merged(at - LIVENESS_TICK_TOLERANCE_MS, at + LIVENESS_TICK_TOLERANCE_MS);
-      return near.some(([start, end]) => at >= start && at <= end + LIVENESS_TICK_TOLERANCE_MS);
-    },
-
-    between(from: number, to: number): CoverageWindow {
-      const windowMs = Math.max(0, to - from);
-      const sessions = merged(from, to);
-      const gaps: Array<{ from: number; to: number }> = [];
-      let cursor = from;
-      for (const [start, end] of sessions) {
-        const s = Math.max(start, from);
-        const e = Math.min(end, to);
-        if (s - cursor > LIVENESS_TICK_TOLERANCE_MS) gaps.push({ from: cursor, to: s });
-        cursor = Math.max(cursor, e);
-      }
-      // The tail: asleep from the last session until the window closed.
-      if (to - cursor > LIVENESS_TICK_TOLERANCE_MS) gaps.push({ from: cursor, to });
-
-      // Awake is the window MINUS the gaps, so the two numbers can
-      // never disagree. Summing session lengths instead counted
-      // sub-tolerance seams as downtime while the gap list — which
-      // applies the tolerance — called them nothing, and a surface
-      // showing both rendered "97% awake, gaps: none": two numbers
-      // about the same fact, contradicting each other on one screen.
-      const gapMs = gaps.reduce((n, g) => n + (g.to - g.from), 0);
-      return { awakeMs: Math.max(0, windowMs - gapMs), windowMs, gaps };
+      const w = between(at - LIVENESS_TICK_TOLERANCE_MS, at + LIVENESS_TICK_TOLERANCE_MS);
+      if (at < w.observedFrom) return false;
+      return !w.gaps.some((g) => at >= g.from && at <= g.to);
     },
   };
 }

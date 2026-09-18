@@ -275,7 +275,16 @@ export async function handleRun(config: CliConfig): Promise<void> {
   let session: { id: string; lastSeen: number } | null = null;
   const liveness = {
     awake: (at: number): void => {
-      const continuous = session != null && at - session.lastSeen <= LIVENESS_SESSION_GAP_MS;
+      // A clock that steps BACKWARD is a new session, not a continuation.
+      //
+      // `at - lastSeen <= gap` is true for negative deltas, so an NTP
+      // correction or a VM resume kept touching the same row with an
+      // earlier timestamp — leaving `last_seen_at < started_at`, an
+      // inverted interval that makes a window report downtime over time
+      // the machine was awake, or drops the running session from the
+      // read entirely.
+      const delta = at - (session?.lastSeen ?? 0);
+      const continuous = session != null && delta >= 0 && delta <= LIVENESS_SESSION_GAP_MS;
       if (continuous && session != null) {
         moteDb.runtimeLivenessStore.touch(session.id, at);
         session.lastSeen = at;

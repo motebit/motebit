@@ -622,7 +622,10 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
         started_at INTEGER NOT NULL,
         last_seen_at INTEGER NOT NULL
       )`,
-      "CREATE INDEX IF NOT EXISTS idx_runtime_liveness_window ON runtime_liveness (motebit_id, started_at)",
+      // Keyed on `last_seen_at` because that is what the window read
+      // filters on first; an index on `started_at` alone cannot serve
+      // it and every coverage read scans the table.
+      "CREATE INDEX IF NOT EXISTS idx_runtime_liveness_window ON runtime_liveness (motebit_id, last_seen_at)",
     ],
   },
 ];
