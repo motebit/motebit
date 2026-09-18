@@ -308,6 +308,22 @@ export class RelayClient {
    * runtime is not connected, this throws `kind: "http"` with the
    * relay's status — and the honest reading of that is "not delivered",
    * never "stopped".
+   *
+   * On a motebit with unattended runtimes on more than one MACHINE,
+   * `halt` and `resume` are delivered to every machine and the answers
+   * are composed rather than raced. `data` then carries TRANSPORT facts
+   * — `sent_to`, `reached`, `answered`, `unreached` — and `answers`,
+   * each machine's own reply verbatim beside the device that sent it.
+   *
+   * It carries NO `acknowledged` key, and that absence is deliberate.
+   * The relay does not know which machine owns a goal, or what `resume`
+   * means, so a verdict AND-ed over heterogeneous replies was a claim
+   * about the interior that the relay is not the authority on: it made
+   * every successful multi-machine resume read as unacknowledged, and
+   * every goal-scoped halt too. Read the per-machine `answers`, or ask
+   * `halt-status` — the command whose job that is. Absent is the
+   * fail-closed reading; a single-machine motebit still returns the
+   * runtime's own reply untouched, `acknowledged` included.
    */
   async sendAgentCommand(opts: {
     motebitId: string;

@@ -216,35 +216,36 @@ const pendingCommands = new Map<
     /** Answers received so far, in arrival order. */
     answers: Array<{ from: string; result: unknown }>;
     /** Armed on the first answer, to bound the wait for the rest. */
-    graceTimer?: ReturnType<typeof setTimeout>;
   }
 >();
 
 /**
- * How long a broadcast waits for the other machines after the first
- * answer.
+ * A broadcast has ONE deadline, and it is the one the request already
+ * had: `COMMAND_TIMEOUT_MS`.
  *
- * It must OUTLAST the slowest honest answer, and the runtime tells us
- * what that is: `cmdHalt` awaits `honorHalts()`, which runs every
- * registered stopper under a 10-second ceiling
- * (`HALT_STOPPER_TIMEOUT_MS` in `packages/runtime/src/motebit-runtime.ts`),
- * while a machine with nothing to stop returns immediately.
+ * There was a grace window here — wait N seconds after the first answer,
+ * then call the rest silent — and it was wrong twice. At 3s it armed on
+ * the machine with nothing to stop and reported the machine actually
+ * aborting work as silent. At 12s it was still under-measured, because
+ * `honorHalts()` awaits a nested loop over pending halts × registered
+ * stoppers, each under its own 10s ceiling, so a machine returning from
+ * a restart with two un-acknowledged halts answers at ~20s. Nothing
+ * bound the relay's constant to the runtime's, so any change to either
+ * silently re-opened the gap.
  *
- * So the first answer is systematically from the machine with the LEAST
- * to do, and a grace shorter than that ceiling arms on it and then
- * reports the machine that is actually aborting work as "did not answer
- * — silence is not a stop", with `acknowledged: false`, while it is
- * still stopping. That is the fast-answerer bias this whole change
- * exists to remove, inverted into a false negative on the one verb
- * where a false negative is most costly.
+ * The lesson is not "measure it better". The relay CANNOT compute this
+ * bound: it depends on interior work the relay has no view of, by
+ * design. So it stops guessing. It waits for every machine it reached,
+ * and when the request's own deadline arrives it COMPOSES what it has —
+ * naming who answered and who did not — instead of rejecting. Timing
+ * out with answers in hand was its own defect: the CLI renders a 504 as
+ * "Delivered, no answer yet", asserting delivery about machines the
+ * relay knew it never reached.
  *
- * Twelve seconds: past the stopper ceiling with headroom, and still far
- * inside `COMMAND_TIMEOUT_MS`, which remains the real bound. A caller
- * waits longer only when a machine is genuinely wedged — and for a halt
- * that is the right trade, because the alternative is being told a
- * machine is silent while it is in the middle of stopping.
+ * Cost: a broadcast with a wedged machine takes the full timeout rather
+ * than the grace. The common case — every machine answers — still
+ * resolves as soon as the slowest one does.
  */
-const BROADCAST_GRACE_MS = 12_000;
 
 const COMMAND_TIMEOUT_MS = 30_000;
 
@@ -376,18 +377,20 @@ export function handleCommandResponse(commandId: string, result: unknown, from?:
   // A broadcast is NOT a race — gather every machine's answer, bounded
   // by a short grace after the first so one slow runtime cannot hold
   // the request open.
-  if (pending.answers.length >= pending.targets.length - pending.unreached.length) {
-    finishCommand(commandId);
-    return;
-  }
-  pending.graceTimer ??= setTimeout(() => finishCommand(commandId), BROADCAST_GRACE_MS);
+  // Count MACHINES, not answers. A runtime replying twice, or a host
+  // whose second process landed in the undeclared bucket, satisfied a
+  // quorum counted on the raw array — closing the request before a real
+  // target had been heard from. An answer from a machine this request
+  // never aimed at is not evidence about this request at all.
+  const reached = pending.targets.filter((t) => !pending.unreached.includes(t));
+  const heardFrom = new Set(pending.answers.map((a) => a.from).filter((f) => reached.includes(f)));
+  if (heardFrom.size >= reached.length) finishCommand(commandId);
 }
 
 function finishCommand(commandId: string): void {
   const pending = pendingCommands.get(commandId);
   if (!pending) return;
   clearTimeout(pending.timer);
-  if (pending.graceTimer != null) clearTimeout(pending.graceTimer);
   pendingCommands.delete(commandId);
   pending.resolve(
     pending.targets.length <= 1 && pending.unreached.length === 0 && !pending.wasFolded
@@ -461,19 +464,29 @@ function composeAnswers(pending: {
     );
   }
 
-  // `acknowledged` survives composition and gets STRICTER: true only
-  // when every machine aimed at was reached, answered, and said so. One
-  // machine's acknowledgement is not the motebit's — the sentence
-  // `cmdHalt` is built around. A folded undeclared bucket makes it
-  // unprovable, so it is not claimed.
-  const acknowledged =
-    unreached.length === 0 &&
-    collapsedUndeclared === 0 &&
-    answers.length === targets.length &&
-    answers.every(
-      (a) =>
-        (a.result as { data?: { acknowledged?: unknown } } | null)?.data?.acknowledged === true,
-    );
+  // The relay does NOT synthesize a verdict about the interior.
+  //
+  // An earlier version AND-ed `data.acknowledged` across machines and
+  // called that "stricter". It was not stricter, it was a category
+  // error, and two normal paths proved it. `cmdResume` never emits
+  // `acknowledged` at all — it reports `lifted` — so every successful
+  // multi-machine resume published `acknowledged: false`. And a
+  // goal-scoped halt can only be honoured by the one machine that owns
+  // the goal; the others truthfully answer they have nothing to stop,
+  // so the conjunction was false about a goal that WAS stopped.
+  //
+  // The relay knows what it sent and what came back. It does not know
+  // what a goal is, which machine owns one, or what `resume` means —
+  // and it sells coordination precisely because it is not the authority
+  // on the interior. So the composed payload carries TRANSPORT facts,
+  // and each machine's own `data` verbatim beside its id. A consumer
+  // asking "did my motebit stop" reads those, or asks `halt-status`,
+  // which is the command whose job that is.
+  //
+  // A composed reply therefore has no `acknowledged` key: absent is the
+  // fail-closed reading, and the single-machine path still passes the
+  // runtime's own reply through untouched, so the documented contract
+  // holds where it can be held.
 
   // A halt id is written per machine, so there is no single one to lift.
   const haltIds = answers
@@ -484,14 +497,27 @@ function composeAnswers(pending: {
       ? "\n\nEach machine wrote its own halt, so the ids above are machine-local — `resume all` lifts them everywhere; `resume <id>` reaches only the machine that wrote it."
       : "";
 
+  const reachedCount = targets.length - unreached.length;
+  const heardCount = new Set(answers.map((a) => a.from)).size;
+
   return {
-    summary: `Sent to ${targets.length} runtimes; ${answers.length} answered.`,
+    // The summary counts machines REACHED, not machines that exist.
+    // "Sent to 2 runtimes" above a detail line reading "dev-1: not
+    // reached" is a first sentence contradicting the report it
+    // introduces, and the CLI prints the summary first.
+    summary:
+      unreached.length > 0
+        ? `Reached ${reachedCount} of ${targets.length} machines; ${heardCount} answered.`
+        : `Sent to ${targets.length} machines; ${heardCount} answered.`,
     detail: [lines.join("\n"), ...details].join("\n\n") + note,
     data: {
-      acknowledged,
       sent_to: targets.length,
-      answered: answers.length,
+      reached: reachedCount,
+      answered: heardCount,
       unreached,
+      // Each machine's own answer, verbatim and attributed. The verdict
+      // about the interior lives here, per machine, where the runtime
+      // put it — never re-derived by the relay.
       answers: answers.map((a) => ({ from: a.from, result: a.result })),
     },
   };
@@ -517,12 +543,15 @@ async function forwardCommandToAgent(
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      // The grace timer can still be armed here — a first answer landing
-      // just under the ceiling arms one that outlives this. Left alone
-      // it holds the event loop open and then fires into a deleted
-      // entry.
+      // A broadcast with targets is not a timeout — it is a partial
+      // report, and the composed form already names which machines were
+      // silent. Rejecting threw those answers away and let the CLI print
+      // "Delivered, no answer yet" about a machine never reached.
       const held = pendingCommands.get(commandId);
-      if (held?.graceTimer != null) clearTimeout(held.graceTimer);
+      if (held != null && held.targets.length > 0) {
+        finishCommand(commandId);
+        return;
+      }
       pendingCommands.delete(commandId);
       reject(new Error("Command timed out"));
     }, COMMAND_TIMEOUT_MS);

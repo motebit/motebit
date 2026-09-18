@@ -374,10 +374,11 @@ describe("two runtimes, one relay — what a frame actually does", () => {
     // And it NAMES the machine, because "1 runtime did not answer"
     // leaves a reader knowing something is still running and not where.
     expect(text).toContain("dev-2");
-    // The grace outlasts the runtime's 10s stopper ceiling, so this
-    // test spends it. That cost buys never calling a machine silent
-    // while it is still stopping.
-  }, 25_000);
+    // There is no grace window any more: the relay waits for every
+    // machine it reached, and composes at the request's own deadline.
+    // This test therefore spends that deadline — the cost of never
+    // calling a machine silent while it is still stopping.
+  }, 45_000);
 
   it("a resume reports the machine that ACTED, not the one with nothing to do", async () => {
     // `cmdResume` answers "Nothing is halted." synchronously when
@@ -410,9 +411,13 @@ describe("two runtimes, one relay — what a frame actually does", () => {
     const text = JSON.stringify(body);
     // Both machines' answers are present; neither stands in for the
     // motebit's.
-    expect(text).toMatch(/Sent to 2 runtimes/i);
+    expect(text).toMatch(/Sent to 2 machines/i);
     expect(text).toMatch(/nothing is halted/i);
-  }, 15_000);
+    // The relay does NOT re-derive a verdict: `resume` reports `lifted`,
+    // never `acknowledged`, so AND-ing that field across machines made
+    // every successful multi-machine resume look failed.
+    expect((body as { data?: { acknowledged?: unknown } }).data?.acknowledged).toBeUndefined();
+  }, 40_000);
 
   it("an unreachable machine is reported, not vanished — and does not let one answer stand in", async () => {
     // Counting only successful sends made an unreachable machine
@@ -441,15 +446,18 @@ describe("two runtimes, one relay — what a frame actually does", () => {
 
     const { body } = await ask("halt");
     const text = JSON.stringify(body);
-    expect(text).toMatch(/Sent to 2 runtimes/i);
+    // The summary counts machines REACHED, so it cannot contradict the
+    // "not reached" line two rows below it.
+    expect(text).toMatch(/Reached 1 of 2 machines/i);
     expect(text).toMatch(/not reached/i);
     expect(text).toContain("dev-2");
-    // Reached one machine, so the motebit is NOT acknowledged stopped.
-    expect((body as { data?: { acknowledged?: boolean } }).data?.acknowledged).toBe(false);
+    const data = (body as { data?: { sent_to?: number; reached?: number } }).data;
+    expect(data?.sent_to).toBe(2);
+    expect(data?.reached).toBe(1);
     expect(live.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(1);
   }, 25_000);
 
-  it("two undeclared connections are folded into one delivery, and that makes acknowledged unprovable", async () => {
+  it("two undeclared connections are folded into one delivery, and the fold is reported", async () => {
     // They are bucketed together because they might equally be one
     // host's two processes sharing a replay store, and delivering twice
     // into that store is the worse error. But they might be two hosts —
@@ -477,8 +485,12 @@ describe("two runtimes, one relay — what a frame actually does", () => {
     expect(a.received.length + b.received.length).toBe(1);
     const text = JSON.stringify(body);
     expect(text).toMatch(/folded into the one above/i);
-    expect((body as { data?: { acknowledged?: boolean } }).data?.acknowledged).toBe(false);
-  }, 25_000);
+    // No synthesized verdict — the per-machine answers carry the
+    // runtime's own `data`, and absent is the fail-closed reading.
+    expect((body as { data?: { acknowledged?: unknown } }).data?.acknowledged).toBeUndefined();
+    const answers = (body as { data?: { answers?: unknown[] } }).data?.answers ?? [];
+    expect(answers.length).toBeGreaterThan(0);
+  }, 40_000);
 
   it("says the halt ids are machine-local, because each machine wrote its own", async () => {
     // Broadcasting a halt makes each machine write its own row with its
@@ -507,6 +519,40 @@ describe("two runtimes, one relay — what a frame actually does", () => {
     expect(text).toMatch(/machine-local/i);
     expect(text).toMatch(/resume all/i);
   }, 25_000);
+
+  it("a goal-scoped halt is honoured by the machine that OWNS the goal, and the others say so", async () => {
+    // Goals live on exactly one machine. AND-ing a verdict across
+    // machines therefore reported a goal that WAS stopped as not
+    // acknowledged, because the machine without the goal truthfully
+    // answered that it had nothing to halt. The relay has no idea which
+    // machine owns a goal — which is the reason it must not adjudicate.
+    const owner = attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "dev-1",
+        capabilities: ["background", "unattended_runtime"],
+        configure: (rt) => rt.setGoalIdResolver?.(() => "goal-abc"),
+      },
+    );
+    attachRuntime(
+      { relay, motebitId, identityPublicKey: pubHex },
+      {
+        label: "run",
+        deviceId: "dev-2",
+        capabilities: ["background", "unattended_runtime"],
+      },
+    );
+
+    const { body } = await ask("halt", "goal goal-abc");
+    const text = JSON.stringify(body);
+    // Both machines are heard from, each in its own words.
+    expect(text).toContain("dev-1");
+    expect(text).toContain("dev-2");
+    // And the relay publishes no verdict of its own over the two.
+    expect((body as { data?: { acknowledged?: unknown } }).data?.acknowledged).toBeUndefined();
+    void owner;
+  }, 40_000);
 
   it("`runs` goes to the ledger-holder, never to a task worker that can be stopped", async () => {
     // `motebit serve` announces `unattended_runtime` truthfully and
