@@ -345,16 +345,26 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     expect(a.sentTo.length + b.sentTo.length).toBeGreaterThan(0);
   });
 
-  it("a HALT still reaches a runtime when the two are on different machines", async () => {
-    // The many-machines refusal is about per-machine RECORDS. A halt is
-    // not one of those — it is the same act wherever it lands, so a
-    // halt delivered to either machine is
-    // truthful — the acknowledgement is per executor and names what
-    // that executor stopped — and the halt is durable state the other
-    // machine honors on its own next tick. Refusing it told a sovereign
-    // running the daemon on a laptop and the worker on a VPS to "run
-    // this command on the machine you mean", which is unusable advice
-    // for someone away from both. That is the situation this arc is for.
+  it("a HALT on two DIFFERENT machines is refused rather than stopping one", async () => {
+    // This test used to assert the opposite, and the reasoning it
+    // carried was wrong in a way worth recording rather than deleting.
+    //
+    // It argued a halt is "the same act wherever it lands", so
+    // delivering to either machine is truthful and the other honours
+    // the durable state on its next tick. The second half is false: the
+    // halt store is LOCAL and nothing replicates it, so the machine
+    // that did not receive the frame has no halt to honour and keeps
+    // working — while the caller is handed the acknowledgement of the
+    // machine that did stop. A record saying the motebit stopped, about
+    // a motebit that is running, is the one outcome this whole
+    // vocabulary exists to prevent.
+    //
+    // The objection in the old comment stands — "run this on the
+    // machine you mean" is poor advice for someone away from both — and
+    // the answer to it is reaching every machine, not guessing one.
+    // That is issue #681, withdrawn from this branch after five review
+    // rounds, and it costs nothing to wait: no motebit has runtimes on
+    // two machines until the installer ships (#685).
     const laptop = fakePeer("dev-1", ["background", "unattended_runtime"]);
     const vps = fakePeer("dev-2", ["background", "unattended_runtime"]);
     relay.connections.set(AGENT_ID, [laptop.peer, vps.peer] as unknown as Parameters<
@@ -365,9 +375,11 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
       motebitId: AGENT_ID,
       identityPrivateKey: keys.privateKey,
     });
-    void postCommand(AGENT_ID, { command: "halt", envelope });
-    await new Promise((r) => setTimeout(r, 50));
-    expect(laptop.sentTo.length + vps.sentTo.length).toBeGreaterThan(0);
+    const { status, json } = await postCommand(AGENT_ID, { command: "halt", envelope });
+    expect(status).toBe(404);
+    expect(JSON.stringify(json)).toMatch(/while the other kept working/i);
+    expect(laptop.sentTo).toEqual([]);
+    expect(vps.sentTo).toEqual([]);
   });
 
   it("two run LEDGERS on different machines are refused, like two queues", async () => {

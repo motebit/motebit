@@ -56,7 +56,6 @@ beforeEach(async () => {
     // The deadline is the only bound now — there is no grace window to
     // shorten — so the silent-machine paths would cost 30s each at the
     // production value. Same motivation as `drainGraceMs`.
-    commandTimeoutMs: 3_000,
     // The harness registers on 127.0.0.1 — the local-development
     // allowance. Production keeps the default: globally-routable only.
     allowPrivateEndpoints: true,
@@ -279,13 +278,11 @@ describe("two runtimes, one relay — what a frame actually does", () => {
     expect(live.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(1);
   });
 
-  it("a halt reaches EVERY machine, not the first that answers", async () => {
-    // The halt store is local and nothing replicates it, so first-wins
-    // stops one machine and leaves the other working — under the
-    // stopped one's acknowledgement, which reads as "stopped" for a
-    // motebit that is still running. The act is idempotent and
-    // machine-local, so the delivery that matches what was asked for is
-    // to all of them.
+  it("a halt is REFUSED on two machines rather than stopping one of them", async () => {
+    // The halt store is local and nothing replicates it, so delivering
+    // to one machine stops that one and answers with its
+    // acknowledgement — a record saying the motebit stopped while the
+    // other machine keeps working. Refusing is survivable; that is not.
     const laptop = attachRuntime(
       { relay, motebitId, identityPublicKey: pubHex },
       {
@@ -303,123 +300,24 @@ describe("two runtimes, one relay — what a frame actually does", () => {
       },
     );
 
-    await ask("halt");
-    expect(laptop.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(1);
-    expect(vps.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(1);
+    const { status, body } = await ask("halt");
+    expect(status).toBe(404);
+    const text = JSON.stringify(body);
+    expect(text).toMatch(/2 different machines/i);
+    // It says WHY, in terms of what would have gone wrong.
+    expect(text).toMatch(/while the other kept working/i);
+    // Neither machine was touched: a refusal that half-acted would be
+    // worse than either choice.
+    expect(laptop.received).toEqual([]);
+    expect(vps.received).toEqual([]);
+    expect(laptop.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(0);
+    expect(vps.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(0);
   });
 
-  it("a machine still STOPPING is not reported as silent", async () => {
-    // The relay waits for the machine that is still WORKING.
-    //
-    // `cmdHalt` awaits every registered stopper, while a machine with
-    // nothing to stop returns immediately — so the first answer is
-    // systematically from the machine with least to do. Settling on it
-    // reports the machine actually aborting work as silent, mid-stop:
-    // the fast-answerer bias this change removes, inverted into a false
-    // negative on the verb where it costs most. Any re-introduced grace
-    // shorter than this stopper fails here.
-    attachRuntime(
-      { relay, motebitId, identityPublicKey: pubHex },
-      {
-        label: "idle",
-        deviceId: "dev-1",
-        capabilities: ["background", "unattended_runtime"],
-      },
-    );
-    attachRuntime(
-      { relay, motebitId, identityPublicKey: pubHex },
-      {
-        label: "busy",
-        deviceId: "dev-2",
-        capabilities: ["background", "unattended_runtime"],
-        configure: (rt) =>
-          rt.onHalt(async () => {
-            // Comfortably under the deadline, comfortably over anything
-            // a re-introduced grace window would plausibly be.
-            await new Promise((r) => setTimeout(r, 900));
-            return "aborted the long job";
-          }),
-      },
-    );
-
-    const { body } = await ask("halt");
-    const text = JSON.stringify(body);
-    expect(text).not.toMatch(/silence is not a stop/i);
-    expect(text).toMatch(/aborted the long job/i);
-  }, 20_000);
-
-  it("ONE machine that never answers is a timeout, not an empty 200", async () => {
-    // The common deployment — a single unattended runtime. Composing
-    // every expired broadcast resolved this with `answers[0]` of an
-    // empty array: `undefined`, serialized as HTTP 200 with an empty
-    // body. The CLI's 504 branch ("Delivered, no answer yet — it may
-    // well have stopped") became a JSON parse error, and the phone said
-    // "The runtime did not recognise \"halt\" — update it": a confident
-    // wrong diagnosis on the verb this arc exists to protect.
-    attachRuntime(
-      { relay, motebitId, identityPublicKey: pubHex },
-      {
-        label: "run",
-        deviceId: "dev-1",
-        capabilities: ["background", "unattended_runtime"],
-        neverReplies: true,
-      },
-    );
-    const envelope = await signAgentCommandEnvelope({
-      command: "halt",
-      motebitId,
-      identityPrivateKey: keys.privateKey,
-    });
-    const res = await relay.app.request(`/api/v1/agents/${motebitId}/command`, {
-      method: "POST",
-      headers: AUTH,
-      body: JSON.stringify({ command: "halt", envelope }),
-    });
-    // Not 200, and not an empty body.
-    expect(res.status).toBeGreaterThanOrEqual(500);
-    const text = await res.text();
-    expect(text.length).toBeGreaterThan(0);
-  }, 20_000);
-
-  it("a broadcast nobody answers is a timeout too — prose at 200 tells a script it worked", async () => {
-    // An honest per-machine report at HTTP 200 still leaves
-    // `motebit halt --remote && …` exiting 0 when nothing was heard.
-    attachRuntime(
-      { relay, motebitId, identityPublicKey: pubHex },
-      {
-        label: "run",
-        deviceId: "dev-1",
-        capabilities: ["background", "unattended_runtime"],
-        neverReplies: true,
-      },
-    );
-    attachRuntime(
-      { relay, motebitId, identityPublicKey: pubHex },
-      {
-        label: "run",
-        deviceId: "dev-2",
-        capabilities: ["background", "unattended_runtime"],
-        neverReplies: true,
-      },
-    );
-    const envelope = await signAgentCommandEnvelope({
-      command: "halt",
-      motebitId,
-      identityPrivateKey: keys.privateKey,
-    });
-    const res = await relay.app.request(`/api/v1/agents/${motebitId}/command`, {
-      method: "POST",
-      headers: AUTH,
-      body: JSON.stringify({ command: "halt", envelope }),
-    });
-    expect(res.status).toBeGreaterThanOrEqual(500);
-  }, 20_000);
-
-  it("a machine that never answers is named as silent, not quietly dropped", async () => {
-    // An unanswered halt is the one outcome a reader must not take for
-    // a stop. Dropping it from the report would hand back the answering
-    // machine's "Stop requested" as though it spoke for the motebit.
-    const laptop = attachRuntime(
+  it("a halt on ONE machine is delivered, unchanged — every deployment today", async () => {
+    // The refusal is scoped to the configuration that does not exist
+    // yet. A single-machine motebit must be exactly as it was.
+    const daemon = attachRuntime(
       { relay, motebitId, identityPublicKey: pubHex },
       {
         label: "run",
@@ -427,43 +325,16 @@ describe("two runtimes, one relay — what a frame actually does", () => {
         capabilities: ["background", "unattended_runtime"],
       },
     );
-    attachRuntime(
-      { relay, motebitId, identityPublicKey: pubHex },
-      {
-        label: "run",
-        deviceId: "dev-2",
-        capabilities: ["background", "unattended_runtime"],
-        neverReplies: true,
-      },
-    );
+    const { status } = await ask("halt");
+    expect(status).toBe(200);
+    expect(daemon.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(1);
+  });
 
-    const { status, body } = await ask("halt");
-    // A PARTIAL is not a success. Honest prose at HTTP 200 still leaves
-    // `motebit halt --remote && <next step>` proceeding while a machine
-    // is possibly still running, and puts the burden on every consumer
-    // to remember to compare `answered` against `sent_to`.
-    expect(status).toBe(504);
-    const text = JSON.stringify(body);
-    expect(text).toMatch(/no answer in time/i);
-    expect(text).toMatch(/silence is not a stop/i);
-    // And the machine that did answer is still reported.
-    expect(text).toMatch(/stop requested/i);
-    expect(laptop.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(1);
-    // And it NAMES the machine, because "1 runtime did not answer"
-    // leaves a reader knowing something is still running and not where.
-    expect(text).toContain("dev-2");
-    // There is no grace window any more: the relay waits for every
-    // machine it reached, and composes at the request's own deadline.
-    // This test therefore spends that deadline — the cost of never
-    // calling a machine silent while it is still stopping.
-  }, 20_000);
-
-  it("a resume reports the machine that ACTED, not the one with nothing to do", async () => {
-    // `cmdResume` answers "Nothing is halted." synchronously when
-    // nothing is active, while the machine that holds the halt awaits
-    // its store — so the machine with least to do reliably wins a race,
-    // and a successful resume rendered as a no-op.
-    const halted = attachRuntime(
+  it("two processes on ONE machine are still interchangeable, not refused", async () => {
+    // `motebit run` and `motebit serve` share a device id. Counting
+    // them as two machines would refuse every remote halt in the
+    // ordinary single-host setup.
+    const run = attachRuntime(
       { relay, motebitId, identityPublicKey: pubHex },
       {
         label: "run",
@@ -471,181 +342,18 @@ describe("two runtimes, one relay — what a frame actually does", () => {
         capabilities: ["background", "unattended_runtime"],
       },
     );
-    const idle = attachRuntime(
+    const serve = attachRuntime(
       { relay, motebitId, identityPublicKey: pubHex },
       {
-        label: "run",
-        deviceId: "dev-2",
-        capabilities: ["background", "unattended_runtime"],
-      },
-    );
-    // Halt reaches both; lift it on one so the two have different news.
-    await ask("halt");
-    const onlyOn = halted.runtime.halts?.listActive(motebitId) ?? [];
-    expect(onlyOn).toHaveLength(1);
-    idle.runtime.halts?.lift((idle.runtime.halts.listActive(motebitId)[0] ?? onlyOn[0]!).halt_id);
-
-    const { body } = await ask("resume");
-    const text = JSON.stringify(body);
-    // Both machines' answers are present; neither stands in for the
-    // motebit's.
-    expect(text).toMatch(/Sent to 2 machines/i);
-    expect(text).toMatch(/nothing is halted/i);
-    // The relay does NOT re-derive a verdict: `resume` reports `lifted`,
-    // never `acknowledged`, so AND-ing that field across machines made
-    // every successful multi-machine resume look failed.
-    expect((body as { data?: { acknowledged?: unknown } }).data?.acknowledged).toBeUndefined();
-  }, 20_000);
-
-  it("an unreachable machine is reported, not vanished — and does not let one answer stand in", async () => {
-    // Counting only successful sends made an unreachable machine
-    // disappear from `targets`, so the composed path was skipped and
-    // the caller got the live machine's raw `acknowledged: true` with
-    // no sign a second machine existed. That is one machine's
-    // acknowledgement standing in for the motebit's — this change's
-    // whole subject, coming back through the accounting.
-    const live = attachRuntime(
-      { relay, motebitId, identityPublicKey: pubHex },
-      {
-        label: "run",
+        label: "serve",
         deviceId: "dev-1",
         capabilities: ["background", "unattended_runtime"],
       },
     );
-    attachRuntime(
-      { relay, motebitId, identityPublicKey: pubHex },
-      {
-        label: "run",
-        deviceId: "dev-2",
-        capabilities: ["background", "unattended_runtime"],
-        socketIsDead: true,
-      },
-    );
-
-    const { status, body } = await ask("halt");
-    const text = JSON.stringify(body);
-    // The summary counts machines REACHED, so it cannot contradict the
-    // "not reached" line two rows below it.
-    // Unreached is partial too, and carries the same non-2xx.
-    expect(status).toBe(504);
-    expect(text).toMatch(/Reached 1 of 2 machines/i);
-    expect(text).toMatch(/not reached/i);
-    expect(text).toContain("dev-2");
-    const data = (body as { data?: { sent_to?: number; reached?: number } }).data;
-    expect(data?.sent_to).toBe(2);
-    expect(data?.reached).toBe(1);
-    expect(live.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(1);
-  }, 25_000);
-
-  it("two undeclared connections are folded into one delivery, and the fold is reported", async () => {
-    // They are bucketed together because they might equally be one
-    // host's two processes sharing a replay store, and delivering twice
-    // into that store is the worse error. But they might be two hosts —
-    // so the fold is reported and `acknowledged` is not claimed.
-    const a = attachRuntime(
-      { relay, motebitId, identityPublicKey: pubHex },
-      {
-        label: "run",
-        deviceId: "generated-1",
-        capabilities: ["background", "unattended_runtime"],
-        deviceIdDeclared: false,
-      },
-    );
-    const b = attachRuntime(
-      { relay, motebitId, identityPublicKey: pubHex },
-      {
-        label: "run",
-        deviceId: "generated-2",
-        capabilities: ["background", "unattended_runtime"],
-        deviceIdDeclared: false,
-      },
-    );
-
-    const { body } = await ask("halt");
-    expect(a.received.length + b.received.length).toBe(1);
-    const text = JSON.stringify(body);
-    expect(text).toMatch(/folded into the one above/i);
-    // No synthesized verdict — the per-machine answers carry the
-    // runtime's own `data`, and absent is the fail-closed reading.
-    expect((body as { data?: { acknowledged?: unknown } }).data?.acknowledged).toBeUndefined();
-    const answers = (body as { data?: { answers?: unknown[] } }).data?.answers ?? [];
-    expect(answers.length).toBeGreaterThan(0);
-  }, 20_000);
-
-  it("says the halt ids are machine-local, because each machine wrote its own", async () => {
-    // Broadcasting a halt makes each machine write its own row with its
-    // own id, so the composed detail carries two `resume <id>` lines
-    // that each reach only one machine. Saying so beats letting a
-    // reader discover it by half-resuming their motebit.
-    attachRuntime(
-      { relay, motebitId, identityPublicKey: pubHex },
-      {
-        label: "run",
-        deviceId: "dev-1",
-        capabilities: ["background", "unattended_runtime"],
-      },
-    );
-    attachRuntime(
-      { relay, motebitId, identityPublicKey: pubHex },
-      {
-        label: "run",
-        deviceId: "dev-2",
-        capabilities: ["background", "unattended_runtime"],
-      },
-    );
-
-    const { body } = await ask("halt");
-    const text = JSON.stringify(body);
-    expect(text).toMatch(/machine-local/i);
-    expect(text).toMatch(/resume all/i);
-  }, 25_000);
-
-  it("a goal-scoped halt is honoured by the machine that OWNS the goal, and the others say so", async () => {
-    // Goals live on exactly one machine. AND-ing a verdict across
-    // machines therefore reported a goal that WAS stopped as not
-    // acknowledged, because the machine without the goal truthfully
-    // answered that it had nothing to halt. The relay has no idea which
-    // machine owns a goal — which is the reason it must not adjudicate.
-    const owner = attachRuntime(
-      { relay, motebitId, identityPublicKey: pubHex },
-      {
-        label: "run",
-        deviceId: "dev-1",
-        capabilities: ["background", "unattended_runtime"],
-        goals: ["goal-abc"],
-        configure: (rt) => rt.setGoalIdResolver?.(() => "goal-abc"),
-      },
-    );
-    const stranger = attachRuntime(
-      { relay, motebitId, identityPublicKey: pubHex },
-      {
-        label: "run",
-        deviceId: "dev-2",
-        capabilities: ["background", "unattended_runtime"],
-      },
-    );
-
-    // The structured form — a `goal <id>` grammar was removed because
-    // `--reason "goal cleanup done"` parsed as a halt of a goal called
-    // "cleanup", which halts nothing.
-    const { body } = await ask("halt", JSON.stringify({ goal_id: "goal-abc" }));
-    const text = JSON.stringify(body);
-    expect(text).toContain("dev-1");
-    expect(text).toContain("dev-2");
-
-    // The OWNER carries a goal-scoped halt row — the half the test is
-    // named for. Asserting only that both ids appear, and that
-    // `acknowledged` is undefined, was satisfied by any composed reply
-    // at all: it would have passed with goal scoping removed entirely.
-    const ownerHalts = owner.runtime.halts?.listActive(motebitId) ?? [];
-    expect(ownerHalts).toHaveLength(1);
-    expect(ownerHalts[0]?.goal_id).toBe("goal-abc");
-
-    // And the machine that does not own it says so rather than
-    // recording a halt for a goal it has never heard of.
-    const strangerHalts = stranger.runtime.halts?.listActive(motebitId) ?? [];
-    expect(strangerHalts).toHaveLength(0);
-  }, 20_000);
+    const { status } = await ask("halt");
+    expect(status).toBe(200);
+    expect(run.received.length + serve.received.length).toBe(1);
+  });
 
   it("`runs` goes to the ledger-holder, never to a task worker that can be stopped", async () => {
     // `motebit serve` announces `unattended_runtime` truthfully and

@@ -73,34 +73,6 @@ const UNATTENDED_RUNTIME_COMMANDS = new Set([
 const MUTATING_UNATTENDED_COMMANDS = new Set(["halt", "resume", "approvals"]);
 
 /**
- * Verbs the relay delivers to EVERY machine, not the first that answers.
- *
- * A halt is written to the halt store of the machine that receives it,
- * and that store is local — nothing replicates it. So first-wins
- * delivery to a sovereign with a daemon on a laptop and a worker on a
- * VPS stopped one of them and answered with that one's acknowledgement,
- * which reads as "stopped" for a motebit that is still working. The act
- * is idempotent and machine-local, so the delivery that matches what
- * the person asked for is to all of them.
- *
- * `approvals` is mutating too and is deliberately NOT here: deciding an
- * approval twice, once per queue, is not one act repeated — it is two
- * decisions on two records, which is why that command refuses a
- * many-machine motebit instead.
- */
-const BROADCAST_UNATTENDED_COMMANDS = new Set(["halt", "resume"]);
-
-/**
- * The one bucket every peer that declared no device id falls into.
- *
- * The relay invents an id per connection for those, so treating each as
- * its own machine would broadcast twice into what is far more often one
- * host's two processes — and those two share a replay store, so the
- * second would reject its own motebit's halt as a replay.
- */
-const UNDECLARED_MACHINE = "__undeclared__";
-
-/**
  * The subset whose answer is a per-machine DATABASE, not a per-motebit
  * fact — so which runtime answers changes what the answer is.
  *
@@ -122,6 +94,36 @@ const UNDECLARED_MACHINE = "__undeclared__";
  * This set gains exactly one member here: `runs`, this increment's own.
  */
 const PER_MACHINE_DATABASE_COMMANDS = new Set(["approvals", "runs"]);
+
+/**
+ * Verbs the relay REFUSES rather than deliver to one machine of several.
+ *
+ * A halt is written to the halt store of the machine that receives it,
+ * and that store is local — nothing replicates it. So first-wins
+ * delivery to a sovereign with a daemon on a laptop and a worker on a
+ * VPS stops one of them and answers with that one's acknowledgement,
+ * which reads as "stopped" for a motebit that is still working. That is
+ * the worst thing this vocabulary can do, so it is refused instead:
+ * saying "I cannot do this from here" is survivable, saying "stopped"
+ * about a motebit that is running is not.
+ *
+ * REACHING every machine is the right answer and is NOT what this is.
+ * It was built (issue #681) and withdrawn after five review rounds: a
+ * broadcast has to gather answers instead of racing them, name the
+ * machines that stayed silent, decline to synthesize a verdict the
+ * relay is not the authority on, and carry a status that a partial
+ * result cannot be mistaken for success — and each round found another
+ * face of that I had not seen. The whole story also needs `halt-status`
+ * composed (#687), or a sovereign can stop their motebit and not see
+ * what stopped.
+ *
+ * It costs nothing today: no motebit has unattended runtimes on two
+ * machines until the installer ships (#685). That is exactly why the
+ * refusal is affordable and why the broadcast is worth building whole,
+ * once, against the multi-runtime harness rather than under review
+ * pressure.
+ */
+const REFUSE_ON_MANY_MACHINES = new Set(["halt", "resume"]);
 
 /**
  * The capability a command's answer actually depends on.
@@ -195,80 +197,20 @@ const INFO_COMMANDS: Record<string, string> = {
 /** Pending command requests waiting for WebSocket response. */
 const pendingCommands = new Map<
   string,
-  {
-    resolve: (result: unknown) => void;
-    timer: ReturnType<typeof setTimeout>;
-    /**
-     * The machines this request was AIMED at. Empty for first-wins,
-     * where exactly one peer was ever addressed.
-     */
-    targets: string[];
-    /** Aimed at, but no socket on that machine was open. */
-    unreached: string[];
-    /**
-     * How many connections beyond the first declared no device id and
-     * were therefore folded into one delivery. They MIGHT be separate
-     * hosts, so a fold makes `acknowledged` unprovable.
-     */
-    collapsedUndeclared: number;
-    /** Shorthand for `collapsedUndeclared > 0`, read on every answer. */
-    wasFolded: boolean;
-    /** Answers received so far, in arrival order. */
-    answers: Array<{ from: string; result: unknown }>;
-  }
+  { resolve: (result: unknown) => void; timer: ReturnType<typeof setTimeout> }
 >();
 
-/**
- * A broadcast has ONE deadline, and it is the one the request already
- * had: `commandTimeoutMs`.
- *
- * There was a grace window here — wait N seconds after the first answer,
- * then call the rest silent — and it was wrong twice. At 3s it armed on
- * the machine with nothing to stop and reported the machine actually
- * aborting work as silent. At 12s it was still under-measured, because
- * `honorHalts()` awaits a nested loop over pending halts × registered
- * stoppers, each under its own 10s ceiling, so a machine returning from
- * a restart with two un-acknowledged halts answers at ~20s. Nothing
- * bound the relay's constant to the runtime's, so any change to either
- * silently re-opened the gap.
- *
- * The lesson is not "measure it better". The relay CANNOT compute this
- * bound: it depends on interior work the relay has no view of, by
- * design. So it stops guessing. It waits for every machine it reached,
- * and when the request's own deadline arrives it COMPOSES what it has —
- * naming who answered and who did not — instead of rejecting. Timing
- * out with answers in hand was its own defect: the CLI renders a 504 as
- * "Delivered, no answer yet", asserting delivery about machines the
- * relay knew it never reached.
- *
- * Cost: a broadcast with a wedged machine takes the full timeout rather
- * than the grace. The common case — every machine answers — still
- * resolves as soon as the slowest one does.
- */
-
-const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
-
-/**
- * The deadline in force. Overridable only through relay config, which
- * production never sets — see `SyncRelayConfig.commandTimeoutMs`.
- */
-let commandTimeoutMs = DEFAULT_COMMAND_TIMEOUT_MS;
+const COMMAND_TIMEOUT_MS = 30_000;
 
 export interface CommandRouteDeps {
   app: Hono;
   db: DatabaseDriver;
   connections: Map<string, ConnectedDevice[]>;
   logger: ReturnType<typeof createLogger>;
-  /** Test seam; production uses the default. */
-  commandTimeoutMs?: number;
 }
 
 export function registerCommandRoutes(deps: CommandRouteDeps): void {
   const { app, db, connections } = deps;
-  // Module-scoped because the deadline belongs to the forwarding
-  // helper, which the route closes over. One relay per process, so a
-  // single value is honest; the override exists for tests alone.
-  commandTimeoutMs = deps.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
 
   /** @internal */
   app.post("/api/v1/agents/:motebitId/command", async (c) => {
@@ -330,20 +272,7 @@ export function registerCommandRoutes(deps: CommandRouteDeps): void {
 
       try {
         const result = await forwardCommandToAgent(peers, command, args, body.envelope);
-        // A PARTIAL broadcast is not a success, and must not be a 2xx.
-        //
-        // The composed prose was honest and the status was not: a halt
-        // that reached two machines and heard from one returned 200,
-        // so `motebit halt --remote && <next step>` proceeded with a
-        // machine still running, and every other consumer had to
-        // remember to compare `answered` against `sent_to`. That is one
-        // more "two opposite safe defaults on one value" — the shape
-        // this arc has already paid for twice. Fail closed at the
-        // transport: a caller that forgets gets an error, not a false
-        // success, and the composed body still carries the per-machine
-        // truth so nothing is lost by the status.
-        const partial = isPartialBroadcast(result);
-        return partial ? c.json(result, 504) : c.json(result);
+        return c.json(result);
       } catch (err: unknown) {
         // A typed rejection already says what happened and with what
         // status — re-wrapping it as a 500 would turn "nothing was
@@ -378,205 +307,12 @@ export function registerCommandRoutes(deps: CommandRouteDeps): void {
  * Called by the WebSocket message handler when an agent sends a command_response.
  * Resolves the pending Promise so the HTTP handler can return the result.
  */
-export function handleCommandResponse(commandId: string, result: unknown, from?: string): void {
-  const pending = pendingCommands.get(commandId);
-  if (!pending) return;
-  // An answer with no machine id came from a peer that declared none,
-  // which is exactly the bucket a broadcast aims its one undeclared
-  // delivery at — so it is attributable after all, to that bucket.
-  pending.answers.push({ from: from ?? UNDECLARED_MACHINE, result });
-
-  // First-wins addressed one peer, nothing was left unreached, and no
-  // undeclared connections were folded: one answer settles it.
-  //
-  // The fold has to be in this condition. Two undeclared peers collapse
-  // to ONE bucket, so a broadcast to them looked like a single target
-  // and took this path — handing back that one machine's raw
-  // `acknowledged: true` while a possible second host was never
-  // reached, which is the very claim the fold makes unprovable.
-  if (pending.targets.length <= 1 && pending.unreached.length === 0 && !pending.wasFolded) {
-    finishCommand(commandId);
-    return;
-  }
-  // A broadcast is NOT a race — gather every machine's answer. There is
-  // no grace window: the relay cannot compute one, so it waits for the
-  // machines it reached and composes at the request's own deadline. See
-  // the note on the single deadline above.
-  // Count MACHINES, not answers. A runtime replying twice, or a host
-  // whose second process landed in the undeclared bucket, satisfied a
-  // quorum counted on the raw array — closing the request before a real
-  // target had been heard from. An answer from a machine this request
-  // never aimed at is not evidence about this request at all.
-  settleIfAllHeard(commandId);
-}
-
-/**
- * Settle once every machine the request actually REACHED has been heard
- * from. Counts machines, not answers: a runtime replying twice, or a
- * host whose second process landed in the undeclared bucket, satisfied
- * a quorum counted on the raw array and closed the request before a
- * real target had answered. An answer from a machine this request never
- * aimed at is not evidence about this request at all.
- */
-function settleIfAllHeard(commandId: string): void {
-  const pending = pendingCommands.get(commandId);
-  if (pending == null) return;
-  const reached = pending.targets.filter((t) => !pending.unreached.includes(t));
-  const heardFrom = new Set(pending.answers.map((a) => a.from).filter((f) => reached.includes(f)));
-  if (heardFrom.size >= reached.length) finishCommand(commandId);
-}
-
-function finishCommand(commandId: string): void {
+export function handleCommandResponse(commandId: string, result: unknown): void {
   const pending = pendingCommands.get(commandId);
   if (!pending) return;
   clearTimeout(pending.timer);
   pendingCommands.delete(commandId);
-  pending.resolve(
-    pending.targets.length <= 1 && pending.unreached.length === 0 && !pending.wasFolded
-      ? pending.answers[0]?.result
-      : composeAnswers(pending),
-  );
-}
-
-/**
- * Did a composed broadcast leave any machine unaccounted for?
- *
- * True when a target was never reached or stayed silent. Only a
- * composed reply can be partial; a single-machine passthrough is the
- * runtime's own answer and carries its own meaning.
- */
-function isPartialBroadcast(result: unknown): boolean {
-  if (typeof result !== "object" || result === null) return false;
-  const d = (result as { data?: { sent_to?: unknown; answered?: unknown } }).data;
-  if (d == null || typeof d.sent_to !== "number" || typeof d.answered !== "number") return false;
-  return d.answered < d.sent_to;
-}
-
-/** A `{ summary, detail? }` reply, as far as this needs to read it. */
-function asReply(value: unknown): { summary: string; detail?: string } | null {
-  if (typeof value !== "object" || value === null) return null;
-  const r = value as { summary?: unknown; detail?: unknown };
-  if (typeof r.summary !== "string") return null;
-  return { summary: r.summary, ...(typeof r.detail === "string" ? { detail: r.detail } : {}) };
-}
-
-/** How a machine is named to the person reading the answer. */
-function machineLabel(id: string): string {
-  return id === UNDECLARED_MACHINE ? "an unidentified runtime" : id;
-}
-
-/**
- * One answer from several machines, without pretending it was one.
- *
- * Every machine the request was aimed at gets a line — answered,
- * unreachable, or silent — and each is NAMED, because "1 runtime did
- * not answer" tells a sovereign with a laptop and a VPS the one thing
- * they cannot act on: something is still running and they do not know
- * where. An answer this cannot parse is shown as that machine's answer
- * rather than replacing the report.
- */
-function composeAnswers(pending: {
-  targets: string[];
-  unreached: string[];
-  collapsedUndeclared: number;
-  wasFolded?: boolean;
-  answers: Array<{ from: string; result: unknown }>;
-}): unknown {
-  const { targets, unreached, collapsedUndeclared, answers } = pending;
-  const lines: string[] = [];
-  const details: string[] = [];
-  const answered = new Set(answers.map((a) => a.from));
-
-  for (const a of answers) {
-    const who = machineLabel(a.from);
-    const reply = asReply(a.result);
-    if (reply == null) {
-      lines.push(`  ${who}: answered in a shape this relay could not read`);
-      continue;
-    }
-    lines.push(`  ${who}: ${reply.summary}`);
-    if (reply.detail != null && reply.detail !== "") details.push(`${who}:\n${reply.detail}`);
-  }
-
-  // Unreachable and silent are different facts and both are the
-  // reader's business: an unanswered halt is the one case that must not
-  // be taken for a stop.
-  for (const t of targets) {
-    if (unreached.includes(t)) {
-      lines.push(`  ${machineLabel(t)}: not reached — its connection was already gone`);
-      continue;
-    }
-    if (answered.has(t)) continue;
-    lines.push(
-      `  ${machineLabel(t)}: no answer in time — what it did is unknown, and silence is not a stop`,
-    );
-  }
-  if (collapsedUndeclared > 0) {
-    lines.push(
-      `  ${collapsedUndeclared} further connection(s) declared no machine id and were folded into the one above — if any is a different host, it was not reached`,
-    );
-  }
-
-  // The relay does NOT synthesize a verdict about the interior.
-  //
-  // An earlier version AND-ed `data.acknowledged` across machines and
-  // called that "stricter". It was not stricter, it was a category
-  // error, and two normal paths proved it. `cmdResume` never emits
-  // `acknowledged` at all — it reports `lifted` — so every successful
-  // multi-machine resume published `acknowledged: false`. And a
-  // goal-scoped halt can only be honoured by the one machine that owns
-  // the goal; the others truthfully answer they have nothing to stop,
-  // so the conjunction was false about a goal that WAS stopped.
-  //
-  // The relay knows what it sent and what came back. It does not know
-  // what a goal is, which machine owns one, or what `resume` means —
-  // and it sells coordination precisely because it is not the authority
-  // on the interior. So the composed payload carries TRANSPORT facts,
-  // and each machine's own `data` verbatim beside its id. A consumer
-  // asking "did my motebit stop" reads those, or asks `halt-status`,
-  // which is the command whose job that is.
-  //
-  // A composed reply therefore has no `acknowledged` key: absent is the
-  // fail-closed reading, and the single-machine path still passes the
-  // runtime's own reply through untouched, so the documented contract
-  // holds where it can be held.
-
-  // A halt id is written per machine, so there is no single one to lift.
-  const haltIds = answers
-    .map((a) => (a.result as { data?: { halt_id?: unknown } } | null)?.data?.halt_id)
-    .filter((h): h is string => typeof h === "string");
-  const note =
-    haltIds.length > 1
-      ? "\n\nEach machine wrote its own halt, so the ids above are machine-local — `resume all` lifts them everywhere; `resume <id>` reaches only the machine that wrote it."
-      : "";
-
-  const reachedCount = targets.length - unreached.length;
-  const heardCount = new Set(answers.map((a) => a.from)).size;
-
-  return {
-    // The summary counts machines REACHED, not machines that exist.
-    // "Sent to 2 runtimes" above a detail line reading "dev-1: not
-    // reached" is a first sentence contradicting the report it
-    // introduces, and the CLI prints the summary first.
-    summary:
-      unreached.length > 0
-        ? `Reached ${reachedCount} of ${targets.length} machines; ${heardCount} answered.`
-        : `Sent to ${targets.length} ${targets.length === 1 ? "machine" : "machines"}; ${heardCount} answered.`,
-    detail: [lines.join("\n"), ...details].join("\n\n") + note,
-    data: {
-      sent_to: targets.length,
-      reached: reachedCount,
-      answered: heardCount,
-      // Rendered, not raw: `__undeclared__` is this relay's internal
-      // bucket key, and a consumer reading the structured field should
-      // see what the prose beside it says.
-      unreached: unreached.map(machineLabel),
-      // Each machine's own answer, verbatim and attributed. The verdict
-      // about the interior lives here, per machine, where the runtime
-      // put it — never re-derived by the relay.
-      answers: answers.map((a) => ({ from: machineLabel(a.from), result: a.result })),
-    },
-  };
+  pending.resolve(result);
 }
 
 // --- WebSocket forwarding ---
@@ -599,50 +335,11 @@ async function forwardCommandToAgent(
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      // A broadcast with targets is not a timeout — it is a partial
-      // report, and the composed form already names which machines were
-      // silent. Rejecting threw those answers away and let the CLI print
-      // "Delivered, no answer yet" about a machine never reached.
-      const held = pendingCommands.get(commandId);
-      // Compose only what there is something to compose. NOTHING heard
-      // is a timeout, and must stay one.
-      //
-      // Routing every expired broadcast here resolved a single-machine
-      // request — every deployment that exists today — with
-      // `answers[0]` of an empty array: `undefined`, serialized as a
-      // 200 with an empty body. The CLI's carefully written 504 branch
-      // ("Delivered, no answer yet — it may well have stopped") was
-      // replaced by a JSON parse error, and the phone by "The runtime
-      // did not recognise \"halt\" — update it": a confident wrong
-      // diagnosis on the one verb this arc exists to protect. The same
-      // applies to a multi-machine request where every machine stayed
-      // silent — an honest prose report at HTTP 200 still tells a
-      // script that the halt succeeded.
-      // Compose when there is anything to SAY, which includes knowing a
-      // machine was never reached — not only when someone answered.
-      //
-      // Keyed on answers alone, a broadcast where one machine was dead
-      // and the other wedged rejected as a plain timeout, and the CLI
-      // printed "Delivered, no answer yet — the runtime received this
-      // command" about a machine the relay knew it never reached. That
-      // is verbatim the conflation this change exists to remove.
-      if (held != null && (held.answers.length > 0 || held.unreached.length > 0)) {
-        finishCommand(commandId);
-        return;
-      }
       pendingCommands.delete(commandId);
       reject(new Error("Command timed out"));
-    }, commandTimeoutMs);
+    }, COMMAND_TIMEOUT_MS);
 
-    pendingCommands.set(commandId, {
-      resolve,
-      timer,
-      targets: [],
-      unreached: [],
-      collapsedUndeclared: 0,
-      wasFolded: false,
-      answers: [],
-    });
+    pendingCommands.set(commandId, { resolve, timer });
 
     // For most commands any connected surface can answer. For the
     // unattended-runtime set, only a peer that actually runs unattended
@@ -691,12 +388,20 @@ async function forwardCommandToAgent(
       // advice for someone away from both machines. That is precisely
       // the situation this arc exists for, so the guard was breaking
       // the feature to protect a different one.
-      const manyMachines =
-        PER_MACHINE_DATABASE_COMMANDS.has(command) && allDeclared && devices.size > 1;
+      const perMachineRecord = PER_MACHINE_DATABASE_COMMANDS.has(command);
+      const wouldStopOne = REFUSE_ON_MANY_MACHINES.has(command);
+      const manyMachines = (perMachineRecord || wouldStopOne) && allDeclared && devices.size > 1;
       candidates = manyMachines ? [] : unattended;
-      emptyReason = manyMachines
-        ? `This motebit has unattended runtimes on ${devices.size} different machines, each with its own records, so the relay cannot choose one — run this command on the machine you mean, or stop the runtime you do not`
-        : noPeerReason(command);
+      emptyReason = !manyMachines
+        ? noPeerReason(command)
+        : wouldStopOne
+          ? // Different sentence from the records one: nothing here is
+            // about which database answers. Delivering to one machine
+            // would STOP one and leave the other working, under the
+            // stopped one's acknowledgement — a record that says the
+            // motebit stopped while it is still running.
+            `This motebit has unattended runtimes on ${devices.size} different machines, and a halt is written where it lands — delivering to one would stop that machine and answer as though the motebit had stopped, while the other kept working. Run this on each machine, or stop the runtime you do not want. Reaching every machine at once is tracked in issue #681`
+          : `This motebit has unattended runtimes on ${devices.size} different machines, each with its own records, so the relay cannot choose one — run this command on the machine you mean, or stop the runtime you do not`;
     } else if (command !== "approvals") {
       // Everything but `approvals` gets no fallback: a daemon too old to
       // announce the capability is too old to honor a halt or to hold a
@@ -750,96 +455,6 @@ async function forwardCommandToAgent(
               : `${emptyReason} — nothing was delivered, so this is not a report that nothing happened`,
         }),
       );
-      return;
-    }
-
-    // Broadcast reaches every MACHINE; first-wins reaches one peer.
-    //
-    // Per machine, not per connection: `motebit run` and `motebit serve`
-    // on one host are two peers sharing a device id, a database and one
-    // replay guard, and the envelope carries a single signature — so a
-    // second frame to the same host is rejected as a replay by its own
-    // motebit. Within a machine, every connection is a candidate for
-    // that machine's one delivery, because which of its sockets is
-    // alive is a different question from how many deliveries it should
-    // get.
-    const broadcast = BROADCAST_UNATTENDED_COMMANDS.has(command);
-    if (broadcast) {
-      const byMachine = new Map<string, ConnectedDevice[]>();
-      for (const peer of candidates) {
-        const key = peer.deviceIdDeclared === true ? peer.deviceId : UNDECLARED_MACHINE;
-        const bucket = byMachine.get(key);
-        if (bucket == null) byMachine.set(key, [peer]);
-        else bucket.push(peer);
-      }
-
-      // Every machine the command was AIMED at is a target, including
-      // one whose only socket turns out to be shut.
-      //
-      // Counting only successful sends made an unreachable machine
-      // vanish: with a laptop whose connection was closed-but-unreaped
-      // and a live VPS, `targets` held one machine, the composed path
-      // was skipped, and the caller got the VPS's raw `acknowledged:
-      // true` with no sign that a second machine existed and was never
-      // reached. That is one machine's acknowledgement standing in for
-      // the motebit's — the defect this change exists to close, coming
-      // back through the accounting.
-      //
-      // And the list is complete BEFORE the first send, assigned rather
-      // than derived afterwards, so an answer arriving during the loop
-      // cannot read it as empty and settle first-wins. The previous
-      // version held only because every reply path crosses an `await`,
-      // which is a property of today's transport and not an invariant.
-      const pending = pendingCommands.get(commandId);
-      const aimedAt = [...byMachine.keys()];
-      if (pending != null) {
-        pending.targets = aimedAt;
-        // Two undeclared connections might be two hosts. They are folded
-        // into one delivery because they might equally be one host's two
-        // processes sharing a replay store, and delivering twice into
-        // that store is the worse error — but the fold makes
-        // `acknowledged` unprovable, so it is recorded and reported.
-        pending.collapsedUndeclared = Math.max(
-          0,
-          (byMachine.get(UNDECLARED_MACHINE)?.length ?? 0) - 1,
-        );
-        pending.wasFolded = pending.collapsedUndeclared > 0;
-      }
-
-      const unreached: string[] = [];
-      for (const [key, machinePeers] of byMachine) {
-        const ok = machinePeers.some((peer) => {
-          if (peer.ws.readyState !== 1) return false;
-          try {
-            peer.ws.send(payload);
-            return true;
-          } catch {
-            return false;
-          }
-        });
-        if (!ok) unreached.push(key);
-      }
-      if (pending != null) {
-        pending.unreached = unreached;
-        // `targets` is complete before the first send; `unreached` can
-        // only be known after it. So the quorum is re-evaluated here:
-        // an answer that arrived DURING the loop computed `reached`
-        // against an empty `unreached`, missed the threshold, and
-        // nothing re-checked — leaving the request to stall for the
-        // whole timeout instead of composing at once. No transport does
-        // that today; the invariant should not depend on it.
-        if (pending.answers.length > 0) settleIfAllHeard(commandId);
-      }
-      if (unreached.length === aimedAt.length) {
-        clearTimeout(timer);
-        pendingCommands.delete(commandId);
-        reject(
-          new HTTPException(404, {
-            message:
-              "The runtime's connection is gone — nothing was delivered, so nothing was stopped or decided",
-          }),
-        );
-      }
       return;
     }
 

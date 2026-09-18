@@ -292,15 +292,14 @@ export function attachRuntime(
       reply: (raw) => {
         const msg = JSON.parse(raw) as { id: string; result: unknown };
         replied.push(msg.result);
-        // Back up the wire, named by the machine that answered — the
-        // relay attributes an answer by the device that sent it, and an
-        // undeclared peer stays undeclared so its bucket is not split.
+        // Back up the wire. Delivery is first-wins, so one answer
+        // settles the request and the relay does not need to know which
+        // machine sent it. Attribution arrives with the broadcast
+        // (issue #681), and this call gains that argument then — which
+        // is the point at which the harness can assert who answered and
+        // who stayed silent.
         try {
-          handleCommandResponse(
-            msg.id,
-            msg.result,
-            opts.deviceIdDeclared === false ? undefined : opts.deviceId,
-          );
+          handleCommandResponse(msg.id, msg.result);
         } catch (err) {
           // Never swallowed. A reply that cannot be delivered is the
           // harness being broken, not the subject.

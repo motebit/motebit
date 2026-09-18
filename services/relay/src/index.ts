@@ -340,18 +340,6 @@ export interface SyncRelayConfig {
    * amplifies contention flakes under parallel `turbo run test`).
    */
   drainGraceMs?: number;
-  /**
-   * How long a forwarded command waits for the runtime, in ms.
-   *
-   * Production keeps the default. Tests override it because a
-   * broadcast now waits for every machine it reached and composes at
-   * this deadline — there is no grace window to shorten — so asserting
-   * the silent-machine paths at the real value costs 30 seconds each,
-   * on a suite this repo already fights for CI time. Same motivation as
-   * `drainGraceMs` above: keep the code path exercised without paying
-   * its wall clock.
-   */
-  commandTimeoutMs?: number;
   /** Federation configuration. Omit to disable federation. */
   federation?: {
     /** Display name for this relay in the federation. */
@@ -1528,13 +1516,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   registerListingsRoutes({ app, moteDb, taskRouter });
 
   // --- Command endpoint (unified remote execution) ---
-  registerCommandRoutes({
-    app,
-    db: moteDb.db,
-    connections,
-    logger,
-    ...(config.commandTimeoutMs != null ? { commandTimeoutMs: config.commandTimeoutMs } : {}),
-  });
+  registerCommandRoutes({ app, db: moteDb.db, connections, logger });
 
   // --- Delegation-revocation cache (standing-delegation §5; signed artifacts,
   // relay is cache-not-authority) ---
