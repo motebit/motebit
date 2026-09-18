@@ -69,7 +69,11 @@ export interface WebSocketDeps {
   ) => Promise<boolean>;
   parseTokenPayloadUnsafe: (token: string) => import("./auth.js").TokenPayload | null;
   logger: ReturnType<typeof createLogger>;
-  onCommandResponse?: (commandId: string, result: unknown) => void;
+  /**
+   * `from` is the device id of the connection the answer arrived on —
+   * a transport fact the relay holds, never a claim read from the answer.
+   */
+  onCommandResponse?: (commandId: string, result: unknown, from?: string) => void;
   /** When true, new WebSocket upgrades are rejected with close code 1001. */
   isDraining?: () => boolean;
 }
@@ -326,7 +330,11 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
               typeof (msg as Record<string, unknown>).id === "string"
             ) {
               const cmdMsg = msg as unknown as { id: string; result: unknown };
-              deps.onCommandResponse?.(cmdMsg.id, cmdMsg.result);
+              // Attributed by the SOCKET — `deviceId` is this connection's,
+              // fixed at upgrade. A composed question names each machine's
+              // answer, and letting the answer name its own machine would
+              // let one runtime speak for another.
+              deps.onCommandResponse?.(cmdMsg.id, cmdMsg.result, deviceId);
             }
 
             // Agent protocol: task_claim

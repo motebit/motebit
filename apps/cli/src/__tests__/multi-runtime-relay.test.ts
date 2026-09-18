@@ -9,16 +9,22 @@
  * guard, real command layer, a halt store per process.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { createSyncRelay } from "@motebit/relay";
+import { createSyncRelay, handleCommandResponse } from "@motebit/relay";
 import type { SyncRelay } from "@motebit/relay";
 import { generateKeypair, bytesToHex, signAgentCommandEnvelope } from "@motebit/crypto";
 import type { KeyPair } from "@motebit/crypto";
+import { readComposedCommandResult } from "@motebit/runtime";
+import { RelayClient, RelayClientError } from "@motebit/relay-client";
+import { describeRemoteFailure } from "../subcommands/halt.js";
 import {
   assertWireHealthy,
   attachRuntime,
   resetHarness,
   standUpMotebit,
 } from "./multi-runtime-harness.js";
+
+/** The relay's one deadline, shortened so a silent machine costs ms. */
+const DEADLINE_MS = 200;
 
 const AUTH = { "Content-Type": "application/json", Authorization: "Bearer test-token" };
 
@@ -53,9 +59,10 @@ beforeEach(async () => {
       testnet: true,
     },
     drainGraceMs: 10,
-    // The deadline is the only bound now — there is no grace window to
+    // The deadline is the only bound — there is no grace window to
     // shorten — so the silent-machine paths would cost 30s each at the
     // production value. Same motivation as `drainGraceMs`.
+    commandTimeoutMs: DEADLINE_MS,
     // The harness registers on 127.0.0.1 — the local-development
     // allowance. Production keeps the default: globally-routable only.
     allowPrivateEndpoints: true,
@@ -428,5 +435,371 @@ describe("two runtimes, one relay — what a frame actually does", () => {
     const { body } = await ask("halt");
     expect(JSON.stringify(body)).toMatch(/no registered identity public key/i);
     expect(daemon.runtime.halts?.listActive(motebitId) ?? []).toHaveLength(0);
+  });
+});
+
+/** One machine's line in a composed answer, as far as a test reads it. */
+interface MachineLine {
+  device_id: string;
+  outcome: string;
+  result?: { summary?: string; data?: Record<string, unknown> };
+}
+
+function machinesOf(body: Record<string, unknown>): MachineLine[] {
+  const data = body.data as { machines?: MachineLine[] } | undefined;
+  return data?.machines ?? [];
+}
+
+const UNATTENDED = ["background", "unattended_runtime"];
+
+describe("halt-status across machines — the question it exists to answer", () => {
+  it("asks EVERY machine, and each machine's own answer comes back under its own name", async () => {
+    // The halt store is per machine. First-wins answered from whichever
+    // machine the relay picked, so "Running — nothing is halted" could
+    // be said about a motebit whose other machine was stopped — or the
+    // reverse, which is worse.
+    const deps = { relay, motebitId, identityPublicKey: pubHex };
+    const laptop = attachRuntime(deps, {
+      label: "run",
+      deviceId: "dev-1",
+      capabilities: UNATTENDED,
+    });
+    const vps = attachRuntime(deps, { label: "run", deviceId: "dev-2", capabilities: UNATTENDED });
+    await vps.runtime.requestHalt({ origin: "local", reason: "only the vps" });
+
+    const { status, body } = await ask("halt-status");
+    expect(status).toBe(200);
+    expect(laptop.received).toHaveLength(1);
+    expect(vps.received).toHaveLength(1);
+
+    const machines = machinesOf(body);
+    expect(machines.map((m) => m.device_id).sort()).toEqual(["dev-1", "dev-2"]);
+    const byId = new Map(machines.map((m) => [m.device_id, m]));
+    // Verbatim, per machine. The relay does not add them up.
+    expect(byId.get("dev-1")?.outcome).toBe("answered");
+    expect(byId.get("dev-1")?.result?.data?.halted).toBe(false);
+    expect(byId.get("dev-2")?.outcome).toBe("answered");
+    expect(byId.get("dev-2")?.result?.data?.halted).toBe(true);
+    // ...and the relay publishes no verdict of its own about the interior.
+    expect((body.data as Record<string, unknown>).halted).toBeUndefined();
+    expect((body.data as Record<string, unknown>).partial).toBe(false);
+    // A person reading only the prose can still tell which is which.
+    expect(String(body.detail)).toMatch(/dev-1: Running/);
+    expect(String(body.detail)).toMatch(/dev-2: Stop requested/);
+  });
+
+  it("delivers ONCE per machine — two processes on a host share a replay guard", async () => {
+    const deps = { relay, motebitId, identityPublicKey: pubHex };
+    const run = attachRuntime(deps, { label: "run", deviceId: "dev-1", capabilities: UNATTENDED });
+    const serve = attachRuntime(deps, {
+      label: "serve",
+      deviceId: "dev-1",
+      capabilities: UNATTENDED,
+    });
+    const vps = attachRuntime(deps, { label: "run", deviceId: "dev-2", capabilities: UNATTENDED });
+
+    const { status, body } = await ask("halt-status");
+    expect(status).toBe(200);
+    expect(run.received.length + serve.received.length).toBe(1);
+    expect(vps.received).toHaveLength(1);
+    // Per connection, the second process refuses its own motebit's
+    // question as a replay and that refusal becomes a machine's answer.
+    expect(JSON.stringify(body)).not.toMatch(/replay/i);
+    expect(machinesOf(body)).toHaveLength(2);
+  });
+
+  it("walks past a dead socket to the live process on the SAME machine", async () => {
+    const deps = { relay, motebitId, identityPublicKey: pubHex };
+    attachRuntime(deps, {
+      label: "stale",
+      deviceId: "dev-1",
+      capabilities: UNATTENDED,
+      socketIsDead: true,
+    });
+    const live = attachRuntime(deps, {
+      label: "live",
+      deviceId: "dev-1",
+      capabilities: UNATTENDED,
+    });
+    attachRuntime(deps, { label: "run", deviceId: "dev-2", capabilities: UNATTENDED });
+
+    const { status, body } = await ask("halt-status");
+    expect(status).toBe(200);
+    expect(live.received).toHaveLength(1);
+    expect(machinesOf(body).every((m) => m.outcome === "answered")).toBe(true);
+  });
+
+  it("an UNREACHED machine is named, and the partial picture is not a 2xx", async () => {
+    // Honest prose at HTTP 200 still lets
+    // `motebit halt-status --remote && <next>` proceed on half a picture.
+    const deps = { relay, motebitId, identityPublicKey: pubHex };
+    attachRuntime(deps, { label: "run", deviceId: "dev-1", capabilities: UNATTENDED });
+    const gone = attachRuntime(deps, {
+      label: "run",
+      deviceId: "dev-2",
+      capabilities: UNATTENDED,
+      socketIsDead: true,
+    });
+
+    const { status, body } = await ask("halt-status");
+    expect(status).toBe(504);
+    expect(gone.received).toEqual([]);
+    const byId = new Map(machinesOf(body).map((m) => [m.device_id, m]));
+    expect(byId.get("dev-1")?.outcome).toBe("answered");
+    expect(byId.get("dev-1")?.result?.data?.halted).toBe(false);
+    expect(byId.get("dev-2")?.outcome).toBe("unreached");
+    expect((body.data as Record<string, unknown>).partial).toBe(true);
+    // Named, in the prose a person actually reads.
+    expect(String(body.detail)).toMatch(/dev-2: not reached/);
+  });
+
+  it("a SILENT machine is named as silent — not as unreached, and not as running", async () => {
+    const deps = { relay, motebitId, identityPublicKey: pubHex };
+    attachRuntime(deps, { label: "run", deviceId: "dev-1", capabilities: UNATTENDED });
+    const wedged = attachRuntime(deps, {
+      label: "run",
+      deviceId: "dev-2",
+      capabilities: UNATTENDED,
+      neverReplies: true,
+    });
+
+    const { status, body } = await ask("halt-status");
+    expect(status).toBe(504);
+    expect(wedged.received).toHaveLength(1);
+    const byId = new Map(machinesOf(body).map((m) => [m.device_id, m]));
+    expect(byId.get("dev-1")?.outcome).toBe("answered");
+    expect(byId.get("dev-2")?.outcome).toBe("silent");
+    expect(String(body.detail)).toMatch(/dev-2: no answer in time/);
+  });
+
+  it("NOTHING heard is a timeout and stays one — with a body a client can parse", async () => {
+    // Composing an empty answer list once resolved `undefined`: a 200
+    // with an empty body, which turned the CLI's 504 branch into a JSON
+    // parse error.
+    const deps = { relay, motebitId, identityPublicKey: pubHex };
+    attachRuntime(deps, {
+      label: "run",
+      deviceId: "dev-1",
+      capabilities: UNATTENDED,
+      neverReplies: true,
+    });
+    attachRuntime(deps, {
+      label: "run",
+      deviceId: "dev-2",
+      capabilities: UNATTENDED,
+      neverReplies: true,
+    });
+
+    const { status, body } = await ask("halt-status");
+    expect(status).toBe(504);
+    expect(typeof body.summary).toBe("string");
+    expect(machinesOf(body).map((m) => m.outcome)).toEqual(["silent", "silent"]);
+  });
+
+  it("NOTHING delivered is a 404, exactly as it is for one machine", async () => {
+    const deps = { relay, motebitId, identityPublicKey: pubHex };
+    attachRuntime(deps, {
+      label: "run",
+      deviceId: "dev-1",
+      capabilities: UNATTENDED,
+      socketIsDead: true,
+    });
+    attachRuntime(deps, {
+      label: "run",
+      deviceId: "dev-2",
+      capabilities: UNATTENDED,
+      socketIsDead: true,
+    });
+
+    const { status, body } = await ask("halt-status");
+    expect(status).toBe(404);
+    expect(JSON.stringify(body)).toMatch(/nothing was delivered/i);
+    expect(JSON.stringify(body)).toMatch(/dev-1/);
+    expect(JSON.stringify(body)).toMatch(/dev-2/);
+  });
+
+  it("an answer belongs to the machine it CAME from, not to whichever line was waiting", async () => {
+    // Arrival order is not attach order. Filling "the next waiting
+    // line" would put the VPS's halt under the laptop's name — telling a
+    // sovereign the wrong machine is stopped, which is worse than not
+    // knowing.
+    const deps = { relay, motebitId, identityPublicKey: pubHex };
+    const laptop = attachRuntime(deps, {
+      label: "run",
+      deviceId: "dev-1",
+      capabilities: UNATTENDED,
+      neverReplies: true,
+    });
+    const vps = attachRuntime(deps, { label: "run", deviceId: "dev-2", capabilities: UNATTENDED });
+    await vps.runtime.requestHalt({ origin: "local" });
+
+    const pending = ask("halt-status");
+    // The machine attached SECOND answers FIRST...
+    await expect.poll(() => vps.replied.length).toBe(1);
+    // ...and only then the laptop, late.
+    const frame = JSON.parse(laptop.received[0] ?? "{}") as { id: string };
+    handleCommandResponse(
+      frame.id,
+      { summary: "the laptop, late", data: { halted: false, active: [] } },
+      "dev-1",
+    );
+
+    const { body } = await pending;
+    const byId = new Map(machinesOf(body).map((m) => [m.device_id, m]));
+    expect(byId.get("dev-2")?.result?.data?.halted).toBe(true);
+    expect(byId.get("dev-1")?.result?.summary).toBe("the laptop, late");
+  });
+
+  it("counts MACHINES, not answers — a repeat, or a stranger, settles nothing", async () => {
+    // A runtime replying twice once satisfied a quorum and closed the
+    // request before the other machine had been heard from.
+    const deps = { relay, motebitId, identityPublicKey: pubHex };
+    const laptop = attachRuntime(deps, {
+      label: "run",
+      deviceId: "dev-1",
+      capabilities: UNATTENDED,
+    });
+    const vps = attachRuntime(deps, {
+      label: "run",
+      deviceId: "dev-2",
+      capabilities: UNATTENDED,
+      neverReplies: true,
+    });
+
+    const pending = ask("halt-status");
+    // Until the laptop has answered for real.
+    await expect.poll(() => laptop.replied.length).toBe(1);
+    const frame = JSON.parse(vps.received[0] ?? "{}") as { id: string };
+    const forged = { summary: "forged", data: { halted: false, active: [] } };
+    handleCommandResponse(frame.id, forged, "dev-1"); // the same machine, again
+    handleCommandResponse(frame.id, forged, "dev-9"); // a machine never asked
+    // Still open: only now does the second machine answer.
+    handleCommandResponse(
+      frame.id,
+      { summary: "the vps, finally", data: { halted: true, active: [] } },
+      "dev-2",
+    );
+
+    const { status, body } = await pending;
+    expect(status).toBe(200);
+    const byId = new Map(machinesOf(body).map((m) => [m.device_id, m]));
+    expect(byId.size).toBe(2);
+    // The first answer a machine gave is the one kept.
+    expect(byId.get("dev-1")?.result?.summary).not.toBe("forged");
+    expect(byId.get("dev-2")?.result?.summary).toBe("the vps, finally");
+  });
+
+  it("a machine that REFUSES has not reported — the picture is partial", async () => {
+    // A replayed envelope is refused by every machine's own guard. Each
+    // refusal is an answer on the wire and a record of nothing, so
+    // counting it as answered would publish "2 of 2" over no halts read.
+    const deps = { relay, motebitId, identityPublicKey: pubHex };
+    attachRuntime(deps, { label: "run", deviceId: "dev-1", capabilities: UNATTENDED });
+    attachRuntime(deps, { label: "run", deviceId: "dev-2", capabilities: UNATTENDED });
+    const envelope = await signAgentCommandEnvelope({
+      command: "halt-status",
+      motebitId,
+      identityPrivateKey: keys.privateKey,
+    });
+    const send = async () => {
+      const res = await relay.app.request(`/api/v1/agents/${motebitId}/command`, {
+        method: "POST",
+        headers: AUTH,
+        body: JSON.stringify({ command: "halt-status", envelope }),
+      });
+      return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+    };
+    expect((await send()).status).toBe(200);
+    const again = await send();
+    expect(again.status).toBe(504);
+    expect(machinesOf(again.body).map((m) => m.outcome)).toEqual(["no_record", "no_record"]);
+    // The machine's own reason is carried, not replaced.
+    expect(String(again.body.detail)).toMatch(/replay/i);
+  });
+
+  it("ONE machine is answered exactly as before — the runtime's own reply, uncomposed", async () => {
+    const deps = { relay, motebitId, identityPublicKey: pubHex };
+    attachRuntime(deps, { label: "run", deviceId: "dev-1", capabilities: UNATTENDED });
+    attachRuntime(deps, { label: "serve", deviceId: "dev-1", capabilities: UNATTENDED });
+
+    const { status, body } = await ask("halt-status");
+    expect(status).toBe(200);
+    expect(body.summary).toBe("Running — nothing is halted.");
+    expect((body.data as Record<string, unknown>).composed).toBeUndefined();
+  });
+
+  it("what the relay composes is what the surfaces' shared reader reads", async () => {
+    // The CLI and the phone both render a partial from its BODY, through
+    // one reader. If the relay's shape and the reader's drift apart,
+    // both fall back to status-keyed copy that asserts "delivered" about
+    // a machine that was never reached.
+    const deps = { relay, motebitId, identityPublicKey: pubHex };
+    attachRuntime(deps, { label: "run", deviceId: "dev-1", capabilities: UNATTENDED });
+    attachRuntime(deps, {
+      label: "run",
+      deviceId: "dev-2",
+      capabilities: UNATTENDED,
+      socketIsDead: true,
+    });
+
+    const { status, body } = await ask("halt-status");
+    expect(status).toBe(504);
+    const read = readComposedCommandResult(JSON.stringify(body));
+    expect(read).not.toBeNull();
+    expect(read?.partial).toBe(true);
+    expect(read?.detail).toMatch(/dev-2: not reached/);
+    // And a plain timeout body is NOT mistaken for one.
+    expect(readComposedCommandResult('{"summary":"Agent did not respond in time."}')).toBeNull();
+  });
+
+  it("the terminal prints a partial as the REPORT it is — through the real client, end to end", async () => {
+    // Every part real but the socket: `RelayClient` mints the envelope
+    // and makes the request, the relay composes, and the CLI's own
+    // wording function reads what came back. The 504 copy it replaces
+    // says "Delivered, no answer yet" — about a machine never reached.
+    const deps = { relay, motebitId, identityPublicKey: pubHex };
+    attachRuntime(deps, { label: "run", deviceId: "dev-1", capabilities: UNATTENDED });
+    attachRuntime(deps, {
+      label: "run",
+      deviceId: "dev-2",
+      capabilities: UNATTENDED,
+      socketIsDead: true,
+    });
+    const client = new RelayClient({
+      baseUrl: "http://relay.test",
+      auth: { staticToken: "test-token" },
+      fetchImpl: ((url: string, init?: RequestInit) =>
+        relay.app.request(new URL(url).pathname, init)) as unknown as typeof fetch,
+    });
+
+    const err = await client
+      .sendAgentCommand({
+        motebitId,
+        command: "halt-status",
+        identityPrivateKey: keys.privateKey,
+      })
+      .catch((e: unknown) => e);
+    // A partial never resolves: `halt-status --remote && <next>` stops.
+    expect(err).toBeInstanceOf(RelayClientError);
+
+    const said = describeRemoteFailure(err as RelayClientError);
+    expect(said.failure).toEqual([]);
+    const text = said.report.join("\n");
+    expect(text).toMatch(/NOT the whole picture/);
+    expect(text).toMatch(/dev-1: Running/);
+    expect(text).toMatch(/dev-2: not reached/);
+    expect(text).not.toMatch(/Delivered/);
+  });
+
+  it("a plain timeout still reads as delivered-and-unanswered", async () => {
+    // The composed branch must not swallow the sentence it sits above.
+    const said = describeRemoteFailure(
+      new RelayClientError("http", "/command", "POST /command → 504", {
+        status: 504,
+        body: '{"summary":"Agent did not respond in time."}',
+      }),
+    );
+    expect(said.report).toEqual([]);
+    expect(said.failure.join("\n")).toMatch(/Delivered, no answer yet/);
   });
 });

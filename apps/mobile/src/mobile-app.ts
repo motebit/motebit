@@ -21,6 +21,7 @@ import {
   resolveProactiveAnchor,
   createRelayCapabilitiesFetcher,
   cmdSelfTest,
+  readComposedCommandResult,
 } from "@motebit/runtime";
 import { buildHardwareVerifiers } from "@motebit/verify";
 import { createSolanaWalletRail, createSolanaMemoSubmitter } from "@motebit/wallet-solana";
@@ -1692,6 +1693,21 @@ export class MobileApp {
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
+      // BEFORE the status is read. A question asked of several machines
+      // comes back non-2xx when any of them did not report, and its body
+      // is the answer — one line per machine, named. The 504 copy below
+      // says "Delivered" about a machine that may never have been
+      // reached; the terminal learned this once and the phone did not,
+      // so both now read the body through the same reader. Still thrown:
+      // a partial picture is not a result, and the person sees it whole.
+      const composed = readComposedCommandResult(text);
+      if (composed != null) {
+        throw new Error(
+          composed.detail != null && composed.detail !== ""
+            ? `${composed.summary}\n${composed.detail}`
+            : composed.summary,
+        );
+      }
       if (res.status === 401) {
         // Two different rejections land here: the transport token, and
         // the command envelope. Naming only one of them would be a

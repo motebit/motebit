@@ -340,6 +340,15 @@ export interface SyncRelayConfig {
    * amplifies contention flakes under parallel `turbo run test`).
    */
   drainGraceMs?: number;
+  /**
+   * How long a forwarded remote command waits for the runtime's answer.
+   *
+   * Default: 30000 (production, which never sets this). A composed
+   * question — one asked of every machine — has no second, shorter
+   * window after the first answer, so a test proving what a SILENT
+   * machine looks like would otherwise pay the full 30s each time.
+   */
+  commandTimeoutMs?: number;
   /** Federation configuration. Omit to disable federation. */
   federation?: {
     /** Display name for this relay in the federation. */
@@ -1516,7 +1525,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   registerListingsRoutes({ app, moteDb, taskRouter });
 
   // --- Command endpoint (unified remote execution) ---
-  registerCommandRoutes({ app, db: moteDb.db, connections, logger });
+  registerCommandRoutes({
+    app,
+    db: moteDb.db,
+    connections,
+    logger,
+    ...(config.commandTimeoutMs != null ? { commandTimeoutMs: config.commandTimeoutMs } : {}),
+  });
 
   // --- Delegation-revocation cache (standing-delegation §5; signed artifacts,
   // relay is cache-not-authority) ---

@@ -83,15 +83,13 @@ const MUTATING_UNATTENDED_COMMANDS = new Set(["halt", "resume", "approvals"]);
  * above without this said "each with its own approval queue" about a
  * question with no queue in it.
  *
- * `halt-status` reads a local store too and is deliberately NOT here.
- * It would be the same reasoning, and it is the wrong PR for it: on a
- * two-machine motebit `halt` still delivers to one of them, so refusing
- * the status leaves a phone able to stop the motebit and unable to see
- * what stopped — strictly worse than the false negative it replaces,
- * and a change to an already-shipped verb from an increment that only
- * adds a read. The multi-machine story is one problem, delivery and
- * status together, and it belongs to issue #681 behind the harness.
- * This set gains exactly one member here: `runs`, this increment's own.
+ * `halt-status` reads a local store too and is NOT here, because it is
+ * not refused: it is ASKED OF EVERY MACHINE and the answers composed —
+ * see `COMPOSED_ACROSS_MACHINES`. Refusing it would leave a sovereign
+ * away from both machines unable to see what is stopped, which is the
+ * one question the verb exists for. `approvals` and `runs` stay refused
+ * until someone needs them composed; that is a decision per verb, not a
+ * property of the machinery.
  */
 const PER_MACHINE_DATABASE_COMMANDS = new Set(["approvals", "runs"]);
 
@@ -124,6 +122,26 @@ const PER_MACHINE_DATABASE_COMMANDS = new Set(["approvals", "runs"]);
  * pressure.
  */
 const REFUSE_ON_MANY_MACHINES = new Set(["halt", "resume"]);
+
+/**
+ * Reads asked of EVERY machine, with the answers composed rather than
+ * raced.
+ *
+ * `halt-status` is the command whose job is answering "did my motebit
+ * stop", and the halt store it reads is per machine. Delivered
+ * first-wins it answered from whichever machine the relay picked, so
+ * "Running — nothing is halted" could be said about a motebit whose
+ * other machine was stopped, or a stop reported for a motebit still
+ * working elsewhere (issue #687).
+ *
+ * A read goes first on purpose. Asking twice is harmless and a local
+ * query answers in milliseconds, so the machinery a many-machine HALT
+ * needs (#681) — one delivery per machine, attributed answers, a status
+ * a partial cannot wear — is proven here on a verb that cannot hurt
+ * anyone, and the act then reuses it. Built the other way round, that
+ * machinery's failure modes were discovered with a halt in flight.
+ */
+const COMPOSED_ACROSS_MACHINES = new Set(["halt-status"]);
 
 /**
  * The capability a command's answer actually depends on.
@@ -194,23 +212,86 @@ const INFO_COMMANDS: Record<string, string> = {
   propose: "Collaborative proposals require the CLI. Run: motebit propose",
 };
 
+/**
+ * What became of the question on ONE machine. Transport facts only —
+ * nothing here is a statement about the interior.
+ *
+ * - `answered`  — the machine replied and its reply carries a record.
+ * - `no_record` — the machine replied WITHOUT one: it refused the frame
+ *   (a replayed envelope, a key it could not verify against) or has no
+ *   store to read. An answer on the wire and a report of nothing, so it
+ *   cannot count toward a complete picture.
+ * - `silent`    — delivered, and nothing came back before the deadline.
+ * - `unreached` — no socket on that machine was open; nothing was sent.
+ */
+type MachineOutcome = "answered" | "no_record" | "silent" | "unreached";
+
+interface MachineLine {
+  deviceId: string;
+  outcome: MachineOutcome;
+  /** The machine's own reply, verbatim. Present iff it replied. */
+  result?: unknown;
+}
+
+/**
+ * A composed reply and whether it is the whole picture.
+ *
+ * A class, not a field sniffed off the body: a first-wins reply is the
+ * runtime's own JSON passed through untouched, so anything keyed on the
+ * body's shape could be worn by a single machine's answer.
+ */
+class ComposedReply {
+  constructor(
+    readonly body: CommandResult,
+    readonly partial: boolean,
+  ) {}
+}
+
 /** Pending command requests waiting for WebSocket response. */
 const pendingCommands = new Map<
   string,
-  { resolve: (result: unknown) => void; timer: ReturnType<typeof setTimeout> }
+  | { kind: "first"; resolve: (result: unknown) => void; timer: ReturnType<typeof setTimeout> }
+  | {
+      kind: "composed";
+      resolve: (result: ComposedReply) => void;
+      timer: ReturnType<typeof setTimeout>;
+      /**
+       * One line per MACHINE the question was aimed at, keyed by device
+       * id. Keyed, not pushed to: counting answers rather than machines
+       * let a runtime replying twice satisfy a quorum and close the
+       * request before the other machine had been heard from.
+       */
+      machines: Map<string, MachineLine>;
+    }
 >();
 
-const COMMAND_TIMEOUT_MS = 30_000;
+const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
+
+/**
+ * The one deadline. A composed request has no second, shorter "grace"
+ * after the first answer: the relay cannot compute how long a machine's
+ * interior takes, two guesses at it were both wrong (#681), and nothing
+ * would bind the relay's constant to the runtime's. So it waits for
+ * every machine it reached and composes at the request's own deadline.
+ * Overridable only through relay config, which production never sets.
+ */
+let commandTimeoutMs = DEFAULT_COMMAND_TIMEOUT_MS;
 
 export interface CommandRouteDeps {
   app: Hono;
   db: DatabaseDriver;
   connections: Map<string, ConnectedDevice[]>;
   logger: ReturnType<typeof createLogger>;
+  /** Test seam; production uses the default. */
+  commandTimeoutMs?: number;
 }
 
 export function registerCommandRoutes(deps: CommandRouteDeps): void {
   const { app, db, connections } = deps;
+  // Module-scoped because the deadline belongs to the forwarding
+  // helpers, which the route closes over. One relay per process, so a
+  // single value is honest; the override exists for tests alone.
+  commandTimeoutMs = deps.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
 
   /** @internal */
   app.post("/api/v1/agents/:motebitId/command", async (c) => {
@@ -272,6 +353,16 @@ export function registerCommandRoutes(deps: CommandRouteDeps): void {
 
       try {
         const result = await forwardCommandToAgent(peers, command, args, body.envelope);
+        if (result instanceof ComposedReply) {
+          // A PARTIAL picture is not a success, and must not be a 2xx.
+          // Honest prose at HTTP 200 still lets
+          // `motebit halt-status --remote && <next step>` proceed on
+          // half an answer, and leaves every other consumer to remember
+          // to compare counts. Fail closed at the transport: a caller
+          // that forgets gets an error, and the body still carries the
+          // per-machine truth, so nothing is lost by the status.
+          return result.partial ? c.json(result.body, 504) : c.json(result.body);
+        }
         return c.json(result);
       } catch (err: unknown) {
         // A typed rejection already says what happened and with what
@@ -306,13 +397,224 @@ export function registerCommandRoutes(deps: CommandRouteDeps): void {
 /**
  * Called by the WebSocket message handler when an agent sends a command_response.
  * Resolves the pending Promise so the HTTP handler can return the result.
+ *
+ * `from` is the device id of the CONNECTION the answer arrived on —
+ * supplied by the socket handler, never read out of the answer. A
+ * machine cannot name itself into another machine's line.
  */
-export function handleCommandResponse(commandId: string, result: unknown): void {
+export function handleCommandResponse(commandId: string, result: unknown, from?: string): void {
   const pending = pendingCommands.get(commandId);
   if (!pending) return;
+  if (pending.kind === "first") {
+    clearTimeout(pending.timer);
+    pendingCommands.delete(commandId);
+    pending.resolve(result);
+    return;
+  }
+
+  // An answer counts once, and only from a machine this question was
+  // delivered to and has not yet heard from. A stranger's answer is not
+  // evidence about this request at all; a repeat must not overwrite the
+  // first, or the last writer would get to say what a machine reported.
+  const line = from != null ? pending.machines.get(from) : undefined;
+  if (line == null || line.outcome !== "silent") return;
+  line.outcome = carriesRecord(result) ? "answered" : "no_record";
+  line.result = result;
+
+  const stillWaiting = [...pending.machines.values()].some((m) => m.outcome === "silent");
+  if (!stillWaiting) settleComposed(commandId);
+}
+
+/**
+ * Did the machine report, or only reply?
+ *
+ * Every command in the composed set answers with structured `data` —
+ * that IS its record — while a refusal from the frame handler (replay,
+ * no key, bad envelope) and a surface with no store answer with prose
+ * alone. Reading for `data` is a fact about the reply's shape, not a
+ * judgement about the interior: the relay still never opens it.
+ */
+function carriesRecord(result: unknown): boolean {
+  if (typeof result !== "object" || result === null) return false;
+  const data = (result as { data?: unknown }).data;
+  return typeof data === "object" && data !== null;
+}
+
+function settleComposed(commandId: string): void {
+  const pending = pendingCommands.get(commandId);
+  if (pending == null || pending.kind !== "composed") return;
   clearTimeout(pending.timer);
   pendingCommands.delete(commandId);
-  pending.resolve(result);
+  pending.resolve(composeMachines([...pending.machines.values()]));
+}
+
+/**
+ * One answer from several machines, without pretending it was one.
+ *
+ * Every machine the question was aimed at gets a line and is NAMED,
+ * because "1 runtime did not answer" tells a sovereign with a laptop
+ * and a VPS the one thing they cannot act on: something may still be
+ * running and they do not know where.
+ *
+ * The relay does NOT add the answers up. It knows what it sent and what
+ * came back; it does not know what a goal is or which machine owns one,
+ * and an earlier attempt to AND a field across machines was false about
+ * two ordinary cases (#681). It sells coordination precisely because it
+ * is not the authority on the interior. So the body carries transport
+ * facts, and each machine's own reply verbatim beside its id — and the
+ * only verdict here is about the PICTURE: whether it is whole.
+ */
+function composeMachines(machines: MachineLine[]): ComposedReply {
+  const lines: string[] = [];
+  const details: string[] = [];
+  for (const m of machines) {
+    if (m.outcome === "unreached") {
+      lines.push(`${m.deviceId}: not reached — its connection was already gone`);
+      continue;
+    }
+    if (m.outcome === "silent") {
+      lines.push(
+        `${m.deviceId}: no answer in time — what is halted there is unknown, and silence is neither a stop nor a run`,
+      );
+      continue;
+    }
+    const reply = m.result as { summary?: unknown; detail?: unknown } | null;
+    const summary =
+      typeof reply?.summary === "string" && reply.summary !== ""
+        ? reply.summary
+        : "answered in a shape this relay could not read";
+    lines.push(
+      m.outcome === "no_record"
+        ? `${m.deviceId}: did not report — ${summary}`
+        : `${m.deviceId}: ${summary}`,
+    );
+    if (typeof reply?.detail === "string" && reply.detail !== "") {
+      details.push(`${m.deviceId}:\n${reply.detail}`);
+    }
+  }
+
+  const asked = machines.length;
+  const answered = machines.filter((m) => m.outcome === "answered").length;
+  const partial = answered < asked;
+  return new ComposedReply(
+    {
+      summary: partial
+        ? `Asked ${asked} machines; ${answered} reported. This is NOT the whole picture — the rest are named below.`
+        : `Asked ${asked} machines; all ${asked} reported. Each machine's own answer is below — the relay does not add them up.`,
+      detail: [lines.join("\n"), ...details].join("\n\n"),
+      data: {
+        // The marker a surface reads a non-2xx body by. See
+        // `readComposedCommandResult` in `@motebit/runtime`.
+        composed: true,
+        // One field, so no consumer has to compare counts to learn it.
+        partial,
+        asked,
+        answered,
+        machines: machines.map((m) => ({
+          device_id: m.deviceId,
+          outcome: m.outcome,
+          ...(m.result !== undefined ? { result: m.result } : {}),
+        })),
+      },
+    },
+    partial,
+  );
+}
+
+/**
+ * The machines a composed question goes to, or `null` when this request
+ * is not one.
+ *
+ * Only when there is more than one machine, and only when every
+ * unattended peer DECLARED its device id. One machine keeps the
+ * runtime's own reply, untouched — every deployment that exists today.
+ * And an undeclared id is one the relay invented per connection, so
+ * grouping by it would read one host's two processes as two machines,
+ * deliver the single-use envelope to both, and publish the second's
+ * replay refusal as a machine that did not report. Unknown falls back
+ * to delivering first-wins, as it does for every other verb here.
+ */
+function machinesToAsk(
+  peers: ConnectedDevice[],
+  command: string,
+): Map<string, ConnectedDevice[]> | null {
+  if (!COMPOSED_ACROSS_MACHINES.has(command)) return null;
+  const needed = requiredCapability(command);
+  const unattended = peers.filter((p) => p.capabilities?.includes(needed) === true);
+  if (unattended.some((p) => p.deviceIdDeclared !== true)) return null;
+  const byMachine = new Map<string, ConnectedDevice[]>();
+  for (const p of unattended) {
+    byMachine.set(p.deviceId, [...(byMachine.get(p.deviceId) ?? []), p]);
+  }
+  return byMachine.size > 1 ? byMachine : null;
+}
+
+/**
+ * Send to the first OPEN socket of a group. See the note on closed
+ * sockets in `forwardCommandToAgent`: a closed one swallows the frame
+ * without throwing, so it has to be asked.
+ */
+function sendToOne(group: ConnectedDevice[], payload: string): boolean {
+  return group.some((peer) => {
+    if (peer.ws.readyState !== 1) return false;
+    try {
+      peer.ws.send(payload);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
+ * Ask every machine once, and compose what comes back.
+ *
+ * ONE delivery per machine, not per connection: `motebit run` and
+ * `motebit serve` on a host share a device id, a database and a replay
+ * guard, and the envelope is single-use — a second frame to the same
+ * machine is refused as a replay by its own motebit.
+ */
+function askEveryMachine(
+  byMachine: Map<string, ConnectedDevice[]>,
+  commandId: string,
+  payload: string,
+): Promise<ComposedReply> {
+  return new Promise((resolve, reject) => {
+    const machines = new Map<string, MachineLine>();
+    // Registered BEFORE anything is sent: a machine may answer inside
+    // `send`, and an answer that finds no pending request is dropped.
+    const timer = setTimeout(() => settleComposed(commandId), commandTimeoutMs);
+    pendingCommands.set(commandId, { kind: "composed", resolve, timer, machines });
+    // Every line exists, and is WAITING, before the first send — for the
+    // same reason. A machine answering inside `send` must find the
+    // others still owed an answer, or it would settle a request whose
+    // other machines had not been asked yet.
+    for (const deviceId of byMachine.keys()) {
+      machines.set(deviceId, { deviceId, outcome: "silent" });
+    }
+    for (const [deviceId, group] of byMachine) {
+      const line = machines.get(deviceId);
+      if (line != null && !sendToOne(group, payload)) line.outcome = "unreached";
+    }
+
+    const lines = [...machines.values()];
+    if (lines.every((m) => m.outcome === "unreached")) {
+      clearTimeout(timer);
+      pendingCommands.delete(commandId);
+      // 404, like the single-machine path: nothing was delivered, and a
+      // composed 504 would say "asked" about machines never reached.
+      reject(
+        new HTTPException(404, {
+          message: `No connection to any of this motebit's ${lines.length} machines is open (${lines.map((m) => m.deviceId).join(", ")}) — nothing was delivered, so this is not a report that nothing happened`,
+        }),
+      );
+      return;
+    }
+    // Everything reachable may already have answered, inside `send`.
+    if (pendingCommands.has(commandId) && !lines.some((m) => m.outcome === "silent")) {
+      settleComposed(commandId);
+    }
+  });
 }
 
 // --- WebSocket forwarding ---
@@ -333,13 +635,16 @@ async function forwardCommandToAgent(
     envelope,
   });
 
+  const byMachine = machinesToAsk(peers, command);
+  if (byMachine != null) return askEveryMachine(byMachine, commandId, payload);
+
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pendingCommands.delete(commandId);
       reject(new Error("Command timed out"));
-    }, COMMAND_TIMEOUT_MS);
+    }, commandTimeoutMs);
 
-    pendingCommands.set(commandId, { resolve, timer });
+    pendingCommands.set(commandId, { kind: "first", resolve, timer });
 
     // For most commands any connected surface can answer. For the
     // unattended-runtime set, only a peer that actually runs unattended

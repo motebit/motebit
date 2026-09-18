@@ -22,6 +22,7 @@ import type { HaltAcknowledgement, HaltRequest } from "@motebit/sdk";
 import { EventType } from "@motebit/sdk";
 import { EventStore } from "@motebit/event-log";
 import { RelayClient, RelayClientError } from "@motebit/relay-client";
+import { readComposedCommandResult } from "@motebit/runtime";
 
 import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
@@ -137,6 +138,62 @@ function describe(halt: HaltRequest, acks: HaltAcknowledgement[]): string {
   return `  ${halt.halt_id.slice(0, 8)}  ${scope.padEnd(26)}${state}  (${halt.origin})${reason}`;
 }
 
+/**
+ * What a failed remote command has to say, split by where it belongs.
+ *
+ * `report` is an ANSWER and goes to stdout; `failure` is a diagnosis and
+ * goes to stderr. Either way the command exits non-zero. Pure, so the
+ * sentences can be asserted without a relay, a keyring or a passphrase.
+ */
+export function describeRemoteFailure(err: RelayClientError): {
+  report: string[];
+  failure: string[];
+} {
+  // BEFORE the status is read. A question asked of several machines
+  // comes back non-2xx when any of them did not report, and its body is
+  // the answer: one line per machine, named. The status-keyed copy
+  // below would say "Delivered, no answer yet" about a machine that was
+  // never reached, and throw the other machine's answer away — so the
+  // body is printed as the report it is, and the exit code still says
+  // the picture is incomplete.
+  const composed = readComposedCommandResult(err.body);
+  if (composed != null) {
+    return {
+      report: [
+        composed.summary,
+        ...(composed.detail != null && composed.detail !== "" ? [composed.detail] : []),
+      ],
+      failure: [],
+    };
+  }
+  // Name the failure for what it is. A command that did not arrive
+  // did not stop anything, and saying otherwise is the one thing a
+  // halt surface must never do.
+  // 504 is the one http status that means DELIVERED — the runtime
+  // had the command and did not answer inside the window, which is
+  // exactly when a halt is most likely to have been applied (the
+  // stopper racing a slow abort). Calling that "not delivered" would
+  // tell someone their motebit is still running when it has stopped.
+  // `err.message` is only `POST <path> → <status>`. The relay's own
+  // reason lives in `body`, and on a 404 it is frequently the only
+  // actionable sentence there is — "runtimes on 2 different
+  // machines, run this on the machine you mean". Printing the
+  // status line alone threw it away, which is the same defect the
+  // phone's handler was fixed for in this branch.
+  const reason = relayReason(err.body);
+  const detail = reason !== "" ? `${err.message} — ${reason}` : err.message;
+  return {
+    report: [],
+    failure: [
+      err.status === 504
+        ? `Delivered, no answer yet: ${detail}\nThe runtime received this command and did not reply in time. It may well have stopped — check \`motebit halt-status --remote\` rather than assuming either way.`
+        : err.kind === "http" || err.kind === "network"
+          ? `Not delivered: ${detail}\nThe runtime did not answer, so nothing has been stopped remotely. A halt written locally (\`motebit halt\` without --remote) is in force on this machine regardless.`
+          : `Command failed: ${detail}`,
+    ],
+  };
+}
+
 async function sendRemote(config: CliConfig, command: string, args?: string): Promise<void> {
   const full = loadFullConfig();
   const motebitId = requireMotebitId(full);
@@ -172,29 +229,9 @@ async function sendRemote(config: CliConfig, command: string, args?: string): Pr
     if (result.detail != null && result.detail !== "") console.log(result.detail);
   } catch (err: unknown) {
     if (err instanceof RelayClientError) {
-      // Name the failure for what it is. A command that did not arrive
-      // did not stop anything, and saying otherwise is the one thing a
-      // halt surface must never do.
-      // 504 is the one http status that means DELIVERED — the runtime
-      // had the command and did not answer inside the window, which is
-      // exactly when a halt is most likely to have been applied (the
-      // stopper racing a slow abort). Calling that "not delivered" would
-      // tell someone their motebit is still running when it has stopped.
-      // `err.message` is only `POST <path> → <status>`. The relay's own
-      // reason lives in `body`, and on a 404 it is frequently the only
-      // actionable sentence there is — "runtimes on 2 different
-      // machines, run this on the machine you mean". Printing the
-      // status line alone threw it away, which is the same defect the
-      // phone's handler was fixed for in this branch.
-      const reason = relayReason(err.body);
-      const detail = reason !== "" ? `${err.message} — ${reason}` : err.message;
-      console.error(
-        err.status === 504
-          ? `Delivered, no answer yet: ${detail}\nThe runtime received this command and did not reply in time. It may well have stopped — check \`motebit halt-status --remote\` rather than assuming either way.`
-          : err.kind === "http" || err.kind === "network"
-            ? `Not delivered: ${detail}\nThe runtime did not answer, so nothing has been stopped remotely. A halt written locally (\`motebit halt\` without --remote) is in force on this machine regardless.`
-            : `Command failed: ${detail}`,
-      );
+      const said = describeRemoteFailure(err);
+      for (const line of said.report) console.log(line);
+      for (const line of said.failure) console.error(line);
       process.exitCode = 1;
       return;
     }

@@ -31,6 +31,12 @@ export { cmdWelcome, cmdApprovals } from "./system.js";
 export { cmdRuns } from "./runs.js";
 import { cmdRuns } from "./runs.js";
 export { cmdHalt, cmdResume, cmdHaltStatus } from "./halt.js";
+export {
+  readComposedCommandResult,
+  type ComposedCommandResult,
+  type ComposedMachineLine,
+  type ComposedMachineOutcome,
+} from "./composed.js";
 export { PlanExecutionVM, type PlanSnapshot, type PlanEvent } from "./plans.js";
 
 /**

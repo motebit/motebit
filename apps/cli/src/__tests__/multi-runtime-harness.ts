@@ -17,9 +17,11 @@
  * layer, real stores.
  *
  * What it deliberately does not do is stand up a socket upgrade. The
- * relay's own tests cover that the WebSocket handler forwards to
- * `handleCommandResponse`; re-proving it here would buy nothing and
- * make the harness slow enough that nobody runs it.
+ * relay's own `websocket-command-response.test.ts` drives the real
+ * handler and proves the one thing this harness has to take on trust:
+ * that an answer is attributed by the device id its connection was
+ * upgraded with. Re-proving it here would make the harness slow enough
+ * that nobody runs it.
  */
 import { handleCommandResponse } from "@motebit/relay";
 import type { SyncRelay } from "@motebit/relay";
@@ -292,14 +294,12 @@ export function attachRuntime(
       reply: (raw) => {
         const msg = JSON.parse(raw) as { id: string; result: unknown };
         replied.push(msg.result);
-        // Back up the wire. Delivery is first-wins, so one answer
-        // settles the request and the relay does not need to know which
-        // machine sent it. Attribution arrives with the broadcast
-        // (issue #681), and this call gains that argument then — which
-        // is the point at which the harness can assert who answered and
-        // who stayed silent.
+        // Back up the wire, attributed the way the relay's socket
+        // handler attributes it: by the CONNECTION the answer arrived
+        // on, never by anything the answer says about itself. A machine
+        // cannot name itself into another machine's line.
         try {
-          handleCommandResponse(msg.id, msg.result);
+          handleCommandResponse(msg.id, msg.result, opts.deviceId);
         } catch (err) {
           // Never swallowed. A reply that cannot be delivered is the
           // harness being broken, not the subject.

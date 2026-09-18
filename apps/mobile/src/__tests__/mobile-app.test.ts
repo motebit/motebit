@@ -808,6 +808,35 @@ describe("MobileApp.sendRemoteCommand", () => {
     expect(err.message).not.toMatch(/nothing was delivered/i);
   });
 
+  it("a partial answer from several machines is shown WHOLE, not as the 504 copy", async () => {
+    // The relay answers a many-machine question non-2xx when a machine
+    // did not report, and the body names each one. The 504 branch would
+    // have said "Delivered" about a machine that was never reached and
+    // dropped the machine that did answer — the sibling-surface miss
+    // that ended the last attempt at this (#681, finding 7).
+    stubFetch(504, {
+      summary: "Asked 2 machines; 1 reported. This is NOT the whole picture.",
+      detail:
+        "dev-1: Running — nothing is halted.\ndev-2: not reached — its connection was already gone",
+      data: {
+        composed: true,
+        partial: true,
+        asked: 2,
+        answered: 1,
+        machines: [
+          { device_id: "dev-1", outcome: "answered", result: { summary: "Running." } },
+          { device_id: "dev-2", outcome: "unreached" },
+        ],
+      },
+    });
+    const err = (await app.sendRemoteCommand("halt-status").catch((e: unknown) => e)) as Error;
+    // Still an error: half a picture is not a result.
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toContain("dev-1: Running");
+    expect(err.message).toContain("dev-2: not reached");
+    expect(err.message).not.toContain("Delivered");
+  });
+
   it("any other failure surfaces the status and body", async () => {
     stubFetch(500, { message: "boom" });
     await expect(app.sendRemoteCommand("halt")).rejects.toThrow(/500/);

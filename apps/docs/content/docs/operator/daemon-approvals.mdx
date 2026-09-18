@@ -216,6 +216,39 @@ tracked in [issue #681](https://github.com/motebit/motebit/issues/681);
 it is not built, and a refusal you can act on beats a "Stopped" that is
 not true.
 
+**`halt-status` is asked of every machine.** It is the verb whose job is
+answering "did my motebit stop", and it reads the same local store — so
+answered by one machine it could say "Running — nothing is halted" about
+a motebit whose other machine was stopped. A remote `halt-status` on a
+two-machine motebit is therefore delivered once per machine (never once
+per process: two processes on a host share a replay guard, and the
+second would refuse its own motebit's question) and the answers come
+back together, one line per machine, each under its device id:
+
+```
+Asked 2 machines; all 2 reported. Each machine's own answer is below — the relay does not add them up.
+9f3c…: Running — nothing is halted.
+b71e…: Stop requested for unattended execution. 1 process(es) have acknowledged; …
+```
+
+The relay does not add them up. It knows what it sent and what came
+back; it does not know what a goal is or which machine owns one, so
+there is no relay-authored "halted: true". Each machine's own answer
+travels verbatim beside its id (`data.machines[].result`).
+
+A machine that did not report is **named**, and how it failed is kept
+apart: *not reached* (no open connection — nothing was sent), *no
+answer in time* (delivered, then silence — which is neither a stop nor a
+run), or *did not report* (it replied without a record, for instance
+refusing a replayed envelope). Any of those makes the picture partial,
+and **a partial picture is not a success**: the relay answers 504 with
+the composed body, so `motebit halt-status --remote && next-step` does
+not proceed on half an answer, and both the terminal and the phone print
+the per-machine report rather than their usual timeout sentence. If no
+machine could be reached at all, that is a 404 like any other
+undelivered command. A one-machine motebit — every deployment until the
+installer ships — gets its runtime's own reply, exactly as before.
+
 **Acknowledged is not stopped either.** A process acknowledging says it
 answered for itself, not that it had work to stop: the worker answers a
 goal-scoped halt with "nothing here runs under that goal — dispatched
