@@ -8,7 +8,11 @@
  * that could only explain the first would absorb the second into it.
  */
 import { describe, it, expect } from "vitest";
-import { createRuntimeCoverage, describeGap } from "../runtime-coverage.js";
+import {
+  createRuntimeCoverage,
+  describeGap,
+  LIVENESS_SESSION_GAP_MS,
+} from "../runtime-coverage.js";
 import type { MotebitDatabase } from "@motebit/persistence";
 
 const MOTEBIT = "mb-1";
@@ -99,49 +103,82 @@ describe("runtime coverage", () => {
 });
 
 /**
- * The distinction the record exists to draw.
+ * The WRITER, across a sleep — the test that should have come first.
  *
- * `GoalScheduler.explainLateness` is private, so this exercises the
- * decision it makes through the same reader it uses. Two goals late by
- * the same six hours, one because the machine slept and one because it
- * did not — identical in the record today, and one of them a defect
- * nobody can currently see.
+ * The reader tests above feed synthetic intervals, which encode an
+ * assumption about what the writer does. That assumption was wrong: a
+ * closing laptop does not restart `motebit run`, so the process
+ * survives, its interval simply stops firing, and a `touch` on resume
+ * stretched one row from 01:00 to 09:00 — eight hours of sleep reading
+ * back as eight hours of uptime. The record built to show the gap
+ * reported its opposite, and every reader test passed throughout,
+ * because they were testing the reader against a model of a writer that
+ * did not exist.
+ *
+ * So this drives the real write path and asks the reader what it sees.
  */
-describe("why a goal fired late", () => {
-  const DUE_AT = 3 * HOUR;
-  const NOW = 9 * HOUR;
+describe("the writer, across a sleep", () => {
+  /** The daemon's recorder, in the shape `apps/cli/src/daemon.ts` builds. */
+  function recorder() {
+    const rows: Array<{ id: string; started: number; last: number }> = [];
+    let session: { id: string; lastSeen: number } | null = null;
+    let n = 0;
+    const awake = (at: number): void => {
+      if (session != null && at - session.lastSeen <= LIVENESS_SESSION_GAP_MS) {
+        rows.find((r) => r.id === session!.id)!.last = at;
+        session.lastSeen = at;
+        return;
+      }
+      const id = `s${n++}`;
+      rows.push({ id, started: at, last: at });
+      session = { id, lastSeen: at };
+    };
+    const db = {
+      runtimeLivenessStore: {
+        intervalsBetween: (_m: string, from: number, to: number) =>
+          rows.filter((r) => r.last >= from && r.started <= to).map((r) => [r.started, r.last]),
+      },
+    } as unknown as MotebitDatabase;
+    return { awake, db, rows };
+  }
 
-  it("asleep at the due time is a HOSTING gap", () => {
-    // Awake 00:00–01:00 and again from 09:00: the goal came due at
-    // 03:00 into nothing.
-    const cov = createRuntimeCoverage(
-      dbWith([
-        [0, 1 * HOUR],
-        [9 * HOUR, 10 * HOUR],
-      ]),
-      MOTEBIT,
-    );
-    expect(cov.wasAwakeAt(DUE_AT)).toBe(false);
-    const gap = cov.between(DUE_AT, NOW).gaps[0];
-    expect(gap).toBeDefined();
-    expect(describeGap(gap!)).toMatch(/6h/);
+  it("a laptop asleep 01:00–09:00 reads as ASLEEP, not as continuous uptime", () => {
+    const { awake, db } = recorder();
+    // Ticking every minute until 01:00, then nothing until 09:00 —
+    // the process never died, the interval just stopped firing.
+    for (let t = 0; t <= 1 * HOUR; t += MIN) awake(t);
+    for (let t = 9 * HOUR; t <= 10 * HOUR; t += MIN) awake(t);
+
+    const cov = createRuntimeCoverage(db, MOTEBIT);
+    expect(cov.wasAwakeAt(3 * HOUR)).toBe(false);
+    const w = cov.between(0, 10 * HOUR);
+    expect(w.gaps).toHaveLength(1);
+    expect(w.gaps[0]!.from).toBe(1 * HOUR);
+    expect(w.gaps[0]!.to).toBe(9 * HOUR);
   });
 
-  it("awake at the due time is NOT a hosting gap — it is a scheduler defect", () => {
-    // The machine was up the whole time and the goal still fired six
-    // hours late. Today this is indistinguishable from the case above,
-    // which is how it stays invisible.
-    const cov = createRuntimeCoverage(dbWith([[0, 12 * HOUR]]), MOTEBIT);
-    expect(cov.wasAwakeAt(DUE_AT)).toBe(true);
-    expect(cov.between(DUE_AT, NOW).gaps).toHaveLength(0);
+  it("ordinary ticking is ONE session, not one per tick", () => {
+    const { awake, rows } = recorder();
+    for (let t = 0; t <= 2 * HOUR; t += MIN) awake(t);
+    expect(rows).toHaveLength(1);
   });
 
-  it("no record at all is neither — and must not read as 'you were hosted'", () => {
-    // A surface that wrote no liveness. "We do not know" is the honest
-    // answer; claiming coverage would be the omission this removes, one
-    // layer up.
-    const cov = createRuntimeCoverage(dbWith([]), MOTEBIT);
-    expect(cov.wasAwakeAt(DUE_AT)).toBe(false);
-    expect(cov.between(DUE_AT, NOW).awakeMs).toBe(0);
+  it("awake and gaps agree: no gaps means the whole window", () => {
+    // Two numbers about the same fact must not contradict each other on
+    // one screen — "97% awake, gaps: none" was possible when awake was
+    // summed from sessions while gaps applied the tolerance.
+    const { awake, db } = recorder();
+    for (let t = 0; t <= 4 * HOUR; t += MIN) awake(t);
+    const w = createRuntimeCoverage(db, MOTEBIT).between(0, 4 * HOUR);
+    expect(w.gaps).toHaveLength(0);
+    expect(w.awakeMs).toBe(w.windowMs);
+  });
+
+  it("a multi-day gap is not rendered as an afternoon", () => {
+    const DAY = 24 * HOUR;
+    const text = describeGap({ from: 9 * HOUR, to: 5 * DAY + 14 * HOUR });
+    expect(text).toMatch(/125h|126h/);
+    // Dates present, so the endpoints cannot read as same-day.
+    expect(text).toMatch(/\w{3}\s\d+/);
   });
 });

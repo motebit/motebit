@@ -29,7 +29,16 @@ import type { MotebitDatabase } from "@motebit/persistence";
  * treating the seam as downtime would report a daemon that never
  * stopped as having been asleep.
  */
-const LIVENESS_TICK_TOLERANCE_MS = 150_000;
+export const LIVENESS_TICK_TOLERANCE_MS = 150_000;
+
+/**
+ * How long a silence means a new waking rather than the same one.
+ *
+ * The writer's half of the tolerance above, exported so the two cannot
+ * drift: a writer that stretched a session across a gap the reader
+ * would call downtime produces a record that contradicts itself.
+ */
+export const LIVENESS_SESSION_GAP_MS = LIVENESS_TICK_TOLERANCE_MS;
 
 export interface CoverageWindow {
   /** Milliseconds in the window this machine was awake. */
@@ -51,7 +60,11 @@ export interface RuntimeCoverage {
 function merge(intervals: Array<[number, number]>): Array<[number, number]> {
   if (intervals.length === 0) return [];
   const sorted = [...intervals].sort((a, b) => a[0] - b[0]);
-  const out: Array<[number, number]> = [sorted[0]!];
+  // Copied, never aliased. Pushing the input's own tuple and then
+  // mutating `last[1]` rewrites the caller's data — harmless while the
+  // store allocates fresh rows per call, and silently corrupting for
+  // any caller that reuses them, which a test fixture naturally does.
+  const out: Array<[number, number]> = [[sorted[0]![0], sorted[0]![1]]];
   for (const [start, end] of sorted.slice(1)) {
     const last = out[out.length - 1]!;
     // Within tolerance of the previous session's end is the same
@@ -81,27 +94,42 @@ export function createRuntimeCoverage(moteDb: MotebitDatabase, motebitId: string
     between(from: number, to: number): CoverageWindow {
       const windowMs = Math.max(0, to - from);
       const sessions = merged(from, to);
-      let awakeMs = 0;
       const gaps: Array<{ from: number; to: number }> = [];
       let cursor = from;
       for (const [start, end] of sessions) {
         const s = Math.max(start, from);
         const e = Math.min(end, to);
-        if (e > s) awakeMs += e - s;
         if (s - cursor > LIVENESS_TICK_TOLERANCE_MS) gaps.push({ from: cursor, to: s });
         cursor = Math.max(cursor, e);
       }
       // The tail: asleep from the last session until the window closed.
       if (to - cursor > LIVENESS_TICK_TOLERANCE_MS) gaps.push({ from: cursor, to });
-      return { awakeMs: Math.min(awakeMs, windowMs), windowMs, gaps };
+
+      // Awake is the window MINUS the gaps, so the two numbers can
+      // never disagree. Summing session lengths instead counted
+      // sub-tolerance seams as downtime while the gap list — which
+      // applies the tolerance — called them nothing, and a surface
+      // showing both rendered "97% awake, gaps: none": two numbers
+      // about the same fact, contradicting each other on one screen.
+      const gapMs = gaps.reduce((n, g) => n + (g.to - g.from), 0);
+      return { awakeMs: Math.max(0, windowMs - gapMs), windowMs, gaps };
     },
   };
 }
 
 /** A gap in words a person can act on. */
 export function describeGap(gap: { from: number; to: number }): string {
-  const fmt = (t: number): string =>
-    new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const start = new Date(gap.from);
+  const end = new Date(gap.to);
+  const time = (d: Date): string =>
+    d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const day = (d: Date): string => d.toLocaleDateString([], { month: "short", day: "numeric" });
   const hours = Math.round(((gap.to - gap.from) / 3_600_000) * 10) / 10;
-  return `${fmt(gap.from)}–${fmt(gap.to)} (${hours}h)`;
+  // Clock times alone rendered a five-DAY outage as "09:00–14:00
+  // (125h)" — endpoints that look like an afternoon, with only the
+  // duration to betray them. Dates appear when the gap crosses one.
+  const sameDay = start.toDateString() === end.toDateString();
+  return sameDay
+    ? `${time(start)}–${time(end)} (${hours}h)`
+    : `${day(start)} ${time(start)} – ${day(end)} ${time(end)} (${hours}h)`;
 }
