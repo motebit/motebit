@@ -54,6 +54,7 @@ import { formatDiagnostic } from "./yaml-config.js";
 import type { CliConfig } from "./args.js";
 import { loadFullConfig, extractPersonality } from "./config.js";
 import { createRunLedgerReader } from "./run-ledger-reader.js";
+import { LIVENESS_SESSION_GAP_MS } from "./runtime-coverage.js";
 import { handleRelayCommandFrame } from "./relay-command-frame.js";
 import { fromHex, loadActiveSigningKey, IdentityKeyError } from "./identity.js";
 import { registerWithRelay, type RelayRegistrationHandle } from "./relay-registration.js";
@@ -253,6 +254,54 @@ export async function handleRun(config: CliConfig): Promise<void> {
 
   // Start goal scheduler
   const goals = moteDb.goalStore.list(motebitId);
+  // One liveness session per PROCESS RUN: a restart opens a new row
+  // rather than editing the last, so the seam between them stays
+  // visible instead of being smoothed over by a bumped timestamp. The
+  // scheduler only says it is awake; this closure knows which device
+  // and which executor "awake" refers to.
+  // A SLEEP is a gap, even though the process never died.
+  //
+  // Closing a laptop lid does not restart `motebit run`: the process
+  // survives and its interval simply stops firing, then fires again on
+  // resume. Touching the same row there stretches `last_seen_at` from
+  // 01:00 to 09:00 with `started_at` unchanged, so eight hours of sleep
+  // read back as eight hours of continuous uptime — and the record
+  // built to show that gap reports its opposite.
+  //
+  // So a tick that arrives long after the last one OPENS A NEW SESSION
+  // rather than extending the old. The seam between them is the gap,
+  // and it is detected here, at write time, by the only party that can
+  // tell: whoever noticed that time passed without a tick.
+  let session: { id: string; lastSeen: number } | null = null;
+  const liveness = {
+    awake: (at: number): void => {
+      // A clock that steps BACKWARD is a new session, not a continuation.
+      //
+      // `at - lastSeen <= gap` is true for negative deltas, so an NTP
+      // correction or a VM resume kept touching the same row with an
+      // earlier timestamp — leaving `last_seen_at < started_at`, an
+      // inverted interval that makes a window report downtime over time
+      // the machine was awake, or drops the running session from the
+      // read entirely.
+      const delta = at - (session?.lastSeen ?? 0);
+      const continuous = session != null && delta >= 0 && delta <= LIVENESS_SESSION_GAP_MS;
+      if (continuous && session != null) {
+        moteDb.runtimeLivenessStore.touch(session.id, at);
+        session.lastSeen = at;
+        return;
+      }
+      const id = crypto.randomUUID();
+      moteDb.runtimeLivenessStore.open({
+        session_id: id,
+        motebit_id: motebitId,
+        device_id: loadFullConfig().device_id ?? "unknown",
+        executor: "run",
+        at,
+      });
+      session = { id, lastSeen: at };
+    },
+  };
+
   const scheduler = new GoalScheduler(
     runtime,
     moteDb.goalStore,
@@ -262,6 +311,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
     moteDb.toolAuditSink,
     motebitId,
     denyAbove,
+    liveness,
   );
   scheduler.setPlanEngine(new PlanEngine(moteDb.planStore), moteDb.planStore);
   scheduler.start();

@@ -120,6 +120,36 @@ export class GoalScheduler {
   private planStore: PlanStoreAdapter | null = null;
   private tickCount = 0;
 
+  /**
+   * Say we are awake, and never let that stop the work.
+   *
+   * A coverage record exists to explain lateness; it is not
+   * load-bearing for running goals, so a storage failure here must not
+   * take the daemon down with it.
+   */
+  private markAwake(): void {
+    try {
+      this.liveness?.awake(Date.now());
+    } catch (err: unknown) {
+      // Not silent. Swallowing kept the daemon alive, which is right —
+      // but a liveness write that fails persistently (a full disk, a
+      // busy database, a surface whose store is missing) makes `doctor`
+      // report hours of "not hosted" for a machine that was awake and
+      // ticking the whole time, with nothing anywhere saying why. Once
+      // per process: a failure every tick would bury the log it belongs
+      // in.
+      if (!this.livenessFailureLogged) {
+        this.livenessFailureLogged = true;
+        errorLine(
+          `[hosting] the awake record is not being written (${err instanceof Error ? err.message : String(err)}) — coverage will under-report until this is fixed`,
+        );
+      }
+    }
+  }
+
+  /** So a broken liveness write is reported once, not every minute. */
+  private livenessFailureLogged = false;
+
   /** Runs already logged as held this process — log the hold once, not every tick. */
   private heldLogged = new Set<string>();
   /** Un-register the halt stopper on stop(). */
@@ -147,6 +177,21 @@ export class GoalScheduler {
     private auditSink: AuditLogSink,
     private motebitId: string,
     private denyAbove: RiskLevel,
+    /**
+     * Where this process records that it was AWAKE.
+     *
+     * The scheduler says "I am awake" and nothing more — the caller
+     * knows which device and which executor "I" is, and the scheduler
+     * has no other use for that identity. Optional, so a surface that
+     * wires none still runs; a reader with no rows then answers "this
+     * machine has no record of being awake", which is honest, rather
+     * than claiming coverage it cannot see.
+     *
+     * Written on the SAME tick that fires goals, so the record of being
+     * awake and the firing it explains cannot drift apart.
+     */
+    private liveness?: { awake(at: number): void },
+
     private defaultTtlMs = 3_600_000, // 1 hour
     private goalWallClockMs = 10 * 60 * 1000, // configurable default wall-clock per goal run
   ) {}
@@ -182,6 +227,11 @@ export class GoalScheduler {
         .find((g) => g.goal_id === prefix || g.goal_id.startsWith(prefix));
       return match?.goal_id ?? null;
     });
+    // A restart opens a NEW session rather than editing the last one,
+    // so the seam between them is visible instead of being smoothed
+    // over by a bumped timestamp. A gap shorter than a couple of ticks
+    // is not treated as downtime — see the coverage reader.
+    this.markAwake();
     this.recoverInterruptedRuns();
     this.ensureMaintenanceGoal();
     this.timer = setInterval(() => {
@@ -642,6 +692,13 @@ export class GoalScheduler {
   }
 
   private async tick(): Promise<void> {
+    // Before anything else this tick does. Being awake is a fact about
+    // this instant, not about whether the work that follows succeeded —
+    // recording it after the body would lose exactly the ticks where
+    // something went wrong, which are the ones a late goal most needs
+    // explained.
+    this.markAwake();
+
     // Phase 0 runs OUTSIDE the single-flight guard, and that placement is
     // the whole point: a goal run holds `ticking` for its entire duration
     // (up to the wall-clock limit, ten minutes by default), so a halt

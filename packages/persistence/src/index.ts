@@ -2073,6 +2073,97 @@ export function goalRunBlocksGoal(run: GoalRun): boolean {
   return run.status === "running" || goalRunNeedsPerson(run);
 }
 
+/**
+ * When this machine's runtime was actually awake.
+ *
+ * The record that lets a LATE goal say why. `GoalScheduler` fires on
+ * `elapsed >= interval_ms`, so a daily goal whose machine slept from
+ * 01:00 to 09:00 does not fail — it fires at 09:00, six hours late, and
+ * without this nothing anywhere says the motebit was not running. A
+ * record untrue by omission is the class this whole arc has been
+ * removing; this is that class arriving through the host layer.
+ *
+ * Coverage is per MACHINE, and deliberately not summed across a
+ * motebit's machines: these rows live in the database of the machine
+ * that wrote them, so a laptop's reader can only ever answer for the
+ * laptop. The union across machines — the shape the arc is aiming at —
+ * needs the same cross-machine plumbing as coordinator handoff, and is
+ * named rather than faked.
+ */
+export class SqliteRuntimeLivenessStore {
+  private stmtOpen: PreparedStatement;
+  private stmtTouch: PreparedStatement;
+  private stmtWindow: PreparedStatement;
+  private stmtFirst: PreparedStatement;
+
+  constructor(db: DatabaseDriver) {
+    this.stmtOpen = db.prepare(
+      `INSERT INTO runtime_liveness (session_id, motebit_id, device_id, executor, started_at, last_seen_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmtTouch = db.prepare(
+      `UPDATE runtime_liveness SET last_seen_at = ? WHERE session_id = ?`,
+    );
+    // Overlapping rather than contained: a session that began before the
+    // window and is still open covers it, and asking otherwise would
+    // report the currently-running daemon as absent.
+    this.stmtFirst = db.prepare(
+      `SELECT started_at FROM runtime_liveness WHERE motebit_id = ? ORDER BY started_at ASC LIMIT 1`,
+    );
+    this.stmtWindow = db.prepare(
+      `SELECT started_at, last_seen_at FROM runtime_liveness
+       WHERE motebit_id = ? AND last_seen_at >= ? AND started_at <= ?
+       ORDER BY started_at ASC`,
+    );
+  }
+
+  /** Begin a session. A restart is a NEW row, never an edited one. */
+  open(session: {
+    session_id: string;
+    motebit_id: string;
+    device_id: string;
+    executor: string;
+    at: number;
+  }): void {
+    this.stmtOpen.run(
+      session.session_id,
+      session.motebit_id,
+      session.device_id,
+      session.executor,
+      session.at,
+      session.at,
+    );
+  }
+
+  /** Still here. Called on the scheduler's tick. */
+  touch(sessionId: string, at: number): void {
+    this.stmtTouch.run(at, sessionId);
+  }
+
+  /**
+   * When this machine first recorded being awake, or null if never.
+   *
+   * The boundary between "we have no record" and "the record says
+   * asleep". Without it a reader reports the time before its first row
+   * as downtime — so an install that had been hosting for weeks is told
+   * it was not hosted for six days, because that is when the table was
+   * created.
+   */
+  firstRecordAt(motebitId: string): number | null {
+    const row = this.stmtFirst.get(motebitId) as { started_at: number } | undefined;
+    return row?.started_at ?? null;
+  }
+
+  /** Raw session intervals overlapping a window, oldest first. */
+  intervalsBetween(motebitId: string, from: number, to: number): Array<[number, number]> {
+    const rows = this.stmtWindow.all(motebitId, from, to) as Array<{
+      started_at: number;
+      last_seen_at: number;
+    }>;
+    return rows.map((r) => [r.started_at, r.last_seen_at]);
+  }
+}
+
 export class SqliteGoalRunStore {
   private stmtStart: PreparedStatement;
   private stmtGet: PreparedStatement;
@@ -3647,6 +3738,7 @@ export interface MotebitDatabase {
   goalOutcomeStore: SqliteGoalOutcomeStore;
   approvalStore: SqliteApprovalStore;
   goalRunStore: SqliteGoalRunStore;
+  runtimeLivenessStore: SqliteRuntimeLivenessStore;
   haltStore: SqliteHaltStore;
   runEvidenceStore: SqliteRunEvidenceStore;
   commandReplayStore: SqliteCommandReplayStore;
@@ -3687,6 +3779,7 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   const goalOutcomeStore = new SqliteGoalOutcomeStore(driver);
   const approvalStore = new SqliteApprovalStore(driver);
   const goalRunStore = new SqliteGoalRunStore(driver);
+  const runtimeLivenessStore = new SqliteRuntimeLivenessStore(driver);
   const haltStore = new SqliteHaltStore(driver);
   const runEvidenceStore = new SqliteRunEvidenceStore(driver);
   const commandReplayStore = new SqliteCommandReplayStore(driver);
@@ -3714,6 +3807,7 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     goalOutcomeStore,
     approvalStore,
     goalRunStore,
+    runtimeLivenessStore,
     haltStore,
     runEvidenceStore,
     commandReplayStore,

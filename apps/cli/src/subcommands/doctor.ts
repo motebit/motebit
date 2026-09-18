@@ -10,6 +10,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { openMotebitDatabase } from "@motebit/persistence";
+import { createRuntimeCoverage, describeGap } from "../runtime-coverage.js";
 import { CONFIG_DIR, loadFullConfig } from "../config.js";
 import { seedBackupStatus } from "./seed.js";
 import { getDbPath } from "../runtime-factory.js";
@@ -468,9 +469,75 @@ export async function handleDoctor(): Promise<void> {
   // "it failed sometime" into "here's which stage failed and when." Opt-in
   // on existing identity — no motebit_id means no DB to read.
   if (fullCfg.motebit_id != null && fullCfg.motebit_id !== "") {
+    // Its OWN try/catch, and its own message.
+    //
+    // Folded into the recent-outcomes block below, a failure here
+    // printed "could not read recent outcomes" — a message about the
+    // wrong thing — and skipped the outcomes report that would have
+    // worked fine.
     try {
       const db = await openMotebitDatabase(getDbPath(undefined));
       try {
+        // How much of the observed period this machine was awake.
+        //
+        // MEASURED, never promised. A motebit only works while
+        // something is hosting it, and a laptop is asleep most of the
+        // night — so show the number and let an owner decide whether to
+        // host somewhere that stays up. Claiming "runs unattended"
+        // without this is a promise the product cannot keep on the
+        // hardware most people have.
+        //
+        // The window is clamped by the reader to this machine's first
+        // record, so the denominator is what was OBSERVED — reporting a
+        // percentage of seven days on a machine that has been recording
+        // for one would invent six days of downtime.
+        //
+        // This machine's, never the motebit's: these rows live in the
+        // database of the machine that wrote them.
+        const coverage = createRuntimeCoverage(db, fullCfg.motebit_id);
+        const now = Date.now();
+        const week = coverage.between(now - 7 * 24 * 3_600_000, now);
+        if (week.windowMs === 0) {
+          console.log(
+            "Hosting: this machine has no record of running unattended.\n" +
+              "         (The record starts the first time `motebit run` ticks.)\n",
+          );
+        } else {
+          const days = Math.round((week.windowMs / 86_400_000) * 10) / 10;
+          const pct = Math.round((week.awakeMs / week.windowMs) * 100);
+          const perDay =
+            Math.round((week.awakeMs / (week.windowMs / 86_400_000) / 3_600_000) * 10) / 10;
+          const span = week.clamped ? `${days}d on record` : "last 7 days";
+          console.log(`Hosting: this machine was awake ${pct}% of the ${span} (~${perDay}h/day).`);
+          // The longest gaps, because an owner acts on WHEN it was down
+          // rather than on a percentage.
+          const worst = [...week.gaps].sort((a, b) => b.to - b.from - (a.to - a.from)).slice(0, 3);
+          for (const g of worst) console.log(`         not hosted ${describeGap(g)}`);
+          console.log();
+        }
+      } finally {
+        db.close();
+      }
+    } catch (err: unknown) {
+      console.log(
+        `Hosting: could not read the coverage record (${err instanceof Error ? err.message : String(err)})\n`,
+      );
+    }
+
+    try {
+      const db = await openMotebitDatabase(getDbPath(undefined));
+      try {
+        // How much of the last week this machine was actually awake.
+        //
+        // MEASURED, never promised. A motebit only works while
+        // something is hosting it, and a laptop is asleep most of the
+        // night — so the honest thing to show an owner is the number,
+        // and let them decide whether to host somewhere that stays up.
+        // Saying "your motebit runs unattended" without this is a claim
+        // the product cannot keep on the hardware most people have.
+        //
+        // This machine's, not the motebit's: these rows live in the
+        // database of the machine that wrote them.
         const recent = db.goalOutcomeStore.listRecent(fullCfg.motebit_id, 50);
         const failed = recent.filter((o) => o.status === "failed");
         if (failed.length === 0) {

@@ -7000,6 +7000,19 @@ bare "Stopped" — `motebit halt` names which processes acknowledged and
 what each of them stopped, and a remote `halt` answers for the runtime
 that received it while listing the rest.
 
+**Two MACHINES is refused, not guessed between.** Everything above is
+about one machine's processes, which share a database — so whichever
+receives a remote halt, the record they all read is the same one. Two
+machines are not that: the halt store is local and nothing replicates
+it, so delivering to one would stop that machine and answer as though
+the motebit had stopped, while the other kept working. A remote `halt`
+on a motebit with unattended runtimes on two different machines is
+refused, and says so. Run it on each machine, or stop the runtime you
+do not want. Reaching every machine at once is the right answer and is
+tracked in [issue #681](https://github.com/motebit/motebit/issues/681);
+it is not built, and a refusal you can act on beats a "Stopped" that is
+not true.
+
 **Acknowledged is not stopped either.** A process acknowledging says it
 answered for itself, not that it had work to stop: the worker answers a
 goal-scoped halt with "nothing here runs under that goal — dispatched
