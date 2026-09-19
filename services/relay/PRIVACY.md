@@ -73,6 +73,19 @@ Observable:
 Retention window: 30-day rolling window, swept every minute by the task-cleanup loop; an operator's audit aid ("who presented the master token, what did we refuse") readable at GET /api/v1/admin/auth-events, not a surveillance log.
 Enforcement: three layers — agent-boundary gating in packages/privacy-layer, relay ingress redaction in services/relay/src/redaction.ts (applied on both the HTTP and WebSocket sync push paths before eventStore.append), and optional client-side E2E encryption in packages/sync-engine.
 
+### Machine roster
+
+Tables: `relay_host_roster_entries`, `relay_host_liveness`.
+
+Observable:
+- which machines a motebit has enrolled to host its unattended work, and which it has retired — the sovereign-signed HostEnrollment / HostRetirement artifacts (motebit_id, device_id, the signing public key, a self-asserted time), stored verbatim as the motebit signed them; the relay never mints, edits, reorders or expires one
+- when the relay received each artifact
+- for each enrolled machine, ONE overwritten value: when the relay last saw a connection from it, and the capability list that connection announced — never a history of connections
+- never the client IP, and nothing at all about a connection from a device the motebit has not enrolled
+
+Retention window: signed roster artifacts: for as long as the motebit's relay data exists — a machine leaves the roster only by the motebit's own signed retirement, never by timeout, because silently dropping a machine is how a statement about "every machine" becomes false. The last-seen value: deleted 30 days after every enrolment the relay holds for that machine has been retired, swept every minute by the task-cleanup loop; an ACTIVE machine's last-seen value is never aged out — "not seen for a year" is what the line is for.
+Access: first-person only: readable and writable solely with that motebit's own token (GET/POST /api/v1/agents/:motebitId/roster); never published, ranked, aggregated or served to another identity.
+
 ### IP addresses
 
 Handling: **transient**.

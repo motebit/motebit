@@ -488,3 +488,45 @@ This is the content-addressed-record pattern — an id that is the hash of a fix
 serialization, a frozen shape, and evolution by new kinds that link to old ones
 by id. "Must-understand extension" schemes do not apply: even an ignorable
 unknown field changes the hash.
+
+## 11. Presentation and retrieval
+
+How roster entries reach a store, and how a consumer gets them back.
+
+#### Routes (foundation law)
+
+The two routes below are the binding cross-implementation contract. Renaming or
+relocating either of them is a wire break.
+
+- `POST /api/v1/agents/:motebitId/roster` — present entries. The body is
+  `{ enrollments?: HostEnrollment[], retirements?: HostRetirement[] }`, at least
+  one of them. The store takes the **idempotent union** (§9): each entry is
+  validated against its wire schema, verified under the key it names, and held by
+  id; an entry it already holds is a no-op; entries of any age are accepted.
+- `GET /api/v1/agents/:motebitId/roster` — the set as held:
+  `{ motebit_id, enrollments, retirements, liveness }`. `enrollments` and
+  `retirements` are served as the motebit signed them. `liveness` (§8) is the
+  store's own observation and is served visibly apart from them, naming the store
+  as its source.
+
+**Both are first-person.** A roster says where someone's agent runs and when each
+machine was last seen. A store MUST serve and accept it only under that motebit's
+own credential, and MUST NOT publish, rank, or aggregate rosters, nor serve one
+to another identity. Security is still in the artifact — a motebit's own
+credential cannot make a store hold an entry its key did not sign — so the routes
+need no audience of their own.
+
+**A partial presentation is not a success.** The response reports, per entry,
+`accepted` (`stored` or `already_held`, with the id) and `refused` (with its index
+and a reason: `malformed`, `wrong_motebit`, `untrusted_key`, `bad_signature`,
+`roster_full`). If anything was refused the status MUST NOT be 2xx: a surface
+re-presenting its whole cached set checks one thing — was it taken — and a 2xx
+over a body it must remember to read is how half a roster comes to be believed
+to be all of it. What was accepted stays accepted; a refused entry does not veto
+its neighbours.
+
+**The store does not reduce.** It returns the set; the consumer reduces it (§6)
+against a key chain the consumer verified. A store MAY refuse an entry under a
+key it does not associate with the motebit (`untrusted_key`) as defence in depth,
+and MUST still hold entries under keys the motebit has rotated away from — after
+a rotation those lines are how a consumer sees the machine that was cut off.

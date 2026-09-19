@@ -1880,4 +1880,48 @@ export const relayMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 41,
+    name: "host_roster",
+    up: (db) => {
+      // The machine roster (docs/doctrine/machine-roster.md,
+      // spec/machine-roster-v1.md). Two tables because two categories
+      // that must never mix:
+      //
+      // relay_host_roster_entries — MEMBERSHIP. Sovereign-signed
+      // HostEnrollment / HostRetirement artifacts, stored verbatim as
+      // canonical JSON, keyed by the entry id the spec defines (§4). The
+      // relay never mints, edits or expires one; INSERT OR IGNORE on the
+      // primary key IS the idempotent union. `device_id` is denormalised
+      // from an enrolment's body only so liveness can be joined to it —
+      // NULL for a retirement, which names an entry, not a machine.
+      // `received_at` is this relay's own observation, never the
+      // artifact's self-asserted time.
+      //
+      // relay_host_liveness — LIVENESS. One overwritten row per machine:
+      // when this relay last saw it and what it last announced. Never a
+      // history. Deleted 30 days after the machine's retirement
+      // (pruneHostLiveness), and named in the transparency declaration.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_host_roster_entries (
+          motebit_id     TEXT NOT NULL,
+          entry_id       TEXT NOT NULL,
+          kind           TEXT NOT NULL CHECK (kind IN ('enrollment', 'retirement')),
+          device_id      TEXT,
+          artifact_json  TEXT NOT NULL,
+          received_at    INTEGER NOT NULL,
+          PRIMARY KEY (motebit_id, entry_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_host_roster_device
+          ON relay_host_roster_entries (motebit_id, device_id);
+        CREATE TABLE IF NOT EXISTS relay_host_liveness (
+          motebit_id      TEXT NOT NULL,
+          device_id       TEXT NOT NULL,
+          last_seen_at    INTEGER NOT NULL,
+          last_announced  TEXT NOT NULL,
+          PRIMARY KEY (motebit_id, device_id)
+        );
+      `);
+    },
+  },
 ];

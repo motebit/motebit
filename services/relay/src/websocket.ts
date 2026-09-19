@@ -39,6 +39,23 @@ export interface ConnectedDevice {
    * either refuse when it should deliver or group when it must not.
    */
   deviceIdDeclared?: boolean;
+  /**
+   * True when the declared device id is the `did` of the signed token
+   * this connection authenticated with — so the id was PROVEN by a key
+   * registered to that device, and not merely typed into a query string.
+   *
+   * `?device_id=` is unauthenticated on its own: any surface holding a
+   * valid sync token for this motebit could declare another machine's
+   * id. Anything that ATTRIBUTES by device id — a roster line's
+   * liveness, a composed answer's per-machine line — reads this, never
+   * `deviceIdDeclared`. False for the master token and with device auth
+   * off: there is no `did` to bind to, and unproven is not verified.
+   *
+   * It proves "a holder of this motebit's key says it is this machine",
+   * not "this IS that machine" — every machine holds the same key
+   * (`docs/doctrine/machine-roster.md`, "A machine is not a principal").
+   */
+  deviceIdVerified?: boolean;
   capabilities?: string[];
 }
 
@@ -70,6 +87,13 @@ export interface WebSocketDeps {
   parseTokenPayloadUnsafe: (token: string) => import("./auth.js").TokenPayload | null;
   logger: ReturnType<typeof createLogger>;
   onCommandResponse?: (commandId: string, result: unknown) => void;
+  /**
+   * A finalized connection went away. Called AFTER it has left
+   * `connections`, with the peer as it was. The roster's liveness record
+   * is written from here — a relay's one durable observation of a
+   * machine is when it last saw it.
+   */
+  onPeerClosed?: (motebitId: string, peer: ConnectedDevice) => void;
   /** When true, new WebSocket upgrades are rejected with close code 1001. */
   isDraining?: () => boolean;
 }
@@ -118,6 +142,10 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
 
       // Track whether this connection has been authenticated (via query param or auth frame)
       let authenticated = false;
+      // The `did` of the signed token that authenticated this socket, or
+      // null when none did (master token, device auth off). See
+      // `ConnectedDevice.deviceIdVerified`.
+      let verifiedDid: string | null = null;
       // Track whether we're still waiting for an auth frame (connection not yet finalized)
       let awaitingAuthFrame = false;
 
@@ -169,6 +197,9 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
             ws.close(4003, "Unauthorized");
             return false;
           }
+          // Read only AFTER verification succeeded, so "unsafe" is safe
+          // here: the signature over these claims has just been checked.
+          verifiedDid = deps.parseTokenPayloadUnsafe(token)?.did ?? null;
           return true;
         }
         // No device auth — check apiToken (shared secret)
@@ -194,9 +225,13 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
         if (!connections.has(motebitId)) {
           connections.set(motebitId, []);
         }
-        connections
-          .get(motebitId)!
-          .push({ ws, deviceId, deviceIdDeclared: declaredDeviceId != null, capabilities });
+        connections.get(motebitId)!.push({
+          ws,
+          deviceId,
+          deviceIdDeclared: declaredDeviceId != null,
+          deviceIdVerified: declaredDeviceId != null && verifiedDid === declaredDeviceId,
+          capabilities,
+        });
 
         // Task recovery: re-dispatch any pending tasks for this agent to the
         // newly connected device. Covers reconnection after disconnect (e.g.
@@ -500,8 +535,19 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
           const peers = connections.get(motebitId);
           if (peers) {
             const idx = peers.findIndex((p) => p.ws === ws);
-            if (idx !== -1) peers.splice(idx, 1);
+            const [gone] = idx !== -1 ? peers.splice(idx, 1) : [];
             if (peers.length === 0) connections.delete(motebitId);
+            if (gone != null) {
+              // Never let an observer take the close path down with it.
+              try {
+                deps.onPeerClosed?.(motebitId, gone);
+              } catch (err: unknown) {
+                logger.warn("ws.on_peer_closed_failed", {
+                  motebitId,
+                  error: err instanceof Error ? err.message : String(err),
+                });
+              }
+            }
           }
         },
       };

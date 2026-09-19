@@ -329,6 +329,11 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   // self-verifying proof-of-funds; the GET status read shares the path). Same
   // artifact-verified class as credentials/submit — no new audience.
   app.use("/api/v1/agents/:motebitId/bond", rl(writeLimiter));
+  // Machine roster (spec/machine-roster-v1.md §11): write-rate. Every
+  // surface of a motebit re-presents its whole cached set whenever it
+  // connects, so this path is hit on each reconnect — and each entry costs
+  // a signature verification, which is what the limit is protecting.
+  app.use("/api/v1/agents/:motebitId/roster", rl(writeLimiter));
 
   // Delegation-revocation cache: submit is write-rate (signed-artifact
   // ingestion, the bond class); the cache read shares the same path, so the
