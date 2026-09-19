@@ -4019,6 +4019,10 @@ export { hexToBytes32 } from "./hex.js";
 export type { BondCommitment } from "./bond.js";
 export { BOND_COMMITMENT_SPEC_ID, isBondCommitment } from "./bond.js";
 
+// === Machine roster — docs/doctrine/machine-roster.md ===
+export type { HostEnrollment, HostRetirement } from "./host-roster.js";
+export { HOST_ROSTER_SPEC_ID, isHostEnrollment, isHostRetirement } from "./host-roster.js";
+
 // === Cryptosuite Registry ===
 // Every signed wire-format artifact in motebit declares its verification
 // recipe via a `suite: SuiteId` field. Missing or unknown values are
