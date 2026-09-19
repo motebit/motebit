@@ -16,6 +16,7 @@ import {
 import { insertRevocationEvent } from "./federation.js";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
+import type { AuthEvent } from "./auth-events.js";
 
 const logger = createLogger({ service: "key-rotation" });
 
@@ -23,11 +24,13 @@ export interface KeyRotationDeps {
   app: Hono;
   moteDb: MotebitDatabase;
   relayIdentity: RelayIdentity;
+  /** Durable auth-event record (auth-events.ts); optional for hand-built test deps. */
+  recordAuthEvent?: (event: AuthEvent) => void;
 }
 
 /** Initialize approval tables and register all key-rotation/revocation/approval routes. */
 export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
-  const { app, moteDb, relayIdentity } = deps;
+  const { app, moteDb, relayIdentity, recordAuthEvent } = deps;
 
   // --- Approval tables (idempotent) ---
   moteDb.db.exec(`
@@ -75,6 +78,32 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
   /** @spec motebit/identity@1.0 */
   app.post("/api/v1/agents/:motebitId/rotate-key", async (c) => {
     const motebitId = c.req.param("motebitId");
+    // A succession is the identity's own act. A record is self-verifying
+    // about its two keys and says nothing about WHICH identity it belongs
+    // to — the signed payload carries no motebit_id — so without this any
+    // authenticated caller could record a succession under any identity,
+    // and it would be served as that identity's key history. Strict
+    // inequality on a PRESENT caller: the operator's master token carries
+    // no caller identity and passes, as it does on this route today.
+    const caller = c.get("callerMotebitId" as never) as string | undefined;
+    if (caller != null && caller !== motebitId) {
+      logger.warn("key_rotation.refused", {
+        motebitId,
+        caller,
+        reason: "succession_under_another_identity",
+      });
+      recordAuthEvent?.({
+        kind: "agent_token_rejected",
+        method: "POST",
+        path: c.req.path,
+        motebitId: caller,
+        reason: "succession_under_another_identity",
+        correlationId: c.req.header("x-correlation-id") ?? null,
+      });
+      throw new HTTPException(403, {
+        message: "a key succession may be presented only under the identity it rotates",
+      });
+    }
     const body = await c.req.json<KeySuccessionRecord>();
 
     if (
