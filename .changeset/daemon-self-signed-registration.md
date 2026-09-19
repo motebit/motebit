@@ -1,5 +1,0 @@
----
-"motebit": patch
----
-
-`motebit run` and `motebit serve` now register with the relay as themselves: every discovery call (bootstrap → register → listing → heartbeat → deregister) carries a short-lived token signed by the motebit's own device key, bound to the audience each route expects. The relay operator's master token (`--sync-token` / `MOTEBIT_API_TOKEN` / `MOTEBIT_SYNC_TOKEN`) is no longer used for registration, and registration is never sent unauthenticated. Fixes two long-standing gaps: a daemon on a hosted relay without the operator's secret never appeared in discovery (its unauthenticated register returned 401), and `serve` reused one 24-hour token for heartbeats and signed the pricing listing with the wrong audience. Heartbeats now mint a fresh token per tick; the listing is signed with `market:listing`; a motebit id already bound to a different key on the relay is refused loudly instead of retried. The master token is still honored where it is the operator's own call (WebSocket sync fallback, plan sync, self-test relay auth).
