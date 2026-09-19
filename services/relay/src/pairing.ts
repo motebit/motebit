@@ -389,7 +389,7 @@ export function registerPairingRoutes(deps: PairingDeps): void {
     const session = db
       .prepare(
         `
-      SELECT pairing_id, status, approved_device_id, motebit_id FROM pairing_sessions WHERE pairing_id = ?
+      SELECT pairing_id, status, approved_device_id, motebit_id, key_transfer_payload FROM pairing_sessions WHERE pairing_id = ?
     `,
       )
       .get(pairingId) as Record<string, unknown> | undefined;
@@ -420,15 +420,36 @@ export function registerPairingRoutes(deps: PairingDeps): void {
     // identity's SEED, so the only key it can honestly present is one this
     // identity already holds. Checked against the rows in the same tick as
     // the write.
+    // The key the approving device SAID it was transferring, captured at
+    // approve time. That is the exact key device B must end up holding,
+    // and — unlike the live rows — nothing that happens between approve
+    // and here can invalidate it. Every client writes the transferred seed
+    // to its keyring BEFORE calling this, so a refusal that depends on
+    // rows the relay may have since dropped would strand the device
+    // holding a seed whose key the relay no longer recognises.
     const motebitId = session.motebit_id as string;
-    const held = db
-      .prepare(
-        `SELECT 1 FROM devices WHERE motebit_id = ? AND lower(public_key) = lower(?)
-          UNION ALL
-         SELECT 1 FROM agent_registry WHERE motebit_id = ? AND lower(public_key) = lower(?)
-         LIMIT 1`,
-      )
-      .get(motebitId, body.public_key, motebitId, body.public_key);
+    let transferred: string | null = null;
+    if (session.key_transfer_payload != null) {
+      try {
+        const kt = JSON.parse(session.key_transfer_payload as string) as Record<string, unknown>;
+        if (typeof kt.identity_pubkey_check === "string") transferred = kt.identity_pubkey_check;
+      } catch {
+        /* a payload this relay cannot read decides nothing */
+      }
+    }
+    const held =
+      transferred != null
+        ? transferred.toLowerCase() === body.public_key.toLowerCase()
+          ? 1
+          : null
+        : db
+            .prepare(
+              `SELECT 1 FROM devices WHERE motebit_id = ? AND lower(public_key) = lower(?)
+                UNION ALL
+               SELECT 1 FROM agent_registry WHERE motebit_id = ? AND lower(public_key) = lower(?)
+               LIMIT 1`,
+            )
+            .get(motebitId, body.public_key, motebitId, body.public_key);
     if (held == null) {
       logger.warn("pairing.update_key.refused", {
         pairingId,

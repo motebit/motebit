@@ -88,17 +88,21 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
      * key history is exactly what the operator's auth-event record exists
      * to show (`services/relay/CLAUDE.md` rule 6).
      */
-    const refuse = (status: 400 | 403, reason: string, message: string): never => {
+    const refuse = (status: 400 | 403, reason: string, message: string): HTTPException => {
       logger.warn("key_rotation.refused", { motebitId, caller: caller ?? null, reason });
       recordAuthEvent({
         kind: "agent_token_rejected",
         method: "POST",
         path: c.req.path,
-        motebitId: caller ?? motebitId,
+        // The SUBJECT of a refusal is whoever presented it. The target
+        // identity is already in `path`; writing it here would read as
+        // "this identity's token was rejected" for an identity that
+        // presented nothing (the operator's master token carries none).
+        motebitId: caller,
         reason: `succession:${reason}`,
         correlationId: c.req.header("x-correlation-id") ?? null,
       });
-      throw new HTTPException(status, { message });
+      return new HTTPException(status, { message });
     };
 
     const body = await c.req.json<KeySuccessionRecord>();
@@ -117,7 +121,7 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     // a recovery is anchored to a key on file by the same check as any
     // other record.
     if (body.recovery !== true && caller != null && caller !== motebitId) {
-      refuse(
+      throw refuse(
         403,
         "under_another_identity",
         "a key succession may be presented only under the identity it rotates",
@@ -149,7 +153,11 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     if (body.recovery) {
       // Guardian recovery: need guardian_signature, not old_key_signature
       if (!body.guardian_signature) {
-        throw new HTTPException(400, { message: "Guardian recovery requires guardian_signature" });
+        throw refuse(
+          400,
+          "recovery_without_guardian_signature",
+          "Guardian recovery requires guardian_signature",
+        );
       }
       // Look up the guardian public key from agent's identity
       const agentGuardian = moteDb.db
@@ -157,12 +165,16 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
         .get(motebitId) as { guardian_public_key: string | null } | undefined;
       const guardianPubKey = agentGuardian?.guardian_public_key;
       if (!guardianPubKey) {
-        throw new HTTPException(400, {
-          message: "Agent has no guardian registered — cannot use guardian recovery",
-        });
+        throw refuse(
+          400,
+          "recovery_without_registered_guardian",
+          "Agent has no guardian registered — cannot use guardian recovery",
+        );
       }
       const valid = await verifyKeySuccession(body, guardianPubKey);
-      if (!valid) throw new HTTPException(400, { message: "Invalid guardian recovery signatures" });
+      if (!valid) {
+        throw refuse(400, "recovery_signature_invalid", "Invalid guardian recovery signatures");
+      }
     } else {
       // Normal rotation: need old_key_signature
       if (!body.old_key_signature) {
@@ -173,7 +185,11 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     }
 
     if (body.new_public_key === body.old_public_key) {
-      refuse(400, "goes_nowhere", "Succession new_public_key must differ from old_public_key");
+      throw refuse(
+        400,
+        "goes_nowhere",
+        "Succession new_public_key must differ from old_public_key",
+      );
     }
 
     // The record must depart from a key this relay HOLDS for the identity.
@@ -187,6 +203,10 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     // A device row's key counts, so an identity whose daemon has shut down
     // can still rotate. Refusing when the relay holds NO key at all is
     // fail-closed: there is nothing for the record to continue from.
+    // Precedence, most authoritative first. Comparison is EXACT: these
+    // keys are covered by the signature, and a record stored in a spelling
+    // that differs from the one signed breaks `verifySuccessionChain`'s
+    // linkage on the public surfaces this rule exists to protect.
     const storedAgent = moteDb.db
       .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
       .get(motebitId) as { public_key: string } | undefined;
@@ -194,22 +214,41 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
       storedAgent?.public_key != null && storedAgent.public_key !== ""
         ? storedAgent.public_key
         : null;
+    // The head of what this relay has already RECORDED. Without it an
+    // identity whose registry row is gone could rotate exactly once: the
+    // registry UPDATE below writes no rows, so the second rotation found
+    // nothing on file and was refused — and rotating twice worked before
+    // this rule existed. The chain is the record of the first rotation,
+    // so it is what the second one continues from. It is reachable only
+    // AFTER a rotation that already passed this check, so it cannot be
+    // used to bootstrap a chain out of nothing.
+    const chainHead = moteDb.db
+      .prepare(
+        "SELECT new_public_key FROM relay_key_successions WHERE motebit_id = ? ORDER BY id DESC LIMIT 1",
+      )
+      .get(motebitId) as { new_public_key: string } | undefined;
     if (registryKey != null) {
-      if (registryKey.toLowerCase() !== body.old_public_key.toLowerCase()) {
-        refuse(
+      if (registryKey !== body.old_public_key) {
+        throw refuse(
           400,
           "not_from_current_key",
           "Succession old_public_key does not match stored public key",
         );
       }
+    } else if (chainHead != null) {
+      if (chainHead.new_public_key !== body.old_public_key) {
+        throw refuse(
+          400,
+          "not_from_current_key",
+          "Succession old_public_key does not match the head of this identity's recorded chain",
+        );
+      }
     } else {
       const heldByDevice = moteDb.db
-        .prepare(
-          "SELECT 1 FROM devices WHERE motebit_id = ? AND lower(public_key) = lower(?) LIMIT 1",
-        )
+        .prepare("SELECT 1 FROM devices WHERE motebit_id = ? AND public_key = ? LIMIT 1")
         .get(motebitId, body.old_public_key);
       if (heldByDevice == null) {
-        refuse(
+        throw refuse(
           400,
           "no_key_on_file",
           "Succession old_public_key is not a key this relay holds for this identity",

@@ -310,6 +310,58 @@ describe("a record must depart from a key this relay holds for the identity", ()
     expect(successions(mid)).toBe(1);
   });
 
+  it("a deregistered identity can rotate MORE THAN ONCE — the recorded chain is what the next one continues from", async () => {
+    // The registry UPDATE writes no rows when the row is gone, and the
+    // device row is not re-keyed, so after the first rotation there was
+    // nothing on file and the second was refused. Rotating twice worked
+    // before this rule existed, so that was a regression.
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    const k3 = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    const first = await signKeySuccession(k1.privateKey, k2.privateKey, k2.publicKey, k1.publicKey);
+    expect(await present(mid, `${mid}-laptop`, k1, mid, first)).toBe(200);
+    const second = await signKeySuccession(
+      k2.privateKey,
+      k3.privateKey,
+      k3.publicKey,
+      k2.publicKey,
+    );
+    expect(await present(mid, `${mid}-laptop`, k1, mid, second)).toBe(200);
+    expect(successions(mid)).toBe(2);
+
+    // And the chain head is not a way in: a record departing from the key
+    // the chain left BEHIND is refused.
+    const stale = await signKeySuccession(k1.privateKey, k3.privateKey, k3.publicKey, k1.publicKey);
+    expect(await present(mid, `${mid}-laptop`, k1, mid, stale)).toBe(400);
+    expect(successions(mid)).toBe(2);
+  });
+
+  it("refuses a record whose keys are the right ones in the wrong spelling — the signature is what makes spelling non-negotiable", async () => {
+    // The stored record is served for verification and the linkage check
+    // is exact, so a re-spelled record stored verbatim would break the
+    // chain on the public surfaces. It never gets that far: the spelling
+    // is inside the signed payload, so re-spelling breaks the signature
+    // first. Recorded because it is easy to believe the comparison below
+    // is what protects this — it is not, and severing that comparison
+    // leaves this test green.
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    expect(await registerAgent(mid, k1)).toBe(200);
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    const shouted = { ...record, old_public_key: record.old_public_key.toUpperCase() };
+    expect(await present(mid, `${mid}-laptop`, k1, mid, shouted)).toBe(400);
+    expect(successions(mid)).toBe(0);
+  });
+
   it("refuses a record that goes nowhere", async () => {
     const mid = crypto.randomUUID();
     const k1 = await generateKeypair();
@@ -423,6 +475,54 @@ describe("guardian recovery is carried by someone else, and anchored to a key on
 });
 
 describe("every refusal leaves a trace in the relay's own record", () => {
+  it("records a recovery probe too — the flag must not be a way to probe unrecorded", async () => {
+    // `recovery: true` skips the caller check by design. If the refusals
+    // inside that branch went unrecorded, setting the flag would be the
+    // obvious way to probe other identities silently.
+    const victim = crypto.randomUUID();
+    const vk = await generateKeypair();
+    const mine = await generateKeypair();
+    expect(await registerSelf(victim, `${victim}-laptop`, vk)).toBe(201);
+    expect(await registerAgent(victim, vk)).toBe(200);
+    const s = await stranger();
+    const impostor = await generateKeypair();
+    const forged = await signGuardianRecoverySuccession(
+      impostor.privateKey,
+      mine.privateKey,
+      vk.publicKey,
+      mine.publicKey,
+    );
+    expect(await present(s.mid, `${s.mid}-laptop`, s.kp, victim, forged)).toBe(400);
+    const reasons = (
+      relay.moteDb.db
+        .prepare("SELECT reason FROM relay_auth_events WHERE reason LIKE 'succession:%'")
+        .all() as Array<{ reason: string }>
+    ).map((r) => r.reason);
+    expect(reasons).toEqual(["succession:recovery_without_registered_guardian"]);
+  });
+
+  it("names the PRESENTER as the subject, not the identity that presented nothing", async () => {
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    expect(await registerAgent(mid, k1)).toBe(200);
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const junk = await signKeySuccession(a.privateKey, b.privateKey, b.publicKey, a.publicKey);
+    const res = await relay.app.request(`/api/v1/agents/${mid}/rotate-key`, {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify(junk),
+    });
+    expect(res.status).toBe(400);
+    const row = relay.moteDb.db
+      .prepare("SELECT motebit_id FROM relay_auth_events WHERE reason LIKE 'succession:%'")
+      .get() as { motebit_id: string | null };
+    // The operator's master token carries no caller identity; the target
+    // is in the path, and must not be recorded as the rejected subject.
+    expect(row.motebit_id).toBeNull();
+  });
+
   it("records the caller and the reason", async () => {
     const victim = crypto.randomUUID();
     const vk = await generateKeypair();
@@ -516,6 +616,80 @@ describe("pairing's key-transfer route writes only a key the identity already ho
     const attacker = await generateKeypair();
     expect((await update(pairingId, attacker)).status).toBe(403);
     expect(mobileKey()).toBe(hex(claimKey));
+  });
+
+  it("accepts the key the approving device said it was transferring, even if the relay's rows moved since", async () => {
+    // Every client writes the transferred seed to its keyring BEFORE
+    // calling this. A refusal that depended on rows the relay may have
+    // dropped in between would strand device B holding a seed whose key
+    // the relay no longer recognises, while the client reports that the
+    // device kept its own keypair.
+    const mid = crypto.randomUUID();
+    const identityKey = await generateKeypair();
+    const claimKey = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, identityKey)).toBe(201);
+    const { token: pairToken } = await mintAudienceToken(
+      { mid, did: `${mid}-laptop`, aud: "device:auth" },
+      identityKey.privateKey,
+    );
+    const auth = { Authorization: `Bearer ${pairToken}` };
+    const init = await relay.app.request("/pairing/initiate", { method: "POST", headers: auth });
+    const { pairing_id, pairing_code } = (await init.json()) as {
+      pairing_id: string;
+      pairing_code: string;
+    };
+    expect(
+      (
+        await relay.app.request("/pairing/claim", {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({
+            pairing_code,
+            device_name: "Mobile",
+            public_key: hex(claimKey),
+            x25519_pubkey: "b".repeat(64),
+          }),
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await relay.app.request(`/pairing/${pairing_id}/approve`, {
+          method: "POST",
+          headers: { ...auth, ...JSON_HEADERS },
+          body: JSON.stringify({
+            key_transfer: {
+              x25519_pubkey: "a".repeat(64),
+              encrypted_seed: "c".repeat(96),
+              nonce: "d".repeat(24),
+              tag: "e".repeat(32),
+              identity_pubkey_check: hex(identityKey),
+            },
+          }),
+        })
+      ).status,
+    ).toBe(200);
+
+    // The identity's rows go away between approve and the transfer.
+    relay.moteDb.db.prepare("DELETE FROM devices WHERE device_id = ?").run(`${mid}-laptop`);
+    relay.moteDb.db.prepare("DELETE FROM agent_registry WHERE motebit_id = ?").run(mid);
+    const res = await relay.app.request(`/pairing/${pairing_id}/update-key`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ public_key: hex(identityKey) }),
+    });
+    expect(res.status).toBe(200);
+    // And a different key is still refused on that same session.
+    const other = await generateKeypair();
+    expect(
+      (
+        await relay.app.request(`/pairing/${pairing_id}/update-key`, {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ public_key: hex(other) }),
+        })
+      ).status,
+    ).toBe(409);
   });
 
   it("completes the transfer it exists for, and then the session is spent", async () => {
