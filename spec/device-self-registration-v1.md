@@ -132,12 +132,15 @@ The endpoint MUST NOT require an `Authorization` header — the request's signat
 
 The relay's response semantics:
 
-| Condition                                                                 | Response                                                                                                   |
-| ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Verification per §4.2 passes; `motebit_id` unknown                        | 201; create identity (with `owner_id` from request, defaulting to `"self:<motebit_id>"`); register device. |
-| Verification passes; identity exists; device exists; `public_key` matches | 200; refresh `registered_at`. Idempotent re-registration.                                                  |
-| Verification passes; identity exists; device exists; `public_key` differs | 409; key-rotation MUST go through `spec/auth-token-v1.md` §9 (`/api/v1/agents/:motebit_id/rotate-key`).    |
-| Verification fails (any §4.2 reason)                                      | 400 with `{ "code": "DEVICE_REGISTRATION_REJECTED", "reason": "<code>" }`.                                 |
+| Condition                                                                                               | Response                                                                                                   |
+| ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Verification per §4.2 passes; `motebit_id` unknown                                                      | 201; create identity (with `owner_id` from request, defaulting to `"self:<motebit_id>"`); register device. |
+| Verification passes; identity exists; device exists; `public_key` matches                               | 200; refresh `registered_at`. Idempotent re-registration.                                                  |
+| Verification passes; identity exists; device exists; `public_key` differs                               | 409; key-rotation MUST go through `spec/auth-token-v1.md` §9 (`/api/v1/agents/:motebit_id/rotate-key`).    |
+| Verification passes; identity exists; device is new; `public_key` is one the identity already holds     | 200; register the device. A second machine after key transfer, or a restore from seed.                     |
+| Verification passes; identity exists; device is new; `public_key` is NOT one the identity already holds | 409 `IDENTITY_KEY_CONFLICT`; nothing is persisted. See §6.3.                                               |
+| Verification passes; `device_id` is registered to a DIFFERENT `motebit_id`                              | 409 `DEVICE_ID_TAKEN`; nothing is persisted. See §6.3.                                                     |
+| Verification fails (any §4.2 reason)                                                                    | 400 with `{ "code": "DEVICE_REGISTRATION_REJECTED", "reason": "<code>" }`.                                 |
 
 The relay MUST NOT return `200` (or `201`) without persisting both the identity (if newly created) and the device. The response IS the operator's commitment that the binding is recorded.
 
@@ -172,7 +175,17 @@ Operators concerned about registration spam SHOULD apply IP-based rate limiting 
 
 ### 6.3 — Key-conflict semantics (409)
 
-When `motebit_id` is already registered to a different `public_key`, the relay MUST return 409 rather than silently accept the new key. Acceptance would let any party with the request canonicalization recipe overwrite an established binding. Key rotation is a deliberate, signed operation defined separately in `spec/auth-token-v1.md` §9 — it requires a signature from the _currently registered_ public key, attesting to the new one. Self-registration is for the binding's _first_ moment only.
+Self-registration is for an identity's _first_ moment only. Once a `motebit_id` holds a key, a self-registration under it MUST present a `public_key` the identity **already holds** — a key on any of its registered devices, or the key in its agent registration — and the relay MUST return 409 otherwise, persisting nothing.
+
+The conflict is per **identity**, not per device. A device row is not inert: its `public_key` is what the relay verifies that device's signed bearer tokens against (`spec/auth-token-v1.md`), so whoever can add a row under an identity can mint that identity's tokens. A relay that checks for a conflict only on the _same_ `device_id` accepts a new `device_id` under an existing identity with any key at all — the request is validly self-signed by the key it carries, which proves possession of that key and nothing about the identity. "No device row yet" is likewise not "no owner yet": an identity known only through its agent registration is protected by that registration's key.
+
+Three legitimate ways a device joins an existing identity, and only the first is this endpoint:
+
+- **The same key, a new device.** A second machine after a key-transfer link, or a restore from seed, holds the identity's own key. Self-registration admits it.
+- **A new key, approved by a device that already belongs.** The authenticated pairing flow. Not this endpoint.
+- **A replacement key.** Key rotation (`spec/auth-token-v1.md` §9) — a signature from the _currently registered_ key attesting to the new one. Not this endpoint.
+
+A `device_id` belongs to the identity that registered it. A registration naming a `device_id` already held by a **different** `motebit_id` MUST be refused (409 `DEVICE_ID_TAKEN`) even when the claimed `motebit_id` is new: a store keyed by `device_id` would otherwise replace the row and carry another identity's device away with it.
 
 ### 6.4 — Trust anchoring
 
