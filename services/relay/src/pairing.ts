@@ -8,6 +8,11 @@ import type { Hono } from "hono";
 import type { TokenAudience } from "@motebit/protocol";
 import { HTTPException } from "hono/http-exception";
 import type { IdentityManager } from "@motebit/core-identity";
+import type { DatabaseDriver } from "@motebit/persistence";
+import { provableIdentityKey } from "./identity-key-authority.js";
+import { createLogger } from "./logger.js";
+
+const logger = createLogger({ service: "relay", module: "pairing" });
 
 // --- Pairing Code Generator ---
 
@@ -26,10 +31,7 @@ function generatePairingCode(): string {
 // --- Dependencies ---
 
 export interface PairingDeps {
-  db: {
-    prepare(sql: string): { run(...args: unknown[]): void; get(...args: unknown[]): unknown };
-    exec(sql: string): void;
-  };
+  db: DatabaseDriver;
   app: Hono;
   apiToken: string | undefined;
   identityManager: IdentityManager;
@@ -405,6 +407,29 @@ export function registerPairingRoutes(deps: PairingDeps): void {
     const device = await identityManager.getDevice(deviceId);
     if (!device) {
       throw new HTTPException(404, { message: "Approved device not found in identity store" });
+    }
+
+    // This door takes no bearer and its session never expires, so what it
+    // may WRITE is the whole of its safety: only the identity's key, as
+    // this relay can prove it (identity-key-authority.ts rule 5). That is
+    // all a key transfer ever needs to write, and it means the door cannot
+    // set a device row back to a key a rotation ended.
+    const basis = await provableIdentityKey(
+      db,
+      session.motebit_id as string,
+      body.public_key,
+      deviceId,
+    );
+    if (basis == null) {
+      logger.warn("pairing.update_key.refused", {
+        pairingId,
+        motebitId: session.motebit_id as string,
+        reason: "NOT_IDENTITY_KEY",
+      });
+      throw new HTTPException(403, {
+        message:
+          "update-key writes only the identity's key: the presented key is not this identity's key as far as this relay can prove",
+      });
     }
 
     await identityManager.updateDevicePublicKey(deviceId, body.public_key);

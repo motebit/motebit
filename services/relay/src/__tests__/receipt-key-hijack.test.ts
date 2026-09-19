@@ -141,4 +141,89 @@ describe("receipt ingestion — cross-identity registry-key hijack is refused", 
     // the severing (drop the device-membership guard) this flips to attackerPubHex.
     expect(registryKey(relay, victim.motebitId)).toBe(victimPubHex);
   });
+
+  it("a device LINKED under its own key has its receipt accepted or refused on its merits — and never becomes the identity's registry key", async () => {
+    // The same-identity sibling of the hijack above. The embedded key IS a
+    // registered device of the identity, so the membership guard passes —
+    // and the old heal then made a linked device's own key the identity's
+    // (after which it could install a guardian: identity-key-authority.ts).
+    // SEVERING (recorded): restore the `UPDATE agent_registry SET public_key`
+    // in tasks.ts's fallback → this flips to the linked key.
+    const ownerKp = await generateKeypair();
+    const linkedKp = await generateKeypair();
+    const ownerPubHex = bytesToHex(ownerKp.publicKey);
+    const linkedPubHex = bytesToHex(linkedKp.publicKey);
+
+    const owner = await createAgent(relay, ownerPubHex);
+    await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify({
+        motebit_id: owner.motebitId,
+        public_key: ownerPubHex,
+        endpoint_url: "http://localhost:1/mcp",
+        capabilities: ["web_search"],
+      }),
+    });
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO devices (device_id, motebit_id, device_token, public_key, registered_at, device_name) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run("linked-tablet", owner.motebitId, crypto.randomUUID(), linkedPubHex, Date.now(), "t");
+
+    const taskRes = await relay.app.request(`/agent/${owner.motebitId}/task`, {
+      method: "POST",
+      headers: jsonAuthWithIdempotency(),
+      body: JSON.stringify({
+        prompt: "heal probe",
+        submitted_by: owner.motebitId,
+        target_agent: owner.motebitId,
+        required_capabilities: ["web_search"],
+      }),
+    });
+    expect(taskRes.status).toBe(201);
+    const { task_id } = (await taskRes.json()) as { task_id: string };
+
+    const token = await createSignedToken(
+      {
+        mid: owner.motebitId,
+        did: "linked-tablet",
+        iat: Date.now(),
+        exp: Date.now() + 5 * 60 * 1000,
+        jti: crypto.randomUUID(),
+        aud: "task:result",
+      },
+      linkedKp.privateKey,
+    );
+    const enc = new TextEncoder();
+    const receipt = await signExecutionReceipt(
+      {
+        task_id,
+        relay_task_id: task_id,
+        motebit_id: owner.motebitId,
+        public_key: linkedPubHex,
+        device_id: "linked-tablet",
+        submitted_at: Date.now() - 1000,
+        completed_at: Date.now(),
+        status: "completed" as const,
+        result: "heal",
+        tools_used: [] as string[],
+        memories_formed: 0,
+        prompt_hash: await sha256(enc.encode("heal probe")),
+        result_hash: await sha256(enc.encode("heal")),
+      } as unknown as Parameters<typeof signExecutionReceipt>[0],
+      linkedKp.privateKey,
+      linkedKp.publicKey,
+    );
+    const res = await relay.app.request(`/agent/${owner.motebitId}/task/${task_id}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(receipt),
+    });
+    // Proof the fallback path was actually REACHED: the receipt verified
+    // under the linked device's key. Without this the assertion below
+    // would pass for a request that never got that far.
+    expect(res.status).toBe(200);
+    expect(registryKey(relay, owner.motebitId)).toBe(ownerPubHex);
+  });
 });

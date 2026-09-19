@@ -33,10 +33,12 @@ import {
   signGuardianRecoverySuccession,
   canonicalJson,
   ed25519Sign,
+  deriveSovereignMotebitId,
 } from "@motebit/crypto";
 import type { KeyPair } from "@motebit/crypto";
 import type { TokenAudience } from "@motebit/protocol";
-import { createTestRelay } from "./test-helpers.js";
+import { createTestRelay, JSON_AUTH } from "./test-helpers.js";
+import { recordSuccession, WS_CLOSE_KEY_ROTATED } from "../identity-key-authority.js";
 
 let relay: SyncRelay;
 let motebitId: string;
@@ -116,12 +118,12 @@ async function guardianFor(mid: string): Promise<{ kp: KeyPair; fields: object }
 }
 
 /** A device linked WITHOUT key transfer: a row under the identity, holding its own key. */
-function linkDevice(deviceId: string, kp: KeyPair): void {
+function linkDevice(deviceId: string, kp: KeyPair, mid: string = motebitId): void {
   relay.moteDb.db
     .prepare(
       "INSERT INTO devices (device_id, motebit_id, device_token, public_key, registered_at, device_name) VALUES (?, ?, ?, ?, ?, ?)",
     )
-    .run(deviceId, motebitId, crypto.randomUUID(), hex(kp), Date.now(), "linked");
+    .run(deviceId, mid, crypto.randomUUID(), hex(kp), Date.now(), "linked");
 }
 
 function registry(mid: string): { public_key: string; guardian_public_key: string | null } {
@@ -342,5 +344,323 @@ describe("rule 3 — a guardian is installed by the identity key, once", () => {
     expect(registry(motebitId).guardian_public_key).toBe(hex(first.kp));
     // Re-registering with the SAME guardian is not a replacement.
     expect((await registerAgent("laptop", k1, k1, first.fields)).status).toBe(200);
+  });
+});
+
+/**
+ * Everything above runs against an identity whose key the REGISTRY holds.
+ * The first review of this change found the rules did not hold where it
+ * holds none — every device-mode identity that never registered as an
+ * agent — because nothing had said what "the identity key" is there. A
+ * device linked under its own key is a first-person caller too.
+ */
+describe("where the relay holds no registry key", () => {
+  let sovereign: string; // an id that COMMITS to its genesis key
+  let sk: KeyPair;
+  let linked: KeyPair;
+  const agentBody = (key: KeyPair | null, extra: object = {}) => ({
+    endpoint_url: "http://localhost:9999/mcp",
+    capabilities: [],
+    ...(key == null ? {} : { public_key: hex(key) }),
+    ...extra,
+  });
+
+  beforeEach(async () => {
+    sk = await generateKeypair();
+    linked = await generateKeypair();
+    sovereign = await deriveSovereignMotebitId(hex(sk));
+    expect(await registerSelf(sovereign, "s-laptop", sk)).toBe(201);
+    linkDevice("s-tablet", linked, sovereign);
+  });
+
+  it("a linked device cannot establish its own key as the identity's — with or without a guardian", async () => {
+    const guardian = await guardianFor(sovereign);
+    for (const extra of [{}, guardian.fields]) {
+      const res = await as(
+        sovereign,
+        "s-tablet",
+        linked,
+        "/api/v1/agents/register",
+        agentBody(linked, extra),
+      );
+      expect(res.status).toBe(409);
+      expect(registry(sovereign)).toBeUndefined();
+    }
+  });
+
+  it("nor register the identity's key, which its token did not prove", async () => {
+    const res = await as(sovereign, "s-tablet", linked, "/api/v1/agents/register", agentBody(sk));
+    expect(res.status).toBe(403);
+    expect(registry(sovereign)).toBeUndefined();
+  });
+
+  it("the identity key registers — and naming no key registers the key the caller PROVED, not the first row found", async () => {
+    const res = await as(sovereign, "s-laptop", sk, "/api/v1/agents/register", agentBody(null));
+    expect(res.status).toBe(200);
+    expect(registry(sovereign).public_key).toBe(hex(sk));
+  });
+
+  it("a linked device's succession is not the identity's history", async () => {
+    const next = await generateKeypair();
+    const record = await signKeySuccession(
+      linked.privateKey,
+      next.privateKey,
+      next.publicKey,
+      linked.publicKey,
+    );
+    const res = await as(
+      sovereign,
+      "s-tablet",
+      linked,
+      `/api/v1/agents/${sovereign}/rotate-key`,
+      record,
+    );
+    expect(res.status).toBe(400);
+    expect(successionCount(sovereign)).toBe(0);
+    expect(deviceKey("s-tablet")).toBe(hex(linked));
+  });
+
+  it("the identity key's first rotation is recorded, proven by the id itself", async () => {
+    const next = await generateKeypair();
+    const record = await signKeySuccession(
+      sk.privateKey,
+      next.privateKey,
+      next.publicKey,
+      sk.publicKey,
+    );
+    const res = await as(
+      sovereign,
+      "s-laptop",
+      sk,
+      `/api/v1/agents/${sovereign}/rotate-key`,
+      record,
+    );
+    expect(res.status).toBe(200);
+    expect(deviceKey("s-laptop")).toBe(hex(next));
+    expect(deviceKey("s-tablet")).toBe(hex(linked));
+  });
+
+  it("an id that commits to nothing, with devices that disagree: the relay says it cannot tell, to BOTH", async () => {
+    // Stated, not hidden: the owner is refused here too. `registered_at` is
+    // refreshed on re-registration, so "the first device" is not a fact the
+    // relay holds. The operator's master token is the recourse.
+    const legacy = crypto.randomUUID();
+    const lk = await generateKeypair();
+    expect(await registerSelf(legacy, "l-laptop", lk)).toBe(201);
+    linkDevice("l-tablet", linked, legacy);
+    for (const [device, kp] of [
+      ["l-laptop", lk],
+      ["l-tablet", linked],
+    ] as const) {
+      const res = await as(legacy, device, kp, "/api/v1/agents/register", agentBody(kp));
+      expect(res.status).toBe(409);
+    }
+    expect(registry(legacy)).toBeUndefined();
+  });
+});
+
+describe("a judgment is made in the tick that writes", () => {
+  /** A request whose body the test releases later: the auth middleware has run, the handler is waiting. */
+  function held(path: string, token: string, body: unknown) {
+    let release!: () => void;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        release = () => {
+          controller.enqueue(new TextEncoder().encode(JSON.stringify(body)));
+          controller.close();
+        };
+      },
+    });
+    const response = relay.app.request(
+      new Request(`http://relay.test${path}`, {
+        method: "POST",
+        headers: { ...JSON_HEADERS, Authorization: `Bearer ${token}` },
+        body: stream,
+        duplex: "half",
+      } as RequestInit),
+    );
+    return { response, release };
+  }
+
+  it("a request verified under K1 and held open across the rotation installs nothing", async () => {
+    const guardian = await guardianFor(motebitId);
+    const { token } = await mintAudienceToken(
+      { mid: motebitId, did: "laptop", aud: "admin:query" },
+      k1.privateKey,
+    );
+    const stalled = held("/api/v1/agents/register", token, {
+      endpoint_url: "http://localhost:9999/mcp",
+      capabilities: [],
+      public_key: hex(k2), // what the registry WILL say
+      ...guardian.fields,
+    });
+    await new Promise((r) => setTimeout(r, 50)); // the middleware verifies under K1
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    expect((await rotate("vps", k1, record)).status).toBe(200);
+    stalled.release();
+    expect((await stalled.response).status).toBe(401);
+    expect(registry(motebitId)).toEqual({ public_key: hex(k2), guardian_public_key: null });
+  });
+
+  it("two rotations from one key: exactly one lands, and the history does not branch", async () => {
+    const other = await generateKeypair();
+    const a = await signKeySuccession(k1.privateKey, k2.privateKey, k2.publicKey, k1.publicKey);
+    const b = await signKeySuccession(
+      k1.privateKey,
+      other.privateKey,
+      other.publicKey,
+      k1.publicKey,
+    );
+    const results = await Promise.all([rotate("laptop", k1, a), rotate("vps", k1, b)]);
+    // The loser is refused before the transaction (400: the registry key
+    // already moved) or inside it (409: it moved after the last check) —
+    // which one depends on where the two interleave. Either way it is refused.
+    const statuses = results.map((r) => r.status).sort();
+    expect(statuses[0]).toBe(200);
+    expect([400, 409]).toContain(statuses[1]);
+    expect(successionCount(motebitId)).toBe(1);
+  });
+
+  it("two REGISTRATIONS rotating from one key: the door that awaits between its check and its write still lands exactly one", async () => {
+    // The rotate-key route checks and writes in one tick. This door
+    // verifies the succession, then awaits (attestation, binding) before
+    // it writes. A first-person loser is refused because the winner's
+    // re-key made the key it proved stale — but the operator's master
+    // token is not judged by key, so for it the re-check INSIDE the
+    // transaction is the only thing between two verified successions and a
+    // branched history.
+    const other = await generateKeypair();
+    const a = await signKeySuccession(k1.privateKey, k2.privateKey, k2.publicKey, k1.publicKey);
+    const b = await signKeySuccession(
+      k1.privateKey,
+      other.privateKey,
+      other.publicKey,
+      k1.publicKey,
+    );
+    const guardian = await guardianFor(motebitId); // an attestation to verify: an await after the check
+    const asOperator = (key: KeyPair, succession: unknown) =>
+      relay.app.request("/api/v1/agents/register", {
+        method: "POST",
+        headers: JSON_AUTH,
+        body: JSON.stringify({
+          motebit_id: motebitId,
+          endpoint_url: "http://localhost:9999/mcp",
+          capabilities: [],
+          public_key: hex(key),
+          succession,
+          ...guardian.fields,
+        }),
+      });
+    const results = await Promise.all([asOperator(k2, a), asOperator(other, b)]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+    expect(successionCount(motebitId)).toBe(1);
+    const landedKey = registry(motebitId).public_key;
+    expect(deviceKey("laptop")).toBe(landedKey);
+    expect(deviceKey("vps")).toBe(landedKey);
+  });
+
+  it("a refused guardian leaves no half-applied rotation behind it", async () => {
+    const first = await guardianFor(motebitId);
+    expect((await registerAgent("laptop", k1, k1, first.fields)).status).toBe(200);
+    const second = await guardianFor(motebitId);
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    const res = await registerAgent("laptop", k1, k2, { succession: record, ...second.fields });
+    expect(res.status).toBe(409);
+    expect(successionCount(motebitId)).toBe(0);
+    expect(registry(motebitId).public_key).toBe(hex(k1));
+    expect(deviceKey("laptop")).toBe(hex(k1));
+  });
+
+  it("the succession, the registry key and the re-key land together or not at all", () => {
+    const db = relay.moteDb.db;
+    expect(() =>
+      recordSuccession(
+        db,
+        undefined,
+        motebitId,
+        { old_public_key: hex(k1), new_public_key: hex(k2), timestamp: 1, new_key_signature: "00" },
+        () => {
+          throw new Error("the registry write failed");
+        },
+      ),
+    ).toThrow("the registry write failed");
+    expect(successionCount(motebitId)).toBe(0);
+    expect(deviceKey("laptop")).toBe(hex(k1));
+  });
+});
+
+describe("a rotation ends what was already open, and a refusal leaves a trace", () => {
+  it("closes the identity's sockets — they were authenticated under the old key — and nobody else's", async () => {
+    const closed: Array<[string, number | undefined]> = [];
+    const socket = (name: string) =>
+      ({ ws: { close: (code?: number) => closed.push([name, code]) } }) as never;
+    relay.connections.set(motebitId, [socket("mine-1"), socket("mine-2")]);
+    relay.connections.set("someone-else", [socket("theirs")]);
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    expect((await rotate("laptop", k1, record)).status).toBe(200);
+    expect(closed).toEqual([
+      ["mine-1", WS_CLOSE_KEY_ROTATED],
+      ["mine-2", WS_CLOSE_KEY_ROTATED],
+    ]);
+    relay.connections.clear();
+  });
+
+  it("and pairing's bearer-less key-transfer door cannot set a device row back to the key the rotation ended", async () => {
+    // An approved pairing session for the vps, as the pairing flow leaves
+    // it: never expired, never deleted, addressed by an id alone.
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO pairing_sessions (pairing_id, motebit_id, initiator_device_id, pairing_code, status, created_at, expires_at, approved_device_id) VALUES (?, ?, ?, ?, 'approved', ?, ?, ?)",
+      )
+      .run("old-pairing", motebitId, "laptop", "ABC234", 1, 2, "vps");
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    expect((await rotate("laptop", k1, record)).status).toBe(200);
+    const update = (key: KeyPair) =>
+      relay.app.request("/pairing/old-pairing/update-key", {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ public_key: hex(key) }),
+      });
+    expect((await update(k1)).status).toBe(403);
+    expect(deviceKey("vps")).toBe(hex(k2));
+    const path = `/api/v1/agents/${motebitId}/balance`;
+    expect((await as(motebitId, "vps", k1, path, undefined, "account:balance")).status).toBe(401);
+    // What the door is FOR still works: writing the identity's current key.
+    expect((await update(k2)).status).toBe(200);
+  });
+
+  it("records every refusal in the relay's own auth-event record", async () => {
+    const linkedKey = await generateKeypair();
+    linkDevice("tablet", linkedKey);
+    const guardian = await guardianFor(motebitId);
+    expect((await registerAgent("tablet", linkedKey, k1, guardian.fields)).status).toBe(403);
+    const reasons = (
+      relay.moteDb.db
+        .prepare(
+          "SELECT reason FROM relay_auth_events WHERE reason LIKE 'identity_key_authority:%'",
+        )
+        .all() as Array<{ reason: string }>
+    ).map((r) => r.reason);
+    expect(reasons).toEqual(["identity_key_authority:GUARDIAN_NOT_IDENTITY_KEY"]);
   });
 });

@@ -110,6 +110,12 @@ export async function verifySignedTokenForDevice(
   agentRevokedCheck?: (motebitId: string) => boolean,
   agentKeyLookup?: (motebitId: string) => string | null,
   onReject?: (reason: string) => void,
+  // The key the token VERIFIED under, reported at the moment it did. A
+  // handler that must know whether the caller proved the identity key or
+  // only a device's own cannot learn it by re-reading the row later: a
+  // request can be held open across a rotation, and the row it would read
+  // then is not the row this token was checked against.
+  onVerifiedKey?: (publicKeyHex: string) => void,
 ): Promise<boolean> {
   // Rejection legibility (#460): every `return false` names its reason via
   // the optional callback so the enforcement site can LOG why — witnessed
@@ -170,5 +176,6 @@ export async function verifySignedTokenForDevice(
     return false;
   }
 
+  onVerifiedKey?.(pubKeyHex);
   return true;
 }

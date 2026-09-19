@@ -16,7 +16,14 @@ import {
 import { insertRevocationEvent } from "./federation.js";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
-import { identityHoldsKey, rekeyDevicesOnSuccession } from "./identity-key-authority.js";
+import {
+  callerIsStillCurrent,
+  provableIdentityKey,
+  recordSuccession,
+} from "./identity-key-authority.js";
+import type { FirstPersonCaller } from "./identity-key-authority.js";
+import type { AuthEvent } from "./auth-events.js";
+import type { ConnectedDevice } from "./websocket.js";
 
 const logger = createLogger({ service: "key-rotation" });
 
@@ -24,11 +31,15 @@ export interface KeyRotationDeps {
   app: Hono;
   moteDb: MotebitDatabase;
   relayIdentity: RelayIdentity;
+  /** Open sockets per identity — ended when its key rotates (identity-key-authority.ts rule 2). */
+  connections?: Map<string, ConnectedDevice[]>;
+  /** Durable auth-event record (auth-events.ts); optional for hand-built test deps. */
+  recordAuthEvent?: (event: AuthEvent) => void;
 }
 
 /** Initialize approval tables and register all key-rotation/revocation/approval routes. */
 export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
-  const { app, moteDb, relayIdentity } = deps;
+  const { app, moteDb, relayIdentity, connections, recordAuthEvent } = deps;
 
   // --- Approval tables (idempotent) ---
   moteDb.db.exec(`
@@ -82,11 +93,32 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     // authenticated caller could record one under any identity. The
     // operator's master token carries no caller identity and passes.
     const caller = c.get("callerMotebitId" as never) as string | undefined;
-    if (caller != null && caller !== motebitId) {
-      throw new HTTPException(403, {
-        message: "a key succession may be presented only under the identity it rotates",
+    const refuse = (status: 400 | 401 | 403 | 409, reason: string, message: string): never => {
+      logger.warn("key_rotation.refused", { motebitId, caller: caller ?? null, reason });
+      recordAuthEvent?.({
+        kind: "agent_token_rejected",
+        method: "POST",
+        path: c.req.path,
+        motebitId: caller ?? motebitId,
+        reason: `identity_key_authority:${reason}`,
+        correlationId: c.req.header("x-correlation-id") ?? null,
       });
+      throw new HTTPException(status, { message });
+    };
+    if (caller != null && caller !== motebitId) {
+      refuse(
+        403,
+        "SUCCESSION_UNDER_ANOTHER_IDENTITY",
+        "a key succession may be presented only under the identity it rotates",
+      );
     }
+    const firstPerson: FirstPersonCaller | null =
+      caller == null
+        ? null
+        : {
+            deviceId: c.get("callerDeviceId" as never) as string | undefined,
+            verifiedKey: c.get("callerVerifiedKey" as never) as string | undefined,
+          };
     const body = await c.req.json<KeySuccessionRecord>();
 
     if (
@@ -137,48 +169,42 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
       if (!valid) throw new HTTPException(400, { message: "Invalid key succession signatures" });
     }
 
-    const storedAgent = moteDb.db
-      .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
-      .get(motebitId) as { public_key: string } | undefined;
-    if (storedAgent && storedAgent.public_key && storedAgent.public_key !== body.old_public_key) {
-      throw new HTTPException(400, {
-        message: "Succession old_public_key does not match stored public key",
-      });
-    }
-    // No registry key to depart from: the record must still depart from a
-    // key this identity HOLDS here. Otherwise two keys nobody has ever
-    // seen become this identity's recorded history.
-    if (
-      !(storedAgent && storedAgent.public_key) &&
-      !identityHoldsKey(moteDb.db, motebitId, body.old_public_key)
-    ) {
-      throw new HTTPException(400, {
-        message: "Succession old_public_key is not a key this identity holds at this relay",
-      });
-    }
-
-    moteDb.db
-      .prepare(
-        `INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature, recovery, guardian_signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        motebitId,
-        body.old_public_key,
-        body.new_public_key,
-        body.timestamp,
-        body.reason ?? null,
-        body.old_key_signature ?? null,
-        body.new_key_signature,
-        body.recovery ? 1 : 0,
-        body.guardian_signature ?? null,
+    // The record must depart from the identity's key AS THIS RELAY CAN
+    // PROVE IT — not from any key some device row happens to hold: a
+    // device linked without key transfer holds one that is not the
+    // identity's, and its succession is not the identity's history.
+    if ((await provableIdentityKey(moteDb.db, motebitId, body.old_public_key)) == null) {
+      refuse(
+        400,
+        "SUCCESSION_NOT_FROM_IDENTITY_KEY",
+        "Succession old_public_key does not match stored public key: it is not this identity's key as far as this relay can prove",
       );
+    }
 
-    moteDb.db
-      .prepare(`UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?`)
-      .run(body.new_public_key, motebitId);
-    // The old key stops being a credential HERE, in the same step: a
-    // device row's key is what an owner token is verified against.
-    rekeyDevicesOnSuccession(moteDb.db, motebitId, body.old_public_key, body.new_public_key);
+    // Last await is behind us. From here to the commit is one tick: the
+    // key this caller PROVED must still be a credential (a request can be
+    // held open across someone else's rotation) …
+    if (firstPerson != null && !callerIsStillCurrent(moteDb.db, motebitId, firstPerson)) {
+      refuse(
+        401,
+        "CALLER_KEY_NOT_CURRENT",
+        "the key this token was verified under is no longer a credential for this identity",
+      );
+    }
+    // … and the record must still depart from the CURRENT key, re-checked
+    // inside the transaction that writes it.
+    const landed = recordSuccession(moteDb.db, connections, motebitId, body, () => {
+      moteDb.db
+        .prepare(`UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?`)
+        .run(body.new_public_key, motebitId);
+    });
+    if (!landed) {
+      refuse(
+        409,
+        "SUCCESSION_RACED",
+        "Succession old_public_key does not match stored public key: another rotation landed first",
+      );
+    }
 
     return c.json({ ok: true, motebit_id: motebitId });
   });

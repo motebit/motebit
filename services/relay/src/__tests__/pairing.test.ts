@@ -545,16 +545,33 @@ describe("Pairing Protocol", () => {
       headers: { Authorization: `Bearer ${deviceA.authToken}` },
     });
 
-    // Update device B's key
-    const newKey = "f".repeat(64);
-    const updateRes = await relay.app.request(`/pairing/${pairing_id}/update-key`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ public_key: newKey }),
-    });
+    const update = (public_key: string) =>
+      relay.app.request(`/pairing/${pairing_id}/update-key`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ public_key }),
+      });
+    const mobileKey = () =>
+      (
+        relay.moteDb.db
+          .prepare("SELECT public_key FROM devices WHERE device_name = 'Mobile'")
+          .get() as { public_key: string }
+      ).public_key;
+
+    // This door takes no bearer and its session never expires, so the
+    // only key it may write is the IDENTITY's (identity-key-authority.ts
+    // rule 5). An arbitrary key — which is what a rotated-away key is — is
+    // refused, and the row is untouched.
+    const refused = await update("f".repeat(64));
+    expect(refused.status).toBe(403);
+    expect(mobileKey()).toBe(bytesToHex(keypairB.publicKey));
+
+    // The key transfer it exists for: device B now holds the identity key.
+    const updateRes = await update(deviceA.publicKeyHex);
     expect(updateRes.status).toBe(200);
     const updateBody = (await updateRes.json()) as { ok: boolean };
     expect(updateBody.ok).toBe(true);
+    expect(mobileKey()).toBe(deviceA.publicKeyHex);
   });
 
   it("POST /pairing/:id/update-key rejects invalid public key", async () => {

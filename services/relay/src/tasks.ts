@@ -518,14 +518,18 @@ export async function handleReceiptIngestion(
     const embeddedIsRegisteredDevice = devices.some((d) => d.public_key === receipt.public_key);
     if (embeddedIsRegisteredDevice) {
       receiptValid = await verifyExecutionReceipt(receipt, hexToBytes(receipt.public_key));
+      // The receipt is ACCEPTED under a registered device's key; the
+      // registry key is NOT rewritten to it. This path used to "heal" the
+      // registry, and a registered device is not always the identity: one
+      // linked without key transfer holds its own key, and healing made
+      // that key the identity's — after which it could install a guardian
+      // (identity-key-authority.ts). A registry key changes through a
+      // succession, which the current key signs. Never through a receipt.
       if (receiptValid) {
-        moteDb.db
-          .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
-          .run(receipt.public_key, receipt.motebit_id);
-        logger.info("receipt.public_key_updated", {
+        logger.info("receipt.verified_under_device_key", {
           correlationId: taskId,
           motebitId: receipt.motebit_id,
-          reason: "embedded key is a registered device, registry reconciled",
+          reason: "embedded key is a registered device; registry key left unchanged",
         });
       }
     }

@@ -119,7 +119,13 @@ import {
   buildSignedRevocationFeed,
 } from "./agent-revocation.js";
 import { createLogger } from "./logger.js";
-import { refuseGuardianInstall, rekeyDevicesOnSuccession } from "./identity-key-authority.js";
+import {
+  callerIsStillCurrent,
+  recordSuccession,
+  refuseFirstRegistrationKey,
+  refuseGuardianInstall,
+} from "./identity-key-authority.js";
+import type { AuthorityRefusal, FirstPersonCaller } from "./identity-key-authority.js";
 
 const logger = createLogger({ service: "agents" });
 
@@ -403,9 +409,12 @@ export interface AgentsDeps {
     agentRevokedCheck?: (motebitId: string) => boolean,
     agentKeyLookup?: (motebitId: string) => string | null,
     onReject?: (reason: string) => void,
+    onVerifiedKey?: (publicKeyHex: string) => void,
   ) => Promise<boolean>;
   isTokenBlacklisted: (jti: string, motebitId: string) => boolean;
   isAgentRevoked: (motebitId: string) => boolean;
+  /** Durable auth-event record (auth-events.ts); optional for hand-built test deps. */
+  recordAuthEvent?: (event: AuthEvent) => void;
 }
 
 /** Subset of AgentsDeps the auth middleware needs. */
@@ -606,15 +615,17 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
           correlationId: c.req.header("x-correlation-id") ?? null,
         });
       },
+      // The key the token verified under, captured AT verification — what
+      // `identity-key-authority.ts` judges a caller by. Never re-read from
+      // the device row at handler time: a request held open across a
+      // rotation would then be judged by the key it did NOT prove.
+      (publicKeyHex) => c.set("callerVerifiedKey" as never, publicKeyHex),
     );
     if (!valid) {
       throw new HTTPException(401, { message: "Token verification failed" });
     }
 
     c.set("callerMotebitId" as never, claims.mid);
-    // Which device row the token was verified against — a handler that
-    // must know whether the caller proved the IDENTITY key, or only a
-    // linked device's own, resolves it from this (identity-key-authority.ts).
     c.set("callerDeviceId" as never, claims.did);
     await next();
   });
@@ -627,6 +638,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     identityManager,
     relayIdentity,
     connections,
+    recordAuthEvent,
     taskRouter,
     apiToken,
     platformFeeRate,
@@ -1101,6 +1113,34 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
   /** @spec motebit/discovery@1.0 */
   app.post("/api/v1/agents/register", async (c) => {
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+    // `null` for the operator's master token, which identity-key-authority.ts does not judge.
+    const firstPerson: FirstPersonCaller | null =
+      callerMotebitId == null
+        ? null
+        : {
+            deviceId: c.get("callerDeviceId" as never) as string | undefined,
+            verifiedKey: c.get("callerVerifiedKey" as never) as string | undefined,
+          };
+
+    // Every identity-key-authority refusal is logged AND recorded: an
+    // attempted takeover must leave a trace in the relay's own record.
+    const refuseAuthority = (
+      refusal: Pick<AuthorityRefusal, "status" | "message"> & { code: string },
+    ): never => {
+      logger.warn("agent.register.refused", {
+        motebitId: callerMotebitId ?? null,
+        code: refusal.code,
+      });
+      recordAuthEvent?.({
+        kind: "agent_token_rejected",
+        method: "POST",
+        path: c.req.path,
+        motebitId: callerMotebitId,
+        reason: `identity_key_authority:${refusal.code}`,
+        correlationId: c.req.header("x-correlation-id") ?? null,
+      });
+      throw new HTTPException(refusal.status, { message: refusal.message });
+    };
 
     // For master token, require motebit_id in body
     const body = await c.req.json<{
@@ -1143,6 +1183,11 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       /^[0-9a-f]{64}$/i.test(body.public_key)
     ) {
       publicKey = body.public_key;
+    } else if (firstPerson?.verifiedKey != null) {
+      // A first-person caller that names no key registers the one it
+      // PROVED. "The first device row with a key" may be a linked device's
+      // own — which refused the identity-key holder and admitted the other.
+      publicKey = firstPerson.verifiedKey;
     } else {
       const devices = await identityManager.listDevices(motebitId);
       const deviceWithKey = devices.find((d) => d.public_key);
@@ -1152,6 +1197,11 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // --- Succession chain validation on re-registration ---
     // If the agent already has a stored public key and the new key differs,
     // require a valid succession record proving key lineage.
+    // VERIFIED here, WRITTEN below — in one transaction with the registry
+    // upsert and the device re-key, after the last refusal this handler
+    // can make. Written here, a later refusal left a succession row (and a
+    // federated key_rotated event) for a rotation that never happened.
+    let pendingSuccession: KeySuccessionRecord | null = null;
     let rotatedFromKey: string | null = null;
     const existingAgent = moteDb.db
       .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
@@ -1203,45 +1253,18 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         });
       }
 
-      // Store the succession record for chain auditability
-      moteDb.db
-        .prepare(
-          `INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature, recovery, guardian_signature)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          motebitId,
-          succession.old_public_key,
-          succession.new_public_key,
-          succession.timestamp,
-          succession.reason ?? null,
-          succession.old_key_signature ?? null,
-          succession.new_key_signature,
-          succession.recovery ? 1 : 0,
-          succession.guardian_signature ?? null,
-        );
-
+      pendingSuccession = succession;
       rotatedFromKey = existingAgent.public_key;
-      logger.info("agent.key.succession_on_register", {
+    } else if (firstPerson != null && publicKey && !(existingAgent && existingAgent.public_key)) {
+      // No registry key yet: this registration ESTABLISHES the identity's
+      // key here. A linked device is a first-person caller too, and its
+      // own key is not the identity's (identity-key-authority.ts rule 4).
+      const refusal = await refuseFirstRegistrationKey(moteDb.db, {
         motebitId,
-        oldKey: existingAgent.public_key.slice(0, 16) + "...",
-        newKey: publicKey.slice(0, 16) + "...",
+        publicKey,
+        caller: firstPerson,
       });
-
-      // Emit key rotation event for federation propagation
-      try {
-        await insertRevocationEvent(moteDb.db, relayIdentity, "key_rotated", motebitId, {
-          newPublicKey: publicKey,
-          revokedPublicKey: existingAgent.public_key,
-          // The old key ceased to be authoritative at the (guardian-attested)
-          // rotation moment, not when the relay processed this registration —
-          // anchor the revocation memo at the succession timestamp so the
-          // verifier's poison window matches the chain.
-          effectiveAt: succession.timestamp,
-        });
-      } catch {
-        /* best-effort */
-      }
+      if (refusal != null) refuseAuthority(refusal);
     }
 
     const now = Date.now();
@@ -1291,20 +1314,8 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       if (claimedGuardianKey === publicKey) {
         throw new HTTPException(400, { message: "Guardian key must not equal identity key" });
       }
-      // The attestation above proves the GUARDIAN consents. It says nothing
-      // about the identity consenting — and a guardian can recover the
-      // identity to any key. Read-only, so a refusal writes nothing.
-      const guardianRefusal = refuseGuardianInstall(moteDb.db, {
-        motebitId,
-        // Mid-rotation, the token was verified under the key being rotated AWAY from.
-        identityKey: rotatedFromKey ?? publicKey,
-        claimedGuardianKey,
-        firstPerson: callerMotebitId != null,
-        callerDeviceId: c.get("callerDeviceId" as never) as string | undefined,
-      });
-      if (guardianRefusal != null) {
-        throw new HTTPException(guardianRefusal.status, { message: guardianRefusal.message });
-      }
+      // The attestation proves the GUARDIAN consents. Whether the IDENTITY
+      // does is judged below, in the tick that writes.
       guardianPublicKey = claimedGuardianKey;
     }
 
@@ -1359,9 +1370,35 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       sweepThreshold = rawSweepThreshold;
     }
 
-    moteDb.db
-      .prepare(
-        `
+    // The last await is behind us: from here to the commit is ONE tick, and
+    // every identity-key-authority judgment is made in it, against the
+    // rows as they are now. The key this caller PROVED must still be a
+    // credential — a request can be held open across someone else's
+    // rotation …
+    if (firstPerson != null && !callerIsStillCurrent(moteDb.db, motebitId, firstPerson)) {
+      refuseAuthority({
+        status: 401,
+        code: "CALLER_KEY_NOT_CURRENT",
+        message:
+          "the key this token was verified under is no longer a credential for this identity",
+      });
+    }
+    // … and a guardian is installed by the identity key, never replaced.
+    if (guardianPublicKey != null) {
+      const refusal = refuseGuardianInstall(moteDb.db, {
+        motebitId,
+        // Mid-rotation, the token was verified under the key being rotated AWAY from.
+        identityKey: rotatedFromKey ?? publicKey,
+        claimedGuardianKey: guardianPublicKey,
+        caller: firstPerson,
+      });
+      if (refusal != null) refuseAuthority(refusal);
+    }
+
+    const upsertRegistry = (): void => {
+      moteDb.db
+        .prepare(
+          `
       INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, capabilities, metadata, registered_at, last_heartbeat, expires_at, guardian_public_key, federation_visible, settlement_address, settlement_modes, sweep_threshold)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(motebit_id) DO UPDATE SET
@@ -1377,26 +1414,62 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         settlement_modes = COALESCE(excluded.settlement_modes, agent_registry.settlement_modes),
         sweep_threshold = COALESCE(excluded.sweep_threshold, agent_registry.sweep_threshold)
     `,
-      )
-      .run(
+        )
+        .run(
+          motebitId,
+          publicKey,
+          body.endpoint_url,
+          JSON.stringify(body.capabilities),
+          body.metadata ? JSON.stringify(body.metadata) : null,
+          now,
+          now,
+          expiresAt,
+          guardianPublicKey ?? null,
+          fedVisibleVal,
+          settlementAddress ?? null,
+          settlementModes ?? "relay",
+          sweepThreshold,
+        );
+    };
+    if (pendingSuccession == null) {
+      upsertRegistry();
+    } else {
+      // The rotate-key route's sibling: succession row, registry key and
+      // device re-key in one transaction; the identity's sockets ended.
+      const landed = recordSuccession(
+        moteDb.db,
+        connections,
         motebitId,
-        publicKey,
-        body.endpoint_url,
-        JSON.stringify(body.capabilities),
-        body.metadata ? JSON.stringify(body.metadata) : null,
-        now,
-        now,
-        expiresAt,
-        guardianPublicKey ?? null,
-        fedVisibleVal,
-        settlementAddress ?? null,
-        settlementModes ?? "relay",
-        sweepThreshold,
+        pendingSuccession,
+        upsertRegistry,
       );
-    // The sibling of `/rotate-key`'s re-key, in the same synchronous step
-    // as the write that made the new key the identity's.
-    if (rotatedFromKey != null) {
-      rekeyDevicesOnSuccession(moteDb.db, motebitId, rotatedFromKey, publicKey);
+      if (!landed) {
+        refuseAuthority({
+          status: 409,
+          code: "SUCCESSION_RACED",
+          message:
+            "Succession old_public_key does not match stored public key: another rotation landed first",
+        });
+      }
+      logger.info("agent.key.succession_on_register", {
+        motebitId,
+        oldKey: (rotatedFromKey ?? "").slice(0, 16) + "...",
+        newKey: publicKey.slice(0, 16) + "...",
+      });
+      // Federation hears of a rotation only once it HAS happened.
+      try {
+        await insertRevocationEvent(moteDb.db, relayIdentity, "key_rotated", motebitId, {
+          newPublicKey: publicKey,
+          revokedPublicKey: rotatedFromKey ?? "",
+          // The old key ceased to be authoritative at the (guardian-attested)
+          // rotation moment, not when the relay processed this registration —
+          // anchor the revocation memo at the succession timestamp so the
+          // verifier's poison window matches the chain.
+          effectiveAt: pendingSuccession.timestamp,
+        });
+      } catch {
+        /* best-effort */
+      }
     }
 
     // Auto-create a default service listing if one doesn't exist.

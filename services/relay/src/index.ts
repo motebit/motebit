@@ -781,6 +781,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     agentRevokedCheck,
     agentKeyLookup,
     onReject,
+    onVerifiedKey,
   ) =>
     verifySignedTokenForDevice(
       token,
@@ -794,6 +795,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       // (2026-09-14 finding): every `auth.*_token_rejected` log line and, now,
       // every rejection record depends on it reaching the verifier.
       onReject,
+      // Same lesson, same wrapper: `identity-key-authority.ts` judges a
+      // caller by the key this reports, and a dropped callback would make
+      // every first-person caller look unverified.
+      onVerifiedKey,
     );
 
   // --- Middleware (rate limiting, CORS, security headers, auth, error handling, health) ---
@@ -1382,7 +1387,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   registerProposalRoutes({ app, moteDb, connections });
 
   // --- Key rotation, revocation & approval routes ---
-  registerKeyRotationRoutes({ app, moteDb, relayIdentity });
+  registerKeyRotationRoutes({
+    app,
+    moteDb,
+    relayIdentity,
+    connections,
+    recordAuthEvent: authEvents.record,
+  });
 
   // --- Browser-sandbox dispatcher-token endpoint ---
   // Mints relay-signed audience-bound tokens that motebits attach to
@@ -1498,6 +1509,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     verifySignedTokenForDevice: verifySignedTokenForDeviceWithFallback,
     isTokenBlacklisted,
     isAgentRevoked,
+    recordAuthEvent: authEvents.record,
   });
 
   // --- Service listings + market queries ---
