@@ -5,6 +5,7 @@
 import type { Hono, Context } from "hono";
 import type { TokenAudience } from "@motebit/protocol";
 import { HTTPException } from "hono/http-exception";
+import { refusePublicDeviceRegistration } from "./device-registration-guard.js";
 import type { MotebitDatabase, DatabaseDriver } from "@motebit/persistence";
 import type { IdentityManager } from "@motebit/core-identity";
 import type { EventStore } from "@motebit/event-log";
@@ -964,18 +965,27 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
 
     const motebitId = body.motebit_id.trim();
 
+    // Who may add a device to an identity — the one rule this door
+    // shares with `/devices/register-self`. It runs BEFORE the
+    // exists/new split because one of its refusals is about a fresh
+    // identity: a device_id that already belongs to someone else.
+    //
+    // This door's own check compared against the FIRST keyed device
+    // only, and looked at nothing when the identity was new — so a
+    // registration under a brand-new motebit_id that reused a known
+    // device_id replaced that row and carried another identity's device
+    // away with it.
+    const refusal = await refusePublicDeviceRegistration(
+      { identityManager, db: moteDb.db },
+      { motebitId, deviceId: body.device_id, publicKey: body.public_key },
+    );
+    if (refusal) {
+      throw new HTTPException(409, { message: `${refusal.error} — ${refusal.remediation}` });
+    }
+
     // Check if identity already exists
     const existing = await identityManager.load(motebitId);
     if (existing) {
-      // Identity exists — check for public key conflict (hijack prevention)
-      const devices = await identityManager.listDevices(motebitId);
-      const existingKey = devices.find((d) => d.public_key)?.public_key;
-      if (existingKey && existingKey.toLowerCase() !== body.public_key.toLowerCase()) {
-        throw new HTTPException(409, {
-          message:
-            "Identity already registered with a different public key — re-registration rejected",
-        });
-      }
       // Same key (or no key yet) — idempotent: register/refresh device and return
       const device = await identityManager.registerDevice(
         motebitId,
