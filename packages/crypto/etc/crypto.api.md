@@ -765,6 +765,9 @@ export const HOST_ROSTER_SUITE: "motebit-jcs-ed25519-b64-v1";
 // @public
 export function hostEnrollmentId(enrollment: HostEnrollment): Promise<string>;
 
+// @public
+export function hostRetirementId(retirement: HostRetirement): Promise<string>;
+
 // @public (undocumented)
 export interface HostRosterMember {
     // (undocumented)

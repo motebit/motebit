@@ -114,6 +114,11 @@ new one per start; otherwise the set grows with every restart. (Re-minting an
 identical body is harmless — it yields the same id — but a body with a fresh
 `enrolled_at` is a new entry.)
 
+A retirement has an id by the same construction — the lowercase hex SHA-256 of
+the canonical JSON of the complete `HostRetirement`. Nothing in §6 depends on it;
+it exists so that a store can key what it holds and make ingest an idempotent
+union (§9). Reference: `hostRetirementId(...)` in `@motebit/crypto`.
+
 Hex is lowercase everywhere in this spec. An entry id is a hash of exact bytes,
 so there is one spelling of a key.
 

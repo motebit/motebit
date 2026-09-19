@@ -9,7 +9,7 @@ The machine roster's two artifacts: `HostEnrollment` and `HostRetirement`.
 
 `@motebit/protocol`: the two wire types, `HOST_ROSTER_SPEC_ID`, and the shape guards `isHostEnrollment` / `isHostRetirement`. Each body carries only what stays true for the life of a membership — no capability list (it changes; it is announced on the socket), no display name (it would be served verbatim forever). Both name the `public_key` that signed them, so a verifier knows _which_ key after a rotation.
 
-`@motebit/crypto`: `signHostEnrollment` / `verifyHostEnrollment`, `signHostRetirement` / `verifyHostRetirement`, `hostEnrollmentId`, and `verifyHostRoster`.
+`@motebit/crypto`: `signHostEnrollment` / `verifyHostEnrollment`, `signHostRetirement` / `verifyHostRetirement`, `hostEnrollmentId` / `hostRetirementId`, and `verifyHostRoster`.
 
 - **A set, not a chain.** Every machine of a motebit holds the same key and nothing coordinates them, so concurrent writers are the normal case. An entry's id is the SHA-256 of its canonical bytes; the roster is every enrolment no retirement names; merging two copies is set union. `verifyHostRoster` gives the same answer for any order and any duplication of its inputs.
 - **Remove wins, and is terminal.** A retirement names an enrolment by hash, so a replayed copy stays retired — and a retirement that arrives before its enrolment is kept as a tombstone rather than discarded.

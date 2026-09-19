@@ -130,6 +130,18 @@ export async function hostEnrollmentId(enrollment: HostEnrollment): Promise<stri
   return hash(new TextEncoder().encode(canonicalJson(enrollment)));
 }
 
+/**
+ * A retirement's identity in the set, by the same construction as an
+ * enrolment's. A store keys what it holds by this, so presenting the
+ * same retirement twice is a no-op — ingest is an idempotent union.
+ *
+ * Exported so a store never hashes a protocol payload for itself: the
+ * id is part of the law, and two implementations of it would be two ids.
+ */
+export async function hostRetirementId(retirement: HostRetirement): Promise<string> {
+  return hash(new TextEncoder().encode(canonicalJson(retirement)));
+}
+
 export interface HostRosterMember {
   enrollment_id: string;
   enrollment: HostEnrollment;

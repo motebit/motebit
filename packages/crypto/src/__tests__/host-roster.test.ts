@@ -15,6 +15,7 @@ import {
   signHostRetirement,
   verifyHostRetirement,
   hostEnrollmentId,
+  hostRetirementId,
   verifyHostRoster,
   canonicalJson,
   toBase64Url,
@@ -122,6 +123,19 @@ describe("HostRetirement", () => {
     expect(r.enrollment_id).toBe(await hostEnrollmentId(e));
     expect(await verifyHostRetirement(r)).toBe(true);
     expect(await verifyHostRetirement({ ...r, enrollment_id: "0".repeat(64) })).toBe(false);
+  });
+});
+
+describe("hostRetirementId", () => {
+  it("is stable for the same retirement and distinct from the entry it ends", async () => {
+    // A store keys retirements by this; presenting one twice must be a no-op.
+    const { enrol, retire } = await setup();
+    const e = await enrol("vps");
+    const r = await retire(e);
+    expect(await hostRetirementId(r)).toBe(await hostRetirementId(await retire(e)));
+    expect(await hostRetirementId(r)).toMatch(/^[0-9a-f]{64}$/);
+    expect(await hostRetirementId(r)).not.toBe(r.enrollment_id);
+    expect(await hostRetirementId(r)).not.toBe(await hostRetirementId(await retire(e, 9_999)));
   });
 });
 
