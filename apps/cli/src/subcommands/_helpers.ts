@@ -71,6 +71,26 @@ export async function fetchRelayJson(
   }
 }
 
+/** The relay every surface falls back to when nothing else names one. */
+export const DEFAULT_SYNC_URL = "https://relay.motebit.com";
+
+/**
+ * The relay this machine talks to, resolved the ONE way: flag, env,
+ * persisted config, then the default. Anything that resolves it differently
+ * can act on a relay the rest of the CLI is not using — `motebit rotate`
+ * read only the persisted value, so an identity registered against the
+ * default relay was told "not configured" and rotated locally into exactly
+ * the split state a rotation must never leave behind (#702).
+ */
+export function resolveRelayUrl(config: CliConfig): string {
+  const url =
+    config.syncUrl ??
+    process.env["MOTEBIT_SYNC_URL"] ??
+    loadFullConfig().sync_url ??
+    DEFAULT_SYNC_URL;
+  return url.replace(/\/+$/, "");
+}
+
 /**
  * Resolve the relay base URL from CLI config, env, or persisted config.
  * Exits the process with a helpful error if no URL is configured.

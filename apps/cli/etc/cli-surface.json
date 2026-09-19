@@ -370,6 +370,7 @@
     "identity.md",
     "motebit.db",
     "motebit.md",
+    "pending-rotation.json",
     "relay",
     "relay/relay.db",
     "smoke-x402-buyer-eoa.txt",

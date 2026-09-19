@@ -99,9 +99,17 @@ export async function submitSuccessionToRelay(
       reason: `relay answered ${res.status}${body ? `: ${body.slice(0, 200)}` : ""}`,
     };
   }
-  const parsed = (await res.json().catch(() => null)) as { applied?: unknown } | null;
-  // A relay that already held this record answers `applied: false`. An
-  // older relay answers neither, and "it did not refuse" is all we can
-  // honestly read from that.
-  return { ok: true, applied: parsed?.applied !== false };
+  const parsed = (await res.json().catch(() => null)) as {
+    ok?: unknown;
+    applied?: unknown;
+  } | null;
+  // The relay answers `{ok, motebit_id, applied}`. Anything else with a
+  // 200 — a captive portal, a proxy error page — did not reach it, and
+  // reading that as success is what lets the caller commit a rotation the
+  // relay never recorded. There is no older relay to be lenient for: this
+  // route has never accepted a client request.
+  if (parsed?.ok !== true) {
+    return { ok: false, reason: "the response did not come from a motebit relay" };
+  }
+  return { ok: true, applied: parsed.applied !== false };
 }

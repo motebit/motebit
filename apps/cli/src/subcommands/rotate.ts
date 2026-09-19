@@ -16,6 +16,12 @@ import * as path from "node:path";
 import { verify, rotate as rotateIdentityFile } from "@motebit/identity-file";
 import { rotateIdentityKeys } from "@motebit/core-identity";
 import { submitSuccessionToRelay } from "@motebit/sync-engine";
+import { resolveRelayUrl } from "./_helpers.js";
+import {
+  clearPendingRotation,
+  loadPendingRotation,
+  savePendingRotation,
+} from "../pending-rotation.js";
 import { hexPublicKeyToDidKey, secureErase, bytesToHex } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
 import { CONFIG_DIR, loadFullConfig, saveFullConfig } from "../config.js";
@@ -123,12 +129,29 @@ export async function handleRotate(config: CliConfig): Promise<void> {
   const oldPrivateKey = fromHex(oldPrivKeyHex);
   const oldPublicKey = fromHex(oldPublicKeyHex);
 
-  // 4. Generate new keypair and sign succession record
-  const rotateResult = await rotateIdentityKeys({
-    oldPrivateKey,
-    oldPublicKey,
-    reason,
-  });
+  // 4. Generate new keypair and sign succession record — unless one is
+  // already held. A rotation whose submission outcome was unknown left its
+  // record behind; finishing THAT one is what lets the relay recognise it
+  // ("already recorded"). Minting a fresh keypair here would present a
+  // record departing from a key the relay may already have retired, which
+  // it refuses for good.
+  const held = loadPendingRotation(motebitId, oldPublicKeyHex);
+  if (held != null) {
+    console.log("  Held rotation found — finishing it rather than starting a new one.");
+  }
+  const rotateResult =
+    held != null
+      ? {
+          newPrivateKey: fromHex(await decryptPrivateKey(held.encrypted_new_key, passphrase)),
+          newPublicKeyHex: held.new_public_key,
+          newPublicKey: fromHex(held.new_public_key),
+          successionRecord: held.record,
+        }
+      : await rotateIdentityKeys({
+          oldPrivateKey,
+          oldPublicKey,
+          reason,
+        });
   console.log(`  Old public key: ${oldPublicKeyHex.slice(0, 16)}...`);
   console.log(`  New public key: ${rotateResult.newPublicKeyHex.slice(0, 16)}...`);
   console.log("  Succession record: created (dual-signed)");
@@ -161,8 +184,39 @@ export async function handleRotate(config: CliConfig): Promise<void> {
   // endpoint third parties read (`spec/identity-v1.md` §7.6) went on serving
   // the retired key, so every receipt signed afterwards failed to verify —
   // silently, and for good. This file's own contract is all-or-nothing.
-  const syncUrl = fullConfig.sync_url ?? process.env["MOTEBIT_SYNC_URL"];
-  if (syncUrl != null && syncUrl !== "") {
+  // Resolved the same way every other subcommand resolves it — flag, env,
+  // persisted, then the default relay. Reading only the persisted value
+  // told an identity registered against the default relay that no relay
+  // was configured, and rotated it locally into the split state this
+  // whole path exists to prevent.
+  const syncUrl = resolveRelayUrl(config);
+  {
+    // Written BEFORE the request goes out, so a response that is lost or
+    // times out is recoverable rather than terminal. Without it the next
+    // run mints a FRESH keypair and a record departing from a key the
+    // relay may already have retired — which it refuses, for good. Holding
+    // the pending record is what lets the next run re-present the SAME one
+    // and meet the relay's "already recorded" answer.
+    if (held == null) {
+      const encryptedNewKey = await encryptPrivateKey(
+        bytesToHex(rotateResult.newPrivateKey),
+        passphrase,
+      );
+      if (encryptedNewKey == null) {
+        console.error("Error: could not encrypt the new key. Nothing was changed.");
+        secureErase(oldPrivateKey);
+        secureErase(rotateResult.newPrivateKey);
+        rl.close();
+        process.exit(1);
+      }
+      savePendingRotation({
+        motebit_id: motebitId,
+        old_public_key: oldPublicKeyHex,
+        new_public_key: rotateResult.newPublicKeyHex,
+        record: rotateResult.successionRecord,
+        encrypted_new_key: encryptedNewKey,
+      });
+    }
     const submitted = await submitSuccessionToRelay({
       syncUrl,
       motebitId,
@@ -176,8 +230,14 @@ export async function handleRotate(config: CliConfig): Promise<void> {
     });
     if (!submitted.ok) {
       console.error(`Error: the relay did not record the rotation — ${submitted.reason}`);
-      console.error("  Nothing was changed locally. Your current key still works.");
-      console.error("  Fix the relay connection and run `motebit rotate` again.");
+      console.error("  Your current key still works; nothing local was changed.");
+      console.error(
+        "  This rotation is held, and `motebit rotate` will finish it rather than start a new one.",
+      );
+      console.error(
+        "  If the relay holds a key this machine no longer has, it cannot be reached from here:",
+      );
+      console.error("  recover through the identity's guardian, or ask the relay operator.");
       secureErase(oldPrivateKey);
       secureErase(rotateResult.newPrivateKey);
       rl.close();
@@ -188,8 +248,6 @@ export async function handleRotate(config: CliConfig): Promise<void> {
         ? "  Relay: rotation recorded"
         : "  Relay: rotation already recorded (no change)",
     );
-  } else {
-    console.log("  Relay: not configured (skipped)");
   }
 
   fs.writeFileSync(identityPath, rotatedContent, "utf-8");
@@ -203,6 +261,9 @@ export async function handleRotate(config: CliConfig): Promise<void> {
   fullConfig.device_public_key = rotateResult.newPublicKeyHex;
   saveFullConfig(fullConfig);
   console.log("  Config: new key encrypted and saved");
+
+  // Local state now agrees with the relay, so the held rotation is done.
+  clearPendingRotation();
 
   // Securely erase old key material
   secureErase(oldPrivateKey);
