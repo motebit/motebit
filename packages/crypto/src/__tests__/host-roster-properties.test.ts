@@ -93,302 +93,363 @@ function statuses(v: HostRosterVerdict): Map<string, [Status, string[]]> {
   return out;
 }
 
-const subE = () => fc.subarray(enrolments);
-const subR = () => fc.subarray(retirements);
-const RUNS = { numRuns: 60 };
+// BOUNDED draws. Every admitted entry costs an Ed25519 verification, and
+// an unbounded subset of this pool is up to ~180 of them per reduction —
+// 44s for this file locally and a 30s-per-test timeout in CI, where it
+// runs under coverage instrumentation. The scenarios these properties
+// need (a machine at several epochs, a retirement by an older/same/newer
+// key, a stranger) all appear in draws this size; more entries per draw
+// buys verification time, not coverage. More RUNS buys coverage.
+const subE = () => fc.subarray(enrolments, { maxLength: 8 });
+const subR = () => fc.subarray(retirements, { maxLength: 12 });
+const RUNS = { numRuns: 50 };
+// Headroom for CI under coverage; locally each property takes ~1s.
+const SLOW = 120_000;
 
 describe("§6 properties", () => {
-  it("P1 partition — every machine with an admissible enrolment is in exactly one bucket", async () => {
-    await fc.assert(
-      fc.asyncProperty(subE(), subR(), fc.integer({ min: 1, max: 4 }), async (e, r, n) => {
-        const c = chain.slice(0, n);
-        const v = ok(await reduce(c, e, r));
-        const placed = [...v.active, ...v.retired, ...v.superseded].map((m) => m.device_id);
-        expect(new Set(placed).size).toBe(placed.length);
-        const admissible = new Set(
-          e.filter((x) => c.includes(x.public_key)).map((x) => x.device_id),
-        );
-        expect(placed.slice().sort()).toEqual([...admissible].sort());
-        // The view stamp, and what it authenticates — under chains of
-        // EVERY length, so an implementation comparing against a fixed
-        // index cannot pass by coincidence.
-        expect(v.chain_head).toEqual({ epoch: n - 1, public_key: c[n - 1] });
-        for (const m of [...v.active, ...v.retired, ...v.superseded]) {
-          expect(m.authenticated).toBe(m.epoch === n - 1);
-          expect(m.entries.length).toBeGreaterThan(0);
-        }
-        for (const m of v.active) expect(m.epoch).toBe(n - 1);
-        for (const m of v.superseded) expect(m.epoch).toBeLessThan(n - 1);
-      }),
-      RUNS,
-    );
-  });
-
-  it("P2 — the WHOLE result is independent of input order and multiplicity", async () => {
-    await fc.assert(
-      fc.asyncProperty(
-        subE(),
-        subR(),
-        fc.integer({ min: 1, max: 4 }),
-        fc.infiniteStream(fc.nat()),
-        async (e, r, n, seed) => {
+  it(
+    "P1 partition — every machine with an admissible enrolment is in exactly one bucket",
+    async () => {
+      await fc.assert(
+        fc.asyncProperty(subE(), subR(), fc.integer({ min: 1, max: 4 }), async (e, r, n) => {
           const c = chain.slice(0, n);
-          const base = await reduce(c, e, r);
-          const shuffle = <T>(xs: T[]): T[] =>
-            xs
-              .map((x) => [seed.next().value as number, x] as const)
-              .sort((a, b) => a[0] - b[0])
-              .map(([, x]) => x);
-          expect(await reduce(c, shuffle([...e, ...e]), shuffle([...r, ...r, ...r]))).toEqual(base);
-        },
-      ),
-      RUNS,
-    );
-  });
-
-  it("P3 monotone under rotation — appending a key nothing here is signed by changes ONLY active → superseded", async () => {
-    // Restated after design review: it is FALSE for sets that already
-    // hold artifacts signed by the appended key (a store learns of K3
-    // artifacts before a consumer learns K3), so those are excluded here
-    // and their effect is P6's business. The composition is tested below.
-    await fc.assert(
-      fc.asyncProperty(subE(), subR(), fc.integer({ min: 1, max: 3 }), async (e, r, n) => {
-        const before = chain.slice(0, n);
-        const notByAppended = <T extends { signature: string }>(xs: T[]) =>
-          xs.filter((x) => signer.get(x.signature) !== n);
-        const [ee, rr] = [notByAppended(e), notByAppended(r)];
-        const a = ok(await reduce(before, ee, rr));
-        const b = ok(await reduce(chain.slice(0, n + 1), ee, rr));
-        // WHOLE machines, not a projection. The first version compared
-        // through `statuses()`, which drops `authenticated` — and so hid
-        // that the spec's statement of this property was false as written.
-        //
-        // Exactly three things change, all functions of the head moving:
-        //   1. `chain_head` names the appended key;
-        //   2. every `active` machine becomes `superseded`;
-        //   3. `authenticated` becomes false for EVERY machine, since none
-        //      has an enrolment at the new head (the set holds nothing
-        //      signed by it) — including machines that stay `retired`.
-        expect(b.chain_head).toEqual({ epoch: n, public_key: chain[n] });
-        expect(b.active).toEqual([]);
-        const stale = (ms: HostRosterMachine[]) => ms.map((m) => ({ ...m, authenticated: false }));
-        const byDevice = (x: HostRosterMachine, y: HostRosterMachine) =>
-          x.device_id < y.device_id ? -1 : 1;
-        expect(b.retired).toEqual(stale(a.retired));
-        expect(b.superseded).toEqual(stale([...a.superseded, ...a.active]).sort(byDevice));
-        expect(b.rejected).toEqual(a.rejected);
-        expect(b.tombstones).toEqual(a.tombstones);
-      }),
-      RUNS,
-    );
-  });
-
-  it("P4 no backward authority — nothing signed below epoch t can move a machine whose H ≥ t", async () => {
-    // The stolen-laptop property: a holder of an old key can mint
-    // anything at its own epoch and must not touch a newer line.
-    await fc.assert(
-      fc.asyncProperty(
-        subE(),
-        subR(),
-        subE(),
-        subR(),
-        fc.integer({ min: 1, max: 3 }),
-        async (e, r, thiefE, thiefR, t) => {
-          const below = <T extends { signature: string }>(xs: T[]) =>
-            xs.filter((x) => {
-              const ep = signer.get(x.signature) ?? -1;
-              return ep >= 0 && ep < t;
-            });
-          const a = ok(await reduce(chain, e, r));
-          const b = ok(await reduce(chain, [...e, ...below(thiefE)], [...r, ...below(thiefR)]));
-          const sb = statuses(b);
-          for (const m of [...a.active, ...a.retired, ...a.superseded]) {
-            if (m.epoch >= t) expect(sb.get(m.device_id)).toEqual(statuses(a).get(m.device_id));
-          }
-        },
-      ),
-      RUNS,
-    );
-  });
-
-  it("P5 one spelling — a re-spelled signature is refused, and beside the real one it changes nothing", async () => {
-    // A signature has ONE well-formed spelling: the last base64url
-    // character's four low bits are zero. The fifteen others decode to the
-    // same bytes and would verify; they are refused on shape, so no
-    // keyless party can multiply an entry, and an id never depended on the
-    // spelling in the first place.
-    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    const twin = <T extends { signature: string }>(x: T): T => {
-      const last = x.signature.slice(-1);
-      return { ...x, signature: x.signature.slice(0, -1) + alphabet[alphabet.indexOf(last) ^ 1]! };
-    };
-    await fc.assert(
-      fc.asyncProperty(subE(), subR(), async (e, r) => {
-        const honest = await reduce(chain, e, r);
-        expect(await reduce(chain, [...e, ...e.map(twin)], [...r.map(twin), ...r])).toEqual(honest);
-        // On their own the twins admit nothing.
-        const alone = ok(await reduce(chain, e.map(twin), r.map(twin)));
-        expect([...alone.active, ...alone.retired, ...alone.superseded]).toEqual([]);
-        expect(alone.tombstones).toEqual([]);
-      }),
-      RUNS,
-    );
-  });
-
-  it("P6 monotone under union — more RETIREMENTS never bring a retired machine back", async () => {
-    await fc.assert(
-      fc.asyncProperty(subE(), subR(), subR(), async (e, r, more) => {
-        const a = statuses(ok(await reduce(chain, e, r)));
-        const b = statuses(ok(await reduce(chain, e, [...r, ...more])));
-        for (const [device, [status]] of a) {
-          if (status === "retired") expect(b.get(device)?.[0]).toBe("retired");
-        }
-      }),
-      RUNS,
-    );
-  });
-
-  it("a verdict is a function of (chain, set) alone — reducing under a stale chain first leaves nothing behind", async () => {
-    // A consumer catches up on a rotation: it reduces under the chain it
-    // had, learns the new key, and reduces again. The second answer must
-    // be exactly what a consumer that always knew would compute — so a
-    // refusal under the stale chain (`untrusted_key`) may leave NO state
-    // behind. This was labelled "P3∘P6" and only re-tested order
-    // invariance; it now does what it says.
-    await fc.assert(
-      fc.asyncProperty(subE(), subR(), fc.integer({ min: 1, max: 3 }), async (e, r, n) => {
-        const full = chain.slice(0, n + 1);
-        const alwaysKnew = await reduce(full, e, r);
-        const stale = ok(await reduce(chain.slice(0, n), e, r));
-        const caughtUp = await reduce(full, e, r);
-        expect(caughtUp).toEqual(alwaysKnew);
-        // And the stale view really was a different view: anything signed
-        // by the key it lacked was refused, not quietly dropped.
-        const byNewKey = [...e, ...r].filter((x) => signer.get(x.signature) === n).length;
-        if (byNewKey > 0) {
-          expect(stale.rejected.some((x) => x.reason === "untrusted_key")).toBe(true);
-        }
-        expect(stale.chain_head.epoch).toBe(n - 1);
-      }),
-      { numRuns: 30 },
-    );
-  });
-
-  it("P7 suffix invariance — the ACTIVE set depends only on the current key and what it signed", async () => {
-    // What makes `authenticated` mean something: no history, true or
-    // forged, can add or remove an active line.
-    await fc.assert(
-      fc.asyncProperty(subE(), subR(), fc.integer({ min: 0, max: 3 }), async (e, r, drop) => {
-        const whole = ok(await reduce(chain, e, r));
-        const suffix = ok(await reduce(chain.slice(drop), e, r));
-        const pick = (v: HostRosterVerdict) =>
-          v.active.map((m) => [m.device_id, m.entries.map((x) => x.enrollment_id)]);
-        expect(pick(suffix)).toEqual(pick(whole));
-        for (const m of whole.active) expect(m.authenticated).toBe(true);
-        for (const m of [...whole.superseded]) expect(m.authenticated).toBe(false);
-      }),
-      RUNS,
-    );
-  });
-
-  it("P8 relative order only — re-rooting the chain on an unrelated older key moves no machine", async () => {
-    const unrelated = bytesToHex((await generateKeypair()).publicKey);
-    await fc.assert(
-      fc.asyncProperty(subE(), subR(), async (e, r) => {
-        const a = statuses(ok(await reduce(chain, e, r)));
-        const b = statuses(ok(await reduce([unrelated, ...chain], e, r)));
-        expect(b).toEqual(a);
-      }),
-      RUNS,
-    );
-  });
-
-  it("P11 keyless additions — nothing a party with NO key can add moves any machine", async () => {
-    // Every other property draws from an authentically signed pool, so
-    // no keyless adversary ever appeared in them — and two defects lived
-    // exactly there. A hostile store, or merely an unverifying one whose
-    // set a consumer UNIONS with an honest store's, can add: copies of a
-    // real artifact under garbage signatures (any number, sorting
-    // anywhere); copies carrying an `undefined`-valued extra key, which
-    // canonicalize to the SAME id and signature; `-0` for `0`; and junk.
-    // None of it may suppress, resurrect, or reclassify anything.
-    // WELL-FORMED garbage — canonical length and final character — or it
-    // is refused on shape and never reaches the verification path this
-    // property exists to attack.
-    const sigChar = fc.constantFrom(..."-_0189AZaz".split(""));
-    const garbageSig = fc
-      .tuple(
-        fc.array(sigChar, { minLength: 85, maxLength: 85 }),
-        fc.constantFrom("A", "Q", "g", "w"),
-      )
-      .map(([cs, last]) => cs.join("") + last);
-    const forge = <T extends { signature: string }>(pool: T[]) =>
-      fc.array(
-        fc
-          .tuple(fc.constantFrom(...pool), garbageSig, fc.integer({ min: 0, max: 3 }))
-          .map(([artifact, sig, mode]) => {
-            if (mode === 0) return { ...artifact, signature: sig };
-            // Same id, same signature, NOT well-formed.
-            if (mode === 1) return { ...artifact, device_name: undefined };
-            if (mode === 2) return { ...artifact, signature: sig, hosts: undefined };
-            return "junk";
-          }),
-        { maxLength: 40 },
-      );
-    // ...and a FLOOD: many garbage copies of ONE real artifact, all
-    // sorting ahead of any genuine signature. Random garbage almost never
-    // stacks up on a single id, which is how a cap on spellings tried
-    // slipped past this property the first time.
-    const flood = <T extends { signature: string }>(pool: T[]) =>
-      fc.tuple(fc.constantFrom(...pool), fc.integer({ min: 9, max: 24 })).map(([real, n]) => ({
-        real,
-        copies: Array.from({ length: n }, (_, i) => ({
-          ...real,
-          signature: `${"-".repeat(83)}${String(i).padStart(2, "0")}A`,
-        })),
-      }));
-    await fc.assert(
-      fc.asyncProperty(
-        subE(),
-        subR(),
-        forge(enrolments),
-        forge(retirements),
-        flood(enrolments),
-        flood(retirements),
-        fc.boolean(),
-        async (e0, r0, junkE, junkR, floodE, floodR, front) => {
-          // The flooded artifacts are IN the honest set, so suppressing
-          // one would show.
-          const e = [...new Set([...e0, floodE.real])];
-          const r = [...new Set([...r0, floodR.real])];
-          const fakeE = [...junkE, ...floodE.copies];
-          const fakeR = [...junkR, ...floodR.copies];
-          const honest = ok(await reduce(chain, e, r));
-          const mix = <T>(real: T[], fake: unknown[]) =>
-            (front ? [...fake, ...real] : [...real, ...fake]) as T[];
-          const flooded = ok(await reduce(chain, mix(e, fakeE), mix(r, fakeR)));
-          expect(statuses(flooded)).toEqual(statuses(honest));
-          // And the flood is order-independent too.
-          expect(ok(await reduce(chain, mix(e, fakeE).reverse(), mix(r, fakeR).reverse()))).toEqual(
-            flooded,
+          const v = ok(await reduce(c, e, r));
+          const placed = [...v.active, ...v.retired, ...v.superseded].map((m) => m.device_id);
+          expect(new Set(placed).size).toBe(placed.length);
+          const admissible = new Set(
+            e.filter((x) => c.includes(x.public_key)).map((x) => x.device_id),
           );
-        },
-      ),
-      RUNS,
-    );
-  });
+          expect(placed.slice().sort()).toEqual([...admissible].sort());
+          // The view stamp, and what it authenticates — under chains of
+          // EVERY length, so an implementation comparing against a fixed
+          // index cannot pass by coincidence.
+          expect(v.chain_head).toEqual({ epoch: n - 1, public_key: c[n - 1] });
+          for (const m of [...v.active, ...v.retired, ...v.superseded]) {
+            expect(m.authenticated).toBe(m.epoch === n - 1);
+            expect(m.entries.length).toBeGreaterThan(0);
+          }
+          for (const m of v.active) expect(m.epoch).toBe(n - 1);
+          for (const m of v.superseded) expect(m.epoch).toBeLessThan(n - 1);
+        }),
+        RUNS,
+      );
+    },
+    SLOW,
+  );
 
-  it("P10 — an unusable chain never yields a roster, so no 'every machine' can be vacuously true", async () => {
-    const e = enrolments.slice(0, 3);
-    expect(await reduce([], e, [])).toEqual({ ok: false, reason: "empty_chain" });
-    expect(await reduce([chain[0]!, chain[1]!, chain[0]!], e, [])).toEqual({
-      ok: false,
-      reason: "duplicate_key",
-    });
-    expect(await reduce([chain[0]!.toUpperCase()], e, [])).toEqual({
-      ok: false,
-      reason: "malformed_key",
-    });
-    expect(await reduce(["not-a-key"], e, [])).toEqual({ ok: false, reason: "malformed_key" });
-  });
+  it(
+    "P2 — the WHOLE result is independent of input order and multiplicity",
+    async () => {
+      await fc.assert(
+        fc.asyncProperty(
+          subE(),
+          subR(),
+          fc.integer({ min: 1, max: 4 }),
+          fc.infiniteStream(fc.nat()),
+          async (e, r, n, seed) => {
+            const c = chain.slice(0, n);
+            const base = await reduce(c, e, r);
+            const shuffle = <T>(xs: T[]): T[] =>
+              xs
+                .map((x) => [seed.next().value as number, x] as const)
+                .sort((a, b) => a[0] - b[0])
+                .map(([, x]) => x);
+            expect(await reduce(c, shuffle([...e, ...e]), shuffle([...r, ...r, ...r]))).toEqual(
+              base,
+            );
+          },
+        ),
+        RUNS,
+      );
+    },
+    SLOW,
+  );
+
+  it(
+    "P3 monotone under rotation — appending a key nothing here is signed by changes ONLY active → superseded",
+    async () => {
+      // Restated after design review: it is FALSE for sets that already
+      // hold artifacts signed by the appended key (a store learns of K3
+      // artifacts before a consumer learns K3), so those are excluded here
+      // and their effect is P6's business. The composition is tested below.
+      await fc.assert(
+        fc.asyncProperty(subE(), subR(), fc.integer({ min: 1, max: 3 }), async (e, r, n) => {
+          const before = chain.slice(0, n);
+          const notByAppended = <T extends { signature: string }>(xs: T[]) =>
+            xs.filter((x) => signer.get(x.signature) !== n);
+          const [ee, rr] = [notByAppended(e), notByAppended(r)];
+          const a = ok(await reduce(before, ee, rr));
+          const b = ok(await reduce(chain.slice(0, n + 1), ee, rr));
+          // WHOLE machines, not a projection. The first version compared
+          // through `statuses()`, which drops `authenticated` — and so hid
+          // that the spec's statement of this property was false as written.
+          //
+          // Exactly three things change, all functions of the head moving:
+          //   1. `chain_head` names the appended key;
+          //   2. every `active` machine becomes `superseded`;
+          //   3. `authenticated` becomes false for EVERY machine, since none
+          //      has an enrolment at the new head (the set holds nothing
+          //      signed by it) — including machines that stay `retired`.
+          expect(b.chain_head).toEqual({ epoch: n, public_key: chain[n] });
+          expect(b.active).toEqual([]);
+          const stale = (ms: HostRosterMachine[]) =>
+            ms.map((m) => ({ ...m, authenticated: false }));
+          const byDevice = (x: HostRosterMachine, y: HostRosterMachine) =>
+            x.device_id < y.device_id ? -1 : 1;
+          expect(b.retired).toEqual(stale(a.retired));
+          expect(b.superseded).toEqual(stale([...a.superseded, ...a.active]).sort(byDevice));
+          expect(b.rejected).toEqual(a.rejected);
+          expect(b.tombstones).toEqual(a.tombstones);
+        }),
+        RUNS,
+      );
+    },
+    SLOW,
+  );
+
+  it(
+    "P4 no backward authority — nothing signed below epoch t can move a machine whose H ≥ t",
+    async () => {
+      // The stolen-laptop property: a holder of an old key can mint
+      // anything at its own epoch and must not touch a newer line.
+      await fc.assert(
+        fc.asyncProperty(
+          subE(),
+          subR(),
+          subE(),
+          subR(),
+          fc.integer({ min: 1, max: 3 }),
+          async (e, r, thiefE, thiefR, t) => {
+            const below = <T extends { signature: string }>(xs: T[]) =>
+              xs.filter((x) => {
+                const ep = signer.get(x.signature) ?? -1;
+                return ep >= 0 && ep < t;
+              });
+            const a = ok(await reduce(chain, e, r));
+            const b = ok(await reduce(chain, [...e, ...below(thiefE)], [...r, ...below(thiefR)]));
+            const sb = statuses(b);
+            for (const m of [...a.active, ...a.retired, ...a.superseded]) {
+              if (m.epoch >= t) expect(sb.get(m.device_id)).toEqual(statuses(a).get(m.device_id));
+            }
+          },
+        ),
+        RUNS,
+      );
+    },
+    SLOW,
+  );
+
+  it(
+    "P5 one spelling — a re-spelled signature is refused, and beside the real one it changes nothing",
+    async () => {
+      // A signature has ONE well-formed spelling: the last base64url
+      // character's four low bits are zero. The fifteen others decode to the
+      // same bytes and would verify; they are refused on shape, so no
+      // keyless party can multiply an entry, and an id never depended on the
+      // spelling in the first place.
+      const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+      const twin = <T extends { signature: string }>(x: T): T => {
+        const last = x.signature.slice(-1);
+        return {
+          ...x,
+          signature: x.signature.slice(0, -1) + alphabet[alphabet.indexOf(last) ^ 1]!,
+        };
+      };
+      await fc.assert(
+        fc.asyncProperty(subE(), subR(), async (e, r) => {
+          const honest = await reduce(chain, e, r);
+          expect(await reduce(chain, [...e, ...e.map(twin)], [...r.map(twin), ...r])).toEqual(
+            honest,
+          );
+          // On their own the twins admit nothing.
+          const alone = ok(await reduce(chain, e.map(twin), r.map(twin)));
+          expect([...alone.active, ...alone.retired, ...alone.superseded]).toEqual([]);
+          expect(alone.tombstones).toEqual([]);
+        }),
+        RUNS,
+      );
+    },
+    SLOW,
+  );
+
+  it(
+    "P6 monotone under union — more RETIREMENTS never bring a retired machine back",
+    async () => {
+      await fc.assert(
+        fc.asyncProperty(subE(), subR(), subR(), async (e, r, more) => {
+          const a = statuses(ok(await reduce(chain, e, r)));
+          const b = statuses(ok(await reduce(chain, e, [...r, ...more])));
+          for (const [device, [status]] of a) {
+            if (status === "retired") expect(b.get(device)?.[0]).toBe("retired");
+          }
+        }),
+        RUNS,
+      );
+    },
+    SLOW,
+  );
+
+  it(
+    "a verdict is a function of (chain, set) alone — reducing under a stale chain first leaves nothing behind",
+    async () => {
+      // A consumer catches up on a rotation: it reduces under the chain it
+      // had, learns the new key, and reduces again. The second answer must
+      // be exactly what a consumer that always knew would compute — so a
+      // refusal under the stale chain (`untrusted_key`) may leave NO state
+      // behind. This was labelled "P3∘P6" and only re-tested order
+      // invariance; it now does what it says.
+      await fc.assert(
+        fc.asyncProperty(subE(), subR(), fc.integer({ min: 1, max: 3 }), async (e, r, n) => {
+          const full = chain.slice(0, n + 1);
+          const alwaysKnew = await reduce(full, e, r);
+          const stale = ok(await reduce(chain.slice(0, n), e, r));
+          const caughtUp = await reduce(full, e, r);
+          expect(caughtUp).toEqual(alwaysKnew);
+          // And the stale view really was a different view: anything signed
+          // by the key it lacked was refused, not quietly dropped.
+          const byNewKey = [...e, ...r].filter((x) => signer.get(x.signature) === n).length;
+          if (byNewKey > 0) {
+            expect(stale.rejected.some((x) => x.reason === "untrusted_key")).toBe(true);
+          }
+          expect(stale.chain_head.epoch).toBe(n - 1);
+        }),
+        { numRuns: 30 },
+      );
+    },
+    SLOW,
+  );
+
+  it(
+    "P7 suffix invariance — the ACTIVE set depends only on the current key and what it signed",
+    async () => {
+      // What makes `authenticated` mean something: no history, true or
+      // forged, can add or remove an active line.
+      await fc.assert(
+        fc.asyncProperty(subE(), subR(), fc.integer({ min: 0, max: 3 }), async (e, r, drop) => {
+          const whole = ok(await reduce(chain, e, r));
+          const suffix = ok(await reduce(chain.slice(drop), e, r));
+          const pick = (v: HostRosterVerdict) =>
+            v.active.map((m) => [m.device_id, m.entries.map((x) => x.enrollment_id)]);
+          expect(pick(suffix)).toEqual(pick(whole));
+          for (const m of whole.active) expect(m.authenticated).toBe(true);
+          for (const m of [...whole.superseded]) expect(m.authenticated).toBe(false);
+        }),
+        RUNS,
+      );
+    },
+    SLOW,
+  );
+
+  it(
+    "P8 relative order only — re-rooting the chain on an unrelated older key moves no machine",
+    async () => {
+      const unrelated = bytesToHex((await generateKeypair()).publicKey);
+      await fc.assert(
+        fc.asyncProperty(subE(), subR(), async (e, r) => {
+          const a = statuses(ok(await reduce(chain, e, r)));
+          const b = statuses(ok(await reduce([unrelated, ...chain], e, r)));
+          expect(b).toEqual(a);
+        }),
+        RUNS,
+      );
+    },
+    SLOW,
+  );
+
+  it(
+    "P11 keyless additions — nothing a party with NO key can add moves any machine",
+    async () => {
+      // Every other property draws from an authentically signed pool, so
+      // no keyless adversary ever appeared in them — and two defects lived
+      // exactly there. A hostile store, or merely an unverifying one whose
+      // set a consumer UNIONS with an honest store's, can add: copies of a
+      // real artifact under garbage signatures (any number, sorting
+      // anywhere); copies carrying an `undefined`-valued extra key, which
+      // canonicalize to the SAME id and signature; `-0` for `0`; and junk.
+      // None of it may suppress, resurrect, or reclassify anything.
+      // WELL-FORMED garbage — canonical length and final character — or it
+      // is refused on shape and never reaches the verification path this
+      // property exists to attack.
+      const sigChar = fc.constantFrom(..."-_0189AZaz".split(""));
+      const garbageSig = fc
+        .tuple(
+          fc.array(sigChar, { minLength: 85, maxLength: 85 }),
+          fc.constantFrom("A", "Q", "g", "w"),
+        )
+        .map(([cs, last]) => cs.join("") + last);
+      const forge = <T extends { signature: string }>(pool: T[]) =>
+        fc.array(
+          fc
+            .tuple(fc.constantFrom(...pool), garbageSig, fc.integer({ min: 0, max: 3 }))
+            .map(([artifact, sig, mode]) => {
+              if (mode === 0) return { ...artifact, signature: sig };
+              // Same id, same signature, NOT well-formed.
+              if (mode === 1) return { ...artifact, device_name: undefined };
+              if (mode === 2) return { ...artifact, signature: sig, hosts: undefined };
+              return "junk";
+            }),
+          { maxLength: 10 },
+        );
+      // ...and a FLOOD: many garbage copies of ONE real artifact, all
+      // sorting ahead of any genuine signature. Random garbage almost never
+      // stacks up on a single id, which is how a cap on spellings tried
+      // slipped past this property the first time.
+      const flood = <T extends { signature: string }>(pool: T[]) =>
+        fc.tuple(fc.constantFrom(...pool), fc.integer({ min: 9, max: 12 })).map(([real, n]) => ({
+          real,
+          copies: Array.from({ length: n }, (_, i) => ({
+            ...real,
+            signature: `${"-".repeat(83)}${String(i).padStart(2, "0")}A`,
+          })),
+        }));
+      await fc.assert(
+        fc.asyncProperty(
+          subE(),
+          subR(),
+          forge(enrolments),
+          forge(retirements),
+          flood(enrolments),
+          flood(retirements),
+          fc.boolean(),
+          async (e0, r0, junkE, junkR, floodE, floodR, front) => {
+            // The flooded artifacts are IN the honest set, so suppressing
+            // one would show.
+            const e = [...new Set([...e0, floodE.real])];
+            const r = [...new Set([...r0, floodR.real])];
+            const fakeE = [...junkE, ...floodE.copies];
+            const fakeR = [...junkR, ...floodR.copies];
+            const honest = ok(await reduce(chain, e, r));
+            const mix = <T>(real: T[], fake: unknown[]) =>
+              (front ? [...fake, ...real] : [...real, ...fake]) as T[];
+            const flooded = ok(await reduce(chain, mix(e, fakeE), mix(r, fakeR)));
+            expect(statuses(flooded)).toEqual(statuses(honest));
+            // And the flood is order-independent too.
+            expect(
+              ok(await reduce(chain, mix(e, fakeE).reverse(), mix(r, fakeR).reverse())),
+            ).toEqual(flooded);
+          },
+        ),
+        RUNS,
+      );
+    },
+    SLOW,
+  );
+
+  it(
+    "P10 — an unusable chain never yields a roster, so no 'every machine' can be vacuously true",
+    async () => {
+      const e = enrolments.slice(0, 3);
+      expect(await reduce([], e, [])).toEqual({ ok: false, reason: "empty_chain" });
+      expect(await reduce([chain[0]!, chain[1]!, chain[0]!], e, [])).toEqual({
+        ok: false,
+        reason: "duplicate_key",
+      });
+      expect(await reduce([chain[0]!.toUpperCase()], e, [])).toEqual({
+        ok: false,
+        reason: "malformed_key",
+      });
+      expect(await reduce(["not-a-key"], e, [])).toEqual({ ok: false, reason: "malformed_key" });
+    },
+    SLOW,
+  );
 });

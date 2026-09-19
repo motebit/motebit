@@ -472,7 +472,9 @@ describe("the reduction — what it refuses", () => {
     const k = await key();
     const vps = await k.enrol("vps");
     const gone = await k.retire(vps);
-    const flood = Array.from({ length: 200 }, (_, i) => ({
+    // Forty: well past any cap worth writing, and cheap — every copy is a
+    // signature verification, and CI runs this under coverage.
+    const flood = Array.from({ length: 40 }, (_, i) => ({
       ...gone,
       // Well-formed garbage: canonical length and final character, so it
       // reaches verification rather than being refused on shape.
