@@ -30,7 +30,7 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991,
-      "description": "Epoch milliseconds (a non-negative integer), self-asserted. Informational: MUST NOT be used to order entries."
+      "description": "Epoch milliseconds (a non-negative integer), self-asserted. Informational: MUST NOT be used to order entries. Negative zero is refused: it canonicalizes to 0."
     },
     "suite": {
       "type": "string",

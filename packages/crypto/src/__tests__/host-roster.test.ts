@@ -187,6 +187,72 @@ describe("the artifacts", () => {
   });
 });
 
+describe("the signers refuse to mint what no verifier will accept", () => {
+  // A daemon caches its enrolment and re-presents the same bytes on every
+  // start. An artifact that signs fine and verifies nowhere is therefore
+  // a machine that is SILENTLY never in "every machine", forever.
+  it("the rotation re-enrol spread: the OLD signature must not end up inside the signed body", async () => {
+    // `{ ...oldEnrolment, public_key, enrolled_at }` is the natural way to
+    // re-enrol under a new key, and TypeScript does not excess-check a
+    // spread. The old `signature` (and `type`, `suite`) ride along.
+    const [k1, k2] = [await key(), await key()];
+    const old = await k1.enrol("laptop");
+    const again = await signHostEnrollment(
+      { ...old, public_key: k2.pub, enrolled_at: 5_000 } as Parameters<
+        typeof signHostEnrollment
+      >[0],
+      k2.kp.privateKey,
+    );
+    expect(await verifyHostEnrollment(again)).toBe(true);
+    expect(Object.keys(again).sort()).toEqual(
+      ["device_id", "enrolled_at", "motebit_id", "public_key", "signature", "suite", "type"].sort(),
+    );
+    expect(again.signature).not.toBe(old.signature);
+  });
+
+  it("throws rather than sign a body that is not well-formed", async () => {
+    const k = await key();
+    const base = {
+      motebit_id: MOTEBIT,
+      device_id: "laptop",
+      public_key: k.pub,
+      enrolled_at: 1_000,
+    };
+    const sign = (over: Record<string, unknown>) =>
+      signHostEnrollment({ ...base, ...over } as typeof base, k.kp.privateKey);
+    await expect(sign({ enrolled_at: 1000.5 })).rejects.toThrow(/not a well-formed HostEnrollment/);
+    await expect(sign({ enrolled_at: -0 })).rejects.toThrow(/not a well-formed/);
+    await expect(sign({ device_id: "" })).rejects.toThrow(/not a well-formed/);
+    await expect(sign({ public_key: k.pub.toUpperCase() })).rejects.toThrow(/not a well-formed/);
+    const e = await k.enrol("laptop");
+    await expect(
+      signHostRetirement(
+        { motebit_id: MOTEBIT, enrollment_id: "abc", public_key: k.pub, retired_at: 1 },
+        k.kp.privateKey,
+      ),
+    ).rejects.toThrow(/not a well-formed HostRetirement/);
+    expect(await hostEnrollmentId(e)).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("throws when `public_key` is not the key doing the signing", async () => {
+    // It would sign, and verify nowhere: the body names a key the
+    // signature was not made with.
+    const [k1, k2] = [await key(), await key()];
+    await expect(
+      signHostEnrollment(
+        { motebit_id: MOTEBIT, device_id: "laptop", public_key: k1.pub, enrolled_at: 1 },
+        k2.kp.privateKey,
+      ),
+    ).rejects.toThrow(/public_key does not match the signing key/);
+    await expect(
+      signHostRetirement(
+        { motebit_id: MOTEBIT, enrollment_id: "cd".repeat(32), public_key: k1.pub, retired_at: 1 },
+        k2.kp.privateKey,
+      ),
+    ).rejects.toThrow(/public_key does not match the signing key/);
+  });
+});
+
 describe("@motebit/protocol's guards and the copies restated here are one law", () => {
   // `@motebit/crypto` keeps zero runtime monorepo deps, so its shape
   // checks are restated rather than imported. Two copies drift; this pins
@@ -498,6 +564,27 @@ describe("the reduction — what it refuses", () => {
     expect(await run([])).toEqual({ ok: false, reason: "empty_chain" });
     expect(await run([k.pub, k.pub])).toEqual({ ok: false, reason: "duplicate_key" });
     expect(await run([k.pub.toUpperCase()])).toEqual({ ok: false, reason: "malformed_key" });
+  });
+});
+
+describe("the reduction — pending tombstones", () => {
+  it("an enrolment that is present but REFUSED has not been seen: its retirement stays pending", async () => {
+    // The spec first said "an id not present in the input", and the code
+    // filtered on ADMITTED enrolments — two conformant reducers would
+    // have disagreed. A consumer whose chain lags is the real case: the
+    // K2 enrolment is in the input and refused as `untrusted_key`.
+    const [k1, k2] = [await key(), await key()];
+    const e = await k2.enrol("laptop");
+    const r = await k1.retire(e);
+    const stale = await reduce([k1.pub], [e], [r]);
+    expect(stale.rejected.map((x) => x.reason)).toEqual(["untrusted_key"]);
+    expect(stale.tombstones).toEqual([{ enrollment_id: await hostEnrollmentId(e), epoch: 0 }]);
+    // Once the consumer learns K2 the enrolment is admitted, the K1
+    // retirement does not apply (authority flows forward), and nothing is
+    // pending — the machine is simply active.
+    const caughtUp = await reduce([k1.pub, k2.pub], [e], [r]);
+    expect(devices(caughtUp.active)).toEqual(["laptop"]);
+    expect(caughtUp.tombstones).toEqual([]);
   });
 });
 

@@ -159,11 +159,23 @@ describe("§6 properties", () => {
         const [ee, rr] = [notByAppended(e), notByAppended(r)];
         const a = ok(await reduce(before, ee, rr));
         const b = ok(await reduce(chain.slice(0, n + 1), ee, rr));
-        const [sa, sb] = [statuses(a), statuses(b)];
-        expect([...sb.keys()].sort()).toEqual([...sa.keys()].sort());
-        for (const [device, [status, entries]] of sa) {
-          expect(sb.get(device)).toEqual([status === "active" ? "superseded" : status, entries]);
-        }
+        // WHOLE machines, not a projection. The first version compared
+        // through `statuses()`, which drops `authenticated` — and so hid
+        // that the spec's statement of this property was false as written.
+        //
+        // Exactly three things change, all functions of the head moving:
+        //   1. `chain_head` names the appended key;
+        //   2. every `active` machine becomes `superseded`;
+        //   3. `authenticated` becomes false for EVERY machine, since none
+        //      has an enrolment at the new head (the set holds nothing
+        //      signed by it) — including machines that stay `retired`.
+        expect(b.chain_head).toEqual({ epoch: n, public_key: chain[n] });
+        expect(b.active).toEqual([]);
+        const stale = (ms: HostRosterMachine[]) => ms.map((m) => ({ ...m, authenticated: false }));
+        const byDevice = (x: HostRosterMachine, y: HostRosterMachine) =>
+          x.device_id < y.device_id ? -1 : 1;
+        expect(b.retired).toEqual(stale(a.retired));
+        expect(b.superseded).toEqual(stale([...a.superseded, ...a.active]).sort(byDevice));
         expect(b.rejected).toEqual(a.rejected);
         expect(b.tombstones).toEqual(a.tombstones);
       }),

@@ -90,7 +90,9 @@ describe("HostEnrollmentSchema / HostRetirementSchema", () => {
     // A float is valid JSON and a cross-language id hazard: two
     // implementations that print it differently derive two ids.
     const { enrollment, retirement } = real();
-    for (const t of [1000.5, -1]) {
+    // -0 too: it canonicalizes to 0 (same id, same signature), and the
+    // guards refuse it — a schema that took it would be LAXER than the verifier.
+    for (const t of [1000.5, -1, -0]) {
       expect(HostEnrollmentSchema.safeParse({ ...enrollment, enrolled_at: t }).success).toBe(false);
       expect(HostRetirementSchema.safeParse({ ...retirement, retired_at: t }).success).toBe(false);
     }

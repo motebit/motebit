@@ -19,7 +19,7 @@ import {
   hexToBytes,
   toBase64Url,
 } from "./signing.js";
-import { signBySuite, verifyBySuite } from "./suite-dispatch.js";
+import { getPublicKeyBySuite, signBySuite, verifyBySuite } from "./suite-dispatch.js";
 
 export const HOST_ROSTER_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
 
@@ -140,11 +140,60 @@ async function verifyBody(artifact: { public_key: string; signature: string }): 
   }
 }
 
+/**
+ * A signer must not mint what no verifier will accept.
+ *
+ * A daemon caches its enrolment and re-presents the same bytes on every
+ * start, so an artifact that signs fine and verifies nowhere is a machine
+ * that is silently never in "every machine", forever. Two ways to get
+ * one, both easy: a body that is not well-formed (a float time from
+ * `performance.now()`, an uppercase key), and a `public_key` that is not
+ * the key doing the signing. Both throw — a producer's bug, surfaced
+ * where the producer is.
+ */
+async function assertSignable<T extends HostEnrollment | HostRetirement>(
+  name: string,
+  artifact: T,
+  isShape: (v: unknown) => v is T,
+  identityPrivateKey: Uint8Array,
+): Promise<T> {
+  if (!isShape(artifact)) {
+    throw new Error(
+      `refusing to sign: not a well-formed ${name} — every verifier would reject it. Check that times are non-negative integers, keys are 64 lowercase hex characters, and no field is empty.`,
+    );
+  }
+  const derived = await getPublicKeyBySuite(identityPrivateKey, HOST_ROSTER_SUITE);
+  const hex = Array.from(derived, (b) => b.toString(16).padStart(2, "0")).join("");
+  if (hex !== artifact.public_key) {
+    throw new Error(
+      `refusing to sign: ${name}.public_key does not match the signing key — the artifact would name a key its signature was not made with, and verify nowhere.`,
+    );
+  }
+  return artifact;
+}
+
 export async function signHostEnrollment(
   enrollment: Omit<HostEnrollment, "signature" | "suite" | "type">,
   identityPrivateKey: Uint8Array,
 ): Promise<HostEnrollment> {
-  const body = { ...enrollment, type: HOST_ENROLLMENT_TYPE, suite: HOST_ROSTER_SUITE } as const;
+  // Field by field, never a spread of the caller's object. The natural
+  // way to re-enrol under a new key is `{ ...oldEnrolment, public_key }`,
+  // TypeScript does not excess-check a spread, and the old `signature`
+  // would ride along INSIDE the body being signed.
+  const body = {
+    type: HOST_ENROLLMENT_TYPE,
+    motebit_id: enrollment.motebit_id,
+    device_id: enrollment.device_id,
+    public_key: enrollment.public_key,
+    enrolled_at: enrollment.enrolled_at,
+    suite: HOST_ROSTER_SUITE,
+  } as const;
+  await assertSignable(
+    "HostEnrollment",
+    { ...body, signature: "A".repeat(86) },
+    isHostEnrollment,
+    identityPrivateKey,
+  );
   return { ...body, signature: await signBody(body, identityPrivateKey) };
 }
 
@@ -164,7 +213,21 @@ export async function signHostRetirement(
   retirement: Omit<HostRetirement, "signature" | "suite" | "type">,
   identityPrivateKey: Uint8Array,
 ): Promise<HostRetirement> {
-  const body = { ...retirement, type: HOST_RETIREMENT_TYPE, suite: HOST_ROSTER_SUITE } as const;
+  // Field by field — see `signHostEnrollment`.
+  const body = {
+    type: HOST_RETIREMENT_TYPE,
+    motebit_id: retirement.motebit_id,
+    enrollment_id: retirement.enrollment_id,
+    public_key: retirement.public_key,
+    retired_at: retirement.retired_at,
+    suite: HOST_ROSTER_SUITE,
+  } as const;
+  await assertSignable(
+    "HostRetirement",
+    { ...body, signature: "A".repeat(86) },
+    isHostRetirement,
+    identityPrivateKey,
+  );
   return { ...body, signature: await signBody(body, identityPrivateKey) };
 }
 

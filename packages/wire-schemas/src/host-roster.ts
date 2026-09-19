@@ -35,6 +35,26 @@ export const HOST_RETIREMENT_SCHEMA_ID =
 // Shared fields
 // ---------------------------------------------------------------------------
 
+/**
+ * Unix ms: a non-negative integer, and NOT `-0`.
+ *
+ * `JSON.parse("-0")` is -0, `.nonnegative()` and JSON Schema's
+ * `minimum: 0` both accept it, and it canonicalizes to "0" — the same id
+ * and the same signature as 0. The shape guards refuse it, so a schema
+ * that accepted it would be LAXER than the verifier: a schema-validating
+ * store could hold a keyless `-0` re-spelling of an authentic entry, and
+ * every consumer would then refuse that copy as malformed. JSON Schema
+ * cannot express the exclusion, so the committed schema says it in words
+ * and this refinement enforces it.
+ */
+const unixMs = (what: string) =>
+  z
+    .number()
+    .int()
+    .nonnegative()
+    .refine((n) => !Object.is(n, -0), "MUST NOT be negative zero")
+    .describe(what);
+
 const publicKey = z
   .string()
   .regex(/^[0-9a-f]{64}$/, "public_key MUST be 64 lowercase hex characters")
@@ -77,13 +97,9 @@ export const HostEnrollmentSchema = z
         "The machine. A label under the motebit's one identity key, not a principal of its own. MUST be minted fresh per machine — two hosts sharing one are a single roster line to every consumer.",
       ),
     public_key: publicKey,
-    enrolled_at: z
-      .number()
-      .int()
-      .nonnegative()
-      .describe(
-        "Epoch milliseconds (a non-negative integer), self-asserted by the enrolling machine. Informational: MUST NOT be used to order entries or break a tie.",
-      ),
+    enrolled_at: unixMs(
+      "Epoch milliseconds (a non-negative integer), self-asserted by the enrolling machine. Informational: MUST NOT be used to order entries or break a tie. Negative zero is refused: it canonicalizes to 0.",
+    ),
     suite,
     signature,
   })
@@ -126,13 +142,9 @@ export const HostRetirementSchema = z
         "Lowercase hex SHA-256 of the canonical JSON of the SIGNED BODY of the HostEnrollment being ended — every field except `signature`. Naming the entry by that hash makes removal terminal: a replayed copy has the same id and stays retired, and so does one whose signature was re-spelled.",
       ),
     public_key: publicKey,
-    retired_at: z
-      .number()
-      .int()
-      .nonnegative()
-      .describe(
-        "Epoch milliseconds (a non-negative integer), self-asserted. Informational: MUST NOT be used to order entries.",
-      ),
+    retired_at: unixMs(
+      "Epoch milliseconds (a non-negative integer), self-asserted. Informational: MUST NOT be used to order entries. Negative zero is refused: it canonicalizes to 0.",
+    ),
     suite,
     signature,
   })

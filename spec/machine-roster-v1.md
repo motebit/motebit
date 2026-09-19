@@ -144,8 +144,9 @@ the artifact it already holds rather than mint a new one per start: a body with
 a fresh `enrolled_at` is a new entry for the same machine (§6 counts the machine
 once, but retiring it then means retiring every such entry).
 
-Hex is lowercase, timestamps are non-negative integers, and signatures are
-unpadded base64url — everywhere in this spec, and a conformant verifier rejects
+Hex is lowercase, timestamps are non-negative integers (and never negative zero,
+which canonicalizes to `0` — the same id and signature — while being a different
+value), and signatures are 86 characters of unpadded base64url — everywhere in this spec, and a conformant verifier rejects
 anything else **even when it is authentically signed**. A verifier laxer than
 the wire schema admits a machine that a schema-validating store refuses, and two
 consumers of one set then disagree about what "every machine" is.
@@ -157,6 +158,14 @@ Ed25519, base64url signature. The signed message is the UTF-8 encoding of the
 canonical JSON of every field except `signature`. A verifier MUST reject a
 missing or unknown `suite` fail-closed — including when every byte is otherwise
 authentic, because the declared suite is what decides how to verify.
+
+**A producer MUST NOT emit an artifact a conformant verifier would refuse.** It
+builds the body from exactly the fields of §3 — never by copying another artifact,
+whose `signature` would then sit inside the body being signed — checks that the
+body is well-formed, and checks that `public_key` is the key it is signing with.
+A producer caches and re-presents what it minted (§4), so an artifact that signs
+and verifies nowhere is a machine that is never in "every machine", silently and
+for good.
 
 Reference implementations: `signHostEnrollment(...)`, `verifyHostEnrollment(...)`,
 `signHostRetirement(...)`, `verifyHostRetirement(...)`, and `hostEnrollmentId(...)`
@@ -193,10 +202,16 @@ roster**: the result is a refusal carrying the reason (`empty_chain`,
 `malformed_key`, `duplicate_key`). It is NOT an empty roster. A statement
 quantified over an empty set is vacuously true — "a halt reached every machine"
 — and that is fail-open on the one quantifier the roster exists for; a statement
-quantified over a refusal is **unknown**. (A repeated key makes an epoch
-ambiguous, and both readings are wrong: first-index strands the current key in
-the past; last-index promotes every old artifact, a thief's included, to the
-present.)
+quantified over a refusal is **unknown**. A repeated key has no sound reading. First-index strands the current key in the
+past, so it can enrol nothing that counts. Last-index promotes every artifact the
+key ever signed to the present — and, because authority flows forward only
+(Step 2), the retirements signed under the keys _between_ its two appearances stop
+applying to its earlier enrolments: rotating back to a key would un-retire
+machines. With no trusted clock there is nothing to tell an artifact signed in the
+key's first tenure from one signed in its second, so the roster refuses. A
+succession that returns to an earlier key is for the identity layer to forbid
+(`spec/identity-v1.md` §3.8); until it does, such a motebit has no roster, which
+is the fail-closed answer.
 
 Otherwise a key's **epoch** is its index in the chain, the **current epoch** is
 the last, and the result carries a **chain head** `{ epoch, public_key }` naming
@@ -235,10 +250,13 @@ machine — can never end an enrolment made under a newer key; and a retirement
 signed before a rotation keeps ending what it ended, because the comparison does
 not change when the chain grows.
 
-A retirement naming an id **not present in the input** is retained and reported
-as a _pending tombstone_, with the highest epoch that named it, so that it takes
-effect when the enrolment appears. A retirement naming an enrolment that IS
-present is not reported separately: its whole effect is in Step 3's three sets,
+A retirement naming an id for which the input holds **no admissible enrolment** is
+retained and reported as a _pending tombstone_, with the highest epoch that named
+it, so that it takes effect when the enrolment appears. (_Admissible_, not merely
+present: an enrolment that is in the input but refused — under a key the
+consumer's chain does not yet contain, say — has not been seen as far as the
+roster is concerned, and its retirement is still pending.) A retirement naming an
+admissible enrolment is not reported separately: its whole effect is in Step 3's three sets,
 and a list that included one Rule A ignores would let a reader mistake a stolen
 old key's attempt for a machine being retired.
 
@@ -275,10 +293,15 @@ Reference implementation: `verifyHostRoster(...)` in `@motebit/crypto`.
    active / retired / superseded.
 2. **Order and multiplicity invariance** of the whole result.
 3. **Monotone under rotation** — for a chain `C`, a key `k ∉ C`, and a set
-   containing nothing signed by `k`: the result under `C·k` equals the result
-   under `C` except that `active` machines become `superseded`. (It is NOT true
-   for sets that already hold artifacts signed by `k` — a store learns of them
-   before a consumer learns `k` — whose effect is property 6's.)
+   containing nothing signed by `k`: the result under `C·k` differs from the result
+   under `C` in exactly three ways, all consequences of the head moving — the
+   chain head names `k`; every `active` machine becomes `superseded`; and
+   `authenticated` becomes false for **every** machine, those that remain
+   `retired` included, since none has an enrolment at the new head. Which
+   machines are retired, every machine's `H` and entries, the pending tombstones
+   and the refusals are unchanged. (It is NOT true for sets that already hold
+   artifacts signed by `k` — a store learns of them before a consumer learns `k`
+   — whose effect is property 6's.)
 4. **No backward authority** — nothing signed only by keys below epoch `t` changes
    the status of a machine whose `H ≥ t`.
 5. **Re-spelling invariance** — another valid spelling of a signature changes
