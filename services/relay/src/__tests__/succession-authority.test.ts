@@ -372,13 +372,15 @@ describe("a record must depart from a key this relay holds for the identity", ()
       k3.publicKey,
       k2.publicKey,
     );
-    expect(await present(mid, `${mid}-laptop`, k1, mid, second)).toBe(200);
+    // Carried with k2 — the first rotation moved the device row, so the
+    // retired key no longer authenticates, which is the point of it.
+    expect(await present(mid, `${mid}-laptop`, k2, mid, second)).toBe(200);
     expect(successions(mid)).toBe(2);
 
     // And the chain head is not a way in: a record departing from the key
     // the chain left BEHIND is refused.
     const stale = await signKeySuccession(k1.privateKey, k3.privateKey, k3.publicKey, k1.publicKey);
-    expect(await present(mid, `${mid}-laptop`, k1, mid, stale)).toBe(400);
+    expect(await present(mid, `${mid}-laptop`, k3, mid, stale)).toBe(400);
     expect(successions(mid)).toBe(2);
   });
 
@@ -847,5 +849,239 @@ describe("pairing's key-transfer route writes only a key the identity already ho
     const { pairingId, identityKey, claimKey } = await approvedSession();
     expect((await update(pairingId, identityKey)).status).toBe(403);
     expect(mobileKey()).toBe(hex(claimKey));
+  });
+});
+
+/**
+ * What a recorded rotation must END.
+ *
+ * A device row's `public_key` is what `verifySignedTokenForDevice` checks
+ * an owner token against, and it is resolved BEFORE the registry key — so
+ * a row left holding the retired key shadows the rotation completely. The
+ * relay recorded rotations without touching that table, which was a
+ * deliberate deferral in `docs/doctrine/security-boundaries.md` on the
+ * grounds that rotating an identity should not rotate independent device
+ * keypairs. That reasoning is kept: only rows holding the key being
+ * retired move.
+ */
+describe("a recorded rotation ends the old key here", () => {
+  async function rotated(): Promise<{
+    mid: string;
+    k1: KeyPair;
+    k2: KeyPair;
+    linked: KeyPair;
+  }> {
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    const linked = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    expect(await registerSelf(mid, `${mid}-vps`, k1)).toBe(200);
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO devices (device_id, motebit_id, device_token, public_key, registered_at, device_name) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run(`${mid}-tablet`, mid, crypto.randomUUID(), hex(linked), Date.now(), "linked");
+    expect(await registerAgent(mid, k1)).toBe(200);
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    expect(await present(mid, `${mid}-laptop`, k1, mid, record)).toBe(200);
+    return { mid, k1, k2, linked };
+  }
+  const deviceKey = (did: string): string =>
+    (
+      relay.moteDb.db.prepare("SELECT public_key FROM devices WHERE device_id = ?").get(did) as {
+        public_key: string;
+      }
+    ).public_key;
+
+  it("moves every row that held the retired key, and leaves an independent device key alone", async () => {
+    const { mid, k2, linked } = await rotated();
+    expect(deviceKey(`${mid}-laptop`)).toBe(hex(k2));
+    expect(deviceKey(`${mid}-vps`)).toBe(hex(k2));
+    expect(deviceKey(`${mid}-tablet`)).toBe(hex(linked));
+    expect(registryKey(mid)).toBe(hex(k2));
+  });
+
+  it("so the retired key stops authenticating and the new one starts, on every machine", async () => {
+    const { mid, k1, k2 } = await rotated();
+    const path = `/api/v1/agents/${mid}/balance`;
+    for (const did of [`${mid}-laptop`, `${mid}-vps`]) {
+      const call = async (kp: KeyPair): Promise<number> =>
+        (
+          await relay.app.request(path, {
+            headers: {
+              Authorization: `Bearer ${await token(mid, did, kp, "account:balance")}`,
+            },
+          })
+        ).status;
+      expect(await call(k1)).toBe(401);
+      expect(await call(k2)).toBe(200);
+    }
+  });
+
+  it("is idempotent — a retry after a lost response appends no second link", async () => {
+    const { mid, k1, k2 } = await rotated();
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    // The caller's key moved with the rotation, so the retry carries the
+    // new one — as a real client would after restarting. It must answer
+    // 200: a client told 400 here would believe its rotation failed and
+    // keep the old key, while the relay had already applied it.
+    expect(await present(mid, `${mid}-laptop`, k2, mid, record)).toBe(200);
+    expect(successions(mid)).toBe(1);
+  });
+
+  it("lands as one write: if any part fails, none of it is applied", async () => {
+    const { mid } = await rotated();
+    const before = successions(mid);
+    const k3 = await generateKeypair();
+    const k4 = await generateKeypair();
+    relay.moteDb.db
+      .prepare("UPDATE devices SET public_key = ? WHERE device_id = ?")
+      .run(hex(k3), `${mid}-laptop`);
+    relay.moteDb.db
+      .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
+      .run(hex(k3), mid);
+    // Fail the LAST statement only. Renaming the table would break the
+    // read that runs before any write, so the request would never reach
+    // the writes and this would prove nothing.
+    relay.moteDb.db.exec(
+      "CREATE TRIGGER refuse_succession BEFORE INSERT ON relay_key_successions BEGIN SELECT RAISE(ABORT, 'refused'); END",
+    );
+    const record = await signKeySuccession(
+      k3.privateKey,
+      k4.privateKey,
+      k4.publicKey,
+      k3.publicKey,
+    );
+    const res = await relay.app.request(`/api/v1/agents/${mid}/rotate-key`, {
+      method: "POST",
+      headers: {
+        ...JSON_HEADERS,
+        Authorization: `Bearer ${await token(mid, `${mid}-laptop`, k3, "rotate-key")}`,
+      },
+      body: JSON.stringify(record),
+    });
+    relay.moteDb.db.exec("DROP TRIGGER refuse_succession");
+    expect(res.status).toBeGreaterThanOrEqual(500);
+    // The state with no way back: the registry moved to the new key while
+    // the device rows still hold the old one. Neither may have happened.
+    expect(registryKey(mid)).toBe(hex(k3));
+    expect(deviceKey(`${mid}-laptop`)).toBe(hex(k3));
+    expect(successions(mid)).toBe(before);
+  });
+
+  it("a guardian recovery ends the old key too", async () => {
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    const next = await generateKeypair();
+    const guardian = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    expect(await registerAgent(mid, k1, guardian)).toBe(200);
+    const recovery = await signGuardianRecoverySuccession(
+      guardian.privateKey,
+      next.privateKey,
+      k1.publicKey,
+      next.publicKey,
+    );
+    const s = await stranger();
+    expect(await present(s.mid, `${s.mid}-laptop`, s.kp, mid, recovery)).toBe(200);
+    // Recovery is for an owner who lost the key. One that left the lost key
+    // authenticating would have recovered nothing. A guardian can already
+    // move the identity to any key, so this adds no power it lacked.
+    expect(deviceKey(`${mid}-laptop`)).toBe(hex(next));
+  });
+});
+
+describe("a rotation retires a pairing approval that carried the old key", () => {
+  it("refuses a stale approved transfer, so the retired key cannot be written back", async () => {
+    // Pairing's key-transfer route takes no bearer and its session is not
+    // consumed, by design — bounded to one predetermined key, replaying it
+    // rewrites the same key. A rotation is what falsifies that: the
+    // approved key is now the RETIRED one, and writing it back onto a
+    // device row resurrects it, because the row is read before the
+    // registry.
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    const claimKey = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    expect(await registerAgent(mid, k1)).toBe(200);
+    const { token: pairToken } = await mintAudienceToken(
+      { mid, did: `${mid}-laptop`, aud: "device:auth" },
+      k1.privateKey,
+    );
+    const auth = { Authorization: `Bearer ${pairToken}` };
+    const init = await relay.app.request("/pairing/initiate", { method: "POST", headers: auth });
+    const { pairing_id, pairing_code } = (await init.json()) as {
+      pairing_id: string;
+      pairing_code: string;
+    };
+    expect(
+      (
+        await relay.app.request("/pairing/claim", {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({
+            pairing_code,
+            device_name: "Mobile",
+            public_key: hex(claimKey),
+            x25519_pubkey: "b".repeat(64),
+          }),
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await relay.app.request(`/pairing/${pairing_id}/approve`, {
+          method: "POST",
+          headers: { ...auth, ...JSON_HEADERS },
+          body: JSON.stringify({
+            key_transfer: {
+              x25519_pubkey: "a".repeat(64),
+              encrypted_seed: "c".repeat(96),
+              nonce: "d".repeat(24),
+              tag: "e".repeat(32),
+              identity_pubkey_check: hex(k1),
+            },
+          }),
+        })
+      ).status,
+    ).toBe(200);
+
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    expect(await present(mid, `${mid}-laptop`, k1, mid, record)).toBe(200);
+
+    const replay = await relay.app.request(`/pairing/${pairing_id}/update-key`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ public_key: hex(k1) }),
+    });
+    expect(replay.status).toBe(403);
+    const mobile = relay.moteDb.db
+      .prepare("SELECT public_key FROM devices WHERE device_name = 'Mobile'")
+      .get() as { public_key: string };
+    expect(mobile.public_key).toBe(hex(claimKey));
+    // And the retired key is not a credential by that route either.
+    const balance = await relay.app.request(`/api/v1/agents/${mid}/balance`, {
+      headers: {
+        Authorization: `Bearer ${await token(mid, `${mid}-laptop`, k1, "account:balance")}`,
+      },
+    });
+    expect(balance.status).toBe(401);
   });
 });
