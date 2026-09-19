@@ -21,9 +21,11 @@ import type { KeyPair } from "@motebit/crypto";
 import type { HostEnrollment, HostRetirement } from "@motebit/protocol";
 import { createTestRelay } from "./test-helpers.js";
 import {
+  MAX_ENROLLMENTS_PER_MOTEBIT,
   observeHostConnection,
   pruneHostLiveness,
   recordHostLastSeen,
+  resetRosterStatusCache,
 } from "../host-roster-store.js";
 
 let relay: SyncRelay;
@@ -98,6 +100,7 @@ function rows(): number {
 }
 
 beforeEach(async () => {
+  resetRosterStatusCache();
   relay = await createTestRelay();
   owner = await generateKeypair();
   pub = bytesToHex(owner.publicKey);
@@ -178,7 +181,12 @@ describe("presenting roster entries", () => {
 });
 
 describe("what the relay refuses to hold", () => {
-  it("an entry under a key this identity has never held — and says so per entry", async () => {
+  it("holds an entry that verifies under the key it names — whose key counts is the CONSUMER's question", async () => {
+    // The relay used to refuse entries under keys it did not associate
+    // with the motebit. Its notion of a motebit's keys is mutable rows a
+    // data loss erases, so it refused — forever, 422 on every reconnect —
+    // exactly the old-key lines a surface re-presents after that loss.
+    // The routes are first-person; that is the bound on who may write.
     const stranger = await generateKeypair();
     const forged = await signHostEnrollment(
       {
@@ -189,13 +197,28 @@ describe("what the relay refuses to hold", () => {
       },
       stranger.privateKey,
     );
+    expect((await present({ enrollments: [await enrol("laptop"), forged] })).status).toBe(200);
+    const served = (await read()).json;
+    // ...and it changes nothing for a consumer, who reduces against a
+    // chain IT verified: the stranger's entry is refused there.
+    const verdict = await verifyHostRoster({
+      motebitId,
+      keyChain: [pub],
+      enrollments: served.enrollments as HostEnrollment[],
+      retirements: served.retirements as HostRetirement[],
+    });
+    if (!verdict.ok) throw new Error(verdict.reason);
+    expect(verdict.active.map((m) => m.device_id)).toEqual(["laptop"]);
+    expect(verdict.rejected.map((r) => r.reason)).toEqual(["untrusted_key"]);
+  });
+
+  it("a refused neighbour is not a veto, and a partial presentation is not a success", async () => {
     const good = await enrol("laptop");
-    const { status, json } = await present({ enrollments: [good, forged] });
-    // A partial is not a success: a caller that checks only `ok` must not
-    // believe its whole set was taken.
+    const { status, json } = await present({
+      enrollments: [good, { ...good, device_id: "edited" }],
+    });
     expect(status).toBe(422);
-    expect(json.refused).toEqual([{ kind: "enrollment", index: 1, reason: "untrusted_key" }]);
-    // The good one is still held — refusing a neighbour is not a veto.
+    expect(json.refused).toEqual([{ kind: "enrollment", index: 1, reason: "bad_signature" }]);
     expect((json.accepted as unknown[]).length).toBe(1);
     expect(rows()).toBe(1);
   });
@@ -218,25 +241,55 @@ describe("what the relay refuses to hold", () => {
     expect(rows()).toBe(0);
   });
 
-  it("an entry under a SUPERSEDED key is still held — a replica must be able to restore history", async () => {
-    // After a rotation the old-key lines are how a consumer sees the
-    // machine that was cut off. The relay cannot be where they are lost.
+  it("after a DATA LOSS it still holds entries under a key it no longer remembers", async () => {
+    // No succession row, no registry row: this relay has never heard of
+    // the old key. A surface re-presents its cached set, old-key lines
+    // included — they are how a consumer sees the machine that was cut
+    // off, and the relay cannot be where they are lost.
     const old = await generateKeypair();
-    const oldPub = bytesToHex(old.publicKey);
-    relay.moteDb.db
-      .prepare(
-        "INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, new_key_signature) VALUES (?, ?, ?, ?, ?)",
-      )
-      .run(motebitId, oldPub, pub, Date.now(), "sig");
     const lost = await signHostEnrollment(
-      { motebit_id: motebitId, device_id: "lost-vps", public_key: oldPub, enrolled_at: 1 },
+      {
+        motebit_id: motebitId,
+        device_id: "lost-vps",
+        public_key: bytesToHex(old.publicKey),
+        enrolled_at: 1,
+      },
       old.privateKey,
     );
     expect((await present({ enrollments: [lost] })).status).toBe(200);
+    expect((await present({ enrollments: [lost] })).status).toBe(200); // and again, on reconnect
+  });
+
+  it("a FULL roster still takes a retirement — the one entry that must never be turned away", async () => {
+    // One shared cap meant a roster filled by a daemon minting per start
+    // refused the retirement of a stolen machine.
+    const vps = await enrol("vps");
+    await present({ enrollments: [vps] });
+    const fill = relay.moteDb.db.prepare(
+      "INSERT INTO relay_host_roster_entries (motebit_id, entry_id, kind, device_id, artifact_json, received_at) VALUES (?, ?, 'enrollment', 'filler', '{}', 1)",
+    );
+    for (let i = 1; i < MAX_ENROLLMENTS_PER_MOTEBIT; i++) fill.run(motebitId, `filler-${i}`);
+
+    const another = await present({ enrollments: [await enrol("one-too-many")] });
+    expect(another.status).toBe(422);
+    expect(another.json.refused).toEqual([{ kind: "enrollment", index: 0, reason: "roster_full" }]);
+
+    const retired = await present({ retirements: [await retire(vps)] });
+    expect(retired.status).toBe(200);
+    expect((retired.json.accepted as Array<{ status: string }>)[0]?.status).toBe("stored");
   });
 
   it("a body that is not a roster presentation, and more entries than one request may carry", async () => {
     expect((await present({})).status).toBe(400);
+    // Present and not a list is MALFORMED, not absent. Read as absent it
+    // answered 200 with nothing accepted and nothing refused.
+    const e = await enrol("laptop");
+    expect(
+      (await present({ enrollments: e as unknown as unknown[], retirements: [] })).status,
+    ).toBe(400);
+    expect(
+      (await present({ enrollments: [], retirements: "none" as unknown as unknown[] })).status,
+    ).toBe(400);
     const many = await Promise.all(Array.from({ length: 65 }, (_, i) => enrol(`m-${i}`)));
     expect((await present({ enrollments: many })).status).toBe(413);
     expect(rows()).toBe(0);
@@ -386,54 +439,102 @@ describe("liveness is served BESIDE the signed set, never inside it", () => {
 
 describe("what the relay is willing to remember about a connection", () => {
   // The transparency declaration promises: nothing about a connection
-  // from a device the motebit has not enrolled. The socket's close hook
-  // and the periodic flush both go through this one function, so this is
-  // where that promise is kept — and tested.
+  // from a device the motebit has not enrolled, and a machine's record
+  // deleted 30 days after its retirement. The socket's close hook, the
+  // periodic flush and the shutdown flush all go through this one
+  // function, so this is where those promises are kept — and tested.
+  const HOST = ["unattended_runtime"];
   const seen = () =>
-    (
-      relay.moteDb.db
-        .prepare(
-          "SELECT device_id FROM relay_host_liveness WHERE motebit_id = ? ORDER BY device_id",
-        )
-        .all(motebitId) as Array<{ device_id: string }>
-    ).map((r) => r.device_id);
+    Object.fromEntries(
+      (
+        relay.moteDb.db
+          .prepare(
+            "SELECT device_id, last_announced FROM relay_host_liveness WHERE motebit_id = ? ORDER BY device_id",
+          )
+          .all(motebitId) as Array<{ device_id: string; last_announced: string }>
+      ).map((r) => [r.device_id, JSON.parse(r.last_announced) as string[]]),
+    );
+  const observe = (deviceId: string, over: Record<string, unknown> = {}, at = 5_000) =>
+    observeHostConnection(
+      relay.moteDb.db,
+      motebitId,
+      { deviceId, deviceIdVerified: true, capabilities: HOST, ...over },
+      at,
+    );
 
   it("records an enrolled machine whose token proved its device id", async () => {
     await present({ enrollments: [await enrol("laptop")] });
-    expect(
-      observeHostConnection(
-        relay.moteDb.db,
-        motebitId,
-        { deviceId: "laptop", deviceIdVerified: true, capabilities: ["unattended_runtime"] },
-        5_000,
-      ),
-    ).toBe(true);
-    expect(seen()).toEqual(["laptop"]);
+    expect(await observe("laptop")).toBe(true);
+    expect(seen()).toEqual({ laptop: HOST });
   });
 
   it("records NOTHING for a device the motebit has not enrolled", async () => {
     await present({ enrollments: [await enrol("laptop")] });
-    expect(
-      observeHostConnection(relay.moteDb.db, motebitId, {
-        deviceId: "phone",
-        deviceIdVerified: true,
-      }),
-    ).toBe(false);
-    expect(seen()).toEqual([]);
+    expect(await observe("phone")).toBe(false);
+    expect(seen()).toEqual({});
   });
 
   it("records NOTHING for a socket that only declared an enrolled machine's id", async () => {
     await present({ enrollments: [await enrol("laptop")] });
     for (const deviceIdVerified of [false, undefined]) {
-      expect(
-        observeHostConnection(relay.moteDb.db, motebitId, { deviceId: "laptop", deviceIdVerified }),
-      ).toBe(false);
+      expect(await observe("laptop", { deviceIdVerified })).toBe(false);
     }
-    expect(seen()).toEqual([]);
+    expect(seen()).toEqual({});
+  });
+
+  it("a plain session on the same machine is not the host, and does not overwrite what the host announced", async () => {
+    // Recording used a WEAKER test than reporting: a CLI session with the
+    // machine's proven device id and no `unattended_runtime` rewrote
+    // `last_announced`, and the line then showed the host no longer
+    // hosting. One predicate now decides both.
+    await present({ enrollments: [await enrol("laptop")] });
+    await observe("laptop");
+    expect(await observe("laptop", { capabilities: ["sync"] }, 9_000)).toBe(false);
+    expect(seen()).toEqual({ laptop: HOST });
+  });
+
+  it("does not record a machine whose registered key is not one its line was enrolled under", async () => {
+    // After a rotation, before the machine re-enrols: GET says
+    // `socket_open: false` for it. The record must agree.
+    const other = await generateKeypair();
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO devices (device_id, motebit_id, device_token, public_key, registered_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run("vps", motebitId, crypto.randomUUID(), bytesToHex(other.publicKey), Date.now());
+    await present({ enrollments: [await enrol("vps")] });
+    expect(await observe("vps")).toBe(false);
+    expect(seen()).toEqual({});
+  });
+
+  it("stops remembering a RETIRED machine — its connection is still reported, live, and not written back", async () => {
+    // Prune and flush used to fight: one deleted the row a month after
+    // retirement, the other re-inserted it every five minutes, and the
+    // relay kept recording past the window it declared.
+    await bootstrap(motebitId, "vps", owner);
+    const vps = await enrol("vps");
+    await present({ enrollments: [vps] });
+    expect(await observe("vps")).toBe(true);
+    await present({ retirements: [await retire(vps)] });
+    expect(await observe("vps", {}, 9_000)).toBe(false);
   });
 });
 
 describe("the one persisted observation", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const left = () =>
+    (
+      relay.moteDb.db
+        .prepare("SELECT device_id FROM relay_host_liveness ORDER BY device_id")
+        .all() as Array<{ device_id: string }>
+    ).map((r) => r.device_id);
+  const receivedAt = (kind: string) =>
+    (
+      relay.moteDb.db
+        .prepare("SELECT MAX(received_at) AS t FROM relay_host_roster_entries WHERE kind = ?")
+        .get(kind) as { t: number }
+    ).t;
+
   it("is a single overwritten value per machine, never a history", () => {
     const db = relay.moteDb.db;
     recordHostLastSeen(db, motebitId, "vps", ["a"], 1_000);
@@ -449,25 +550,67 @@ describe("the one persisted observation", () => {
     const vps = await enrol("vps");
     const laptop = await enrol("laptop");
     await present({ enrollments: [vps, laptop], retirements: [await retire(vps)] });
-    const retiredReceivedAt = (
-      db
-        .prepare("SELECT received_at FROM relay_host_roster_entries WHERE kind = 'retirement'")
-        .get() as { received_at: number }
-    ).received_at;
     recordHostLastSeen(db, motebitId, "vps", [], 1);
     recordHostLastSeen(db, motebitId, "laptop", [], 1);
-    const DAY = 24 * 60 * 60 * 1000;
-    const left = () =>
-      (
-        db.prepare("SELECT device_id FROM relay_host_liveness ORDER BY device_id").all() as Array<{
-          device_id: string;
-        }>
-      ).map((r) => r.device_id);
+    const t = receivedAt("retirement");
 
-    pruneHostLiveness(db, retiredReceivedAt + 29 * DAY);
+    expect(await pruneHostLiveness(db, t + 29 * DAY)).toBe(0);
     expect(left()).toEqual(["laptop", "vps"]);
-    pruneHostLiveness(db, retiredReceivedAt + 31 * DAY);
+    expect(await pruneHostLiveness(db, t + 31 * DAY)).toBe(1);
     // The ACTIVE machine's line is never pruned by age: silence is not an exit.
     expect(left()).toEqual(["laptop"]);
+  });
+
+  it("a retirement the LAW ignores cannot get an active machine's record deleted", async () => {
+    // The relay pruned on "some held retirement names its enrolment". A
+    // retirement under an OLDER key names an enrolment without ending it
+    // (authority flows forward), so a stolen old key could have an ACTIVE
+    // machine's last-seen value deleted — the one thing the declaration
+    // says never happens. Pruning now asks the law.
+    const db = relay.moteDb.db;
+    const stolen = await generateKeypair();
+    const stolenPub = bytesToHex(stolen.publicKey);
+    db.prepare(
+      "INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, new_key_signature) VALUES (?, ?, ?, ?, ?)",
+    ).run(motebitId, stolenPub, pub, 1, "sig");
+    const laptop = await enrol("laptop"); // under the CURRENT key
+    const strike = await signHostRetirement(
+      {
+        motebit_id: motebitId,
+        enrollment_id: await hostEnrollmentId(laptop),
+        public_key: stolenPub,
+        retired_at: 2,
+      },
+      stolen.privateKey,
+    );
+    await present({ enrollments: [laptop], retirements: [strike] });
+    recordHostLastSeen(db, motebitId, "laptop", [], 1);
+
+    expect(await pruneHostLiveness(db, receivedAt("retirement") + 365 * DAY)).toBe(0);
+    expect(left()).toEqual(["laptop"]);
+    // ...and it goes on being recorded: the law holds it active.
+    expect(
+      await observeHostConnection(db, motebitId, {
+        deviceId: "laptop",
+        deviceIdVerified: true,
+        capabilities: ["unattended_runtime"],
+      }),
+    ).toBe(true);
+  });
+
+  it("prunes nothing where it cannot apply the law", async () => {
+    // Two devices under two different keys and no rotation on record: a
+    // device linked without key transfer is among them, and the relay
+    // cannot say which key is the motebit's. Unknown means keep.
+    const db = relay.moteDb.db;
+    const other = await generateKeypair();
+    db.prepare(
+      "INSERT INTO devices (device_id, motebit_id, device_token, public_key, registered_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("tablet", motebitId, crypto.randomUUID(), bytesToHex(other.publicKey), Date.now());
+    const vps = await enrol("vps");
+    await present({ enrollments: [vps], retirements: [await retire(vps)] });
+    recordHostLastSeen(db, motebitId, "vps", [], 1);
+    expect(await pruneHostLiveness(db, receivedAt("retirement") + 365 * DAY)).toBe(0);
+    expect(left()).toEqual(["vps"]);
   });
 });

@@ -857,24 +857,35 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   }
   const HOST_LIVENESS_FLUSH_MS = 5 * 60_000;
   let lastHostLivenessFlushAt = Date.now();
+  /** Record every connection that is bound to a roster line, as of `at`. */
+  const flushHostLiveness = async (at: number): Promise<void> => {
+    for (const [motebitId, peers] of connections) {
+      for (const peer of peers) await observeHostConnection(moteDb.db, motebitId, peer, at);
+    }
+  };
   const taskCleanupInterval = superviseInterval(loopSupervisor, "task-cleanup", 60_000, () => {
     const now = Date.now();
     // Expire completed/failed tasks and tasks past their TTL
     taskQueue.cleanup(now);
     // Auth-event record: 30-day rolling window (auth-events.ts).
     authEvents.sweep(now);
-    // Machine roster liveness (host-roster-store.ts): a machine's one
-    // persisted observation is deleted 30 days after its retirement...
-    pruneHostLiveness(moteDb.db, now);
-    // ...and refreshed COARSELY for machines connected right now, so a
-    // relay that dies without closing its sockets does not leave "last
-    // seen" hours stale. Every five minutes, one overwritten row each —
-    // the same record `onPeerClosed` writes, never a history.
+    // Machine roster liveness (host-roster-store.ts), every five
+    // minutes: refresh the one overwritten last-seen value for machines
+    // connected right now — so a relay that dies without closing its
+    // sockets does not leave it hours stale — and delete it for machines
+    // the law has held retired for 30 days. Detached and guarded: this
+    // tick also evicts the task queue and cleans the rate limiters, and a
+    // corrupt row or a locked database here must not starve them of
+    // every tick that follows.
     if (now - lastHostLivenessFlushAt >= HOST_LIVENESS_FLUSH_MS) {
       lastHostLivenessFlushAt = now;
-      for (const [motebitId, peers] of connections) {
-        for (const peer of peers) observeHostConnection(moteDb.db, motebitId, peer, now);
-      }
+      void flushHostLiveness(now)
+        .then(() => pruneHostLiveness(moteDb.db, now))
+        .catch((err: unknown) => {
+          logger.warn("host_roster.housekeeping_failed", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
     }
     // Evict oldest entries if queue exceeds hard cap (defensive against flooding)
     const evicted = taskQueue.evict(MAX_TASK_QUEUE_SIZE);
@@ -957,7 +968,15 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     // for a machine the sovereign enrolled — this relay keeps no record
     // of when an unenrolled device came and went.
     onPeerClosed: (motebitId, peer) => {
-      observeHostConnection(moteDb.db, motebitId, peer);
+      // Fire and forget, and never let it reject into the socket's close
+      // path: a relay's one observation of a machine is not worth a
+      // crashed handler.
+      void observeHostConnection(moteDb.db, motebitId, peer).catch((err: unknown) => {
+        logger.warn("host_roster.observe_failed", {
+          motebitId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
     },
     isDraining: () => draining,
   });
@@ -1542,7 +1561,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // --- Machine roster (docs/doctrine/machine-roster.md) ---
   // After registerAgentRoutes, whose auth middleware covers `/agents/*`:
   // the roster is first-person and answers to that middleware's default.
-  registerHostRosterRoutes({ app, db: moteDb.db, identityManager, connections });
+  registerHostRosterRoutes({ app, db: moteDb.db, connections });
 
   // --- Command endpoint (unified remote execution) ---
   registerCommandRoutes({ app, db: moteDb.db, connections, logger });
@@ -2039,6 +2058,19 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       disconnected: totalBefore - remainingAfterGrace,
       remaining: remainingAfterGrace,
     });
+
+    // Before the map is cleared: the close hook finds a peer by looking
+    // it up in `connections`, so a socket force-closed below never reaches
+    // it — and a deploy would leave every connected machine's last-seen
+    // value up to five minutes stale, or NULL for one that connected since
+    // the last flush. "Not seen since" has to survive a deploy.
+    try {
+      await flushHostLiveness(Date.now());
+    } catch (err: unknown) {
+      logger.warn("host_roster.shutdown_flush_failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
     // Phase 3: Force close — terminate remaining connections with 1001 (Going Away)
     for (const peers of connections.values()) {

@@ -151,11 +151,11 @@ export const DECLARATION_CONTENT = {
       observable: [
         "which machines a motebit has enrolled to host its unattended work, and which it has retired — the sovereign-signed HostEnrollment / HostRetirement artifacts (motebit_id, device_id, the signing public key, a self-asserted time), stored verbatim as the motebit signed them; the relay never mints, edits, reorders or expires one",
         "when the relay received each artifact",
-        "for each enrolled machine, ONE overwritten value: when the relay last saw a connection from it, and the capability list that connection announced — never a history of connections",
+        "for each enrolled machine, ONE overwritten value: when the relay last saw a connection from it that announced it hosts unattended work and whose signed token proved the device id of that machine under a key the machine was enrolled with, and the capability list that connection announced — never a history of connections",
         "never the client IP, and nothing at all about a connection from a device the motebit has not enrolled",
       ],
       retention_window:
-        'signed roster artifacts: for as long as the motebit\'s relay data exists — a machine leaves the roster only by the motebit\'s own signed retirement, never by timeout, because silently dropping a machine is how a statement about "every machine" becomes false. The last-seen value: deleted 30 days after every enrolment the relay holds for that machine has been retired, swept every minute by the task-cleanup loop; an ACTIVE machine\'s last-seen value is never aged out — "not seen for a year" is what the line is for',
+        'signed roster artifacts: for as long as the motebit\'s relay data exists — a machine leaves the roster only by the motebit\'s own signed retirement, never by timeout, because silently dropping a machine is how a statement about "every machine" becomes false. The last-seen value: no longer written once the machine is retired, and deleted 30 days after that — retired as the published roster reduction (spec/machine-roster-v1.md §6) computes it, so a retirement signed under a superseded key, which that law disregards, cannot get the record of an active machine deleted; swept every five minutes by the task-cleanup loop, and never deleted where the relay cannot apply that law; an ACTIVE machine\'s last-seen value is never aged out — "not seen for a year" is what the line is for',
       access:
         "first-person only: readable and writable solely with that motebit's own token (GET/POST /api/v1/agents/:motebitId/roster); never published, ranked, aggregated or served to another identity",
     },

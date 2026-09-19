@@ -20,25 +20,23 @@
 import type { Context, Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { DatabaseDriver } from "@motebit/persistence";
-import type { IdentityManager } from "@motebit/core-identity";
 import type { ConnectedDevice } from "./websocket.js";
 import {
+  HOSTS_UNATTENDED_WORK,
   MAX_ROSTER_ENTRIES_PER_REQUEST,
   ingestHostRoster,
+  isBoundToRosterLine,
   readHostLiveness,
   readHostRoster,
+  rosterStatus,
 } from "./host-roster-store.js";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "relay", module: "host-roster" });
 
-/** The capability a connection announces when it hosts unattended work. */
-const HOSTS_UNATTENDED_WORK = "unattended_runtime";
-
 export interface HostRosterRouteDeps {
   app: Hono;
   db: DatabaseDriver;
-  identityManager: IdentityManager;
   connections: Map<string, ConnectedDevice[]>;
 }
 
@@ -55,7 +53,7 @@ export interface HostLivenessLine {
 }
 
 export function registerHostRosterRoutes(deps: HostRosterRouteDeps): void {
-  const { app, db, identityManager, connections } = deps;
+  const { app, db, connections } = deps;
 
   const requireFirstPerson = (c: Context, motebitId: string): void => {
     const caller = c.get("callerMotebitId" as never) as string | undefined;
@@ -75,8 +73,22 @@ export function registerHostRosterRoutes(deps: HostRosterRouteDeps): void {
       enrollments?: unknown;
       retirements?: unknown;
     } | null;
-    const enrollments = Array.isArray(body?.enrollments) ? body.enrollments : null;
-    const retirements = Array.isArray(body?.retirements) ? body.retirements : null;
+    // A field that is PRESENT and not a list is a malformed request, not
+    // an absent field. Treating `{ enrollments: {…one object…} }` as "no
+    // enrolments" answered 200 with nothing accepted and nothing refused
+    // — the partial success the 422 below exists to prevent, by another
+    // door: the surface believes its enrolment was taken.
+    const listOrAbsent = (v: unknown, name: string): unknown[] | null => {
+      if (v === undefined) return null;
+      if (!Array.isArray(v)) {
+        throw new HTTPException(400, {
+          message: `\`${name}\` must be an array. Nothing was stored.`,
+        });
+      }
+      return v as unknown[];
+    };
+    const enrollments = listOrAbsent(body?.enrollments, "enrollments");
+    const retirements = listOrAbsent(body?.retirements, "retirements");
     if (enrollments == null && retirements == null) {
       throw new HTTPException(400, {
         message: "Body must carry `enrollments` and/or `retirements` arrays",
@@ -117,33 +129,22 @@ export function registerHostRosterRoutes(deps: HostRosterRouteDeps): void {
     // One line per ENROLLED machine — whatever its state, so a consumer
     // can say "retired, but connected". Membership decides who is
     // listed; liveness only annotates. Never the other way round.
-    const signerKeys = new Map<string, Set<string>>();
-    for (const e of roster.enrollments) {
-      const keys = signerKeys.get(e.device_id) ?? new Set<string>();
-      keys.add(e.public_key);
-      signerKeys.set(e.device_id, keys);
-    }
+    const status = await rosterStatus(db, motebitId);
 
-    // A socket is BOUND to a line only when its signed token proved that
-    // device id AND that token's key is one that line was enrolled
-    // under. A `device_id` typed into a URL binds nothing.
+    // Bound or not is ONE predicate, shared with what may be recorded
+    // (`observeHostConnection`), so this response and the liveness
+    // record cannot disagree about the same socket.
     const open = new Set<string>();
     let unknownConnections = 0;
     for (const peer of connections.get(motebitId) ?? []) {
       if (peer.capabilities?.includes(HOSTS_UNATTENDED_WORK) !== true) continue;
-      const keys = signerKeys.get(peer.deviceId);
-      let bound = false;
-      if (peer.deviceIdVerified === true && keys != null) {
-        const device = await identityManager.loadDeviceById(peer.deviceId, motebitId);
-        bound = device != null && keys.has(device.public_key.toLowerCase());
-      }
-      if (bound) open.add(peer.deviceId);
+      if (isBoundToRosterLine(db, motebitId, peer, status)) open.add(peer.deviceId);
       // Hosting unattended work, and not a line on the roster: reported
       // BESIDE the set as what it is. It neither joins it nor vetoes it.
       else unknownConnections++;
     }
 
-    const members: HostLivenessLine[] = [...signerKeys.keys()].sort().map((device_id) => ({
+    const members: HostLivenessLine[] = [...status.enrolled.keys()].sort().map((device_id) => ({
       device_id,
       socket_open: open.has(device_id),
       last_seen_at: seen.get(device_id)?.last_seen_at ?? null,
