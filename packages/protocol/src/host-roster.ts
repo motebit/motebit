@@ -71,7 +71,10 @@ export interface HostRetirement {
   signature: string;
 }
 
-const HEX_32 = /^[0-9a-f]{64}$/i;
+// Lowercase only. An entry's id is a hash of its exact bytes, so there is
+// one spelling of a key — the same law `spec/schemas` states for every
+// other hex key on the wire.
+const HEX_32 = /^[0-9a-f]{64}$/;
 
 export function isHostEnrollment(value: unknown): value is HostEnrollment {
   if (typeof value !== "object" || value === null) return false;

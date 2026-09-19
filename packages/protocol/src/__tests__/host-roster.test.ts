@@ -46,6 +46,8 @@ describe("machine roster guards", () => {
     // Two hosts sharing an empty id would be one line to everyone downstream.
     ["empty device_id", { ...enrollment, device_id: "" }],
     ["a key that is not 32 bytes of hex", { ...enrollment, public_key: "abcd" }],
+    // One spelling of a key: the id is a hash of the exact bytes.
+    ["an UPPERCASE key", { ...enrollment, public_key: KEY.toUpperCase() }],
     ["a non-finite time", { ...enrollment, enrolled_at: Number.NaN }],
     ["a missing suite", { ...enrollment, suite: undefined }],
     ["a missing signature", { ...enrollment, signature: undefined }],

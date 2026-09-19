@@ -872,7 +872,7 @@ This isn't laziness about API design. It's the inverse: every package promoted t
 
 Three paths, in order of how much motebit you take with you:
 
-1. **Implement the spec.** 34 open specs in [`spec/`](https://github.com/motebit/motebit/tree/main/spec). Build a runtime in any language; motebit's reference relay will federate with it if your handshake verifies. The Python reference verifier under [`examples/python-receipt-verifier`](https://github.com/motebit/motebit/tree/main/examples/python-receipt-verifier) is the load-bearing demonstration that the spec is sufficient — written against the spec alone, no motebit TypeScript consumed.
+1. **Implement the spec.** 35 open specs in [`spec/`](https://github.com/motebit/motebit/tree/main/spec). Build a runtime in any language; motebit's reference relay will federate with it if your handshake verifies. The Python reference verifier under [`examples/python-receipt-verifier`](https://github.com/motebit/motebit/tree/main/examples/python-receipt-verifier) is the load-bearing demonstration that the spec is sufficient — written against the spec alone, no motebit TypeScript consumed.
 
 2. **Build against the Apache-2.0 floor.** Import `@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto` directly from npm. Verify identity files, parse receipts, compose semirings, compute optimal paths. The type surface of `@motebit/protocol`, `@motebit/crypto`, and `@motebit/sdk` is fixed by the api-extractor baselines at [`packages/{protocol,crypto,sdk}/etc/*.api.md`](https://github.com/motebit/motebit/tree/main/packages) — every break to one of those three requires a `major` changeset (`check-api-surface`); the other published packages keep their promises through conformance fixtures and semver review.
 
@@ -6338,7 +6338,7 @@ Source: https://docs.motebit.com/docs/operator/architecture
 
 Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **53 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 11 services · 34 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
+The shape is **53 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 11 services · 35 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
 <DiagramFigure
   src="protocol-stack"
@@ -6461,7 +6461,7 @@ motebit/
 │   ├── browser-sandbox/       [atom]        Playwright-driven Chromium for the virtual_browser embodiment — second computer-use-v1 producer.
 │   └── proxy/                 [glue]        Vercel edge CORS proxy for the web app.
 │
-├── spec/                      # 34 open specifications, each motebit/<name>@1.0
+├── spec/                      # 35 open specifications, each motebit/<name>@1.0
 │   ├── identity-v1.md                       motebit.md format, signing, multi-device, guardian, succession.
 │   ├── execution-ledger-v1.md               Timeline, signed manifests, receipt structure.
 │   ├── relay-federation-v1.md               Peering, discovery, cross-relay routing, circuit breaker.
@@ -6495,7 +6495,8 @@ motebit/
 │   ├── bond-v1.md                           Agent's own sovereign capital as an anti-sybil staked signal — self-signed proof-of-funds, RPC-verified never custodied; address bound to identity. Phase 1: signal, not recourse.
 │   ├── evidence-provenance-v1.md            Re-verifiable provenance on a verdict's EvidenceRef — a content-addressed verbatim span in a primary record; the byte-determinism conformance requirement for projection recipes. Verifiable-locality from signatures to evidence.
 │   ├── eval-attestation-v1.md               Signed third-party measurement (subject ≠ signer) — per-axis verdicts embedded whole, closed EvalKind intake, envelope law only; the Auditor archetype's deliverable.
-│   └── routing-transcript-v1.md             Signed routing-decision transcript (subject = signer, receipt-family) — the frozen candidate set, posterior reads and draws, and decision parameters behind a paid hire; integrity + recomputable faithfulness, two rungs.
+│   ├── routing-transcript-v1.md             Signed routing-decision transcript (subject = signer, receipt-family) — the frozen candidate set, posterior reads and draws, and decision parameters behind a paid hire; integrity + recomputable faithfulness, two rungs.
+│   └── machine-roster-v1.md                 Which machines a motebit runs unattended work on — a sovereign-signed SET (enrolment + retirement, id = hash, merge = union, remove wins), relay-transported verbatim. Quantify over membership, annotate with liveness; never a lease, never an admission gate.
 │
 └── scripts/                   # Drift-defense CI gates
     ├── check-deps.ts                        Layer DAG enforcement. Source of truth for L0–L6.
@@ -6583,7 +6584,7 @@ Every task settles through the relay or directly peer-to-peer. Relay-mediated: b
 
 ## Specifications
 
-All 34 specs (listed in the tree above) are Apache-2.0, published in `spec/`, and have working reference implementations in this repo. A third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required.
+All 35 specs (listed in the tree above) are Apache-2.0, published in `spec/`, and have working reference implementations in this repo. A third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required.
 
 The `motebit.md` identity file is the most-used entry point: any tool can verify one with `@motebit/crypto`, with or without the motebit runtime.
 

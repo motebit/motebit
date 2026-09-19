@@ -17,6 +17,8 @@ The machine roster's two artifacts: `HostEnrollment` and `HostRetirement`.
 - **Verified against keys the consumer trusts, never the key an entry brings.** `verifyHostEnrollment` is integrity only; an entry that is perfectly self-consistent under a stranger's key is exactly what a hostile relay would serve. `verifyHostRoster` takes `trustedKeys` from the caller, and with none, trusts nothing. Everything refused is reported with a reason, never silently dropped.
 - **Rotation is a membership epoch.** Keys passed as `supersededKeys` can neither add nor remove a machine — a stolen laptop must not be able to strike the sovereign's other machines out of "every machine" before a halt — but an old-key line with no current-key line for the same machine is reported as `superseded`: that is precisely the machine that was cut off, and rotating a key does not stop it running.
 
+The open spec is `spec/machine-roster-v1.md` (`motebit/machine-roster@1.0`, the thirty-fifth): the two wire formats, the entry id, and the roster reduction as foundation law — including what it is _not_ (an admission gate, a store-authored fact, a device list, a lease). Its routes land with the relay increment, so the spec never promises an endpoint nothing serves.
+
 `@motebit/crypto` still verifies standalone: the import from `@motebit/protocol` is type-only and the shape checks are restated locally.
 
 Each of the nine rules in the reducer was tamper-checked — disabled one at a time and a test confirmed red. One did not bite at first: the unknown-suite test edited `suite` _after_ signing, so the signature broke before the suite check was ever reached. It now signs validly over an unknown suite, which is the case cryptosuite agility is actually about.

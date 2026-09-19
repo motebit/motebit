@@ -1,0 +1,41 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/host-enrollment-v1.json",
+  "title": "HostEnrollment (v1)",
+  "description": "A motebit's sovereign-signed statement that a machine hosts its unattended work. One entry in a SET: identified by the lowercase hex SHA-256 of its canonical JSON (signature included), unordered, merged by union. A relay stores and serves it verbatim and never mints one. See spec/machine-roster-v1.md.",
+  "type": "object",
+  "properties": {
+    "motebit_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "MotebitId whose unattended work this machine hosts."
+    },
+    "device_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The machine. A label under the motebit's one identity key, not a principal of its own. MUST be minted fresh per machine — two hosts sharing one are a single roster line to every consumer."
+    },
+    "public_key": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Hex-encoded 32-byte Ed25519 identity public key that signs this artifact. Named in the body so a verifier knows WHICH key after a rotation. A consumer accepts it only if it is a key that consumer already trusts for `motebit_id` — never because the artifact says so."
+    },
+    "enrolled_at": {
+      "type": "number",
+      "description": "Epoch milliseconds, self-asserted by the enrolling machine. Informational: MUST NOT be used to order entries or break a tie."
+    },
+    "suite": {
+      "type": "string",
+      "const": "motebit-jcs-ed25519-b64-v1",
+      "description": "Cryptosuite — always `motebit-jcs-ed25519-b64-v1` (JCS, Ed25519, base64url signature). Verifiers reject missing or unknown values fail-closed."
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Base64url Ed25519 signature over canonicalJson of every field except `signature`, by `public_key`."
+    }
+  },
+  "required": ["motebit_id", "device_id", "public_key", "enrolled_at", "suite", "signature"],
+  "additionalProperties": false
+}
