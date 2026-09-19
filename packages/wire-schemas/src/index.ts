@@ -197,6 +197,14 @@ export {
   buildBondCommitmentJsonSchema,
 } from "./bond.js";
 export {
+  HostEnrollmentSchema,
+  HOST_ENROLLMENT_SCHEMA_ID,
+  buildHostEnrollmentJsonSchema,
+  HostRetirementSchema,
+  HOST_RETIREMENT_SCHEMA_ID,
+  buildHostRetirementJsonSchema,
+} from "./host-roster.js";
+export {
   EvidenceProvenanceSchema,
   EVIDENCE_PROVENANCE_SCHEMA_ID,
   buildEvidenceProvenanceJsonSchema,

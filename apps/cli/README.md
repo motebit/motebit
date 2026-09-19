@@ -196,7 +196,7 @@ See [docs.motebit.com](https://docs.motebit.com) for full documentation.
 
 **The public promise of `motebit@1.0` is that operator-facing surface — subcommands, flags, exit codes, `~/.motebit/` layout, relay HTTP routes, MCP server tool list — not the internal workspace package graph.** Breaking changes to that surface require a major bump.
 
-For the wire-format contract third parties build against, see the Apache-2.0 packages: [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol), [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto), [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk), and the [34 open specs](https://github.com/motebit/motebit/tree/main/spec). Those promise stability independently and are gated by `check-api-surface`.
+For the wire-format contract third parties build against, see the Apache-2.0 packages: [`@motebit/protocol`](https://www.npmjs.com/package/@motebit/protocol), [`@motebit/crypto`](https://www.npmjs.com/package/@motebit/crypto), [`@motebit/sdk`](https://www.npmjs.com/package/@motebit/sdk), and the [35 open specs](https://github.com/motebit/motebit/tree/main/spec). Those promise stability independently and are gated by `check-api-surface`.
 
 ## Related
 

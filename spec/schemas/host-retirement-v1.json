@@ -1,0 +1,56 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/host-retirement-v1.json",
+  "title": "HostRetirement (v1)",
+  "description": "A motebit's sovereign-signed end of one HostEnrollment, named by id. A lost machine cannot sign its own exit, so it may be signed by any holder of a key at an epoch NO OLDER than the enrolment's — authority flows forward only, and a retirement under an older key does not end an enrolment made under a newer one. Where it applies, remove wins and is terminal for that entry. See spec/machine-roster-v1.md.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "motebit/host-retirement@1",
+      "description": "Domain tag, inside the signed body. See HostEnrollment.type."
+    },
+    "motebit_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "MotebitId the retired enrolment belongs to."
+    },
+    "enrollment_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Lowercase hex SHA-256 of the canonical JSON of the SIGNED BODY of the HostEnrollment being ended — every field except `signature`. Naming the entry by that hash makes removal terminal: a replayed copy has the same id and stays retired, and so does one whose signature was re-spelled."
+    },
+    "public_key": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Hex-encoded 32-byte Ed25519 identity public key that signs this artifact. Named in the body so a verifier knows WHICH key after a rotation. A consumer accepts it only if it is a key that consumer already trusts for `motebit_id` — never because the artifact says so."
+    },
+    "retired_at": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "Epoch milliseconds (a non-negative integer), self-asserted. Informational: MUST NOT be used to order entries. Negative zero is refused: it canonicalizes to 0."
+    },
+    "suite": {
+      "type": "string",
+      "const": "motebit-jcs-ed25519-b64-v1",
+      "description": "Cryptosuite — always `motebit-jcs-ed25519-b64-v1` (JCS, Ed25519, base64url signature). Verifiers reject missing or unknown values fail-closed."
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$",
+      "description": "Base64url Ed25519 signature over canonicalJson of every field except `signature`, by `public_key`."
+    }
+  },
+  "required": [
+    "type",
+    "motebit_id",
+    "enrollment_id",
+    "public_key",
+    "retired_at",
+    "suite",
+    "signature"
+  ],
+  "additionalProperties": false
+}

@@ -326,6 +326,11 @@ const PERMISSIVE_ALLOWED_FUNCTIONS: Record<string, Set<string>> = {
     // @motebit/crypto's verifyBondCommitment). An anti-sybil staked signal;
     // doctrine: docs/doctrine/commitment-bond.md.
     "isBondCommitment",
+    // Machine roster (docs/doctrine/machine-roster.md) — structural guards
+    // for the two sovereign-signed membership artifacts. Pure shape checks:
+    // no I/O, no decision; signature verification lives in @motebit/crypto.
+    "isHostEnrollment",
+    "isHostRetirement",
   ]),
   "@motebit/crypto": new Set([
     // Artifact verification (original verify package)

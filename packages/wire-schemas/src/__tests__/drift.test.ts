@@ -53,6 +53,12 @@ import {
 } from "../identity-binding.js";
 import { BOND_COMMITMENT_SCHEMA_ID, buildBondCommitmentJsonSchema } from "../bond.js";
 import {
+  HOST_ENROLLMENT_SCHEMA_ID,
+  HOST_RETIREMENT_SCHEMA_ID,
+  buildHostEnrollmentJsonSchema,
+  buildHostRetirementJsonSchema,
+} from "../host-roster.js";
+import {
   EVIDENCE_PROVENANCE_SCHEMA_ID,
   buildEvidenceProvenanceJsonSchema,
 } from "../evidence-provenance.js";
@@ -760,6 +766,18 @@ const CASES: SchemaCase[] = [
     filename: "bond-commitment-v1.json",
     expectedId: BOND_COMMITMENT_SCHEMA_ID,
     build: buildBondCommitmentJsonSchema,
+  },
+  {
+    name: "host-enrollment-v1",
+    filename: "host-enrollment-v1.json",
+    expectedId: HOST_ENROLLMENT_SCHEMA_ID,
+    build: buildHostEnrollmentJsonSchema,
+  },
+  {
+    name: "host-retirement-v1",
+    filename: "host-retirement-v1.json",
+    expectedId: HOST_RETIREMENT_SCHEMA_ID,
+    build: buildHostRetirementJsonSchema,
   },
   {
     name: "evidence-provenance-v1",

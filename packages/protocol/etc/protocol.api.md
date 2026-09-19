@@ -2357,6 +2357,37 @@ export interface HorizonWitnessRequestBody {
 }
 
 // @public
+export const HOST_ENROLLMENT_TYPE: "motebit/host-enrollment@1";
+
+// @public (undocumented)
+export const HOST_RETIREMENT_TYPE: "motebit/host-retirement@1";
+
+// @public
+export const HOST_ROSTER_SPEC_ID: "motebit/machine-roster@1.0";
+
+// @public (undocumented)
+export interface HostEnrollment {
+    device_id: string;
+    enrolled_at: number;
+    motebit_id: string;
+    public_key: string;
+    signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
+    type: typeof HOST_ENROLLMENT_TYPE;
+}
+
+// @public (undocumented)
+export interface HostRetirement {
+    enrollment_id: string;
+    motebit_id: string;
+    public_key: string;
+    retired_at: number;
+    signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
+    type: typeof HOST_RETIREMENT_TYPE;
+}
+
+// @public
 export interface IdentityBinding {
     // (undocumented)
     readonly motebit_id: string;
@@ -2511,6 +2542,12 @@ export function isEvalKind(value: unknown): value is EvalKind;
 
 // @public
 export function isEventType(value: unknown): value is EventType;
+
+// @public (undocumented)
+export function isHostEnrollment(value: unknown): value is HostEnrollment;
+
+// @public (undocumented)
+export function isHostRetirement(value: unknown): value is HostRetirement;
 
 // @public
 export function isMemorySource(value: unknown): value is MemorySource;
