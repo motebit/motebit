@@ -7,7 +7,7 @@
  * `docs/doctrine/machine-roster.md`.
  *
  * The roster is a SET, not a chain: entries are unordered, each is
- * identified by the SHA-256 of its canonical bytes, and the roster is
+ * identified by the SHA-256 of its signed body, and the roster is
  * every enrolment no retirement names. Every machine of a motebit holds
  * the same identity key and nothing coordinates them, so concurrent
  * writers are the normal case — and a set needs no merge.
@@ -37,8 +37,9 @@ export interface HostEnrollment {
    */
   public_key: string;
   /**
-   * Unix ms, self-asserted by the enrolling machine. Informational:
-   * never ordered by, never used to break a tie.
+   * Unix ms — a non-negative safe INTEGER — self-asserted by the
+   * enrolling machine. Informational: never ordered by, never used to
+   * break a tie.
    */
   enrolled_at: number;
   /** Cryptosuite discriminator. Verifiers reject unknown values fail-closed. */
@@ -51,10 +52,11 @@ export interface HostRetirement {
   /** MotebitId the retired enrolment belongs to. */
   motebit_id: string;
   /**
-   * Lowercase hex SHA-256 of the canonical JSON of the COMPLETE
-   * enrolment being ended (signature included). Naming the entry by its
-   * hash is what makes removal terminal: a replayed copy of that
-   * enrolment has the same hash and stays retired.
+   * Lowercase hex SHA-256 of the canonical JSON of the SIGNED BODY of
+   * the enrolment being ended — every field except `signature`. Naming
+   * the entry by that hash is what makes removal terminal: a replayed
+   * copy has the same id and stays retired, and so does a copy whose
+   * signature was re-spelled, because the spelling is not in the hash.
    */
   enrollment_id: string;
   /**
@@ -63,7 +65,7 @@ export interface HostRetirement {
    * cannot sign its own exit, so the phone retires the VPS.
    */
   public_key: string;
-  /** Unix ms, self-asserted. Informational; never ordered by. */
+  /** Unix ms — a non-negative safe INTEGER — self-asserted. Informational; never ordered by. */
   retired_at: number;
   /** Cryptosuite discriminator. Verifiers reject unknown values fail-closed. */
   suite: "motebit-jcs-ed25519-b64-v1";
@@ -71,25 +73,63 @@ export interface HostRetirement {
   signature: string;
 }
 
-// Lowercase only. An entry's id is a hash of its exact bytes, so there is
+// Lowercase only. An entry's id is a hash of exact bytes, so there is
 // one spelling of a key — the same law `spec/schemas` states for every
 // other hex key on the wire.
 const HEX_32 = /^[0-9a-f]{64}$/;
+// Unpadded URL-safe base64, the one spelling the suite names.
+const BASE64URL = /^[A-Za-z0-9_-]+$/;
+
+const ENROLLMENT_KEYS = [
+  "device_id",
+  "enrolled_at",
+  "motebit_id",
+  "public_key",
+  "signature",
+  "suite",
+];
+const RETIREMENT_KEYS = [
+  "enrollment_id",
+  "motebit_id",
+  "public_key",
+  "retired_at",
+  "signature",
+  "suite",
+];
+
+// EXACTLY these keys — the guard is as strict as the wire schema. Every
+// field but `signature` is signed, so an extra one would verify; a guard
+// that let it through would admit a machine a schema-validating store
+// refuses, and two consumers of one set would disagree about "every".
+function hasExactly(v: Record<string, unknown>, keys: readonly string[]): boolean {
+  const own = Object.keys(v).sort();
+  return own.length === keys.length && own.every((k, i) => k === keys[i]);
+}
+
+// Unix ms is an integer: a float is a cross-language id hazard.
+const isUnixMs = (n: unknown): boolean => Number.isSafeInteger(n) && (n as number) >= 0;
+
+function hasSignedShape(v: Record<string, unknown>): boolean {
+  return (
+    typeof v.motebit_id === "string" &&
+    v.motebit_id !== "" &&
+    typeof v.public_key === "string" &&
+    HEX_32.test(v.public_key) &&
+    typeof v.suite === "string" &&
+    typeof v.signature === "string" &&
+    BASE64URL.test(v.signature)
+  );
+}
 
 export function isHostEnrollment(value: unknown): value is HostEnrollment {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
   return (
-    typeof v.motebit_id === "string" &&
-    v.motebit_id !== "" &&
+    hasExactly(v, ENROLLMENT_KEYS) &&
+    hasSignedShape(v) &&
     typeof v.device_id === "string" &&
     v.device_id !== "" &&
-    typeof v.public_key === "string" &&
-    HEX_32.test(v.public_key) &&
-    typeof v.enrolled_at === "number" &&
-    Number.isFinite(v.enrolled_at) &&
-    typeof v.suite === "string" &&
-    typeof v.signature === "string"
+    isUnixMs(v.enrolled_at)
   );
 }
 
@@ -97,15 +137,10 @@ export function isHostRetirement(value: unknown): value is HostRetirement {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
   return (
-    typeof v.motebit_id === "string" &&
-    v.motebit_id !== "" &&
+    hasExactly(v, RETIREMENT_KEYS) &&
+    hasSignedShape(v) &&
     typeof v.enrollment_id === "string" &&
     HEX_32.test(v.enrollment_id) &&
-    typeof v.public_key === "string" &&
-    HEX_32.test(v.public_key) &&
-    typeof v.retired_at === "number" &&
-    Number.isFinite(v.retired_at) &&
-    typeof v.suite === "string" &&
-    typeof v.signature === "string"
+    isUnixMs(v.retired_at)
   );
 }

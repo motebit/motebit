@@ -49,6 +49,15 @@ describe("machine roster guards", () => {
     // One spelling of a key: the id is a hash of the exact bytes.
     ["an UPPERCASE key", { ...enrollment, public_key: KEY.toUpperCase() }],
     ["a non-finite time", { ...enrollment, enrolled_at: Number.NaN }],
+    // Unix ms is an integer; a float is a cross-language id hazard.
+    ["a float time", { ...enrollment, enrolled_at: 1000.5 }],
+    ["a negative time", { ...enrollment, enrolled_at: -1 }],
+    ["an unsafe integer time", { ...enrollment, enrolled_at: 2 ** 60 }],
+    // As strict as the wire schema: every field but `signature` is signed,
+    // so an extra one would verify and must be refused on shape.
+    ["an unknown field", { ...enrollment, hosts: ["run"] }],
+    ["a padded signature", { ...enrollment, signature: "c2ln==" }],
+    ["a standard-base64 signature", { ...enrollment, signature: "ab+/" }],
     ["a missing suite", { ...enrollment, suite: undefined }],
     ["a missing signature", { ...enrollment, signature: undefined }],
   ])("refuses an enrolment with %s", (_label, value) => {
@@ -61,6 +70,8 @@ describe("machine roster guards", () => {
     ["an enrollment_id that is not a sha256", { ...retirement, enrollment_id: "vps" }],
     ["a key that is not 32 bytes of hex", { ...retirement, public_key: "" }],
     ["a non-finite time", { ...retirement, retired_at: Infinity }],
+    ["a float time", { ...retirement, retired_at: 0.5 }],
+    ["an unknown field", { ...retirement, reason: "lost" }],
     ["empty motebit_id", { ...retirement, motebit_id: "" }],
     ["a missing signature", { ...retirement, signature: 7 }],
     ["a missing suite", { ...retirement, suite: null }],

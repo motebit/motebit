@@ -769,26 +769,44 @@ export function hostEnrollmentId(enrollment: HostEnrollment): Promise<string>;
 export function hostRetirementId(retirement: HostRetirement): Promise<string>;
 
 // @public (undocumented)
-export interface HostRosterMember {
+export interface HostRosterEntry {
     // (undocumented)
     enrollment: HostEnrollment;
     // (undocumented)
     enrollment_id: string;
 }
 
-// @public (undocumented)
-export type HostRosterRejection = {
-    kind: "enrollment" | "retirement";
-    reason: "malformed" | "wrong_motebit" | "untrusted_key" | "bad_signature";
-};
+// @public
+export interface HostRosterMachine {
+    // (undocumented)
+    device_id: string;
+    entries: HostRosterEntry[];
+}
 
 // @public (undocumented)
+export interface HostRosterRejection {
+    id: string | null;
+    // (undocumented)
+    kind: "enrollment" | "retirement";
+    public_key: string | null;
+    // (undocumented)
+    reason: "malformed" | "wrong_motebit" | "untrusted_key" | "bad_signature";
+}
+
+// @public (undocumented)
+export interface HostRosterTombstone {
+    // (undocumented)
+    enrollment_id: string;
+    scope: "any" | "superseded_only";
+}
+
+// @public
 export interface HostRosterVerdict {
-    active: HostRosterMember[];
+    active: HostRosterMachine[];
     rejected: HostRosterRejection[];
-    retired: HostRosterMember[];
-    superseded: HostRosterMember[];
-    tombstones: string[];
+    retired: HostRosterMachine[];
+    superseded: HostRosterMachine[];
+    tombstones: HostRosterTombstone[];
 }
 
 export { IdentityBindingVerdict }

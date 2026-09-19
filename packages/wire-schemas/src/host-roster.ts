@@ -49,7 +49,7 @@ const suite = z
 
 const signature = z
   .string()
-  .min(1)
+  .regex(/^[A-Za-z0-9_-]+$/, "signature MUST be unpadded URL-safe base64")
   .describe(
     "Base64url Ed25519 signature over canonicalJson of every field except `signature`, by `public_key`.",
   );
@@ -70,8 +70,10 @@ export const HostEnrollmentSchema = z
     public_key: publicKey,
     enrolled_at: z
       .number()
+      .int()
+      .nonnegative()
       .describe(
-        "Epoch milliseconds, self-asserted by the enrolling machine. Informational: MUST NOT be used to order entries or break a tie.",
+        "Epoch milliseconds (a non-negative integer), self-asserted by the enrolling machine. Informational: MUST NOT be used to order entries or break a tie.",
       ),
     suite,
     signature,
@@ -94,7 +96,7 @@ export function buildHostEnrollmentJsonSchema(): Record<string, unknown> {
     $id: HOST_ENROLLMENT_SCHEMA_ID,
     title: "HostEnrollment (v1)",
     description:
-      "A motebit's sovereign-signed statement that a machine hosts its unattended work. One entry in a SET: identified by the lowercase hex SHA-256 of its canonical JSON (signature included), unordered, merged by union. A relay stores and serves it verbatim and never mints one. See spec/machine-roster-v1.md.",
+      "A motebit's sovereign-signed statement that a machine hosts its unattended work. One entry in a SET: identified by the lowercase hex SHA-256 of the canonical JSON of its signed body (every field except `signature`), unordered, merged by union. A relay stores and serves it verbatim and never mints one. See spec/machine-roster-v1.md.",
   });
 }
 
@@ -109,13 +111,15 @@ export const HostRetirementSchema = z
       .string()
       .regex(/^[0-9a-f]{64}$/, "enrollment_id MUST be 64 lowercase hex characters")
       .describe(
-        "Lowercase hex SHA-256 of the canonical JSON of the COMPLETE HostEnrollment being ended, signature included. Naming the entry by its hash makes removal terminal: a replayed copy of that enrolment has the same hash and stays retired.",
+        "Lowercase hex SHA-256 of the canonical JSON of the SIGNED BODY of the HostEnrollment being ended — every field except `signature`. Naming the entry by that hash makes removal terminal: a replayed copy has the same id and stays retired, and so does one whose signature was re-spelled.",
       ),
     public_key: publicKey,
     retired_at: z
       .number()
+      .int()
+      .nonnegative()
       .describe(
-        "Epoch milliseconds, self-asserted. Informational: MUST NOT be used to order entries.",
+        "Epoch milliseconds (a non-negative integer), self-asserted. Informational: MUST NOT be used to order entries.",
       ),
     suite,
     signature,

@@ -14,7 +14,7 @@
     "enrollment_id": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$",
-      "description": "Lowercase hex SHA-256 of the canonical JSON of the COMPLETE HostEnrollment being ended, signature included. Naming the entry by its hash makes removal terminal: a replayed copy of that enrolment has the same hash and stays retired."
+      "description": "Lowercase hex SHA-256 of the canonical JSON of the SIGNED BODY of the HostEnrollment being ended — every field except `signature`. Naming the entry by that hash makes removal terminal: a replayed copy has the same id and stays retired, and so does one whose signature was re-spelled."
     },
     "public_key": {
       "type": "string",
@@ -22,8 +22,10 @@
       "description": "Hex-encoded 32-byte Ed25519 identity public key that signs this artifact. Named in the body so a verifier knows WHICH key after a rotation. A consumer accepts it only if it is a key that consumer already trusts for `motebit_id` — never because the artifact says so."
     },
     "retired_at": {
-      "type": "number",
-      "description": "Epoch milliseconds, self-asserted. Informational: MUST NOT be used to order entries."
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "Epoch milliseconds (a non-negative integer), self-asserted. Informational: MUST NOT be used to order entries."
     },
     "suite": {
       "type": "string",
@@ -32,7 +34,7 @@
     },
     "signature": {
       "type": "string",
-      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
       "description": "Base64url Ed25519 signature over canonicalJson of every field except `signature`, by `public_key`."
     }
   },

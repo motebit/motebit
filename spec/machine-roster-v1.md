@@ -77,9 +77,9 @@ HostEnrollment {
   motebit_id:   string   // MotebitId whose unattended work this machine hosts
   device_id:    string   // the machine — a label under the motebit's key; MUST be minted fresh per machine
   public_key:   string   // 64 lowercase hex chars — the Ed25519 identity key that signs this entry
-  enrolled_at:  number   // unix ms, self-asserted; informational, never ordered by
+  enrolled_at:  number   // unix ms — a non-negative integer; self-asserted, informational, never ordered by
   suite:        string   // "motebit-jcs-ed25519-b64-v1"
-  signature:    string   // Ed25519 over canonical JSON of all fields except signature
+  signature:    string   // unpadded base64url — Ed25519 over canonical JSON of all fields except signature
 }
 ```
 
@@ -96,31 +96,42 @@ HostRetirement {
   motebit_id:     string   // MotebitId the retired enrolment belongs to
   enrollment_id:  string   // 64 lowercase hex chars — the entry id (§4) of the HostEnrollment being ended
   public_key:     string   // 64 lowercase hex chars — the Ed25519 identity key that signs this retirement
-  retired_at:     number   // unix ms, self-asserted; informational, never ordered by
+  retired_at:     number   // unix ms — a non-negative integer; self-asserted, informational, never ordered by
   suite:          string   // "motebit-jcs-ed25519-b64-v1"
-  signature:      string   // Ed25519 over canonical JSON of all fields except signature
+  signature:      string   // unpadded base64url — Ed25519 over canonical JSON of all fields except signature
 }
 ```
 
 ## 4. Entry identity
 
 An enrolment's **entry id** is the lowercase hex SHA-256 of the canonical JSON
-(JCS) of the **complete** `HostEnrollment`, `signature` included.
+(JCS) of its **signed body** — every field of the `HostEnrollment` **except**
+`signature`.
 
-Ed25519 signatures are deterministic, so the same body under the same key is the
-same bytes and the same id. An implementation that enrols automatically when a
-runtime starts MUST re-present the artifact it already holds rather than mint a
-new one per start; otherwise the set grows with every restart. (Re-minting an
-identical body is harmless — it yields the same id — but a body with a fresh
-`enrolled_at` is a new entry.)
+The signature is deliberately outside the hash. Its _spelling_ is the one part
+of an artifact that nothing signs, and base64 has many spellings of the same
+bytes — padding, the standard alphabet, the unused low bits of the final
+character. An id computed over the whole artifact lets anyone holding a copy,
+with no key, re-spell a **retired** enrolment into a new id that still verifies,
+and the machine returns to the set. The signed body admits no such freedom:
+every byte of it is covered by the signature. It also means the id does not
+depend on the signer being deterministic.
 
-A retirement has an id by the same construction — the lowercase hex SHA-256 of
-the canonical JSON of the complete `HostRetirement`. Nothing in §6 depends on it;
-it exists so that a store can key what it holds and make ingest an idempotent
-union (§9). Reference: `hostRetirementId(...)` in `@motebit/crypto`.
+A retirement has an id by the same construction. Nothing in §6 depends on it; it
+exists so that a store can key what it holds and make ingest an idempotent union
+(§9). Reference: `hostEnrollmentId(...)` and `hostRetirementId(...)` in
+`@motebit/crypto`.
 
-Hex is lowercase everywhere in this spec. An entry id is a hash of exact bytes,
-so there is one spelling of a key.
+An implementation that enrols automatically when a runtime starts MUST re-present
+the artifact it already holds rather than mint a new one per start: a body with
+a fresh `enrolled_at` is a new entry for the same machine (§6 counts it once, but
+retiring the machine then means retiring every such entry).
+
+Hex is lowercase, timestamps are non-negative integers, and signatures are
+unpadded base64url — everywhere in this spec, and a conformant verifier rejects
+anything else **even when it is authentically signed**. A verifier laxer than
+the wire schema admits a machine that a schema-validating store refuses, and two
+consumers of one set then disagree about what "every machine" is.
 
 ## 5. Suite, signing, and integrity
 
@@ -144,8 +155,9 @@ consumer, from keys the consumer already trusts.
 
 Given a `motebit_id`, a set of enrolments, a set of retirements, the consumer's
 **trusted keys** for that motebit, and optionally its **superseded keys**, a
-conformant implementation computes the roster as follows. The result MUST NOT
-depend on the order or multiplicity of the inputs.
+conformant implementation computes the roster as follows. **The entire result —
+every list in it, including what was refused — MUST NOT depend on the order or
+multiplicity of the inputs:** two reductions of the same set MUST be equal.
 
 **Trusted keys** are the identity keys the _consumer_ accepts for `motebit_id` —
 its own key, or keys time-valid in the motebit's succession chain
@@ -155,29 +167,50 @@ nothing is trusted and the roster is empty.
 
 **Superseded keys** are keys that were the motebit's before a rotation.
 
-1. **Retirements first.** A retirement is _valid_ iff it is well-formed, its
-   `motebit_id` matches, its `public_key` is a **trusted** key, and its signature
-   verifies. Collect the `enrollment_id` of every valid retirement as a
-   **tombstone**. A superseded key MUST NOT retire: after a rotation the old key
-   may be held by whoever took the machine, and must not be able to strike the
-   sovereign's other machines out of the set.
-2. **Enrolments.** An enrolment is _admissible_ iff it is well-formed, its
+**The unit of the roster is the machine (`device_id`), not the entry.** One
+machine may hold several enrolments; it is one member.
+
+1. **Admit each distinct entry once.** Group inputs by id (§4). An entry is
+   _admissible_ iff it is well-formed (§4's strictness included), its
    `motebit_id` matches, its `public_key` is a trusted **or** superseded key, and
-   its signature verifies. Compute its entry id (§4). Duplicates collapse.
-3. **Active** — admissible under a trusted key, and not tombstoned.
-4. **Retired** — admissible, and tombstoned. **Remove wins and is terminal for
-   that entry**: a replayed copy of a retired enrolment has the same id and stays
-   retired.
-5. **Superseded** — admissible under a superseded key, not tombstoned, and with
-   no **active** entry for the same `device_id`. After a rotation this is exactly
-   the machine that did not receive the new key. It MUST be reported, not
-   dropped: rotating a key does not stop the old machine running.
-6. **Tombstones are kept even when their enrolment has not been seen.** A
-   retirement may arrive before the enrolment it names — union has no order — and
-   must still take effect when the enrolment appears.
-7. Everything refused in steps 1–2 MUST be surfaced with its reason
-   (`malformed`, `wrong_motebit`, `untrusted_key`, `bad_signature`), never silently
-   discarded.
+   at least one of its copies verifies. Copies that differ only in signature
+   spelling are one entry; which copy represents it MUST NOT depend on arrival
+   order (the reference implementation takes the first that verifies in sorted
+   signature order).
+2. **Tombstones, scoped by the signer's epoch.** An admissible retirement signed
+   by a **trusted** key ends whatever enrolment it names (scope `any`). One signed
+   by a **superseded** key ends only an enrolment made under a superseded key
+   (scope `superseded_only`). A trusted retirement outranks a superseded one for
+   the same target.
+   - A superseded key MUST NOT end a current-key enrolment: after a rotation the
+     old key may be held by whoever took the machine, and must not be able to
+     strike the sovereign's other machines out of the set.
+   - It MUST still end an old-epoch enrolment: otherwise rotating would silently
+     un-retire every machine retired before it, and there is no trusted clock
+     here to tell "signed before the rotation" from "signed after it". The most a
+     holder of the old key gains is to mark an old-epoch line — most plausibly
+     the lost machine's own — as retired rather than cut off; it stays visible
+     either way, and nothing current is touched.
+3. **Classify each machine into exactly one of three.** Let _cur_ be its
+   admissible enrolments under a trusted key, and _old_ those under a superseded
+   key. An enrolment is _standing_ iff no applicable tombstone names it.
+   - **Active** — some _cur_ enrolment is standing. Reported with its standing
+     _cur_ enrolments: to retire the machine, retire every one of them.
+   - **Retired** — _cur_ is non-empty and none stands; or _cur_ is empty and no
+     _old_ enrolment stands. A machine that received the new key and was let go
+     is retired — its old-epoch lines MUST NOT resurface it as cut off.
+   - **Superseded** — _cur_ is empty and some _old_ enrolment stands. After a
+     rotation this is exactly the machine that never received the new key. It
+     MUST be reported, not dropped: rotating a key does not stop it running.
+4. **Remove wins and is terminal for that entry**: a replayed copy of a retired
+   enrolment has the same id and stays retired.
+5. **Tombstones are kept even when their enrolment has not been seen.** A
+   retirement may arrive first — union has no order — and must still take effect
+   when the enrolment appears.
+6. **Everything refused MUST be surfaced**, once per distinct entry, carrying the
+   entry id and the `public_key` it claimed where those are readable, and a
+   reason: `malformed`, `wrong_motebit`, `untrusted_key`, `bad_signature`. Never
+   silently discarded, and never in arrival order.
 
 Reference implementation: `verifyHostRoster(...)` in `@motebit/crypto`.
 
@@ -191,7 +224,7 @@ but connected_ — and rejoins only by an explicit act that mints a new entry.
 
 Because every machine holds one key, **key rotation is the remedy for a lost or
 stolen machine**, and it is a membership epoch: machines that receive the new key
-enrol again under it, which supersedes their own old-key line (step 5). The
+enrol again under it, which supersedes their own old-key line (§6 step 3). The
 machine that never does is the one that was cut off.
 
 ## 7. Quantified statements (interop law)
@@ -238,7 +271,7 @@ reconnects, and the offline machine — the case this spec exists for — vanish
 **No freshness window.** Unlike a registration request, these are durable
 artifacts, not requests: a store MUST accept a validly signed entry of any age. A
 replayed enrolment is a no-op (same id); a replayed enrolment of a retired
-machine stays retired (§6.4).
+machine stays retired (§6 step 4), however its signature is re-spelled (§4).
 
 **Omission.** A consumer that trusts a store to return every entry can be shown
 fewer. A consumer that remembers the entry ids it has verified detects a store

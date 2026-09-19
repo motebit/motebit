@@ -84,6 +84,19 @@ describe("HostEnrollmentSchema / HostRetirementSchema", () => {
     expect(HostEnrollmentSchema.safeParse(unsigned).success).toBe(false);
   });
 
+  it("takes unix ms as a non-negative INTEGER, and a signature as unpadded base64url", () => {
+    // A float is valid JSON and a cross-language id hazard: two
+    // implementations that print it differently derive two ids.
+    const { enrollment, retirement } = real();
+    for (const t of [1000.5, -1]) {
+      expect(HostEnrollmentSchema.safeParse({ ...enrollment, enrolled_at: t }).success).toBe(false);
+      expect(HostRetirementSchema.safeParse({ ...retirement, retired_at: t }).success).toBe(false);
+    }
+    for (const sig of ["c2ln==", "ab+/", "with space "]) {
+      expect(HostEnrollmentSchema.safeParse({ ...enrollment, signature: sig }).success).toBe(false);
+    }
+  });
+
   it("does not confuse the two artifacts", () => {
     const { enrollment, retirement } = real();
     expect(HostEnrollmentSchema.safeParse(retirement).success).toBe(false);
