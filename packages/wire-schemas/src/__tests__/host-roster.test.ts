@@ -101,6 +101,7 @@ describe("HostEnrollmentSchema / HostRetirementSchema", () => {
       `${"A".repeat(84)}+/`,
       "A".repeat(85),
       "A".repeat(87),
+      `${"A".repeat(85)}B`,
     ]) {
       expect(HostEnrollmentSchema.safeParse({ ...enrollment, signature: sig }).success).toBe(false);
     }

@@ -70,6 +70,8 @@ describe("machine roster guards", () => {
     ["a padded signature", { ...enrollment, signature: `${"A".repeat(86)}==` }],
     ["a standard-base64 signature", { ...enrollment, signature: `${"A".repeat(84)}+/` }],
     ["a signature that is not 64 bytes", { ...enrollment, signature: "A".repeat(85) }],
+    // ONE spelling: the last character's four low bits are zero (A, Q, g, w).
+    ["a non-canonical final character", { ...enrollment, signature: `${"A".repeat(85)}B` }],
     // The LITERAL suite and tag: a guard narrowing to a type whose
     // `suite` is one string while accepting any is a lie tsc believes.
     ["another registered suite", { ...enrollment, suite: "motebit-jcs-ed25519-hex-v1" }],

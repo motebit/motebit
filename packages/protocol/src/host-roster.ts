@@ -102,9 +102,11 @@ export interface HostRetirement {
 // one spelling of a key — the same law `spec/schemas` states for every
 // other hex key on the wire.
 const HEX_32 = /^[0-9a-f]{64}$/;
-// Unpadded URL-safe base64 of exactly 64 bytes — the one spelling and the
-// one length an Ed25519 signature has.
-const ED25519_SIG_B64URL = /^[A-Za-z0-9_-]{86}$/;
+// Unpadded URL-safe base64 of exactly 64 bytes, in its ONE canonical
+// spelling: 86 characters carry 516 bits and a signature has 512, so the
+// last character's four low bits are zero — `A`, `Q`, `g` or `w`. The
+// full alphabet there gave every signature sixteen verifying spellings.
+const ED25519_SIG_B64URL = /^[A-Za-z0-9_-]{85}[AQgw]$/;
 const SUITE = "motebit-jcs-ed25519-b64-v1";
 
 const ENROLLMENT_KEYS = [

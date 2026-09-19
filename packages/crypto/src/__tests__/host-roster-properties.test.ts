@@ -211,7 +211,12 @@ describe("§6 properties", () => {
     );
   });
 
-  it("P5 re-spelling invariance — another valid spelling of a signature changes nothing", async () => {
+  it("P5 one spelling — a re-spelled signature is refused, and beside the real one it changes nothing", async () => {
+    // A signature has ONE well-formed spelling: the last base64url
+    // character's four low bits are zero. The fifteen others decode to the
+    // same bytes and would verify; they are refused on shape, so no
+    // keyless party can multiply an entry, and an id never depended on the
+    // spelling in the first place.
     const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     const twin = <T extends { signature: string }>(x: T): T => {
       const last = x.signature.slice(-1);
@@ -219,7 +224,12 @@ describe("§6 properties", () => {
     };
     await fc.assert(
       fc.asyncProperty(subE(), subR(), async (e, r) => {
-        expect(await reduce(chain, e.map(twin), r.map(twin))).toEqual(await reduce(chain, e, r));
+        const honest = await reduce(chain, e, r);
+        expect(await reduce(chain, [...e, ...e.map(twin)], [...r.map(twin), ...r])).toEqual(honest);
+        // On their own the twins admit nothing.
+        const alone = ok(await reduce(chain, e.map(twin), r.map(twin)));
+        expect([...alone.active, ...alone.retired, ...alone.superseded]).toEqual([]);
+        expect(alone.tombstones).toEqual([]);
       }),
       RUNS,
     );
@@ -238,18 +248,29 @@ describe("§6 properties", () => {
     );
   });
 
-  it("P3∘P6 — learning a key AND the artifacts it signed equals reducing the full set under the full chain", async () => {
-    // The composition that P3's restatement sets aside: a stale consumer
-    // catching up. Whatever order it learns things in, it lands on the
-    // same verdict as a consumer that always knew.
+  it("a verdict is a function of (chain, set) alone — reducing under a stale chain first leaves nothing behind", async () => {
+    // A consumer catches up on a rotation: it reduces under the chain it
+    // had, learns the new key, and reduces again. The second answer must
+    // be exactly what a consumer that always knew would compute — so a
+    // refusal under the stale chain (`untrusted_key`) may leave NO state
+    // behind. This was labelled "P3∘P6" and only re-tested order
+    // invariance; it now does what it says.
     await fc.assert(
       fc.asyncProperty(subE(), subR(), fc.integer({ min: 1, max: 3 }), async (e, r, n) => {
         const full = chain.slice(0, n + 1);
-        expect(await reduce(full, [...e], [...r])).toEqual(
-          await reduce(full, [...e].reverse(), [...r].reverse()),
-        );
+        const alwaysKnew = await reduce(full, e, r);
+        const stale = ok(await reduce(chain.slice(0, n), e, r));
+        const caughtUp = await reduce(full, e, r);
+        expect(caughtUp).toEqual(alwaysKnew);
+        // And the stale view really was a different view: anything signed
+        // by the key it lacked was refused, not quietly dropped.
+        const byNewKey = [...e, ...r].filter((x) => signer.get(x.signature) === n).length;
+        if (byNewKey > 0) {
+          expect(stale.rejected.some((x) => x.reason === "untrusted_key")).toBe(true);
+        }
+        expect(stale.chain_head.epoch).toBe(n - 1);
       }),
-      { numRuns: 20 },
+      { numRuns: 30 },
     );
   });
 
@@ -291,8 +312,16 @@ describe("§6 properties", () => {
     // anywhere); copies carrying an `undefined`-valued extra key, which
     // canonicalize to the SAME id and signature; `-0` for `0`; and junk.
     // None of it may suppress, resurrect, or reclassify anything.
+    // WELL-FORMED garbage — canonical length and final character — or it
+    // is refused on shape and never reaches the verification path this
+    // property exists to attack.
     const sigChar = fc.constantFrom(..."-_0189AZaz".split(""));
-    const garbageSig = fc.array(sigChar, { minLength: 86, maxLength: 86 }).map((cs) => cs.join(""));
+    const garbageSig = fc
+      .tuple(
+        fc.array(sigChar, { minLength: 85, maxLength: 85 }),
+        fc.constantFrom("A", "Q", "g", "w"),
+      )
+      .map(([cs, last]) => cs.join("") + last);
     const forge = <T extends { signature: string }>(pool: T[]) =>
       fc.array(
         fc
@@ -315,7 +344,7 @@ describe("§6 properties", () => {
         real,
         copies: Array.from({ length: n }, (_, i) => ({
           ...real,
-          signature: `${"-".repeat(84)}${String(i).padStart(2, "0")}`,
+          signature: `${"-".repeat(83)}${String(i).padStart(2, "0")}A`,
         })),
       }));
     await fc.assert(

@@ -29,8 +29,10 @@ Doctrine: [`docs/doctrine/machine-roster.md`](../docs/doctrine/machine-roster.md
 ### What it is
 
 A **set** of self-verifying, sovereign-signed entries. Unordered. Each entry is
-identified by the hash of its **signed body** (§4) — never the whole artifact. The roster is every machine with an enrolment no
-retirement names (§6). Merging two copies of a roster is set union.
+identified by the hash of its **signed body** (§4) — never the whole artifact. The roster is
+every machine that has, **at its highest epoch, an enrolment no retirement ends**
+(§6) — _ends_, not _names_: a retirement signed under an older key names an
+enrolment without ending it. Merging two copies of a roster is set union.
 
 ### What it is not
 
@@ -78,9 +80,9 @@ HostEnrollment {
   motebit_id:   string   // MotebitId whose unattended work this machine hosts
   device_id:    string   // the machine — a label under the motebit's key; MUST be minted fresh per machine
   public_key:   string   // 64 lowercase hex chars — the Ed25519 identity key that signs this entry
-  enrolled_at:  number   // unix ms — a non-negative integer; self-asserted, informational, never ordered by
+  enrolled_at:  number   // unix ms — an integer in [0, 2^53 − 1], never -0; self-asserted, informational, never ordered by
   suite:        string   // "motebit-jcs-ed25519-b64-v1"
-  signature:    string   // 86 chars of unpadded base64url — Ed25519 over canonical JSON of all fields except signature
+  signature:    string   // canonical unpadded base64url, 86 chars ending in A, Q, g or w — Ed25519 over canonical JSON of all fields except signature
 }
 ```
 
@@ -103,9 +105,9 @@ HostRetirement {
   motebit_id:     string   // MotebitId the retired enrolment belongs to
   enrollment_id:  string   // 64 lowercase hex chars — the entry id (§4) of the HostEnrollment being ended
   public_key:     string   // 64 lowercase hex chars — the Ed25519 identity key that signs this retirement
-  retired_at:     number   // unix ms — a non-negative integer; self-asserted, informational, never ordered by
+  retired_at:     number   // unix ms — an integer in [0, 2^53 − 1], never -0; self-asserted, informational, never ordered by
   suite:          string   // "motebit-jcs-ed25519-b64-v1"
-  signature:      string   // 86 chars of unpadded base64url — Ed25519 over canonical JSON of all fields except signature
+  signature:      string   // canonical unpadded base64url, 86 chars ending in A, Q, g or w — Ed25519 over canonical JSON of all fields except signature
 }
 ```
 
@@ -144,9 +146,15 @@ the artifact it already holds rather than mint a new one per start: a body with
 a fresh `enrolled_at` is a new entry for the same machine (§6 counts the machine
 once, but retiring it then means retiring every such entry).
 
-Hex is lowercase, timestamps are non-negative integers (and never negative zero,
-which canonicalizes to `0` — the same id and signature — while being a different
-value), and signatures are 86 characters of unpadded base64url — everywhere in this spec, and a conformant verifier rejects
+Hex is lowercase. Timestamps are integers in **[0, 2^53 − 1]** — the range every
+JSON implementation represents exactly; a bignum implementation that admitted a
+larger one would disagree with one that cannot, about membership and about the id
+— and never negative zero, which canonicalizes to `0` (the same id and signature)
+while being a different value. A signature is the **canonical** unpadded base64url
+of its 64 bytes: 86 characters, of which the last carries two signature bits and
+four that MUST be zero, so it is `A`, `Q`, `g` or `w`. The fifteen other spellings
+decode to the same bytes and would verify; they are refused, so that an entry has
+one spelling. These hold everywhere in this spec, and a conformant verifier rejects
 anything else **even when it is authentically signed**. A verifier laxer than
 the wire schema admits a machine that a schema-validating store refuses, and two
 consumers of one set then disagree about what "every machine" is.
@@ -196,7 +204,10 @@ The entire result — every list in it, including what was refused — MUST NOT 
 on the order or multiplicity of the inputs, and equality of results is over ids
 and signed bodies, never signatures.
 
-**Step 0 — is the chain usable?** If the key chain is empty, contains a key that
+**Step 0 — is the question usable?** If the `motebit_id` is not a non-empty
+string, or the key chain, the enrolments or the retirements are not lists, the
+result is a refusal (`malformed_input`) — never a thrown error, which a caller
+catches and defaults. If the key chain is empty, contains a key that
 is not 64 lowercase hex characters, or contains **any key twice**, there is **no
 roster**: the result is a refusal carrying the reason (`empty_chain`,
 `malformed_key`, `duplicate_key`). It is NOT an empty roster. A statement

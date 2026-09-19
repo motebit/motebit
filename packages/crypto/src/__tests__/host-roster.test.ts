@@ -167,6 +167,14 @@ describe("the artifacts", () => {
       false,
     );
     expect(await verifyHostEnrollment({ ...signed, signature: "AAAA" })).toBe(false);
+    // ONE spelling. The last character's four low bits are zero, so it is
+    // A, Q, g or w; the fifteen other spellings decode to the same bytes,
+    // WOULD verify, and are refused.
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const last = signed.signature.slice(-1);
+    expect("AQgw").toContain(last);
+    const respelled = signed.signature.slice(0, -1) + alphabet[alphabet.indexOf(last) ^ 1]!;
+    expect(await verifyHostEnrollment({ ...signed, signature: respelled })).toBe(false);
   });
 
   it("have ONE id for one signed body — however the signature is spelled", async () => {
@@ -466,7 +474,9 @@ describe("the reduction — what it refuses", () => {
     const gone = await k.retire(vps);
     const flood = Array.from({ length: 200 }, (_, i) => ({
       ...gone,
-      signature: `${"-".repeat(83)}${String(i).padStart(3, "0")}`,
+      // Well-formed garbage: canonical length and final character, so it
+      // reaches verification rather than being refused on shape.
+      signature: `${"-".repeat(82)}${String(i).padStart(3, "0")}A`,
     }));
     for (const retirements of [
       [...flood, gone],
@@ -556,14 +566,43 @@ describe("the reduction — what it refuses", () => {
     expect(v.tombstones).toEqual([{ enrollment_id: await hostEnrollmentId(unseen), epoch: 1 }]);
   });
 
-  it("an unusable chain is NOT an empty roster", async () => {
+  it("an unusable INPUT is never an empty roster — chain, motebit id, or the sets themselves", async () => {
+    // "A halt reached every machine" over zero machines is vacuously
+    // TRUE. So every way of asking a question that has no answer gets a
+    // refusal, not an empty roster — and not a throw, which a caller
+    // catches and defaults.
     const k = await key();
     const e = [await k.enrol("laptop")];
-    const run = (keyChain: string[]) =>
-      verifyHostRoster({ motebitId: MOTEBIT, keyChain, enrollments: e, retirements: [] });
-    expect(await run([])).toEqual({ ok: false, reason: "empty_chain" });
-    expect(await run([k.pub, k.pub])).toEqual({ ok: false, reason: "duplicate_key" });
-    expect(await run([k.pub.toUpperCase()])).toEqual({ ok: false, reason: "malformed_key" });
+    type Input = Parameters<typeof verifyHostRoster>[0];
+    const run = (over: Record<string, unknown>) =>
+      verifyHostRoster({
+        motebitId: MOTEBIT,
+        keyChain: [k.pub],
+        enrollments: e,
+        retirements: [],
+        ...over,
+      } as Input);
+    expect(await run({ keyChain: [] })).toEqual({ ok: false, reason: "empty_chain" });
+    expect(await run({ keyChain: [k.pub, k.pub] })).toEqual({ ok: false, reason: "duplicate_key" });
+    expect(await run({ keyChain: [k.pub.toUpperCase()] })).toEqual({
+      ok: false,
+      reason: "malformed_key",
+    });
+    // A config read that failed. Every entry would be `wrong_motebit` and
+    // the roster empty — fail-open by another door.
+    for (const motebitId of ["", undefined, null, 42]) {
+      expect(await run({ motebitId })).toEqual({ ok: false, reason: "malformed_input" });
+    }
+    // A store with no retirements that omits the key.
+    for (const bad of [undefined, null, "none", {}]) {
+      expect(await run({ retirements: bad })).toEqual({ ok: false, reason: "malformed_input" });
+      expect(await run({ enrollments: bad })).toEqual({ ok: false, reason: "malformed_input" });
+    }
+    expect(await run({ keyChain: "not-an-array" })).toEqual({
+      ok: false,
+      reason: "malformed_input",
+    });
+    expect((await run({})).ok).toBe(true);
   });
 });
 

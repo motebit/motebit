@@ -39,7 +39,7 @@
     },
     "signature": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9_-]{86}$",
+      "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$",
       "description": "Base64url Ed25519 signature over canonicalJson of every field except `signature`, by `public_key`."
     }
   },

@@ -71,8 +71,8 @@ const suite = z
 const signature = z
   .string()
   .regex(
-    /^[A-Za-z0-9_-]{86}$/,
-    "signature MUST be 86 characters of unpadded URL-safe base64 (a 64-byte Ed25519 signature)",
+    /^[A-Za-z0-9_-]{85}[AQgw]$/,
+    "signature MUST be the canonical 86-character unpadded URL-safe base64 of a 64-byte Ed25519 signature — the last character is A, Q, g or w (its four low bits are zero)",
   )
   .describe(
     "Base64url Ed25519 signature over canonicalJson of every field except `signature`, by `public_key`.",

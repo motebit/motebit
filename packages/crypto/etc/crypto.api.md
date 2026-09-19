@@ -796,7 +796,7 @@ export interface HostRosterRejection {
 // @public
 export type HostRosterResult = {
     ok: false;
-    reason: "empty_chain" | "malformed_key" | "duplicate_key";
+    reason: "malformed_input" | "empty_chain" | "malformed_key" | "duplicate_key";
 } | ({
     ok: true;
 } & HostRosterVerdict);

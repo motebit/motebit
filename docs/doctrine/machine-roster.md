@@ -59,7 +59,7 @@ Enrolling is automatic and silent. `motebit run` and `motebit serve` _are_ hosti
 
 ## The ladder: how much of "complete" a consumer can check for itself
 
-Additive, like the identity-binding ladder. Nothing below needs a field the first increment lacks: an entry's id is its hash, and a later optional field is already an additive change — so nothing is carried "for later".
+Additive, like the identity-binding ladder — and additive by **new artifacts, never new fields**. An entry's id is a hash of its signed body and every validator is strict, so a field added later, optional or not, would have existing consumers refuse the entry and the machine silently leave "every machine". The two bodies are therefore frozen for major version 1, and each rung below arrives as a new artifact that references an enrolment by id, which old consumers ignore safely.
 
 - **relay-listed** — the consumer verifies each entry's signature, and trusts the relay to have returned all of them. Defeats absence. Does **not** defeat omission, and says so.
 - **set-pinned** — the consumer remembers the entry ids it has verified. A relay serving fewer — without presenting the retirements that account for the difference — is detected offline: _served ⊇ remembered, modulo presented retirements._ What this cannot detect is omission of an entry the consumer never saw; that is a freshness problem, and no structure held by one consumer solves it.

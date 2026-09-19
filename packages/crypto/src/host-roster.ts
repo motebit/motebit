@@ -13,6 +13,7 @@
 // third party can use.
 import type { HostEnrollment, HostRetirement } from "@motebit/protocol";
 import {
+  bytesToHex,
   canonicalJson,
   canonicalSha256,
   fromBase64Url,
@@ -27,11 +28,18 @@ export const HOST_ROSTER_SUITE = "motebit-jcs-ed25519-b64-v1" as const;
 // one spelling of a key — the same law `spec/schemas` states for every
 // other hex key on the wire.
 const HEX_32 = /^[0-9a-f]{64}$/;
-// Unpadded URL-safe base64 of exactly 64 bytes — the one spelling and the
-// one length an Ed25519 signature has. `atob` would also take padding,
-// `+/` and stray whitespace; a verifier that accepts what the wire schema
-// refuses is a second, laxer law.
-const ED25519_SIG_B64URL = /^[A-Za-z0-9_-]{86}$/;
+// Unpadded URL-safe base64 of exactly 64 bytes, in its ONE canonical
+// spelling. 86 characters carry 516 bits and a signature has 512, so the
+// last character holds two signature bits and four that must be zero —
+// which leaves `A`, `Q`, `g`, `w`. Allowing the full alphabet there gave
+// every signature sixteen well-formed spellings that all verified: the
+// reduction did not care (an id excludes the signature), but "one
+// spelling" was false, a store deduplicating on bytes held sixteen copies
+// of one entry, and `atob`'s tolerance of non-zero trailing bits is not
+// uniform across runtimes. `atob` would also take padding, `+/` and stray
+// whitespace; a verifier that accepts what the wire schema refuses is a
+// second, laxer law.
+const ED25519_SIG_B64URL = /^[A-Za-z0-9_-]{85}[AQgw]$/;
 
 // Restated from `@motebit/protocol` (see the import note above); a parity
 // table in the tests pins the two copies together.
@@ -163,8 +171,7 @@ async function assertSignable<T extends HostEnrollment | HostRetirement>(
     );
   }
   const derived = await getPublicKeyBySuite(identityPrivateKey, HOST_ROSTER_SUITE);
-  const hex = Array.from(derived, (b) => b.toString(16).padStart(2, "0")).join("");
-  if (hex !== artifact.public_key) {
+  if (bytesToHex(derived) !== artifact.public_key) {
     throw new Error(
       `refusing to sign: ${name}.public_key does not match the signing key — the artifact would name a key its signature was not made with, and verify nowhere.`,
     );
@@ -374,7 +381,10 @@ export interface HostRosterVerdict {
  * `ok: false` is UNKNOWN.
  */
 export type HostRosterResult =
-  | { ok: false; reason: "empty_chain" | "malformed_key" | "duplicate_key" }
+  | {
+      ok: false;
+      reason: "malformed_input" | "empty_chain" | "malformed_key" | "duplicate_key";
+    }
   | ({ ok: true } & HostRosterVerdict);
 
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -412,7 +422,28 @@ export async function verifyHostRoster(input: {
   enrollments: readonly HostEnrollment[];
   retirements: readonly HostRetirement[];
 }): Promise<HostRosterResult> {
-  // Step 0 — is the chain usable at all?
+  // Step 0 — is the QUESTION usable at all? Hostile or merely broken
+  // input reaches here untyped, whatever the signature says: a config
+  // read that failed gives an empty motebit id, under which every entry
+  // is `wrong_motebit` and the roster is empty — fail-open by another
+  // door; and a store with no retirements that omits the key would throw
+  // out of a function whose contract is a result, for a caller to catch
+  // and default.
+  const raw = input as {
+    motebitId?: unknown;
+    keyChain?: unknown;
+    enrollments?: unknown;
+    retirements?: unknown;
+  };
+  if (
+    typeof raw.motebitId !== "string" ||
+    raw.motebitId === "" ||
+    !Array.isArray(raw.keyChain) ||
+    !Array.isArray(raw.enrollments) ||
+    !Array.isArray(raw.retirements)
+  ) {
+    return { ok: false, reason: "malformed_input" };
+  }
   const { keyChain } = input;
   if (keyChain.length === 0) return { ok: false, reason: "empty_chain" };
   if (!keyChain.every((k) => typeof k === "string" && HEX_32.test(k))) {
