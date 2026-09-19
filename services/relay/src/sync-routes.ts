@@ -26,6 +26,7 @@ import {
 import { verifyBySuite } from "@motebit/crypto";
 import { isSuiteId } from "@motebit/protocol";
 import { createLogger } from "./logger.js";
+import { refusePublicDeviceRegistration } from "./device-registration-guard.js";
 import type { ConnectedDevice } from "./index.js";
 
 const logger = createLogger({ service: "sync-routes" });
@@ -223,25 +224,22 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
       );
     }
 
-    // Key-conflict check: the (motebit_id, public_key) binding is immutable
-    // until a deliberate key-rotation request (spec/auth-token-v1.md §9).
-    // Silently accepting a different key would let any party with the
-    // canonicalization recipe overwrite an established binding.
-    const existingDevice = await identityManager.loadDeviceById(body.device_id, body.motebit_id);
-    if (existingDevice && existingDevice.public_key !== body.public_key) {
-      logger.warn("device.self_register.key_conflict", {
+    // Who may add a device to an identity that already exists — the one
+    // rule this door shares with `/agents/bootstrap`. See the guard for
+    // why a per-device conflict check was not enough.
+    const refusal = await refusePublicDeviceRegistration(
+      { identityManager, db: deps.moteDb.db },
+      { motebitId: body.motebit_id, deviceId: body.device_id, publicKey: body.public_key },
+    );
+    if (refusal) {
+      logger.warn("device.self_register.refused", {
         motebitId: body.motebit_id,
         deviceId: body.device_id,
+        code: refusal.code,
       });
-      return c.json(
-        {
-          error: "device exists with a different public key",
-          code: "DEVICE_KEY_CONFLICT",
-          remediation: "use /api/v1/agents/:motebit_id/rotate-key",
-        },
-        409,
-      );
+      return c.json(refusal, 409);
     }
+    const existingDevice = await identityManager.loadDeviceById(body.device_id, body.motebit_id);
 
     // Idempotent identity + device upsert. createWithId returns the
     // existing identity if the motebit_id is already known; the response

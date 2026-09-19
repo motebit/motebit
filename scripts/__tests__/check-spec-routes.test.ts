@@ -43,6 +43,20 @@ function runGateWith(source: string): string {
   }
 }
 
+/**
+ * A `@stabilizes_by` that is never past due, however long this file lives.
+ *
+ * It was the literal `2026-09-19`. On that day, at midnight UTC, the gate
+ * under test correctly reported the FIXTURE's route as `experimental-past-due`
+ * — so a test about comment parsing went red on `main`, for a reason that had
+ * nothing to do with what it tests, in the minutes between a pull request's
+ * green CI and the same commit's CI after merge. `main` red blocks every
+ * deploy; the change queued behind it that day was a security fix.
+ *
+ * A fixture that embeds a date is a test with an expiry. Derive it.
+ */
+const NOT_YET_DUE = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
 /** A minimal file carrying one annotated route, with `reason` lines injected. */
 function fixture(opts: { reasonLines: string[]; tag?: string; filler?: number }): string {
   const tag = opts.tag ?? "@experimental";
@@ -56,7 +70,7 @@ export function registerIdentityTransparencyRoutes(deps: { app: Hono; db: unknow
   /**
    * ${tag}
    * @since 2026-05-21
-   * @stabilizes_by 2026-09-19
+   * @stabilizes_by ${NOT_YET_DUE}
    * @replacement none
 ${reason}
    */
