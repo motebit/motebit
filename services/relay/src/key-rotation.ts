@@ -178,10 +178,16 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     } else {
       // Normal rotation: need old_key_signature
       if (!body.old_key_signature) {
-        throw new HTTPException(400, { message: "Normal rotation requires old_key_signature" });
+        throw refuse(
+          400,
+          "rotation_without_old_key_signature",
+          "Normal rotation requires old_key_signature",
+        );
       }
       const valid = await verifyKeySuccession(body);
-      if (!valid) throw new HTTPException(400, { message: "Invalid key succession signatures" });
+      if (!valid) {
+        throw refuse(400, "rotation_signature_invalid", "Invalid key succession signatures");
+      }
     }
 
     if (body.new_public_key === body.old_public_key) {

@@ -553,14 +553,11 @@ describe("Pairing Protocol", () => {
       });
 
     // This route takes no bearer, so what it may WRITE is its safety: only
-    // a key the identity already holds, which is all a key transfer ever
-    // presents. See `succession-authority.test.ts`.
+    // the key the transfer was approved to carry. This session approved
+    // none — `approve` was called with no `key_transfer` — so there is
+    // nothing for it to complete. See `succession-authority.test.ts`.
     expect((await update("f".repeat(64))).status).toBe(403);
-
-    const updateRes = await update(deviceA.publicKeyHex);
-    expect(updateRes.status).toBe(200);
-    const updateBody = (await updateRes.json()) as { ok: boolean };
-    expect(updateBody.ok).toBe(true);
+    expect((await update(deviceA.publicKeyHex)).status).toBe(403);
   });
 
   it("POST /pairing/:id/update-key rejects invalid public key", async () => {

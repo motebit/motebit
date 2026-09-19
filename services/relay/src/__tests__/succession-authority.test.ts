@@ -523,6 +523,28 @@ describe("every refusal leaves a trace in the relay's own record", () => {
     expect(row.motebit_id).toBeNull();
   });
 
+  it("records an ordinary rotation's signature refusal too — the record is complete or it misleads", async () => {
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    expect(await registerAgent(mid, k1)).toBe(200);
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    const tampered = { ...record, old_key_signature: "0".repeat(128) };
+    expect(await present(mid, `${mid}-laptop`, k1, mid, tampered)).toBe(400);
+    const reasons = (
+      relay.moteDb.db
+        .prepare("SELECT reason FROM relay_auth_events WHERE reason LIKE 'succession:%'")
+        .all() as Array<{ reason: string }>
+    ).map((r) => r.reason);
+    expect(reasons).toEqual(["succession:rotation_signature_invalid"]);
+  });
+
   it("records the caller and the reason", async () => {
     const victim = crypto.randomUUID();
     const vk = await generateKeypair();
@@ -598,6 +620,56 @@ describe("pairing's key-transfer route writes only a key the identity already ho
     return { pairingId: pairing_id, identityKey, claimKey };
   }
 
+  /** The same, with a key transfer approved — what every client actually does. */
+  async function approvedTransfer(): Promise<{ pairingId: string; identityKey: KeyPair }> {
+    const mid = crypto.randomUUID();
+    const identityKey = await generateKeypair();
+    const claimKey = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, identityKey)).toBe(201);
+    const { token: pairToken } = await mintAudienceToken(
+      { mid, did: `${mid}-laptop`, aud: "device:auth" },
+      identityKey.privateKey,
+    );
+    const auth = { Authorization: `Bearer ${pairToken}` };
+    const init = await relay.app.request("/pairing/initiate", { method: "POST", headers: auth });
+    const { pairing_id, pairing_code } = (await init.json()) as {
+      pairing_id: string;
+      pairing_code: string;
+    };
+    expect(
+      (
+        await relay.app.request("/pairing/claim", {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({
+            pairing_code,
+            device_name: "Mobile",
+            public_key: hex(claimKey),
+            x25519_pubkey: "b".repeat(64),
+          }),
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await relay.app.request(`/pairing/${pairing_id}/approve`, {
+          method: "POST",
+          headers: { ...auth, ...JSON_HEADERS },
+          body: JSON.stringify({
+            key_transfer: {
+              x25519_pubkey: "a".repeat(64),
+              encrypted_seed: "c".repeat(96),
+              nonce: "d".repeat(24),
+              tag: "e".repeat(32),
+              identity_pubkey_check: hex(identityKey),
+            },
+          }),
+        })
+      ).status,
+    ).toBe(200);
+    return { pairingId: pairing_id, identityKey };
+  }
+
   const update = (pairingId: string, key: KeyPair) =>
     relay.app.request(`/pairing/${pairingId}/update-key`, {
       method: "POST",
@@ -611,11 +683,42 @@ describe("pairing's key-transfer route writes only a key the identity already ho
         .get() as { public_key: string }
     ).public_key;
 
-  it("refuses a key the identity does not hold, and writes nothing", async () => {
-    const { pairingId, claimKey } = await approvedSession();
+  it("refuses any key but the one the transfer was approved to carry, and writes nothing", async () => {
+    const { pairingId } = await approvedTransfer();
+    const attacker = await generateKeypair();
+    const before = mobileKey();
+    expect((await update(pairingId, attacker)).status).toBe(403);
+    expect(mobileKey()).toBe(before);
+  });
+
+  it("refuses the approved key in another spelling — what is written is compared exactly everywhere else", async () => {
+    // The row is written verbatim, and `key-rotation.ts` compares device
+    // keys exactly. A row stored in a spelling the identity does not
+    // otherwise use could not serve as the key a succession departs from.
+    const { pairingId, identityKey } = await approvedTransfer();
+    const before = mobileKey();
+    const res = await relay.app.request(`/pairing/${pairingId}/update-key`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ public_key: hex(identityKey).toUpperCase() }),
+    });
+    expect(res.status).toBe(403);
+    expect(mobileKey()).toBe(before);
+  });
+
+  it("completes the approved transfer, and re-presenting the id writes only that same key again", async () => {
+    // Bounded to one predetermined key, the pairing id stops being a
+    // standing credential WITHOUT a single-use flag — which would have to
+    // live in `status`, whose published values the clients switch on, and
+    // would turn a retry after a lost response into a refusal.
+    const { pairingId, identityKey } = await approvedTransfer();
+    expect((await update(pairingId, identityKey)).status).toBe(200);
+    expect(mobileKey()).toBe(hex(identityKey));
+    expect((await update(pairingId, identityKey)).status).toBe(200);
+    expect(mobileKey()).toBe(hex(identityKey));
     const attacker = await generateKeypair();
     expect((await update(pairingId, attacker)).status).toBe(403);
-    expect(mobileKey()).toBe(hex(claimKey));
+    expect(mobileKey()).toBe(hex(identityKey));
   });
 
   it("accepts the key the approving device said it was transferring, even if the relay's rows moved since", async () => {
@@ -689,15 +792,16 @@ describe("pairing's key-transfer route writes only a key the identity already ho
           body: JSON.stringify({ public_key: hex(other) }),
         })
       ).status,
-    ).toBe(409);
+    ).toBe(403);
   });
 
-  it("completes the transfer it exists for, and then the session is spent", async () => {
-    const { pairingId, identityKey } = await approvedSession();
-    expect((await update(pairingId, identityKey)).status).toBe(200);
-    expect(mobileKey()).toBe(hex(identityKey));
-    // The pairing id was a standing credential: a second use, at any later
-    // date, re-keyed that row again.
-    expect((await update(pairingId, identityKey)).status).toBe(409);
+  it("refuses a session that approved no key transfer — there is nothing to complete", async () => {
+    // The fallback this replaces accepted any key the identity held, so
+    // whoever had the pairing id could put the APPROVING device's key onto
+    // the approved device's row: that device then holds a private key the
+    // relay no longer recognises, locked out with no bearer involved.
+    const { pairingId, identityKey, claimKey } = await approvedSession();
+    expect((await update(pairingId, identityKey)).status).toBe(403);
+    expect(mobileKey()).toBe(hex(claimKey));
   });
 });

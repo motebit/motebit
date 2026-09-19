@@ -427,6 +427,21 @@ export function registerPairingRoutes(deps: PairingDeps): void {
     // to its keyring BEFORE calling this, so a refusal that depends on
     // rows the relay may have since dropped would strand the device
     // holding a seed whose key the relay no longer recognises.
+    // This route COMPLETES an approved key transfer, so the only key it
+    // may write is the one that transfer was approved to carry — captured
+    // at approve time and matched exactly, because the spelling is what
+    // every later comparison uses. Where no transfer was approved there is
+    // nothing to complete, and the route writes nothing: falling back to
+    // "any key this identity holds" would let whoever has the pairing id
+    // put the APPROVING device's key onto the approved device's row, so
+    // that device holds a private key the relay no longer recognises —
+    // a bearer-less lockout of a just-paired device.
+    //
+    // Bounded to one predetermined key, the pairing id stops being a
+    // standing credential without a single-use flag: re-presenting it
+    // writes the same key again. That matters — a single-use flag would
+    // have to live in `status`, whose published values the clients switch
+    // on, and it would turn a retry after a lost response into a refusal.
     const motebitId = session.motebit_id as string;
     let transferred: string | null = null;
     if (session.key_transfer_payload != null) {
@@ -434,41 +449,24 @@ export function registerPairingRoutes(deps: PairingDeps): void {
         const kt = JSON.parse(session.key_transfer_payload as string) as Record<string, unknown>;
         if (typeof kt.identity_pubkey_check === "string") transferred = kt.identity_pubkey_check;
       } catch {
-        /* a payload this relay cannot read decides nothing */
+        /* a payload this relay cannot read approves nothing */
       }
     }
-    const held =
-      transferred != null
-        ? transferred.toLowerCase() === body.public_key.toLowerCase()
-          ? 1
-          : null
-        : db
-            .prepare(
-              `SELECT 1 FROM devices WHERE motebit_id = ? AND lower(public_key) = lower(?)
-                UNION ALL
-               SELECT 1 FROM agent_registry WHERE motebit_id = ? AND lower(public_key) = lower(?)
-               LIMIT 1`,
-            )
-            .get(motebitId, body.public_key, motebitId, body.public_key);
-    if (held == null) {
+    if (transferred == null || transferred !== body.public_key) {
       logger.warn("pairing.update_key.refused", {
         pairingId,
         motebitId,
-        reason: "not_a_key_this_identity_holds",
+        reason: transferred == null ? "no_key_transfer_approved" : "not_the_approved_key",
       });
       throw new HTTPException(403, {
         message:
-          "update-key completes a key transfer: the presented key is not one this identity holds",
+          transferred == null
+            ? "update-key completes a key transfer, and this session approved none"
+            : "update-key writes only the key this transfer was approved to carry",
       });
     }
 
     await identityManager.updateDevicePublicKey(deviceId, body.public_key);
-    // Spend the session. The pairing id was otherwise a standing
-    // credential: it never expired and was never consumed, so a once-valid
-    // id re-keyed that row at any later date.
-    db.prepare("UPDATE pairing_sessions SET status = 'key_updated' WHERE pairing_id = ?").run(
-      pairingId,
-    );
 
     return c.json({ ok: true });
   });
