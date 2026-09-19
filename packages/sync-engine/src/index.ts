@@ -1,6 +1,9 @@
 import type { EventLogEntry, SyncCursor, ConflictEdge } from "@motebit/sdk";
 import type { EventStoreAdapter } from "@motebit/event-log";
 
+export { submitSuccessionToRelay } from "./succession-client.js";
+export type { SubmitSuccessionRequest, SubmitSuccessionResult } from "./succession-client.js";
+
 export { StaticCredentialSource } from "./credential-source.js";
 export type { CredentialRequest, CredentialSource } from "./credential-source.js";
 

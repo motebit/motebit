@@ -15,12 +15,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { verify, rotate as rotateIdentityFile } from "@motebit/identity-file";
 import { rotateIdentityKeys } from "@motebit/core-identity";
-import {
-  hexPublicKeyToDidKey,
-  mintAudienceToken,
-  secureErase,
-  bytesToHex,
-} from "@motebit/encryption";
+import { submitSuccessionToRelay } from "@motebit/sync-engine";
+import { hexPublicKeyToDidKey, secureErase, bytesToHex } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
 import { CONFIG_DIR, loadFullConfig, saveFullConfig } from "../config.js";
 import {
@@ -155,6 +151,47 @@ export async function handleRotate(config: CliConfig): Promise<void> {
     process.exit(1);
   }
 
+  // 5b. Tell the relay BEFORE committing anything locally.
+  //
+  // This used to run last, best-effort, after the old key was erased — so a
+  // relay that was down, rate-limited or unreachable left local state on the
+  // new key while the relay still served the old one. Nothing could repair
+  // that: the record cannot be re-presented (the relay verifies the token
+  // against the key it holds, which is now the wrong one), and the identity
+  // endpoint third parties read (`spec/identity-v1.md` §7.6) went on serving
+  // the retired key, so every receipt signed afterwards failed to verify —
+  // silently, and for good. This file's own contract is all-or-nothing.
+  const syncUrl = fullConfig.sync_url ?? process.env["MOTEBIT_SYNC_URL"];
+  if (syncUrl != null && syncUrl !== "") {
+    const submitted = await submitSuccessionToRelay({
+      syncUrl,
+      motebitId,
+      deviceId: fullConfig.device_id ?? "",
+      // Signed with the key being RETIRED: it is the only one the relay
+      // can verify at this moment. That makes the request authentic, not
+      // safe — a thief holding the same key can sign one too, and whoever
+      // arrives first wins. Rotation does not adjudicate that race.
+      signingKey: oldPrivateKey,
+      record: rotateResult.successionRecord,
+    });
+    if (!submitted.ok) {
+      console.error(`Error: the relay did not record the rotation — ${submitted.reason}`);
+      console.error("  Nothing was changed locally. Your current key still works.");
+      console.error("  Fix the relay connection and run `motebit rotate` again.");
+      secureErase(oldPrivateKey);
+      secureErase(rotateResult.newPrivateKey);
+      rl.close();
+      process.exit(1);
+    }
+    console.log(
+      submitted.applied
+        ? "  Relay: rotation recorded"
+        : "  Relay: rotation already recorded (no change)",
+    );
+  } else {
+    console.log("  Relay: not configured (skipped)");
+  }
+
   fs.writeFileSync(identityPath, rotatedContent, "utf-8");
   console.log("  Identity file: updated and re-signed");
 
@@ -170,48 +207,6 @@ export async function handleRotate(config: CliConfig): Promise<void> {
   // Securely erase old key material
   secureErase(oldPrivateKey);
   secureErase(rotateResult.newPrivateKey);
-
-  // 8. Submit succession record to relay if configured
-  const syncUrl = fullConfig.sync_url ?? process.env["MOTEBIT_SYNC_URL"];
-  if (syncUrl) {
-    const baseUrl = syncUrl.replace(/\/+$/, "");
-    try {
-      // Re-decrypt new key for signing the relay request
-      if (!fullConfig.cli_encrypted_key) throw new Error("No encrypted key in config");
-      const newPrivKeyHex = await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
-      const newPrivKey = fromHex(newPrivKeyHex);
-      const deviceId = fullConfig.device_id ?? "";
-
-      const { token } = await mintAudienceToken(
-        { mid: motebitId, did: deviceId, aud: "rotate-key" },
-        newPrivKey,
-      );
-      secureErase(newPrivKey);
-
-      const relayResp = await fetch(`${baseUrl}/api/v1/agents/${motebitId}/rotate-key`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(rotateResult.successionRecord),
-      });
-
-      if (relayResp.ok) {
-        console.log("  Relay: succession record submitted");
-      } else {
-        const text = await relayResp.text();
-        console.warn(`  Relay: submission failed (${relayResp.status}): ${text.slice(0, 200)}`);
-        console.warn("  The local rotation is complete. Re-register with the relay manually.");
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`  Relay: could not reach ${baseUrl}: ${msg}`);
-      console.warn("  The local rotation is complete. Re-register with the relay manually.");
-    }
-  } else {
-    console.log("  Relay: not configured (skipped)");
-  }
 
   // 9. Summary
   console.log();
