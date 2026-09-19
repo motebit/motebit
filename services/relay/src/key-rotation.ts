@@ -209,6 +209,21 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     // A device row's key counts, so an identity whose daemon has shut down
     // can still rotate. Refusing when the relay holds NO key at all is
     // fail-closed: there is nothing for the record to continue from.
+    // Already recorded? Answer 200 and change nothing. This must come
+    // BEFORE the key-on-file check below, because a successful rotation
+    // moves that key — so a retry after a lost response would otherwise be
+    // refused as "not from the current key", telling a client its rotation
+    // failed when the relay had already applied it. The signatures above
+    // have been verified, so this only honours a record we would accept.
+    const alreadyRecorded = moteDb.db
+      .prepare(
+        "SELECT 1 FROM relay_key_successions WHERE motebit_id = ? AND old_public_key = ? AND new_public_key = ? LIMIT 1",
+      )
+      .get(motebitId, body.old_public_key, body.new_public_key);
+    if (alreadyRecorded != null) {
+      return c.json({ ok: true, motebit_id: motebitId, applied: false });
+    }
+
     // Precedence, most authoritative first. Comparison is EXACT: these
     // keys are covered by the signature, and a record stored in a spelling
     // that differs from the one signed breaks `verifySuccessionChain`'s
@@ -262,27 +277,80 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
       }
     }
 
-    moteDb.db
-      .prepare(
-        `INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature, recovery, guardian_signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        motebitId,
-        body.old_public_key,
-        body.new_public_key,
-        body.timestamp,
-        body.reason ?? null,
-        body.old_key_signature ?? null,
-        body.new_key_signature,
-        body.recovery ? 1 : 0,
-        body.guardian_signature ?? null,
-      );
+    // Everything a recorded rotation changes, in ONE transaction. Written
+    // as three statements, a crash between them left the registry saying
+    // the new key while the device rows still verified tokens under the
+    // old one — and from there the owner could not rotate again (the
+    // record no longer departs from the stored key), could not
+    // re-register (the row disagrees) and could not authenticate. There
+    // was no way back without the operator.
+    //
+    // Devices are written FIRST for the same reason: if this ever stops
+    // being one transaction, the half-applied state that remains is the
+    // recoverable one.
+    const applied = moteDb.db.transaction(() => {
+      // Idempotent: a lost response and a retry must not append the same
+      // link twice. The chain is served in timestamp order, and two
+      // identical links make a history a verifier cannot walk.
+      const already = moteDb.db
+        .prepare(
+          "SELECT 1 FROM relay_key_successions WHERE motebit_id = ? AND old_public_key = ? AND new_public_key = ? LIMIT 1",
+        )
+        .get(motebitId, body.old_public_key, body.new_public_key);
+      if (already != null) return false;
 
-    moteDb.db
-      .prepare(`UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?`)
-      .run(body.new_public_key, motebitId);
+      // The old key stops being a credential HERE. A device row's
+      // `public_key` is what an owner token is verified against, and it is
+      // resolved BEFORE the registry key, so a stale row shadows the
+      // rotation entirely. Scoped to rows holding the key being retired: a
+      // device linked without key transfer holds its own key, which this
+      // rotation is not about (`docs/doctrine/security-boundaries.md` —
+      // rotating an identity must not rotate independent device keypairs).
+      moteDb.db
+        .prepare("UPDATE devices SET public_key = ? WHERE motebit_id = ? AND public_key = ?")
+        .run(body.new_public_key, motebitId, body.old_public_key);
 
-    return c.json({ ok: true, motebit_id: motebitId });
+      // A pairing session approved before this rotation carries the key
+      // that was just retired, and pairing's key-transfer route takes no
+      // bearer. Left alone, whoever holds that pairing id could write the
+      // retired key back onto a device row and authenticate again — the
+      // rotation undone by an unauthenticated route. Clearing the payload
+      // is what makes that route refuse ("this session approved none");
+      // `status` is left alone because clients switch on its values.
+      moteDb.db
+        .prepare(
+          "UPDATE pairing_sessions SET key_transfer_payload = NULL WHERE motebit_id = ? AND key_transfer_payload IS NOT NULL",
+        )
+        .run(motebitId);
+
+      moteDb.db
+        .prepare(`UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?`)
+        .run(body.new_public_key, motebitId);
+
+      moteDb.db
+        .prepare(
+          `INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature, recovery, guardian_signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          motebitId,
+          body.old_public_key,
+          body.new_public_key,
+          body.timestamp,
+          body.reason ?? null,
+          body.old_key_signature ?? null,
+          body.new_key_signature,
+          body.recovery ? 1 : 0,
+          body.guardian_signature ?? null,
+        );
+      return true;
+    });
+
+    logger.info("key_rotation.recorded", {
+      motebitId,
+      recovery: body.recovery === true,
+      applied,
+    });
+    return c.json({ ok: true, motebit_id: motebitId, applied });
   });
 
   // --- Key succession chain query ---
