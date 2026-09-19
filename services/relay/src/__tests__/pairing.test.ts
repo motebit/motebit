@@ -545,16 +545,19 @@ describe("Pairing Protocol", () => {
       headers: { Authorization: `Bearer ${deviceA.authToken}` },
     });
 
-    // Update device B's key
-    const newKey = "f".repeat(64);
-    const updateRes = await relay.app.request(`/pairing/${pairing_id}/update-key`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ public_key: newKey }),
-    });
-    expect(updateRes.status).toBe(200);
-    const updateBody = (await updateRes.json()) as { ok: boolean };
-    expect(updateBody.ok).toBe(true);
+    const update = (public_key: string) =>
+      relay.app.request(`/pairing/${pairing_id}/update-key`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ public_key }),
+      });
+
+    // This route takes no bearer, so what it may WRITE is its safety: only
+    // the key the transfer was approved to carry. This session approved
+    // none — `approve` was called with no `key_transfer` — so there is
+    // nothing for it to complete. See `succession-authority.test.ts`.
+    expect((await update("f".repeat(64))).status).toBe(403);
+    expect((await update(deviceA.publicKeyHex)).status).toBe(403);
   });
 
   it("POST /pairing/:id/update-key rejects invalid public key", async () => {
