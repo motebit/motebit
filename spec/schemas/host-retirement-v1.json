@@ -3,7 +3,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/host-retirement-v1.json",
   "title": "HostRetirement (v1)",
-  "description": "A motebit's sovereign-signed end of one HostEnrollment, named by hash. Signed by ANY holder of the motebit's identity key — a lost machine cannot sign its own exit. Remove wins and is terminal for that entry. See spec/machine-roster-v1.md.",
+  "description": "A motebit's sovereign-signed end of one HostEnrollment, named by id. A lost machine cannot sign its own exit, so it may be signed by any holder of a key at an epoch NO OLDER than the enrolment's — authority flows forward only, and a retirement under an older key does not end an enrolment made under a newer one. Where it applies, remove wins and is terminal for that entry. See spec/machine-roster-v1.md.",
   "type": "object",
   "properties": {
     "type": {

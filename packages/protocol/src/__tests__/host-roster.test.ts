@@ -62,6 +62,7 @@ describe("machine roster guards", () => {
     // Unix ms is an integer; a float is a cross-language id hazard.
     ["a float time", { ...enrollment, enrolled_at: 1000.5 }],
     ["a negative time", { ...enrollment, enrolled_at: -1 }],
+    ["negative zero", { ...enrollment, enrolled_at: -0 }],
     ["an unsafe integer time", { ...enrollment, enrolled_at: 2 ** 60 }],
     // As strict as the wire schema: every field but `signature` is signed,
     // so an extra one would verify and must be refused on shape.

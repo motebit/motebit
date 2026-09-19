@@ -270,6 +270,73 @@ describe("§6 properties", () => {
     );
   });
 
+  it("P11 keyless additions — nothing a party with NO key can add moves any machine", async () => {
+    // Every other property draws from an authentically signed pool, so
+    // no keyless adversary ever appeared in them — and two defects lived
+    // exactly there. A hostile store, or merely an unverifying one whose
+    // set a consumer UNIONS with an honest store's, can add: copies of a
+    // real artifact under garbage signatures (any number, sorting
+    // anywhere); copies carrying an `undefined`-valued extra key, which
+    // canonicalize to the SAME id and signature; `-0` for `0`; and junk.
+    // None of it may suppress, resurrect, or reclassify anything.
+    const sigChar = fc.constantFrom(..."-_0189AZaz".split(""));
+    const garbageSig = fc.array(sigChar, { minLength: 86, maxLength: 86 }).map((cs) => cs.join(""));
+    const forge = <T extends { signature: string }>(pool: T[]) =>
+      fc.array(
+        fc
+          .tuple(fc.constantFrom(...pool), garbageSig, fc.integer({ min: 0, max: 3 }))
+          .map(([artifact, sig, mode]) => {
+            if (mode === 0) return { ...artifact, signature: sig };
+            // Same id, same signature, NOT well-formed.
+            if (mode === 1) return { ...artifact, device_name: undefined };
+            if (mode === 2) return { ...artifact, signature: sig, hosts: undefined };
+            return "junk";
+          }),
+        { maxLength: 40 },
+      );
+    // ...and a FLOOD: many garbage copies of ONE real artifact, all
+    // sorting ahead of any genuine signature. Random garbage almost never
+    // stacks up on a single id, which is how a cap on spellings tried
+    // slipped past this property the first time.
+    const flood = <T extends { signature: string }>(pool: T[]) =>
+      fc.tuple(fc.constantFrom(...pool), fc.integer({ min: 9, max: 24 })).map(([real, n]) => ({
+        real,
+        copies: Array.from({ length: n }, (_, i) => ({
+          ...real,
+          signature: `${"-".repeat(84)}${String(i).padStart(2, "0")}`,
+        })),
+      }));
+    await fc.assert(
+      fc.asyncProperty(
+        subE(),
+        subR(),
+        forge(enrolments),
+        forge(retirements),
+        flood(enrolments),
+        flood(retirements),
+        fc.boolean(),
+        async (e0, r0, junkE, junkR, floodE, floodR, front) => {
+          // The flooded artifacts are IN the honest set, so suppressing
+          // one would show.
+          const e = [...new Set([...e0, floodE.real])];
+          const r = [...new Set([...r0, floodR.real])];
+          const fakeE = [...junkE, ...floodE.copies];
+          const fakeR = [...junkR, ...floodR.copies];
+          const honest = ok(await reduce(chain, e, r));
+          const mix = <T>(real: T[], fake: unknown[]) =>
+            (front ? [...fake, ...real] : [...real, ...fake]) as T[];
+          const flooded = ok(await reduce(chain, mix(e, fakeE), mix(r, fakeR)));
+          expect(statuses(flooded)).toEqual(statuses(honest));
+          // And the flood is order-independent too.
+          expect(ok(await reduce(chain, mix(e, fakeE).reverse(), mix(r, fakeR).reverse()))).toEqual(
+            flooded,
+          );
+        },
+      ),
+      RUNS,
+    );
+  });
+
   it("P10 — an unusable chain never yields a roster, so no 'every machine' can be vacuously true", async () => {
     const e = enrolments.slice(0, 3);
     expect(await reduce([], e, [])).toEqual({ ok: false, reason: "empty_chain" });

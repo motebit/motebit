@@ -86,7 +86,11 @@ function hasSignedShape(v: Record<string, unknown>): boolean {
 // hazard: two implementations that print 1.7e21 differently derive two
 // ids for one entry, and a retirement minted on one never bites on the
 // other.
-const isUnixMs = (n: unknown): n is number => Number.isSafeInteger(n) && (n as number) >= 0;
+// `-0` is refused too: `JSON.parse("-0")` is -0, it canonicalizes to "0" —
+// the same id and the same signature as 0 — and a verdict carrying one or
+// the other would depend on which copy arrived first.
+const isUnixMs = (n: unknown): n is number =>
+  Number.isSafeInteger(n) && (n as number) >= 0 && !Object.is(n, -0);
 
 function isHostEnrollment(value: unknown): value is HostEnrollment {
   if (typeof value !== "object" || value === null) return false;
@@ -208,15 +212,6 @@ export async function hostRetirementId(retirement: HostRetirement): Promise<stri
   return signedBodyId(retirement);
 }
 
-/**
- * How many signature spellings of ONE entry are tried before it is
- * refused. Part of the law, not a tuning knob: a store can attach any
- * number of garbage-signature copies to an id, the reduction runs on a
- * phone, and a cap that differed between implementations would make the
- * verdict differ. Copies are tried in sorted signature order.
- */
-export const MAX_SIGNATURE_COPIES_TRIED = 8;
-
 export interface HostRosterEntry {
   enrollment_id: string;
   /**
@@ -255,9 +250,17 @@ export interface HostRosterMachine {
 
 export interface HostRosterRejection {
   kind: "enrollment" | "retirement";
-  /** The entry's id, or `null` when it was not even a JSON object. */
+  /**
+   * The entry's id. `null` for input that is not a JSON object or cannot
+   * be canonicalized: such inputs cannot be told apart, so they are ONE
+   * refusal, with no key.
+   */
   id: string | null;
-  /** The key it claimed, when readable — what a person would investigate. */
+  /**
+   * The key it claimed, when it has an id and the claim is a string —
+   * what a person would investigate. Copies that share an id share a
+   * canonical body, so this never depends on which copy arrived first.
+   */
   public_key: string | null;
   /** The FIRST that applies, in this order. */
   reason: "malformed" | "wrong_motebit" | "untrusted_key" | "bad_signature";
@@ -284,9 +287,17 @@ export interface HostRosterVerdict {
    */
   superseded: HostRosterMachine[];
   /**
-   * Every enrolment id an admissible retirement names, with the highest
-   * epoch that named it — including ids whose enrolment has not been
-   * seen. A retirement may arrive first; union has no order.
+   * PENDING tombstones only: admissible retirements naming an enrolment
+   * that is NOT in this input, with the highest epoch that named each. A
+   * retirement may arrive first — union has no order — and a consumer
+   * keeps these so they bite when the enrolment appears (it ends an
+   * enrolment at epoch `e` iff `epoch >= e`).
+   *
+   * Retirements naming an enrolment that IS present are not listed: their
+   * whole effect is already in the three buckets, and listing them let a
+   * reader mistake one that Rule A ignores — a stolen old key naming a
+   * current enrolment — for a machine being retired. "Am I retired?" is
+   * answered by the buckets, never by this list.
    */
   tombstones: Array<{ enrollment_id: string; epoch: number }>;
   /** One per distinct refused entry, sorted. Never silently dropped. */
@@ -354,12 +365,26 @@ export async function verifyHostRoster(input: {
   const rejected = new Map<string, HostRosterRejection>();
 
   // Step 1 — admit each DISTINCT entry once.
+  //
+  // Nothing a party with NO key can add may change the outcome for an
+  // id. A consumer unions what several stores serve, and one of them may
+  // be hostile or merely unverifying, so beside an authentic entry there
+  // may be any number of copies of its body under garbage signatures,
+  // and copies that canonicalize to the SAME id and signature while not
+  // being well-formed (`{...e, device_name: undefined}` — canonical JSON
+  // skips an undefined value). So: well-formed copies are kept apart from
+  // the rest and never displaced by them; EVERY distinct well-formed copy
+  // is tried, with no cap — a cap let eight garbage copies that sort
+  // first suppress a real retirement; and an id with one verifying copy
+  // is admitted and refuses nothing. The cost of a flood is bounded by
+  // whoever hands this function its input, which is where it can be.
   async function admit<T extends HostEnrollment | HostRetirement>(
     kind: "enrollment" | "retirement",
     items: readonly unknown[],
     isShape: (v: unknown) => v is T,
   ): Promise<Array<{ id: string; artifact: T; epoch: number }>> {
-    const groups = new Map<string, { first: unknown; copies: Map<string, unknown> }>();
+    const groups = new Map<string, { claimed: string | null; shaped: Map<string, T> }>();
+    let unidentifiable = false;
     for (const item of items) {
       // Anything that is a JSON object has an id, well-formed or not, so
       // fifty malformed entries are fifty refusals, not one anonymous one.
@@ -371,28 +396,30 @@ export async function verifyHostRoster(input: {
           id = null;
         }
       }
-      const key = id ?? "";
-      const group = groups.get(key) ?? { first: item, copies: new Map<string, unknown>() };
-      const sig = (item as { signature?: unknown } | null)?.signature;
-      group.copies.set(typeof sig === "string" ? sig : "", item);
-      groups.set(key, group);
+      if (id == null) {
+        unidentifiable = true;
+        continue;
+      }
+      let group = groups.get(id);
+      if (group == null) {
+        const claimed = (item as { public_key?: unknown }).public_key;
+        group = { claimed: typeof claimed === "string" ? claimed : null, shaped: new Map() };
+        groups.set(id, group);
+      }
+      if (isShape(item)) group.shaped.set(item.signature, item);
+    }
+    if (unidentifiable) {
+      rejected.set(`${kind}||malformed`, { kind, id: null, public_key: null, reason: "malformed" });
     }
 
     const out: Array<{ id: string; artifact: T; epoch: number }> = [];
-    for (const [key, group] of groups) {
-      const id = key === "" ? null : key;
-      const claimed = (group.first as { public_key?: unknown } | null)?.public_key;
-      const public_key = typeof claimed === "string" ? claimed : null;
+    for (const [id, group] of groups) {
       const refuse = (reason: HostRosterRejection["reason"]): void => {
-        rejected.set(`${kind}|${key}|${reason}`, { kind, id, public_key, reason });
+        rejected.set(`${kind}|${id}|${reason}`, { kind, id, public_key: group.claimed, reason });
       };
-      // Copies share a signed body, so shape (bar the signature's own
-      // spelling), motebit and key are properties of the GROUP.
-      const shaped = [...group.copies.entries()]
-        .filter((entry): entry is [string, T] => isShape(entry[1]))
-        .sort((a, b) => cmp(a[0], b[0]));
-      const sample = shaped[0]?.[1];
-      if (id == null || sample == null) {
+      // Copies share a signed body, so motebit and key belong to the GROUP.
+      const sample = group.shaped.values().next().value;
+      if (sample == null) {
         refuse("malformed");
         continue;
       }
@@ -405,10 +432,8 @@ export async function verifyHostRoster(input: {
         refuse("untrusted_key");
         continue;
       }
-      // An id with at least one verifying copy is admitted and yields NO
-      // refusal, whatever garbage copies accompany it.
       let good: T | undefined;
-      for (const [, copy] of shaped.slice(0, MAX_SIGNATURE_COPIES_TRIED)) {
+      for (const copy of group.shaped.values()) {
         if (await verifyBody(copy)) {
           good = copy;
           break;
@@ -443,16 +468,26 @@ export async function verifyHostRoster(input: {
     active: [],
     retired: [],
     superseded: [],
-    tombstones: [...endedAtEpoch]
-      .map(([enrollment_id, epoch]) => ({ enrollment_id, epoch }))
-      .sort((a, b) => cmp(a.enrollment_id, b.enrollment_id)),
+    tombstones: [], // filled below, once the enrolments present are known
     rejected: [...rejected.values()].sort(
       (a, b) => cmp(a.kind, b.kind) || cmp(a.id ?? "", b.id ?? "") || cmp(a.reason, b.reason),
     ),
   };
 
+  const present = new Set<string>();
+  for (const all of byDevice.values()) for (const e of all) present.add(e.id);
+  verdict.tombstones = [...endedAtEpoch]
+    .filter(([enrollment_id]) => !present.has(enrollment_id))
+    .map(([enrollment_id, epoch]) => ({ enrollment_id, epoch }))
+    .sort((a, b) => cmp(a.enrollment_id, b.enrollment_id));
+
   for (const [device_id, all] of byDevice) {
-    const H = Math.max(...all.map((e) => e.epoch));
+    // A loop, not `Math.max(...spread)`: a holder of an old key may mint
+    // any number of enrolments for one device, and a spread that large
+    // throws — denying a consumer even the active set an old key cannot
+    // otherwise touch.
+    let H = -1;
+    for (const e of all) if (e.epoch > H) H = e.epoch;
     const atH = all.filter((e) => e.epoch === H);
     // Rule A: ended iff some retirement at an epoch >= the enrolment's names it.
     const standing = atH.filter((e) => (endedAtEpoch.get(e.id) ?? -1) < e.epoch);

@@ -944,9 +944,6 @@ export interface KeySuccessionRecord {
 export type KnownKeys = Map<string, Uint8Array>;
 
 // @public
-export const MAX_SIGNATURE_COPIES_TRIED = 8;
-
-// @public
 export function mintAudienceToken(input: MintAudienceTokenInput, privateKey: Uint8Array): Promise<MintedAudienceToken>;
 
 // @public (undocumented)

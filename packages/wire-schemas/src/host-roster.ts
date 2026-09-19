@@ -4,7 +4,8 @@
  *
  * "Every machine" is a statement about a set. `HostEnrollment` adds a
  * machine to a motebit's roster and `HostRetirement` ends one; the
- * roster is every enrolment no retirement names. A relay stores and
+ * roster is every MACHINE with an enrolment, at its highest epoch, that
+ * no retirement ends. A relay stores and
  * serves these verbatim and never mints one — so a third party (or the
  * sovereign's own phone) validates what it was served against THIS
  * schema, then verifies the signatures with `@motebit/crypto`, and needs
@@ -153,6 +154,6 @@ export function buildHostRetirementJsonSchema(): Record<string, unknown> {
     $id: HOST_RETIREMENT_SCHEMA_ID,
     title: "HostRetirement (v1)",
     description:
-      "A motebit's sovereign-signed end of one HostEnrollment, named by hash. Signed by ANY holder of the motebit's identity key — a lost machine cannot sign its own exit. Remove wins and is terminal for that entry. See spec/machine-roster-v1.md.",
+      "A motebit's sovereign-signed end of one HostEnrollment, named by id. A lost machine cannot sign its own exit, so it may be signed by any holder of a key at an epoch NO OLDER than the enrolment's — authority flows forward only, and a retirement under an older key does not end an enrolment made under a newer one. Where it applies, remove wins and is terminal for that entry. See spec/machine-roster-v1.md.",
   });
 }

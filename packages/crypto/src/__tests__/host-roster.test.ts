@@ -27,7 +27,6 @@ import {
   hostEnrollmentId,
   hostRetirementId,
   verifyHostRoster,
-  MAX_SIGNATURE_COPIES_TRIED,
 } from "../index.js";
 import type { HostRosterMachine, HostRosterResult, HostRosterVerdict } from "../index.js";
 import { signBySuite } from "../suite-dispatch.js";
@@ -228,6 +227,7 @@ describe("@motebit/protocol's guards and the copies restated here are one law", 
       ["enrolment, float time", { ...e, enrolled_at: 1.5 }],
       ["retirement, negative time", { ...r, retired_at: -1 }],
       ["enrolment, unsafe integer", { ...e, enrolled_at: 2 ** 60 }],
+      ["enrolment, negative zero", { ...e, enrolled_at: -0 }],
       ["enrolment, empty device", { ...e, device_id: "" }],
       ["enrolment, empty motebit", { ...e, motebit_id: "" }],
       ["retirement, short enrollment_id", { ...r, enrollment_id: "abc" }],
@@ -389,27 +389,105 @@ describe("the reduction — what it refuses", () => {
     ]);
   });
 
-  it("tries a bounded number of spellings of one entry, in a fixed order", async () => {
-    // A store can attach any number of garbage copies to an id and the
-    // reduction runs on a phone. The cap is part of the law, so the
-    // verdict cannot differ between implementations that chose their own.
+  it("code review on the rebuild: NO number of garbage copies suppresses an authentic entry", async () => {
+    // A cap of eight spellings, tried in sorted order, let anyone with no
+    // key serve eight garbage copies that sort ahead of a real RETIREMENT.
+    // A consumer unioning that store with an honest one never reached the
+    // good copy — and the machine was active again. Withholding cannot do
+    // that under union; flooding could.
     const k = await key();
-    const good = await k.enrol("laptop");
-    const garbage = Array.from({ length: MAX_SIGNATURE_COPIES_TRIED }, (_, i) => ({
-      ...good,
-      // Sorts before any real signature's first character class mix.
-      signature: `${"-".repeat(85)}${"ABCDEFGH"[i]}`,
+    const vps = await k.enrol("vps");
+    const gone = await k.retire(vps);
+    const flood = Array.from({ length: 200 }, (_, i) => ({
+      ...gone,
+      signature: `${"-".repeat(83)}${String(i).padStart(3, "0")}`,
     }));
-    const flooded = await reduce([k.pub], [good, ...garbage]);
-    const few = await reduce([k.pub], [good, ...garbage.slice(0, 2)]);
-    expect(devices(few.active)).toEqual(["laptop"]);
-    // The cap BITES: with a full cap of garbage sorting ahead of it, the
-    // good copy is never reached, and the entry is refused — which a
-    // hostile store could equally achieve by withholding it.
-    expect(flooded.active).toEqual([]);
-    expect(flooded.rejected.map((r) => r.reason)).toEqual(["bad_signature"]);
-    // Same answer whichever order the flood arrives in.
-    expect(await reduce([k.pub], [...garbage, good])).toEqual(flooded);
+    for (const retirements of [
+      [...flood, gone],
+      [gone, ...flood],
+    ]) {
+      const v = await reduce([k.pub], [vps], retirements);
+      expect(devices(v.retired)).toEqual(["vps"]);
+      expect(v.rejected).toEqual([]);
+    }
+  });
+
+  it("code review on the rebuild: a copy that is not well-formed never displaces one that is", async () => {
+    // `{...e, device_name: undefined}` — what rebuilding an artifact from
+    // a row with an optional column gives you. Canonical JSON skips the
+    // undefined value, so it has the SAME id and the SAME signature, and
+    // it is not well-formed. It overwrote the good copy in a map keyed by
+    // signature, and the machine vanished — in one input order only.
+    const k = await key();
+    const laptop = await k.enrol("laptop");
+    const ghostField = { ...laptop, device_name: undefined } as unknown as HostEnrollment;
+    const a = await reduce([k.pub], [laptop, ghostField]);
+    const b = await reduce([k.pub], [ghostField, laptop]);
+    expect(devices(a.active)).toEqual(["laptop"]);
+    expect(b).toEqual(a);
+    expect(a.rejected).toEqual([]);
+  });
+
+  it("refuses -0 as a time: it canonicalizes to 0 and would make the verdict order-dependent", async () => {
+    const k = await key();
+    const zero = await k.signRaw({
+      type: "motebit/host-enrollment@1",
+      motebit_id: MOTEBIT,
+      device_id: "laptop",
+      public_key: k.pub,
+      enrolled_at: 0,
+      suite: SUITE,
+    });
+    expect(await verifyHostEnrollment(zero as unknown as HostEnrollment)).toBe(true);
+    expect(
+      await verifyHostEnrollment({ ...zero, enrolled_at: -0 } as unknown as HostEnrollment),
+    ).toBe(false);
+    expect(isHostEnrollment({ ...zero, enrolled_at: -0 })).toBe(false);
+  });
+
+  it("never spreads an attacker-sized list into a function call (structural)", async () => {
+    // `Math.max(...all.map(...))` throws RangeError past the engine's
+    // argument limit, and a holder of an old key may mint any number of
+    // enrolments for one device — so a flood denied a consumer even the
+    // `active` set an old key cannot otherwise touch. Reproducing it
+    // needs ~125k AUTHENTIC entries (minutes of signing), so this reads
+    // the source instead. It is a tripwire, not a proof, and says so.
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../host-roster.ts", import.meta.url), "utf8");
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    expect(code).not.toMatch(/Math\.(max|min)\(\s*\.\.\./);
+    expect(code).not.toMatch(/\.push\(\s*\.\.\./);
+  });
+
+  it("input with no id is ONE refusal with no key, whatever order it arrives in", async () => {
+    const k = await key();
+    const unhashable = [
+      { public_key: "aa".repeat(32), x: 1n },
+      { public_key: "bb".repeat(32), x: 2n },
+      "junk",
+      null,
+    ] as unknown as HostEnrollment[];
+    const a = await reduce([k.pub], unhashable);
+    expect(a.rejected).toEqual([
+      { kind: "enrollment", id: null, public_key: null, reason: "malformed" },
+    ]);
+    expect(await reduce([k.pub], [...unhashable].reverse())).toEqual(a);
+  });
+
+  it("lists only PENDING tombstones — a retirement Rule A ignores is not a machine being retired", async () => {
+    // A stolen epoch-0 key names the current enrolment. The machine stays
+    // active, and the verdict must not hand a surface a "tombstone" for it
+    // to misread as "I am retired, do not re-enrol".
+    const [k1, k2] = [await key(), await key()];
+    const laptop = await k2.enrol("laptop");
+    const unseen = await k2.enrol("never-presented");
+    const v = await reduce(
+      [k1.pub, k2.pub],
+      [laptop],
+      [await k1.retire(laptop), await k2.retire(unseen)],
+    );
+    expect(devices(v.active)).toEqual(["laptop"]);
+    expect(v.tombstones).toEqual([{ enrollment_id: await hostEnrollmentId(unseen), epoch: 1 }]);
   });
 
   it("an unusable chain is NOT an empty roster", async () => {

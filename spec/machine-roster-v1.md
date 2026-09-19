@@ -29,7 +29,7 @@ Doctrine: [`docs/doctrine/machine-roster.md`](../docs/doctrine/machine-roster.md
 ### What it is
 
 A **set** of self-verifying, sovereign-signed entries. Unordered. Each entry is
-identified by the hash of its **signed body** (§4) — never the whole artifact. The roster is every enrolment no
+identified by the hash of its **signed body** (§4) — never the whole artifact. The roster is every machine with an enrolment no
 retirement names (§6). Merging two copies of a roster is set union.
 
 ### What it is not
@@ -203,16 +203,29 @@ the last, and the result carries a **chain head** `{ epoch, public_key }` naming
 the view it was computed under. Only the relative order of epochs is used.
 
 **Step 1 — admit each distinct entry once.** Group inputs by id (§4); anything
-that is a JSON object has one, well-formed or not. An id is _admissible_ iff it is
-well-formed (§4's strictness included), its `motebit_id` matches, its `public_key`
-is in the key chain, and at least one of its copies verifies. Copies that differ
-only in signature spelling are one entry. An implementation tries copies in
-sorted signature order and MUST try at most **8** before refusing the id — the cap
-is part of the law, so that two implementations cannot disagree about a flooded
-entry. An admissible id yields **no** refusal, whatever garbage copies accompany
-it. Any other id yields exactly one: `{ kind, id | null, public_key | null, reason }`
+that is a JSON object and can be canonicalized has one, well-formed or not. An id
+is _admissible_ iff at least one of its copies is well-formed (§4's strictness
+included), its `motebit_id` matches, its `public_key` is in the key chain, and at
+least one well-formed copy verifies.
+
+**Nothing a party with no key can add may change the outcome for an id.** A
+consumer unions what several stores serve, and one of them may be hostile or
+merely unverifying, so beside an authentic entry there may be any number of
+copies of its body under garbage signatures, and copies that canonicalize to the
+same id and signature while not being well-formed (canonical JSON skips an
+`undefined` value). Therefore: a well-formed copy is never displaced by one that
+is not; **every** distinct well-formed copy is tried — an implementation MUST NOT
+cap the number, since a cap lets that many garbage copies which sort first
+suppress an authentic retirement; and an admissible id yields **no** refusal,
+whatever accompanies it. Bounding the cost of a flood is the job of whoever
+supplies the input (§9), where it can be done without changing the answer.
+
+Any other id yields exactly one refusal `{ kind, id, public_key | null, reason }`
 with the reason the FIRST that applies of `malformed`, `wrong_motebit`,
-`untrusted_key`, `bad_signature`. Refusals are sorted, and never silently discarded.
+`untrusted_key`, `bad_signature`; `public_key` is the key the entry claimed, when
+it is a string. Inputs with no id — not a JSON object, or not canonicalizable —
+cannot be told apart and are **one** refusal with `id` and `public_key` null.
+Refusals are sorted, and never silently discarded.
 
 **Step 2 — Rule A: authority flows forward only.** An admissible retirement `R`
 ends an admissible enrolment `E` iff `R.enrollment_id = id(E)` **and**
@@ -220,8 +233,14 @@ ends an admissible enrolment `E` iff `R.enrollment_id = id(E)` **and**
 from an older epoch — which after a rotation may be held by whoever took the
 machine — can never end an enrolment made under a newer key; and a retirement
 signed before a rotation keeps ending what it ended, because the comparison does
-not change when the chain grows. Retirements naming ids not yet seen are
-retained as tombstones, and take effect when the enrolment appears.
+not change when the chain grows.
+
+A retirement naming an id **not present in the input** is retained and reported
+as a _pending tombstone_, with the highest epoch that named it, so that it takes
+effect when the enrolment appears. A retirement naming an enrolment that IS
+present is not reported separately: its whole effect is in Step 3's three sets,
+and a list that included one Rule A ignores would let a reader mistake a stolen
+old key's attempt for a machine being retired.
 
 **Step 3 — Rule B: a machine's status is a function of its highest-epoch
 enrolments only.** The unit of the roster is the machine (`device_id`), not the
@@ -340,6 +359,16 @@ about membership.
 
 ## 9. Security considerations
 
+**A store holds only what verifies.** A store keys entries by id (§4), and the id
+excludes the signature — so a store that accepted an unverified copy would let
+anyone who has seen a retirement send its body under a junk signature first,
+occupy the slot, and turn the authentic one into a "no-op". A store MUST verify an
+entry's signature under the key it names before holding it, and MUST NOT let a
+copy that does not verify stand in for one that does. This is integrity only and
+needs no trust decision. A store SHOULD also bound what one presentation and one
+motebit may carry: that, and not a cap inside the reduction, is where a flood is
+limited.
+
 **Replication, and the offline machine.** Entries do not live only on the
 machine they describe. Every surface that holds the motebit's identity key
 SHOULD keep the full set it last verified and present all of it — retirements
@@ -393,9 +422,7 @@ never required to have one.
 
 **A store's own key record is not the trust root.** A store's notion of a
 motebit's key is mutable state, and a device registry records whichever key a
-registration carried (`spec/device-self-registration-v1.md`). A store MAY verify
-entries at ingest as defence in depth; a consumer MUST verify against its own
-key chain regardless.
+registration carried (`spec/device-self-registration-v1.md`). A store MAY additionally refuse entries under keys it does not associate with the motebit, as defence in depth; a consumer MUST reduce against its own key chain regardless.
 
 **Self-asserted time.** `enrolled_at` and `retired_at` are claims by the signer.
 A store that records when it received an entry MUST label that value as its own

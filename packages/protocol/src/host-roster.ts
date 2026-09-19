@@ -8,7 +8,8 @@
  *
  * The roster is a SET, not a chain: entries are unordered, each is
  * identified by the SHA-256 of its signed body, and the roster is
- * every enrolment no retirement names. Every machine of a motebit holds
+ * every MACHINE with an enrolment, at its highest epoch, that no
+ * retirement ends. Every machine of a motebit holds
  * the same identity key and nothing coordinates them, so concurrent
  * writers are the normal case — and a set needs no merge.
  *
@@ -81,9 +82,12 @@ export interface HostRetirement {
    */
   enrollment_id: string;
   /**
-   * Hex of the identity public key that signs this retirement. ANY
-   * holder of the motebit's key may retire any machine — a lost machine
-   * cannot sign its own exit, so the phone retires the VPS.
+   * Hex of the identity public key that signs this retirement. A lost
+   * machine cannot sign its own exit, so any holder of a key at an epoch
+   * NO OLDER than the enrolment's may retire it — the phone retires the
+   * VPS. Authority flows forward only: a key from an older epoch, which
+   * after a rotation may be in a thief's hands, never ends an enrolment
+   * made under a newer one.
    */
   public_key: string;
   /** Unix ms — a non-negative safe INTEGER — self-asserted. Informational; never ordered by. */
@@ -132,7 +136,10 @@ function hasExactly(v: Record<string, unknown>, keys: readonly string[]): boolea
 }
 
 // Unix ms is an integer: a float is a cross-language id hazard.
-const isUnixMs = (n: unknown): boolean => Number.isSafeInteger(n) && (n as number) >= 0;
+// `-0` too: `JSON.parse("-0")` is -0 and it canonicalizes to "0" — the same
+// id and signature as 0 — so admitting it makes a verdict order-dependent.
+const isUnixMs = (n: unknown): boolean =>
+  Number.isSafeInteger(n) && (n as number) >= 0 && !Object.is(n, -0);
 
 function hasSignedShape(v: Record<string, unknown>): boolean {
   return (
