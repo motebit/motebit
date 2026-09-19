@@ -170,6 +170,10 @@ const BACKTICK_IDENT = /`([A-Za-z_][A-Za-z0-9_]*)`/g;
  */
 const IDENTIFIER_ALLOWLIST: Record<string, string> = {
   // ----- Anticipated future symbols (named ahead of landing) -----
+  HostEnrollment:
+    "anticipated future type — `machine-roster.md` names the sovereign-signed membership artifact ahead of its landing (increment 1: `@motebit/protocol` type, `@motebit/crypto` sign/verify, wire schema, spec). Listed explicitly even though the root CLAUDE.md index entry happens to satisfy the corpus lookup — a doc citing a doc is not a resolution.",
+  HostRetirement:
+    "anticipated future type — `machine-roster.md` names the signed exit that ends a `HostEnrollment`; lands in the same increment as the enrolment, because the doctrine refuses to ship create without delete.",
   resolveFeltMemory:
     "anticipated future symbol — `felt-interior.md` §5 names the canonical entry point for the memory felt record (parallel to the shipped `resolveFeltConsolidation`); lands in `@motebit/panels`'s memory controller when the increment ships.",
   FeltMemoryRecord:

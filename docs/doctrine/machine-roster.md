@@ -1,0 +1,98 @@
+# The machine roster — a motebit knows its machines; a relay only knows who is connected
+
+**"Every machine" is a statement about a set. The sovereign signs the set's membership; the relay observes only its liveness; and no surface may say "every", "all" or "nothing" about a motebit's machines from liveness alone.**
+
+This is [`settlement-authority-binding.md`](settlement-authority-binding.md)'s move applied to topology. There, a relay transports where an agent is paid and never creates that authority. Here, a relay transports which machines a motebit runs on and never creates that fact by noticing who happens to be connected.
+
+## The hole (verified from the bytes, twice)
+
+Two attempts to make a verb reach "every machine" were built and withdrawn: the halt broadcast (#681, five review rounds) and the composed `halt-status` (#687 → PR #690, two). The second was built read-first against two real runtimes, its machinery went green in one pass, and 22 production lines were tamper-checked red. It was withdrawn anyway, because the defect was upstream of all of it:
+
+- `connections: Map<motebitId, ConnectedDevice[]>` (`services/relay/src/websocket.ts`) holds **live sockets only**, and `onClose` removes them. A motebit whose VPS daemon is down has, as far as the relay can see, one machine — so "asked every machine" returned HTTP 200 "Running — nothing is halted" with the VPS never mentioned. The `unreached` outcome existed only in the instant between a socket dying and being reaped.
+- Membership was a **query string**. `?device_id=` and `?capabilities=` are typed into a URL; any socket could add itself to the set, and any unverified one could veto composition for the rest.
+- The many-machine refusals `#686` shipped (`REFUSE_ON_MANY_MACHINES`, `PER_MACHINE_DATABASE_COMMANDS` in `services/relay/src/command-route.ts`) count the same live sockets. They are correct only while every machine is online.
+
+Thirty-odd review findings across the two attempts reduce to one sentence: **the relay inferred the set it was reporting against.** Patching the edges of a set with no owner does not converge.
+
+## A machine is not a principal
+
+The realisation that fixes the shape. Since Link Device shipped, every device linked with key transfer holds the **same** Ed25519 identity key (one motebit = one wallet = one address) — and a device linked without it holds a key that can sign neither a remote command nor anything below, so it is not part of this question. Among the machines that matter, a `device_id` is a label under one key, not a key of its own.
+
+So "is this socket _really_ the VPS?" has no cryptographic answer at the software rung, and does not need one. A token whose `did` names the VPS proves that _a holder of this motebit's key says so_ — and a holder of that key is the sovereign, who could sign `resume all` regardless. The relay never adjudicates between holders of one sovereign key ([`atom-loop-occupant.md`](atom-loop-occupant.md): attribution terminates at the signer; there is no one behind the signer to appeal to).
+
+That relocates the problem. The roster's job was never security _between_ machines. It is **completeness** — the denominator — and completeness has three adversaries, none of them an impostor:
+
+- **Absence.** A machine that is offline must still be a line in the answer.
+- **Ambiguity.** Two hosts that share a `device_id` (a copied `~/.motebit/config.json`) are one machine to everyone downstream.
+- **Omission.** A relay — buggy, stale, or hostile — that returns fewer machines than exist.
+
+The one place a machine _is_ a principal is hardware: a Secure Enclave / TPM key is per-machine and non-exportable, and `DeviceRegistration.hardware_attestation_credential` already carries it. That is the rung that defeats ambiguity outright. Per [`hardware-attestation.md`](hardware-attestation.md) it is additive — it strengthens a roster line, it is never required to have one.
+
+## The shape: membership is signed, liveness is observed, and they never mix
+
+Two categories, held apart the way [`records-vs-acts.md`](records-vs-acts.md) and [`operator-transparency.md`](operator-transparency.md) (declared vs proven) hold theirs:
+
+**Membership — sovereign-signed, relay-transported.** A machine that hosts unattended work says so with a **`HostEnrollment`**: `{ motebit_id, device_id, public_key, enrolled_at, suite, signature }`, signed by the motebit's identity key and naming it. Leaving is a **`HostRetirement`** naming the enrolment it ends — a **signed act**, never a timeout: a machine silent for a year is still a line ("not seen since …") until its sovereign says otherwise, because silently dropping a machine is how "every" becomes false again. Subject = signer, so both are receipt-family, not attestations ([`evals-as-attestations.md`](evals-as-attestations.md)). The relay stores each artifact and serves it **verbatim**; it never mints, edits or infers one.
+
+The body carries only what stays true for the life of the membership. **Not** what the machine runs — `motebit run` today and `motebit serve` tomorrow would need a re-sign, and a roster line is a _machine_, one line for two executors; capabilities stay socket-announced and are reported as liveness ("last announced"). **Not** a display name — a user label would be served verbatim forever; it lives beside the signed bytes, not in them. `enrolled_at` is self-asserted and is never ordered by; the relay records its own `received_at`, labelled as relay-observed.
+
+The roster is a **set, not a chain.** Every enrolling machine holds the same key and nothing coordinates them, so concurrent writers are the normal case, not the edge — and a linear history would need either the relay as sequencer (which makes it relay-authored) or merge nodes a scalar back-pointer cannot express. So entries are unordered, each identified by the SHA-256 of its canonical bytes; the roster is every enrolment not named by a retirement; and merging two copies is set union. There are no forks to resolve because there is no order to disagree about. **Remove wins, and is terminal for that entry**: a replayed old enrolment cannot resurrect a retired one, because the retirement names its hash.
+
+Retirement is signed by **any holder of the key, not by the machine leaving** — which is the whole answer to "a dead machine cannot retire itself": the phone retires the VPS. And a machine that finds itself retired does **not** silently re-enrol, or retiring would not be durable; it is reported as its own, louder line — _retired, but connected_ — and rejoins only by an explicit act that mints a new entry. Auto-enrol re-presents the **same stored bytes** on every start; it never mints per start, or the set grows with every reboot.
+
+**Which key, and what rotation does.** A consumer verifies an entry against the motebit's identity key as _it_ knows it — its own key, or a key time-valid in the succession chain (`verifyKeyBindingAtTime`, [`identity-binding-verification.md`](identity-binding-verification.md)) — never against the relay's say-so. The relay's own check at ingest is defence in depth. It must not be the root: the relay's notion of a motebit's key is a mutable row, and the device registry beside it records whichever key a registration carried. (`spec/device-self-registration-v1.md` gives the relay a durable _row_ per device but keeps no signature and was never identity-signed — a tenth of a substrate, not half, which is why this is a new artifact.) Because every machine holds one key, **rotation is the remedy for a lost or stolen machine**, and it is a membership epoch: machines that receive the new key re-enrol under it, superseding their own old-key line. A line that never re-enrols is exactly the machine that was cut off, and it is shown as that — _holds a superseded key; cannot be reached from here_ — until retired. It is not dropped: rotating a key does not stop the old machine running.
+
+**Liveness — relay-observed, labelled as such.** What a relay legitimately knows, and a transport fact — never evidence about membership. It is defined, not assumed:
+
+- A socket annotates a roster line only when it is **bound** to it: the socket's signed token names that `device_id` as its `did`, and verified under the enrolment's signer key. A query string binds nothing.
+- `connected` is a claim the relay may make only behind a heartbeat with a deadline. Today there is no ping/pong reaper, so a half-open socket reads as open (#691); until there is one, the honest word is _socket open_.
+- `last_seen_at` is **one overwritten value per line** — written on disconnect and on a coarse periodic flush — never a history, deleted a stated number of days after retirement, and named in the operator's declaration. "Not seen since …" has to survive a deploy, so it is persisted; an activity log is not what this is.
+- A socket announcing `unattended_runtime` that is **not enrolled** is not added to the set and cannot veto it. It is reported beside the set as what it is: _a connection the roster does not know._
+
+The law that joins them: **a quantified statement about a motebit's machines ("all reported", "nothing is halted", "refused: N machines") is computed over MEMBERSHIP and annotated with LIVENESS — never computed over liveness.** Every defect in the hole above is a violation of this one sentence.
+
+Enrolling is automatic and silent. `motebit run` and `motebit serve` _are_ hosting unattended work when they start, so they enrol idempotently with the key they already hold — no affordance, no toast. Retiring is explicit (`motebit machines retire <id>`, and the phone's equivalent), because it changes what "every" means.
+
+## The ladder: how much of "complete" a consumer can check for itself
+
+Additive, like the identity-binding ladder. Nothing below needs a field the first increment lacks: an entry's id is its hash, and a later optional field is already an additive change — so nothing is carried "for later".
+
+- **relay-listed** — the consumer verifies each entry's signature, and trusts the relay to have returned all of them. Defeats absence. Does **not** defeat omission, and says so.
+- **set-pinned** — the consumer remembers the entry ids it has verified. A relay serving fewer — without presenting the retirements that account for the difference — is detected offline: _served ⊇ remembered, modulo presented retirements._ What this cannot detect is omission of an entry the consumer never saw; that is a freshness problem, and no structure held by one consumer solves it.
+- **anchored** — a commitment to the sorted entry ids joins the identity-transparency log (`services/relay/src/identity-log.ts`) as a versioned leaf or a sibling log — never by changing the existing leaf, which is foundation-law wire shape. Non-equivocation across consumers; this is the rung that answers freshness.
+- **hardware-attested line** — orthogonal to the three above: a line whose machine proved a non-exportable key. The only rung that defeats ambiguity.
+
+At the software rung ambiguity is **prevented, not detected**: a new machine MUST mint a fresh `device_id` (an installer requirement, #685; `motebit restore` already does). The relay persists no network origin, so the one hint available is in-memory: two concurrent sockets bound to one line under the same executor id, which one-coordinator-per-machine makes impossible on a single host. A hint for `motebit doctor`, never a verdict.
+
+## Every surface is a replica
+
+"Lose the relay's copy and the roster re-forms" is only true if the machines that are _offline_ re-form with it — and an offline machine cannot re-present anything. So the entries do not live on the machine they describe. **Every key-holding surface, the phone included, keeps the full set it last verified** (set-pinning needs that cache anyway) and presents all of it — retirements too — whenever it connects. Relay ingest is an idempotent union with no freshness window: these are durable artifacts, not requests. Any one surviving surface repopulates any store.
+
+| What goes wrong                           | What happens                                                                                                                                                                    |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The relay loses its database              | The first surface to connect re-presents the whole set, offline machines included.                                                                                              |
+| A machine is offline for months           | Still a line, still counted: a halt stays _partial_, which is the fail-safe direction. Presentation may call it dormant and offer to retire it; the quantifier does not change. |
+| A machine is lost, stolen, or reinstalled | Any key-holder retires it — from the phone if that is what is in hand. If the key went with it, rotate: it becomes a superseded-key line.                                       |
+| Two hosts share one `device_id`           | One line, undetectable at the software rung. Prevented at install; defeated only by the hardware rung.                                                                          |
+| A relay omits a member                    | Detected by set-pinning if this consumer ever saw it; otherwise only at the anchored rung. Stated, not hidden.                                                                  |
+| A retired machine comes back              | _Retired, but connected_ — named, never silently re-enrolled, never silently ignored.                                                                                           |
+
+## What the roster is NOT
+
+- **Not an admission gate.** An unenrolled machine still runs, still halts locally, still answers a command addressed to it. Enrolment makes a machine _countable_; it never makes it _permitted_. Same posture as hardware attestation and the commitment bond: additive, never a gate.
+- **Not a relay-authored fact.** Every entry is signed by the sovereign and held by every one of the sovereign's surfaces; the relay's copy is a cache any of them can rebuild (above). Relay rule 7 holds: nothing here is a relay-only assertion.
+- **Not a device list.** The phone and the web app are devices and are not on it. The roster is the machines where work happens _while nobody is watching_ — the set a halt must reach ([`surface-authority-model.md`](surface-authority-model.md): mobile is the consent root, never an execution surface).
+- **Not a global registry.** It is first-person: a motebit's own machines, signed by its own key, readable by its own surfaces. The relay does not publish, rank or aggregate rosters.
+
+## Increments
+
+0. **This doctrine.** Reviewed independently before any code; six required changes taken (set not chain; every surface a replica; the verification key and rotation; the exit's semantics; nothing mutable in the signed body; liveness defined).
+1. **The artifacts, the entrance and the exit — together.** Never ship create without delete. `HostEnrollment` + `HostRetirement` in `@motebit/protocol`; sign/verify in `@motebit/crypto` (suite-dispatch); zod + committed JSON Schema in `@motebit/wire-schemas`; an open spec. Relay: one table of verbatim entry bytes keyed by `(motebit_id, entry_id)`, idempotent-union ingest, served verbatim beside a clearly labelled liveness block; `DECLARATION_CONTENT` + `PRIVACY.md` name the new retained records and their windows in the same PR (relay rule 11). No new token audience — security is in the artifact. Clients: `run` / `serve` mint once, store, and present the full cached set on connect; `motebit machines` and `motebit machines retire <id>`, with the phone's equivalents, in the same pass.
+2. **A heartbeat the word "connected" can stand on** (#691): app-level ping with a deadline, newest-socket-first delivery. Its own change — it fixes `halt` on one machine today, and it is merged code.
+3. **`halt-status` over the roster (#687).** The withdrawn branch's machinery, re-aimed: one line per _enrolled_ machine; an offline one is named; an unenrolled peer is reported beside the set, never inside it; a line binds to the socket the frame was sent on. The drift gate over roster quantifiers lands here (unbuilt, so unnamed — a citation is a promise): in the relay's command route, no branch may derive a machine count from `connections` alone.
+4. **A halt that is a state, not a message — then `halt` / `resume` over the roster (#681).** The roster says who missed a halt; nothing yet re-delivers it. A command envelope is fresh for five minutes and a halt store is machine-local, so a member offline at halt time reconnects **un-halted**. Reaching every machine therefore needs level-triggered desired state — a durable signed halt delivered on reconnect to every member — which a request envelope cannot be. Design that first. Deliver to members _and_ any live unattended socket; quantify over members only. The refusals `#686` shipped move from live-socket counts to membership.
+5. **set-pinned** on every consuming surface. **anchored** and **hardware-attested line** are deferred-with-trigger: the first third party that must verify a motebit's topology, and the first sovereign with two machines that both hold hardware keys.
+
+## Cross-cuts
+
+[`daemon-desktop-unification.md`](daemon-desktop-unification.md) (one coordinator per machine — a roster line is a _machine_, so `run` + `serve` on a host are one line, two executors) · [`always-on host decision` (#685)](https://github.com/motebit/motebit/issues/685) ("uptime is the union of your machines' uptimes" — the roster is that union's index, and the awake record `#688` ships is each line's history) · [`felt-interior.md`](felt-interior.md) (the owner can _see_ where their motebit lives: a calm record, never a dashboard) · [`composition-preserves-enforcement.md`](composition-preserves-enforcement.md) (a guarantee quantified over the wrong set is `silent`-class: every component correct, the composed claim false).
