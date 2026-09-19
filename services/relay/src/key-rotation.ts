@@ -16,6 +16,7 @@ import {
 import { insertRevocationEvent } from "./federation.js";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
+import { identityHoldsKey, rekeyDevicesOnSuccession } from "./identity-key-authority.js";
 
 const logger = createLogger({ service: "key-rotation" });
 
@@ -75,6 +76,17 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
   /** @spec motebit/identity@1.0 */
   app.post("/api/v1/agents/:motebitId/rotate-key", async (c) => {
     const motebitId = c.req.param("motebitId");
+    // A succession is the identity's own act. A record is self-verifying
+    // about its two keys and says nothing about WHICH identity it belongs
+    // to (the signed payload carries no motebit_id), so without this any
+    // authenticated caller could record one under any identity. The
+    // operator's master token carries no caller identity and passes.
+    const caller = c.get("callerMotebitId" as never) as string | undefined;
+    if (caller != null && caller !== motebitId) {
+      throw new HTTPException(403, {
+        message: "a key succession may be presented only under the identity it rotates",
+      });
+    }
     const body = await c.req.json<KeySuccessionRecord>();
 
     if (
@@ -133,6 +145,17 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
         message: "Succession old_public_key does not match stored public key",
       });
     }
+    // No registry key to depart from: the record must still depart from a
+    // key this identity HOLDS here. Otherwise two keys nobody has ever
+    // seen become this identity's recorded history.
+    if (
+      !(storedAgent && storedAgent.public_key) &&
+      !identityHoldsKey(moteDb.db, motebitId, body.old_public_key)
+    ) {
+      throw new HTTPException(400, {
+        message: "Succession old_public_key is not a key this identity holds at this relay",
+      });
+    }
 
     moteDb.db
       .prepare(
@@ -153,6 +176,9 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     moteDb.db
       .prepare(`UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?`)
       .run(body.new_public_key, motebitId);
+    // The old key stops being a credential HERE, in the same step: a
+    // device row's key is what an owner token is verified against.
+    rekeyDevicesOnSuccession(moteDb.db, motebitId, body.old_public_key, body.new_public_key);
 
     return c.json({ ok: true, motebit_id: motebitId });
   });

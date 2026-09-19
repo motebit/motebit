@@ -119,6 +119,7 @@ import {
   buildSignedRevocationFeed,
 } from "./agent-revocation.js";
 import { createLogger } from "./logger.js";
+import { refuseGuardianInstall, rekeyDevicesOnSuccession } from "./identity-key-authority.js";
 
 const logger = createLogger({ service: "agents" });
 
@@ -611,6 +612,10 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
     }
 
     c.set("callerMotebitId" as never, claims.mid);
+    // Which device row the token was verified against — a handler that
+    // must know whether the caller proved the IDENTITY key, or only a
+    // linked device's own, resolves it from this (identity-key-authority.ts).
+    c.set("callerDeviceId" as never, claims.did);
     await next();
   });
 }
@@ -1147,6 +1152,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // --- Succession chain validation on re-registration ---
     // If the agent already has a stored public key and the new key differs,
     // require a valid succession record proving key lineage.
+    let rotatedFromKey: string | null = null;
     const existingAgent = moteDb.db
       .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
       .get(motebitId) as { public_key: string } | undefined;
@@ -1215,6 +1221,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
           succession.guardian_signature ?? null,
         );
 
+      rotatedFromKey = existingAgent.public_key;
       logger.info("agent.key.succession_on_register", {
         motebitId,
         oldKey: existingAgent.public_key.slice(0, 16) + "...",
@@ -1283,6 +1290,20 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       // Guardian key ≠ identity key (§3.3)
       if (claimedGuardianKey === publicKey) {
         throw new HTTPException(400, { message: "Guardian key must not equal identity key" });
+      }
+      // The attestation above proves the GUARDIAN consents. It says nothing
+      // about the identity consenting — and a guardian can recover the
+      // identity to any key. Read-only, so a refusal writes nothing.
+      const guardianRefusal = refuseGuardianInstall(moteDb.db, {
+        motebitId,
+        // Mid-rotation, the token was verified under the key being rotated AWAY from.
+        identityKey: rotatedFromKey ?? publicKey,
+        claimedGuardianKey,
+        firstPerson: callerMotebitId != null,
+        callerDeviceId: c.get("callerDeviceId" as never) as string | undefined,
+      });
+      if (guardianRefusal != null) {
+        throw new HTTPException(guardianRefusal.status, { message: guardianRefusal.message });
       }
       guardianPublicKey = claimedGuardianKey;
     }
@@ -1372,6 +1393,11 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         settlementModes ?? "relay",
         sweepThreshold,
       );
+    // The sibling of `/rotate-key`'s re-key, in the same synchronous step
+    // as the write that made the new key the identity's.
+    if (rotatedFromKey != null) {
+      rekeyDevicesOnSuccession(moteDb.db, motebitId, rotatedFromKey, publicKey);
+    }
 
     // Auto-create a default service listing if one doesn't exist.
     // Registration populates agent_registry (for discovery); routing reads from

@@ -597,6 +597,12 @@ The nine routes below are the binding cross-implementation contract for identity
 - `GET /api/v1/agents/:motebitId/approvals/:approvalId` — read approval state.
 - `GET /api/v1/identity/:motebitId` — resolve the binding material a third party needs to verify a receipt's producer: current key, succession chain, and (once anchored) a Merkle inclusion proof against an on-chain root (§7.6).
 
+A relay that accepts bearer tokens verified against per-device key records carries three obligations on these routes, because at such a relay a key record is a credential:
+
+1. **A succession is the identity's own act.** `rotate-key` MUST refuse a record presented under a token for any other `motebit_id`: the signed payload (§3.8.1) names two keys and no identity, so the record alone cannot say whose history it belongs to. The record's `old_public_key` MUST equal the key the relay holds for the identity, or — where it holds none — a key some device of that identity is registered with.
+2. **A rotation ends the old key.** In the same step that records a succession, the relay MUST replace the old key in every device record of that identity that held it. A device registered under its own key (linked without key transfer) is not the identity's key and MUST be left unchanged. Rotation is the remedy for a lost or stolen machine (§8.2); a relay that goes on verifying tokens against the rotated-away key has recorded the remedy without applying it. A machine that has not yet received the new key is refused until it does.
+3. **A guardian is installed by the identity key.** The guardian `attestation` (§3.3) proves the guardian's consent, not the identity's. A relay MUST accept a guardian for an identity only from a caller whose token was verified under the identity key, and MUST NOT replace an installed guardian as a side effect of registration (§3.3.1: the identity key holder must cooperate). A guardian can recover an identity to any key (§3.8.3), so who may install one is who may take the identity.
+
 ## 7.6 Identity-Binding Transparency
 
 `GET /api/v1/identity/:motebitId` is unauthenticated and answers the _binding_ question — does this public key really belong to this `motebit_id`? — that signature integrity alone can never establish ([`docs/doctrine/identity-binding-verification.md`](../docs/doctrine/identity-binding-verification.md)).
