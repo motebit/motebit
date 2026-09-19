@@ -770,17 +770,18 @@ export function hostRetirementId(retirement: HostRetirement): Promise<string>;
 
 // @public (undocumented)
 export interface HostRosterEntry {
-    // (undocumented)
-    enrollment: HostEnrollment;
+    body: Omit<HostEnrollment, "signature">;
     // (undocumented)
     enrollment_id: string;
 }
 
 // @public
 export interface HostRosterMachine {
+    authenticated: boolean;
     // (undocumented)
     device_id: string;
     entries: HostRosterEntry[];
+    epoch: number;
 }
 
 // @public (undocumented)
@@ -789,24 +790,31 @@ export interface HostRosterRejection {
     // (undocumented)
     kind: "enrollment" | "retirement";
     public_key: string | null;
-    // (undocumented)
     reason: "malformed" | "wrong_motebit" | "untrusted_key" | "bad_signature";
 }
 
-// @public (undocumented)
-export interface HostRosterTombstone {
-    // (undocumented)
-    enrollment_id: string;
-    scope: "any" | "superseded_only";
-}
-
 // @public
+export type HostRosterResult = {
+    ok: false;
+    reason: "empty_chain" | "malformed_key" | "duplicate_key";
+} | ({
+    ok: true;
+} & HostRosterVerdict);
+
+// @public (undocumented)
 export interface HostRosterVerdict {
     active: HostRosterMachine[];
+    chain_head: {
+        epoch: number;
+        public_key: string;
+    };
     rejected: HostRosterRejection[];
     retired: HostRosterMachine[];
     superseded: HostRosterMachine[];
-    tombstones: HostRosterTombstone[];
+    tombstones: Array<{
+        enrollment_id: string;
+        epoch: number;
+    }>;
 }
 
 export { IdentityBindingVerdict }
@@ -934,6 +942,9 @@ export interface KeySuccessionRecord {
 
 // @public
 export type KnownKeys = Map<string, Uint8Array>;
+
+// @public
+export const MAX_SIGNATURE_COPIES_TRIED = 8;
 
 // @public
 export function mintAudienceToken(input: MintAudienceTokenInput, privateKey: Uint8Array): Promise<MintedAudienceToken>;
@@ -1497,10 +1508,10 @@ export function signHorizonWitness(cert: Extract<DeletionCertificate, {
 export function signHorizonWitnessRequestBody(body: HorizonWitnessRequestBody, privateKey: Uint8Array): Promise<string>;
 
 // @public (undocumented)
-export function signHostEnrollment(enrollment: Omit<HostEnrollment, "signature" | "suite">, identityPrivateKey: Uint8Array): Promise<HostEnrollment>;
+export function signHostEnrollment(enrollment: Omit<HostEnrollment, "signature" | "suite" | "type">, identityPrivateKey: Uint8Array): Promise<HostEnrollment>;
 
 // @public (undocumented)
-export function signHostRetirement(retirement: Omit<HostRetirement, "signature" | "suite">, identityPrivateKey: Uint8Array): Promise<HostRetirement>;
+export function signHostRetirement(retirement: Omit<HostRetirement, "signature" | "suite" | "type">, identityPrivateKey: Uint8Array): Promise<HostRetirement>;
 
 // @public
 export function signInvoice(input: Omit<InvoiceV1, "signature" | "suite">, issuerPrivateKey: Uint8Array): Promise<InvoiceV1>;
@@ -1949,11 +1960,10 @@ export function verifyHostRetirement(retirement: HostRetirement): Promise<boolea
 // @public
 export function verifyHostRoster(input: {
     motebitId: string;
-    trustedKeys: readonly string[];
-    supersededKeys?: readonly string[];
+    keyChain: readonly string[];
     enrollments: readonly HostEnrollment[];
     retirements: readonly HostRetirement[];
-}): Promise<HostRosterVerdict>;
+}): Promise<HostRosterResult>;
 
 // @public
 export function verifyIdentityBindingAnchored(identity: MotebitIdentityFile, signingKeyHex: string, atTimestampMs: number, proof: IdentityLogInclusionProof, guardianPublicKeyHex?: string): Promise<KeyBindingResult>;

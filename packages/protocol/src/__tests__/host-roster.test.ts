@@ -4,29 +4,39 @@
  * whether the signer speaks for the motebit.
  */
 import { describe, it, expect } from "vitest";
-import { HOST_ROSTER_SPEC_ID, isHostEnrollment, isHostRetirement } from "../index.js";
+import {
+  HOST_ROSTER_SPEC_ID,
+  HOST_ENROLLMENT_TYPE,
+  HOST_RETIREMENT_TYPE,
+  isHostEnrollment,
+  isHostRetirement,
+} from "../index.js";
 
 const KEY = "ab".repeat(32);
 const enrollment = {
+  type: "motebit/host-enrollment@1",
   motebit_id: "019d903f-13de-75a4-8341-58319e0a2f16",
   device_id: "01a04bb5-9c87-7d2c-bc6c-2f4cd3ce11d8",
   public_key: KEY,
   enrolled_at: 1_776_239_454_545,
   suite: "motebit-jcs-ed25519-b64-v1",
-  signature: "sig",
+  signature: "A".repeat(86),
 };
 const retirement = {
+  type: "motebit/host-retirement@1",
   motebit_id: enrollment.motebit_id,
   enrollment_id: "cd".repeat(32),
   public_key: KEY,
   retired_at: 1_776_239_999_999,
   suite: "motebit-jcs-ed25519-b64-v1",
-  signature: "sig",
+  signature: "A".repeat(86),
 };
 
 describe("machine roster guards", () => {
   it("names its spec", () => {
     expect(HOST_ROSTER_SPEC_ID).toBe("motebit/machine-roster@1.0");
+    expect(HOST_ENROLLMENT_TYPE).toBe("motebit/host-enrollment@1");
+    expect(HOST_RETIREMENT_TYPE).toBe("motebit/host-retirement@1");
   });
 
   it("accepts a well-formed enrolment and retirement", () => {
@@ -56,8 +66,15 @@ describe("machine roster guards", () => {
     // As strict as the wire schema: every field but `signature` is signed,
     // so an extra one would verify and must be refused on shape.
     ["an unknown field", { ...enrollment, hosts: ["run"] }],
-    ["a padded signature", { ...enrollment, signature: "c2ln==" }],
-    ["a standard-base64 signature", { ...enrollment, signature: "ab+/" }],
+    ["a padded signature", { ...enrollment, signature: `${"A".repeat(86)}==` }],
+    ["a standard-base64 signature", { ...enrollment, signature: `${"A".repeat(84)}+/` }],
+    ["a signature that is not 64 bytes", { ...enrollment, signature: "A".repeat(85) }],
+    // The LITERAL suite and tag: a guard narrowing to a type whose
+    // `suite` is one string while accepting any is a lie tsc believes.
+    ["another registered suite", { ...enrollment, suite: "motebit-jcs-ed25519-hex-v1" }],
+    ["no domain tag", (({ type: _t, ...rest }) => rest)(enrollment)],
+    ["the retirement's tag", { ...enrollment, type: "motebit/host-retirement@1" }],
+    ["the next major's tag", { ...enrollment, type: "motebit/host-enrollment@2" }],
     ["a missing suite", { ...enrollment, suite: undefined }],
     ["a missing signature", { ...enrollment, signature: undefined }],
   ])("refuses an enrolment with %s", (_label, value) => {
@@ -72,6 +89,8 @@ describe("machine roster guards", () => {
     ["a non-finite time", { ...retirement, retired_at: Infinity }],
     ["a float time", { ...retirement, retired_at: 0.5 }],
     ["an unknown field", { ...retirement, reason: "lost" }],
+    ["the enrolment's tag", { ...retirement, type: "motebit/host-enrollment@1" }],
+    ["an unknown suite", { ...retirement, suite: "rot13" }],
     ["empty motebit_id", { ...retirement, motebit_id: "" }],
     ["a missing signature", { ...retirement, signature: 7 }],
     ["a missing suite", { ...retirement, suite: null }],

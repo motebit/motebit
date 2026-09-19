@@ -49,7 +49,10 @@ const suite = z
 
 const signature = z
   .string()
-  .regex(/^[A-Za-z0-9_-]+$/, "signature MUST be unpadded URL-safe base64")
+  .regex(
+    /^[A-Za-z0-9_-]{86}$/,
+    "signature MUST be 86 characters of unpadded URL-safe base64 (a 64-byte Ed25519 signature)",
+  )
   .describe(
     "Base64url Ed25519 signature over canonicalJson of every field except `signature`, by `public_key`.",
   );
@@ -60,6 +63,11 @@ const signature = z
 
 export const HostEnrollmentSchema = z
   .object({
+    type: z
+      .literal("motebit/host-enrollment@1")
+      .describe(
+        "Domain tag, inside the signed body. Separates this artifact from every other signed under the same suite — a device self-registration differs by a single field name — and is how a future major version is expressed in what is signed.",
+      ),
     motebit_id: z.string().min(1).describe("MotebitId whose unattended work this machine hosts."),
     device_id: z
       .string()
@@ -106,6 +114,9 @@ export function buildHostEnrollmentJsonSchema(): Record<string, unknown> {
 
 export const HostRetirementSchema = z
   .object({
+    type: z
+      .literal("motebit/host-retirement@1")
+      .describe("Domain tag, inside the signed body. See HostEnrollment.type."),
     motebit_id: z.string().min(1).describe("MotebitId the retired enrolment belongs to."),
     enrollment_id: z
       .string()

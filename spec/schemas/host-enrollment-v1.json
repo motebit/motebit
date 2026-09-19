@@ -6,6 +6,11 @@
   "description": "A motebit's sovereign-signed statement that a machine hosts its unattended work. One entry in a SET: identified by the lowercase hex SHA-256 of the canonical JSON of its signed body (every field except `signature`), unordered, merged by union. A relay stores and serves it verbatim and never mints one. See spec/machine-roster-v1.md.",
   "type": "object",
   "properties": {
+    "type": {
+      "type": "string",
+      "const": "motebit/host-enrollment@1",
+      "description": "Domain tag, inside the signed body. Separates this artifact from every other signed under the same suite — a device self-registration differs by a single field name — and is how a future major version is expressed in what is signed."
+    },
     "motebit_id": {
       "type": "string",
       "minLength": 1,
@@ -34,10 +39,18 @@
     },
     "signature": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9_-]+$",
+      "pattern": "^[A-Za-z0-9_-]{86}$",
       "description": "Base64url Ed25519 signature over canonicalJson of every field except `signature`, by `public_key`."
     }
   },
-  "required": ["motebit_id", "device_id", "public_key", "enrolled_at", "suite", "signature"],
+  "required": [
+    "type",
+    "motebit_id",
+    "device_id",
+    "public_key",
+    "enrolled_at",
+    "suite",
+    "signature"
+  ],
   "additionalProperties": false
 }

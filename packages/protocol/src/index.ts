@@ -4021,7 +4021,13 @@ export { BOND_COMMITMENT_SPEC_ID, isBondCommitment } from "./bond.js";
 
 // === Machine roster — docs/doctrine/machine-roster.md ===
 export type { HostEnrollment, HostRetirement } from "./host-roster.js";
-export { HOST_ROSTER_SPEC_ID, isHostEnrollment, isHostRetirement } from "./host-roster.js";
+export {
+  HOST_ROSTER_SPEC_ID,
+  HOST_ENROLLMENT_TYPE,
+  HOST_RETIREMENT_TYPE,
+  isHostEnrollment,
+  isHostRetirement,
+} from "./host-roster.js";
 
 // === Cryptosuite Registry ===
 // Every signed wire-format artifact in motebit declares its verification

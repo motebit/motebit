@@ -20,7 +20,26 @@
 
 export const HOST_ROSTER_SPEC_ID = "motebit/machine-roster@1.0" as const;
 
+/**
+ * Domain tags, INSIDE the signed body.
+ *
+ * Without one, a `HostEnrollment` and a device self-registration are the
+ * same suite over `{motebit_id, device_id, public_key, <one time field>,
+ * suite}` — separated by a single field name. And "a new major version"
+ * would have no expression in what is signed: a major-2 artifact with the
+ * same fields would have the same id and a valid signature under both
+ * laws. The body is frozen for the life of major 1
+ * (`spec/machine-roster-v1.md` §10), so the tag goes in now or never.
+ *
+ * Named `type`, not `artifact_type`: that name belongs to the
+ * `ContentArtifactType` closed registry, a different vocabulary.
+ */
+export const HOST_ENROLLMENT_TYPE = "motebit/host-enrollment@1" as const;
+export const HOST_RETIREMENT_TYPE = "motebit/host-retirement@1" as const;
+
 export interface HostEnrollment {
+  /** Domain tag — always `motebit/host-enrollment@1`. Signed. */
+  type: typeof HOST_ENROLLMENT_TYPE;
   /** MotebitId whose unattended work this machine hosts. */
   motebit_id: string;
   /**
@@ -49,6 +68,8 @@ export interface HostEnrollment {
 }
 
 export interface HostRetirement {
+  /** Domain tag — always `motebit/host-retirement@1`. Signed. */
+  type: typeof HOST_RETIREMENT_TYPE;
   /** MotebitId the retired enrolment belongs to. */
   motebit_id: string;
   /**
@@ -77,8 +98,10 @@ export interface HostRetirement {
 // one spelling of a key — the same law `spec/schemas` states for every
 // other hex key on the wire.
 const HEX_32 = /^[0-9a-f]{64}$/;
-// Unpadded URL-safe base64, the one spelling the suite names.
-const BASE64URL = /^[A-Za-z0-9_-]+$/;
+// Unpadded URL-safe base64 of exactly 64 bytes — the one spelling and the
+// one length an Ed25519 signature has.
+const ED25519_SIG_B64URL = /^[A-Za-z0-9_-]{86}$/;
+const SUITE = "motebit-jcs-ed25519-b64-v1";
 
 const ENROLLMENT_KEYS = [
   "device_id",
@@ -87,6 +110,7 @@ const ENROLLMENT_KEYS = [
   "public_key",
   "signature",
   "suite",
+  "type",
 ];
 const RETIREMENT_KEYS = [
   "enrollment_id",
@@ -95,6 +119,7 @@ const RETIREMENT_KEYS = [
   "retired_at",
   "signature",
   "suite",
+  "type",
 ];
 
 // EXACTLY these keys — the guard is as strict as the wire schema. Every
@@ -115,9 +140,11 @@ function hasSignedShape(v: Record<string, unknown>): boolean {
     v.motebit_id !== "" &&
     typeof v.public_key === "string" &&
     HEX_32.test(v.public_key) &&
-    typeof v.suite === "string" &&
+    // The LITERAL. A guard that narrows to a type whose `suite` is one
+    // string while accepting any string is a lie the compiler believes.
+    v.suite === SUITE &&
     typeof v.signature === "string" &&
-    BASE64URL.test(v.signature)
+    ED25519_SIG_B64URL.test(v.signature)
   );
 }
 
@@ -126,6 +153,7 @@ export function isHostEnrollment(value: unknown): value is HostEnrollment {
   const v = value as Record<string, unknown>;
   return (
     hasExactly(v, ENROLLMENT_KEYS) &&
+    v.type === HOST_ENROLLMENT_TYPE &&
     hasSignedShape(v) &&
     typeof v.device_id === "string" &&
     v.device_id !== "" &&
@@ -138,6 +166,7 @@ export function isHostRetirement(value: unknown): value is HostRetirement {
   const v = value as Record<string, unknown>;
   return (
     hasExactly(v, RETIREMENT_KEYS) &&
+    v.type === HOST_RETIREMENT_TYPE &&
     hasSignedShape(v) &&
     typeof v.enrollment_id === "string" &&
     HEX_32.test(v.enrollment_id) &&

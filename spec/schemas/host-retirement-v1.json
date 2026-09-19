@@ -6,6 +6,11 @@
   "description": "A motebit's sovereign-signed end of one HostEnrollment, named by hash. Signed by ANY holder of the motebit's identity key — a lost machine cannot sign its own exit. Remove wins and is terminal for that entry. See spec/machine-roster-v1.md.",
   "type": "object",
   "properties": {
+    "type": {
+      "type": "string",
+      "const": "motebit/host-retirement@1",
+      "description": "Domain tag, inside the signed body. See HostEnrollment.type."
+    },
     "motebit_id": {
       "type": "string",
       "minLength": 1,
@@ -34,10 +39,18 @@
     },
     "signature": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9_-]+$",
+      "pattern": "^[A-Za-z0-9_-]{86}$",
       "description": "Base64url Ed25519 signature over canonicalJson of every field except `signature`, by `public_key`."
     }
   },
-  "required": ["motebit_id", "enrollment_id", "public_key", "retired_at", "suite", "signature"],
+  "required": [
+    "type",
+    "motebit_id",
+    "enrollment_id",
+    "public_key",
+    "retired_at",
+    "suite",
+    "signature"
+  ],
   "additionalProperties": false
 }

@@ -29,7 +29,7 @@ Doctrine: [`docs/doctrine/machine-roster.md`](../docs/doctrine/machine-roster.md
 ### What it is
 
 A **set** of self-verifying, sovereign-signed entries. Unordered. Each entry is
-identified by the hash of its own bytes (§4). The roster is every enrolment no
+identified by the hash of its **signed body** (§4) — never the whole artifact. The roster is every enrolment no
 retirement names (§6). Merging two copies of a roster is set union.
 
 ### What it is not
@@ -74,33 +74,50 @@ validators reject unknown fields.
 
 ```
 HostEnrollment {
+  type:         string   // "motebit/host-enrollment@1" — domain tag, signed
   motebit_id:   string   // MotebitId whose unattended work this machine hosts
   device_id:    string   // the machine — a label under the motebit's key; MUST be minted fresh per machine
   public_key:   string   // 64 lowercase hex chars — the Ed25519 identity key that signs this entry
   enrolled_at:  number   // unix ms — a non-negative integer; self-asserted, informational, never ordered by
   suite:        string   // "motebit-jcs-ed25519-b64-v1"
-  signature:    string   // unpadded base64url — Ed25519 over canonical JSON of all fields except signature
+  signature:    string   // 86 chars of unpadded base64url — Ed25519 over canonical JSON of all fields except signature
 }
 ```
+
+`device_id` is non-empty and compared byte-for-byte, with no normalization. It is
+the same identifier the machine registers under
+(`spec/device-self-registration-v1.md`).
 
 ### 3.2 — HostRetirement
 
 #### Wire format (foundation law)
 
-The end of one enrolment, named by hash. It MAY be signed by **any** holder of
-the motebit's identity key, not only the machine leaving — a lost machine cannot
-sign its own exit. Conformant validators reject unknown fields.
+The end of one enrolment, named by id. A lost machine cannot sign its own exit,
+so it MAY be signed by **any holder of a key at an epoch no older than the
+enrolment's** (§6, Rule A) — the phone retires the VPS. Conformant validators
+reject unknown fields.
 
 ```
 HostRetirement {
+  type:           string   // "motebit/host-retirement@1" — domain tag, signed
   motebit_id:     string   // MotebitId the retired enrolment belongs to
   enrollment_id:  string   // 64 lowercase hex chars — the entry id (§4) of the HostEnrollment being ended
   public_key:     string   // 64 lowercase hex chars — the Ed25519 identity key that signs this retirement
   retired_at:     number   // unix ms — a non-negative integer; self-asserted, informational, never ordered by
   suite:          string   // "motebit-jcs-ed25519-b64-v1"
-  signature:      string   // unpadded base64url — Ed25519 over canonical JSON of all fields except signature
+  signature:      string   // 86 chars of unpadded base64url — Ed25519 over canonical JSON of all fields except signature
 }
 ```
+
+### 3.3 — Why the domain tag
+
+Both bodies carry `type` **inside what is signed**. Without it, a `HostEnrollment`
+and a device self-registration (`spec/device-self-registration-v1.md`) are the
+same suite over `{motebit_id, device_id, public_key, <one time field>, suite}` —
+separated by a single field name. And a future major version would have no
+expression in what is signed: a major-2 artifact with the same fields would have
+the same id and a valid signature under both laws. The field is named `type`
+rather than `artifact_type`, which belongs to the content-artifact registry.
 
 ## 4. Entry identity
 
@@ -124,8 +141,8 @@ exists so that a store can key what it holds and make ingest an idempotent union
 
 An implementation that enrols automatically when a runtime starts MUST re-present
 the artifact it already holds rather than mint a new one per start: a body with
-a fresh `enrolled_at` is a new entry for the same machine (§6 counts it once, but
-retiring the machine then means retiring every such entry).
+a fresh `enrolled_at` is a new entry for the same machine (§6 counts the machine
+once, but retiring it then means retiring every such entry).
 
 Hex is lowercase, timestamps are non-negative integers, and signatures are
 unpadded base64url — everywhere in this spec, and a conformant verifier rejects
@@ -153,86 +170,148 @@ consumer, from keys the consumer already trusts.
 
 ## 6. The roster reduction (foundation law)
 
-Given a `motebit_id`, a set of enrolments, a set of retirements, the consumer's
-**trusted keys** for that motebit, and optionally its **superseded keys**, a
-conformant implementation computes the roster as follows. **The entire result —
-every list in it, including what was refused — MUST NOT depend on the order or
-multiplicity of the inputs:** two reductions of the same set MUST be equal.
+Structurally: a 2P-set per entry (add, then tombstone by id), an observed-remove
+set per machine, and a forward-only epoch guard on removes.
 
-**Trusted keys** are the identity keys the _consumer_ accepts for `motebit_id` —
-its own key, or keys time-valid in the motebit's succession chain
-(`docs/doctrine/identity-binding-verification.md`). They MUST NOT be taken from
-the entries, and MUST NOT be taken on a store's say-so. With no trusted key,
-nothing is trusted and the roster is empty.
+**Inputs.** A `motebit_id`; a **key chain** — the motebit's identity keys ordered
+OLDEST → NEWEST, from a succession chain (`spec/identity-v1.md` §3.8) **the
+consumer verified itself**; a set of enrolments; a set of retirements. The key
+chain MUST NOT be taken from the entries or on a store's say-so. The consumer
+MUST take it from its strongest available binding rung
+(`docs/doctrine/identity-binding-verification.md`) and MUST enforce
+**extension-only** against the chain it last accepted: a chain that is not a
+prefix-extension of that one is a fork, to be refused and surfaced. Resolving a
+forked succession belongs to identity binding, not to the roster.
 
-**Superseded keys** are keys that were the motebit's before a rotation.
+The entire result — every list in it, including what was refused — MUST NOT depend
+on the order or multiplicity of the inputs, and equality of results is over ids
+and signed bodies, never signatures.
 
-**The unit of the roster is the machine (`device_id`), not the entry.** One
-machine may hold several enrolments; it is one member.
+**Step 0 — is the chain usable?** If the key chain is empty, contains a key that
+is not 64 lowercase hex characters, or contains **any key twice**, there is **no
+roster**: the result is a refusal carrying the reason (`empty_chain`,
+`malformed_key`, `duplicate_key`). It is NOT an empty roster. A statement
+quantified over an empty set is vacuously true — "a halt reached every machine"
+— and that is fail-open on the one quantifier the roster exists for; a statement
+quantified over a refusal is **unknown**. (A repeated key makes an epoch
+ambiguous, and both readings are wrong: first-index strands the current key in
+the past; last-index promotes every old artifact, a thief's included, to the
+present.)
 
-1. **Admit each distinct entry once.** Group inputs by id (§4). An entry is
-   _admissible_ iff it is well-formed (§4's strictness included), its
-   `motebit_id` matches, its `public_key` is a trusted **or** superseded key, and
-   at least one of its copies verifies. Copies that differ only in signature
-   spelling are one entry; which copy represents it MUST NOT depend on arrival
-   order (the reference implementation takes the first that verifies in sorted
-   signature order).
-2. **Tombstones, scoped by the signer's epoch.** An admissible retirement signed
-   by a **trusted** key ends whatever enrolment it names (scope `any`). One signed
-   by a **superseded** key ends only an enrolment made under a superseded key
-   (scope `superseded_only`). A trusted retirement outranks a superseded one for
-   the same target.
-   - A superseded key MUST NOT end a current-key enrolment: after a rotation the
-     old key may be held by whoever took the machine, and must not be able to
-     strike the sovereign's other machines out of the set.
-   - It MUST still end an old-epoch enrolment: otherwise rotating would silently
-     un-retire every machine retired before it, and there is no trusted clock
-     here to tell "signed before the rotation" from "signed after it". The most a
-     holder of the old key gains is to mark an old-epoch line — most plausibly
-     the lost machine's own — as retired rather than cut off; it stays visible
-     either way, and nothing current is touched.
-3. **Classify each machine into exactly one of three.** Let _cur_ be its
-   admissible enrolments under a trusted key, and _old_ those under a superseded
-   key. An enrolment is _standing_ iff no applicable tombstone names it.
-   - **Active** — some _cur_ enrolment is standing. Reported with its standing
-     _cur_ enrolments: to retire the machine, retire every one of them.
-   - **Retired** — _cur_ is non-empty and none stands; or _cur_ is empty and no
-     _old_ enrolment stands. A machine that received the new key and was let go
-     is retired — its old-epoch lines MUST NOT resurface it as cut off.
-   - **Superseded** — _cur_ is empty and some _old_ enrolment stands. After a
-     rotation this is exactly the machine that never received the new key. It
-     MUST be reported, not dropped: rotating a key does not stop it running.
-4. **Remove wins and is terminal for that entry**: a replayed copy of a retired
-   enrolment has the same id and stays retired.
-5. **Tombstones are kept even when their enrolment has not been seen.** A
-   retirement may arrive first — union has no order — and must still take effect
-   when the enrolment appears.
-6. **Everything refused MUST be surfaced**, once per distinct entry, carrying the
-   entry id and the `public_key` it claimed where those are readable, and a
-   reason: `malformed`, `wrong_motebit`, `untrusted_key`, `bad_signature`. Never
-   silently discarded, and never in arrival order.
+Otherwise a key's **epoch** is its index in the chain, the **current epoch** is
+the last, and the result carries a **chain head** `{ epoch, public_key }` naming
+the view it was computed under. Only the relative order of epochs is used.
+
+**Step 1 — admit each distinct entry once.** Group inputs by id (§4); anything
+that is a JSON object has one, well-formed or not. An id is _admissible_ iff it is
+well-formed (§4's strictness included), its `motebit_id` matches, its `public_key`
+is in the key chain, and at least one of its copies verifies. Copies that differ
+only in signature spelling are one entry. An implementation tries copies in
+sorted signature order and MUST try at most **8** before refusing the id — the cap
+is part of the law, so that two implementations cannot disagree about a flooded
+entry. An admissible id yields **no** refusal, whatever garbage copies accompany
+it. Any other id yields exactly one: `{ kind, id | null, public_key | null, reason }`
+with the reason the FIRST that applies of `malformed`, `wrong_motebit`,
+`untrusted_key`, `bad_signature`. Refusals are sorted, and never silently discarded.
+
+**Step 2 — Rule A: authority flows forward only.** An admissible retirement `R`
+ends an admissible enrolment `E` iff `R.enrollment_id = id(E)` **and**
+`epoch(R.public_key) ≥ epoch(E.public_key)`. One rule with two consequences: a key
+from an older epoch — which after a rotation may be held by whoever took the
+machine — can never end an enrolment made under a newer key; and a retirement
+signed before a rotation keeps ending what it ended, because the comparison does
+not change when the chain grows. Retirements naming ids not yet seen are
+retained as tombstones, and take effect when the enrolment appears.
+
+**Step 3 — Rule B: a machine's status is a function of its highest-epoch
+enrolments only.** The unit of the roster is the machine (`device_id`), not the
+entry; a machine may hold several enrolments and is one member. For each machine
+`M` with at least one admissible enrolment let `H` be the highest epoch among
+them, and `S` the enrolments of `M` at epoch `H` that no retirement ends:
+
+- `S ≠ ∅` and `H` is the current epoch ⇒ **active**, reported with `S` — to retire
+  the machine, retire every entry in `S`.
+- `S ≠ ∅` and `H` is older ⇒ **superseded**: it never received the new key. It
+  MUST be reported, not dropped — rotating a key does not stop it running.
+- `S = ∅` ⇒ **retired**.
+
+Enrolments of `M` below `H` are history: the machine moved epochs, and they play
+no part in its status. Every machine lands in exactly one of the three, and each
+carries `H` and `authenticated = (H is the current epoch)`.
+
+**Step 4 — what is authenticated.** Only a status at the current epoch is
+authenticated. For `H` older than current, **both `superseded` and `retired` are
+advisory**: any holder of a key at epoch ≥ `H` — including a superseded, stolen
+key — can flip them in either direction, and can mint any number of such lines
+for device ids that never existed. There is no trusted clock here, so the
+reduction cannot tell a line minted before a rotation from one minted after it
+by a thief, and it does not pretend to. What no holder of an old key can ever do
+is add, remove, or alter an **active** line.
 
 Reference implementation: `verifyHostRoster(...)` in `@motebit/crypto`.
+
+### Properties a conformant implementation has
+
+1. **Partition** — every machine with an admissible enrolment is in exactly one of
+   active / retired / superseded.
+2. **Order and multiplicity invariance** of the whole result.
+3. **Monotone under rotation** — for a chain `C`, a key `k ∉ C`, and a set
+   containing nothing signed by `k`: the result under `C·k` equals the result
+   under `C` except that `active` machines become `superseded`. (It is NOT true
+   for sets that already hold artifacts signed by `k` — a store learns of them
+   before a consumer learns `k` — whose effect is property 6's.)
+4. **No backward authority** — nothing signed only by keys below epoch `t` changes
+   the status of a machine whose `H ≥ t`.
+5. **Re-spelling invariance** — another valid spelling of a signature changes
+   nothing.
+6. **Monotone under union** — for a fixed chain, more retirements never move a
+   machine out of `retired`. The only way out is a new enrolment at epoch ≥ `H`
+   that nothing ends — **which any holder of a key at epoch ≥ `H` can mint.**
+   `retired` is therefore durable only at the current epoch.
+7. **Suffix invariance of the active set** — truncating the chain to any suffix
+   that contains the current key leaves `active` unchanged.
+8. **Relative order only** — the result is invariant under any order-preserving
+   re-indexing of epochs.
+9. **An unusable chain never yields a roster** (Step 0).
 
 ### Rejoining
 
 A machine that finds its enrolment retired MUST NOT silently re-enrol, or
 retiring would not be durable. It is reported as its own condition — _retired,
-but connected_ — and rejoins only by an explicit act that mints a new entry.
+but connected_ — and rejoins only by an explicit act that mints a new entry. This
+binds honest software only: every machine holds the key, so a hostile retired
+machine can re-enrol at will, and the remedy for that is rotation.
 
 ### Rotation
 
 Because every machine holds one key, **key rotation is the remedy for a lost or
-stolen machine**, and it is a membership epoch: machines that receive the new key
-enrol again under it, which supersedes their own old-key line (§6 step 3). The
-machine that never does is the one that was cut off.
+stolen machine**, and it is a membership epoch.
+
+On receiving a new key, a machine enrols under it **iff it is `active` under the
+pre-rotation chain in its own last-verified view**. A machine that sees itself
+`retired` MUST NOT enrol on receiving a new key — it would un-retire itself, and
+the reduction could not tell that from an explicit re-join. A machine holds at
+most one enrolment per `(device_id, public_key)`, and re-presents it rather than
+minting another. The machine that never enrols under the new key is the one that
+was cut off, and it is reported as `superseded`.
 
 ## 7. Quantified statements (interop law)
 
 A statement quantified over a motebit's machines — that all of them answered,
 that none is halted, that there are N of them — MUST be computed over the
 **active** roster (§6) and MAY be annotated with liveness (§8). It MUST NOT be
-computed over liveness alone.
+computed over liveness alone, and it MUST NOT be made over a refused chain
+(§6 Step 0), where it is unknown.
+
+It MUST **cite the chain head** it was computed under. A consumer whose key
+chain lags the truth computes a confident, wrong roster — to it, the holder of
+the key it believes current _is_ the sovereign — and no reduction can make that
+fail-safe. The head is what makes it detectable and attributable; a surface
+SHOULD refresh the chain before presenting a universal claim.
+
+When `superseded` is non-empty the statement MUST say so: _every machine on the
+current key; k lines on superseded keys not covered._ Never a bare "every
+machine".
 
 A connection that announces it hosts unattended work but has no active enrolment
 is neither added to the set nor able to veto it. It is reported beside the set,
@@ -271,7 +350,7 @@ reconnects, and the offline machine — the case this spec exists for — vanish
 **No freshness window.** Unlike a registration request, these are durable
 artifacts, not requests: a store MUST accept a validly signed entry of any age. A
 replayed enrolment is a no-op (same id); a replayed enrolment of a retired
-machine stays retired (§6 step 4), however its signature is re-spelled (§4).
+machine stays retired (§6, Rule A names it by id), however its signature is re-spelled (§4).
 
 **Omission.** A consumer that trusts a store to return every entry can be shown
 fewer. A consumer that remembers the entry ids it has verified detects a store
@@ -280,6 +359,29 @@ the difference: _served ⊇ remembered, modulo presented retirements._ This cann
 detect omission of an entry the consumer never saw; that is a freshness problem
 and needs a commitment shared across consumers (a transparency log), which this
 version does not define.
+
+**A stale key chain is not fail-safe.** A consumer that has not learned of the
+latest rotation treats the holder of the key it believes current as the
+sovereign: that holder can retire every real machine and enrol its own, and the
+owner's new-key retirements are refused as untrusted. There is no containment
+between the stale roster and the true one in either direction, so staleness
+cannot be treated as conservative. This is the stale-revocation-list problem and
+no reduction solves it; §7's chain head makes it detectable. An implementation
+MAY surface an entry whose signature verifies under a key outside the chain as a
+hint to refresh the chain. It MUST NOT let such an entry alter a result — anyone
+can mint one.
+
+**Ghost lines.** A holder of a superseded key can mint enrolments for device ids
+that never existed; they appear as `superseded`. They can never be `active`
+(§6 property 7), quantified statements run over `active` (§7), and they are
+marked unauthenticated (§6 Step 4) — a legibility cost, not a safety one. A
+reducer MUST NOT refuse old-epoch enrolments it has not seen before: after a
+store's data loss an honest offline machine's re-presented line is
+indistinguishable from a ghost, and dropping it is the failure this spec exists
+to prevent. A consumer MAY annotate, beside the result and never inside it, a
+line it had not seen before it first accepted the newer key. The durable remedy
+is a signed seal under the new key (§10), deferred until a consumer gates on
+`superseded` or a ghost is observed.
 
 **Ambiguity.** Two machines that share a `device_id` are one roster line, and
 nothing at this layer can tell them apart — they hold the same key. It is
@@ -293,7 +395,7 @@ never required to have one.
 motebit's key is mutable state, and a device registry records whichever key a
 registration carried (`spec/device-self-registration-v1.md`). A store MAY verify
 entries at ingest as defence in depth; a consumer MUST verify against its own
-trusted keys regardless.
+key chain regardless.
 
 **Self-asserted time.** `enrolled_at` and `retired_at` are claims by the signer.
 A store that records when it received an entry MUST label that value as its own
@@ -301,7 +403,27 @@ observation.
 
 ## 10. Versioning
 
-Additive changes — a new optional field, a stronger verification rung — bump the
-minor version and MUST keep §4's entry id computable for existing entries.
-Changing the reduction in §6, the entry-id construction, or the meaning of an
-existing field is a major version.
+**The signed body of both artifacts is frozen for the life of major version 1.**
+No field may be added, optional or otherwise. An entry's id is a hash of its
+body and every conformant validator rejects unknown fields, so a producer that
+added one would have its machines refused by every existing consumer — silently
+leaving their rosters, which is the failure this spec exists to prevent.
+
+Evolution happens by:
+
+- **a new artifact type that references an enrolment by id** — for instance a
+  future hardware attestation of a roster line, or a signed seal under a new key
+  listing which old-epoch enrolments it recognises (the remedy for §6 Step 4's
+  advisory lines). Existing consumers ignore it safely: it is not in the sets
+  they reduce.
+- **a new major version**, expressed in the signed `type` tag (§3.3).
+
+A minor version may change non-wire text and add new **outputs** to the
+reduction, provided no output changes which machines are active, retired, or
+superseded for a given key chain and set. Anything that changes those three sets
+is a major version.
+
+This is the content-addressed-record pattern — an id that is the hash of a fixed
+serialization, a frozen shape, and evolution by new kinds that link to old ones
+by id. "Must-understand extension" schemes do not apply: even an ignorable
+unknown field changes the hash.

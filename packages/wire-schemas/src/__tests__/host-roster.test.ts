@@ -19,20 +19,22 @@ import {
 function real() {
   const public_key = "ab".repeat(32);
   const enrollment = {
+    type: "motebit/host-enrollment@1" as const,
     motebit_id: "019d903f-13de-75a4-8341-58319e0a2f16",
     device_id: "01a04bb5-9c87-7d2c-bc6c-2f4cd3ce11d8",
     public_key,
     enrolled_at: 1_776_239_454_545,
     suite: "motebit-jcs-ed25519-b64-v1" as const,
-    signature: "c2lnbmF0dXJl",
+    signature: "A".repeat(86),
   };
   const retirement = {
+    type: "motebit/host-retirement@1" as const,
     motebit_id: enrollment.motebit_id,
     enrollment_id: "cd".repeat(32),
     public_key,
     retired_at: 1_776_239_999_999,
     suite: "motebit-jcs-ed25519-b64-v1" as const,
-    signature: "c2lnbmF0dXJl",
+    signature: "A".repeat(86),
   };
   return { enrollment, retirement };
 }
@@ -92,9 +94,26 @@ describe("HostEnrollmentSchema / HostRetirementSchema", () => {
       expect(HostEnrollmentSchema.safeParse({ ...enrollment, enrolled_at: t }).success).toBe(false);
       expect(HostRetirementSchema.safeParse({ ...retirement, retired_at: t }).success).toBe(false);
     }
-    for (const sig of ["c2ln==", "ab+/", "with space "]) {
+    for (const sig of [
+      `${"A".repeat(86)}==`,
+      `${"A".repeat(84)}+/`,
+      "A".repeat(85),
+      "A".repeat(87),
+    ]) {
       expect(HostEnrollmentSchema.safeParse({ ...enrollment, signature: sig }).success).toBe(false);
     }
+  });
+
+  it("requires the domain tag, exactly", () => {
+    const { enrollment, retirement } = real();
+    const { type: _t, ...untagged } = enrollment;
+    expect(HostEnrollmentSchema.safeParse(untagged).success).toBe(false);
+    expect(HostEnrollmentSchema.safeParse({ ...enrollment, type: retirement.type }).success).toBe(
+      false,
+    );
+    expect(
+      HostRetirementSchema.safeParse({ ...retirement, type: "motebit/host-retirement@2" }).success,
+    ).toBe(false);
   });
 
   it("does not confuse the two artifacts", () => {
@@ -111,7 +130,14 @@ describe("HostEnrollmentSchema / HostRetirementSchema", () => {
     expect(e.additionalProperties).toBe(false);
     expect(r.additionalProperties).toBe(false);
     expect(e.required).toEqual(
-      expect.arrayContaining(["motebit_id", "device_id", "public_key", "suite", "signature"]),
+      expect.arrayContaining([
+        "type",
+        "motebit_id",
+        "device_id",
+        "public_key",
+        "suite",
+        "signature",
+      ]),
     );
     expect(r.required).toEqual(expect.arrayContaining(["enrollment_id", "public_key"]));
   });

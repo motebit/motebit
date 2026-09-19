@@ -2357,6 +2357,12 @@ export interface HorizonWitnessRequestBody {
 }
 
 // @public
+export const HOST_ENROLLMENT_TYPE: "motebit/host-enrollment@1";
+
+// @public (undocumented)
+export const HOST_RETIREMENT_TYPE: "motebit/host-retirement@1";
+
+// @public
 export const HOST_ROSTER_SPEC_ID: "motebit/machine-roster@1.0";
 
 // @public (undocumented)
@@ -2367,6 +2373,7 @@ export interface HostEnrollment {
     public_key: string;
     signature: string;
     suite: "motebit-jcs-ed25519-b64-v1";
+    type: typeof HOST_ENROLLMENT_TYPE;
 }
 
 // @public (undocumented)
@@ -2377,6 +2384,7 @@ export interface HostRetirement {
     retired_at: number;
     signature: string;
     suite: "motebit-jcs-ed25519-b64-v1";
+    type: typeof HOST_RETIREMENT_TYPE;
 }
 
 // @public

@@ -1,15 +1,25 @@
 /**
- * The machine roster's two artifacts and the one reduction over them.
+ * The machine roster's two artifacts, and named scenarios for the
+ * reduction.
  *
- * Each test is a sentence from `docs/doctrine/machine-roster.md`. The
- * roster is a SET of self-verifying entries, so what matters is what
- * survives union, reordering, replay and a key the consumer never
- * agreed to trust.
+ * The UNIVERSAL claims live in `host-roster-properties.test.ts`. This
+ * file is the stories: each scenario below is a defect that was actually
+ * found — by a code-review round on the first draft, or by the design
+ * review of the second — written so that a regression reads as the story
+ * it breaks.
+ *
+ * One rule governs every test that is not about signatures: to exercise
+ * a validation rule, build the body you want and SIGN IT AUTHENTICALLY.
+ * Editing a signed artifact proves nothing — the signature breaks first,
+ * and the rule under test is never what said no. Three tests in the first
+ * draft "covered" a rule that way and stayed green when it was deleted.
  */
 import { describe, it, expect } from "vitest";
 import {
   generateKeypair,
   bytesToHex,
+  canonicalJson,
+  toBase64Url,
   signHostEnrollment,
   verifyHostEnrollment,
   signHostRetirement,
@@ -17,579 +27,204 @@ import {
   hostEnrollmentId,
   hostRetirementId,
   verifyHostRoster,
-  canonicalJson,
-  toBase64Url,
+  MAX_SIGNATURE_COPIES_TRIED,
 } from "../index.js";
+import type { HostRosterMachine, HostRosterResult, HostRosterVerdict } from "../index.js";
 import { signBySuite } from "../suite-dispatch.js";
-import fc from "fast-check";
 import { isHostEnrollment, isHostRetirement } from "@motebit/protocol";
 import type { HostEnrollment, HostRetirement } from "@motebit/protocol";
 
 const MOTEBIT = "019d903f-13de-75a4-8341-58319e0a2f16";
+const SUITE = "motebit-jcs-ed25519-b64-v1";
 
-async function setupWithKey() {
-  return { kp: await generateKeypair() };
-}
-
-async function setup() {
+/** One identity key, able to enrol and retire. */
+async function key() {
   const kp = await generateKeypair();
   const pub = bytesToHex(kp.publicKey);
-  const enrol = (deviceId: string, at = 1_000) =>
-    signHostEnrollment(
-      { motebit_id: MOTEBIT, device_id: deviceId, public_key: pub, enrolled_at: at },
-      kp.privateKey,
-    );
-  const retire = async (e: HostEnrollment, at = 2_000) =>
-    signHostRetirement(
-      {
-        motebit_id: MOTEBIT,
-        enrollment_id: await hostEnrollmentId(e),
-        public_key: pub,
-        retired_at: at,
-      },
-      kp.privateKey,
-    );
-  return { kp, pub, enrol, retire };
-}
-
-describe("HostEnrollment", () => {
-  it("verifies, and any changed field does not", async () => {
-    const { enrol } = await setup();
-    const e = await enrol("laptop");
-    expect(await verifyHostEnrollment(e)).toBe(true);
-    for (const tampered of [
-      { ...e, device_id: "vps" },
-      { ...e, motebit_id: "someone-else" },
-      { ...e, enrolled_at: e.enrolled_at + 1 },
-    ]) {
-      expect(await verifyHostEnrollment(tampered)).toBe(false);
-    }
-  });
-
-  it("is refused under a key that did not sign it — the artifact names its signer", async () => {
-    const { enrol } = await setup();
-    const other = await generateKeypair();
-    const e = await enrol("laptop");
-    expect(await verifyHostEnrollment({ ...e, public_key: bytesToHex(other.publicKey) })).toBe(
-      false,
-    );
-  });
-
-  it("fails closed on an unknown suite or a malformed key", async () => {
-    const { enrol } = await setup();
-    const e = await enrol("laptop");
-    // Signed VALIDLY over a suite this verifier does not know. Editing
-    // `suite` after signing proves nothing — the signature breaks first,
-    // and the suite check is never what refused it. Agility means the
-    // declared suite decides how to verify, so an unknown one must be
-    // refused even when every byte is authentic.
-    const { kp } = await setupWithKey();
-    const body = {
-      motebit_id: MOTEBIT,
-      device_id: "laptop",
-      public_key: bytesToHex(kp.publicKey),
-      enrolled_at: 1_000,
-      suite: "motebit-future-suite-v9",
-    };
-    const sig = await signBySuite(
-      "motebit-jcs-ed25519-b64-v1",
-      new TextEncoder().encode(canonicalJson(body)),
-      kp.privateKey,
-    );
-    const authenticButUnknown = {
-      ...body,
-      signature: toBase64Url(sig),
-    } as unknown as HostEnrollment;
-    expect(await verifyHostEnrollment(authenticButUnknown)).toBe(false);
-    expect(await verifyHostEnrollment({ ...e, public_key: "zz" })).toBe(false);
-    expect(await verifyHostEnrollment({ ...e, signature: "!!!" })).toBe(false);
-  });
-
-  it("refuses a float or negative time, an unknown field, and a non-base64url signature", async () => {
-    // Integrity verification is as strict as the wire schema. Every field
-    // but `signature` is signed, so an extra one WOULD verify — and then
-    // this verifier admits a machine a schema-validating store refuses.
-    const { kp, pub } = await setup();
-    const resign = (body: Record<string, unknown>) =>
-      signBySuite(
-        "motebit-jcs-ed25519-b64-v1",
-        new TextEncoder().encode(canonicalJson(body)),
-        kp.privateKey,
-      ).then((sig) => ({ ...body, signature: toBase64Url(sig) }) as unknown as HostEnrollment);
-    const base = {
-      motebit_id: MOTEBIT,
-      device_id: "laptop",
-      public_key: pub,
-      enrolled_at: 1_000,
-      suite: "motebit-jcs-ed25519-b64-v1",
-    };
-    expect(await verifyHostEnrollment(await resign(base))).toBe(true);
-    // Each of these is AUTHENTICALLY signed. It is the shape that is refused.
-    expect(await verifyHostEnrollment(await resign({ ...base, enrolled_at: 1000.5 }))).toBe(false);
-    expect(await verifyHostEnrollment(await resign({ ...base, enrolled_at: -1 }))).toBe(false);
-    expect(await verifyHostEnrollment(await resign({ ...base, enrolled_at: 1.7e21 }))).toBe(false);
-    expect(await verifyHostEnrollment(await resign({ ...base, hosts: ["run"] }))).toBe(false);
-    expect(await verifyHostEnrollment(await resign({ ...base, device_name: "x" }))).toBe(false);
-    const good = await resign(base);
-    expect(await verifyHostEnrollment({ ...good, signature: `${good.signature}==` })).toBe(false);
-  });
-
-  it("has ONE id for the same bytes — re-presenting on every start adds nothing", async () => {
-    // Auto-enrol presents the same stored artifact each time a daemon
-    // starts. If the id moved, the set would grow with every reboot.
-    const { enrol } = await setup();
-    const a = await enrol("laptop");
-    const again = await enrol("laptop");
-    expect(await hostEnrollmentId(a)).toBe(await hostEnrollmentId(again));
-    expect(await hostEnrollmentId(a)).toMatch(/^[0-9a-f]{64}$/);
-    expect(await hostEnrollmentId(a)).not.toBe(await hostEnrollmentId(await enrol("vps")));
-  });
-});
-
-describe("HostRetirement", () => {
-  it("verifies, names the entry it ends, and does not survive tampering", async () => {
-    const { enrol, retire } = await setup();
-    const e = await enrol("vps");
-    const r = await retire(e);
-    expect(r.enrollment_id).toBe(await hostEnrollmentId(e));
-    expect(await verifyHostRetirement(r)).toBe(true);
-    expect(await verifyHostRetirement({ ...r, enrollment_id: "0".repeat(64) })).toBe(false);
-  });
-});
-
-describe("hostRetirementId", () => {
-  it("is stable for the same retirement and distinct from the entry it ends", async () => {
-    // A store keys retirements by this; presenting one twice must be a no-op.
-    const { enrol, retire } = await setup();
-    const e = await enrol("vps");
-    const r = await retire(e);
-    expect(await hostRetirementId(r)).toBe(await hostRetirementId(await retire(e)));
-    expect(await hostRetirementId(r)).toMatch(/^[0-9a-f]{64}$/);
-    expect(await hostRetirementId(r)).not.toBe(r.enrollment_id);
-    expect(await hostRetirementId(r)).not.toBe(await hostRetirementId(await retire(e, 9_999)));
-  });
-});
-
-/** Every spelling `atob` would take for the same 64 signature bytes. */
-function respellings(sig: string): string[] {
-  const std = sig.replace(/-/g, "+").replace(/_/g, "/");
-  return [`${sig}==`, `${sig} `, std, `${std}==`];
-}
-
-const devices = (ms: Array<{ device_id: string }>) => ms.map((m) => m.device_id);
-
-describe("the entry id is over the SIGNED BODY", () => {
-  it("does not move when the signature is re-spelled — so removal stays terminal", async () => {
-    // The signature's spelling is the one part of an artifact nothing
-    // signs. Hashing it let anyone holding a copy, with no key at all,
-    // turn a RETIRED enrolment into a new id that still verified — and
-    // the machine was back in "every machine".
-    const { pub, enrol, retire } = await setup();
-    const vps = await enrol("vps");
-    const gone = await retire(vps);
-    for (const spelling of respellings(vps.signature)) {
-      const copy = { ...vps, signature: spelling };
-      expect(await hostEnrollmentId(copy)).toBe(await hostEnrollmentId(vps));
-      const verdict = await verifyHostRoster({
-        motebitId: MOTEBIT,
-        trustedKeys: [pub],
-        enrollments: [copy],
-        retirements: [gone],
-      });
-      expect(verdict.active).toEqual([]);
-    }
-  });
-
-  it("two VALID spellings of one signature are one entry, with one representative", async () => {
-    // The last base64url character of a 64-byte signature carries four
-    // unused bits. Setting them is still unpadded base64url, still
-    // decodes to the same bytes, still verifies. Which copy represents
-    // the entry must not depend on which arrived first.
-    const { pub, enrol } = await setup();
-    const laptop = await enrol("laptop");
-    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    const last = laptop.signature.slice(-1);
-    const twin = {
-      ...laptop,
-      signature: laptop.signature.slice(0, -1) + alphabet[alphabet.indexOf(last) | 1]!,
-    };
-    const flipped = twin.signature !== laptop.signature;
-    expect(await verifyHostEnrollment(twin)).toBe(true);
-    const run = (enrollments: HostEnrollment[]) =>
-      verifyHostRoster({ motebitId: MOTEBIT, trustedKeys: [pub], enrollments, retirements: [] });
-    const ab = await run([laptop, twin]);
-    expect(await run([twin, laptop])).toEqual(ab);
-    expect(ab.active).toHaveLength(1);
-    expect(ab.active[0]?.entries).toHaveLength(1);
-    // (If the low bit was already set the twin IS the original — still one entry.)
-    expect(flipped || twin.signature === laptop.signature).toBe(true);
-  });
-
-  it("a garbage copy of an entry cannot evict the good one, whichever arrives first", async () => {
-    const { pub, enrol } = await setup();
-    const laptop = await enrol("laptop");
-    const garbage = { ...laptop, signature: "AAAA" };
-    for (const enrollments of [
-      [laptop, garbage],
-      [garbage, laptop],
-    ]) {
-      const verdict = await verifyHostRoster({
-        motebitId: MOTEBIT,
-        trustedKeys: [pub],
-        enrollments,
-        retirements: [],
-      });
-      expect(devices(verdict.active)).toEqual(["laptop"]);
-      expect(verdict.active[0]?.entries[0]?.enrollment.signature).toBe(laptop.signature);
-    }
-  });
-});
-
-describe("verifyHostRoster — the set, reduced", () => {
-  it("is every machine with an enrolment no retirement ends", async () => {
-    const { pub, enrol, retire } = await setup();
-    const laptop = await enrol("laptop");
-    const vps = await enrol("vps");
-    const verdict = await verifyHostRoster({
-      motebitId: MOTEBIT,
-      trustedKeys: [pub],
-      enrollments: [laptop, vps],
-      retirements: [await retire(vps)],
-    });
-    expect(devices(verdict.active)).toEqual(["laptop"]);
-    expect(devices(verdict.retired)).toEqual(["vps"]);
-    expect(verdict.rejected).toEqual([]);
-  });
-
-  it("remove wins, and a replayed enrolment cannot resurrect it", async () => {
-    const { pub, enrol, retire } = await setup();
-    const vps = await enrol("vps");
-    const verdict = await verifyHostRoster({
-      motebitId: MOTEBIT,
-      trustedKeys: [pub],
-      enrollments: [vps, vps, await enrol("vps")],
-      retirements: [await retire(vps)],
-    });
-    expect(verdict.active).toEqual([]);
-    expect(devices(verdict.retired)).toEqual(["vps"]);
-  });
-
-  it("a retirement may arrive BEFORE the enrolment it names — union has no order", async () => {
-    const { pub, enrol, retire } = await setup();
-    const vps = await enrol("vps");
-    const tombstone = await retire(vps);
-    const early = await verifyHostRoster({
-      motebitId: MOTEBIT,
-      trustedKeys: [pub],
-      enrollments: [],
-      retirements: [tombstone],
-    });
-    expect(early.tombstones).toEqual([{ enrollment_id: tombstone.enrollment_id, scope: "any" }]);
-    const late = await verifyHostRoster({
-      motebitId: MOTEBIT,
-      trustedKeys: [pub],
-      enrollments: [vps],
-      retirements: [tombstone],
-    });
-    expect(late.active).toEqual([]);
-  });
-
-  it("counts MACHINES — two enrolments for one machine are one member", async () => {
-    // A daemon that lost its cached artifact mints a new enrolment with
-    // a fresh time: a new id, the same machine. Counting entries would
-    // count it twice in every "N machines" — and retiring the one entry
-    // a person can see would leave the machine in "every machine".
-    const { pub, enrol, retire } = await setup();
-    const first = await enrol("vps", 1_000);
-    const second = await enrol("vps", 9_000);
-    const both = await verifyHostRoster({
-      motebitId: MOTEBIT,
-      trustedKeys: [pub],
-      enrollments: [first, second],
-      retirements: [],
-    });
-    expect(devices(both.active)).toEqual(["vps"]);
-    expect(both.active[0]?.entries).toHaveLength(2);
-
-    const oneGone = await verifyHostRoster({
-      motebitId: MOTEBIT,
-      trustedKeys: [pub],
-      enrollments: [first, second],
-      retirements: [await retire(first)],
-    });
-    // Still a member — and the verdict says exactly which entry is
-    // keeping it one, so a surface can finish the job.
-    expect(devices(oneGone.active)).toEqual(["vps"]);
-    expect(oneGone.active[0]?.entries.map((e) => e.enrollment_id)).toEqual([
-      await hostEnrollmentId(second),
-    ]);
-
-    const allGone = await verifyHostRoster({
-      motebitId: MOTEBIT,
-      trustedKeys: [pub],
-      enrollments: [first, second],
-      retirements: [await retire(first), await retire(second)],
-    });
-    expect(allGone.active).toEqual([]);
-    expect(devices(allGone.retired)).toEqual(["vps"]);
-  });
-
-  it("verifies against keys the CONSUMER trusts — never the key an entry brings with it", async () => {
-    const { pub, enrol } = await setup();
-    const stranger = await generateKeypair();
-    const strangerPub = bytesToHex(stranger.publicKey);
-    const forged = await signHostEnrollment(
-      {
-        motebit_id: MOTEBIT,
-        device_id: "attacker-box",
-        public_key: strangerPub,
-        enrolled_at: 1_000,
-      },
-      stranger.privateKey,
-    );
-    expect(await verifyHostEnrollment(forged)).toBe(true); // internally valid
-    const verdict = await verifyHostRoster({
-      motebitId: MOTEBIT,
-      trustedKeys: [pub],
-      enrollments: [await enrol("laptop"), forged],
-      retirements: [],
-    });
-    expect(devices(verdict.active)).toEqual(["laptop"]);
-    // Traceable: WHICH entry, under WHICH key.
-    expect(verdict.rejected).toEqual([
-      {
-        kind: "enrollment",
-        id: await hostEnrollmentId(forged),
-        public_key: strangerPub,
-        reason: "untrusted_key",
-      },
-    ]);
-  });
-
-  it("a stranger cannot retire a machine either", async () => {
-    const { pub, enrol } = await setup();
-    const stranger = await generateKeypair();
-    const laptop = await enrol("laptop");
-    const forged = await signHostRetirement(
-      {
-        motebit_id: MOTEBIT,
-        enrollment_id: await hostEnrollmentId(laptop),
-        public_key: bytesToHex(stranger.publicKey),
-        retired_at: 2_000,
-      },
-      stranger.privateKey,
-    );
-    const verdict = await verifyHostRoster({
-      motebitId: MOTEBIT,
-      trustedKeys: [pub],
-      enrollments: [laptop],
-      retirements: [forged],
-    });
-    expect(devices(verdict.active)).toEqual(["laptop"]);
-    expect(verdict.rejected.map((r) => [r.kind, r.reason])).toEqual([
-      ["retirement", "untrusted_key"],
-    ]);
-    expect(verdict.tombstones).toEqual([]);
-  });
-
-  it("refuses an entry for another motebit, and one that does not verify", async () => {
-    const { pub, kp, enrol } = await setup();
-    const elsewhere = await signHostEnrollment(
-      { motebit_id: "another-motebit", device_id: "x", public_key: pub, enrolled_at: 1 },
-      kp.privateKey,
-    );
-    const broken = { ...(await enrol("laptop")), device_id: "edited" };
-    const verdict = await verifyHostRoster({
-      motebitId: MOTEBIT,
-      trustedKeys: [pub],
-      enrollments: [elsewhere, broken],
-      retirements: [],
-    });
-    expect(verdict.active).toEqual([]);
-    expect(verdict.rejected.map((r) => r.reason).sort()).toEqual([
-      "bad_signature",
-      "wrong_motebit",
-    ]);
-  });
-
-  it("reports each refusal ONCE, in one order, however the inputs arrive", async () => {
-    // `rejected` was pushed in input order with no identifier: the same
-    // set from two replicas deep-compared unequal, and "untrusted_key x3"
-    // could not be traced to an entry.
-    const { pub, enrol } = await setup();
-    const stranger = await generateKeypair();
-    const forged = await signHostEnrollment(
-      {
-        motebit_id: MOTEBIT,
-        device_id: "x",
-        public_key: bytesToHex(stranger.publicKey),
-        enrolled_at: 1,
-      },
-      stranger.privateKey,
-    );
-    const broken = { ...(await enrol("laptop")), device_id: "edited" };
-    const junk = { nonsense: true } as unknown as HostEnrollment;
-    const run = (enrollments: HostEnrollment[]) =>
-      verifyHostRoster({ motebitId: MOTEBIT, trustedKeys: [pub], enrollments, retirements: [] });
-    const a = await run([forged, broken, junk]);
-    const b = await run([junk, junk, broken, forged, forged, broken]);
-    expect(b).toEqual(a);
-    expect(a.rejected).toHaveLength(3);
-  });
-
-  it("with no trusted key, trusts nothing", async () => {
-    const { enrol } = await setup();
-    const verdict = await verifyHostRoster({
-      motebitId: MOTEBIT,
-      trustedKeys: [],
-      enrollments: [await enrol("laptop")],
-      retirements: [],
-    });
-    expect(verdict.active).toEqual([]);
-  });
-});
-
-describe("rotation is a membership epoch", () => {
-  async function rotated() {
-    const old = await setup();
-    const fresh = await generateKeypair();
-    const freshPub = bytesToHex(fresh.publicKey);
-    const enrolNew = (deviceId: string) =>
+  return {
+    kp,
+    pub,
+    enrol: (device_id: string, enrolled_at = 1_000) =>
       signHostEnrollment(
-        { motebit_id: MOTEBIT, device_id: deviceId, public_key: freshPub, enrolled_at: 5_000 },
-        fresh.privateKey,
-      );
-    const retireNew = async (e: HostEnrollment) =>
+        { motebit_id: MOTEBIT, device_id, public_key: pub, enrolled_at },
+        kp.privateKey,
+      ),
+    retire: async (e: HostEnrollment, retired_at = 2_000) =>
       signHostRetirement(
         {
           motebit_id: MOTEBIT,
           enrollment_id: await hostEnrollmentId(e),
-          public_key: freshPub,
-          retired_at: 6_000,
+          public_key: pub,
+          retired_at,
         },
-        fresh.privateKey,
-      );
-    const reduce = (enrollments: HostEnrollment[], retirements: HostRetirement[]) =>
-      verifyHostRoster({
-        motebitId: MOTEBIT,
-        trustedKeys: [freshPub],
-        supersededKeys: [old.pub],
-        enrollments,
-        retirements,
-      });
-    return { old, enrolNew, retireNew, reduce };
-  }
-
-  it("the machine nobody re-enrolled is SHOWN as cut off; the one that moved epochs is not", async () => {
-    const { old, enrolNew, reduce } = await rotated();
-    const verdict = await reduce(
-      [await old.enrol("lost-vps"), await old.enrol("laptop"), await enrolNew("laptop")],
-      [],
-    );
-    expect(devices(verdict.active)).toEqual(["laptop"]);
-    expect(devices(verdict.superseded)).toEqual(["lost-vps"]);
-  });
-
-  it("does NOT un-retire what was retired before it", async () => {
-    // Retirements were honoured only under a current key, so rotating
-    // turned every earlier retirement into `untrusted_key` and its
-    // machine came back as "cut off but running".
-    const { old, reduce } = await rotated();
-    const vps = await old.enrol("vps");
-    const verdict = await reduce([vps], [await old.retire(vps)]);
-    expect(devices(verdict.retired)).toEqual(["vps"]);
-    expect(verdict.superseded).toEqual([]);
-    expect(verdict.rejected).toEqual([]);
-    expect(verdict.tombstones).toEqual([
-      { enrollment_id: await hostEnrollmentId(vps), scope: "superseded_only" },
-    ]);
-  });
-
-  it("a SUPERSEDED key cannot retire a current machine", async () => {
-    // After rotation the old key may be in the hands of whoever took the
-    // machine. It must not be able to strike the sovereign's other
-    // machines out of "every machine" before a halt.
-    const { old, enrolNew, reduce } = await rotated();
-    const laptop = await enrolNew("laptop");
-    const strike = await signHostRetirement(
-      {
-        motebit_id: MOTEBIT,
-        enrollment_id: await hostEnrollmentId(laptop),
-        public_key: old.pub,
-        retired_at: 7_000,
-      },
-      old.kp.privateKey,
-    );
-    const verdict = await reduce([laptop], [strike]);
-    expect(devices(verdict.active)).toEqual(["laptop"]);
-    expect(verdict.retired).toEqual([]);
-  });
-
-  it("a current-key retirement outranks an old-key one for the same entry, in either order", async () => {
-    const { old, retireNew, reduce } = await rotated();
-    const vps = await old.enrol("vps");
-    const weak = await old.retire(vps);
-    const strong = await retireNew(vps);
-    for (const rs of [
-      [weak, strong],
-      [strong, weak],
-    ]) {
-      expect((await reduce([vps], rs)).tombstones).toEqual([
-        { enrollment_id: await hostEnrollmentId(vps), scope: "any" },
-      ]);
-    }
-  });
-
-  it("a machine retired under the NEW key does not come back as cut off through its old line", async () => {
-    // It received the new key and was explicitly let go. Its old-key
-    // enrolment has no tombstone of its own, and used to resurface it as
-    // "the machine that did not receive the new key".
-    const { old, enrolNew, retireNew, reduce } = await rotated();
-    const vpsNew = await enrolNew("vps");
-    const verdict = await reduce([await old.enrol("vps"), vpsNew], [await retireNew(vpsNew)]);
-    expect(devices(verdict.retired)).toEqual(["vps"]);
-    expect(verdict.superseded).toEqual([]);
-    expect(verdict.active).toEqual([]);
-  });
-});
-
-describe("the guards in @motebit/protocol and here are one law, stated twice", () => {
-  // `@motebit/crypto` keeps zero runtime monorepo deps, so its shape
-  // checks are restated rather than imported. Two copies drift; this
-  // pins them to one table.
-  it("agree on every row — each one AUTHENTICALLY signed, so shape alone decides", async () => {
-    // Rows that merely edit a signed artifact prove nothing here: the
-    // signature breaks first, crypto says no for the wrong reason, and
-    // the two "agree" by accident. Every row below is re-signed over
-    // exactly the body it carries.
-    const { kp, pub } = await setup();
-    const sign = async (body: Record<string, unknown>) => {
+        kp.privateKey,
+      ),
+    /** Sign ANY body authentically — the only honest way to test a shape rule. */
+    signRaw: async (body: Record<string, unknown>) => {
       const sig = await signBySuite(
-        "motebit-jcs-ed25519-b64-v1",
+        SUITE,
         new TextEncoder().encode(canonicalJson(body)),
         kp.privateKey,
       );
       return { ...body, signature: toBase64Url(sig) };
-    };
-    const e = {
+    },
+  };
+}
+
+function ok(result: HostRosterResult): HostRosterVerdict {
+  if (!result.ok) throw new Error(`expected a roster, got ${result.reason}`);
+  return result;
+}
+
+const reduce = async (
+  keyChain: string[],
+  enrollments: HostEnrollment[],
+  retirements: HostRetirement[] = [],
+) => ok(await verifyHostRoster({ motebitId: MOTEBIT, keyChain, enrollments, retirements }));
+
+const devices = (ms: HostRosterMachine[]) => ms.map((m) => m.device_id);
+
+describe("the artifacts", () => {
+  it("carry a signed domain tag, and verify", async () => {
+    const k = await key();
+    const e = await k.enrol("laptop");
+    const r = await k.retire(e);
+    expect(e.type).toBe("motebit/host-enrollment@1");
+    expect(r.type).toBe("motebit/host-retirement@1");
+    expect(await verifyHostEnrollment(e)).toBe(true);
+    expect(await verifyHostRetirement(r)).toBe(true);
+    expect(r.enrollment_id).toBe(await hostEnrollmentId(e));
+  });
+
+  it("do not survive a changed field, or the wrong signer", async () => {
+    const k = await key();
+    const other = await key();
+    const e = await k.enrol("laptop");
+    for (const tampered of [
+      { ...e, device_id: "vps" },
+      { ...e, motebit_id: "someone-else" },
+      { ...e, enrolled_at: e.enrolled_at + 1 },
+      { ...e, public_key: other.pub },
+    ]) {
+      expect(await verifyHostEnrollment(tampered)).toBe(false);
+    }
+    const r = await k.retire(e);
+    expect(await verifyHostRetirement({ ...r, enrollment_id: "0".repeat(64) })).toBe(false);
+  });
+
+  it("are not interchangeable with a device self-registration — the tag is what separates them", async () => {
+    // Without `type`, a HostEnrollment and a device self-registration are
+    // one suite over {motebit_id, device_id, public_key, <a time>, suite}:
+    // separated by a single field NAME. An authentic registration-shaped
+    // body must not verify as an enrolment, and an enrolment carrying the
+    // retirement's tag must not verify as either.
+    const k = await key();
+    const base = { motebit_id: MOTEBIT, device_id: "laptop", public_key: k.pub, suite: SUITE };
+    const registrationShaped = await k.signRaw({ ...base, timestamp: 1_000 });
+    const untagged = await k.signRaw({ ...base, enrolled_at: 1_000 });
+    const crossTagged = await k.signRaw({
+      ...base,
+      enrolled_at: 1_000,
+      type: "motebit/host-retirement@1",
+    });
+    const nextMajor = await k.signRaw({
+      ...base,
+      enrolled_at: 1_000,
+      type: "motebit/host-enrollment@2",
+    });
+    for (const v of [registrationShaped, untagged, crossTagged, nextMajor]) {
+      expect(await verifyHostEnrollment(v as unknown as HostEnrollment)).toBe(false);
+      expect(await verifyHostRetirement(v as unknown as HostRetirement)).toBe(false);
+    }
+  });
+
+  it("are refused on SHAPE even when every byte is authentic", async () => {
+    // As strict as the wire schema. Every field but `signature` is signed,
+    // so an extra one WOULD verify — and then this verifier admits a
+    // machine that a schema-validating store refuses.
+    const k = await key();
+    const good = {
+      type: "motebit/host-enrollment@1",
       motebit_id: MOTEBIT,
       device_id: "laptop",
-      public_key: pub,
+      public_key: k.pub,
       enrolled_at: 1_000,
-      suite: "motebit-jcs-ed25519-b64-v1",
+      suite: SUITE,
+    };
+    const v = async (body: Record<string, unknown>) =>
+      verifyHostEnrollment((await k.signRaw(body)) as unknown as HostEnrollment);
+    expect(await v(good)).toBe(true);
+    expect(await v({ ...good, enrolled_at: 1000.5 })).toBe(false);
+    expect(await v({ ...good, enrolled_at: -1 })).toBe(false);
+    expect(await v({ ...good, enrolled_at: 1.7e21 })).toBe(false);
+    expect(await v({ ...good, hosts: ["run"] })).toBe(false);
+    expect(await v({ ...good, device_name: "x" })).toBe(false);
+    expect(await v({ ...good, device_id: "" })).toBe(false);
+    // The declared suite decides HOW to verify, so an unknown one is
+    // refused though the signature over it is genuine.
+    expect(await v({ ...good, suite: "motebit-future-suite-v9" })).toBe(false);
+    const signed = (await k.signRaw(good)) as unknown as HostEnrollment;
+    expect(await verifyHostEnrollment({ ...signed, signature: `${signed.signature}==` })).toBe(
+      false,
+    );
+    expect(await verifyHostEnrollment({ ...signed, signature: "AAAA" })).toBe(false);
+  });
+
+  it("have ONE id for one signed body — however the signature is spelled", async () => {
+    // The spelling is the one part of an artifact nothing signs. Hashing
+    // it let anyone, with no key, turn a RETIRED enrolment into a new id
+    // that still verified.
+    const k = await key();
+    const e = await k.enrol("laptop");
+    expect(await hostEnrollmentId(e)).toMatch(/^[0-9a-f]{64}$/);
+    expect(await hostEnrollmentId(e)).toBe(await hostEnrollmentId(await k.enrol("laptop")));
+    expect(await hostEnrollmentId({ ...e, signature: "anything-at-all" })).toBe(
+      await hostEnrollmentId(e),
+    );
+    expect(await hostEnrollmentId(e)).not.toBe(await hostEnrollmentId(await k.enrol("vps")));
+    const r = await k.retire(e);
+    expect(await hostRetirementId(r)).toBe(await hostRetirementId(await k.retire(e)));
+    expect(await hostRetirementId(r)).not.toBe(r.enrollment_id);
+  });
+});
+
+describe("@motebit/protocol's guards and the copies restated here are one law", () => {
+  // `@motebit/crypto` keeps zero runtime monorepo deps, so its shape
+  // checks are restated rather than imported. Two copies drift; this pins
+  // them to one table of AUTHENTICALLY SIGNED rows, so shape alone decides.
+  it("agree on every row", async () => {
+    const k = await key();
+    const e = {
+      type: "motebit/host-enrollment@1",
+      motebit_id: MOTEBIT,
+      device_id: "laptop",
+      public_key: k.pub,
+      enrolled_at: 1_000,
+      suite: SUITE,
     };
     const r = {
+      type: "motebit/host-retirement@1",
       motebit_id: MOTEBIT,
       enrollment_id: "cd".repeat(32),
-      public_key: pub,
+      public_key: k.pub,
       retired_at: 2_000,
-      suite: "motebit-jcs-ed25519-b64-v1",
+      suite: SUITE,
     };
     const rows: Array<[string, Record<string, unknown>]> = [
       ["a good enrolment", e],
       ["a good retirement", r],
       ["enrolment + extra field", { ...e, hosts: [] }],
       ["retirement + extra field", { ...r, reason: "lost" }],
+      ["enrolment, no tag", (({ type: _t, ...rest }) => rest)(e)],
+      ["enrolment, retirement's tag", { ...e, type: r.type }],
+      ["enrolment, next major's tag", { ...e, type: "motebit/host-enrollment@2" }],
+      ["retirement, no tag", (({ type: _t, ...rest }) => rest)(r)],
+      // The key set is right and only the VALUE is wrong — the row that
+      // notices a guard which stopped reading the tag.
+      ["retirement, enrolment's tag", { ...r, type: e.type }],
+      ["retirement, next major's tag", { ...r, type: "motebit/host-retirement@2" }],
+      ["enrolment, another registered suite", { ...e, suite: "motebit-jcs-ed25519-hex-v1" }],
+      ["retirement, unknown suite", { ...r, suite: "rot13" }],
       ["enrolment, float time", { ...e, enrolled_at: 1.5 }],
       ["retirement, negative time", { ...r, retired_at: -1 }],
       ["enrolment, unsafe integer", { ...e, enrolled_at: 2 ** 60 }],
@@ -598,133 +233,300 @@ describe("the guards in @motebit/protocol and here are one law, stated twice", (
       ["retirement, short enrollment_id", { ...r, enrollment_id: "abc" }],
       ["retirement, uppercase enrollment_id", { ...r, enrollment_id: "CD".repeat(32) }],
     ];
-    let disagreements = 0;
+    const seen = new Set<boolean>();
     for (const [label, body] of rows) {
-      const value = await sign(body);
+      const value = await k.signRaw(body);
       const protocolSays = isHostEnrollment(value) || isHostRetirement(value);
       const cryptoSays =
         (await verifyHostEnrollment(value as unknown as HostEnrollment)) ||
         (await verifyHostRetirement(value as unknown as HostRetirement));
-      if (protocolSays !== cryptoSays) disagreements++;
+      seen.add(protocolSays);
       expect([label, cryptoSays]).toEqual([label, protocolSays]);
     }
-    expect(disagreements).toBe(0);
-    // And the table is not vacuous: it contains both verdicts.
-    expect(await verifyHostEnrollment((await sign(e)) as unknown as HostEnrollment)).toBe(true);
-    expect(isHostEnrollment(await sign({ ...e, hosts: [] }))).toBe(false);
+    expect(seen).toEqual(new Set([true, false])); // not a vacuous table
   });
 });
 
-describe("properties — the claims that are universal, checked as such", () => {
-  it("the WHOLE verdict is independent of input order and multiplicity", async () => {
-    const old = await setup();
-    const fresh = await generateKeypair();
-    const freshPub = bytesToHex(fresh.publicKey);
-    const stranger = await generateKeypair();
-    const mk = (kp: typeof fresh, pub: string, d: string, at: number) =>
-      signHostEnrollment(
-        { motebit_id: MOTEBIT, device_id: d, public_key: pub, enrolled_at: at },
-        kp.privateKey,
-      );
-    const es: HostEnrollment[] = [
-      await old.enrol("a"),
-      await old.enrol("b"),
-      await mk(fresh, freshPub, "a", 5),
-      await mk(fresh, freshPub, "c", 5),
-      await mk(fresh, freshPub, "c", 6),
-      await mk(stranger, bytesToHex(stranger.publicKey), "z", 1),
-      { nonsense: 1 } as unknown as HostEnrollment,
-    ];
-    es.push({ ...es[2]!, signature: `${es[2]!.signature}` }, { ...es[3]!, signature: "AAAA" });
-    const rs: HostRetirement[] = [
-      await old.retire(es[1]!),
-      await old.retire(es[3]!), // old key striking a current entry: no effect
-      await signHostRetirement(
-        {
-          motebit_id: MOTEBIT,
-          enrollment_id: await hostEnrollmentId(es[4]!),
-          public_key: freshPub,
-          retired_at: 9,
-        },
-        fresh.privateKey,
-      ),
-    ];
-    const reduce = (enrollments: HostEnrollment[], retirements: HostRetirement[]) =>
-      verifyHostRoster({
-        motebitId: MOTEBIT,
-        trustedKeys: [freshPub],
-        supersededKeys: [old.pub],
-        enrollments,
-        retirements,
-      });
-    const canonical = await reduce(es, rs);
-
-    await fc.assert(
-      fc.asyncProperty(
-        // Any reordering of the full set...
-        fc.shuffledSubarray(es, { minLength: es.length }),
-        fc.shuffledSubarray(rs, { minLength: rs.length }),
-        // ...with any duplicates mixed in, anywhere.
-        fc.shuffledSubarray([...es, ...es]),
-        fc.shuffledSubarray([...rs, ...rs]),
-        async (e, r, extraE, extraR) => {
-          expect(await reduce([...extraE, ...e], [...r, ...extraR])).toEqual(canonical);
-        },
-      ),
-      { numRuns: 40 },
-    );
+describe("the reduction — one key", () => {
+  it("is every MACHINE with an enrolment nothing ends", async () => {
+    const k = await key();
+    const laptop = await k.enrol("laptop");
+    const vps = await k.enrol("vps");
+    const v = await reduce([k.pub], [laptop, vps], [await k.retire(vps)]);
+    expect(devices(v.active)).toEqual(["laptop"]);
+    expect(devices(v.retired)).toEqual(["vps"]);
+    expect(v.superseded).toEqual([]);
+    expect(v.rejected).toEqual([]);
+    expect(v.chain_head).toEqual({ epoch: 0, public_key: k.pub });
+    expect(v.active[0]?.authenticated).toBe(true);
   });
 
-  it("every admissible machine lands in EXACTLY one bucket, for any subset of the set", async () => {
-    const old = await setup();
-    const fresh = await generateKeypair();
-    const freshPub = bytesToHex(fresh.publicKey);
-    const mk = (d: string, at: number) =>
-      signHostEnrollment(
-        { motebit_id: MOTEBIT, device_id: d, public_key: freshPub, enrolled_at: at },
-        fresh.privateKey,
-      );
-    const es = [
-      await old.enrol("a"),
-      await old.enrol("b"),
-      await mk("a", 1),
-      await mk("b", 1),
-      await mk("c", 1),
-      await mk("c", 2),
-    ];
-    const rs: HostRetirement[] = [];
-    for (const e of es) {
-      rs.push(await old.retire(e));
-      rs.push(
-        await signHostRetirement(
-          {
-            motebit_id: MOTEBIT,
-            enrollment_id: await hostEnrollmentId(e),
-            public_key: freshPub,
-            retired_at: 3,
-          },
-          fresh.privateKey,
-        ),
-      );
-    }
-    await fc.assert(
-      fc.asyncProperty(fc.subarray(es), fc.subarray(rs), async (e, r) => {
-        const v = await verifyHostRoster({
-          motebitId: MOTEBIT,
-          trustedKeys: [freshPub],
-          supersededKeys: [old.pub],
-          enrollments: e,
-          retirements: r,
-        });
-        const placed = [...v.active, ...v.retired, ...v.superseded].map((m) => m.device_id);
-        expect(placed.slice().sort()).toEqual([...new Set(e.map((x) => x.device_id))].sort());
-        expect(new Set(placed).size).toBe(placed.length);
-        // An active machine's listed entries are all standing, under the current key.
-        for (const m of v.active) {
-          for (const entry of m.entries) expect(entry.enrollment.public_key).toBe(freshPub);
-        }
-      }),
-      { numRuns: 60 },
+  it("states what was SIGNED — an entry's body, never a spelling of its signature", async () => {
+    const k = await key();
+    const laptop = await k.enrol("laptop");
+    const { signature: _s, ...body } = laptop;
+    const v = await reduce([k.pub], [laptop]);
+    expect(v.active[0]?.entries).toEqual([{ enrollment_id: await hostEnrollmentId(laptop), body }]);
+  });
+
+  it("remove wins; a replay, a re-spelling, or an early tombstone does not undo it", async () => {
+    const k = await key();
+    const vps = await k.enrol("vps");
+    const gone = await k.retire(vps);
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const last = vps.signature.slice(-1);
+    const respelled = {
+      ...vps,
+      signature: vps.signature.slice(0, -1) + alphabet[alphabet.indexOf(last) ^ 1]!,
+    };
+    expect(devices((await reduce([k.pub], [vps, vps, respelled], [gone])).retired)).toEqual([
+      "vps",
+    ]);
+    // Union has no order: the tombstone is kept for an enrolment not yet seen.
+    const early = await reduce([k.pub], [], [gone]);
+    expect(early.tombstones).toEqual([{ enrollment_id: gone.enrollment_id, epoch: 0 }]);
+  });
+
+  it("counts a machine ONCE however many enrolments it holds, and says which keep it a member", async () => {
+    // A daemon that lost its cached artifact mints a second enrolment.
+    // Counted per entry it was two members — and retiring the one a
+    // person could see left the machine in "every machine".
+    const k = await key();
+    const first = await k.enrol("vps", 1_000);
+    const second = await k.enrol("vps", 9_000);
+    const both = await reduce([k.pub], [first, second]);
+    expect(devices(both.active)).toEqual(["vps"]);
+    expect(both.active[0]?.entries).toHaveLength(2);
+
+    const oneGone = await reduce([k.pub], [first, second], [await k.retire(first)]);
+    expect(oneGone.active[0]?.entries.map((e) => e.enrollment_id)).toEqual([
+      await hostEnrollmentId(second),
+    ]);
+    const allGone = await reduce(
+      [k.pub],
+      [first, second],
+      [await k.retire(first), await k.retire(second)],
     );
+    expect(devices(allGone.retired)).toEqual(["vps"]);
+  });
+
+  it("a re-join is a NEW entry; the byte-identical one stays retired", async () => {
+    const k = await key();
+    const vps = await k.enrol("vps", 1_000);
+    const gone = await k.retire(vps);
+    expect(
+      devices((await reduce([k.pub], [vps, await k.enrol("vps", 1_000)], [gone])).retired),
+    ).toEqual(["vps"]);
+    expect(
+      devices((await reduce([k.pub], [vps, await k.enrol("vps", 5_000)], [gone])).active),
+    ).toEqual(["vps"]);
+  });
+});
+
+describe("the reduction — what it refuses", () => {
+  it("a key the CONSUMER's chain does not contain, however self-consistent the entry", async () => {
+    const k = await key();
+    const stranger = await key();
+    const forged = await stranger.enrol("attacker-box");
+    expect(await verifyHostEnrollment(forged)).toBe(true);
+    const v = await reduce([k.pub], [await k.enrol("laptop"), forged]);
+    expect(devices(v.active)).toEqual(["laptop"]);
+    expect(v.rejected).toEqual([
+      {
+        kind: "enrollment",
+        id: await hostEnrollmentId(forged),
+        public_key: stranger.pub,
+        reason: "untrusted_key",
+      },
+    ]);
+    const strike = await stranger.retire(await k.enrol("laptop"));
+    const v2 = await reduce([k.pub], [await k.enrol("laptop")], [strike]);
+    expect(devices(v2.active)).toEqual(["laptop"]);
+    expect(v2.tombstones).toEqual([]);
+  });
+
+  it("names EACH malformed entry — fifty bad entries are not one anonymous refusal", async () => {
+    // Collapsed into `{id: null}` a consumer could not tell one bad entry
+    // from fifty machines silently leaving "every machine".
+    const k = await key();
+    const bad = await Promise.all(
+      [1, 2, 3].map(
+        async (n) =>
+          (await k.signRaw({
+            type: "motebit/host-enrollment@1",
+            motebit_id: MOTEBIT,
+            device_id: `m-${n}`,
+            public_key: k.pub,
+            enrolled_at: 1_000,
+            suite: SUITE,
+            hosts: ["run"],
+          })) as unknown as HostEnrollment,
+      ),
+    );
+    const v = await reduce([k.pub], [...bad, "junk" as unknown as HostEnrollment]);
+    expect(v.rejected).toHaveLength(4);
+    expect(v.rejected.filter((r) => r.id != null)).toHaveLength(3);
+    expect(v.rejected.every((r) => r.reason === "malformed")).toBe(true);
+    expect(v.rejected.filter((r) => r.public_key === k.pub)).toHaveLength(3);
+  });
+
+  it("gives ONE reason per entry, by precedence, and none for an id with a good copy", async () => {
+    const k = await key();
+    const stranger = await key();
+    const good = await k.enrol("laptop");
+    // Wrong motebit AND an untrusted key: the first that applies.
+    const both = await signHostEnrollment(
+      { motebit_id: "another", device_id: "x", public_key: stranger.pub, enrolled_at: 1 },
+      stranger.kp.privateKey,
+    );
+    const garbageCopy = { ...good, signature: "A".repeat(86) };
+    const v = await reduce([k.pub], [garbageCopy, good, both]);
+    expect(devices(v.active)).toEqual(["laptop"]);
+    expect(v.rejected.map((r) => r.reason)).toEqual(["wrong_motebit"]);
+    // With NO good copy, that id is a bad signature.
+    expect((await reduce([k.pub], [garbageCopy])).rejected.map((r) => r.reason)).toEqual([
+      "bad_signature",
+    ]);
+  });
+
+  it("tries a bounded number of spellings of one entry, in a fixed order", async () => {
+    // A store can attach any number of garbage copies to an id and the
+    // reduction runs on a phone. The cap is part of the law, so the
+    // verdict cannot differ between implementations that chose their own.
+    const k = await key();
+    const good = await k.enrol("laptop");
+    const garbage = Array.from({ length: MAX_SIGNATURE_COPIES_TRIED }, (_, i) => ({
+      ...good,
+      // Sorts before any real signature's first character class mix.
+      signature: `${"-".repeat(85)}${"ABCDEFGH"[i]}`,
+    }));
+    const flooded = await reduce([k.pub], [good, ...garbage]);
+    const few = await reduce([k.pub], [good, ...garbage.slice(0, 2)]);
+    expect(devices(few.active)).toEqual(["laptop"]);
+    // The cap BITES: with a full cap of garbage sorting ahead of it, the
+    // good copy is never reached, and the entry is refused — which a
+    // hostile store could equally achieve by withholding it.
+    expect(flooded.active).toEqual([]);
+    expect(flooded.rejected.map((r) => r.reason)).toEqual(["bad_signature"]);
+    // Same answer whichever order the flood arrives in.
+    expect(await reduce([k.pub], [...garbage, good])).toEqual(flooded);
+  });
+
+  it("an unusable chain is NOT an empty roster", async () => {
+    const k = await key();
+    const e = [await k.enrol("laptop")];
+    const run = (keyChain: string[]) =>
+      verifyHostRoster({ motebitId: MOTEBIT, keyChain, enrollments: e, retirements: [] });
+    expect(await run([])).toEqual({ ok: false, reason: "empty_chain" });
+    expect(await run([k.pub, k.pub])).toEqual({ ok: false, reason: "duplicate_key" });
+    expect(await run([k.pub.toUpperCase()])).toEqual({ ok: false, reason: "malformed_key" });
+  });
+});
+
+describe("the reduction — rotation (every scenario here was a real defect)", () => {
+  it("code review, round 1: a rotation must not un-retire what was retired before it", async () => {
+    const k1 = await key();
+    const k2 = await key();
+    const vps = await k1.enrol("vps");
+    const v = await reduce([k1.pub, k2.pub], [vps], [await k1.retire(vps)]);
+    expect(devices(v.retired)).toEqual(["vps"]);
+    expect(v.superseded).toEqual([]);
+    expect(v.rejected).toEqual([]);
+  });
+
+  it("code review, round 2: nor may a SECOND rotation", async () => {
+    // E1 under K1, never retired. E2 under K2, retired under K2. Against
+    // "current vs old" sets, rotating to K3 emptied the machine's current
+    // entries and its K1 line "stood" again: cut off, still running.
+    const [k1, k2, k3] = [await key(), await key(), await key()];
+    const e1 = await k1.enrol("vps");
+    const e2 = await k2.enrol("vps");
+    const gone = await k2.retire(e2);
+    for (const chain of [
+      [k1.pub, k2.pub],
+      [k1.pub, k2.pub, k3.pub],
+    ]) {
+      const v = await reduce(chain, [e1, e2], [gone]);
+      expect(devices(v.retired)).toEqual(["vps"]);
+      expect(v.superseded).toEqual([]);
+    }
+  });
+
+  it("the machine that never received the new key is SHOWN as cut off — and marked advisory", async () => {
+    const [k1, k2] = [await key(), await key()];
+    const v = await reduce(
+      [k1.pub, k2.pub],
+      [await k1.enrol("lost-vps"), await k1.enrol("laptop"), await k2.enrol("laptop")],
+    );
+    expect(devices(v.active)).toEqual(["laptop"]);
+    expect(devices(v.superseded)).toEqual(["lost-vps"]);
+    expect(v.superseded[0]).toMatchObject({ epoch: 0, authenticated: false });
+    expect(v.active[0]).toMatchObject({ epoch: 1, authenticated: true });
+  });
+
+  it("a stolen OLD key cannot strike a current machine, nor add one", async () => {
+    const [k1, k2] = [await key(), await key()];
+    const laptop = await k2.enrol("laptop");
+    const v = await reduce(
+      [k1.pub, k2.pub],
+      [laptop, await k1.enrol("ghost")],
+      [await k1.retire(laptop)],
+    );
+    expect(devices(v.active)).toEqual(["laptop"]);
+    // The ghost is visible, advisory, and NOT in the set a universal
+    // claim is computed over.
+    expect(devices(v.superseded)).toEqual(["ghost"]);
+    expect(v.superseded[0]?.authenticated).toBe(false);
+  });
+
+  it("design review C2: 'retired forever' is FALSE at an old epoch — and the verdict says so", async () => {
+    // The owner rotates because a machine was stolen, and retires it
+    // under the new key. The thief, holding the old key, mints a fresh
+    // enrolment at the old epoch: the machine is `superseded` again. With
+    // no trusted clock the reduction cannot tell, so it does not pretend
+    // to: every status below the current epoch is `authenticated: false`.
+    const [k1, k2] = [await key(), await key()];
+    const stolen = await k1.enrol("stolen", 1_000);
+    const retiredByOwner = await k2.retire(stolen);
+    expect(devices((await reduce([k1.pub, k2.pub], [stolen], [retiredByOwner])).retired)).toEqual([
+      "stolen",
+    ]);
+    const again = await reduce(
+      [k1.pub, k2.pub],
+      [stolen, await k1.enrol("stolen", 7_777)],
+      [retiredByOwner],
+    );
+    expect(devices(again.superseded)).toEqual(["stolen"]);
+    expect(again.superseded[0]?.authenticated).toBe(false);
+    // What the thief can NEVER do is reach the authenticated partition.
+    expect(again.active).toEqual([]);
+  });
+
+  it("design review C1: a consumer catching up on a rotation lands where one that always knew does", async () => {
+    // The store learns of K2-signed artifacts before this consumer learns
+    // K2. Under [K1] they are refused; under [K1,K2] they take effect.
+    const [k1, k2] = [await key(), await key()];
+    const vOld = await k1.enrol("vps");
+    const set = { e: [vOld, await k2.enrol("laptop")], r: [await k2.retire(vOld)] };
+    const stale = await reduce([k1.pub], set.e, set.r);
+    expect(devices(stale.active)).toEqual(["vps"]);
+    expect(stale.rejected.map((r) => r.reason)).toEqual(["untrusted_key", "untrusted_key"]);
+    // ...and it says which view that was, so the claim is attributable.
+    expect(stale.chain_head).toEqual({ epoch: 0, public_key: k1.pub });
+
+    const caughtUp = await reduce([k1.pub, k2.pub], set.e, set.r);
+    expect(devices(caughtUp.active)).toEqual(["laptop"]);
+    expect(devices(caughtUp.retired)).toEqual(["vps"]);
+    expect(caughtUp.chain_head).toEqual({ epoch: 1, public_key: k2.pub });
+  });
+
+  it("a consumer that knows only the current key sees the same ACTIVE set, and loses the history", async () => {
+    const [k1, k2] = [await key(), await key()];
+    const set = [await k1.enrol("lost-vps"), await k2.enrol("laptop")];
+    const full = await reduce([k1.pub, k2.pub], set);
+    const onlyCurrent = await reduce([k2.pub], set);
+    expect(devices(onlyCurrent.active)).toEqual(devices(full.active));
+    expect(onlyCurrent.superseded).toEqual([]); // absence is no longer defended
+    expect(devices(full.superseded)).toEqual(["lost-vps"]);
   });
 });
