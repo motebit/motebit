@@ -545,13 +545,19 @@ describe("Pairing Protocol", () => {
       headers: { Authorization: `Bearer ${deviceA.authToken}` },
     });
 
-    // Update device B's key
-    const newKey = "f".repeat(64);
-    const updateRes = await relay.app.request(`/pairing/${pairing_id}/update-key`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ public_key: newKey }),
-    });
+    const update = (public_key: string) =>
+      relay.app.request(`/pairing/${pairing_id}/update-key`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ public_key }),
+      });
+
+    // This route takes no bearer, so what it may WRITE is its safety: only
+    // a key the identity already holds, which is all a key transfer ever
+    // presents. See `succession-authority.test.ts`.
+    expect((await update("f".repeat(64))).status).toBe(403);
+
+    const updateRes = await update(deviceA.publicKeyHex);
     expect(updateRes.status).toBe(200);
     const updateBody = (await updateRes.json()) as { ok: boolean };
     expect(updateBody.ok).toBe(true);

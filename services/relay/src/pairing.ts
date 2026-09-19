@@ -7,12 +7,15 @@
 import type { Hono } from "hono";
 import type { TokenAudience } from "@motebit/protocol";
 import { HTTPException } from "hono/http-exception";
+import { createLogger } from "./logger.js";
 import type { IdentityManager } from "@motebit/core-identity";
 
 // --- Pairing Code Generator ---
 
 const PAIRING_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // 30 chars, no ambiguous 0/O/1/I/L
 const PAIRING_CODE_LENGTH = 6;
+const logger = createLogger({ service: "relay", module: "pairing" });
+
 const PAIRING_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 function generatePairingCode(): string {
@@ -30,6 +33,7 @@ export interface PairingDeps {
     prepare(sql: string): { run(...args: unknown[]): void; get(...args: unknown[]): unknown };
     exec(sql: string): void;
   };
+
   app: Hono;
   apiToken: string | undefined;
   identityManager: IdentityManager;
@@ -407,7 +411,43 @@ export function registerPairingRoutes(deps: PairingDeps): void {
       throw new HTTPException(404, { message: "Approved device not found in identity store" });
     }
 
+    // This route takes no bearer — it is reached by whoever completed the
+    // pairing — so what it may WRITE is the whole of its safety. A device
+    // row's `public_key` is what an owner token is verified against, so
+    // writing an arbitrary key here mints that identity's tokens.
+    //
+    // The transfer's own meaning bounds it: device B receives the
+    // identity's SEED, so the only key it can honestly present is one this
+    // identity already holds. Checked against the rows in the same tick as
+    // the write.
+    const motebitId = session.motebit_id as string;
+    const held = db
+      .prepare(
+        `SELECT 1 FROM devices WHERE motebit_id = ? AND lower(public_key) = lower(?)
+          UNION ALL
+         SELECT 1 FROM agent_registry WHERE motebit_id = ? AND lower(public_key) = lower(?)
+         LIMIT 1`,
+      )
+      .get(motebitId, body.public_key, motebitId, body.public_key);
+    if (held == null) {
+      logger.warn("pairing.update_key.refused", {
+        pairingId,
+        motebitId,
+        reason: "not_a_key_this_identity_holds",
+      });
+      throw new HTTPException(403, {
+        message:
+          "update-key completes a key transfer: the presented key is not one this identity holds",
+      });
+    }
+
     await identityManager.updateDevicePublicKey(deviceId, body.public_key);
+    // Spend the session. The pairing id was otherwise a standing
+    // credential: it never expired and was never consumed, so a once-valid
+    // id re-keyed that row at any later date.
+    db.prepare("UPDATE pairing_sessions SET status = 'key_updated' WHERE pairing_id = ?").run(
+      pairingId,
+    );
 
     return c.json({ ok: true });
   });

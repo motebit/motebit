@@ -1382,7 +1382,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   registerProposalRoutes({ app, moteDb, connections });
 
   // --- Key rotation, revocation & approval routes ---
-  registerKeyRotationRoutes({ app, moteDb, relayIdentity });
+  registerKeyRotationRoutes({
+    app,
+    moteDb,
+    relayIdentity,
+    recordAuthEvent: authEvents.record,
+  });
 
   // --- Browser-sandbox dispatcher-token endpoint ---
   // Mints relay-signed audience-bound tokens that motebits attach to

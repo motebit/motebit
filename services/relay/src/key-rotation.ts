@@ -16,6 +16,7 @@ import {
 import { insertRevocationEvent } from "./federation.js";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
+import type { AuthEvent } from "./auth-events.js";
 
 const logger = createLogger({ service: "key-rotation" });
 
@@ -23,11 +24,17 @@ export interface KeyRotationDeps {
   app: Hono;
   moteDb: MotebitDatabase;
   relayIdentity: RelayIdentity;
+  /**
+   * Durable auth-event record (auth-events.ts). Required: this module has
+   * one caller, and an optional recorder is a refusal that stops being
+   * recorded the day a refactor drops the field, with nothing going red.
+   */
+  recordAuthEvent: (event: AuthEvent) => void;
 }
 
 /** Initialize approval tables and register all key-rotation/revocation/approval routes. */
 export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
-  const { app, moteDb, relayIdentity } = deps;
+  const { app, moteDb, relayIdentity, recordAuthEvent } = deps;
 
   // --- Approval tables (idempotent) ---
   moteDb.db.exec(`
@@ -75,7 +82,47 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
   /** @spec motebit/identity@1.0 */
   app.post("/api/v1/agents/:motebitId/rotate-key", async (c) => {
     const motebitId = c.req.param("motebitId");
+    const caller = c.get("callerMotebitId" as never) as string | undefined;
+    /**
+     * Refuse, loudly and durably. An attempt to write another identity's
+     * key history is exactly what the operator's auth-event record exists
+     * to show (`services/relay/CLAUDE.md` rule 6).
+     */
+    const refuse = (status: 400 | 403, reason: string, message: string): never => {
+      logger.warn("key_rotation.refused", { motebitId, caller: caller ?? null, reason });
+      recordAuthEvent({
+        kind: "agent_token_rejected",
+        method: "POST",
+        path: c.req.path,
+        motebitId: caller ?? motebitId,
+        reason: `succession:${reason}`,
+        correlationId: c.req.header("x-correlation-id") ?? null,
+      });
+      throw new HTTPException(status, { message });
+    };
+
     const body = await c.req.json<KeySuccessionRecord>();
+
+    // An ORDINARY succession is the identity's own act. The signed payload
+    // names two keys and no motebit_id, so the record cannot say whose
+    // history it belongs to — this does. Strict inequality on a PRESENT
+    // caller: the operator's master token carries no caller identity and
+    // passes, as it does on this route today.
+    //
+    // A guardian RECOVERY is exempt, and has to be: it exists for an owner
+    // who has LOST the key (`spec/identity-v1.md` §3.8.3), so it is by
+    // design carried by someone else. What authorizes one is the
+    // guardian's signature, checked below against the guardian key THIS
+    // identity registered — and, since that lookup needs a registry row,
+    // a recovery is anchored to a key on file by the same check as any
+    // other record.
+    if (body.recovery !== true && caller != null && caller !== motebitId) {
+      refuse(
+        403,
+        "under_another_identity",
+        "a key succession may be presented only under the identity it rotates",
+      );
+    }
 
     if (
       !body.old_public_key ||
@@ -125,13 +172,49 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
       if (!valid) throw new HTTPException(400, { message: "Invalid key succession signatures" });
     }
 
+    if (body.new_public_key === body.old_public_key) {
+      refuse(400, "goes_nowhere", "Succession new_public_key must differ from old_public_key");
+    }
+
+    // The record must depart from a key this relay HOLDS for the identity.
+    // This check used to be skipped whenever the stored key was absent or
+    // the empty string — both routine states, not corner cases: the daemon
+    // deregisters on every shutdown (dropping the registry row), and a
+    // master-token registration with no key writes `''`. Skipping it let a
+    // chain be planted from two keys nobody had ever seen, and let one
+    // guardian's genuine record be replayed at a sibling identity.
+    //
+    // A device row's key counts, so an identity whose daemon has shut down
+    // can still rotate. Refusing when the relay holds NO key at all is
+    // fail-closed: there is nothing for the record to continue from.
     const storedAgent = moteDb.db
       .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
       .get(motebitId) as { public_key: string } | undefined;
-    if (storedAgent && storedAgent.public_key && storedAgent.public_key !== body.old_public_key) {
-      throw new HTTPException(400, {
-        message: "Succession old_public_key does not match stored public key",
-      });
+    const registryKey =
+      storedAgent?.public_key != null && storedAgent.public_key !== ""
+        ? storedAgent.public_key
+        : null;
+    if (registryKey != null) {
+      if (registryKey.toLowerCase() !== body.old_public_key.toLowerCase()) {
+        refuse(
+          400,
+          "not_from_current_key",
+          "Succession old_public_key does not match stored public key",
+        );
+      }
+    } else {
+      const heldByDevice = moteDb.db
+        .prepare(
+          "SELECT 1 FROM devices WHERE motebit_id = ? AND lower(public_key) = lower(?) LIMIT 1",
+        )
+        .get(motebitId, body.old_public_key);
+      if (heldByDevice == null) {
+        refuse(
+          400,
+          "no_key_on_file",
+          "Succession old_public_key is not a key this relay holds for this identity",
+        );
+      }
     }
 
     moteDb.db

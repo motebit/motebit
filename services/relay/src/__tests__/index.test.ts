@@ -2835,12 +2835,24 @@ describe("POST /api/v1/agents/:motebitId/rotate-key", () => {
       oldKp.publicKey,
       "routine rotation",
     );
+    const present = () =>
+      relay.app.request("/api/v1/agents/test-mote/rotate-key", {
+        method: "POST",
+        headers: { ...AUTH_HEADER, "Content-Type": "application/json" },
+        body: JSON.stringify(record),
+      });
 
-    const res = await relay.app.request("/api/v1/agents/test-mote/rotate-key", {
-      method: "POST",
-      headers: { ...AUTH_HEADER, "Content-Type": "application/json" },
-      body: JSON.stringify(record),
-    });
+    // A genuine record is still refused while the relay holds no key for
+    // this identity to continue from — even from the operator. See
+    // `succession-authority.test.ts`.
+    expect((await present()).status).toBe(400);
+
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO devices (device_id, motebit_id, device_token, public_key, registered_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run("test-device", "test-mote", "tok", bytesToHex(oldKp.publicKey), Date.now());
+    const res = await present();
 
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean; motebit_id: string };
