@@ -35,6 +35,7 @@ import {
   ed25519Sign,
 } from "@motebit/crypto";
 import type { KeyPair } from "@motebit/crypto";
+import type { TokenAudience } from "@motebit/protocol";
 import { createTestRelay, JSON_AUTH } from "./test-helpers.js";
 
 let relay: SyncRelay;
@@ -60,11 +61,13 @@ async function registerSelf(mid: string, deviceId: string, kp: KeyPair): Promise
   return res.status;
 }
 
-async function token(mid: string, deviceId: string, kp: KeyPair): Promise<string> {
-  const { token: t } = await mintAudienceToken(
-    { mid, did: deviceId, aud: "admin:query" },
-    kp.privateKey,
-  );
+async function token(
+  mid: string,
+  deviceId: string,
+  kp: KeyPair,
+  aud: TokenAudience = "admin:query",
+): Promise<string> {
+  const { token: t } = await mintAudienceToken({ mid, did: deviceId, aud }, kp.privateKey);
   return t;
 }
 
@@ -78,7 +81,13 @@ async function present(
 ): Promise<number> {
   const res = await relay.app.request(`/api/v1/agents/${targetMid}/rotate-key`, {
     method: "POST",
-    headers: { ...JSON_HEADERS, Authorization: `Bearer ${await token(callerMid, deviceId, kp)}` },
+    headers: {
+      ...JSON_HEADERS,
+      // The audience the spec names for this route, and the one the shipped
+      // client mints. A helper that minted `admin:query` here would keep
+      // passing while every real client 401'd (#702).
+      Authorization: `Bearer ${await token(callerMid, deviceId, kp, "rotate-key")}`,
+    },
     body: JSON.stringify(record),
   });
   return res.status;
@@ -208,6 +217,41 @@ describe("an ordinary succession is the identity's own act", () => {
     });
     expect(res.status).toBe(200);
     expect(registryKey(mid)).toBe(hex(k2));
+  });
+});
+
+describe("the route answers to the audience the spec names", () => {
+  it("accepts `rotate-key` and refuses a general read token", async () => {
+    // The route defaulted to `admin:query`, so the only tokens that ever
+    // reached it were the operator's, and every signed client 401'd —
+    // which is why no rotation has ever been recorded (#702). Narrowing it
+    // also means an ordinary read token cannot be replayed here.
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    expect(await registerAgent(mid, k1)).toBe(200);
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    const send = async (aud: TokenAudience): Promise<number> =>
+      (
+        await relay.app.request(`/api/v1/agents/${mid}/rotate-key`, {
+          method: "POST",
+          headers: {
+            ...JSON_HEADERS,
+            Authorization: `Bearer ${await token(mid, `${mid}-laptop`, k1, aud)}`,
+          },
+          body: JSON.stringify(record),
+        })
+      ).status;
+    expect(await send("admin:query")).toBe(401);
+    expect(successions(mid)).toBe(0);
+    expect(await send("rotate-key")).toBe(200);
+    expect(successions(mid)).toBe(1);
   });
 });
 

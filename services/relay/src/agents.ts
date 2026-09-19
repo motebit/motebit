@@ -561,6 +561,12 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
       agentAudience = "credentials";
     } else if (path.includes("/presentation")) {
       agentAudience = "credentials:present";
+    } else if (path.endsWith("/rotate-key")) {
+      // The audience `spec/auth-token-v1.md` §9 already names for this
+      // route. It defaulted to `admin:query`, so the only tokens that ever
+      // reached it were the operator's — every signed client 401'd, and
+      // key rotation has never once been recorded here (#702).
+      agentAudience = "rotate-key";
     } else if (path.includes("/proxy-token")) {
       agentAudience = "proxy:token";
     } else if (path.includes("/receipts")) {
