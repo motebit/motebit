@@ -24,8 +24,12 @@ export interface KeyRotationDeps {
   app: Hono;
   moteDb: MotebitDatabase;
   relayIdentity: RelayIdentity;
-  /** Durable auth-event record (auth-events.ts); optional for hand-built test deps. */
-  recordAuthEvent?: (event: AuthEvent) => void;
+  /**
+   * Durable auth-event record (auth-events.ts). REQUIRED: this module has
+   * one caller, and an optional recorder is a refusal that stops being
+   * recorded the day a refactor drops the field, with nothing going red.
+   */
+  recordAuthEvent: (event: AuthEvent) => void;
 }
 
 /** Initialize approval tables and register all key-rotation/revocation/approval routes. */
@@ -78,21 +82,34 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
   /** @spec motebit/identity@1.0 */
   app.post("/api/v1/agents/:motebitId/rotate-key", async (c) => {
     const motebitId = c.req.param("motebitId");
-    // A succession is the identity's own act. A record is self-verifying
-    // about its two keys and says nothing about WHICH identity it belongs
-    // to — the signed payload carries no motebit_id — so without this any
-    // authenticated caller could record a succession under any identity,
-    // and it would be served as that identity's key history. Strict
-    // inequality on a PRESENT caller: the operator's master token carries
-    // no caller identity and passes, as it does on this route today.
+    const body = await c.req.json<KeySuccessionRecord>();
+
+    // An ordinary succession is the identity's own act. A record is
+    // self-verifying about its two keys and says nothing about WHICH
+    // identity it belongs to — the signed payload carries no motebit_id —
+    // so without this any authenticated caller could record a succession
+    // under any identity, and it would be served as that identity's key
+    // history. Strict inequality on a PRESENT caller: the operator's
+    // master token carries no caller identity and passes, as it does on
+    // this route today.
+    //
+    // Guardian RECOVERY is exempt, and has to be: it exists for an owner
+    // who has LOST the key (spec/identity-v1.md §3.8.3), and such an owner
+    // cannot mint a token for their own identity — so recovery is, by
+    // design, carried by someone else. What authorizes it is not the hand
+    // that carries it but the guardian's signature, verified below against
+    // the guardian key THIS identity registered, over a record that must
+    // depart from this identity's stored key. The same truthiness test the
+    // branch below uses, so the two cannot disagree about which path a
+    // request is on.
     const caller = c.get("callerMotebitId" as never) as string | undefined;
-    if (caller != null && caller !== motebitId) {
+    if (!body.recovery && caller != null && caller !== motebitId) {
       logger.warn("key_rotation.refused", {
         motebitId,
         caller,
         reason: "succession_under_another_identity",
       });
-      recordAuthEvent?.({
+      recordAuthEvent({
         kind: "agent_token_rejected",
         method: "POST",
         path: c.req.path,
@@ -104,7 +121,6 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
         message: "a key succession may be presented only under the identity it rotates",
       });
     }
-    const body = await c.req.json<KeySuccessionRecord>();
 
     if (
       !body.old_public_key ||
