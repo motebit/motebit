@@ -35,6 +35,7 @@
  */
 
 import * as fs from "node:fs";
+import * as path from "node:path";
 import * as readline from "node:readline";
 import {
   importIdentityFile,
@@ -51,7 +52,7 @@ import {
   deriveSovereignMotebitId,
 } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
-import { loadFullConfig, saveFullConfig } from "../config.js";
+import { CONFIG_DIR, CONFIG_PATH, loadFullConfig, saveFullConfig } from "../config.js";
 import { encryptPrivateKey, promptPassphrase } from "../identity.js";
 import { bold, dim, error as errorColor, success, warn } from "./../colors.js";
 
@@ -165,7 +166,28 @@ export async function handleRestore(config: CliConfig): Promise<void> {
   }
 
   // ── Plan: reset / fresh / replace ──
-  const full = loadFullConfig();
+  //
+  // Restore is the one command that must survive a config it cannot read:
+  // it is what `doctor` sends the user here to run, and its whole job is
+  // to replace that file from the seed they have just proved they hold.
+  // Refusing here would be a loop with no exit.
+  let full: ReturnType<typeof loadFullConfig>;
+  try {
+    full = loadFullConfig();
+  } catch {
+    const asideName = `config.json.damaged-${Date.now()}`;
+    try {
+      fs.copyFileSync(CONFIG_PATH, path.join(CONFIG_DIR, asideName));
+      console.log(
+        `\n  ${warn(`Existing config could not be read — copied aside as ${asideName}.`)}`,
+      );
+    } catch {
+      console.log(
+        `\n  ${warn("Existing config could not be read, and could not be copied aside.")}`,
+      );
+    }
+    full = {};
+  }
   const plan = planRestore(publicKeyHex, metadata!.motebitId, full);
 
   if (plan.kind === "passphrase_reset") {

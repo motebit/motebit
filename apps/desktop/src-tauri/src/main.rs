@@ -398,8 +398,26 @@ fn write_config(json: String) -> Result<(), String> {
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("Failed to create config directory: {}", e))?;
     let path = dir.join("config.json");
-    std::fs::write(&path, &json)
-        .map_err(|e| format!("Failed to write config: {}", e))?;
+    // The same file the CLI keeps its identity key in, and the CLI now
+    // replaces it atomically (`apps/cli/src/config.ts`). Writing through
+    // here would undo that guarantee for the shared file: a crash or a
+    // full disk mid-write truncates the only copy of that key. Stage
+    // beside the target, then rename — atomic within a directory.
+    let staged = dir.join(format!("config.json.{}.tmp", std::process::id()));
+    let write_staged = || -> std::io::Result<()> {
+        std::fs::write(&staged, &json)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o600))?;
+        }
+        std::fs::rename(&staged, &path)
+    };
+    if let Err(e) = write_staged() {
+        // Never leave the scratch copy behind; it holds the same secrets.
+        let _ = std::fs::remove_file(&staged);
+        return Err(format!("Failed to write config: {}", e));
+    }
     Ok(())
 }
 

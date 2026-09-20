@@ -105,9 +105,15 @@ export async function handleDoctor(): Promise<void> {
   try {
     fullCfg = loadFullConfig();
   } catch (err) {
-    const backups = fs
-      .readdirSync(CONFIG_DIR)
-      .filter((f) => f.startsWith("config.json.clobbered-"));
+    // The dominant reason this throws for a non-ENOENT read is an
+    // unreadable directory — in which case listing it throws too, and the
+    // composed report becomes the stack trace it exists to replace.
+    let backups: string[] = [];
+    try {
+      backups = fs.readdirSync(CONFIG_DIR).filter((f) => f.startsWith("config.json.clobbered-"));
+    } catch {
+      /* the directory itself is unreadable; the message below still holds */
+    }
     checks.push({
       name: "Config file",
       ok: false,
@@ -119,7 +125,11 @@ export async function handleDoctor(): Promise<void> {
     });
     console.log("\nmotebit doctor\n");
     for (const check of checks) {
-      console.log(`  ${"FAIL".padEnd(6)} ${check.name.padEnd(20)} ${check.detail}`);
+      // Each check's OWN status. Printing them all as failures buries the
+      // one that matters under false ones, on the screen a user reaches
+      // when something is already wrong.
+      const icon = check.ok ? (check.warn === true ? "warn" : "ok") : "FAIL";
+      console.log(`  ${icon.padEnd(6)} ${check.name.padEnd(20)} ${check.detail}`);
       if (check.remedy != null && check.remedy !== "") {
         console.log(`         ${" ".repeat(20)} → ${check.remedy}`);
       }
@@ -127,7 +137,11 @@ export async function handleDoctor(): Promise<void> {
     console.log();
     // Every later check reads config. None of them can say anything true
     // while it cannot be read, and several would overwrite it.
-    return;
+    //
+    // Non-zero, like every other failing check: this command is a
+    // readiness probe, and supervisors and installers gate on its exit
+    // code. Exiting 0 here would report the worst state as healthy.
+    process.exit(1);
   }
   if (fullCfg.motebit_id != null && fullCfg.motebit_id !== "") {
     checks.push({ name: "Identity", ok: true, detail: `${fullCfg.motebit_id.slice(0, 8)}...` });

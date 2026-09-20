@@ -187,19 +187,27 @@ export function loadFullConfig(): FullConfig {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
     throw new ConfigDamagedError(CONFIG_PATH, err);
   }
-  let parsed: FullConfig;
+  let parsed: unknown;
   try {
-    parsed = JSON.parse(raw) as FullConfig;
+    parsed = JSON.parse(raw);
   } catch (err) {
     throw new ConfigDamagedError(CONFIG_PATH, err);
   }
+  // Valid JSON is not a valid config. `null`, `[]`, `3` and `"x"` all
+  // parse: the first throws a raw TypeError below, and the rest read back
+  // as a config whose every field is undefined — damage as absence, past
+  // the guard above, and overwritten by the next save.
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new ConfigDamagedError(CONFIG_PATH);
+  }
+  const config = parsed as FullConfig;
   // Governance: validate the persisted blob. Drop invalid shapes — runtime
   // construction falls back to DEFAULT_GOVERNANCE_CONFIG when absent. A bad
   // governance block is not damage: it is a field we know how to ignore.
-  if (parsed.governance !== undefined && !isValidGovernanceConfig(parsed.governance)) {
-    delete parsed.governance;
+  if (config.governance !== undefined && !isValidGovernanceConfig(config.governance)) {
+    delete config.governance;
   }
-  return parsed;
+  return config;
 }
 
 /**
@@ -220,6 +228,10 @@ export function saveFullConfig(config: FullConfig): void {
     // 0600 from the moment it exists: the contents are key material, and
     // the staged copy is as sensitive as the target.
     fs.writeFileSync(staged, JSON.stringify(config, null, 2), { encoding: "utf-8", mode: 0o600 });
+    // Tighten BEFORE the rename: after it, the save has already succeeded,
+    // and a chmod that fails there (network mounts, changed ownership)
+    // would be reported to the caller as a failed save that in fact landed.
+    fs.chmodSync(staged, 0o600);
     const fd = fs.openSync(staged, "r+");
     try {
       fs.fsyncSync(fd);
@@ -227,8 +239,19 @@ export function saveFullConfig(config: FullConfig): void {
       fs.closeSync(fd);
     }
     fs.renameSync(staged, CONFIG_PATH);
-    // An older config may predate the mode above.
-    fs.chmodSync(CONFIG_PATH, 0o600);
+    // The file's bytes are durable after the fsync above; the rename that
+    // makes them the config is a DIRECTORY change, and is not, until this.
+    try {
+      const dirFd = fs.openSync(CONFIG_DIR, "r");
+      try {
+        fs.fsyncSync(dirFd);
+      } finally {
+        fs.closeSync(dirFd);
+      }
+    } catch {
+      // Not every platform allows fsync on a directory. The rename is
+      // still atomic; only its durability across power loss is weakened.
+    }
   } catch (err) {
     // Never leave the scratch file behind: it holds the same secrets and
     // nothing else would ever clean it up.

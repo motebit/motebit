@@ -8,7 +8,7 @@
  */
 
 import { verify } from "@motebit/crypto";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, rmSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
 import { homedir } from "node:os";
 import { generateIdentity, regenerateIdentityFile, decryptPrivateKey } from "./generate.js";
@@ -61,18 +61,60 @@ interface MotebitConfig {
   [key: string]: unknown;
 }
 
+/**
+ * The same file the CLI keeps its identity key in, so the same three
+ * rules apply here (`apps/cli/src/config.ts`): absence is not damage,
+ * damage is never overwritten, and a replacement is atomic and
+ * owner-only. Reading damage as `{}` here mattered twice over, because
+ * the clobber guard below decides from `motebit_id` alone — an
+ * unreadable config looked like a fresh machine and was replaced.
+ */
 function loadConfig(): MotebitConfig {
+  let raw: string;
   try {
-    return JSON.parse(readFileSync(configPath(), "utf-8")) as MotebitConfig;
-  } catch {
-    return {};
+    raw = readFileSync(configPath(), "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw new Error(
+      `${configPath()} exists but could not be read — it may be damaged. It has NOT been changed. Copy it aside before running anything that writes config.`,
+      { cause: err },
+    );
   }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `${configPath()} exists but could not be read — it may be damaged. It has NOT been changed.`,
+      { cause: err },
+    );
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${configPath()} exists but is not a config object — it may be damaged.`);
+  }
+  return parsed as MotebitConfig;
 }
 
 function saveConfig(config: MotebitConfig): void {
   const dir = configDir();
   mkdirSync(dir, { recursive: true });
-  writeFileSync(configPath(), JSON.stringify(config, null, 2) + "\n", "utf-8");
+  writeFileAtomic(configPath(), JSON.stringify(config, null, 2) + "\n");
+}
+
+/** Stage beside the target, then rename — a reader sees the old file or the new one, never a partial one. */
+function writeFileAtomic(target: string, contents: string): void {
+  const staged = `${target}.${process.pid}.tmp`;
+  try {
+    writeFileSync(staged, contents, { encoding: "utf-8", mode: 0o600 });
+    renameSync(staged, target);
+  } catch (err) {
+    try {
+      rmSync(staged, { force: true });
+    } catch {
+      /* best effort */
+    }
+    throw err;
+  }
 }
 
 /**

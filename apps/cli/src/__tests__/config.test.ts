@@ -189,6 +189,29 @@ describe("config durability", () => {
     }
   });
 
+  it("refuses JSON that parses but is not a config object", () => {
+    // `null` would throw a raw TypeError on the governance check — a stack
+    // trace, not a message. The others read back as a config whose every
+    // field is undefined, which is damage wearing absence's clothes, and
+    // the next save would overwrite the key with it.
+    for (const body of ["null", "[]", "3", '"x"']) {
+      fs.writeFileSync(mod.CONFIG_PATH, body, "utf-8");
+      expect(() => mod.loadFullConfig()).toThrow(/damaged|could not be read|config object/i);
+      expect(fs.readFileSync(mod.CONFIG_PATH, "utf-8")).toBe(body);
+    }
+  });
+
+  it("tightens a stale scratch file rather than inheriting its mode", () => {
+    // `writeFileSync`'s mode applies only when it CREATES the file. A
+    // scratch copy left behind by an earlier crash, with loose
+    // permissions, would otherwise be renamed into place as-is.
+    fs.mkdirSync(mod.CONFIG_DIR, { recursive: true });
+    const staged = `${mod.CONFIG_PATH}.${process.pid}.tmp`;
+    fs.writeFileSync(staged, "{}", { encoding: "utf-8", mode: 0o644 });
+    mod.saveFullConfig({ motebit_id: "m-1" });
+    expect(fs.statSync(mod.CONFIG_PATH).mode & 0o777).toBe(0o600);
+  });
+
   it("reads an absent config as empty — that is a first run, not damage", () => {
     fs.rmSync(mod.CONFIG_PATH, { force: true });
     expect(mod.loadFullConfig()).toEqual({});
