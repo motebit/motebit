@@ -97,8 +97,38 @@ export async function handleDoctor(): Promise<void> {
     });
   }
 
-  // Existing identity
-  const fullCfg = loadFullConfig();
+  // Existing identity. `loadFullConfig` now refuses a config it cannot
+  // read rather than reporting it as empty — and this is the one command
+  // that must survive that and SAY so, because it is where a user lands
+  // when something is wrong.
+  let fullCfg: ReturnType<typeof loadFullConfig>;
+  try {
+    fullCfg = loadFullConfig();
+  } catch (err) {
+    const backups = fs
+      .readdirSync(CONFIG_DIR)
+      .filter((f) => f.startsWith("config.json.clobbered-"));
+    checks.push({
+      name: "Config file",
+      ok: false,
+      detail: err instanceof Error ? err.message : String(err),
+      remedy:
+        backups.length > 0
+          ? `copy the damaged file aside, then restore from ~/.motebit/${backups[0]}`
+          : "copy the damaged file aside; if you have your recovery seed, `motebit restore` can rebuild from it",
+    });
+    console.log("\nmotebit doctor\n");
+    for (const check of checks) {
+      console.log(`  ${"FAIL".padEnd(6)} ${check.name.padEnd(20)} ${check.detail}`);
+      if (check.remedy != null && check.remedy !== "") {
+        console.log(`         ${" ".repeat(20)} → ${check.remedy}`);
+      }
+    }
+    console.log();
+    // Every later check reads config. None of them can say anything true
+    // while it cannot be read, and several would overwrite it.
+    return;
+  }
   if (fullCfg.motebit_id != null && fullCfg.motebit_id !== "") {
     checks.push({ name: "Identity", ok: true, detail: `${fullCfg.motebit_id.slice(0, 8)}...` });
   } else {

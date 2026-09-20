@@ -150,24 +150,95 @@ function isValidGovernanceConfig(value: unknown): value is GovernanceConfig {
   );
 }
 
-export function loadFullConfig(): FullConfig {
-  try {
-    const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
-    const parsed = JSON.parse(raw) as FullConfig;
-    // Governance: validate the persisted blob. Drop invalid shapes — runtime
-    // construction falls back to DEFAULT_GOVERNANCE_CONFIG when absent.
-    if (parsed.governance !== undefined && !isValidGovernanceConfig(parsed.governance)) {
-      delete parsed.governance;
-    }
-    return parsed;
-  } catch {
-    return {};
+/** The scratch name a replacement is staged under, in the same directory so the rename is atomic. */
+function stagingPath(): string {
+  return `${CONFIG_PATH}.${process.pid}.tmp`;
+}
+
+/**
+ * An existing config that cannot be read. Distinct from "no config", and
+ * the distinction is load-bearing: this file holds `cli_encrypted_key` —
+ * for a CLI identity, the only copy of the private key — and, for anyone
+ * who has not migrated, the deprecated `cli_private_key` in plaintext.
+ * Reporting damage as absence tells the user they have no identity, and
+ * the next save then overwrites whatever was recoverable with a fresh,
+ * nearly-empty file.
+ */
+export class ConfigDamagedError extends Error {
+  constructor(
+    readonly path: string,
+    cause?: unknown,
+  ) {
+    super(
+      `${path} exists but could not be read — it may be damaged. It has NOT been changed. ` +
+        `If you have your recovery seed you can restore from it; otherwise copy that file aside before running anything that writes config.`,
+      { cause },
+    );
+    this.name = "ConfigDamagedError";
   }
 }
 
+export function loadFullConfig(): FullConfig {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(CONFIG_PATH, "utf-8");
+  } catch (err) {
+    // Absent is a first run, and that is the ONLY reason to answer "empty".
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw new ConfigDamagedError(CONFIG_PATH, err);
+  }
+  let parsed: FullConfig;
+  try {
+    parsed = JSON.parse(raw) as FullConfig;
+  } catch (err) {
+    throw new ConfigDamagedError(CONFIG_PATH, err);
+  }
+  // Governance: validate the persisted blob. Drop invalid shapes — runtime
+  // construction falls back to DEFAULT_GOVERNANCE_CONFIG when absent. A bad
+  // governance block is not damage: it is a field we know how to ignore.
+  if (parsed.governance !== undefined && !isValidGovernanceConfig(parsed.governance)) {
+    delete parsed.governance;
+  }
+  return parsed;
+}
+
+/**
+ * Replace the config atomically, owner-only.
+ *
+ * `writeFileSync` straight onto the target truncates first, so a crash, a
+ * full disk or a kill between the truncate and the completed write leaves
+ * the file empty or half-written — and this is the file holding the only
+ * copy of the identity's key. Staging beside it and renaming means a
+ * reader sees the old file or the new one, never a partial one, because
+ * rename within a directory is atomic. The fsync is what makes that true
+ * across power loss rather than only across a crashed process.
+ */
 export function saveFullConfig(config: FullConfig): void {
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
+  const staged = stagingPath();
+  try {
+    // 0600 from the moment it exists: the contents are key material, and
+    // the staged copy is as sensitive as the target.
+    fs.writeFileSync(staged, JSON.stringify(config, null, 2), { encoding: "utf-8", mode: 0o600 });
+    const fd = fs.openSync(staged, "r+");
+    try {
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(staged, CONFIG_PATH);
+    // An older config may predate the mode above.
+    fs.chmodSync(CONFIG_PATH, 0o600);
+  } catch (err) {
+    // Never leave the scratch file behind: it holds the same secrets and
+    // nothing else would ever clean it up.
+    try {
+      fs.rmSync(staged, { force: true });
+    } catch {
+      /* best effort */
+    }
+    throw err;
+  }
 }
 
 /** Persist newly pinned motebit public keys from connected adapters back to config. */
