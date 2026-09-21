@@ -110,20 +110,77 @@ function deployTargets(): Target[] {
 }
 
 /**
- * ISO time of the newest commit touching this service's deploy trigger paths.
- * Every deploy-*.yml triggers on `services/<svc>/**` plus `packages/**`, so
- * those two paths are what "should have shipped by now" means.
- *
- * Returns null when git cannot answer (shallow clone) — the caller treats an
- * unknown expectation as not-a-finding rather than inventing one.
+ * The deploy workflow that ships this service, found by the fly config its
+ * `flyctl deploy --config` names. The file name does not follow the service
+ * name (`services/relay` ships from `deploy-sync.yml`), so the deploy command
+ * is the only honest link between the two.
  */
-function lastRelevantCommit(service: string): Date | null {
+function workflowFor(service: string, env: string): string | null {
+  const config = `services/${service}/${env === "staging" ? "fly.staging.toml" : "fly.toml"}`;
+  const dir = resolve(ROOT, ".github/workflows");
+  for (const file of readdirSync(dir).sort()) {
+    if (!file.startsWith("deploy-") || !file.endsWith(".yml")) continue;
+    const src = readFileSync(join(dir, file), "utf-8");
+    if (src.includes(`--config ${config}`)) return join(dir, file);
+  }
+  return null;
+}
+
+/**
+ * The paths a workflow actually redeploys on — its `on.push.paths` list.
+ *
+ * This used to be assumed: "every deploy-*.yml triggers on `services/<svc>/**`
+ * plus `packages/**`". That assumption was wrong in both directions, and it
+ * produced a two-day red. `deploy-embed.yml` has NO `packages/**` trigger (the
+ * service has no workspace dependencies, and its comment says so), so every
+ * commit under `packages/` reported embed as stale for a change that cannot
+ * reach it — and the manual dispatch that would clear the red ships a
+ * byte-identical image. `deploy-browser-sandbox.yml` triggers on
+ * `packages/protocol/**` only, and has the same problem more narrowly.
+ *
+ * The opposite direction is the dangerous one and was invisible: embed also
+ * redeploys on `pnpm-lock.yaml` and `package.json`, which the assumption did
+ * not include, so a lockfile change that should have shipped and did not would
+ * have read as fresh. A gate that models a service's inputs from a guess
+ * cannot report on the inputs it guessed wrong.
+ *
+ * Comment lines are skipped so that a `# - "packages/**"` example in prose is
+ * never read as a trigger — `deploy-embed.yml` contains exactly that.
+ */
+function triggerPaths(workflow: string): string[] | null {
+  const lines = readFileSync(workflow, "utf-8").split("\n");
+  const start = lines.findIndex((l) => /^\s*paths:\s*$/.test(l));
+  if (start === -1) return null;
+  const paths: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (/^\s*#/.test(line)) continue;
+    const item = line.match(/^\s*-\s*["']([^"']+)["']\s*$/);
+    if (item === null) break;
+    paths.push(item[1]!);
+  }
+  return paths.length > 0 ? paths : null;
+}
+
+/**
+ * ISO time of the newest commit touching the paths that would have redeployed
+ * this service — read from its workflow, not assumed.
+ *
+ * Returns null when git cannot answer (shallow clone) or when the workflow
+ * declares no path filter: an unknown expectation is not a finding, because
+ * inventing one is how this check went red about a service that was current.
+ */
+function lastRelevantCommit(service: string, env: string): Date | null {
+  const workflow = workflowFor(service, env);
+  const paths = workflow === null ? null : triggerPaths(workflow);
+  if (paths === null) return null;
+  // A glob is a git pathspec here: `services/embed/**` and `services/embed`
+  // select the same commits, and git handles the rest.
   try {
-    const out = execFileSync(
-      "git",
-      ["log", "-1", "--format=%cI", "--", `services/${service}`, "packages"],
-      { cwd: ROOT, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] },
-    ).trim();
+    const out = execFileSync("git", ["log", "-1", "--format=%cI", "--", ...paths], {
+      cwd: ROOT,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
     return out === "" ? null : new Date(out);
   } catch {
     return null;
@@ -212,7 +269,8 @@ function main(): void {
       .filter((d): d is Date => d != null && !Number.isNaN(d.getTime()));
     const deployedAt =
       stamps.length > 0 ? new Date(Math.max(...stamps.map((d) => d.getTime()))) : null;
-    const commitAt = lastRelevantCommit(target.service);
+    const workflow = workflowFor(target.service, target.env);
+    const commitAt = lastRelevantCommit(target.service, target.env);
 
     if (deployedAt != null && commitAt != null) {
       const lagHours = (commitAt.getTime() - deployedAt.getTime()) / 3_600_000;
@@ -228,9 +286,18 @@ function main(): void {
         );
       }
     } else if (live.length > 0) {
-      console.log(
-        `  ✓ ${label} — running (freshness unknown: no git history or machine timestamp)`,
-      );
+      // Name WHY freshness is unknown rather than folding every cause into one
+      // sentence. "No workflow deploys this" is a different fact from "git
+      // could not answer", and it is one worth seeing: six staging configs
+      // have no deploy workflow referencing them, so nothing would ship them
+      // automatically and a freshness verdict about them would be invented.
+      // A check that goes quiet without saying what it stopped looking at is
+      // how aperture drifts (docs/doctrine/gate-repair-instructions.md).
+      const why =
+        workflow === null
+          ? "no deploy workflow references this fly config — nothing auto-deploys it"
+          : "no git history or machine timestamp";
+      console.log(`  ✓ ${label} — running (freshness unknown: ${why})`);
     }
   }
 
