@@ -222,7 +222,7 @@ describe("Revocation Propagation", () => {
       expect(result.refused).toBe(0);
     });
 
-    it("processes credential revocation — stores in revoked credentials table", async () => {
+    it("refuses a peer's credential revocation — a peer is neither subject nor issuer", async () => {
       const timestamp = Date.now();
       const motebitId = "agent-cred-revoked";
       const credentialId = "cred-fed-1";
@@ -240,13 +240,16 @@ describe("Revocation Propagation", () => {
       ];
 
       const result = await processIncomingRevocations(db, events, identity.publicKey);
-      expect(result.processed).toBe(1);
+      // Refused regardless of whether the subject is an identity this relay
+      // holds: the authority model for this act is "subject or issuer", and a
+      // peer relay is neither.
+      expect(result.refused).toBe(1);
+      expect(result.processed).toBe(0);
 
       const row = db
         .prepare("SELECT * FROM relay_revoked_credentials WHERE credential_id = ?")
         .get(credentialId) as Record<string, unknown> | undefined;
-      expect(row).toBeDefined();
-      expect(row!.revoked_by).toBe("federation");
+      expect(row).toBeUndefined();
     });
 
     it("rejects events with invalid signature (fail-closed)", async () => {

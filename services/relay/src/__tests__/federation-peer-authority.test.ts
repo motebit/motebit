@@ -221,13 +221,13 @@ describe("federation — a peer has no authority over a locally held identity", 
     expect(after.found).toBe(false);
   });
 
-  it("still applies credential_revoked — the fix is scoped, not a blanket refusal", async () => {
-    // The guard that matters in the other direction. `relay_revoked_credentials`
-    // is federation-native by construction (`revoked_by` records 'federation'),
-    // and the write denies a credential rather than moving identity authority.
-    // If someone later "fixes" the authority defect by refusing every peer
-    // event, this goes red — which is the whole point of scoping the invariant
-    // to `agent_registry` rather than to the handler.
+  it("cannot revoke a credential — it is neither the subject nor the issuer", async () => {
+    // This test previously asserted the OPPOSITE, and that was the defect
+    // wearing a requirement's clothes. The relay's own door for this act
+    // answers 403 "Only the credential subject or issuer can revoke"
+    // (`credentials.ts`, checked against `relay_credentials.issuer_did`). A
+    // peer is neither principal, and nothing in the event asserts it speaks
+    // for one, so the same rule has to hold at this door.
     const peer = await becomePeer(relay);
     const credentialId = `cred-${crypto.randomUUID()}`;
 
@@ -237,7 +237,39 @@ describe("federation — a peer has no authority over a locally held identity", 
     const status = await heartbeatWith(relay, peer, [
       { type: "credential_revoked", motebit_id: victimId, credential_id: credentialId },
     ]);
-    expect(status).toBe(200);
+    expect(status).toBe(200); // liveness: the heartbeat is still honest traffic
+
+    const after = await relay.app.request(`/api/v1/credentials/${credentialId}/status`);
+    expect(((await after.json()) as { revoked: boolean }).revoked).toBe(false);
+  });
+
+  it("cannot poison a credential id that has not been issued yet", async () => {
+    // `relay_revoked_credentials` has no foreign key and the write was
+    // `INSERT OR IGNORE`, so the named id never had to exist. The consumer
+    // that makes this bite is credential submission, which rejects an id
+    // already present in that table — a credential could be killed before it
+    // was ever minted.
+    const peer = await becomePeer(relay);
+    const futureId = `urn:uuid:${crypto.randomUUID()}`;
+
+    await heartbeatWith(relay, peer, [
+      { type: "credential_revoked", motebit_id: victimId, credential_id: futureId },
+    ]);
+
+    const status = await relay.app.request(`/api/v1/credentials/${futureId}/status`);
+    expect(((await status.json()) as { revoked: boolean }).revoked).toBe(false);
+  });
+
+  it("keeps the subject-or-issuer door working — the fix refuses peers, not revocation", async () => {
+    // The positive control that stops this becoming a blanket "deny everything
+    // credential-shaped". The owner-authorized door must still revoke.
+    const credentialId = `cred-${crypto.randomUUID()}`;
+    const res = await relay.app.request(`/api/v1/agents/${victimId}/revoke-credential`, {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify({ credential_id: credentialId, reason: "owner revoked" }),
+    });
+    expect(res.status).toBe(200);
 
     const after = await relay.app.request(`/api/v1/credentials/${credentialId}/status`);
     expect(((await after.json()) as { revoked: boolean }).revoked).toBe(true);

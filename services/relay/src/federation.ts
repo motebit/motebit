@@ -497,14 +497,20 @@ export function getRevocationEventsSince(db: DatabaseDriver, sinceTs: number): R
  * signature" is a property anyone who can reach this relay can produce for
  * themselves, and it cannot be the thing that authorizes a write.
  *
- * Every row in `agent_registry` was admitted by a door that proved possession
- * of that identity's own key — registration and bootstrap (both behind
- * `refusePublicDeviceRegistration`), the `/rotate-key` succession, guardian
- * recovery, and the migration accept (which verifies a migration token and a
- * credential bundle against the presented key). `services/relay/CLAUDE.md`
- * rule 21 requires every door that writes `agent_registry.public_key` to
- * answer to that rule or to say what roots its authority instead. This door's
- * answer is that it has none, so it writes nothing there.
+ * Every row in `agent_registry` was written by a door with a NAMED authorized
+ * principal. The principal is not always the identity's current key, and the
+ * invariant is authorization rather than current-key possession: registration
+ * and bootstrap admit on a key the identity already holds (behind
+ * `refusePublicDeviceRegistration`) and `/rotate-key` proves possession of the
+ * current key, but guardian recovery is authorized by the identity's own
+ * designated guardian, operator moderation by the operator under a signed
+ * append-only `relay_agent_revocations` record, and the migration accept by a
+ * verified migration token plus a credential bundle checked against the
+ * presented key. A peer is none of those principals, and carries nothing that
+ * would make it one. `services/relay/CLAUDE.md` rule 21 requires every door
+ * that writes `agent_registry.public_key` to answer to the shared rule or to
+ * say what roots its authority instead. This door's answer is that it has
+ * none, so it writes nothing there.
  *
  * Refusing costs no working behaviour. `agent_registry` holds only identities
  * registered HERE — remote agents are never cached into it, and
@@ -516,12 +522,38 @@ export function getRevocationEventsSince(db: DatabaseDriver, sinceTs: number): R
  * departure deliberately does not (`migration.ts` marks the row revoked
  * locally and mints no event).
  *
- * `credential_revoked` is deliberately left applying. Its table is
- * federation-native by construction — `relay_revoked_credentials.revoked_by`
- * records `'federation'` as a first-class source — and the write denies a
- * credential rather than moving identity authority. Its scope is still
- * unbounded (any peer may name any credential id) and that is tracked with the
- * federation wire work, not silently fixed here.
+ * `credential_revoked` is refused for the same reason, and the reasoning that
+ * once spared it was wrong: "the table is federation-native" describes storage
+ * provenance and "the write only denies" describes blast direction. Neither is
+ * a grant of authority. This relay already has an authority model for that
+ * act, stated and enforced on its own door — `POST
+ * /api/v1/agents/:motebitId/revoke-credential` answers 403 "Only the
+ * credential subject or issuer can revoke", checked against
+ * `relay_credentials.issuer_did`. A peer is neither, `credential_id` is not
+ * covered by the signature verified above, and nothing in the event asserts
+ * that the sender speaks for either principal. The table also has no foreign
+ * key and the write is `INSERT OR IGNORE`, so a named id need not exist: an
+ * unrefused event can poison an identifier before it is ever issued.
+ *
+ * Refusing it has a real cost, stated rather than glossed: a credential
+ * legitimately revoked on a peer no longer becomes revoked here, so this
+ * direction now fails OPEN on honest revocations in exchange for closing an
+ * unauthorized write. Restoring it needs the issuer's or subject's OWN signed
+ * revocation carried in the event and verified against that identity's key —
+ * the same shape as the unsigned `new_public_key` field, and the same
+ * federation wire increment.
+ *
+ * What remains applicable from an inbound feed is therefore nothing: with all
+ * three branches grounded, this handler can act with authority on no event the
+ * current wire format can carry. That is the honest state of the feature, and
+ * naming it is better than keeping a door open to look busy.
+ *
+ * The scoping precedent is already in this file. `POST
+ * /federation/v1/horizon/witness` refuses a request whose `cert_body.subject`
+ * is not the soliciting `issuer_id` — "stops a relay from soliciting witnesses
+ * for a cert it doesn't own" — and `/horizon/dispute` refuses a cert this
+ * relay did not issue. A peer may speak about itself. This door had simply
+ * drifted from a rule its siblings already kept.
  *
  * `refused` counts only the cross-authority shape: an event naming an identity
  * this relay holds. An event about an identity we do not hold is `processed`
@@ -593,13 +625,19 @@ export async function processIncomingRevocations(
         break;
       }
       case "credential_revoked": {
-        // Store credential revocation
-        if (event.credential_id) {
-          db.prepare(
-            "INSERT OR IGNORE INTO relay_revoked_credentials (credential_id, motebit_id, reason, revoked_by) VALUES (?, ?, 'Revoked via federation', 'federation')",
-          ).run(event.credential_id, event.motebit_id);
-        }
-        processed++;
+        // Unlike the two above, this is refused whether or not the subject is
+        // an identity this relay holds. The local door's rule is "subject or
+        // issuer" and a peer can be neither; and because the table takes an
+        // arbitrary id with no existence check, an unrefused event could also
+        // deny a credential that has not been issued yet. Consumers that would
+        // have honoured it: the hardware-attestation projection in
+        // `agents.ts` (dropping a revoked credential's score) and the
+        // credential-submission check in `credentials.ts`.
+        refused++;
+        logger.warn("federation.revocation.refused_unauthorized_credential", {
+          type: event.type,
+          motebitId: event.motebit_id,
+        });
         break;
       }
       default:
