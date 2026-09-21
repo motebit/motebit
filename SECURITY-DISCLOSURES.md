@@ -17,7 +17,7 @@ The last point is the one that makes the rest worth reading. "We found no eviden
 
 ## Why there is no published advisory
 
-A GitHub security advisory tells the users of a released package which versions to move off. Both weaknesses below are in `@motebit/relay`, which is marked private and has never been published: there is no version anyone installed, and nothing for a user to upgrade. Filing an advisory against a package nobody depends on would be a notice that looks like diligence without doing its work.
+A GitHub security advisory tells the users of a released package which versions to move off. Every weakness below is in `@motebit/relay`, which is marked private and has never been published: there is no version anyone installed, and nothing for a user to upgrade. Filing an advisory against a package nobody depends on would be a notice that looks like diligence without doing its work.
 
 The relay is a service we operate. The honest artifact for a service is this record, alongside the transparency declaration at [`services/relay/PRIVACY.md`](services/relay/PRIVACY.md). If a weakness ever reaches a published package, it gets an advisory as well, because then there is someone with a version to move off.
 
@@ -61,13 +61,54 @@ The same change closed a second door. Pairing's key-transfer route takes no bear
 
 ---
 
+## 2026-09-21 — a peer of the relay could set any identity's key
+
+**Fixed in [#713](https://github.com/motebit/motebit/pull/713), live in relay release v962.**
+
+Relays federate by exchanging revocation events over a heartbeat. Each event carries the sending relay's signature, and the receiving relay verified it and then applied the event: `key_rotated` wrote the named public key into the agent registry, `agent_revoked` set the revoked flag, `credential_revoked` denied a credential.
+
+The signature was never a boundary. Peering is not an authorization — `propose` and `confirm` are two unauthenticated calls, and a peer is admitted on a signature over a nonce the relay has just handed it, made with the key it supplied. The peer and the author of the events are the same party, so a valid signature was something anyone who could reach the relay could produce for themselves. The key in `key_rotated` was not covered by that signature either, but that is the smaller half: even a signed field would not have said the sender was entitled to speak about the identity it named.
+
+An identity re-keyed this way is served from discovery, from the identity-binding endpoint third parties read, and into the anchored identity log. Revoked, it drops out of discovery and can no longer migrate — without the signed, append-only moderation record the operator's own revocation writes.
+
+The receiving side now writes no identity state from a peer's feed at all. Every row in that table was admitted by a door with a named authorized principal — the identity itself, its designated guardian, the operator under a signed record, or a verified migration — and a peer is none of them. `credential_revoked` is refused on the same ground: the relay already states that only a credential's subject or issuer may revoke it, and a peer is neither.
+
+**What we checked, 2026-09-21, against the production database.** A peer that ever reached the active state leaves a durable record — the only deletion is on a failed handshake, and a peer removing itself only marks the row removed. There are **two** such records: our own staging relay, long since removed, and a stale self-reference. No third party has a record. No identity is revoked, none carries a key its own devices do not attest, and no credential is marked revoked from any source.
+
+**What that check cannot see.** There is no append-only log of the registry table, so the key comparison is a point-in-time read: a change written and overwritten before we looked would leave nothing behind. Volume backups were not examined. And the argument that an admitted peer always leaves a record is drawn from the current code, not proved over the whole history.
+
+**What this fix does not do.** It blocks unauthorized inbound changes; it does not give the protocol an authenticated way for one relay to tell another about a real revocation. That is unbuilt, tracked in [#714](https://github.com/motebit/motebit/issues/714), and it means a credential legitimately revoked on another relay does not become revoked here. No credential we currently hold depends on that path — all of them were issued by, and belong to, identities this relay serves — and local revocation is unaffected.
+
+---
+
+## 2026-09-21 — anyone could revoke anyone's credential
+
+**Fixed in [#719](https://github.com/motebit/motebit/pull/719), live in relay release v963.**
+
+The route that revokes a credential states its rule in its own refusal: only the credential's subject or its issuer may do it. It decided that rule by comparing the caller to the identity named in the request path — a value the caller chooses — and never compared it to the credential named in the body. Naming yourself in the path satisfied the subject test for any credential, including one belonging to someone else.
+
+Authentication was not a barrier either. The route's audience is resolved by matching the path against `/credentials`, which `revoke-credential` does not contain, so it fell through to the general audience any agent mints from its own key.
+
+Knowing a credential's identifier is the only other requirement, and identifiers are not secret to a counterparty: presenting your credentials is the ordinary way to be trusted, and a presentation carries them. A revoked credential is dropped from the hardware-attestation score the relay computes and is refused if resubmitted. The table has no foreign key, so an identifier could also be denied before it was ever issued.
+
+Authorization now resolves the credential first and binds to it. The path segment must name the credential's holder; it keeps the route's meaning honest and it does not authorize. Two further faults went with it: the issuer check consulted whichever device row happened to come back first from an unordered query, so a legitimate issuer with more than one device was refused unpredictably; and the revocation record was filed under the identity the request named rather than the credential's actual holder.
+
+**What we checked, 2026-09-21, against the production database.** The revoked-credential table is **empty** — no rows, from any source, across the relay's life. This was never exercised, by anyone. Forty-six credentials are held, every one of them issued by and belonging to identities this relay serves.
+
+**What that check cannot see.** Emptiness is a strong answer here because the table is append-oriented and nothing in the relay deletes from it — but it is still a point-in-time read, and a row written and removed by some path we have not identified would leave no trace.
+
+**How it was found.** Not by a report. It came out of writing the tests for the rule while closing the weakness above, which is the part worth recording: the rule had two tests and neither reached it. One sends no token; the other uses the operator token, which takes a bypass and never evaluates the subject test at all. A rule enforced in one place, skipped in another, and asserted nowhere is invisible until someone writes the test that names its principals.
+
+---
+
 ## Known and open
 
 We do not only publish what we have finished. Weaknesses we have found and not yet closed are tracked in the open, without the detail that would help someone use them before we do:
 
 - [#702](https://github.com/motebit/motebit/issues/702) — no shipped client can reach the key-rotation route, so rotating an identity's key currently removes it from the relay.
 - [#703](https://github.com/motebit/motebit/issues/703) — a routine daemon shutdown discards an identity's guardian and key state along with its discovery record.
-- [#704](https://github.com/motebit/motebit/issues/704) — a federated peer can set a local identity's key from a field its signature does not cover.
 - [#705](https://github.com/motebit/motebit/issues/705) — two routes are unauthenticated on a deployment configured without an operator token.
 - [#706](https://github.com/motebit/motebit/issues/706) — a key history can be recorded in an order a verifier will reject.
 - [#707](https://github.com/motebit/motebit/issues/707) — an identity holding no key at all is claimable at the public registration doors.
+- [#714](https://github.com/motebit/motebit/issues/714) — there is no authenticated way for one relay to tell another about a revocation, so revocations do not cross relays at all.
+- [#715](https://github.com/motebit/motebit/issues/715) — a setting we publish as an anti-sybil boundary is read by nothing, so the posture it declares is not the posture we hold.
