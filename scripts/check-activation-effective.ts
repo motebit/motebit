@@ -46,6 +46,7 @@ const ROOT = resolve(__dirname, "..");
 const RELAY = resolve(ROOT, "services/relay");
 const TESTS_DIR = resolve(RELAY, "src/__tests__");
 const TASKS = "services/relay/src/tasks.ts";
+const FEDERATION = "services/relay/src/federation.ts";
 
 interface Probe {
   /** The booted suite this probe defends (basename, used as the vitest filter). */
@@ -124,6 +125,25 @@ const PROBES: readonly Probe[] = [
       ),
     observable:
       "a wrong-audience token must be refused (403) and settle/trust nothing across the cascade",
+  },
+  {
+    suite: "booted-federation-authority-activation",
+    guards:
+      "peer authority — a federation peer cannot write the key or revocation state of an identity this relay serves",
+    target: FEDERATION,
+    // Restore the `key_rotated` registry write (the pre-fix shape). Anchored on
+    // the branch's own comment, because the guard block is textually identical
+    // to `agent_revoked`'s. `heldLocally` stays referenced by that sibling
+    // branch, so the mutation builds cleanly and the suite reds on its
+    // assertion rather than on tsc.
+    mutate: (src) =>
+      replaceOnce(
+        src,
+        "        // current-key possession (a recovery exists precisely because that key\n        // is gone). A peer is neither principal.\n        if (heldLocally(event.motebit_id)) {",
+        '        // current-key possession (a recovery exists precisely because that key\n        // is gone). A peer is neither principal.\n        if (event.new_public_key) {\n          db.prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?").run(\n            event.new_public_key,\n            event.motebit_id,\n          );\n        }\n        if (false && heldLocally(event.motebit_id)) {',
+      ),
+    observable:
+      "an unauthenticated peer's signed key_rotated must not change the identity's key in discovery",
   },
 ];
 
