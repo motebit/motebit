@@ -260,9 +260,19 @@ describe("federation — a peer has no authority over a locally held identity", 
     expect(((await status.json()) as { revoked: boolean }).revoked).toBe(false);
   });
 
-  it("keeps the subject-or-issuer door working — the fix refuses peers, not revocation", async () => {
-    // The positive control that stops this becoming a blanket "deny everything
-    // credential-shaped". The owner-authorized door must still revoke.
+  it("keeps OPERATOR-authorized credential revocation working — the fix refuses peers, not revocation", async () => {
+    // Positive control: this must not become a blanket "deny everything
+    // credential-shaped".
+    //
+    // Precise about what it proves. `JSON_AUTH` is the configured master
+    // token, which leaves `callerMotebitId` undefined, and `credentials.ts`
+    // reads that as `isSubject` — the operator bypass. So this exercises the
+    // OPERATOR path, not an authenticated subject or issuer. The distinction
+    // matters because the rule this PR applies at the federation door is the
+    // subject-or-issuer one, and **no test in this repo exercises that 403
+    // branch** (checked: no test references `issuer_did` against
+    // `revoke-credential`, and `listing-auth.test.ts` covers only the
+    // no-token case). Worth its own coverage; deliberately not grown here.
     const credentialId = `cred-${crypto.randomUUID()}`;
     const res = await relay.app.request(`/api/v1/agents/${victimId}/revoke-credential`, {
       method: "POST",

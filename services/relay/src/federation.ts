@@ -555,10 +555,13 @@ export function getRevocationEventsSince(db: DatabaseDriver, sinceTs: number): R
  * relay did not issue. A peer may speak about itself. This door had simply
  * drifted from a rule its siblings already kept.
  *
- * `refused` counts only the cross-authority shape: an event naming an identity
- * this relay holds. An event about an identity we do not hold is `processed`
- * with no local effect, exactly as before, so an honest peer's feed stays
- * quiet in the logs.
+ * `refused` counts two shapes, not one. For `agent_revoked` and `key_rotated`
+ * it is the cross-authority case: an event naming an identity this relay
+ * holds. For `credential_revoked` it is EVERY event, whatever the subject's
+ * locality, because the authority a peer lacks there is over the credential
+ * rather than over the registry row. An `agent_revoked` or `key_rotated` event
+ * about an identity we do not hold is still `processed` with no local effect,
+ * exactly as before, so an honest peer's feed stays quiet on those two.
  */
 export async function processIncomingRevocations(
   db: DatabaseDriver,
@@ -612,7 +615,11 @@ export async function processIncomingRevocations(
         // authenticated the key it names. The field binding is a wire change
         // and is tracked separately; it is not what makes this safe. What
         // makes it safe is that the key of an identity this relay holds moves
-        // only through a door that proves possession of the CURRENT key.
+        // only through a door with a named authorized principal — `/rotate-key`
+        // proving possession of the CURRENT key, or the identity's designated
+        // guardian on the recovery path, which is deliberately an exception to
+        // current-key possession (a recovery exists precisely because that key
+        // is gone). A peer is neither principal.
         if (heldLocally(event.motebit_id)) {
           refused++;
           logger.warn("federation.revocation.refused_local_identity", {

@@ -139,8 +139,8 @@ const PROBES: readonly Probe[] = [
     mutate: (src) =>
       replaceOnce(
         src,
-        "        // only through a door that proves possession of the CURRENT key.\n        if (heldLocally(event.motebit_id)) {",
-        '        // only through a door that proves possession of the CURRENT key.\n        if (event.new_public_key) {\n          db.prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?").run(\n            event.new_public_key,\n            event.motebit_id,\n          );\n        }\n        if (false && heldLocally(event.motebit_id)) {',
+        "        // current-key possession (a recovery exists precisely because that key\n        // is gone). A peer is neither principal.\n        if (heldLocally(event.motebit_id)) {",
+        '        // current-key possession (a recovery exists precisely because that key\n        // is gone). A peer is neither principal.\n        if (event.new_public_key) {\n          db.prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?").run(\n            event.new_public_key,\n            event.motebit_id,\n          );\n        }\n        if (false && heldLocally(event.motebit_id)) {',
       ),
     observable:
       "an unauthenticated peer's signed key_rotated must not change the identity's key in discovery",
