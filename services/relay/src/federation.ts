@@ -484,15 +484,63 @@ export function getRevocationEventsSince(db: DatabaseDriver, sinceTs: number): R
 // surfaces as the declared `horizon_advance_period_days: 7` in commit
 // 5's manifest projection.
 
-/** Process incoming revocation events from a peer relay. */
+/**
+ * Process incoming revocation events from a peer relay.
+ *
+ * A peer signature establishes AUTHORSHIP of the statement. It does not
+ * establish AUTHORITY over the identity the statement names, and the two must
+ * not be conflated here, because peering is not an authorization:
+ * `/federation/v1/peer/propose` followed by `/federation/v1/peer/confirm` are
+ * two unauthenticated calls, and `autoAcceptPeers` is not consulted by either
+ * (see `federation-independent-operators.test.ts` — "two independent
+ * operators, no shared admin token"). So "this event carries a valid peer
+ * signature" is a property anyone who can reach this relay can produce for
+ * themselves, and it cannot be the thing that authorizes a write.
+ *
+ * Every row in `agent_registry` was admitted by a door that proved possession
+ * of that identity's own key — registration and bootstrap (both behind
+ * `refusePublicDeviceRegistration`), the `/rotate-key` succession, guardian
+ * recovery, and the migration accept (which verifies a migration token and a
+ * credential bundle against the presented key). `services/relay/CLAUDE.md`
+ * rule 21 requires every door that writes `agent_registry.public_key` to
+ * answer to that rule or to say what roots its authority instead. This door's
+ * answer is that it has none, so it writes nothing there.
+ *
+ * Refusing costs no working behaviour. `agent_registry` holds only identities
+ * registered HERE — remote agents are never cached into it, and
+ * `federation_visible` is an opt-out on local rows — while the outbound feed
+ * (`insertRevocationEvent`) is only ever minted about this relay's own
+ * identities. An inbound event therefore describes the SENDER's identity, and
+ * could only match a local row by naming an identity that is not the sender's.
+ * That match is the defect, not a feature: nothing emits it, and migration
+ * departure deliberately does not (`migration.ts` marks the row revoked
+ * locally and mints no event).
+ *
+ * `credential_revoked` is deliberately left applying. Its table is
+ * federation-native by construction — `relay_revoked_credentials.revoked_by`
+ * records `'federation'` as a first-class source — and the write denies a
+ * credential rather than moving identity authority. Its scope is still
+ * unbounded (any peer may name any credential id) and that is tracked with the
+ * federation wire work, not silently fixed here.
+ *
+ * `refused` counts only the cross-authority shape: an event naming an identity
+ * this relay holds. An event about an identity we do not hold is `processed`
+ * with no local effect, exactly as before, so an honest peer's feed stays
+ * quiet in the logs.
+ */
 export async function processIncomingRevocations(
   db: DatabaseDriver,
   events: RevocationEvent[],
   peerPublicKey: Uint8Array,
-): Promise<{ processed: number; rejected: number }> {
+): Promise<{ processed: number; rejected: number; refused: number }> {
   const encoder = new TextEncoder();
   let processed = 0;
   let rejected = 0;
+  let refused = 0;
+
+  /** True when this relay is the identity's home — the rows a peer may not touch. */
+  const heldLocally = (motebitId: string): boolean =>
+    db.prepare("SELECT 1 FROM agent_registry WHERE motebit_id = ?").get(motebitId) !== undefined;
 
   for (const event of events) {
     // Verify peer signature
@@ -509,28 +557,37 @@ export async function processIncomingRevocations(
 
     switch (event.type) {
       case "agent_revoked": {
-        // Mark agent as revoked in local cache if it exists
-        try {
-          db.prepare("UPDATE agent_registry SET revoked = 1 WHERE motebit_id = ?").run(
-            event.motebit_id,
-          );
-        } catch {
-          /* agent may not exist locally */
+        // A peer does not get to de-list an identity this relay is the home
+        // of: `revoked = 1` removes it from discovery (`discovery.ts`) and
+        // 403s its migration, and the admin door that legitimately sets it
+        // writes a signed, append-only `relay_agent_revocations` record —
+        // which this path never did, so a peer write also bypassed the
+        // moderation history the relay is obliged to keep (rule 6).
+        if (heldLocally(event.motebit_id)) {
+          refused++;
+          logger.warn("federation.revocation.refused_local_identity", {
+            type: event.type,
+            motebitId: event.motebit_id,
+          });
+          break;
         }
         processed++;
         break;
       }
       case "key_rotated": {
-        // Update pinned public key if we have this agent
-        if (event.new_public_key) {
-          try {
-            db.prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?").run(
-              event.new_public_key,
-              event.motebit_id,
-            );
-          } catch {
-            /* agent may not exist locally */
-          }
+        // `new_public_key` is not covered by the signature verified above, so
+        // even a peer entitled to speak about this identity would not have
+        // authenticated the key it names. The field binding is a wire change
+        // and is tracked separately; it is not what makes this safe. What
+        // makes it safe is that the key of an identity this relay holds moves
+        // only through a door that proves possession of the CURRENT key.
+        if (heldLocally(event.motebit_id)) {
+          refused++;
+          logger.warn("federation.revocation.refused_local_identity", {
+            type: event.type,
+            motebitId: event.motebit_id,
+          });
+          break;
         }
         processed++;
         break;
@@ -551,7 +608,7 @@ export async function processIncomingRevocations(
     }
   }
 
-  return { processed, rejected };
+  return { processed, rejected, refused };
 }
 
 // === Private Key Encryption (AES-256-GCM) ===
@@ -1543,6 +1600,16 @@ export function registerFederationRoutes(deps: FederationDeps): void {
           logger.info("federation.revocation.processed", {
             peerId: relay_id,
             processed: result.processed,
+          });
+        }
+        // A peer claiming authority over an identity this relay is the home of
+        // is not a malformed feed — it is a peer asserting something it cannot
+        // be entitled to assert. Named at warn with the peer that sent it, so
+        // the attempt is visible rather than silently absorbed into a count.
+        if (result.refused > 0) {
+          logger.warn("federation.revocation.refused", {
+            peerId: relay_id,
+            refused: result.refused,
           });
         }
       } catch (err) {
