@@ -114,3 +114,4 @@ apps/web/e2e/golden/__screenshots__/*-darwin.png
 
 # Exclusive lock held by `pnpm check` and the effectiveness probes (scripts/lib/probe-lock.ts)
 .motebit-gate.lock
+.motebit-activation-probe.json

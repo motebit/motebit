@@ -34,7 +34,7 @@
  * drain/abort guards, as `check-gates-effective`).
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, existsSync, unlinkSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -59,6 +59,77 @@ interface Probe {
   mutate: (src: string) => string;
   /** The observable the suite asserts — surfaced in the repair instruction. */
   observable: string;
+}
+
+/**
+ * Where an in-flight perturbation is recorded so it survives this process.
+ *
+ * The per-probe `try/finally` covers a thrown probe. It does not cover a
+ * SIGINT from the terminal, and nothing inside a process covers SIGKILL — and
+ * this runner is reached through the pre-push hook, so an interrupted `git
+ * push` is the ordinary way it dies. What it would leave behind is worse than
+ * a half-written file: the mutations here are chosen to BUILD CLEANLY, so a
+ * stranded one is a deliberately broken security control that `tsc` will not
+ * catch and only `git status` stands between it and a commit. That happened
+ * twice while shipping #713 and self-healed both times, which is luck rather
+ * than a control.
+ *
+ * `check-gates-effective` already solves this for itself: try/finally, signal
+ * handlers, and a pre-flight drain for the SIGKILL case. It can auto-revert
+ * because its perturbations carry a known marker. These do not — they are
+ * arbitrary source edits — so reverting by pattern would eat legitimate
+ * uncommitted work. The journal makes the ambiguity go away: it holds the
+ * ORIGINAL bytes, so a leftover journal is both the proof a run died and the
+ * material to undo it, with no guessing about what the file should contain.
+ */
+const JOURNAL = resolve(ROOT, ".motebit-activation-probe.json");
+
+interface Journal {
+  path: string;
+  original: string;
+  startedAt: string;
+}
+
+function openJournal(target: string, original: string): void {
+  const entry: Journal = { path: target, original, startedAt: new Date().toISOString() };
+  writeFileSync(JOURNAL, JSON.stringify(entry));
+}
+
+function closeJournal(): void {
+  if (existsSync(JOURNAL)) unlinkSync(JOURNAL);
+}
+
+/**
+ * Pre-flight: undo a perturbation a previous run did not live to undo.
+ *
+ * Restores from the journal's own copy of the original bytes, so it cannot
+ * damage unrelated work — the only file it touches is the one a probe was
+ * mid-way through mutating, and the only content it writes is what that file
+ * held before. Says so loudly: a silent repair here would hide exactly the
+ * event worth knowing about.
+ */
+function drainStrandedPerturbation(): void {
+  if (!existsSync(JOURNAL)) return;
+  let entry: Journal;
+  try {
+    entry = JSON.parse(readFileSync(JOURNAL, "utf-8")) as Journal;
+  } catch {
+    process.stderr.write(
+      `\n  ! ${JOURNAL} is unreadable. A previous run was interrupted mid-probe and its\n` +
+        `    record of the original file is gone. Check \`git status\` for a modified source\n` +
+        `    file and revert it by hand before trusting this run.\n\n`,
+    );
+    closeJournal();
+    return;
+  }
+  const abs = resolve(ROOT, entry.path);
+  writeFileSync(abs, entry.original);
+  closeJournal();
+  process.stderr.write(
+    `\n  ! Restored ${entry.path} — a run started ${entry.startedAt} was interrupted while it\n` +
+      `    held a deliberately broken version of that file. The severing built cleanly by\n` +
+      `    design, so nothing else would have caught it.\n\n`,
+  );
 }
 
 /**
@@ -214,6 +285,19 @@ function main(): void {
   // Exclusive with `pnpm check` and the other perturbing script: probes rewrite
   // real files for their duration (scripts/lib/probe-lock.ts).
   acquireGateLock(ROOT, "check-activation-effective (mutating probes)");
+
+  // Before anything else: a previous run may have died holding a severed file.
+  drainStrandedPerturbation();
+
+  // A graceful interrupt restores what the `finally` would have. SIGKILL
+  // cannot be caught anywhere, which is what the journal and the drain above
+  // are for — the two halves are deliberate, not redundant.
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    process.on(signal, () => {
+      drainStrandedPerturbation();
+      process.exit(130);
+    });
+  }
   // Refuse to run on a dirty tasks.ts — this gate mutates it in place, and a
   // pre-existing edit would be indistinguishable from a probe (or clobbered by
   // the revert). Same isolation discipline as check-gates-effective.
@@ -258,6 +342,7 @@ function main(): void {
     let discriminated = false;
     let buildBroke = false;
     try {
+      openJournal(probe.target, original);
       writeFileSync(abs, probe.mutate(original));
       const build = buildRelay();
       if (build.code !== 0) {
@@ -276,6 +361,7 @@ function main(): void {
       }
     } finally {
       writeFileSync(abs, original);
+      closeJournal();
     }
     results.push({
       suite: probe.suite,
