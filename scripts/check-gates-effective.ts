@@ -2315,6 +2315,18 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-identity-authority-writers",
+    proves:
+      "flags a new door that writes identity authority without naming its principal — the shape of #701, #713 and #719, each of which cut a write beside the doors that already had the rule, without the rule. Probe reintroduces the #713 door verbatim: an UPDATE of agent_registry.public_key inside the federation revocation ingest, where the only thing 'authorizing' it is a peer signature over a payload that does not cover the key and a peering handshake that takes no authorization at all. The UNREGISTERED branch must fire and name federation.ts. Chosen because it is the actual defect that shipped, not a synthetic one — the perturbation is selected by the PREDICATE the gate enforces (an unregistered write into a listed table), never by a literal copied from the registry. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile(`services/relay/src/federation.ts`, (src) =>
+        src.replace(
+          '      case "credential_revoked": {',
+          '      case "credential_revoked": {\n        db.prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?").run(event.new_public_key, event.motebit_id);',
+        ),
+      ),
+  },
+  {
     script: "check-money-authority",
     proves:
       "flags the R4 standing-authority block disappearing from policy-gate.ts — the invariant that an R4_MONEY tool call never auto-executes without a verified standing-delegation grant. Drift class: a refactor that deletes or inverts the grant check (or reorders it ahead of the trust-level switch) silently re-opens 'Trusted caller auto-executes money'. Probe inverts the null-check (`== null` → `!= null`) so the gate's ordered marker regex no longer matches; assertion 1 must fire. byte-identical restoration via mutateFile.",
