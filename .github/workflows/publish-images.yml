@@ -41,7 +41,13 @@ jobs:
   relay:
     name: ghcr.io/motebit/relay
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The arm64 half builds under QEMU emulation and the cache export is
+    # mode=max, so a normal run is 18-24 minutes. At 30 the margin was one bad
+    # run wide, and on 2026-09-21 a run took 30.3 and was killed — reported as
+    # `cancelled`, which reads like someone pressed a button rather than a
+    # failure. 60 is headroom, not a target; if a run approaches it the build
+    # has a problem worth looking at rather than a ceiling worth raising.
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -54,28 +60,29 @@ jobs:
           echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
           echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
-          # Tag list: always sha-<short>, plus :main on main branch, plus :X.Y.Z
-          # if this is a relay-vX.Y.Z tag push.
-          tags="ghcr.io/motebit/relay:sha-${short_sha}"
+          # Two lists, deliberately. `sha_tag` is the immutable one this build
+          # pushes; `alias_tags` are the names an operator is actually told to
+          # pull, and they are applied only AFTER the image is signed and
+          # attested. A job that dies in between therefore leaves a
+          # digest-pinned tag nobody is pointed at, never a `:main` that
+          # carries none of the guarantees this workflow's header promises.
+          sha_tag="ghcr.io/motebit/relay:sha-${short_sha}"
+          echo "sha_tag=${sha_tag}" >> "$GITHUB_OUTPUT"
+          aliases=""
           if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
-            tags="${tags}\nghcr.io/motebit/relay:main"
+            aliases="ghcr.io/motebit/relay:main"
           fi
           case "${GITHUB_REF}" in
             refs/tags/relay-v*)
               version="${GITHUB_REF#refs/tags/relay-v}"
-              tags="${tags}\nghcr.io/motebit/relay:${version}"
+              aliases="${aliases}${aliases:+ }ghcr.io/motebit/relay:${version}"
               echo "version=${version}" >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "version=0.0.0+sha.${short_sha}" >> "$GITHUB_OUTPUT"
               ;;
           esac
-          {
-            echo 'tags<<EOF'
-            printf '%b' "$tags"
-            echo
-            echo 'EOF'
-          } >> "$GITHUB_OUTPUT"
+          echo "alias_tags=${aliases}" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU (cross-arch emulation for arm64 builds)
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
@@ -149,7 +156,7 @@ jobs:
           file: services/relay/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.tags.outputs.tags }}
+          tags: ${{ steps.tags.outputs.sha_tag }}
           # Dynamic labels — Dockerfile carries static metadata; per-build
           # provenance fields go here so they reflect this exact run.
           labels: |
@@ -171,13 +178,12 @@ jobs:
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          # Sign every published tag. The image digest is identical across tags
-          # (they all point to the same manifest list), so this signs the
-          # underlying artifact once per tag reference.
-          while IFS= read -r tag; do
-            [ -z "$tag" ] && continue
-            cosign sign --yes "${tag}@${DIGEST}"
-          done <<< "${{ steps.tags.outputs.tags }}"
+          set -eu
+          # One signature, against the digest. Cosign stores a signature under
+          # the DIGEST, so the previous loop over every tag wrote the same
+          # signature repeatedly — and it could not have covered the alias
+          # tags anyway, because they no longer exist at this point.
+          cosign sign --yes "${{ steps.tags.outputs.sha_tag }}@${DIGEST}"
 
       - name: Attest build provenance (SLSA)
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -185,3 +191,28 @@ jobs:
           subject-name: ghcr.io/motebit/relay
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
+
+      # LAST, and only on success. `:main` and `:X.Y.Z` are the names an
+      # operator pulls, so they are applied to an image that is already signed
+      # and attested — never alongside one that might not get there. This adds
+      # a tag to the existing manifest list server-side; nothing is rebuilt or
+      # re-uploaded, so the digest an operator verifies is the digest that was
+      # signed.
+      #
+      # Why this shape: on 2026-09-21 the job timed out after the push and
+      # before signing, and `:main` spent the next hours pointing at an
+      # unsigned, unattested image — indistinguishable from a real release,
+      # which is the failing-open direction. The workflow's own header promises
+      # every shipped image is signed and provenance-attested; this is what
+      # makes the promise structural rather than sequential.
+      - name: Apply release tags to the signed image
+        if: steps.tags.outputs.alias_tags != ''
+        env:
+          SHA_TAG: ${{ steps.tags.outputs.sha_tag }}
+          ALIASES: ${{ steps.tags.outputs.alias_tags }}
+        run: |
+          set -eu
+          for alias in ${ALIASES}; do
+            echo "tagging ${alias} -> ${SHA_TAG}"
+            docker buildx imagetools create --tag "${alias}" "${SHA_TAG}"
+          done
