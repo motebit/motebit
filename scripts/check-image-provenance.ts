@@ -566,6 +566,12 @@ function publishRun(sha: string): PublishRun | null | undefined {
         "list",
         "--workflow",
         "publish-images.yml",
+        // Filtered server-side by commit. An earlier draft listed the newest
+        // 40 runs and filtered here, which made "no run for HEAD" ambiguous
+        // between "never published" and "published, but 40 tag pushes ago" —
+        // a blind spot that had to be disclosed. Now it is one question.
+        "--commit",
+        sha,
         "--limit",
         "40",
         "--json",
@@ -580,6 +586,7 @@ function publishRun(sha: string): PublishRun | null | undefined {
       url: string;
       createdAt: string;
     }>;
+    // A re-run shares the commit; the newest run is the one whose outcome stands.
     const mine = runs
       .filter((r) => r.headSha === sha)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -589,6 +596,55 @@ function publishRun(sha: string): PublishRun | null | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Does `publish-images.yml` run on EVERY push to main? The "no run for HEAD
+ * ⇒ the publish path stopped firing" finding below rests on exactly that, and
+ * `check-deploy-freshness` (#720) is the record of what happens when a gate
+ * assumes a workflow's triggers instead of reading them: it was wrong in both
+ * directions for two days. So the premise is read off the file, line by line
+ * like `triggerPaths` there — a `paths:` / `paths-ignore:` filter under `push`,
+ * or `main` missing from `branches`, and the premise is FALSE and the finding
+ * says so instead of accusing the publish path. `null` = the file could not be
+ * read, or its `on:` block has a shape this reader does not understand.
+ */
+function publishesEveryMainPush(): boolean | null {
+  let text: string;
+  try {
+    text = readFileSync(join(ROOT, ".github/workflows/publish-images.yml"), "utf-8");
+  } catch {
+    return null;
+  }
+  const lines = text.split("\n");
+  const on = lines.findIndex((l) => /^on:\s*$/.test(l));
+  if (on < 0) return null;
+  // The `on:` block ends at the next top-level key.
+  let end = lines.findIndex((l, i) => i > on && /^[A-Za-z_-]+:/.test(l));
+  if (end < 0) end = lines.length;
+  const block = lines.slice(on + 1, end);
+  const push = block.findIndex((l) => /^  push:\s*$/.test(l));
+  if (push < 0) return false;
+  // The `push:` sub-block ends at the next key at its own indentation.
+  let pushEnd = block.findIndex((l, i) => i > push && /^  [A-Za-z_-]+:/.test(l));
+  if (pushEnd < 0) pushEnd = block.length;
+  const sub = block.slice(push + 1, pushEnd);
+  if (sub.some((l) => /^\s+paths(-ignore)?:/.test(l))) return false;
+  const branches = sub.findIndex((l) => /^\s+branches:/.test(l));
+  if (branches < 0) return null;
+  const inline = /^\s+branches:\s*\[(.*)\]\s*$/.exec(sub[branches]!);
+  if (inline) {
+    return inline[1]!
+      .split(",")
+      .map((b) => b.trim().replace(/^["']|["']$/g, ""))
+      .includes("main");
+  }
+  for (let i = branches + 1; i < sub.length; i++) {
+    const item = /^\s+-\s*["']?([^"'\s]+)["']?\s*$/.exec(sub[i]!);
+    if (!item) break;
+    if (item[1] === "main") return true;
+  }
+  return false;
 }
 
 // ── main ───────────────────────────────────────────────────────────────────
@@ -626,10 +682,13 @@ async function main(): Promise<void> {
   const head = gitOut(["rev-parse", "HEAD"]);
   const all = targets(head);
 
-  // A build still running has not failed. Skip its tags with the reason stated
-  // rather than reporting an image that was never expected to exist yet.
+  // Whether an image is DUE for HEAD is decided by the publish run, never
+  // assumed from the commit. A build still running has not failed; a commit
+  // that was never pushed to main (a feature branch, this gate's own PR) was
+  // never published at all. Reporting either as a missing image would be a
+  // finding about the clock rather than about the registry.
   const run = head === null ? undefined : publishRun(head);
-  const buildPending = run != null && run.status !== "completed";
+  const buildPending = run == null || run.status !== "completed" || run.conclusion !== "success";
 
   const findings: Finding[] = [];
   const notes: string[] = [];
@@ -649,9 +708,26 @@ async function main(): Promise<void> {
       notes.push(message);
     }
   } else if (run === null) {
-    notes.push(
-      `no publish-images run for ${head?.slice(0, 7) ?? "HEAD"} — nothing published this commit yet`,
-    );
+    // On the scheduled run HEAD is main's tip. If publish-images.yml runs on
+    // every push to main with no path filter — READ from the file, not assumed
+    // (#720) — then no run at all means the publish path itself stopped firing:
+    // the whole artifact going missing rather than one tag. Locally it just
+    // means a feature branch. If the premise no longer holds, the honest
+    // finding is that this gate's model of the workflow is stale, not that the
+    // publish path broke.
+    const everyPush = publishesEveryMainPush();
+    const message =
+      everyPush === true
+        ? `no publish-images run exists for ${head?.slice(0, 7) ?? "HEAD"} — publish-images.yml runs on every push to main, so on main this means the publish path stopped firing`
+        : everyPush === false
+          ? `no publish-images run exists for ${head?.slice(0, 7) ?? "HEAD"}, and publish-images.yml no longer runs on every push to main (a paths filter, or main absent from branches) — this gate's premise that HEAD's tags are due after every push is STALE; update this gate alongside the workflow`
+          : `no publish-images run exists for ${head?.slice(0, 7) ?? "HEAD"}, and the push trigger in publish-images.yml could not be read — whether HEAD's tags are due is unknown, which is not a pass`;
+    if (REQUIRE_TOOLS) {
+      assertions++;
+      findings.push({ ref: "publish-images", kind: "publish", detail: message });
+    } else {
+      notes.push(`${message} (expected on a branch)`);
+    }
   } else if (run.status !== "completed") {
     notes.push(`publish-images for ${head!.slice(0, 7)} is ${run.status} — HEAD tags not yet due`);
   } else {
@@ -673,7 +749,13 @@ async function main(): Promise<void> {
     const where = target.sources.join(", ");
 
     if (target.fromHead && buildPending) {
-      notes.push(`${ref} — skipped, the publish run for this commit is still ${run!.status}`);
+      const why =
+        run == null
+          ? "no publish-images run has completed for this commit"
+          : run.status !== "completed"
+            ? `the publish run for this commit is still ${run.status}`
+            : `the publish run for this commit concluded \`${run.conclusion}\``;
+      notes.push(`${ref} — skipped, ${why}`);
       continue;
     }
 
@@ -823,7 +905,8 @@ async function main(): Promise<void> {
       `plus the two every push to main publishes; the ${commands.length} cosign command(s) are parsed from ` +
       `${VERIFY_DOC} rather than written here, with ${restated} restatement(s) of them elsewhere held to that shape; verification runs once per DIGEST, so tags sharing a manifest are verified through one of them. Blind to a tag no document names, to any repository other than ` +
       `${IMAGE_REPO}, to the image's CONTENTS (a signed image is proven to be ours, never proven good), and to ` +
-      `a run whose conclusion gh does not return in its newest 40.`,
+      `a publish run GitHub no longer retains (the run is looked up by HEAD's commit, so nothing falls out of a listing window). ` +
+      `Whether HEAD's tags are DUE is read from publish-images.yml's push trigger, never assumed.`,
   );
 }
 
