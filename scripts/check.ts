@@ -125,6 +125,8 @@ const EXCLUDED_CHECKS: Record<string, string> = {
     "the EXTERNAL drift gate (#475, inventory row #150) — its canonical source is the provider's LIVE models endpoint, so it needs network + ANTHROPIC_API_KEY. Runs weekly from .github/workflows/model-catalog-drift.yml with --require-key (missing secret = red); local runs without the key skip politely.",
   "check-deploy-freshness":
     "the second EXTERNAL drift gate (#551, inventory row #153) — its canonical source is the LIVE Fly fleet, so it needs network + FLY_API_TOKEN. Proves the deployed system is what main says it should be (freshness) and is actually serving (liveness); the static pass can only prove things about the repo. Runs daily from .github/workflows/deploy-freshness.yml with --require-token (missing secret = red); local runs without the token skip politely.",
+  "check-image-provenance":
+    "the third EXTERNAL drift gate (#722, inventory row #160) — its canonical source is the ghcr.io registry, so it needs network + cosign. Proves the DISTRIBUTED artifact is what the operator docs promise: every tag docs/operator/self-host.md names exists, verifies under the cosign commands those docs publish, and carries SLSA provenance binding it to the commit it claims. Runs daily from .github/workflows/image-provenance.yml with --require-tools (missing cosign = red); local runs without it skip politely. No secret — anonymous pulls and keyless verification need none.",
 };
 
 // Order matters: run fastest first so CI fails loudly on the cheapest signal.
