@@ -22,7 +22,7 @@
  * must depart from the key this relay holds for that identity — refusing
  * when it holds none, rather than skipping the check.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { SyncRelay } from "../index.js";
 import {
   generateKeypair,
@@ -30,11 +30,13 @@ import {
   signDeviceRegistration,
   mintAudienceToken,
   signKeySuccession,
+  verifySuccessionChain,
   signGuardianRecoverySuccession,
   canonicalJson,
   ed25519Sign,
 } from "@motebit/crypto";
-import type { KeyPair } from "@motebit/crypto";
+import type { KeyPair, KeySuccessionRecord } from "@motebit/crypto";
+import type { TokenAudience } from "@motebit/protocol";
 import { createTestRelay, JSON_AUTH } from "./test-helpers.js";
 
 let relay: SyncRelay;
@@ -60,11 +62,13 @@ async function registerSelf(mid: string, deviceId: string, kp: KeyPair): Promise
   return res.status;
 }
 
-async function token(mid: string, deviceId: string, kp: KeyPair): Promise<string> {
-  const { token: t } = await mintAudienceToken(
-    { mid, did: deviceId, aud: "admin:query" },
-    kp.privateKey,
-  );
+async function token(
+  mid: string,
+  deviceId: string,
+  kp: KeyPair,
+  aud: TokenAudience = "admin:query",
+): Promise<string> {
+  const { token: t } = await mintAudienceToken({ mid, did: deviceId, aud }, kp.privateKey);
   return t;
 }
 
@@ -78,7 +82,13 @@ async function present(
 ): Promise<number> {
   const res = await relay.app.request(`/api/v1/agents/${targetMid}/rotate-key`, {
     method: "POST",
-    headers: { ...JSON_HEADERS, Authorization: `Bearer ${await token(callerMid, deviceId, kp)}` },
+    headers: {
+      ...JSON_HEADERS,
+      // The audience the spec names for this route, and the one the shipped
+      // client mints. A helper that minted `admin:query` here would keep
+      // passing while every real client 401'd (#702).
+      Authorization: `Bearer ${await token(callerMid, deviceId, kp, "rotate-key")}`,
+    },
     body: JSON.stringify(record),
   });
   return res.status;
@@ -116,6 +126,14 @@ async function registerAgent(mid: string, kp: KeyPair, guardian?: KeyPair): Prom
   return res.status;
 }
 
+const events = (mid: string, type: string): number =>
+  (
+    relay.moteDb.db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM relay_revocation_events WHERE motebit_id = ? AND type = ?",
+      )
+      .get(mid, type) as { n: number }
+  ).n;
 const successions = (mid: string): number =>
   (
     relay.moteDb.db
@@ -208,6 +226,41 @@ describe("an ordinary succession is the identity's own act", () => {
     });
     expect(res.status).toBe(200);
     expect(registryKey(mid)).toBe(hex(k2));
+  });
+});
+
+describe("the route answers to the audience the spec names", () => {
+  it("accepts `rotate-key` and refuses a general read token", async () => {
+    // The route defaulted to `admin:query`, so the only tokens that ever
+    // reached it were the operator's, and every signed client 401'd —
+    // which is why no rotation has ever been recorded (#702). Narrowing it
+    // also means an ordinary read token cannot be replayed here.
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    expect(await registerAgent(mid, k1)).toBe(200);
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    const send = async (aud: TokenAudience): Promise<number> =>
+      (
+        await relay.app.request(`/api/v1/agents/${mid}/rotate-key`, {
+          method: "POST",
+          headers: {
+            ...JSON_HEADERS,
+            Authorization: `Bearer ${await token(mid, `${mid}-laptop`, k1, aud)}`,
+          },
+          body: JSON.stringify(record),
+        })
+      ).status;
+    expect(await send("admin:query")).toBe(401);
+    expect(successions(mid)).toBe(0);
+    expect(await send("rotate-key")).toBe(200);
+    expect(successions(mid)).toBe(1);
   });
 });
 
@@ -328,13 +381,15 @@ describe("a record must depart from a key this relay holds for the identity", ()
       k3.publicKey,
       k2.publicKey,
     );
-    expect(await present(mid, `${mid}-laptop`, k1, mid, second)).toBe(200);
+    // Carried with k2 — the first rotation moved the device row, so the
+    // retired key no longer authenticates, which is the point of it.
+    expect(await present(mid, `${mid}-laptop`, k2, mid, second)).toBe(200);
     expect(successions(mid)).toBe(2);
 
     // And the chain head is not a way in: a record departing from the key
     // the chain left BEHIND is refused.
     const stale = await signKeySuccession(k1.privateKey, k3.privateKey, k3.publicKey, k1.publicKey);
-    expect(await present(mid, `${mid}-laptop`, k1, mid, stale)).toBe(400);
+    expect(await present(mid, `${mid}-laptop`, k3, mid, stale)).toBe(400);
     expect(successions(mid)).toBe(2);
   });
 
@@ -471,6 +526,123 @@ describe("guardian recovery is carried by someone else, and anchored to a key on
     expect(await present(s.mid, `${s.mid}-laptop`, s.kp, mid, forged)).toBe(400);
     expect(registryKey(mid)).toBe(hex(k1));
     expect(successions(mid)).toBe(0);
+  });
+});
+
+describe("the public succession route answers the departure question with the rule /rotate-key enforces", () => {
+  async function read(mid: string, from?: string) {
+    const url = `/api/v1/agents/${mid}/succession${from ? `?from=${from}` : ""}`;
+    return (await (await relay.app.request(url)).json()) as {
+      current_public_key: string | null;
+      held_public_key: string | null;
+      departable?: boolean | null;
+      chain: unknown[];
+    };
+  }
+
+  it("registry rung: holds the registry key; departable only from it", async () => {
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    const other = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    expect(await registerAgent(mid, k1)).toBe(200);
+    expect(await read(mid, hex(k1))).toMatchObject({ held_public_key: hex(k1), departable: true });
+    expect(await read(mid, hex(other))).toMatchObject({
+      held_public_key: hex(k1),
+      departable: false,
+    });
+    expect((await read(mid)).departable).toBeUndefined();
+  });
+
+  it("chain rung: a deregistered identity is held at its recorded head", async () => {
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    expect(await registerAgent(mid, k1)).toBe(200);
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    expect(await present(mid, `${mid}-laptop`, k1, mid, record)).toBe(200);
+    relay.moteDb.db.prepare("DELETE FROM agent_registry WHERE motebit_id = ?").run(mid);
+    expect(await read(mid, hex(k2))).toMatchObject({
+      current_public_key: null,
+      held_public_key: hex(k2),
+      departable: true,
+    });
+    expect(await read(mid, hex(k1))).toMatchObject({ departable: false });
+  });
+
+  it("device rung: a daemon that shut down before ever rotating leaves its key ONLY on a device row — held is null, yet departable", async () => {
+    // The state a client that re-derived "held" from chain + registry read
+    // as UNREGISTERED and rotated locally into the split — the relay would
+    // have accepted the rotation all along.
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    const other = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    expect(await registerAgent(mid, k1)).toBe(200);
+    relay.moteDb.db.prepare("DELETE FROM agent_registry WHERE motebit_id = ?").run(mid);
+    expect(await read(mid, hex(k1))).toMatchObject({
+      held_public_key: null,
+      chain: [],
+      departable: true,
+    });
+    expect(await read(mid, hex(other))).toMatchObject({ held_public_key: null, departable: false });
+    // And /rotate-key agrees: the departure the route said yes to lands.
+    const k2 = await generateKeypair();
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    expect(await present(mid, `${mid}-laptop`, k1, mid, record)).toBe(200);
+  });
+
+  it("truly unknown: no registry, no chain, no device row ⇒ held null and not departable from anything", async () => {
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    expect(await read(mid, hex(k1))).toMatchObject({
+      held_public_key: null,
+      chain: [],
+      departable: false,
+    });
+  });
+
+  it("the served answer and the route's decision are one function: severing agreement is a red test", async () => {
+    // Registry says k1, chain head says k2 (registry re-created on an old key
+    // — a residual rule 21 names). Precedence puts the registry first, so
+    // departing from k2 is refused and from k1 is allowed; the read says the
+    // same, because it IS the same rule.
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    expect(await registerAgent(mid, k1)).toBe(200);
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    expect(await present(mid, `${mid}-laptop`, k1, mid, record)).toBe(200);
+    relay.moteDb.db
+      .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
+      .run(hex(k1), mid);
+    expect(await read(mid, hex(k2))).toMatchObject({ held_public_key: hex(k1), departable: false });
+    expect(await read(mid, hex(k1))).toMatchObject({ departable: true });
+    const k3 = await generateKeypair();
+    const fromK2 = await signKeySuccession(
+      k2.privateKey,
+      k3.privateKey,
+      k3.publicKey,
+      k2.publicKey,
+    );
+    expect(await present(mid, `${mid}-laptop`, k2, mid, fromK2)).toBe(400);
   });
 });
 
@@ -803,5 +975,464 @@ describe("pairing's key-transfer route writes only a key the identity already ho
     const { pairingId, identityKey, claimKey } = await approvedSession();
     expect((await update(pairingId, identityKey)).status).toBe(403);
     expect(mobileKey()).toBe(hex(claimKey));
+  });
+});
+
+/**
+ * What a recorded rotation must END.
+ *
+ * A device row's `public_key` is what `verifySignedTokenForDevice` checks
+ * an owner token against, and it is resolved BEFORE the registry key — so
+ * a row left holding the retired key shadows the rotation completely. The
+ * relay recorded rotations without touching that table, which was a
+ * deliberate deferral in `docs/doctrine/security-boundaries.md` on the
+ * grounds that rotating an identity should not rotate independent device
+ * keypairs. That reasoning is kept: only rows holding the key being
+ * retired move.
+ */
+describe("a recorded rotation ends the old key here", () => {
+  async function rotated(): Promise<{
+    mid: string;
+    k1: KeyPair;
+    k2: KeyPair;
+    linked: KeyPair;
+  }> {
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    const linked = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    expect(await registerSelf(mid, `${mid}-vps`, k1)).toBe(200);
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO devices (device_id, motebit_id, device_token, public_key, registered_at, device_name) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run(`${mid}-tablet`, mid, crypto.randomUUID(), hex(linked), Date.now(), "linked");
+    expect(await registerAgent(mid, k1)).toBe(200);
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    expect(await present(mid, `${mid}-laptop`, k1, mid, record)).toBe(200);
+    return { mid, k1, k2, linked };
+  }
+  const deviceKey = (did: string): string =>
+    (
+      relay.moteDb.db.prepare("SELECT public_key FROM devices WHERE device_id = ?").get(did) as {
+        public_key: string;
+      }
+    ).public_key;
+
+  it("moves every row that held the retired key, and leaves an independent device key alone", async () => {
+    const { mid, k2, linked } = await rotated();
+    expect(deviceKey(`${mid}-laptop`)).toBe(hex(k2));
+    expect(deviceKey(`${mid}-vps`)).toBe(hex(k2));
+    expect(deviceKey(`${mid}-tablet`)).toBe(hex(linked));
+    expect(registryKey(mid)).toBe(hex(k2));
+  });
+
+  it("so the retired key stops authenticating and the new one starts, on every machine", async () => {
+    const { mid, k1, k2 } = await rotated();
+    const path = `/api/v1/agents/${mid}/balance`;
+    for (const did of [`${mid}-laptop`, `${mid}-vps`]) {
+      const call = async (kp: KeyPair): Promise<number> =>
+        (
+          await relay.app.request(path, {
+            headers: {
+              Authorization: `Bearer ${await token(mid, did, kp, "account:balance")}`,
+            },
+          })
+        ).status;
+      expect(await call(k1)).toBe(401);
+      expect(await call(k2)).toBe(200);
+    }
+  });
+
+  it("is idempotent — a retry after a lost response appends no second link", async () => {
+    const { mid, k1, k2 } = await rotated();
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    // The caller's key moved with the rotation, so the retry carries the
+    // new one — as a real client would after restarting. It must answer
+    // 200: a client told 400 here would believe its rotation failed and
+    // keep the old key, while the relay had already applied it.
+    expect(await present(mid, `${mid}-laptop`, k2, mid, record)).toBe(200);
+    expect(successions(mid)).toBe(1);
+  });
+
+  it("lands as one write: if any part fails, none of it is applied", async () => {
+    const { mid } = await rotated();
+    const before = successions(mid);
+    const k3 = await generateKeypair();
+    const k4 = await generateKeypair();
+    relay.moteDb.db
+      .prepare("UPDATE devices SET public_key = ? WHERE device_id = ?")
+      .run(hex(k3), `${mid}-laptop`);
+    relay.moteDb.db
+      .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
+      .run(hex(k3), mid);
+    // Fail the LAST statement only. Renaming the table would break the
+    // read that runs before any write, so the request would never reach
+    // the writes and this would prove nothing.
+    relay.moteDb.db.exec(
+      "CREATE TRIGGER refuse_succession BEFORE INSERT ON relay_key_successions BEGIN SELECT RAISE(ABORT, 'refused'); END",
+    );
+    const record = await signKeySuccession(
+      k3.privateKey,
+      k4.privateKey,
+      k4.publicKey,
+      k3.publicKey,
+    );
+    const res = await relay.app.request(`/api/v1/agents/${mid}/rotate-key`, {
+      method: "POST",
+      headers: {
+        ...JSON_HEADERS,
+        Authorization: `Bearer ${await token(mid, `${mid}-laptop`, k3, "rotate-key")}`,
+      },
+      body: JSON.stringify(record),
+    });
+    relay.moteDb.db.exec("DROP TRIGGER refuse_succession");
+    expect(res.status).toBeGreaterThanOrEqual(500);
+    // The state with no way back: the registry moved to the new key while
+    // the device rows still hold the old one. Neither may have happened.
+    expect(registryKey(mid)).toBe(hex(k3));
+    expect(deviceKey(`${mid}-laptop`)).toBe(hex(k3));
+    expect(successions(mid)).toBe(before);
+  });
+
+  it("the register door applies the same cascade, so a link it recorded is already finished — re-presenting it is a retry", async () => {
+    // `/agents/register` with a succession used to move the registry key
+    // and record the link while touching neither the device rows nor the
+    // pairing payloads — a rotation that ended nothing, which a second
+    // route then had to "finish". #710 tried exactly that and its test
+    // PLANTED the chain row in a state the door never produces. Both doors
+    // now call one `applySuccession`, so the state cannot exist: this
+    // drives the real door and shows the rows moved THERE, and that
+    // re-presenting the link to /rotate-key is a retry that changes nothing.
+    const { mid, k2 } = await rotated();
+    const k3 = await generateKeypair();
+    const record = await signKeySuccession(
+      k2.privateKey,
+      k3.privateKey,
+      k3.publicKey,
+      k2.publicKey,
+    );
+    const viaRegister = await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: {
+        ...JSON_HEADERS,
+        // The bearer must verify against the key the relay holds — k2, on
+        // the device row — while the body registers k3 with the succession.
+        Authorization: `Bearer ${await token(mid, `${mid}-laptop`, k2)}`,
+      },
+      body: JSON.stringify({
+        endpoint_url: "http://localhost:9999/mcp",
+        capabilities: [],
+        public_key: hex(k3),
+        succession: record,
+      }),
+    });
+    expect(viaRegister.status).toBe(200);
+    // The door's own state: registry moved, link held, device rows MOVED.
+    expect(registryKey(mid)).toBe(hex(k3));
+    expect(successions(mid)).toBe(2);
+    expect(deviceKey(`${mid}-laptop`)).toBe(hex(k3));
+    expect(deviceKey(`${mid}-vps`)).toBe(hex(k3));
+    expect(events(mid, "key_rotated")).toBe(2);
+
+    // Re-presenting the same link here is a retry of the head: 200, the
+    // chain does not grow, nothing moves, no second federation event. The
+    // bearer is signed with k3 — the key the laptop row holds NOW; a retry
+    // signed with the retired key is 401 by construction, which is why the
+    // client design reads the chain instead of re-sending.
+    const res = await relay.app.request(`/api/v1/agents/${mid}/rotate-key`, {
+      method: "POST",
+      headers: {
+        ...JSON_HEADERS,
+        Authorization: `Bearer ${await token(mid, `${mid}-laptop`, k3, "rotate-key")}`,
+      },
+      body: JSON.stringify(record),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ applied: false });
+    expect(deviceKey(`${mid}-laptop`)).toBe(hex(k3));
+    expect(deviceKey(`${mid}-vps`)).toBe(hex(k3));
+    expect(registryKey(mid)).toBe(hex(k3));
+    expect(successions(mid)).toBe(2);
+    expect(events(mid, "key_rotated")).toBe(2);
+  });
+
+  it("a stray re-presentation of an OLD link — not the head — is refused and moves nothing", async () => {
+    // Chain k1→k2→k3. k1→k2 arriving after k2→k3 is not a retry of the
+    // head: it is a record departing from a key that is neither the registry
+    // key nor the chain head, and the key-on-file rule refuses it. Nothing
+    // moves — in particular the registry does not fall back from k3 to k2,
+    // which would refuse the identity's next rotation from the real head.
+    // (The client design never sends this; it READS the chain and stops.)
+    const { mid, k1, k2 } = await rotated();
+    const first = await signKeySuccession(k1.privateKey, k2.privateKey, k2.publicKey, k1.publicKey);
+    const k3 = await generateKeypair();
+    const second = await signKeySuccession(
+      k2.privateKey,
+      k3.privateKey,
+      k3.publicKey,
+      k2.publicKey,
+    );
+    expect(await present(mid, `${mid}-laptop`, k2, mid, second)).toBe(200);
+    expect(registryKey(mid)).toBe(hex(k3));
+
+    // The bearer is one the relay can verify: the laptop row now holds k3.
+    const res = await relay.app.request(`/api/v1/agents/${mid}/rotate-key`, {
+      method: "POST",
+      headers: {
+        ...JSON_HEADERS,
+        Authorization: `Bearer ${await token(mid, `${mid}-laptop`, k3, "rotate-key")}`,
+      },
+      body: JSON.stringify(first),
+    });
+    expect(res.status).toBe(400);
+    expect(registryKey(mid)).toBe(hex(k3));
+    expect(deviceKey(`${mid}-laptop`)).toBe(hex(k3));
+    expect(successions(mid)).toBe(2);
+    // And the identity can still rotate from the real head.
+    const k4 = await generateKeypair();
+    const third = await signKeySuccession(k3.privateKey, k4.privateKey, k4.publicKey, k3.publicKey);
+    expect(await present(mid, `${mid}-laptop`, k3, mid, third)).toBe(200);
+    expect(registryKey(mid)).toBe(hex(k4));
+  });
+
+  it("rotating BACK to a previously used key is a new link, and the served chain still verifies", async () => {
+    // k1→k2, then k2→k1 (rollback), then k1→k2 again with a fresh record. A
+    // reader that matched "already held" on the key PAIR would take the third
+    // as a retry of the first: no append, registry moved anyway, and the
+    // public chain ends at a key the registry has left — every external
+    // verifier reports it broken. "Held" means HEAD.
+    const { mid, k1, k2 } = await rotated();
+    const back = await signKeySuccession(k2.privateKey, k1.privateKey, k1.publicKey, k2.publicKey);
+    expect(await present(mid, `${mid}-laptop`, k2, mid, back)).toBe(200);
+    expect(registryKey(mid)).toBe(hex(k1));
+    const again = await signKeySuccession(k1.privateKey, k2.privateKey, k2.publicKey, k1.publicKey);
+    const res = await relay.app.request(`/api/v1/agents/${mid}/rotate-key`, {
+      method: "POST",
+      headers: {
+        ...JSON_HEADERS,
+        Authorization: `Bearer ${await token(mid, `${mid}-laptop`, k1, "rotate-key")}`,
+      },
+      body: JSON.stringify(again),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ applied: true });
+    expect(successions(mid)).toBe(3);
+    expect(registryKey(mid)).toBe(hex(k2));
+    expect(deviceKey(`${mid}-laptop`)).toBe(hex(k2));
+
+    const served = (await (await relay.app.request(`/api/v1/agents/${mid}/succession`)).json()) as {
+      chain: KeySuccessionRecord[];
+      current_public_key: string | null;
+    };
+    const verdict = await verifySuccessionChain(served.chain);
+    expect(verdict.valid).toBe(true);
+    expect(verdict.current_public_key).toBe(hex(k2));
+    expect(served.current_public_key).toBe(hex(k2));
+  });
+
+  it("a rotation recorded at /rotate-key reaches federation, and a retry does not repeat it", async () => {
+    const { mid, k1, k2 } = await rotated();
+    expect(events(mid, "key_rotated")).toBe(1);
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    // rotated() already recorded k1→k2 with its own record; this fresh
+    // record has the same keys and is a retry of the head by construction.
+    expect(await present(mid, `${mid}-laptop`, k2, mid, record)).toBe(200);
+    expect(events(mid, "key_rotated")).toBe(1);
+  });
+
+  it("a retry of the head is accepted after the freshness window has closed — the relay judged that timestamp once", async () => {
+    // The record's timestamp is inside the signature, so a client cannot
+    // refresh a held record; and a link the register door recorded may be
+    // re-presented long after. Refusing the retry as "too old" would tell a
+    // client its rotation failed when it succeeded. A NEW link that old is
+    // still refused.
+    const { mid, k1, k2 } = await rotated();
+    const retry = await signKeySuccession(k1.privateKey, k2.privateKey, k2.publicKey, k1.publicKey);
+    const k3 = await generateKeypair();
+    const fresh = await signKeySuccession(k2.privateKey, k3.privateKey, k3.publicKey, k2.publicKey);
+    vi.useFakeTimers({ now: Date.now() + 20 * 60_000, toFake: ["Date"] });
+    try {
+      expect(await present(mid, `${mid}-laptop`, k2, mid, retry)).toBe(200);
+      expect(successions(mid)).toBe(1);
+      expect(await present(mid, `${mid}-laptop`, k2, mid, fresh)).toBe(400);
+      expect(registryKey(mid)).toBe(hex(k2));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops a hardware-attestation credential bound to the key it retires", async () => {
+    // The credential names the key it was attached to, and the attach
+    // route refuses a mismatch. Carried across a rotation it would be
+    // published beside a key it does not name, and a peer checking the
+    // binding this relay itself enforces would reject the agent.
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    expect(await registerAgent(mid, k1)).toBe(200);
+    relay.moteDb.db
+      .prepare("UPDATE devices SET hardware_attestation_credential = ? WHERE device_id = ?")
+      .run(
+        JSON.stringify({ credentialSubject: { identity_public_key: hex(k1) } }),
+        `${mid}-laptop`,
+      );
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    expect(await present(mid, `${mid}-laptop`, k1, mid, record)).toBe(200);
+    const row = relay.moteDb.db
+      .prepare("SELECT hardware_attestation_credential AS c FROM devices WHERE device_id = ?")
+      .get(`${mid}-laptop`) as { c: string | null };
+    expect(row.c).toBeNull();
+  });
+
+  it("a guardian recovery ends the old key too", async () => {
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    const next = await generateKeypair();
+    const guardian = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    expect(await registerAgent(mid, k1, guardian)).toBe(200);
+    const recovery = await signGuardianRecoverySuccession(
+      guardian.privateKey,
+      next.privateKey,
+      k1.publicKey,
+      next.publicKey,
+    );
+    const s = await stranger();
+    expect(await present(s.mid, `${s.mid}-laptop`, s.kp, mid, recovery)).toBe(200);
+    // Recovery is for an owner who lost the key. One that left the lost key
+    // authenticating would have recovered nothing. A guardian can already
+    // move the identity to any key, so this adds no power it lacked.
+    expect(deviceKey(`${mid}-laptop`)).toBe(hex(next));
+  });
+});
+
+describe("a rotation retires a pairing approval that carried the old key", () => {
+  it("refuses a stale approved transfer, so the retired key cannot be written back", async () => {
+    // Pairing's key-transfer route takes no bearer and its session is not
+    // consumed, by design — bounded to one predetermined key, replaying it
+    // rewrites the same key. A rotation is what falsifies that: the
+    // approved key is now the RETIRED one, and writing it back onto a
+    // device row resurrects it, because the row is read before the
+    // registry.
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    const claimKey = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    expect(await registerAgent(mid, k1)).toBe(200);
+    const { token: pairToken } = await mintAudienceToken(
+      { mid, did: `${mid}-laptop`, aud: "device:auth" },
+      k1.privateKey,
+    );
+    const auth = { Authorization: `Bearer ${pairToken}` };
+    const init = await relay.app.request("/pairing/initiate", { method: "POST", headers: auth });
+    const { pairing_id, pairing_code } = (await init.json()) as {
+      pairing_id: string;
+      pairing_code: string;
+    };
+    expect(
+      (
+        await relay.app.request("/pairing/claim", {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({
+            pairing_code,
+            device_name: "Mobile",
+            public_key: hex(claimKey),
+            x25519_pubkey: "b".repeat(64),
+          }),
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await relay.app.request(`/pairing/${pairing_id}/approve`, {
+          method: "POST",
+          headers: { ...auth, ...JSON_HEADERS },
+          body: JSON.stringify({
+            key_transfer: {
+              x25519_pubkey: "a".repeat(64),
+              encrypted_seed: "c".repeat(96),
+              nonce: "d".repeat(24),
+              tag: "e".repeat(32),
+              identity_pubkey_check: hex(k1),
+            },
+          }),
+        })
+      ).status,
+    ).toBe(200);
+
+    // An approval carrying a key this rotation is NOT about, present
+    // before it runs: clearing every session would strand an unrelated
+    // pairing mid-transfer, with no signal to re-pair.
+    const unrelated = crypto.randomUUID();
+    const untouchedKey = await generateKeypair();
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO pairing_sessions (pairing_id, motebit_id, initiator_device_id, pairing_code, status, created_at, expires_at, key_transfer_payload) VALUES (?, ?, ?, ?, 'approved', ?, ?, ?)",
+      )
+      .run(
+        unrelated,
+        mid,
+        `${mid}-laptop`,
+        "ZZZ999",
+        1,
+        2,
+        JSON.stringify({ identity_pubkey_check: hex(untouchedKey) }),
+      );
+
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    expect(await present(mid, `${mid}-laptop`, k1, mid, record)).toBe(200);
+
+    const survived = relay.moteDb.db
+      .prepare("SELECT key_transfer_payload AS p FROM pairing_sessions WHERE pairing_id = ?")
+      .get(unrelated) as { p: string | null };
+    expect(survived.p).not.toBeNull();
+
+    const replay = await relay.app.request(`/pairing/${pairing_id}/update-key`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ public_key: hex(k1) }),
+    });
+    expect(replay.status).toBe(403);
+    const mobile = relay.moteDb.db
+      .prepare("SELECT public_key FROM devices WHERE device_name = 'Mobile'")
+      .get() as { public_key: string };
+    expect(mobile.public_key).toBe(hex(claimKey));
+    // And the retired key is not a credential by that route either.
+    const balance = await relay.app.request(`/api/v1/agents/${mid}/balance`, {
+      headers: {
+        Authorization: `Bearer ${await token(mid, `${mid}-laptop`, k1, "account:balance")}`,
+      },
+    });
+    expect(balance.status).toBe(401);
   });
 });
