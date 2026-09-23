@@ -47,12 +47,13 @@
  *   tsx scripts/check-publishable-package-metadata.ts        # exit 1 on violation
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { resolve } from "node:path";
+
+import { publishablePackages, workspaceGlobs } from "./lib/publish-freshness.js";
 
 const REPO_ROOT = resolve(new URL(".", import.meta.url).pathname, "..");
 
-const SCAN_ROOTS = ["packages", "apps", "services"] as const;
+const GLOBS = workspaceGlobs(REPO_ROOT);
 
 const CANONICAL_REPOSITORY_URL = "https://github.com/motebit/motebit";
 const CANONICAL_REPOSITORY_TYPE = "git";
@@ -77,47 +78,19 @@ interface Finding {
 }
 
 /**
- * Walk `packages/`, `apps/`, `services/` and return every package whose
- * `package.json` is neither `"private": true` nor `"0.0.0-private"`.
+ * The one enumerator of publishable packages (`scripts/lib/publish-freshness.ts`):
+ * every workspace manifest under the pnpm-workspace.yaml globs that is neither
+ * `"private": true` nor `"0.0.0-private"`. Shared with `check-publish-freshness`
+ * and `wait-for-npm-propagation`, so "publishable" has one answer.
  */
 function discoverPublishablePackages(): ReadonlyArray<PackageInfo> {
-  const out: PackageInfo[] = [];
-  for (const top of SCAN_ROOTS) {
-    const topDir = resolve(REPO_ROOT, top);
-    if (!existsSync(topDir)) continue;
-    let entries: string[];
-    try {
-      entries = readdirSync(topDir);
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      const dir = resolve(topDir, entry);
-      const pj = resolve(dir, "package.json");
-      if (!existsSync(pj)) continue;
-      let st: ReturnType<typeof statSync>;
-      try {
-        st = statSync(dir);
-      } catch {
-        continue;
-      }
-      if (!st.isDirectory()) continue;
-      const raw = JSON.parse(readFileSync(pj, "utf-8")) as Record<string, unknown>;
-      const name = typeof raw.name === "string" ? raw.name : undefined;
-      const version = typeof raw.version === "string" ? raw.version : undefined;
-      if (!name || !version) continue;
-      if (raw.private === true) continue;
-      if (version === "0.0.0-private") continue;
-      out.push({
-        dir,
-        relativeDir: relative(REPO_ROOT, dir),
-        name,
-        version,
-        raw,
-      });
-    }
-  }
-  return out.sort((a, b) => a.name.localeCompare(b.name));
+  return publishablePackages(REPO_ROOT, GLOBS).map((p) => ({
+    dir: resolve(REPO_ROOT, p.dir),
+    relativeDir: p.dir,
+    name: p.name,
+    version: p.version,
+    raw: p.raw,
+  }));
 }
 
 interface RepositoryShape {
@@ -205,7 +178,7 @@ function main(): void {
   }
 
   console.log(
-    `check-publishable-package-metadata — scanned ${SCAN_ROOTS.length} root(s)\n` +
+    `check-publishable-package-metadata — scanned ${GLOBS.length} workspace glob(s) (${GLOBS.join(", ")})\n` +
       `  ${packages.length} publishable package(s) (private !== true AND version !== "0.0.0-private")\n`,
   );
 

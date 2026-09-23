@@ -61,7 +61,7 @@ jobs:
         run: |
           gh issue list --label publish-freshness --state open --json number --jq '.[0].number' > /tmp/issue || true
           N=$(cat /tmp/issue)
-          BODY="Scheduled publish-freshness gate FAILED: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} — a public package's version on main is not what the npm registry serves (a publish that did not happen, or one that happened outside main)."
+          BODY="Scheduled publish-freshness gate FAILED: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} — a public package's version on main is not what the npm registry serves (a publish that did not happen, or one that happened outside main) — OR the registry was unreachable from the runner, which is not a token problem; the run log names which."
           if [ -n "$N" ]; then gh issue comment "$N" --body "$BODY"; else gh issue create --title "Publish freshness gate failing" --label publish-freshness --body "$BODY"; fi
         env:
           GH_TOKEN: ${{ github.token }}

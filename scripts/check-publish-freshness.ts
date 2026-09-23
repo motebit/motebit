@@ -44,44 +44,68 @@ import { execFileSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { runPublishFreshness, type PublishablePackage } from "./lib/publish-freshness.js";
+import {
+  parsePendingHours,
+  runPublishFreshness,
+  type Bump,
+  type PublishablePackage,
+} from "./lib/publish-freshness.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
 
-/**
- * When main's manifest first carried this version — the commit that bumped
- * it. Null when git cannot answer (shallow clone, or a version that was never
- * committed), in which case there is no grace: an unknown bump time is not a
- * reason to call a missing publish pending.
- */
-function versionBumpedAt(pkg: PublishablePackage): Date | null {
+function git(args: string[]): string | null {
   try {
-    const out = execFileSync(
-      "git",
-      [
-        "log",
-        "-1",
-        "--format=%cI",
-        `-S"version": "${pkg.version}"`,
-        "--",
-        `${pkg.dir}/package.json`,
-      ],
-      { cwd: ROOT, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] },
-    ).trim();
-    if (out === "") return null;
-    const d = new Date(out);
-    return Number.isNaN(d.getTime()) ? null : d;
+    return execFileSync("git", args, {
+      cwd: ROOT,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
   } catch {
     return null;
   }
+}
+
+/**
+ * The commit that gave the manifest its current version, and the version the
+ * manifest carried before it. Null when git cannot answer (shallow clone, or
+ * a version that was never committed) — and an unknown bump is no grace.
+ */
+function versionBumpedAt(pkg: PublishablePackage): Bump | null {
+  const path = `${pkg.dir}/package.json`;
+  const sha = git(["log", "-1", "--format=%H", `-S"version": "${pkg.version}"`, "--", path]);
+  if (sha === null || sha === "") return null;
+  const when = git(["show", "-s", "--format=%cI", sha]);
+  if (when === null) return null;
+  const at = new Date(when);
+  if (Number.isNaN(at.getTime())) return null;
+  const before = git(["show", `${sha}^:${path}`]);
+  let previous: string | null = null;
+  if (before !== null) {
+    try {
+      const v = (JSON.parse(before) as { version?: unknown }).version;
+      previous = typeof v === "string" ? v : null;
+    } catch {
+      previous = null;
+    }
+  }
+  return { at, previous };
+}
+
+const hours = parsePendingHours(process.env["PUBLISH_FRESHNESS_HOURS"]);
+if (!hours.ok) {
+  console.error(`check-publish-freshness: ${hours.reason}.`);
+  console.error(
+    "Fix: set PUBLISH_FRESHNESS_HOURS to a plain number of hours (e.g. `6`, or `0` for no grace) in .github/workflows/publish-freshness.yml or the shell; scripts/lib/publish-freshness.ts `parsePendingHours` is the reader.",
+  );
+  process.exit(1);
 }
 
 runPublishFreshness({
   root: ROOT,
   registry: process.env["PUBLISH_FRESHNESS_REGISTRY"] ?? "https://registry.npmjs.org",
   requireRegistry: process.argv.includes("--require-registry"),
-  pendingHours: Number(process.env["PUBLISH_FRESHNESS_HOURS"] ?? "6"),
+  pendingHours: hours.hours,
   fetch: (url, init) => fetch(url, init),
   versionBumpedAt,
   now: () => Date.now(),

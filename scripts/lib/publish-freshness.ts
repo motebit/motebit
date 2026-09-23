@@ -1,10 +1,12 @@
 /**
- * publish-freshness — the pure half of `check-publish-freshness` (#161).
+ * publish-freshness — the pure half of `check-publish-freshness` (#161), and
+ * the ONE enumerator of "publishable workspace package" that
+ * `wait-for-npm-propagation` and `check-publishable-package-metadata` also
+ * consume (three hand-rolled copies had three definitions).
  *
- * Everything here is deterministic and network-free so it can be tested
- * against fixtures: which workspace packages are PUBLISHABLE, how a registry
- * answer is classified against the manifest, and how two versions order.
- * The gate script owns the network call and the git question.
+ * Everything here is deterministic; the two effects — the registry call and
+ * the git question — are injected, so every verdict is proven to bite in
+ * `scripts/__tests__/check-publish-freshness.test.ts` without a network.
  */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -15,6 +17,8 @@ export interface PublishablePackage {
   version: string;
   /** Repo-relative directory, e.g. `packages/crypto`. */
   dir: string;
+  /** The parsed manifest, for callers that read more than name/version. */
+  raw: Record<string, unknown>;
 }
 
 /**
@@ -44,9 +48,16 @@ export function parseWorkspaceGlobs(yaml: string): string[] {
   return globs;
 }
 
+/** The globs of this repo's own pnpm-workspace.yaml. */
+export function workspaceGlobs(root: string): string[] {
+  return parseWorkspaceGlobs(readFileSync(resolve(root, "pnpm-workspace.yaml"), "utf-8"));
+}
+
 /**
  * Every workspace package that npm would accept — a manifest with a name, a
- * version, and no `"private": true`. This is the whole candidate set: the
+ * version, no `"private": true`, and not the `0.0.0-private` marker
+ * (`docs/doctrine/promoting-private-to-public.md`: a public-shaped manifest
+ * that has not been promoted yet). This is the whole candidate set: the
  * changesets `ignore` list decides who gets a version BUMP, but release.yml's
  * direct-publish step ships any public package whose manifest is ahead of
  * the registry, ignored or not, so the ignore list is not the aperture.
@@ -66,38 +77,83 @@ export function publishablePackages(root: string, globs: string[]): PublishableP
   for (const dir of dirs) {
     const manifest = resolve(root, dir, "package.json");
     if (!existsSync(manifest)) continue;
-    let parsed: { name?: unknown; version?: unknown; private?: unknown };
+    let raw: Record<string, unknown>;
     try {
-      parsed = JSON.parse(readFileSync(manifest, "utf-8")) as typeof parsed;
+      raw = JSON.parse(readFileSync(manifest, "utf-8")) as Record<string, unknown>;
     } catch {
       continue;
     }
-    if (parsed.private === true) continue;
-    if (typeof parsed.name !== "string" || typeof parsed.version !== "string") continue;
-    out.push({ name: parsed.name, version: parsed.version, dir });
+    if (raw.private === true) continue;
+    if (typeof raw.name !== "string" || typeof raw.version !== "string") continue;
+    if (raw.version === "0.0.0-private") continue;
+    out.push({ name: raw.name, version: raw.version, dir, raw });
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /**
  * Orders two versions: negative when `a < b`, zero when equal, positive when
- * `a > b`. Numeric on the dotted core; a pre-release sorts below its release
- * and pre-release tags compare as strings. Enough for this repo's versions,
- * and inlined rather than imported so the gate has no runtime dependency.
+ * `a > b`. Numeric on the dotted core; a pre-release sorts below its release,
+ * and pre-release identifiers compare per semver §11 — dot-separated, numeric
+ * identifiers numerically (`rc.10 > rc.9`), otherwise as strings, numeric
+ * below alphanumeric, the shorter list first when all shared parts agree.
+ * Inlined rather than imported so the gate has no runtime dependency.
  */
 export function compareVersions(a: string, b: string): number {
-  const [aCore, aPre] = a.split("-", 2);
-  const [bCore, bPre] = b.split("-", 2);
+  const [aCore, aPre] = splitPre(a);
+  const [bCore, bPre] = splitPre(b);
   const an = aCore.split(".").map((n) => Number(n));
   const bn = bCore.split(".").map((n) => Number(n));
   for (let i = 0; i < Math.max(an.length, bn.length); i++) {
     const d = (an[i] ?? 0) - (bn[i] ?? 0);
     if (d !== 0) return d;
   }
-  if (aPre === undefined && bPre === undefined) return 0;
-  if (aPre === undefined) return 1;
-  if (bPre === undefined) return -1;
-  return aPre < bPre ? -1 : aPre > bPre ? 1 : 0;
+  if (aPre === null && bPre === null) return 0;
+  if (aPre === null) return 1;
+  if (bPre === null) return -1;
+  const ap = aPre.split(".");
+  const bp = bPre.split(".");
+  for (let i = 0; i < Math.min(ap.length, bp.length); i++) {
+    const x = ap[i];
+    const y = bp[i];
+    const xn = /^\d+$/.test(x);
+    const yn = /^\d+$/.test(y);
+    if (xn && yn) {
+      const d = Number(x) - Number(y);
+      if (d !== 0) return d;
+    } else if (xn !== yn) {
+      return xn ? -1 : 1;
+    } else if (x !== y) {
+      return x < y ? -1 : 1;
+    }
+  }
+  return ap.length - bp.length;
+}
+
+function splitPre(v: string): [string, string | null] {
+  const plus = v.indexOf("+");
+  const noBuild = plus === -1 ? v : v.slice(0, plus);
+  const dash = noBuild.indexOf("-");
+  return dash === -1 ? [noBuild, null] : [noBuild.slice(0, dash), noBuild.slice(dash + 1)];
+}
+
+/**
+ * The grace-window width from its environment variable. A value that is not a
+ * finite non-negative number is refused with a message, never silently read
+ * as NaN — `Number("6h")` would disable the window and send every fresh bump
+ * to the token repair without saying why.
+ */
+export function parsePendingHours(
+  raw: string | undefined,
+): { ok: true; hours: number } | { ok: false; reason: string } {
+  if (raw === undefined || raw === "") return { ok: true, hours: 6 };
+  const hours = Number(raw);
+  if (!Number.isFinite(hours) || hours < 0)
+    return {
+      ok: false,
+      reason: `PUBLISH_FRESHNESS_HOURS=${JSON.stringify(raw)} is not a finite non-negative number of hours`,
+    };
+  return { ok: true, hours };
 }
 
 /** What the registry said about one package name. */
@@ -156,10 +212,44 @@ export function readRegistryDocument(status: number, body: string): RegistryAnsw
   }
 }
 
+/**
+ * The commit that gave the manifest its current version, and what the
+ * manifest said before it. `previous` is null when the manifest (or its
+ * version) did not exist before — a first publish.
+ */
+export interface Bump {
+  at: Date;
+  previous: string | null;
+}
+
+/**
+ * Whether a missing publish is still PENDING (the train merges the bump and
+ * publishes minutes later) or a finding. Two conditions, both required:
+ *
+ *  - the bump is younger than the window, and
+ *  - the registry serves EXACTLY the version main had before the bump (or,
+ *    for a name the registry has never seen, main had no version before —
+ *    a first publish).
+ *
+ * The second condition is what keeps the grace from masking the incident:
+ * a fresh bump over a registry that has been stale for weeks has a young
+ * bump time but a `latest` that is not the previous version, so it is
+ * `behind` today, not `pending` for a day. An unknown bump (null) is never
+ * grace: an unanswerable question is not a reason to call a gap pending.
+ */
+export function isPending(
+  standing: { kind: "behind"; latest: string } | { kind: "unpublished" },
+  bump: Bump | null,
+  pendingHours: number,
+  now: number,
+): boolean {
+  if (bump === null) return false;
+  const ageHours = (now - bump.at.getTime()) / 3_600_000;
+  if (!(ageHours < pendingHours)) return false;
+  return standing.kind === "behind" ? bump.previous === standing.latest : bump.previous === null;
+}
+
 // ── The runner ──────────────────────────────────────────────────────────────
-// The gate's whole verdict, with its two effects injected: the registry call
-// and the git question. The script wires the real ones; the test wires a
-// registry it controls and proves every verdict bites without a network.
 
 export interface RunOptions {
   /** Repo root — where pnpm-workspace.yaml and the manifests live. */
@@ -170,15 +260,14 @@ export interface RunOptions {
   requireRegistry: boolean;
   /** Hours a version bump on main may wait for its publish before it is a finding. */
   pendingHours: number;
+  /** Per-request registry timeout. */
+  timeoutMs?: number;
   fetch: (
     url: string,
     init: { headers: Record<string, string>; signal: AbortSignal },
-  ) => Promise<{
-    status: number;
-    text(): Promise<string>;
-  }>;
-  /** When main's manifest first carried `pkg.version`; null when git cannot say. */
-  versionBumpedAt: (pkg: PublishablePackage) => Date | null;
+  ) => Promise<{ status: number; text(): Promise<string> }>;
+  /** When main's manifest first carried `pkg.version`, and what it said before; null when git cannot say. */
+  versionBumpedAt: (pkg: PublishablePackage) => Bump | null;
   now: () => number;
   log: (line: string) => void;
   error: (line: string) => void;
@@ -191,7 +280,10 @@ export interface Finding {
 
 export interface RunResult {
   code: 0 | 1;
+  /** Packages in the candidate set. */
   examined: number;
+  /** Packages the registry actually answered about. */
+  verified: number;
   findings: Finding[];
   pending: number;
 }
@@ -200,12 +292,13 @@ export async function askRegistry(
   registry: string,
   name: string,
   fetchImpl: RunOptions["fetch"],
+  timeoutMs = 20_000,
 ): Promise<RegistryAnswer> {
   const url = `${registry.replace(/\/+$/, "")}/${name.replace("/", "%2F")}`;
   try {
     const res = await fetchImpl(url, {
       headers: { accept: "application/vnd.npm.install-v1+json" },
-      signal: AbortSignal.timeout(20_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     return readRegistryDocument(res.status, await res.text());
   } catch (err) {
@@ -215,25 +308,31 @@ export async function askRegistry(
 
 export async function runPublishFreshness(o: RunOptions): Promise<RunResult> {
   o.log(
-    `▸ check-publish-freshness — npm registry vs main (dist-tags.latest == manifest; bumps younger than ${o.pendingHours}h are pending)`,
+    `▸ check-publish-freshness — npm registry vs main (dist-tags.latest == manifest; a bump younger than ${o.pendingHours}h over the previous version is pending)`,
   );
 
-  const globs = parseWorkspaceGlobs(readFileSync(resolve(o.root, "pnpm-workspace.yaml"), "utf-8"));
+  const globs = workspaceGlobs(o.root);
   const packages = publishablePackages(o.root, globs);
   if (packages.length === 0) {
     o.error("check-publish-freshness: found 0 publishable packages — the aperture is empty.");
     o.error(
       `Fix: pnpm-workspace.yaml globs read as [${globs.join(", ")}]; scripts/lib/publish-freshness.ts understands \`dir/*\` and literal directories. A new glob shape needs the reader widened, not a green run over nothing.`,
     );
-    return { code: 1, examined: 0, findings: [], pending: 0 };
+    return { code: 1, examined: 0, verified: 0, findings: [], pending: 0 };
   }
+
+  // One round-trip for the whole set: an outage costs one timeout, not one
+  // per package. Order is restored by the sorted candidate list.
+  const answers = await Promise.all(
+    packages.map((pkg) => askRegistry(o.registry, pkg.name, o.fetch, o.timeoutMs)),
+  );
 
   const findings: Finding[] = [];
   const pending: string[] = [];
   let unreachable = 0;
 
-  for (const pkg of packages) {
-    const standing = classify(pkg.version, await askRegistry(o.registry, pkg.name, o.fetch));
+  packages.forEach((pkg, i) => {
+    const standing = classify(pkg.version, answers[i]);
     const label = `${pkg.name}@${pkg.version} (${pkg.dir})`;
     switch (standing.kind) {
       case "current":
@@ -246,10 +345,12 @@ export async function runPublishFreshness(o: RunOptions): Promise<RunResult> {
         break;
       case "behind":
       case "unpublished": {
-        const bumped = o.versionBumpedAt(pkg);
-        const ageHours = bumped === null ? null : (o.now() - bumped.getTime()) / 3_600_000;
-        if (ageHours !== null && ageHours < o.pendingHours) {
-          pending.push(`${label} — bumped ${ageHours.toFixed(1)}h ago, publish still pending`);
+        const bump = o.versionBumpedAt(pkg);
+        if (isPending(standing, bump, o.pendingHours, o.now())) {
+          const age = ((o.now() - (bump as Bump).at.getTime()) / 3_600_000).toFixed(1);
+          pending.push(
+            `${label} — bumped ${age}h ago from ${standing.kind === "behind" ? standing.latest : "nothing"}, publish still pending`,
+          );
         } else {
           findings.push({ pkg, standing });
         }
@@ -259,9 +360,10 @@ export async function runPublishFreshness(o: RunOptions): Promise<RunResult> {
         findings.push({ pkg, standing });
         break;
     }
-  }
+  });
 
   for (const p of pending) o.log(`  … ${p}`);
+  const verified = packages.length - unreachable;
 
   if (findings.length > 0) {
     o.error(`check-publish-freshness: ${findings.length} finding(s):`);
@@ -278,16 +380,23 @@ export async function runPublishFreshness(o: RunOptions): Promise<RunResult> {
       o.error(`  [${s.kind}] ${f.pkg.name} (${f.pkg.dir}/package.json): ${what}`);
     }
     o.error(
-      "Fix: for [behind]/[unpublished] — open the newest run of .github/workflows/release.yml. If its Direct-publish step shows `E404`/`E403` on a PUT to registry.npmjs.org, the NPM_TOKEN secret is expired or lacks publish scope (npm answers 404 to an unauthorized scoped PUT): mint a granular token with read+write on scope @motebit plus `motebit` and `create-motebit`, `gh secret set NPM_TOKEN --repo motebit/motebit`, then `gh run rerun <id>`. If that run is GREEN, publish was skipped, not attempted — a fresh changeset put the workflow back in version mode — so dispatch release.yml or rerun the last failed one. For [ahead] — a version reached the registry outside main; find who published it and bring main's manifest forward. For [unreachable] — the registry did not answer; a transient outage clears on the next run, a persistent one means the runner cannot reach registry.npmjs.org.",
+      "Fix: for [behind]/[unpublished] — open the newest run of .github/workflows/release.yml. If its Direct-publish step shows `E404`/`E403` on a PUT to registry.npmjs.org, the NPM_TOKEN secret is expired or lacks publish scope (npm answers 404 to an unauthorized scoped PUT): mint a granular token with read+write on scope @motebit plus `motebit` and `create-motebit`, `gh secret set NPM_TOKEN --repo motebit/motebit`, then `gh run rerun <id>`. If that run is GREEN, publish was skipped, not attempted — a fresh changeset put the workflow back in version mode — so dispatch release.yml or rerun the last failed one. For [ahead] — a version reached the registry outside main; find who published it and bring main's manifest forward. For [unreachable] — the registry did not answer; this is NOT a token problem: a transient outage clears on the next run, a persistent one means the runner cannot reach registry.npmjs.org.",
     );
     o.error(
       "Doctrine: docs/doctrine/composition-preserves-enforcement.md — a green release workflow is a statement about the workflow, not about the registry; docs/doctrine/release-versioning.md — a version on main is a promise the registry must keep.",
     );
-    return { code: 1, examined: packages.length, findings, pending: pending.length };
+    return { code: 1, examined: packages.length, verified, findings, pending: pending.length };
   }
 
-  o.log(
-    `✓ check-publish-freshness: ${packages.length} publishable package(s) examined (every workspace manifest without \`private: true\` under ${globs.join(", ")}) — registry current${pending.length > 0 ? `, ${pending.length} pending` : ""}${unreachable > 0 ? `, ${unreachable} unreachable (skipped)` : ""}.`,
-  );
-  return { code: 0, examined: packages.length, findings: [], pending: pending.length };
+  const scope = `${packages.length} publishable package(s) examined (every workspace manifest without \`private: true\` or \`0.0.0-private\` under ${globs.join(", ")})`;
+  if (verified === 0) {
+    o.log(
+      `– check-publish-freshness: ${scope} — registry unreachable for all of them, NOTHING verified (skipped; CI runs with --require-registry, where this is red).`,
+    );
+  } else {
+    o.log(
+      `✓ check-publish-freshness: ${scope} — ${verified} verified against the registry${pending.length > 0 ? `, ${pending.length} pending` : ""}${unreachable > 0 ? `, ${unreachable} unreachable (skipped, not verified)` : ""}.`,
+    );
+  }
+  return { code: 0, examined: packages.length, verified, findings: [], pending: pending.length };
 }

@@ -26,8 +26,9 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
+
+import { publishablePackages, workspaceGlobs } from "./lib/publish-freshness.js";
 
 const REPO_ROOT = resolve(new URL(".", import.meta.url).pathname, "..");
 const POLL_INTERVAL_MS = 3000;
@@ -45,28 +46,17 @@ interface Pkg {
   version: string;
 }
 
-function readJson(path: string): any {
-  return JSON.parse(readFileSync(path, "utf-8"));
-}
-
+/**
+ * The same candidate set the daily `check-publish-freshness` gate holds the
+ * registry to (`scripts/lib/publish-freshness.ts`): every public manifest,
+ * ignored-by-changesets or not — direct-publish above ships those too, so a
+ * wait keyed to the ignore list would race exactly the packages it skipped.
+ */
 function getPublishablePackages(): Pkg[] {
-  const config = readJson(join(REPO_ROOT, ".changeset", "config.json"));
-  const ignore = new Set<string>(Array.isArray(config.ignore) ? config.ignore : []);
-  const result: Pkg[] = [];
-  for (const top of ["packages", "apps", "services"]) {
-    const dir = join(REPO_ROOT, top);
-    if (!existsSync(dir)) continue;
-    for (const name of readdirSync(dir)) {
-      const pkgPath = join(dir, name, "package.json");
-      if (!existsSync(pkgPath)) continue;
-      const pkg = readJson(pkgPath);
-      if (pkg.private === true) continue;
-      if (ignore.has(pkg.name)) continue;
-      if (typeof pkg.name !== "string" || typeof pkg.version !== "string") continue;
-      result.push({ name: pkg.name, version: pkg.version });
-    }
-  }
-  return result;
+  return publishablePackages(REPO_ROOT, workspaceGlobs(REPO_ROOT)).map(({ name, version }) => ({
+    name,
+    version,
+  }));
 }
 
 function sleep(ms: number): Promise<void> {
