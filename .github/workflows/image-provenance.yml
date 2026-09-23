@@ -31,6 +31,7 @@ permissions:
   contents: read
   actions: read
   packages: read
+  issues: write # the failure alert below comments on / opens a pinned issue
 
 jobs:
   provenance:
@@ -58,3 +59,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: npx tsx scripts/check-image-provenance.ts --require-tools
+      # A scheduled gate with no alert is a gate nobody reads: model-catalog-drift
+      # sat red for five weeks before anyone opened the square (#632). Same step
+      # as that workflow's, mirrored — one pinned issue thread per gate, a
+      # comment per red run, never a fresh issue each day.
+      - name: Alert on failure (pinned issue thread)
+        if: failure()
+        run: |
+          gh issue list --label image-provenance --state open --json number --jq '.[0].number' > /tmp/issue || true
+          N=$(cat /tmp/issue)
+          BODY="Scheduled image-provenance gate FAILED: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} — a documented image tag is absent, unsigned, unattested, bound to another commit, or the publish run for main's HEAD did not conclude success."
+          if [ -n "$N" ]; then gh issue comment "$N" --body "$BODY"; else gh issue create --title "Image provenance gate failing" --label image-provenance --body "$BODY"; fi
+        env:
+          GH_TOKEN: ${{ github.token }}

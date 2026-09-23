@@ -263,6 +263,8 @@ function assertCommandParity(canonical: VerifyCommand[]): number {
 // ── The documented targets ─────────────────────────────────────────────────
 
 interface Target {
+  /** Set when a docs-named X.Y.Z has no visible `relay-vX.Y.Z` tag to bind to. */
+  unresolvedTag?: string;
   /** Tag only, e.g. `1.0.1`, `main`, `sha-4fa5fbb`. */
   tag: string;
   /** Where the operator is told about it. */
@@ -319,10 +321,13 @@ function targets(head: string | null): Target[] {
       // `:X.Y.Z` and `:sha-` are the table's placeholder rows — the regexp stops
       // at the `<` of `sha-<short>`, so a bare `sha-` is that row, never a tag.
       if (tag === "X.Y.Z" || tag === "sha-") continue;
-      const version = /^\d+\.\d+\.\d+$/.test(tag)
-        ? gitOut(["rev-parse", `relay-v${tag}^{commit}`])
-        : null;
+      const isVersion = /^\d+\.\d+\.\d+$/.test(tag);
+      const version = isVersion ? gitOut(["rev-parse", `relay-v${tag}^{commit}`]) : null;
       add(tag, rel, tag === "main" ? head : version, tag === "main");
+      // A documented X.Y.Z whose `relay-vX.Y.Z` tag is not visible has no
+      // commit to bind to. That is not the same as "bound": the assertion was
+      // never formed, and the loop below says so rather than dropping it.
+      if (isVersion && version === null) byTag.get(tag)!.unresolvedTag = `relay-v${tag}`;
     }
   }
 
@@ -451,14 +456,47 @@ function classify(result: CosignResult, command: VerifyCommand, viaTag: string):
   }
   if (!result.ok) {
     const last = result.stderr.trim().split("\n").filter(Boolean).slice(-1)[0] ?? "no output";
+    // Only a message that is ABOUT the artifact earns `failed`. These are the
+    // strings cosign prints when the image genuinely does not carry what the
+    // documented command demands (observed against the live registry while
+    // writing this gate). Anything else — Rekor/Fulcio unreachable, TUF root
+    // fetch, DNS, TLS, a registry 5xx, a message this list has never seen —
+    // is the CHECK not completing, and blaming the artifact for it is the
+    // false accusation the doc comment above promises not to make. The
+    // unknown case lands on `unverified`, which in CI is still a finding.
+    const artifactFailure = ARTIFACT_FAILURE_MARKERS.some((m) => result.stderr.includes(m));
+    if (artifactFailure) {
+      return {
+        status: "failed",
+        viaTag,
+        detail: `the documented \`cosign ${command.argv[1]}\` command fails: ${last}`,
+      };
+    }
     return {
-      status: "failed",
+      status: "unverified",
       viaTag,
-      detail: `the documented \`cosign ${command.argv[1]}\` command fails: ${last}`,
+      detail: `the documented \`cosign ${command.argv[1]}\` command could not complete (${last}) — the image is UNVERIFIED, not proven bad; check Sigstore/ghcr reachability before suspecting the artifact`,
     };
   }
   return { status: "verified", result, viaTag };
 }
+
+/**
+ * What cosign says when the ARTIFACT fails the documented command, as opposed
+ * to the command failing to run. Observed live; extend when a new genuine
+ * failure shape appears, never widen to a catch-all.
+ */
+const ARTIFACT_FAILURE_MARKERS = [
+  "no matching signatures",
+  "no matching attestations",
+  "none of the attestations matched",
+  "no signatures found",
+  "no matching CertificateIdentity",
+  "signature verification failed",
+  "invalid signature",
+  "image tag not found",
+  "MANIFEST_UNKNOWN",
+];
 
 function runCosign(command: VerifyCommand, tag: string): CosignResult {
   const argv = [...command.argv];
@@ -478,11 +516,15 @@ function runCosign(command: VerifyCommand, tag: string): CosignResult {
     });
     return { ok: true, stdout, stderr: "", timedOut: false };
   } catch (err) {
-    const e = err as { stdout?: string; stderr?: string; signal?: string; message?: string };
+    // execFileSync throws an Error carrying the child's streams; anything else
+    // means cosign could not even be spawned, and that message must survive.
+    const e = err as { stdout?: unknown; stderr?: unknown; signal?: unknown };
+    const message = err instanceof Error ? err.message : String(err);
+    const stderr = typeof e.stderr === "string" && e.stderr.length > 0 ? e.stderr : message;
     return {
       ok: false,
-      stdout: e.stdout ?? "",
-      stderr: (e.stderr ?? e.message ?? "").toString(),
+      stdout: typeof e.stdout === "string" ? e.stdout : "",
+      stderr,
       timedOut: e.signal === "SIGKILL" || e.signal === "SIGTERM",
     };
   }
@@ -681,6 +723,12 @@ async function main(): Promise<void> {
   const restated = assertCommandParity(commands);
   const head = gitOut(["rev-parse", "HEAD"]);
   const all = targets(head);
+  // The publish assertion is about MAIN. A `workflow_dispatch` from a branch
+  // (someone trying the gate on its own PR) has no publish run and must not
+  // read as the publish path having stopped — the message says "on main", so
+  // the code has to know whether it is.
+  const branch = process.env["GITHUB_REF_NAME"] ?? gitOut(["rev-parse", "--abbrev-ref", "HEAD"]);
+  const onMain = branch === "main";
 
   // Whether an image is DUE for HEAD is decided by the publish run, never
   // assumed from the commit. A build still running has not failed; a commit
@@ -701,7 +749,10 @@ async function main(): Promise<void> {
   }
 
   if (run === undefined) {
-    const message = `could not read publish-images runs (gh unavailable or unauthenticated) — the PUBLISHED assertion was not made for ${head?.slice(0, 7) ?? "HEAD"}`;
+    const message =
+      head === null
+        ? "git could not report HEAD, so which commit's image is due is unknown — the PUBLISHED assertion was not made"
+        : `could not read publish-images runs (gh unavailable or unauthenticated) — the PUBLISHED assertion was not made for ${head.slice(0, 7)}`;
     if (REQUIRE_TOOLS) {
       findings.push({ ref: "publish-images", kind: "publish", detail: message });
     } else {
@@ -722,11 +773,11 @@ async function main(): Promise<void> {
         : everyPush === false
           ? `no publish-images run exists for ${head?.slice(0, 7) ?? "HEAD"}, and publish-images.yml no longer runs on every push to main (a paths filter, or main absent from branches) — this gate's premise that HEAD's tags are due after every push is STALE; update this gate alongside the workflow`
           : `no publish-images run exists for ${head?.slice(0, 7) ?? "HEAD"}, and the push trigger in publish-images.yml could not be read — whether HEAD's tags are due is unknown, which is not a pass`;
-    if (REQUIRE_TOOLS) {
+    if (REQUIRE_TOOLS && onMain) {
       assertions++;
       findings.push({ ref: "publish-images", kind: "publish", detail: message });
     } else {
-      notes.push(`${message} (expected on a branch)`);
+      notes.push(`${message} (on ${branch ?? "an unknown ref"}, not main — expected)`);
     }
   } else if (run.status !== "completed") {
     notes.push(`publish-images for ${head!.slice(0, 7)} is ${run.status} — HEAD tags not yet due`);
@@ -744,6 +795,10 @@ async function main(): Promise<void> {
     }
   }
 
+  // One registry read per tag; the ALIAS assertion below reasons about the
+  // same manifest the loop verified, never a second read that could differ.
+  const digests = new Map<string, string | null | undefined>();
+
   for (const target of all) {
     const ref = `${IMAGE_REPO}:${target.tag}`;
     const where = target.sources.join(", ");
@@ -760,8 +815,16 @@ async function main(): Promise<void> {
     }
 
     const digest = await resolveDigest(target.tag);
+    digests.set(target.tag, digest);
     if (digest === undefined) {
-      notes.push(`${ref} — registry unreachable, not assessed`);
+      // Not 200 and not 404: the package flipped private (401/403), the token
+      // endpoint is down, a 5xx, DNS. The operator cannot pull the image
+      // either way. Locally a note; in CI a finding — the same rule as an
+      // `unverified` cosign run, because "not assessed" every day is a
+      // dormant gate whichever prerequisite went quiet.
+      const detail = `the registry did not answer for this tag (neither found nor absent) — existence is UNVERIFIED, which is not a pass; if the package went private, an operator cannot pull it`;
+      if (REQUIRE_TOOLS) findings.push({ ref, kind: "unverified", detail });
+      else notes.push(`${ref} — ${detail}`);
       continue;
     }
     assertions++;
@@ -814,7 +877,19 @@ async function main(): Promise<void> {
       // moved between the registry read and the verification shows up here.
       if (command.kind === "signature") {
         const signed = signedDigests(verdict.result.stdout);
-        if (signed.length > 0 && !signed.includes(digest)) {
+        // cosign exiting 0 with output this gate cannot read is not "signed":
+        // the digest binding was never checked. A cosign that changes its
+        // JSON, or a doc edit that adds `--output text` to the command this
+        // gate runs verbatim, must go red here, not print a tick.
+        if (signed.length === 0) {
+          findings.push({
+            ref,
+            kind: "unverified",
+            detail: `cosign verify exited 0 but its output carried no manifest digest this gate recognizes, so the signature was not bound to what the tag serves${via}`,
+          });
+          continue;
+        }
+        if (!signed.includes(digest)) {
           findings.push({
             ref,
             kind: "mismatch",
@@ -829,7 +904,15 @@ async function main(): Promise<void> {
       const { subjectDigests, gitCommits } = provenance(verdict.result.stdout);
       assertions++;
       let bound = true;
-      if (subjectDigests.length > 0 && !subjectDigests.includes(digest)) {
+      if (subjectDigests.length === 0) {
+        findings.push({
+          ref,
+          kind: "unverified",
+          detail: `cosign verify-attestation exited 0 but no in-toto subject digest could be read from its output, so the provenance was not bound to what the tag serves${via}`,
+        });
+        continue;
+      }
+      if (!subjectDigests.includes(digest)) {
         bound = false;
         findings.push({
           ref,
@@ -837,7 +920,26 @@ async function main(): Promise<void> {
           detail: `provenance subject is ${subjectDigests.join(", ")} but the tag resolves to ${digest}`,
         });
       }
-      if (target.expectCommit !== null && gitCommits.length > 0) {
+      if (target.unresolvedTag !== undefined) {
+        // The docs name a version whose tag this checkout cannot see. With
+        // fetch-depth: 0 in CI that means the docs are ahead of the tag (or
+        // the tag was never pushed), and the commit binding CANNOT be checked
+        // — said, never silently skipped.
+        const detail = `commit binding not checked: ${target.unresolvedTag} is not a visible git tag, so which commit this image should be built from is unknown`;
+        if (REQUIRE_TOOLS) {
+          bound = false;
+          findings.push({ ref, kind: "unverified", detail });
+        } else notes.push(`${ref} — ${detail} (a shallow checkout carries no tags)`);
+      } else if (target.expectCommit !== null && gitCommits.length === 0) {
+        // The provenance carries no gitCommit at all. The build always emits
+        // one; a statement without it is a shape this gate does not know.
+        bound = false;
+        findings.push({
+          ref,
+          kind: "unverified",
+          detail: `provenance carries no gitCommit, so whether this image was built from ${target.expectCommit.slice(0, 7)} could not be checked${via}`,
+        });
+      } else if (target.expectCommit !== null) {
         assertions++;
         if (!gitCommits.includes(target.expectCommit)) {
           bound = false;
@@ -872,8 +974,13 @@ async function main(): Promise<void> {
   // ALIAS: #723's invariant, read off the registry rather than the workflow.
   if (head !== null && !buildPending) {
     const shaTag = `sha-${head.slice(0, 7)}`;
-    const [aliasDigest, shaDigest] = [await resolveDigest("main"), await resolveDigest(shaTag)];
-    if (typeof aliasDigest === "string" && typeof shaDigest === "string") {
+    const aliasDigest = digests.has("main") ? digests.get("main") : await resolveDigest("main");
+    const shaDigest = digests.has(shaTag) ? digests.get(shaTag) : await resolveDigest(shaTag);
+    if (aliasDigest === undefined || shaDigest === undefined) {
+      const detail = `the registry did not answer for :main or ${shaTag}, so #723's alias invariant (both tags = one digest) was not checked`;
+      if (REQUIRE_TOOLS) findings.push({ ref: `${IMAGE_REPO}:main`, kind: "unverified", detail });
+      else notes.push(detail);
+    } else if (typeof aliasDigest === "string" && typeof shaDigest === "string") {
       assertions++;
       if (aliasDigest !== shaDigest) {
         findings.push({
