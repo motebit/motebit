@@ -14,7 +14,7 @@ import {
   hexToBytes,
 } from "@motebit/encryption";
 import { insertRevocationEvent } from "./federation.js";
-import { applySuccession, successionAtHead, successionHead } from "./succession-apply.js";
+import { applySuccession, departureFrom, keyOnFile, successionAtHead } from "./succession-apply.js";
 import { readSuccessionChain } from "./identity-transparency.js";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
@@ -234,50 +234,22 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     // keys are covered by the signature, and a record stored in a spelling
     // that differs from the one signed breaks `verifySuccessionChain`'s
     // linkage on the public surfaces this rule exists to protect.
-    const storedAgent = moteDb.db
-      .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
-      .get(motebitId) as { public_key: string } | undefined;
-    const registryKey =
-      storedAgent?.public_key != null && storedAgent.public_key !== ""
-        ? storedAgent.public_key
-        : null;
-    // The head of what this relay has already RECORDED. Without it an
-    // identity whose registry row is gone could rotate exactly once: the
-    // registry UPDATE below writes no rows, so the second rotation found
-    // nothing on file and was refused — and rotating twice worked before
-    // this rule existed. The chain is the record of the first rotation,
-    // so it is what the second one continues from. It is reachable only
-    // AFTER a rotation that already passed this check, so it cannot be
-    // used to bootstrap a chain out of nothing.
-    const chainHead = successionHead(moteDb.db, motebitId);
-    if (held) {
-      // Nothing to protect: the link is this identity's recorded head, and
-      // the key it departs from has by definition moved on.
-    } else if (registryKey != null) {
-      if (registryKey !== body.old_public_key) {
+    if (!held) {
+      // The ONE precedence rule, shared with the public succession route so
+      // a client's read and this refusal can never disagree.
+      const departure = departureFrom(moteDb.db, motebitId, body.old_public_key);
+      if (!departure.admissible) {
+        const messages = {
+          not_from_current_key: "Succession old_public_key does not match stored public key",
+          not_from_chain_head:
+            "Succession old_public_key does not match the head of this identity's recorded chain",
+          no_key_on_file:
+            "Succession old_public_key is not a key this relay holds for this identity",
+        } as const;
         throw refuse(
           400,
-          "not_from_current_key",
-          "Succession old_public_key does not match stored public key",
-        );
-      }
-    } else if (chainHead != null) {
-      if (chainHead.new_public_key !== body.old_public_key) {
-        throw refuse(
-          400,
-          "not_from_current_key",
-          "Succession old_public_key does not match the head of this identity's recorded chain",
-        );
-      }
-    } else {
-      const heldByDevice = moteDb.db
-        .prepare("SELECT 1 FROM devices WHERE motebit_id = ? AND public_key = ? LIMIT 1")
-        .get(motebitId, body.old_public_key);
-      if (heldByDevice == null) {
-        throw refuse(
-          400,
-          "no_key_on_file",
-          "Succession old_public_key is not a key this relay holds for this identity",
+          departure.reason === "no_key_on_file" ? "no_key_on_file" : "not_from_current_key",
+          messages[departure.reason],
         );
       }
     }
@@ -324,6 +296,17 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     // READS to classify the relay was unverifiable as served.
     const chain = readSuccessionChain(moteDb.db, motebitId);
 
+    // What the relay HOLDS and whether a rotation may depart from a given
+    // key, answered by the same function /rotate-key enforces. A client
+    // reads this before minting anything; re-deriving it from the chain
+    // and registry alone cannot see device rows and inverts the precedence.
+    const onFile = keyOnFile(moteDb.db, motebitId);
+    const from = c.req.query("from");
+    const departable =
+      from != null && /^[0-9a-f]{64}$/i.test(from)
+        ? departureFrom(moteDb.db, motebitId, from).admissible
+        : null;
+
     const agent = moteDb.db
       .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
       .get(motebitId) as { public_key: string } | undefined;
@@ -334,6 +317,8 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
       motebit_id: motebitId,
       chain,
       current_public_key: agent?.public_key ?? null,
+      held_public_key: onFile.held,
+      ...(from != null ? { departable_from: from, departable } : {}),
     });
   });
 

@@ -60,6 +60,69 @@ export function successionAtHead(
   );
 }
 
+/**
+ * The key this relay holds for an identity, and whether a rotation may
+ * depart from a given key — the ONE precedence rule, in precedence order
+ * (`services/relay/CLAUDE.md` rule 21, `spec/identity-v1.md` §7.5): the
+ * registry key; else the head of the chain this relay has already recorded;
+ * else a key one of the identity's device rows holds. Refusing when it holds
+ * none is fail-closed.
+ *
+ * Exported because a CLIENT must be able to ask this question before it
+ * mints anything (`docs/proposals/key-rotation-client-v1.md` D3), and a
+ * client that re-derives it from the served chain and registry key alone
+ * gets it wrong in both directions: it cannot see device rows (a daemon that
+ * shut down leaves its key only there), and its precedence inverts the
+ * relay's whenever registry and chain disagree. So the public succession
+ * route serves this function's answer, and `/rotate-key` enforces it — same
+ * function, so they cannot disagree.
+ */
+export interface KeyOnFile {
+  /** The registry key, when the row exists and holds one (`''` is not a key). */
+  registryKey: string | null;
+  /** The `new_public_key` of the newest recorded link, by insertion order. */
+  chainHead: string | null;
+  /** The single most authoritative key: registry, else chain head, else null. */
+  held: string | null;
+}
+
+export function keyOnFile(db: DatabaseDriver, motebitId: string): KeyOnFile {
+  const row = db
+    .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+    .get(motebitId) as { public_key: string | null } | undefined;
+  const registryKey = row?.public_key != null && row.public_key !== "" ? row.public_key : null;
+  const chainHead = successionHead(db, motebitId)?.new_public_key ?? null;
+  return { registryKey, chainHead, held: registryKey ?? chainHead };
+}
+
+export type Departure =
+  | { admissible: true; rung: "registry" | "chain" | "device" }
+  | {
+      admissible: false;
+      reason: "not_from_current_key" | "not_from_chain_head" | "no_key_on_file";
+    };
+
+/** May a succession departing from `key` be recorded for this identity? */
+export function departureFrom(db: DatabaseDriver, motebitId: string, key: string): Departure {
+  const { registryKey, chainHead } = keyOnFile(db, motebitId);
+  if (registryKey !== null) {
+    return registryKey === key
+      ? { admissible: true, rung: "registry" }
+      : { admissible: false, reason: "not_from_current_key" };
+  }
+  if (chainHead !== null) {
+    return chainHead === key
+      ? { admissible: true, rung: "chain" }
+      : { admissible: false, reason: "not_from_chain_head" };
+  }
+  const heldByDevice = db
+    .prepare("SELECT 1 FROM devices WHERE motebit_id = ? AND public_key = ? LIMIT 1")
+    .get(motebitId, key);
+  return heldByDevice != null
+    ? { admissible: true, rung: "device" }
+    : { admissible: false, reason: "no_key_on_file" };
+}
+
 export interface SuccessionApplied {
   /** Whether the chain grew. False for a retry of the link already at its head. */
   applied: boolean;

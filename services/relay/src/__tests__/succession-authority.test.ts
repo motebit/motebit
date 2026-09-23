@@ -529,6 +529,123 @@ describe("guardian recovery is carried by someone else, and anchored to a key on
   });
 });
 
+describe("the public succession route answers the departure question with the rule /rotate-key enforces", () => {
+  async function read(mid: string, from?: string) {
+    const url = `/api/v1/agents/${mid}/succession${from ? `?from=${from}` : ""}`;
+    return (await (await relay.app.request(url)).json()) as {
+      current_public_key: string | null;
+      held_public_key: string | null;
+      departable?: boolean | null;
+      chain: unknown[];
+    };
+  }
+
+  it("registry rung: holds the registry key; departable only from it", async () => {
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    const other = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    expect(await registerAgent(mid, k1)).toBe(200);
+    expect(await read(mid, hex(k1))).toMatchObject({ held_public_key: hex(k1), departable: true });
+    expect(await read(mid, hex(other))).toMatchObject({
+      held_public_key: hex(k1),
+      departable: false,
+    });
+    expect((await read(mid)).departable).toBeUndefined();
+  });
+
+  it("chain rung: a deregistered identity is held at its recorded head", async () => {
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    expect(await registerAgent(mid, k1)).toBe(200);
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    expect(await present(mid, `${mid}-laptop`, k1, mid, record)).toBe(200);
+    relay.moteDb.db.prepare("DELETE FROM agent_registry WHERE motebit_id = ?").run(mid);
+    expect(await read(mid, hex(k2))).toMatchObject({
+      current_public_key: null,
+      held_public_key: hex(k2),
+      departable: true,
+    });
+    expect(await read(mid, hex(k1))).toMatchObject({ departable: false });
+  });
+
+  it("device rung: a daemon that shut down before ever rotating leaves its key ONLY on a device row — held is null, yet departable", async () => {
+    // The state a client that re-derived "held" from chain + registry read
+    // as UNREGISTERED and rotated locally into the split — the relay would
+    // have accepted the rotation all along.
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    const other = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    expect(await registerAgent(mid, k1)).toBe(200);
+    relay.moteDb.db.prepare("DELETE FROM agent_registry WHERE motebit_id = ?").run(mid);
+    expect(await read(mid, hex(k1))).toMatchObject({
+      held_public_key: null,
+      chain: [],
+      departable: true,
+    });
+    expect(await read(mid, hex(other))).toMatchObject({ held_public_key: null, departable: false });
+    // And /rotate-key agrees: the departure the route said yes to lands.
+    const k2 = await generateKeypair();
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    expect(await present(mid, `${mid}-laptop`, k1, mid, record)).toBe(200);
+  });
+
+  it("truly unknown: no registry, no chain, no device row ⇒ held null and not departable from anything", async () => {
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    expect(await read(mid, hex(k1))).toMatchObject({
+      held_public_key: null,
+      chain: [],
+      departable: false,
+    });
+  });
+
+  it("the served answer and the route's decision are one function: severing agreement is a red test", async () => {
+    // Registry says k1, chain head says k2 (registry re-created on an old key
+    // — a residual rule 21 names). Precedence puts the registry first, so
+    // departing from k2 is refused and from k1 is allowed; the read says the
+    // same, because it IS the same rule.
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    expect(await registerAgent(mid, k1)).toBe(200);
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    expect(await present(mid, `${mid}-laptop`, k1, mid, record)).toBe(200);
+    relay.moteDb.db
+      .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
+      .run(hex(k1), mid);
+    expect(await read(mid, hex(k2))).toMatchObject({ held_public_key: hex(k1), departable: false });
+    expect(await read(mid, hex(k1))).toMatchObject({ departable: true });
+    const k3 = await generateKeypair();
+    const fromK2 = await signKeySuccession(
+      k2.privateKey,
+      k3.privateKey,
+      k3.publicKey,
+      k2.publicKey,
+    );
+    expect(await present(mid, `${mid}-laptop`, k2, mid, fromK2)).toBe(400);
+  });
+});
+
 describe("every refusal leaves a trace in the relay's own record", () => {
   it("records a recovery probe too — the flag must not be a way to probe unrecorded", async () => {
     // `recovery: true` skips the caller check by design. If the refusals
