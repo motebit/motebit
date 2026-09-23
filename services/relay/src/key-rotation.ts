@@ -209,20 +209,28 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     // A device row's key counts, so an identity whose daemon has shut down
     // can still rotate. Refusing when the relay holds NO key at all is
     // fail-closed: there is nothing for the record to continue from.
-    // Already recorded? Answer 200 and change nothing. This must come
-    // BEFORE the key-on-file check below, because a successful rotation
-    // moves that key — so a retry after a lost response would otherwise be
-    // refused as "not from the current key", telling a client its rotation
-    // failed when the relay had already applied it. The signatures above
-    // have been verified, so this only honours a record we would accept.
-    const alreadyRecorded = moteDb.db
-      .prepare(
-        "SELECT 1 FROM relay_key_successions WHERE motebit_id = ? AND old_public_key = ? AND new_public_key = ? LIMIT 1",
-      )
-      .get(motebitId, body.old_public_key, body.new_public_key);
-    if (alreadyRecorded != null) {
-      return c.json({ ok: true, motebit_id: motebitId, applied: false });
-    }
+    // Does the chain already hold this link? Two doors write it: this route,
+    // and the succession path of `/agents/register`, which moves the registry
+    // key and records the link while touching neither the device rows nor
+    // the pairing payloads. So "already recorded" is NOT "already applied",
+    // and it must not short-circuit — #710 tried a "fully applied" precheck
+    // (registry moved AND no device row holds the old key) and it was
+    // unreachable for the register door, because the key-on-file rule below
+    // then refused the record as "not from the current key" (the registry
+    // had moved). A held link answers a different question: it decides the
+    // SHAPE of what follows, never whether anything follows. The signatures
+    // were verified above, the link is this identity's own history already,
+    // so the key-on-file rule has nothing left to protect here — what is left
+    // is retiring every credential the link retires, and the writes in the
+    // transaction below are idempotent and scoped to the retired key, so a
+    // retry after a lost response and a link another door recorded both
+    // converge on the same state. `applied` reports whether the CHAIN grew.
+    const linkAlreadyHeld =
+      moteDb.db
+        .prepare(
+          "SELECT 1 FROM relay_key_successions WHERE motebit_id = ? AND old_public_key = ? AND new_public_key = ? LIMIT 1",
+        )
+        .get(motebitId, body.old_public_key, body.new_public_key) != null;
 
     // Precedence, most authoritative first. Comparison is EXACT: these
     // keys are covered by the signature, and a record stored in a spelling
@@ -248,7 +256,12 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
         "SELECT new_public_key FROM relay_key_successions WHERE motebit_id = ? ORDER BY id DESC LIMIT 1",
       )
       .get(motebitId) as { new_public_key: string } | undefined;
-    if (registryKey != null) {
+    if (linkAlreadyHeld) {
+      // Nothing to protect: the link is already this identity's recorded
+      // history, and the key it departs from has by definition moved on.
+      // Skipping the rule here is what makes the register door's link
+      // finishable and a lost-response retry answerable (#710 finding 4).
+    } else if (registryKey != null) {
       if (registryKey !== body.old_public_key) {
         throw refuse(
           400,
@@ -289,16 +302,6 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     // being one transaction, the half-applied state that remains is the
     // recoverable one.
     const applied = moteDb.db.transaction(() => {
-      // Idempotent: a lost response and a retry must not append the same
-      // link twice. The chain is served in timestamp order, and two
-      // identical links make a history a verifier cannot walk.
-      const already = moteDb.db
-        .prepare(
-          "SELECT 1 FROM relay_key_successions WHERE motebit_id = ? AND old_public_key = ? AND new_public_key = ? LIMIT 1",
-        )
-        .get(motebitId, body.old_public_key, body.new_public_key);
-      if (already != null) return false;
-
       // The old key stops being a credential HERE. A device row's
       // `public_key` is what an owner token is verified against, and it is
       // resolved BEFORE the registry key, so a stale row shadows the
@@ -306,8 +309,16 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
       // device linked without key transfer holds its own key, which this
       // rotation is not about (`docs/doctrine/security-boundaries.md` —
       // rotating an identity must not rotate independent device keypairs).
+      // The attached hardware-attestation credential names the key it was
+      // bound to (`sync-routes.ts` refuses a mismatch at attach time), so
+      // carrying it across a rotation would publish a credential that
+      // names a key the row no longer holds — and a peer checking the
+      // binding this relay itself enforces would reject it. Dropped, so
+      // the device re-attaches against the key it now holds.
       moteDb.db
-        .prepare("UPDATE devices SET public_key = ? WHERE motebit_id = ? AND public_key = ?")
+        .prepare(
+          "UPDATE devices SET public_key = ?, hardware_attestation_credential = NULL WHERE motebit_id = ? AND public_key = ?",
+        )
         .run(body.new_public_key, motebitId, body.old_public_key);
 
       // A pairing session approved before this rotation carries the key
@@ -317,16 +328,51 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
       // rotation undone by an unauthenticated route. Clearing the payload
       // is what makes that route refuse ("this session approved none");
       // `status` is left alone because clients switch on its values.
+      // Scoped to approvals that carry the key being retired. Clearing
+      // every session would also strand a pairing approved under a key
+      // this rotation is not about, mid-transfer and with no signal.
+      const stale = moteDb.db
+        .prepare(
+          "SELECT pairing_id, key_transfer_payload FROM pairing_sessions WHERE motebit_id = ? AND key_transfer_payload IS NOT NULL",
+        )
+        .all(motebitId) as Array<{ pairing_id: string; key_transfer_payload: string }>;
+      for (const session of stale) {
+        let carries = false;
+        try {
+          const kt = JSON.parse(session.key_transfer_payload) as Record<string, unknown>;
+          carries = kt["identity_pubkey_check"] === body.old_public_key;
+        } catch {
+          // A payload this relay cannot read cannot be shown to be safe.
+          carries = true;
+        }
+        if (carries) {
+          moteDb.db
+            .prepare("UPDATE pairing_sessions SET key_transfer_payload = NULL WHERE pairing_id = ?")
+            .run(session.pairing_id);
+        }
+      }
+
+      // The registry key moves only FROM the key this link retires, or into
+      // an empty slot when this link is (or is about to be) the head of the
+      // chain. Unscoped, a late retry of an OLD link would drag a registry
+      // that had since moved on to a later key back to this one — and the
+      // next rotation, departing from the real head, would be refused as
+      // "not from the current key". An empty slot is the master-token
+      // registration case (`''`), which the head of the chain is entitled
+      // to fill and an older link is not.
+      const willBeHead = !linkAlreadyHeld || chainHead?.new_public_key === body.new_public_key;
       moteDb.db
         .prepare(
-          "UPDATE pairing_sessions SET key_transfer_payload = NULL WHERE motebit_id = ? AND key_transfer_payload IS NOT NULL",
+          `UPDATE agent_registry SET public_key = ? WHERE motebit_id = ? AND (public_key = ? OR (COALESCE(public_key, '') = '' AND ? = 1))`,
         )
-        .run(motebitId);
+        .run(body.new_public_key, motebitId, body.old_public_key, willBeHead ? 1 : 0);
 
-      moteDb.db
-        .prepare(`UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?`)
-        .run(body.new_public_key, motebitId);
-
+      // The chain grows only if it does not already hold this link. A lost
+      // response and a retry must not append the same link twice: the chain
+      // is served in timestamp order, and two identical links make a history
+      // a verifier cannot walk. Everything above still ran, which is the
+      // point — that is what "already recorded but not applied" needed.
+      if (linkAlreadyHeld) return false;
       moteDb.db
         .prepare(
           `INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature, recovery, guardian_signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,

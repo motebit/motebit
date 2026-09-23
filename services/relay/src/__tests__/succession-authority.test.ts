@@ -980,6 +980,131 @@ describe("a recorded rotation ends the old key here", () => {
     expect(successions(mid)).toBe(before);
   });
 
+  it("finishes a rotation the register door recorded but did not apply — driven through that door, not planted", async () => {
+    // `/agents/register` with a succession moves the registry key and
+    // records the link, touching neither the device rows nor the pairing
+    // payloads. #710's test for this PLANTED the chain row by hand and left
+    // the registry on the old key — a state that door never produces — so
+    // its "fully applied" precheck fell through to the key-on-file rule,
+    // which refused the record because the registry had moved. This drives
+    // the real door, so the state is the one the relay actually reaches.
+    const { mid, k2 } = await rotated();
+    const k3 = await generateKeypair();
+    const record = await signKeySuccession(
+      k2.privateKey,
+      k3.privateKey,
+      k3.publicKey,
+      k2.publicKey,
+    );
+    const viaRegister = await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: {
+        ...JSON_HEADERS,
+        // The bearer must verify against the key the relay holds — k2, on
+        // the device row — while the body registers k3 with the succession.
+        Authorization: `Bearer ${await token(mid, `${mid}-laptop`, k2)}`,
+      },
+      body: JSON.stringify({
+        endpoint_url: "http://localhost:9999/mcp",
+        capabilities: [],
+        public_key: hex(k3),
+        succession: record,
+      }),
+    });
+    expect(viaRegister.status).toBe(200);
+    // The door's own state: registry moved, link held, device rows NOT moved.
+    expect(registryKey(mid)).toBe(hex(k3));
+    expect(successions(mid)).toBe(2);
+    expect(deviceKey(`${mid}-laptop`)).toBe(hex(k2));
+
+    // Re-presenting the same link here finishes it: the chain does not
+    // grow, the rows move, and `applied` says the chain did not grow.
+    const res = await relay.app.request(`/api/v1/agents/${mid}/rotate-key`, {
+      method: "POST",
+      headers: {
+        ...JSON_HEADERS,
+        Authorization: `Bearer ${await token(mid, `${mid}-laptop`, k2, "rotate-key")}`,
+      },
+      body: JSON.stringify(record),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ applied: false });
+    expect(deviceKey(`${mid}-laptop`)).toBe(hex(k3));
+    expect(deviceKey(`${mid}-vps`)).toBe(hex(k3));
+    expect(registryKey(mid)).toBe(hex(k3));
+    expect(successions(mid)).toBe(2);
+  });
+
+  it("a late retry of an OLD link never drags the registry back from a later key", async () => {
+    // Chain k1→k2→k3. A retry of k1→k2 arriving after k2→k3 (a client that
+    // lost the first response and resumed late) must be answered — it is a
+    // held link — but must not move the registry from k3 back to k2, or the
+    // next rotation, departing from the real head, is refused.
+    const { mid, k1, k2 } = await rotated();
+    const first = await signKeySuccession(k1.privateKey, k2.privateKey, k2.publicKey, k1.publicKey);
+    const k3 = await generateKeypair();
+    const second = await signKeySuccession(
+      k2.privateKey,
+      k3.privateKey,
+      k3.publicKey,
+      k2.publicKey,
+    );
+    expect(await present(mid, `${mid}-laptop`, k2, mid, second)).toBe(200);
+    expect(registryKey(mid)).toBe(hex(k3));
+
+    // The retry carries a bearer the relay can still verify: the laptop
+    // row now holds k3, so sign with k3 (the resume path in the client
+    // design reads first and would not send at all; this is the relay's
+    // obligation if something does).
+    const res = await relay.app.request(`/api/v1/agents/${mid}/rotate-key`, {
+      method: "POST",
+      headers: {
+        ...JSON_HEADERS,
+        Authorization: `Bearer ${await token(mid, `${mid}-laptop`, k3, "rotate-key")}`,
+      },
+      body: JSON.stringify(first),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ applied: false });
+    expect(registryKey(mid)).toBe(hex(k3));
+    expect(deviceKey(`${mid}-laptop`)).toBe(hex(k3));
+    expect(successions(mid)).toBe(2);
+    // And the identity can still rotate from the real head.
+    const k4 = await generateKeypair();
+    const third = await signKeySuccession(k3.privateKey, k4.privateKey, k4.publicKey, k3.publicKey);
+    expect(await present(mid, `${mid}-laptop`, k3, mid, third)).toBe(200);
+    expect(registryKey(mid)).toBe(hex(k4));
+  });
+
+  it("drops a hardware-attestation credential bound to the key it retires", async () => {
+    // The credential names the key it was attached to, and the attach
+    // route refuses a mismatch. Carried across a rotation it would be
+    // published beside a key it does not name, and a peer checking the
+    // binding this relay itself enforces would reject the agent.
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    expect(await registerAgent(mid, k1)).toBe(200);
+    relay.moteDb.db
+      .prepare("UPDATE devices SET hardware_attestation_credential = ? WHERE device_id = ?")
+      .run(
+        JSON.stringify({ credentialSubject: { identity_public_key: hex(k1) } }),
+        `${mid}-laptop`,
+      );
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    expect(await present(mid, `${mid}-laptop`, k1, mid, record)).toBe(200);
+    const row = relay.moteDb.db
+      .prepare("SELECT hardware_attestation_credential AS c FROM devices WHERE device_id = ?")
+      .get(`${mid}-laptop`) as { c: string | null };
+    expect(row.c).toBeNull();
+  });
+
   it("a guardian recovery ends the old key too", async () => {
     const mid = crypto.randomUUID();
     const k1 = await generateKeypair();
@@ -1058,6 +1183,25 @@ describe("a rotation retires a pairing approval that carried the old key", () =>
       ).status,
     ).toBe(200);
 
+    // An approval carrying a key this rotation is NOT about, present
+    // before it runs: clearing every session would strand an unrelated
+    // pairing mid-transfer, with no signal to re-pair.
+    const unrelated = crypto.randomUUID();
+    const untouchedKey = await generateKeypair();
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO pairing_sessions (pairing_id, motebit_id, initiator_device_id, pairing_code, status, created_at, expires_at, key_transfer_payload) VALUES (?, ?, ?, ?, 'approved', ?, ?, ?)",
+      )
+      .run(
+        unrelated,
+        mid,
+        `${mid}-laptop`,
+        "ZZZ999",
+        1,
+        2,
+        JSON.stringify({ identity_pubkey_check: hex(untouchedKey) }),
+      );
+
     const record = await signKeySuccession(
       k1.privateKey,
       k2.privateKey,
@@ -1065,6 +1209,11 @@ describe("a rotation retires a pairing approval that carried the old key", () =>
       k1.publicKey,
     );
     expect(await present(mid, `${mid}-laptop`, k1, mid, record)).toBe(200);
+
+    const survived = relay.moteDb.db
+      .prepare("SELECT key_transfer_payload AS p FROM pairing_sessions WHERE pairing_id = ?")
+      .get(unrelated) as { p: string | null };
+    expect(survived.p).not.toBeNull();
 
     const replay = await relay.app.request(`/pairing/${pairing_id}/update-key`, {
       method: "POST",

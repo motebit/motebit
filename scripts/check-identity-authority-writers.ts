@@ -120,6 +120,14 @@ const WRITERS: readonly Writer[] = [
   {
     file: "services/relay/src/key-rotation.ts",
     verb: "UPDATE",
+    table: "devices",
+    count: 1,
+    principal:
+      "the identity itself — the same verified succession that moves the registry key moves every device row holding the key it retires (and only those), in the same transaction; a device row is what a bearer is verified against FIRST, so leaving it on the retired key would let that key keep authenticating (#702 relay half)",
+  },
+  {
+    file: "services/relay/src/key-rotation.ts",
+    verb: "UPDATE",
     table: "agent_registry",
     count: 2,
     principal:
