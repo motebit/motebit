@@ -27,7 +27,7 @@
  *   3. The "direct mode" parenthetical on the task-handler line must be
  *      backed by a `--direct` entry in the scaffold's serveArgs.
  *   4. The relay URL in `Registered with relay: <url>` must equal the
- *      `DEFAULT_SYNC_URL` constant in apps/cli/src/runtime-factory.ts.
+ *      exported `DEFAULT_SYNC_URL` constant in apps/cli/src/subcommands/_helpers.ts.
  *
  * This is the twenty-fourth synchronization invariant defense.
  *
@@ -43,7 +43,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
 const README_PATH = join(ROOT, "README.md");
 const SCAFFOLD_PATH = join(ROOT, "packages/create-motebit/src/index.ts");
-const RUNTIME_FACTORY_PATH = join(ROOT, "apps/cli/src/runtime-factory.ts");
+const RELAY_RESOLVER_PATH = join(ROOT, "apps/cli/src/subcommands/_helpers.ts");
 
 interface Finding {
   loc: string;
@@ -183,16 +183,19 @@ function extractScaffoldHasDirectFlag(): { hasDirect: boolean; locHint: string }
 }
 
 function extractDefaultSyncUrl(): { url: string; locHint: string } {
-  const src = readFileSync(RUNTIME_FACTORY_PATH, "utf-8");
-  const m = src.match(/const\s+DEFAULT_SYNC_URL\s*=\s*"([^"]+)"/);
+  // The ONE declaration (#702 client half): `runtime-factory.ts` and
+  // `index.ts` consume it through `resolveRelayUrl`, so this is the value
+  // every command actually falls back to.
+  const src = readFileSync(RELAY_RESOLVER_PATH, "utf-8");
+  const m = src.match(/export\s+const\s+DEFAULT_SYNC_URL\s*=\s*"([^"]+)"/);
   if (!m) {
     throw new Error(
-      "could not locate DEFAULT_SYNC_URL in runtime-factory.ts — if it moved, update this probe's extractor",
+      "could not locate the exported DEFAULT_SYNC_URL in apps/cli/src/subcommands/_helpers.ts — if it moved, update this probe's extractor",
     );
   }
   const idx = src.indexOf(m[0]);
   const line = src.slice(0, idx).split("\n").length;
-  return { url: m[1], locHint: `${relative(ROOT, RUNTIME_FACTORY_PATH)}:${line}` };
+  return { url: m[1], locHint: `${relative(ROOT, RELAY_RESOLVER_PATH)}:${line}` };
 }
 
 // ── Assertions ────────────────────────────────────────────────────────
@@ -286,7 +289,7 @@ function main(): void {
   process.stderr.write(
     "Fix: the code is the source of truth — update each flagged README.md line to match\n" +
       "     the named code value (tool names from create-motebit's agent template, PORT and\n" +
-      "     DEFAULT_SYNC_URL from apps/cli/src/runtime-factory.ts). If the code value changed\n" +
+      "     DEFAULT_SYNC_URL from apps/cli/src/subcommands/_helpers.ts). If the code value changed\n" +
       "     intentionally, edit the README 'What you see:' block to match it; never the reverse.\n\n",
   );
   process.exit(1);

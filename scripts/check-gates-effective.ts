@@ -803,11 +803,11 @@ export async function probeLeak(): Promise<boolean> {
   {
     script: "check-readme",
     proves:
-      "flags a README 'What you see:' block claim that disagrees with create-motebit / runtime-factory source-of-truth (here: the relay URL ↔ DEFAULT_SYNC_URL pin)",
+      "flags a README 'What you see:' block claim that disagrees with create-motebit / the CLI relay resolver source-of-truth (here: the relay URL ↔ DEFAULT_SYNC_URL pin)",
     perturb: () =>
       // Replace the README's `Registered with relay:` value with an obviously
       // invalid URL. The gate's claim-4 assertion compares this line against
-      // `DEFAULT_SYNC_URL` in apps/cli/src/runtime-factory.ts — under the
+      // the exported `DEFAULT_SYNC_URL` in apps/cli/src/subcommands/_helpers.ts — under the
       // perturbation, the two disagree and the gate fires. Distinctive
       // `.invalid` TLD makes the perturbation trivially safe to grep-and-
       // revert if cleanup ever fails.
