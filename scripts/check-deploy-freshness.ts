@@ -65,6 +65,8 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { readPushTrigger } from "./lib/workflow-triggers.js";
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
 
@@ -148,17 +150,13 @@ function workflowFor(service: string, env: string): string | null {
  * never read as a trigger — `deploy-embed.yml` contains exactly that.
  */
 function triggerPaths(workflow: string): string[] | null {
-  const lines = readFileSync(workflow, "utf-8").split("\n");
-  const start = lines.findIndex((l) => /^\s*paths:\s*$/.test(l));
-  if (start === -1) return null;
-  const paths: string[] = [];
-  for (const line of lines.slice(start + 1)) {
-    if (/^\s*#/.test(line)) continue;
-    const item = line.match(/^\s*-\s*["']([^"']+)["']\s*$/);
-    if (item === null) break;
-    paths.push(item[1]!);
-  }
-  return paths.length > 0 ? paths : null;
+  // One reader for every gate that asks a workflow what it triggers on
+  // (`scripts/lib/workflow-triggers.ts`, #731): the image-provenance gate
+  // reads the same block for a different question, and two hand-rolled
+  // readers of one file shape had already diverged.
+  const trigger = readPushTrigger(workflow);
+  if (!trigger.readable || !trigger.push || trigger.paths === null) return null;
+  return trigger.paths.length > 0 ? trigger.paths : null;
 }
 
 /**

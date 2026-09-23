@@ -32,6 +32,10 @@ concurrency:
   group: deploy-freshness
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  issues: write # the failure alert below comments on / opens a pinned issue
+
 jobs:
   freshness:
     runs-on: ubuntu-latest
@@ -51,3 +55,17 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: npx tsx scripts/check-deploy-freshness.ts --require-token
+      # A scheduled gate with no alert is a gate nobody reads: model-catalog-drift
+      # sat red for five weeks before anyone opened the square (#632). Its two
+      # siblings carry this step; this one did not (#731). Same shape — one
+      # pinned issue thread per gate, a comment per red run, never a fresh
+      # issue each day.
+      - name: Alert on failure (pinned issue thread)
+        if: failure()
+        run: |
+          gh issue list --label deploy-freshness --state open --json number --jq '.[0].number' > /tmp/issue || true
+          N=$(cat /tmp/issue)
+          BODY="Scheduled deploy-freshness gate FAILED: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} — a deployed app is behind the last commit that should have shipped it, or is serving nothing."
+          if [ -n "$N" ]; then gh issue comment "$N" --body "$BODY"; else gh issue create --title "Deploy freshness gate failing" --label deploy-freshness --body "$BODY"; fi
+        env:
+          GH_TOKEN: ${{ github.token }}

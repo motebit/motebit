@@ -75,6 +75,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { failWithRepair } from "./lib/gate-report.js";
+import { readPushTrigger } from "./lib/workflow-triggers.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -645,48 +646,20 @@ function publishRun(sha: string): PublishRun | null | undefined {
  * ⇒ the publish path stopped firing" finding below rests on exactly that, and
  * `check-deploy-freshness` (#720) is the record of what happens when a gate
  * assumes a workflow's triggers instead of reading them: it was wrong in both
- * directions for two days. So the premise is read off the file, line by line
- * like `triggerPaths` there — a `paths:` / `paths-ignore:` filter under `push`,
+ * directions for two days. So the premise is read off the file, through the
+ * same reader `triggerPaths` there uses — a `paths:` / `paths-ignore:` filter under `push`,
  * or `main` missing from `branches`, and the premise is FALSE and the finding
  * says so instead of accusing the publish path. `null` = the file could not be
- * read, or its `on:` block has a shape this reader does not understand.
+ * read, or its `on:` block has a shape the shared reader
+ * (`scripts/lib/workflow-triggers.ts`, #731) does not understand.
  */
 function publishesEveryMainPush(): boolean | null {
-  let text: string;
-  try {
-    text = readFileSync(join(ROOT, ".github/workflows/publish-images.yml"), "utf-8");
-  } catch {
-    return null;
-  }
-  const lines = text.split("\n");
-  const on = lines.findIndex((l) => /^on:\s*$/.test(l));
-  if (on < 0) return null;
-  // The `on:` block ends at the next top-level key.
-  let end = lines.findIndex((l, i) => i > on && /^[A-Za-z_-]+:/.test(l));
-  if (end < 0) end = lines.length;
-  const block = lines.slice(on + 1, end);
-  const push = block.findIndex((l) => /^  push:\s*$/.test(l));
-  if (push < 0) return false;
-  // The `push:` sub-block ends at the next key at its own indentation.
-  let pushEnd = block.findIndex((l, i) => i > push && /^  [A-Za-z_-]+:/.test(l));
-  if (pushEnd < 0) pushEnd = block.length;
-  const sub = block.slice(push + 1, pushEnd);
-  if (sub.some((l) => /^\s+paths(-ignore)?:/.test(l))) return false;
-  const branches = sub.findIndex((l) => /^\s+branches:/.test(l));
-  if (branches < 0) return null;
-  const inline = /^\s+branches:\s*\[(.*)\]\s*$/.exec(sub[branches]!);
-  if (inline) {
-    return inline[1]!
-      .split(",")
-      .map((b) => b.trim().replace(/^["']|["']$/g, ""))
-      .includes("main");
-  }
-  for (let i = branches + 1; i < sub.length; i++) {
-    const item = /^\s+-\s*["']?([^"'\s]+)["']?\s*$/.exec(sub[i]!);
-    if (!item) break;
-    if (item[1] === "main") return true;
-  }
-  return false;
+  const trigger = readPushTrigger(join(ROOT, ".github/workflows/publish-images.yml"));
+  if (!trigger.readable) return null;
+  if (!trigger.push) return false;
+  if (trigger.paths !== null || trigger.pathsIgnore !== null) return false;
+  if (trigger.branches === null) return null; // "every branch" is not a shape this gate has modelled
+  return trigger.branches.includes("main");
 }
 
 // ── main ───────────────────────────────────────────────────────────────────
