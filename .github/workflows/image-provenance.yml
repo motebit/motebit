@@ -1,0 +1,74 @@
+# The third EXTERNAL drift gate (#722, inventory row #160). `check-deploy-freshness`
+# asks whether the repo is what is RUNNING; this asks whether the repo is what is
+# DISTRIBUTED — the signed container an operator is told to pull.
+#
+# Red means a tag `docs/operator/self-host.md` names is absent, unsigned, missing
+# its SLSA provenance, bound to another commit, or that the publish run for main's
+# HEAD did not conclude `success`. That last one includes `cancelled`, which is
+# what a job TIMEOUT reports as: on 2026-09-21 the publish job died after pushing
+# and before signing, `:main` pointed at an unsigned image for hours, and nothing
+# alerted because nothing was red. #723 fixed the ordering; this closes the
+# blindness that let it sit.
+#
+# NO SECRET. Anonymous pulls work against a public ghcr package and cosign keyless
+# verification needs no credentials; `GH_TOKEN` is the workflow's own automatic
+# token, used only to read the publish run's conclusion. Runs with
+# --require-tools, so a missing cosign is RED rather than a silent skip — a
+# dormant external gate is the flaw class this gate exists to catch.
+
+name: Image provenance
+
+on:
+  schedule:
+    - cron: "17 13 * * *" # daily, ahead of the 13:41 deploy-freshness run
+  workflow_dispatch:
+
+concurrency:
+  group: image-provenance
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+  packages: read
+  issues: write # the failure alert below comments on / opens a pinned issue
+
+jobs:
+  provenance:
+    runs-on: ubuntu-latest
+    # Sequential cosign verifications against Sigstore; a slow log round-trip
+    # dominates, not our compute. Generous so a slow day is a slow run, never a
+    # spurious red about an image that is fine.
+    timeout-minutes: 45
+    steps:
+      # fetch-depth: 0 is load-bearing. The gate resolves the NEWEST `relay-v*`
+      # tag and the commit it points at; a shallow checkout carries no tags, so
+      # the release target would vanish from the set without the gate going red —
+      # silent aperture narrowing, the failure mode it is written against.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Verify every documented image tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: npx tsx scripts/check-image-provenance.ts --require-tools
+      # A scheduled gate with no alert is a gate nobody reads: model-catalog-drift
+      # sat red for five weeks before anyone opened the square (#632). Same step
+      # as that workflow's, mirrored — one pinned issue thread per gate, a
+      # comment per red run, never a fresh issue each day.
+      - name: Alert on failure (pinned issue thread)
+        if: failure()
+        run: |
+          gh issue list --label image-provenance --state open --json number --jq '.[0].number' > /tmp/issue || true
+          N=$(cat /tmp/issue)
+          BODY="Scheduled image-provenance gate FAILED: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} — a documented image tag is absent, unsigned, unattested, bound to another commit, or the publish run for main's HEAD did not conclude success."
+          if [ -n "$N" ]; then gh issue comment "$N" --body "$BODY"; else gh issue create --title "Image provenance gate failing" --label image-provenance --body "$BODY"; fi
+        env:
+          GH_TOKEN: ${{ github.token }}

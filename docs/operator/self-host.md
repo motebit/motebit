@@ -26,9 +26,11 @@ cosign verify ghcr.io/motebit/relay:1.0.1 \
   --certificate-identity-regexp 'https://github.com/motebit/motebit/.github/workflows/publish-images.yml@.*' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
 
-# Verify the build-provenance attestation (SLSA).
+# Verify the build-provenance attestation (SLSA). `slsaprovenance1` is the v1
+# predicate the build emits; the bare `slsaprovenance` shorthand selects v0.2
+# and matches nothing here.
 cosign verify-attestation ghcr.io/motebit/relay:1.0.1 \
-  --type slsaprovenance \
+  --type slsaprovenance1 \
   --certificate-identity-regexp 'https://github.com/motebit/motebit/.github/workflows/.*' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
 ```
