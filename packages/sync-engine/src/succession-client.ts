@@ -55,7 +55,7 @@ export type RelaySuccessionState =
   | { state: "applied"; relayKey: string; chain: KeySuccessionRecord[] }
   /** S4 — the relay holds no key and no chain for this identity. */
   | { state: "unregistered"; relayKey: null; chain: [] }
-  /** S5 — the relay holds some other key. Someone else rotated first. */
+  /** S5 — the relay holds some other key, or holds this identity's history without this key. Someone else rotated first. */
   | { state: "diverged"; relayKey: string; chain: KeySuccessionRecord[] }
   /** S6 — the relay could not be read. Nothing is known. */
   | { state: "unreachable"; reason: string };
@@ -67,10 +67,16 @@ export async function readSuccessionState(
   const doFetch = req.fetchImpl ?? fetch;
   let res: Response;
   try {
-    res = await doFetch(`${base}/api/v1/agents/${req.motebitId}/succession`, {
-      method: "GET",
-      signal: AbortSignal.timeout(req.timeoutMs ?? 10_000),
-    });
+    // `?from=` asks the relay the exact question its rotate-key rule
+    // answers: may a rotation depart from the key this machine holds? The
+    // relay computes it with the same function it enforces with. A client
+    // that re-derived it from the chain and registry key alone could not see
+    // device rows (a daemon that shut down leaves its key ONLY there) and
+    // inverted the relay's precedence whenever the two disagreed.
+    res = await doFetch(
+      `${base}/api/v1/agents/${req.motebitId}/succession?from=${req.localPublicKey}`,
+      { method: "GET", signal: AbortSignal.timeout(req.timeoutMs ?? 10_000) },
+    );
   } catch (err) {
     return { state: "unreachable", reason: err instanceof Error ? err.message : String(err) };
   }
@@ -79,31 +85,38 @@ export async function readSuccessionState(
   }
   const parsed = (await res.json().catch(() => null)) as {
     chain?: unknown;
-    current_public_key?: unknown;
+    held_public_key?: unknown;
+    departable?: unknown;
   } | null;
   if (parsed == null || !Array.isArray(parsed.chain)) {
     // A captive portal, a proxy error page: not a relay's answer. Reading
     // that as "unregistered" would rotate locally into the split state.
     return { state: "unreachable", reason: "the response did not come from a motebit relay" };
   }
-  const chain = parsed.chain as KeySuccessionRecord[];
-  // The key the relay holds NOW: the head of the recorded chain, else the
-  // registry key. The chain outranks the registry because the registry row
-  // comes and goes (the daemon deregisters on shutdown, #703) and a
-  // master-token registration writes `''`; the chain is what a rotation
-  // recorded and is never emptied.
-  const tail = chain.length > 0 ? chain[chain.length - 1]!.new_public_key : null;
-  const registry =
-    typeof parsed.current_public_key === "string" && parsed.current_public_key !== ""
-      ? parsed.current_public_key
-      : null;
-  const relayKey = tail ?? registry;
-  if (relayKey === null) return { state: "unregistered", relayKey: null, chain: [] };
-  if (relayKey === req.localPublicKey) return { state: "current", relayKey, chain };
-  if (req.heldNewPublicKey !== undefined && relayKey === req.heldNewPublicKey) {
-    return { state: "applied", relayKey, chain };
+  if (typeof parsed.departable !== "boolean") {
+    // A relay that does not answer the departure question cannot be
+    // classified honestly — guessing is what this read replaces. Fail
+    // closed: nothing is minted, nothing local moves.
+    return {
+      state: "unreachable",
+      reason:
+        "this relay does not answer whether a rotation may depart from the local key (upgrade the relay)",
+    };
   }
-  return { state: "diverged", relayKey, chain };
+  const chain = parsed.chain as KeySuccessionRecord[];
+  const held = typeof parsed.held_public_key === "string" ? parsed.held_public_key : null;
+  if (parsed.departable) {
+    // S0, whichever rung admitted it. `relayKey` is the key the relay holds
+    // most authoritatively, or the local key when only a device row holds it.
+    return { state: "current", relayKey: held ?? req.localPublicKey, chain };
+  }
+  if (req.heldNewPublicKey !== undefined && held === req.heldNewPublicKey) {
+    return { state: "applied", relayKey: held, chain };
+  }
+  if (held === null && chain.length === 0) {
+    return { state: "unregistered", relayKey: null, chain: [] };
+  }
+  return { state: "diverged", relayKey: held ?? chain[chain.length - 1]!.new_public_key, chain };
 }
 
 // ── presenting a record ───────────────────────────────────────────────────

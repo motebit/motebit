@@ -140,6 +140,7 @@ import {
   handleSkillsRunScript,
 } from "./subcommands/index.js";
 import { handleRun, handleServe } from "./daemon.js";
+import { resolveRelayUrl } from "./subcommands/_helpers.js";
 import { formatMs, formatTimeAgo } from "./utils.js";
 import { VoiceController } from "./voice.js";
 
@@ -893,12 +894,7 @@ async function main(): Promise<void> {
   const voiceController = new VoiceController({ enabled: config.voice === true });
 
   // Enable interactive delegation if relay + signing keys are available
-  const DEFAULT_SYNC_URL = "https://relay.motebit.com";
-  const syncUrl =
-    config.syncUrl ??
-    process.env["MOTEBIT_SYNC_URL"] ??
-    reloadedConfig.sync_url ??
-    DEFAULT_SYNC_URL;
+  const syncUrl = resolveRelayUrl(config, reloadedConfig);
   // Initial sync — default relay is always available
   {
     try {

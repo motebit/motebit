@@ -35,19 +35,44 @@ async function link(from: KeyPair, to: KeyPair) {
   return signKeySuccession(from.privateKey, to.privateKey, to.publicKey, from.publicKey);
 }
 
-describe("readSuccessionState — the resume path READS", () => {
-  it("S0: the relay holds the local key ⇒ current (registry key, no chain yet)", async () => {
+describe("readSuccessionState — the resume path READS the relay's own answer", () => {
+  // The relay answers `departable` for `?from=<local key>` with the same
+  // function its rotate-key rule enforces, and names `held_public_key`. The
+  // client classifies from THAT, never from the chain and registry alone —
+  // it cannot see device rows, and its precedence would invert the relay's.
+
+  it("asks the relay about the local key, and takes its answer: departable ⇒ current", async () => {
     const a = await generateKeypair();
+    let asked = "";
     const r = await readSuccessionState({
       syncUrl: "http://relay/",
       motebitId: MID,
       localPublicKey: hex(a),
-      fetchImpl: relayAnswering({ motebit_id: MID, chain: [], current_public_key: hex(a) }),
+      fetchImpl: (async (url: string) => {
+        asked = url;
+        return new Response(
+          JSON.stringify({ chain: [], held_public_key: hex(a), departable: true }),
+          { status: 200 },
+        );
+      }) as unknown as typeof fetch,
+    });
+    expect(asked).toBe(`http://relay/api/v1/agents/${MID}/succession?from=${hex(a)}`);
+    expect(r).toMatchObject({ state: "current", relayKey: hex(a) });
+  });
+
+  it("device rung: the relay holds nothing in registry or chain but says departable — current, from the local key", async () => {
+    // The daemon-shut-down state a re-deriving client misread as UNREGISTERED.
+    const a = await generateKeypair();
+    const r = await readSuccessionState({
+      syncUrl: "http://relay",
+      motebitId: MID,
+      localPublicKey: hex(a),
+      fetchImpl: relayAnswering({ chain: [], held_public_key: null, departable: true }),
     });
     expect(r).toMatchObject({ state: "current", relayKey: hex(a) });
   });
 
-  it("S1: the relay holds the key a held write-ahead rotates to ⇒ applied", async () => {
+  it("S1: not departable, and the relay holds the key a write-ahead rotates to ⇒ applied", async () => {
     const a = await generateKeypair();
     const b = await generateKeypair();
     const r = await readSuccessionState({
@@ -55,52 +80,55 @@ describe("readSuccessionState — the resume path READS", () => {
       motebitId: MID,
       localPublicKey: hex(a),
       heldNewPublicKey: hex(b),
-      fetchImpl: relayAnswering({ chain: [await link(a, b)], current_public_key: hex(b) }),
+      fetchImpl: relayAnswering({
+        chain: [await link(a, b)],
+        held_public_key: hex(b),
+        departable: false,
+      }),
     });
     expect(r).toMatchObject({ state: "applied", relayKey: hex(b) });
   });
 
-  it("the chain head outranks the registry key — a deregistered daemon leaves the registry empty, never the chain", async () => {
-    const a = await generateKeypair();
-    const b = await generateKeypair();
-    const r = await readSuccessionState({
-      syncUrl: "http://relay",
-      motebitId: MID,
-      localPublicKey: hex(b),
-      fetchImpl: relayAnswering({ chain: [await link(a, b)], current_public_key: null }),
-    });
-    expect(r).toMatchObject({ state: "current", relayKey: hex(b) });
-    const empty = await readSuccessionState({
-      syncUrl: "http://relay",
-      motebitId: MID,
-      localPublicKey: hex(b),
-      fetchImpl: relayAnswering({ chain: [await link(a, b)], current_public_key: "" }),
-    });
-    expect(empty).toMatchObject({ state: "current", relayKey: hex(b) });
-  });
-
-  it("S4: no key and no chain ⇒ unregistered — a local-only identity is READ, not declared", async () => {
+  it("S4: not departable, no held key, no chain ⇒ unregistered", async () => {
     const a = await generateKeypair();
     const r = await readSuccessionState({
       syncUrl: "http://relay",
       motebitId: MID,
       localPublicKey: hex(a),
-      fetchImpl: relayAnswering({ chain: [], current_public_key: null }),
+      fetchImpl: relayAnswering({ chain: [], held_public_key: null, departable: false }),
     });
     expect(r).toEqual({ state: "unregistered", relayKey: null, chain: [] });
   });
 
-  it("S5: the relay holds some other key ⇒ diverged, naming it", async () => {
+  it("S5: not departable and the relay holds another key ⇒ diverged, naming the SERVED held key, not a re-derived one", async () => {
     const a = await generateKeypair();
+    const b = await generateKeypair();
     const c = await generateKeypair();
+    // Chain tail says b; the relay's own precedence says c (registry). The
+    // served `held_public_key` wins — the client does not re-derive.
     const r = await readSuccessionState({
       syncUrl: "http://relay",
       motebitId: MID,
       localPublicKey: hex(a),
-      heldNewPublicKey: undefined,
-      fetchImpl: relayAnswering({ chain: [], current_public_key: hex(c) }),
+      fetchImpl: relayAnswering({
+        chain: [await link(a, b)],
+        held_public_key: hex(c),
+        departable: false,
+      }),
     });
     expect(r).toMatchObject({ state: "diverged", relayKey: hex(c) });
+  });
+
+  it("a relay that does not answer the departure question is UNREACHABLE — guessing is what this read replaces", async () => {
+    const a = await generateKeypair();
+    const r = await readSuccessionState({
+      syncUrl: "http://relay",
+      motebitId: MID,
+      localPublicKey: hex(a),
+      fetchImpl: relayAnswering({ chain: [], current_public_key: hex(a) }),
+    });
+    expect(r).toMatchObject({ state: "unreachable" });
+    expect((r as { reason: string }).reason).toContain("upgrade");
   });
 
   it("S6: unreachable, a non-2xx, or a body that is not a relay's ⇒ unreachable — never unregistered", async () => {

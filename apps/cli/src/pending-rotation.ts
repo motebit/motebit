@@ -39,18 +39,16 @@ export interface PendingRotation {
   written_at: number;
 }
 
-const PENDING_ROTATION_FILE = "pending-rotation.json";
-
 /**
- * Where the write-ahead lives on THIS machine. Spelled as a literal join on
- * `CONFIG_DIR` because that is the on-disk contract `check-cli-surface`
- * reads: a file the CLI writes under `~/.motebit` is part of what an
- * operator's scripts may pin to, and it must appear in the baseline.
+ * Where the write-ahead lives on THIS machine — the one spelling, and a
+ * literal join on `CONFIG_DIR` because that is the on-disk contract
+ * `check-cli-surface` reads: a file the CLI writes under `~/.motebit` is part
+ * of what an operator's scripts may pin to, and it must appear in the baseline.
  */
 export const PENDING_ROTATION_PATH = path.join(CONFIG_DIR, "pending-rotation.json");
 
 export function pendingRotationPath(dir: string = CONFIG_DIR): string {
-  return dir === CONFIG_DIR ? PENDING_ROTATION_PATH : path.join(dir, PENDING_ROTATION_FILE);
+  return path.join(dir, path.basename(PENDING_ROTATION_PATH));
 }
 
 export function savePendingRotation(pending: PendingRotation, dir: string = CONFIG_DIR): void {
@@ -76,6 +74,20 @@ export function loadPendingRotation(
   currentPublicKey: string,
   dir: string = CONFIG_DIR,
 ): PendingRotation | null {
+  const pending = loadAnyPendingRotation(dir);
+  if (pending == null) return null;
+  if (pending.motebit_id !== motebitId || pending.old_public_key !== currentPublicKey) return null;
+  return pending;
+}
+
+/**
+ * Whatever write-ahead exists, whoever it belongs to — for reconciliation
+ * (a crash between the two local commit writes leaves the identity file and
+ * the config on different keys, and the write-ahead is what bridges them)
+ * and for naming a stale one before it is cleared. `null` when there is
+ * none or it cannot be read.
+ */
+export function loadAnyPendingRotation(dir: string = CONFIG_DIR): PendingRotation | null {
   let raw: string;
   try {
     raw = fs.readFileSync(pendingRotationPath(dir), "utf-8");
@@ -84,8 +96,8 @@ export function loadPendingRotation(
   }
   try {
     const pending = JSON.parse(raw) as Partial<PendingRotation>;
-    if (pending.motebit_id !== motebitId) return null;
-    if (pending.old_public_key !== currentPublicKey) return null;
+    if (typeof pending.motebit_id !== "string" || typeof pending.old_public_key !== "string")
+      return null;
     if (typeof pending.new_public_key !== "string" || pending.record == null) return null;
     if (pending.encrypted_new_key == null) return null;
     return pending as PendingRotation;
@@ -94,7 +106,7 @@ export function loadPendingRotation(
   }
 }
 
-/** Whether ANY write-ahead exists, whoever it belongs to. */
+/** Whether ANY write-ahead file exists, readable or not. */
 export function hasPendingRotation(dir: string = CONFIG_DIR): boolean {
   return fs.existsSync(pendingRotationPath(dir));
 }

@@ -85,7 +85,7 @@ export function getRelayUrl(config: CliConfig): string {
   return url.replace(/\/+$/, "");
 }
 
-/** The relay every surface falls back to when nothing names one (`runtime-factory.ts` keeps the same literal for `motebit up`). */
+/** The relay every surface falls back to when nothing names one. The ONE declaration; `runtime-factory.ts` and `index.ts` consume it. */
 export const DEFAULT_SYNC_URL = "https://relay.motebit.com";
 
 /**
@@ -97,11 +97,11 @@ export const DEFAULT_SYNC_URL = "https://relay.motebit.com";
  * registered against the DEFAULT relay was told "not configured" and rotated
  * locally into exactly the split state a rotation must never leave (#702).
  */
-export function resolveRelayUrl(config: CliConfig): string {
+export function resolveRelayUrl(config: CliConfig, fullConfig?: FullConfig): string {
   const url =
     config.syncUrl ??
     process.env["MOTEBIT_SYNC_URL"] ??
-    loadFullConfig().sync_url ??
+    (fullConfig ?? loadFullConfig()).sync_url ??
     DEFAULT_SYNC_URL;
   return url.replace(/\/+$/, "");
 }

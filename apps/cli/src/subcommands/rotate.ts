@@ -19,11 +19,12 @@ import { CONFIG_DIR, loadFullConfig, saveFullConfig } from "../config.js";
 import { resolveUnlockPassphrase } from "../identity.js";
 import {
   clearPendingRotation,
+  loadAnyPendingRotation,
   loadPendingRotation,
   pendingRotationPath,
   savePendingRotation,
 } from "../pending-rotation.js";
-import { performRotation } from "../rotation.js";
+import { performRotation, RotationUnlockError, type RotationNote } from "../rotation.js";
 import { resolveRelayUrl } from "./_helpers.js";
 
 /**
@@ -47,6 +48,19 @@ function discoverIdentityFile(): string | null {
   if (fs.existsSync(homeCandidate)) return homeCandidate;
 
   return null;
+}
+
+function describeNote(note: RotationNote): string {
+  switch (note.kind) {
+    case "stale-write-ahead-cleared":
+      return `Note: a held rotation for ${note.motebitId === "" ? "an unknown identity" : `identity ${note.motebitId.slice(0, 12)}…`} from key ${note.oldPublicKey.slice(0, 12)}… did not belong to this machine's current key and was cleared`;
+    case "write-ahead-discarded": {
+      const minutes = Math.round(note.ageMs / 60_000);
+      return `Note: a held rotation from ${minutes} minute${minutes === 1 ? "" : "s"} ago was never recorded by the relay and was discarded; a fresh one was made`;
+    }
+    case "interrupted-commit-finished":
+      return `Note: the previous rotation was interrupted between its two local writes; finished it — this machine is on ${note.newPublicKeyHex.slice(0, 16)}…`;
+  }
 }
 
 export async function handleRotate(config: CliConfig): Promise<void> {
@@ -89,6 +103,7 @@ export async function handleRotate(config: CliConfig): Promise<void> {
       saveConfig: saveFullConfig,
       pending: {
         load: loadPendingRotation,
+        loadAny: loadAnyPendingRotation,
         save: savePendingRotation,
         clear: clearPendingRotation,
         path: pendingRotationPath(),
@@ -98,12 +113,22 @@ export async function handleRotate(config: CliConfig): Promise<void> {
       syncUrl,
     });
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`Error: ${/incorrect|decrypt|auth/i.test(msg) ? "incorrect passphrase" : msg}.`);
+    // Classified by TYPE: the unlock step throws its own error, so no
+    // message text is pattern-matched (WebCrypto's decrypt failure says
+    // nothing about passphrases, and an unrelated error may say "auth").
+    const msg =
+      err instanceof RotationUnlockError
+        ? "incorrect passphrase"
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    console.error(`Error: ${msg}.`);
     rl.close();
     process.exit(1);
   }
   rl.close();
+
+  for (const note of outcome.notes) console.log(`  ${describeNote(note)}`);
 
   switch (outcome.kind) {
     case "stopped": {

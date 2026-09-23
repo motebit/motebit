@@ -26,7 +26,12 @@ import { verify, rotate as rotateIdentityFile } from "@motebit/identity-file";
 import { rotateIdentityKeys } from "@motebit/core-identity";
 import { readSuccessionState, submitSuccessionToRelay } from "@motebit/sync-engine";
 import type { KeySuccessionRecord } from "@motebit/sdk";
-import { bytesToHex, hexPublicKeyToDidKey, secureErase } from "@motebit/encryption";
+import {
+  bytesToHex,
+  getPublicKeyBySuite,
+  hexPublicKeyToDidKey,
+  secureErase,
+} from "@motebit/encryption";
 import type { FullConfig } from "./config.js";
 import { decryptPrivateKey, encryptPrivateKey, fromHex } from "./identity.js";
 import type { PendingRotation } from "./pending-rotation.js";
@@ -38,6 +43,8 @@ export interface RotationDeps {
   saveConfig: (config: FullConfig) => void;
   pending: {
     load: (motebitId: string, currentPublicKey: string) => PendingRotation | null;
+    /** Whatever write-ahead exists, whoever it belongs to — for reconciliation and for naming a stale one. */
+    loadAny: () => PendingRotation | null;
     save: (pending: PendingRotation) => void;
     clear: () => void;
     /** For messages that name the file. */
@@ -50,6 +57,23 @@ export interface RotationDeps {
   now?: () => number;
 }
 
+/** The passphrase did not open the identity's key. Distinguished by TYPE, never by message text. */
+export class RotationUnlockError extends Error {
+  constructor() {
+    super("incorrect passphrase");
+    this.name = "RotationUnlockError";
+  }
+}
+
+/** Something this run noticed on the way and dealt with; each is said, never silent. */
+export type RotationNote =
+  /** A write-ahead for another identity or another key: cleared. */
+  | { kind: "stale-write-ahead-cleared"; motebitId: string; oldPublicKey: string }
+  /** A write-ahead the relay never applied: discarded unused, this old. */
+  | { kind: "write-ahead-discarded"; ageMs: number }
+  /** The last run's commit was interrupted between its two local writes; finished from the write-ahead. */
+  | { kind: "interrupted-commit-finished"; newPublicKeyHex: string };
+
 export type RotationOutcome =
   | {
       kind: "rotated";
@@ -59,9 +83,16 @@ export type RotationOutcome =
       relay: "recorded" | "already-held" | "none";
       rotations: number;
       relayKeyBefore: string | null;
+      notes: RotationNote[];
     }
   /** The outcome at the relay is unknown; the write-ahead is kept and the next run resolves it by reading. */
-  | { kind: "held"; motebitId: string; newPublicKeyHex: string; reason: string }
+  | {
+      kind: "held";
+      motebitId: string;
+      newPublicKeyHex: string;
+      reason: string;
+      notes: RotationNote[];
+    }
   | {
       kind: "stopped";
       motebitId: string;
@@ -69,9 +100,45 @@ export type RotationOutcome =
       message: string;
       /** For `diverged`: the key the relay holds. */
       relayKey?: string;
+      notes: RotationNote[];
     };
 
 export async function performRotation(deps: RotationDeps): Promise<RotationOutcome> {
+  // Every key allocated on any path is erased on every path — including a
+  // throw from a primitive this function did not anticipate.
+  const allocated: Uint8Array[] = [];
+  try {
+    return await rotateWithin(deps, allocated);
+  } finally {
+    for (const k of allocated) secureErase(k);
+  }
+}
+
+async function rotateWithin(deps: RotationDeps, allocated: Uint8Array[]): Promise<RotationOutcome> {
+  const notes: RotationNote[] = [];
+  const now = deps.now ?? Date.now;
+
+  // 0. What this machine HOLDS: the key the config's encrypted private key
+  //    derives to. The identity file names a key too, and the two agree
+  //    except in one state — a crash between the two local writes of a
+  //    previous commit — which is reconciled below from the write-ahead.
+  //    Taking the departing key from the FILE while signing with the CONFIG's
+  //    key would, in that state, mint a record signed by A that names B, get
+  //    refused, and then clear the only copy of B.
+  const config = deps.loadConfig();
+  if (!config.cli_encrypted_key) {
+    throw new Error("no encrypted key found in config; cannot rotate without the old key");
+  }
+  let oldPrivateKey: Uint8Array;
+  try {
+    oldPrivateKey = fromHex(await decryptPrivateKey(config.cli_encrypted_key, deps.passphrase));
+  } catch {
+    throw new RotationUnlockError();
+  }
+  allocated.push(oldPrivateKey);
+  const oldPublicKey = await getPublicKeyBySuite(oldPrivateKey, "motebit-jcs-ed25519-hex-v1");
+  const oldPublicKeyHex = bytesToHex(oldPublicKey);
+
   const existingContent = fs.readFileSync(deps.identityPath, "utf-8");
   const verified = await verify(existingContent, { expectedType: "identity" });
   if (verified.type !== "identity" || !verified.valid || !verified.identity) {
@@ -79,22 +146,112 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
       `identity file verification failed: ${verified.errors?.[0]?.message ?? "invalid"}`,
     );
   }
-  const identity = verified.identity;
-  const motebitId = identity.motebit_id;
-  const oldPublicKeyHex = identity.identity.public_key;
+  const motebitId = verified.identity.motebit_id;
 
-  const config = deps.loadConfig();
-  if (!config.cli_encrypted_key) {
-    throw new Error("no encrypted key found in config; cannot rotate without the old key");
+  // 1. What this machine holds IN FLIGHT.
+  const anyPending = deps.pending.loadAny();
+  const fileKey = verified.identity.identity.public_key;
+  if (fileKey !== oldPublicKeyHex) {
+    // The two local writes of a commit disagree. Only a write-ahead of ours
+    // that bridges them makes this a known state; anything else is not for
+    // this command to guess at.
+    if (
+      anyPending != null &&
+      anyPending.motebit_id === motebitId &&
+      anyPending.new_public_key === fileKey &&
+      anyPending.old_public_key === oldPublicKeyHex
+    ) {
+      // File is on B, config still on A: the config write did not land.
+      let newPrivateKey: Uint8Array;
+      try {
+        newPrivateKey = fromHex(
+          await decryptPrivateKey(anyPending.encrypted_new_key, deps.passphrase),
+        );
+      } catch {
+        return stopped(
+          motebitId,
+          "held-unopenable",
+          `the identity file is already on a new key but the write-ahead (${deps.pending.path}) holding that key will not open under this passphrase — recover through the identity's guardian`,
+          notes,
+        );
+      }
+      allocated.push(newPrivateKey);
+      const encrypted = await encryptPrivateKey(bytesToHex(newPrivateKey), deps.passphrase);
+      if (encrypted == null) throw new Error("could not encrypt the new key; nothing was changed");
+      const next = deps.loadConfig();
+      next.cli_encrypted_key = encrypted;
+      next.device_public_key = fileKey;
+      deps.saveConfig(next);
+      deps.pending.clear();
+      notes.push({ kind: "interrupted-commit-finished", newPublicKeyHex: fileKey });
+      return {
+        kind: "rotated",
+        motebitId,
+        newPublicKeyHex: fileKey,
+        relay: "already-held",
+        rotations: verified.identity.succession?.length ?? 1,
+        relayKeyBefore: oldPublicKeyHex,
+        notes,
+      };
+    }
+    if (
+      anyPending != null &&
+      anyPending.motebit_id === motebitId &&
+      anyPending.new_public_key === oldPublicKeyHex &&
+      anyPending.old_public_key === fileKey
+    ) {
+      // Config is on B, file still on A: the file write did not land. The
+      // config's key IS B (just decrypted), so the file is re-signed from
+      // the held record and the rotation is finished.
+      const rotated = await rotateIdentityFile({
+        existingContent,
+        newPublicKey: oldPublicKey,
+        newPrivateKey: oldPrivateKey,
+        successionRecord: anyPending.record,
+      });
+      const check = await verify(rotated, { expectedType: "identity" });
+      if (!check.valid) {
+        throw new Error(
+          `the identity file could not be re-signed from the write-ahead: ${check.errors?.[0]?.message ?? "invalid"}`,
+        );
+      }
+      fs.writeFileSync(deps.identityPath, rotated, "utf-8");
+      deps.pending.clear();
+      notes.push({ kind: "interrupted-commit-finished", newPublicKeyHex: oldPublicKeyHex });
+      return {
+        kind: "rotated",
+        motebitId,
+        newPublicKeyHex: oldPublicKeyHex,
+        relay: "already-held",
+        rotations: (verified.identity.succession?.length ?? 0) + 1,
+        relayKeyBefore: fileKey,
+        notes,
+      };
+    }
+    throw new Error(
+      `the identity file names key ${fileKey.slice(0, 16)}… but the config's key is ${oldPublicKeyHex.slice(0, 16)}…, and no write-ahead bridges them; restore the identity from its seed or motebit.md before rotating`,
+    );
   }
-  const oldPrivateKey = fromHex(await decryptPrivateKey(config.cli_encrypted_key, deps.passphrase));
-  const oldPublicKey = fromHex(oldPublicKeyHex);
-  const erase = (...keys: Uint8Array[]) => keys.forEach((k) => secureErase(k));
-
-  // 1. What does this machine hold in flight, from THIS key?
+  // A write-ahead for another identity, or from a key this machine no
+  // longer holds, is evidence of a different problem — an older config
+  // restored over a newer one — never an instruction. Said, then cleared,
+  // so it can neither be finished by mistake nor block a passphrase change.
+  if (
+    anyPending != null &&
+    (anyPending.motebit_id !== motebitId || anyPending.old_public_key !== oldPublicKeyHex)
+  ) {
+    notes.push({
+      kind: "stale-write-ahead-cleared",
+      motebitId: anyPending.motebit_id,
+      oldPublicKey: anyPending.old_public_key,
+    });
+    deps.pending.clear();
+  }
   const held = deps.pending.load(motebitId, oldPublicKeyHex);
 
-  // 2. Where does the relay stand? Read, never assumed (D3).
+  // 2. Where does the relay stand? Read, never assumed (D3) — and read as the
+  //    relay's own answer to "may a rotation depart from this key", so a key
+  //    held only on a device row is not misread as "unregistered".
   const relay = await readSuccessionState({
     syncUrl: deps.syncUrl,
     motebitId,
@@ -111,7 +268,10 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
     relayKeyBefore: string | null,
   ): Promise<RotationOutcome> => {
     // Local state moves ONLY here, and only after the relay is known (I1).
-    // The rotated file is verified before a single byte is written.
+    // The rotated file is verified before a single byte is written. Order:
+    // the CONFIG (the private key) first, the identity file second, the
+    // write-ahead cleared last — so a crash after any one write leaves a
+    // state the next run reconciles from the write-ahead (above).
     const rotated = await rotateIdentityFile({
       existingContent,
       newPublicKey: fromHex(newPublicKeyHex),
@@ -120,32 +280,26 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
     });
     const check = await verify(rotated, { expectedType: "identity" });
     if (!check.valid) {
-      erase(oldPrivateKey, newPrivateKey);
       throw new Error(
         `rotated identity file failed self-verification; nothing was changed: ${check.errors?.[0]?.message ?? "invalid"}`,
       );
     }
     const encrypted = await encryptPrivateKey(bytesToHex(newPrivateKey), deps.passphrase);
-    if (encrypted == null) {
-      erase(oldPrivateKey, newPrivateKey);
-      throw new Error("could not encrypt the new key; nothing was changed");
-    }
-    fs.writeFileSync(deps.identityPath, rotated, "utf-8");
+    if (encrypted == null) throw new Error("could not encrypt the new key; nothing was changed");
     const next = deps.loadConfig();
     next.cli_encrypted_key = encrypted;
     next.device_public_key = newPublicKeyHex;
     deps.saveConfig(next);
-    // The write-ahead goes LAST, once local state agrees with the relay;
-    // the old key is erased after that.
+    fs.writeFileSync(deps.identityPath, rotated, "utf-8");
     deps.pending.clear();
-    erase(oldPrivateKey, newPrivateKey);
     return {
       kind: "rotated",
       motebitId,
       newPublicKeyHex,
       relay: relayOutcome,
-      rotations: (identity.succession?.length ?? 0) + 1,
+      rotations: (verified.identity!.succession?.length ?? 0) + 1,
       relayKeyBefore,
+      notes,
     };
   };
 
@@ -153,53 +307,47 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
     case "unreachable": {
       // S6. Rotating now would produce (B, A) the moment the relay is back.
       // The old key stays; the write-ahead, if any, stays for the next run.
-      erase(oldPrivateKey);
-      return {
-        kind: "stopped",
+      return stopped(
         motebitId,
-        state: "unreachable",
-        message: `the relay could not be read (${relay.reason}); nothing was changed — retry when it is reachable`,
-      };
+        "unreachable",
+        `the relay could not be read (${relay.reason}); nothing was changed — retry when it is reachable`,
+        notes,
+      );
     }
     case "diverged": {
       // S5. Someone else rotated first, or another device did. Not ours to
       // adjudicate: guardian recovery is the remedy.
-      erase(oldPrivateKey);
       return {
-        kind: "stopped",
-        motebitId,
-        state: "diverged",
+        ...stopped(
+          motebitId,
+          "diverged",
+          `the relay holds a key this machine does not (${relay.relayKey.slice(0, 16)}…); a rotation cannot depart from a key the relay has already left — recover through the identity's guardian`,
+          notes,
+        ),
         relayKey: relay.relayKey,
-        message: `the relay holds a key this machine does not (${relay.relayKey.slice(0, 16)}…); a rotation cannot depart from a key the relay has already left — recover through the identity's guardian`,
       };
     }
     case "applied": {
       // S1. The relay already holds B from a write-ahead of ours. Commit
       // from it. No token is minted; nothing is sent.
       if (held == null) {
-        // Unreachable by construction (`applied` requires heldNewPublicKey),
-        // but the type does not know that.
-        erase(oldPrivateKey);
         return {
-          kind: "stopped",
-          motebitId,
-          state: "diverged",
+          ...stopped(motebitId, "diverged", "the relay holds a key this machine does not", notes),
           relayKey: relay.relayKey,
-          message: "the relay holds a key this machine does not",
         };
       }
       let newPrivateKey: Uint8Array;
       try {
         newPrivateKey = fromHex(await decryptPrivateKey(held.encrypted_new_key, deps.passphrase));
       } catch {
-        erase(oldPrivateKey);
-        return {
-          kind: "stopped",
+        return stopped(
           motebitId,
-          state: "held-unopenable",
-          message: `the relay already holds the new key from a rotation this machine started, but its write-ahead (${deps.pending.path}) will not open under this passphrase — this machine cannot finish the rotation; recover through the identity's guardian`,
-        };
+          "held-unopenable",
+          `the relay already holds the new key from a rotation this machine started, but its write-ahead (${deps.pending.path}) will not open under this passphrase — this machine cannot finish the rotation; recover through the identity's guardian`,
+          notes,
+        );
       }
+      allocated.push(newPrivateKey);
       return commit(
         held.record,
         newPrivateKey,
@@ -211,13 +359,18 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
     case "unregistered":
     case "current": {
       // S4 or S0. Either way a FRESH record: a held one (if any) was never
-      // applied and cannot be re-timestamped, so it is discarded unused.
-      if (held != null) deps.pending.clear();
+      // applied and cannot be re-timestamped, so it is discarded unused —
+      // and its age is said.
+      if (held != null) {
+        notes.push({ kind: "write-ahead-discarded", ageMs: Math.max(0, now() - held.written_at) });
+        deps.pending.clear();
+      }
       const minted = await rotateIdentityKeys({
         oldPrivateKey,
         oldPublicKey,
         ...(deps.reason !== undefined ? { reason: deps.reason } : {}),
       });
+      allocated.push(minted.newPrivateKey);
       const newPublicKeyHex = minted.newPublicKeyHex;
 
       if (relay.state === "unregistered") {
@@ -231,17 +384,15 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
         bytesToHex(minted.newPrivateKey),
         deps.passphrase,
       );
-      if (encryptedNewKey == null) {
-        erase(oldPrivateKey, minted.newPrivateKey);
+      if (encryptedNewKey == null)
         throw new Error("could not encrypt the new key; nothing was changed");
-      }
       deps.pending.save({
         motebit_id: motebitId,
         old_public_key: oldPublicKeyHex,
         new_public_key: newPublicKeyHex,
         record: minted.successionRecord,
         encrypted_new_key: encryptedNewKey,
-        written_at: (deps.now ?? Date.now)(),
+        written_at: now(),
       });
 
       const submitted = await submitSuccessionToRelay({
@@ -271,27 +422,29 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
         // The relay said no. R is still A. Nothing local changed; the
         // write-ahead is for a rotation that will never land.
         deps.pending.clear();
-        erase(oldPrivateKey, minted.newPrivateKey);
-        return {
-          kind: "stopped",
+        return stopped(
           motebitId,
-          state: "refused",
-          message: `the relay refused the rotation — ${submitted.reason}; your current key still works and nothing was changed`,
-        };
+          "refused",
+          `the relay refused the rotation — ${submitted.reason}; your current key still works and nothing was changed`,
+          notes,
+        );
       }
       // Unknown. The relay may hold B. The write-ahead stays; the next run
       // reads the relay and either commits from it or mints afresh.
-      erase(oldPrivateKey, minted.newPrivateKey);
-      return {
-        kind: "held",
-        motebitId,
-        newPublicKeyHex,
-        reason: submitted.reason,
-      };
+      return { kind: "held", motebitId, newPublicKeyHex, reason: submitted.reason, notes };
     }
     default: {
       const never: never = relay;
       throw new Error(`unmodelled relay state: ${JSON.stringify(never)}`);
     }
   }
+}
+
+function stopped(
+  motebitId: string,
+  state: Extract<RotationOutcome, { kind: "stopped" }>["state"],
+  message: string,
+  notes: RotationNote[],
+): Extract<RotationOutcome, { kind: "stopped" }> {
+  return { kind: "stopped", motebitId, state, message, notes };
 }

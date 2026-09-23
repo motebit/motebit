@@ -53,7 +53,12 @@ import {
 import type { CliConfig } from "../args.js";
 import { loadFullConfig, saveFullConfig } from "../config.js";
 import { encryptPrivateKey, promptPassphrase } from "../identity.js";
-import { hasPendingRotation, pendingRotationPath } from "../pending-rotation.js";
+import {
+  clearPendingRotation,
+  hasPendingRotation,
+  loadPendingRotation,
+  pendingRotationPath,
+} from "../pending-rotation.js";
 import { bold, dim, error as errorColor, success, warn } from "./../colors.js";
 
 const IDENTITY_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
@@ -202,7 +207,12 @@ export async function handleRestore(config: CliConfig): Promise<void> {
   // — and if the relay already recorded the rotation, unreachable, with no
   // way back but the guardian. Finish or discard the rotation first
   // (`docs/proposals/key-rotation-client-v1.md` D7).
-  if (plan.kind === "passphrase_reset" && hasPendingRotation()) {
+  // Scoped to THIS identity and THIS key: a write-ahead for another identity,
+  // or from a key this machine no longer holds, is stale and must not block a
+  // passphrase change forever — it is cleared, and said.
+  const inFlight =
+    plan.kind === "passphrase_reset" ? loadPendingRotation(plan.motebitId, publicKeyHex) : null;
+  if (inFlight != null) {
     console.error(
       `  A key rotation is in flight (${pendingRotationPath()}); its new key is encrypted under the current passphrase.`,
     );
@@ -210,6 +220,14 @@ export async function handleRestore(config: CliConfig): Promise<void> {
       "  Run `motebit rotate` to finish it, then change the passphrase. Nothing changed.",
     );
     process.exit(1);
+  }
+  if (hasPendingRotation()) {
+    console.log(
+      dim(
+        `  Note: a held rotation (${pendingRotationPath()}) did not belong to this identity and key; cleared.`,
+      ),
+    );
+    clearPendingRotation();
   }
   const pass1 = await promptPassphrase("  New passphrase: ");
   if (pass1 === "") {

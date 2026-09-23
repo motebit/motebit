@@ -86,6 +86,7 @@ import { dim } from "./colors.js";
 import { createCliLogger } from "./cli-logger.js";
 import type { CliConfig } from "./args.js";
 import { CONFIG_DIR, loadFullConfig } from "./config.js";
+import { resolveRelayUrl } from "./subcommands/_helpers.js";
 
 export function getApiKey(
   provider: "anthropic" | "openai" | "google" | "deepseek" | "groq" = "anthropic",
@@ -844,12 +845,9 @@ export async function createRuntime(
   );
 
   // Wire sync — default relay is always available
-  const DEFAULT_SYNC_URL = "https://relay.motebit.com";
-  const syncUrl =
-    config.syncUrl ??
-    process.env["MOTEBIT_SYNC_URL"] ??
-    loadFullConfig().sync_url ??
-    DEFAULT_SYNC_URL;
+  // One resolver for every command that talks to a relay (#702: `rotate`
+  // resolved it differently and stranded the default-relay case).
+  const syncUrl = resolveRelayUrl(config);
   // Accept both env var names — they have been aliases for the life of the
   // CLI; see subcommands/_helpers.ts:getRelayAuthHeaders for the canonical
   // fallback order. create-motebit's scaffold writes MOTEBIT_API_TOKEN, so

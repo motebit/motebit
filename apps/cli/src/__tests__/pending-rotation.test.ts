@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   clearPendingRotation,
   hasPendingRotation,
+  loadAnyPendingRotation,
   loadPendingRotation,
   pendingRotationPath,
   savePendingRotation,
@@ -50,8 +51,10 @@ describe("a held rotation", () => {
     savePendingRotation(held, dir);
     expect(loadPendingRotation("mid-2", "aa".repeat(32), dir)).toBeNull();
     expect(loadPendingRotation("mid-1", "bb".repeat(32), dir)).toBeNull();
-    // Still on disk — the caller decides what a stale one means.
+    // Still on disk — the caller decides what a stale one means, and can
+    // read it unscoped to say WHOSE it was before clearing it.
     expect(hasPendingRotation(dir)).toBe(true);
+    expect(loadAnyPendingRotation(dir)).toEqual(held);
   });
 
   it("is absent when nothing is held, and survives a corrupt or partial file", () => {

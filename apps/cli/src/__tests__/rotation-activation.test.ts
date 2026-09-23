@@ -20,12 +20,18 @@ import type { FullConfig } from "../config.js";
 import { encryptPrivateKey, decryptPrivateKey } from "../identity.js";
 import {
   clearPendingRotation,
+  loadAnyPendingRotation,
   loadPendingRotation,
   pendingRotationPath,
   savePendingRotation,
 } from "../pending-rotation.js";
 import { registerWithRelay } from "../relay-registration.js";
-import { performRotation, type RotationDeps, type RotationOutcome } from "../rotation.js";
+import {
+  performRotation,
+  RotationUnlockError,
+  type RotationDeps,
+  type RotationOutcome,
+} from "../rotation.js";
 
 const PASS = "correct horse";
 const SYNC_URL = "http://relay.test";
@@ -120,6 +126,7 @@ function deps(f: Fixture, over: Partial<RotationDeps> = {}): RotationDeps {
     },
     pending: {
       load: (mid, key) => loadPendingRotation(mid, key, dir),
+      loadAny: () => loadAnyPendingRotation(dir),
       save: (p) => savePendingRotation(p, dir),
       clear: () => clearPendingRotation(dir),
       path: pendingRotationPath(dir),
@@ -271,6 +278,10 @@ describe("S0 with a stale write-ahead: the relay never applied it", () => {
     const o = rotated(await performRotation(deps(f)));
     expect(o.relay).toBe("recorded");
     expect(o.newPublicKeyHex).not.toBe(hex(ghost));
+    // Its age is said, not silently swallowed.
+    const note = o.notes.find((n) => n.kind === "write-ahead-discarded");
+    expect(note).toBeDefined();
+    expect((note as { ageMs: number }).ageMs).toBeGreaterThanOrEqual(16 * 60_000);
     expect(relayKey(f.mid)).toBe(o.newPublicKeyHex);
     const chain = relay.moteDb.db
       .prepare("SELECT new_public_key FROM relay_key_successions WHERE motebit_id = ?")
@@ -347,6 +358,159 @@ describe("S6: the relay is unreachable", () => {
     expect(o).toMatchObject({ kind: "stopped", state: "unreachable" });
     expect((await localKey(f)).publicKeyHex).toBe(hex(f.a));
     expect(loadPendingRotation(f.mid, hex(f.a), dir)).toBeNull();
+    expect(chainLength(f.mid)).toBe(0);
+  });
+});
+
+describe("a daemon that shut down before ever rotating", () => {
+  it("still rotates: deregister dropped the registry row, the key lives only on a device row, and the relay says so", async () => {
+    // The state a client that re-derived "held" from chain + registry read
+    // as UNREGISTERED and rotated locally into the split — while the relay
+    // would have accepted the rotation all along. Now the relay is asked.
+    const f = await registered();
+    relay.moteDb.db.prepare("DELETE FROM agent_registry WHERE motebit_id = ?").run(f.mid);
+    const o = rotated(await performRotation(deps(f)));
+    expect(o.relay).toBe("recorded");
+    expect(chainLength(f.mid)).toBe(1);
+    expect(deviceKey(f.deviceId)).toBe(o.newPublicKeyHex);
+    expect((await localKey(f)).publicKeyHex).toBe(o.newPublicKeyHex);
+  });
+});
+
+describe("a commit interrupted between its two local writes", () => {
+  async function interrupted(f: Fixture): Promise<{
+    before: string;
+    configA: FullConfig;
+    o: Extract<RotationOutcome, { kind: "rotated" }>;
+  }> {
+    const before = readFileSync(f.identityPath, "utf-8");
+    const configA = { ...config };
+    const o = rotated(await performRotation(deps(f)));
+    return { before, configA, o };
+  }
+
+  it("config on B, file still on A: the next run re-signs the file from the write-ahead and finishes", async () => {
+    const f = await registered();
+    const { before, o } = await interrupted(f);
+    const held = loadAnyPendingRotation(dir); // gone after a clean commit
+    expect(held).toBeNull();
+    // Reconstruct: file write did not land, write-ahead still there.
+    writeFileSync(f.identityPath, before);
+    savePendingRotation(
+      {
+        motebit_id: f.mid,
+        old_public_key: hex(f.a),
+        new_public_key: o.newPublicKeyHex,
+        // The record that introduced B — read back off the relay's chain.
+        record: (() => {
+          const row = relay.moteDb.db
+            .prepare(
+              "SELECT old_public_key, new_public_key, timestamp, old_key_signature, new_key_signature FROM relay_key_successions WHERE motebit_id = ?",
+            )
+            .get(f.mid) as {
+            old_public_key: string;
+            new_public_key: string;
+            timestamp: number;
+            old_key_signature: string;
+            new_key_signature: string;
+          };
+          return { ...row, suite: "motebit-jcs-ed25519-hex-v1" as const };
+        })(),
+        encrypted_new_key: config.cli_encrypted_key!,
+        written_at: Date.now(),
+      },
+      dir,
+    );
+    const again = rotated(await performRotation(deps(f)));
+    expect(again.notes).toContainEqual({
+      kind: "interrupted-commit-finished",
+      newPublicKeyHex: o.newPublicKeyHex,
+    });
+    expect((await localKey(f)).publicKeyHex).toBe(o.newPublicKeyHex);
+    expect(chainLength(f.mid)).toBe(1); // nothing was sent
+    expect(loadAnyPendingRotation(dir)).toBeNull();
+  });
+
+  it("file on B, config still on A: the next run re-encrypts B into the config from the write-ahead and finishes", async () => {
+    const f = await registered();
+    const { configA, o } = await interrupted(f);
+    const configB = { ...config };
+    // Reconstruct: config write did not land (file is on B), write-ahead present with enc(B).
+    config = configA;
+    savePendingRotation(
+      {
+        motebit_id: f.mid,
+        old_public_key: hex(f.a),
+        new_public_key: o.newPublicKeyHex,
+        record: {
+          old_public_key: hex(f.a),
+          new_public_key: o.newPublicKeyHex,
+          timestamp: 1,
+          suite: "motebit-jcs-ed25519-hex-v1",
+          new_key_signature: "00",
+        },
+        encrypted_new_key: configB.cli_encrypted_key!,
+        written_at: Date.now(),
+      },
+      dir,
+    );
+    const again = rotated(await performRotation(deps(f)));
+    expect(again.notes).toContainEqual({
+      kind: "interrupted-commit-finished",
+      newPublicKeyHex: o.newPublicKeyHex,
+    });
+    expect((await localKey(f)).publicKeyHex).toBe(o.newPublicKeyHex);
+    expect(config.device_public_key).toBe(o.newPublicKeyHex);
+    expect(chainLength(f.mid)).toBe(1);
+    expect(loadAnyPendingRotation(dir)).toBeNull();
+  });
+
+  it("file and config disagree with no write-ahead to bridge them: refuse to guess", async () => {
+    const f = await registered();
+    const { before } = await interrupted(f);
+    writeFileSync(f.identityPath, before);
+    await expect(performRotation(deps(f))).rejects.toThrow(/no write-ahead bridges them/);
+  });
+});
+
+describe("a write-ahead that is not this machine's", () => {
+  it("is said and cleared, never finished, never left to block a passphrase change", async () => {
+    const f = await registered();
+    const other = await generateKeypair();
+    savePendingRotation(
+      {
+        motebit_id: "someone-else",
+        old_public_key: hex(other),
+        new_public_key: hex(other),
+        record: {
+          old_public_key: hex(other),
+          new_public_key: hex(other),
+          timestamp: 1,
+          suite: "motebit-jcs-ed25519-hex-v1",
+          new_key_signature: "00",
+        },
+        encrypted_new_key: config.cli_encrypted_key!,
+        written_at: 1,
+      },
+      dir,
+    );
+    const o = rotated(await performRotation(deps(f)));
+    expect(o.notes).toContainEqual({
+      kind: "stale-write-ahead-cleared",
+      motebitId: "someone-else",
+      oldPublicKey: hex(other),
+    });
+    expect(loadAnyPendingRotation(dir)).toBeNull();
+  });
+});
+
+describe("the passphrase", () => {
+  it("failing to open the key is a typed error, not a message to pattern-match", async () => {
+    const f = await registered();
+    await expect(performRotation(deps(f, { passphrase: "wrong" }))).rejects.toBeInstanceOf(
+      RotationUnlockError,
+    );
+    expect((await localKey(f)).publicKeyHex).toBe(hex(f.a));
     expect(chainLength(f.mid)).toBe(0);
   });
 });
