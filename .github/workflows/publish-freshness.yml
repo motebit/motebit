@@ -1,0 +1,67 @@
+# The fourth EXTERNAL drift gate (inventory row #161). `check-deploy-freshness`
+# asks whether the repo is what is RUNNING, `check-image-provenance` whether it
+# is what is DISTRIBUTED as an image; this one asks whether it is what is
+# INSTALLED — for every public workspace package, the npm registry's
+# `dist-tags.latest` must equal the version main's manifest declares.
+#
+# Red means a publish that did not happen (or one that happened outside
+# main). The incident: the npm token expired 2026-08-21 and nothing noticed
+# until 2026-09-23, because every Release run in between took the
+# "update the Version Packages PR" path and read GREEN while publishing
+# nothing; the one real attempt failed E404 on twelve packages and the next
+# changeset turned the workflow green again. Six weeks of releases sat on
+# main while `npm install motebit` served 1.13.2.
+#
+# No secret: reading dist-tags needs none. Runs with --require-registry so an
+# unreachable registry is RED, never a silent skip — a dormant external gate
+# is precisely the flaw class this gate exists to catch.
+#
+# fetch-depth: 0 is load-bearing. The grace window ("bumped less than 6h ago,
+# publish pending") is measured from the commit that introduced the version
+# string; a shallow clone cannot answer that, and an unanswerable bump time
+# is treated as no grace at all.
+
+name: Publish freshness
+
+on:
+  schedule:
+    - cron: "5 13 * * *" # daily, ahead of the 13:17 image-provenance run; the Tuesday train publishes at 23:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: publish-freshness
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write # the failure alert below comments on / opens a pinned issue
+
+jobs:
+  freshness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Compare the npm registry against main
+        run: npx tsx scripts/check-publish-freshness.ts --require-registry
+      # A scheduled gate with no alert is a gate nobody reads: model-catalog-drift
+      # sat red for five weeks before anyone opened the square (#632). Same step
+      # as its three siblings — one pinned issue thread per gate, a comment per
+      # red run, never a fresh issue each day.
+      - name: Alert on failure (pinned issue thread)
+        if: failure()
+        run: |
+          gh issue list --label publish-freshness --state open --json number --jq '.[0].number' > /tmp/issue || true
+          N=$(cat /tmp/issue)
+          BODY="Scheduled publish-freshness gate FAILED: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} — a public package's version on main is not what the npm registry serves (a publish that did not happen, or one that happened outside main)."
+          if [ -n "$N" ]; then gh issue comment "$N" --body "$BODY"; else gh issue create --title "Publish freshness gate failing" --label publish-freshness --body "$BODY"; fi
+        env:
+          GH_TOKEN: ${{ github.token }}
