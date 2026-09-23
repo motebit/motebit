@@ -7,10 +7,19 @@
   "include": ["src"],
   "references": [
     {
+      "path": "../core-identity"
+    },
+    {
+      "path": "../encryption"
+    },
+    {
       "path": "../mcp-client"
     },
     {
       "path": "../sdk"
+    },
+    {
+      "path": "../sync-engine"
     }
   ]
 }

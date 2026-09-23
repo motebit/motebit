@@ -259,6 +259,9 @@ importers:
       '@motebit/state-vector':
         specifier: workspace:*
         version: link:../../packages/state-vector
+      '@motebit/surface-kit':
+        specifier: workspace:*
+        version: link:../../packages/surface-kit
       '@motebit/sync-engine':
         specifier: workspace:*
         version: link:../../packages/sync-engine
@@ -370,6 +373,9 @@ importers:
       '@motebit/state-vector':
         specifier: workspace:*
         version: link:../../packages/state-vector
+      '@motebit/surface-kit':
+        specifier: workspace:*
+        version: link:../../packages/surface-kit
       '@motebit/sync-engine':
         specifier: workspace:*
         version: link:../../packages/sync-engine
@@ -984,6 +990,9 @@ importers:
       '@motebit/state-vector':
         specifier: workspace:*
         version: link:../../packages/state-vector
+      '@motebit/surface-kit':
+        specifier: workspace:*
+        version: link:../../packages/surface-kit
       '@motebit/sync-engine':
         specifier: workspace:*
         version: link:../../packages/sync-engine
@@ -2106,12 +2115,21 @@ importers:
 
   packages/surface-kit:
     dependencies:
+      '@motebit/core-identity':
+        specifier: workspace:*
+        version: link:../core-identity
+      '@motebit/encryption':
+        specifier: workspace:*
+        version: link:../encryption
       '@motebit/mcp-client':
         specifier: workspace:*
         version: link:../mcp-client
       '@motebit/sdk':
         specifier: workspace:*
         version: link:../sdk
+      '@motebit/sync-engine':
+        specifier: workspace:*
+        version: link:../sync-engine
     devDependencies:
       '@types/node':
         specifier: ^22.20.1
@@ -15881,7 +15899,7 @@ snapshots:
       obug: 2.1.3
       std-env: 4.1.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.10(@types/node@26.2.0)(@vitest/coverage-v8@4.1.10)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@8.2.1(@types/node@26.2.0)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12)(yaml@2.9.0))
+      vitest: 4.1.10(@types/node@22.20.1)(@vitest/coverage-v8@4.1.10)(jsdom@25.0.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))(vite@8.2.1(@types/node@22.20.1)(esbuild@0.27.3)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12)(yaml@2.9.0))
 
   '@vitest/expect@4.1.10':
     dependencies:

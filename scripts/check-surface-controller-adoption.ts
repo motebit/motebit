@@ -42,6 +42,19 @@ const ADOPTIONS: readonly Adoption[] = [
     files: ["apps/mobile/src/mcp-manager.ts", "apps/spatial/src/mcp-manager.ts"],
     maxLines: 60,
   },
+  {
+    // Key rotation (#709): four surfaces each re-forked the same state machine
+    // and three got the ordering wrong the same way. The CLI keeps its own
+    // richer adapter (identity file + config reconciliation, apps/cli/src/
+    // rotation.ts); these three are thin: ports over the platform's keystore.
+    controller: "rotateOrThrow",
+    files: [
+      "apps/web/src/key-rotation.ts",
+      "apps/mobile/src/key-rotation.ts",
+      "apps/desktop/src/key-rotation.ts",
+    ],
+    maxLines: 110,
+  },
 ];
 
 const errors: string[] = [];

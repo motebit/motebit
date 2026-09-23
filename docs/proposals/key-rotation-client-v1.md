@@ -141,6 +141,12 @@ Withdraw on a **wrong answer**: an honest caller ends in S3 or S5-by-our-own-doi
 - A per-device kill-switch (`security-boundaries.md`'s open half).
 - Anchoring the succession on Solana; the memo path is fire-and-forget and unchanged.
 
+## 11. The other surfaces (#709) — built 2026-09-23
+
+The state machine of §3 is `performKeyRotation` in `@motebit/surface-kit`, with the platform inverted into ports: the private key the device holds, a write-ahead slot in the **same protected medium** as the key (the module never encrypts — the medium is the protection: IndexedDB+WebCrypto wrapping on web, SecureStore on mobile, the OS keyring on desktop), and a `commit` the surface implements (store the key, publish the public key, re-sign an identity file when it keeps one). `rotateOrThrow` keeps the contract every settings screen already had — resolve on rotated, reject with the honest next action on a stop or a hold — so no screen had to change to stop lying. Web, mobile and desktop are thin adapters (`apps/<surface>/src/key-rotation.ts`, ceiling-checked by `check-surface-controller-adoption`). Two behaviours the old surfaces had are gone by construction: a rotation without a succession record ("no identity file ⇒ raw keypair"), which no relay could ever accept; and "best-effort" relay notification after local state had already moved. The CLI keeps its richer adapter (identity file + config reconciliation, §3.2); folding it onto the shared controller is a follow-up, not a difference in algorithm.
+
+Passes the four-question extraction test (`surface-controller-extraction.md`): duplicated _logic_ (each surface re-implemented the ordering, wrongly), divergent only in plumbing, fits the DAG (surface-kit L3 over sync-engine L2), not platform-specific.
+
 ## 10. Open for the founder
 
 - **Q1** — D5's wording: is "the relay holds no key for this identity" acceptable output for an unregistered identity, or should `rotate` refuse to run at all before first registration?

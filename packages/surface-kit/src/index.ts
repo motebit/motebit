@@ -16,3 +16,11 @@ export type {
   McpServerStatus,
   McpManagerCoreDeps,
 } from "./mcp-manager.js";
+
+export { performKeyRotation, rotateOrThrow, KeyRotationError } from "./key-rotation.js";
+export type {
+  HeldRotation,
+  KeyRotationNote,
+  KeyRotationOutcome,
+  KeyRotationPorts,
+} from "./key-rotation.js";
