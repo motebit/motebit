@@ -341,6 +341,33 @@ describe("§6 properties", () => {
   );
 
   it(
+    "P12 suffix stability — a consumer that lost the OLD end of the chain misplaces no machine it can still see",
+    async () => {
+      // P7 is about the active set. This is about every bucket, and it is
+      // what lets a store act on a chain shorter than the truth: a machine
+      // whose highest epoch fell off the front is ABSENT from the short
+      // view, never moved to another bucket. (A retirement able to end an
+      // enrolment at epoch e sits at an epoch ≥ e, so any suffix that
+      // still holds e holds it too.)
+      await fc.assert(
+        fc.asyncProperty(subE(), subR(), fc.integer({ min: 0, max: 3 }), async (e, r, drop) => {
+          const whole = statuses(ok(await reduce(chain, e, r)));
+          const short = statuses(ok(await reduce(chain.slice(drop), e, r)));
+          for (const [device, placed] of short) expect(whole.get(device)).toEqual(placed);
+          // And what it cannot see is exactly what the dropped keys alone signed for.
+          const kept = new Set(chain.slice(drop));
+          for (const device of whole.keys()) {
+            const visible = e.some((x) => x.device_id === device && kept.has(x.public_key));
+            expect(short.has(device)).toBe(visible);
+          }
+        }),
+        RUNS,
+      );
+    },
+    SLOW,
+  );
+
+  it(
     "P8 relative order only — re-rooting the chain on an unrelated older key moves no machine",
     async () => {
       const unrelated = bytesToHex((await generateKeypair()).publicKey);
