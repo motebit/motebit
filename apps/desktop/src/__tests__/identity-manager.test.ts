@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Hoisted mock state
@@ -683,8 +683,18 @@ describe("IdentityManager.rotateKey", () => {
   // the inversion of the old tests — that a relay failure REJECTS instead of
   // being swallowed after local state already moved.
   const SEED = "b".repeat(64);
+  // The published key must be what SEED derives to: the shared controller
+  // reads it as a second witness, and a fixture that contradicts the key
+  // it holds is the torn-commit state, not a healthy device.
+  let PUB = "";
+  beforeAll(async () => {
+    const real = await vi.importActual<typeof import("@motebit/encryption")>("@motebit/encryption");
+    PUB = real.bytesToHex(
+      await real.getPublicKeyBySuite(real.hexToBytes(SEED), "motebit-jcs-ed25519-hex-v1"),
+    );
+  });
   beforeEach(() => {
-    mockCtrl.relayState = { state: "current", relayKey: "a".repeat(64), chain: [] };
+    mockCtrl.relayState = { state: "current", relayKey: PUB, chain: [] };
     mockCtrl.submitResult = { ok: true, applied: true };
     mockCtrl.submissions = [];
   });
@@ -692,9 +702,9 @@ describe("IdentityManager.rotateKey", () => {
     const mgr = new IdentityManager();
     mgr.motebitId = "m1";
     mgr.deviceId = "d1";
-    mgr.publicKey = "a".repeat(64);
+    mgr.publicKey = PUB;
     const invoke = makeInvoke({
-      device_public_key: "a".repeat(64),
+      device_public_key: PUB,
       __keyring_device_private_key: SEED,
       ...config,
     });
@@ -743,7 +753,7 @@ describe("IdentityManager.rotateKey", () => {
     const { mgr, invoke } = manager({ sync_url: "https://relay" });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await expect(mgr.rotateKey(invoke as any)).rejects.toThrow(/could not be read/);
-    expect(mgr.publicKey).toBe("a".repeat(64));
+    expect(mgr.publicKey).toBe(PUB);
     const cfg = JSON.parse((await invoke("read_config")) as string) as Record<string, unknown>;
     expect(cfg.__keyring_device_private_key).toBe(SEED);
     expect(cfg.__keyring_pending_rotation).toBeUndefined();

@@ -42,6 +42,7 @@ import {
   bytesToHex,
   getPublicKeyBySuite,
   hexPublicKeyToDidKey,
+  hexToBytes,
   secureErase,
 } from "@motebit/encryption";
 import type { KeySuccessionRecord } from "@motebit/sdk";
@@ -68,12 +69,26 @@ export interface KeyRotationPorts {
   /** Relay base URL, or `null` when none is configured. */
   syncUrl: string | null;
   loadPrivateKeyHex(): Promise<string | null>;
+  /**
+   * The key this surface has PUBLISHED as current (config / localStorage /
+   * keyring public-key slot; the identity file's key where one is kept). A
+   * second witness: when it disagrees with the key the private key derives
+   * to, a commit was interrupted between its writes, and the write-ahead is
+   * what bridges the two — it is finished, never cleared as stale.
+   */
+  publishedPublicKeyHex?(): Promise<string | null>;
   writeAhead: {
-    load(): Promise<HeldRotation | null>;
+    /** `null` = nothing held; `"unreadable"` = something is there but could not be read. Never conflate them. */
+    load(): Promise<HeldRotation | null | "unreadable">;
     save(held: HeldRotation): Promise<void>;
     clear(): Promise<void>;
   };
-  /** Called ONLY after the relay is known (I1). Must store the key before returning. */
+  /**
+   * Called ONLY after the relay is known (I1). Must store the key before
+   * returning, and must be IDEMPOTENT: a commit interrupted between its
+   * writes is finished by calling it again with the same arguments, so an
+   * identity file already on the new key must not be re-signed twice.
+   */
   commit(next: {
     privateKeyHex: string;
     publicKeyHex: string;
@@ -87,7 +102,37 @@ export interface KeyRotationPorts {
 export type KeyRotationNote =
   | { kind: "stale-write-ahead-cleared"; motebitId: string; oldPublicKey: string }
   | { kind: "write-ahead-discarded"; ageMs: number }
-  | { kind: "no-relay-configured" };
+  | { kind: "no-relay-configured" }
+  /** The last run's commit was interrupted between its writes; finished from the write-ahead. */
+  | { kind: "interrupted-commit-finished"; newPublicKeyHex: string };
+
+/**
+ * Parse a stored write-ahead. `null` for nothing stored; `"unreadable"` for
+ * anything present that is not a well-formed HeldRotation — a torn write, a
+ * future shape, a decrypt that failed. Every adapter goes through this so an
+ * unreadable slot is never mistaken for an empty one.
+ */
+export function parseHeldRotation(
+  raw: string | null | undefined,
+): HeldRotation | null | "unreadable" {
+  if (raw == null || raw === "") return null;
+  try {
+    const h = JSON.parse(raw) as Partial<HeldRotation>;
+    if (
+      typeof h.motebit_id !== "string" ||
+      typeof h.old_public_key !== "string" ||
+      typeof h.new_public_key !== "string" ||
+      typeof h.new_private_key_hex !== "string" ||
+      typeof h.written_at !== "number" ||
+      h.record == null
+    ) {
+      return "unreadable";
+    }
+    return h as HeldRotation;
+  } catch {
+    return "unreadable";
+  }
+}
 
 export type KeyRotationOutcome =
   | {
@@ -95,13 +140,25 @@ export type KeyRotationOutcome =
       newPublicKeyHex: string;
       /** What the relay did: recorded this link, already held it (finished from the write-ahead), or holds nothing / was not configured. */
       relay: "recorded" | "already-held" | "none";
+      /** The key the relay held before this run, or null when it held none / was not consulted. */
+      relayKeyBefore: string | null;
       notes: KeyRotationNote[];
     }
   /** Outcome at the relay unknown; the write-ahead is kept and the next run resolves it by reading. */
   | { kind: "held"; newPublicKeyHex: string; reason: string; notes: KeyRotationNote[] }
   | {
       kind: "stopped";
-      state: "unreachable" | "diverged" | "refused" | "no-key";
+      state:
+        | "unreachable"
+        | "diverged"
+        | "refused"
+        | "no-key"
+        /** A write-ahead is present but cannot be read; nothing is guessed. */
+        | "held-unreadable"
+        /** The write-ahead's private key does not derive to the key it names. */
+        | "held-corrupt"
+        /** Published key and held key disagree with no write-ahead bridging them. */
+        | "inconsistent";
       message: string;
       relayKey?: string;
       notes: KeyRotationNote[];
@@ -137,12 +194,6 @@ export async function rotateOrThrow(
   return outcome;
 }
 
-function hexToBytes(hex: string): Uint8Array {
-  const out = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) out[i / 2] = parseInt(hex.slice(i, i + 2), 16);
-  return out;
-}
-
 async function rotateWithin(
   ports: KeyRotationPorts,
   allocated: Uint8Array[],
@@ -172,14 +223,76 @@ async function rotateWithin(
   const oldPublicKey = await getPublicKeyBySuite(oldPrivateKey, IDENTITY_SUITE);
   const oldPublicKeyHex = bytesToHex(oldPublicKey);
 
-  // 1. What this device holds IN FLIGHT. A write-ahead for another identity
-  //    or from a key this device no longer holds is evidence of a different
-  //    problem, never an instruction: said, then cleared.
-  const any = await ports.writeAhead.load();
+  // 1. What this device holds IN FLIGHT — read without conflating "nothing"
+  //    with "something I cannot read".
+  const loaded = await ports.writeAhead.load();
+  if (loaded === "unreadable") {
+    return stopped(
+      "held-unreadable",
+      "a rotation write-ahead is present on this device but could not be read; nothing was changed — retry, and if it persists the write-ahead must be inspected before rotating again",
+    );
+  }
+  const any: HeldRotation | null = loaded;
+
+  // 1b. The second witness. If the key this surface PUBLISHED disagrees with
+  //     the key the private key derives to, a previous commit was interrupted
+  //     between its writes. The write-ahead that names BOTH keys is what
+  //     bridges them: finish that commit (adapters make it idempotent) rather
+  //     than clearing it as stale — clearing it would destroy the only copy
+  //     of the succession record and let a fresh rotation mint on top of a
+  //     torn state, corrupting the chain silently.
+  const published = ports.publishedPublicKeyHex ? await ports.publishedPublicKeyHex() : null;
+  if (published !== null && published !== "" && published !== oldPublicKeyHex) {
+    const bridges =
+      any != null &&
+      any.motebit_id === ports.motebitId &&
+      ((any.old_public_key === published && any.new_public_key === oldPublicKeyHex) ||
+        (any.old_public_key === oldPublicKeyHex && any.new_public_key === published));
+    if (!bridges) {
+      return stopped(
+        "inconsistent",
+        `this device's published key (${published.slice(0, 16)}…) and the key it holds (${oldPublicKeyHex.slice(0, 16)}…) disagree, and no write-ahead bridges them; restore the identity before rotating`,
+      );
+    }
+    // Which key is the NEW one is what the write-ahead says, not which
+    // write happened to land.
+    const target = any;
+    const newPrivateKey = hexToBytes(target.new_private_key_hex);
+    allocated.push(newPrivateKey);
+    const derived = bytesToHex(await getPublicKeyBySuite(newPrivateKey, IDENTITY_SUITE));
+    if (derived !== target.new_public_key) {
+      return stopped(
+        "held-corrupt",
+        "the write-ahead's private key does not derive to the key it names; nothing was changed — recover through the identity's guardian",
+      );
+    }
+    await ports.commit({
+      privateKeyHex: target.new_private_key_hex,
+      publicKeyHex: target.new_public_key,
+      record: target.record,
+    });
+    await ports.writeAhead.clear();
+    notes.push({ kind: "interrupted-commit-finished", newPublicKeyHex: target.new_public_key });
+    return {
+      kind: "rotated",
+      newPublicKeyHex: target.new_public_key,
+      relay: "already-held",
+      relayKeyBefore: published,
+      notes,
+    };
+  }
+
+  // 1c. A write-ahead for another identity, or one that names neither the
+  //     key this device holds nor its published key, is evidence of a
+  //     different problem (an older store restored over a newer one), never
+  //     an instruction: said, then cleared. One that names the held key on
+  //     either side is never stale.
   let held: HeldRotation | null = null;
   if (any != null) {
+    const namesHeldKey =
+      any.old_public_key === oldPublicKeyHex || any.new_public_key === oldPublicKeyHex;
     if (any.motebit_id === ports.motebitId && any.old_public_key === oldPublicKeyHex) held = any;
-    else {
+    else if (any.motebit_id !== ports.motebitId || !namesHeldKey) {
       notes.push({
         kind: "stale-write-ahead-cleared",
         motebitId: any.motebit_id,
@@ -194,11 +307,12 @@ async function rotateWithin(
     newPrivateKeyHex: string,
     newPublicKeyHex: string,
     relay: "recorded" | "already-held" | "none",
+    relayKeyBefore: string | null,
   ): Promise<KeyRotationOutcome> => {
     // Local state moves ONLY here, and only after the relay is known (I1).
     await ports.commit({ privateKeyHex: newPrivateKeyHex, publicKeyHex: newPublicKeyHex, record });
     await ports.writeAhead.clear();
-    return { kind: "rotated", newPublicKeyHex, relay, notes };
+    return { kind: "rotated", newPublicKeyHex, relay, relayKeyBefore, notes };
   };
 
   const mintFresh = async () => {
@@ -225,6 +339,7 @@ async function rotateWithin(
       bytesToHex(minted.newPrivateKey),
       minted.newPublicKeyHex,
       "none",
+      null,
     );
   }
 
@@ -264,7 +379,24 @@ async function rotateWithin(
         return stopped("diverged", "the relay holds a key this device does not", relay.relayKey);
       }
       /* c8 ignore stop */
-      return commit(held.record, held.new_private_key_hex, held.new_public_key, "already-held");
+      {
+        const newPrivateKey = hexToBytes(held.new_private_key_hex);
+        allocated.push(newPrivateKey);
+        const derived = bytesToHex(await getPublicKeyBySuite(newPrivateKey, IDENTITY_SUITE));
+        if (derived !== held.new_public_key) {
+          return stopped(
+            "held-corrupt",
+            "the relay already holds the new key from a rotation this device started, but the write-ahead's private key does not derive to it; this device cannot finish the rotation — recover through the identity's guardian",
+          );
+        }
+      }
+      return commit(
+        held.record,
+        held.new_private_key_hex,
+        held.new_public_key,
+        "already-held",
+        oldPublicKeyHex,
+      );
     }
     case "unregistered": {
       // S4. The relay has no key to update and no chain to extend. Read,
@@ -275,6 +407,7 @@ async function rotateWithin(
         bytesToHex(minted.newPrivateKey),
         minted.newPublicKeyHex,
         "none",
+        null,
       );
     }
     case "current": {
@@ -304,6 +437,7 @@ async function rotateWithin(
           newPrivateKeyHex,
           minted.newPublicKeyHex,
           submitted.applied ? "recorded" : "already-held",
+          relay.relayKey,
         );
       }
       if (submitted.kind === "refused") {

@@ -53,7 +53,16 @@ const ADOPTIONS: readonly Adoption[] = [
       "apps/mobile/src/key-rotation.ts",
       "apps/desktop/src/key-rotation.ts",
     ],
-    maxLines: 110,
+    maxLines: 130,
+  },
+  {
+    // The CLI is the fourth adapter of the same controller: its ports carry a
+    // passphrase-encrypted config key, motebit.md as the published witness,
+    // and an encrypted write-ahead file. Ceiling is higher because the CLI
+    // keeps its own outcome vocabulary for the terminal, mapped from the kit's.
+    controller: "performKeyRotation",
+    files: ["apps/cli/src/rotation.ts"],
+    maxLines: 260,
   },
 ];
 

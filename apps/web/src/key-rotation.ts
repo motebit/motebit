@@ -6,7 +6,7 @@
  * supplies the browser's plumbing: the encrypted IndexedDB keystore for the
  * key and the write-ahead, localStorage for the published public key.
  */
-import { rotateOrThrow, type HeldRotation } from "@motebit/surface-kit";
+import { parseHeldRotation, rotateOrThrow } from "@motebit/surface-kit";
 import type { EncryptedKeyStore } from "./encrypted-keystore";
 
 export interface WebRotationDeps {
@@ -26,15 +26,18 @@ export async function rotateWebKey(deps: WebRotationDeps): Promise<{ newPublicKe
     deviceId: deps.deviceId,
     syncUrl: deps.syncUrl,
     loadPrivateKeyHex: () => deps.keyStore.loadPrivateKey(),
+    publishedPublicKeyHex: () => Promise.resolve(localStorage.getItem("motebit:device_public_key")),
     writeAhead: {
       load: async () => {
-        const raw = await deps.keyStore.loadPendingRotation();
-        if (raw == null) return null;
+        // `loadPendingRotation` answers null for an empty slot and throws for
+        // a slot it cannot open; those are different states.
+        let raw: string | null;
         try {
-          return JSON.parse(raw) as HeldRotation;
+          raw = await deps.keyStore.loadPendingRotation();
         } catch {
-          return null;
+          return "unreadable";
         }
+        return parseHeldRotation(raw);
       },
       save: (held) => deps.keyStore.storePendingRotation(JSON.stringify(held)),
       clear: () => deps.keyStore.clearPendingRotation(),

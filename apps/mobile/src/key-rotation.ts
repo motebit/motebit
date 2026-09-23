@@ -4,8 +4,9 @@
  * supplies Expo's plumbing: SecureStore for the key and the write-ahead,
  * AsyncStorage for the identity file that is re-signed on commit.
  */
-import { rotateOrThrow, type HeldRotation } from "@motebit/surface-kit";
-import { rotate as rotateIdentityFile } from "@motebit/identity-file";
+import { parseHeldRotation, rotateOrThrow } from "@motebit/surface-kit";
+import { parse as parseIdentityFile, rotate as rotateIdentityFile } from "@motebit/identity-file";
+import { hexToBytes } from "@motebit/encryption";
 
 interface SecureStore {
   get(key: string): Promise<string | null>;
@@ -32,22 +33,28 @@ export async function rotateMobileKey(deps: MobileRotationDeps): Promise<{ newPu
     deviceId: deps.deviceId,
     syncUrl: deps.syncUrl,
     loadPrivateKeyHex: () => deps.keyring.get("device_private_key"),
+    publishedPublicKeyHex: () => deps.keyring.get("device_public_key"),
     writeAhead: {
       load: async () => {
-        const raw = await deps.keyring.get(PENDING_KEY);
-        if (raw == null || raw === "") return null;
+        let raw: string | null;
         try {
-          return JSON.parse(raw) as HeldRotation;
+          raw = await deps.keyring.get(PENDING_KEY);
         } catch {
-          return null;
+          return "unreadable";
         }
+        return parseHeldRotation(raw);
       },
       save: (held) => deps.keyring.set(PENDING_KEY, JSON.stringify(held)),
       clear: () => deps.keyring.delete(PENDING_KEY),
     },
     commit: async ({ privateKeyHex, publicKeyHex, record }) => {
+      // Key first (the recoverable half), then the published key, then the
+      // identity file — and idempotent: a file already on the new key is not
+      // re-signed, so finishing an interrupted commit appends no second link.
+      await deps.keyring.set("device_private_key", privateKeyHex);
+      await deps.keyring.set("device_public_key", publicKeyHex);
       const existing = await deps.identityFile.load();
-      if (existing != null && existing !== "") {
+      if (existing != null && existing !== "" && fileKey(existing) !== publicKeyHex) {
         const rotated = await rotateIdentityFile({
           existingContent: existing,
           newPublicKey: hexToBytes(publicKeyHex),
@@ -56,8 +63,6 @@ export async function rotateMobileKey(deps: MobileRotationDeps): Promise<{ newPu
         });
         await deps.identityFile.save(rotated);
       }
-      await deps.keyring.set("device_private_key", privateKeyHex);
-      await deps.keyring.set("device_public_key", publicKeyHex);
       deps.onCommitted(publicKeyHex);
     },
     ...(deps.reason !== undefined ? { reason: deps.reason } : {}),
@@ -66,8 +71,11 @@ export async function rotateMobileKey(deps: MobileRotationDeps): Promise<{ newPu
   return { newPublicKey: outcome.newPublicKeyHex };
 }
 
-function hexToBytes(hex: string): Uint8Array {
-  const out = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) out[i / 2] = parseInt(hex.slice(i, i + 2), 16);
-  return out;
+/** The key an identity file currently names, or null when it cannot be read. */
+function fileKey(content: string): string | null {
+  try {
+    return parseIdentityFile(content).frontmatter.identity.public_key;
+  } catch {
+    return null;
+  }
 }

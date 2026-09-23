@@ -17,7 +17,12 @@ export type {
   McpManagerCoreDeps,
 } from "./mcp-manager.js";
 
-export { performKeyRotation, rotateOrThrow, KeyRotationError } from "./key-rotation.js";
+export {
+  performKeyRotation,
+  rotateOrThrow,
+  parseHeldRotation,
+  KeyRotationError,
+} from "./key-rotation.js";
 export type {
   HeldRotation,
   KeyRotationNote,

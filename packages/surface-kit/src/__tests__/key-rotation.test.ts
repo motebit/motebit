@@ -16,6 +16,7 @@ import type { KeyPair } from "@motebit/encryption";
 import {
   performKeyRotation,
   rotateOrThrow,
+  parseHeldRotation,
   KeyRotationError,
   type HeldRotation,
   type KeyRotationPorts,
@@ -28,7 +29,7 @@ interface Fake {
   ports: KeyRotationPorts;
   privateKeyHex: () => string | null;
   publicKeyHex: () => string | null;
-  held: () => HeldRotation | null;
+  held: () => HeldRotation | null | "unreadable";
   commits: number;
   posts: number;
 }
@@ -43,11 +44,15 @@ function device(
     onPost?: (record: unknown) => Response | Error;
     down?: boolean;
   } | null,
-  opts: { held?: HeldRotation | null; deviceId?: string } = {},
+  opts: {
+    held?: HeldRotation | null | "unreadable";
+    deviceId?: string;
+    published?: string | null;
+  } = {},
 ): Fake {
   let priv: string | null = bytesToHex(a.privateKey);
-  let pub: string | null = hex(a);
-  let held: HeldRotation | null = opts.held ?? null;
+  let pub: string | null = opts.published === undefined ? hex(a) : opts.published;
+  let held: HeldRotation | null | "unreadable" = opts.held ?? null;
   const fake: Fake = {
     commits: 0,
     posts: 0,
@@ -59,6 +64,7 @@ function device(
       deviceId: opts.deviceId ?? "d-1",
       syncUrl: relay === null ? null : "http://relay",
       loadPrivateKeyHex: async () => priv,
+      publishedPublicKeyHex: async () => pub,
       writeAhead: {
         load: async () => held,
         save: async (h) => {
@@ -115,7 +121,7 @@ describe("performKeyRotation", () => {
 
   it("I2: the write-ahead exists BEFORE the request leaves, and I1: local state has not moved when it does", async () => {
     const a = await generateKeypair();
-    let seen: { held: HeldRotation | null; commits: number } | null = null;
+    let seen: { held: HeldRotation | null | "unreadable"; commits: number } | null = null;
     const f: Fake = device(a, {
       departable: true,
       held_public_key: hex(a),
@@ -249,7 +255,9 @@ describe("performKeyRotation", () => {
     expect(o).toMatchObject({ kind: "held" });
     expect(f.commits).toBe(0);
     expect(f.held()).not.toBeNull();
-    expect(f.held()!.new_public_key).toBe((o as { newPublicKeyHex: string }).newPublicKeyHex);
+    expect((f.held() as HeldRotation).new_public_key).toBe(
+      (o as { newPublicKeyHex: string }).newPublicKeyHex,
+    );
   });
 
   it("no relay configured ⇒ rotates locally and says so; no read, no POST", async () => {
@@ -310,6 +318,126 @@ describe("performKeyRotation", () => {
     } finally {
       globalThis.fetch = saved;
     }
+  });
+
+  it("torn commit, key stored but not published: finished from the bridging write-ahead, nothing sent, never cleared as stale", async () => {
+    // Desktop's order: keyring_set(B) landed, write_config(B) did not.
+    // Derived = B, published = A, write-ahead A→B. The old rule read
+    // "A ≠ B" as stale and DELETED the only copy of the record.
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const record = await signKeySuccession(a.privateKey, b.privateKey, b.publicKey, a.publicKey);
+    const held: HeldRotation = {
+      motebit_id: MID,
+      old_public_key: hex(a),
+      new_public_key: hex(b),
+      record,
+      new_private_key_hex: bytesToHex(b.privateKey),
+      written_at: 1,
+    };
+    const f = device(
+      b,
+      { departable: false, held_public_key: hex(b), chain: [record] },
+      { held, published: hex(a) },
+    );
+    const o = await performKeyRotation(f.ports);
+    expect(o).toMatchObject({ kind: "rotated", relay: "already-held", newPublicKeyHex: hex(b) });
+    expect(o.notes).toContainEqual({
+      kind: "interrupted-commit-finished",
+      newPublicKeyHex: hex(b),
+    });
+    expect(f.commits).toBe(1);
+    expect(f.posts).toBe(0);
+    expect(f.publicKeyHex()).toBe(hex(b));
+    expect(f.held()).toBeNull();
+  });
+
+  it("torn commit, published but key not stored: finished the same way", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const record = await signKeySuccession(a.privateKey, b.privateKey, b.publicKey, a.publicKey);
+    const held: HeldRotation = {
+      motebit_id: MID,
+      old_public_key: hex(a),
+      new_public_key: hex(b),
+      record,
+      new_private_key_hex: bytesToHex(b.privateKey),
+      written_at: 1,
+    };
+    // Derived = A (key not stored), published = B.
+    const f = device(
+      a,
+      { departable: false, held_public_key: hex(b), chain: [record] },
+      { held, published: hex(b) },
+    );
+    const o = await performKeyRotation(f.ports);
+    expect(o).toMatchObject({ kind: "rotated", relay: "already-held", newPublicKeyHex: hex(b) });
+    expect(f.privateKeyHex()).toBe(bytesToHex(b.privateKey));
+    expect(f.posts).toBe(0);
+  });
+
+  it("published and held keys disagree with no bridging write-ahead: refuse to guess, clear nothing", async () => {
+    const a = await generateKeypair();
+    const other = await generateKeypair();
+    const f = device(a, { departable: true, held_public_key: hex(a) }, { published: hex(other) });
+    expect(await performKeyRotation(f.ports)).toMatchObject({
+      kind: "stopped",
+      state: "inconsistent",
+    });
+    expect(f.commits).toBe(0);
+    expect(f.posts).toBe(0);
+  });
+
+  it("a write-ahead whose private key does not derive to the key it names is never committed", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const wrong = await generateKeypair();
+    const record = await signKeySuccession(a.privateKey, b.privateKey, b.publicKey, a.publicKey);
+    const held: HeldRotation = {
+      motebit_id: MID,
+      old_public_key: hex(a),
+      new_public_key: hex(b),
+      record,
+      new_private_key_hex: bytesToHex(wrong.privateKey),
+      written_at: 1,
+    };
+    const f = device(a, { departable: false, held_public_key: hex(b), chain: [record] }, { held });
+    expect(await performKeyRotation(f.ports)).toMatchObject({
+      kind: "stopped",
+      state: "held-corrupt",
+    });
+    expect(f.commits).toBe(0);
+    expect(f.privateKeyHex()).toBe(bytesToHex(a.privateKey));
+  });
+
+  it("an unreadable write-ahead is not an absent one: stop, do not clear, do not read the relay", async () => {
+    const a = await generateKeypair();
+    const f = device(a, { departable: true, held_public_key: hex(a) }, { held: "unreadable" });
+    expect(await performKeyRotation(f.ports)).toMatchObject({
+      kind: "stopped",
+      state: "held-unreadable",
+    });
+    expect(f.held()).toBe("unreadable");
+    expect(f.commits).toBe(0);
+    expect(f.posts).toBe(0);
+  });
+
+  it("parseHeldRotation: empty ⇒ null; malformed or partial ⇒ unreadable; well-formed ⇒ the record", () => {
+    expect(parseHeldRotation(null)).toBeNull();
+    expect(parseHeldRotation("")).toBeNull();
+    expect(parseHeldRotation("{not json")).toBe("unreadable");
+    expect(parseHeldRotation(JSON.stringify({ motebit_id: "m", old_public_key: "a" }))).toBe(
+      "unreadable",
+    );
+    const ok = {
+      motebit_id: "m",
+      old_public_key: "a",
+      new_public_key: "b",
+      record: {},
+      new_private_key_hex: "c",
+      written_at: 1,
+    };
+    expect(parseHeldRotation(JSON.stringify(ok))).toEqual(ok);
   });
 
   it("rotateOrThrow keeps the settings screens' contract: resolve on rotated, reject with the honest message otherwise", async () => {

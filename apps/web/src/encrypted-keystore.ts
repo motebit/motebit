@@ -236,8 +236,11 @@ export class EncryptedKeyStore implements BootstrapKeyStore {
   async clearPendingRotation(): Promise<void> {
     if (this.useIndexedDB) {
       const db = await openKeystoreDB();
-      await idbDelete(db, IDB_PENDING_KEY);
-      db.close();
+      try {
+        await idbDelete(db, IDB_PENDING_KEY);
+      } finally {
+        db.close();
+      }
     } else {
       localStorage.removeItem(LS_PENDING_CIPHER_KEY);
       localStorage.removeItem(LS_PENDING_IV_KEY);

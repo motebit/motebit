@@ -5,8 +5,8 @@
  * the write-ahead, the config file for the published key and the identity
  * file that is re-signed on commit.
  */
-import { rotateOrThrow, type HeldRotation } from "@motebit/surface-kit";
-import { rotate as rotateIdentityFile } from "@motebit/identity-file";
+import { parseHeldRotation, rotateOrThrow } from "@motebit/surface-kit";
+import { parse as parseIdentityFile, rotate as rotateIdentityFile } from "@motebit/identity-file";
 import { hexToBytes } from "@motebit/encryption";
 
 export type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -36,17 +36,22 @@ export async function rotateDesktopKey(
     syncUrl,
     loadPrivateKeyHex: () =>
       deps.invoke<string | null>("keyring_get", { key: "device_private_key" }),
+    publishedPublicKeyHex: async () => {
+      const c = await readConfig();
+      const published = c["device_public_key"];
+      return typeof published === "string" ? published : null;
+    },
     writeAhead: {
       load: async () => {
-        const raw = await deps
-          .invoke<string | null>("keyring_get", { key: PENDING_KEY })
-          .catch(() => null);
-        if (raw == null || raw === "") return null;
+        // A keyring read that throws (prompt cancelled, locked) is not an
+        // empty slot; it is a slot this run cannot see into.
+        let raw: string | null;
         try {
-          return JSON.parse(raw) as HeldRotation;
+          raw = await deps.invoke<string | null>("keyring_get", { key: PENDING_KEY });
         } catch {
-          return null;
+          return "unreadable";
         }
+        return parseHeldRotation(raw);
       },
       save: (held) =>
         deps.invoke<void>("keyring_set", { key: PENDING_KEY, value: JSON.stringify(held) }),
@@ -56,7 +61,7 @@ export async function rotateDesktopKey(
       await deps.invoke<void>("keyring_set", { key: "device_private_key", value: privateKeyHex });
       const next = await readConfig();
       const existing = next["_identity_file"];
-      if (typeof existing === "string" && existing !== "") {
+      if (typeof existing === "string" && existing !== "" && fileKey(existing) !== publicKeyHex) {
         next["_identity_file"] = await rotateIdentityFile({
           existingContent: existing,
           newPublicKey: hexToBytes(publicKeyHex),
@@ -72,4 +77,13 @@ export async function rotateDesktopKey(
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
   });
   return { newPublicKeyHex: outcome.newPublicKeyHex };
+}
+
+/** The key an identity file currently names, or null when it cannot be read. */
+function fileKey(content: string): string | null {
+  try {
+    return parseIdentityFile(content).frontmatter.identity.public_key;
+  } catch {
+    return null;
+  }
 }
