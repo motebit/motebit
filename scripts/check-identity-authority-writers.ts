@@ -80,14 +80,6 @@ const WRITERS: readonly Writer[] = [
   {
     file: "services/relay/src/agents.ts",
     verb: "INSERT",
-    table: "relay_key_successions",
-    count: 1,
-    principal:
-      "the identity itself — the succession path of /agents/register records a link only from a key this relay already holds for that identity (#701)",
-  },
-  {
-    file: "services/relay/src/agents.ts",
-    verb: "INSERT",
     table: "agent_registry",
     count: 1,
     principal:
@@ -111,27 +103,35 @@ const WRITERS: readonly Writer[] = [
   },
   {
     file: "services/relay/src/key-rotation.ts",
+    verb: "UPDATE",
+    table: "agent_registry",
+    count: 1,
+    principal:
+      "the identity itself — /revoke marks its own row revoked under its own token (or the operator's)",
+  },
+  {
+    file: "services/relay/src/succession-apply.ts",
     verb: "INSERT",
     table: "relay_key_successions",
     count: 1,
     principal:
-      "the identity itself — /rotate-key verifies the request against the key the relay currently holds, so possession of the departing key is the proof",
+      "the identity itself, or its designated guardian for a recovery — the ONE writer both doors (/rotate-key, the succession path of /agents/register) call after verifying the record's signatures and that it departs from a key this relay holds (#701, #702 relay half); a recovery is the deliberate exception to current-key possession, since it exists because that key is gone",
   },
   {
-    file: "services/relay/src/key-rotation.ts",
+    file: "services/relay/src/succession-apply.ts",
     verb: "UPDATE",
     table: "devices",
     count: 1,
     principal:
-      "the identity itself — the same verified succession that moves the registry key moves every device row holding the key it retires (and only those), in the same transaction; a device row is what a bearer is verified against FIRST, so leaving it on the retired key would let that key keep authenticating (#702 relay half)",
+      "the identity itself — the same verified succession that records the link moves every device row holding the key it retires (and only those), in the same transaction; a device row is what a bearer is verified against FIRST, so leaving it on the retired key would let that key keep authenticating (#702 relay half)",
   },
   {
-    file: "services/relay/src/key-rotation.ts",
+    file: "services/relay/src/succession-apply.ts",
     verb: "UPDATE",
     table: "agent_registry",
-    count: 2,
+    count: 1,
     principal:
-      "the identity itself for a rotation (possession of the current key), and the identity's designated guardian for a recovery — deliberately an exception to current-key possession, since a recovery exists because that key is gone",
+      "the identity itself (or its guardian for a recovery) — the registry key moves only FROM the key the verified link retires, or into an empty master-token slot, so a stray re-presentation can never drag it back from a later key",
   },
   {
     file: "services/relay/src/migration.ts",

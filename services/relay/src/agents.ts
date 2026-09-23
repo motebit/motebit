@@ -17,6 +17,7 @@ import { scoreAttestation } from "@motebit/market";
 import type { ConnectedDevice } from "./index.js";
 import type { RelayIdentity } from "./federation.js";
 import { insertRevocationEvent, signDiscoverBody } from "./federation.js";
+import { applySuccession } from "./succession-apply.js";
 import type { TaskRouter } from "./task-routing.js";
 import { evaluateSettlementEligibility } from "./task-routing.js";
 import { REFERENCE_MIN_BONDED_SIGNAL_MICRO } from "./bond-store.js";
@@ -1203,44 +1204,36 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         });
       }
 
-      // Store the succession record for chain auditability
-      moteDb.db
-        .prepare(
-          `INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature, recovery, guardian_signature)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          motebitId,
-          succession.old_public_key,
-          succession.new_public_key,
-          succession.timestamp,
-          succession.reason ?? null,
-          succession.old_key_signature ?? null,
-          succession.new_key_signature,
-          succession.recovery ? 1 : 0,
-          succession.guardian_signature ?? null,
-        );
+      // Record AND apply it, the same way /rotate-key does: this door used to
+      // write the chain row and move the registry key while leaving every
+      // device row on the retired key — a rotation that ended nothing, and a
+      // state a second route then had to finish (#702 relay half). One
+      // writer for both doors makes that state unrepresentable.
+      const { applied } = applySuccession(moteDb.db, motebitId, succession);
 
       logger.info("agent.key.succession_on_register", {
         motebitId,
         oldKey: existingAgent.public_key.slice(0, 16) + "...",
         newKey: publicKey.slice(0, 16) + "...",
+        applied,
       });
 
-      // Emit key rotation event for federation propagation
-      try {
-        await insertRevocationEvent(moteDb.db, relayIdentity, "key_rotated", motebitId, {
-          newPublicKey: publicKey,
-          revokedPublicKey: existingAgent.public_key,
-          // The old key ceased to be authoritative at the (guardian-attested)
-          // rotation moment, not when the relay processed this registration —
-          // anchor the revocation memo at the succession timestamp so the
-          // verifier's poison window matches the chain.
-          effectiveAt: succession.timestamp,
-        });
-      } catch {
-        /* best-effort */
-      }
+      // Emit key rotation event for federation propagation — only when the
+      // chain grew; a retry of the head appended nothing.
+      if (applied)
+        try {
+          await insertRevocationEvent(moteDb.db, relayIdentity, "key_rotated", motebitId, {
+            newPublicKey: publicKey,
+            revokedPublicKey: existingAgent.public_key,
+            // The old key ceased to be authoritative at the (guardian-attested)
+            // rotation moment, not when the relay processed this registration —
+            // anchor the revocation memo at the succession timestamp so the
+            // verifier's poison window matches the chain.
+            effectiveAt: succession.timestamp,
+          });
+        } catch {
+          /* best-effort */
+        }
     }
 
     const now = Date.now();

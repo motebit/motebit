@@ -14,6 +14,8 @@ import {
   hexToBytes,
 } from "@motebit/encryption";
 import { insertRevocationEvent } from "./federation.js";
+import { applySuccession, successionAtHead, successionHead } from "./succession-apply.js";
+import { readSuccessionChain } from "./identity-transparency.js";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
 import type { AuthEvent } from "./auth-events.js";
@@ -137,19 +139,6 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
       throw new HTTPException(400, { message: "Missing required fields in key succession record" });
     }
 
-    // Timestamp freshness: reject succession records older than 15 minutes or in the future
-    const MAX_ROTATION_AGE_MS = 15 * 60 * 1000;
-    const age = Date.now() - body.timestamp;
-    if (age < -60_000) {
-      // Allow 1 minute clock skew for future timestamps
-      throw new HTTPException(400, { message: "Succession record timestamp is in the future" });
-    }
-    if (age > MAX_ROTATION_AGE_MS) {
-      throw new HTTPException(400, {
-        message: "Succession record timestamp is too old (>15 minutes)",
-      });
-    }
-
     if (body.recovery) {
       // Guardian recovery: need guardian_signature, not old_key_signature
       if (!body.guardian_signature) {
@@ -209,28 +198,37 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     // A device row's key counts, so an identity whose daemon has shut down
     // can still rotate. Refusing when the relay holds NO key at all is
     // fail-closed: there is nothing for the record to continue from.
-    // Does the chain already hold this link? Two doors write it: this route,
-    // and the succession path of `/agents/register`, which moves the registry
-    // key and records the link while touching neither the device rows nor
-    // the pairing payloads. So "already recorded" is NOT "already applied",
-    // and it must not short-circuit — #710 tried a "fully applied" precheck
-    // (registry moved AND no device row holds the old key) and it was
-    // unreachable for the register door, because the key-on-file rule below
-    // then refused the record as "not from the current key" (the registry
-    // had moved). A held link answers a different question: it decides the
-    // SHAPE of what follows, never whether anything follows. The signatures
-    // were verified above, the link is this identity's own history already,
-    // so the key-on-file rule has nothing left to protect here — what is left
-    // is retiring every credential the link retires, and the writes in the
-    // transaction below are idempotent and scoped to the retired key, so a
-    // retry after a lost response and a link another door recorded both
-    // converge on the same state. `applied` reports whether the CHAIN grew.
-    const linkAlreadyHeld =
-      moteDb.db
-        .prepare(
-          "SELECT 1 FROM relay_key_successions WHERE motebit_id = ? AND old_public_key = ? AND new_public_key = ? LIMIT 1",
-        )
-        .get(motebitId, body.old_public_key, body.new_public_key) != null;
+    // Is this link the HEAD of the chain this relay already recorded? Then
+    // this is a retry — a lost response, a timeout after commit — of a
+    // record the relay already accepted once, and two rules below do not
+    // apply to it: freshness (the relay judged this exact timestamp when it
+    // first recorded the link; refusing the retry as "too old" tells a
+    // client its rotation failed when it succeeded) and key-on-file (the key
+    // it departs from has by definition moved on). Head, not "any earlier
+    // row with these keys": a rotation back to a previously used key is a
+    // NEW link and must append, or the served chain stops at a key the
+    // registry has left. `applySuccession` is idempotent and scoped to the
+    // retired key, so both doors and every retry converge on one state —
+    // #710's "fully applied" precheck, which had to reproduce the law to
+    // decide whether to run the law, is gone with the state it modelled.
+    const held = successionAtHead(moteDb.db, motebitId, body);
+
+    if (!held) {
+      // Timestamp freshness: a NEW link must be recent — older than 15
+      // minutes or in the future is refused. A held link already passed this
+      // once.
+      const MAX_ROTATION_AGE_MS = 15 * 60 * 1000;
+      const age = Date.now() - body.timestamp;
+      if (age < -60_000) {
+        // Allow 1 minute clock skew for future timestamps
+        throw new HTTPException(400, { message: "Succession record timestamp is in the future" });
+      }
+      if (age > MAX_ROTATION_AGE_MS) {
+        throw new HTTPException(400, {
+          message: "Succession record timestamp is too old (>15 minutes)",
+        });
+      }
+    }
 
     // Precedence, most authoritative first. Comparison is EXACT: these
     // keys are covered by the signature, and a record stored in a spelling
@@ -251,16 +249,10 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     // so it is what the second one continues from. It is reachable only
     // AFTER a rotation that already passed this check, so it cannot be
     // used to bootstrap a chain out of nothing.
-    const chainHead = moteDb.db
-      .prepare(
-        "SELECT new_public_key FROM relay_key_successions WHERE motebit_id = ? ORDER BY id DESC LIMIT 1",
-      )
-      .get(motebitId) as { new_public_key: string } | undefined;
-    if (linkAlreadyHeld) {
-      // Nothing to protect: the link is already this identity's recorded
-      // history, and the key it departs from has by definition moved on.
-      // Skipping the rule here is what makes the register door's link
-      // finishable and a lost-response retry answerable (#710 finding 4).
+    const chainHead = successionHead(moteDb.db, motebitId);
+    if (held) {
+      // Nothing to protect: the link is this identity's recorded head, and
+      // the key it departs from has by definition moved on.
     } else if (registryKey != null) {
       if (registryKey !== body.old_public_key) {
         throw refuse(
@@ -290,106 +282,24 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
       }
     }
 
-    // Everything a recorded rotation changes, in ONE transaction. Written
-    // as three statements, a crash between them left the registry saying
-    // the new key while the device rows still verified tokens under the
-    // old one — and from there the owner could not rotate again (the
-    // record no longer departs from the stored key), could not
-    // re-register (the row disagrees) and could not authenticate. There
-    // was no way back without the operator.
-    //
-    // Devices are written FIRST for the same reason: if this ever stops
-    // being one transaction, the half-applied state that remains is the
-    // recoverable one.
-    const applied = moteDb.db.transaction(() => {
-      // The old key stops being a credential HERE. A device row's
-      // `public_key` is what an owner token is verified against, and it is
-      // resolved BEFORE the registry key, so a stale row shadows the
-      // rotation entirely. Scoped to rows holding the key being retired: a
-      // device linked without key transfer holds its own key, which this
-      // rotation is not about (`docs/doctrine/security-boundaries.md` —
-      // rotating an identity must not rotate independent device keypairs).
-      // The attached hardware-attestation credential names the key it was
-      // bound to (`sync-routes.ts` refuses a mismatch at attach time), so
-      // carrying it across a rotation would publish a credential that
-      // names a key the row no longer holds — and a peer checking the
-      // binding this relay itself enforces would reject it. Dropped, so
-      // the device re-attaches against the key it now holds.
-      moteDb.db
-        .prepare(
-          "UPDATE devices SET public_key = ?, hardware_attestation_credential = NULL WHERE motebit_id = ? AND public_key = ?",
-        )
-        .run(body.new_public_key, motebitId, body.old_public_key);
+    const { applied } = applySuccession(moteDb.db, motebitId, body);
 
-      // A pairing session approved before this rotation carries the key
-      // that was just retired, and pairing's key-transfer route takes no
-      // bearer. Left alone, whoever holds that pairing id could write the
-      // retired key back onto a device row and authenticate again — the
-      // rotation undone by an unauthenticated route. Clearing the payload
-      // is what makes that route refuse ("this session approved none");
-      // `status` is left alone because clients switch on its values.
-      // Scoped to approvals that carry the key being retired. Clearing
-      // every session would also strand a pairing approved under a key
-      // this rotation is not about, mid-transfer and with no signal.
-      const stale = moteDb.db
-        .prepare(
-          "SELECT pairing_id, key_transfer_payload FROM pairing_sessions WHERE motebit_id = ? AND key_transfer_payload IS NOT NULL",
-        )
-        .all(motebitId) as Array<{ pairing_id: string; key_transfer_payload: string }>;
-      for (const session of stale) {
-        let carries = false;
-        try {
-          const kt = JSON.parse(session.key_transfer_payload) as Record<string, unknown>;
-          carries = kt["identity_pubkey_check"] === body.old_public_key;
-        } catch {
-          // A payload this relay cannot read cannot be shown to be safe.
-          carries = true;
-        }
-        if (carries) {
-          moteDb.db
-            .prepare("UPDATE pairing_sessions SET key_transfer_payload = NULL WHERE pairing_id = ?")
-            .run(session.pairing_id);
-        }
+    if (applied) {
+      // The old key ceased to be authoritative at the rotation moment, not
+      // when this relay processed the request — anchor the memo at the
+      // record's timestamp so a verifier's poison window matches the chain.
+      // Same event the register door emits; a retry appended nothing and
+      // emits nothing. Best-effort, as there.
+      try {
+        await insertRevocationEvent(moteDb.db, relayIdentity, "key_rotated", motebitId, {
+          newPublicKey: body.new_public_key,
+          revokedPublicKey: body.old_public_key,
+          effectiveAt: body.timestamp,
+        });
+      } catch {
+        /* best-effort */
       }
-
-      // The registry key moves only FROM the key this link retires, or into
-      // an empty slot when this link is (or is about to be) the head of the
-      // chain. Unscoped, a late retry of an OLD link would drag a registry
-      // that had since moved on to a later key back to this one — and the
-      // next rotation, departing from the real head, would be refused as
-      // "not from the current key". An empty slot is the master-token
-      // registration case (`''`), which the head of the chain is entitled
-      // to fill and an older link is not.
-      const willBeHead = !linkAlreadyHeld || chainHead?.new_public_key === body.new_public_key;
-      moteDb.db
-        .prepare(
-          `UPDATE agent_registry SET public_key = ? WHERE motebit_id = ? AND (public_key = ? OR (COALESCE(public_key, '') = '' AND ? = 1))`,
-        )
-        .run(body.new_public_key, motebitId, body.old_public_key, willBeHead ? 1 : 0);
-
-      // The chain grows only if it does not already hold this link. A lost
-      // response and a retry must not append the same link twice: the chain
-      // is served in timestamp order, and two identical links make a history
-      // a verifier cannot walk. Everything above still ran, which is the
-      // point — that is what "already recorded but not applied" needed.
-      if (linkAlreadyHeld) return false;
-      moteDb.db
-        .prepare(
-          `INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature, recovery, guardian_signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          motebitId,
-          body.old_public_key,
-          body.new_public_key,
-          body.timestamp,
-          body.reason ?? null,
-          body.old_key_signature ?? null,
-          body.new_key_signature,
-          body.recovery ? 1 : 0,
-          body.guardian_signature ?? null,
-        );
-      return true;
-    });
+    }
 
     logger.info("key_rotation.recorded", {
       motebitId,
@@ -405,20 +315,14 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     const motebitId = c.req.param("motebitId");
     const correlationId = c.req.header("x-correlation-id") ?? crypto.randomUUID();
 
-    const chain = moteDb.db
-      .prepare(
-        `SELECT old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature, recovery, guardian_signature FROM relay_key_successions WHERE motebit_id = ? ORDER BY timestamp ASC`,
-      )
-      .all(motebitId) as Array<{
-      old_public_key: string;
-      new_public_key: string;
-      timestamp: number;
-      reason: string | null;
-      old_key_signature: string | null;
-      new_key_signature: string;
-      recovery: number;
-      guardian_signature: string | null;
-    }>;
+    // ONE reader of the served chain, shared with the identity bundle
+    // (`identity-transparency.ts`): it stamps the `suite` the verifier
+    // demands fail-closed and omits a null `reason` — the signed payload has
+    // no `reason` key when none was given, so serving `reason: null` changes
+    // the canonical bytes and every signature fails. This route used to
+    // build its own rows without either, so the chain the client design
+    // READS to classify the relay was unverifiable as served.
+    const chain = readSuccessionChain(moteDb.db, motebitId);
 
     const agent = moteDb.db
       .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
@@ -428,15 +332,7 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
 
     return c.json({
       motebit_id: motebitId,
-      chain: chain.map((r) => ({
-        old_public_key: r.old_public_key,
-        new_public_key: r.new_public_key,
-        timestamp: r.timestamp,
-        reason: r.reason,
-        ...(r.old_key_signature ? { old_key_signature: r.old_key_signature } : {}),
-        new_key_signature: r.new_key_signature,
-        ...(r.recovery === 1 ? { recovery: true, guardian_signature: r.guardian_signature } : {}),
-      })),
+      chain,
       current_public_key: agent?.public_key ?? null,
     });
   });
