@@ -1,6 +1,6 @@
 # PROPOSAL — key rotation reaches the relay: the client half (DRAFT, not built)
 
-**Status:** DRAFT for design review, 2026-09-23. Nothing here is built. Predecessors #699, #700 and #710 were each withdrawn in review round 2; #710's post-mortem asked for exactly this document before any further code.
+**Status:** BUILT for the CLI, 2026-09-23 — `apps/cli/src/rotation.ts` (`performRotation`, the state machine of §3), `packages/sync-engine/src/succession-client.ts` (`readSuccessionState`, `submitSuccessionToRelay`), `apps/cli/src/pending-rotation.ts` (the write-ahead); activation test `apps/cli/src/__tests__/rotation-activation.test.ts` drives the real function against an in-process relay, one case per row of §7, each link severed and seen red. D5 and D7 shipped with the defaults this note proposes (§10 remains open for the founder to reverse). Desktop / web / mobile: #709. Predecessors #699, #700 and #710 were each withdrawn in review round 2; #710's post-mortem asked for this document before any further code.
 **Author:** motebit PE
 **Closes when built:** #702 (no shipped client can reach the rotate-key route)
 **Relationship:** the relay half (audience branch, idempotent re-presentation, device-row cascade) is a separate proposal and PR; §6 names what this design REQUIRES of it. Desktop/web/mobile adoption stays #709. Daemon key-state conflation stays #703.

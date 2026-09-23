@@ -21,6 +21,13 @@ export {
 } from "./encrypted-conversation-adapter.js";
 export type { EncryptedConversationAdapterConfig } from "./encrypted-conversation-adapter.js";
 export { PairingClient } from "./pairing-client.js";
+export { readSuccessionState, submitSuccessionToRelay } from "./succession-client.js";
+export type {
+  ReadSuccessionStateRequest,
+  RelaySuccessionState,
+  SubmitSuccessionRequest,
+  SubmitSuccessionResult,
+} from "./succession-client.js";
 export type { PairingClientConfig, PairingSession, PairingStatus } from "./pairing-client.js";
 export {
   ConversationSyncEngine,

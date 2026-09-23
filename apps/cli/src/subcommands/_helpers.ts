@@ -85,6 +85,27 @@ export function getRelayUrl(config: CliConfig): string {
   return url.replace(/\/+$/, "");
 }
 
+/** The relay every surface falls back to when nothing names one (`runtime-factory.ts` keeps the same literal for `motebit up`). */
+export const DEFAULT_SYNC_URL = "https://relay.motebit.com";
+
+/**
+ * The relay this machine talks to, resolved the ONE way `motebit up` does:
+ * flag, env, persisted config, then the default. `getRelayUrl` above exits
+ * when nothing is configured, which is right for commands that only make
+ * sense against a relay someone chose; a rotation is not one of them —
+ * `motebit rotate` used to read only the persisted value, so an identity
+ * registered against the DEFAULT relay was told "not configured" and rotated
+ * locally into exactly the split state a rotation must never leave (#702).
+ */
+export function resolveRelayUrl(config: CliConfig): string {
+  const url =
+    config.syncUrl ??
+    process.env["MOTEBIT_SYNC_URL"] ??
+    loadFullConfig().sync_url ??
+    DEFAULT_SYNC_URL;
+  return url.replace(/\/+$/, "");
+}
+
 /**
  * Build auth headers for relay API calls. Tries in order:
  * 1. --sync-token / MOTEBIT_API_TOKEN / MOTEBIT_SYNC_TOKEN (master token)

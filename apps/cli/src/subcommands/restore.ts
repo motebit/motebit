@@ -53,6 +53,7 @@ import {
 import type { CliConfig } from "../args.js";
 import { loadFullConfig, saveFullConfig } from "../config.js";
 import { encryptPrivateKey, promptPassphrase } from "../identity.js";
+import { hasPendingRotation, pendingRotationPath } from "../pending-rotation.js";
 import { bold, dim, error as errorColor, success, warn } from "./../colors.js";
 
 const IDENTITY_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
@@ -196,6 +197,20 @@ export async function handleRestore(config: CliConfig): Promise<void> {
   }
 
   // ── New passphrase, encrypt, write ──
+  // A rotation in flight holds its new key encrypted under the CURRENT
+  // passphrase. Changing the passphrase now would leave that key unopenable
+  // — and if the relay already recorded the rotation, unreachable, with no
+  // way back but the guardian. Finish or discard the rotation first
+  // (`docs/proposals/key-rotation-client-v1.md` D7).
+  if (plan.kind === "passphrase_reset" && hasPendingRotation()) {
+    console.error(
+      `  A key rotation is in flight (${pendingRotationPath()}); its new key is encrypted under the current passphrase.`,
+    );
+    console.error(
+      "  Run `motebit rotate` to finish it, then change the passphrase. Nothing changed.",
+    );
+    process.exit(1);
+  }
   const pass1 = await promptPassphrase("  New passphrase: ");
   if (pass1 === "") {
     console.error("  Passphrase cannot be empty.");
