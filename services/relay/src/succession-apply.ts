@@ -25,7 +25,7 @@
  */
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { KeySuccessionRecord } from "@motebit/encryption";
-import { recordIdentityKey } from "./identity-keys.js";
+import { identityKeyFor, recordIdentityKey } from "./identity-keys.js";
 
 interface ChainHead {
   old_public_key: string;
@@ -79,31 +79,37 @@ export function successionAtHead(
  * function, so they cannot disagree.
  */
 export interface KeyOnFile {
+  /** The one holder's key (`identity_keys`), when it has one. */
+  holderKey: string | null;
   /** The registry key, when the row exists and holds one (`''` is not a key). */
   registryKey: string | null;
   /** The `new_public_key` of the newest recorded link, by insertion order. */
   chainHead: string | null;
-  /** The single most authoritative key: registry, else chain head, else null. */
+  /** The single most authoritative key: holder, else registry, else chain head, else null. */
   held: string | null;
 }
 
 export function keyOnFile(db: DatabaseDriver, motebitId: string): KeyOnFile {
-  // The ONE holder answers first (#703 Inc 2); the registry and chain rungs
-  // stay named because a departure verdict reports which rung it used.
-  const held = db
-    .prepare("SELECT public_key FROM identity_keys WHERE motebit_id = ?")
-    .get(motebitId) as { public_key: string } | undefined;
+  // The ONE resolver answers (#703 Inc 2); the rungs stay named because a
+  // departure verdict reports which one it used. The device rung is
+  // deliberately not a departure rung here — `departureFrom` keeps its own
+  // exact device-row check, which is a different question (does THIS row
+  // hold the key) from the resolver's (do all rows agree).
+  const resolved = identityKeyFor(db, motebitId);
+  const holderKey =
+    resolved?.source !== undefined && !["registry", "chain", "devices"].includes(resolved.source)
+      ? resolved.publicKey
+      : null;
   const row = db
     .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
     .get(motebitId) as { public_key: string | null } | undefined;
-  const registryKey =
-    held?.public_key ?? (row?.public_key != null && row.public_key !== "" ? row.public_key : null);
+  const registryKey = row?.public_key != null && row.public_key !== "" ? row.public_key : null;
   const chainHead = successionHead(db, motebitId)?.new_public_key ?? null;
-  return { registryKey, chainHead, held: registryKey ?? chainHead };
+  return { holderKey, registryKey, chainHead, held: holderKey ?? registryKey ?? chainHead };
 }
 
 export type Departure =
-  | { admissible: true; rung: "registry" | "chain" | "device" }
+  | { admissible: true; rung: "holder" | "registry" | "chain" | "device" }
   | {
       admissible: false;
       reason: "not_from_current_key" | "not_from_chain_head" | "no_key_on_file";
@@ -111,7 +117,12 @@ export type Departure =
 
 /** May a succession departing from `key` be recorded for this identity? */
 export function departureFrom(db: DatabaseDriver, motebitId: string, key: string): Departure {
-  const { registryKey, chainHead } = keyOnFile(db, motebitId);
+  const { holderKey, registryKey, chainHead } = keyOnFile(db, motebitId);
+  if (holderKey !== null) {
+    return holderKey === key
+      ? { admissible: true, rung: "holder" }
+      : { admissible: false, reason: "not_from_current_key" };
+  }
   if (registryKey !== null) {
     return registryKey === key
       ? { admissible: true, rung: "registry" }
@@ -202,13 +213,21 @@ export function applySuccession(
     db.prepare(
       "UPDATE agent_registry SET public_key = ? WHERE motebit_id = ? AND (public_key = ? OR COALESCE(public_key, '') = '')",
     ).run(record.new_public_key, motebitId, record.old_public_key);
-    // The one holder moves with the chain, in the same transaction (#703 Inc 2).
-    recordIdentityKey(db, {
-      motebitId,
-      publicKey: record.new_public_key,
-      source: "succession",
-      now: Date.now(),
-    });
+    // The one holder moves with the chain, in the same transaction — and, like
+    // the registry UPDATE above, only FROM the key this link retires or into an
+    // empty slot: a re-presented head link must not drag a holder that has
+    // since moved on back to an older key (#703 Inc 2 review).
+    const holder = db
+      .prepare("SELECT public_key FROM identity_keys WHERE motebit_id = ?")
+      .get(motebitId) as { public_key: string } | undefined;
+    if (holder === undefined || holder.public_key === record.old_public_key) {
+      recordIdentityKey(db, {
+        motebitId,
+        publicKey: record.new_public_key,
+        source: "succession",
+        now: Date.now(),
+      });
+    }
 
     // The chain grows unless this link is already its head. A lost response
     // and a retry must not append the same link twice: the chain is served

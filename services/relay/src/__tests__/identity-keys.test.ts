@@ -10,8 +10,13 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { DatabaseDriver } from "@motebit/persistence";
 
 import type { SyncRelay } from "../index.js";
-import { IDENTITY_KEYS_BACKFILL_SQL, identityKeyFor, recordIdentityKey } from "../identity-keys.js";
-import { keyOnFile } from "../succession-apply.js";
+import {
+  IDENTITY_KEYS_BACKFILL_SQL,
+  identityKeyFor,
+  keyHeldByEveryDevice,
+  recordIdentityKey,
+} from "../identity-keys.js";
+import { applySuccession, departureFrom, keyOnFile } from "../succession-apply.js";
 import { readIdentityBindings } from "../identity-transparency.js";
 import { createTestRelay, AUTH_HEADER } from "./test-helpers.js";
 
@@ -177,5 +182,103 @@ describe("identityKeyFor — the one resolver, holders set against each other", 
     });
     expect(readIdentityBindings(db).map((b) => b.motebit_id)).toContain("mote-rowless");
     expect((await relay.app.request("/api/v1/identity/mote-rowless")).status).toBe(200);
+  });
+
+  it("keys are stored as given — an uppercase registrant's own spelling is what the holder answers", () => {
+    const upper = "ABCDEF" + "0".repeat(58);
+    recordIdentityKey(db, {
+      motebitId: "mote-upper",
+      publicKey: upper,
+      source: "register",
+      now: 1,
+    });
+    expect(identityKeyFor(db, "mote-upper")?.publicKey).toBe(upper);
+    expect(departureFrom(db, "mote-upper", upper)).toMatchObject({
+      admissible: true,
+      rung: "holder",
+    });
+    expect(departureFrom(db, "mote-upper", upper.toLowerCase())).toMatchObject({
+      admissible: false,
+    });
+  });
+
+  it("keyHeldByEveryDevice: no keyed rows, or all rows this key — never a key some row does not hold", () => {
+    expect(keyHeldByEveryDevice(db, "mote-none", A)).toBe(true);
+    plantDevice(db, "mote-one", "o1", A);
+    expect(keyHeldByEveryDevice(db, "mote-one", A)).toBe(true);
+    expect(keyHeldByEveryDevice(db, "mote-one", B)).toBe(false);
+    plantDevice(db, "mote-one", "o2", B);
+    expect(keyHeldByEveryDevice(db, "mote-one", A)).toBe(false);
+  });
+
+  it("/agents/register: a first key contradicted by a device row is NOT recorded; a differing key without a succession is refused", async () => {
+    // Personal identity: device A holds K1 and a paired device holds its own K2; no holder yet.
+    plantDevice(db, "mote-reg-c", "dA", A);
+    plantDevice(db, "mote-reg-c", "dB", B);
+    const first = await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        motebit_id: "mote-reg-c",
+        public_key: B,
+        endpoint_url: "https://x/mcp",
+        capabilities: ["query"],
+      }),
+    });
+    expect(first.status).toBe(200);
+    expect(
+      db.prepare("SELECT 1 FROM identity_keys WHERE motebit_id = ?").get("mote-reg-c"),
+    ).toBeUndefined();
+
+    // A rowless identity whose holder says A: registering under an unproven C
+    // is a key change, and the succession rule now compares against the holder.
+    recordIdentityKey(db, { motebitId: "mote-reg-h", publicKey: A, source: "bootstrap", now: 1 });
+    const change = await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        motebit_id: "mote-reg-h",
+        public_key: C,
+        endpoint_url: "https://x/mcp",
+        capabilities: ["query"],
+      }),
+    });
+    expect(change.status).toBe(400);
+    expect(identityKeyFor(db, "mote-reg-h")?.publicKey).toBe(A);
+  });
+
+  it("the legacy /device/register (operator bearer) proves nothing and writes nothing to the holder", async () => {
+    recordIdentityKey(db, { motebitId: "mote-legacy", publicKey: A, source: "bootstrap", now: 1 });
+    const res = await relay.app.request("/device/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ motebit_id: "mote-legacy", device_name: "x", public_key: B }),
+    });
+    expect(res.status).toBeLessThan(500);
+    expect(identityKeyFor(db, "mote-legacy")?.publicKey).toBe(A);
+  });
+
+  it("a re-presented head link does not drag a holder that has moved on back to an older key", () => {
+    const mid = "mote-replay";
+    plantDevice(db, mid, "r1", A);
+    plantRegistry(db, mid, A);
+    recordIdentityKey(db, { motebitId: mid, publicKey: A, source: "register", now: 1 });
+    const link = {
+      old_public_key: A,
+      new_public_key: B,
+      timestamp: 2,
+      reason: null,
+      old_key_signature: "s1",
+      new_key_signature: "s2",
+      recovery: false,
+      guardian_signature: null,
+    } as unknown as Parameters<typeof applySuccession>[2];
+    applySuccession(db, mid, link);
+    expect(identityKeyFor(db, mid)?.publicKey).toBe(B);
+    // The holder moves on (another door) …
+    recordIdentityKey(db, { motebitId: mid, publicKey: C, source: "register", now: 3 });
+    // … and the same link presented again is a no-op for the holder.
+    applySuccession(db, mid, link);
+    expect(identityKeyFor(db, mid)?.publicKey).toBe(C);
   });
 });

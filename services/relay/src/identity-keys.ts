@@ -50,11 +50,11 @@ export interface IdentityKey {
   guardianPublicKey: string | null;
   /** Where the answer came from — the holder, or a fallback rung. */
   source: IdentityKeySource | "registry" | "chain" | "devices";
-  /** When this relay first held a key for the identity (ms epoch), when known. */
-  firstSeen: number | null;
+  /** When this relay first held a key for the identity (ms epoch). */
+  firstSeen: number;
 }
 
-const HEX_64 = /^[0-9a-f]{64}$/;
+const HEX_64 = /^[0-9a-f]{64}$/i;
 
 /**
  * Record a key a door has just PROVED. Upsert: a later proof replaces the key;
@@ -71,7 +71,10 @@ export function recordIdentityKey(
     now: number;
   },
 ): void {
-  const key = input.publicKey.toLowerCase();
+  // Stored as given, never normalized: every sibling store keeps the caller's
+  // spelling and rule 21's comparisons are EXACT, so a lowercased holder would
+  // refuse an uppercase registrant's own rotation.
+  const key = input.publicKey;
   if (!HEX_64.test(key)) {
     throw new Error(`recordIdentityKey: not a 32-byte hex public key (source ${input.source})`);
   }
@@ -86,18 +89,32 @@ export function recordIdentityKey(
   ).run(input.motebitId, key, input.guardianPublicKey ?? null, input.source, input.now, input.now);
 }
 
+/**
+ * May a door treat `key` as THE identity's key on the strength of the device
+ * rows alone? Yes when the identity has no keyed device rows (a service-mode
+ * first registration) or when every keyed device row holds exactly this key.
+ * No when any device row holds another key — a paired device holds its own,
+ * and that is not the identity's (D5: never guess).
+ */
+export function keyHeldByEveryDevice(db: DatabaseDriver, motebitId: string, key: string): boolean {
+  const rows = db
+    .prepare("SELECT DISTINCT public_key FROM devices WHERE motebit_id = ? AND public_key != ''")
+    .all(motebitId) as Array<{ public_key: string }>;
+  return rows.length === 0 || (rows.length === 1 && rows[0]!.public_key === key);
+}
+
 /** The ONE resolver. Null when the relay holds no unambiguous key for the identity. */
 export function identityKeyFor(db: DatabaseDriver, motebitId: string): IdentityKey | null {
   const held = db
     .prepare(
-      "SELECT public_key, guardian_public_key, source, first_seen FROM identity_keys WHERE motebit_id = ?",
+      "SELECT public_key, guardian_public_key, source, COALESCE(first_seen, updated_at) AS first_seen FROM identity_keys WHERE motebit_id = ?",
     )
     .get(motebitId) as
     | {
         public_key: string;
         guardian_public_key: string | null;
         source: IdentityKeySource;
-        first_seen: number | null;
+        first_seen: number;
       }
     | undefined;
   if (held) {
@@ -127,15 +144,15 @@ export function identityKeyFor(db: DatabaseDriver, motebitId: string): IdentityK
 
   const head = db
     .prepare(
-      "SELECT new_public_key FROM relay_key_successions WHERE motebit_id = ? ORDER BY id DESC LIMIT 1",
+      "SELECT new_public_key, (SELECT MIN(timestamp) FROM relay_key_successions WHERE motebit_id = ?) AS first_link FROM relay_key_successions WHERE motebit_id = ? ORDER BY id DESC LIMIT 1",
     )
-    .get(motebitId) as { new_public_key: string } | undefined;
+    .get(motebitId, motebitId) as { new_public_key: string; first_link: number } | undefined;
   if (head) {
     return {
       publicKey: head.new_public_key,
       guardianPublicKey: reg?.guardian_public_key ?? null,
       source: "chain",
-      firstSeen: reg?.registered_at ?? null,
+      firstSeen: reg?.registered_at ?? head.first_link,
     };
   }
 
@@ -145,7 +162,7 @@ export function identityKeyFor(db: DatabaseDriver, motebitId: string): IdentityK
   if (devices.length === 1) {
     const first = db
       .prepare("SELECT MIN(registered_at) AS t FROM devices WHERE motebit_id = ?")
-      .get(motebitId) as { t: number | null };
+      .get(motebitId) as { t: number };
     return {
       publicKey: devices[0]!.public_key,
       guardianPublicKey: reg?.guardian_public_key ?? null,

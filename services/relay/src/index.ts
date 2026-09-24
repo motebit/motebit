@@ -778,7 +778,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // right key under the wrong device id verify.
   const agentRegistryKeyLookup = (mid: string): string | null => {
     const hasDevice = moteDb.db
-      .prepare("SELECT 1 FROM devices WHERE motebit_id = ? LIMIT 1")
+      .prepare("SELECT 1 FROM devices WHERE motebit_id = ? AND public_key != '' LIMIT 1")
       .get(mid);
     if (hasDevice != null) return null;
     return identityKeyFor(moteDb.db, mid)?.publicKey ?? null;

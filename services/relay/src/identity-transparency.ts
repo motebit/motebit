@@ -106,7 +106,7 @@ export async function buildIdentityBindingBundle(
   if (!held) return null;
   const agent = {
     public_key: held.publicKey,
-    registered_at: held.firstSeen ?? 0,
+    registered_at: held.firstSeen,
     guardian_public_key: held.guardianPublicKey,
   };
 

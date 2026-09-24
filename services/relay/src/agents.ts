@@ -22,7 +22,7 @@ import type { TaskRouter } from "./task-routing.js";
 import { evaluateSettlementEligibility } from "./task-routing.js";
 import { REFERENCE_MIN_BONDED_SIGNAL_MICRO } from "./bond-store.js";
 import { ON_SHELF, delistRegistration } from "./registry-delist.js";
-import { identityKeyFor, recordIdentityKey } from "./identity-keys.js";
+import { identityKeyFor, keyHeldByEveryDevice, recordIdentityKey } from "./identity-keys.js";
 
 /**
  * Fields the ORIGIN relay computes itself and MUST NOT accept from a federated
@@ -794,12 +794,18 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       return c.json({ valid: false, reason: "motebit_id mismatch" });
     }
 
-    // Resolve the key: the identity's key through the ONE resolver (#703 Inc 2),
-    // else the receipt's device row (a linked device signs with its own key).
+    // Resolve the key: the receipt's OWN device row first — a linked device
+    // signs with its own key, which is not the identity's — else the identity's
+    // key through the ONE resolver (#703 Inc 2).
     let pubKeyHex: string | undefined;
-    const held = identityKeyFor(moteDb.db, motebitId);
-    if (held) {
-      pubKeyHex = held.publicKey;
+    const signingDevice =
+      receipt.device_id != null
+        ? await identityManager.loadDeviceById(receipt.device_id, motebitId)
+        : null;
+    if (signingDevice?.public_key) {
+      pubKeyHex = signingDevice.public_key;
+    } else if (identityKeyFor(moteDb.db, motebitId)) {
+      pubKeyHex = identityKeyFor(moteDb.db, motebitId)!.publicKey;
     } else {
       const devices = await identityManager.listDevices(motebitId);
       const device =
@@ -1001,13 +1007,6 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         body.public_key,
         body.device_id,
       );
-      // The key bootstrap carries IS the identity key (F10) — record it in the one holder (#703 Inc 2).
-      recordIdentityKey(moteDb.db, {
-        motebitId,
-        publicKey: body.public_key,
-        source: "bootstrap",
-        now: Date.now(),
-      });
       return c.json(
         {
           motebit_id: motebitId,
@@ -1031,7 +1030,10 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       body.public_key,
       body.device_id,
     );
-    // The key bootstrap carries IS the identity key (F10) — record it in the one holder (#703 Inc 2).
+    // A NEW identity: this is its first key, proven by construction (the id was
+    // minted for it here). An EXISTING identity's bootstrap above records
+    // nothing: the guard accepts any key some device row holds, including a
+    // paired device's own, and that is not the identity's key (#703 Inc 2).
     recordIdentityKey(moteDb.db, {
       motebitId,
       publicKey: body.public_key,
@@ -1172,13 +1174,13 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     const existingAgent = moteDb.db
       .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
       .get(motebitId) as { public_key: string } | undefined;
+    // The key on file is the ONE holder's when it has one (#703 Inc 2); the
+    // registry row is the pre-holder fallback. A daemon that deregistered has
+    // no registry row and would otherwise re-register under any key unproven.
+    const keyOnFileForRegister =
+      identityKeyFor(moteDb.db, motebitId)?.publicKey ?? existingAgent?.public_key;
 
-    if (
-      existingAgent &&
-      existingAgent.public_key &&
-      publicKey &&
-      existingAgent.public_key !== publicKey
-    ) {
+    if (keyOnFileForRegister && publicKey && keyOnFileForRegister !== publicKey) {
       const succession = (body as Record<string, unknown>).succession as
         KeySuccessionRecord | undefined;
       if (!succession) {
@@ -1206,7 +1208,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       }
 
       // Verify the old key in the succession record matches the stored key
-      if (succession.old_public_key !== existingAgent.public_key) {
+      if (succession.old_public_key !== keyOnFileForRegister) {
         throw new HTTPException(400, {
           message: "Succession old_public_key does not match stored public key",
         });
@@ -1228,7 +1230,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
 
       logger.info("agent.key.succession_on_register", {
         motebitId,
-        oldKey: existingAgent.public_key.slice(0, 16) + "...",
+        oldKey: keyOnFileForRegister.slice(0, 16) + "...",
         newKey: publicKey.slice(0, 16) + "...",
         applied,
       });
@@ -1239,7 +1241,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         try {
           await insertRevocationEvent(moteDb.db, relayIdentity, "key_rotated", motebitId, {
             newPublicKey: publicKey,
-            revokedPublicKey: existingAgent.public_key,
+            revokedPublicKey: keyOnFileForRegister,
             // The old key ceased to be authoritative at the (guardian-attested)
             // rotation moment, not when the relay processed this registration —
             // anchor the revocation memo at the succession timestamp so the
@@ -1392,7 +1394,18 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // The key this door just proved (its own token, or the operator's) lands in
     // the ONE holder too (#703 Inc 2). A registration without a key (legacy
     // callers) proves nothing about the key and records nothing.
-    if (publicKey !== "") {
+    // Proven how: a differing key passed the succession check above (and
+    // applySuccession recorded it); the same key is a no-op refresh (guardian
+    // may update); a FIRST key is recorded only when the device rows do not
+    // contradict it — every keyed row holds it, or there are none (service
+    // mode). A key that some device row does not hold is not shown to be the
+    // identity's, so it is not recorded (D5).
+    if (
+      publicKey !== "" &&
+      (keyOnFileForRegister === publicKey ||
+        (keyOnFileForRegister === undefined &&
+          keyHeldByEveryDevice(moteDb.db, motebitId, publicKey)))
+    ) {
       recordIdentityKey(moteDb.db, {
         motebitId,
         publicKey,
