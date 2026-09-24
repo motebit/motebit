@@ -23,16 +23,25 @@ import type { SuccessionRecord } from "@motebit/crypto";
 import { buildIdentityLog } from "./identity-log.js";
 import type { AnchoredInclusion, IdentityBinding, IdentityBindingBundle } from "@motebit/protocol";
 import { getLatestAnchoredSnapshot } from "./identity-log-anchoring.js";
+import { identityKeyFor } from "./identity-keys.js";
 
 /** The relay's succession records are always under this suite (no per-row column). */
 const SUCCESSION_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
 
 /** Read every registered `motebit_id → current key` binding for the log. */
 export function readIdentityBindings(db: DatabaseDriver): IdentityBinding[] {
-  const rows = db.prepare("SELECT motebit_id, public_key FROM agent_registry").all() as Array<{
-    motebit_id: string;
-    public_key: string;
-  }>;
+  // The one holder (#703 Inc 2), plus any registry row it does not yet hold —
+  // a row planted before its door recorded the key, or a legacy registration
+  // without one. The holder's key wins where both exist.
+  const rows = db
+    .prepare(
+      `SELECT motebit_id, public_key FROM identity_keys
+       UNION ALL
+       SELECT r.motebit_id, r.public_key FROM agent_registry r
+        WHERE r.public_key != '' AND r.motebit_id NOT IN (SELECT motebit_id FROM identity_keys)
+       ORDER BY motebit_id`,
+    )
+    .all() as Array<{ motebit_id: string; public_key: string }>;
   return rows.map((r) => ({ motebit_id: r.motebit_id, public_key: r.public_key }));
 }
 
@@ -91,13 +100,15 @@ export async function buildIdentityBindingBundle(
   db: DatabaseDriver,
   motebitId: string,
 ): Promise<IdentityBindingBundle | null> {
-  const agent = db
-    .prepare(
-      "SELECT public_key, registered_at, guardian_public_key FROM agent_registry WHERE motebit_id = ?",
-    )
-    .get(motebitId) as
-    { public_key: string; registered_at: number; guardian_public_key: string | null } | undefined;
-  if (!agent) return null;
+  // The one resolver (#703 Inc 2): §7.6 now answers for every identity the
+  // relay holds a key for, not only the ones with a registry row.
+  const held = identityKeyFor(db, motebitId);
+  if (!held) return null;
+  const agent = {
+    public_key: held.publicKey,
+    registered_at: held.firstSeen,
+    guardian_public_key: held.guardianPublicKey,
+  };
 
   let anchored: AnchoredInclusion | null = null;
   const snapshot = getLatestAnchoredSnapshot(db);

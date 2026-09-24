@@ -52,6 +52,7 @@ const TABLES = [
   "devices",
   "relay_key_successions",
   "relay_revoked_credentials",
+  "identity_keys",
 ] as const;
 
 /** Columns that carry authority. An UPDATE touching none of these is routine. */
@@ -77,6 +78,14 @@ interface Writer {
  * still fails — which is exactly how #713 and #719 were added.
  */
 const WRITERS: readonly Writer[] = [
+  {
+    file: "services/relay/src/identity-keys.ts",
+    verb: "INSERT",
+    table: "identity_keys",
+    count: 2,
+    principal:
+      "two statements: `recordIdentityKey`, called by a door under its own registered principal, and the one-time migration backfill (IDENTITY_KEYS_BACKFILL_SQL, v42) that copies keys those doors already proved, only where unambiguous. The doors: /agents/register (the identity's token or the operator, and only a key the identity already holds or a succession from the key on file), the sovereign-signed /api/v1/devices/register-self, bootstrap of a NEW identity only (its first key, by construction), applySuccession (the verified link, from the key it retires, in its transaction), accept-migration (the sovereign binding verified in step (i)). The holder is written only AFTER a door has proven the key; this function proves nothing itself (#703 Inc 2)",
+  },
   {
     file: "services/relay/src/agents.ts",
     verb: "INSERT",
