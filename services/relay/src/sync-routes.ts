@@ -28,6 +28,7 @@ import { isSuiteId } from "@motebit/protocol";
 import { createLogger } from "./logger.js";
 import { refusePublicDeviceRegistration } from "./device-registration-guard.js";
 import type { ConnectedDevice } from "./index.js";
+import { recordIdentityKey } from "./identity-keys.js";
 
 const logger = createLogger({ service: "sync-routes" });
 
@@ -170,6 +171,15 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
       body.device_name,
       body.public_key,
     );
+    // register-self carries the identity key (F10): record it in the one holder (#703 Inc 2).
+    if (body.public_key) {
+      recordIdentityKey(deps.moteDb.db, {
+        motebitId: body.motebit_id,
+        publicKey: body.public_key,
+        source: "register-self",
+        now: Date.now(),
+      });
+    }
     return c.json(device, 201);
   });
 

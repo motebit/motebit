@@ -1,6 +1,6 @@
 # PROPOSAL — identity key state outlives the discovery row (DRAFT, not built)
 
-**Status:** DRAFT for design review, 2026-09-23; §10 DECIDED 2026-09-24 (founder delegated the three questions to PE judgement). **Increment 1 (§4) BUILT 2026-09-24** — `registry-delist.ts`, migration v41, gate #162; Increment 2 (§5) is not built.
+**Status:** DRAFT for design review, 2026-09-23; §10 DECIDED 2026-09-24 (founder delegated the three questions to PE judgement). **Increment 1 (§4) BUILT 2026-09-24** — `registry-delist.ts`, migration v41, gate #162 (#744). **Increment 2 (§5) PART A BUILT 2026-09-24** — `identity_keys` (migration v42, backfill; production count 50/50 unambiguous, 0 unfilled), `recordIdentityKey` at every door that proves a key, `identityKeyFor` the one resolver, the three named resolvers (auth's service fallback, verify-receipt, `keyOnFile`/`departureFrom`) and the identity log + §7.6 bundle on it. PART B not built: the remaining second-family readers (tasks.ts ×5, disputes.ts ×3, command-route, bond-store, device-registration-guard, federation-callbacks, index.ts, migration.ts ×3, key-rotation.ts recovery, trust-graph) and `check-identity-key-resolver`.
 **Author:** motebit PE
 **Closes when built:** #703 (a daemon shutdown discards the identity's guardian and key state)
 **Prerequisite for:** roster part B (the successor to withdrawn #698), then #691 / #687 / #681 — the roster's key model was found inert against production data because of exactly this conflation.

@@ -22,6 +22,7 @@ import type { TaskRouter } from "./task-routing.js";
 import { evaluateSettlementEligibility } from "./task-routing.js";
 import { REFERENCE_MIN_BONDED_SIGNAL_MICRO } from "./bond-store.js";
 import { ON_SHELF, delistRegistration } from "./registry-delist.js";
+import { identityKeyFor, recordIdentityKey } from "./identity-keys.js";
 
 /**
  * Fields the ORIGIN relay computes itself and MUST NOT accept from a federated
@@ -793,13 +794,12 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       return c.json({ valid: false, reason: "motebit_id mismatch" });
     }
 
-    // Resolve public key: agent_registry (service agents) > device records (personal agents)
+    // Resolve the key: the identity's key through the ONE resolver (#703 Inc 2),
+    // else the receipt's device row (a linked device signs with its own key).
     let pubKeyHex: string | undefined;
-    const regRow = moteDb.db
-      .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
-      .get(motebitId) as { public_key: string } | undefined;
-    if (regRow?.public_key) {
-      pubKeyHex = regRow.public_key;
+    const held = identityKeyFor(moteDb.db, motebitId);
+    if (held) {
+      pubKeyHex = held.publicKey;
     } else {
       const devices = await identityManager.listDevices(motebitId);
       const device =
@@ -1001,6 +1001,13 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         body.public_key,
         body.device_id,
       );
+      // The key bootstrap carries IS the identity key (F10) — record it in the one holder (#703 Inc 2).
+      recordIdentityKey(moteDb.db, {
+        motebitId,
+        publicKey: body.public_key,
+        source: "bootstrap",
+        now: Date.now(),
+      });
       return c.json(
         {
           motebit_id: motebitId,
@@ -1024,6 +1031,13 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       body.public_key,
       body.device_id,
     );
+    // The key bootstrap carries IS the identity key (F10) — record it in the one holder (#703 Inc 2).
+    recordIdentityKey(moteDb.db, {
+      motebitId,
+      publicKey: body.public_key,
+      source: "bootstrap",
+      now: Date.now(),
+    });
 
     return c.json(
       {
@@ -1375,6 +1389,19 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       );
 
     // Auto-create a default service listing if one doesn't exist.
+    // The key this door just proved (its own token, or the operator's) lands in
+    // the ONE holder too (#703 Inc 2). A registration without a key (legacy
+    // callers) proves nothing about the key and records nothing.
+    if (publicKey !== "") {
+      recordIdentityKey(moteDb.db, {
+        motebitId,
+        publicKey,
+        guardianPublicKey: guardianPublicKey ?? null,
+        source: "register",
+        now,
+      });
+    }
+
     // Registration populates agent_registry (for discovery); routing reads from
     // relay_service_listings. Without this, registered agents are discoverable
     // but never routed to — the scored routing loop finds zero candidates.

@@ -182,6 +182,7 @@ import {
   BridgeSettlementRail,
 } from "@motebit/settlement-rails";
 import { delistExpired } from "./registry-delist.js";
+import { identityKeyFor } from "./identity-keys.js";
 
 // === Re-exports for backward compatibility (tests and sibling modules import from index) ===
 
@@ -767,12 +768,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // auth.ts); bound once here and injected at every auth site so a service-mode
   // caller is verified uniformly rather than 401'd on the routes that happen to
   // omit the fallback.
-  const agentRegistryKeyLookup = (mid: string): string | null => {
-    const row = moteDb.db
-      .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
-      .get(mid) as { public_key?: string } | undefined;
-    return row?.public_key ?? null;
-  };
+  // The service-mode fallback for a token with no device row: the identity's
+  // key through the ONE resolver (#703 Inc 2), not a registry read of its own.
+  const agentRegistryKeyLookup = (mid: string): string | null =>
+    identityKeyFor(moteDb.db, mid)?.publicKey ?? null;
   const verifySignedTokenForDeviceWithFallback: typeof verifySignedTokenForDevice = (
     token,
     mid,

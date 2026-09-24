@@ -25,6 +25,7 @@
  */
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { KeySuccessionRecord } from "@motebit/encryption";
+import { recordIdentityKey } from "./identity-keys.js";
 
 interface ChainHead {
   old_public_key: string;
@@ -87,10 +88,16 @@ export interface KeyOnFile {
 }
 
 export function keyOnFile(db: DatabaseDriver, motebitId: string): KeyOnFile {
+  // The ONE holder answers first (#703 Inc 2); the registry and chain rungs
+  // stay named because a departure verdict reports which rung it used.
+  const held = db
+    .prepare("SELECT public_key FROM identity_keys WHERE motebit_id = ?")
+    .get(motebitId) as { public_key: string } | undefined;
   const row = db
     .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
     .get(motebitId) as { public_key: string | null } | undefined;
-  const registryKey = row?.public_key != null && row.public_key !== "" ? row.public_key : null;
+  const registryKey =
+    held?.public_key ?? (row?.public_key != null && row.public_key !== "" ? row.public_key : null);
   const chainHead = successionHead(db, motebitId)?.new_public_key ?? null;
   return { registryKey, chainHead, held: registryKey ?? chainHead };
 }
@@ -195,6 +202,13 @@ export function applySuccession(
     db.prepare(
       "UPDATE agent_registry SET public_key = ? WHERE motebit_id = ? AND (public_key = ? OR COALESCE(public_key, '') = '')",
     ).run(record.new_public_key, motebitId, record.old_public_key);
+    // The one holder moves with the chain, in the same transaction (#703 Inc 2).
+    recordIdentityKey(db, {
+      motebitId,
+      publicKey: record.new_public_key,
+      source: "succession",
+      now: Date.now(),
+    });
 
     // The chain grows unless this link is already its head. A lost response
     // and a retry must not append the same link twice: the chain is served
