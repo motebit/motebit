@@ -153,10 +153,16 @@ describe("worker self-auth — a service authenticates to its relay with its own
       headers: { Authorization: `Bearer ${await mint("admin:query")}` },
     });
     expect(dereg.status).toBe(200);
-    const gone = await relay.app.request(`/api/v1/agents/${motebitId}`, {
+    // Off the shelf — but not forgotten (#703): the row is delisted, not
+    // deleted, so the KEY reader the inbound verifier falls back to still
+    // answers, and discover no longer lists the worker.
+    const still = await relay.app.request(`/api/v1/agents/${motebitId}`, {
       headers: { Authorization: `Bearer ${await mint("admin:query")}` },
     });
-    expect(gone.status).toBe(404);
+    expect(still.status).toBe(200);
+    expect(((await still.json()) as { public_key: string }).public_key).toBe(pubKeyHex);
+    const shelf = await relay.app.request(`/api/v1/discover/${motebitId}`);
+    expect(((await shelf.json()) as { found: boolean }).found).toBe(false);
   });
 
   it("keeps audience binding strict on the self-registration family", async () => {
