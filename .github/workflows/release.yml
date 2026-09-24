@@ -351,3 +351,16 @@ jobs:
           node -e "import('./dist/index.js').then(m => { if (!Array.isArray(m.default) || m.default.length === 0) { console.error('agent import returned no tools'); process.exit(1); } console.log('agent imports clean,', m.default.length, 'tools exported'); }).catch(e => { console.error('agent import failed:', e.message); process.exit(1); })"
 
           echo "Smoke tests passed."
+
+      # The claim the "Nothing to publish" branch above makes — "every
+      # workspace package.json matches npm" — verified against the registry,
+      # on EVERY path this workflow takes. From 2026-08-21 to 2026-09-23 that
+      # branch printed it on six weeks of runs while twelve packages sat
+      # unpublished (the token had expired; the one real attempt failed
+      # E404). No grace here: this run IS the publish, and propagation was
+      # already waited for above. The daily publish-freshness.yml is the
+      # same assertion from the other side, for the days no release runs.
+      - name: Registry matches main (publish-freshness, no grace)
+        env:
+          PUBLISH_FRESHNESS_HOURS: "0"
+        run: npx tsx scripts/check-publish-freshness.ts --require-registry
