@@ -411,4 +411,221 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE agent_trust ADD COLUMN capability_stats TEXT",
     ],
   },
+  {
+    version: 43,
+    description: "goal_runs ledger + approval_queue.args_json — durable unattended execution",
+    statements: [
+      // Durable execution for the daemon scheduler. A goal RUN is now a
+      // persisted row with a lifecycle (running → awaiting_approval /
+      // completed / failed / interrupted) so a process death leaves an
+      // honest record instead of an in-memory map. On restart the
+      // scheduler marks `running` rows `interrupted`, derives the actions
+      // whose external effect is unknown from the tool audit log
+      // (decision row, no completion row) and HOLDS the goal until a
+      // human acknowledges — never silently repeating completed actions,
+      // never retrying an uncertain one. Local private state, never on
+      // the wire.
+      `CREATE TABLE IF NOT EXISTS goal_runs (
+        run_id TEXT PRIMARY KEY,
+        goal_id TEXT NOT NULL,
+        motebit_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        approval_id TEXT,
+        started_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        completed_actions INTEGER NOT NULL DEFAULT 0,
+        uncertain_actions TEXT,
+        reviewed_at INTEGER,
+        note TEXT
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_goal_runs_goal ON goal_runs (goal_id, started_at)",
+      "CREATE INDEX IF NOT EXISTS idx_goal_runs_motebit_status ON goal_runs (motebit_id, status)",
+      // The full argument set of a paused tool call. `args_preview` (500
+      // chars) was enough to SHOW a human what they were approving; it is
+      // not enough to EXECUTE exactly what they approved once the paused
+      // turn is gone (daemon restart). NULL on rows written before this
+      // migration — the scheduler refuses to execute those post-restart
+      // rather than guess.
+      "ALTER TABLE approval_queue ADD COLUMN args_json TEXT",
+    ],
+  },
+  {
+    version: 44,
+    description: "halt_state — durable withdrawal of unattended autonomy",
+    statements: [
+      // A halt is state, not a message: a message a stopped process never
+      // receives is not a stop, and a stop a restart forgets is not a stop.
+      // `acknowledged_at` is deliberately separate from `requested_at` —
+      // a daemon that is offline has been ASKED to stop and has not
+      // stopped, and no surface may render the first as the second.
+      // `goal_id` NULL = every goal. Local private state, never on a wire.
+      `CREATE TABLE IF NOT EXISTS halt_state (
+        halt_id TEXT PRIMARY KEY,
+        motebit_id TEXT NOT NULL,
+        goal_id TEXT,
+        requested_at INTEGER NOT NULL,
+        origin TEXT NOT NULL,
+        reason TEXT,
+        acknowledged_at INTEGER,
+        acknowledgement TEXT,
+        lifted_at INTEGER
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_halt_state_active ON halt_state (motebit_id, lifted_at)",
+    ],
+  },
+  {
+    version: 45,
+    description: "command_replay — shared replay memory for signed remote commands",
+    statements: [
+      // An in-memory guard is per-process, and a machine can run both
+      // `motebit run` and `motebit serve` — two peers announcing the
+      // same capability, either of which the relay may pick. A replayed
+      // `resume` landing on the sibling would lift a halt the sovereign
+      // had just applied, which is the act the guard exists to prevent.
+      // Shared and durable for the same reason the halt itself is.
+      // Rows live only as long as the envelope's freshness window;
+      // outside it the verifier has already refused the envelope.
+      `CREATE TABLE IF NOT EXISTS command_replay (
+        signature TEXT PRIMARY KEY,
+        seen_at INTEGER NOT NULL
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_command_replay_seen ON command_replay (seen_at)",
+    ],
+  },
+  {
+    version: 46,
+    description: "halt_acknowledgement — one row per executor, not one per halt",
+    statements: [
+      // `halt_state.acknowledged_at` modelled "the motebit stopped" as a
+      // single fact, but several processes can run unattended work for
+      // one motebit (`motebit run` + `motebit serve`, same machine, same
+      // database). The first to acknowledge marked the halt honored for
+      // all of them; every other process then skipped it and kept
+      // working while the surface reported "Stopped". Acknowledgement is
+      // per executor because stopping is.
+      `CREATE TABLE IF NOT EXISTS halt_acknowledgement (
+        halt_id TEXT NOT NULL,
+        executor_id TEXT NOT NULL,
+        acknowledged_at INTEGER NOT NULL,
+        acknowledgement TEXT NOT NULL,
+        PRIMARY KEY (halt_id, executor_id)
+      )`,
+    ],
+  },
+  {
+    version: 47,
+    description:
+      "run_evidence + signed/complete goal results — what a returning owner can re-check",
+    statements: [
+      // The sibling artifact `PolicyGate.recordResult`'s contract names:
+      // a pointer to evidence from the affected system, never inferred
+      // from the tool's own verdict. One row per content-addressed read,
+      // written by the fetch itself — so a span nobody retrieved cannot
+      // be in here, whatever a later summary says.
+      //
+      // `span` is bounded at the producer; a prefix of a substring is
+      // still a substring, so the re-check law is unaffected and the
+      // retrieved document never lands in a store it was not admitted
+      // to. `projection` absent means the span sits over the raw bytes
+      // directly; absent `projection_class` means spec-reproducible,
+      // which is the strong rung — the weak one is opt-in and can never
+      // be claimed by omission.
+      `CREATE TABLE IF NOT EXISTS run_evidence (
+        evidence_id TEXT PRIMARY KEY,
+        run_id TEXT,
+        turn_id TEXT NOT NULL,
+        call_id TEXT NOT NULL,
+        tool TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        ref TEXT NOT NULL,
+        digest_algorithm TEXT,
+        digest_value TEXT,
+        projection TEXT,
+        projection_class TEXT,
+        span TEXT,
+        locator_start INTEGER,
+        locator_end INTEGER,
+        recorded_at INTEGER NOT NULL,
+        -- Null by default, and honestly so: nothing classifies content
+        -- fetched from somewhere else. The flush lazy-classifies a null
+        -- to the operator's declared default tier, exactly as it does
+        -- for the sibling audit rows. The column exists so a classifier
+        -- has somewhere to write when one arrives, and so this store's
+        -- at-rest shape matches the consolidation_flush contract it
+        -- declares rather than quietly diverging from it.
+        sensitivity TEXT,
+        -- Set when this row records a REFUSAL rather than a pointer: the
+        -- tool retrieved something and the credential guard would not
+        -- keep it. Such a row carries no digest, no span and no source,
+        -- so a withheld pointer is distinguishable from a tool that
+        -- never retrieved anything -- two absences that meant the same
+        -- thing to every reader until now.
+        withheld_reason TEXT
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_run_evidence_run ON run_evidence (run_id, recorded_at)",
+      "CREATE INDEX IF NOT EXISTS idx_run_evidence_call ON run_evidence (call_id)",
+      // The horizon sweep selects on `recorded_at` alone; neither index
+      // above leads on it, so every consolidation cycle full-scanned the
+      // table. Bounded by the horizon, so it degraded quietly rather
+      // than failing — which is the kind of cost that never gets found.
+      "CREATE INDEX IF NOT EXISTS idx_run_evidence_recorded ON run_evidence (recorded_at)",
+      // Parity with desktop and mobile, which added both columns in
+      // their own per-surface registries. The shared schema — the one
+      // the CLI daemon uses, the surface that actually runs goals
+      // unattended — never did, so the daemon kept a 500-character
+      // summary and discarded the artifact it had just produced. A
+      // result that is not kept whole cannot be signed, and a result
+      // that is not signed is the motebit's word for what it did.
+      "ALTER TABLE goal_outcomes ADD COLUMN response_full TEXT",
+      "ALTER TABLE goal_outcomes ADD COLUMN signed_manifest TEXT",
+      // The link from an outcome to the run that produced it, as a
+      // FIELD rather than an id-equality convention.
+      //
+      // The live paths key `outcome_id = run_id`; the recovery paths
+      // deliberately mint a fresh id, because a death between their
+      // write and the run-status transition must not let their row
+      // REPLACE a genuine outcome. Both are right, and together they
+      // meant a reader could only find half the outcomes from a run —
+      // so `runs show` reported "the run did not reach an outcome row"
+      // for exactly the interrupted and recovered runs it exists to
+      // explain. A column serves both: unique ids where they are needed,
+      // and one way to ask.
+      "ALTER TABLE goal_outcomes ADD COLUMN run_id TEXT",
+      "CREATE INDEX IF NOT EXISTS idx_goal_outcomes_run ON goal_outcomes (run_id)",
+    ],
+  },
+  {
+    version: 48,
+    description: "runtime_liveness — when the daemon was actually awake",
+    statements: [
+      // The record that lets a LATE goal say why.
+      //
+      // `GoalScheduler` fires on `elapsed >= interval_ms`, so a daily
+      // goal whose machine slept from 01:00 to 09:00 does not fail — it
+      // fires at 09:00, six hours late, and nothing anywhere says the
+      // motebit was not running. That is a record untrue by omission,
+      // the same class this arc has been removing, arriving through the
+      // host layer instead of the routing layer.
+      //
+      // One row per PROCESS-RUN, not per machine and not per motebit: a
+      // machine's coverage is the union of its processes' intervals, and
+      // a restart is a new row rather than an edit, so a gap between
+      // sessions is visible instead of being smoothed over by a bumped
+      // timestamp. `last_seen_at` is refreshed on the scheduler's tick,
+      // which is why a gap shorter than a couple of ticks is not a gap —
+      // see `LIVENESS_TICK_TOLERANCE_MS` at the reader.
+      `CREATE TABLE IF NOT EXISTS runtime_liveness (
+        session_id TEXT PRIMARY KEY,
+        motebit_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        executor TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL
+      )`,
+      // Keyed on `last_seen_at` because that is what the window read
+      // filters on first; an index on `started_at` alone cannot serve
+      // it and every coverage read scans the table.
+      "CREATE INDEX IF NOT EXISTS idx_runtime_liveness_window ON runtime_liveness (motebit_id, last_seen_at)",
+    ],
+  },
 ];

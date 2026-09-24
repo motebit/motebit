@@ -23,8 +23,11 @@ DELETE /sessions/:id             — tear down a session
 GET    /health                   — liveness check (unauth)
 ```
 
-Auth: `Authorization: Bearer $MOTEBIT_API_TOKEN` on every authed
-route.
+Auth: `Authorization: Bearer <relay-signed sandbox token>` on every
+authed route — an audience-bound token (`aud: "browser-sandbox"`) the
+motebit's relay mints against the motebit's own signed grant, verified
+here against the pinned `MOTEBIT_TRUSTED_RELAY_PUBKEY`. The v1 shared
+bearer was retired 2026-09-14; there is no second path.
 
 ## v1 limits
 
@@ -34,20 +37,16 @@ route.
   The reaper skips sessions with in-flight actions, so a slow action
   whose runtime exceeds the idle window is not torn down
   mid-execution.
-- **Single-tenant deployment boundary.** v1 auth is one shared bearer
-  token (`MOTEBIT_API_TOKEN`) across all callers. Session IDs are
-  128-bit random and unguessable, but the shared bearer is **not** a
-  per-motebit cryptographic authorization layer — anyone holding the
-  token plus a valid session id can act on that session. Practical
-  isolation in v1 rests on session-id obscurity + transport-layer
-  trust, not cryptographic per-motebit scoping.
-
-  **Operational rule:** until audience-bound, per-motebit signed
-  tokens land (the relay's `aud: "browser-sandbox"` model with a
-  `motebit_id` claim), run **one service per motebit** — or per
-  same-operator deployment — and treat the service as a single-tenant
-  boundary. Multi-tenant production exposure is gated on the JWT
-  graduation, not on slice 3's web wiring.
+- **Per-motebit authorization, enforced.** Every request carries a
+  relay-signed token whose `mid` claim names the calling motebit; a
+  session belongs to the motebit that opened it, and every per-session
+  route (`actions`, `read-page`, `forward-input`, `screencast`,
+  `keepalive`, `DELETE`) refuses any other motebit's token with
+  `permission_denied` — knowing a session id is not authorization.
+  One session per motebit (`ensure` dedups); the concurrent cap counts
+  motebits, not tabs. The old "single-tenant boundary" caveat is gone:
+  multi-tenant exposure is now a capacity and product decision, not a
+  security one.
 
 ## Where to read more
 

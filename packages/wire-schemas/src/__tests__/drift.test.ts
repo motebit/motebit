@@ -47,7 +47,17 @@ import {
   buildAgentRevocationRecordJsonSchema,
   buildAgentRevocationFeedJsonSchema,
 } from "../agent-revocation.js";
+import {
+  IDENTITY_BINDING_BUNDLE_SCHEMA_ID,
+  buildIdentityBindingBundleJsonSchema,
+} from "../identity-binding.js";
 import { BOND_COMMITMENT_SCHEMA_ID, buildBondCommitmentJsonSchema } from "../bond.js";
+import {
+  HOST_ENROLLMENT_SCHEMA_ID,
+  HOST_RETIREMENT_SCHEMA_ID,
+  buildHostEnrollmentJsonSchema,
+  buildHostRetirementJsonSchema,
+} from "../host-roster.js";
 import {
   EVIDENCE_PROVENANCE_SCHEMA_ID,
   buildEvidenceProvenanceJsonSchema,
@@ -746,10 +756,28 @@ const CASES: SchemaCase[] = [
     build: buildAgentRevocationFeedJsonSchema,
   },
   {
+    name: "identity-binding-bundle-v1",
+    filename: "identity-binding-bundle-v1.json",
+    expectedId: IDENTITY_BINDING_BUNDLE_SCHEMA_ID,
+    build: buildIdentityBindingBundleJsonSchema,
+  },
+  {
     name: "bond-commitment-v1",
     filename: "bond-commitment-v1.json",
     expectedId: BOND_COMMITMENT_SCHEMA_ID,
     build: buildBondCommitmentJsonSchema,
+  },
+  {
+    name: "host-enrollment-v1",
+    filename: "host-enrollment-v1.json",
+    expectedId: HOST_ENROLLMENT_SCHEMA_ID,
+    build: buildHostEnrollmentJsonSchema,
+  },
+  {
+    name: "host-retirement-v1",
+    filename: "host-retirement-v1.json",
+    expectedId: HOST_RETIREMENT_SCHEMA_ID,
+    build: buildHostRetirementJsonSchema,
   },
   {
     name: "evidence-provenance-v1",

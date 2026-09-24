@@ -11,11 +11,28 @@
  * `MotebitRuntime.signGoalArtifact(content, { goalId, runId })`.
  *
  * The Phase-3 close (2026-05-14: commits 2428248a → 347b8461 →
- * 8b547f3f → 714d7e38) wired this call on all three flat surfaces:
+ * 8b547f3f → 714d7e38) wired this call on the three flat surfaces:
  *
  *   - `apps/web/src/goal-scheduler.ts`
  *   - `apps/desktop/src/goal-scheduler.ts`
  *   - `apps/mobile/src/goal-scheduler.ts`
+ *
+ * APERTURE — read this before trusting a green run. This gate checks
+ * the files in `REGISTERED_GOAL_RUNNERS` and nothing else, so its
+ * green says "every goal-runner I was told about signs", never "every
+ * goal-runner signs". It said the first while meaning the second for
+ * four months: `apps/cli/src/scheduler.ts` — the daemon, the ONLY
+ * surface that fires goals with nobody watching — was in neither the
+ * registry nor the allowlist. It signed nothing, kept a 500-character
+ * summary, and discarded the artifact, while this gate printed that
+ * every registered runner signs and the doctrine memo said Phase 3
+ * shipped "across all surfaces". A scanning gate cannot go red about
+ * a file it never opens, so the fix for a narrow aperture is to widen
+ * the scan, never to disclose a narrower number.
+ *
+ * Adding a goal-fire loop to a surface means adding it here in the
+ * same change. That obligation is the gate; the string match is only
+ * how it is checked.
  *
  * Without this gate, a refactor that drops the call from one surface
  * (or a new surface that adds a goal-fire loop without calling
@@ -59,6 +76,11 @@ const REGISTERED_GOAL_RUNNERS: ReadonlyArray<{
   { path: "apps/web/src/goal-scheduler.ts", surface: "web" },
   { path: "apps/desktop/src/goal-scheduler.ts", surface: "desktop" },
   { path: "apps/mobile/src/goal-scheduler.ts", surface: "mobile" },
+  // The daemon. Registered 2026-09-16, four months after the gate
+  // claimed to cover every goal-runner — it runs goals unattended,
+  // which is precisely where an unsigned result has nobody present to
+  // have seen otherwise.
+  { path: "apps/cli/src/scheduler.ts", surface: "cli daemon" },
 ];
 
 /**

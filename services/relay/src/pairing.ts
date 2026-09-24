@@ -7,12 +7,15 @@
 import type { Hono } from "hono";
 import type { TokenAudience } from "@motebit/protocol";
 import { HTTPException } from "hono/http-exception";
+import { createLogger } from "./logger.js";
 import type { IdentityManager } from "@motebit/core-identity";
 
 // --- Pairing Code Generator ---
 
 const PAIRING_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // 30 chars, no ambiguous 0/O/1/I/L
 const PAIRING_CODE_LENGTH = 6;
+const logger = createLogger({ service: "relay", module: "pairing" });
+
 const PAIRING_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 function generatePairingCode(): string {
@@ -30,6 +33,7 @@ export interface PairingDeps {
     prepare(sql: string): { run(...args: unknown[]): void; get(...args: unknown[]): unknown };
     exec(sql: string): void;
   };
+
   app: Hono;
   apiToken: string | undefined;
   identityManager: IdentityManager;
@@ -385,7 +389,7 @@ export function registerPairingRoutes(deps: PairingDeps): void {
     const session = db
       .prepare(
         `
-      SELECT pairing_id, status, approved_device_id, motebit_id FROM pairing_sessions WHERE pairing_id = ?
+      SELECT pairing_id, status, approved_device_id, motebit_id, key_transfer_payload FROM pairing_sessions WHERE pairing_id = ?
     `,
       )
       .get(pairingId) as Record<string, unknown> | undefined;
@@ -405,6 +409,61 @@ export function registerPairingRoutes(deps: PairingDeps): void {
     const device = await identityManager.getDevice(deviceId);
     if (!device) {
       throw new HTTPException(404, { message: "Approved device not found in identity store" });
+    }
+
+    // This route takes no bearer — it is reached by whoever completed the
+    // pairing — so what it may WRITE is the whole of its safety. A device
+    // row's `public_key` is what an owner token is verified against, so
+    // writing an arbitrary key here mints that identity's tokens.
+    //
+    // The transfer's own meaning bounds it: device B receives the
+    // identity's SEED, so the only key it can honestly present is one this
+    // identity already holds. Checked against the rows in the same tick as
+    // the write.
+    // The key the approving device SAID it was transferring, captured at
+    // approve time. That is the exact key device B must end up holding,
+    // and — unlike the live rows — nothing that happens between approve
+    // and here can invalidate it. Every client writes the transferred seed
+    // to its keyring BEFORE calling this, so a refusal that depends on
+    // rows the relay may have since dropped would strand the device
+    // holding a seed whose key the relay no longer recognises.
+    // This route COMPLETES an approved key transfer, so the only key it
+    // may write is the one that transfer was approved to carry — captured
+    // at approve time and matched exactly, because the spelling is what
+    // every later comparison uses. Where no transfer was approved there is
+    // nothing to complete, and the route writes nothing: falling back to
+    // "any key this identity holds" would let whoever has the pairing id
+    // put the APPROVING device's key onto the approved device's row, so
+    // that device holds a private key the relay no longer recognises —
+    // a bearer-less lockout of a just-paired device.
+    //
+    // Bounded to one predetermined key, the pairing id stops being a
+    // standing credential without a single-use flag: re-presenting it
+    // writes the same key again. That matters — a single-use flag would
+    // have to live in `status`, whose published values the clients switch
+    // on, and it would turn a retry after a lost response into a refusal.
+    const motebitId = session.motebit_id as string;
+    let transferred: string | null = null;
+    if (session.key_transfer_payload != null) {
+      try {
+        const kt = JSON.parse(session.key_transfer_payload as string) as Record<string, unknown>;
+        if (typeof kt.identity_pubkey_check === "string") transferred = kt.identity_pubkey_check;
+      } catch {
+        /* a payload this relay cannot read approves nothing */
+      }
+    }
+    if (transferred == null || transferred !== body.public_key) {
+      logger.warn("pairing.update_key.refused", {
+        pairingId,
+        motebitId,
+        reason: transferred == null ? "no_key_transfer_approved" : "not_the_approved_key",
+      });
+      throw new HTTPException(403, {
+        message:
+          transferred == null
+            ? "update-key completes a key transfer, and this session approved none"
+            : "update-key writes only the key this transfer was approved to carry",
+      });
     }
 
     await identityManager.updateDevicePublicKey(deviceId, body.public_key);

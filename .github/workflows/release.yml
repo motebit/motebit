@@ -66,7 +66,7 @@ jobs:
       # GITHUB_TOKEN on *both* checkout and env and tags still didn't push.
       # The real causes were the shallow clone and bulk `git push --tags`
       # (fixed via fetch-depth: 0 below + per-tag push in direct-publish).
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history + all tags. changesets/action requires this, and its
           # absence is why tag pushing broke: in the default shallow clone
@@ -75,7 +75,7 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
 
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v4
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
@@ -83,6 +83,20 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           cache: pnpm
 
+      # npm trusted publishing (OIDC): the runner proves it is THIS repo's
+      # release.yml to the registry and gets a short-lived publish credential
+      # in exchange — no token to mint, rotate, or let expire. The one that
+      # expired on 2026-08-21 went unnoticed for six weeks (#741). Every publish
+      # below reaches npm through the npm CLI (`pnpm publish` shells out to
+      # it), and only npm >= 11.5.1 speaks OIDC; Node 22 ships npm 10, so the
+      # CLI is upgraded here. Requires `id-token: write` on the job (above) and
+      # a Trusted Publisher entry on each package at npmjs.com naming
+      # motebit/motebit + release.yml. NO NODE_AUTH_TOKEN anywhere in this job:
+      # when a token is present the CLI uses it and never attempts OIDC.
+      - name: npm that speaks trusted publishing (OIDC)
+        run: |
+          npm install -g npm@^11
+          npm --version
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -242,7 +256,6 @@ jobs:
           createGithubReleases: true
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
 
       # Fires in state 3 (all-ignored changesets accumulating), which is the
@@ -304,7 +317,6 @@ jobs:
             echo "Nothing to publish — every workspace package.json matches npm."
           fi
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
 
@@ -351,3 +363,24 @@ jobs:
           node -e "import('./dist/index.js').then(m => { if (!Array.isArray(m.default) || m.default.length === 0) { console.error('agent import returned no tools'); process.exit(1); } console.log('agent imports clean,', m.default.length, 'tools exported'); }).catch(e => { console.error('agent import failed:', e.message); process.exit(1); })"
 
           echo "Smoke tests passed."
+
+      # The claim the "Nothing to publish" branch above makes — "every
+      # workspace package.json matches npm" — verified against the registry,
+      # on EVERY path this workflow takes. From 2026-08-21 to 2026-09-23 that
+      # branch printed it on six weeks of runs while twelve packages sat
+      # unpublished (the token had expired; the one real attempt failed
+      # E404). No grace here: this run IS the publish, and propagation was
+      # already waited for above. The daily publish-freshness.yml is the
+      # same assertion from the other side, for the days no release runs.
+      # …read against the COMMIT THAT WAS PUSHED, not the working tree: in
+      # version mode the changesets action runs `pnpm version-packages` right
+      # here, bumping every manifest for the Version Packages branch, and the
+      # first five runs of this step read those bumps as "main is a patch ahead
+      # of npm" (2026-09-24, five red runs, nothing actually unpublished). The
+      # manifests are restored from the pushed sha first.
+      - name: Registry matches main (publish-freshness, no grace)
+        env:
+          PUBLISH_FRESHNESS_HOURS: "0"
+        run: |
+          git checkout -q "${{ github.sha }}" -- pnpm-workspace.yaml packages apps services
+          npx tsx scripts/check-publish-freshness.ts --require-registry

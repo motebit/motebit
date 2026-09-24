@@ -12,7 +12,12 @@
  * MCP server wiring) to `@motebit/molecule-runner`.
  */
 
-import { buildServiceReceipt, runMolecule } from "@motebit/molecule-runner";
+import {
+  buildServiceReceipt,
+  runMolecule,
+  createProviderReadiness,
+  makeAuthTokenMinter,
+} from "@motebit/molecule-runner";
 import type { ExecutionReceipt } from "@motebit/molecule-runner";
 import { InMemoryToolRegistry } from "@motebit/tools";
 import type { ToolDefinition, ToolHandler } from "@motebit/tools";
@@ -92,6 +97,29 @@ async function main(): Promise<void> {
   // signal before any prod price change.
   const unitCost = parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.25");
 
+  // Readiness: detected passively from real task failures (free), recovered
+  // actively by the cheapest possible provider round-trip — one token, and only
+  // while already dark, since no tasks arrive to prove recovery on their own.
+  const readiness = createProviderReadiness({
+    probe: async () => {
+      const resp = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": config.anthropicApiKey ?? "",
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 1,
+          messages: [{ role: "user", content: "." }],
+        }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      return resp.ok;
+    },
+  });
+
   await runMolecule(
     {
       dataDir: config.dataDir,
@@ -102,10 +130,18 @@ async function main(): Promise<void> {
       serviceDescription:
         "Web research agent — investigates a question via motebit's web-search and read-url atoms, returns a synthesized report with a verifiable citation chain (signed delegation_receipts)",
       capabilities: ["research"],
-      ...(config.authToken != null ? { authToken: config.authToken } : {}),
+      // No static inbound bearer: callers present a motebit signed token (the
+      // relay's per-task dispatch token, or a caller-signed token) or are
+      // refused. Until 2026-09-15 the deploy script set MOTEBIT_AUTH_TOKEN to the
+      // relay OPERATOR's master token on every worker — a second copy of the
+      // secret #649 retired.
       ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
-      ...(config.apiToken != null ? { apiToken: config.apiToken } : {}),
       ...(config.publicUrl != null ? { publicUrl: config.publicUrl } : {}),
+      ...(config.relayPublicKey != null ? { relayPublicKeyHex: config.relayPublicKey } : {}),
+      // Task admission — this molecule spends on inference, so it runs only
+      // relay-admitted work (docs/doctrine/task-admission.md). Escape hatch
+      // for an operator who must reopen it: MOTEBIT_TASK_ADMISSION=open.
+      taskAdmission: process.env["MOTEBIT_TASK_ADMISSION"] === "open" ? "open" : "relay",
       // Inc 2b — paid sub-delegation seam, opt-in via env. When BOTH the Solana
       // RPC and the pinned relay key are set, the Researcher pays priced atoms
       // P2P from its own wallet under a self-issued grant; absent ⇒ no spend
@@ -143,9 +179,10 @@ async function main(): Promise<void> {
         callerMotebitId: motebitId,
         callerDeviceId: deviceId,
         callerPrivateKey: privateKey,
+        // Relay budget binding signs as THIS molecule — never an operator secret.
+        mintRelayToken: makeAuthTokenMinter(identity),
         maxToolCalls: config.maxToolCalls,
         ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
-        ...(config.apiToken != null ? { apiToken: config.apiToken } : {}),
         ...(config.webSearchTargetId != null
           ? { webSearchTargetId: config.webSearchTargetId }
           : {}),
@@ -219,6 +256,8 @@ async function main(): Promise<void> {
           log(
             `research complete: ${r.report.length} chars, ${r.recall_self_count} interior, ${r.search_count} searches, ${r.fetch_count} fetches, ${r.citations.length} citations, report_cost_estimate_usd=${r.cost_estimate_usd.toFixed(4)}`,
           );
+          // A completed research turn is the strongest readiness evidence there is.
+          readiness.recordSuccess();
           delegationReceipts = r.delegation_receipts as unknown as Record<string, unknown>[];
           // The wire payload now carries the citation list. Interior
           // citations are self-attested (no receipt_task_id); web
@@ -249,6 +288,19 @@ async function main(): Promise<void> {
           };
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
+          // The refusal is signed into the receipt either way — but a receipt
+          // is read by the BUYER, not by the operator tailing these logs. With
+          // no log here the success path printed "research complete: …" and the
+          // failure path printed nothing at all, so a dead service looked like
+          // a quiet one: six nights of staging conformance red (2026-08-27 →
+          // 09-01) with the cause ("credit balance is too low") visible only to
+          // whoever thought to fetch the stored receipt off the relay. An
+          // honest failure must be as loud in the log as an honest success.
+          log(`research FAILED: ${msg}`);
+          // Feed the real failure to the readiness tracker. A durable operator
+          // condition (exhausted credit, revoked key) stops this agent
+          // advertising rather than letting it keep selling refusals (#610).
+          readiness.recordFailure(msg);
           result = { ok: false, error: msg };
         }
 
@@ -282,6 +334,7 @@ async function main(): Promise<void> {
       return {
         toolRegistry: registry,
         handleAgentTask,
+        checkReadiness: () => readiness.check(),
         getServiceListing: () =>
           Promise.resolve({
             capabilities: ["research"],

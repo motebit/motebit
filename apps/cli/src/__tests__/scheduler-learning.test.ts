@@ -131,6 +131,14 @@ function createMockRuntime(
         eventsAppended.push({ event_type: "goal_removed", payload });
       }),
     },
+    // Halt contract (increment 2): a mock runtime that does not answer
+    // these makes the scheduler's halt checks throw. Never halted here.
+    onHalt: () => () => undefined,
+    halts: null,
+    haltInForce: () => null,
+    honorHalts: async () => [],
+    liftHalt: async () => false,
+    setGoalIdResolver: vi.fn(),
     setGoalStatusResolver: vi.fn(),
     memory: memoryGraph,
     getToolRegistry: vi.fn().mockReturnValue({
@@ -212,6 +220,8 @@ describe("GoalScheduler — learning loop", () => {
         moteDb.goalStore,
         moteDb.approvalStore,
         moteDb.goalOutcomeStore,
+        moteDb.goalRunStore,
+        moteDb.toolAuditSink,
         "mote-test",
         RiskLevel.R3_EXECUTE,
       );
@@ -242,6 +252,8 @@ describe("GoalScheduler — learning loop", () => {
         moteDb.goalStore,
         moteDb.approvalStore,
         moteDb.goalOutcomeStore,
+        moteDb.goalRunStore,
+        moteDb.toolAuditSink,
         "mote-test",
         RiskLevel.R3_EXECUTE,
       );
@@ -317,6 +329,8 @@ describe("GoalScheduler — learning loop", () => {
         moteDb.goalStore,
         moteDb.approvalStore,
         moteDb.goalOutcomeStore,
+        moteDb.goalRunStore,
+        moteDb.toolAuditSink,
         "mote-test",
         RiskLevel.R3_EXECUTE,
       );
@@ -392,6 +406,8 @@ describe("GoalScheduler — learning loop", () => {
         moteDb.goalStore,
         moteDb.approvalStore,
         moteDb.goalOutcomeStore,
+        moteDb.goalRunStore,
+        moteDb.toolAuditSink,
         "mote-test",
         RiskLevel.R3_EXECUTE,
       );
@@ -468,6 +484,8 @@ describe("GoalScheduler — learning loop", () => {
         moteDb.goalStore,
         moteDb.approvalStore,
         moteDb.goalOutcomeStore,
+        moteDb.goalRunStore,
+        moteDb.toolAuditSink,
         "mote-test",
         RiskLevel.R3_EXECUTE,
       );
@@ -521,6 +539,8 @@ describe("GoalScheduler — learning loop", () => {
         moteDb.goalStore,
         moteDb.approvalStore,
         moteDb.goalOutcomeStore,
+        moteDb.goalRunStore,
+        moteDb.toolAuditSink,
         "mote-test",
         RiskLevel.R3_EXECUTE,
       );
@@ -567,6 +587,8 @@ describe("GoalScheduler — learning loop", () => {
         moteDb.goalStore,
         moteDb.approvalStore,
         moteDb.goalOutcomeStore,
+        moteDb.goalRunStore,
+        moteDb.toolAuditSink,
         "mote-test",
         RiskLevel.R3_EXECUTE,
       );

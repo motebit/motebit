@@ -6,11 +6,11 @@ import * as path from "node:path";
 import {
   MotebitRuntime,
   NullRenderer,
-  executeCommand,
+  CommandReplayGuard,
+  type CommandReplayStore,
   cmdSelfTest,
   PLANNING_TASK_ROUTER,
   createRelayCapabilitiesFetcher,
-  verifyAgentCommandEnvelope,
 } from "@motebit/runtime";
 import type { MintToken } from "@motebit/runtime";
 import { buildHardwareVerifiers } from "@motebit/verify";
@@ -53,7 +53,11 @@ import { applyMotebitYaml, resolveYamlPath } from "./subcommands/up.js";
 import { formatDiagnostic } from "./yaml-config.js";
 import type { CliConfig } from "./args.js";
 import { loadFullConfig, extractPersonality } from "./config.js";
+import { createRunLedgerReader } from "./run-ledger-reader.js";
+import { LIVENESS_SESSION_GAP_MS } from "./runtime-coverage.js";
+import { handleRelayCommandFrame } from "./relay-command-frame.js";
 import { fromHex, loadActiveSigningKey, IdentityKeyError } from "./identity.js";
+import { registerWithRelay, type RelayRegistrationHandle } from "./relay-registration.js";
 import {
   electAttachOrCoordinate,
   electCoordinatorRole,
@@ -68,50 +72,23 @@ import {
 } from "./runtime-factory.js";
 
 /**
- * Publish a service listing with pricing after relay registration.
- * Shared by handleRun and handleServe — avoids duplication.
+ * Per-process replay memory for remote commands. The daemon is the only
+ * surface the relay routes the mutating verbs to, so this is where a
+ * replayed envelope has to be caught.
  */
-async function publishServiceListing(
-  syncUrl: string,
-  motebitId: string,
-  headers: Record<string, string>,
-  toolNames: string[],
-  priceStr: string | undefined,
-  description: string,
-  log: (msg: string) => void = console.log,
-): Promise<void> {
-  const raw = priceStr ?? process.env["MOTEBIT_PRICE"];
-  if (!raw) return;
+const commandReplayGuard = new CommandReplayGuard();
 
-  const unitCost = parseFloat(raw);
-  if (isNaN(unitCost) || unitCost <= 0) {
-    log(`Warning: --price "${raw}" is not a valid positive number — earning disabled`);
-    return;
-  }
-
-  try {
-    const resp = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/listing`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        capabilities: toolNames,
-        pricing: toolNames.map((cap) => ({
-          capability: cap,
-          unit_cost: unitCost,
-          currency: "USD",
-          per: "task",
-        })),
-        sla: { max_latency_ms: 60_000, availability_guarantee: 0.95 },
-        description,
-      }),
-    });
-    if (resp.ok) {
-      log(`Pricing: $${unitCost.toFixed(2)}/task — earning enabled`);
-    }
-  } catch {
-    // Best-effort listing
-  }
+/**
+ * Point the guard at this machine's shared store once the database is
+ * open. Both `motebit run` and `motebit serve` announce
+ * `unattended_runtime`, and the relay may route a command to either —
+ * so a replay must be visible to whichever process receives it.
+ */
+function useSharedReplayMemory(moteDb: { commandReplayStore: CommandReplayStore }): void {
+  sharedReplayGuard = new CommandReplayGuard(600_000, moteDb.commandReplayStore);
 }
+let sharedReplayGuard: CommandReplayGuard | null = null;
+const replayGuard = (): CommandReplayGuard => sharedReplayGuard ?? commandReplayGuard;
 
 export async function handleRun(config: CliConfig): Promise<void> {
   const explicitIdentity = config.identity != null && config.identity !== "";
@@ -217,6 +194,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
   // does not carry — absent means DEFAULT_GOVERNANCE_CONFIG.
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
+  useSharedReplayMemory(moteDb);
   const provider = createProvider(config, personalityConfig);
   const governance = deriveGovernanceForRuntime(fullConfig.governance);
 
@@ -250,24 +228,90 @@ export async function handleRun(config: CliConfig): Promise<void> {
 
   await runtime.init();
 
-  // Advertise full CLI/desktop capabilities
+  // Advertise full CLI/desktop capabilities. Kept in step with the
+  // WebSocket announcement below — routing reads only the WS set, but
+  // two lists disagreeing about what this process IS is how the next
+  // reader picks the wrong one.
   runtime.setLocalCapabilities([
     DeviceCapability.StdioMcp,
     DeviceCapability.HttpMcp,
     DeviceCapability.FileSystem,
     DeviceCapability.Keyring,
     DeviceCapability.Background,
+    DeviceCapability.UnattendedRuntime,
+    DeviceCapability.RunLedger,
   ]);
+
+  // The goal daemon is ONE executor across restarts. Without a stable
+  // id, every restart re-honors an active halt and appends another
+  // acknowledgement, so a night of three restarts reports three
+  // processes stopped on a machine that ran one.
+  runtime.setHaltExecutorId(`run@${fullConfig.device_id ?? "unknown"}`);
+  // The return view's source. Only this process holds the ledger, so
+  // only it can answer "what happened while I was away" — asked from
+  // the phone, or anywhere else the consent root reaches.
+  runtime.setRunLedgerReader(createRunLedgerReader(moteDb, motebitId));
 
   // Start goal scheduler
   const goals = moteDb.goalStore.list(motebitId);
+  // One liveness session per PROCESS RUN: a restart opens a new row
+  // rather than editing the last, so the seam between them stays
+  // visible instead of being smoothed over by a bumped timestamp. The
+  // scheduler only says it is awake; this closure knows which device
+  // and which executor "awake" refers to.
+  // A SLEEP is a gap, even though the process never died.
+  //
+  // Closing a laptop lid does not restart `motebit run`: the process
+  // survives and its interval simply stops firing, then fires again on
+  // resume. Touching the same row there stretches `last_seen_at` from
+  // 01:00 to 09:00 with `started_at` unchanged, so eight hours of sleep
+  // read back as eight hours of continuous uptime — and the record
+  // built to show that gap reports its opposite.
+  //
+  // So a tick that arrives long after the last one OPENS A NEW SESSION
+  // rather than extending the old. The seam between them is the gap,
+  // and it is detected here, at write time, by the only party that can
+  // tell: whoever noticed that time passed without a tick.
+  let session: { id: string; lastSeen: number } | null = null;
+  const liveness = {
+    awake: (at: number): void => {
+      // A clock that steps BACKWARD is a new session, not a continuation.
+      //
+      // `at - lastSeen <= gap` is true for negative deltas, so an NTP
+      // correction or a VM resume kept touching the same row with an
+      // earlier timestamp — leaving `last_seen_at < started_at`, an
+      // inverted interval that makes a window report downtime over time
+      // the machine was awake, or drops the running session from the
+      // read entirely.
+      const delta = at - (session?.lastSeen ?? 0);
+      const continuous = session != null && delta >= 0 && delta <= LIVENESS_SESSION_GAP_MS;
+      if (continuous && session != null) {
+        moteDb.runtimeLivenessStore.touch(session.id, at);
+        session.lastSeen = at;
+        return;
+      }
+      const id = crypto.randomUUID();
+      moteDb.runtimeLivenessStore.open({
+        session_id: id,
+        motebit_id: motebitId,
+        device_id: loadFullConfig().device_id ?? "unknown",
+        executor: "run",
+        at,
+      });
+      session = { id, lastSeen: at };
+    },
+  };
+
   const scheduler = new GoalScheduler(
     runtime,
     moteDb.goalStore,
     moteDb.approvalStore,
     moteDb.goalOutcomeStore,
+    moteDb.goalRunStore,
+    moteDb.toolAuditSink,
     motebitId,
     denyAbove,
+    liveness,
   );
   scheduler.setPlanEngine(new PlanEngine(moteDb.planStore), moteDb.planStore);
   scheduler.start();
@@ -350,7 +394,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
   const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig.sync_url;
   const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
   let wsAdapter: WebSocketEventStoreAdapter | null = null;
-  let daemonHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  let daemonRegistration: RelayRegistrationHandle | undefined;
   let privKeyBytes: Uint8Array | undefined;
 
   if (syncUrl != null && syncUrl !== "") {
@@ -369,23 +413,6 @@ export async function handleRun(config: CliConfig): Promise<void> {
         console.log(
           `Warning: could not decrypt private key — agent tasks disabled (${err instanceof Error ? err.message : String(err)})`,
         );
-      }
-    }
-
-    // Register device with relay so other agents can resolve our public key
-    if (privKeyBytes && fullConfig.device_id && fullConfig.device_public_key) {
-      try {
-        await fetch(`${syncUrl}/api/v1/agents/bootstrap`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            motebit_id: motebitId,
-            device_id: fullConfig.device_id,
-            public_key: fullConfig.device_public_key,
-          }),
-        });
-      } catch {
-        // Best-effort — relay may be unreachable
       }
     }
 
@@ -419,6 +446,15 @@ export async function handleRun(config: CliConfig): Promise<void> {
       DeviceCapability.FileSystem,
       DeviceCapability.Keyring,
       DeviceCapability.Background,
+      // The daemon wires the durable halt + approval stores, so it can
+      // honor a stop and decide a queued approval. The relay routes
+      // those verbs by it.
+      DeviceCapability.UnattendedRuntime,
+      // And this is the process that FIRES goals, so the run ledger is
+      // its own record. `motebit serve` announces the capability above
+      // and not this one — it can be stopped, and it has nothing to
+      // report. Announced here and nowhere else.
+      DeviceCapability.RunLedger,
     ];
 
     wsAdapter = new WebSocketEventStoreAdapter({
@@ -426,6 +462,11 @@ export async function handleRun(config: CliConfig): Promise<void> {
       motebitId,
       authToken,
       capabilities: cliCapabilities,
+      // Declared, not invented. The relay groups peers by machine to
+      // decide whether two unattended runtimes share a database; without
+      // this it assigns a random id per connection and reads this
+      // process and `motebit serve` as two separate machines.
+      ...(fullConfig.device_id != null ? { deviceId: fullConfig.device_id } : {}),
       httpFallback: httpAdapter,
       localStore: moteDb.eventStore,
     });
@@ -478,45 +519,50 @@ export async function handleRun(config: CliConfig): Promise<void> {
             args?: string;
             envelope?: unknown;
           };
-          void (async () => {
-            try {
-              const verdict = await verifyAgentCommandEnvelope({
-                envelope: cmdMsg.envelope,
-                command: cmdMsg.command,
-                args: cmdMsg.args,
-                motebitId,
-                identityPublicKey: identity.identity.public_key,
-              });
-              if (!verdict.ok) {
-                wsAdapter!.sendRaw(
-                  JSON.stringify({
-                    type: "command_response",
-                    id: cmdMsg.id,
-                    result: { summary: verdict.reason },
-                  }),
-                );
-                return;
-              }
-              const result = await executeCommand(runtime, cmdMsg.command, cmdMsg.args);
-              wsAdapter!.sendRaw(
-                JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
-              );
-            } catch (err: unknown) {
-              wsAdapter!.sendRaw(
-                JSON.stringify({
-                  type: "command_response",
-                  id: cmdMsg.id,
-                  result: {
-                    summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
-                  },
-                }),
-              );
-            }
-          })();
+          // One handler, shared with serve's below and drivable by the
+          // integration harness — see relay-command-frame.ts.
+          void handleRelayCommandFrame(cmdMsg, {
+            runtime,
+            motebitId,
+            identityPublicKey: identity.identity.public_key,
+            checkReplay: (sig) => replayGuard().check(sig),
+            reply: (payload) => wsAdapter!.sendRaw(payload),
+          });
           return;
         }
 
         if (msg.type === "task_request" && msg.task != null) {
+          // Refuse BEFORE claiming. The chokepoint in `handleAgentTask`
+          // will refuse this work, but a claimed task is not
+          // re-dispatched — so claiming first would black-hole it, and
+          // the submitter (who cleared the settlement gates to get here)
+          // would learn nothing until it timed out. Leaving it unclaimed
+          // lets the relay offer it elsewhere.
+          // Both reads are guarded, and neither failure is swallowed.
+          // This handler runs inside the ws-adapter's
+          // `catch { /* ignore malformed messages */ }`, so a throw
+          // here would drop the task with no log at all — a refusal
+          // indistinguishable from never having arrived. Every sibling
+          // honoring call in this file logs its failure; this one used
+          // to discard it.
+          let runHalt: import("@motebit/sdk").HaltRequest | null = null;
+          try {
+            runHalt = runtime.haltInForce();
+          } catch (err: unknown) {
+            console.log(
+              `[halt] could not read halt state, refusing the task to be safe: ${err instanceof Error ? err.message : String(err)}`,
+            );
+            return;
+          }
+          if (runHalt != null) {
+            void runtime.honorHalts().catch((err: unknown) => {
+              console.log(
+                `[halt] honoring failed (will retry): ${err instanceof Error ? err.message : String(err)}`,
+              );
+            });
+            console.log(`\nAgent task not claimed — halted (${runHalt.halt_id.slice(0, 8)})`);
+            return;
+          }
           const task = msg.task as AgentTask;
 
           // Check if we have the required capabilities
@@ -622,16 +668,15 @@ export async function handleRun(config: CliConfig): Promise<void> {
       console.log("Delegation: enabled (RelayDelegationAdapter wired)");
     }
 
-    // Register with agent discovery registry so other motebits can find this daemon.
-    try {
+    // Register with agent discovery registry so other motebits can find this
+    // daemon — signed as THIS motebit (bootstrap → register → listing →
+    // heartbeat), never with the operator's sync token and never
+    // unauthenticated. See relay-registration.ts.
+    if (privKeyBytes && fullConfig.device_id && fullConfig.device_public_key) {
       const toolNames = runtime
         .getToolRegistry()
         .list()
         .map((t) => t.name);
-
-      const regHeaders: Record<string, string> = { "Content-Type": "application/json" };
-      if (syncToken) regHeaders["Authorization"] = `Bearer ${syncToken}`;
-
       const regBody: Record<string, unknown> = {
         motebit_id: motebitId,
         endpoint_url: syncUrl,
@@ -644,42 +689,23 @@ export async function handleRun(config: CliConfig): Promise<void> {
           regBody.guardian_attestation = identity.guardian.attestation;
         }
       }
-      const regResp = await fetch(`${syncUrl}/api/v1/agents/register`, {
-        method: "POST",
-        headers: regHeaders,
-        body: JSON.stringify(regBody),
-      });
-
-      if (regResp.ok) {
-        console.log(`Discovery: registered with relay (${toolNames.length} tools)`);
-
-        await publishServiceListing(
-          syncUrl,
+      daemonRegistration = await registerWithRelay({
+        syncUrl,
+        identity: {
           motebitId,
-          regHeaders,
-          toolNames,
-          config.price,
-          `daemon-${motebitId.slice(0, 8)}`,
-        );
-
-        // Heartbeat every 5 minutes to keep the registry entry alive
-        daemonHeartbeatTimer = setInterval(
-          () => {
-            void fetch(`${syncUrl}/api/v1/agents/heartbeat`, {
-              method: "POST",
-              headers: regHeaders,
-            }).catch(() => {
-              // Best-effort heartbeat
-            });
-          },
-          5 * 60 * 1000,
-        );
-      } else {
-        console.log(`Discovery: registry registration returned ${regResp.status} (skipping)`);
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.log(`Discovery: registry registration failed (${msg}) — continuing`);
+          deviceId: fullConfig.device_id,
+          publicKeyHex: fullConfig.device_public_key,
+          privateKey: privKeyBytes,
+        },
+        registration: regBody,
+        toolNames,
+        price: config.price,
+        description: `daemon-${motebitId.slice(0, 8)}`,
+      });
+    } else {
+      console.log(
+        "Discovery: registration skipped — no device signing key available (the daemon registers with its own key, never the operator's token)",
+      );
     }
 
     // Also wire sync via the HTTP adapter
@@ -715,16 +741,8 @@ export async function handleRun(config: CliConfig): Promise<void> {
     const forceExit = setTimeout(() => process.exit(1), 5_000);
     if (typeof forceExit.unref === "function") forceExit.unref(); // Don't block event loop
     try {
-      if (daemonHeartbeatTimer !== undefined) clearInterval(daemonHeartbeatTimer);
-      // Best-effort deregistration from agent discovery registry
-      if (syncUrl) {
-        const deregHeaders: Record<string, string> = {};
-        if (syncToken) deregHeaders["Authorization"] = `Bearer ${syncToken}`;
-        void fetch(`${syncUrl}/api/v1/agents/deregister`, {
-          method: "DELETE",
-          headers: deregHeaders,
-        }).catch(() => {});
-      }
+      // Best-effort deregistration from agent discovery registry (signed as us).
+      if (daemonRegistration) void daemonRegistration.deregister().catch(() => {});
       scheduler.stop();
       wsAdapter?.disconnect();
       // Release the runtime-host socket so a successor can elect.
@@ -1055,6 +1073,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
   // provided, `governance` also drives approval thresholds.
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
+  useSharedReplayMemory(moteDb);
   // Direct mode doesn't need an LLM — skip provider creation to avoid requiring an API key
   const provider = config.direct ? undefined : createProvider(config, personalityConfig);
   const governance = deriveGovernanceForRuntime(fullConfig.governance);
@@ -1096,10 +1115,83 @@ export async function handleServe(config: CliConfig): Promise<void> {
 
   await runtime.init();
 
+  // Registered BEFORE anything can deliver a halt, not after.
+  //
+  // Serve honors halts on EVERY transport: it executes work through its
+  // MCP `motebit_task` tool over stdio as well as http, with or without
+  // a relay. Enforcement already refuses at the runtime chokepoint in
+  // all of them, but nothing would CALL `honorHalts`, so a local
+  // `motebit halt` would sit un-acknowledged forever while every
+  // surface reported "no acknowledgement" about a worker that was in
+  // fact refusing every task.
+  //
+  // The ordering matters as much as the registration. These used to run
+  // after the relay socket was already connected and a registry
+  // round-trip had completed — seconds later. A remote halt arriving in
+  // that window honored itself with the per-process default id and no
+  // stopper, recorded "nothing was running", and was then honored AGAIN
+  // by the ticker under the stable id: two acknowledgement rows for one
+  // process, which is the over-reporting the stable id exists to
+  // remove. A goal-scoped halt in that window also found no resolver.
+  //
+  // Serve is the OTHER long-lived executor on this machine and stops
+  // different work, so it takes its own stable id — never the daemon's,
+  // never a fresh one per restart.
+  runtime.setHaltExecutorId(`serve@${loadFullConfig().device_id ?? "unknown"}`);
+  // Serve does NOT answer the return view, even though its database is
+  // this machine's.
+  //
+  // It shares the file when it is co-located with the daemon, and holds
+  // an empty one when it is not — and serve on its own machine is the
+  // arc's own deployment story, a daemon on a laptop and a worker on a
+  // VPS. From there this answered "No runs recorded yet" about a
+  // motebit that had worked all night: a confident false empty, which
+  // is the single failure the return view was built to remove. Serve
+  // runs relay-dispatched tasks, not goal runs, so it has no record of
+  // its own to report either way. The relay routes the question by
+  // `run_ledger`, which only the goal daemon announces.
+  // The stopper answers for THIS halt, not for halts in general.
+  //
+  // Serve executes relay-dispatched tasks. Those are not goal runs, and
+  // serve's enforcement asks `haltInForce()` with no goal — so a
+  // goal-scoped halt stops nothing here. Returning the motebit-wide
+  // sentence for one anyway wrote an acknowledgement claiming this
+  // worker had stopped accepting tasks while it went on accepting every
+  // one of them: the record says a goal was halted and the work keeps
+  // running, which is the failure the whole arc exists to remove.
+  // Saying "nothing here runs under that goal" is the honest answer,
+  // and it is also the true one.
+  const unregisterServeHalt = runtime.onHalt((halt) =>
+    halt.goal_id == null
+      ? "no further dispatched tasks will be accepted (one already running finishes)"
+      : `nothing here runs under goal ${halt.goal_id.slice(0, 8)} — this worker executes relay-dispatched tasks, which are not goal runs, and they continue`,
+  );
+  // Serve announces `unattended_runtime`, so the relay may route a
+  // goal-scoped halt here — and a person can only send the 8-char
+  // prefix `motebit goal list` prints. Without a resolver in this
+  // process too, the same command would succeed or fail depending on
+  // which peer the relay happened to pick.
+  runtime.setGoalIdResolver((prefix) => {
+    const match = moteDb.goalStore
+      .list(motebitId)
+      .find((g) => g.goal_id === prefix || g.goal_id.startsWith(prefix));
+    return match?.goal_id ?? null;
+  });
+
   // Wire MotebitServerDeps from the runtime
   const deps: MotebitServerDeps = {
     motebitId,
     publicKeyHex,
+
+    // The halt gate for EVERY `motebit_task`, including `--direct`,
+    // which replaces `handleAgentTask` and so never reaches the
+    // runtime's own chokepoint.
+    haltRefusal: () => {
+      const halted = runtimeRef.current?.haltInForce() ?? null;
+      return halted == null
+        ? null
+        : `this motebit has been stopped by its owner (halt ${halted.halt_id.slice(0, 8)})`;
+    },
 
     listTools: () => runtime.getToolRegistry().list(),
     filterTools: (tools) => runtime.policy.filterTools(tools),
@@ -1366,7 +1458,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
 
   // Connect to relay (HTTP transport only): WebSocket for task dispatch + HTTP registration
   // Fallback chain: CLI arg > env var > config file
-  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  let serveRegistration: RelayRegistrationHandle | undefined;
   let serveWsAdapter: WebSocketEventStoreAdapter | null = null;
   const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig.sync_url;
   if (transport === "http" && syncUrl) {
@@ -1401,7 +1493,15 @@ export async function handleServe(config: CliConfig): Promise<void> {
         url: wsUrl,
         motebitId,
         authToken: wsAuthToken,
-        capabilities: [DeviceCapability.HttpMcp],
+        // Serve mode wires the halt store and executes relay-dispatched
+        // work, so it is an unattended runtime and says so — without
+        // this the relay refuses to route a halt here at all, and a
+        // worker that cannot be reached is a worker that cannot be
+        // stopped.
+        capabilities: [DeviceCapability.HttpMcp, DeviceCapability.UnattendedRuntime],
+        // Same machine as `motebit run` when both are local — see the
+        // daemon's own socket above.
+        ...(fullConfigForServe.device_id != null ? { deviceId: fullConfigForServe.device_id } : {}),
         httpFallback: httpAdapter,
         localStore: moteDb.eventStore,
       });
@@ -1417,56 +1517,51 @@ export async function handleServe(config: CliConfig): Promise<void> {
             args?: string;
             envelope?: unknown;
           };
-          void (async () => {
-            try {
-              // Fail-closed remote ingress: no registered identity key
-              // means nothing to verify against — reject, never trust
-              // the relay's forwarding alone.
-              const verdict =
-                publicKeyHex == null || publicKeyHex === ""
-                  ? {
-                      ok: false as const,
-                      reason:
-                        "command_request rejected: no registered identity public key to verify against",
-                    }
-                  : await verifyAgentCommandEnvelope({
-                      envelope: cmdMsg.envelope,
-                      command: cmdMsg.command,
-                      args: cmdMsg.args,
-                      motebitId,
-                      identityPublicKey: publicKeyHex,
-                    });
-              if (!verdict.ok) {
-                serveWsAdapter!.sendRaw(
-                  JSON.stringify({
-                    type: "command_response",
-                    id: cmdMsg.id,
-                    result: { summary: verdict.reason },
-                  }),
-                );
-                return;
-              }
-              const result = await executeCommand(runtimeRef.current!, cmdMsg.command, cmdMsg.args);
-              serveWsAdapter!.sendRaw(
-                JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
-              );
-            } catch (err: unknown) {
-              serveWsAdapter!.sendRaw(
-                JSON.stringify({
-                  type: "command_response",
-                  id: cmdMsg.id,
-                  result: {
-                    summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
-                  },
-                }),
-              );
-            }
-          })();
+          // The same handler the daemon's socket uses, and the one an
+          // integration harness can drive — see relay-command-frame.ts.
+          void handleRelayCommandFrame(cmdMsg, {
+            runtime: runtimeRef.current,
+            motebitId,
+            identityPublicKey: publicKeyHex,
+            checkReplay: (sig) => replayGuard().check(sig),
+            reply: (payload) => serveWsAdapter!.sendRaw(payload),
+          });
           return;
         }
 
         if (msg.type !== "task_request" || msg.task == null) return;
         const task = msg.task as AgentTask;
+        // A halt covers relay-dispatched work too. Serve mode has no
+        // goal scheduler, so this is the only place it can be honored —
+        // without it, `motebit halt` would record a stop, print "in
+        // force from now", and the worker would keep accepting and
+        // executing tasks.
+        const serveHalt = runtimeRef.current?.haltInForce() ?? null;
+        if (serveHalt != null) {
+          // Guarded like every other call site: the CLI registers no
+          // unhandledRejection handler, and `honorHalts` writes to
+          // SQLite, which throws on a busy database. A halted worker
+          // must refuse the task, not take the process down.
+          void runtimeRef.current?.honorHalts().catch((err: unknown) => {
+            log(`[halt] honoring failed: ${err instanceof Error ? err.message : String(err)}`);
+          });
+          // Not claimed, and deliberately not answered with an invented
+          // frame: the relay's inbound vocabulary has `task_claim` and no
+          // decline verb, so a `task_reject` would be silently dropped —
+          // the appearance of a refusal without one, which is the exact
+          // shape of dishonesty this whole arc exists to remove.
+          //
+          // Known limitation, named rather than papered over: the relay
+          // re-dispatches an unclaimed task, so it will come back and be
+          // refused again until it times out, and the submitter learns
+          // only from that timeout. Giving them a real answer needs a
+          // decline verb in the relay's task protocol, which belongs to
+          // the task arc, not to halt.
+          log(
+            `Agent task ${task.task_id.slice(0, 8)}... not claimed — halted (${serveHalt.halt_id.slice(0, 8)}); it will be re-dispatched until it times out`,
+          );
+          return;
+        }
         log(
           `Agent task received: ${task.task_id.slice(0, 8)}... prompt: "${task.prompt.slice(0, 80)}"`,
         );
@@ -1510,71 +1605,10 @@ export async function handleServe(config: CliConfig): Promise<void> {
         .list()
         .map((t) => t.name);
 
-      // Self-sovereign registration auth.
-      //
-      // The relay's `/api/v1/agents/*` middleware accepts two auth shapes:
-      //   1. Operator master token (`MOTEBIT_API_TOKEN`) — bypass.
-      //   2. Self-signed device token — verified against the agent's own
-      //      registered public key, audience-bound (`admin:query` for
-      //      register/heartbeat/deregister/info).
-      //
-      // Anonymous registration was always advertised as supported (per
-      // create-motebit's `.env.example`: "Anonymous agents can register and
-      // serve for free") but failed in practice because daemon never minted
-      // shape #2 — it only sent `Bearer ${masterToken}` when a master token
-      // existed. Result: scaffolded agents with empty `MOTEBIT_API_TOKEN`
-      // hit 401 at register time and stayed off the discovery graph.
-      //
-      // The fix is two coordinated steps the relay already supports:
-      //   a. Call `/api/v1/agents/bootstrap` (unauthenticated, rate-limited,
-      //      idempotent) to register `(motebit_id, device_id, public_key)`
-      //      so the relay knows which key to verify our token against.
-      //   b. Mint a signed token (`mintAudienceToken`) with `aud: "admin:query"`
-      //      signed by `servePrivateKey` and use it as Bearer.
-      //
-      // Master token, when present, still wins — operators with explicit
-      // tokens skip the self-signing dance.
-      const regHeaders: Record<string, string> = { "Content-Type": "application/json" };
-      if (masterToken) {
-        regHeaders["Authorization"] = `Bearer ${masterToken}`;
-      } else if (servePrivateKey && fullConfigForServe.device_id && publicKeyHex) {
-        // Bootstrap is idempotent: if the identity is already registered with
-        // the same public key, returns 200 with `registered: false`; if new,
-        // 201 with `registered: true`. Either is fine for our purposes.
-        // We don't await the response body — only the network round-trip
-        // matters, and any 4xx other than 409 (key conflict) means we'll
-        // hit a clearer error on the subsequent /register call.
-        try {
-          await fetch(`${syncUrl}/api/v1/agents/bootstrap`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              motebit_id: motebitId,
-              device_id: fullConfigForServe.device_id,
-              public_key: publicKeyHex,
-            }),
-          });
-        } catch {
-          // Best-effort. If bootstrap fails, /register's auth check will
-          // surface a clearer error than a generic network failure here.
-        }
-        // 24h expiry instead of the per-call 5-min default. The same token
-        // is reused for the heartbeat setInterval below, which fires every
-        // 5 min — a 5-min token would expire before the second heartbeat.
-        // Agents that run longer than 24h will need to be restarted (or
-        // refactor heartbeat to re-mint on each call). Acceptable for v1.
-        const { token: signedToken } = await mintAudienceToken(
-          {
-            mid: motebitId,
-            did: fullConfigForServe.device_id,
-            aud: "admin:query",
-            ttlMs: 24 * 60 * 60 * 1000,
-          },
-          servePrivateKey,
-        );
-        regHeaders["Authorization"] = `Bearer ${signedToken}`;
-      }
-
+      // Signed as THIS motebit — bootstrap → register → listing → heartbeat —
+      // never with the operator's master token and never unauthenticated
+      // (relay-registration.ts). A master token is the OPERATOR's credential;
+      // the agent's own key is the only bearer a worker presents.
       const endpointUrl = `http://localhost:${port}`;
       const serveRegBody: Record<string, unknown> = {
         motebit_id: motebitId,
@@ -1588,37 +1622,27 @@ export async function handleServe(config: CliConfig): Promise<void> {
           serveRegBody.guardian_attestation = guardianAttestation;
         }
       }
-      const regResp = await fetch(`${syncUrl}/api/v1/agents/register`, {
-        method: "POST",
-        headers: regHeaders,
-        body: JSON.stringify(serveRegBody),
-      });
-      if (regResp.ok) {
-        log(`Registered with relay: ${syncUrl}`);
-
-        await publishServiceListing(
+      if (servePrivateKey && fullConfigForServe.device_id && publicKeyHex) {
+        serveRegistration = await registerWithRelay({
           syncUrl,
-          motebitId,
-          regHeaders,
-          toolNames,
-          config.price,
-          serverConfig.name ?? `serve-${motebitId.slice(0, 8)}`,
-          log,
-        );
-
-        // Heartbeat every 5 minutes
-        heartbeatTimer = setInterval(
-          () => {
-            void fetch(`${syncUrl}/api/v1/agents/heartbeat`, {
-              method: "POST",
-              headers: regHeaders,
-            }).catch(() => {
-              // Best-effort heartbeat
-            });
+          identity: {
+            motebitId,
+            deviceId: fullConfigForServe.device_id,
+            publicKeyHex,
+            privateKey: servePrivateKey,
           },
-          5 * 60 * 1000,
+          registration: serveRegBody,
+          toolNames,
+          price: config.price,
+          description: serverConfig.name ?? `serve-${motebitId.slice(0, 8)}`,
+          log,
+        });
+      } else {
+        log(
+          "Registry registration skipped — no device signing key available (serve registers with its own key, never the operator's token)",
         );
-
+      }
+      if (serveRegistration?.registered) {
         // Self-test: adversarial onboarding probe via shared command layer.
         // Exercises the exact auth flow production agents use and validates all
         // five sybil defense layers. See packages/runtime/src/commands/self-test.ts.
@@ -1658,8 +1682,6 @@ export async function handleServe(config: CliConfig): Promise<void> {
             log(`[self-test] error: ${errMsg}`);
           }
         }
-      } else {
-        log(`Registry registration failed: ${regResp.status}`);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1667,27 +1689,32 @@ export async function handleServe(config: CliConfig): Promise<void> {
     }
   }
 
+  const serveHaltTicker = setInterval(() => {
+    void runtimeRef.current?.honorHalts().catch((err: unknown) => {
+      log(
+        `[halt] honoring failed (will retry): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+  }, 15_000);
+  serveHaltTicker.unref?.();
+
   // Graceful shutdown with safety timeout
   const shutdown = async (): Promise<void> => {
     log("\nShutting down MCP server...");
     const forceExit = setTimeout(() => process.exit(1), 5_000);
     if (typeof forceExit.unref === "function") forceExit.unref();
     try {
-      if (heartbeatTimer) clearInterval(heartbeatTimer);
-      if (syncUrl) {
-        try {
-          const masterToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
-          const headers: Record<string, string> = {};
-          if (masterToken) headers["Authorization"] = `Bearer ${masterToken}`;
-          await fetch(`${syncUrl}/api/v1/agents/deregister`, { method: "DELETE", headers });
-        } catch {
-          // Best-effort deregistration
-        }
-      }
+      if (serveRegistration) await serveRegistration.deregister();
       serveWsAdapter?.disconnect();
       await mcpServer.stop();
       // Release the runtime-host socket so a successor can elect.
       await runtimeHostServer.close().catch(() => {});
+      // Released explicitly: if handleServe is ever re-entered in this
+      // process, a surviving ticker would keep honoring halts against a
+      // stale runtime and each surviving stopper would add another
+      // sentence to every future acknowledgement.
+      clearInterval(serveHaltTicker);
+      unregisterServeHalt?.();
       runtime.stop();
       moteDb.close();
     } catch (err: unknown) {

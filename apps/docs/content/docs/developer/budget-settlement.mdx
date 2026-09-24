@@ -131,7 +131,7 @@ Three outcomes:
 
 | Receipt Status           | Ledger                             | Settlement                                               |
 | ------------------------ | ---------------------------------- | -------------------------------------------------------- |
-| `"completed"`            | All steps completed (or no ledger) | **Full settlement** — locked amount is paid              |
+| `"completed"`            | All steps completed (or no ledger) | **Full settlement** — locked amount minus the platform fee is paid |
 | `"completed"`            | Some steps completed, some failed  | **Partial settlement** — proportional to completed steps |
 | `"failed"` or `"denied"` | Any                                | **Refund** — locked amount returned, `amount_settled: 0` |
 
@@ -141,15 +141,18 @@ The settlement record includes:
 {
   settlement_id: string;
   allocation_id: string;
+  motebit_id: string;
   receipt_hash: string; // links to the execution receipt
   ledger_hash: string | null; // links to the execution ledger
-  amount_settled: number;
+  amount_settled: number; // gross minus platform_fee
+  platform_fee: number;
+  platform_fee_rate: number; // PLATFORM_FEE_RATE (0.05)
   status: "completed" | "partial" | "refunded";
   settled_at: number;
 }
 ```
 
-Partial settlement uses the execution ledger to determine the proportion: `completed_steps / total_steps * amount_locked`, rounded to two decimal places. This requires the delegating agent to have access to the ledger — if no ledger is provided and the receipt is completed, full settlement applies.
+Partial settlement uses the execution ledger to determine the proportion: `completed_steps / total_steps * amount_locked`, with the platform fee taken from the gross and every amount rounded to six decimal places (USDC micro-units). This requires the delegating agent to have access to the ledger — if no ledger is provided and the receipt is completed, full settlement applies.
 
 ## Candidate scoring
 
@@ -204,4 +207,4 @@ Returns scored and ranked candidates matching the specified criteria.
 
 ### Budget (via relay internals)
 
-Budget allocations and settlements are stored on the relay and linked to task submissions. The relay tracks allocations (`relay_budget_allocations`) and settlement records (`relay_settlements`) per task. When a task is submitted with a `max_budget`, the relay runs cost estimation and budget allocation before forwarding to the candidate. Settlement occurs automatically when the execution receipt is verified.
+Budget allocations and settlements are stored on the relay and linked to task submissions. The relay tracks allocations (`relay_allocations`) and settlement records (`relay_settlements`) per task. A task is priced from the worker's service listing at submission — there is no `max_budget` request field on `POST /agent/:motebitId/task` (`max_budget` is a query parameter of the candidates endpoint above). When a priced task is submitted, the relay runs cost estimation and budget allocation before forwarding to the candidate. Settlement occurs automatically when the execution receipt is verified.

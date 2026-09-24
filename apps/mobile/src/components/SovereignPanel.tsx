@@ -379,7 +379,7 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
                     );
                   })}
                 </View>
-              ) : null
+              ) : undefined
             }
             renderItem={({ item }) => {
               const color = TYPE_COLORS[item.credential_type] ?? "#616161";
@@ -433,7 +433,7 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
               // Self-attesting payoff: show the relay ledger was verified, not
               // merely trusted. Calm — muted `verified`, prominent `failed`
               // (a tampering signal). Doctrine: self-attesting-system.md.
-              state.ledgerVerification === "unverified" ? null : (
+              state.ledgerVerification === "unverified" ? undefined : (
                 <Text
                   style={
                     state.ledgerVerification === "verified"
@@ -565,7 +565,7 @@ export function SovereignPanel({ visible, app, onClose }: SovereignPanelProps): 
                 <View style={styles.emptyContainer}>
                   <Text style={styles.emptyText}>No budget data yet.</Text>
                 </View>
-              ) : null
+              ) : undefined
             }
           />
         ) : (

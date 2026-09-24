@@ -1,3 +1,4 @@
+import { PERSISTENCE_MIGRATIONS } from "../migrations-registry.js";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -180,11 +181,19 @@ describe("sql.js driver (in-memory)", () => {
   // === Pragma handling ===
 
   it("user_version get/set works", async () => {
-    // After createMotebitDatabaseFromDriver, user_version reflects the latest
-    // migration applied. Bump this alongside any new migration so CI catches
-    // a forgotten version bump in the migrate block.
+    // `user_version` tracks the highest migration APPLIED, and the
+    // invariant worth asserting is that relationship — not a literal.
+    //
+    // This used to hardcode the number, with a comment asking the next
+    // person to bump it "so CI catches a forgotten version bump in the
+    // migrate block". There is no such block: `runMigrations` derives
+    // the version from `PERSISTENCE_MIGRATIONS` itself. So the literal
+    // guarded nothing and failed on every migration — a test coupled to
+    // a value rather than to a property, which this repo has been
+    // bitten by before.
+    const latest = Math.max(...PERSISTENCE_MIGRATIONS.map((m) => m.version));
     const result = mdb.db.pragma("user_version") as { user_version: number }[];
-    expect(result[0]!.user_version).toBe(42);
+    expect(result[0]!.user_version).toBe(latest);
 
     mdb.db.pragma("user_version = 99");
     const result2 = mdb.db.pragma("user_version") as { user_version: number }[];
@@ -419,7 +428,7 @@ describe("sql.js driver (file-backed)", () => {
     expect(indexes.map((i) => i.name)).toContain("idx_goals_routine");
 
     const v = mdb3.db.pragma("user_version") as { user_version: number }[];
-    expect(v[0]!.user_version).toBe(42);
+    expect(v[0]!.user_version).toBe(Math.max(...PERSISTENCE_MIGRATIONS.map((m) => m.version)));
     mdb3.close();
   });
 });

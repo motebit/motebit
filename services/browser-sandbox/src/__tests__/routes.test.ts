@@ -39,20 +39,49 @@ import type { BrowserSandboxConfig } from "../env.js";
 import type { BrowserPool, BrowserSession } from "../chromium-pool.js";
 import { ServiceError } from "../errors.js";
 
-const TEST_TOKEN = "test-token-1234567890abcdef";
+// The sandbox admits relay-signed tokens only (the v1 shared bearer was
+// retired 2026-09-14). A test relay key is generated once; TEST_CONFIG pins
+// it. `authHeader()` presents ONE stable test identity ("motebit-test") so a
+// test's sequence of calls is one motebit acting on its own session — the
+// ownership invariant every per-session route now enforces. Cross-identity
+// cases mint their own tokens with `mintTokenFor`.
+let TEST_CONFIG: BrowserSandboxConfig;
+let testRelayPrivateKey: Uint8Array;
+let TEST_BEARER = "";
 
-const TEST_CONFIG: BrowserSandboxConfig = {
-  apiToken: TEST_TOKEN,
-  trustedRelayPublicKeyHex: null,
-  port: 0,
-  maxConcurrentSessions: 4,
-  sessionIdleMs: 60_000,
-  viewportWidth: 1280,
-  viewportHeight: 800,
-};
+async function mintTokenFor(motebitId: string): Promise<string> {
+  const now = Date.now();
+  return createSignedToken(
+    {
+      mid: motebitId,
+      did: "did:key:zRelay",
+      iat: now,
+      exp: now + 60 * 60 * 1000,
+      jti: crypto.randomUUID(),
+      aud: BROWSER_SANDBOX_AUDIENCE,
+    },
+    testRelayPrivateKey,
+  );
+}
+
+beforeAll(async () => {
+  const keypair = await generateKeypair();
+  testRelayPrivateKey = keypair.privateKey;
+  TEST_CONFIG = {
+    trustedRelayPublicKeyHex: Array.from(keypair.publicKey)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join(""),
+    port: 0,
+    maxConcurrentSessions: 4,
+    sessionIdleMs: 60_000,
+    viewportWidth: 1280,
+    viewportHeight: 800,
+  };
+  TEST_BEARER = await mintTokenFor("motebit-test");
+});
 
 function authHeader(): Record<string, string> {
-  return { Authorization: `Bearer ${TEST_TOKEN}` };
+  return { Authorization: `Bearer ${TEST_BEARER}` };
 }
 
 interface FakePoolState {
@@ -347,25 +376,45 @@ describe("browser-sandbox routes", () => {
       expect(state.sessions.size).toBe(2);
     });
 
-    it("legacy bearer keeps fresh-every-call (admin/test path unaffected)", async () => {
+    it("a session is driveable ONLY by the motebit that opened it — every per-session route refuses another motebit's valid token", async () => {
       const app = buildApp({
         config: { ...TEST_CONFIG, trustedRelayPublicKeyHex: relayPublicKeyHex },
         pool,
       });
-      // Two calls with the legacy shared bearer — no motebitId on
-      // c.var → route falls through to openSession → fresh every time.
-      const first = await app.request("/sessions/ensure", {
-        method: "POST",
-        headers: authHeader(),
-      });
-      const second = await app.request("/sessions/ensure", {
-        method: "POST",
-        headers: authHeader(),
-      });
-      const a = (await first.json()) as { session_id: string };
-      const b = (await second.json()) as { session_id: string };
-      expect(b.session_id).not.toBe(a.session_id);
-      expect(state.sessions.size).toBe(2);
+      const alice = { Authorization: `Bearer ${await mintToken("motebit-alice")}` };
+      const bob = { Authorization: `Bearer ${await mintToken("motebit-bob")}` };
+      const opened = (await (
+        await app.request("/sessions/ensure", { method: "POST", headers: alice })
+      ).json()) as { session_id: string };
+      const id = opened.session_id;
+      const action = JSON.stringify({ action: { kind: "screenshot" } });
+      const json = { "Content-Type": "application/json" };
+
+      const attempts: Array<[string, RequestInit]> = [
+        [`/sessions/${id}/keepalive`, { method: "POST", headers: bob }],
+        [`/sessions/${id}/actions`, { method: "POST", headers: { ...bob, ...json }, body: action }],
+        [`/sessions/${id}/read-page`, { method: "POST", headers: { ...bob, ...json }, body: "{}" }],
+        [
+          `/sessions/${id}/forward-input`,
+          { method: "POST", headers: { ...bob, ...json }, body: "{}" },
+        ],
+        [`/sessions/${id}/screencast`, { method: "GET", headers: bob }],
+        [`/sessions/${id}`, { method: "DELETE", headers: bob }],
+      ];
+      for (const [url, init] of attempts) {
+        const res = await app.request(url, init);
+        expect(res.status, url).toBe(401);
+        const body = (await res.json()) as { error: { reason: string } };
+        expect(body.error.reason, url).toBe("permission_denied");
+      }
+      // Bob's refused delete left Alice's session intact, and Alice still owns it.
+      expect(state.sessions.has(id)).toBe(true);
+      expect(
+        (await app.request(`/sessions/${id}/keepalive`, { method: "POST", headers: alice })).status,
+      ).toBe(204);
+      const closed = await app.request(`/sessions/${id}`, { method: "DELETE", headers: alice });
+      expect(closed.status).toBe(200);
+      expect(state.sessions.has(id)).toBe(false);
     });
   });
 

@@ -36,9 +36,7 @@ function loadConfig() {
     // Identity (motebit.json, motebit.key, motebit.md) is generated
     // here on first boot and reloaded on every subsequent boot.
     dataDir: process.env["MOTEBIT_DATA_DIR"] ?? "./data",
-    authToken: process.env["MOTEBIT_AUTH_TOKEN"],
     syncUrl: process.env["MOTEBIT_SYNC_URL"],
-    apiToken: process.env["MOTEBIT_API_TOKEN"],
     // Zero-cost atom until the multi-hop settlement arc; listed so the market
     // renders it as priced (conformance "pricing listed").
     unitCost: parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0"),
@@ -111,9 +109,12 @@ async function main(): Promise<void> {
       displayName: "Summarize",
       serviceDescription: "Multi-hop delegating service: summarize_search delegates to web-search",
       capabilities: ["summarize_search"],
-      ...(config.authToken != null ? { authToken: config.authToken } : {}),
+      // No static inbound bearer: callers present a motebit signed token (the
+      // relay's per-task dispatch token, or a caller-signed token) or are
+      // refused. Until 2026-09-15 the deploy script set MOTEBIT_AUTH_TOKEN to the
+      // relay OPERATOR's master token on every worker — a second copy of the
+      // secret #649 retired.
       ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
-      ...(config.apiToken != null ? { apiToken: config.apiToken } : {}),
       ...(config.publicUrl != null ? { publicUrl: config.publicUrl } : {}),
     },
     (identity) => {
@@ -140,6 +141,10 @@ async function main(): Promise<void> {
           result = await registry.execute("summarize_search", { query: prompt });
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
+          // An honest failure must be as loud in the log as an honest success —
+          // otherwise a dead service reads as a quiet one. See the research
+          // service for the six-night staging outage this silence hid.
+          log(`summarize FAILED: ${msg}`);
           result = { ok: false, error: msg };
         }
         const completedAt = Date.now();

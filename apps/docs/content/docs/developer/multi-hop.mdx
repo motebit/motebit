@@ -35,7 +35,7 @@ The sub-delegation flow inside Bob's task handler:
 3. Open an MCP StreamableHTTP session to Charlie's endpoint.
 4. Authenticate with a signed token (`createSignedToken` — Ed25519, 5-minute expiry).
 5. If a relay is configured (`MOTEBIT_SYNC_URL`), submit a relay task for budget allocation before calling Charlie.
-6. Call `motebit_task` on Charlie with the URL as the prompt, passing `relay_task_id` for economic binding.
+6. Call `motebit_task` on Charlie with the URL as the prompt, passing `relay_task_id` for economic binding and the relay's `dispatch_token` (returned by the task submission) as proof of admission — a worker configured for task admission refuses the hop without it.
 7. Parse Charlie's receipt from the response.
 8. Nest Charlie's receipt in `delegation_receipts` when constructing Bob's own receipt.
 
@@ -110,7 +110,7 @@ interface ExecutionReceipt {
   memories_formed: number;
   prompt_hash: string; // hex(SHA-256(UTF-8(prompt))) — plain SHA-256 of the prompt string
   result_hash: string; // hex(SHA-256(UTF-8(result))) — plain SHA-256 of the result string (NOT canonicalized)
-  relay_task_id?: string; // binds receipt to the relay's economic identity
+  relay_task_id: string; // binds receipt to the relay's economic identity — required; the relay rejects a receipt without it
   delegation_receipts?: ExecutionReceipt[]; // nested sub-delegation proofs
   suite: "motebit-jcs-ed25519-b64-v1"; // REQUIRED, signed — stamped by signExecutionReceipt
   signature: string; // Ed25519 over the JCS-canonical UTF-8 bytes of all other fields (not a hash of them)

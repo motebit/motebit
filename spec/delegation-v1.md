@@ -38,8 +38,12 @@ AgentTask {
   step_id:                string      // Optional: plan step identifier (for multi-step delegation)
   exclude_agents:         string[]    // Optional: agents to skip (retries, conflict avoidance)
   wall_clock_ms:          number      // Optional: delegator's wall clock at submission
+  presenter:              string      // Optional (1.2): "relay" (default) | "submitter" — who presents the
+                                      //   admitted task to the worker (§3.2 dispatch_token)
 }
 ```
+
+`presenter` (1.2) names the one presenter up front. `"relay"` is today's behavior: the relay routes the task (WebSocket, MCP forward, federation) and its `dispatch_token` travels with that dispatch. `"submitter"` makes the relay run every submission gate (pricing, P2P-proof, budget) but route NOTHING; the response then always carries `dispatch_token` and the submitter presents the task directly. It is the shape of a sub-delegation whose receipt returns in the submitter's own `delegation_receipts` chain (multi-hop settlement walks that chain). Any other value is rejected with `TASK_INVALID_INPUT`. A relay that predates 1.2 ignores the field (unknown fields MUST be ignored) and may route; the submitter then receives no token, which a worker enforcing admission surfaces as a refusal rather than a silent second execution.
 
 The `AgentTask` type in `@motebit/protocol` is the binding machine-readable form.
 
@@ -59,10 +63,18 @@ TaskResponse {
     sub_scores:               Record<string, number>
     routing_paths:            string[][]
     alternatives_considered:  number
+    trust_evidence_path?:     string[]    // Optional (additive): the vouching chain behind sub_scores.trust
   } | null
   price_snapshot:   number      // Optional: estimated cost in micro-units
+  dispatch_token:   string      // Optional: relay-signed task admission token (auth-token §5 `task:dispatch`),
+                                //   present ONLY when the relay did not dispatch the task itself — the submitter
+                                //   is then the one presenter and passes it to the worker's motebit_task
 }
 ```
+
+`routing_choice.routing_paths[0]` is the PLANNED EXECUTION route — the hops the task takes to `selected_agent` (direct, or via a federation peer) — whose composed execution metrics `sub_scores` reports; later entries are the non-dominated planned-route alternatives the policy weighed. The optional `trust_evidence_path` is the vouching chain (recorded delegations included) behind `sub_scores.trust`; it may differ from the planned execution route, and a recorded delegation's cost or latency never prices the new hire. Every entry is a path that exists (never a per-dimension optimum no single path attains). Neither path is a record of who executed; participation is proven by receipts. Field semantics in full: `execution-ledger-v1.md` §4.1.1.
+
+`dispatch_token` (1.1) binds `mid` to the intended worker (`target_agent` when set, else the URL agent), `sub` to `task_id`, and `digest` to SHA-256 of `prompt`. When the relay routed the task (WebSocket, MCP forward, or federation) the token travelled with that dispatch and the response carries none: one admission, one presenter. A worker configured for task admission admits each `task_id` to one completed execution (a run that produced no receipt may be re-presented under the same admission; a second presentation while a run is in flight is refused). See `agent-mcp-surface-v1.md` §5.1 and `docs/doctrine/task-admission.md`.
 
 ### 3.3 Foundation Law
 
@@ -393,3 +405,9 @@ The eight routes below are the binding cross-implementation contract for delegat
 | settlement@1.0        | Defines how money moves. This spec defines when settlement is triggered (receipt verification).                   |
 | relay-federation@1.0  | Cross-relay delegation: tasks route via federation peers. Same lifecycle, settlement chains for multi-relay hops. |
 | auth-token@1.0        | Task submission and result delivery require signed bearer tokens with audience binding.                           |
+
+## Change Log
+
+- **1.2 (2026-09-13)** — Additive: optional `presenter` on `AgentTask` (§3.1). `"submitter"` asks the relay to admit but not route, so the submitter is the one presenter and always receives `dispatch_token`. Closes the race where a bound sub-delegation was routed by the relay AND presented directly by the submitter (two presentations of one admission). Doctrine: `docs/doctrine/task-admission.md` § "Where it flows".
+- **1.1 (2026-09-12)** — Additive: optional `dispatch_token` on `TaskResponse` (§3.2), returned only when the relay did not dispatch the task itself. Task admission arc (`docs/doctrine/task-admission.md`).
+- **1.0** — Initial.

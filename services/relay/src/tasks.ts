@@ -9,6 +9,7 @@
 
 import type { Hono } from "hono";
 import type { TokenAudience } from "@motebit/protocol";
+import type { OutboundUrlOptions } from "@motebit/sdk";
 import { HTTPException } from "hono/http-exception";
 import type { MotebitDatabase } from "@motebit/persistence";
 import type { IdentityManager } from "@motebit/core-identity";
@@ -51,9 +52,14 @@ import {
   computeGrossAmount,
   weightedSumComposite,
   lexicographicComposite,
+  lexicographicOver,
 } from "@motebit/market";
 import type { CandidateProfile, CompositeFunction } from "@motebit/market";
-import { computeP2pFeeMicro, computeFederatedFeeSplit } from "@motebit/protocol";
+import {
+  computeP2pFeeMicro,
+  computeFederatedFeeSplit,
+  roundSettlementSplitMicro,
+} from "@motebit/protocol";
 import {
   getAccountBalance,
   creditAccount,
@@ -69,6 +75,7 @@ import {
   forwardTaskViaMcp,
   evaluateSettlementEligibility,
   type ReceiptCandidate,
+  mintTaskDispatchToken,
 } from "./task-routing.js";
 import type { TaskRouter } from "./task-routing.js";
 import { getBondBackingAdapter } from "./bond-backing-adapter.js";
@@ -81,6 +88,7 @@ import {
 import type { ConnectedDevice } from "./index.js";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import { createLogger } from "./logger.js";
+import type { TaskQueue } from "./task-queue.js";
 import { ExecutionReceiptSchema } from "@motebit/wire-schemas";
 import {
   RelayError,
@@ -92,6 +100,7 @@ import {
   TaskError,
 } from "./errors.js";
 import { listRevokedGrantIds } from "./delegation-revocations.js";
+import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
 
 const logger = createLogger({ service: "tasks" });
 
@@ -186,6 +195,8 @@ export interface TasksDeps {
   taskRouter: TaskRouter;
   issueCredentials: boolean;
   apiToken?: string;
+  /** Outbound URL law applied to every MCP forward (`buildOutboundPolicy`). */
+  outboundPolicy?: OutboundUrlOptions;
   enableDeviceAuth: boolean;
   maxTasksPerSubmitter: number;
   x402Config: {
@@ -244,7 +255,14 @@ export function getListingUnitCost(
   try {
     const pricing = JSON.parse(row.pricing) as CapabilityPrice[];
     if (capability != null) {
-      return pricing.find((p) => p.capability === capability)?.unit_cost ?? 0;
+      const listed = pricing.find((p) => p.capability === capability)?.unit_cost;
+      if (listed != null) return listed;
+      // An UNLISTED capability against a priced worker prices at the worker's
+      // ceiling, never at 0: a `required_capabilities: ["bogus"]` submission
+      // must not clear the P2P gate for free and walk away with a dispatch
+      // token the worker will honor (task-admission.md). Unpriced workers
+      // still price at 0.
+      return pricing.reduce((max, p) => Math.max(max, p.unit_cost ?? 0), 0);
     }
     return pricing.reduce((sum, p) => sum + (p.unit_cost ?? 0), 0);
   } catch {
@@ -282,6 +300,92 @@ export function requiresP2pProof(args: {
   );
 }
 
+/** A replayed dispatch token this close to `exp` will not survive the hop — treat as expired. */
+const DISPATCH_TOKEN_REMINT_MARGIN_MS = 60_000;
+
+/**
+ * Idempotent replay ⇒ the same response, INCLUDING the same dispatch token —
+ * which lives 15 minutes while the idempotency window lives 24 hours. A
+ * delegator whose first presentation died without a receipt and who retries
+ * after the TTL would replay an expired token and be refused until the window
+ * lapsed (the retry gap named in docs/doctrine/task-admission.md; the worker
+ * half — re-admitting a receiptless `sub` — shipped with the one-presenter arc).
+ *
+ * This is the relay half: when the replayed body carries a dispatch token that
+ * is expired (or within a minute of it) AND the task still has no receipt, mint
+ * a fresh token for the SAME task id and prompt digest. A task that already
+ * produced a receipt is left alone — its replay should send the delegator to
+ * the result, never to a second admission — and so is any body without a
+ * token. Same `sub`, same `digest`, same worker: nothing about what was
+ * admitted changes, only the clock.
+ */
+export async function refreshDispatchTokenOnReplay(
+  replayed: Record<string, unknown>,
+  deps: {
+    taskQueue: Pick<TaskQueue, "get">;
+    relayIdentity: RelayIdentity;
+    parseTokenPayloadUnsafe: (token: string) => { mid?: string; exp?: number } | null;
+    now?: () => number;
+  },
+): Promise<Record<string, unknown>> {
+  const token = replayed["dispatch_token"];
+  const taskId = replayed["task_id"];
+  if (typeof token !== "string" || typeof taskId !== "string") return replayed;
+  const claims = deps.parseTokenPayloadUnsafe(token);
+  if (claims == null || typeof claims.mid !== "string" || typeof claims.exp !== "number") {
+    return replayed;
+  }
+  const now = (deps.now ?? Date.now)();
+  if (claims.exp - now > DISPATCH_TOKEN_REMINT_MARGIN_MS) return replayed; // still live
+  const entry = deps.taskQueue.get(taskId);
+  if (entry == null) return replayed; // aged out of the queue — nothing to admit
+  const terminal =
+    entry.receipt != null ||
+    entry.task.status === AgentTaskStatus.Completed ||
+    entry.task.status === AgentTaskStatus.Failed ||
+    entry.task.status === AgentTaskStatus.Denied;
+  if (terminal) return replayed;
+  // Stamp the re-mint with the same clock that judged the old token expired:
+  // with the real clock, a re-mint in the same millisecond as the original
+  // would carry an identical `exp` — indistinguishable to a worker's
+  // "later than what I saw" check, and a flake in tests with an injected now.
+  const fresh = await mintTaskDispatchToken(
+    deps.relayIdentity,
+    claims.mid,
+    taskId,
+    entry.task.prompt,
+    now,
+  );
+  logger.info("task.dispatch_token_reminted", {
+    correlationId: taskId,
+    worker: claims.mid,
+    reason: claims.exp <= now ? "expired" : "expiring",
+  });
+  return { ...replayed, dispatch_token: fresh };
+}
+
+/**
+ * x402-chargeability, NOT "does this agent charge money".
+ *
+ * Returns null without a `pay_to_address` — correctly, because the x402 gate it
+ * feeds is an ONCHAIN payment path and `pay_to_address` is where the money
+ * goes. There is no arming an onchain gate with no destination.
+ *
+ * **Do not reuse this as a general "is this agent paid" predicate.** That is a
+ * different question with a different answer: the relay-custody lane credits
+ * the worker's VIRTUAL ACCOUNT and never reads `pay_to_address`, so an agent
+ * can charge for relay-custody work while publishing no onchain address at all.
+ * For "does this agent charge", read the price — `getListingUnitCost(...) > 0`,
+ * the same source `price_snapshot` derives from, so the two cannot disagree.
+ *
+ * Conflating the two made "priced and unpayable" representable and produced the
+ * unfunded-allocation mint: priced enough to book `amount_locked`, not priced
+ * enough to demand payment, leaving a locked allocation with no debit behind it
+ * for every downstream payout site to trust. See the `requiresPayment` comment
+ * at the allocation branch, and `priced-unpayable-listing.test.ts`.
+ *
+ * Sole caller: the x402 middleware wrapper.
+ */
 function getAgentPricing(
   moteDb: MotebitDatabase,
   agentId: string,
@@ -880,8 +984,17 @@ export async function handleReceiptIngestion(
           subSettlementId,
           platformFeeRate,
         );
-        subSettlement.amount_settled = Math.round(subSettlement.amount_settled);
-        subSettlement.platform_fee = Math.round(subSettlement.platform_fee);
+        // Conserving round to whole micro-units: `net + fee` must still equal
+        // the gross after rounding. Rounding each leg independently overstates
+        // the fee by one micro on 5% of grosses (see roundSettlementSplitMicro).
+        {
+          const rounded = roundSettlementSplitMicro(
+            subSettlement.amount_settled,
+            subSettlement.platform_fee,
+          );
+          subSettlement.amount_settled = rounded.netMicro;
+          subSettlement.platform_fee = rounded.feeMicro;
+        }
 
         // Self-attesting sub-settlement. Sign BEFORE the synchronous
         // BEGIN/COMMIT block — see the canonical settlement site for the
@@ -922,18 +1035,32 @@ export async function handleReceiptIngestion(
           moteDb.db.exec("BEGIN");
 
           // Fail-closed funding claim — mirror of the canonical settlement
-          // site (handleReceiptIngestion). The sub-credit below is funded by
-          // the sub-task's relay-custody hold (`x402-<subRelayTaskId>`);
-          // claim it atomically before crediting. `changes === 0` means the
-          // allocation is not 'locked': it was never funded (a P2P-submitted
-          // sub-hop moves money onchain and books NO relay allocation, so
-          // crediting here would double-pay on top of the onchain leg), or it
-          // was already released by the stale-allocation sweep / a refund
-          // (crediting would double-pay a delegator who was already made
-          // whole). subGross > 0 is guaranteed above, so an unclaimable
-          // allocation always means skip. This is the multi-hop sibling of
-          // the `settlement.unfunded_skipped` guard on the direct path.
+          // site (handleReceiptIngestion), including its claim-ORDER.
+          //
+          // What the delegator actually has at stake for this sub-task:
+          // `allocation_hold` debits minus `allocation_release` credits for
+          // `x402-<subRelayTaskId>`, read from the transaction ledger. NEVER
+          // the allocation row's status alone — a `'locked'` row also exists
+          // on never-debited paths (free-agent best-effort holds), and a paid
+          // sub-delegation is a real `POST /agent/:worker/task` (rule 8), so
+          // it reaches that same branch. Crediting against such a row mints
+          // balance the relay never received, and `reconcileLedger` cannot
+          // see it because the credit is itself a ledger row.
+          //
+          // READ BEFORE CLAIMING, and the ordering is load-bearing. The
+          // UPDATE is not a predicate — it EXECUTES. Claiming first and
+          // consulting the ledger second would leave an unfunded allocation
+          // permanently `'settled'` with no settlement row: a hard error in
+          // `reconcileLedger` invariant 3, and the exact defect that sent the
+          // direct-path fix back for rework (#541 review → #566). Deriving
+          // funding first and claiming only when funded keeps the claim and
+          // the INSERT atomic.
+          //
+          // subGross > 0 is guaranteed above, so there is no zero-cost
+          // carve-out to make here: unfunded always means skip.
+          const subHeldOnLedger = getAllocationHoldRemaining(moteDb.db, subAllocationId);
           const subClaimed =
+            subHeldOnLedger > 0 &&
             moteDb.db
               .prepare(
                 "UPDATE relay_allocations SET status = 'settled', settled_at = ? WHERE task_id = ? AND status = 'locked'",
@@ -947,8 +1074,11 @@ export async function handleReceiptIngestion(
               subTaskId: subRelayTaskId,
               subAgent: sub.motebit_id,
               gross: subGross,
+              subHeldOnLedger,
               reason:
-                "sub-allocation not locked — never funded (e.g. P2P sub-hop) or already released; relay credit skipped to prevent unfunded credit / double-pay",
+                subHeldOnLedger > 0
+                  ? "sub-allocation not locked — never funded (e.g. P2P sub-hop) or already released; relay credit skipped to prevent unfunded credit / double-pay"
+                  : "sub-allocation holds nothing on the ledger — never debited (best-effort path, or a P2P-submitted sub-hop that moved money onchain), so crediting the sub-agent would mint balance the relay never received",
             });
           } else {
             moteDb.db
@@ -1208,8 +1338,20 @@ export async function handleReceiptIngestion(
       // amount_settled) diverge from what the delegator was actually charged.
       const settlement = settleOnReceipt(allocation, receipt, null, settlementId, platformFeeRate);
       // Round to integer micro-units for DB storage
-      settlement.amount_settled = Math.round(settlement.amount_settled);
-      settlement.platform_fee = Math.round(settlement.platform_fee);
+      // Conserving round to whole micro-units. `settleOnReceipt` returns a
+      // conserving but possibly fractional pair; rounding the two legs
+      // INDEPENDENTLY breaks `net + fee === gross` on 5% of grosses, each
+      // recording one micro of fee the relay never retained — into the signed,
+      // dispute-grade `relay_settlements` row that feeds the treasury
+      // reconciler's `onchain >= recordedFeeSum` invariant.
+      {
+        const rounded = roundSettlementSplitMicro(
+          settlement.amount_settled,
+          settlement.platform_fee,
+        );
+        settlement.amount_settled = rounded.netMicro;
+        settlement.platform_fee = rounded.feeMicro;
+      }
 
       let credentialRow: {
         credential_id: string;
@@ -1334,30 +1476,50 @@ export async function handleReceiptIngestion(
         // keeps reconciliation invariant 3 (allocation 'settled' ⇔ settlement
         // record exists) true: the claim and the INSERT below commit together
         // or not at all.
+        // What the delegator actually has at stake: allocation_hold debits
+        // minus allocation_release credits for this allocation, from the
+        // transaction ledger. NEVER `amount_locked` — allocation rows also
+        // exist for never-debited paths (free-agent best-effort holds), and
+        // crediting against one mints balance the relay never received.
+        //
+        // READ BEFORE CLAIMING, and this ordering is load-bearing.
+        // `allocationClaimed` is not a predicate — it EXECUTES the UPDATE. An
+        // earlier attempt at this fix claimed first, consulted the ledger
+        // second, then skipped the settlement INSERT when unfunded, which left
+        // an allocation permanently `'settled'` with no settlement row: a hard
+        // error in `reconcileLedger` invariant 3 (settled allocation ⇔
+        // settlement record). Deriving funding first and claiming only when
+        // funded keeps the claim and the INSERT atomic, exactly as the previous
+        // comment here promised.
+        const heldOnLedger = getAllocationHoldRemaining(moteDb.db, allocationId);
+        const settlementApplies = !isP2pTask && signedSettlement != null;
+        const fundedOnLedger = grossAmount === 0 || heldOnLedger > 0;
+
+        // Claim only what we intend to settle. An unfunded row stays `'locked'`
+        // and is retired later by the stale-allocation sweep, which (since the
+        // ledger-derived release) correctly pays out nothing for it.
         const allocationClaimed =
-          !isP2pTask &&
-          signedSettlement != null &&
+          settlementApplies &&
+          fundedOnLedger &&
           moteDb.db
             .prepare(
               "UPDATE relay_allocations SET status = 'settled', settled_at = ? WHERE task_id = ? AND status = 'locked'",
             )
             .run(Date.now(), taskId).changes > 0;
-        // What the delegator actually has at stake: allocation_hold debits
-        // minus allocation_release credits for this allocation, from the
-        // transaction ledger. NEVER `amount_locked` — allocation rows also
-        // exist for never-debited paths (free-agent best-effort holds), and
-        // releasing `amount_locked` there would mint unfunded balance.
-        const heldRemaining = allocationClaimed
-          ? getAllocationHoldRemaining(moteDb.db, allocationId)
-          : 0;
-        const settlementFunded = grossAmount === 0 || allocationClaimed;
-        if (!isP2pTask && signedSettlement != null && !settlementFunded) {
+
+        const heldRemaining = allocationClaimed ? heldOnLedger : 0;
+        const settlementFunded = grossAmount === 0 || (allocationClaimed && heldRemaining > 0);
+        if (settlementApplies && !settlementFunded) {
           logger.error("settlement.unfunded_skipped", {
             correlationId: taskId,
             settlementId: settlement.settlement_id,
             gross: settlement.amount_settled + settlement.platform_fee,
+            heldOnLedger,
+            allocationClaimed,
             reason:
-              "allocation no longer locked — funds already released to the delegator; settlement skipped to prevent double-credit",
+              heldOnLedger > 0
+                ? "allocation no longer locked — funds already released to the delegator; settlement skipped to prevent double-credit"
+                : "allocation holds nothing on the ledger — never debited (best-effort path, or a priced listing with no payout address), so crediting the worker would mint balance the relay never received",
           });
         }
         // Relay settlement: INSERT record + credit/refund virtual accounts.
@@ -1651,6 +1813,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     taskRouter,
     issueCredentials,
     apiToken,
+    outboundPolicy,
     enableDeviceAuth,
     maxTasksPerSubmitter,
     x402Config,
@@ -1886,10 +2049,13 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
 
     const idempCheck = checkIdempotency(moteDb.db, idempotencyKey, motebitId);
     if (idempCheck.action === "replay") {
-      return c.json(
+      // Same answer, fresh admission when the old one has aged out and the
+      // work never happened (see refreshDispatchTokenOnReplay).
+      const replayed = await refreshDispatchTokenOnReplay(
         JSON.parse(idempCheck.body) as Record<string, unknown>,
-        idempCheck.status as 201,
+        { taskQueue, relayIdentity, parseTokenPayloadUnsafe },
       );
+      return c.json(replayed, idempCheck.status as 201);
     }
     if (idempCheck.action === "conflict") {
       throw new TaskError(
@@ -1925,6 +2091,17 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
        * (400) so that surface-determinism callers cannot typo past the gate.
        */
       invocation_origin?: "user-tap" | "ai-loop" | "scheduled" | "agent-to-agent";
+      /**
+       * Who presents the admitted task to the worker (delegation spec §3.1,
+       * 1.2). "relay" (default): the relay routes and forwards, its token
+       * travels with the dispatch. "submitter": the relay runs every settlement
+       * gate but does NOT route; it returns the dispatch_token and the
+       * submitter presents the task directly — the shape of a sub-delegation
+       * whose receipt rides back in the submitter's own delegation chain. One
+       * admission, one presenter, chosen up front instead of by whether
+       * anything happened to route.
+       */
+      presenter?: "relay" | "submitter";
       /** P2P: target agent for direct settlement (required with payment_proof). */
       target_agent?: string;
       /**
@@ -1981,6 +2158,18 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         b_fee_amount_micro?: number;
       };
     }>();
+
+    if (body.presenter != null && body.presenter !== "relay" && body.presenter !== "submitter") {
+      throw new TaskError(
+        "TASK_INVALID_INPUT",
+
+        'presenter must be "relay" or "submitter" when present',
+
+        400,
+      );
+    }
+
+    const submitterPresenter = body.presenter === "submitter";
 
     if (!body.prompt || typeof body.prompt !== "string" || body.prompt.trim() === "") {
       throw new TaskError("TASK_INVALID_INPUT", "Missing or empty 'prompt' field", 400);
@@ -2389,9 +2578,33 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // Persist budget allocation so settlement can verify the lock exists.
     // P2P tasks skip allocation — money already moved onchain.
     if (settlementMode !== "p2p" && priceSnapshot != null && priceSnapshot > 0) {
-      // Determine whether this agent requires payment (has pay_to_address in listing)
-      const agentPricingInfo = getAgentPricing(moteDb, motebitId);
-      const requiresPayment = agentPricingInfo != null;
+      // Payment is required BY DEFINITION here: this branch is guarded by
+      // `priceSnapshot > 0`, and `priceSnapshot` derives from the listing's
+      // own `pricing` column (`getListingUnitCost`). A priced agent charges.
+      //
+      // This used to ask `getAgentPricing(...) != null`, which additionally
+      // required a `pay_to_address` — and that made a priced listing WITHOUT a
+      // payout address read as FREE. It is the same listing row answering two
+      // different questions:
+      //
+      //   - the x402 middleware asks "can this agent be charged ONCHAIN?" —
+      //     which genuinely needs `pay_to_address`, because that is where the
+      //     money goes. `getAgentPricing` still serves that question, unchanged.
+      //   - this branch asks "does this agent charge AT ALL?" — which does not,
+      //     because the relay-custody lane credits the worker's VIRTUAL ACCOUNT
+      //     and never touches `pay_to_address`.
+      //
+      // Conflating them made "priced and unpayable" representable: priced
+      // enough to mint a `price_snapshot`, not priced enough to demand payment.
+      // An unfunded delegation then fell to the free-agent best-effort branch
+      // below and booked an allocation `status='locked'` with `amount_locked`
+      // set and NO debit — a row every downstream payout site trusts (the
+      // settlement credit, the stale-allocation release, the retry-exhaustion
+      // refund), each paying out real balance against money never received.
+      //
+      // Deriving both halves from the one read makes the disagreement
+      // unrepresentable rather than catching it later at each payout site.
+      const requiresPayment = true;
 
       try {
         const delegatorId = submittedBy ?? motebitId;
@@ -2437,7 +2650,20 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         const account = getAccountBalance(moteDb.db, delegatorId);
         const rawBalance = account?.balance ?? 0;
         const escrowHold = computeDisputeWindowHold(moteDb.db, delegatorId);
-        const virtualBalance = Math.max(0, rawBalance - escrowHold);
+        // The escrow hold exists to stop a delegator spending its own recent
+        // EARNINGS while those are still disputable. An x402 payment is not
+        // that: it arrived seconds ago, from outside, earmarked for THIS task,
+        // and was deposit-credited just above. Netting the escrow hold against
+        // it would refuse a task the delegator has already paid for onchain.
+        //
+        // That refusal used to fail quietly in the worst way: `allocateBudget`
+        // returned null, control fell to the best-effort branch, and the task
+        // booked an allocation with NO hold behind it — so the relay took the
+        // money, the worker did the work, and the settlement path had nothing
+        // to pay from. Once settlement became ledger-derived that turns into a
+        // worker who is simply never paid. Excluding earmarked x402 funds from
+        // the escrow net keeps the hold real and the invariant honest.
+        const virtualBalance = x402TxHash ? rawBalance : Math.max(0, rawBalance - escrowHold);
 
         // Use allocateBudget to compute lock amount with risk buffer
         const allocation = allocateBudget(
@@ -2515,6 +2741,15 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
 
     const requiredCaps = task.required_capabilities ?? [];
     const payload = JSON.stringify({ type: "task_request", task });
+    // Task admission artifact — one presenter per admission. Every MCP forward
+    // below mints a token bound to the worker it goes to (`mid`) and to this
+    // prompt (`digest`). If the relay routes the task itself, the relay is the
+    // presenter and the submitter gets NO token; if nothing routes it, the
+    // submitter gets a token bound to the intended worker (`target_agent`, else
+    // the URL worker) so it can present the task directly. Two presentations
+    // of one admission are mutually exclusive at the worker (single-use `sub`).
+    const dispatchTokenFor = (workerId: string): Promise<string> =>
+      mintTaskDispatchToken(relayIdentity, workerId, taskId, body.prompt);
     let routed = false;
     let federationAttempted = false;
     let routingChoice:
@@ -2524,6 +2759,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           sub_scores: Record<string, number>;
           routing_paths: string[][];
           alternatives_considered: number;
+          trust_evidence_path?: string[];
         }
       | undefined;
 
@@ -2540,7 +2776,12 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // `pinnedLocalHandled` even when dispatch fails — a paid task must never
     // fan out to a worker the delegator did not pay).
     let pinnedLocalHandled = false;
-    if (settlementMode === "p2p" && body.target_agent != null && !federatedP2pIntent) {
+    if (
+      !submitterPresenter &&
+      settlementMode === "p2p" &&
+      body.target_agent != null &&
+      !federatedP2pIntent
+    ) {
       pinnedLocalHandled = true;
       const pinnedId = body.target_agent;
       routingChoice = {
@@ -2564,7 +2805,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       } else {
         const pinnedReg = moteDb.db
           .prepare(
-            "SELECT endpoint_url FROM agent_registry WHERE motebit_id = ? AND expires_at > ?",
+            `SELECT endpoint_url FROM agent_registry WHERE motebit_id = ? AND expires_at > ?${ON_SHELF}`,
           )
           .get(pinnedId, Date.now()) as { endpoint_url: string } | undefined;
         if (pinnedReg?.endpoint_url?.trim()) {
@@ -2587,6 +2828,8 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                 ingestionDeps,
               );
             },
+            await dispatchTokenFor(pinnedId),
+            outboundPolicy,
           );
           routed = true;
           logger.info("task.p2p_pinned_dispatched", {
@@ -2609,7 +2852,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     }
 
     // Phase 1: Scored routing — find best service agents from listings
-    if (!pinnedLocalHandled && requiredCaps.length > 0) {
+    if (!submitterPresenter && !pinnedLocalHandled && requiredCaps.length > 0) {
       try {
         const { profiles, requirements } = taskRouter.buildCandidateProfiles(
           requiredCaps[0],
@@ -2652,17 +2895,6 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           _settlement_address: string | null;
           _public_key: string | null;
         }[] = [];
-        let federationEdges: Array<{
-          from: string;
-          to: string;
-          weight: {
-            trust: number;
-            cost: number;
-            latency: number;
-            reliability: number;
-            regulatory_risk: number;
-          };
-        }> = [];
         let peerRelayNodes: Array<{
           peerRelayId: string;
           trust: number;
@@ -2670,18 +2902,25 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           reliability: number;
         }> = [];
         const remoteAgentRelay = new Map<string, string>(); // remote agent motebit_id → peer relay endpoint_url
+        const peerEndpointByRelayId = new Map<string, string>(); // peer relay id → endpoint_url (dispatch consumes the planned route)
         try {
           const fedResult = await taskRouter.fetchFederatedCandidates(
             requiredCaps,
             callerMotebitId,
           );
           federatedCandidates = fedResult.candidates;
-          federationEdges = fedResult.federationEdges;
+          // `fedResult.federationEdges` (peer → agent topology) is deliberately
+          // not fed to the ranking graph: each remote profile carries
+          // `reachable_via`, so `buildRoutingGraph` builds that leg from the
+          // agent's OWN execution metrics instead of placeholder weights.
           peerRelayNodes = fedResult.peerRelayNodes;
           for (const fc of federatedCandidates) {
             // Filter out excluded agents from federated results too
             if (!excludeSet.has(fc.profile.motebit_id)) {
               remoteAgentRelay.set(fc.profile.motebit_id, fc._source_relay_endpoint);
+              if (fc.profile.reachable_via) {
+                peerEndpointByRelayId.set(fc.profile.reachable_via, fc._source_relay_endpoint);
+              }
             }
           }
         } catch {
@@ -2908,6 +3147,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           const federationPeerEdges = peerRelayNodes.map((node) => ({
             from: selfId,
             to: node.peerRelayId,
+            kind: "traversed" as const, // the forward really goes through the peer
             weight: {
               trust: node.trust,
               cost: 0,
@@ -2916,12 +3156,15 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               regulatory_risk: 0,
             },
           }));
-          const allPeerEdges = [...peerEdges, ...federationPeerEdges, ...federationEdges];
+          // Only the traversed self → peer hop is supplied here; the peer →
+          // agent leg comes from each remote profile's `reachable_via`.
+          // Discovery via a peer never yields a direct self → agent edge.
+          const allPeerEdges = [...peerEdges, ...federationPeerEdges];
 
           // Map routing_strategy to semiring composite function
           const compositeFunction: CompositeFunction | undefined =
             body.routing_strategy === "cost"
-              ? (_route, scores) => scores.costScore * 1e6 + scores.reliability * 1e3 + scores.trust
+              ? lexicographicOver(["costScore", "reliability", "trust"])
               : body.routing_strategy === "quality"
                 ? lexicographicComposite
                 : body.routing_strategy === "balanced"
@@ -2960,6 +3203,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               sub_scores: topScore.sub_scores,
               routing_paths: topScore.routing_paths,
               alternatives_considered: topScore.alternatives_considered,
+              trust_evidence_path: topScore.trust_evidence_path,
             };
 
             // A task forwards to at most ONE federated relay: fanning one task
@@ -2971,9 +3215,26 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
             for (const sel of selected) {
               const selId = sel.motebit_id;
               if (remoteAgentRelay.has(selId)) {
-                // Remote agent: forward task to peer relay
+                // Remote agent: forward task to the peer relay the PLANNED
+                // ROUTE names. Selection and transport must agree — choosing
+                // a worker and then picking a peer independently would let
+                // the recorded route and the real forward diverge.
                 if (federatedForwarded) continue;
-                const peerEndpoint = remoteAgentRelay.get(selId)!;
+                const plannedRoute = sel.routing_paths[0] ?? [];
+                const plannedPeer = plannedRoute.length >= 2 ? plannedRoute[0] : undefined;
+                const peerEndpoint =
+                  plannedPeer != null ? peerEndpointByRelayId.get(plannedPeer) : undefined;
+                if (peerEndpoint == null || plannedRoute[plannedRoute.length - 1] !== selId) {
+                  // Loud, not silent: the ranking produced a route the dispatcher
+                  // cannot take. Skip rather than forward on a different path.
+                  logger.warn("task.forward_route_mismatch", {
+                    taskId,
+                    agent: selId,
+                    plannedRoute,
+                    knownPeers: [...peerEndpointByRelayId.keys()],
+                  });
+                  continue;
+                }
 
                 // Circuit breaker: skip forwarding if the peer's circuit is open
                 if (!taskRouter.canForward(peerEndpoint)) {
@@ -3083,7 +3344,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                   // No WebSocket — try HTTP MCP forwarding via registered endpoint_url
                   const regRow = moteDb.db
                     .prepare(
-                      "SELECT endpoint_url FROM agent_registry WHERE motebit_id = ? AND expires_at > ?",
+                      `SELECT endpoint_url FROM agent_registry WHERE motebit_id = ? AND expires_at > ?${ON_SHELF}`,
                     )
                     .get(selId, Date.now()) as { endpoint_url: string } | undefined;
                   if (regRow?.endpoint_url?.trim()) {
@@ -3106,6 +3367,8 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                           ingestionDeps,
                         );
                       },
+                      await dispatchTokenFor(selId),
+                      outboundPolicy,
                     );
                     routed = true;
                   }
@@ -3126,7 +3389,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // may have accepted the task, and broadcasting locally would cause double-execution.
     // Also skip for pinned-local paid tasks (Phase 0): fan-out could execute the
     // paid task on a worker the delegator never paid.
-    if (!pinnedLocalHandled && !routed && !federationAttempted) {
+    if (!submitterPresenter && !pinnedLocalHandled && !routed && !federationAttempted) {
       const peers = connections.get(motebitId);
       if (peers) {
         for (const peer of peers) {
@@ -3142,7 +3405,13 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
 
     // Phase 3: HTTP MCP fallback — when no WebSocket routed the task,
     // find a registered agent with matching capabilities and forward via HTTP.
-    if (!pinnedLocalHandled && !routed && !federationAttempted && requiredCaps.length > 0) {
+    if (
+      !submitterPresenter &&
+      !pinnedLocalHandled &&
+      !routed &&
+      !federationAttempted &&
+      requiredCaps.length > 0
+    ) {
       const now = Date.now();
       const capFilter = requiredCaps[0]!;
       // Self-exclusion (#459): same rule as the scored path — the fallback
@@ -3152,7 +3421,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       const httpCandidate = moteDb.db
         .prepare(
           `SELECT r.motebit_id, r.endpoint_url FROM agent_registry r
-           WHERE r.expires_at > ? AND r.endpoint_url != ''
+           WHERE r.expires_at > ? AND r.endpoint_url != '' AND r.${ON_SHELF_PREDICATE}
              AND r.motebit_id != ?
              AND EXISTS (SELECT 1 FROM json_each(r.capabilities) WHERE value = ?)
            LIMIT 1`,
@@ -3179,6 +3448,8 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               ingestionDeps,
             );
           },
+          await dispatchTokenFor(httpCandidate.motebit_id),
+          outboundPolicy,
         );
         routed = true;
       }
@@ -3187,14 +3458,42 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // Phase 4: Push wake — when no WebSocket, no HTTP MCP, and no federation routed the task,
     // attempt to wake a mobile device via push notification. Fire-and-forget — the task stays
     // in queue regardless. The device will reconnect via WebSocket and claim the task.
-    if (!pinnedLocalHandled && !routed && !federationAttempted && pushAdapter) {
+    if (
+      !submitterPresenter &&
+      !pinnedLocalHandled &&
+      !routed &&
+      !federationAttempted &&
+      pushAdapter
+    ) {
       void attemptPushWake(motebitId, { pushAdapter, db: moteDb.db });
     }
 
+    // The submitter becomes the presenter only when the relay did not route
+    // the task anywhere (no WebSocket, no MCP endpoint, no federation). A
+    // routed task's token travelled with the forward; handing the submitter a
+    // second one would race the relay's own dispatch at the worker.
+    const submitterPresents = !routed && !federationAttempted;
+    if (submitterPresenter) {
+      // Chosen, not incidental: the submitter asked to present. Nothing above
+      // routed (every phase is guarded), so the token below is the ONLY one.
+      logger.info("task.submitter_presents", {
+        correlationId: taskId,
+        worker:
+          typeof body.target_agent === "string" && body.target_agent.length > 0
+            ? body.target_agent
+            : motebitId,
+        submitted_by: submittedBy ?? null,
+      });
+    }
+    const intendedWorker =
+      typeof body.target_agent === "string" && body.target_agent.length > 0
+        ? body.target_agent
+        : motebitId;
     const responseBody = {
       task_id: taskId,
       status: task.status,
       routing_choice: routingChoice ?? null,
+      ...(submitterPresents ? { dispatch_token: await dispatchTokenFor(intendedWorker) } : {}),
     };
     completeIdempotency(moteDb.db, idempotencyKey, motebitId, 201, JSON.stringify(responseBody));
     return c.json(responseBody, 201);

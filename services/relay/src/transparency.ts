@@ -77,7 +77,25 @@ export const DECLARATION_CONTENT = {
         "expires_at TTL",
         "optional device label (claiming_device_name) when set by user during pairing",
       ],
-      retention_window: "indefinite while motebit is active; expires per TTL after last heartbeat",
+      retention_window:
+        "discovery fields (endpoint_url, capabilities) are cleared when the motebit deregisters, is revoked, or 90 days pass without a heartbeat (the lease); the row itself — motebit_id, public key, guardian key, settlement configuration — is retained until revocation, and revocation keeps the row with its revoked mark so the identity's binding and its end stay verifiable (#703, since 2026-09-24)",
+    },
+    // Its own category, not a line under presence: presence is TTL-governed
+    // and this table is not, and one `retention_window` string per category
+    // cannot say both. Undeclared until 2026-09-24 (#696).
+    device_registry: {
+      tables: ["devices"],
+      observable: [
+        "device_id",
+        "the motebit_id the device belongs to",
+        "the device's Ed25519 public key",
+        "registered_at timestamp",
+        "optional device_name",
+        "an opaque per-device bearer token (never the identity's private key)",
+        "optional self-issued hardware-attestation credential (JSON) for the device",
+      ],
+      retention_window:
+        "indefinite — device rows carry no TTL and are never reaped for silence; there is no automatic removal",
     },
     operational: {
       tables: [
@@ -136,10 +154,20 @@ export const DECLARATION_CONTENT = {
       enforcement:
         "three layers — agent-boundary gating in packages/privacy-layer, relay ingress redaction in services/relay/src/redaction.ts (applied on both the HTTP and WebSocket sync push paths before eventStore.append), and optional client-side E2E encryption in packages/sync-engine",
     },
+    auth_events: {
+      tables: ["relay_auth_events"],
+      observable: [
+        "every presentation of the operator master token — HTTP method, route path, request correlation id",
+        "every refused signed token — the token's claimed motebit_id, the audience the route expected, the rejection reason, route path, correlation id",
+        "never the token bytes; never the client IP (see ip_addresses below)",
+      ],
+      retention_window:
+        '30-day rolling window, swept every minute by the task-cleanup loop; an operator\'s audit aid ("who presented the master token, what did we refuse") readable at GET /api/v1/admin/auth-events, not a surveillance log',
+    },
     ip_addresses: {
       handling: "transient",
       detail:
-        "client IP is read for rate limiting (in-memory FixedWindowLimiter, no DB) and included in auth-event log lines (Fly.io retention applies, no app-level persistence)",
+        "client IP is read for rate limiting (in-memory FixedWindowLimiter, no DB) and included in auth-event LOG LINES only (Fly.io retention applies); the relay's own auth-event record (relay_auth_events) deliberately has no IP column — no app-level persistence",
       no_app_db_storage: true,
     },
   },
@@ -549,6 +577,16 @@ export function renderMarkdown(): string {
   lines.push(`Retention window: ${c.retention.presence.retention_window}.`);
   lines.push("");
 
+  lines.push("### Device registry");
+  lines.push("");
+  lines.push(`Tables: ${c.retention.device_registry.tables.map((t) => `\`${t}\``).join(", ")}.`);
+  lines.push("");
+  lines.push("Observable:");
+  for (const item of c.retention.device_registry.observable) lines.push(`- ${item}`);
+  lines.push("");
+  lines.push(`Retention window: ${c.retention.device_registry.retention_window}.`);
+  lines.push("");
+
   lines.push("### Operational");
   lines.push("");
   lines.push(`Tables: ${c.retention.operational.tables.map((t) => `\`${t}\``).join(", ")}.`);
@@ -567,8 +605,16 @@ export function renderMarkdown(): string {
   for (const item of c.retention.content.observable) lines.push(`- ${item}`);
   lines.push("");
   lines.push(`Retention window: ${c.retention.content.retention_window}.`);
-  lines.push("");
   lines.push(`Enforcement: ${c.retention.content.enforcement}.`);
+  lines.push("");
+  lines.push("### Auth events");
+  lines.push("");
+  lines.push(`Tables: ${c.retention.auth_events.tables.map((t) => `\`${t}\``).join(", ")}.`);
+  lines.push("");
+  lines.push("Observable:");
+  for (const item of c.retention.auth_events.observable) lines.push(`- ${item}`);
+  lines.push("");
+  lines.push(`Retention window: ${c.retention.auth_events.retention_window}.`);
   lines.push("");
 
   lines.push("### IP addresses");

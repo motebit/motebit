@@ -25,7 +25,6 @@ Open settings (gear icon, top right) to configure your LLM:
 |---|---|
 | **Ollama** (default) | Requires a running Ollama instance. Set the endpoint URL in settings (default `http://localhost:11434`). |
 | **Anthropic** | Enter your API key. Stored in the device keychain, never on disk. |
-| **Hybrid** | Uses Anthropic as primary, falls back to Ollama on failure. Requires both an API key and an Ollama endpoint. |
 
 Set the model name in the **Model** field. Default: `qwen3`.
 
@@ -88,7 +87,7 @@ Goal outcomes (completed/failed) appear as system messages with summaries.
 
 Connect external tools via MCP (Model Context Protocol). Mobile supports **HTTP transport only** (no stdio).
 
-In the **Tools** settings tab:
+In the **Capabilities** panel (not the settings modal):
 
 1. Tap **Add Server** — enter name, URL, and optional trust toggle
 2. On connect, the manifest is SHA-256 hashed and pinned
@@ -134,7 +133,9 @@ The settings modal has 5 tabs:
 | **Governance** | Operator mode + PIN, tool approval preset (cautious/balanced/autonomous), memory persistence threshold, reject-secrets switch, max tool calls per turn |
 | **Identity** | Motebit ID, DID, device ID, public key (copy-to-clipboard), rotate key, link device, export identity file, export all data |
 | **Intelligence** | Provider mode (Motebit Cloud / BYOK / on-device), model, BYOK vendor, on-device backend (Apple FM / MLX / local server), voice settings (TTS, auto-send, neural VAD, TTS voice) |
-| **Tools** | MCP server list with trust toggles, add/remove servers, motebit-pinned public keys |
+| **Billing** | Motebit Cloud balance and funding for this motebit (`BillingPanel`) |
+
+MCP servers (server list with trust toggles, add/remove, motebit-pinned public keys) live in the **Capabilities** panel, not in the settings modal.
 
 ## Configuration storage
 

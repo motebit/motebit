@@ -1,6 +1,6 @@
 {
   "name": "@motebit/clerk",
-  "version": "0.0.0",
+  "version": "0.0.0-private",
   "license": "BUSL-1.1",
   "private": true,
   "type": "module",
@@ -23,7 +23,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
-    "tsx": "^4.23.1",
+    "tsx": "^4.23.12",
     "typescript": "^5.6.0",
     "vitest": "^4.1.10"
   }

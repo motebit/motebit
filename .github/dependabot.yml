@@ -69,6 +69,18 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "@react-native-async-storage/async-storage"
         update-types: ["version-update:semver-major"]
+      # Not a major, and not a decision against the library — an upstream type
+      # regression. 13.16.2 changed the default type parameter from
+      # `WebView<P = {}>` to `WebView<P = undefined>`, and the class extends
+      # `Component<WebViewProps & P>`. TypeScript reduces `WebViewProps &
+      # undefined` to `never`, so every prop on a plain `<WebView …/>` fails to
+      # typecheck ("Type 'X' is not assignable to type 'never'"). 13.17.0 still
+      # carries it, so `apps/mobile` pins the exact last-good 13.16.1 rather
+      # than contorting the call site with an explicit generic. Remove the pin
+      # and this ignore together, once a release declares a default type
+      # parameter that does not collapse the props type.
+      - dependency-name: "react-native-webview"
+        update-types: ["version-update:semver-minor", "version-update:semver-patch"]
     # Grouping strategy: isolate blast radius.
     #
     # Crypto deps are security-critical — any compromise undermines the thesis,

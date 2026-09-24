@@ -301,6 +301,35 @@ describe("mintAudienceToken (the canonical mint seam)", () => {
     expect(result).toEqual(payload);
   });
 
+  it("carries an optional `sub` subject claim under the signature and omits it when absent", async () => {
+    const kp = await generateKeypair();
+    const withSub = await mintAudienceToken(
+      {
+        mid: "worker-1",
+        did: "relay-did",
+        aud: "task:dispatch",
+        sub: "task-abc",
+        digest: "ab".repeat(32),
+      },
+      kp.privateKey,
+    );
+    const verified = await verifySignedToken(withSub.token, kp.publicKey);
+    expect(verified?.sub).toBe("task-abc");
+    expect(verified?.digest).toBe("ab".repeat(32));
+    expect(verified).toEqual(withSub.payload);
+
+    // Tampering with the subject after signing is a signature failure, not a
+    // silently different subject — the claim is under the Ed25519 signature.
+    const [b64, sig] = withSub.token.split(".") as [string, string];
+    const json = Buffer.from(b64, "base64url").toString("utf8");
+    const forged = Buffer.from(json.replace("task-abc", "task-xyz"), "utf8").toString("base64url");
+    expect(await verifySignedToken(`${forged}.${sig}`, kp.publicKey)).toBeNull();
+
+    const without = await mintAudienceToken({ mid: "m", did: "d", aud: "sync" }, kp.privateKey);
+    expect("sub" in without.payload).toBe(false);
+    expect("digest" in without.payload).toBe(false);
+  });
+
   it("defaults the lifetime to DEFAULT_SIGNED_TOKEN_TTL_MS and honors ttlMs overrides", async () => {
     const kp = await generateKeypair();
     const { payload } = await mintAudienceToken({ mid: "m", did: "d", aud: "sync" }, kp.privateKey);

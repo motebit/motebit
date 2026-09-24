@@ -11,7 +11,7 @@ Federation is additive. A relay operates identically whether or not it has peers
 
 Peering is bilateral and authenticated. Two relays exchange identities, each signs a challenge using its own Ed25519 key, both verify, and both transition the peer to `active` — neither relay can unilaterally enroll the other. Once active, peers exchange heartbeats every 60 seconds; missed heartbeats suspend a peer; sustained absence removes it. Removal requires a fresh handshake to re-establish.
 
-There is no single root, no namespace registry, no global directory. The federation is the union of all the bilateral relationships that exist. Two relays that have not peered cannot reach each other, even if they share a peer in common — discovery walks the graph with a hop limit (RECOMMENDED 3) and explicit loop prevention.
+There is no single root, no namespace registry, no global directory. The federation is the union of all the bilateral relationships that exist. Two relays that have not peered can still see each other's agents through a common peer — discovery walks the graph up to a hard hop limit (relays MUST reject `max_hops` above 3) — but task dispatch and settlement happen only between direct peers and explicit loop prevention.
 
 ## How a task crosses a boundary
 

@@ -6,6 +6,12 @@ on:
     paths:
       - "apps/web/**"
       - "packages/**"
+      # A lockfile or root-manifest change (dependency security fixes,
+      # pnpm.overrides) changes the built image without touching this
+      # service's own files — it must redeploy too. Witnessed 2026-09-13:
+      # the advisory triage merge redeployed only the relay.
+      - "pnpm-lock.yaml"
+      - "package.json"
   workflow_dispatch:
 
 concurrency:
@@ -22,7 +28,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Vercel CLI
         run: npm install -g vercel

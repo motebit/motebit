@@ -3,18 +3,18 @@ title: CLI
 description: The developer REPL — slash commands, streaming, and debugging.
 ---
 
-The CLI is a Node.js REPL for talking to your motebit — streaming responses, tool approvals, slash commands, and a daemon mode for scheduled goals. Same code that ships via `npm install -g motebit`; running `pnpm --filter motebit dev` from a monorepo clone invokes it with the package source instead of the published bundle.
+The CLI is a Node.js REPL for talking to your motebit — streaming responses, tool approvals, slash commands, and a daemon mode for scheduled goals. Same code that ships via `npm install -g motebit`; running `pnpm --filter motebit start` from a monorepo clone invokes it with the package source instead of the published bundle.
 
 ## Running the CLI
 
 ```bash
-pnpm --filter motebit dev
+pnpm --filter motebit start
 ```
 
 Or with options:
 
 ```bash
-pnpm --filter motebit dev -- \
+pnpm --filter motebit start -- \
   --provider anthropic \
   --model claude-sonnet-4-6 \
   --operator
@@ -24,7 +24,7 @@ pnpm --filter motebit dev -- \
 
 | Flag | Description |
 |---|---|
-| `--provider <name>` | `ollama` or `anthropic` |
+| `--provider <name>` | `anthropic`, `openai`, `google`, `groq`, `deepseek`, `local-server`, or `proxy` (`ollama` is a deprecated alias for `local-server`) |
 | `--model <name>` | Model identifier |
 | `--db-path <path>` | Custom SQLite database path |
 | `--no-stream` | Disable streaming (wait for full response) |
@@ -71,7 +71,7 @@ pnpm --filter motebit dev -- \
 | `/agents info <id>` | Full trust record detail for an agent |
 | `/agents trust <id> <level>` | Set trust level (first_contact, verified, trusted, blocked) |
 | `/agents block <id>` | Block an agent |
-| `/operator` | Toggle operator mode |
+| `/operator` | Show operator mode status |
 | `quit` / `exit` | Exit the CLI |
 
 ## Tool approval flow
@@ -81,10 +81,10 @@ When the agent requests a tool that requires approval, the CLI pauses and prompt
 ```
 Tool approval required: shellExec
   args: {"command": "ls -la"}
-Allow? (Y/n):
+Allow? (y/n):
 ```
 
-Type `Y` to approve, `n` to deny. The agent continues with the result (or denial) and completes the turn.
+Type `y` to approve; anything else denies. The agent continues with the result (or denial) and completes the turn.
 
 ## Identity bootstrap
 
@@ -125,6 +125,10 @@ The CLI supports several subcommands beyond the default interactive REPL:
 | `motebit doctor` | Diagnose configuration and connectivity issues |
 | `motebit goal add/list/remove/pause/resume` | Manage scheduled goals |
 | `motebit approvals list/show/approve/deny` | Manage the tool approval queue |
+| `motebit halt [goal <id>] [--reason "..."] [--remote]` | Withdraw the permission to act unattended; `--remote` signs a command to the running runtime and returns its acknowledgement |
+| `motebit resume [<halt_id>\|all] [--remote]` | Give that permission back |
+| `motebit halt-status [--remote]` | What is stopped, and whether the motebit has acknowledged it |
+| `motebit runs [list\|show <run_id>\|ack <run_id> --allow-fresh-run]` | Goal-run ledger: runs holding their goal (paused on you, or interrupted with side effects) and recent runs; `show` opens one run — what it produced and whether that result is signed, what its tools reported, and the evidence pointers a stranger could re-check against the original source; `ack --allow-fresh-run` releases a reviewed interrupted run, accepting that its goal's next run may repeat effects |
 | `motebit rotate [--reason "..."]` | Rotate Ed25519 keypair with signed succession record |
 
 ### Serve flags
@@ -156,4 +160,4 @@ motebit serve --identity ./motebit.md --tools ./dist/tools.js \
   --serve-transport http --direct --self-test
 ```
 
-In HTTP mode, the server registers with the sync relay (if configured) and sends a heartbeat every 5 minutes. Authentication is configured via the `authToken` field in `~/.motebit/config.json` — clients pass it as a bearer token.
+In HTTP mode, the server registers with the sync relay (if configured) and sends a heartbeat every 5 minutes. Authentication is fail-closed: callers present a motebit signed token (`Authorization: Bearer motebit:<signed-token>`, e.g. the relay's per-task `task:dispatch` token) and everything else except `/health` gets 401. There is no static `authToken` setting in `~/.motebit/config.json`.

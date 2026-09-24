@@ -8,6 +8,8 @@
  * All 11 federation endpoints registered here.
  */
 import type { Hono } from "hono";
+import { checkOutboundUrl } from "@motebit/sdk";
+import type { OutboundUrlOptions } from "@motebit/sdk";
 import { HTTPException } from "hono/http-exception";
 import {
   sign,
@@ -39,6 +41,7 @@ import { persistWitnessOmissionDispute, resolveHorizonCertBySignature } from "./
 // dispatcher). The `suite` literal below is the stable contract between
 // services and the registry in @motebit/protocol.
 const FEDERATION_SUITE = "motebit-concat-ed25519-hex-v1" as const;
+import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
 
 /**
  * Wire-reported relay-federation spec version. Single source of truth for the
@@ -482,15 +485,98 @@ export function getRevocationEventsSince(db: DatabaseDriver, sinceTs: number): R
 // surfaces as the declared `horizon_advance_period_days: 7` in commit
 // 5's manifest projection.
 
-/** Process incoming revocation events from a peer relay. */
+/**
+ * Process incoming revocation events from a peer relay.
+ *
+ * A peer signature establishes AUTHORSHIP of the statement. It does not
+ * establish AUTHORITY over the identity the statement names, and the two must
+ * not be conflated here, because peering is not an authorization:
+ * `/federation/v1/peer/propose` followed by `/federation/v1/peer/confirm` are
+ * two unauthenticated calls, and `autoAcceptPeers` is not consulted by either
+ * (see `federation-independent-operators.test.ts` — "two independent
+ * operators, no shared admin token"). So "this event carries a valid peer
+ * signature" is a property anyone who can reach this relay can produce for
+ * themselves, and it cannot be the thing that authorizes a write.
+ *
+ * Every row in `agent_registry` was written by a door with a NAMED authorized
+ * principal. The principal is not always the identity's current key, and the
+ * invariant is authorization rather than current-key possession: registration
+ * and bootstrap admit on a key the identity already holds (behind
+ * `refusePublicDeviceRegistration`) and `/rotate-key` proves possession of the
+ * current key, but guardian recovery is authorized by the identity's own
+ * designated guardian, operator moderation by the operator under a signed
+ * append-only `relay_agent_revocations` record, and the migration accept by a
+ * verified migration token plus a credential bundle checked against the
+ * presented key. A peer is none of those principals, and carries nothing that
+ * would make it one. `services/relay/CLAUDE.md` rule 21 requires every door
+ * that writes `agent_registry.public_key` to answer to the shared rule or to
+ * say what roots its authority instead. This door's answer is that it has
+ * none, so it writes nothing there.
+ *
+ * Refusing costs no working behaviour. `agent_registry` holds only identities
+ * registered HERE — remote agents are never cached into it, and
+ * `federation_visible` is an opt-out on local rows — while the outbound feed
+ * (`insertRevocationEvent`) is only ever minted about this relay's own
+ * identities. An inbound event therefore describes the SENDER's identity, and
+ * could only match a local row by naming an identity that is not the sender's.
+ * That match is the defect, not a feature: nothing emits it, and migration
+ * departure deliberately does not (`migration.ts` marks the row revoked
+ * locally and mints no event).
+ *
+ * `credential_revoked` is refused for the same reason, and the reasoning that
+ * once spared it was wrong: "the table is federation-native" describes storage
+ * provenance and "the write only denies" describes blast direction. Neither is
+ * a grant of authority. This relay already has an authority model for that
+ * act, stated and enforced on its own door — `POST
+ * /api/v1/agents/:motebitId/revoke-credential` answers 403 "Only the
+ * credential subject or issuer can revoke", checked against
+ * `relay_credentials.issuer_did`. A peer is neither, `credential_id` is not
+ * covered by the signature verified above, and nothing in the event asserts
+ * that the sender speaks for either principal. The table also has no foreign
+ * key and the write is `INSERT OR IGNORE`, so a named id need not exist: an
+ * unrefused event can poison an identifier before it is ever issued.
+ *
+ * Refusing it has a real cost, stated rather than glossed: a credential
+ * legitimately revoked on a peer no longer becomes revoked here, so this
+ * direction now fails OPEN on honest revocations in exchange for closing an
+ * unauthorized write. Restoring it needs the issuer's or subject's OWN signed
+ * revocation carried in the event and verified against that identity's key —
+ * the same shape as the unsigned `new_public_key` field, and the same
+ * federation wire increment.
+ *
+ * What remains applicable from an inbound feed is therefore nothing: with all
+ * three branches grounded, this handler can act with authority on no event the
+ * current wire format can carry. That is the honest state of the feature, and
+ * naming it is better than keeping a door open to look busy.
+ *
+ * The scoping precedent is already in this file. `POST
+ * /federation/v1/horizon/witness` refuses a request whose `cert_body.subject`
+ * is not the soliciting `issuer_id` — "stops a relay from soliciting witnesses
+ * for a cert it doesn't own" — and `/horizon/dispute` refuses a cert this
+ * relay did not issue. A peer may speak about itself. This door had simply
+ * drifted from a rule its siblings already kept.
+ *
+ * `refused` counts two shapes, not one. For `agent_revoked` and `key_rotated`
+ * it is the cross-authority case: an event naming an identity this relay
+ * holds. For `credential_revoked` it is EVERY event, whatever the subject's
+ * locality, because the authority a peer lacks there is over the credential
+ * rather than over the registry row. An `agent_revoked` or `key_rotated` event
+ * about an identity we do not hold is still `processed` with no local effect,
+ * exactly as before, so an honest peer's feed stays quiet on those two.
+ */
 export async function processIncomingRevocations(
   db: DatabaseDriver,
   events: RevocationEvent[],
   peerPublicKey: Uint8Array,
-): Promise<{ processed: number; rejected: number }> {
+): Promise<{ processed: number; rejected: number; refused: number }> {
   const encoder = new TextEncoder();
   let processed = 0;
   let rejected = 0;
+  let refused = 0;
+
+  /** True when this relay is the identity's home — the rows a peer may not touch. */
+  const heldLocally = (motebitId: string): boolean =>
+    db.prepare("SELECT 1 FROM agent_registry WHERE motebit_id = ?").get(motebitId) !== undefined;
 
   for (const event of events) {
     // Verify peer signature
@@ -507,40 +593,59 @@ export async function processIncomingRevocations(
 
     switch (event.type) {
       case "agent_revoked": {
-        // Mark agent as revoked in local cache if it exists
-        try {
-          db.prepare("UPDATE agent_registry SET revoked = 1 WHERE motebit_id = ?").run(
-            event.motebit_id,
-          );
-        } catch {
-          /* agent may not exist locally */
+        // A peer does not get to de-list an identity this relay is the home
+        // of: `revoked = 1` removes it from discovery (`discovery.ts`) and
+        // 403s its migration, and the admin door that legitimately sets it
+        // writes a signed, append-only `relay_agent_revocations` record —
+        // which this path never did, so a peer write also bypassed the
+        // moderation history the relay is obliged to keep (rule 6).
+        if (heldLocally(event.motebit_id)) {
+          refused++;
+          logger.warn("federation.revocation.refused_local_identity", {
+            type: event.type,
+            motebitId: event.motebit_id,
+          });
+          break;
         }
         processed++;
         break;
       }
       case "key_rotated": {
-        // Update pinned public key if we have this agent
-        if (event.new_public_key) {
-          try {
-            db.prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?").run(
-              event.new_public_key,
-              event.motebit_id,
-            );
-          } catch {
-            /* agent may not exist locally */
-          }
+        // `new_public_key` is not covered by the signature verified above, so
+        // even a peer entitled to speak about this identity would not have
+        // authenticated the key it names. The field binding is a wire change
+        // and is tracked separately; it is not what makes this safe. What
+        // makes it safe is that the key of an identity this relay holds moves
+        // only through a door with a named authorized principal — `/rotate-key`
+        // proving possession of the CURRENT key, or the identity's designated
+        // guardian on the recovery path, which is deliberately an exception to
+        // current-key possession (a recovery exists precisely because that key
+        // is gone). A peer is neither principal.
+        if (heldLocally(event.motebit_id)) {
+          refused++;
+          logger.warn("federation.revocation.refused_local_identity", {
+            type: event.type,
+            motebitId: event.motebit_id,
+          });
+          break;
         }
         processed++;
         break;
       }
       case "credential_revoked": {
-        // Store credential revocation
-        if (event.credential_id) {
-          db.prepare(
-            "INSERT OR IGNORE INTO relay_revoked_credentials (credential_id, motebit_id, reason, revoked_by) VALUES (?, ?, 'Revoked via federation', 'federation')",
-          ).run(event.credential_id, event.motebit_id);
-        }
-        processed++;
+        // Unlike the two above, this is refused whether or not the subject is
+        // an identity this relay holds. The local door's rule is "subject or
+        // issuer" and a peer can be neither; and because the table takes an
+        // arbitrary id with no existence check, an unrefused event could also
+        // deny a credential that has not been issued yet. Consumers that would
+        // have honoured it: the hardware-attestation projection in
+        // `agents.ts` (dropping a revoked credential's score) and the
+        // credential-submission check in `credentials.ts`.
+        refused++;
+        logger.warn("federation.revocation.refused_unauthorized_credential", {
+          type: event.type,
+          motebitId: event.motebit_id,
+        });
         break;
       }
       default:
@@ -549,7 +654,7 @@ export async function processIncomingRevocations(
     }
   }
 
-  return { processed, rejected };
+  return { processed, rejected, refused };
 }
 
 // === Private Key Encryption (AES-256-GCM) ===
@@ -759,7 +864,9 @@ export async function sendHeartbeats(
   const encoder = new TextEncoder();
   const timestamp = Date.now();
   const agentCount = (
-    db.prepare("SELECT COUNT(*) as cnt FROM agent_registry").get() as { cnt: number }
+    db.prepare(`SELECT COUNT(*) as cnt FROM agent_registry WHERE ${ON_SHELF_PREDICATE}`).get() as {
+      cnt: number;
+    }
   ).cnt;
   // Heartbeat signing payload format (FEDERATION_SUITE = motebit-concat-ed25519-hex-v1):
   //   `{relay_id}|{timestamp}|{suite}`  — UTF-8 concatenation, Ed25519 sign, hex encode
@@ -1138,6 +1245,8 @@ export interface FederationDeps {
   db: DatabaseDriver;
   app: Hono;
   relayIdentity: RelayIdentity;
+  /** Outbound URL law for persisted peer endpoints (`buildOutboundPolicy`). */
+  outboundPolicy?: OutboundUrlOptions;
   federationConfig?: FederationConfig;
   federationQueryCache: Map<string, number>;
 
@@ -1330,6 +1439,13 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       throw new HTTPException(400, { message: "relay_id and public_key are required" });
     if (!endpoint_url) throw new HTTPException(400, { message: "endpoint_url is required" });
     if (!nonce) throw new HTTPException(400, { message: "nonce is required" });
+    // The challenge proves control of the proposed KEY; it says nothing about
+    // whether the endpoint is a safe destination for this relay to contact.
+    // Persist only globally-routable peer endpoints.
+    const peerVerdict = await checkOutboundUrl(endpoint_url, deps.outboundPolicy);
+    if (!peerVerdict.ok) {
+      throw new HTTPException(400, { message: `endpoint_url refused: ${peerVerdict.reason}` });
+    }
 
     checkFederationEnabled();
     checkVersionCompatibility(spec_version);
@@ -1534,6 +1650,16 @@ export function registerFederationRoutes(deps: FederationDeps): void {
             processed: result.processed,
           });
         }
+        // A peer claiming authority over an identity this relay is the home of
+        // is not a malformed feed — it is a peer asserting something it cannot
+        // be entitled to assert. Named at warn with the peer that sent it, so
+        // the attempt is visible rather than silently absorbed into a count.
+        if (result.refused > 0) {
+          logger.warn("federation.revocation.refused", {
+            peerId: relay_id,
+            refused: result.refused,
+          });
+        }
       } catch (err) {
         logger.warn("federation.revocation.error", {
           peerId: relay_id,
@@ -1544,7 +1670,11 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
     const ourTimestamp = Date.now();
     const localAgentCount = (
-      db.prepare("SELECT COUNT(*) as cnt FROM agent_registry").get() as { cnt: number }
+      db
+        .prepare(`SELECT COUNT(*) as cnt FROM agent_registry WHERE ${ON_SHELF_PREDICATE}`)
+        .get() as {
+        cnt: number;
+      }
     ).cnt;
     const responseSig = await sign(
       encoder.encode(`${relayIdentity.relayMotebitId}|${ourTimestamp}|${FEDERATION_SUITE}`),
@@ -2198,8 +2328,10 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     // `forwardTaskViaMcp` downstream, not by this existence gate. Gating
     // peer-forwards on a 15-min heartbeat window was punishing peers for
     // agent sleep, which they can't control.
+    // A delisted agent (departed, lapsed, revoked) is not serving: 404, the
+    // same answer a peer got when the row used to be deleted.
     const agent = db
-      .prepare("SELECT 1 FROM agent_registry WHERE motebit_id = ?")
+      .prepare(`SELECT 1 FROM agent_registry WHERE motebit_id = ?${ON_SHELF}`)
       .get(body.target_agent);
     if (agent == null)
       throw new HTTPException(404, { message: "Target agent not found on this relay" });

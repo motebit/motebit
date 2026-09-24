@@ -77,6 +77,7 @@ import {
   BraveSearchProvider,
   DuckDuckGoSearchProvider,
   FallbackSearchProvider,
+  nodeAddressResolver,
 } from "@motebit/tools";
 import { querySelfKnowledge } from "@motebit/self-knowledge";
 import type { SearchProvider } from "@motebit/tools";
@@ -85,6 +86,7 @@ import { dim } from "./colors.js";
 import { createCliLogger } from "./cli-logger.js";
 import type { CliConfig } from "./args.js";
 import { CONFIG_DIR, loadFullConfig } from "./config.js";
+import { resolveRelayUrl } from "./subcommands/_helpers.js";
 
 export function getApiKey(
   provider: "anthropic" | "openai" | "google" | "deepseek" | "groq" = "anthropic",
@@ -153,6 +155,12 @@ export function buildStorageAdapters(moteDb: MotebitDatabase): StorageAdapters {
     latencyStatsStore: moteDb.latencyStatsStore,
     credentialStore: moteDb.credentialStore,
     approvalStore: moteDb.approvalStore,
+    haltStore: moteDb.haltStore,
+    // Where the pointers a returning owner re-checks are kept. The
+    // daemon is the surface that runs goals with nobody watching, so it
+    // is the one that most needs its work to be checkable rather than
+    // taken on trust.
+    runEvidenceSink: moteDb.runEvidenceStore,
   };
 }
 
@@ -349,7 +357,16 @@ export function buildToolRegistry(
   }
   registry.register(currentTimeDefinition, createCurrentTimeHandler());
   registry.register(webSearchDefinition, createWebSearchHandler(searchProvider));
-  registry.register(readUrlDefinition, createReadUrlHandler());
+  // Model-driven fetches obey the outbound URL law by default (no LAN, no
+  // loopback, no metadata). A developer reading their own localhost server
+  // opts in explicitly — the switch is theirs, never the model's.
+  registry.register(
+    readUrlDefinition,
+    createReadUrlHandler({
+      allowPrivateNetwork: process.env["MOTEBIT_ALLOW_PRIVATE_URLS"] === "1",
+      resolve: nodeAddressResolver(),
+    }),
+  );
 
   // Deferred handlers for memory/events (need runtime, which needs registry).
   // Recall routes through the runtime's `recallMemoriesForTool` — the one place
@@ -828,12 +845,9 @@ export async function createRuntime(
   );
 
   // Wire sync — default relay is always available
-  const DEFAULT_SYNC_URL = "https://relay.motebit.com";
-  const syncUrl =
-    config.syncUrl ??
-    process.env["MOTEBIT_SYNC_URL"] ??
-    loadFullConfig().sync_url ??
-    DEFAULT_SYNC_URL;
+  // One resolver for every command that talks to a relay (#702: `rotate`
+  // resolved it differently and stranded the default-relay case).
+  const syncUrl = resolveRelayUrl(config);
   // Accept both env var names — they have been aliases for the life of the
   // CLI; see subcommands/_helpers.ts:getRelayAuthHeaders for the canonical
   // fallback order. create-motebit's scaffold writes MOTEBIT_API_TOKEN, so

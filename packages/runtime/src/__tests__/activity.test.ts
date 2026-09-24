@@ -14,6 +14,17 @@ describe("deriveStreamActivity", () => {
     expect(deriveStreamActivity(chunk)).toBe("tool: web_search");
   });
 
+  it("tool_status calling with band narration → the narration, never the identifier", () => {
+    const chunk: StreamChunk = {
+      type: "tool_status",
+      name: "web_search",
+      status: "calling",
+      slabProjection: "band",
+      narration: 'Searching "dreamversal.com"',
+    };
+    expect(deriveStreamActivity(chunk)).toBe('Searching "dreamversal.com"');
+  });
+
   it("tool_status done → thinking", () => {
     const chunk: StreamChunk = { type: "tool_status", name: "web_search", status: "done" };
     expect(deriveStreamActivity(chunk)).toBe("thinking");

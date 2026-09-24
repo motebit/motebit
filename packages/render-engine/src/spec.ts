@@ -471,13 +471,22 @@ export interface RenderAdapter {
  * the floor (the intent-gated-slab principle — the slab precedes
  * content; content embeds INTO the register, never adjacent).
  */
-export type SlabBodyRegister = "home" | "live" | "transition";
+export type SlabBodyRegister = "home" | "live" | "transition" | "artifact";
 
-/** Iteration array; closed under additions to `SlabBodyRegister`. */
+/**
+ * Iteration array; closed under additions to `SlabBodyRegister`.
+ *
+ * `artifact` (#594 Inc 4): the body slot presents a durable goal-result
+ * artifact (`WebApp.presentGoalArtifact`). Screen-mesh visibility derives
+ * false exactly like `home` — only `live` shows a screencast — so the
+ * artifact renders against pure slab interior. Any URL/session
+ * transition recomputes the register and the artifact view yields.
+ */
 export const ALL_SLAB_BODY_REGISTERS: readonly SlabBodyRegister[] = [
   "home",
   "live",
   "transition",
+  "artifact",
 ] as const;
 
 /**

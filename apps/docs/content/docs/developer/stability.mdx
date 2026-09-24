@@ -20,7 +20,7 @@ A version number is a claim about what changed. Motebit's published packages ver
 | `@motebit/sdk` | `2.x` | Developer contract — types + adapter interfaces |
 | `@motebit/crypto-{appattest,android-keystore,tpm,webauthn}` | `1.x` | Platform attestation verifiers |
 | `create-motebit` | `1.x` | Project scaffolder |
-| `motebit` (CLI bundle) | `1.x` | Operator surface: subcommands, flags, exit codes, `~/.motebit/` layout, relay HTTP routes |
+| `motebit` (CLI bundle) | `1.x` | Operator surface: subcommands, flags, exit codes, `~/.motebit/` layout |
 | `@motebit/state-export-client` | `0.x` | **Pre-1.0 — the API may still change. Pin the exact version.** |
 | workspace-private (`0.0.0-private`) | — | **No public contract.** Bundled into `motebit`; internals can change between any two releases. Don't `npm install` or depend on them. |
 
@@ -30,8 +30,8 @@ The full published list and the protocol/package boundary live in [Public surfac
 
 You don't have to take motebit's word for it — the stability is mechanical:
 
-- **`check-api-surface`** pins the exported type surface of `protocol`, `sdk`, `crypto`, `verifier`, and `verify` to committed api-extractor baselines (`packages/*/etc/*.api.md`). Any change to an exported signature **fails CI** unless a `major` changeset ships with it. A breaking change *cannot* be released as a patch.
-- **`check-cli-surface`** locks the `motebit` CLI's subcommands, flags, exit codes, `~/.motebit/` layout, and relay routes the same way.
+- **`check-api-surface`** pins the exported type surface of `@motebit/protocol`, `@motebit/crypto`, and `@motebit/sdk` to committed api-extractor baselines (`packages/{protocol,crypto,sdk}/etc/*.api.md`); the other published packages are covered by their own conformance fixtures and semver review, not by an extracted baseline. Any change to an exported signature **fails CI** unless a `major` changeset ships with it. A breaking change *cannot* be released as a patch.
+- **`check-cli-surface`** locks the `motebit` CLI's subcommands, top-level flags, exit codes, and `~/.motebit/` layout the same way. Relay HTTP routes are documented per spec (`check-spec-routes`) but are not part of this gate.
 
 These are drift gates that break the build — the same discipline that keeps the docs honest keeps the API honest.
 

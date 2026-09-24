@@ -105,6 +105,12 @@ interface PendingAnnotation {
     reason?: string;
   };
   line: number;
+  /**
+   * The LAST line of the annotation construct (the `*​/` of a JSDoc block, or
+   * the line itself for a single-line annotation). The pending-TTL measures
+   * from here, never from `line` — see PENDING_TTL_LINES.
+   */
+  endLine: number;
 }
 
 interface ImplRouteAnnotation {
@@ -123,6 +129,14 @@ interface ImplRouteUnclassified {
   path: string;
   file: string;
   line: number;
+  /**
+   * Why no annotation attached — "has none" and "has one the scanner dropped"
+   * need different repair instructions (gate-repair-instructions.md). Absent
+   * means the plain case: nothing annotation-shaped was found above the route.
+   */
+  reason?: "expired" | "unparsed";
+  /** For `expired`/`unparsed`: where the block the scanner did see begins. */
+  blockLine?: number;
 }
 
 const SINGLE_LINE_ANN = /^\s*\/\*\*\s*@(spec|internal|experimental)(?:\s+([^\s*]+))?\s*\*\/\s*$/;
@@ -135,6 +149,18 @@ const ROUTE_DECL =
 // subsequent non-blank line. Used by upgradeWebSocket-shaped registrations.
 const ROUTE_DECL_OPEN = /^\s*(?:app|router|api|hono)\.(get|post|put|patch|delete|all)\(\s*$/i;
 const STRING_LITERAL_LINE = /^\s*["']([^"']+)["']/;
+/**
+ * How far below the END of an annotation a route declaration may sit and still
+ * be considered annotated by it.
+ *
+ * Measured from the annotation's LAST line, never its first. Measuring from the
+ * first made the budget do two jobs at once — "how far away is the route" and
+ * "how long is the comment" — so a well-written annotation aged itself out.
+ * The `GET /api/v1/identity/:motebitId` block sat at exactly 12 from its `/**`,
+ * and adding one blank `*` line to a multi-paragraph @reason tipped it to 13:
+ * the gate then reported the route as having NO annotation while five tags sat
+ * directly above it (#573). Comment length is not staleness.
+ */
 const PENDING_TTL_LINES = 12;
 
 function parseJsdocBlock(block: string): PendingAnnotation | null {
@@ -152,10 +178,10 @@ function parseJsdocBlock(block: string): PendingAnnotation | null {
     tags[tag] = val;
   }
   if ("spec" in tags) {
-    return { type: "spec", specId: tags.spec || undefined, line: 0 };
+    return { type: "spec", specId: tags.spec || undefined, line: 0, endLine: 0 };
   }
   if ("internal" in tags) {
-    return { type: "internal", line: 0 };
+    return { type: "internal", line: 0, endLine: 0 };
   }
   if ("experimental" in tags) {
     return {
@@ -167,6 +193,7 @@ function parseJsdocBlock(block: string): PendingAnnotation | null {
         reason: tags.reason,
       },
       line: 0,
+      endLine: 0,
     };
   }
   return null;
@@ -181,9 +208,13 @@ function scanImplFile(
   const unclassified: ImplRouteUnclassified[] = [];
 
   let pending: PendingAnnotation | null = null;
+  // The most recent JSDoc block that yielded NO annotation — kept only so an
+  // unclassified route can say "a block is there, no tag parsed from it".
+  let lastBlockLine: number | null = null;
+  let lastBlockEndLine: number | null = null;
 
   const consume = (method: string, path: string, declarationLine: number): void => {
-    if (pending && declarationLine - pending.line <= PENDING_TTL_LINES) {
+    if (pending && declarationLine - pending.endLine <= PENDING_TTL_LINES) {
       annotations.push({
         method: method.toUpperCase(),
         path,
@@ -195,7 +226,20 @@ function scanImplFile(
         declarationLine,
       });
     } else {
-      unclassified.push({ method: method.toUpperCase(), path, file, line: declarationLine });
+      // Distinguish "no annotation" from "an annotation the scanner dropped" —
+      // pointing someone at a missing tag that is in fact present sends them to
+      // add a second one (#573).
+      unclassified.push({
+        method: method.toUpperCase(),
+        path,
+        file,
+        line: declarationLine,
+        ...(pending != null
+          ? { reason: "expired" as const, blockLine: pending.line }
+          : lastBlockLine != null && declarationLine - lastBlockEndLine! <= PENDING_TTL_LINES
+            ? { reason: "unparsed" as const, blockLine: lastBlockLine }
+            : {}),
+      });
     }
     pending = null;
   };
@@ -210,6 +254,7 @@ function scanImplFile(
         type,
         specId: type === "spec" ? single[2] : undefined,
         line: i + 1,
+        endLine: i + 1,
       };
       continue;
     }
@@ -225,7 +270,13 @@ function scanImplFile(
       const parsed = parseJsdocBlock(block);
       if (parsed) {
         parsed.line = i + 1;
+        // Anchor the TTL to the block's closing line so a long annotation does
+        // not age itself out (#573).
+        parsed.endLine = Math.min(j, lines.length - 1) + 1;
         pending = parsed;
+      } else {
+        lastBlockLine = i + 1;
+        lastBlockEndLine = Math.min(j, lines.length - 1) + 1;
       }
       i = j;
       continue;
@@ -338,8 +389,26 @@ function main(): void {
     }
   }
 
-  // Rule (c)
+  // Rule (c). "No annotation" and "an annotation the scanner did not attach"
+  // are different problems with different repairs — saying the first when the
+  // second is true sends the reader to add a tag that is already there (#573).
   for (const u of unclassified) {
+    if (u.reason === "expired") {
+      findings.push(
+        `unclassified: ${u.file}:${u.line} route "${u.method} ${u.path}" has an annotation at ` +
+          `line ${u.blockLine}, but it ends more than ${PENDING_TTL_LINES} lines above the route ` +
+          `— move the annotation directly above the declaration (do not add a second one).`,
+      );
+      continue;
+    }
+    if (u.reason === "unparsed") {
+      findings.push(
+        `unclassified: ${u.file}:${u.line} route "${u.method} ${u.path}" has a JSDoc block at ` +
+          `line ${u.blockLine}, but no @spec/@internal/@experimental tag was parsed from it ` +
+          `— check the tag spelling and that it sits on its own \`*\` line.`,
+      );
+      continue;
+    }
     findings.push(
       `unclassified: ${u.file}:${u.line} route "${u.method} ${u.path}" has no @spec/@internal/@experimental annotation.`,
     );

@@ -34,6 +34,7 @@ import {
   createRuntime,
   openMotebitDatabase,
 } from "./runtime-factory.js";
+import { createRunLedgerReader } from "./run-ledger-reader.js";
 import { consumeStream } from "./stream.js";
 import {
   readInput,
@@ -85,6 +86,12 @@ import {
   handleApprovalShow,
   handleApprovalApprove,
   handleApprovalDeny,
+  handleRunsList,
+  handleRunsAck,
+  handleRunsShow,
+  handleHalt,
+  handleResume,
+  handleHaltStatus,
   handleId,
   handleInit,
   handleLedger,
@@ -133,6 +140,7 @@ import {
   handleSkillsRunScript,
 } from "./subcommands/index.js";
 import { handleRun, handleServe } from "./daemon.js";
+import { resolveRelayUrl } from "./subcommands/_helpers.js";
 import { formatMs, formatTimeAgo } from "./utils.js";
 import { VoiceController } from "./voice.js";
 
@@ -386,6 +394,36 @@ async function main(): Promise<void> {
 
   if (subcommand === "ps") {
     await handlePs(config);
+    return;
+  }
+
+  if (subcommand === "halt") {
+    await handleHalt(config);
+    return;
+  }
+
+  if (subcommand === "resume") {
+    await handleResume(config);
+    return;
+  }
+
+  if (subcommand === "halt-status") {
+    await handleHaltStatus(config);
+    return;
+  }
+
+  if (subcommand === "runs") {
+    const runsCmd = config.positionals[1];
+    if (runsCmd == null || runsCmd === "list") {
+      await handleRunsList(config);
+    } else if (runsCmd === "ack") {
+      await handleRunsAck(config);
+    } else if (runsCmd === "show") {
+      await handleRunsShow(config);
+    } else {
+      console.error("Usage: motebit runs [list|show <run_id>|ack <run_id> --allow-fresh-run]");
+      process.exit(1);
+    }
     return;
   }
 
@@ -802,6 +840,11 @@ async function main(): Promise<void> {
     solanaWallet,
   );
   runtimeRef.current = runtime;
+  // The interactive terminal holds this machine's ledger, so `/runs`
+  // answers from it rather than reporting that it cannot see one. A
+  // command registered on a surface that owns the data and answers "I
+  // cannot look" would be the ambiguity this view exists to remove.
+  runtime.setRunLedgerReader(createRunLedgerReader(moteDb, motebitId));
 
   // #457: when a pending approval times out (default 10 minutes), say so
   // the MOMENT it happens — previously the expiry was structurally
@@ -851,12 +894,7 @@ async function main(): Promise<void> {
   const voiceController = new VoiceController({ enabled: config.voice === true });
 
   // Enable interactive delegation if relay + signing keys are available
-  const DEFAULT_SYNC_URL = "https://relay.motebit.com";
-  const syncUrl =
-    config.syncUrl ??
-    process.env["MOTEBIT_SYNC_URL"] ??
-    reloadedConfig.sync_url ??
-    DEFAULT_SYNC_URL;
+  const syncUrl = resolveRelayUrl(config, reloadedConfig);
   // Initial sync — default relay is always available
   {
     try {

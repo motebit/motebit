@@ -46,6 +46,7 @@ import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { hasRepairInstruction } from "./lib/gate-report.js";
+import { acquireGateLock } from "./lib/probe-lock.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -294,8 +295,20 @@ const PROBES: ReadonlyArray<Probe> = [
       // Drop treasury-reconciliation's declared statements below the money floor
       // (90). The gate checks the DECLARED threshold against the floor, so no test
       // run is needed; cleanup restores the config verbatim.
+      //
+      // Matched by FIELD, never by value. This probe previously replaced the
+      // literal `"statements: 90"`, and went vacuous the moment that package was
+      // ratcheted 90 -> 100 (its measured coverage was already 100 on all four
+      // axes): the replace matched nothing, the perturbation was a no-op, and the
+      // gate honestly exited 0.
+      //
+      // That is the THIRD time a probe in this file has been coupled to a value
+      // that legitimately moved — see the two prior forms recorded on the
+      // check-coverage-graduation probe directly below. A threshold is supposed
+      // to ratchet upward; a probe that breaks when it does is asserting the
+      // opposite of the policy it defends.
       mutateFile("packages/treasury-reconciliation/vitest.config.ts", (src) =>
-        src.replace("statements: 90", "statements: 50"),
+        src.replace(/statements:\s*\d+(?:\.\d+)?/, "statements: 50"),
       ),
   },
   {
@@ -303,10 +316,50 @@ const PROBES: ReadonlyArray<Probe> = [
     proves:
       "flags a graduation commitment whose target_date has passed while its live coverage thresholds still fall short of the target — the raise-by promise rotting silently past its deadline",
     perturb: () =>
-      // Past-date core-identity's entry (its live thresholds are below target —
-      // why it's under graduation). The deadline gate then fires: past
-      // target_date + target unmet. Cleanup restores the manifest verbatim.
-      mutateFile("coverage-graduation.json", (src) => src.replace('"2026-08-15"', '"2020-01-01"')),
+      // Back-date every entry that STILL has a gap. The deadline gate then
+      // fires: past target_date + target unmet. Cleanup restores verbatim.
+      //
+      // Selected by GAP, never by a literal. Two prior forms of this probe
+      // went vacuous, each coupled to manifest data that legitimately moved:
+      //
+      //   1. It back-dated core-identity by name, and proved nothing once
+      //      that package graduated (2026-08-13) — entry present, targets met.
+      //   2. It rewrote the shared literal "2026-09-30", and proved nothing
+      //      once #589 re-baselined the ONLY still-gapped entry (verify) to
+      //      2026-11-30 — the literal then matched only graduated records, so
+      //      main went red on the push after the PR (the PR itself did not
+      //      touch scripts/, so gate-effectiveness never ran on it).
+      //
+      // The manifest is data the probe must not know by value. Parse it and
+      // back-date whichever entries have `current < target` on any axis —
+      // exactly the predicate the gate enforces (`meetsTarget`), so the probe
+      // tracks the cohort as packages graduate, re-baseline, or move dates.
+      //
+      // If no entry has a gap, throw rather than return the file unchanged: a
+      // silent no-op reads as "gate exited 0" and points the reader at the
+      // gate, when the truth is the gate has no live commitment left to
+      // enforce and the probe (not the gate) needs a decision.
+      mutateFile("coverage-graduation.json", (src) => {
+        type Axes = Record<"statements" | "branches" | "functions" | "lines", number>;
+        const manifest = JSON.parse(src) as {
+          packages: Array<{ package: string; current: Axes; target: Axes; target_date: string }>;
+        };
+        const axes = ["statements", "branches", "functions", "lines"] as const;
+        const gapped = manifest.packages.filter((e) =>
+          axes.some((axis) => e.current[axis] < e.target[axis]),
+        );
+        if (gapped.length === 0) {
+          throw new Error(
+            "probe vacuous: every coverage-graduation.json entry already meets its target, so " +
+              "there is no commitment for check-coverage-graduation to enforce. Either the " +
+              "registry is genuinely fully graduated (retire the probe and the gate together) or " +
+              "an entry's `current` snapshot has drifted above its `target` — see " +
+              "docs/doctrine/coverage-graduation.md.",
+          );
+        }
+        for (const entry of gapped) entry.target_date = "2020-01-01";
+        return `${JSON.stringify(manifest, null, 2)}\n`;
+      }),
   },
   {
     script: "check-money-identity-path-canonical",
@@ -750,11 +803,11 @@ export async function probeLeak(): Promise<boolean> {
   {
     script: "check-readme",
     proves:
-      "flags a README 'What you see:' block claim that disagrees with create-motebit / runtime-factory source-of-truth (here: the relay URL ↔ DEFAULT_SYNC_URL pin)",
+      "flags a README 'What you see:' block claim that disagrees with create-motebit / the CLI relay resolver source-of-truth (here: the relay URL ↔ DEFAULT_SYNC_URL pin)",
     perturb: () =>
       // Replace the README's `Registered with relay:` value with an obviously
       // invalid URL. The gate's claim-4 assertion compares this line against
-      // `DEFAULT_SYNC_URL` in apps/cli/src/runtime-factory.ts — under the
+      // the exported `DEFAULT_SYNC_URL` in apps/cli/src/subcommands/_helpers.ts — under the
       // perturbation, the two disagree and the gate fires. Distinctive
       // `.invalid` TLD makes the perturbation trivially safe to grep-and-
       // revert if cleanup ever fails.
@@ -792,6 +845,44 @@ export async function probeLeak(): Promise<boolean> {
         src.replace(
           /^- \[`docs\/doctrine\/evidence-provenance\.md`\][^\n]*/m,
           (line) => `${line} PROBE-ONLY length-cap perturbation ${"x".repeat(260)}`,
+        ),
+      ),
+  },
+  {
+    script: "check-gate-references",
+    proves:
+      "flags a `check-*` gate NAME asserted in an always-loaded CLAUDE.md that resolves to no gate on disk — the phantom-enforcement class, where the index claims an invariant is guarded and nothing guards it",
+    perturb: () =>
+      // Append an index line asserting a gate that does not exist, in the same
+      // grammatical form the real claims use. The gate should fire on the
+      // unresolvable name.
+      //
+      // The injected line MUST carry the `PROBE_PREFIX + "injected"` needle:
+      // root CLAUDE.md is TRACKED, and `drainStalePerturbations` recovers a
+      // tracked file only when an added line contains that needle. Without it,
+      // a SIGKILL mid-probe would leave a phantom-gate assertion appended to
+      // the one file that loads into every subsequent session — precisely the
+      // poison this gate exists to prevent, written by its own probe.
+      // "Greppable by a human" is the recovery model the drain replaced.
+      mutateFile(
+        "CLAUDE.md",
+        (src) =>
+          `${src}\n- ${PROBE_PREFIX}injected phantom entry. Gate check-probe-nonexistent-gate\n`,
+      ),
+  },
+  {
+    script: "check-root-workspace-deps",
+    proves:
+      "flags a root package.json `workspace:*` dependency pointing outside the trees the relay Dockerfile copies — the shape that froze production relay for four days while main stayed green",
+    perturb: () =>
+      // Reintroduce the exact 2026-07-31 defect: a root devDependency on
+      // @motebit/research, which lives at services/research/ and is therefore
+      // absent from the relay image slice. The gate should name the package,
+      // its resolved directory, and the copied trees.
+      mutateFile("package.json", (src) =>
+        src.replace(
+          /(\n\s*)"@motebit\/runtime": "workspace:\*",/,
+          '$1"@motebit/research": "workspace:*",$1"@motebit/runtime": "workspace:*",',
         ),
       ),
   },
@@ -2224,6 +2315,18 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-identity-authority-writers",
+    proves:
+      "flags a new door that writes identity authority without naming its principal — the shape of #701, #713 and #719, each of which cut a write beside the doors that already had the rule, without the rule. Probe reintroduces the #713 door verbatim: an UPDATE of agent_registry.public_key inside the federation revocation ingest, where the only thing 'authorizing' it is a peer signature over a payload that does not cover the key and a peering handshake that takes no authorization at all. The UNREGISTERED branch must fire and name federation.ts. Chosen because it is the actual defect that shipped, not a synthetic one — the perturbation is selected by the PREDICATE the gate enforces (an unregistered write into a listed table), never by a literal copied from the registry. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile(`services/relay/src/federation.ts`, (src) =>
+        src.replace(
+          '      case "credential_revoked": {',
+          '      case "credential_revoked": {\n        db.prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?").run(event.new_public_key, event.motebit_id);',
+        ),
+      ),
+  },
+  {
     script: "check-money-authority",
     proves:
       "flags the R4 standing-authority block disappearing from policy-gate.ts — the invariant that an R4_MONEY tool call never auto-executes without a verified standing-delegation grant. Drift class: a refactor that deletes or inverts the grant check (or reorders it ahead of the trust-level switch) silently re-opens 'Trusted caller auto-executes money'. Probe inverts the null-check (`== null` → `!= null`) so the gate's ordered marker regex no longer matches; assertion 1 must fire. byte-identical restoration via mutateFile.",
@@ -2459,6 +2562,91 @@ export async function probeFetch(): Promise<unknown> {
         ),
       ),
   },
+  {
+    script: "check-playwright-image-parity",
+    proves:
+      "flags a Playwright image tag that drifts off the lockfile's resolved playwright-core (the #577→#584 crash-loop shape). Perturbs by PREDICATE — bumps the patch of whichever version the first `FROM mcr.microsoft.com/playwright:v…` stage carries — never a literal version, so a future bump cannot make this probe vacuous. Throws if no pinned stage exists.",
+    perturb: () =>
+      mutateFile("services/browser-sandbox/Dockerfile", (src) => {
+        const re = /(FROM\s+mcr\.microsoft\.com\/playwright:v)(\d+)\.(\d+)\.(\d+)/;
+        const m = re.exec(src);
+        if (m == null) {
+          throw new Error(
+            "probe vacuous: services/browser-sandbox/Dockerfile no longer pins mcr.microsoft.com/playwright — retarget the probe",
+          );
+        }
+        return src.replace(re, `$1$2.$3.${Number(m[4]) + 1}`);
+      }),
+  },
+  {
+    script: "check-docs-script-claims",
+    proves:
+      "flags a docs page that tells the reader to run a package script that does not exist — exactly the #667 finding (`pnpm --filter motebit dev` when the CLI has only `start`). Drops a fixture MDX page with a fenced `pnpm --filter motebit` command naming a script no manifest defines; the gate's manifest lookup finds the package and misses the script.",
+    perturb: () =>
+      writeFixture(
+        `apps/docs/content/docs/developer/${PROBE_PREFIX}script_claim_violation.mdx`,
+        [
+          "---",
+          "title: Probe fixture",
+          "description: Probe fixture — intentional nonexistent package script.",
+          "---",
+          "",
+          "```bash",
+          `pnpm --filter motebit ${PROBE_PREFIX}no_such_script`,
+          "```",
+          "",
+        ].join("\n"),
+      ),
+  },
+  {
+    script: "check-relay-frame-origin",
+    proves:
+      "flags a surface that handles a relay `command_request` and executes it through `executeCommand` without saying where the command came from — the 2026-09-16 class where five surfaces forwarded a relay frame with no origin, so a command that arrived over the wire answered as if typed on the machine and the return view's credential membrane never closed. Drops a fixture handler that reads a `command_request` frame and calls `executeCommand` bare; the gate finds the frame marker and no door and no explicit origin.",
+    perturb: () =>
+      writeFixture(
+        `apps/web/src/${PROBE_PREFIX}relay_frame_handler.ts`,
+        [
+          "// Probe fixture — a relay frame handler that forgets its origin.",
+          "export async function handle(rt: unknown, msg: { type: string; command: string }) {",
+          '  if (msg.type !== "command_request") return null;',
+          "  return await executeCommand(rt as never, msg.command);",
+          "}",
+          "declare function executeCommand(rt: never, command: string): Promise<unknown>;",
+          "",
+        ].join("\n"),
+      ),
+  },
+  {
+    script: "check-registry-never-deleted",
+    proves:
+      "flags a relay source file that DELETEs an agent_registry row — the #703 class (deregister and the janitor deleted the row, so every daemon shutdown discarded the identity's guardian and key). Drops a fixture door under services/relay/src that runs the forbidden statement; the gate names the file and line.",
+    perturb: () =>
+      writeFixture(
+        `services/relay/src/${PROBE_PREFIX}forgetful_door.ts`,
+        [
+          "// Probe fixture — a door that forgets who someone is.",
+          "export function forget(db: { prepare(sql: string): { run(...a: unknown[]): unknown } }, id: string) {",
+          '  db.prepare("DELETE FROM agent_registry WHERE motebit_id = ?").run(id);',
+          "}",
+          "",
+        ].join("\n"),
+      ),
+  },
+  {
+    script: "check-worker-no-master-token",
+    proves:
+      "flags a worker reading the relay master token again — the 2026-09-13 blast-radius class (every first-party worker held MOTEBIT_API_TOKEN, so a compromised worker container was a compromised relay). Probe reinstates the env read in research's config loader; byte-identical restoration on cleanup.",
+    perturb: () =>
+      mutateFile("services/research/src/helpers.ts", (src) => {
+        const anchor = 'syncUrl: process.env["MOTEBIT_SYNC_URL"],';
+        if (!src.includes(anchor)) {
+          throw new Error(
+            "probe vacuous: services/research/src/helpers.ts no longer reads MOTEBIT_SYNC_URL — retarget the probe",
+          );
+        }
+        return src.replace(anchor, `${anchor}\n    apiToken: process.env["MOTEBIT_API_TOKEN"],`);
+      }),
+  },
 ];
 
 /**
@@ -2645,6 +2833,9 @@ function drainStalePerturbations(): void {
 }
 
 function main(): void {
+  // Exclusive with `pnpm check` and the other perturbing script: probes rewrite
+  // real files for their duration (scripts/lib/probe-lock.ts).
+  acquireGateLock(ROOT, "check-gates-effective (mutating probes)");
   drainStalePerturbations();
   assertProbeCoverage();
 

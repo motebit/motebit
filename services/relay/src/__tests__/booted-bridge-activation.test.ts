@@ -349,7 +349,11 @@ describe("booted two-artifact bridge — runtime R4 authority gates money reachi
   let relayPublicKeyHex: string;
 
   beforeAll(async () => {
-    booted = await bootRealEntry(DIST_TIER, { MOTEBIT_API_TOKEN: MASTER_TOKEN });
+    booted = await bootRealEntry(DIST_TIER, {
+      MOTEBIT_API_TOKEN: MASTER_TOKEN,
+      // Tests register workers on localhost — the local-development allowance.
+      MOTEBIT_ALLOW_PRIVATE_ENDPOINTS: "1",
+    });
     const idRes = await fetch(`${booted.baseUrl}/federation/v1/identity`);
     ({ public_key: relayPublicKeyHex } = (await idRes.json()) as { public_key: string });
     worker = await provisionDevice(booted.baseUrl);

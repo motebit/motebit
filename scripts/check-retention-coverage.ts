@@ -98,6 +98,7 @@ const STORE_TABLE_ALIASES: Readonly<Record<string, readonly string[]>> = {
   conversation_messages: ["conversation_messages"],
   tool_audit: ["tool_audit", "tool_audit_log"],
   skill_audit: ["skill_audit"],
+  run_evidence: ["run_evidence"],
 };
 
 // ── Where to look for CREATE TABLE statements ────────────────────────

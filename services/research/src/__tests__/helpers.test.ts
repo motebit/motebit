@@ -6,9 +6,7 @@ describe("loadConfig", () => {
     "MOTEBIT_PORT",
     "MOTEBIT_DB_PATH",
     "MOTEBIT_DATA_DIR",
-    "MOTEBIT_AUTH_TOKEN",
     "MOTEBIT_SYNC_URL",
-    "MOTEBIT_API_TOKEN",
     "MOTEBIT_PUBLIC_URL",
     "ANTHROPIC_API_KEY",
     "MOTEBIT_WEB_SEARCH_URL",
@@ -35,9 +33,7 @@ describe("loadConfig", () => {
     expect(config.port).toBe(3400);
     expect(config.dbPath).toBe("./data/research.db");
     expect(config.dataDir).toBe("./data");
-    expect(config.authToken).toBeUndefined();
     expect(config.syncUrl).toBeUndefined();
-    expect(config.apiToken).toBeUndefined();
     expect(config.publicUrl).toBeUndefined();
     expect(config.anthropicApiKey).toBeUndefined();
     expect(config.webSearchUrl).toBeUndefined();
@@ -80,16 +76,12 @@ describe("loadConfig", () => {
   });
 
   it("propagates all optional fields when set", () => {
-    process.env["MOTEBIT_AUTH_TOKEN"] = "auth";
     process.env["MOTEBIT_SYNC_URL"] = "https://sync";
-    process.env["MOTEBIT_API_TOKEN"] = "api";
     process.env["MOTEBIT_PUBLIC_URL"] = "https://public";
     process.env["ANTHROPIC_API_KEY"] = "sk-ant";
 
     const config = loadConfig();
-    expect(config.authToken).toBe("auth");
     expect(config.syncUrl).toBe("https://sync");
-    expect(config.apiToken).toBe("api");
     expect(config.publicUrl).toBe("https://public");
     expect(config.anthropicApiKey).toBe("sk-ant");
   });

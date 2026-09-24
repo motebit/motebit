@@ -36,6 +36,7 @@ import { availableParallelism } from "node:os";
 import { readFileSync, unlinkSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { acquireGateLock } from "./lib/probe-lock.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -122,6 +123,12 @@ const EXCLUDED_CHECKS: Record<string, string> = {
     "cross-impl conformance — needs the packages built (dist) + python3 (stdlib only, no pynacl), so it runs in the python-receipt-verifier-conformance CI job (with REQUIRE_PYTHON=1), not in the static `pnpm check` pass.",
   "check-model-catalog-drift":
     "the EXTERNAL drift gate (#475, inventory row #150) — its canonical source is the provider's LIVE models endpoint, so it needs network + ANTHROPIC_API_KEY. Runs weekly from .github/workflows/model-catalog-drift.yml with --require-key (missing secret = red); local runs without the key skip politely.",
+  "check-deploy-freshness":
+    "the second EXTERNAL drift gate (#551, inventory row #153) — its canonical source is the LIVE Fly fleet, so it needs network + FLY_API_TOKEN. Proves the deployed system is what main says it should be (freshness) and is actually serving (liveness); the static pass can only prove things about the repo. Runs daily from .github/workflows/deploy-freshness.yml with --require-token (missing secret = red); local runs without the token skip politely.",
+  "check-image-provenance":
+    "the third EXTERNAL drift gate (#722, inventory row #160) — its canonical source is the ghcr.io registry, so it needs network + cosign. Proves the DISTRIBUTED artifact is what the operator docs promise: every tag docs/operator/self-host.md names exists, verifies under the cosign commands those docs publish, and carries SLSA provenance binding it to the commit it claims. Runs daily from .github/workflows/image-provenance.yml with --require-tools (missing cosign = red); local runs without it skip politely. No secret — anonymous pulls and keyless verification need none.",
+  "check-publish-freshness":
+    "the fourth EXTERNAL drift gate (inventory row #161) — its canonical source is the npm registry, so it needs network. Proves the INSTALLED artifact is what main promises: every public workspace package's `dist-tags.latest` equals the version its manifest declares (the 2026-09-23 incident — token expired Aug 21, six weeks of green Release runs that published nothing). Runs daily from .github/workflows/publish-freshness.yml with --require-registry (unreachable registry = red); local runs without it skip politely. No secret — reading dist-tags needs none.",
 };
 
 // Order matters: run fastest first so CI fails loudly on the cheapest signal.
@@ -329,6 +336,18 @@ const GATES: ReadonlyArray<Gate> = [
     defends:
       "every per-directory CLAUDE.md and every docs/doctrine/*.md is indexed in root CLAUDE.md (under 'Per-directory doctrine loads lazily' and 'Cross-cutting doctrine (read on demand)' respectively); same canonical-index drift class for both lists, one gate covers both — sub-doctrine is only discoverable through the root index, so an unindexed file is invisible to top-down readers (invariant #25, added 2026-04-18 after a birds-eye review found 6 package CLAUDE.md files silently absent; doctrine-list scope added 2026-04-27 after the cross-cutting-doctrine audit found hardware-attestation.md on disk but missing from the lazy-load index)",
     script: "check-claude-md",
+  },
+  {
+    name: "check-gate-references",
+    defends:
+      "every `check-*` gate NAME asserted in an always-loaded CLAUDE.md resolves to a runnable gate script that actually exists (name resolution — NOT that the gate runs per-PR; the seven EXCLUDED_CHECKS resolve too, and that narrowing is recorded in the gate's own docblock) — sibling of #25 one aperture over (that gate validates doctrine LINKS resolve; nothing validated gate NAMES). Phantom enforcement is the most expensive drift shape in an agent-read repo: an index that asserts `Gate check-settlement-authority` in the same grammatical form as seven real claims stops an audit rather than failing it, because the reader concludes the invariant is structurally closed. Found 2026-08-04 by a birds-eye review — the named gate was an unshipped Inc-4 aspiration while the money-path invariant it claimed to guard was half-built. Deliberate deferrals stay legal but must be declared in PLANNED_GATES with a reason (the EXCLUDED_CHECKS move applied to claims). Doctrine docs are deliberately out of scope — they are design documents and may name future gates; the index is the surface that says what IS (invariant #151)",
+    script: "check-gate-references",
+  },
+  {
+    name: "check-root-workspace-deps",
+    defends:
+      "every `workspace:*` dependency in the ROOT package.json resolves to a tree the relay Dockerfile actually copies. The relay image is built from a SLICE of the monorepo (root manifest + packages/ + services/relay/), but `pnpm deploy --prod` resolves the workspace from the root manifest that rode along in that slice — so a root dep on any other services/* or apps/* package is unsatisfiable inside the image. Adding `@motebit/research` to root devDeps on 2026-07-31 (for ONE dynamic import in a repo script) took down BOTH the relay deploy and the container-image publish on every run for four days, while main stayed green and production relay sat frozen on the 07-31 build. PR CI never builds the relay image, and check-deploy-parity reasons about what the relay DECLARES, not what the Dockerfile COPIES. Copied trees are parsed from the Dockerfile's COPY lines, so widening the copy set updates the gate automatically (invariant #152)",
+    script: "check-root-workspace-deps",
   },
   {
     name: "check-skill-corpus",
@@ -727,6 +746,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-memory-source-canonical",
   },
   {
+    name: "check-identity-authority-writers",
+    defends:
+      "every door that writes identity authority names the principal that authorizes it. The closed set is the INSERT/UPDATE sites into `agent_registry`, `devices`, `relay_key_successions` and `relay_revoked_credentials` — the rows that decide who an identity IS and whether it may act — and each registered entry states WHO may cause the write and what IN THE REQUEST proves they are that. Generalized from `services/relay/CLAUDE.md` rule 21, which asked the same question of `agent_registry.public_key` writers in prose and therefore could not notice a tenth writer appearing. Drift class, named by three weaknesses closed in one week, all the same shape — authority asserted over a target the request never proves a relationship to: #701 (a key succession recorded under another identity — the route never compared the caller to the identity in the path), #713 (a federation peer re-keying or de-listing any identity — a valid peer signature read as entitlement to speak about the `motebit_id` the event named, when peering is two unauthenticated calls), #719 (any agent revoking any credential — the caller compared to a path segment the caller chooses, never to the credential). None was a logic error inside a function; each was a door cut beside the doors that already had the rule, without the rule. The gate does not and cannot prove a site's authorization is correct — it forces the question to be answered in writing at the moment the door is cut, which is the step all three skipped. An `UPDATE agent_registry` counts only when its SET clause touches an authority column, so a heartbeat refresh is not a finding. Doctrine: `docs/doctrine/memory-never-confers-authority.md` (only signed artifacts authorize) and `docs/doctrine/identity-binding-verification.md`.",
+    script: "check-identity-authority-writers",
+  },
+  {
     name: "check-money-authority",
     defends:
       "the standing-authority invariant — MEMORY NEVER CONFERS AUTHORITY (`docs/doctrine/memory-never-confers-authority.md`). Three ordered assertions: (1) `packages/policy/src/policy-gate.ts` contains the R4 standing-authority block (`profile.risk >= RiskLevel.R4_MONEY && !needsApproval && ctx.verifiedGrant == null` → re-raise approval) AFTER the caller-trust-level switch — ordering is load-bearing because the invariant must subordinate the Trusted bypass and every other approval-lowering adjustment; a refactor that reorders them silently re-opens 'Trusted caller auto-executes money'; (2) the `delegate_to_agent` registration carries an explicit `riskHint` referencing `RiskLevel.R4_MONEY` — without one the risk-model name/description patterns classify the money-capable delegation tool R0_READ (the exact hole the 2026-06-10 memory-architecture audit found: a tool that settles real money over the P2P rail auto-executed as read-class); (3) `verifiedGrant` has a SINGLE audited producer — no file outside `packages/runtime/src/grant-verifier.ts` (and tests) may construct a `verifiedGrant` object value; pass-through threading is permitted, minting is an unverified authority claim. Together: an R4_MONEY tool call auto-executes only on a cryptographically verified standing-delegation grant (verifyStandingDelegation + verifyTokenAgainstGrant + revocation feed), never on recalled memory, trust level, preset, or model output. Same ordered-marker-scan shape as `check-affordance-routing` (#28).",
@@ -954,6 +979,36 @@ const GATES: ReadonlyArray<Gate> = [
       "audience-bound auth tokens are minted through the ONE canonical seam — `mintAudienceToken` (@motebit/crypto), which owns iat/exp/jti assembly — never via raw `createSignedToken(` outside packages/crypto/src/signing.ts (tests exempt: adversarial fixtures need exact payload control). Before the seam, 23 call sites each restated the freshness window and replay nonce — the identity→authz instance of the shadow-the-constant class (one site drifting its TTL or nonce source silently weakens the boundary while every test stays green). One seam means one place where the assembly can be right or wrong. Invariant #147, added 2026-07-23",
     script: "check-token-mint-canonical",
   },
+  {
+    name: "check-playwright-image-parity",
+    defends:
+      "every `FROM mcr.microsoft.com/playwright:v<X.Y.Z>-…` stage in a service Dockerfile pins the exact version pnpm-lock.yaml resolves for that service's `playwright-core` — read per importer, so each service is held to its own truth. Playwright resolves the browser build by a revision baked into the client, so a client newer than the image exits 1 at boot; browser-sandbox runs always-on (`auto_stop_machines = false`), so the machine crash-loops past its restart budget and STAYS STOPPED until the next deploy. Bitten 2026-07-25 and 2026-08-22 (#577 moved playwright-core, #584 moved the tags). No CI step builds or boots the container, so both halves stayed individually green — the composition-preserves-enforcement class at the image boundary. #647 made every lockfile change auto-deploy every service, which turns this from hygiene into a prerequisite. Invariant #155, added 2026-09-13",
+    script: "check-playwright-image-parity",
+  },
+  {
+    name: "check-worker-no-master-token",
+    defends:
+      "a worker never holds the relay master token: no `services/*` source outside the relay (browser-sandbox allowlisted — same env NAME, different secret, its own inbound bearer) reads `MOTEBIT_API_TOKEN`, and no worker-side config surface (`MoleculeConfig`, `McpServiceConfig`, `WireServerDepsOptions`) carries an `apiToken` field. Until 2026-09-13 all seven first-party workers presented the relay OPERATOR's master credential as their bearer on register/heartbeat/listing/deregister/key-lookups, so a compromised worker container was a compromised relay — invisible to every test because nothing was wrong except the blast radius. Workers now sign per-audience tokens with their own key (`RelayAuth`) after a public `POST /api/v1/agents/bootstrap`. Same permanent-structural-lock shape as `check-credit-caller-allowlist`. Widened 2026-09-15 to the alias `MOTEBIT_AUTH_TOKEN` and to deploy-script hand-outs (`scripts/deploy-*.ts` writing the operator token into a worker secret map) after the slate script was found still setting the master token on every worker under the alias. Invariant #156, added 2026-09-13",
+    script: "check-worker-no-master-token",
+  },
+  {
+    name: "check-relay-frame-origin",
+    defends:
+      "a file that handles a relay `command_request` frame never reaches `executeCommand` without saying where the command came from — it calls `executeRemoteCommand`, or passes `origin` explicitly. `origin` has to default to `local` (that is what nearly every call site is, and a halt mislabelled `remote` is an untruth in the durable record), but the return view reads the SAME field to decide whether the credential membrane applies, where `local` means disclose. One parameter with two opposite safe defaults is a thing a reader gets wrong, and did: five surfaces forwarded a relay frame with no origin at all, so a command that arrived over the wire answered as if typed on the machine — latent only because none of them wired a run ledger yet. Nothing fails when a surface forgets: the command runs, the answer returns, the tests pass, and the only thing wrong is a membrane that did not close. Same permanent-structural-lock shape as `check-affordance-routing`. Invariant #158, added 2026-09-17",
+    script: "check-relay-frame-origin",
+  },
+  {
+    name: "check-registry-never-deleted",
+    defends:
+      "no relay source runs `DELETE FROM agent_registry` — a departed or long-silent identity is DELISTED (services/relay/src/registry-delist.ts: discovery fields cleared, delisted_at set, key/guardian/settlement kept) and never forgotten. Until 2026-09-24 deregister and the 90-day janitor both deleted the row, and the CLI daemon deregisters on every shutdown, so a routine restart discarded the guardian and the key (#703, the precondition #701 needed). Nothing fails when a door deletes: discover is empty as expected and the tests pass; only the guardian recovery that comes later finds nothing. Same permanent-structural-lock shape as check-relay-frame-origin. Invariant #162, added 2026-09-24",
+    script: "check-registry-never-deleted",
+  },
+  {
+    name: "check-docs-script-claims",
+    defends:
+      "every package script a docs page tells the reader to run exists in the manifest it would run against: `pnpm --filter <pkg> <script>` resolves to a workspace package by name and one of its `scripts`; `pnpm run <script>` resolves against the most recent `cd <workspace-dir>` in the same fenced block (else the repo root); `npm run <script>` resolves against the scripts the create-motebit scaffold generates. The 2026-09-14 docs-vs-code cross-audit (#667) found three of the five app pages OPENING with a command that did not exist or did something other than the sentence claimed — the first command a new contributor types was the least-checked sentence on the site; `check-docs-tree` enforced the directory listing and `check-docs-cli-claims` the CLI subcommands, but nothing tied a documented script to a package.json. Invariant #157, added 2026-09-14",
+    script: "check-docs-script-claims",
+  },
 ];
 
 interface Result {
@@ -1063,6 +1118,10 @@ function assertRegistryCompleteness(): void {
 }
 
 async function main(): Promise<void> {
+  // Exclusive with the effectiveness probes: they mutate real files while
+  // they run, and a gate reading one mid-probe reports a planted violation
+  // as real (scripts/lib/probe-lock.ts). Released on exit.
+  acquireGateLock(ROOT, "pnpm check");
   // Drain any orphan gate-probe files before running production
   // gates. See `drainStaleProbes` for why this lives here and not
   // only in `check-gates-effective`.

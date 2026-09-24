@@ -32,7 +32,20 @@ import type { MemoryStorageAdapter, MemoryQuery } from "@motebit/memory-graph";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 import type { IdentityStorage, DeviceRegistration } from "@motebit/core-identity";
 import type { AuditLogAdapter } from "@motebit/privacy-layer";
-import type { ToolAuditEntry, PolicyDecision } from "@motebit/sdk";
+import type {
+  ToolAuditEntry,
+  PolicyDecision,
+  HaltRequest,
+  HaltStoreAdapter,
+  RunEvidenceEntry,
+  RunEvidenceSink,
+  RunEvidenceWithheldReason,
+  DigestAlgorithm,
+  ProjectionClass,
+  HaltAcknowledgement,
+  ApprovalItem,
+  ApprovalStatus,
+} from "@motebit/sdk";
 import type {
   AuditLogSink,
   AuditStatsSince,
@@ -1109,6 +1122,14 @@ export class SqliteToolAuditSink implements AuditLogSink {
     );
   }
 
+  /** Update the recorded row's result in place; the decision as recorded is kept. */
+  complete(entry: ToolAuditEntry): void {
+    const info = this.db
+      .prepare(`UPDATE tool_audit_log SET result = ?, timestamp = ? WHERE call_id = ?`)
+      .run(entry.result ? JSON.stringify(entry.result) : null, entry.timestamp, entry.callId);
+    if (info.changes === 0) this.append(entry);
+  }
+
   enumerateForFlush(beforeTimestamp: number): ToolAuditEntry[] {
     const rows = this.db
       .prepare(`SELECT * FROM tool_audit_log WHERE timestamp < ? ORDER BY timestamp ASC`)
@@ -1409,12 +1430,43 @@ export interface GoalOutcome {
   goal_id: string;
   motebit_id: string;
   ran_at: number;
-  status: "completed" | "failed" | "suspended";
+  /**
+   * `partial` (migration #43 era): the human's decision on a paused call was
+   * applied after a restart — the one approved action ran (or was refused)
+   * but the goal's REMAINING work was not resumed. Structurally distinct
+   * from `completed` so no projection counts it as goal success.
+   */
+  status: "completed" | "failed" | "suspended" | "partial";
   summary: string | null;
   tool_calls_made: number;
   memories_formed: number;
   error_message: string | null;
   tokens_used?: number;
+  /**
+   * The run that produced this outcome.
+   *
+   * A field, not the id: live paths set `outcome_id = run_id` while the
+   * recovery paths mint a fresh id on purpose, so id-equality found only
+   * half the outcomes from a run.
+   */
+  run_id?: string;
+  /**
+   * The result text WHOLE, not the 500-character `summary`.
+   *
+   * `summary` is for a table row; this is the artifact. A daemon that
+   * kept only the summary discarded the thing it had just produced, so
+   * there was nothing left to sign and nothing for a returning owner to
+   * read.
+   */
+  response_full?: string;
+  /**
+   * The serialized `ContentArtifactManifest` over `response_full`, or
+   * absent when this surface could not sign (no identity loaded).
+   *
+   * Absent means unsigned, and every reader must say so rather than
+   * imply a signature it does not have.
+   */
+  signed_manifest?: string;
 }
 
 interface GoalOutcomeRow {
@@ -1428,6 +1480,9 @@ interface GoalOutcomeRow {
   memories_formed: number;
   error_message: string | null;
   tokens_used: number | null;
+  response_full: string | null;
+  signed_manifest: string | null;
+  run_id: string | null;
 }
 
 function rowToGoalOutcome(row: GoalOutcomeRow): GoalOutcome {
@@ -1442,19 +1497,28 @@ function rowToGoalOutcome(row: GoalOutcomeRow): GoalOutcome {
     memories_formed: row.memories_formed,
     error_message: row.error_message,
     ...(row.tokens_used != null ? { tokens_used: row.tokens_used } : {}),
+    ...(row.run_id != null ? { run_id: row.run_id } : {}),
+    ...(row.response_full != null ? { response_full: row.response_full } : {}),
+    ...(row.signed_manifest != null ? { signed_manifest: row.signed_manifest } : {}),
   };
 }
 
 export class SqliteGoalOutcomeStore {
   private stmtAdd: PreparedStatement;
+  private stmtGet: PreparedStatement;
+  private stmtForRun: PreparedStatement;
   private stmtListForGoal: PreparedStatement;
   private stmtListRecent: PreparedStatement;
 
   constructor(db: DatabaseDriver) {
     this.stmtAdd = db.prepare(
       `INSERT OR REPLACE INTO goal_outcomes
-       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full, signed_manifest, run_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmtGet = db.prepare(`SELECT * FROM goal_outcomes WHERE outcome_id = ?`);
+    this.stmtForRun = db.prepare(
+      `SELECT * FROM goal_outcomes WHERE run_id = ? ORDER BY ran_at DESC`,
     );
     this.stmtListForGoal = db.prepare(
       `SELECT * FROM goal_outcomes WHERE goal_id = ? ORDER BY ran_at DESC LIMIT ?`,
@@ -1476,7 +1540,31 @@ export class SqliteGoalOutcomeStore {
       outcome.memories_formed,
       outcome.error_message,
       outcome.tokens_used ?? null,
+      outcome.response_full ?? null,
+      outcome.signed_manifest ?? null,
+      outcome.run_id ?? null,
     );
+  }
+
+  /**
+   * One outcome by id. Indexed, so a reader never has to decide how far
+   * back to look — a windowed scan reports "no outcome" for a row that
+   * exists just outside the window, which on this table means telling
+   * someone their run produced nothing when it produced and signed a
+   * result.
+   */
+  get(outcomeId: string): GoalOutcome | null {
+    const row = this.stmtGet.get(outcomeId) as GoalOutcomeRow | undefined;
+    return row === undefined ? null : rowToGoalOutcome(row);
+  }
+
+  /**
+   * Every outcome a run produced, newest first. The reader's question is
+   * "what came of this run", and it must not depend on which code path
+   * happened to close it.
+   */
+  listForRun(runId: string): GoalOutcome[] {
+    return (this.stmtForRun.all(runId) as GoalOutcomeRow[]).map(rowToGoalOutcome);
   }
 
   listForGoal(goalId: string, limit = 10): GoalOutcome[] {
@@ -1490,24 +1578,718 @@ export class SqliteGoalOutcomeStore {
   }
 }
 
+// === Run evidence (what a returning owner can re-check) ===
+
+interface RunEvidenceRow {
+  evidence_id: string;
+  run_id: string | null;
+  turn_id: string;
+  call_id: string;
+  tool: string;
+  kind: string;
+  ref: string;
+  digest_algorithm: string | null;
+  digest_value: string | null;
+  projection: string | null;
+  projection_class: string | null;
+  span: string | null;
+  withheld_reason: string | null;
+  locator_start: number | null;
+  locator_end: number | null;
+  recorded_at: number;
+}
+
+function rowToRunEvidence(row: RunEvidenceRow): RunEvidenceEntry {
+  // A withheld row is a refusal, not a pointer: it carries no digest,
+  // no span and no source, so it reads back as a bare `EvidenceRef`
+  // with the reason attached — the protocol's own back-compat shape for
+  // a producer that has nothing it can back.
+  if (row.withheld_reason != null) {
+    return {
+      evidence_id: row.evidence_id,
+      ...(row.run_id != null ? { run_id: row.run_id } : {}),
+      turn_id: row.turn_id,
+      call_id: row.call_id,
+      tool: row.tool,
+      recorded_at: row.recorded_at,
+      evidence: { kind: row.kind, ref: row.ref },
+      withheld_reason: row.withheld_reason as RunEvidenceWithheldReason,
+    };
+  }
+  return {
+    evidence_id: row.evidence_id,
+    ...(row.run_id != null ? { run_id: row.run_id } : {}),
+    turn_id: row.turn_id,
+    call_id: row.call_id,
+    tool: row.tool,
+    recorded_at: row.recorded_at,
+    evidence: {
+      kind: row.kind,
+      ref: row.ref,
+      provenance: {
+        digest: {
+          // Carried as stored. The law compares the digest VALUE and
+          // does not dispatch on the algorithm, so a row written by a
+          // future producer under another algorithm reads back
+          // faithfully and fails the re-check rather than being
+          // silently relabelled here.
+          algorithm: row.digest_algorithm as DigestAlgorithm,
+          value: row.digest_value ?? "",
+        },
+        ...(row.projection != null ? { projection: row.projection } : {}),
+        ...(row.projection_class != null
+          ? { projectionClass: row.projection_class as ProjectionClass }
+          : {}),
+        span: row.span ?? "",
+        ...(row.locator_start != null && row.locator_end != null
+          ? { locator: { start: row.locator_start, end: row.locator_end } }
+          : {}),
+      },
+    },
+  };
+}
+
+/**
+ * Durable run evidence (migration #47). Implements `RunEvidenceSink`.
+ *
+ * Append-only by construction: there is no update statement. A pointer
+ * is a record of what was read at a moment, and a record that can be
+ * edited after the fact is not evidence.
+ */
+export class SqliteRunEvidenceStore implements RunEvidenceSink {
+  private stmtRecord: PreparedStatement;
+  private stmtListForRun: PreparedStatement;
+  private stmtEraseForCall: PreparedStatement;
+  private stmtStale: PreparedStatement;
+  private stmtCountForCall: PreparedStatement;
+
+  constructor(db: DatabaseDriver) {
+    this.stmtRecord = db.prepare(
+      // Plain INSERT. `OR IGNORE` bought no dedup here — the primary key
+      // is a fresh uuid per call, so it can never collide — while
+      // silently swallowing a NOT NULL violation, which would drop the
+      // row and leave a reader saying "none recorded" about evidence
+      // that was produced. That is the one failure this record must not
+      // have, so a broken write raises instead.
+      `INSERT INTO run_evidence
+       (evidence_id, run_id, turn_id, call_id, tool, kind, ref,
+        digest_algorithm, digest_value, projection, projection_class,
+        span, locator_start, locator_end, recorded_at, withheld_reason)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmtListForRun = db.prepare(
+      `SELECT * FROM run_evidence WHERE run_id = ? ORDER BY recorded_at ASC`,
+    );
+    this.stmtEraseForCall = db.prepare(`DELETE FROM run_evidence WHERE call_id = ?`);
+    this.stmtCountForCall = db.prepare(`SELECT COUNT(*) AS n FROM run_evidence WHERE call_id = ?`);
+    this.stmtStale = db.prepare(`SELECT DISTINCT call_id FROM run_evidence WHERE recorded_at < ?`);
+  }
+
+  record(entry: RunEvidenceEntry): void {
+    const p = entry.evidence.provenance;
+    if (entry.withheld_reason != null) {
+      // A refusal. Written with no digest, no span and no source — the
+      // whole point is that nothing retrieved is kept — so that a reader
+      // can tell "we would not keep this" from "nothing was read".
+      this.stmtRecord.run(
+        entry.evidence_id,
+        entry.run_id ?? null,
+        entry.turn_id,
+        entry.call_id,
+        entry.tool,
+        entry.evidence.kind,
+        entry.evidence.ref,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        entry.recorded_at,
+        entry.withheld_reason,
+      );
+      return;
+    }
+    if (p == null) {
+      // Raised, not returned. `provenance` is optional on the carrier,
+      // so this is a legal entry — and silently dropping it is exactly
+      // the "none recorded about evidence that was produced" failure
+      // this store chose a plain INSERT to avoid, two lines below its
+      // own comment saying so.
+      throw new Error(
+        "refusing to record a run-evidence entry with no provenance — there is nothing re-checkable in it, and storing it silently would report as absence what was actually produced",
+      );
+    }
+    this.stmtRecord.run(
+      entry.evidence_id,
+      entry.run_id ?? null,
+      entry.turn_id,
+      entry.call_id,
+      entry.tool,
+      entry.evidence.kind,
+      entry.evidence.ref,
+      p.digest.algorithm,
+      p.digest.value,
+      p.projection ?? null,
+      p.projectionClass ?? null,
+      p.span,
+      p.locator?.start ?? null,
+      p.locator?.end ?? null,
+      entry.recorded_at,
+      null,
+    );
+  }
+
+  listForRun(runId: string): RunEvidenceEntry[] {
+    return (this.stmtListForRun.all(runId) as RunEvidenceRow[]).map(rowToRunEvidence);
+  }
+
+  /**
+   * Physical removal of every pointer beside one tool call — the storage
+   * operation behind the flush's deletion certificate. Also the only
+   * path that reaches rows written outside a goal run (`run_id IS
+   * NULL`), which `listForRun` can never return: they still sit beside
+   * an audit row, so they still die with it.
+   */
+  eraseForCall(callId: string): void {
+    this.stmtEraseForCall.run(callId);
+  }
+
+  /** How many pointers sit beside one call. See the port's doc. */
+  countForCall(callId: string): number {
+    const row = this.stmtCountForCall.get(callId) as { n: number } | undefined;
+    return row?.n ?? 0;
+  }
+
+  /** Call ids with pointers older than the horizon. See the port's doc. */
+  enumerateStale(beforeTimestamp: number): string[] {
+    return (this.stmtStale.all(beforeTimestamp) as { call_id: string }[]).map((r) => r.call_id);
+  }
+}
+
+// === Command replay memory (shared across this machine's processes) ===
+
+/**
+ * Durable seen-signature set for signed remote commands (migration #45).
+ *
+ * `INSERT OR IGNORE` makes the check-and-record one atomic statement, so
+ * two processes racing the same replayed envelope cannot both conclude
+ * it is new.
+ */
+export class SqliteCommandReplayStore {
+  private stmtInsert: PreparedStatement;
+  private stmtPrune: PreparedStatement;
+
+  constructor(db: DatabaseDriver) {
+    this.stmtInsert = db.prepare(
+      `INSERT OR IGNORE INTO command_replay (signature, seen_at) VALUES (?, ?)`,
+    );
+    this.stmtPrune = db.prepare(`DELETE FROM command_replay WHERE seen_at < ?`);
+  }
+
+  /** True when this exact envelope was already recorded. Atomic. */
+  isReplay(signature: string, now: number, windowMs: number): boolean {
+    this.stmtPrune.run(now - windowMs);
+    return this.stmtInsert.run(signature, now).changes === 0;
+  }
+}
+
+// === Halt (withdrawing unattended autonomy) ===
+
+interface HaltRow {
+  halt_id: string;
+  motebit_id: string;
+  goal_id: string | null;
+  requested_at: number;
+  origin: string;
+  reason: string | null;
+  acknowledged_at: number | null;
+  acknowledgement: string | null;
+  lifted_at: number | null;
+}
+
+/**
+ * `halt_state.acknowledged_at` / `.acknowledgement` are migration #44
+ * columns that migration #46 superseded. They are read by nothing and
+ * written by nothing: a per-halt column cannot hold N executors' answers,
+ * and while it existed every reader that touched it reported one
+ * process's stop as the whole motebit's. The columns stay for the rows
+ * already written; the projection does not carry them out.
+ */
+function rowToHalt(row: HaltRow): HaltRequest {
+  return {
+    halt_id: row.halt_id,
+    motebit_id: row.motebit_id,
+    goal_id: row.goal_id,
+    requested_at: row.requested_at,
+    origin: row.origin === "remote" ? "remote" : "local",
+    reason: row.reason,
+    lifted_at: row.lifted_at,
+  };
+}
+
+/**
+ * Durable halt state (migration #44). Implements `HaltStoreAdapter`.
+ *
+ * "In force" is `lifted_at IS NULL` — NOT "acknowledged". A requested
+ * halt blocks from the instant it is written, before anyone has
+ * acknowledged it: the gap between asking and stopping must fail toward
+ * stopped, or the ask is advisory.
+ */
+export class SqliteHaltStore implements HaltStoreAdapter {
+  private stmtRequest: PreparedStatement;
+  private stmtGet: PreparedStatement;
+  private stmtLift: PreparedStatement;
+  private stmtListActive: PreparedStatement;
+  private stmtListRecent: PreparedStatement;
+  private stmtGoalExists: PreparedStatement;
+  private stmtAckExecutor: PreparedStatement;
+  private stmtHasAck: PreparedStatement;
+  private stmtListAcks: PreparedStatement;
+
+  constructor(db: DatabaseDriver) {
+    this.stmtGoalExists = db.prepare(
+      `SELECT goal_id FROM goals WHERE goal_id = ? AND motebit_id = ?`,
+    );
+    this.stmtAckExecutor = db.prepare(
+      `INSERT OR IGNORE INTO halt_acknowledgement (halt_id, executor_id, acknowledged_at, acknowledgement)
+       VALUES (?, ?, ?, ?)`,
+    );
+    this.stmtHasAck = db.prepare(
+      `SELECT 1 FROM halt_acknowledgement WHERE halt_id = ? AND executor_id = ?`,
+    );
+    this.stmtListAcks = db.prepare(
+      `SELECT * FROM halt_acknowledgement WHERE halt_id = ? ORDER BY acknowledged_at ASC`,
+    );
+    this.stmtRequest = db.prepare(
+      `INSERT OR REPLACE INTO halt_state
+       (halt_id, motebit_id, goal_id, requested_at, origin, reason, lifted_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmtGet = db.prepare(`SELECT * FROM halt_state WHERE halt_id = ?`);
+    this.stmtLift = db.prepare(
+      `UPDATE halt_state SET lifted_at = ? WHERE halt_id = ? AND lifted_at IS NULL`,
+    );
+    this.stmtListActive = db.prepare(
+      `SELECT * FROM halt_state WHERE motebit_id = ? AND lifted_at IS NULL ORDER BY requested_at ASC`,
+    );
+    this.stmtListRecent = db.prepare(
+      `SELECT * FROM halt_state WHERE motebit_id = ? ORDER BY requested_at DESC LIMIT ?`,
+    );
+  }
+
+  /**
+   * Record a request to stop.
+   *
+   * A goal-scoped halt is validated against the goals table here rather
+   * than trusted from the caller, because three separate review rounds
+   * found three separate ways to write a halt whose scope matched
+   * nothing: a reason parsed as a goal name, an 8-character prefix left
+   * unresolved, and an id that simply did not exist. Each produced the
+   * one failure a stop command must never have — the record said a goal
+   * was halted, `halt-status` listed it as in force, and the goal kept
+   * firing.
+   *
+   * Fixing the fourth call site would have been the fourth fix. A scope
+   * that cannot match is refused at the boundary instead, so no caller —
+   * CLI, command layer, phone, or one not written yet — can record one.
+   */
+  request(halt: HaltRequest): void {
+    if (halt.goal_id != null) {
+      const found = this.stmtGoalExists.get(halt.goal_id, halt.motebit_id) as
+        { goal_id: string } | undefined;
+      if (found === undefined) {
+        throw new Error(
+          `refusing to record a halt scoped to goal "${halt.goal_id}", which does not exist for this motebit — a halt that matches no goal would report a stop while the goal kept running`,
+        );
+      }
+    }
+    this.stmtRequest.run(
+      halt.halt_id,
+      halt.motebit_id,
+      halt.goal_id,
+      halt.requested_at,
+      halt.origin,
+      halt.reason,
+      halt.lifted_at,
+    );
+  }
+
+  get(haltId: string): HaltRequest | null {
+    const row = this.stmtGet.get(haltId) as HaltRow | undefined;
+    return row === undefined ? null : rowToHalt(row);
+  }
+
+  /**
+   * Record that ONE executor stopped. The per-executor row is the whole
+   * fact — there is no per-halt summary to keep in step with it, by
+   * construction.
+   */
+  acknowledge(haltId: string, executorId: string, acknowledgement: string, at = Date.now()): void {
+    this.stmtAckExecutor.run(haltId, executorId, at, acknowledgement);
+  }
+
+  hasAcknowledged(haltId: string, executorId: string): boolean {
+    return this.stmtHasAck.get(haltId, executorId) !== undefined;
+  }
+
+  acknowledgements(haltId: string): HaltAcknowledgement[] {
+    return (this.stmtListAcks.all(haltId) as HaltAcknowledgement[]).map((r) => ({
+      halt_id: r.halt_id,
+      executor_id: r.executor_id,
+      acknowledged_at: r.acknowledged_at,
+      acknowledgement: r.acknowledgement,
+    }));
+  }
+
+  lift(haltId: string, at = Date.now()): boolean {
+    return this.stmtLift.run(at, haltId).changes > 0;
+  }
+
+  listActive(motebitId: string): HaltRequest[] {
+    return (this.stmtListActive.all(motebitId) as HaltRow[]).map(rowToHalt);
+  }
+
+  activeFor(motebitId: string, goalId?: string): HaltRequest | null {
+    const active = this.listActive(motebitId);
+    // Motebit-wide first: it covers everything, so it is the honest
+    // answer to "am I halted" regardless of which goal asked.
+    return (
+      active.find((h) => h.goal_id === null) ??
+      (goalId != null ? (active.find((h) => h.goal_id === goalId) ?? null) : null)
+    );
+  }
+
+  listRecent(motebitId: string, limit = 20): HaltRequest[] {
+    return (this.stmtListRecent.all(motebitId, limit) as HaltRow[]).map(rowToHalt);
+  }
+}
+
+// === Goal Runs (durable unattended execution) ===
+
+/**
+ * Lifecycle of one goal run (migration #43).
+ *
+ *   running            — the daemon is executing it right now
+ *   awaiting_approval  — paused on a tool call that needs a human (approval_id set)
+ *   completed          — the run's turn ran to its end
+ *   partial            — a decision was applied after a restart: the one
+ *                        approved action ran (or was refused); the goal's
+ *                        remaining work was NOT resumed. Not goal success.
+ *   failed             — errored, expired, or could not be recovered
+ *   interrupted        — the process died mid-run; `completed_actions` /
+ *                        `uncertain_actions` say whether anything external
+ *                        happened, `reviewed_at` whether a human looked
+ */
+export type GoalRunStatus =
+  "running" | "awaiting_approval" | "completed" | "partial" | "failed" | "interrupted";
+
+/** An allowed tool call whose completion was never recorded — effect unknown. */
+export interface UncertainAction {
+  call_id: string;
+  tool: string;
+  intended_at: number;
+}
+
+export interface GoalRun {
+  run_id: string;
+  goal_id: string;
+  motebit_id: string;
+  status: GoalRunStatus;
+  approval_id: string | null;
+  started_at: number;
+  updated_at: number;
+  /** Allowed tool calls that DID record a completion before the interruption. */
+  completed_actions: number;
+  /** Allowed tool calls with no completion row — external effect unknown. */
+  uncertain_actions: UncertainAction[] | null;
+  reviewed_at: number | null;
+  note: string | null;
+}
+
+interface GoalRunRow {
+  run_id: string;
+  goal_id: string;
+  motebit_id: string;
+  status: string;
+  approval_id: string | null;
+  started_at: number;
+  updated_at: number;
+  completed_actions: number;
+  uncertain_actions: string | null;
+  reviewed_at: number | null;
+  note: string | null;
+}
+
+function rowToGoalRun(row: GoalRunRow): GoalRun {
+  return {
+    run_id: row.run_id,
+    goal_id: row.goal_id,
+    motebit_id: row.motebit_id,
+    status: row.status as GoalRunStatus,
+    approval_id: row.approval_id,
+    started_at: row.started_at,
+    updated_at: row.updated_at,
+    completed_actions: row.completed_actions,
+    uncertain_actions:
+      row.uncertain_actions == null
+        ? null
+        : (JSON.parse(row.uncertain_actions) as UncertainAction[]),
+    reviewed_at: row.reviewed_at,
+    note: row.note,
+  };
+}
+
+/**
+ * Is this run still in the way of a replacement run for its goal?
+ *
+ * A run blocks while it is live (`running` / `awaiting_approval`), and an
+ * `interrupted` run blocks until a human reviews it IF it had any
+ * external side effects — completed actions a re-run would repeat, or
+ * uncertain ones whose effect nobody knows. An interrupted run with no
+ * allowed tool calls at all (pure inference) resolves itself: re-running
+ * repeats nothing.
+ */
+/**
+ * This run is waiting on a PERSON — not merely open.
+ *
+ * Split out of `goalRunBlocksGoal` because the two facts are different
+ * and a reader that conflates them says something untrue. A `running`
+ * run blocks its goal and asks nothing of anyone; a run raised to the
+ * top of the return view and labelled "needs you" while it is
+ * mid-execution sends its owner looking for an acknowledgement that
+ * does not exist. Blocking is defined in terms of this so the two
+ * cannot drift.
+ */
+export function goalRunNeedsPerson(run: GoalRun): boolean {
+  if (run.status === "awaiting_approval") return true;
+  if (run.status !== "interrupted") return false;
+  if (run.reviewed_at != null) return false;
+  return run.completed_actions > 0 || (run.uncertain_actions?.length ?? 0) > 0;
+}
+
+export function goalRunBlocksGoal(run: GoalRun): boolean {
+  return run.status === "running" || goalRunNeedsPerson(run);
+}
+
+/**
+ * When this machine's runtime was actually awake.
+ *
+ * The record that lets a LATE goal say why. `GoalScheduler` fires on
+ * `elapsed >= interval_ms`, so a daily goal whose machine slept from
+ * 01:00 to 09:00 does not fail — it fires at 09:00, six hours late, and
+ * without this nothing anywhere says the motebit was not running. A
+ * record untrue by omission is the class this whole arc has been
+ * removing; this is that class arriving through the host layer.
+ *
+ * Coverage is per MACHINE, and deliberately not summed across a
+ * motebit's machines: these rows live in the database of the machine
+ * that wrote them, so a laptop's reader can only ever answer for the
+ * laptop. The union across machines — the shape the arc is aiming at —
+ * needs the same cross-machine plumbing as coordinator handoff, and is
+ * named rather than faked.
+ */
+export class SqliteRuntimeLivenessStore {
+  private stmtOpen: PreparedStatement;
+  private stmtTouch: PreparedStatement;
+  private stmtWindow: PreparedStatement;
+  private stmtFirst: PreparedStatement;
+
+  constructor(db: DatabaseDriver) {
+    this.stmtOpen = db.prepare(
+      `INSERT INTO runtime_liveness (session_id, motebit_id, device_id, executor, started_at, last_seen_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmtTouch = db.prepare(
+      `UPDATE runtime_liveness SET last_seen_at = ? WHERE session_id = ?`,
+    );
+    // Overlapping rather than contained: a session that began before the
+    // window and is still open covers it, and asking otherwise would
+    // report the currently-running daemon as absent.
+    this.stmtFirst = db.prepare(
+      `SELECT started_at FROM runtime_liveness WHERE motebit_id = ? ORDER BY started_at ASC LIMIT 1`,
+    );
+    this.stmtWindow = db.prepare(
+      `SELECT started_at, last_seen_at FROM runtime_liveness
+       WHERE motebit_id = ? AND last_seen_at >= ? AND started_at <= ?
+       ORDER BY started_at ASC`,
+    );
+  }
+
+  /** Begin a session. A restart is a NEW row, never an edited one. */
+  open(session: {
+    session_id: string;
+    motebit_id: string;
+    device_id: string;
+    executor: string;
+    at: number;
+  }): void {
+    this.stmtOpen.run(
+      session.session_id,
+      session.motebit_id,
+      session.device_id,
+      session.executor,
+      session.at,
+      session.at,
+    );
+  }
+
+  /** Still here. Called on the scheduler's tick. */
+  touch(sessionId: string, at: number): void {
+    this.stmtTouch.run(at, sessionId);
+  }
+
+  /**
+   * When this machine first recorded being awake, or null if never.
+   *
+   * The boundary between "we have no record" and "the record says
+   * asleep". Without it a reader reports the time before its first row
+   * as downtime — so an install that had been hosting for weeks is told
+   * it was not hosted for six days, because that is when the table was
+   * created.
+   */
+  firstRecordAt(motebitId: string): number | null {
+    const row = this.stmtFirst.get(motebitId) as { started_at: number } | undefined;
+    return row?.started_at ?? null;
+  }
+
+  /** Raw session intervals overlapping a window, oldest first. */
+  intervalsBetween(motebitId: string, from: number, to: number): Array<[number, number]> {
+    const rows = this.stmtWindow.all(motebitId, from, to) as Array<{
+      started_at: number;
+      last_seen_at: number;
+    }>;
+    return rows.map((r) => [r.started_at, r.last_seen_at]);
+  }
+}
+
+export class SqliteGoalRunStore {
+  private stmtStart: PreparedStatement;
+  private stmtGet: PreparedStatement;
+  private stmtGetByApproval: PreparedStatement;
+  private stmtListByStatus: PreparedStatement;
+  private stmtListForGoal: PreparedStatement;
+  private stmtListRecent: PreparedStatement;
+  private stmtSetStatus: PreparedStatement;
+  private stmtMarkInterrupted: PreparedStatement;
+  private stmtAck: PreparedStatement;
+
+  constructor(db: DatabaseDriver) {
+    this.stmtStart = db.prepare(
+      `INSERT INTO goal_runs
+       (run_id, goal_id, motebit_id, status, approval_id, started_at, updated_at, completed_actions, uncertain_actions, reviewed_at, note)
+       VALUES (?, ?, ?, 'running', NULL, ?, ?, 0, NULL, NULL, NULL)`,
+    );
+    this.stmtGet = db.prepare(`SELECT * FROM goal_runs WHERE run_id = ?`);
+    this.stmtGetByApproval = db.prepare(`SELECT * FROM goal_runs WHERE approval_id = ?`);
+    this.stmtListByStatus = db.prepare(
+      `SELECT * FROM goal_runs WHERE motebit_id = ? AND status = ? ORDER BY started_at ASC`,
+    );
+    this.stmtListForGoal = db.prepare(
+      `SELECT * FROM goal_runs WHERE goal_id = ? ORDER BY started_at DESC LIMIT ?`,
+    );
+    this.stmtListRecent = db.prepare(
+      `SELECT * FROM goal_runs WHERE motebit_id = ? ORDER BY started_at DESC LIMIT ?`,
+    );
+    this.stmtSetStatus = db.prepare(
+      `UPDATE goal_runs SET status = ?, approval_id = COALESCE(?, approval_id), note = COALESCE(?, note), updated_at = ? WHERE run_id = ?`,
+    );
+    this.stmtMarkInterrupted = db.prepare(
+      `UPDATE goal_runs SET status = 'interrupted', completed_actions = ?, uncertain_actions = ?, reviewed_at = ?, note = ?, updated_at = ? WHERE run_id = ?`,
+    );
+    this.stmtAck = db.prepare(
+      `UPDATE goal_runs SET reviewed_at = ?, updated_at = ? WHERE run_id = ? AND status = 'interrupted'`,
+    );
+  }
+
+  /** Open a run as `running`. Called BEFORE the first model call of the run. */
+  start(run: { run_id: string; goal_id: string; motebit_id: string; started_at?: number }): void {
+    const at = run.started_at ?? Date.now();
+    this.stmtStart.run(run.run_id, run.goal_id, run.motebit_id, at, at);
+  }
+
+  get(runId: string): GoalRun | null {
+    const row = this.stmtGet.get(runId) as GoalRunRow | undefined;
+    return row === undefined ? null : rowToGoalRun(row);
+  }
+
+  getByApproval(approvalId: string): GoalRun | null {
+    const row = this.stmtGetByApproval.get(approvalId) as GoalRunRow | undefined;
+    return row === undefined ? null : rowToGoalRun(row);
+  }
+
+  listByStatus(motebitId: string, status: GoalRunStatus): GoalRun[] {
+    const rows = this.stmtListByStatus.all(motebitId, status) as GoalRunRow[];
+    return rows.map(rowToGoalRun);
+  }
+
+  listForGoal(goalId: string, limit = 10): GoalRun[] {
+    const rows = this.stmtListForGoal.all(goalId, limit) as GoalRunRow[];
+    return rows.map(rowToGoalRun);
+  }
+
+  listRecent(motebitId: string, limit = 20): GoalRun[] {
+    const rows = this.stmtListRecent.all(motebitId, limit) as GoalRunRow[];
+    return rows.map(rowToGoalRun);
+  }
+
+  /** Every run that currently blocks its goal (see `goalRunBlocksGoal`). */
+  listBlocking(motebitId: string): GoalRun[] {
+    return [
+      ...this.listByStatus(motebitId, "running"),
+      ...this.listByStatus(motebitId, "awaiting_approval"),
+      ...this.listByStatus(motebitId, "interrupted"),
+    ].filter(goalRunBlocksGoal);
+  }
+
+  /** The run blocking this goal, if any. */
+  blockingRunForGoal(goalId: string): GoalRun | null {
+    return this.listForGoal(goalId, 50).find(goalRunBlocksGoal) ?? null;
+  }
+
+  setStatus(
+    runId: string,
+    status: Exclude<GoalRunStatus, "interrupted">,
+    opts: { approval_id?: string; note?: string } = {},
+  ): void {
+    this.stmtSetStatus.run(status, opts.approval_id ?? null, opts.note ?? null, Date.now(), runId);
+  }
+
+  /**
+   * Mark a run the process died inside. `reviewed_at` is set immediately
+   * when the run had no side effects at all (nothing to review); left
+   * NULL otherwise so the goal stays held until `ack`.
+   */
+  markInterrupted(
+    runId: string,
+    facts: { completed_actions: number; uncertain_actions: UncertainAction[]; note?: string },
+  ): void {
+    const now = Date.now();
+    const hadSideEffects = facts.completed_actions > 0 || facts.uncertain_actions.length > 0;
+    this.stmtMarkInterrupted.run(
+      facts.completed_actions,
+      JSON.stringify(facts.uncertain_actions),
+      hadSideEffects ? null : now,
+      facts.note ?? null,
+      now,
+      runId,
+    );
+  }
+
+  /** A human reviewed an interrupted run; the goal may fire again. Returns false if no such run. */
+  ack(runId: string, at = Date.now()): boolean {
+    const info = this.stmtAck.run(at, at, runId);
+    return info.changes > 0;
+  }
+}
+
 // === Approval Queue ===
 
-export type ApprovalStatus = "pending" | "approved" | "denied" | "expired";
-
-export interface ApprovalItem {
-  approval_id: string;
-  motebit_id: string;
-  goal_id: string;
-  tool_name: string;
-  args_preview: string;
-  args_hash: string;
-  risk_level: number;
-  status: ApprovalStatus;
-  created_at: number;
-  expires_at: number;
-  resolved_at: number | null;
-  denied_reason: string | null;
-}
+// Canonical home is `@motebit/protocol` — the shape crosses a wire when a
+// remote consent surface is shown what it is deciding on. Re-exported
+// here so existing importers keep working.
+export type { ApprovalItem, ApprovalStatus } from "@motebit/sdk";
 
 interface ApprovalRow {
   approval_id: string;
@@ -1522,6 +2304,7 @@ interface ApprovalRow {
   expires_at: number;
   resolved_at: number | null;
   denied_reason: string | null;
+  args_json: string | null;
 }
 
 function rowToApproval(row: ApprovalRow): ApprovalItem {
@@ -1538,6 +2321,7 @@ function rowToApproval(row: ApprovalRow): ApprovalItem {
     expires_at: row.expires_at,
     resolved_at: row.resolved_at,
     denied_reason: row.denied_reason,
+    args_json: row.args_json ?? null,
   };
 }
 
@@ -1554,8 +2338,8 @@ export class SqliteApprovalStore {
     this.db = db;
     this.stmtAdd = db.prepare(
       `INSERT OR REPLACE INTO approval_queue
-       (approval_id, motebit_id, goal_id, tool_name, args_preview, args_hash, risk_level, status, created_at, expires_at, resolved_at, denied_reason)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (approval_id, motebit_id, goal_id, tool_name, args_preview, args_hash, risk_level, status, created_at, expires_at, resolved_at, denied_reason, args_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.stmtGet = db.prepare(`SELECT * FROM approval_queue WHERE approval_id = ?`);
     this.stmtListPending = db.prepare(
@@ -1586,6 +2370,7 @@ export class SqliteApprovalStore {
       item.expires_at,
       item.resolved_at,
       item.denied_reason,
+      item.args_json ?? null,
     );
   }
 
@@ -2366,18 +3151,26 @@ interface AgentTrustRow {
  */
 function parseCapabilityStats(
   raw: string | null,
-): Record<string, { successful_tasks: number; failed_tasks: number }> | undefined {
+): NonNullable<AgentTrustRecord["capability_stats"]> | undefined {
   if (raw == null || raw === "") return undefined;
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (parsed == null || typeof parsed !== "object") return undefined;
-    const out: Record<string, { successful_tasks: number; failed_tasks: number }> = {};
+    const out: NonNullable<AgentTrustRecord["capability_stats"]> = {};
     for (const [cap, v] of Object.entries(parsed as Record<string, unknown>)) {
       if (v == null || typeof v !== "object") continue;
       const s = (v as { successful_tasks?: unknown }).successful_tasks;
       const f = (v as { failed_tasks?: unknown }).failed_tasks;
+      const p = (v as { paid_failure_penalty?: unknown }).paid_failure_penalty;
       if (typeof s === "number" && typeof f === "number") {
-        out[cap] = { successful_tasks: s, failed_tasks: f };
+        out[cap] = {
+          successful_tasks: s,
+          failed_tasks: f,
+          // Paid-failure pseudo-failures (integer ≥ 0); anything else reads as none.
+          ...(typeof p === "number" && Number.isInteger(p) && p > 0
+            ? { paid_failure_penalty: p }
+            : {}),
+        };
       }
     }
     return Object.keys(out).length > 0 ? out : undefined;
@@ -2944,6 +3737,11 @@ export interface MotebitDatabase {
   goalStore: SqliteGoalStore;
   goalOutcomeStore: SqliteGoalOutcomeStore;
   approvalStore: SqliteApprovalStore;
+  goalRunStore: SqliteGoalRunStore;
+  runtimeLivenessStore: SqliteRuntimeLivenessStore;
+  haltStore: SqliteHaltStore;
+  runEvidenceStore: SqliteRunEvidenceStore;
+  commandReplayStore: SqliteCommandReplayStore;
   conversationStore: SqliteConversationStore;
   planStore: SqlitePlanStore;
   gradientStore: SqliteGradientStore;
@@ -2980,6 +3778,11 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   const goalStore = new SqliteGoalStore(driver);
   const goalOutcomeStore = new SqliteGoalOutcomeStore(driver);
   const approvalStore = new SqliteApprovalStore(driver);
+  const goalRunStore = new SqliteGoalRunStore(driver);
+  const runtimeLivenessStore = new SqliteRuntimeLivenessStore(driver);
+  const haltStore = new SqliteHaltStore(driver);
+  const runEvidenceStore = new SqliteRunEvidenceStore(driver);
+  const commandReplayStore = new SqliteCommandReplayStore(driver);
   const conversationStore = new SqliteConversationStore(driver);
   const planStore = new SqlitePlanStore(driver);
   const gradientStore = new SqliteGradientStore(driver);
@@ -3003,6 +3806,11 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     goalStore,
     goalOutcomeStore,
     approvalStore,
+    goalRunStore,
+    runtimeLivenessStore,
+    haltStore,
+    runEvidenceStore,
+    commandReplayStore,
     conversationStore,
     planStore,
     gradientStore,

@@ -26,10 +26,12 @@ export { InMemoryAccountStore } from "./store.js";
 export type {
   CompleteWithdrawalArgs,
   RequestWithdrawalArgs,
+  WithdrawableAvailable,
   WithdrawalsLogger,
 } from "./withdrawals.js";
 export {
   completeWithdrawal,
+  computeWithdrawableAvailable,
   failWithdrawal,
   getAccountBalanceDetailed,
   linkWithdrawalTransfer,

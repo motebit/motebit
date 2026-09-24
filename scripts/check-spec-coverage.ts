@@ -126,9 +126,18 @@ function analyzeSpec(file: string): SpecAnalysis {
       continue;
     }
 
-    // Another top-level section header ends the current wire block context.
+    // Another top-level section header ends the current wire block context —
+    // and clears the pending type name with it. Without the second half, a
+    // `#### Wire format (foundation law)` block that does not sit under a
+    // `### N.M — TypeName` heading inherits whatever heading was last seen,
+    // however far above and in whatever unrelated section. Adding §7.6 to
+    // identity-v1.md made that concrete: the gate reported the missing type as
+    // `identity-v1.md:551 Discovery`, naming a heading 47 lines earlier in a
+    // different chapter. A gate must not blame a line that has nothing to do
+    // with the failure (docs/doctrine/gate-repair-instructions.md).
     if (ANY_HEADER.test(line) && !line.startsWith("####")) {
       insideWireBlock = false;
+      currentType = null;
     }
     // Reference insideWireBlock to keep state flow explicit (no-op read).
     void insideWireBlock;

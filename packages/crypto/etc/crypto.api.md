@@ -36,6 +36,8 @@ import type { GoalExecutionManifest } from '@motebit/protocol';
 import type { HardwareAttestationClaim } from '@motebit/protocol';
 import type { HorizonWitness } from '@motebit/protocol';
 import type { HorizonWitnessRequestBody } from '@motebit/protocol';
+import type { HostEnrollment } from '@motebit/protocol';
+import type { HostRetirement } from '@motebit/protocol';
 import type { IdentityBindingVerdict } from '@motebit/protocol';
 import type { IntegrityVerdict } from '@motebit/protocol';
 import type { InvoiceV1 } from '@motebit/protocol';
@@ -757,6 +759,64 @@ export function hexPublicKeyToDidKey(hexPublicKey: string): string;
 // @public (undocumented)
 export function hexToBytes(hex: string): Uint8Array;
 
+// @public (undocumented)
+export const HOST_ROSTER_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+// @public
+export function hostEnrollmentId(enrollment: HostEnrollment): Promise<string>;
+
+// @public
+export function hostRetirementId(retirement: HostRetirement): Promise<string>;
+
+// @public (undocumented)
+export interface HostRosterEntry {
+    body: Omit<HostEnrollment, "signature">;
+    // (undocumented)
+    enrollment_id: string;
+}
+
+// @public
+export interface HostRosterMachine {
+    authenticated: boolean;
+    // (undocumented)
+    device_id: string;
+    entries: HostRosterEntry[];
+    epoch: number;
+}
+
+// @public (undocumented)
+export interface HostRosterRejection {
+    id: string | null;
+    // (undocumented)
+    kind: "enrollment" | "retirement";
+    public_key: string | null;
+    reason: "malformed" | "wrong_motebit" | "untrusted_key" | "bad_signature";
+}
+
+// @public
+export type HostRosterResult = {
+    ok: false;
+    reason: "malformed_input" | "empty_chain" | "malformed_key" | "duplicate_key";
+} | ({
+    ok: true;
+} & HostRosterVerdict);
+
+// @public (undocumented)
+export interface HostRosterVerdict {
+    active: HostRosterMachine[];
+    chain_head: {
+        epoch: number;
+        public_key: string;
+    };
+    rejected: HostRosterRejection[];
+    retired: HostRosterMachine[];
+    superseded: HostRosterMachine[];
+    tombstones: Array<{
+        enrollment_id: string;
+        epoch: number;
+    }>;
+}
+
 export { IdentityBindingVerdict }
 
 // @public
@@ -891,9 +951,11 @@ export interface MintAudienceTokenInput {
     aud: string;
     // (undocumented)
     did: string;
+    digest?: string;
     // (undocumented)
     mid: string;
     nowMs?: number;
+    sub?: string;
     ttlMs?: number;
 }
 
@@ -1392,6 +1454,7 @@ export interface SignedTokenPayload {
     aud: string;
     // (undocumented)
     did: string;
+    digest?: string;
     // (undocumented)
     exp: number;
     // (undocumented)
@@ -1399,6 +1462,7 @@ export interface SignedTokenPayload {
     jti: string;
     // (undocumented)
     mid: string;
+    sub?: string;
     suite: "motebit-jwt-ed25519-v1";
 }
 
@@ -1439,6 +1503,12 @@ export function signHorizonWitness(cert: Extract<DeletionCertificate, {
 
 // @public
 export function signHorizonWitnessRequestBody(body: HorizonWitnessRequestBody, privateKey: Uint8Array): Promise<string>;
+
+// @public (undocumented)
+export function signHostEnrollment(enrollment: Omit<HostEnrollment, "signature" | "suite" | "type">, identityPrivateKey: Uint8Array): Promise<HostEnrollment>;
+
+// @public (undocumented)
+export function signHostRetirement(retirement: Omit<HostRetirement, "signature" | "suite" | "type">, identityPrivateKey: Uint8Array): Promise<HostRetirement>;
 
 // @public
 export function signInvoice(input: Omit<InvoiceV1, "signature" | "suite">, issuerPrivateKey: Uint8Array): Promise<InvoiceV1>;
@@ -1877,6 +1947,20 @@ export function verifyHardwareAttestationClaim(claim: HardwareAttestationClaim, 
 
 // @public
 export function verifyHorizonWitnessRequestSignature(body: HorizonWitnessRequestBody, signatureBase64Url: string, issuerPublicKey: Uint8Array): Promise<boolean>;
+
+// @public
+export function verifyHostEnrollment(enrollment: HostEnrollment): Promise<boolean>;
+
+// @public
+export function verifyHostRetirement(retirement: HostRetirement): Promise<boolean>;
+
+// @public
+export function verifyHostRoster(input: {
+    motebitId: string;
+    keyChain: readonly string[];
+    enrollments: readonly HostEnrollment[];
+    retirements: readonly HostRetirement[];
+}): Promise<HostRosterResult>;
 
 // @public
 export function verifyIdentityBindingAnchored(identity: MotebitIdentityFile, signingKeyHex: string, atTimestampMs: number, proof: IdentityLogInclusionProof, guardianPublicKeyHex?: string): Promise<KeyBindingResult>;

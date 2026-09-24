@@ -32,6 +32,21 @@ test.describe("App loads without crashing", () => {
     expect(errors).toEqual([]);
   });
 
+  test("first visit renders the zero-inference welcome", async ({ page }) => {
+    await page.goto("/");
+    await page.waitForFunction(
+      () => (window as { __motebitReady?: boolean }).__motebitReady === true,
+    );
+
+    // True first visit (fresh profile: no saved provider, no conversations) —
+    // the creature speaks once, locally (first-session arc Inc 1, #594).
+    const welcome = page.locator("#chat-log .chat-bubble.assistant").first();
+    await expect(welcome).toBeVisible();
+    await expect(welcome).toContainText("I'm yours");
+    // Zero inference: no token sub-label may render inside the welcome.
+    await expect(welcome.locator(".message-cost")).toHaveCount(0);
+  });
+
   test("dark theme is applied by default on dark-preferring system", async ({ page }) => {
     // Emulate dark color scheme
     await page.emulateMedia({ colorScheme: "dark" });

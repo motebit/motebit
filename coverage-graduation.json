@@ -6,50 +6,110 @@
     {
       "package": "@motebit/core-identity",
       "vitest_config": "packages/core-identity/vitest.config.ts",
-      "current": { "statements": 82, "branches": 86, "functions": 83, "lines": 82 },
-      "target": { "statements": 85, "branches": 80, "functions": 85, "lines": 85 },
+      "current": {
+        "statements": 85,
+        "branches": 86,
+        "functions": 85,
+        "lines": 85
+      },
+      "target": {
+        "statements": 85,
+        "branches": 80,
+        "functions": 85,
+        "lines": 85
+      },
       "target_date": "2026-08-15",
-      "rationale": "Short of the identity floor (85/80/85/85) on statements/functions/lines — the gap is the service-layer error/retry branches in bootstrap + register-with-relay, exercised today only on the happy path. Plan: a dedicated PR adding register-with-relay failure-path tests (relay 4xx/5xx, signature-mismatch) + bootstrap re-entry/partial-state tests, which cover the uncovered branches without touching the pure crypto. Lever: those named error paths, not a coverage knob. Recalibrated 2026-06 to vitest-4 coverage-v8 (commits c0faba1e + bf254dd8): the same tests measure ~7pts lower on branches under v8, so the enforced threshold + this snapshot moved 93→86. The branches target was a no-regress pin on the old inflated current; it is reset to the named 80 floor (already met at 86) so it cannot become an unreachable hard-fail under v8 — the real statements/functions/lines→85 gaps are unchanged."
+      "rationale": "GRADUATED 2026-08-13, two days ahead of the raise-by date. Measured coverage (95.4 statements / 88.4 branches / 89.4 functions / 97.1 lines) was already well clear of the 85/80/85/85 identity floor, so the floor was raised to the commitment without new tests \u2014 the named service-layer error paths (register-with-relay 4xx/5xx, bootstrap re-entry) had been covered by work landing after the 2026-06 snapshot was taken, and nobody re-measured. `branches` is held at 86, above its target of 80: a graduation target is a floor to reach, never a level to fall back to, and lowering a live threshold to match one would violate the never-lower-thresholds policy. Retained as a closed record rather than deleted so the commitment and its outcome stay auditable."
     },
     {
       "package": "@motebit/crypto-appattest",
       "vitest_config": "packages/crypto-appattest/vitest.config.ts",
-      "current": { "statements": 84, "branches": 75, "functions": 100, "lines": 89 },
-      "target": { "statements": 85, "branches": 80, "functions": 100, "lines": 85 },
+      "current": {
+        "statements": 85,
+        "branches": 80,
+        "functions": 100,
+        "lines": 89
+      },
+      "target": {
+        "statements": 85,
+        "branches": 80,
+        "functions": 100,
+        "lines": 85
+      },
       "target_date": "2026-09-30",
-      "rationale": "Branches 75 < 80 floor (plus a statements 84→85 sliver) — the systematic cert-chain rare-error gap shared by all four platform verifiers (malformed/expired/wrong-root attestation paths exercised only by a few hand-built fixtures). Plan: a shared fuzz/property-based malformed-certificate fixture generator across the four verifiers so the rejection branches are exercised systematically. Lever: that fixture generator (one PR, four packages); raise-now would be hand-stubbed branches = the test-theater we ruled out. Recalibrated 2026-06 to vitest-4 coverage-v8 (commits c0faba1e + bf254dd8): the same tests measure statements 90→84, lines 90→89 under v8; this snapshot syncs to that, and the statements/lines no-regress pins (old inflated 90/90) reset to the shared platform-verifier floor 85/80/100/85 so they cannot become unreachable hard-fails — harmonizing all four verifiers on one floor. The real branches→80 gap is unchanged."
+      "rationale": "GRADUATED 2026-08-13, 48 days ahead of the raise-by date. Measured coverage (87.3/81.8/100/93.3 statements/branches/functions/lines) already cleared the 80-branch identity floor, so the threshold was raised to the commitment without new tests. The cert-chain fuzz-fixture generator named as the lever was never built \u2014 the branches were covered incidentally by work landing after the 2026-06 snapshot, and nobody re-measured. Existing live values ABOVE target are held, never lowered to match one. Retained as a closed record so the commitment and its outcome stay auditable."
     },
     {
       "package": "@motebit/crypto-android-keystore",
       "vitest_config": "packages/crypto-android-keystore/vitest.config.ts",
-      "current": { "statements": 85, "branches": 70, "functions": 100, "lines": 85 },
-      "target": { "statements": 85, "branches": 80, "functions": 100, "lines": 85 },
+      "current": {
+        "statements": 85,
+        "branches": 80,
+        "functions": 100,
+        "lines": 85
+      },
+      "target": {
+        "statements": 85,
+        "branches": 80,
+        "functions": 100,
+        "lines": 85
+      },
       "target_date": "2026-09-30",
-      "rationale": "Branches 70 < 80 floor — same cert-chain rare-error gap. Plan: the shared fuzz-based malformed-attestation fixture generator (see crypto-appattest entry) covers the Google RSA + ECDSA P-384 root rejection branches. Lever: that shared fixture infra."
+      "rationale": "GRADUATED 2026-08-13, 48 days ahead of the raise-by date. Measured coverage (88.8/80.9/100/91.0 statements/branches/functions/lines) already cleared the 80-branch identity floor, so the threshold was raised to the commitment without new tests. The cert-chain fuzz-fixture generator named as the lever was never built \u2014 the branches were covered incidentally by work landing after the 2026-06 snapshot, and nobody re-measured. Existing live values ABOVE target are held, never lowered to match one. Retained as a closed record so the commitment and its outcome stay auditable."
     },
     {
       "package": "@motebit/crypto-tpm",
       "vitest_config": "packages/crypto-tpm/vitest.config.ts",
-      "current": { "statements": 85, "branches": 70, "functions": 100, "lines": 85 },
-      "target": { "statements": 85, "branches": 80, "functions": 100, "lines": 85 },
+      "current": {
+        "statements": 85,
+        "branches": 80,
+        "functions": 100,
+        "lines": 85
+      },
+      "target": {
+        "statements": 85,
+        "branches": 80,
+        "functions": 100,
+        "lines": 85
+      },
       "target_date": "2026-09-30",
-      "rationale": "Branches 70 < 80 floor — same cert-chain rare-error gap. Plan: the shared fuzz-based malformed-EK-chain fixture generator (see crypto-appattest entry) covers the vendor-root rejection branches. Lever: that shared fixture infra. (Real-device EK fixtures remain structurally unpublishable — EK certs identify chips — so fuzz fixtures are the only honest lever.)"
+      "rationale": "GRADUATED 2026-08-13, 48 days ahead of the raise-by date. Measured coverage (93.5/85.8/100/96.7 statements/branches/functions/lines) already cleared the 80-branch identity floor, so the threshold was raised to the commitment without new tests. The cert-chain fuzz-fixture generator named as the lever was never built \u2014 the branches were covered incidentally by work landing after the 2026-06 snapshot, and nobody re-measured. Existing live values ABOVE target are held, never lowered to match one. Retained as a closed record so the commitment and its outcome stay auditable."
     },
     {
       "package": "@motebit/crypto-webauthn",
       "vitest_config": "packages/crypto-webauthn/vitest.config.ts",
-      "current": { "statements": 85, "branches": 75, "functions": 100, "lines": 85 },
-      "target": { "statements": 85, "branches": 80, "functions": 100, "lines": 85 },
+      "current": {
+        "statements": 85,
+        "branches": 80,
+        "functions": 100,
+        "lines": 85
+      },
+      "target": {
+        "statements": 85,
+        "branches": 80,
+        "functions": 100,
+        "lines": 85
+      },
       "target_date": "2026-09-30",
-      "rationale": "Branches 75 < 80 floor — same cert-chain rare-error gap. Plan: the shared fuzz-based malformed-attestation fixture generator (see crypto-appattest entry) covers the FIDO root (Apple/Yubico/Microsoft) rejection branches. Lever: that shared fixture infra."
+      "rationale": "GRADUATED 2026-08-13, 48 days ahead of the raise-by date. Measured coverage (89.0/82.1/100/94.2 statements/branches/functions/lines) already cleared the 80-branch identity floor, so the threshold was raised to the commitment without new tests. The cert-chain fuzz-fixture generator named as the lever was never built \u2014 the branches were covered incidentally by work landing after the 2026-06 snapshot, and nobody re-measured. Existing live values ABOVE target are held, never lowered to match one. Retained as a closed record so the commitment and its outcome stay auditable."
     },
     {
       "package": "@motebit/verify",
       "vitest_config": "packages/verify/vitest.config.ts",
-      "current": { "statements": 90, "branches": 75, "functions": 100, "lines": 90 },
-      "target": { "statements": 90, "branches": 80, "functions": 100, "lines": 90 },
-      "target_date": "2026-09-30",
-      "rationale": "New registry member (canonical motebit-verify aggregator; verification is the identity path). Branches 75 < 80 — inherits the bundled leaf verifiers' cert-chain gap plus its own CLI error branches. Plan: rides the shared cert-chain fuzz fixtures (see crypto-appattest entry) + a PR covering the CLI's unsupported-suite / post-quantum-pending branches. Lever: shared fixtures + named CLI error paths."
+      "current": {
+        "statements": 58,
+        "branches": 50,
+        "functions": 47,
+        "lines": 56
+      },
+      "target": {
+        "statements": 85,
+        "branches": 80,
+        "functions": 85,
+        "lines": 85
+      },
+      "target_date": "2026-11-30",
+      "rationale": "RE-BASELINED 2026-08-22 (#568). The previous entry (90/75/100/90 -> branches 80 by 09-30) described a measurement that did not exist: src/cli.ts sat in coverageExclude as \"the bin shim\", so the thresholds were enforced against 8 statements in adapters.ts -- 2.3% of the package -- while the stated lever was \"the CLI's unsupported-suite / post-quantum-pending branches\", which live in the excluded file. The lever could not move the number because there was effectively no number. (The thresholds themselves were real, not vacuous: a deliberate severing fails them. #568's \"measures zero files\" reading came from the empty text-reporter table, the same artifact that caused the #575/#576 revert -- coverage-final.json always had adapters.ts at 100%.) cli.ts is now measured, and 45 in-process parseArgs branch tests took the package from 39.4/32.4/47.4/39.8 to 60/51.7/47.4/58.1. The floor is set just under that. Digits are lower than the old 90/75/100/90 but enforcement is 43x wider: 345 statements guarded instead of 8, and adapters.ts keeps a per-glob 100/100/100/100 floor so nothing regressed. Target is the registry's identity floor. Lever: the remaining gap is the command bodies (cli.ts ~640-1012, and the 10 uncovered functions), which the existing suite drives through spawnSync -- real end-to-end verification the parent process cannot instrument. Extract a runCli(argv) seam so those tests execute in-process and their coverage counts. Date moved 09-30 -> 11-30 because that is a refactor of the CLI's entry seam plus five test files, not the fixture pass the old rationale assumed; re-baselining on new information rather than quietly missing the date."
     }
   ]
 }

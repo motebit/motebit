@@ -9,9 +9,18 @@
 # from `node:22-alpine` and apt-installing Chromium is a 30-step
 # Dockerfile that's brittle across Chromium upgrades; the official
 # Playwright image is the right metabolic absorption.
+#
+# SYNCHRONIZATION INVARIANT: the image tag below MUST match the
+# `playwright-core` version resolved in pnpm-lock.yaml. Playwright
+# resolves browsers by a revision baked into the client library, so a
+# client newer than the image looks for a Chromium build the image does
+# not carry and the process exits 1 at boot — a crash loop, not a
+# degraded mode. This has now bitten twice: 2026-07-25, and again on
+# 2026-08-22 when a grouped dependabot bump moved playwright-core
+# 1.61.1 -> 1.62.1 while this tag stayed put. Bump both in one change.
 
 # --- Build: install deps + compile TypeScript with full pnpm workspace ---
-FROM mcr.microsoft.com/playwright:v1.61.1-jammy AS build
+FROM mcr.microsoft.com/playwright:v1.62.1-jammy AS build
 WORKDIR /app
 
 # pnpm via corepack (Node 22+ ships corepack; Playwright base has Node 20).
@@ -40,7 +49,7 @@ RUN pnpm --filter @motebit/browser-sandbox... build
 RUN pnpm --filter @motebit/browser-sandbox deploy --prod /app/deployed
 
 # --- Runtime: Playwright base + the deployed bundle ---
-FROM mcr.microsoft.com/playwright:v1.61.1-jammy AS runtime
+FROM mcr.microsoft.com/playwright:v1.62.1-jammy AS runtime
 WORKDIR /app
 
 # Drop privileges — Playwright's base image runs as root by default,

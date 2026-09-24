@@ -27,7 +27,7 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.112.3",
+    "@anthropic-ai/sdk": "^0.116.0",
     "@motebit/mcp-client": "workspace:*",
     "@motebit/molecule-runner": "workspace:*",
     "@motebit/sdk": "workspace:*",
@@ -36,13 +36,13 @@
     "better-sqlite3": "^12.11.1"
   },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@motebit/encryption": "workspace:*",
     "@motebit/identity-file": "workspace:*",
     "@motebit/mcp-server": "workspace:*",
     "@motebit/runtime": "workspace:*",
     "@types/node": "^22.20.1",
-    "tsx": "^4.23.1",
+    "tsx": "^4.23.12",
     "typescript": "^5.6.0",
     "vitest": "^4.1.10"
   }

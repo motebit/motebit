@@ -14,8 +14,11 @@ import {
   hexToBytes,
 } from "@motebit/encryption";
 import { insertRevocationEvent } from "./federation.js";
+import { applySuccession, departureFrom, keyOnFile, successionAtHead } from "./succession-apply.js";
+import { readSuccessionChain } from "./identity-transparency.js";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
+import type { AuthEvent } from "./auth-events.js";
 
 const logger = createLogger({ service: "key-rotation" });
 
@@ -23,11 +26,17 @@ export interface KeyRotationDeps {
   app: Hono;
   moteDb: MotebitDatabase;
   relayIdentity: RelayIdentity;
+  /**
+   * Durable auth-event record (auth-events.ts). Required: this module has
+   * one caller, and an optional recorder is a refusal that stops being
+   * recorded the day a refactor drops the field, with nothing going red.
+   */
+  recordAuthEvent: (event: AuthEvent) => void;
 }
 
 /** Initialize approval tables and register all key-rotation/revocation/approval routes. */
 export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
-  const { app, moteDb, relayIdentity } = deps;
+  const { app, moteDb, relayIdentity, recordAuthEvent } = deps;
 
   // --- Approval tables (idempotent) ---
   moteDb.db.exec(`
@@ -75,7 +84,51 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
   /** @spec motebit/identity@1.0 */
   app.post("/api/v1/agents/:motebitId/rotate-key", async (c) => {
     const motebitId = c.req.param("motebitId");
+    const caller = c.get("callerMotebitId" as never) as string | undefined;
+    /**
+     * Refuse, loudly and durably. An attempt to write another identity's
+     * key history is exactly what the operator's auth-event record exists
+     * to show (`services/relay/CLAUDE.md` rule 6).
+     */
+    const refuse = (status: 400 | 403, reason: string, message: string): HTTPException => {
+      logger.warn("key_rotation.refused", { motebitId, caller: caller ?? null, reason });
+      recordAuthEvent({
+        kind: "agent_token_rejected",
+        method: "POST",
+        path: c.req.path,
+        // The SUBJECT of a refusal is whoever presented it. The target
+        // identity is already in `path`; writing it here would read as
+        // "this identity's token was rejected" for an identity that
+        // presented nothing (the operator's master token carries none).
+        motebitId: caller,
+        reason: `succession:${reason}`,
+        correlationId: c.req.header("x-correlation-id") ?? null,
+      });
+      return new HTTPException(status, { message });
+    };
+
     const body = await c.req.json<KeySuccessionRecord>();
+
+    // An ORDINARY succession is the identity's own act. The signed payload
+    // names two keys and no motebit_id, so the record cannot say whose
+    // history it belongs to — this does. Strict inequality on a PRESENT
+    // caller: the operator's master token carries no caller identity and
+    // passes, as it does on this route today.
+    //
+    // A guardian RECOVERY is exempt, and has to be: it exists for an owner
+    // who has LOST the key (`spec/identity-v1.md` §3.8.3), so it is by
+    // design carried by someone else. What authorizes one is the
+    // guardian's signature, checked below against the guardian key THIS
+    // identity registered — and, since that lookup needs a registry row,
+    // a recovery is anchored to a key on file by the same check as any
+    // other record.
+    if (body.recovery !== true && caller != null && caller !== motebitId) {
+      throw refuse(
+        403,
+        "under_another_identity",
+        "a key succession may be presented only under the identity it rotates",
+      );
+    }
 
     if (
       !body.old_public_key ||
@@ -86,23 +139,14 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
       throw new HTTPException(400, { message: "Missing required fields in key succession record" });
     }
 
-    // Timestamp freshness: reject succession records older than 15 minutes or in the future
-    const MAX_ROTATION_AGE_MS = 15 * 60 * 1000;
-    const age = Date.now() - body.timestamp;
-    if (age < -60_000) {
-      // Allow 1 minute clock skew for future timestamps
-      throw new HTTPException(400, { message: "Succession record timestamp is in the future" });
-    }
-    if (age > MAX_ROTATION_AGE_MS) {
-      throw new HTTPException(400, {
-        message: "Succession record timestamp is too old (>15 minutes)",
-      });
-    }
-
     if (body.recovery) {
       // Guardian recovery: need guardian_signature, not old_key_signature
       if (!body.guardian_signature) {
-        throw new HTTPException(400, { message: "Guardian recovery requires guardian_signature" });
+        throw refuse(
+          400,
+          "recovery_without_guardian_signature",
+          "Guardian recovery requires guardian_signature",
+        );
       }
       // Look up the guardian public key from agent's identity
       const agentGuardian = moteDb.db
@@ -110,51 +154,131 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
         .get(motebitId) as { guardian_public_key: string | null } | undefined;
       const guardianPubKey = agentGuardian?.guardian_public_key;
       if (!guardianPubKey) {
-        throw new HTTPException(400, {
-          message: "Agent has no guardian registered — cannot use guardian recovery",
-        });
+        throw refuse(
+          400,
+          "recovery_without_registered_guardian",
+          "Agent has no guardian registered — cannot use guardian recovery",
+        );
       }
       const valid = await verifyKeySuccession(body, guardianPubKey);
-      if (!valid) throw new HTTPException(400, { message: "Invalid guardian recovery signatures" });
+      if (!valid) {
+        throw refuse(400, "recovery_signature_invalid", "Invalid guardian recovery signatures");
+      }
     } else {
       // Normal rotation: need old_key_signature
       if (!body.old_key_signature) {
-        throw new HTTPException(400, { message: "Normal rotation requires old_key_signature" });
+        throw refuse(
+          400,
+          "rotation_without_old_key_signature",
+          "Normal rotation requires old_key_signature",
+        );
       }
       const valid = await verifyKeySuccession(body);
-      if (!valid) throw new HTTPException(400, { message: "Invalid key succession signatures" });
+      if (!valid) {
+        throw refuse(400, "rotation_signature_invalid", "Invalid key succession signatures");
+      }
     }
 
-    const storedAgent = moteDb.db
-      .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
-      .get(motebitId) as { public_key: string } | undefined;
-    if (storedAgent && storedAgent.public_key && storedAgent.public_key !== body.old_public_key) {
-      throw new HTTPException(400, {
-        message: "Succession old_public_key does not match stored public key",
-      });
-    }
-
-    moteDb.db
-      .prepare(
-        `INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature, recovery, guardian_signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        motebitId,
-        body.old_public_key,
-        body.new_public_key,
-        body.timestamp,
-        body.reason ?? null,
-        body.old_key_signature ?? null,
-        body.new_key_signature,
-        body.recovery ? 1 : 0,
-        body.guardian_signature ?? null,
+    if (body.new_public_key === body.old_public_key) {
+      throw refuse(
+        400,
+        "goes_nowhere",
+        "Succession new_public_key must differ from old_public_key",
       );
+    }
 
-    moteDb.db
-      .prepare(`UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?`)
-      .run(body.new_public_key, motebitId);
+    // The record must depart from a key this relay HOLDS for the identity.
+    // This check used to be skipped whenever the stored key was absent or
+    // the empty string — both routine states, not corner cases: the daemon
+    // deregisters on every shutdown (dropping the registry row), and a
+    // master-token registration with no key writes `''`. Skipping it let a
+    // chain be planted from two keys nobody had ever seen, and let one
+    // guardian's genuine record be replayed at a sibling identity.
+    //
+    // A device row's key counts, so an identity whose daemon has shut down
+    // can still rotate. Refusing when the relay holds NO key at all is
+    // fail-closed: there is nothing for the record to continue from.
+    // Is this link the HEAD of the chain this relay already recorded? Then
+    // this is a retry — a lost response, a timeout after commit — of a
+    // record the relay already accepted once, and two rules below do not
+    // apply to it: freshness (the relay judged this exact timestamp when it
+    // first recorded the link; refusing the retry as "too old" tells a
+    // client its rotation failed when it succeeded) and key-on-file (the key
+    // it departs from has by definition moved on). Head, not "any earlier
+    // row with these keys": a rotation back to a previously used key is a
+    // NEW link and must append, or the served chain stops at a key the
+    // registry has left. `applySuccession` is idempotent and scoped to the
+    // retired key, so both doors and every retry converge on one state —
+    // #710's "fully applied" precheck, which had to reproduce the law to
+    // decide whether to run the law, is gone with the state it modelled.
+    const held = successionAtHead(moteDb.db, motebitId, body);
 
-    return c.json({ ok: true, motebit_id: motebitId });
+    if (!held) {
+      // Timestamp freshness: a NEW link must be recent — older than 15
+      // minutes or in the future is refused. A held link already passed this
+      // once.
+      const MAX_ROTATION_AGE_MS = 15 * 60 * 1000;
+      const age = Date.now() - body.timestamp;
+      if (age < -60_000) {
+        // Allow 1 minute clock skew for future timestamps
+        throw new HTTPException(400, { message: "Succession record timestamp is in the future" });
+      }
+      if (age > MAX_ROTATION_AGE_MS) {
+        throw new HTTPException(400, {
+          message: "Succession record timestamp is too old (>15 minutes)",
+        });
+      }
+    }
+
+    // Precedence, most authoritative first. Comparison is EXACT: these
+    // keys are covered by the signature, and a record stored in a spelling
+    // that differs from the one signed breaks `verifySuccessionChain`'s
+    // linkage on the public surfaces this rule exists to protect.
+    if (!held) {
+      // The ONE precedence rule, shared with the public succession route so
+      // a client's read and this refusal can never disagree.
+      const departure = departureFrom(moteDb.db, motebitId, body.old_public_key);
+      if (!departure.admissible) {
+        const messages = {
+          not_from_current_key: "Succession old_public_key does not match stored public key",
+          not_from_chain_head:
+            "Succession old_public_key does not match the head of this identity's recorded chain",
+          no_key_on_file:
+            "Succession old_public_key is not a key this relay holds for this identity",
+        } as const;
+        throw refuse(
+          400,
+          departure.reason === "no_key_on_file" ? "no_key_on_file" : "not_from_current_key",
+          messages[departure.reason],
+        );
+      }
+    }
+
+    const { applied } = applySuccession(moteDb.db, motebitId, body);
+
+    if (applied) {
+      // The old key ceased to be authoritative at the rotation moment, not
+      // when this relay processed the request — anchor the memo at the
+      // record's timestamp so a verifier's poison window matches the chain.
+      // Same event the register door emits; a retry appended nothing and
+      // emits nothing. Best-effort, as there.
+      try {
+        await insertRevocationEvent(moteDb.db, relayIdentity, "key_rotated", motebitId, {
+          newPublicKey: body.new_public_key,
+          revokedPublicKey: body.old_public_key,
+          effectiveAt: body.timestamp,
+        });
+      } catch {
+        /* best-effort */
+      }
+    }
+
+    logger.info("key_rotation.recorded", {
+      motebitId,
+      recovery: body.recovery === true,
+      applied,
+    });
+    return c.json({ ok: true, motebit_id: motebitId, applied });
   });
 
   // --- Key succession chain query ---
@@ -163,20 +287,25 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     const motebitId = c.req.param("motebitId");
     const correlationId = c.req.header("x-correlation-id") ?? crypto.randomUUID();
 
-    const chain = moteDb.db
-      .prepare(
-        `SELECT old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature, recovery, guardian_signature FROM relay_key_successions WHERE motebit_id = ? ORDER BY timestamp ASC`,
-      )
-      .all(motebitId) as Array<{
-      old_public_key: string;
-      new_public_key: string;
-      timestamp: number;
-      reason: string | null;
-      old_key_signature: string | null;
-      new_key_signature: string;
-      recovery: number;
-      guardian_signature: string | null;
-    }>;
+    // ONE reader of the served chain, shared with the identity bundle
+    // (`identity-transparency.ts`): it stamps the `suite` the verifier
+    // demands fail-closed and omits a null `reason` — the signed payload has
+    // no `reason` key when none was given, so serving `reason: null` changes
+    // the canonical bytes and every signature fails. This route used to
+    // build its own rows without either, so the chain the client design
+    // READS to classify the relay was unverifiable as served.
+    const chain = readSuccessionChain(moteDb.db, motebitId);
+
+    // What the relay HOLDS and whether a rotation may depart from a given
+    // key, answered by the same function /rotate-key enforces. A client
+    // reads this before minting anything; re-deriving it from the chain
+    // and registry alone cannot see device rows and inverts the precedence.
+    const onFile = keyOnFile(moteDb.db, motebitId);
+    const from = c.req.query("from");
+    const departable =
+      from != null && /^[0-9a-f]{64}$/i.test(from)
+        ? departureFrom(moteDb.db, motebitId, from).admissible
+        : null;
 
     const agent = moteDb.db
       .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
@@ -186,16 +315,10 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
 
     return c.json({
       motebit_id: motebitId,
-      chain: chain.map((r) => ({
-        old_public_key: r.old_public_key,
-        new_public_key: r.new_public_key,
-        timestamp: r.timestamp,
-        reason: r.reason,
-        ...(r.old_key_signature ? { old_key_signature: r.old_key_signature } : {}),
-        new_key_signature: r.new_key_signature,
-        ...(r.recovery === 1 ? { recovery: true, guardian_signature: r.guardian_signature } : {}),
-      })),
+      chain,
       current_public_key: agent?.public_key ?? null,
+      held_public_key: onFile.held,
+      ...(from != null ? { departable_from: from, departable } : {}),
     });
   });
 
@@ -254,7 +377,18 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     const agent = moteDb.db
       .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
       .get(motebitId) as { public_key: string } | undefined;
-    moteDb.db.prepare("UPDATE agent_registry SET revoked = 1 WHERE motebit_id = ?").run(motebitId);
+    // Revocation also DELISTS (identity-key-state-v1 §10 Q1): a revoked
+    // identity cannot act, so it must not be for hire; one statement, one
+    // audit site. The row itself stays — the identity log keeps the
+    // binding and its end for verifiers walking old receipt chains.
+    // The SET clause is written out here, not imported: the writers gate
+    // reads statement text, and an authority write hidden in a constant is
+    // an authority write the gate cannot see.
+    moteDb.db
+      .prepare(
+        "UPDATE agent_registry SET revoked = 1, delisted_at = COALESCE(delisted_at, ?), endpoint_url = '', capabilities = '[]' WHERE motebit_id = ?",
+      )
+      .run(Date.now(), motebitId);
     try {
       await insertRevocationEvent(moteDb.db, relayIdentity, "agent_revoked", motebitId, {
         revokedPublicKey: agent?.public_key,

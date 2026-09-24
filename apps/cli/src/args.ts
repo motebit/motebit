@@ -8,6 +8,7 @@ import {
   DEFAULT_GROQ_MODEL,
   DEFAULT_LOCAL_SERVER_MODEL,
   DEFAULT_OPENAI_MODEL,
+  PROVIDER_VERIFICATION,
 } from "@motebit/sdk";
 import { VERSION } from "./config.js";
 import { bold, dim, cyan, green, command } from "./colors.js";
@@ -45,6 +46,10 @@ export interface CliConfig {
   wallClock: string | undefined;
   project: string | undefined;
   reason: string | undefined;
+  /** `motebit runs ack`: explicit acceptance that the goal's next run may repeat effects. */
+  allowFreshRun: boolean;
+  /** Send the command to the running runtime over the relay, signed, instead of acting locally. */
+  remote: boolean;
   destination: string | undefined;
   capability: string | undefined;
   /** `grant create` minting flags + the chat `--grant` presentation id. */
@@ -144,6 +149,8 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
       "wall-clock": { type: "string" },
       project: { type: "string" },
       reason: { type: "string" },
+      "allow-fresh-run": { type: "boolean", default: false },
+      remote: { type: "boolean", default: false },
       destination: { type: "string" },
       capability: { type: "string" },
       target: { type: "string" },
@@ -227,8 +234,22 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     "proxy",
   ];
   if (!VALID_PROVIDERS.includes(rawProvider as CliProvider)) {
+    // Name what has actually been WITNESSED, not just what resolves (#518).
+    // Every provider here is wired; only some have had a live turn run through
+    // them, and a picker that implies parity is how a catalog of unverified
+    // model ids ships unnoticed.
+    const withStatus = VALID_PROVIDERS.map((p) => {
+      const v = (PROVIDER_VERIFICATION as Record<string, string | undefined>)[p];
+      return v === "verified"
+        ? `${p} (verified live)`
+        : v === "available"
+          ? `${p} (unverified)`
+          : p;
+    });
     throw new Error(
-      `Unknown provider "${values.provider}". Use one of: ${VALID_PROVIDERS.join(", ")} (or the alias "ollama" for local-server).`,
+      `Unknown provider "${values.provider}". Use one of: ${withStatus.join(", ")} ` +
+        `(or the alias "ollama" for local-server). "unverified" means wired and expected to ` +
+        `work, but no live turn has been witnessed yet — see #518.`,
     );
   }
   const cliProvider = rawProvider as CliProvider;
@@ -257,6 +278,8 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): CliConfig 
     wallClock: values["wall-clock"],
     project: values.project,
     reason: values.reason,
+    allowFreshRun: values["allow-fresh-run"],
+    remote: values.remote,
     destination: values.destination,
     capability: values.capability,
     scope: values.scope,
@@ -363,6 +386,10 @@ export const COMMANDS: CommandEntry[] = [
   { usage: "/goal resume <id>", desc: "Resume a paused goal" },
   { usage: "/goal outcomes <id>", desc: "Show execution history" },
   { usage: "/approvals", desc: "Show pending approval queue" },
+  {
+    usage: "/runs [id]",
+    desc: "What happened while you were away; an id opens one run in full",
+  },
   { usage: "/id", desc: "Show your identity card (motebit_id, did, keys)" },
   { usage: "/wallet", desc: "Show your sovereign Solana wallet (address, USDC balance)" },
   { usage: "/ledger <goal-id>", desc: "Show a goal's signed execution ledger" },
@@ -490,6 +517,12 @@ Commands:
   approvals show <id>       Show approval detail
   approvals approve <id>    Approve a pending tool call
   approvals deny <id> [--reason <text>]  Deny a pending tool call
+  runs                      Goal runs holding their goal (paused on you, or interrupted with side effects), then recent runs
+  runs show <run_id>        What one run produced, what its tools reported, and the evidence a stranger could re-check
+  runs ack <id> --allow-fresh-run  Release an interrupted run's goal; its next run starts from scratch and may repeat effects — nothing is retried
+  halt [goal <id>] [--reason "..."] [--remote]  Stop acting unattended; --remote signs a command to the running runtime and returns its acknowledgement
+  resume [<halt_id>|all] [--remote]  Give the permission to act unattended back
+  halt-status [--remote]    What is stopped, and whether the motebit has acknowledged it
   federation status           Show relay identity (motebit_id, DID, public key)
   federation peers            List active federation peers
   federation peer <url>       Peer with another relay (mutual handshake)

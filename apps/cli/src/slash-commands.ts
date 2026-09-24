@@ -2665,6 +2665,15 @@ export async function handleSlashCommand(
       break;
     }
 
+    case "runs": {
+      // Delegates to the shared `cmdRuns` dispatcher — the same return
+      // view the phone gets over a signed envelope, rendered here from
+      // this machine's own ledger. One command, one shape, whichever
+      // surface a person happens to be holding.
+      await trySharedCommand(runtime, cmd, args, config, fullConfig, repl);
+      break;
+    }
+
     case "welcome": {
       // Delegates to the shared cmdWelcome dispatcher — the
       // onboarding tour naming the three thesis pillars. Same

@@ -66,6 +66,7 @@ export {
   createMemoryController,
   filterMemoriesView,
   classifyCertainty,
+  memoryProvenance,
   type Certainty,
   type MemoryController,
   type MemoryControllerOptions,

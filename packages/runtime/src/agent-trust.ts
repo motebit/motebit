@@ -125,23 +125,62 @@ function resolveTaskCapability(
 }
 
 /**
+ * How many failures a PAID failure counts as in the reliability posterior.
+ *
+ * docs/doctrine/paid-failure-recourse.md refused escrow and named the trust
+ * graph as the buyer's recourse; until 2026-09-15 the graph was money-blind —
+ * a failed $0.25 hire and a failed free one each added one failure. This is
+ * the recourse made real: a paid failure adds 1 to `failed_tasks` as before
+ * and `weight − 1` extra pseudo-failures to the capability bucket's
+ * `paid_failure_penalty`. Integer (the seeded Beta sampler needs integer
+ * shapes, and a routing transcript must recompute exactly), scaled by what
+ * the buyer actually lost, capped so one bad hire cannot erase a long record:
+ *
+ *   free / unknown  → 1        $0.003 (an atom)   → 2
+ *   $0.01–$0.02     → 2–3      $0.25 (a molecule) → 5 (cap)
+ *
+ * Measured with the real selector (2000 seeded draws, worker with 3 successes
+ * vs an equal rival, P(re-hire next draw)): no failure 0.50, one free failure
+ * 0.29, weight 2 → 0.17, weight 5 → 0.06. Against a cold rival a 60-success
+ * incumbent moves 0.98 → 0.95 at weight 3 — a paid failure is expensive,
+ * never annihilating. Level transitions (the pairwise relationship) read the
+ * raw counts and are untouched; this is a competence signal.
+ */
+export const PAID_FAILURE_WEIGHT_CAP = 5;
+export const PAID_FAILURE_USD_PER_STEP = 0.01;
+export function paidFailureWeight(paidUsd: number | undefined): number {
+  if (paidUsd == null || !Number.isFinite(paidUsd) || paidUsd <= 0) return 1;
+  return Math.min(PAID_FAILURE_WEIGHT_CAP, 1 + Math.ceil(paidUsd / PAID_FAILURE_USD_PER_STEP));
+}
+
+/** Bucket key for penalties whose capability is unknown (aggregate-only reads sum it). */
+export const UNSCOPED_PENALTY_BUCKET = "*";
+
+/**
  * Return a NEW capability_stats map with the resolved capability's bucket
  * incremented (immutable — never mutate the stored record's nested object). A
- * null capability leaves the map untouched (aggregate-only attribution).
+ * null capability leaves the counts untouched (aggregate-only attribution) but
+ * still records a paid-failure penalty under the `"*"` bucket, so the money
+ * loss is never dropped on the floor for want of a capability name.
  */
 function bumpCapabilityStats(
   existing: AgentTrustRecord["capability_stats"],
   capability: string | undefined,
   effectiveSuccess: boolean,
   effectiveFailure: boolean,
+  paidFailurePenalty = 0,
 ): AgentTrustRecord["capability_stats"] {
-  if (capability == null) return existing;
-  const prev = existing?.[capability] ?? { successful_tasks: 0, failed_tasks: 0 };
+  const key = capability ?? (paidFailurePenalty > 0 ? UNSCOPED_PENALTY_BUCKET : undefined);
+  if (key == null) return existing;
+  const prev = existing?.[key] ?? { successful_tasks: 0, failed_tasks: 0 };
+  const countsHere = capability != null;
+  const penalty = (prev.paid_failure_penalty ?? 0) + paidFailurePenalty;
   return {
     ...(existing ?? {}),
-    [capability]: {
-      successful_tasks: prev.successful_tasks + (effectiveSuccess ? 1 : 0),
-      failed_tasks: prev.failed_tasks + (effectiveFailure ? 1 : 0),
+    [key]: {
+      successful_tasks: prev.successful_tasks + (countsHere && effectiveSuccess ? 1 : 0),
+      failed_tasks: prev.failed_tasks + (countsHere && effectiveFailure ? 1 : 0),
+      ...(penalty > 0 ? { paid_failure_penalty: penalty } : {}),
     },
   };
 }
@@ -158,6 +197,13 @@ export async function bumpTrustFromReceipt(
    * aggregate counts update. Never widens authority — pure observation.
    */
   capability?: string,
+  /**
+   * What the caller PAID for this work, USD, when the hire was priced and the
+   * payment settled. On a failure it weighs the failure by `paidFailureWeight`
+   * (the trust-graph recourse of docs/doctrine/paid-failure-recourse.md).
+   * Absent / 0 ⇒ a free failure, weight 1 — byte-identical to before.
+   */
+  paidUsd?: number,
 ): Promise<void> {
   const {
     motebitId,
@@ -198,6 +244,9 @@ export async function bumpTrustFromReceipt(
   // The capability to attribute this work to (competence is per-skill). Undefined
   // ⇒ aggregate-only, no bucket touched.
   const taskCapability = resolveTaskCapability(capability, receipt);
+  // A paid failure costs more trust than a free one — the buyer's money loss as
+  // a first-person fact. Extra pseudo-failures beyond the 1 counted below.
+  const paidFailurePenalty = effectiveFailure ? paidFailureWeight(paidUsd) - 1 : 0;
 
   if (existing != null) {
     // Quality EMA update
@@ -210,6 +259,7 @@ export async function bumpTrustFromReceipt(
       taskCapability,
       effectiveSuccess,
       effectiveFailure,
+      paidFailurePenalty,
     );
     const updated: AgentTrustRecord = {
       ...existing,
@@ -412,6 +462,7 @@ export async function bumpTrustFromReceipt(
       taskCapability,
       effectiveSuccess,
       effectiveFailure,
+      paidFailurePenalty,
     );
     const record: AgentTrustRecord = {
       motebit_id: motebitId,

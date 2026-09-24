@@ -116,6 +116,22 @@ const SELF_STATE_FACETS: ReadonlyArray<SelfStateFacet> = [
       "Stale bytes_omitted_reason — the runtime computes that a prior omission's gate has flipped. Pin from 2026-05-11 (telling the user to /vision grant a thing already granted).",
   },
   {
+    key: "substrate",
+    promptText: "Substrate:",
+    producerField: "substrate",
+    testText: "Substrate: claude-opus-4-7",
+    notes:
+      "Substrate proprioception — the live provider model (#530). Pin from 2026-08-01 (motebit.com: honest 'I don't know what model I am' beside chrome rendering claude-opus-4-7 — the runtime knew, the interior wasn't told).",
+  },
+  {
+    key: "settledDelegations",
+    promptText: "Settled this turn:",
+    producerField: "settledDelegations",
+    testText: "Settled this turn: research (paid)",
+    notes:
+      "Settled money acts this exchange — the streaming manager's own ledger (#530). Pin from 2026-08-01 (a completed \$0.25 hire the model denied and tried to re-buy; #521/#522 patched the mouths, this puts the ledger in the premises).",
+  },
+  {
     key: "memory",
     promptText: "Your own memory state is in the [Now] block",
     producerField: "memory",

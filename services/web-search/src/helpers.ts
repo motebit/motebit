@@ -60,12 +60,11 @@ export function loadConfig() {
     // motebit.key, motebit.md) is generated here on first boot and
     // reloaded on every subsequent boot. Survives deploys.
     dataDir: process.env["MOTEBIT_DATA_DIR"] ?? "./data",
-    authToken: process.env["MOTEBIT_AUTH_TOKEN"],
     syncUrl: process.env["MOTEBIT_SYNC_URL"],
-    apiToken: process.env["MOTEBIT_API_TOKEN"],
     braveApiKey: process.env["BRAVE_SEARCH_API_KEY"],
     tavilyApiKey: process.env["TAVILY_API_KEY"],
     publicUrl: process.env["MOTEBIT_PUBLIC_URL"],
+    relayPublicKey: process.env["MOTEBIT_RELAY_PUBLIC_KEY"]?.trim() || undefined,
     delegateReadUrl: process.env["MOTEBIT_DELEGATE_READ_URL"],
     delegateTargetId: process.env["MOTEBIT_DELEGATE_TARGET_ID"],
   };

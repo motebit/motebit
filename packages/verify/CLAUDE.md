@@ -11,8 +11,8 @@ The `-er`-suffixed sibling [`@motebit/verifier`](../verifier/) is the _library_;
 ## The three-package lineage
 
 ```
-@motebit/verify     this package  Apache-2.0  L6  CLI `motebit-verify` — the tool a human installs
-@motebit/verifier                 Apache-2.0  L6  Library — file I/O, human formatting helpers
+@motebit/verify     this package  Apache-2.0  L3  CLI `motebit-verify` — the tool a human installs
+@motebit/verifier                 Apache-2.0  L1  Library — file I/O, human formatting helpers
 @motebit/crypto                   Apache-2.0  L0  Primitives — verify, sign, suite dispatch
 ```
 
@@ -20,7 +20,7 @@ Same shape as the lineages that survive for decades: `git` / `libgit2`, `cargo` 
 
 ## Why this package exists as the aggregator
 
-`@motebit/verifier` (Apache-2.0, L6 library) stays dep-thin on purpose: file I/O, `formatHuman`, and the injection point for an optional hardware-attestation verifier. Pulling the platform adapters into it would force every library consumer to accept the `cbor2` / `@peculiar/x509` dep surface and motebit's specific root-pin choices, even when the consumer just wants to verify software identity files.
+`@motebit/verifier` (Apache-2.0, L1 library) stays dep-thin on purpose: file I/O, `formatHuman`, and the injection point for an optional hardware-attestation verifier. Pulling the platform adapters into it would force every library consumer to accept the `cbor2` / `@peculiar/x509` dep surface and motebit's specific root-pin choices, even when the consumer just wants to verify software identity files.
 
 Splitting lets the library stay a deterministic primitive and lets this package carry the motebit-canonical wiring — default bundle IDs `com.motebit.mobile`, default RP ID `motebit.com`, CLI argument shape. A third-party auditor who wants to reproduce motebit's verification decision in their own Apache-2.0-licensed code composes `@motebit/crypto` + `@motebit/verifier` + any subset of the `@motebit/crypto-*` platform leaves (`crypto-appattest`, `crypto-android-keystore`, `crypto-tpm`, `crypto-webauthn`) and pins the roots they trust. A human running `motebit-verify cred.json` installs one permissive-floor package and gets motebit's opinionated composition out of the box — no license friction in CI pipelines, enterprise audit tooling, or third-party verifier integrations.
 

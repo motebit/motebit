@@ -1,7 +1,7 @@
 import {
   MotebitRuntime,
   RelayDelegationAdapter,
-  executeCommand,
+  executeRemoteCommand,
   cmdSelfTest,
   PLANNING_TASK_ROUTER,
   resolveProactiveAnchor,
@@ -25,6 +25,7 @@ import {
   releaseLiveBrowserItem,
 } from "./ui/slab-items";
 import { buildSlabHomeView } from "./ui/slab-home.js";
+import { buildGoalArtifactView } from "./ui/slab-goal-artifact.js";
 import { buildIdentityFace } from "./ui/identity-face.js";
 import { deriveHomeSeed, type HomeSeedInputs, type HomeTileAction } from "./ui/slab-home-model.js";
 import { animateMarkForReceipt } from "./ui/cobrowse-chrome";
@@ -71,7 +72,6 @@ import { ScreencastFrameBus } from "./screencast-bus.js";
 import { setLiveBrowserSuppressionPredicate } from "./ui/slab-items.js";
 import {
   bootstrapIdentity,
-  rotateIdentityKeys,
   registerDeviceWithRelay,
   announceMotebit,
   writeRestoredIdentity,
@@ -92,6 +92,9 @@ import {
   formatWalletWarning,
 } from "@motebit/encryption";
 import type { KeyTransferPayload } from "@motebit/sdk";
+// Type-only at runtime here (goal-scheduler value-imports only types from
+// this module, so this edge cannot form a runtime cycle).
+import { ARTIFACT_MANIFEST_PREFIX } from "./goal-scheduler";
 import {
   HttpEventStoreAdapter,
   WebSocketEventStoreAdapter,
@@ -135,6 +138,7 @@ import {
 } from "./storage.js";
 import { LocalStorageKeyringAdapter } from "./browser-keyring";
 import { EncryptedKeyStore } from "./encrypted-keystore";
+import { rotateWebKey } from "./key-rotation";
 import { createWebGoalsScheduler } from "./goal-scheduler";
 import { createWebGoalsAdapter } from "./goals-adapter";
 import type { GoalsEngine } from "./goal-engine";
@@ -391,6 +395,15 @@ export class UnbootedWebApp {
    */
   private _onHomeRegister = true;
   private _homeOverlayActive = false;
+  /**
+   * Goal-artifact presentation (#594 Inc 4): non-null while the body
+   * slot presents a durable goal result (`presentGoalArtifact`). Wins
+   * over home/overlay in `effectiveHomeState` / `effectiveBodyRegister`,
+   * and is DISSOLVED by `applyHomeRegisterToCurrentState` — any URL or
+   * session transition recomputes the register and the artifact yields
+   * with no dedicated teardown path.
+   */
+  private _artifactViewGoalId: string | null = null;
   private _motebitId = "";
   private _deviceId = "";
   private _publicKeyHex = "";
@@ -1035,24 +1048,16 @@ export class UnbootedWebApp {
     //   3. Browser-sandbox verifies signature against pinned relay
     //      pubkey. Single trust anchor, no bundled secret.
     //
-    // Legacy path (`VITE_BROWSER_SANDBOX_TOKEN`): shared bearer in
-    // the bundle. Acceptable for local-dev where the bundle is not
-    // public. NEVER set on motebit.com's Vercel env — would expose
-    // the bearer to anyone visiting the page.
+    // There is no bundled-secret path. A shared bearer in a public bundle
+    // leaks to every visitor; the sandbox stopped accepting one on
+    // 2026-09-14. Local dev runs a local relay and takes the same signed
+    // grant path as production.
     const env = (import.meta as unknown as Record<string, Record<string, string> | undefined>).env;
     const browserSandboxUrl = env?.VITE_BROWSER_SANDBOX_URL ?? "";
-    const browserSandboxToken = env?.VITE_BROWSER_SANDBOX_TOKEN ?? "";
     const relayUrl = loadSyncUrl();
 
     let getAuthToken: (() => Promise<string> | string) | null = null;
-    if (browserSandboxToken) {
-      // Local-dev / single-tenant deployment path. The bundled token
-      // matches the sandbox's `MOTEBIT_API_TOKEN` legacy bearer. The
-      // sandbox's `dualAuth` accepts this OR a relay-signed token,
-      // so the same sandbox deployment can serve both paths during
-      // the transition window.
-      getAuthToken = (): string => browserSandboxToken;
-    } else if (relayUrl != null && relayUrl !== "") {
+    if (relayUrl != null && relayUrl !== "") {
       // Production / federation-grade path. The grant signer is the
       // existing `createSyncToken` primitive — already audience-
       // parameterized, already routes through suite-dispatch, secure-
@@ -2125,29 +2130,76 @@ export class UnbootedWebApp {
    * wins on goal_id collision because local is the signed-locally
    * truth, relay is a mirror.
    *
-   * Future arc swaps this for per-fire signed ExecutionReceipt
-   * aggregation via `replayGoal()` from packages/runtime/src/
-   * execution-ledger.ts — each fire becomes a signature-verified row.
-   * Contract-preserving swap (same `GoalRow` shape); only deepens the
-   * source of truth. Doctrine: docs/doctrine/receipts-unified.md.
+   * #594 Inc 3a: rows now carry `local_verification` when the goal's
+   * signed `ContentArtifactManifest` (written by the scheduler on each
+   * successful fire, previously write-only) verifies against the stored
+   * result bytes AND its `producer_public_key` equals this motebit's
+   * own key — the out-of-band binding the content-artifact trust note
+   * requires. Verification is fail-closed: a present-but-unverifiable
+   * manifest is `"failed"` (a tampering signal), an absent one leaves
+   * the field off. Per-fire rows via `replayGoal()` remain Inc 3b (web
+   * emits no goal lifecycle events yet).
    */
-  getLocalLedger(): Array<{
-    goal_id: string;
-    prompt: string;
-    status: string;
-    created_at: number;
-  }> {
+  async getLocalLedger(): Promise<
+    Array<{
+      goal_id: string;
+      prompt: string;
+      status: string;
+      created_at: number;
+      local_verification?: "verified" | "failed";
+    }>
+  > {
     const scheduler = this._scheduler;
     if (!scheduler) return [];
     const { goals } = scheduler.getState();
-    return goals
-      .filter((g) => g.last_run_at != null || g.status === "completed" || g.status === "failed")
-      .map((g) => ({
-        goal_id: g.goal_id,
-        prompt: g.prompt,
-        status: String(g.status),
-        created_at: g.created_at ?? g.last_run_at ?? Date.now(),
-      }));
+    const executed = goals.filter(
+      (g) => g.last_run_at != null || g.status === "completed" || g.status === "failed",
+    );
+
+    // Lazy-load the verifier only when a signed artifact exists to check.
+    const needsVerify = executed.some((g) => g.last_manifest_signed === true);
+    let verify: typeof import("@motebit/encryption").verifyContentArtifact | null = null;
+    if (needsVerify && this._publicKeyHex) {
+      try {
+        ({ verifyContentArtifact: verify } = await import("@motebit/encryption"));
+      } catch {
+        verify = null; // verifier unavailable — rows render without the field
+      }
+    }
+
+    return Promise.all(
+      executed.map(async (g) => {
+        const row: {
+          goal_id: string;
+          prompt: string;
+          status: string;
+          created_at: number;
+          local_verification?: "verified" | "failed";
+        } = {
+          goal_id: g.goal_id,
+          prompt: g.prompt,
+          status: String(g.status),
+          created_at: g.created_at ?? g.last_run_at ?? Date.now(),
+        };
+        if (verify == null || g.last_manifest_signed !== true) return row;
+        try {
+          const raw = localStorage.getItem(`${ARTIFACT_MANIFEST_PREFIX}${g.goal_id}`);
+          const content = g.last_response_full;
+          if (raw == null || content == null) return row;
+          const manifest = JSON.parse(raw) as import("@motebit/encryption").ContentArtifactManifest;
+          const result = await verify(manifest, new TextEncoder().encode(content));
+          // Conjunction: cryptographic validity AND owner-key binding.
+          row.local_verification =
+            result.valid && manifest.producer_public_key === this._publicKeyHex
+              ? "verified"
+              : "failed";
+        } catch {
+          // A stored-but-unparseable manifest is a failed check, not silence.
+          row.local_verification = "failed";
+        }
+        return row;
+      }),
+    );
   }
 
   /**
@@ -2256,72 +2308,20 @@ export class UnbootedWebApp {
    * and submit to relay if syncing.
    */
   async rotateKey(reason?: string): Promise<{ newPublicKey: string }> {
-    // 1. Load existing private key from encrypted keystore
-    const oldPrivKeyHex = await this.keyStore.loadPrivateKey();
-    if (oldPrivKeyHex == null || oldPrivKeyHex === "") {
-      throw new Error("No private key available — bootstrap first");
-    }
-
-    const oldPrivKeyBytes = new Uint8Array(oldPrivKeyHex.length / 2);
-    for (let i = 0; i < oldPrivKeyHex.length; i += 2) {
-      oldPrivKeyBytes[i / 2] = parseInt(oldPrivKeyHex.slice(i, i + 2), 16);
-    }
-
-    try {
-      // 2. Derive old public key bytes from hex
-      const oldPubHex = this._publicKeyHex;
-      if (!oldPubHex) throw new Error("No public key available — bootstrap first");
-      const oldPubKeyBytes = new Uint8Array(oldPubHex.length / 2);
-      for (let i = 0; i < oldPubHex.length; i += 2) {
-        oldPubKeyBytes[i / 2] = parseInt(oldPubHex.slice(i, i + 2), 16);
-      }
-
-      // 3. Rotate: generates new keypair + signed succession record
-      const rotateResult = await rotateIdentityKeys({
-        oldPrivateKey: oldPrivKeyBytes,
-        oldPublicKey: oldPubKeyBytes,
-        reason,
-      });
-
-      const newPubKeyHex = rotateResult.newPublicKeyHex;
-      const newPrivKeyHex = bytesToHex(rotateResult.newPrivateKey);
-      secureErase(rotateResult.newPrivateKey);
-
-      // 4. Store new private key in encrypted IndexedDB
-      await this.keyStore.storePrivateKey(newPrivKeyHex);
-
-      // 5. Update public key in localStorage and in-memory
-      localStorage.setItem("motebit:device_public_key", newPubKeyHex);
-      this._publicKeyHex = newPubKeyHex;
-
-      // 6. Submit to relay if syncing (best-effort)
-      try {
-        const token = await this.createSyncToken("device:auth");
-        if (token != null) {
-          const syncUrl = loadSyncUrl();
-          if (syncUrl != null && syncUrl !== "") {
-            await fetch(`${syncUrl}/api/v1/agents/${this._motebitId}/key-rotation`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${token}`,
-              },
-              body: JSON.stringify({
-                device_id: this._deviceId,
-                new_public_key: newPubKeyHex,
-                succession_record: rotateResult.successionRecord,
-              }),
-            });
-          }
-        }
-      } catch {
-        // Non-fatal — relay notification is best-effort
-      }
-
-      return { newPublicKey: newPubKeyHex };
-    } finally {
-      secureErase(oldPrivKeyBytes);
-    }
+    // The state machine lives in @motebit/surface-kit (#709): it reads the
+    // relay first, writes the new key ahead, submits signed by the RETIRING
+    // key, and moves local state only after the relay confirms. A stop or a
+    // lost answer rejects with the honest next action — never "rotated".
+    return rotateWebKey({
+      keyStore: this.keyStore,
+      motebitId: this._motebitId,
+      deviceId: this._deviceId,
+      syncUrl: loadSyncUrl() ?? null,
+      onCommitted: (publicKeyHex) => {
+        this._publicKeyHex = publicKeyHex;
+      },
+      ...(reason !== undefined ? { reason } : {}),
+    });
   }
 
   // === MCP Management ===
@@ -2803,6 +2803,7 @@ export class UnbootedWebApp {
    * focus/blur path.
    */
   private effectiveHomeState(): "hidden" | "register" | "overlay" {
+    if (this._artifactViewGoalId != null) return "register";
     if (this._onHomeRegister) return "register";
     if (this._homeOverlayActive) return "overlay";
     return "hidden";
@@ -2820,6 +2821,7 @@ export class UnbootedWebApp {
    * Doctrine: `motebit-computer.md` §"Body register — the tri-state."
    */
   private effectiveBodyRegister(): SlabBodyRegister {
+    if (this._artifactViewGoalId != null) return "artifact";
     if (this._onHomeRegister) return "home";
     if (this._homeOverlayActive) return "transition";
     return "live";
@@ -2828,6 +2830,10 @@ export class UnbootedWebApp {
   private applyHomeRegisterToCurrentState(): void {
     const handle = this.liveBrowserHandle;
     if (!handle) return;
+    // A URL/session transition dissolves any presented goal artifact —
+    // the artifact view has no teardown path of its own by design
+    // (#594 Inc 4); the register recomputation below is the exit.
+    this._artifactViewGoalId = null;
     const url = this._currentBrowserUrl;
     const onHome = url == null || url === "" || url === "about:blank";
     const wasOnHome = this._onHomeRegister;
@@ -2883,6 +2889,9 @@ export class UnbootedWebApp {
       // dismissed, navigated, or blurred-out during the await window.
       if (this.liveBrowserHandle !== handle) return;
       if (!this._onHomeRegister && !this._homeOverlayActive) return;
+      // A goal artifact presented during the await window owns the slot —
+      // the home view must not stomp it (#594 Inc 4 race guard).
+      if (this._artifactViewGoalId != null) return;
       const seed = deriveHomeSeed(inputs);
       const view = buildSlabHomeView(seed, {
         onTileAction: (action) => this.dispatchHomeTileAction(action),
@@ -2890,6 +2899,35 @@ export class UnbootedWebApp {
       });
       handle.bodySlot.replaceChildren(view);
     });
+  }
+
+  /**
+   * Present a durable goal-result artifact in the slab body (#594 Inc 4).
+   *
+   * Reads the DURABLE record (`last_response_full` on the goal, plus the
+   * signed-manifest claim) — never the runtime's resting mind-mode slab
+   * item, which is hidden by design and session-only. Requires the shell
+   * to be mounted (`invokeComputer()` first — main.ts owns that sequence;
+   * this method is excluded from `BootedApp` so panels must go through
+   * the typed `motebit:goal-view-result` event). No-op when the goal or
+   * its content is gone: the affordance degrades to a plain slab open.
+   */
+  presentGoalArtifact(goalId: string): void {
+    const handle = this.liveBrowserHandle;
+    if (!handle) return;
+    const goal = this.getGoalsController()
+      ?.getState()
+      .goals.find((g) => g.goal_id === goalId);
+    const content = goal?.last_response_full;
+    if (goal == null || content == null || content === "") return;
+    this._artifactViewGoalId = goalId;
+    const view = buildGoalArtifactView(
+      { prompt: goal.prompt, content, signed: goal.last_manifest_signed === true },
+      { soulTint: this._interiorColor ? this.tintToHex(this._interiorColor.tint) : undefined },
+    );
+    handle.bodySlot.replaceChildren(view);
+    handle.setHomeState(this.effectiveHomeState());
+    this.renderer.setSlabBodyRegister?.(this.effectiveBodyRegister());
   }
 
   /**
@@ -3716,7 +3754,8 @@ export class UnbootedWebApp {
               );
               return;
             }
-            const result = await executeCommand(this.runtime!, cmdMsg.command, cmdMsg.args);
+            // The one door for a relay frame.
+            const result = await executeRemoteCommand(this.runtime!, cmdMsg.command, cmdMsg.args);
             this._wsAdapter?.sendRaw(
               JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
             );
@@ -4337,4 +4376,11 @@ export class WebApp extends UnbootedWebApp {
  *
  * Doctrine: `intent-gated-slab.md`.
  */
-export type BootedApp = Omit<WebApp, "invokeComputer" | "dismissComputer" | "bootstrap">;
+export type BootedApp = Omit<
+  WebApp,
+  // presentGoalArtifact joins the excluded set (#594 Inc 4): it writes
+  // slab body state, so panels reach it only through the typed
+  // `motebit:goal-view-result` event that main.ts pairs with the
+  // canonical invokeComputer() summon.
+  "invokeComputer" | "dismissComputer" | "presentGoalArtifact" | "bootstrap"
+>;

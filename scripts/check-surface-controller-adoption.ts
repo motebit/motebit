@@ -42,6 +42,28 @@ const ADOPTIONS: readonly Adoption[] = [
     files: ["apps/mobile/src/mcp-manager.ts", "apps/spatial/src/mcp-manager.ts"],
     maxLines: 60,
   },
+  {
+    // Key rotation (#709): four surfaces each re-forked the same state machine
+    // and three got the ordering wrong the same way. The CLI keeps its own
+    // richer adapter (identity file + config reconciliation, apps/cli/src/
+    // rotation.ts); these three are thin: ports over the platform's keystore.
+    controller: "rotateOrThrow",
+    files: [
+      "apps/web/src/key-rotation.ts",
+      "apps/mobile/src/key-rotation.ts",
+      "apps/desktop/src/key-rotation.ts",
+    ],
+    maxLines: 130,
+  },
+  {
+    // The CLI is the fourth adapter of the same controller: its ports carry a
+    // passphrase-encrypted config key, motebit.md as the published witness,
+    // and an encrypted write-ahead file. Ceiling is higher because the CLI
+    // keeps its own outcome vocabulary for the terminal, mapped from the kit's.
+    controller: "performKeyRotation",
+    files: ["apps/cli/src/rotation.ts"],
+    maxLines: 260,
+  },
 ];
 
 const errors: string[] = [];

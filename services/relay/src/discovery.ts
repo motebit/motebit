@@ -11,6 +11,7 @@ import type { RelayMetadata, AgentResolutionResult } from "@motebit/protocol";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { RelayIdentity, FederationConfig } from "./federation.js";
 import { createLogger } from "./logger.js";
+import { ON_SHELF } from "./registry-delist.js";
 
 const logger = createLogger({ service: "relay", module: "discovery" });
 
@@ -82,7 +83,7 @@ export function registerDiscoveryRoutes(deps: DiscoveryDeps): void {
 
     // Approximate agent count
     const countRow = db
-      .prepare("SELECT COUNT(*) as cnt FROM agent_registry WHERE revoked = 0")
+      .prepare(`SELECT COUNT(*) as cnt FROM agent_registry WHERE revoked = 0${ON_SHELF}`)
       .get() as { cnt: number } | undefined;
     const agentCount = countRow?.cnt ?? 0;
 
@@ -171,7 +172,7 @@ async function resolveAgent(
   // Step 1: Check local agent registry
   const localAgent = db
     .prepare(
-      "SELECT motebit_id, public_key, capabilities, settlement_address, settlement_modes FROM agent_registry WHERE motebit_id = ? AND revoked = 0",
+      `SELECT motebit_id, public_key, capabilities, settlement_address, settlement_modes FROM agent_registry WHERE motebit_id = ? AND revoked = 0${ON_SHELF}`,
     )
     .get(motebitId) as
     | {

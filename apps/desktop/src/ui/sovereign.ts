@@ -250,15 +250,15 @@ function renderCredentials(state: SovereignState, hasRelay: boolean): void {
   }
 }
 
-function renderLedger(state: SovereignState, hasRelay: boolean, ctrl: SovereignController): void {
+function renderLedger(state: SovereignState, _hasRelay: boolean, ctrl: SovereignController): void {
   ledgerList.innerHTML = "";
 
-  if (!hasRelay) {
-    ledgerEmpty.style.display = "block";
-    ledgerEmpty.textContent = "Connect to a relay to view execution ledger.";
-    return;
-  }
-
+  // Local-first per protocol-primacy: the renderer reads from state, never
+  // from relay-availability. state.goals merges getLocalLedger rows with
+  // relay rows in the controller, so gating on hasRelay here hid local
+  // execution history behind a relay requirement — the exact
+  // renderer-relay-gate drift class protocol-primacy.md names (#594 Inc 3a
+  // removed it; web/mobile never had the gate).
   if (state.goals.length === 0) {
     ledgerEmpty.style.display = "block";
     ledgerEmpty.textContent = "No completed goals yet. Execute a goal to generate a ledger.";

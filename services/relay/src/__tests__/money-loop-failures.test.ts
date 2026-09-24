@@ -174,41 +174,20 @@ describe("Money Loop Failure Injection", () => {
       .prepare("UPDATE relay_allocations SET created_at = ? WHERE task_id = ?")
       .run(Date.now() - 3_700_000, taskId);
 
-    // Run the stale cleanup logic manually (same as the interval callback)
-    const now = Date.now();
-    const staleAllocations = relay.moteDb.db
-      .prepare(
-        "SELECT allocation_id, task_id, motebit_id, amount_locked FROM relay_allocations WHERE status = 'locked' AND created_at < ?",
-      )
-      .all(now - 3_600_000) as Array<{
-      allocation_id: string;
-      task_id: string;
-      motebit_id: string;
-      amount_locked: number;
-    }>;
-
-    expect(staleAllocations.length).toBeGreaterThan(0);
-
-    // Import creditAccount to perform the cleanup
-    const { creditAccount } = await import("../accounts.js");
-
-    relay.moteDb.db.exec("BEGIN");
-    for (const a of staleAllocations) {
-      creditAccount(
-        relay.moteDb.db,
-        worker.motebitId,
-        a.amount_locked,
-        "allocation_release",
-        a.allocation_id,
-        `Stale allocation release for task ${a.task_id}`,
-      );
-    }
-    relay.moteDb.db
-      .prepare(
-        "UPDATE relay_allocations SET status = 'released', released_at = ? WHERE status = 'locked' AND created_at < ?",
-      )
-      .run(now, now - 3_600_000);
-    relay.moteDb.db.exec("COMMIT");
+    // Drive the REAL cleanup function the interval calls — not a copy of it.
+    // This test used to re-implement the loop body inline ("same as the
+    // interval callback"), which is a modeled composition: it stayed green no
+    // matter what the deployed loop actually did, and would not have caught the
+    // release-the-claim-not-the-ledger mint. `releaseStaleAllocations` is
+    // exported for exactly this reason.
+    const { releaseStaleAllocations } = await import("../index.js");
+    const released = releaseStaleAllocations(
+      relay.moteDb.db,
+      Date.now(),
+      3_600_000,
+      () => worker.motebitId,
+    );
+    expect(released).toBeGreaterThan(0);
 
     // Funds returned to delegator
     const afterBalance = await getBalance(relay, worker.motebitId);

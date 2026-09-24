@@ -28,14 +28,14 @@ Three coordinated commitments:
 
 **`motebit × *` family** (the new default register; six cells, ~5 of them meaningful):
 
-| cell                        | register content                                                                                                  |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `motebit × virtual_browser` | task-step narration ("Reading the page") + URL inline-with-narration; default cell                                |
-| `motebit × mind`            | thinking narration ("Considering the trade-offs"); no screencast, no URL                                          |
-| `motebit × shared_gaze`     | observation narration ("Watching what you're doing"); polarity flips — the screencast IS the user's screen        |
-| `motebit × tool_result`     | result narration ("Here's the screenshot from earlier"); held register, no live action                            |
-| `motebit × desktop_drive`   | local-driving narration ("Working in your terminal"); same shape as `virtual_browser` register, different surface |
-| `motebit × peer_viewport`   | peer-action narration ("Showing what the other motebit is doing")                                                 |
+| cell                        | register content                                                                                                                                                                                                                            |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `motebit × virtual_browser` | task-step narration ("Reading the page") + URL inline-with-narration; default cell                                                                                                                                                          |
+| `motebit × mind`            | thinking narration ("Considering the trade-offs"); no screencast, no URL                                                                                                                                                                    |
+| `motebit × shared_gaze`     | observation narration ("Watching what you're doing"); polarity flips — the screencast IS the user's screen                                                                                                                                  |
+| `motebit × tool_result`     | result narration ("Here's the screenshot from earlier"); held register, no live action. Band-projected tool acts (`tool-policy.ts` `projection: "band"`) feed this cell with a runtime-produced line ("Searching …") instead of a body card |
+| `motebit × desktop_drive`   | local-driving narration ("Working in your terminal"); same shape as `virtual_browser` register, different surface                                                                                                                           |
+| `motebit × peer_viewport`   | peer-action narration ("Showing what the other motebit is doing")                                                                                                                                                                           |
 
 **`user × *` family** (cobrowse entered; collapses to 3-4 meaningful cells):
 

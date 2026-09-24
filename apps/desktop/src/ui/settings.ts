@@ -21,6 +21,7 @@ import {
   type ApprovalPreset,
   type GovernanceConfig,
   type AppearanceConfig,
+  PROVIDER_NOTE,
 } from "@motebit/sdk";
 import {
   byokKeyringKey,
@@ -501,6 +502,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         populateCloudModeModels();
       } else if (mode === "byok" && settingsByokModels.options.length === 0) {
         populateByokModeModels(activeByokVendor);
+        renderByokVendorNote(activeByokVendor);
       } else if (mode === "on-device" && settingsOnDeviceModel.options.length === 0) {
         populateOnDeviceModeModels();
       }
@@ -509,6 +511,19 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
   // BYOK vendor pill buttons — three top-level vendor choices (Anthropic /
   // OpenAI / Google). Click swaps the active state and re-seeds the model
+
+  /**
+   * Render the per-vendor honesty line from the SDK's canonical
+   * `PROVIDER_NOTE` (#518). Data-driven rather than prose in the markup so the
+   * surfaces cannot drift from what has actually been witnessed — and so the
+   * Groq/Grok disambiguation lives in exactly one place.
+   */
+  function renderByokVendorNote(vendor: string): void {
+    const el = document.getElementById("byok-vendor-note");
+    if (el == null) return;
+    el.textContent = (PROVIDER_NOTE as Record<string, string | undefined>)[vendor] ?? "";
+  }
+
   // datalist for the chosen vendor.
   document.querySelectorAll<HTMLButtonElement>(".byok-provider-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -523,6 +538,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
         b.style.color = isActive ? "var(--text-heading)" : "var(--text-muted)";
       });
       populateByokModeModels(vendor);
+      renderByokVendorNote(vendor);
     });
   });
 
@@ -563,8 +579,27 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
 
   const modelIndicator = document.getElementById("model-indicator") as HTMLDivElement;
 
+  // Transition cue, not a nameplate (mirrors web): the label appears when
+  // the active model changes, holds, then clears — steady state is silent,
+  // the standing record lives in Settings → Intelligence.
+  // `#model-indicator:empty { display: none }` hides the node.
+  const MODEL_CUE_HOLD_MS = 6000;
+  let settledModel: string | null = null;
+  let modelCueTimer: ReturnType<typeof setTimeout> | null = null;
+
   function updateModelIndicator(): void {
-    modelIndicator.textContent = ctx.app.currentModel ?? "";
+    const model = ctx.app.currentModel;
+    if (model === settledModel) return;
+    settledModel = model;
+    if (modelCueTimer != null) clearTimeout(modelCueTimer);
+    modelCueTimer = null;
+    modelIndicator.textContent = model ?? "";
+    if (model != null) {
+      modelCueTimer = setTimeout(() => {
+        modelCueTimer = null;
+        modelIndicator.textContent = "";
+      }, MODEL_CUE_HOLD_MS);
+    }
   }
 
   // === Approval Presets ===

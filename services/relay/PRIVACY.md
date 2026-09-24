@@ -27,7 +27,22 @@ Observable:
 - expires_at TTL
 - optional device label (claiming_device_name) when set by user during pairing
 
-Retention window: indefinite while motebit is active; expires per TTL after last heartbeat.
+Retention window: discovery fields (endpoint_url, capabilities) are cleared when the motebit deregisters, is revoked, or 90 days pass without a heartbeat (the lease); the row itself — motebit_id, public key, guardian key, settlement configuration — is retained until revocation, and revocation keeps the row with its revoked mark so the identity's binding and its end stay verifiable (#703, since 2026-09-24).
+
+### Device registry
+
+Tables: `devices`.
+
+Observable:
+- device_id
+- the motebit_id the device belongs to
+- the device's Ed25519 public key
+- registered_at timestamp
+- optional device_name
+- an opaque per-device bearer token (never the identity's private key)
+- optional self-issued hardware-attestation credential (JSON) for the device
+
+Retention window: indefinite — device rows carry no TTL and are never reaped for silence; there is no automatic removal.
 
 ### Operational
 
@@ -59,14 +74,24 @@ Observable:
 - memory node projections for cross-device restore, subject to the same sensitivity ceiling
 
 Retention window: while the motebit's sync data is active; memory content above the none/personal sensitivity ceiling is never stored (ingress-redacted before write); a synced DeleteRequested for a memory node erases that node's stored memory_formed content from the relay's event store (deletion propagation — services/relay/src/deletion-propagation.ts); clients MAY end-to-end encrypt event payloads, in which case the relay stores ciphertext only and erasure is the client-side key lifecycle.
-
 Enforcement: three layers — agent-boundary gating in packages/privacy-layer, relay ingress redaction in services/relay/src/redaction.ts (applied on both the HTTP and WebSocket sync push paths before eventStore.append), and optional client-side E2E encryption in packages/sync-engine.
+
+### Auth events
+
+Tables: `relay_auth_events`.
+
+Observable:
+- every presentation of the operator master token — HTTP method, route path, request correlation id
+- every refused signed token — the token's claimed motebit_id, the audience the route expected, the rejection reason, route path, correlation id
+- never the token bytes; never the client IP (see ip_addresses below)
+
+Retention window: 30-day rolling window, swept every minute by the task-cleanup loop; an operator's audit aid ("who presented the master token, what did we refuse") readable at GET /api/v1/admin/auth-events, not a surveillance log.
 
 ### IP addresses
 
 Handling: **transient**.
 
-client IP is read for rate limiting (in-memory FixedWindowLimiter, no DB) and included in auth-event log lines (Fly.io retention applies, no app-level persistence).
+client IP is read for rate limiting (in-memory FixedWindowLimiter, no DB) and included in auth-event LOG LINES only (Fly.io retention applies); the relay's own auth-event record (relay_auth_events) deliberately has no IP column — no app-level persistence.
 
 ## PII collected
 

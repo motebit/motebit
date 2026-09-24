@@ -127,6 +127,42 @@ export interface StreamingDeps {
   getLatestCues(): BehaviorCues;
   /** Approval store for quorum persistence. */
   getApprovalStore(): ApprovalStoreAdapter | null;
+  /**
+   * Record, BEFORE the resume path executes an approved call, that the
+   * paused decision is proceeding on the human's verdict
+   * (`PolicyGate.recordApprovalSatisfied`). Same correlation fields as
+   * `recordApprovedToolResult`.
+   */
+  recordApprovalSatisfied?(params: {
+    turnId: string | undefined;
+    runId: string | undefined;
+    auditCallId: string | undefined;
+    toolName: string;
+    args: Record<string, unknown>;
+  }): void;
+  /**
+   * Close the gate's audit row for an approved call the resume path
+   * executed outside the loop — the completion half of the durable
+   * execution ledger (`PolicyGate.recordResult`). Optional: absent
+   * means the row stays open, which reads as "prepared; effect
+   * unknown" — honest, but the runtime always wires it.
+   */
+  recordApprovedToolResult?(params: {
+    turnId: string | undefined;
+    runId: string | undefined;
+    auditCallId: string | undefined;
+    toolName: string;
+    args: Record<string, unknown>;
+    ok: boolean;
+    durationMs: number;
+    /**
+     * The whole result, so the evidence pointer can be minted here too.
+     * A tool that content-addressed its bytes did so whether the call
+     * was approval-gated or not; without this, what a run can prove
+     * depended on whether a human had to say yes first.
+     */
+    result?: import("@motebit/sdk").ToolResult;
+  }): void;
   /** Approval timeout in ms. */
   approvalTimeoutMs: number;
   /** Redact secrets from arbitrary text (defense-in-depth at the streaming boundary). */
@@ -253,6 +289,10 @@ interface PendingApproval {
   riskLevel?: number;
   /** Unix ms when the gate fired (the approval was requested). */
   requestedAt: number;
+  /** The gate's audit `callId` for the paused decision (ledger correlation). */
+  auditCallId?: string;
+  /** The loop turn the paused decision belongs to (ledger correlation). */
+  turnId?: string;
 }
 
 export class StreamingManager {
@@ -307,7 +347,16 @@ export class StreamingManager {
    * subsequent `approval_request` so the band can say "a hire already
    * completed this turn" at the decision moment.
    */
-  private settledDelegationsThisExchange = 0;
+  private settledDelegationsThisExchange: Array<{ capability: string }> = [];
+
+  /**
+   * Read-only view of the settled ledger for the [Now] proprioception
+   * facet (#530) — the runtime's snapshot producer reads this so the
+   * model's premises contain what this layer already did.
+   */
+  settledDelegationsList(): ReadonlyArray<{ capability: string }> {
+    return this.settledDelegationsThisExchange;
+  }
   private approvalExpiredCallback: (() => void) | null = null;
   /** Fired when a NEW turn voids a pending approval (#462) — the owning surface renders the void. */
   private approvalVoidedCallback: ((toolName: string) => void) | null = null;
@@ -394,7 +443,7 @@ export class StreamingManager {
    */
   beginExchange(): void {
     this.deniedToolsThisExchange.clear();
-    this.settledDelegationsThisExchange = 0;
+    this.settledDelegationsThisExchange = [];
   }
 
   /** Shared stream processing — extracts state tags, handles tool/approval/injection chunks. */
@@ -566,7 +615,7 @@ export class StreamingManager {
               }
             }
             this.deps.setDelegating(false);
-            this.settledDelegationsThisExchange++;
+            this.settledDelegationsThisExchange.push({ capability: chunk.name });
             yield {
               type: "delegation_complete",
               server: motebitServer,
@@ -590,7 +639,9 @@ export class StreamingManager {
             delegateStashMark = null;
             const stashed = this.deps.delegationReceiptStash?.peekSince(mark) ?? [];
             for (const receipt of stashed) {
-              this.settledDelegationsThisExchange++;
+              this.settledDelegationsThisExchange.push({
+                capability: receipt.tools_used?.[0] ?? "delegate_to_agent",
+              });
               yield {
                 type: "delegation_complete",
                 server: "relay",
@@ -691,6 +742,8 @@ export class StreamingManager {
           quorum: chunk.quorum,
           riskLevel: chunk.risk_level,
           requestedAt: Date.now(),
+          auditCallId: chunk.audit_call_id,
+          turnId: chunk.turn_id,
         };
 
         // Persist quorum metadata to the approval store (source of truth)
@@ -712,9 +765,9 @@ export class StreamingManager {
         // exchange, in the same frame as the Allow?. Witnessed 2026-08-01:
         // a model that failed to digest a delivered result proposed the
         // same hire again with nothing on the band saying so.
-        if (this.settledDelegationsThisExchange > 0) {
+        if (this.settledDelegationsThisExchange.length > 0) {
           (chunk as { prior_settled_this_turn?: number }).prior_settled_this_turn =
-            this.settledDelegationsThisExchange;
+            this.settledDelegationsThisExchange.length;
         }
       }
 
@@ -818,7 +871,44 @@ export class StreamingManager {
             ? (this.deps.delegationReceiptStash?.count() ?? null)
             : null;
         const toolRegistry = this.deps.getToolRegistry();
-        const result = await toolRegistry.execute(pending.toolName, pending.args);
+        // Ledger: the paused decision is proceeding — written before the call.
+        this.deps.recordApprovalSatisfied?.({
+          turnId: pending.turnId,
+          runId: pending.runId,
+          auditCallId: pending.auditCallId,
+          toolName: pending.toolName,
+          args: pending.args,
+        });
+        const dispatchedAt = Date.now();
+        let result: ToolResult;
+        try {
+          result = await toolRegistry.execute(pending.toolName, pending.args);
+        } catch (err) {
+          // Close the ledger row before re-throwing: the handler threw, so
+          // the tool reports failure — an open row would read as unknown.
+          this.deps.recordApprovedToolResult?.({
+            turnId: pending.turnId,
+            runId: pending.runId,
+            auditCallId: pending.auditCallId,
+            toolName: pending.toolName,
+            args: pending.args,
+            ok: false,
+            durationMs: Date.now() - dispatchedAt,
+          });
+          throw err;
+        }
+        // Completion row for the decision the gate paused on — recorded
+        // the moment execution returns, before sanitization can throw.
+        this.deps.recordApprovedToolResult?.({
+          turnId: pending.turnId,
+          runId: pending.runId,
+          auditCallId: pending.auditCallId,
+          toolName: pending.toolName,
+          args: pending.args,
+          ok: result.ok,
+          durationMs: Date.now() - dispatchedAt,
+          result,
+        });
 
         // Sanitize through policy if available
         const check = this.deps.sanitizeToolResult(result, pending.toolName);
@@ -840,7 +930,9 @@ export class StreamingManager {
           for (const receipt of stashed) {
             // #522 — the post-approval hire is the exact settled spend the
             // witnessed re-proposal followed; count it.
-            this.settledDelegationsThisExchange++;
+            this.settledDelegationsThisExchange.push({
+              capability: receipt.tools_used?.[0] ?? "delegate_to_agent",
+            });
             yield {
               type: "delegation_complete" as const,
               server: "relay",

@@ -209,13 +209,13 @@ function createWebAdapter(ctx: WebContext): SovereignFetchAdapter {
     // Local-first Ledger tab support — reads executed goals from the
     // GoalsRunner state (the local source of truth). Controller merges
     // with relay-fetched goals; local wins on goal_id collision (signed
-    // locally is canonical, relay is mirror). Sync underneath; wrapped
-    // in Promise.resolve to match the adapter's Promise return type
-    // (the future ExecutionReceipt-aggregation arc will become genuinely
-    // async — verifying signatures takes IO).
+    // locally is canonical, relay is mirror). Genuinely async since
+    // #594 Inc 3a: WebApp.getLocalLedger verifies each stored signed
+    // ContentArtifactManifest against the result bytes and the owner's
+    // own key, attaching per-row `local_verification`.
     // Doctrine: docs/doctrine/receipts-unified.md (the motebit's own
     // signed receipts are the source of execution proof-of-work).
-    getLocalLedger: () => Promise.resolve(ctx.app.getLocalLedger()),
+    getLocalLedger: () => ctx.app.getLocalLedger(),
   };
 }
 
@@ -299,12 +299,11 @@ function renderLedger(
   ledgerList.innerHTML = "";
 
   // Local-first per protocol-primacy: the renderer reads from state,
-  // not from relay-availability. state.goals is currently populated
-  // via relay-only fetch (the controller's fetchGoals path). A proper
-  // local-first fix needs a getLocalLedger() adapter accessor that
-  // queries the local event store for execution receipts — deferred
-  // to the local-event-store-integration arc. For now the empty
-  // caption describes what fills the panel without invoking the relay.
+  // not from relay-availability. state.goals merges getLocalLedger rows
+  // (adapter → WebApp.getLocalLedger, with per-row owner-key artifact
+  // verification, #594 Inc 3a) with relay-fetched rows; local wins on
+  // goal_id collision. The empty caption is therefore honest without a
+  // relay: it renders only when neither source has execution history.
   if (state.goals.length === 0) {
     setEmptyPulse(ledgerEmpty, "Execution history appears here", "as goals complete");
     return;
@@ -347,6 +346,25 @@ function renderLedger(
     text.textContent = goal.prompt;
     text.title = goal.prompt;
     header.appendChild(text);
+
+    // Per-row local verification (#594 Inc 3a): "verified" means the
+    // adapter checked the locally-stored signed ContentArtifactManifest
+    // against the result bytes AND the owner's own key — strictly
+    // stronger evidence than the relay's list-level badge, and rendered
+    // quieter (a record annotation). "failed" is a tampering signal.
+    if (goal.local_verification != null) {
+      const localBadge = document.createElement("span");
+      localBadge.className = `ledger-local-verification ${goal.local_verification}`;
+      const verified = goal.local_verification === "verified";
+      localBadge.style.cssText = `font-size:10px;letter-spacing:0.02em;${
+        verified ? "opacity:0.55;" : "color:#c0392b;font-weight:600;"
+      }`;
+      localBadge.textContent = verified ? "✓ signed by you" : "⚠ local signature failed";
+      localBadge.title = verified
+        ? "Result verified against the signed artifact and your own key — no relay involved"
+        : "The stored signed artifact did not verify against the result and your key";
+      header.appendChild(localBadge);
+    }
 
     const time = document.createElement("span");
     time.className = "ledger-item-time";

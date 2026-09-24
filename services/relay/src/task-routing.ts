@@ -9,7 +9,13 @@
 import type { CandidateProfile, TaskRequirements } from "@motebit/market";
 import { aggregateCredentialReputation, aggregateHardwareAttestation } from "@motebit/market";
 import type { ReputationVC, TrustVC } from "@motebit/market";
-import type { CapabilityPrice, AgentTrustRecord, SettlementEligibility } from "@motebit/sdk";
+import type {
+  CapabilityPrice,
+  AgentTrustRecord,
+  SettlementEligibility,
+  OutboundUrlOptions,
+} from "@motebit/sdk";
+import { checkOutboundUrl } from "@motebit/sdk";
 import { asMotebitId, asListingId, AgentTrustLevel } from "@motebit/sdk";
 import { trustLevelToScore } from "@motebit/market";
 import { verifySovereignBinding } from "@motebit/crypto";
@@ -21,13 +27,21 @@ import {
   markBondBacking,
   BOND_BACKING_STALENESS_MS,
 } from "./bond-store.js";
-import { hexPublicKeyToDidKey, didKeyToPublicKey, bytesToHex } from "@motebit/encryption";
+import {
+  hexPublicKeyToDidKey,
+  didKeyToPublicKey,
+  bytesToHex,
+  mintAudienceToken,
+  sha256,
+} from "@motebit/encryption";
+import { TASK_DISPATCH_AUDIENCE } from "@motebit/protocol";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { RelayIdentity, FederationConfig } from "./federation.js";
 import { signDiscoverBody } from "./federation.js";
 import { CircuitBreaker } from "@motebit/circuit-breaker";
 import type { CircuitBreakerConfig, CircuitBreakerState } from "@motebit/circuit-breaker";
 import { createLogger } from "./logger.js";
+import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
 
 const logger = createLogger({ service: "relay", module: "task-routing" });
 const circuitBreakerLogger = createLogger({ service: "relay", module: "circuit-breaker" });
@@ -97,6 +111,7 @@ export interface TaskRouter {
   fetchPeerEdges(): Array<{
     from: string;
     to: string;
+    kind: "evidence" | "traversed";
     weight: {
       trust: number;
       cost: number;
@@ -130,6 +145,7 @@ export interface TaskRouter {
     federationEdges: Array<{
       from: string;
       to: string;
+      kind: "evidence" | "traversed";
       weight: {
         trust: number;
         cost: number;
@@ -195,6 +211,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
   function fetchPeerEdges(): Array<{
     from: string;
     to: string;
+    kind: "evidence" | "traversed";
     weight: {
       trust: number;
       cost: number;
@@ -223,6 +240,9 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
       return rows.map((row) => ({
         from: row.from_motebit_id,
         to: row.to_motebit_id,
+        // A recorded delegation is EVIDENCE (vouching); this task will not
+        // traverse it, so its price/latency never price the new hire.
+        kind: "evidence" as const,
         weight: {
           trust: row.trust,
           cost: row.cost,
@@ -244,7 +264,12 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
   ): { profiles: CandidateProfile[]; requirements: TaskRequirements } {
     const now = Date.now();
 
-    // Query service listings, optionally filtered by capability.
+    // Query service listings, optionally filtered by capability. A listing
+    // whose agent row is delisted or revoked is not a candidate (#703): the
+    // listing outlives the shelf by up to seven days, and before delisting a
+    // deleted row made the LEFT JOIN yield nulls, which is what kept a
+    // departed worker out of the ranking. (`r.delisted_at IS NULL` is also
+    // true for a listing with no registry row, as before.)
     // `last_heartbeat` is pulled so the candidate's freshness can drive
     // `is_online` instead of the old `expires_at > now` gate (which
     // created a visibility deadlock with Fly.io auto_stop).
@@ -256,6 +281,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
            FROM relay_service_listings l
            LEFT JOIN agent_registry r ON l.motebit_id = r.motebit_id
            WHERE EXISTS (SELECT 1 FROM json_each(l.capabilities) WHERE value = ?)
+             AND r.${ON_SHELF_PREDICATE} AND (r.revoked IS NULL OR r.revoked = 0)
            LIMIT ?`,
         )
         .all(capabilityFilter, limit) as Array<Record<string, unknown>>;
@@ -265,6 +291,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
           `SELECT l.*, r.public_key, r.last_heartbeat, r.guardian_public_key, r.endpoint_url AS agent_endpoint_url
            FROM relay_service_listings l
            LEFT JOIN agent_registry r ON l.motebit_id = r.motebit_id
+           WHERE r.${ON_SHELF_PREDICATE} AND (r.revoked IS NULL OR r.revoked = 0)
            LIMIT ?`,
         )
         .all(limit) as Array<Record<string, unknown>>;
@@ -480,6 +507,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     federationEdges: Array<{
       from: string;
       to: string;
+      kind: "evidence" | "traversed";
       weight: {
         trust: number;
         cost: number;
@@ -517,6 +545,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     const allFederationEdges: Array<{
       from: string;
       to: string;
+      kind: "evidence" | "traversed";
       weight: {
         trust: number;
         cost: number;
@@ -616,6 +645,8 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
           allFederationEdges.push({
             from: peer.peer_relay_id,
             to: agent.motebit_id,
+            // The task really forwards through the peer relay: a traversed hop.
+            kind: "traversed" as const,
             weight: {
               trust: 0.5,
               cost: 0,
@@ -645,7 +676,14 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
               },
               latency_stats: null, // No local latency data for remote agents
               is_online: true, // Peer discovery returned them, assume available
-              chain_trust: undefined, // Let the semiring graph compose trust along paths
+              // The peer's vouch for its own agent (the trust of the
+              // peer → agent leg); the graph composes it with OUR trust in
+              // the peer along the planned route self → peer → agent.
+              chain_trust: 0.5,
+              // Discovery through a peer does not make the agent directly
+              // dispatchable: the routing graph carries no self → agent edge,
+              // and dispatch forwards to THIS peer (the planned route names it).
+              reachable_via: peer.peer_relay_id,
             },
             _source_relay_endpoint: peer.endpoint_url,
             _settlement_address: agent.settlement_address ?? null,
@@ -743,7 +781,9 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     // No `expires_at > now` filter: discoverability is a protocol property,
     // not a heartbeat property. `last_heartbeat` drives the freshness
     // discriminant below, which is a render hint for the caller.
-    const revokedFilter = " AND (revoked IS NULL OR revoked = 0)";
+    // …and delisted rows (departed, lease lapsed, or revoked — one predicate,
+    // registry-delist.ts): the row is kept for its key state, not for hire.
+    const revokedFilter = ` AND (revoked IS NULL OR revoked = 0)${ON_SHELF}`;
     const fedFilter = federatedOnly
       ? " AND (federation_visible IS NULL OR federation_visible != 0)"
       : "";
@@ -970,6 +1010,53 @@ function isReceiptCandidate(v: unknown): v is ReceiptCandidate {
 }
 
 /**
+ * Lifetime of a relay-signed task dispatch token. Long enough to cover a
+ * cold-start wake + the MCP forward (≤ 30 s init + 120 s call) and a
+ * delegator that submits then calls the worker directly; short enough that
+ * a leaked token is worthless within minutes. The worker refuses a second
+ * execution of the same task id regardless of TTL.
+ */
+export const TASK_DISPATCH_TOKEN_TTL_MS = 15 * 60 * 1000;
+
+/** Hex SHA-256 of the admitted prompt — the `digest` claim on a dispatch token. */
+export async function taskPromptDigest(prompt: string): Promise<string> {
+  return bytesToHex(await sha256(new TextEncoder().encode(prompt)));
+}
+
+/**
+ * Mint the relay-signed per-task ADMISSION artifact (`aud: "task:dispatch"`,
+ * `mid` = the worker the task is dispatched to, `sub` = the relay task id,
+ * `digest` = SHA-256 of the admitted prompt). Attached to the relay's own MCP
+ * forward, or returned to a submitter the relay did not dispatch for — exactly
+ * one presenter per admission — so a worker that admits work only through its
+ * relay can verify offline, against the pinned relay key, that THIS work
+ * cleared submission (payment proof, balance hold, or an explicit carve-out)
+ * before it spends anything. Doctrine: `docs/doctrine/task-admission.md`.
+ */
+export async function mintTaskDispatchToken(
+  relayIdentity: RelayIdentity,
+  workerMotebitId: string,
+  taskId: string,
+  prompt: string,
+  /** Clock for `iat`/`exp` — injected so a re-mint on replay is stamped by the same clock that judged the old token expired. */
+  nowMs?: number,
+): Promise<string> {
+  const { token } = await mintAudienceToken(
+    {
+      mid: workerMotebitId,
+      did: relayIdentity.did,
+      aud: TASK_DISPATCH_AUDIENCE,
+      sub: taskId,
+      digest: await taskPromptDigest(prompt),
+      ttlMs: TASK_DISPATCH_TOKEN_TTL_MS,
+      ...(nowMs != null ? { nowMs } : {}),
+    },
+    relayIdentity.privateKey,
+  );
+  return token;
+}
+
+/**
  * Forward a task to an agent's MCP endpoint via HTTP StreamableHTTP.
  * Called as fire-and-forget when no WebSocket connection is available.
  * On success, stores the receipt in the task queue for polling.
@@ -984,15 +1071,53 @@ export async function forwardTaskViaMcp(
     info: (msg: string, ctx: Record<string, unknown>) => void;
     warn: (msg: string, ctx: Record<string, unknown>) => void;
   },
-  apiToken?: string,
+  /**
+   * Retired: the relay's master token is NEVER sent to a worker endpoint.
+   * Kept positionally so existing call sites and tests do not shift; any
+   * value passed here is ignored. The relay authenticates as itself with
+   * the dispatch token below (`Authorization: Bearer motebit:<token>`),
+   * which the worker verifies under its pinned relay key.
+   */
+  _retiredApiToken?: string,
   onReceipt?: (receipt: ReceiptCandidate) => Promise<void>,
+  /** Relay-signed admission artifact for THIS worker + task (`mintTaskDispatchToken`) — also the bearer. */
+  dispatchToken?: string,
+  /** Outbound URL law (`buildOutboundPolicy`); absent ⇒ literals + names only. */
+  outboundPolicy?: OutboundUrlOptions,
 ): Promise<void> {
+  // Re-check at CONNECT time, not only at registration: the registry row is
+  // months old by the time a task arrives, and this forward carries a bearer.
+  const outbound = await checkOutboundUrl(endpointUrl, outboundPolicy);
+  if (!outbound.ok) {
+    logger.warn("task.mcp_forward_refused", {
+      correlationId: taskId,
+      agent: agentId,
+      endpoint: endpointUrl,
+      reason: outbound.reason,
+    });
+    return;
+  }
+  if (dispatchToken == null) {
+    logger.warn("task.mcp_forward_refused", {
+      correlationId: taskId,
+      agent: agentId,
+      endpoint: endpointUrl,
+      reason: "no_dispatch_token",
+    });
+    return;
+  }
   const mcpEndpoint = endpointUrl.endsWith("/mcp") ? endpointUrl : `${endpointUrl}/mcp`;
   const mcpHeaders: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/json, text/event-stream",
   };
-  if (apiToken) mcpHeaders["Authorization"] = `Bearer ${apiToken}`;
+  // The relay authenticates AS ITSELF: the per-task, per-worker dispatch
+  // token is the bearer. The master token never leaves the relay — before
+  // this, any registered endpoint received the relay's admin credential on
+  // its first forwarded task (docs/doctrine/task-admission.md §"The relay
+  // authenticates as itself"). A worker on an older @motebit/mcp-server
+  // (no relayTrust) answers 401, which is logged loudly below.
+  if (dispatchToken) mcpHeaders["Authorization"] = `Bearer motebit:${dispatchToken}`;
 
   // Wake-on-delegation: Fly.io `auto_stop_machines = "stop"` services
   // require an HTTP GET to trigger auto-start. MCP POSTs don't wake
@@ -1073,7 +1198,14 @@ export async function forwardTaskViaMcp(
         jsonrpc: "2.0",
         method: "tools/call",
         id: 2,
-        params: { name: "motebit_task", arguments: { prompt, relay_task_id: taskId } },
+        params: {
+          name: "motebit_task",
+          arguments: {
+            prompt,
+            relay_task_id: taskId,
+            ...(dispatchToken != null ? { dispatch_token: dispatchToken } : {}),
+          },
+        },
       }),
       signal: AbortSignal.timeout(120000),
     });

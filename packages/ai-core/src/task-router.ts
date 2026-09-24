@@ -116,23 +116,34 @@ export function isModelTier(model: string): model is ModelTier {
 /**
  * Resolve a model tier to a concrete model ID based on the provider's current model.
  *
- * The current model reveals which provider family is active (Anthropic, OpenAI,
- * Google, Ollama, WebLLM). The tier resolves to the best available model in
- * that family. If the current model doesn't match a known family, the tier
- * resolves to the current model (no-op — use whatever's loaded).
+ * **`default` means the USER'S model** (#533): from the sovereign's seat,
+ * "default" is whatever they chose — never the family's workhorse SKU.
+ * The old mapping (`default` → claude-sonnet-5 / gpt-5.4-mini / …)
+ * silently replaced an explicit model choice for every routed background
+ * task, hopping brain and billing to a SKU the user never picked —
+ * witnessed 2026-08-01 when the mode row caught the deferred
+ * memory-formation pass mid-borrow on sonnet-5 under a sonnet-4-6
+ * session, and the substrate facet's second ask confirmed the restore
+ * (race, not leak). `default` resolving to `currentModel` also makes the
+ * tier a structural no-op — no hop, no race surface, nothing to catch
+ * mid-flight.
+ *
+ * `strongest` and `fast` express DELIBERATE deviation intent and keep
+ * their family mappings (real API aliases, not family names — #474): the
+ * current model reveals which family is active; the tier resolves within
+ * it. If the current model doesn't match a known family, every tier
+ * resolves to the current model (the user loaded a specific model; it's
+ * all we have).
  */
 export function resolveModelTier(tier: ModelTier, currentModel: string): string {
+  // The sovereign's seat: "default" IS the current model, in every family.
+  if (tier === "default") return currentModel;
+
   // Detect provider family from current model
   if (currentModel.includes("claude") || currentModel.includes("anthropic")) {
-    // Real API aliases, not family names: the previous values
-    // ("claude-opus" etc.) are not servable model ids — a tier switch fed
-    // them to provider.setModel() and 404'd the turn (#471's sibling,
-    // found in the same sweep).
     switch (tier) {
       case "strongest":
         return "claude-opus-5";
-      case "default":
-        return "claude-sonnet-5";
       case "fast":
         return "claude-haiku-4-5";
     }
@@ -147,8 +158,6 @@ export function resolveModelTier(tier: ModelTier, currentModel: string): string 
     switch (tier) {
       case "strongest":
         return "gpt-5.4";
-      case "default":
-        return "gpt-5.4-mini";
       case "fast":
         return "gpt-5.4-nano";
     }
@@ -158,8 +167,6 @@ export function resolveModelTier(tier: ModelTier, currentModel: string): string 
     switch (tier) {
       case "strongest":
         return "gemini-2.5-pro";
-      case "default":
-        return "gemini-2.5-flash";
       case "fast":
         return "gemini-2.5-flash-lite";
     }

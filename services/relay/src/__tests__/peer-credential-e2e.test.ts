@@ -102,6 +102,7 @@ describe("Peer Credential E2E — Delegation Loop", () => {
   beforeAll(async () => {
     // Relay with credential issuance DISABLED — proves peer credentials work independently
     relay = await createSyncRelay({
+      allowPrivateEndpoints: true,
       dbPath: ":memory:",
       apiToken: MASTER_TOKEN,
       enableDeviceAuth: true,
@@ -365,6 +366,7 @@ describe("Peer Credential E2E — Cross-Relay Portability", () => {
   beforeAll(async () => {
     // Two independent relays — no federation, no shared state
     relayA = await createSyncRelay({
+      allowPrivateEndpoints: true,
       dbPath: ":memory:",
       apiToken: "relay-a-token",
       issueCredentials: false,
@@ -375,6 +377,7 @@ describe("Peer Credential E2E — Cross-Relay Portability", () => {
       },
     });
     relayB = await createSyncRelay({
+      allowPrivateEndpoints: true,
       dbPath: ":memory:",
       apiToken: "relay-b-token",
       issueCredentials: false,
@@ -520,6 +523,7 @@ describe("Peer Credential E2E — Cross-Relay Portability", () => {
   it("peer-issued credentials influence relay routing scores", async () => {
     // Create a relay with credential issuance ENABLED so credentials land in relay_credentials
     const routingRelay = await createSyncRelay({
+      allowPrivateEndpoints: true,
       dbPath: ":memory:",
       apiToken: "routing-test-token",
       enableDeviceAuth: true,

@@ -1,6 +1,6 @@
 import type { WebContext } from "../types";
 import type { ProviderConfig, GovernanceConfig, VoiceConfig, AppearanceConfig } from "../storage";
-import { APPROVAL_PRESET_CONFIGS, DEFAULT_GOVERNANCE_CONFIG } from "@motebit/sdk";
+import { APPROVAL_PRESET_CONFIGS, DEFAULT_GOVERNANCE_CONFIG, PROVIDER_NOTE } from "@motebit/sdk";
 import {
   saveProviderConfig,
   saveSoulColor,
@@ -784,6 +784,18 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     });
   });
 
+  /**
+   * Render the per-vendor honesty line from the SDK's canonical
+   * `PROVIDER_NOTE` (#518). Data-driven rather than prose in the markup so the
+   * surfaces cannot drift from what has actually been witnessed — and so the
+   * Groq/Grok disambiguation lives in exactly one place.
+   */
+  function renderByokVendorNote(vendor: string): void {
+    const el = document.getElementById("byok-vendor-note");
+    if (el == null) return;
+    el.textContent = (PROVIDER_NOTE as Record<string, string | undefined>)[vendor] ?? "";
+  }
+
   // === BYOK Sub-Provider Toggle ===
   document.querySelectorAll<HTMLButtonElement>(".byok-provider-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -791,6 +803,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
       if (!byok) return;
       activeByokProvider = byok;
       setByokProviderUI(byok);
+      renderByokVendorNote(byok);
     });
   });
 
@@ -1142,6 +1155,18 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     if (ttsDeepgramKey) ttsDeepgramKey.value = getVendorKey("deepgram") ?? "";
     if (ttsInworldKey) ttsInworldKey.value = getVendorKey("inworld") ?? "";
 
+    // Voice keys live behind a collapsed disclosure (#594 Inc 5) so a
+    // fresh eye meets no key-shaped inputs. Chrome renders state: when a
+    // key is already stored, the disclosure opens so the owner sees their
+    // configuration without a hunt.
+    const voiceKeysDisclosure = document.getElementById(
+      "voice-keys-disclosure",
+    ) as HTMLDetailsElement | null;
+    if (voiceKeysDisclosure) {
+      voiceKeysDisclosure.open =
+        (getVendorKey("elevenlabs") ?? getVendorKey("deepgram") ?? getVendorKey("inworld")) != null;
+    }
+
     // Populate TTS voices — must run *after* key fields are filled so the
     // picker reflects the active provider's voice space on open.
     populateTtsVoices();
@@ -1170,6 +1195,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
           switchProviderTab("anthropic");
           activeByokProvider = config.vendor;
           setByokProviderUI(config.vendor);
+          renderByokVendorNote(config.vendor);
           if (config.vendor === "anthropic") {
             anthropicApiKey.value = config.apiKey;
             if (config.model) anthropicModel.value = config.model;
@@ -1553,13 +1579,46 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   });
 
   // === Model Indicator ===
+  //
+  // The indicator is a TRANSITION cue, not a nameplate. Steady state is
+  // silent — the standing "what am I running" record lives in Settings →
+  // Intelligence (records-vs-acts; calm software: don't confirm what isn't
+  // changing). The label appears when the active model CHANGES (cloud ↔
+  // BYOK ↔ on-device, or a model swap), holds long enough to register,
+  // then clears (`#model-indicator:empty` hides the node). Loading and
+  // error states stay persistent until resolved — those ARE transitions.
+
+  const MODEL_CUE_HOLD_MS = 6000;
+  let settledModel: string | null = null;
+  let modelCueTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function clearModelCueTimer(): void {
+    if (modelCueTimer != null) {
+      clearTimeout(modelCueTimer);
+      modelCueTimer = null;
+    }
+  }
 
   function updateModelIndicator(): void {
     // Any normal indicator update is a settled state — drop a stale loading
     // pulse / error so the HUD can't get stuck mid-transition.
     modelIndicator.classList.remove("is-loading", "is-error");
-    const model = ctx.app.currentModel;
-    modelIndicator.textContent = ctx.app.isProviderConnected ? (model ?? "") : "";
+    const model = ctx.app.isProviderConnected ? ctx.app.currentModel : null;
+    if (model === settledModel) {
+      // Nothing changed — steady state is silent. Clearing here also wipes
+      // resolved loading/error text left behind by the setters below.
+      if (modelCueTimer == null) modelIndicator.textContent = "";
+      return;
+    }
+    settledModel = model;
+    clearModelCueTimer();
+    modelIndicator.textContent = model ?? "";
+    if (model != null) {
+      modelCueTimer = setTimeout(() => {
+        modelCueTimer = null;
+        modelIndicator.textContent = "";
+      }, MODEL_CUE_HOLD_MS);
+    }
   }
 
   /**
@@ -1569,12 +1628,14 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
    * multi-GB download is observable after the modal closes.
    */
   function setModelIndicatorLoading(modelLabel: string, pct: number): void {
+    clearModelCueTimer(); // a pending fade must not wipe live progress
     modelIndicator.classList.remove("is-error");
     modelIndicator.classList.add("is-loading");
     modelIndicator.textContent = `preparing ${modelLabel} · ${pct}%`;
   }
 
   function setModelIndicatorError(modelLabel: string): void {
+    clearModelCueTimer(); // an error must persist until resolved
     modelIndicator.classList.remove("is-loading");
     modelIndicator.classList.add("is-error");
     modelIndicator.textContent = `couldn't load ${modelLabel}`;

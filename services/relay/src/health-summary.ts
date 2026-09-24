@@ -41,9 +41,88 @@
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
+import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
+
+/** See `HealthMotebits.identity_keys_*`. Exported for the measure script's test. */
+export function identityKeyPopulation(db: DatabaseDriver): {
+  identity_keys_total: number;
+  identity_keys_unambiguous: number;
+  identity_keys_ambiguous: number;
+  identity_keys_keyless: number;
+} {
+  const row = db
+    .prepare(
+      `WITH ids AS (
+         SELECT motebit_id FROM agent_registry
+         UNION SELECT motebit_id FROM devices
+         UNION SELECT motebit_id FROM relay_key_successions
+       ),
+       per AS (
+         SELECT i.motebit_id,
+           (SELECT r.public_key FROM agent_registry r
+             WHERE r.motebit_id = i.motebit_id AND r.public_key != '') AS reg,
+           (SELECT s.new_public_key FROM relay_key_successions s
+             WHERE s.motebit_id = i.motebit_id ORDER BY s.id DESC LIMIT 1) AS head,
+           (SELECT COUNT(DISTINCT d.public_key) FROM devices d
+             WHERE d.motebit_id = i.motebit_id AND d.public_key != '') AS dkeys
+         FROM ids i
+       )
+       SELECT
+         COUNT(*) AS total,
+         COALESCE(SUM(CASE WHEN reg IS NOT NULL OR head IS NOT NULL OR dkeys = 1 THEN 1 ELSE 0 END), 0) AS unambiguous,
+         COALESCE(SUM(CASE WHEN reg IS NULL AND head IS NULL AND dkeys > 1 THEN 1 ELSE 0 END), 0) AS ambiguous,
+         COALESCE(SUM(CASE WHEN reg IS NULL AND head IS NULL AND dkeys = 0 THEN 1 ELSE 0 END), 0) AS keyless
+       FROM per`,
+    )
+    .get() as { total: number; unambiguous: number; ambiguous: number; keyless: number };
+  return {
+    identity_keys_total: row.total,
+    identity_keys_unambiguous: row.unambiguous,
+    identity_keys_ambiguous: row.ambiguous,
+    identity_keys_keyless: row.keyless,
+  };
+}
 
 export interface HealthMotebits {
+  /**
+   * Agents currently SERVING — on the shelf: not delisted, so discoverable
+   * and for hire. Since 2026-09-24 (#703) a departed or long-silent agent's
+   * row is delisted rather than deleted, so this is no longer "every row";
+   * the number was continuous at the cutover (every row that existed was
+   * serving, or the janitor would have deleted it) and its documented
+   * meaning is unchanged. `total_known` is every row.
+   */
   total_registered: number;
+  // active_* below count heartbeats among SERVING rows only: a delisted
+  // identity's heartbeat is refused (404) and its old heartbeats must not
+  // read as activity the operator could hire.
+  /**
+   * Every identity this relay holds a registry row for, serving or
+   * delisted — the key-state population, which only revocation shrinks
+   * (and revocation keeps the row too). ≥ `total_registered`.
+   */
+  total_known: number;
+  /**
+   * The identity-key population, counted BEFORE Increment 2 of
+   * docs/proposals/identity-key-state-v1.md builds its backfill (§10 Q3: the
+   * count is Inc 2's first commit, not its gate). An identity is every
+   * motebit_id in agent_registry ∪ devices ∪ relay_key_successions.
+   *
+   * - `identity_keys_unambiguous`: the relay can name ONE key without
+   *   guessing — a registry key, else a recorded chain head, else every keyed
+   *   device row agrees. These backfill.
+   * - `identity_keys_ambiguous`: no registry key, no chain, and device rows
+   *   that DISAGREE. D5: left unfilled, never guessed; filled on the next
+   *   bootstrap/register, which carry the identity key explicitly.
+   * - `identity_keys_keyless`: known by id only (no keyed row anywhere).
+   *
+   * `identity_keys_total` = the three summed. Read from production through
+   * `/api/v1/admin/health` (scripts/measure-identity-key-ambiguity.ts).
+   */
+  identity_keys_total: number;
+  identity_keys_unambiguous: number;
+  identity_keys_ambiguous: number;
+  identity_keys_keyless: number;
   active_24h: number;
   active_7d: number;
   active_30d: number;
@@ -135,20 +214,25 @@ export function aggregateHealthSummary(
   const cutoff30d = nowMs - 30 * DAY_MS;
 
   const motebits: HealthMotebits = {
-    total_registered: count(db, "SELECT COUNT(*) AS n FROM agent_registry"),
+    total_registered: count(
+      db,
+      `SELECT COUNT(*) AS n FROM agent_registry WHERE ${ON_SHELF_PREDICATE}`,
+    ),
+    total_known: count(db, "SELECT COUNT(*) AS n FROM agent_registry"),
+    ...identityKeyPopulation(db),
     active_24h: count(
       db,
-      "SELECT COUNT(*) AS n FROM agent_registry WHERE last_heartbeat >= ?",
+      `SELECT COUNT(*) AS n FROM agent_registry WHERE last_heartbeat >= ?${ON_SHELF}`,
       cutoff24h,
     ),
     active_7d: count(
       db,
-      "SELECT COUNT(*) AS n FROM agent_registry WHERE last_heartbeat >= ?",
+      `SELECT COUNT(*) AS n FROM agent_registry WHERE last_heartbeat >= ?${ON_SHELF}`,
       cutoff7d,
     ),
     active_30d: count(
       db,
-      "SELECT COUNT(*) AS n FROM agent_registry WHERE last_heartbeat >= ?",
+      `SELECT COUNT(*) AS n FROM agent_registry WHERE last_heartbeat >= ?${ON_SHELF}`,
       cutoff30d,
     ),
     // Acquisition — the durable intake ledger (append-only, never reaped),

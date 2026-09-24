@@ -333,6 +333,7 @@ export interface AgentTrustRecord {
     capability_stats?: Record<string, {
         successful_tasks: number;
         failed_tasks: number;
+        paid_failure_penalty?: number;
     }>;
     // (undocumented)
     failed_tasks?: number;
@@ -407,6 +408,9 @@ export const ALL_MERKLE_TREE_VERSIONS: readonly MerkleTreeVersion[];
 // @public (undocumented)
 export const ALL_PROJECTION_CLASSES: readonly ProjectionClass[];
 
+// @public (undocumented)
+export const ALL_RUN_EVIDENCE_WITHHELD_REASONS: readonly RunEvidenceWithheldReason[];
+
 // @public
 export const ALL_SENSITIVITY_LEVELS: readonly SensitivityLevel[];
 
@@ -431,6 +435,13 @@ export const ALL_TOKEN_AUDIENCES: readonly TokenAudience[];
 export type AllocationId = Brand<string, "AllocationId">;
 
 // @public
+export interface AnchoredInclusion {
+    readonly network: string;
+    readonly proof: IdentityLogProof;
+    readonly tx_hash: string;
+}
+
+// @public
 export interface ApprovalDecision {
     approval_id: string;
     args_hash: string;
@@ -450,6 +461,35 @@ export interface ApprovalDecision {
 }
 
 // @public
+export interface ApprovalItem {
+    // (undocumented)
+    approval_id: string;
+    // (undocumented)
+    args_hash: string;
+    args_json?: string | null;
+    // (undocumented)
+    args_preview: string;
+    // (undocumented)
+    created_at: number;
+    // (undocumented)
+    denied_reason: string | null;
+    // (undocumented)
+    expires_at: number;
+    // (undocumented)
+    goal_id: string;
+    // (undocumented)
+    motebit_id: string;
+    // (undocumented)
+    resolved_at: number | null;
+    // (undocumented)
+    risk_level: number;
+    // (undocumented)
+    status: ApprovalStatus;
+    // (undocumented)
+    tool_name: string;
+}
+
+// @public
 export interface ApprovalQuorum {
     approvers: string[];
     risk_floor?: string;
@@ -457,11 +497,19 @@ export interface ApprovalQuorum {
 }
 
 // @public (undocumented)
+export type ApprovalStatus = "pending" | "approved" | "denied" | "expired";
+
+// @public (undocumented)
 export interface ApprovalStoreAdapter {
     collectApproval(approvalId: string, approverId: string): {
         met: boolean;
         collected: string[];
     };
+    expireStale?(now: number): number;
+    // (undocumented)
+    get?(approvalId: string): ApprovalItem | null;
+    listPending?(motebitId: string): ApprovalItem[];
+    resolve?(approvalId: string, status: "approved" | "denied", deniedReason?: string): void;
     setQuorum(approvalId: string, required: number, approvers: string[]): void;
 }
 
@@ -551,6 +599,7 @@ export interface AuditLogAdapter {
 export interface AuditLogSink {
     // (undocumented)
     append(entry: ToolAuditEntry): void;
+    complete?(entry: ToolAuditEntry): void;
     enumerateForFlush?(beforeTimestamp: number): ToolAuditEntry[];
     erase?(callId: string): void;
     // (undocumented)
@@ -1286,6 +1335,7 @@ export interface DelegatedStepResult {
         sub_scores: Record<string, number>;
         routing_paths: string[][];
         alternatives_considered: number;
+        trust_evidence_path?: string[];
     };
     // (undocumented)
     step_id: string;
@@ -1453,9 +1503,11 @@ export enum DeviceCapability {
     // (undocumented)
     LocalLlm = "local_llm",
     PushWake = "push_wake",
+    RunLedger = "run_ledger",
     SecureEnclave = "secure_enclave",
     // (undocumented)
-    StdioMcp = "stdio_mcp"
+    StdioMcp = "stdio_mcp",
+    UnattendedRuntime = "unattended_runtime"
 }
 
 // @public (undocumented)
@@ -1799,6 +1851,12 @@ export enum EventType {
     // (undocumented)
     GoalRemoved = "goal_removed",
     // (undocumented)
+    HaltAcknowledged = "halt_acknowledged",
+    // (undocumented)
+    HaltLifted = "halt_lifted",
+    // (undocumented)
+    HaltRequested = "halt_requested",
+    // (undocumented)
     HousekeepingRun = "housekeeping_run",
     // (undocumented)
     IdentityCreated = "identity_created",
@@ -1925,6 +1983,7 @@ export interface ExecutionReceipt {
     signature: string;
     source_digest?: DigestRef;
     source_projection?: string;
+    source_projection_class?: ProjectionClass;
     status: "completed" | "failed" | "denied";
     // (undocumented)
     submitted_at: number;
@@ -1956,6 +2015,7 @@ export interface ExecutionStepSummary {
             };
             routing_paths: string[][];
             alternatives_considered: number;
+            trust_evidence_path?: string[];
         };
     };
     // (undocumented)
@@ -2210,6 +2270,49 @@ export interface GuestRail extends SettlementRail {
 }
 
 // @public
+export interface HaltAcknowledgement {
+    // (undocumented)
+    acknowledged_at: number;
+    // (undocumented)
+    acknowledgement: string;
+    executor_id: string;
+    // (undocumented)
+    halt_id: string;
+}
+
+// @public (undocumented)
+export type HaltOrigin = "local" | "remote";
+
+// @public
+export interface HaltRequest {
+    goal_id: string | null;
+    // (undocumented)
+    halt_id: string;
+    lifted_at: number | null;
+    // (undocumented)
+    motebit_id: string;
+    origin: HaltOrigin;
+    reason: string | null;
+    // (undocumented)
+    requested_at: number;
+}
+
+// @public
+export interface HaltStoreAdapter {
+    acknowledge(haltId: string, executorId: string, acknowledgement: string, at?: number): void;
+    acknowledgements(haltId: string): HaltAcknowledgement[];
+    activeFor(motebitId: string, goalId?: string): HaltRequest | null;
+    // (undocumented)
+    get(haltId: string): HaltRequest | null;
+    hasAcknowledged(haltId: string, executorId: string): boolean;
+    lift(haltId: string, at?: number): boolean;
+    listActive(motebitId: string): HaltRequest[];
+    // (undocumented)
+    listRecent(motebitId: string, limit?: number): HaltRequest[];
+    request(halt: HaltRequest): void;
+}
+
+// @public
 export interface HardwareAttestationClaim {
     attestation_receipt?: string;
     key_exported?: boolean;
@@ -2254,6 +2357,55 @@ export interface HorizonWitnessRequestBody {
 }
 
 // @public
+export const HOST_ENROLLMENT_TYPE: "motebit/host-enrollment@1";
+
+// @public (undocumented)
+export const HOST_RETIREMENT_TYPE: "motebit/host-retirement@1";
+
+// @public
+export const HOST_ROSTER_SPEC_ID: "motebit/machine-roster@1.0";
+
+// @public (undocumented)
+export interface HostEnrollment {
+    device_id: string;
+    enrolled_at: number;
+    motebit_id: string;
+    public_key: string;
+    signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
+    type: typeof HOST_ENROLLMENT_TYPE;
+}
+
+// @public (undocumented)
+export interface HostRetirement {
+    enrollment_id: string;
+    motebit_id: string;
+    public_key: string;
+    retired_at: number;
+    signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
+    type: typeof HOST_RETIREMENT_TYPE;
+}
+
+// @public
+export interface IdentityBinding {
+    // (undocumented)
+    readonly motebit_id: string;
+    readonly public_key: string;
+}
+
+// @public
+export interface IdentityBindingBundle {
+    readonly anchored: AnchoredInclusion | null;
+    readonly created_at: string;
+    readonly current_public_key: string;
+    readonly guardian_public_key?: string;
+    // (undocumented)
+    readonly motebit_id: string;
+    readonly succession: readonly KeySuccessionRecord[];
+}
+
+// @public
 export type IdentityBindingVerdict = "sovereign" | "anchored" | "pinned" | "unverified" | "invalid";
 
 // @public
@@ -2262,6 +2414,18 @@ export interface IdentityGuardian {
     organization?: string;
     organization_id?: string;
     public_key: string;
+}
+
+// @public
+export interface IdentityLogProof {
+    readonly anchoredRoot: string;
+    // (undocumented)
+    readonly index: number;
+    // (undocumented)
+    readonly layerSizes: number[];
+    // (undocumented)
+    readonly siblings: string[];
+    readonly tree_hash_version?: MerkleTreeVersion;
 }
 
 // @public (undocumented)
@@ -2379,6 +2543,12 @@ export function isEvalKind(value: unknown): value is EvalKind;
 // @public
 export function isEventType(value: unknown): value is EventType;
 
+// @public (undocumented)
+export function isHostEnrollment(value: unknown): value is HostEnrollment;
+
+// @public (undocumented)
+export function isHostRetirement(value: unknown): value is HostRetirement;
+
 // @public
 export function isMemorySource(value: unknown): value is MemorySource;
 
@@ -2387,6 +2557,9 @@ export function isMerkleTreeVersion(value: unknown): value is MerkleTreeVersion;
 
 // @public (undocumented)
 export function isProjectionClass(s: string): s is ProjectionClass;
+
+// @public (undocumented)
+export function isRunEvidenceWithheldReason(v: unknown): v is RunEvidenceWithheldReason;
 
 // @public
 export function isSensitivityLevel(value: unknown): value is SensitivityLevel;
@@ -3043,6 +3216,7 @@ export interface PolicyDecision {
         timeMs: number;
         cost: number;
     };
+    callId?: string;
     missing_authority?: AuthorityDelta;
     quorum?: {
         required: number;
@@ -3408,6 +3582,9 @@ export enum RiskLevel {
 // @public
 export const ROTATE_KEY_AUDIENCE: TokenAudience;
 
+// @public
+export function roundSettlementSplitMicro(netExact: number, feeExact: number): SettlementSplitMicro;
+
 // @public (undocumented)
 export interface RouteScore {
     // (undocumented)
@@ -3482,13 +3659,102 @@ export interface RoutingDecisionTranscript {
 }
 
 // @public
+export interface RunEvidenceEntry {
+    call_id: string;
+    evidence: EvidenceRef;
+    // (undocumented)
+    evidence_id: string;
+    // (undocumented)
+    recorded_at: number;
+    run_id?: string;
+    // (undocumented)
+    tool: string;
+    // (undocumented)
+    turn_id: string;
+    withheld_reason?: RunEvidenceWithheldReason;
+}
+
+// @public
+export interface RunEvidenceSink {
+    countForCall?(callId: string): number;
+    enumerateStale?(beforeTimestamp: number): string[];
+    eraseForCall?(callId: string): void;
+    listForRun(runId: string): RunEvidenceEntry[];
+    // (undocumented)
+    record(entry: RunEvidenceEntry): void;
+}
+
+// @public
+export type RunEvidenceWithheldReason = "credential_in_span" | "credential_in_source";
+
+// @public
+export interface RunLedgerDetail extends RunLedgerSummary {
+    evidence: ReadonlyArray<{
+        tool: string;
+        ref: string;
+        digest: string;
+        projection?: string;
+    }>;
+    outcomes: ReadonlyArray<{
+        status: string;
+        error_message?: string;
+        summary_preview?: string;
+        signed: boolean;
+    }>;
+    // (undocumented)
+    tool_calls: ReadonlyArray<{
+        tool: string;
+        verdict: string;
+    }>;
+    // (undocumented)
+    withheld: ReadonlyArray<{
+        tool: string;
+        reason: string;
+    }>;
+}
+
+// @public
+export type RunLedgerLookup = {
+    readonly kind: "found";
+    readonly run: RunLedgerDetail;
+} | {
+    readonly kind: "ambiguous";
+    readonly matches: readonly string[];
+} | {
+    readonly kind: "missing";
+};
+
+// @public
+export interface RunLedgerReader {
+    get(runIdOrPrefix: string): RunLedgerLookup;
+    listRecent(limit: number): RunLedgerSummary[];
+}
+
+// @public
+export interface RunLedgerSummary {
+    evidence_count: number;
+    // (undocumented)
+    goal_id: string;
+    holding: boolean;
+    note?: string;
+    // (undocumented)
+    run_id: string;
+    signed: boolean;
+    // (undocumented)
+    started_at: number;
+    // (undocumented)
+    status: string;
+    withheld_count: number;
+}
+
+// @public
 export const RUNTIME_ATTACH_AUDIENCE: TokenAudience;
 
 // @public
 export const RUNTIME_RETENTION_REGISTRY: Readonly<Record<RuntimeStoreId, RetentionShapeDeclaration>>;
 
 // @public
-export type RuntimeStoreId = "memory" | "event_log" | "conversation_messages" | "tool_audit" | "skill_audit";
+export type RuntimeStoreId = "memory" | "event_log" | "conversation_messages" | "tool_audit" | "skill_audit" | "run_evidence";
 
 // @alpha
 export interface ScreencastFrame {
@@ -3679,6 +3945,12 @@ export interface SettlementRecord {
     suite: "motebit-jcs-ed25519-b64-v1";
     x402_network?: string;
     x402_tx_hash?: string;
+}
+
+// @public
+export interface SettlementSplitMicro {
+    feeMicro: number;
+    netMicro: number;
 }
 
 // @public (undocumented)
@@ -4256,6 +4528,9 @@ export interface SyncPlanStep {
 }
 
 // @public
+export const TASK_DISPATCH_AUDIENCE: TokenAudience;
+
+// @public
 export const TASK_QUERY_AUDIENCE: TokenAudience;
 
 // @public
@@ -4274,7 +4549,7 @@ export type TemporalBasis = "clockless" | "local_clock" | "ledger_anchored";
 export function toCents(dollars: number): number;
 
 // @public
-export type TokenAudience = "sync" | "device:auth" | "pair" | "rotate-key" | "push:register" | "task:submit" | "task:query" | "task:result" | "admin:query" | "proposal" | "receipts:read" | "market:listing" | "market:query" | "credentials" | "credentials:present" | "account:balance" | "account:deposit" | "account:withdraw" | "account:withdrawals" | "account:checkout" | "proxy:token" | "browser-sandbox-grant" | "browser-sandbox" | "runtime:attach";
+export type TokenAudience = "sync" | "device:auth" | "pair" | "rotate-key" | "push:register" | "task:submit" | "task:query" | "task:result" | "task:dispatch" | "admin:query" | "proposal" | "receipts:read" | "market:listing" | "market:query" | "credentials" | "credentials:present" | "account:balance" | "account:deposit" | "account:withdraw" | "account:withdrawals" | "account:checkout" | "proxy:token" | "browser-sandbox-grant" | "browser-sandbox" | "runtime:attach";
 
 // @public
 export function toMicro(dollars: number): number;
@@ -4329,7 +4604,7 @@ export interface ToolDefinition {
         dataClass?: DataClass;
         sideEffect?: SideEffect;
     };
-    slabProjection?: "none" | "tool_call";
+    slabProjection?: "none" | "tool_call" | "band";
 }
 
 // @public (undocumented)
@@ -4386,6 +4661,8 @@ export interface ToolResult {
     _sanitized?: boolean;
     source_digest?: DigestRef;
     source_projection?: string;
+    source_projection_class?: ProjectionClass;
+    source_ref?: string;
 }
 
 // @public (undocumented)

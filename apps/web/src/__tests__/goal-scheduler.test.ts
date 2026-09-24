@@ -234,3 +234,146 @@ describe("createWebGoalsScheduler — fire() routing by mode", () => {
     expect(globalThis.localStorage.getItem("check")).toBe("ok");
   });
 });
+
+describe("createWebGoalsScheduler — goal_executed emission (#594 Inc 3b prerequisite)", () => {
+  /** A stub runtime capturing what the scheduler emits to the execution ledger. */
+  function makeRuntime(): { runtime: unknown; emitted: Array<Record<string, unknown>> } {
+    const emitted: Array<Record<string, unknown>> = [];
+    return {
+      emitted,
+      runtime: {
+        goals: {
+          executed: (payload: Record<string, unknown>) => {
+            emitted.push(payload);
+            return Promise.resolve();
+          },
+        },
+        signGoalArtifact: () => Promise.resolve(null),
+      },
+    };
+  }
+
+  it("emits goal_executed on a successful recurring fire, with CLI-matching counters", async () => {
+    // Web was the ONLY surface that never emitted this — CLI and desktop both
+    // do — so the same goal firing on the same identity produced a ledger entry
+    // on one surface and nothing on another. That is the Ring-1 divergence #594
+    // Inc 3b has to close before per-fire rows can mean anything.
+    const { runtime, emitted } = makeRuntime();
+    const app = makeApp({
+      getRuntime: () => runtime,
+      async *sendMessageStreaming() {
+        yield { type: "tool_status", status: "calling", name: "web_search" };
+        yield { type: "tool_status", status: "done", name: "web_search" };
+        yield { type: "tool_status", status: "calling", name: "read_url" };
+        yield { type: "text", text: "Findings: the report body." };
+        yield {
+          type: "result",
+          result: { totalTokens: 1234, memoriesFormed: [{ id: "m1" }, { id: "m2" }] },
+        };
+      },
+    });
+    const engine = createWebGoalsScheduler(app as unknown as WebApp);
+    engine.addGoal({ prompt: "daily brief", interval_ms: 3_600_000, mode: "recurring" });
+    const goal = engine.getState().goals[0]!;
+
+    const result = await engine.runNow(goal.goal_id);
+    expect(result.outcome).toBe("fired");
+
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]).toMatchObject({
+      goal_id: goal.goal_id,
+      summary: "Findings: the report body.",
+      // Calls INITIATED, matching the CLI's semantic (one per `calling` chunk).
+      // The `done` chunk must not double-count.
+      tool_calls: 2,
+      memories: 2,
+    });
+  });
+
+  it("emits the failure variant with `error` when the turn throws", async () => {
+    const { runtime, emitted } = makeRuntime();
+    const app = makeApp({
+      getRuntime: () => runtime,
+      // eslint-disable-next-line require-yield -- the throw is the behaviour under test
+      async *sendMessageStreaming() {
+        throw new Error("provider unreachable");
+      },
+    });
+    const engine = createWebGoalsScheduler(app as unknown as WebApp);
+    engine.addGoal({ prompt: "daily brief", interval_ms: 3_600_000, mode: "recurring" });
+    const goal = engine.getState().goals[0]!;
+
+    const result = await engine.runNow(goal.goal_id);
+    expect(result.outcome).toBe("error");
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]).toMatchObject({ goal_id: goal.goal_id, error: "provider unreachable" });
+    // A failed run has no counters to report — omitted, never guessed as zero.
+    expect(emitted[0]).not.toHaveProperty("tool_calls");
+  });
+
+  it("emits on the once/plan path too — success and plan_failed", async () => {
+    const { runtime, emitted } = makeRuntime();
+    const app = makeApp({
+      getRuntime: () => runtime,
+      async *executeGoal() {
+        yield { type: "plan_created", plan: { title: "Draft itinerary", total_steps: 2 } };
+        yield { type: "plan_completed" };
+      },
+    });
+    const engine = createWebGoalsScheduler(app as unknown as WebApp);
+    engine.addGoal({ prompt: "Draft itinerary", interval_ms: 0, mode: "once" });
+    const goal = engine.getState().goals[0]!;
+    await engine.runNow(goal.goal_id);
+
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]?.["summary"]).toContain("Draft itinerary");
+    // The plan path has no per-tool chunk to count, so the counters are omitted
+    // rather than reported as zero — absent means unknown, not none.
+    expect(emitted[0]).not.toHaveProperty("tool_calls");
+
+    const failing = makeApp({
+      getRuntime: () => runtime,
+      async *executeGoal() {
+        yield { type: "plan_failed", reason: "step 2 unreachable" };
+      },
+    });
+    const e2 = createWebGoalsScheduler(failing as unknown as WebApp);
+    e2.addGoal({ prompt: "Other", interval_ms: 0, mode: "once" });
+    await e2.runNow(e2.getState().goals[0]!.goal_id);
+
+    expect(emitted).toHaveLength(2);
+    expect(emitted[1]).toMatchObject({ error: "step 2 unreachable" });
+  });
+
+  it("does not emit when identity is not loaded — no ledger to write to", async () => {
+    // getRuntime() === null is the fail-safe state the signing path already
+    // honours; the ledger emission must not throw through it.
+    const app = makeApp({
+      async *sendMessageStreaming() {
+        yield { type: "text", text: "ok" };
+      },
+    });
+    const engine = createWebGoalsScheduler(app as unknown as WebApp);
+    engine.addGoal({ prompt: "x", interval_ms: 3_600_000, mode: "recurring" });
+    const result = await engine.runNow(engine.getState().goals[0]!.goal_id);
+    expect(result.outcome).toBe("fired");
+  });
+
+  it("a rejected emission never fails the goal run", async () => {
+    // Fire-and-forget, exactly as the CLI does: a ledger write must never take
+    // down the run that produced it.
+    const app = makeApp({
+      getRuntime: () => ({
+        goals: { executed: () => Promise.reject(new Error("ledger unavailable")) },
+        signGoalArtifact: () => Promise.resolve(null),
+      }),
+      async *sendMessageStreaming() {
+        yield { type: "text", text: "ok" };
+      },
+    });
+    const engine = createWebGoalsScheduler(app as unknown as WebApp);
+    engine.addGoal({ prompt: "x", interval_ms: 3_600_000, mode: "recurring" });
+    const result = await engine.runNow(engine.getState().goals[0]!.goal_id);
+    expect(result.outcome).toBe("fired");
+  });
+});

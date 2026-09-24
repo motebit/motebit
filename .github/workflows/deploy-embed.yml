@@ -5,6 +5,12 @@ on:
     branches: [main]
     paths:
       - "services/embed/**"
+      # A lockfile or root-manifest change (dependency security fixes,
+      # pnpm.overrides) changes the built image without touching this
+      # service's own files — it must redeploy too. Witnessed 2026-09-13:
+      # the advisory triage merge redeployed only the relay.
+      - "pnpm-lock.yaml"
+      - "package.json"
       # No `packages/**` trigger: embed has zero @motebit/* dependencies
       # (only @xenova/transformers), so monorepo package changes cannot
       # affect its build. If this service ever imports a workspace package,
@@ -21,11 +27,17 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master
 
       - name: Deploy to Fly.io
-        run: flyctl deploy --config services/embed/fly.toml --remote-only
+        # A HANG must fail, not vanish: a job killed by the ceiling
+        # reports as `cancelled`, which no `if: failure()` alert
+        # matches. See deploy-sync.yml for the incident that showed it.
+        timeout-minutes: 15
+        run: |
+          set -o pipefail
+          flyctl deploy --config services/embed/fly.toml --remote-only --wait-timeout 10m
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

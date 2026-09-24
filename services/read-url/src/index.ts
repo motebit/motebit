@@ -30,7 +30,12 @@
  */
 
 import { buildServiceReceipt, runMolecule } from "@motebit/molecule-runner";
-import { InMemoryToolRegistry, readUrlDefinition, createReadUrlHandler } from "@motebit/tools";
+import {
+  InMemoryToolRegistry,
+  readUrlDefinition,
+  createReadUrlHandler,
+  nodeAddressResolver,
+} from "@motebit/tools";
 import type { ToolResult } from "@motebit/sdk";
 import { loadConfig } from "./helpers.js";
 
@@ -51,16 +56,30 @@ async function main(): Promise<void> {
       displayName: "Read URL",
       serviceDescription: "Minimal URL reader (second hop in multi-hop delegation proof)",
       capabilities: ["read_url"],
-      ...(config.authToken != null ? { authToken: config.authToken } : {}),
+      // No static inbound bearer: callers present a motebit signed token (the
+      // relay's per-task dispatch token, or a caller-signed token) or are
+      // refused. Until 2026-09-15 the deploy script set MOTEBIT_AUTH_TOKEN to the
+      // relay OPERATOR's master token on every worker — a second copy of the
+      // secret #649 retired.
       ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
-      ...(config.apiToken != null ? { apiToken: config.apiToken } : {}),
       ...(config.publicUrl != null ? { publicUrl: config.publicUrl } : {}),
+      ...(config.relayPublicKey != null ? { relayPublicKeyHex: config.relayPublicKey } : {}),
+      // Task admission (docs/doctrine/task-admission.md): run only relay-admitted
+      // work. read-url is UNPRICED (its value is priced into the molecules that
+      // call it), so every first-party hop binds through the relay at zero cost
+      // and carries the token. MOTEBIT_TASK_ADMISSION=open is the escape hatch.
+      taskAdmission: process.env["MOTEBIT_TASK_ADMISSION"] === "open" ? "open" : "relay",
     },
     (identity) => {
       const { motebitId, deviceId, publicKey, privateKey } = identity;
 
       const registry = new InMemoryToolRegistry();
-      registry.register(readUrlDefinition, createReadUrlHandler());
+      // Deployed atom: the outbound URL law with a Node resolver — a public
+      // name that resolves into Fly's private network is refused too.
+      registry.register(
+        readUrlDefinition,
+        createReadUrlHandler({ resolve: nodeAddressResolver() }),
+      );
 
       const handleAgentTask = async function* (
         prompt: string,
@@ -76,6 +95,10 @@ async function main(): Promise<void> {
           result = await registry.execute("read_url", { url: prompt });
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
+          // An honest failure must be as loud in the log as an honest success —
+          // otherwise a dead service reads as a quiet one. See the research
+          // service for the six-night staging outage this silence hid.
+          log(`read_url FAILED: ${msg}`);
           result = { ok: false, error: msg };
         }
         const completedAt = Date.now();
@@ -110,6 +133,13 @@ async function main(): Promise<void> {
             : {}),
           ...(result.ok && result.source_projection != null
             ? { sourceProjection: result.source_projection }
+            : {}),
+          // The class travels with the recipe. Dropping it here would
+          // let the signed receipt assert the strong assurance rung for
+          // a recipe that declared the weaker one — the over-claim the
+          // class exists to make impossible.
+          ...(result.ok && result.source_projection_class != null
+            ? { sourceProjectionClass: result.source_projection_class }
             : {}),
         });
         log(`receipt=${signed.signature.slice(0, 12)}… url="${prompt.slice(0, 60)}"`);

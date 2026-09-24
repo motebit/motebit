@@ -69,6 +69,27 @@ import type { SensitivityLevel } from "./index.js";
  */
 export type InferenceHost = "anthropic" | "openai" | "google" | "groq" | "local-server";
 
+// A note for the next reader who notices that "host" means three different
+// things across these members — a lab serving its own weights, a pure
+// third-party host, and the user's own machine — and reaches for a `kind`
+// field to say so.
+//
+// Don't. The partition is already DERIVABLE from the two unions:
+//
+//   InferenceHost ∩ ModelLab          → anthropic, google, openai  (lab hosts itself)
+//   InferenceHost − ModelLab − self   → groq                       (pure third-party host)
+//   "local-server"                    → self                       (the user's machine)
+//
+// A stored `kind` would denormalize a fact the schema already encodes, creating
+// a second source of truth that can disagree with the first and nothing forcing
+// them to agree. If a consumer ever needs it, derive it (`hostKind(host)`) —
+// derivation cannot drift.
+//
+// Nor is "a second pure host appears (Together, Fireworks, Bedrock)" the trigger
+// to revisit: that just makes the third set larger and the derivation still
+// holds. The only real trigger is a consumer that needs host-kind ON THE WIRE —
+// persisted or transmitted — where it must be stated rather than computed.
+
 /**
  * Who trained the weights. Anthropic/OpenAI/Google appear here
  * because they trained Claude/GPT/Gemini respectively; Meta appears

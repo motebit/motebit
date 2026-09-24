@@ -165,7 +165,7 @@ Pairing codes have a short TTL. Generate a new one.
 
 ### HTTP 429 — Rate Limited
 
-The relay enforces 5-tier sliding-window rate limits per IP address:
+The relay enforces 5-tier fixed-window rate limits per IP address:
 
 | Tier | Limit | Endpoints |
 |---|---|---|
@@ -251,7 +251,7 @@ Normal operation — a settlement was successfully recorded.
 
 ### `settlement.retry.refunded`
 
-Settlement forwarding to a federation peer failed after 5 retry attempts (exponential backoff: 30s, 2min, 8min, 32min, 2h). The locked funds were automatically refunded to the delegator.
+Settlement forwarding to a federation peer failed after `max_attempts` retries (default 5; exponential backoff from 5 s with ±20% jitter, capped at 1 hour — `DEFAULT_RETRY_POLICY` in `retry-policy.ts`). The locked funds were automatically refunded to the delegator.
 
 ```json
 {"level":"info","msg":"settlement.retry.refunded","taskId":"task-123","amount":0.005,"delegator":"alice-id"}
@@ -305,9 +305,9 @@ A peer relay didn't respond to the heartbeat ping. The relay tracks consecutive 
 
 ### `federation.peer.suspended`
 
-A peer was suspended due to missed heartbeats or the forward-path circuit breaker (failure rate exceeds 50% over 6+ samples with 3+ consecutive failures). Agents on suspended peers are excluded from task routing.
+A peer is suspended after 3 missed heartbeats. Separately, the forward-path circuit breaker opens after 5 forward failures within a 120 s window and makes the relay skip forwarding to that peer until it half-opens — it does not change the peer's state. Agents on suspended peers are excluded from task routing.
 
-The peer will be restored to `active` on the next successful heartbeat.
+Recovery has hysteresis: each successful heartbeat decrements the missed count by one, so a peer suspended at 3 misses returns to `active` after 3 consecutive successes.
 
 ### `federation.receipt_signature_invalid`
 

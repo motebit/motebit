@@ -4,11 +4,16 @@ import type {
   SqliteGoalStore,
   SqliteApprovalStore,
   SqliteGoalOutcomeStore,
+  SqliteGoalRunStore,
   Goal,
   GoalOutcome,
+  GoalRun,
+  UncertainAction,
 } from "@motebit/persistence";
+import type { HaltRequest } from "@motebit/sdk";
 import { EventType, RiskLevel, PlanStatus, SensitivityLevel } from "@motebit/sdk";
-import type { ToolHandler } from "@motebit/sdk";
+import type { ToolHandler, AuditLogSink } from "@motebit/sdk";
+import { findUnresolvedActions, countCompletedActions } from "@motebit/policy";
 import {
   createSubGoalDefinition,
   completeGoalDefinition,
@@ -29,10 +34,61 @@ const logLine = (msg: string): void => writeLine(dim(msg));
 const warnLine = (msg: string): void => writeLine(warnColor(msg));
 const errorLine = (msg: string): void => writeLine(errorColor(msg));
 
+/**
+ * The abort reason a halt uses, so the goal-run catch can tell a stop
+ * the human asked for from a genuine failure. A halt must not spend the
+ * goal's retry budget.
+ */
+class HaltAbort extends Error {
+  constructor(readonly haltId: string) {
+    super(`halted (${haltId.slice(0, 8)})`);
+    this.name = "HaltAbort";
+  }
+}
+
+/**
+ * Rejoin a resumed turn's continuation to what preceded the pause, so an
+ * outcome and its signature cover the run rather than its tail.
+ */
+function withTextBeforePause(turn: SuspendedTurn, result: GoalStreamResult): GoalStreamResult {
+  const before = turn.textBeforePause ?? "";
+  const tools = turn.toolCallsBeforePause ?? 0;
+  const memories = turn.memoriesBeforePause ?? 0;
+  if (before === "" && tools === 0 && memories === 0) return result;
+  // The COUNTS rejoin too. `consumeDaemonStream` resets both on entry,
+  // so an outcome built from the continuation alone reported the tool
+  // calls made after the pause and silently dropped the ones before it
+  // — the same tail-presented-as-whole defect the text carry fixed,
+  // left in the numbers that `runs show` prints and the next run reads.
+  return {
+    ...result,
+    responseText: `${before}${result.responseText}`,
+    toolCallsMade: result.toolCallsMade + tools,
+    memoriesFormed: result.memoriesFormed + memories,
+  };
+}
+
 interface SuspendedTurn {
   approvalId: string;
   goalId: string;
+  /** The persisted goal run this turn belongs to (goal_runs.run_id). */
+  runId: string;
   createdAt: number;
+  /**
+   * What the model had already produced when this turn paused.
+   *
+   * A resumed turn's stream carries only the CONTINUATION, so an
+   * outcome built from it alone covered the fragment after the pause —
+   * and the `ContentArtifactManifest` signed over it covered that
+   * fragment too, while the return view presented it as the result
+   * whole. The same fragment became the summary the next run reads. A
+   * signature over part of a thing, presented as the thing, is the
+   * failure this arc exists to remove.
+   */
+  textBeforePause?: string;
+  /** Tool calls and memories from before the pause — see `withTextBeforePause`. */
+  toolCallsBeforePause?: number;
+  memoriesBeforePause?: number;
   /** The runtime gate's tool_call_id for the approval this turn suspended on.
    *  Resume/deny is BOUND to it (#462): the scheduler may only resolve the
    *  pending approval it owns, never whatever happens to be pending — in
@@ -56,17 +112,86 @@ export class GoalScheduler {
   private ticking = false;
   private suspended = new Map<string, SuspendedTurn>();
   private currentGoalId: string | null = null;
+  /** The run row in flight (fire path or live resume), so a graceful stop can close it. */
+  private currentRunId: string | null = null;
+  private currentAbort: AbortController | null = null;
+  private foreignPendingLogged = false;
   private planEngine: PlanEngine | null = null;
   private planStore: PlanStoreAdapter | null = null;
   private tickCount = 0;
+
+  /**
+   * Say we are awake, and never let that stop the work.
+   *
+   * A coverage record exists to explain lateness; it is not
+   * load-bearing for running goals, so a storage failure here must not
+   * take the daemon down with it.
+   */
+  private markAwake(): void {
+    try {
+      this.liveness?.awake(Date.now());
+    } catch (err: unknown) {
+      // Not silent. Swallowing kept the daemon alive, which is right —
+      // but a liveness write that fails persistently (a full disk, a
+      // busy database, a surface whose store is missing) makes `doctor`
+      // report hours of "not hosted" for a machine that was awake and
+      // ticking the whole time, with nothing anywhere saying why. Once
+      // per process: a failure every tick would bury the log it belongs
+      // in.
+      if (!this.livenessFailureLogged) {
+        this.livenessFailureLogged = true;
+        errorLine(
+          `[hosting] the awake record is not being written (${err instanceof Error ? err.message : String(err)}) — coverage will under-report until this is fixed`,
+        );
+      }
+    }
+  }
+
+  /** So a broken liveness write is reported once, not every minute. */
+  private livenessFailureLogged = false;
+
+  /** Runs already logged as held this process — log the hold once, not every tick. */
+  private heldLogged = new Set<string>();
+  /** Un-register the halt stopper on stop(). */
+  private unregisterHaltListener: (() => void) | null = null;
+  /** Halt ids already logged as blocking this process. */
+  private haltLogged = new Set<string>();
 
   constructor(
     private runtime: MotebitRuntime,
     private goalStore: SqliteGoalStore,
     private approvalStore: SqliteApprovalStore,
     private goalOutcomeStore: SqliteGoalOutcomeStore,
+    /**
+     * Durable execution ledger — every run is a persisted row from before
+     * its first model call, so a process death leaves a record, and the
+     * next start recovers instead of re-firing (see `recoverInterruptedRuns`).
+     */
+    private runStore: SqliteGoalRunStore,
+    /**
+     * The tool audit log the policy gate writes decision rows into BEFORE
+     * execution and completion rows into after. Restart recovery reads it
+     * by run id to tell "did anything external happen" — and holds the
+     * goal when the answer is yes or unknown.
+     */
+    private auditSink: AuditLogSink,
     private motebitId: string,
     private denyAbove: RiskLevel,
+    /**
+     * Where this process records that it was AWAKE.
+     *
+     * The scheduler says "I am awake" and nothing more — the caller
+     * knows which device and which executor "I" is, and the scheduler
+     * has no other use for that identity. Optional, so a surface that
+     * wires none still runs; a reader with no rows then answers "this
+     * machine has no record of being awake", which is honest, rather
+     * than claiming coverage it cannot see.
+     *
+     * Written on the SAME tick that fires goals, so the record of being
+     * awake and the firing it explains cannot drift apart.
+     */
+    private liveness?: { awake(at: number): void },
+
     private defaultTtlMs = 3_600_000, // 1 hour
     private goalWallClockMs = 10 * 60 * 1000, // configurable default wall-clock per goal run
   ) {}
@@ -88,7 +213,26 @@ export class GoalScheduler {
       const g = this.goalStore.get(goalId);
       return g == null ? null : g.status;
     });
-    this.cleanupOrphanedApprovals();
+    // Register the stopper BEFORE recovery or the first tick: a halt
+    // already in force when the daemon starts must be honored before any
+    // goal fires, not after one slips through.
+    this.unregisterHaltListener = this.runtime.onHalt((halt) => this.stopForHalt(halt));
+    // Only this process holds the goal store, so only it can turn the
+    // 8-char prefix a person reads off `motebit goal list` into a full
+    // id. A remote halt names a goal on THIS machine; the calling
+    // machine has no way to resolve it.
+    this.runtime.setGoalIdResolver((prefix) => {
+      const match = this.goalStore
+        .list(this.motebitId)
+        .find((g) => g.goal_id === prefix || g.goal_id.startsWith(prefix));
+      return match?.goal_id ?? null;
+    });
+    // A restart opens a NEW session rather than editing the last one,
+    // so the seam between them is visible instead of being smoothed
+    // over by a bumped timestamp. A gap shorter than a couple of ticks
+    // is not treated as downtime — see the coverage reader.
+    this.markAwake();
+    this.recoverInterruptedRuns();
     this.ensureMaintenanceGoal();
     this.timer = setInterval(() => {
       void this.tick();
@@ -125,15 +269,89 @@ export class GoalScheduler {
     logLine("[scheduler] created system memory maintenance goal (24h interval)");
   }
 
-  /** Deny any pending approvals left over from a previous daemon run. */
-  private cleanupOrphanedApprovals(): void {
-    const orphans = this.approvalStore.listPending(this.motebitId);
-    for (const a of orphans) {
-      this.approvalStore.resolve(a.approval_id, "denied", "daemon_restart");
+  /**
+   * Restart recovery. Runs the previous process died inside are still
+   * `running` in the ledger; each becomes `interrupted` with the honest
+   * facts read from the tool audit log:
+   *
+   *   - completed_actions — allowed tool calls that DID record a completion
+   *     (re-running the goal would repeat them);
+   *   - uncertain_actions — allowed tool calls with a decision row but no
+   *     completion row: the process died somewhere between preparing the call
+   *     and recording its outcome. The row proves preparation — not that
+   *     dispatch occurred, and not what the effect was.
+   *
+   * Any side effect, known or unknown, HOLDS the goal until a human runs
+   * `motebit runs ack <run_id>`. A run with no allowed tool calls at all
+   * resolves itself — re-running it repeats nothing. Pending approvals are
+   * left pending (they were a human's decision to make, and still are);
+   * `awaiting_approval` runs are drained by `drainRecoveredApprovals` once
+   * the human decides.
+   */
+  recoverInterruptedRuns(): void {
+    const stale = this.runStore.listByStatus(this.motebitId, "running");
+    for (const run of stale) {
+      const facts = this.classifyInterruptedRun(run);
+      this.runStore.markInterrupted(run.run_id, facts);
+      const held = facts.completed_actions > 0 || facts.uncertain_actions.length > 0;
+      // Own id, never `run.run_id`: the live paths write their outcome under
+      // the run id, and a death between that write and the run-status
+      // transition must not let this row REPLACE a genuine outcome.
+      this.goalOutcomeStore.add({
+        outcome_id: crypto.randomUUID(),
+        run_id: run.run_id,
+        goal_id: run.goal_id,
+        motebit_id: this.motebitId,
+        ran_at: Date.now(),
+        status: "failed",
+        summary: null,
+        tool_calls_made: facts.completed_actions + facts.uncertain_actions.length,
+        memories_formed: 0,
+        error_message: `interrupted: ${facts.note}`,
+      });
+      void this.runtime.goals.executed({
+        goal_id: run.goal_id,
+        error: `interrupted: ${facts.note}`,
+      });
+      if (held) {
+        warnLine(
+          `[scheduler] run ${run.run_id.slice(0, 8)} of goal ${run.goal_id.slice(0, 8)} was interrupted with ${facts.note} — goal HELD until \`motebit runs ack ${run.run_id.slice(0, 8)} --allow-fresh-run\``,
+        );
+      } else {
+        logLine(
+          `[scheduler] run ${run.run_id.slice(0, 8)} was interrupted before any external action — will re-fire on schedule`,
+        );
+      }
     }
-    if (orphans.length > 0) {
-      logLine(`[scheduler] cleaned up ${orphans.length} orphaned approval(s) from previous run`);
+  }
+
+  private classifyInterruptedRun(run: GoalRun): {
+    completed_actions: number;
+    uncertain_actions: UncertainAction[];
+    note: string;
+  } {
+    if (typeof this.auditSink.queryByRunId !== "function") {
+      // The sink cannot answer by run — side effects are UNKNOWN, which is
+      // the held case, not the safe case. A sentinel uncertain action keeps
+      // the hold honest in content: "something may have happened".
+      return {
+        completed_actions: 0,
+        uncertain_actions: [{ call_id: "unknown", tool: "unknown", intended_at: run.started_at }],
+        note: "audit log cannot be queried by run — side effects unknown",
+      };
     }
+    const entries = this.auditSink.queryByRunId(run.run_id);
+    const uncertain = findUnresolvedActions(entries).map((e) => ({
+      call_id: e.callId,
+      tool: e.tool,
+      intended_at: e.timestamp,
+    }));
+    const completed = countCompletedActions(entries);
+    const note =
+      completed === 0 && uncertain.length === 0
+        ? "no external actions recorded"
+        : `${completed} completed action(s), ${uncertain.length} with unknown outcome`;
+    return { completed_actions: completed, uncertain_actions: uncertain, note };
   }
 
   stop(): void {
@@ -141,13 +359,63 @@ export class GoalScheduler {
       clearInterval(this.timer);
       this.timer = null;
     }
-    // On shutdown: expire all pending approvals
-    for (const [id] of this.suspended) {
-      this.approvalStore.resolve(id, "denied", "daemon_shutdown");
-    }
+    this.unregisterHaltListener?.();
+    this.unregisterHaltListener = null;
+    // On shutdown the pending approvals STAY pending and their runs stay
+    // `awaiting_approval` in the ledger — a human's decision survives the
+    // process. Only the in-memory resume handles are dropped; after a
+    // restart the decision is applied by `drainRecoveredApprovals`.
     this.suspended.clear();
-    // Best-effort memory consolidation on shutdown
-    void this.runtime.consolidationCycle();
+    // A run in flight at a GRACEFUL stop is closed here, synchronously,
+    // because the daemon exits right after this returns and the tick's own
+    // catch may never run. Left `running`, the next start would classify it
+    // as interrupted and hold the goal behind a human ack for what was an
+    // orderly shutdown. It is the process that is alive to say so.
+    if (this.currentRunId != null) {
+      const runId = this.currentRunId;
+      const run = this.runStore.get(runId);
+      const goalId = run?.goal_id ?? this.currentGoalId;
+      this.currentAbort?.abort(new Error("daemon stopped"));
+      this.runStore.setStatus(runId, "failed", { note: "daemon stopped mid-run (graceful)" });
+      if (goalId != null) {
+        this.goalOutcomeStore.add({
+          outcome_id: crypto.randomUUID(),
+          run_id: runId,
+          goal_id: goalId,
+          motebit_id: this.motebitId,
+          ran_at: Date.now(),
+          status: "failed",
+          summary: null,
+          tool_calls_made: 0,
+          memories_formed: 0,
+          error_message: "daemon stopped mid-run (graceful)",
+        });
+      }
+      this.currentRunId = null;
+      this.currentAbort = null;
+      logLine(
+        `[scheduler] stopped mid-run ${runId.slice(0, 8)} — closed as failed, will re-fire on schedule`,
+      );
+    }
+    // Best-effort memory consolidation on shutdown — unless a halt is in
+    // force, whose acknowledgement promised that no further consolidation
+    // would start. A promise that lapses at shutdown is not a promise.
+    //
+    // Guarded because this is a SYNCHRONOUS SQLite read and it is the
+    // last statement in `stop()`. A busy-database throw would propagate
+    // into the daemon's shutdown block and skip everything after it —
+    // the socket disconnect, the runtime-host close, the database
+    // close, and the private-key erase. Failing toward "halted" costs
+    // one best-effort cycle; failing open costs the key still in memory.
+    let haltedAtShutdown = true;
+    try {
+      haltedAtShutdown = this.runtime.haltInForce() != null;
+    } catch {
+      // Treated as halted: skip the cycle, let shutdown finish.
+    }
+    if (!haltedAtShutdown) {
+      void this.runtime.consolidationCycle();
+    }
   }
 
   /** Run a single scheduler tick. Exposed for deterministic testing. */
@@ -424,16 +692,63 @@ export class GoalScheduler {
   }
 
   private async tick(): Promise<void> {
+    // Before anything else this tick does. Being awake is a fact about
+    // this instant, not about whether the work that follows succeeded —
+    // recording it after the body would lose exactly the ticks where
+    // something went wrong, which are the ones a late goal most needs
+    // explained.
+    this.markAwake();
+
+    // Phase 0 runs OUTSIDE the single-flight guard, and that placement is
+    // the whole point: a goal run holds `ticking` for its entire duration
+    // (up to the wall-clock limit, ten minutes by default), so a halt
+    // honored inside the guard could not reach the run it is meant to
+    // abort until that run had already finished. A halt must be able to
+    // interrupt work in progress, not queue behind it. `honorHalts` is
+    // idempotent and reads one row, so running it on every interval
+    // costs nothing once the work is stopped.
+    // …and inside its OWN try/catch, because it is now outside the one
+    // that wraps the tick body. `tick()` is invoked as `void this.tick()`
+    // from the interval and the daemon registers no unhandledRejection
+    // handler, so a throw here — a busy SQLite write, a malformed row, a
+    // rejecting stopper — would kill the daemon rather than log a failed
+    // tick. A halt that cannot be honored must not take the process down
+    // with it.
+    try {
+      await this.runtime.honorHalts();
+    } catch (err: unknown) {
+      errorLine(
+        `[halt] honoring failed (will retry next tick): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
     // Single-flight guard — prevent re-entry if previous tick is still running
     if (this.ticking) return;
     this.ticking = true;
 
     try {
+      const halted = this.runtime.haltInForce();
+      if (halted != null) {
+        // Keep the approval TTL running. Freezing it would leave a
+        // decidable-looking approval on the phone all night and then
+        // expire a pile of them the instant the halt lifted.
+        this.expireStaleApprovals();
+        if (!this.haltLogged.has(halted.halt_id)) {
+          this.haltLogged.add(halted.halt_id);
+          warnLine(
+            `[halt] unattended execution is stopped (${halted.halt_id.slice(0, 8)}, ${halted.origin}${halted.reason != null ? `: ${halted.reason}` : ""}) — \`motebit resume ${halted.halt_id.slice(0, 8)}\` to give the permission back`,
+          );
+        }
+        return;
+      }
+
       // Phase 1: expire stale approvals
       this.expireStaleApprovals();
 
-      // Phase 2: drain resolved approvals
+      // Phase 2: drain resolved approvals — live turns first, then the ones
+      // whose paused turn died with a previous process.
       await this.drainResolvedApprovals();
+      await this.drainRecoveredApprovals();
 
       // Phase 3: skip goal scheduling if runtime has a pending approval
       if (this.runtime.hasPendingApproval) return;
@@ -448,6 +763,32 @@ export class GoalScheduler {
         const elapsed = goal.last_run_at != null ? now - goal.last_run_at : Infinity;
         if (elapsed < goal.interval_ms) continue;
 
+        // A goal-scoped halt stops this goal and nothing else.
+        const goalHalt = this.runtime.haltInForce(goal.goal_id);
+        if (goalHalt != null) {
+          if (!this.haltLogged.has(goalHalt.halt_id)) {
+            this.haltLogged.add(goalHalt.halt_id);
+            warnLine(
+              `[halt] goal ${goal.goal_id.slice(0, 8)} is stopped (${goalHalt.halt_id.slice(0, 8)}) — \`motebit resume ${goalHalt.halt_id.slice(0, 8)}\` to give the permission back`,
+            );
+          }
+          continue;
+        }
+
+        // Never start a replacement run while an existing run is unresolved:
+        // paused on a human, or interrupted with side effects nobody has
+        // reviewed. Re-firing would repeat what already happened.
+        const blocking = this.runStore.blockingRunForGoal(goal.goal_id);
+        if (blocking != null) {
+          if (!this.heldLogged.has(blocking.run_id)) {
+            this.heldLogged.add(blocking.run_id);
+            logLine(
+              `[goal] ${goal.goal_id.slice(0, 8)} held — run ${blocking.run_id.slice(0, 8)} is ${blocking.status}${blocking.status === "interrupted" ? ` (ack with \`motebit runs ack ${blocking.run_id.slice(0, 8)} --allow-fresh-run\`)` : ""}`,
+            );
+          }
+          continue;
+        }
+
         logLine(`[goal] executing: "${goal.prompt.slice(0, 60)}"`);
 
         // Build enriched context
@@ -460,6 +801,9 @@ export class GoalScheduler {
 
         // Generate a stable runId for this goal execution (= outcome_id for audit correlation)
         const runId = crypto.randomUUID();
+        // Ledger row BEFORE the first model call: a death from here on
+        // leaves a `running` row that restart recovery classifies.
+        this.runStore.start({ run_id: runId, goal_id: goal.goal_id, motebit_id: this.motebitId });
 
         try {
           let result: GoalStreamResult;
@@ -467,6 +811,8 @@ export class GoalScheduler {
           // Wall-clock limit: per-goal override → scheduler default
           const wallClock = goal.wall_clock_ms ?? this.goalWallClockMs;
           const abortController = new AbortController();
+          this.currentAbort = abortController;
+          this.currentRunId = runId;
           const deadlineTimer = setTimeout(
             () =>
               abortController.abort(
@@ -482,7 +828,12 @@ export class GoalScheduler {
               result = await this.executePlanGoal(goal, outcomes, runId, abortController.signal);
             } else {
               const stream = this.runtime.sendMessageStreaming(enrichedPrompt, runId);
-              result = await this.consumeDaemonStream(stream, goal.goal_id, abortController.signal);
+              result = await this.consumeDaemonStream(
+                stream,
+                goal.goal_id,
+                runId,
+                abortController.signal,
+              );
             }
           } finally {
             clearTimeout(deadlineTimer);
@@ -495,26 +846,20 @@ export class GoalScheduler {
             return;
           }
 
-          // Record outcome (runId = outcome_id for audit correlation)
-          this.goalOutcomeStore.add({
-            outcome_id: runId,
-            goal_id: goal.goal_id,
-            motebit_id: this.motebitId,
-            ran_at: Date.now(),
-            status: "completed",
-            summary: result.responseText.slice(0, 500) || null,
-            tool_calls_made: result.toolCallsMade,
-            memories_formed: result.memoriesFormed,
-            error_message: null,
-          });
-
+          // Run-status transition FIRST, then the outcome row: a death in
+          // between leaves a completed run with no outcome (honest, no hold)
+          // rather than a completed outcome under a `running` row that the
+          // next start would reclassify as interrupted.
+          this.runStore.setStatus(runId, "completed");
+          const full = result.responseText;
+          await this.recordCompletedOutcome(goal.goal_id, runId, result);
           this.goalStore.updateLastRun(goal.goal_id, Date.now());
           this.goalStore.resetFailures(goal.goal_id);
 
           // Emit goal_executed (success variant) — spec §5.2.
           void this.runtime.goals.executed({
             goal_id: goal.goal_id,
-            summary: result.responseText.slice(0, 200),
+            summary: full.slice(0, 200),
             tool_calls: result.toolCallsMade,
             memories: result.memoriesFormed,
           });
@@ -537,11 +882,60 @@ export class GoalScheduler {
           logLine(`[goal] completed: ${goal.goal_id.slice(0, 8)}`);
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
+          // A stop the human asked for is not a failure of the goal.
+          // Counting it would burn the retry budget and eventually
+          // auto-pause the goal, so lifting the halt would silently not
+          // be enough to start it again.
+          if (err instanceof HaltAbort) {
+            const note = `halted (${err.haltId.slice(0, 8)})`;
+            this.runStore.setStatus(runId, "failed", { note });
+            // Every run leaves a wire record regardless of outcome — the
+            // ledger is the semantic source of truth, and a run that was
+            // stopped is still a run that happened. Only the FAILURE
+            // COUNT is skipped: a stop the human asked for must not burn
+            // the goal's retry budget.
+            this.goalOutcomeStore.add({
+              // Fresh id + `run_id` link, like the sibling catch below.
+              // A halt aborts before the result is written today, so this
+              // cannot overwrite one — but the two rows share a table
+              // whose insert replaces, and relying on an ordering that
+              // holds by accident is how the other one came to.
+              outcome_id: crypto.randomUUID(),
+              run_id: runId,
+              goal_id: goal.goal_id,
+              motebit_id: this.motebitId,
+              ran_at: Date.now(),
+              status: "partial",
+              summary: `stopped by ${note}`,
+              tool_calls_made: 0,
+              memories_formed: 0,
+              error_message: null,
+            });
+            void this.runtime.goals.executed({
+              goal_id: goal.goal_id,
+              error: `stopped by ${note}`,
+            });
+            logLine(
+              `[goal] ${goal.goal_id.slice(0, 8)} stopped by halt ${err.haltId.slice(0, 8)} — not counted as a failure`,
+            );
+            continue;
+          }
           errorLine(`[goal] error for ${goal.goal_id.slice(0, 8)}: ${msg}`);
 
-          // Record failed outcome (runId = outcome_id for audit correlation)
+          this.runStore.setStatus(runId, "failed", { note: msg });
+          // Fresh id, and linked by `run_id`. This catch wraps the whole
+          // tick INCLUDING the successful path, and several statements
+          // run after `recordCompletedOutcome` — updating last-run,
+          // resetting failures, reading and setting goal status — any of
+          // which can throw on a busy database. Keyed by the run into an
+          // INSERT-OR-REPLACE table, this row would then overwrite the
+          // result that had just been written and destroy the signed
+          // manifest with it: the artifact this whole increment exists
+          // to preserve, deleted by its own error handler. The resume
+          // catch was fixed for this; the primary one was left behind.
           this.goalOutcomeStore.add({
-            outcome_id: runId,
+            outcome_id: crypto.randomUUID(),
+            run_id: runId,
             goal_id: goal.goal_id,
             motebit_id: this.motebitId,
             ran_at: Date.now(),
@@ -568,12 +962,14 @@ export class GoalScheduler {
           }
         } finally {
           this.currentGoalId = null;
+          this.currentRunId = null;
+          this.currentAbort = null;
           this.unregisterGoalTools();
         }
       }
       // Phase 5: periodic memory consolidation (every 10 ticks ≈ 10 min at default 60s)
       this.tickCount++;
-      if (this.tickCount % 10 === 0) {
+      if (this.tickCount % 10 === 0 && this.runtime.haltInForce() == null) {
         void this.runtime.consolidationCycle();
       }
     } catch (err: unknown) {
@@ -586,7 +982,16 @@ export class GoalScheduler {
   private async consumeDaemonStream(
     stream: AsyncGenerator<StreamChunk>,
     goalId: string,
+    runId: string,
     signal?: AbortSignal,
+    /**
+     * Text this turn had already produced BEFORE the pause it is now
+     * resuming from. Carried so that a turn which pauses twice does not
+     * lose its first segment — see the suspend site below.
+     */
+    carriedText = "",
+    carriedTools = 0,
+    carriedMemories = 0,
   ): Promise<GoalStreamResult> {
     let toolCallsMade = 0;
     let memoriesFormed = 0;
@@ -606,7 +1011,11 @@ export class GoalScheduler {
           if (chunk.status === "calling") {
             writeOutput(`\n  [tool] ${chunk.name}...`);
             toolCallsMade++;
-            if (toolCallsMade > MAX_TOOL_CALLS_PER_RUN) {
+            // Per RUN, so it counts what was carried across every pause.
+            // Comparing only this stream's counter reset the budget at
+            // each approval: a goal that paused five times could make
+            // 250 calls under a guard that says fifty.
+            if (carriedTools + toolCallsMade > MAX_TOOL_CALLS_PER_RUN) {
               throw new Error(`Goal exceeded ${MAX_TOOL_CALLS_PER_RUN} tool calls — run stopped`);
             }
           } else {
@@ -620,7 +1029,8 @@ export class GoalScheduler {
           const argsHash = hashArgs(argsJson);
           const now = Date.now();
 
-          // Persist to SQLite
+          // Persist to SQLite — the FULL args, so a decision made after a
+          // restart can execute exactly what was shown, never a guess.
           this.approvalStore.add({
             approval_id: approvalId,
             motebit_id: this.motebitId,
@@ -634,14 +1044,32 @@ export class GoalScheduler {
             expires_at: now + this.defaultTtlMs,
             resolved_at: null,
             denied_reason: null,
+            args_json: argsJson,
           });
+          this.runStore.setStatus(runId, "awaiting_approval", { approval_id: approvalId });
 
           // Track in-memory (runtime holds the actual suspended state)
           this.suspended.set(approvalId, {
             approvalId,
             goalId,
+            runId,
             createdAt: now,
             toolCallId: chunk.tool_call_id,
+            // Carried forward, not overwritten: a resumed turn can pause
+            // AGAIN, and this stream holds only the current segment. The
+            // first version recorded segment two and lost segment one,
+            // so the eventual signature covered everything except the
+            // beginning — the same partial-signed-as-whole defect it was
+            // written to close, one pause further in.
+            ...(carriedText + responseText !== ""
+              ? { textBeforePause: carriedText + responseText }
+              : {}),
+            ...(carriedTools + toolCallsMade > 0
+              ? { toolCallsBeforePause: carriedTools + toolCallsMade }
+              : {}),
+            ...(carriedMemories + memoriesFormed > 0
+              ? { memoriesBeforePause: carriedMemories + memoriesFormed }
+              : {}),
           });
 
           logLine(`\n  [approval-pending] ${chunk.name} — approval_id: ${approvalId.slice(0, 8)}`);
@@ -656,13 +1084,14 @@ export class GoalScheduler {
           // Record suspended outcome
           this.goalOutcomeStore.add({
             outcome_id: crypto.randomUUID(),
+            ...(runId != null ? { run_id: runId } : {}),
             goal_id: goalId,
             motebit_id: this.motebitId,
             ran_at: now,
             status: "suspended",
             summary: `Suspended for approval: ${chunk.name}`,
-            tool_calls_made: toolCallsMade,
-            memories_formed: memoriesFormed,
+            tool_calls_made: carriedTools + toolCallsMade,
+            memories_formed: carriedMemories + memoriesFormed,
             error_message: null,
           });
 
@@ -732,12 +1161,13 @@ export class GoalScheduler {
       planStream = this.planEngine!.executePlan(plan.plan_id, loopDeps, undefined, runId);
     }
 
-    return this.consumePlanStream(planStream, goal.goal_id, signal);
+    return this.consumePlanStream(planStream, goal.goal_id, runId, signal);
   }
 
   private async consumePlanStream(
     stream: AsyncGenerator<PlanChunk>,
     goalId: string,
+    runId: string | undefined,
     signal?: AbortSignal,
   ): Promise<GoalStreamResult> {
     let toolCallsMade = 0;
@@ -815,13 +1245,26 @@ export class GoalScheduler {
             expires_at: now + this.defaultTtlMs,
             resolved_at: null,
             denied_reason: null,
+            args_json: argsJson,
           });
+          if (runId != null) {
+            this.runStore.setStatus(runId, "awaiting_approval", { approval_id: approvalId });
+          }
 
           this.suspended.set(approvalId, {
             approvalId,
             goalId,
+            runId: runId ?? approvalId,
             createdAt: now,
             toolCallId: innerChunk.tool_call_id,
+            // Plan mode carries the pre-pause text AND the counters.
+            // Setting only the text left the same tail-presented-as-whole
+            // defect in the numbers: a plan goal with three calls before
+            // the pause and one after recorded one, which is what the
+            // return view prints and the next run reads.
+            ...(responseText !== "" ? { textBeforePause: responseText } : {}),
+            ...(toolCallsMade > 0 ? { toolCallsBeforePause: toolCallsMade } : {}),
+            ...(memoriesFormed > 0 ? { memoriesBeforePause: memoriesFormed } : {}),
           });
           logLine(
             `\n  [approval-pending] ${innerChunk.name} — approval_id: ${approvalId.slice(0, 8)}`,
@@ -876,6 +1319,14 @@ export class GoalScheduler {
     for (const [id, turn] of this.suspended) {
       const item = this.approvalStore.get(id);
       if (!item || item.status === "expired") {
+        // Before anything is dropped. Resuming with a denial is a MODEL
+        // TURN whose continuation can make further, non-approval-gated
+        // tool calls — unattended work starting, which a halt forbids.
+        // Placed after the delete (as it first was), this "leave it
+        // suspended" guard did the opposite: the map entry was already
+        // gone, the run never closed, and the runtime stayed wedged on a
+        // pending approval nothing could resolve once the halt lifted.
+        if (this.runtime.haltInForce(turn.goalId) != null) continue;
         this.suspended.delete(id);
         void this.logApprovalEvent(EventType.ApprovalExpired, turn.goalId, id, "", {});
         // Deny-release the runtime ONLY when the pending approval is the one
@@ -888,11 +1339,117 @@ export class GoalScheduler {
           logLine(
             `[approval] expired → denying suspended turn ${id.slice(0, 8)} (${pending.toolName}) to release the runtime`,
           );
+          // The denied continuation runs under this run id: mark it live so
+          // the recovered-approval drain leaves it alone, and close it when
+          // the continuation ends.
+          this.runStore.setStatus(turn.runId, "running", {
+            note: "approval expired; continuing after denial",
+          });
+          // Consumed, not discarded: this is a THIRD path that reaches
+          // `completed`, and it wrote no outcome row at all — so a run
+          // that produced work after an approval lapsed reported "the
+          // run did not reach an outcome row", with nothing signed. The
+          // drift gate stayed green because it matches the signing call
+          // once per file, which is the aperture blindness this whole
+          // increment set out to correct, found for the second time
+          // inside the increment itself.
           const resumeStream = this.runtime.resumeAfterApproval(false);
-          void this.consumeAndDiscard(resumeStream);
-        } else if (pending != null) {
-          logLine(
-            `[approval] expired ${id.slice(0, 8)} but the runtime's pending approval belongs to another actor (${pending.toolName}) — leaving it untouched`,
+          const expiredGoalId = turn.goalId;
+          const expiredRunId = turn.runId;
+          // This path deliberately does NOT touch `currentGoalId` /
+          // `currentRunId`, and an earlier version of it did.
+          //
+          // The reason given for setting them was that the goal tools
+          // fail closed without them. They do — but this runs in the
+          // approval phase, and `registerGoalTools` runs in the goal
+          // phase after it, so during this continuation those tools are
+          // not registered at all. Setting the ids bought nothing.
+          //
+          // It cost something, though. This continuation is
+          // fire-and-forget, so its cleanup lands at an arbitrary later
+          // moment — by which time the goal phase may have started a
+          // real run and put ITS ids there. Writing anything back then
+          // strips a live run of the context a stop uses to abort it and
+          // a graceful shutdown uses to close it, leaving it to be
+          // reclassified as interrupted and held behind a human. Two
+          // versions of the write-back were wrong in opposite
+          // directions; the third is not to write.
+          void this.consumeDaemonStream(
+            resumeStream,
+            expiredGoalId,
+            expiredRunId,
+            undefined,
+            turn.textBeforePause ?? "",
+            turn.toolCallsBeforePause ?? 0,
+            turn.memoriesBeforePause ?? 0,
+          )
+            .then(async (result) => {
+              // `!result.suspended`, like the sibling path. A denied
+              // continuation can make ANOTHER approval-gated call, and
+              // then the stream returns suspended with a fresh pending
+              // approval and the run already re-marked
+              // `awaiting_approval`. Closing it here anyway recorded a
+              // run as completed while a human decision was still
+              // queued against it — it vanished from the list of runs
+              // holding their goal, and its outcome said the action did
+              // not run while a second one waited.
+              if (result.suspended) return;
+              this.runStore.setStatus(expiredRunId, "completed", {
+                note: "approval expired; the turn continued after the denial",
+              });
+              // `partial`, never `completed`: the action the human never
+              // decided did not run, so this is not the goal's work
+              // finished.
+              await this.recordCompletedOutcome(
+                expiredGoalId,
+                expiredRunId,
+                withTextBeforePause(turn, result),
+                {
+                  status: "partial",
+                  errorMessage:
+                    "the approval expired before it was decided; the action did not run",
+                },
+              );
+            })
+            .catch((err: unknown) => {
+              // Every `running` transition needs a failure transition.
+              // The drain this replaced never rejected, so the close
+              // always ran; consuming for a result can throw (the
+              // single-writer guard, a tool-call ceiling), and logging
+              // alone left the run `running` with its suspended entry
+              // already gone — nothing would ever close it, and the goal
+              // stayed blocked until a restart reclassified it as
+              // interrupted and asked a human to acknowledge it.
+              const msg = err instanceof Error ? err.message : String(err);
+              errorLine(`[approval] expired-continuation of ${id.slice(0, 8)} failed: ${msg}`);
+              this.runStore.setStatus(expiredRunId, "failed", {
+                note: `expired-approval continuation failed: ${msg}`,
+              });
+              this.goalOutcomeStore.add({
+                outcome_id: crypto.randomUUID(),
+                run_id: expiredRunId,
+                goal_id: expiredGoalId,
+                motebit_id: this.motebitId,
+                ran_at: Date.now(),
+                status: "failed",
+                summary: null,
+                tool_calls_made: 0,
+                memories_formed: 0,
+                error_message: `expired-approval continuation failed: ${msg}`,
+              });
+            });
+        } else {
+          if (pending != null) {
+            logLine(
+              `[approval] expired ${id.slice(0, 8)} but the runtime's pending approval belongs to another actor (${pending.toolName}) — leaving it untouched`,
+            );
+          }
+          // The paused turn is gone (voided or timed out in the runtime);
+          // nothing will ever resume it. Close its run so it neither holds
+          // the goal nor gets picked up by the recovered-approval drain.
+          this.closeVoidedRun(
+            turn,
+            `approval for ${item?.tool_name ?? "a tool"} expired; not executed`,
           );
         }
       }
@@ -901,6 +1458,10 @@ export class GoalScheduler {
 
   private async drainResolvedApprovals(): Promise<void> {
     for (const [approvalId, turn] of this.suspended) {
+      // A halt covering this goal outranks the verdict: resuming would
+      // execute the approved call. The suspended turn is left in place,
+      // so lifting the halt resumes it rather than losing it.
+      if (this.runtime.haltInForce(turn.goalId) != null) continue;
       const item = this.approvalStore.get(approvalId);
       if (!item) continue;
       if (item.status !== "approved" && item.status !== "denied") continue;
@@ -916,20 +1477,114 @@ export class GoalScheduler {
       const pending = this.runtime.pendingApprovalInfo;
       if (pending != null && pending.toolCallId === turn.toolCallId) {
         this.currentGoalId = turn.goalId;
-        const resumeStream = this.runtime.resumeAfterApproval(approved);
-        const result = await this.consumeDaemonStream(resumeStream, turn.goalId);
-        this.currentGoalId = null;
-        if (approved && !result.suspended) {
+        this.currentRunId = turn.runId;
+        // Leave `awaiting_approval` BEFORE resuming (same reason as the
+        // recovered path): a death after the approved call executes must
+        // land on a `running` row the next start classifies from the audit
+        // log — never on an `approved` approval still "awaiting", which
+        // would execute it again.
+        this.runStore.setStatus(turn.runId, "running", {
+          note: approved ? "resuming after approval" : "resuming after denial",
+        });
+        try {
+          const resumeStream = this.runtime.resumeAfterApproval(approved);
+          const result = await this.consumeDaemonStream(
+            resumeStream,
+            turn.goalId,
+            turn.runId,
+            undefined,
+            turn.textBeforePause ?? "",
+            turn.toolCallsBeforePause ?? 0,
+            turn.memoriesBeforePause ?? 0,
+          );
+          if (!result.suspended) {
+            // The resumed turn ran to its end (a second pause would have
+            // re-marked the run awaiting_approval itself).
+            this.runStore.setStatus(turn.runId, "completed", {
+              note: approved ? "resumed after approval" : "resumed after denial",
+            });
+            // Write the outcome, sign it, keep it whole — the same three
+            // things the ordinary completion path does.
+            //
+            // This path wrote NO outcome row at all, so a goal run that
+            // paused for a human's yes and then ran to its end produced
+            // no result, nothing signed, and `runs show` reporting "the
+            // run did not reach an outcome row". The signing gate stayed
+            // green because it matches the call once per file: the
+            // aperture blindness this increment was written to correct,
+            // reproduced one level down inside the fix for it.
+            // `approved`, not unconditionally. A refusal is not a
+            // completion, and writing one as `completed` — signed, no
+            // less — put a denial into `goal_outcomes`, which
+            // `buildGoalContext` reads back into the NEXT run's prompt.
+            // The agent would have learned that work a human refused was
+            // finished work.
+            await this.recordCompletedOutcome(
+              turn.goalId,
+              turn.runId,
+              withTextBeforePause(turn, result),
+              {
+                status: approved ? "completed" : "partial",
+                errorMessage: approved ? null : "the approved action was denied by its owner",
+              },
+            );
+            if (approved) {
+              this.goalStore.updateLastRun(turn.goalId, Date.now());
+            }
+          }
+        } catch (err: unknown) {
+          // Every `running` transition needs a failure transition, or the
+          // goal is held behind a row nobody can ack ("running, not
+          // interrupted") until the next restart.
+          const msg = err instanceof Error ? err.message : String(err);
+          errorLine(`[approval] resume of ${approvalId.slice(0, 8)} failed: ${msg}`);
+          this.runStore.setStatus(turn.runId, "failed", { note: `resume failed: ${msg}` });
+          this.goalOutcomeStore.add({
+            // Fresh id, as the recovery writers use, because this runs
+            // in a catch: if `recordCompletedOutcome` already wrote a
+            // genuine result and a later statement threw, keying this
+            // row by the run would REPLACE that result and destroy the
+            // signed artifact with it. `run_id` is what makes it
+            // findable; the id only has to be unique.
+            outcome_id: crypto.randomUUID(),
+            run_id: turn.runId,
+            goal_id: turn.goalId,
+            motebit_id: this.motebitId,
+            ran_at: Date.now(),
+            status: "failed",
+            summary: null,
+            tool_calls_made: 0,
+            memories_formed: 0,
+            error_message: `resume failed: ${msg}`,
+          });
           this.goalStore.updateLastRun(turn.goalId, Date.now());
+        } finally {
+          this.currentGoalId = null;
+          this.currentRunId = null;
         }
-      } else if (pending != null) {
-        logLine(
-          `[approval] ${approvalId.slice(0, 8)} resolved, but the runtime's pending approval belongs to another actor (${pending.toolName}) — this turn was already voided; not resuming`,
-        );
       } else {
-        logLine(
-          `[approval] ${approvalId.slice(0, 8)} resolved, but its suspended turn is gone (voided or expired) — nothing to resume`,
-        );
+        // Two "nothing to resume" cases. Either way the paused turn no
+        // longer exists, so the stored verdict cannot be applied to it —
+        // and it must NOT fall through to the recovered-approval drain,
+        // which would execute the call out of band, possibly long after the
+        // conversation already recorded it as timed out.
+        if (pending != null) {
+          logLine(
+            `[approval] ${approvalId.slice(0, 8)} resolved, but the runtime's pending approval belongs to another actor (${pending.toolName}) — this turn was already voided; not resuming`,
+          );
+          this.closeVoidedRun(
+            turn,
+            `${item.tool_name} approval resolved after the paused turn was voided by another actor's approval — not executed`,
+          );
+        } else {
+          logLine(
+            `[approval] ${approvalId.slice(0, 8)} resolved, but its suspended turn is gone (voided or expired) — nothing to resume`,
+          );
+          this.closeVoidedRun(
+            turn,
+            `${item.tool_name} approval resolved after the paused turn expired in the runtime — not executed; the conversation already recorded the call as failed`,
+          );
+        }
       }
 
       this.suspended.delete(approvalId);
@@ -945,19 +1600,284 @@ export class GoalScheduler {
     }
   }
 
-  private async consumeAndDiscard(stream: AsyncGenerator<StreamChunk>): Promise<void> {
-    // Never let a drain reject escape — callers fire-and-forget (`void ...`),
-    // so a throw here (e.g. resumeAfterApproval's single-writer "Already
-    // processing" guard, #462, when a human turn is mid-flight on the shared
-    // runtime) would be an unhandled rejection. Log and retry next tick.
-    try {
-      for await (const _chunk of stream) {
-        // drain
+  /**
+   * Apply human decisions to runs whose paused turn no longer exists (the
+   * process that paused them is gone). The paused turn cannot be resumed —
+   * its stream died with the process — so the decision is applied to the
+   * ONE action the human saw:
+   *
+   *   approved → execute exactly the persisted call through
+   *              `invokeLocalTool` (the same policy gate, `humanApproved`
+   *              satisfying the approval band the way a tap does; a hard
+   *              deny still denies; R4_MONEY is never executed here — the
+   *              recovered path holds no verified grant);
+   *   denied   → nothing runs; the run completes with the denial noted.
+   *
+   * The rest of the goal's turn is NOT re-run. That would re-execute the
+   * pre-pause tool calls, which already happened. The goal fires again on
+   * its own cadence.
+   */
+  private async drainRecoveredApprovals(): Promise<void> {
+    // A halt outranks an approval. The human granted permission for one
+    // action and then withdrew permission to act unattended at all; the
+    // later word wins. The approval stays `approved` — nothing is
+    // executed, and nothing is thrown away.
+    if (this.runtime.haltInForce() != null) return;
+    const waiting = this.runStore.listByStatus(this.motebitId, "awaiting_approval");
+    for (const run of waiting) {
+      // …and a GOAL-scoped halt outranks that goal's approval. Checking
+      // only the motebit-wide halt above would execute the one call the
+      // narrower halt existed to prevent.
+      if (this.runtime.haltInForce(run.goal_id) != null) continue;
+      if (run.approval_id == null) continue;
+      if (this.suspended.has(run.approval_id)) continue; // live — handled above
+      const item = this.approvalStore.get(run.approval_id);
+      if (!item) continue;
+      if (item.status === "expired") {
+        this.finishRecoveredRun(run, {
+          ok: false,
+          summary: `approval for ${item.tool_name} expired before a decision`,
+          countAsFailure: false,
+        });
+        continue;
       }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      errorLine(`[approval] release drain failed (will retry next tick): ${msg}`);
+      if (item.status !== "approved" && item.status !== "denied") continue;
+
+      const approved = item.status === "approved";
+      void this.logApprovalEvent(
+        approved ? EventType.ApprovalApproved : EventType.ApprovalDenied,
+        run.goal_id,
+        item.approval_id,
+        item.tool_name,
+        {},
+        item.denied_reason,
+      );
+
+      if (!approved) {
+        this.finishRecoveredRun(run, {
+          ok: true,
+          summary: `${item.tool_name} denied by the human after a restart — action not taken; turn not resumed`,
+          countAsFailure: false,
+        });
+        continue;
+      }
+      // The TTL is a bound on the DECISION, not on the sweep: an approval
+      // granted after its expiry (the daemon was down, so no tick expired the
+      // row) is a stale decision and is never executed.
+      const decidedAt = item.resolved_at ?? Date.now();
+      if (decidedAt > item.expires_at) {
+        this.finishRecoveredRun(run, {
+          ok: false,
+          summary: `${item.tool_name} was approved ${formatMsAgo(decidedAt - item.expires_at)} after its approval expired — not executed`,
+          countAsFailure: false,
+        });
+        continue;
+      }
+      if (item.args_json == null) {
+        this.finishRecoveredRun(run, {
+          ok: false,
+          summary: `${item.tool_name} was approved after a restart but its full arguments were not persisted — not executed`,
+          countAsFailure: false,
+        });
+        continue;
+      }
+      // Never execute anything while another actor's approval is pending in
+      // the shared runtime (a human's live prompt from an attached surface);
+      // wait for the next tick instead.
+      if (this.runtime.hasPendingApproval) {
+        if (!this.foreignPendingLogged) {
+          this.foreignPendingLogged = true;
+          logLine(
+            `[approval] ${item.approval_id.slice(0, 8)} approved, but another approval is pending in the runtime — waiting`,
+          );
+        }
+        continue;
+      }
+      this.foreignPendingLogged = false;
+      // `risk_level` is the persisted numeric tier (-1 when unknown).
+      const moneyTier: number = RiskLevel.R4_MONEY;
+      if (item.risk_level >= moneyTier) {
+        this.finishRecoveredRun(run, {
+          ok: false,
+          summary: `${item.tool_name} is a money action — never executed from a recovered run (no verified grant in reach)`,
+          countAsFailure: false,
+        });
+        continue;
+      }
+
+      let args: Record<string, unknown>;
+      try {
+        args = JSON.parse(item.args_json) as Record<string, unknown>;
+      } catch {
+        this.finishRecoveredRun(run, {
+          ok: false,
+          summary: `${item.tool_name} approved after a restart but its persisted arguments are unreadable — not executed`,
+          countAsFailure: false,
+        });
+        continue;
+      }
+      // Hash the stored bytes, exactly what was persisted at pause time.
+      const argsHash = hashArgs(item.args_json);
+      if (argsHash !== item.args_hash) {
+        this.finishRecoveredRun(run, {
+          ok: false,
+          summary: `${item.tool_name} approved after a restart but the persisted arguments no longer match what was approved — not executed`,
+          countAsFailure: false,
+        });
+        continue;
+      }
+
+      logLine(
+        `[approval] ${item.approval_id.slice(0, 8)} approved after restart — executing ${item.tool_name} exactly as approved`,
+      );
+      // Leave `awaiting_approval` BEFORE the call, not after: if the process
+      // dies between the tool returning and the outcome landing, the next
+      // start must find this run `running` (→ interrupted, classified from
+      // the audit row this call writes under run_id) — never still
+      // `awaiting_approval` with an `approved` row, which would execute the
+      // approval a second time.
+      this.runStore.setStatus(run.run_id, "running", {
+        note: `executing ${item.tool_name} approved after restart`,
+      });
+      this.currentGoalId = run.goal_id;
+      this.currentRunId = run.run_id;
+      // Goal-scoped tools (create_sub_goal / complete_goal / report_progress)
+      // are registered per fire and unregistered after; an approved call to
+      // one of them must find it registered here too.
+      this.registerGoalTools();
+      let result: { ok: boolean; data?: unknown; error?: string };
+      try {
+        result = await this.runtime.invokeLocalTool(item.tool_name, args, {
+          invocationOrigin: "scheduled",
+          humanApproved: true,
+          runId: run.run_id,
+        });
+      } catch (err: unknown) {
+        result = { ok: false, error: err instanceof Error ? err.message : String(err) };
+      } finally {
+        this.currentGoalId = null;
+        this.currentRunId = null;
+        this.unregisterGoalTools();
+      }
+      const shown = result.ok
+        ? JSON.stringify(result.data ?? null).slice(0, 500)
+        : (result.error ?? "failed");
+      this.finishRecoveredRun(run, {
+        ok: result.ok,
+        summary: result.ok
+          ? `${item.tool_name} executed after approval (recovered run); the goal's remaining work was not resumed: ${shown}`
+          : `${item.tool_name} failed after approval (recovered run); the goal's remaining work was not resumed: ${shown}`,
+        countAsFailure: !result.ok,
+        toolCallsMade: 1,
+      });
     }
+  }
+
+  /**
+   * Stop what this scheduler owns, and say what stopping entailed. The
+   * runtime calls this from `honorHalts`; the returned text becomes the
+   * halt's acknowledgement, which is the only honest record that the
+   * motebit actually stopped rather than merely being asked to.
+   *
+   * A goal-scoped halt aborts the in-flight run only when that run
+   * belongs to the halted goal — halting one goal must not kill another
+   * goal's work mid-call.
+   */
+  private stopForHalt(halt: HaltRequest): string {
+    const stopped: string[] = [];
+    const runId = this.currentRunId;
+    if (runId != null) {
+      const run = this.runStore.get(runId);
+      const coversThisRun = halt.goal_id == null || run?.goal_id === halt.goal_id;
+      if (coversThisRun) {
+        // Report what was DONE, never what was attempted. `currentRunId`
+        // is set by three paths but `currentAbort` by only one (the goal
+        // fire) — both approval drains execute with no abort channel at
+        // all. Deriving the sentence from the run id claimed a signal
+        // was sent while a recovered call ran to completion: this arc's
+        // recurring failure wearing one more disguise. The controller's
+        // presence is the fact, so it is what the sentence reads from.
+        const abort = this.currentAbort;
+        if (abort != null) {
+          abort.abort(new HaltAbort(halt.halt_id));
+          // "signalled", not "aborted": the signal is observed between
+          // stream chunks, so a tool call already in flight runs to its
+          // end.
+          stopped.push(
+            `signalled abort of run ${runId.slice(0, 8)} (a tool call already in flight finishes)`,
+          );
+        } else {
+          stopped.push(
+            `run ${runId.slice(0, 8)} is executing an approved call and cannot be interrupted — it will finish`,
+          );
+        }
+      }
+    }
+    stopped.push(
+      halt.goal_id == null
+        ? "no further goal runs, recovered approvals, or consolidation will start"
+        : `goal ${halt.goal_id.slice(0, 8)} will not fire`,
+    );
+    return stopped.join("; ");
+  }
+
+  /**
+   * A suspended turn that no longer exists in the runtime (voided by another
+   * actor's approval, or timed out) cannot receive its verdict. Close the run
+   * so the goal is released on cadence and the recovered-approval drain does
+   * not execute the call out of band. No-op unless the run is still waiting.
+   */
+  private closeVoidedRun(turn: SuspendedTurn, summary: string): void {
+    const run = this.runStore.get(turn.runId);
+    if (run == null || run.status !== "awaiting_approval") return;
+    this.finishRecoveredRun(run, { ok: false, summary, countAsFailure: false });
+  }
+
+  /**
+   * Close a recovered run. A decision applied after a restart never
+   * finishes the GOAL — at most it finishes the one action the human saw —
+   * so the honest terminal states are `partial` (action ran or was refused;
+   * remaining work not resumed) and `failed`. Never `completed`: a
+   * projection that counts completed runs as goal success must not count
+   * these.
+   */
+  private finishRecoveredRun(
+    run: GoalRun,
+    verdict: { ok: boolean; summary: string; countAsFailure: boolean; toolCallsMade?: number },
+  ): void {
+    const status = verdict.ok ? "partial" : "failed";
+    this.runStore.setStatus(run.run_id, status, { note: verdict.summary });
+    this.goalOutcomeStore.add({
+      outcome_id: crypto.randomUUID(),
+      run_id: run.run_id,
+      goal_id: run.goal_id,
+      motebit_id: this.motebitId,
+      ran_at: Date.now(),
+      status,
+      summary: verdict.ok ? verdict.summary : null,
+      tool_calls_made: verdict.toolCallsMade ?? 0,
+      memories_formed: 0,
+      error_message: verdict.ok ? null : verdict.summary,
+    });
+    // The goal's own cadence resumes from now either way — the human's
+    // decision closed this run; it is not silently re-fired.
+    this.goalStore.updateLastRun(run.goal_id, Date.now());
+    if (verdict.countAsFailure) {
+      this.goalStore.incrementFailures(run.goal_id);
+    } else if (verdict.ok) {
+      this.goalStore.resetFailures(run.goal_id);
+    }
+    void this.runtime.goals.executed(
+      verdict.ok
+        ? {
+            goal_id: run.goal_id,
+            summary: verdict.summary.slice(0, 200),
+            tool_calls: verdict.toolCallsMade ?? 0,
+            memories: 0,
+          }
+        : { goal_id: run.goal_id, error: verdict.summary },
+    );
+    logLine(`[goal] recovered run ${run.run_id.slice(0, 8)} → ${status}`);
   }
 
   /**
@@ -988,6 +1908,67 @@ export class GoalScheduler {
       logLine(`[plan] stored ${stored} learning memor${stored === 1 ? "y" : "ies"}`);
     }
     return stored;
+  }
+
+  /**
+   * Form a memory from a completed goal outcome so the agent learns from its work.
+   */
+  /**
+   * The ONE place a completed goal run becomes a record.
+   *
+   * Two paths reach completion — an ordinary fire, and a run that paused
+   * for a human's yes and then finished — and only the first of them
+   * wrote an outcome at all. So a goal that needed approval produced no
+   * result, nothing signed, and `runs show` reporting that the run never
+   * reached an outcome row. The signing drift gate stayed green because
+   * it matches the call once per FILE, which is the same aperture
+   * blindness this increment set out to correct, one level down.
+   *
+   * Fixing the second call site would have been the second fix. There is
+   * one writer instead, so a third path inherits signing and whole-result
+   * retention rather than having to remember them.
+   *
+   * `signGoalArtifact` returns null when no identity is loaded, and that
+   * stays null: an unsigned result recorded honestly is a record; a
+   * placeholder signature is a lie with a checksum.
+   */
+  private async recordCompletedOutcome(
+    goalId: string,
+    runId: string,
+    result: GoalStreamResult,
+    opts: { status?: GoalOutcome["status"]; errorMessage?: string | null } = {},
+  ): Promise<void> {
+    const full = result.responseText;
+    let signedManifest: string | null = null;
+    // Nothing to sign is not something to sign. Signing an empty result
+    // produced a manifest over zero bytes, which `runs show` then
+    // rendered as "empty." immediately followed by "signed" — a
+    // signature presented as backing an artifact that does not exist.
+    try {
+      const manifest =
+        full === "" ? null : await this.runtime.signGoalArtifact(full, { goalId, runId });
+      signedManifest = manifest == null ? null : JSON.stringify(manifest);
+    } catch (err: unknown) {
+      logLine(
+        `[scheduler] goal artifact could not be signed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    // runId = outcome_id, so the run, its outcome and its tool-audit rows
+    // all join on one id.
+    this.goalOutcomeStore.add({
+      outcome_id: runId,
+      run_id: runId,
+      goal_id: goalId,
+      motebit_id: this.motebitId,
+      ran_at: Date.now(),
+      status: opts.status ?? "completed",
+      summary: full.slice(0, 500) || null,
+      tool_calls_made: result.toolCallsMade,
+      memories_formed: result.memoriesFormed,
+      error_message: opts.errorMessage ?? null,
+      ...(full !== "" ? { response_full: full } : {}),
+      ...(signedManifest != null ? { signed_manifest: signedManifest } : {}),
+    });
   }
 
   /**
@@ -1095,4 +2076,11 @@ function formatMs(ms: number): string {
   if (ms >= 86_400_000) return `${ms / 86_400_000}d`;
   if (ms >= 3_600_000) return `${ms / 3_600_000}h`;
   return `${ms / 60_000}m`;
+}
+
+function formatMsAgo(ms: number): string {
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h`;
+  return `${Math.round(ms / 86_400_000)}d`;
 }

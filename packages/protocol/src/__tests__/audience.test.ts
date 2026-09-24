@@ -17,6 +17,7 @@ import {
   TASK_SUBMIT_AUDIENCE,
   TASK_QUERY_AUDIENCE,
   TASK_RESULT_AUDIENCE,
+  TASK_DISPATCH_AUDIENCE,
   ADMIN_QUERY_AUDIENCE,
   PROPOSAL_AUDIENCE,
   RECEIPTS_READ_AUDIENCE,
@@ -38,7 +39,7 @@ import {
 
 describe("ALL_TOKEN_AUDIENCES", () => {
   it("has exactly the twenty-four registered entries", () => {
-    expect(ALL_TOKEN_AUDIENCES.length).toBe(24);
+    expect(ALL_TOKEN_AUDIENCES.length).toBe(25);
   });
 
   it("enumerates every named constant exactly once", () => {
@@ -51,6 +52,7 @@ describe("ALL_TOKEN_AUDIENCES", () => {
       TASK_SUBMIT_AUDIENCE,
       TASK_QUERY_AUDIENCE,
       TASK_RESULT_AUDIENCE,
+      TASK_DISPATCH_AUDIENCE,
       ADMIN_QUERY_AUDIENCE,
       PROPOSAL_AUDIENCE,
       RECEIPTS_READ_AUDIENCE,

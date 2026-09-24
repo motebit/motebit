@@ -26,7 +26,7 @@
 
 import type { MotebitRuntime, StorageAdapters } from "@motebit/runtime";
 import {
-  executeCommand,
+  executeRemoteCommand,
   cmdSelfTest,
   RelayDelegationAdapter,
   verifyAgentCommandEnvelope,
@@ -288,7 +288,14 @@ export class SpatialSyncController {
                 );
                 return;
               }
-              const result = await executeCommand(rt, cmdMsg.command, cmdMsg.args);
+              // The one door for a relay frame. The envelope is the
+              // authorization; the origin is recorded, never trusted —
+              // but a command arriving over the wire and answering as
+              // if it were typed here writes a halt record saying the
+              // sovereign stopped their motebit from this machine, and
+              // lets a view that masks for the wire decide it is not on
+              // one.
+              const result = await executeRemoteCommand(rt, cmdMsg.command, cmdMsg.args);
               wsAdapter.sendRaw(
                 JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
               );

@@ -43,8 +43,11 @@ import {
   verifyEvidenceProvenance,
   verifyRoutingTranscript,
 } from "@motebit/verifier";
+import type { SolanaWalletRail } from "@motebit/wallet-solana";
 import { recomputeRoutingDecision } from "@motebit/semiring";
 import type { EvalAttestation } from "@motebit/protocol";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 interface Expectation {
   service: string;
@@ -155,13 +158,12 @@ function checkPresence(agents: DiscoveredWireAgent[]): Map<string, DiscoveredWir
  * history: it pays like one and acknowledges like one (no allowlist;
  * protocol-primacy). Returns the signed receipt.
  */
-async function delegatePaid(
-  workerId: string,
-  capability: string,
-  prompt: string,
-): Promise<Record<string, unknown>> {
+/**
+ * The probe's own Solana rail (devnet). Built from the seed in
+ * DELEGATOR_SEED_HEX; its `address` is the wallet an operator funds.
+ */
+async function delegatorRail(): Promise<SolanaWalletRail> {
   const { Buffer } = await import("node:buffer");
-  const { resolveAndSubmitP2pDelegation } = await import("@motebit/runtime");
   const { createSolanaWalletRail } = await import("@motebit/wallet-solana");
   const required = ["DELEGATOR_MOTEBIT_ID", "DELEGATOR_SEED_HEX", "SOLANA_RPC_URL"] as const;
   for (const k of required) {
@@ -169,11 +171,25 @@ async function delegatePaid(
   }
   const seedHex = process.env["DELEGATOR_SEED_HEX"]!.replace(/^0x/, "");
   const usdcMint = process.env["SOLANA_USDC_MINT"]?.trim() || undefined;
-  const rail = createSolanaWalletRail({
+  return createSolanaWalletRail({
     rpcUrl: process.env["SOLANA_RPC_URL"]!,
     identitySeed: Buffer.from(seedHex, "hex"),
     ...(usdcMint ? { usdcMint } : {}),
   });
+}
+
+/** Where to top the probe up — a public address; the seed never prints. */
+const FUNDING_HINT = (address: string): string =>
+  `delegator wallet ${address} — devnet USDC (mint ${process.env["SOLANA_USDC_MINT"] ?? "default"}); ` +
+  `top up at https://faucet.circle.com (Solana Devnet)`;
+
+async function delegatePaid(
+  workerId: string,
+  capability: string,
+  prompt: string,
+): Promise<Record<string, unknown>> {
+  const { resolveAndSubmitP2pDelegation } = await import("@motebit/runtime");
+  const rail = await delegatorRail();
 
   // Fee-leg trust root: pin the relay key from /.well-known (TOFU) — the
   // treasury derives from THIS, matching the staging-proof harness.
@@ -190,13 +206,18 @@ async function delegatePaid(
     capability,
     targetWorkerId: workerId,
     relayPublicKeyHex: wk.public_key,
-    buildP2pPayment: (req) => rail.buildP2pPayment!(req),
+    buildP2pPayment: (req) => rail.buildP2pPayment(req),
     acknowledgeNoHistoryRisk: true,
     timeoutMs: Number(process.env["TIMEOUT_MS"] ?? "180000"),
     logger: { warn: (m, ctx) => console.warn(`[conformance] warn: ${m}`, ctx ?? "") },
   });
   if (!result.ok) {
-    throw new Error(`${result.error.code}: ${result.error.message}`);
+    // A funding failure names the wallet to fund: four consecutive daily reds
+    // (2026-09-10 → 09-13) said "insufficient_balance" and nothing else — an
+    // operator could not act on it without the seed. The address is public.
+    const hint =
+      result.error.code === "insufficient_balance" ? ` — ${FUNDING_HINT(rail.address)}` : "";
+    throw new Error(`${result.error.code}: ${result.error.message}${hint}`);
   }
   return result.receipt as unknown as Record<string, unknown>;
 }
@@ -221,6 +242,60 @@ async function verifyReceiptTree(label: string, receipt: Record<string, unknown>
   );
 }
 
+/**
+ * The purchased payload, or a legible refusal — read the receipt's own
+ * verdict BEFORE parsing its body.
+ *
+ * A worker that cannot do the work signs an HONEST `failed` receipt whose
+ * `result` is the error TEXT, not JSON (see the catch in
+ * `services/research/src/index.ts`). Parsing that text as JSON turns one
+ * operator-actionable sentence into a JSON syntax error — repeated once per
+ * dependent check. That is exactly what hid a six-night staging outage
+ * (2026-08-27 → 2026-09-01): the Researcher's Anthropic key was out of
+ * credits and said so in plain English inside every receipt, while this probe
+ * reported three copies of "Unexpected non-whitespace character after JSON at
+ * position 4" and nothing else. Six red nights, cause unreadable.
+ *
+ * gate-repair-instructions.md: a red must be self-serviceable from its text
+ * alone. So a failed receipt is ONE failure carrying the worker's own words,
+ * and the payload-dependent checks are not-applicable rather than
+ * separately-failed — one root cause reports as one line, not as N.
+ */
+export function purchasedPayload(
+  label: string,
+  receipt: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const status = String(receipt["status"] ?? "");
+  const body = String(receipt["result"] ?? "");
+  if (status === "failed" || receipt["ok"] === false) {
+    record(
+      `${label}: worker completed the work`,
+      "FAIL",
+      `worker signed a FAILED receipt — its own words: ${body.slice(0, 400) || "(empty result)"}`,
+    );
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(body === "" ? "{}" : body);
+    if (typeof parsed !== "object" || parsed === null) {
+      record(
+        `${label}: result payload`,
+        "FAIL",
+        `result is not a JSON object (got ${typeof parsed}) — the worker's payload contract is one JSON object; raw: ${body.slice(0, 200)}`,
+      );
+      return null;
+    }
+    return parsed as Record<string, unknown>;
+  } catch (err) {
+    record(
+      `${label}: result payload`,
+      "FAIL",
+      `receipt status=${status || "(absent)"} but result is not JSON (${err instanceof Error ? err.message : String(err)}) — raw: ${body.slice(0, 200)}`,
+    );
+    return null;
+  }
+}
+
 async function checkResearcher(
   agent: DiscoveredWireAgent,
 ): Promise<Record<string, unknown> | null> {
@@ -236,6 +311,12 @@ async function checkResearcher(
   record("research: paid delegation", "PASS");
   await verifyReceiptTree("research", receipt);
 
+  // Read the verdict before the body: an honest `failed` receipt is a legible
+  // refusal, never a parse error. Integrity above still ran — a refusal is
+  // still a signed artifact, and it must still verify.
+  const purchased = purchasedPayload("research", receipt);
+  if (purchased == null) return receipt;
+
   // The multi-hop-as-P2P invariant: a molecule that did external atom work MUST
   // have PAID for it P2P — never silently for free. Read the self-attested money
   // facts (`sub_settlements`, stamped by the molecule with mode + onchain tx) and
@@ -246,7 +327,7 @@ async function checkResearcher(
   // #333 fixed — research dropping to free direct-MCP would keep the receipt tree
   // verifying while paying no one; here that is a hard FAIL.
   try {
-    const settlePayload = JSON.parse(String(receipt["result"] ?? "{}")) as {
+    const settlePayload = purchased as {
       sub_settlements?: Array<{ mode?: string; tx_hash?: string; capability?: string }>;
       search_count?: number;
       fetch_count?: number;
@@ -279,7 +360,7 @@ async function checkResearcher(
   // admissible candidate survives), so absence alone is a WARN-with-count,
   // never a FAIL — the emission drift gate holds the producer structurally.
   try {
-    const tPayload = JSON.parse(String(receipt["result"] ?? "{}")) as {
+    const tPayload = purchased as {
       routing_transcripts?: Array<Record<string, unknown>>;
       sub_settlements?: Array<{ mode?: string }>;
     };
@@ -317,7 +398,7 @@ async function checkResearcher(
   // Citation chain: parse the result payload, cross-check receipt_task_id
   // and run the structural provenance discipline.
   try {
-    const payload = JSON.parse(String(receipt["result"] ?? "{}")) as {
+    const payload = purchased as {
       report?: string;
       citations?: Array<{
         receipt_task_id?: string;
@@ -343,7 +424,18 @@ async function checkResearcher(
     // shape contract the producer retries against — deterministic shape,
     // never an LLM judge; quality beyond shape stays the archetype's
     // earned record, not a relay gate.
-    const { reportShapeIssues } = await import("@motebit/research/report-shape");
+    // Imported by RELATIVE PATH, not as `@motebit/research/report-shape`, and
+    // the distinction is load-bearing rather than stylistic. A `workspace:*`
+    // entry in the ROOT package.json must resolve inside the relay's Docker
+    // build, which copies only `packages/` and `services/relay/` — so a root
+    // dependency on any other `services/*` package makes `pnpm deploy --prod`
+    // fail with ERR_PNPM_WORKSPACE_PKG_NOT_FOUND and takes the relay's entire
+    // deploy + image-publish pipeline down. That is not hypothetical: it
+    // stranded production relay for four days (2026-07-31 → 08-04). This is a
+    // repo script, never a published consumer, so the relative import (the
+    // same shape `build-self-knowledge.ts` and `gen-verdict-corpus.ts` use)
+    // gets the same code with no workspace edge. See check-root-workspace-deps.
+    const { reportShapeIssues } = await import("../services/research/src/report-shape.js");
     const shapeIssues = reportShapeIssues(payload.report ?? "", {
       sourcesRead: citations.length > 0,
     });
@@ -406,8 +498,11 @@ async function checkAuditor(
   record("auditor: paid delegation", "PASS");
   await verifyReceiptTree("auditor", receipt);
 
+  const purchased = purchasedPayload("auditor", receipt);
+  if (purchased == null) return;
+
   try {
-    const payload = JSON.parse(String(receipt["result"] ?? "{}")) as {
+    const payload = purchased as {
       attestation?: EvalAttestation;
     };
     if (payload.attestation == null) {
@@ -473,9 +568,12 @@ async function checkClerk(
   record("clerk: paid delegation", "PASS");
   await verifyReceiptTree("clerk", receipt);
 
+  const purchased = purchasedPayload("clerk", receipt);
+  if (purchased == null) return;
+
   try {
     const status = String(receipt["status"] ?? "");
-    const payload = JSON.parse(String(receipt["result"] ?? "{}")) as {
+    const payload = purchased as {
       ok?: boolean;
       dry_run?: boolean;
       code?: string;
@@ -525,6 +623,15 @@ async function main(): Promise<void> {
   const bySlate = checkPresence(agents);
 
   if (DELEGATE) {
+    // Say which wallet pays BEFORE anything is attempted, so a funding gap is
+    // diagnosable from the run header alone.
+    try {
+      console.log(`[conformance] ${FUNDING_HINT((await delegatorRail()).address)}\n`);
+    } catch (err) {
+      console.log(
+        `[conformance] delegator rail unavailable: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     const researcher = bySlate.get("research");
     const auditor = bySlate.get("auditor");
     const clerk = bySlate.get("clerk");
@@ -542,7 +649,15 @@ async function main(): Promise<void> {
   if (fails.length > 0) process.exit(1);
 }
 
-main().catch((err: unknown) => {
-  console.error(err instanceof Error ? err.message : String(err));
-  process.exit(1);
-});
+// Entrypoint guard: running the probe is a side effect (network, process.exit),
+// so it must fire only when this file IS the program. Importing it — which the
+// regression test around `purchasedPayload` does — must stay inert.
+const invokedDirectly =
+  process.argv[1] != null && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (invokedDirectly) {
+  main().catch((err: unknown) => {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  });
+}

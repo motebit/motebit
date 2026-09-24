@@ -1143,10 +1143,10 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
     const ru = new StubAtomAdapter([]);
     const fetchMock = vi.fn<(url: string | URL | Request, init?: RequestInit) => Promise<Response>>(
       async () => {
-        return new Response(JSON.stringify({ task_id: "relay-task-xyz" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({ task_id: "relay-task-xyz", dispatch_token: "disp.tok" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
       },
     );
     const originalFetch = globalThis.fetch;
@@ -1164,7 +1164,7 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
       await research("q", {
         ...baseConfig,
         syncUrl: "http://relay.test",
-        apiToken: "tok",
+        mintRelayToken: async () => "tok",
         webSearchTargetId: "ws-mote",
         adapterFactory: makeFactory(
           new Map([
@@ -1182,10 +1182,97 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
     expect(call[0]).toBe("http://relay.test/agent/ws-mote/task");
     const body = JSON.parse(call[1]!.body as string);
     expect(body.required_capabilities).toEqual(["web_search"]);
+    // One presenter, chosen up front: the Researcher will call the atom itself,
+    // so it asks the relay to admit but not route (delegation spec §3.1 1.2).
+    expect(body.presenter).toBe("submitter");
     expect(ws.calls[0]!.args.relay_task_id).toBe("relay-task-xyz");
+    // The relay's admission artifact travels verbatim to the atom — an atom
+    // that admits work only through its relay refuses the hop without it.
+    expect(ws.calls[0]!.args.dispatch_token).toBe("disp.tok");
   });
 
-  it("survives relay-binding non-OK status (no relay_task_id forwarded)", async () => {
+  it("treats a 200 with no task_id as a refusal — the hop is not run free", async () => {
+    const receipt = makeReceipt({ result: "[]", signature: "sig-r1" });
+    const ws = new StubAtomAdapter([receipt]);
+    const ru = new StubAtomAdapter([]);
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ dispatch_token: "orphan" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      mockCreate
+        .mockResolvedValueOnce({
+          content: [
+            { type: "tool_use", id: "tu-1", name: "motebit_web_search", input: { query: "q" } },
+          ],
+        })
+        .mockResolvedValueOnce({ content: [{ type: "text", text: "ok" }] });
+      const result = await research("q", {
+        ...baseConfig,
+        syncUrl: "http://relay.test",
+        mintRelayToken: async () => "tok",
+        webSearchTargetId: "ws-mote",
+        adapterFactory: makeFactory(
+          new Map([
+            ["web-search", ws],
+            ["read-url", ru],
+          ]),
+        ),
+      });
+      // Honest failure: no atom call, no receipt — the loop is told the hop was not admitted.
+      expect(ws.calls).toHaveLength(0);
+      expect(result.delegation_receipts).toHaveLength(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("forwards relay_task_id without a dispatch_token when an older relay returns none", async () => {
+    const receipt = makeReceipt({ result: "[]", signature: "sig-r1" });
+    const ws = new StubAtomAdapter([receipt]);
+    const ru = new StubAtomAdapter([]);
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ task_id: "relay-task-old" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      mockCreate
+        .mockResolvedValueOnce({
+          content: [
+            { type: "tool_use", id: "tu-1", name: "motebit_web_search", input: { query: "q" } },
+          ],
+        })
+        .mockResolvedValueOnce({ content: [{ type: "text", text: "ok" }] });
+      await research("q", {
+        ...baseConfig,
+        syncUrl: "http://relay.test",
+        mintRelayToken: async () => "tok",
+        webSearchTargetId: "ws-mote",
+        adapterFactory: makeFactory(
+          new Map([
+            ["web-search", ws],
+            ["read-url", ru],
+          ]),
+        ),
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    expect(ws.calls[0]!.args.relay_task_id).toBe("relay-task-old");
+    expect("dispatch_token" in ws.calls[0]!.args).toBe(false);
+  });
+
+  it("fails the hop honestly on relay-binding non-OK status (no free call)", async () => {
     const receipt = makeReceipt({ result: "[]", signature: "sig-r1" });
     const ws = new StubAtomAdapter([receipt]);
     const ru = new StubAtomAdapter([]);
@@ -1206,7 +1293,7 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
       const result = await research("q", {
         ...baseConfig,
         syncUrl: "http://relay.test",
-        apiToken: "tok",
+        mintRelayToken: async () => "tok",
         webSearchTargetId: "ws-mote",
         adapterFactory: makeFactory(
           new Map([
@@ -1215,14 +1302,15 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
           ]),
         ),
       });
-      expect(result.delegation_receipts).toHaveLength(1);
-      expect(ws.calls[0]!.args.relay_task_id).toBeUndefined();
+      // The relay said no (429): the Researcher does not do the hop for free.
+      expect(ws.calls).toHaveLength(0);
+      expect(result.delegation_receipts).toHaveLength(0);
     } finally {
       globalThis.fetch = originalFetch;
     }
   });
 
-  it("survives relay-binding throw (catch swallows)", async () => {
+  it("fails the hop honestly when the relay is unreachable (no free call)", async () => {
     const receipt = makeReceipt({ result: "[]", signature: "sig-r1" });
     const ws = new StubAtomAdapter([receipt]);
     const ru = new StubAtomAdapter([]);
@@ -1243,7 +1331,7 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
       const result = await research("q", {
         ...baseConfig,
         syncUrl: "http://relay.test",
-        apiToken: "tok",
+        mintRelayToken: async () => "tok",
         webSearchTargetId: "ws-mote",
         adapterFactory: makeFactory(
           new Map([
@@ -1252,8 +1340,9 @@ describe("research — cryptographic citation chain (via mcp-client)", () => {
           ]),
         ),
       });
-      expect(result.delegation_receipts).toHaveLength(1);
-      expect(ws.calls[0]!.args.relay_task_id).toBeUndefined();
+      // Unreachable relay is a refusal, not a license: no atom call.
+      expect(ws.calls).toHaveLength(0);
+      expect(result.delegation_receipts).toHaveLength(0);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1510,11 +1599,67 @@ describe("research — report shape guard (#504)", () => {
     expect(result.report).toBe(NOTES);
   });
 
-  it("a thin original is delivered when the retry is no better", async () => {
+  it("escalates to a final strict attempt when the retry is no better, and that attempt can save it", async () => {
+    // The measured dead end: over the scheduled conformance history, the red
+    // runs were always a readable answer with no `Findings` heading whose retry
+    // came back readable and still shapeless. The old code gave up here; one
+    // more attempt with a literal-template instruction gets the shape.
     const adapters = fetchFlowThen(NOTES);
-    mockCreate.mockResolvedValueOnce({
-      content: [{ type: "text", text: "Different notes, still not a report." }],
-    });
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [{ type: "text", text: "Different notes, still not a report." }],
+      })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: SHAPED_REPORT }] });
+
+    const result = await run(adapters);
+    expect(result.report).toBe(SHAPED_REPORT);
+    expect(mockCreate).toHaveBeenCalledTimes(4);
+
+    // The escalation must SHOW the headings, not describe them — `hasSection`
+    // matches literal headings, so a parenthetical aside is what failed before.
+    const strictParams = mockCreate.mock.calls[3]![0] as {
+      tools?: unknown;
+      messages: Array<{ role: string; content: unknown }>;
+    };
+    expect(strictParams.tools).toBeUndefined();
+    const sent = String(strictParams.messages[strictParams.messages.length - 1]!.content);
+    expect(sent).toContain("## Findings");
+    expect(sent).toContain("## Sources");
+    expect(sent).toContain("final attempt");
+  });
+
+  it("delivers the thin original when the strict attempt is no better either", async () => {
+    // Bounded at two. A model that will not produce the shape must not spend
+    // the buyer's turn forever, and the paid non-empty artifact is still theirs.
+    const adapters = fetchFlowThen(NOTES);
+    mockCreate
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Still notes." }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Yet more notes." }] });
+
+    const result = await run(adapters);
+    expect(result.report).toBe(NOTES);
+    expect(mockCreate).toHaveBeenCalledTimes(4);
+  });
+
+  it("delivers an improved-but-imperfect strict attempt, residual issues logged", async () => {
+    // Partial credit is still progress: both sections present but under the
+    // floor is 1 issue against the original's 3, so the buyer gets the better
+    // artifact rather than the notes-dump.
+    const adapters = fetchFlowThen(NOTES);
+    const partial = "**Findings**\nYes.\n**Sources**\n[1] x — https://x.example";
+    mockCreate
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Still notes." }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: partial }] });
+
+    const result = await run(adapters);
+    expect(result.report).toBe(partial);
+  });
+
+  it("delivers the thin original when the strict attempt comes back empty", async () => {
+    const adapters = fetchFlowThen(NOTES);
+    mockCreate
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Still notes." }] })
+      .mockResolvedValueOnce({ content: [] });
 
     const result = await run(adapters);
     expect(result.report).toBe(NOTES);

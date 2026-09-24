@@ -37,7 +37,31 @@ export function ApprovalCard({
 }: ApprovalCardProps): React.ReactElement {
   const colors = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const argsPreview = JSON.stringify(args).slice(0, 120);
+  // A tool name is not a decision. What makes a call consequential is
+  // its arguments — the destination, the path, the amount — so they are
+  // rendered per field rather than as a truncated JSON string. A 120-
+  // character slice of `{"to":"…","amount":…}` routinely cut off before
+  // the part that mattered, which made the card a prompt to trust the
+  // name rather than a prompt to decide on the action.
+  const argRows = useMemo(() => {
+    const entries = Object.entries(args ?? {});
+    return entries.map(([key, value]) => {
+      const rendered =
+        typeof value === "string"
+          ? value
+          : value === null || value === undefined
+            ? String(value)
+            : JSON.stringify(value);
+      return {
+        key,
+        // Long values are elided in the MIDDLE: the head and the tail of
+        // a path, an address, or a URL are what identify it, and cutting
+        // only the tail hides exactly the distinguishing part.
+        value:
+          rendered.length > 160 ? `${rendered.slice(0, 90)} … ${rendered.slice(-50)}` : rendered,
+      };
+    });
+  }, [args]);
   const risk = riskLevel != null ? RISK_BADGES[riskLevel] : undefined;
 
   return (
@@ -51,9 +75,18 @@ export function ApprovalCard({
         )}
       </View>
       <Text style={styles.toolName}>{toolName}</Text>
-      <Text style={styles.args} numberOfLines={2}>
-        {argsPreview}
-      </Text>
+      {argRows.length === 0 ? (
+        <Text style={styles.args}>no arguments</Text>
+      ) : (
+        argRows.map((row) => (
+          <View key={row.key} style={styles.argRow}>
+            <Text style={styles.argKey}>{row.key}</Text>
+            <Text style={styles.argValue} numberOfLines={4}>
+              {row.value}
+            </Text>
+          </View>
+        ))
+      )}
       <View style={styles.buttonRow}>
         <TouchableOpacity
           style={[styles.button, styles.denyButton, disabled === true && styles.disabled]}
@@ -87,6 +120,23 @@ function createStyles(c: ThemeColors) {
       marginVertical: 4,
       maxWidth: "90%",
       alignSelf: "flex-start",
+    },
+    argRow: {
+      flexDirection: "row",
+      gap: 8,
+      marginTop: 4,
+    },
+    argKey: {
+      color: c.textMuted,
+      fontSize: 12,
+      fontFamily: "Menlo",
+      minWidth: 72,
+    },
+    argValue: {
+      color: c.textSecondary,
+      fontSize: 12,
+      fontFamily: "Menlo",
+      flexShrink: 1,
     },
     labelRow: {
       flexDirection: "row",

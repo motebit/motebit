@@ -46,6 +46,13 @@ export {
   createSignedToken,
   verifySignedToken,
   mintAudienceToken,
+  // Reaching a motebit's own running runtime from another of its
+  // surfaces: the phone signs an `agent-command/{motebit_id}` envelope
+  // and the runtime re-verifies fail-closed. Re-exported here for the
+  // same reason `mintAudienceToken` is — apps consume the product
+  // vocabulary, never `@motebit/crypto` directly.
+  signAgentCommandEnvelope,
+  agentCommandAudience,
   DEFAULT_SIGNED_TOKEN_TTL_MS,
   type MintAudienceTokenInput,
   type MintedAudienceToken,
@@ -507,3 +514,15 @@ export {
   formatWalletWarning,
 } from "./x25519.js";
 export type { X25519Keypair, PreTransferWalletCheck } from "./x25519.js";
+
+// ── Content-artifact verification (re-export from @motebit/crypto) ──
+// The Sovereign Ledger's local-row verification path: surfaces verify a
+// locally-stored signed ContentArtifactManifest against its content bytes
+// AND against the owner's own public key (the trust note in
+// content-artifact.ts — the manifest's declared key needs out-of-band
+// binding; for owner-produced goal artifacts that binding is key equality).
+export {
+  verifyContentArtifact,
+  type ContentArtifactManifest,
+  type VerifyContentArtifactResult,
+} from "@motebit/crypto";

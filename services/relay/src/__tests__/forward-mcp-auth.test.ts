@@ -73,10 +73,12 @@ describe("forwardTaskViaMcp — non-2xx is loud, never silent", () => {
       "worker-abc",
       taskQueue,
       cap.logger as Parameters<typeof forwardTaskViaMcp>[5],
-      "relay-token",
+      undefined,
       async () => {
         receiptIngested = true;
       },
+      "disp.token",
+      { allowPrivateNetwork: true },
     );
 
     const failure = cap.entries.find((e) => e.msg === "task.mcp_forward_failed");

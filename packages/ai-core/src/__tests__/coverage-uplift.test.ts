@@ -169,20 +169,30 @@ describe("isModelTier", () => {
 });
 
 describe("resolveModelTier", () => {
-  it("resolves Anthropic family tiers", () => {
+  // #533 — 'default' means the USER'S model, in every family. Witnessed
+  // 2026-08-01: the old family-workhorse mapping hopped the deferred
+  // memory-formation pass onto sonnet-5 under a sonnet-4-6 session; the
+  // mode row caught the borrow and the substrate facet's second ask
+  // confirmed the restore. Default-as-current makes the hop structurally
+  // impossible for default-tier tasks.
+  it("'default' resolves to the current model — the sovereign's choice, every family", () => {
+    expect(resolveModelTier("default", "claude-sonnet-4-6")).toBe("claude-sonnet-4-6");
+    expect(resolveModelTier("default", "claude-haiku-3")).toBe("claude-haiku-3");
+    expect(resolveModelTier("default", "o1-preview")).toBe("o1-preview");
+    expect(resolveModelTier("default", "gemini-1.5-flash")).toBe("gemini-1.5-flash");
+    expect(resolveModelTier("default", "qwen3:latest")).toBe("qwen3:latest");
+  });
+  it("resolves Anthropic family deviation tiers", () => {
     expect(resolveModelTier("strongest", "claude-sonnet-4-5-20250929")).toBe("claude-opus-5");
-    expect(resolveModelTier("default", "claude-haiku-3")).toBe("claude-sonnet-5");
     expect(resolveModelTier("fast", "anthropic-x")).toBe("claude-haiku-4-5");
   });
-  it("resolves OpenAI family tiers", () => {
+  it("resolves OpenAI family deviation tiers", () => {
     expect(resolveModelTier("strongest", "gpt-5.4-mini")).toBe("gpt-5.4");
-    expect(resolveModelTier("default", "o1-preview")).toBe("gpt-5.4-mini");
     expect(resolveModelTier("fast", "o3-pro")).toBe("gpt-5.4-nano");
     expect(resolveModelTier("fast", "o4-mini")).toBe("gpt-5.4-nano");
   });
-  it("resolves Google family tiers", () => {
+  it("resolves Google family deviation tiers", () => {
     expect(resolveModelTier("strongest", "gemini-2.0-pro")).toBe("gemini-2.5-pro");
-    expect(resolveModelTier("default", "gemini-1.5-flash")).toBe("gemini-2.5-flash");
     expect(resolveModelTier("fast", "google-gemma")).toBe("gemini-2.5-flash-lite");
   });
   it("falls back to currentModel for unknown providers (Ollama, WebLLM, etc.)", () => {

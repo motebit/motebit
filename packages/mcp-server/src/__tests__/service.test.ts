@@ -247,6 +247,17 @@ describe("startServiceServer", () => {
     }
   });
 
+  /**
+   * Signed self-auth stand-in. The relay credential a service presents is a
+   * token minted by ITS OWN key per audience — never a static operator secret.
+   * The fake encodes the audience so a test can assert which one each relay
+   * call was bound to.
+   */
+  const testRelayAuth = {
+    deviceId: "test-device",
+    mint: (audience: string) => Promise.resolve(`signed.${audience}`),
+  };
+
   function makeDeps(overrides: Partial<ReturnType<typeof wireServerDeps>> = {}) {
     return {
       motebitId: "test-svc",
@@ -269,6 +280,21 @@ describe("startServiceServer", () => {
     });
     expect(handle.server).toBeDefined();
     expect(onStart).toHaveBeenCalledWith(expect.any(Number), 1);
+  });
+
+  it("threads taskAdmission through to the adapter (activation, not just definition)", async () => {
+    const taskAdmission = { relayPublicKey: "ab".repeat(32) };
+    handle = await startServiceServer(makeDeps(), { port: 0, taskAdmission });
+    // The adapter's config is private; read it structurally — the point is
+    // that a service which asked for admission actually got an admitting
+    // server, so a severed pass-through here goes red.
+    const cfg = (handle.server as unknown as { config: { taskAdmission?: unknown } }).config;
+    expect(cfg.taskAdmission).toEqual(taskAdmission);
+
+    const plain = await startServiceServer(makeDeps(), { port: 0 });
+    const plainCfg = (plain.server as unknown as { config: { taskAdmission?: unknown } }).config;
+    expect(plainCfg.taskAdmission).toBeUndefined();
+    await plain.shutdown();
   });
 
   it("shutdown calls onStop and is idempotent", async () => {
@@ -294,7 +320,7 @@ describe("startServiceServer", () => {
     handle = await startServiceServer(makeDeps(), {
       port: 0,
       syncUrl: "http://fake-relay",
-      apiToken: "test-token",
+      relayAuth: testRelayAuth,
       onStart: vi.fn(),
       log,
     });
@@ -308,6 +334,175 @@ describe("startServiceServer", () => {
     fetchSpy.mockRestore();
   });
 
+  it("republishes the service listing on a healthy, continuously-heartbeating service", async () => {
+    // Regression for the month-long staging conformance red.
+    //
+    // The listing is published by `register()` and by nothing else, while
+    // `heartbeat()` only extends the TTL — and a successful heartbeat ALSO
+    // refreshes `lastRegisteredAt`, which is what the staleness branch reads.
+    // So on a healthy service the staleness branch never fired and the listing
+    // became a boot-time one-shot: once the relay lost it, nothing ever put it
+    // back. Six staging atoms sat live, heartbeating and fully discoverable but
+    // unpriced and undescribed for roughly a month, and the archetype
+    // conformance probe went red daily until each machine was restarted by hand.
+    //
+    // The invariant: over a long healthy uptime, `/listing` must be POSTed more
+    // than once. Severing the FULL_REREGISTER_INTERVAL_MS branch reds this while
+    // the boot-registration test above stays green.
+    vi.useFakeTimers();
+    try {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+      handle = await startServiceServer(makeDeps(), {
+        port: 0,
+        syncUrl: "http://fake-relay",
+        relayAuth: testRelayAuth,
+        onStart: vi.fn(),
+        log: vi.fn(),
+      });
+
+      const listingCalls = (): number =>
+        fetchSpy.mock.calls.filter(
+          (c) => typeof c[0] === "string" && (c[0] as string).includes("/listing"),
+        ).length;
+
+      // Boot publishes once.
+      expect(listingCalls()).toBe(1);
+
+      // Two hours of a perfectly healthy service: every heartbeat succeeds, so
+      // the staleness branch is never reached. Before the fix this produced
+      // zero further listing POSTs, forever.
+      await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000 + 60_000);
+
+      expect(listingCalls()).toBeGreaterThan(1);
+
+      fetchSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("withholds heartbeats while checkReadiness says the agent cannot work", async () => {
+    // Composition-preserves-enforcement: `createProviderReadiness` being correct
+    // in isolation proves nothing if `runService` never consults it. This drives
+    // the real loop and asserts the seam is actually load-bearing.
+    //
+    // The behavior it protects: an agent whose provider is dead must stop
+    // renewing its claim to be awake, so the relay's freshness ladder decays it
+    // instead of letting it keep taking PAID delegations it can only refuse
+    // (#593, #610). Deleting the readiness call in the heartbeat timer reds this
+    // while every other test here stays green.
+    vi.useFakeTimers();
+    try {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+      let ready = false;
+      const log = vi.fn();
+      handle = await startServiceServer(
+        makeDeps({
+          checkReadiness: () =>
+            Promise.resolve(
+              ready ? { ready: true } : { ready: false, reason: "provider credit exhausted" },
+            ),
+        } as never),
+        {
+          port: 0,
+          syncUrl: "http://fake-relay",
+          relayAuth: testRelayAuth,
+          onStart: vi.fn(),
+          log,
+        },
+      );
+
+      const heartbeats = (): number =>
+        fetchSpy.mock.calls.filter(
+          (c) => typeof c[0] === "string" && (c[0] as string).includes("/heartbeat"),
+        ).length;
+
+      // An hour of ticks while not ready: not one heartbeat may go out.
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+      expect(heartbeats()).toBe(0);
+
+      // The transition is logged once, with the reason — an operator must be
+      // able to see WHY an agent went quiet.
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("NOT ready"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("provider credit exhausted"));
+
+      // Recovery resumes advertising.
+      ready = true;
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      expect(heartbeats()).toBeGreaterThan(0);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Ready again"));
+
+      fetchSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("heartbeats normally when no readiness probe is wired", async () => {
+    // The safety default: every service that supplies no probe must behave
+    // exactly as it did before this seam existed.
+    vi.useFakeTimers();
+    try {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+      handle = await startServiceServer(makeDeps(), {
+        port: 0,
+        syncUrl: "http://fake-relay",
+        relayAuth: testRelayAuth,
+        onStart: vi.fn(),
+        log: vi.fn(),
+      });
+
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+      const heartbeats = fetchSpy.mock.calls.filter(
+        (c) => typeof c[0] === "string" && (c[0] as string).includes("/heartbeat"),
+      ).length;
+      expect(heartbeats).toBeGreaterThan(0);
+
+      fetchSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps advertising when the readiness probe throws", async () => {
+    // Fail OPEN. An unreliable probe must never be the thing that takes a
+    // working agent off the market.
+    vi.useFakeTimers();
+    try {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+      const log = vi.fn();
+      handle = await startServiceServer(
+        makeDeps({
+          checkReadiness: () => Promise.reject(new Error("probe exploded")),
+        } as never),
+        { port: 0, syncUrl: "http://fake-relay", relayAuth: testRelayAuth, onStart: vi.fn(), log },
+      );
+
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+      const heartbeats = fetchSpy.mock.calls.filter(
+        (c) => typeof c[0] === "string" && (c[0] as string).includes("/heartbeat"),
+      ).length;
+      expect(heartbeats).toBeGreaterThan(0);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Readiness probe threw"));
+
+      fetchSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("handles relay registration failure gracefully", async () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
@@ -317,10 +512,99 @@ describe("startServiceServer", () => {
     handle = await startServiceServer(makeDeps(), {
       port: 0,
       syncUrl: "http://fake-relay",
+      relayAuth: testRelayAuth,
       log,
     });
 
     expect(log).toHaveBeenCalledWith(expect.stringContaining("registration failed"));
+    fetchSpy.mockRestore();
+  });
+
+  it("authenticates every relay call with a bearer signed by its own key, bound per audience — never a static secret", async () => {
+    // The master-token retirement (2026-09-13). Before it, `apiToken` — the
+    // relay OPERATOR's master credential — was the bearer on register,
+    // heartbeat, listing, and deregister, so every worker container held full
+    // relay authority. Now: bootstrap (public, introduces our key) precedes the
+    // first signed call; register/heartbeat/deregister carry `admin:query`,
+    // the listing carries `market:listing`. There is no config field through
+    // which a shared secret could travel.
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    handle = await startServiceServer(makeDeps({ publicKeyHex: "ab".repeat(32) } as never), {
+      port: 0,
+      syncUrl: "http://fake-relay",
+      relayAuth: testRelayAuth,
+      onStart: vi.fn(),
+      log: vi.fn(),
+    });
+    await handle.shutdown();
+    handle = null;
+
+    const calls = fetchSpy.mock.calls.map((c) => ({
+      url: c[0] as string,
+      init: (c[1] ?? {}) as RequestInit,
+    }));
+    const bearer = (url: string): string | undefined =>
+      (calls.find((c) => c.url.includes(url))?.init.headers as Record<string, string> | undefined)
+        ?.Authorization;
+
+    // Bootstrap runs first, unauthenticated, carrying the bootstrap device id
+    // and our public key — the relay learns the key it will verify us with.
+    const bootstrapIdx = calls.findIndex((c) => c.url.endsWith("/api/v1/agents/bootstrap"));
+    const registerIdx = calls.findIndex((c) => c.url.endsWith("/api/v1/agents/register"));
+    expect(bootstrapIdx).toBeGreaterThanOrEqual(0);
+    expect(bootstrapIdx).toBeLessThan(registerIdx);
+    expect(bearer("/agents/bootstrap")).toBeUndefined();
+    expect(JSON.parse(calls[bootstrapIdx]!.init.body as string)).toEqual({
+      motebit_id: "test-svc",
+      device_id: "test-device",
+      public_key: "ab".repeat(32),
+    });
+
+    expect(bearer("/agents/register")).toBe("Bearer signed.admin:query");
+    expect(bearer("/listing")).toBe("Bearer signed.market:listing");
+    expect(bearer("/agents/deregister")).toBe("Bearer signed.admin:query");
+
+    // Nothing on the wire is a static token.
+    for (const c of calls) {
+      const auth = (c.init.headers as Record<string, string> | undefined)?.Authorization;
+      if (auth != null) expect(auth.startsWith("Bearer signed.")).toBe(true);
+    }
+    fetchSpy.mockRestore();
+  });
+
+  it("bootstraps once per process, not on every re-registration", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+      handle = await startServiceServer(makeDeps(), {
+        port: 0,
+        syncUrl: "http://fake-relay",
+        relayAuth: testRelayAuth,
+        onStart: vi.fn(),
+        log: vi.fn(),
+      });
+      await vi.advanceTimersByTimeAsync(3 * 60 * 60 * 1000);
+      const count = (needle: string): number =>
+        fetchSpy.mock.calls.filter((c) => (c[0] as string).includes(needle)).length;
+      expect(count("/agents/register")).toBeGreaterThan(1);
+      expect(count("/agents/bootstrap")).toBe(1);
+      fetchSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips relay registration loudly when syncUrl is set without signed self-auth", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const log = vi.fn();
+    handle = await startServiceServer(makeDeps(), { port: 0, syncUrl: "http://fake-relay", log });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("no relayAuth"));
     fetchSpy.mockRestore();
   });
 
@@ -332,7 +616,7 @@ describe("startServiceServer", () => {
     handle = await startServiceServer(makeDeps(), {
       port: 0,
       syncUrl: "http://fake-relay",
-      apiToken: "tok",
+      relayAuth: testRelayAuth,
     });
 
     await handle.shutdown();

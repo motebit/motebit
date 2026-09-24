@@ -51,7 +51,10 @@ function identityFrom(
     privacy: { default_sensitivity: "none", retention_days: {}, fail_closed: true },
     memory: { half_life_days: 30, confidence_threshold: 0.5, per_turn_limit: 5 },
     devices: [],
-    succession: bundle.succession,
+    // The wire type is `readonly KeySuccessionRecord[]` (foundation law now
+    // lives in @motebit/protocol); MotebitIdentityFile still holds a mutable
+    // array, so copy rather than widen the wire shape.
+    succession: [...bundle.succession],
   };
 }
 

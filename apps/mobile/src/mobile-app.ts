@@ -52,10 +52,16 @@ import {
   type AppearanceConfig,
   type DeletionCertificate,
 } from "@motebit/sdk";
-import { mintAudienceToken, secureErase, bytesToHex } from "@motebit/encryption";
+import { mintAudienceToken, secureErase, signAgentCommandEnvelope } from "@motebit/encryption";
+
+/** The runtime's answer to a remote command (mirrors `@motebit/runtime`). */
+export interface CommandResult {
+  summary: string;
+  detail?: string;
+  data?: Record<string, unknown>;
+}
 import {
   bootstrapIdentity as sharedBootstrapIdentity,
-  rotateIdentityKeys,
   writeRestoredIdentity,
   type BootstrapConfigStore,
   type BootstrapKeyStore,
@@ -89,7 +95,6 @@ import {
   importIdentityFile as importIdentityFileFromContent,
   parse as parseIdentityFile,
   governanceToPolicyConfig,
-  rotate as rotateIdentityFile,
   validateRestoreRequest,
   verify as verifyIdentityFile,
   type ImportIdentityResult,
@@ -102,6 +107,7 @@ import { SkillRegistry } from "@motebit/skills";
 import { WebViewGLAdapter } from "./adapters/webview-gl";
 import { ASYNC_STORAGE_KEYS, KEYRING_KEYS } from "./storage-keys";
 import { SecureStoreAdapter } from "./adapters/secure-store";
+import { rotateMobileKey } from "./key-rotation";
 import {
   MobileGoalScheduler,
   type GoalCompleteEvent,
@@ -1599,6 +1605,147 @@ export class MobileApp {
     return res.json() as Promise<unknown>;
   }
 
+  /**
+   * Reach the motebit's RUNNING runtime — the daemon on the laptop —
+   * from the phone, over a signed command envelope.
+   *
+   * The phone is the consent root ([`surface-authority-model.md`]): it
+   * is where the human is, and after a key-transfer pairing it holds
+   * the motebit's identity private key, which is what an
+   * `agent-command/{motebit_id}` envelope must be signed with. That is
+   * the whole authorization — the relay verifies at ingress as defence
+   * in depth, forwards the envelope verbatim, and the runtime
+   * re-verifies fail-closed before acting.
+   *
+   * A phone that was paired WITHOUT key transfer (the wallet-funds
+   * guard, or a failed decrypt) still holds its own device key. Its
+   * envelopes will not verify, and this says so rather than looking
+   * like the command was refused.
+   */
+  private static extractRelayReason(body: string): string {
+    // The relay answers JSON with its reason under `message` or
+    // `summary`; a proxy in front of it may answer plain text. Take
+    // whichever is there, and nothing if neither is.
+    try {
+      const parsed = JSON.parse(body) as Record<string, unknown>;
+      for (const key of ["message", "summary", "error"]) {
+        const v = parsed[key];
+        if (typeof v === "string" && v.trim() !== "") return v.trim();
+      }
+      return "";
+    } catch {
+      const trimmed = body.trim();
+      return trimmed.length > 0 && trimmed.length <= 400 ? trimmed : "";
+    }
+  }
+
+  async sendRemoteCommand(command: string, args?: string): Promise<CommandResult> {
+    const syncUrl = await this.getSyncUrl();
+    if (!syncUrl) throw new Error("No relay configured — connect in Settings > Sync");
+    const privHex = await this.keyring.get("device_private_key");
+    if (privHex == null || privHex === "") {
+      throw new Error("No signing key on this device — remote commands must be signed.");
+    }
+    const privBytes = new Uint8Array(privHex.length / 2);
+    for (let i = 0; i < privHex.length; i += 2) {
+      privBytes[i / 2] = parseInt(privHex.slice(i, i + 2), 16);
+    }
+    // `finally`, not a straight line: if signing throws — bad key
+    // material, a missing WebCrypto path — the decoded identity private
+    // key would otherwise stay live in the JS heap for the life of the
+    // process. `createSyncToken` in this file already erases this way.
+    let envelope;
+    try {
+      envelope = await signAgentCommandEnvelope({
+        command,
+        ...(args !== undefined && args !== "" ? { args } : {}),
+        motebitId: this.motebitId,
+        identityPrivateKey: privBytes,
+        // Distinguishes two identical commands sent in the same
+        // millisecond; without it the replay guard refuses the second.
+        nonce: crypto.randomUUID(),
+      });
+    } finally {
+      secureErase(privBytes);
+    }
+    // Transport auth for `/api/v1/agents/*`, which this path sits behind.
+    // The audience must be the route's (`admin:query`) — the default
+    // `sync` audience is rejected by exact-match verification, which
+    // looks identical to a refused command.
+    const token = await this.createSyncToken("admin:query");
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const res = await fetch(`${syncUrl}/api/v1/agents/${this.motebitId}/command`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        command,
+        ...(args !== undefined && args !== "" ? { args } : {}),
+        envelope,
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      if (res.status === 401) {
+        // Two different rejections land here: the transport token, and
+        // the command envelope. Naming only one of them would be a
+        // confident wrong diagnosis — the earlier version blamed the
+        // device key for what was an audience mismatch. Carry the
+        // relay's own reason and offer the key as a possibility.
+        throw new Error(
+          `The relay rejected this command: ${text || "unauthorized"}. ` +
+            "If it names the envelope, this device's key is not the motebit's identity key — " +
+            "re-pair with key transfer from the device that holds the identity.",
+        );
+      }
+      if (res.status === 404 || res.status === 503) {
+        // Not delivered is not stopped. Say which one happened — and
+        // carry the relay's own reason, because "not connected" is only
+        // one of them. The relay also refuses when several surfaces
+        // could answer and it cannot tell which is the daemon, and that
+        // refusal names the fix. Overwriting it with "not connected"
+        // was a confident wrong diagnosis that threw away the only
+        // actionable sentence.
+        const reason = MobileApp.extractRelayReason(text);
+        throw new Error(
+          reason !== ""
+            ? `Nothing was delivered (${res.status}), so nothing has been stopped or decided. ${reason}`
+            : `The runtime is not connected, so nothing was delivered (${res.status}). Nothing has been stopped or decided.`,
+        );
+      }
+      if (res.status === 504) {
+        // The opposite case, and the one that reads worst when it falls
+        // through to a raw status line: 504 means the relay DID deliver
+        // and the runtime did not answer in time. A person told only
+        // "504" cannot tell that from "not delivered", and would send a
+        // stop a second time believing the first did not land.
+        throw new Error(
+          "Delivered, but the runtime did not answer in time. It may have stopped — check with /halted before sending it again.",
+        );
+      }
+      throw new Error(`${res.status}: ${text}`);
+    }
+    // Validated, not trusted. `executeCommand` returns null for any
+    // verb it does not know, the daemon serializes that as
+    // `result: null`, and the relay passes it through as a 200. Casting
+    // it meant the caller dereferenced null and the person saw a raw
+    // TypeError instead of being told the runtime did not recognise the
+    // command. That skew is exactly what the relay's compatibility
+    // fallback exists to tolerate, so it is reachable. `RelayClient`
+    // already guards the same case on the desktop path.
+    const body: unknown = await res.json();
+    if (
+      body == null ||
+      typeof body !== "object" ||
+      typeof (body as { summary?: unknown }).summary !== "string"
+    ) {
+      throw new Error(
+        `The runtime did not recognise "${command}" — it answered without a result. This phone may be newer than the runtime; update it (npm i -g motebit@latest) and try again.`,
+      );
+    }
+    return body as CommandResult;
+  }
+
   subscribe(fn: (state: MotebitState) => void): () => void {
     if (!this.runtime) return () => {};
     return this.runtime.subscribe(fn);
@@ -1679,83 +1826,26 @@ export class MobileApp {
    * key in expo-secure-store, and submit to relay if configured.
    */
   async rotateKey(reason?: string): Promise<{ newPublicKey: string }> {
-    // 1. Load existing private key
-    const oldPrivKeyBytes = await this.getPrivKeyBytes();
-
-    try {
-      // 2. Derive old public key from the stored hex
-      const oldPubKeyHex = this.publicKey;
-      if (!oldPubKeyHex) throw new Error("No public key available — bootstrap first");
-      const oldPubKeyBytes = new Uint8Array(oldPubKeyHex.length / 2);
-      for (let i = 0; i < oldPubKeyHex.length; i += 2) {
-        oldPubKeyBytes[i / 2] = parseInt(oldPubKeyHex.slice(i, i + 2), 16);
-      }
-
-      // 3. Rotate identity file if it exists (generates keypair + succession internally)
-      const existingIdentityFile = await AsyncStorage.getItem(IDENTITY_FILE_KEY);
-      let newPubKeyHex: string;
-      let newPrivKeyHex: string;
-      let successionRecord: unknown;
-
-      if (existingIdentityFile != null && existingIdentityFile !== "") {
-        const rotateResult = await rotateIdentityKeys({
-          oldPrivateKey: oldPrivKeyBytes,
-          oldPublicKey: oldPubKeyBytes,
-          reason,
-        });
-        const rotatedContent = await rotateIdentityFile({
-          existingContent: existingIdentityFile,
-          newPublicKey: rotateResult.newPublicKey,
-          newPrivateKey: rotateResult.newPrivateKey,
-          successionRecord: rotateResult.successionRecord,
-        });
-        await AsyncStorage.setItem(IDENTITY_FILE_KEY, rotatedContent);
-        newPubKeyHex = rotateResult.newPublicKeyHex;
-        newPrivKeyHex = bytesToHex(rotateResult.newPrivateKey);
-        successionRecord = rotateResult.successionRecord;
-        secureErase(rotateResult.newPrivateKey);
-      } else {
-        // No identity file — generate raw keypair for device key rotation only
-        const { generateKeypair } = await import("@motebit/encryption");
-        const newKeypair = await generateKeypair();
-        newPubKeyHex = bytesToHex(newKeypair.publicKey);
-        newPrivKeyHex = bytesToHex(newKeypair.privateKey);
-        secureErase(newKeypair.privateKey);
-      }
-
-      // 4. Store new private key in secure store
-      await this.keyring.set("device_private_key", newPrivKeyHex);
-
-      // 5. Update public key in secure store and in-memory
-      await this.keyring.set("device_public_key", newPubKeyHex);
-      this.publicKey = newPubKeyHex;
-
-      // 6. Submit to relay if configured (best-effort)
-      try {
-        const syncUrl = await this.getSyncUrl();
-        if (syncUrl != null && syncUrl !== "") {
-          const token = await this.createSyncToken("device:auth");
-          await fetch(`${syncUrl}/api/v1/agents/${this.motebitId}/key-rotation`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({
-              device_id: this.deviceId,
-              new_public_key: newPubKeyHex,
-              ...(successionRecord != null ? { succession_record: successionRecord } : {}),
-            }),
-          });
-        }
-      } catch {
-        // Non-fatal — relay notification is best-effort
-      }
-
-      return { newPublicKey: newPubKeyHex };
-    } finally {
-      secureErase(oldPrivKeyBytes);
-    }
+    // The state machine lives in @motebit/surface-kit (#709): read the relay
+    // first, write the new key ahead, submit signed by the RETIRING key,
+    // commit only after the relay confirms. A stop rejects with the honest
+    // next action. A succession record is ALWAYS minted now — the old
+    // "no identity file ⇒ raw keypair, no succession" branch produced a
+    // rotation no relay could ever accept.
+    return rotateMobileKey({
+      keyring: this.keyring,
+      motebitId: this.motebitId,
+      deviceId: this.deviceId,
+      syncUrl: await this.getSyncUrl(),
+      identityFile: {
+        load: () => AsyncStorage.getItem(IDENTITY_FILE_KEY),
+        save: (content) => AsyncStorage.setItem(IDENTITY_FILE_KEY, content),
+      },
+      onCommitted: (publicKeyHex) => {
+        this.publicKey = publicKeyHex;
+      },
+      ...(reason !== undefined ? { reason } : {}),
+    });
   }
 
   // === Governance ===

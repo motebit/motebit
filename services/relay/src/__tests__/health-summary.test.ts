@@ -112,6 +112,9 @@ describe("aggregateHealthSummary", () => {
     const now = Date.now();
     const out = aggregateHealthSummary(relay.moteDb.db, now);
     expect(out.motebits.total_registered).toBe(0);
+    expect(out.motebits.total_known).toBe(0);
+    expect(out.motebits.identity_keys_total).toBe(0);
+    expect(out.motebits.identity_keys_ambiguous).toBe(0);
     expect(out.motebits.active_24h).toBe(0);
     expect(out.motebits.active_7d).toBe(0);
     expect(out.motebits.active_30d).toBe(0);
@@ -132,6 +135,38 @@ describe("aggregateHealthSummary", () => {
     expect(out.generated_at).toBe(now);
   });
 
+  it("counts the identity-key population by whether one key can be named without guessing (Inc 2 D5)", () => {
+    const db = relay.moteDb.db;
+    const t = Date.now();
+    const dev = db.prepare(
+      "INSERT INTO devices (device_id, motebit_id, device_token, public_key, registered_at) VALUES (?, ?, ?, ?, ?)",
+    );
+    // registry key ⇒ unambiguous even with disagreeing devices
+    insertAgent(db, "reg", t);
+    dev.run("d-reg-1", "reg", "tok-reg-1", "a".repeat(64), t);
+    dev.run("d-reg-2", "reg", "tok-reg-2", "b".repeat(64), t);
+    // chain head, no registry row ⇒ unambiguous
+    db.prepare(
+      "INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, new_key_signature) VALUES (?, ?, ?, ?, ?)",
+    ).run("chain", "c".repeat(64), "d".repeat(64), t, "sig");
+    dev.run("d-chain-1", "chain", "tok-chain-1", "e".repeat(64), t);
+    dev.run("d-chain-2", "chain", "tok-chain-2", "f".repeat(64), t);
+    // device rows that AGREE ⇒ unambiguous
+    dev.run("d-agree-1", "agree", "tok-agree-1", "1".repeat(64), t);
+    dev.run("d-agree-2", "agree", "tok-agree-2", "1".repeat(64), t);
+    // device rows that DISAGREE, nothing else ⇒ ambiguous (left unfilled)
+    dev.run("d-amb-1", "amb", "tok-amb-1", "2".repeat(64), t);
+    dev.run("d-amb-2", "amb", "tok-amb-2", "3".repeat(64), t);
+    // a device row with an empty key ⇒ keyless
+    dev.run("d-none", "none", "tok-none", "", t);
+
+    const out = aggregateHealthSummary(db, t);
+    expect(out.motebits.identity_keys_total).toBe(5);
+    expect(out.motebits.identity_keys_unambiguous).toBe(3);
+    expect(out.motebits.identity_keys_ambiguous).toBe(1);
+    expect(out.motebits.identity_keys_keyless).toBe(1);
+  });
+
   it("counts agent activity windows from the serving registry", () => {
     const now = Date.UTC(2026, 3, 15, 12, 0, 0);
     insertAgent(relay.moteDb.db, "fresh", now - 1 * 60 * 60 * 1000); // 1h ago
@@ -142,6 +177,7 @@ describe("aggregateHealthSummary", () => {
 
     const out = aggregateHealthSummary(relay.moteDb.db, now);
     expect(out.motebits.total_registered).toBe(5);
+    expect(out.motebits.total_known).toBe(5);
     expect(out.motebits.active_24h).toBe(2); // fresh + yesterday
     expect(out.motebits.active_7d).toBe(3); // + this-week
     expect(out.motebits.active_30d).toBe(4); // + this-month (stale excluded)

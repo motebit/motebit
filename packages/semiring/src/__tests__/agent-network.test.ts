@@ -191,6 +191,42 @@ describe("rankReachableAgents", () => {
     const ranked = rankReachableAgents(graph, self);
     expect(ranked.every((r) => r.route.trust > 0)).toBe(true);
   });
+
+  it("competing paths: the reported route is a real route whose metrics equal its own edges", () => {
+    // One expensive trusted route (self → t → w), one cheap less-trusted route (self → w).
+    const graph = new WeightedDigraph(RouteWeightSemiring);
+    for (const n of ["self", "t", "w"]) graph.addNode(n);
+    const direct = { trust: 0.2, cost: 1, latency: 100, reliability: 0.9, regulatory_risk: 0 };
+    const hop1 = { trust: 0.9, cost: 5, latency: 100, reliability: 0.95, regulatory_risk: 0 };
+    const hop2 = { trust: 0.9, cost: 5, latency: 100, reliability: 0.95, regulatory_risk: 0 };
+    graph.setEdge("self", "w", direct);
+    graph.setEdge("self", "t", hop1);
+    graph.setEdge("t", "w", hop2);
+    const viaT = {
+      trust: hop1.trust * hop2.trust,
+      cost: hop1.cost + hop2.cost,
+      latency: hop1.latency + hop2.latency,
+      reliability: hop1.reliability * hop2.reliability,
+      regulatory_risk: 0,
+    };
+
+    const trustOnly = { trust: 1, cost: 0, latency: 0, reliability: 0, regulatory_risk: 0 };
+    const w1 = rankReachableAgents(graph, "self", trustOnly).find((r) => r.motebit_id === "w")!;
+    expect(w1.path).toEqual(["t", "w"]);
+    expect(w1.route).toEqual(viaT);
+    expect(w1.alternatives).toBe(2);
+
+    const costOnly = { trust: 0, cost: 1, latency: 0, reliability: 0, regulatory_risk: 0 };
+    const w2 = rankReachableAgents(graph, "self", costOnly).find((r) => r.motebit_id === "w")!;
+    expect(w2.path).toEqual(["w"]);
+    expect(w2.route).toEqual(direct);
+    // The record semiring's value for w is the mixture {trust: 0.81, cost: 1} — no such route.
+    const mixed = RouteWeightSemiring.add(direct, viaT);
+    expect(mixed.trust).toBe(viaT.trust);
+    expect(mixed.cost).toBe(direct.cost);
+    expect(w1.route).not.toEqual(mixed);
+    expect(w2.route).not.toEqual(mixed);
+  });
 });
 
 describe("projectGraph — functorial projection", () => {

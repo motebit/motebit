@@ -13,6 +13,19 @@ import {
   secureErase,
 } from "../index.js";
 
+/**
+ * Flip every bit of one byte in a hex string — a mutation that is guaranteed
+ * to change the value whatever it was. Assigning a constant ("ff") is not:
+ * it silently no-ops when the byte already holds that constant, which is how
+ * a tamper test ends up passing tampered bytes through (#601).
+ */
+function flipHexByte(hex: string, byteIndex: number): string {
+  const at = byteIndex * 2;
+  const original = Number.parseInt(hex.slice(at, at + 2), 16);
+  const flipped = (original ^ 0xff).toString(16).padStart(2, "0");
+  return hex.slice(0, at) + flipped + hex.slice(at + 2);
+}
+
 describe("X25519 key exchange", () => {
   it("generates 32-byte keypairs", () => {
     const kp = generateX25519Keypair();
@@ -120,13 +133,62 @@ describe("Key transfer round-trip", () => {
       "ABC123",
     );
 
-    // Tamper with encrypted_seed
-    const tampered = {
-      ...payload,
-      encrypted_seed: payload.encrypted_seed.replace(/^.{2}/, "ff"),
-    };
+    // Tamper by FLIPPING the first byte, never by assigning a constant.
+    //
+    // This previously read `.replace(/^.{2}/, "ff")`, which is a no-op exactly
+    // when the first ciphertext byte is already 0xff — a 1-in-256 chance per
+    // run, since the keys (and therefore the ciphertext) are freshly random
+    // each time. On those runs the "tampered" payload was byte-identical to the
+    // real one, decryption correctly succeeded, and the test failed. It flaked
+    // on the #600 main push (`ae7f90c1`) and passed on a no-change rerun (#601).
+    //
+    // A tamper test must tamper. Flipping is value-independent, so the mutation
+    // is guaranteed on every run.
+    const tampered = { ...payload, encrypted_seed: flipHexByte(payload.encrypted_seed, 0) };
+    expect(tampered.encrypted_seed).not.toBe(payload.encrypted_seed);
 
     await expect(decryptKeyTransfer(tampered, deviceB.privateKey, "ABC123")).rejects.toThrow();
+  });
+
+  it("authenticates every byte of the ciphertext, nonce, and tag", async () => {
+    // The de-flaked single-byte case above proves one position. #601 asked the
+    // sharper question: does a randomly-placed tamper sometimes land somewhere
+    // that is NOT authenticated? Answer it exhaustively rather than by sampling
+    // — flip each byte of each AEAD field in turn and require every one to be
+    // rejected. If any position were outside the authenticated envelope, this
+    // names the field and the offset instead of failing once every few hundred
+    // CI runs with no clue attached.
+    const identity = await generateKeypair();
+    const deviceB = generateX25519Keypair();
+
+    // Build once and mutate copies — the payload is the fixture, not the work.
+    const payload = await buildKeyTransferPayload(
+      identity.privateKey,
+      bytesToHex(identity.publicKey),
+      deviceB.publicKey,
+      "ABC123",
+    );
+
+    const fields = ["encrypted_seed", "nonce", "tag"] as const;
+    const survivors: string[] = [];
+
+    for (const field of fields) {
+      const hex = payload[field];
+      expect(hex.length % 2).toBe(0);
+      for (let byte = 0; byte < hex.length / 2; byte++) {
+        const mutated = { ...payload, [field]: flipHexByte(hex, byte) };
+        try {
+          await decryptKeyTransfer(mutated, deviceB.privateKey, "ABC123");
+          // Decryption of a mutated payload MUST NOT succeed. Collect rather
+          // than throw so one run reports every unauthenticated position.
+          survivors.push(`${field}[${byte}]`);
+        } catch {
+          // Rejected, as required.
+        }
+      }
+    }
+
+    expect(survivors, `tampered bytes that still decrypted: ${survivors.join(", ")}`).toEqual([]);
   });
 
   it("fails with wrong identity_pubkey_check", async () => {

@@ -31,6 +31,9 @@ import {
   motebitFailure,
 } from "../../../inference/classify";
 import { failureResponse, emitProxyFailure } from "../../../inference/failure-response";
+// Spend controls for the motebit-cloud path: live-ish balance (per-token spent
+// counter), per-identity rate and concurrency — enforced BEFORE anything spends.
+import { admitSpend, type SpendAdmission } from "../../../spend-controls";
 
 const ALLOWED_ORIGINS = new Set([
   "https://motebit.com",
@@ -206,6 +209,12 @@ export async function POST(request: Request): Promise<Response> {
 
   let authMode: "proxy-token" | "byok";
   let tokenPayload: ProxyTokenPayload | null = null;
+  /** Granted spend admission (proxy-token mode). Released on every exit after grant. */
+  let spendAdmission: (SpendAdmission & { ok: true }) | null = null;
+  const released = async <T>(r: T): Promise<T> => {
+    await spendAdmission?.release();
+    return r;
+  };
 
   if (clientApiKey != null && clientApiKey !== "") {
     authMode = "byok";
@@ -251,15 +260,62 @@ export async function POST(request: Request): Promise<Response> {
       });
     }
 
+    // Spend controls — the bound the token's balance SNAPSHOT cannot provide
+    // on its own. Refuses before the classifier or the provider spends.
+    const spend = await admitSpend(tokenPayload);
+    if (!spend.ok) {
+      if (spend.reason === "balance_exhausted") {
+        return failureResponse({
+          requestId,
+          status: 402,
+          bodyObj: {
+            error: "insufficient_balance",
+            message: "This token's balance is spent. Deposit funds to continue.",
+            balance: spend.remainingMicro ?? 0,
+          },
+          headers: cors,
+          mode: "proxy-token",
+          failure: motebitFailure("motebit_balance", "balance_exhausted", 402),
+        });
+      }
+      if (spend.reason === "store_unavailable") {
+        return failureResponse({
+          requestId,
+          status: 503,
+          bodyObj: { error: "server_error", message: "Spend controls unavailable; try again." },
+          headers: { ...cors, "Retry-After": "5" },
+          mode: "proxy-token",
+          failure: motebitFailure("motebit_infrastructure", "not_configured", 503),
+        });
+      }
+      return failureResponse({
+        requestId,
+        status: 429,
+        bodyObj: {
+          error: spend.reason,
+          message:
+            spend.reason === "rate_limited"
+              ? "Too many requests for this motebit; slow down."
+              : "Too many concurrent requests for this motebit; wait for one to finish.",
+        },
+        headers: { ...cors, "Retry-After": String(spend.retryAfterSeconds ?? 5) },
+        mode: "proxy-token",
+        failure: motebitFailure("motebit_request", "rate_limited", 429),
+      });
+    }
+    spendAdmission = spend;
+
     authMode = "proxy-token";
   } else {
-    return failureResponse({
-      requestId,
-      status: 401,
-      bodyObj: { error: "unauthorized", message: "Provide a proxy token or API key." },
-      headers: cors,
-      failure: motebitFailure("motebit_request", "authentication", 401),
-    });
+    return released(
+      failureResponse({
+        requestId,
+        status: 401,
+        bodyObj: { error: "unauthorized", message: "Provide a proxy token or API key." },
+        headers: cors,
+        failure: motebitFailure("motebit_request", "authentication", 401),
+      }),
+    );
   }
 
   const isBYOK = authMode === "byok";
@@ -268,41 +324,47 @@ export async function POST(request: Request): Promise<Response> {
   // --- Parse body ---
   const raw = await request.text();
   if (raw.length > limits.maxBody) {
-    return failureResponse({
-      requestId,
-      status: 413,
-      bodyObj: { error: "request_too_large" },
-      headers: cors,
-      mode: authMode,
-      failure: motebitFailure("motebit_request", "malformed_request", 413),
-    });
+    return released(
+      failureResponse({
+        requestId,
+        status: 413,
+        bodyObj: { error: "request_too_large" },
+        headers: cors,
+        mode: authMode,
+        failure: motebitFailure("motebit_request", "malformed_request", 413),
+      }),
+    );
   }
 
   let body: Record<string, unknown>;
   try {
     body = JSON.parse(raw) as Record<string, unknown>;
   } catch {
-    return failureResponse({
-      requestId,
-      status: 400,
-      bodyObj: { error: "invalid_json" },
-      headers: cors,
-      mode: authMode,
-      failure: motebitFailure("motebit_request", "malformed_request", 400),
-    });
+    return released(
+      failureResponse({
+        requestId,
+        status: 400,
+        bodyObj: { error: "invalid_json" },
+        headers: cors,
+        mode: authMode,
+        failure: motebitFailure("motebit_request", "malformed_request", 400),
+      }),
+    );
   }
 
   // --- Validate and resolve model ---
   let resolvedModel = body.model as string | undefined;
   if (!resolvedModel) {
-    return failureResponse({
-      requestId,
-      status: 400,
-      bodyObj: { error: "invalid_model", message: "Model is required" },
-      headers: cors,
-      mode: authMode,
-      failure: motebitFailure("motebit_request", "malformed_request", 400),
-    });
+    return released(
+      failureResponse({
+        requestId,
+        status: 400,
+        bodyObj: { error: "invalid_model", message: "Model is required" },
+        headers: cors,
+        mode: authMode,
+        failure: motebitFailure("motebit_request", "malformed_request", 400),
+      }),
+    );
   }
 
   // Resolve legacy/class aliases → current canonical model ID.
@@ -407,15 +469,20 @@ export async function POST(request: Request): Promise<Response> {
       tokenPayload.models.length > 0 &&
       !tokenPayload.models.includes(resolvedModel)
     ) {
-      return failureResponse({
-        requestId,
-        status: 400,
-        bodyObj: { error: "invalid_model", message: `Allowed: ${tokenPayload.models.join(", ")}` },
-        headers: cors,
-        model: resolvedModel,
-        mode: "proxy-token",
-        failure: motebitFailure("motebit_request", "model_unavailable", 400),
-      });
+      return released(
+        failureResponse({
+          requestId,
+          status: 400,
+          bodyObj: {
+            error: "invalid_model",
+            message: `Allowed: ${tokenPayload.models.join(", ")}`,
+          },
+          headers: cors,
+          model: resolvedModel,
+          mode: "proxy-token",
+          failure: motebitFailure("motebit_request", "model_unavailable", 400),
+        }),
+      );
     }
 
     // Motebit-cloud jurisdiction admission predicate. Lifts the previously-
@@ -426,18 +493,20 @@ export async function POST(request: Request): Promise<Response> {
     // this filter (the user's own key, the user's own choice; sovereignty
     // doctrine stays orthogonal to tier policy).
     if (resolvedModel !== "auto" && !isModelAllowedInMotebitCloud(resolvedModel)) {
-      return failureResponse({
-        requestId,
-        status: 451,
-        bodyObj: {
-          error: "jurisdiction_not_permitted",
-          message: `${resolvedModel} is not available in motebit-cloud routing. Use BYOK to call this model with your own API key.`,
-        },
-        headers: cors,
-        model: resolvedModel,
-        mode: "proxy-token",
-        failure: motebitFailure("motebit_request", "model_unavailable", 451),
-      });
+      return released(
+        failureResponse({
+          requestId,
+          status: 451,
+          bodyObj: {
+            error: "jurisdiction_not_permitted",
+            message: `${resolvedModel} is not available in motebit-cloud routing. Use BYOK to call this model with your own API key.`,
+          },
+          headers: cors,
+          model: resolvedModel,
+          mode: "proxy-token",
+          failure: motebitFailure("motebit_request", "model_unavailable", 451),
+        }),
+      );
     }
   }
 
@@ -450,68 +519,78 @@ export async function POST(request: Request): Promise<Response> {
     apiKey = clientApiKey;
   } else {
     if (!provider) {
-      return failureResponse({
-        requestId,
-        status: 400,
-        bodyObj: { error: "invalid_model", message: `Model not supported: ${resolvedModel}` },
-        headers: cors,
-        model: resolvedModel,
-        mode: authMode,
-        failure: motebitFailure("motebit_request", "model_unavailable", 400),
-      });
+      return released(
+        failureResponse({
+          requestId,
+          status: 400,
+          bodyObj: { error: "invalid_model", message: `Model not supported: ${resolvedModel}` },
+          headers: cors,
+          model: resolvedModel,
+          mode: authMode,
+          failure: motebitFailure("motebit_request", "model_unavailable", 400),
+        }),
+      );
     }
     apiKey = getProviderApiKey(provider);
     if (!apiKey) {
-      return failureResponse({
-        requestId,
-        status: 501,
-        bodyObj: {
-          error: "provider_not_configured",
-          message: `${provider} is not configured on this proxy`,
-        },
-        headers: cors,
-        model: resolvedModel,
-        mode: authMode,
-        failure: motebitFailure("motebit_infrastructure", "not_configured", 501),
-      });
+      return released(
+        failureResponse({
+          requestId,
+          status: 501,
+          bodyObj: {
+            error: "provider_not_configured",
+            message: `${provider} is not configured on this proxy`,
+          },
+          headers: cors,
+          model: resolvedModel,
+          mode: authMode,
+          failure: motebitFailure("motebit_infrastructure", "not_configured", 501),
+        }),
+      );
     }
   }
 
   if (!apiKey) {
-    return failureResponse({
-      requestId,
-      status: 500,
-      bodyObj: { error: "server_error", message: "No API key available" },
-      headers: cors,
-      model: resolvedModel,
-      mode: authMode,
-      failure: motebitFailure("motebit_infrastructure", "not_configured", 500),
-    });
+    return released(
+      failureResponse({
+        requestId,
+        status: 500,
+        bodyObj: { error: "server_error", message: "No API key available" },
+        headers: cors,
+        model: resolvedModel,
+        mode: authMode,
+        failure: motebitFailure("motebit_infrastructure", "not_configured", 500),
+      }),
+    );
   }
 
   // --- Validate messages ---
   const messages = body.messages as Array<{ role: string; content: string }> | undefined;
   if (!Array.isArray(messages) || messages.length === 0) {
-    return failureResponse({
-      requestId,
-      status: 400,
-      bodyObj: { error: "invalid_messages" },
-      headers: cors,
-      model: resolvedModel,
-      mode: authMode,
-      failure: motebitFailure("motebit_request", "malformed_request", 400),
-    });
+    return released(
+      failureResponse({
+        requestId,
+        status: 400,
+        bodyObj: { error: "invalid_messages" },
+        headers: cors,
+        model: resolvedModel,
+        mode: authMode,
+        failure: motebitFailure("motebit_request", "malformed_request", 400),
+      }),
+    );
   }
   if (messages.length > limits.maxMsgs) {
-    return failureResponse({
-      requestId,
-      status: 400,
-      bodyObj: { error: "too_many_messages", message: `Max ${limits.maxMsgs} messages` },
-      headers: cors,
-      model: resolvedModel,
-      mode: authMode,
-      failure: motebitFailure("motebit_request", "malformed_request", 400),
-    });
+    return released(
+      failureResponse({
+        requestId,
+        status: 400,
+        bodyObj: { error: "too_many_messages", message: `Max ${limits.maxMsgs} messages` },
+        headers: cors,
+        model: resolvedModel,
+        mode: authMode,
+        failure: motebitFailure("motebit_request", "malformed_request", 400),
+      }),
+    );
   }
 
   // --- Build and send provider request ---
@@ -539,18 +618,20 @@ export async function POST(request: Request): Promise<Response> {
       provider: resolvedProvider,
       errorName: err instanceof Error ? err.name : undefined,
     });
-    return failureResponse({
-      requestId,
-      status: 502,
-      bodyObj: {
-        error: "provider_unreachable",
-        message: "Upstream provider could not be reached.",
-      },
-      headers: cors,
-      model: resolvedModel,
-      mode: authMode,
-      failure,
-    });
+    return released(
+      failureResponse({
+        requestId,
+        status: 502,
+        bodyObj: {
+          error: "provider_unreachable",
+          message: "Upstream provider could not be reached.",
+        },
+        headers: cors,
+        model: resolvedModel,
+        mode: authMode,
+        failure,
+      }),
+    );
   }
 
   // Pre-stream upstream failure: classify + emit one event, then preserve the
@@ -577,16 +658,18 @@ export async function POST(request: Request): Promise<Response> {
     // still want the provider's retry guidance until in-proxy recovery (PR3)
     // exists. The rest of the upstream header set is deliberately not relayed.
     const retryAfter = providerRes.headers.get("Retry-After");
-    return new Response(bodyText, {
-      status: providerRes.status,
-      headers: {
-        ...cors,
-        "Content-Type": providerRes.headers.get("Content-Type") ?? "application/json",
-        "Cache-Control": "no-cache",
-        "X-Motebit-Request-Id": requestId,
-        ...(retryAfter != null ? { "Retry-After": retryAfter } : {}),
-      },
-    });
+    return released(
+      new Response(bodyText, {
+        status: providerRes.status,
+        headers: {
+          ...cors,
+          "Content-Type": providerRes.headers.get("Content-Type") ?? "application/json",
+          "Cache-Control": "no-cache",
+          "X-Motebit-Request-Id": requestId,
+          ...(retryAfter != null ? { "Retry-After": retryAfter } : {}),
+        },
+      }),
+    );
   }
 
   // --- Stream response and extract usage for debit ---
@@ -648,6 +731,10 @@ export async function POST(request: Request): Promise<Response> {
         // already holds the full response (writer.close() above), so this never
         // delays the user.
         if (cost > 0) await debitRelay(mid, cost, requestId);
+        // Spend controls: charge this token's local counter so the NEXT request
+        // sees the live-ish balance, then free the concurrency slot.
+        await spendAdmission?.record(cost);
+        await spendAdmission?.release();
       }
     })();
 
@@ -662,7 +749,9 @@ export async function POST(request: Request): Promise<Response> {
     });
   }
 
-  // BYOK or non-streaming: pipe directly
+  // BYOK or non-streaming: pipe directly (a proxy-token request only lands
+  // here with no upstream body — release the slot; nothing was streamed).
+  await spendAdmission?.release();
   return new Response(providerRes.body, {
     status: providerRes.status,
     headers: {

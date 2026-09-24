@@ -545,7 +545,7 @@ export type RetentionShapeDeclaration =
  * these exact strings with the manifest's `RetentionStoreDeclaration.store_id`.
  */
 export type RuntimeStoreId =
-  "memory" | "event_log" | "conversation_messages" | "tool_audit" | "skill_audit";
+  "memory" | "event_log" | "conversation_messages" | "tool_audit" | "skill_audit" | "run_evidence";
 
 /**
  * Canonical registry: `RuntimeStoreId` → declared `RetentionShape`.
@@ -597,6 +597,33 @@ export const RUNTIME_RETENTION_REGISTRY: Readonly<
   // retention ceilings. No min-floor resolver: skill audit doesn't
   // gate settlement, so the per-tier horizon is the only ceiling.
   skill_audit: {
+    kind: "consolidation_flush",
+    flush_to: "expire",
+    has_min_floor_resolver: false,
+  },
+  // `run_evidence` holds the re-checkable pointers a run produced —
+  // including a bounded span of VERBATIM third-party retrieved content,
+  // which makes it the most revealing runtime store here and the one a
+  // published manifest can least afford to omit. It shipped unregistered
+  // once: a registry the gate iterates cannot go red about a store that
+  // is not in it, so omission is invisible by construction.
+  //
+  // `consolidation_flush`, because that is what the code performs.
+  //
+  // It was declared `append_only_horizon` first, which sounded right —
+  // rows are never rewritten — but that shape commits a store to
+  // whole-prefix truncation under signed HORIZON certs, and this one
+  // deletes scattered rows by call id under `consolidation_flush` certs.
+  // A published manifest projecting the registry would have claimed a
+  // motion the code does not make, which is the same class of error as
+  // a certificate naming the wrong record: an attestation about
+  // something that did not happen that way.
+  //
+  // The flat 90-day ceiling this store also applies is a STRICTER floor
+  // than the per-tier default, which the doctrine explicitly permits.
+  // It exists because nothing can classify content fetched from
+  // somewhere else, and unknown must mean held for less time.
+  run_evidence: {
     kind: "consolidation_flush",
     flush_to: "expire",
     has_min_floor_resolver: false,

@@ -193,13 +193,13 @@ export function GoalsPanel({ visible, app, onClose }: GoalsPanelProps): React.Re
         Animated.timing(emptyPulseAnim, {
           toValue: 1,
           duration: 1665,
-          easing: Easing.inOut(Easing.ease),
+          easing: Easing.inOut((t) => Easing.ease(t)),
           useNativeDriver: true,
         }),
         Animated.timing(emptyPulseAnim, {
           toValue: 0,
           duration: 1665,
-          easing: Easing.inOut(Easing.ease),
+          easing: Easing.inOut((t) => Easing.ease(t)),
           useNativeDriver: true,
         }),
       ]),

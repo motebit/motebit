@@ -1,41 +1,37 @@
 /**
- * `motebit rotate` — rotate the Ed25519 keypair with a signed
- * succession record, re-sign the identity file, and submit the
- * succession to the relay.
+ * `motebit rotate` — rotate the Ed25519 keypair with a signed succession
+ * record, tell the relay, and only then re-sign the identity file and move
+ * the local key.
  *
- * The private `discoverIdentityFile` helper walks cwd + parent
- * directories + `~/.motebit/identity.md` looking for an existing
- * motebit.md to rotate. Rotation is all-or-nothing: if the new
- * identity file fails self-verification, the old key is kept and
- * nothing is written.
+ * The algorithm lives in `../rotation.ts` (`performRotation`), a state
+ * machine over what this machine holds and what the relay holds, with every
+ * side effect injected so it is driven end-to-end against an in-process
+ * relay in tests. This file is the terminal: find the identity file, unlock
+ * the key, resolve the relay, print what happened.
  */
 
 import * as readline from "node:readline";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { verify, rotate as rotateIdentityFile } from "@motebit/identity-file";
-import { rotateIdentityKeys } from "@motebit/core-identity";
-import {
-  hexPublicKeyToDidKey,
-  mintAudienceToken,
-  secureErase,
-  bytesToHex,
-} from "@motebit/encryption";
+import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
 import { CONFIG_DIR, loadFullConfig, saveFullConfig } from "../config.js";
+import { resolveUnlockPassphrase } from "../identity.js";
 import {
-  fromHex,
-  resolveUnlockPassphrase,
-  encryptPrivateKey,
-  decryptPrivateKey,
-} from "../identity.js";
+  clearPendingRotation,
+  loadAnyPendingRotation,
+  loadPendingRotation,
+  pendingRotationPath,
+  savePendingRotation,
+} from "../pending-rotation.js";
+import { performRotation, RotationUnlockError, type RotationNote } from "../rotation.js";
+import { resolveRelayUrl } from "./_helpers.js";
 
 /**
  * Discover motebit.md by searching cwd, parent directories, and ~/.motebit/identity.md.
  * Returns the absolute path to the first found identity file, or null.
  */
 function discoverIdentityFile(): string | null {
-  // 1. Walk up from cwd looking for motebit.md
   let dir = process.cwd();
   const root = path.parse(dir).root;
   let parent = path.dirname(dir);
@@ -45,54 +41,37 @@ function discoverIdentityFile(): string | null {
     dir = parent;
     parent = path.dirname(dir);
   }
-  // Check root itself
   const rootCandidate = path.join(root, "motebit.md");
   if (fs.existsSync(rootCandidate)) return rootCandidate;
 
-  // 2. Check ~/.motebit/identity.md
   const homeCandidate = path.join(CONFIG_DIR, "identity.md");
   if (fs.existsSync(homeCandidate)) return homeCandidate;
 
   return null;
 }
 
-export async function handleRotate(config: CliConfig): Promise<void> {
-  const reason = config.reason;
+function describeNote(note: RotationNote): string {
+  switch (note.kind) {
+    case "stale-write-ahead-cleared":
+      return `Note: a held rotation for ${note.motebitId === "" ? "an unknown identity" : `identity ${note.motebitId.slice(0, 12)}…`} from key ${note.oldPublicKey.slice(0, 12)}… did not belong to this machine's current key and was cleared`;
+    case "write-ahead-discarded": {
+      const minutes = Math.round(note.ageMs / 60_000);
+      return `Note: a held rotation from ${minutes} minute${minutes === 1 ? "" : "s"} ago was never recorded by the relay and was discarded; a fresh one was made`;
+    }
+    case "interrupted-commit-finished":
+      return `Note: the previous rotation was interrupted between its two local writes; finished it — this machine is on ${note.newPublicKeyHex.slice(0, 16)}…`;
+  }
+}
 
-  // 1. Find identity file
+export async function handleRotate(config: CliConfig): Promise<void> {
   const identityPath = discoverIdentityFile();
   if (!identityPath) {
     console.error("Error: no motebit.md found. Searched cwd/parents and ~/.motebit/identity.md.");
     console.error("  Run `motebit export` first to generate an identity file.");
     process.exit(1);
   }
-
   console.log(`\nIdentity file: ${identityPath}`);
 
-  // 2. Read and verify existing identity file
-  let existingContent: string;
-  try {
-    existingContent = fs.readFileSync(identityPath, "utf-8");
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`Error: cannot read identity file: ${msg}`);
-    process.exit(1);
-  }
-
-  const verifyResult = await verify(existingContent, { expectedType: "identity" });
-  if (verifyResult.type !== "identity" || !verifyResult.valid || !verifyResult.identity) {
-    console.error("Error: identity file verification failed.");
-    const msg = verifyResult.errors?.[0]?.message;
-    if (msg) console.error(`  ${msg}`);
-    process.exit(1);
-  }
-  console.log("  Verified: signature valid");
-
-  const identity = verifyResult.identity;
-  const motebitId = identity.motebit_id;
-  const oldPublicKeyHex = identity.identity.public_key;
-
-  // 3. Load config and decrypt old private key
   const fullConfig = loadFullConfig();
   if (!fullConfig.cli_encrypted_key) {
     console.error("Error: no encrypted key found in config. Cannot rotate without the old key.");
@@ -105,126 +84,88 @@ export async function handleRotate(config: CliConfig): Promise<void> {
     escapeCodeTimeout: 50,
   });
   const envPassphrase = process.env["MOTEBIT_PASSPHRASE"];
-  let passphrase: string;
-  if (envPassphrase != null && envPassphrase !== "") {
-    passphrase = envPassphrase;
-  } else {
-    passphrase = await resolveUnlockPassphrase("Passphrase: ", {
-      rl,
-      encryptedKey: fullConfig.cli_encrypted_key,
-    });
-  }
+  const passphrase =
+    envPassphrase != null && envPassphrase !== ""
+      ? envPassphrase
+      : await resolveUnlockPassphrase("Passphrase: ", {
+          rl,
+          encryptedKey: fullConfig.cli_encrypted_key,
+        });
 
-  let oldPrivKeyHex: string;
+  const syncUrl = resolveRelayUrl(config);
+  console.log(`  Relay: ${syncUrl}`);
+
+  let outcome;
   try {
-    oldPrivKeyHex = await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
-  } catch {
-    console.error("Error: incorrect passphrase.");
+    outcome = await performRotation({
+      identityPath,
+      loadConfig: loadFullConfig,
+      saveConfig: saveFullConfig,
+      pending: {
+        load: loadPendingRotation,
+        loadAny: loadAnyPendingRotation,
+        save: savePendingRotation,
+        clear: clearPendingRotation,
+        path: pendingRotationPath(),
+      },
+      passphrase,
+      ...(config.reason !== undefined ? { reason: config.reason } : {}),
+      syncUrl,
+    });
+  } catch (err: unknown) {
+    // Classified by TYPE: the unlock step throws its own error, so no
+    // message text is pattern-matched (WebCrypto's decrypt failure says
+    // nothing about passphrases, and an unrelated error may say "auth").
+    const msg =
+      err instanceof RotationUnlockError
+        ? "incorrect passphrase"
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    console.error(`Error: ${msg}.`);
     rl.close();
     process.exit(1);
   }
-
-  const oldPrivateKey = fromHex(oldPrivKeyHex);
-  const oldPublicKey = fromHex(oldPublicKeyHex);
-
-  // 4. Generate new keypair and sign succession record
-  const rotateResult = await rotateIdentityKeys({
-    oldPrivateKey,
-    oldPublicKey,
-    reason,
-  });
-  console.log(`  Old public key: ${oldPublicKeyHex.slice(0, 16)}...`);
-  console.log(`  New public key: ${rotateResult.newPublicKeyHex.slice(0, 16)}...`);
-  console.log("  Succession record: created (dual-signed)");
-
-  // 5. Rotate identity file and verify before writing
-  const rotatedContent = await rotateIdentityFile({
-    existingContent,
-    newPublicKey: rotateResult.newPublicKey,
-    newPrivateKey: rotateResult.newPrivateKey,
-    successionRecord: rotateResult.successionRecord,
-  });
-  const rotatedVerify = await verify(rotatedContent, { expectedType: "identity" });
-  if (!rotatedVerify.valid) {
-    console.error("Error: rotated identity file failed self-verification. Aborting.");
-    const msg = rotatedVerify.errors?.[0]?.message;
-    if (msg) console.error(`  ${msg}`);
-    secureErase(oldPrivateKey);
-    secureErase(rotateResult.newPrivateKey);
-    rl.close();
-    process.exit(1);
-  }
-
-  fs.writeFileSync(identityPath, rotatedContent, "utf-8");
-  console.log("  Identity file: updated and re-signed");
-
-  // 6. Encrypt new private key and update config
-  fullConfig.cli_encrypted_key = await encryptPrivateKey(
-    bytesToHex(rotateResult.newPrivateKey),
-    passphrase,
-  );
-  fullConfig.device_public_key = rotateResult.newPublicKeyHex;
-  saveFullConfig(fullConfig);
-  console.log("  Config: new key encrypted and saved");
-
-  // Securely erase old key material
-  secureErase(oldPrivateKey);
-  secureErase(rotateResult.newPrivateKey);
-
-  // 8. Submit succession record to relay if configured
-  const syncUrl = fullConfig.sync_url ?? process.env["MOTEBIT_SYNC_URL"];
-  if (syncUrl) {
-    const baseUrl = syncUrl.replace(/\/+$/, "");
-    try {
-      // Re-decrypt new key for signing the relay request
-      if (!fullConfig.cli_encrypted_key) throw new Error("No encrypted key in config");
-      const newPrivKeyHex = await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
-      const newPrivKey = fromHex(newPrivKeyHex);
-      const deviceId = fullConfig.device_id ?? "";
-
-      const { token } = await mintAudienceToken(
-        { mid: motebitId, did: deviceId, aud: "rotate-key" },
-        newPrivKey,
-      );
-      secureErase(newPrivKey);
-
-      const relayResp = await fetch(`${baseUrl}/api/v1/agents/${motebitId}/rotate-key`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(rotateResult.successionRecord),
-      });
-
-      if (relayResp.ok) {
-        console.log("  Relay: succession record submitted");
-      } else {
-        const text = await relayResp.text();
-        console.warn(`  Relay: submission failed (${relayResp.status}): ${text.slice(0, 200)}`);
-        console.warn("  The local rotation is complete. Re-register with the relay manually.");
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`  Relay: could not reach ${baseUrl}: ${msg}`);
-      console.warn("  The local rotation is complete. Re-register with the relay manually.");
-    }
-  } else {
-    console.log("  Relay: not configured (skipped)");
-  }
-
-  // 9. Summary
-  console.log();
-  console.log("Key rotation complete.");
-  console.log(`  motebit_id   ${motebitId}`);
-  console.log(`  did          ${hexPublicKeyToDidKey(rotateResult.newPublicKeyHex)}`);
-  console.log(`  public_key   ${rotateResult.newPublicKeyHex.slice(0, 16)}...`);
-  const chainLength = (identity.succession?.length ?? 0) + 1;
-  console.log(`  rotations    ${chainLength}`);
-  if (reason) {
-    console.log(`  reason       ${reason}`);
-  }
-  console.log();
-
   rl.close();
+
+  for (const note of outcome.notes) console.log(`  ${describeNote(note)}`);
+
+  switch (outcome.kind) {
+    case "stopped": {
+      console.error(`Error: ${outcome.message}.`);
+      process.exit(1);
+    }
+    // eslint-disable-next-line no-fallthrough -- process.exit never returns
+    case "held": {
+      console.error(`  Relay: outcome unknown — ${outcome.reason}.`);
+      console.error(
+        "  Your current key still works; nothing local was changed. The new key is held, encrypted, in",
+      );
+      console.error(`  ${pendingRotationPath()}.`);
+      console.error(
+        "  Run `motebit rotate` again: it reads the relay and finishes this rotation if the relay recorded it, or starts a fresh one if not.",
+      );
+      process.exit(1);
+    }
+    // eslint-disable-next-line no-fallthrough -- process.exit never returns
+    case "rotated": {
+      const relayLine =
+        outcome.relay === "recorded"
+          ? "recorded the rotation"
+          : outcome.relay === "already-held"
+            ? "already held it — finished the rotation this machine started earlier"
+            : "holds no key for this identity; nothing to record there (a later `motebit up` registers the new key)";
+      console.log(`  Relay: ${relayLine}`);
+      console.log("  Identity file: updated and re-signed");
+      console.log("  Config: new key encrypted and saved; old key erased");
+      console.log();
+      console.log("Key rotation complete.");
+      console.log(`  motebit_id   ${outcome.motebitId}`);
+      console.log(`  did          ${hexPublicKeyToDidKey(outcome.newPublicKeyHex)}`);
+      console.log(`  public_key   ${outcome.newPublicKeyHex.slice(0, 16)}...`);
+      console.log(`  rotations    ${outcome.rotations}`);
+      if (config.reason) console.log(`  reason       ${config.reason}`);
+      console.log();
+    }
+  }
 }

@@ -15,6 +15,7 @@ import {
   createTestRelay,
   seedBalance,
 } from "./test-helpers.js";
+import { readIdentityBindings } from "../identity-transparency.js";
 
 // === Helpers ===
 
@@ -2114,8 +2115,8 @@ describe("Sync Relay — agent discovery registry", () => {
     expect(hbRes.status).toBe(404);
   });
 
-  it("deregister → discover returns empty", async () => {
-    const { token } = await setupIdentityAndToken();
+  it("deregister → discover returns empty, and the identity is not forgotten", async () => {
+    const { token, motebitId, pubKeyHex } = await setupIdentityAndToken();
 
     // Register
     await relay.app.request("/api/v1/agents/register", {
@@ -2141,6 +2142,20 @@ describe("Sync Relay — agent discovery registry", () => {
     expect(discoverRes.status).toBe(200);
     const discoverBody = (await discoverRes.json()) as { agents: unknown[] };
     expect(discoverBody.agents).toHaveLength(0);
+
+    // …but the relay has NOT forgotten who this is (#703): the row is delisted,
+    // not deleted — the key is still on file and the identity log still
+    // carries the binding. The CLI daemon calls deregister on every shutdown.
+    const row = relay.moteDb.db
+      .prepare(
+        "SELECT public_key, delisted_at, endpoint_url FROM agent_registry WHERE motebit_id = ?",
+      )
+      .get(motebitId) as { public_key: string; delisted_at: number | null; endpoint_url: string };
+    expect(row).toBeDefined();
+    expect(row.public_key).toBe(pubKeyHex);
+    expect(row.delisted_at).not.toBeNull();
+    expect(row.endpoint_url).toBe("");
+    expect(readIdentityBindings(relay.moteDb.db).map((b) => b.motebit_id)).toContain(motebitId);
   });
 
   it("discover with capability filter", async () => {
@@ -2835,12 +2850,24 @@ describe("POST /api/v1/agents/:motebitId/rotate-key", () => {
       oldKp.publicKey,
       "routine rotation",
     );
+    const present = () =>
+      relay.app.request("/api/v1/agents/test-mote/rotate-key", {
+        method: "POST",
+        headers: { ...AUTH_HEADER, "Content-Type": "application/json" },
+        body: JSON.stringify(record),
+      });
 
-    const res = await relay.app.request("/api/v1/agents/test-mote/rotate-key", {
-      method: "POST",
-      headers: { ...AUTH_HEADER, "Content-Type": "application/json" },
-      body: JSON.stringify(record),
-    });
+    // A genuine record is still refused while the relay holds no key for
+    // this identity to continue from — even from the operator. See
+    // `succession-authority.test.ts`.
+    expect((await present()).status).toBe(400);
+
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO devices (device_id, motebit_id, device_token, public_key, registered_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run("test-device", "test-mote", "tok", bytesToHex(oldKp.publicKey), Date.now());
+    const res = await present();
 
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean; motebit_id: string };

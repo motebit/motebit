@@ -1,6 +1,6 @@
 {
   "name": "@motebit/crypto-webauthn",
-  "version": "1.0.32",
+  "version": "1.0.35",
   "description": "Apache-2.0 verifier for W3C WebAuthn packed-attestation hardware-attestation credentials — offline chain verification against pinned FIDO vendor roots (Apple, Yubico, Microsoft). Plugs into @motebit/crypto's HardwareAttestationVerifiers dispatcher to validate browser-attested motebit identities.",
   "type": "module",
   "main": "./dist/index.js",
@@ -67,8 +67,8 @@
     "cbor2": "^2.3.0"
   },
   "devDependencies": {
-    "@noble/curves": "^2.2.0",
-    "@noble/hashes": "^2.2.0",
+    "@noble/curves": "^2.3.0",
+    "@noble/hashes": "^2.3.0",
     "@peculiar/webcrypto": "^1.7.1",
     "@types/node": "^22.20.1",
     "fast-check": "^4.9.0",

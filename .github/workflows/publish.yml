@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       dry-run:
-        description: 'Perform a dry run (no actual publish)'
+        description: "Perform a dry run (no actual publish)"
         required: false
         default: false
         type: boolean
@@ -26,15 +26,23 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v4
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: "22"
-          registry-url: 'https://registry.npmjs.org'
+          registry-url: "https://registry.npmjs.org"
           cache: pnpm
+
+      # Trusted publishing (OIDC) — see release.yml for the reasoning. npm >= 11.5.1
+      # is the CLI that speaks it; no NODE_AUTH_TOKEN, or the CLI uses the token
+      # and never attempts OIDC.
+      - name: npm that speaks trusted publishing (OIDC)
+        run: |
+          npm install -g npm@^11
+          npm --version
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -52,28 +60,18 @@ jobs:
 
       - name: Publish @motebit/sdk
         run: pnpm --filter @motebit/sdk publish --no-git-checks --provenance ${{ inputs.dry-run && '--dry-run' || '' }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @motebit/crypto
         run: pnpm --filter @motebit/crypto publish --no-git-checks --provenance ${{ inputs.dry-run && '--dry-run' || '' }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @motebit/verifier
         run: pnpm --filter @motebit/verifier publish --no-git-checks --provenance ${{ inputs.dry-run && '--dry-run' || '' }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish create-motebit
         run: pnpm --filter create-motebit publish --no-git-checks --provenance ${{ inputs.dry-run && '--dry-run' || '' }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish motebit CLI
         run: pnpm --filter motebit publish --no-git-checks --provenance ${{ inputs.dry-run && '--dry-run' || '' }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Post-publish smoke test
         if: ${{ !inputs.dry-run }}

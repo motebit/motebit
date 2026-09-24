@@ -22,7 +22,7 @@
     "@motebit/privacy-layer": "workspace:*",
     "@motebit/sdk": "workspace:*",
     "@motebit/sqlite-migrations": "workspace:*",
-    "sql.js": "^1.14.1"
+    "sql.js": "^1.14.2"
   },
   "optionalDependencies": {
     "better-sqlite3": "^12.11.1"

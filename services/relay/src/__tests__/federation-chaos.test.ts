@@ -136,7 +136,7 @@ async function setupDbAndIdentity(): Promise<void> {
   const moteDb = await openMotebitDatabase(":memory:");
   createFederationTables(moteDb.db);
   moteDb.db.exec(
-    "CREATE TABLE IF NOT EXISTS agent_registry (motebit_id TEXT PRIMARY KEY, expires_at INTEGER)",
+    "CREATE TABLE IF NOT EXISTS agent_registry (motebit_id TEXT PRIMARY KEY, expires_at INTEGER, delisted_at INTEGER)",
   );
   db = moteDb.db;
 }
@@ -262,6 +262,7 @@ describe("Federation Chaos: Re-Registration Cooldown", () => {
 
   it("rejects re-proposal for pending peer (409), prevents rapid re-registration", async () => {
     const relay = await createSyncRelay({
+      allowPrivateEndpoints: true,
       apiToken: "test-token",
       x402: {
         payToAddress: "0x0000000000000000000000000000000000000000",

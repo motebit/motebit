@@ -5,18 +5,23 @@
 import type { Hono, Context } from "hono";
 import type { TokenAudience } from "@motebit/protocol";
 import { HTTPException } from "hono/http-exception";
+import { refusePublicDeviceRegistration } from "./device-registration-guard.js";
 import type { MotebitDatabase, DatabaseDriver } from "@motebit/persistence";
 import type { IdentityManager } from "@motebit/core-identity";
 import type { EventStore } from "@motebit/event-log";
 import { asMotebitId } from "@motebit/sdk";
+import { checkOutboundUrl } from "@motebit/sdk";
+import type { OutboundUrlOptions } from "@motebit/sdk";
 import type { AgentTrustRecord, ExecutionReceipt, HardwareAttestationClaim } from "@motebit/sdk";
 import { scoreAttestation } from "@motebit/market";
 import type { ConnectedDevice } from "./index.js";
 import type { RelayIdentity } from "./federation.js";
 import { insertRevocationEvent, signDiscoverBody } from "./federation.js";
+import { applySuccession } from "./succession-apply.js";
 import type { TaskRouter } from "./task-routing.js";
 import { evaluateSettlementEligibility } from "./task-routing.js";
 import { REFERENCE_MIN_BONDED_SIGNAL_MICRO } from "./bond-store.js";
+import { ON_SHELF, delistRegistration } from "./registry-delist.js";
 
 /**
  * Fields the ORIGIN relay computes itself and MUST NOT accept from a federated
@@ -98,6 +103,7 @@ import { ExecutionReceiptSchema } from "@motebit/wire-schemas";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import { getAccountBalanceDetailed } from "./accounts.js";
 import { listStoredReceipts, getStoredReceiptJson } from "./receipts-store.js";
+import type { AuthEvent } from "./auth-events.js";
 import {
   isAgentRevocationReason,
   type AgentRevocationReason,
@@ -378,6 +384,8 @@ export interface AgentsDeps {
   relayIdentity: RelayIdentity;
   connections: Map<string, ConnectedDevice[]>;
   taskRouter: TaskRouter;
+  /** Outbound URL law for persisted agent endpoints (`buildOutboundPolicy`). */
+  outboundPolicy?: OutboundUrlOptions;
   apiToken?: string;
   /** Platform fee rate for the P2P eligibility pre-flight's expected-fee hint. Defaults to PLATFORM_FEE_RATE. */
   platformFeeRate?: number;
@@ -410,6 +418,8 @@ export interface AgentAuthMiddlewareDeps {
   verifySignedTokenForDevice: AgentsDeps["verifySignedTokenForDevice"];
   isTokenBlacklisted: AgentsDeps["isTokenBlacklisted"];
   isAgentRevoked: AgentsDeps["isAgentRevoked"];
+  /** Durable auth-event record (auth-events.ts); optional for hand-built test deps. */
+  recordAuthEvent?: (event: AuthEvent) => void;
 }
 
 /**
@@ -499,6 +509,7 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
     verifySignedTokenForDevice,
     isTokenBlacklisted,
     isAgentRevoked,
+    recordAuthEvent,
   } = deps;
 
   app.use("/api/v1/agents/*", async (c, next) => {
@@ -517,8 +528,16 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
     }
     const token = authHeader.slice(7);
 
-    // Master token bypass (operator).
+    // Master token bypass (operator) — recorded: a master-token presentation
+    // on an agent route is exactly the shape the retirement arc closed, so it
+    // must be visible if it ever comes back.
     if (apiToken != null && apiToken !== "" && token === apiToken) {
+      recordAuthEvent?.({
+        kind: "master_token",
+        method,
+        path,
+        correlationId: c.req.header("x-correlation-id") ?? null,
+      });
       await next();
       return;
     }
@@ -544,6 +563,12 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
       agentAudience = "credentials";
     } else if (path.includes("/presentation")) {
       agentAudience = "credentials:present";
+    } else if (path.endsWith("/rotate-key")) {
+      // The audience `spec/auth-token-v1.md` §9 already names for this
+      // route. It defaulted to `admin:query`, so the only tokens that ever
+      // reached it were the operator's — every signed client 401'd, and
+      // key rotation has never once been recorded here (#702).
+      agentAudience = "rotate-key";
     } else if (path.includes("/proxy-token")) {
       agentAudience = "proxy:token";
     } else if (path.includes("/receipts")) {
@@ -571,13 +596,23 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
       // Rejection legibility (#460): this second auth layer rejecting
       // silently is exactly what made the balance 401 undiagnosable — the
       // dedicated dualAuth logged nothing because it never rejected.
-      (reason) =>
+      (reason) => {
         logger.warn("auth.agent_token_rejected", {
           reason,
           expectedAudience: agentAudience,
           mid: claims.mid,
           path,
-        }),
+        });
+        recordAuthEvent?.({
+          kind: "agent_token_rejected",
+          method,
+          path,
+          motebitId: claims.mid,
+          audience: agentAudience,
+          reason,
+          correlationId: c.req.header("x-correlation-id") ?? null,
+        });
+      },
     );
     if (!valid) {
       throw new HTTPException(401, { message: "Token verification failed" });
@@ -938,18 +973,27 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
 
     const motebitId = body.motebit_id.trim();
 
+    // Who may add a device to an identity — the one rule this door
+    // shares with `/devices/register-self`. It runs BEFORE the
+    // exists/new split because one of its refusals is about a fresh
+    // identity: a device_id that already belongs to someone else.
+    //
+    // This door's own check compared against the FIRST keyed device
+    // only, and looked at nothing when the identity was new — so a
+    // registration under a brand-new motebit_id that reused a known
+    // device_id replaced that row and carried another identity's device
+    // away with it.
+    const refusal = await refusePublicDeviceRegistration(
+      { identityManager, db: moteDb.db },
+      { motebitId, deviceId: body.device_id, publicKey: body.public_key },
+    );
+    if (refusal) {
+      throw new HTTPException(409, { message: `${refusal.error} — ${refusal.remediation}` });
+    }
+
     // Check if identity already exists
     const existing = await identityManager.load(motebitId);
     if (existing) {
-      // Identity exists — check for public key conflict (hijack prevention)
-      const devices = await identityManager.listDevices(motebitId);
-      const existingKey = devices.find((d) => d.public_key)?.public_key;
-      if (existingKey && existingKey.toLowerCase() !== body.public_key.toLowerCase()) {
-        throw new HTTPException(409, {
-          message:
-            "Identity already registered with a different public key — re-registration rejected",
-        });
-      }
       // Same key (or no key yet) — idempotent: register/refresh device and return
       const device = await identityManager.registerDevice(
         motebitId,
@@ -1077,6 +1121,17 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     if (!body.endpoint_url || typeof body.endpoint_url !== "string") {
       throw new HTTPException(400, { message: "Missing or invalid 'endpoint_url'" });
     }
+    // The relay will later CONNECT to this URL (task forwards carry a bearer),
+    // so it must be a globally-routable destination — never loopback,
+    // private, link-local/metadata, *.internal, or a name resolving to one.
+    // Refused at persist time so a hostile registration never becomes a
+    // stored SSRF primitive. Doctrine: security-boundaries.md §"Outbound URLs".
+    const endpointVerdict = await checkOutboundUrl(body.endpoint_url, deps.outboundPolicy);
+    if (!endpointVerdict.ok) {
+      throw new HTTPException(400, {
+        message: `endpoint_url refused: ${endpointVerdict.reason}`,
+      });
+    }
     if (!Array.isArray(body.capabilities)) {
       throw new HTTPException(400, {
         message: "Missing or invalid 'capabilities' (must be array)",
@@ -1150,44 +1205,36 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         });
       }
 
-      // Store the succession record for chain auditability
-      moteDb.db
-        .prepare(
-          `INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature, recovery, guardian_signature)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          motebitId,
-          succession.old_public_key,
-          succession.new_public_key,
-          succession.timestamp,
-          succession.reason ?? null,
-          succession.old_key_signature ?? null,
-          succession.new_key_signature,
-          succession.recovery ? 1 : 0,
-          succession.guardian_signature ?? null,
-        );
+      // Record AND apply it, the same way /rotate-key does: this door used to
+      // write the chain row and move the registry key while leaving every
+      // device row on the retired key — a rotation that ended nothing, and a
+      // state a second route then had to finish (#702 relay half). One
+      // writer for both doors makes that state unrepresentable.
+      const { applied } = applySuccession(moteDb.db, motebitId, succession);
 
       logger.info("agent.key.succession_on_register", {
         motebitId,
         oldKey: existingAgent.public_key.slice(0, 16) + "...",
         newKey: publicKey.slice(0, 16) + "...",
+        applied,
       });
 
-      // Emit key rotation event for federation propagation
-      try {
-        await insertRevocationEvent(moteDb.db, relayIdentity, "key_rotated", motebitId, {
-          newPublicKey: publicKey,
-          revokedPublicKey: existingAgent.public_key,
-          // The old key ceased to be authoritative at the (guardian-attested)
-          // rotation moment, not when the relay processed this registration —
-          // anchor the revocation memo at the succession timestamp so the
-          // verifier's poison window matches the chain.
-          effectiveAt: succession.timestamp,
-        });
-      } catch {
-        /* best-effort */
-      }
+      // Emit key rotation event for federation propagation — only when the
+      // chain grew; a retry of the head appended nothing.
+      if (applied)
+        try {
+          await insertRevocationEvent(moteDb.db, relayIdentity, "key_rotated", motebitId, {
+            newPublicKey: publicKey,
+            revokedPublicKey: existingAgent.public_key,
+            // The old key ceased to be authoritative at the (guardian-attested)
+            // rotation moment, not when the relay processed this registration —
+            // anchor the revocation memo at the succession timestamp so the
+            // verifier's poison window matches the chain.
+            effectiveAt: succession.timestamp,
+          });
+        } catch {
+          /* best-effort */
+        }
     }
 
     const now = Date.now();
@@ -1298,8 +1345,8 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(motebit_id) DO UPDATE SET
         public_key = excluded.public_key,
-        endpoint_url = excluded.endpoint_url,
-        capabilities = excluded.capabilities,
+        endpoint_url = CASE WHEN agent_registry.revoked = 1 THEN agent_registry.endpoint_url ELSE excluded.endpoint_url END,
+        capabilities = CASE WHEN agent_registry.revoked = 1 THEN agent_registry.capabilities ELSE excluded.capabilities END,
         metadata = excluded.metadata,
         last_heartbeat = excluded.last_heartbeat,
         expires_at = excluded.expires_at,
@@ -1307,7 +1354,8 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         federation_visible = excluded.federation_visible,
         settlement_address = COALESCE(excluded.settlement_address, agent_registry.settlement_address),
         settlement_modes = COALESCE(excluded.settlement_modes, agent_registry.settlement_modes),
-        sweep_threshold = COALESCE(excluded.sweep_threshold, agent_registry.sweep_threshold)
+        sweep_threshold = COALESCE(excluded.sweep_threshold, agent_registry.sweep_threshold),
+        delisted_at = CASE WHEN agent_registry.revoked = 1 THEN agent_registry.delisted_at ELSE NULL END
     `,
       )
       .run(
@@ -1381,11 +1429,14 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     const result = moteDb.db
       .prepare(
         `
-      UPDATE agent_registry SET last_heartbeat = ?, expires_at = ? WHERE motebit_id = ?
+      UPDATE agent_registry SET last_heartbeat = ?, expires_at = ? WHERE motebit_id = ?${ON_SHELF}
     `,
       )
       .run(now, expiresAt, motebitId);
 
+    // A delisted row answers as the deleted row used to: not registered.
+    // A heartbeat must not keep a lease fresh, or count as active, for an
+    // identity that is not on the shelf — it re-registers to come back.
     if (result.changes === 0) {
       throw new HTTPException(404, { message: "Agent not registered" });
     }
@@ -1726,8 +1777,19 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // Flip the discoverability flag (what Discover filters) and append the
     // signed record in the same path. Append-only: never an update/delete.
     moteDb.db
-      .prepare("UPDATE agent_registry SET revoked = ? WHERE motebit_id = ?")
-      .run(revoked ? 1 : 0, motebitId);
+      // The operator's door is a reversible MODERATION HOLD, so it delists
+      // (identity-key-state-v1 §10 Q1: off the shelf in the same write) but
+      // KEEPS the discovery fields, and restore-listing puts the agent
+      // straight back on the shelf. The two terminal doors — the identity's
+      // own /revoke and migration departure — clear the fields as well.
+      // Spelled out, not imported: check-identity-authority-writers reads
+      // statement text.
+      .prepare(
+        revoked
+          ? "UPDATE agent_registry SET revoked = 1, delisted_at = COALESCE(delisted_at, ?) WHERE motebit_id = ?"
+          : "UPDATE agent_registry SET revoked = 0, delisted_at = NULL WHERE motebit_id = ? AND ? IS NOT NULL",
+      )
+      .run(...(revoked ? [Date.now(), motebitId] : [motebitId, Date.now()]));
 
     const record = await buildSignedRevocationRecord(relayIdentity, {
       motebitId,
@@ -1882,10 +1944,11 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
   app.get("/api/v1/agents/:motebitId", (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
 
-    // No `expires_at > now` filter: public-key lookups for receipt
-    // verification must survive a sleeping agent. The janitor TTL (90d
-    // no-heartbeat) removes truly abandoned rows; `revoked = 0` is the
-    // correct "don't show this agent" filter.
+    // A KEY reader, not a shelf reader: public-key lookups for receipt
+    // verification (mcp-server's last-resort caller lookup) must survive a
+    // sleeping, departed, or delisted agent, so this route carries no
+    // `expires_at`, `revoked` or `delisted_at` filter. Whether the agent is
+    // for hire is discover's question (#703).
     const row = moteDb.db
       .prepare(
         `
@@ -1918,7 +1981,11 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       throw new HTTPException(400, { message: "Cannot determine motebit_id from token" });
     }
 
-    moteDb.db.prepare(`DELETE FROM agent_registry WHERE motebit_id = ?`).run(callerMotebitId);
+    // Departure from DISCOVERY, not from the relay's knowledge of who this
+    // identity is: the row is delisted (registry-delist.ts), never deleted.
+    // The CLI daemon calls this on every shutdown; deleting here discarded
+    // the guardian and the key with each restart (#703).
+    delistRegistration(moteDb.db, callerMotebitId, Date.now());
     return c.json({ ok: true });
   });
 

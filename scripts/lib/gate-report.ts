@@ -32,6 +32,25 @@
  * gate clears the ceiling above the floor. Tighten the floor in one place (the
  * matchers below) if it ever proves too lenient.
  *
+ * ## The sibling contract: aperture
+ *
+ * `hasRepairInstruction` governs what a gate owes its reader WHEN IT FAILS.
+ * `hasApertureDisclosure` governs what a scanning gate owes its reader WHEN IT
+ * PASSES: how much it actually examined.
+ *
+ * A green gate makes a claim, and the claim is only as wide as the gate's
+ * aperture. `check-affordance-routing` enforced surface determinism while
+ * scanning 57 of 322 app source files — six of nine apps saw ZERO files — and
+ * printed "9 apps clean" (#545). It was not wrong about what it looked at; it
+ * was silent about how little that was. Seven separate instances of the same
+ * shape surfaced in a single day: a gate green because it is not looking.
+ *
+ * The failure is invisible by construction. A gate with a narrow aperture never
+ * goes red, so nothing prompts anyone to check it, and a hardcoded candidate
+ * list narrows silently every time the repo grows. Disclosure is the cheapest
+ * defense: a reader who sees "322 file(s) scanned" can sanity-check the number
+ * against the repo; a reader who sees "clean" cannot.
+ *
  * Doctrine: docs/doctrine/gate-repair-instructions.md.
  */
 
@@ -86,6 +105,65 @@ export function hasRepairInstruction(output: string): RepairCheck {
       "an actionable directive (a runnable `pnpm …`/`npm …` command, a `Fix:` label, or an imperative verb like `import`/`route through`/`add`/`replace`)",
     );
   return { ok: false, reason: `failure output is missing ${missing.join(" and ")}` };
+}
+
+/**
+ * A stated count of what was examined: "322 file(s) scanned", "63 packages
+ * checked", "108 doc(s) scanned", "14 required pair(s) validated".
+ *
+ * The unit is deliberately open — gates count files, packages, routes, specs,
+ * subcommands, exports, waivers — so the contract is A NUMBER BOUND TO A
+ * COUNTABLE NOUN, never a fixed phrase. Up to three tokens may sit between them
+ * ("17 `/api/v1/admin/*` route(s)", "943 permissive-floor exports"), because
+ * real gate output interleaves paths and adjectives.
+ *
+ * `0` counts as disclosure, deliberately: "0 files scanned" is an honest and
+ * alarming statement. What is forbidden is silence, not emptiness.
+ *
+ * Time units are excluded explicitly. Nearly every gate prints a duration, and
+ * "738ms" is a number next to a word ending in `s` — matching it would make the
+ * contract vacuous by passing every gate that reports how long it took.
+ */
+const TIME_UNIT = /^(?:m?s|sec|secs|seconds?|min|mins|minutes?|ms\b)$/i;
+
+/** A word that can plausibly be counted — plural, or an explicit `(s)` form. */
+const COUNTABLE = /^(?:[a-z][a-z-]{2,}\(s\)|[a-z][a-z-]{2,}s)$/i;
+
+export interface ApertureCheck {
+  ok: boolean;
+  /** Present when `!ok` — what the success output failed to state. */
+  reason?: string;
+}
+
+/**
+ * The aperture-disclosure contract, for gates that scan a candidate set.
+ *
+ * Success output satisfies it iff it states HOW MUCH was examined. This is
+ * checked on the PASSING output — the inverse surface to
+ * `hasRepairInstruction`, which is checked on the failing output.
+ *
+ * Like the repair contract, this is a FLOOR: it proves the gate said a number,
+ * not that the number is the right one. No mechanical check can know a gate's
+ * true candidate set — that is the author's judgement. What it can do is make
+ * the aperture visible, so a wrong one is arguable instead of invisible.
+ */
+export function hasApertureDisclosure(output: string): ApertureCheck {
+  const text = output.replace(ANSI, "");
+  for (const m of text.matchAll(/\b\d[\d,_]*\b(.{0,48})/gs)) {
+    const tokens = (m[1] ?? "")
+      .split(/[\s]+/)
+      .map((t) => t.replace(/^[^A-Za-z(]+|[^A-Za-z)]+$/g, ""))
+      .filter((t) => t.length > 0)
+      .slice(0, 4);
+    if (tokens.some((t) => !TIME_UNIT.test(t) && COUNTABLE.test(t))) return { ok: true };
+  }
+  return {
+    ok: false,
+    reason:
+      "success output states no aperture — a reader cannot tell whether 'clean' means " +
+      "'examined everything and found nothing' or 'examined nothing'. State the count " +
+      "(e.g. `322 file(s) scanned`, `63 packages checked`).",
+  };
 }
 
 export interface RepairReport {

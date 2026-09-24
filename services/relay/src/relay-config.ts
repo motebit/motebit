@@ -82,6 +82,7 @@ export function buildRelayConfigFromEnv(
     // explicitly. A shadowing literal here would silently drop device-token
     // verification, so it is a registered security boundary.
     enableDeviceAuth: parseBoolEnv("MOTEBIT_ENABLE_DEVICE_AUTH", true, env),
+    allowPrivateEndpoints: parseBoolEnv("MOTEBIT_ALLOW_PRIVATE_ENDPOINTS", false, env),
     emergencyFreeze: parseBoolEnv("MOTEBIT_EMERGENCY_FREEZE", false, env),
     getShuttingDown: deps.getShuttingDown,
     x402,

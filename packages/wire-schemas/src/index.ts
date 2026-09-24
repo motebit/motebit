@@ -187,10 +187,23 @@ export {
   buildAgentRevocationFeedJsonSchema,
 } from "./agent-revocation.js";
 export {
+  IdentityBindingBundleSchema,
+  IDENTITY_BINDING_BUNDLE_SCHEMA_ID,
+  buildIdentityBindingBundleJsonSchema,
+} from "./identity-binding.js";
+export {
   BondCommitmentSchema,
   BOND_COMMITMENT_SCHEMA_ID,
   buildBondCommitmentJsonSchema,
 } from "./bond.js";
+export {
+  HostEnrollmentSchema,
+  HOST_ENROLLMENT_SCHEMA_ID,
+  buildHostEnrollmentJsonSchema,
+  HostRetirementSchema,
+  HOST_RETIREMENT_SCHEMA_ID,
+  buildHostRetirementJsonSchema,
+} from "./host-roster.js";
 export {
   EvidenceProvenanceSchema,
   EVIDENCE_PROVENANCE_SCHEMA_ID,

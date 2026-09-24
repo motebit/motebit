@@ -295,16 +295,82 @@ describe("OpenAIProvider", () => {
       });
     });
 
-    it("respects max_tokens and temperature config", async () => {
+    // This block previously asserted `max_tokens` + `temperature` on the default
+    // `gpt-5.4-mini` config — a request OpenAI rejects with 400, so the test was
+    // pinning the bug in place. Witnessed live 2026-09-09 via probe-provider-live:
+    // "Unsupported parameter: 'max_tokens' is not supported with this model."
+    it("sends max_completion_tokens and NO temperature on a reasoning-era model", async () => {
       mockFetchJson(mockChatCompletion("hi"));
-      const provider = new OpenAIProvider(makeConfig({ max_tokens: 2048, temperature: 0.3 }));
+      const provider = new OpenAIProvider(
+        makeConfig({ model: "gpt-5.4-mini", max_tokens: 2048, temperature: 0.3 }),
+      );
       await provider.generate(makeContextPack());
-      const body = JSON.parse(getLastFetchCall().init.body as string) as {
-        max_tokens: number;
-        temperature: number;
-      };
+      const body = JSON.parse(getLastFetchCall().init.body as string) as Record<string, unknown>;
+      expect(body.max_completion_tokens).toBe(2048);
+      expect(body).not.toHaveProperty("max_tokens");
+      // Dropped, not passed through: this family accepts only the default, so
+      // omitting is the only always-valid shape.
+      expect(body).not.toHaveProperty("temperature");
+    });
+
+    it("sends max_tokens and temperature on a classic model", async () => {
+      mockFetchJson(mockChatCompletion("hi"));
+      const provider = new OpenAIProvider(
+        makeConfig({ model: "gpt-4o-mini", max_tokens: 2048, temperature: 0.3 }),
+      );
+      await provider.generate(makeContextPack());
+      const body = JSON.parse(getLastFetchCall().init.body as string) as Record<string, unknown>;
       expect(body.max_tokens).toBe(2048);
       expect(body.temperature).toBe(0.3);
+      expect(body).not.toHaveProperty("max_completion_tokens");
+    });
+
+    // The whole point of the id-anchored patterns: this adapter also carries
+    // Gemini, Groq, DeepSeek and local servers, none of which accept
+    // `max_completion_tokens`. Misclassifying any of them would break four
+    // vendors while fixing one.
+    it.each([
+      ["gemini-2.5-flash", "google"],
+      ["deepseek-chat", "deepseek"],
+      ["llama-3.3-70b-versatile", "groq"],
+      ["openai/gpt-oss-120b", "groq open-weight — contains 'gpt', is NOT gpt-5"],
+      ["llama3.2", "ollama"],
+    ])("keeps the classic shape for %s (%s)", async (model) => {
+      mockFetchJson(mockChatCompletion("hi"));
+      const provider = new OpenAIProvider(makeConfig({ model, max_tokens: 512 }));
+      await provider.generate(makeContextPack());
+      const body = JSON.parse(getLastFetchCall().init.body as string) as Record<string, unknown>;
+      expect(body.max_tokens).toBe(512);
+      expect(body).not.toHaveProperty("max_completion_tokens");
+    });
+
+    // KNOWN LIMITATION, pinned deliberately rather than hidden. Id-based dispatch
+    // cannot distinguish OpenAI's o-series from a local model that happens to be
+    // named like one, and matching future o-series ids automatically was judged
+    // worth that cost. Both directions fail LOUDLY (a 400 naming the parameter),
+    // never silently. If someone tightens the pattern to fix this, they are
+    // changing a documented tradeoff — this test is where they will find out.
+    it("misclassifies a local model named like the o-series (documented tradeoff)", async () => {
+      mockFetchJson(mockChatCompletion("hi"));
+      const provider = new OpenAIProvider(
+        makeConfig({ model: "o1-local-finetune-of-llama", max_tokens: 512 }),
+      );
+      await provider.generate(makeContextPack());
+      const body = JSON.parse(getLastFetchCall().init.body as string) as Record<string, unknown>;
+      expect(body.max_completion_tokens).toBe(512);
+    });
+
+    it("applies the reasoning-era shape on the STREAMING path too", async () => {
+      // The two body-build sites had drifted into separate copies; a fix landing
+      // on only one would leave every streamed turn — i.e. every real turn — 400ing.
+      mockFetchStream([{ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }, "[DONE]"]);
+      const provider = new OpenAIProvider(makeConfig({ model: "gpt-5.4", max_tokens: 128 }));
+      for await (const _ of provider.generateStream(makeContextPack())) {
+        // drain
+      }
+      const body = JSON.parse(getLastFetchCall().init.body as string) as Record<string, unknown>;
+      expect(body.max_completion_tokens).toBe(128);
+      expect(body).not.toHaveProperty("max_tokens");
     });
 
     it("falls back to https://api.openai.com/v1 when base_url is omitted", async () => {

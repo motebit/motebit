@@ -7,9 +7,7 @@ export function loadConfig() {
     // /data; locally, ./data. Identity (motebit.json, motebit.key, motebit.md)
     // is generated here on first boot and reloaded on every subsequent boot.
     dataDir: process.env["MOTEBIT_DATA_DIR"] ?? "./data",
-    authToken: process.env["MOTEBIT_AUTH_TOKEN"],
     syncUrl: process.env["MOTEBIT_SYNC_URL"],
-    apiToken: process.env["MOTEBIT_API_TOKEN"],
     publicUrl: process.env["MOTEBIT_PUBLIC_URL"],
     anthropicApiKey: process.env["ANTHROPIC_API_KEY"],
     /** URL of the motebit web-search MCP endpoint (e.g. http://localhost:3200/mcp). */
@@ -25,7 +23,7 @@ export function loadConfig() {
     // P2P; absent ⇒ atom hops use the free direct-MCP path (dormant until the
     // atoms are priced). The molecule's identity key IS the Solana wallet seed.
     solanaRpcUrl: process.env["MOTEBIT_SOLANA_RPC_URL"] ?? null,
-    relayPublicKey: process.env["MOTEBIT_RELAY_PUBLIC_KEY"] ?? null,
+    relayPublicKey: process.env["MOTEBIT_RELAY_PUBLIC_KEY"]?.trim() || null,
     // USDC SPL mint for the sovereign wallet rail — MUST match the network
     // behind MOTEBIT_SOLANA_RPC_URL (devnet USDC on staging). Absent ⇒ the rail
     // defaults to mainnet USDC (only correct on a mainnet deployment).

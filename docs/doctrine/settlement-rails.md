@@ -42,6 +42,24 @@ The trichotomy auditors look for ("treasury / managed relay / sovereign P2P") ma
 
 `PaymentProof.railType` retains `"direct_asset"` since payment proofs span both custody boundaries — only the rail registration is split.
 
+## Irreversibility, and what an agent therefore owes
+
+Sovereign settlement is one-way. On the P2P rail the delegator's payment is broadcast and confirmed **before** the task is submitted (`packages/runtime/src/relay-delegation.ts:1365-1396`) — the relay never holds the funds, so it has no claw-back authority over a sovereign wallet, and a P2P dispute moves zero money by construction (`services/relay/src/disputes.ts:1846`). That is deliberate: every guard on the delegation path is a pre-broadcast guard, and `spec/settlement-v1.md` marks escrow permitted-but-unimplemented. Bonds are a signal, never collateral.
+
+Relay-custody refunds `failed` and `denied` identically (full release, zero fee — `packages/market/src/settlement.ts:148`). **That machinery does not extend to the sovereign rail and cannot.** `spec/execution-ledger-v1.md` says the distinction "is consumed by the trust layer, not the money layer" — a sentence whose "reference relay-custody" qualifier quietly conceded the P2P case. Stated plainly here instead:
+
+> **On the sovereign rail a buyer who pays for work that fails does not get their money back. The recourse is the trust graph, not a reversal.**
+
+This is defensible when the worker did the work and it did not succeed — inference was burned, and `failed` covers principled refusals "however much work was metered along the way." It is **not** defensible when the worker could never have done the work at all. That case is not a settlement question but an honesty one, and it lands on the agent:
+
+> **An agent must not advertise a capability it cannot currently perform.** Being unreachable is an honest state. Being for sale and unable to deliver is not.
+
+The mechanism is deliberately minimal — no new protocol, no deregistration verb. A heartbeat asserts _liveness_; a listing asserts _readiness_, which is the stronger claim. When an agent detects a durable inability to perform (exhausted provider credit, a revoked key), it **withholds its heartbeat**, and the relay's existing freshness ladder decays it `awake → recently_seen → dormant` on its own. The listing survives; a later recovery restores it. See `createProviderReadiness` in `@motebit/molecule-runner` and `checkReadiness` on the service deps.
+
+The classification is asymmetric on purpose. A false positive takes a working agent off the market, which is the more expensive failure, so only a narrow set of durable operator conditions may withhold; rate limits, 5xx, timeouts and anything unrecognized keep the agent advertising. Detection is passive (real task failures, zero cost); recovery is an active probe used only while already dark, because an agent that has stopped advertising receives no tasks and would otherwise never learn it had recovered.
+
+Provenance: the staging Researcher ran six nights out of provider credit (#593), advertising `awake` with listed pricing and selling signed refusals for real devnet money the whole time (#610). The refund half of that gap remains an open decision; this half — do not sell what you cannot deliver — does not depend on it.
+
 ## Evidence regimes per settlement mode
 
 Custody is one axis. Evidence regime — how deletion claims become structurally verifiable rather than relying on operator promises — is an orthogonal one. The architecture has three deployment surfaces, three evidence regimes:

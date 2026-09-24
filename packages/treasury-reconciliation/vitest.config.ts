@@ -6,6 +6,8 @@ import { defineMotebitTest } from "../../vitest.shared.js";
 // functions to cover); index.ts (the barrel) is exercised via the test's
 // import-through-the-public-surface.
 export default defineMotebitTest({
-  thresholds: { statements: 90, branches: 85, functions: 90, lines: 90 },
+  // Ratcheted to measured (100 on all four axes) by scripts/measure-coverage-slack.ts.
+  // A floor N points below reality only catches a regression bigger than N.
+  thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
   coverageExclude: ["src/types.ts"],
 });

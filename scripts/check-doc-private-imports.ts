@@ -23,6 +23,15 @@
  * internal code and links to source on GitHub. See
  * `apps/docs/src/components/reference-example.tsx`.
  *
+ * Second rule (2026-09-14): every `<ReferenceExample source="…">`
+ * MUST name a file that exists in the repo. The wrapper's claim is
+ * "this snippet reflects THAT file"; the attribute renders as a
+ * GitHub blob link. A renamed module (`annotated.ts` →
+ * `provenance.ts`, `agent-graph.ts` → `agent-network.ts`) left two
+ * of the eight sources on the semiring-routing page pointing at
+ * files that had not existed for months — a dead link under a
+ * "reference implementation" label, found only by an external read.
+ *
  * Exit codes:
  *   0 — all checks passed
  *   1 — one or more violations
@@ -31,7 +40,7 @@
  *   pnpm check-doc-private-imports
  */
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -180,6 +189,27 @@ function findImports(file: string, content: string, privates: Set<string>): Impo
   return sites;
 }
 
+interface SourceSite {
+  readonly file: string;
+  readonly line: number;
+  readonly source: string;
+}
+
+/** Every `<ReferenceExample … source="…">` attribute in the file, with its line. */
+function findSources(file: string, content: string): SourceSite[] {
+  const sites: SourceSite[] = [];
+  const tagRe = /<ReferenceExample\b[^>]*?\bsource="([^"]+)"/g;
+  let match: RegExpExecArray | null;
+  while ((match = tagRe.exec(content)) !== null) {
+    sites.push({
+      file,
+      line: content.slice(0, match.index).split("\n").length,
+      source: match[1]!,
+    });
+  }
+  return sites;
+}
+
 // ── Main ───────────────────────────────────────────────────────────────
 
 function main(): void {
@@ -193,8 +223,10 @@ function main(): void {
 
   const mdxFiles = walkMdx(DOCS_CONTENT_DIR);
   const violations: ImportSite[] = [];
+  const deadSources: SourceSite[] = [];
   let totalImports = 0;
   let wrappedImports = 0;
+  let totalSources = 0;
 
   for (const file of mdxFiles) {
     const content = readFileSync(file, "utf-8");
@@ -207,6 +239,10 @@ function main(): void {
         violations.push(site);
       }
     }
+    for (const src of findSources(file, content)) {
+      totalSources++;
+      if (!existsSync(join(REPO_ROOT, src.source))) deadSources.push(src);
+    }
   }
 
   console.log("check-doc-private-imports:");
@@ -214,24 +250,45 @@ function main(): void {
   console.log(`  ${privates.size} private packages tracked`);
   console.log(`  ${totalImports} imports found across docs`);
   console.log(`  ${wrappedImports} wrapped in <ReferenceExample>`);
+  console.log(
+    `  ${totalSources} <ReferenceExample source="…"> attributes resolved against the repo`,
+  );
 
-  if (violations.length === 0) {
-    console.log("✓ all private-package imports are inside <ReferenceExample> wrappers");
+  if (violations.length === 0 && deadSources.length === 0) {
+    console.log(
+      "✓ all private-package imports are inside <ReferenceExample> wrappers and every wrapper's source file exists",
+    );
     return;
   }
 
-  console.error(`\n✗ ${violations.length} unwrapped private-package import(s):`);
-  for (const v of violations) {
+  if (violations.length > 0) {
+    console.error(`\n✗ ${violations.length} unwrapped private-package import(s):`);
+    for (const v of violations) {
+      console.error(
+        `  - ${relative(REPO_ROOT, v.file)}:${v.line}: ` +
+          `from "${v.pkg}" — private package, must be inside <ReferenceExample>`,
+      );
+    }
     console.error(
-      `  - ${relative(REPO_ROOT, v.file)}:${v.line}: ` +
-        `from "${v.pkg}" — private package, must be inside <ReferenceExample>`,
+      '\nWrap the import block in <ReferenceExample pkg="@motebit/X" source="packages/X/src/...">...</ReferenceExample>\n' +
+        "or rewrite the example to use a published-package import (@motebit/protocol, @motebit/sdk, @motebit/crypto, ...).\n" +
+        "See `/docs/concepts/public-surface` and `docs/drift-defenses.md` invariant #50.",
     );
   }
-  console.error(
-    '\nWrap the import block in <ReferenceExample pkg="@motebit/X" source="packages/X/src/...">...</ReferenceExample>\n' +
-      "or rewrite the example to use a published-package import (@motebit/protocol, @motebit/sdk, @motebit/crypto, ...).\n" +
-      "See `/docs/concepts/public-surface` and `docs/drift-defenses.md` invariant #50.",
-  );
+  if (deadSources.length > 0) {
+    console.error(
+      `\n✗ ${deadSources.length} <ReferenceExample source="…"> path(s) that do not exist:`,
+    );
+    for (const d of deadSources) {
+      console.error(`  - ${relative(REPO_ROOT, d.file)}:${d.line}: source="${d.source}"`);
+    }
+    console.error(
+      "\nPoint `source` at the file the snippet reflects TODAY (the attribute renders as a GitHub blob link\n" +
+        "under a 'reference implementation' label; a dead path is a dead link). If the module was renamed,\n" +
+        "update the path; if the example no longer reflects any file, rewrite or remove the example.\n" +
+        "See `docs/drift-defenses.md` invariant #50.",
+    );
+  }
   process.exit(1);
 }
 

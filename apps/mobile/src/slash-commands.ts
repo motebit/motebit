@@ -18,6 +18,8 @@
  *   - Agents: /agents, /discover, /serve
  *   - Goals: /goals, /plan
  *   - Economy: /balance, /deposits, /approvals, /proposals, /withdraw
+ *   - Reaching the runtime elsewhere (signed remote commands):
+ *     /pending, /approve, /deny, /halt, /resume, /halted
  *   - Federation: /sync, /export, /delegate, /propose
  */
 
@@ -56,6 +58,33 @@ export interface SlashCommandDeps {
   setShowSettings: (show: boolean) => void;
   setShowCapabilitiesPanel: (show: boolean) => void;
   setShowActivityPanel: (show: boolean) => void;
+}
+
+/**
+ * Turn what someone typed after `/halt` into a command payload.
+ *
+ * Scope is carried by an explicit `--goal <id>` marker, never by the
+ * bare word "goal". This branch's first review round removed a
+ * `goal <id> <reason>` grammar from the command line for a reason that
+ * applies twice over on the consent root: it reads "/halt goal is done"
+ * as a halt of a goal named "is", which matches nothing, so the store
+ * refuses and NOTHING stops — a person asking for a stop and getting
+ * silence. "cleanup", "finished," and "is" are all things someone
+ * writes after the word goal, and none of them is a goal id.
+ *
+ * A reason never begins with `--goal`, so the marker is unambiguous in
+ * a way the keyword cannot be. Anything else is a reason and only a
+ * reason, exactly as the command layer documents.
+ */
+function haltRemote(args?: string): { cmd: string; args?: string } {
+  const raw = (args ?? "").trim();
+  const scoped = /^--goal(?:=|\s+)(\S+)\s*(.*)$/i.exec(raw);
+  if (!scoped) return { cmd: "halt", ...(raw !== "" ? { args: raw } : {}) };
+  const reason = (scoped[2] ?? "").trim();
+  return {
+    cmd: "halt",
+    args: JSON.stringify({ goal_id: scoped[1]!, ...(reason !== "" ? { reason } : {}) }),
+  };
 }
 
 export function runSlashCommand(command: string, args: string, deps: SlashCommandDeps): void {
@@ -584,6 +613,55 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
       }
       break;
     }
+    // ── Reaching the runtime elsewhere ──────────────────────────────
+    // The phone is the consent root. These six send a SIGNED command to
+    // the motebit's running runtime (the daemon on the laptop) and show
+    // what it answered — not what the relay accepted. A command that did
+    // not arrive stopped nothing and decided nothing, and the error says
+    // so in those words.
+    // `runs` joins this group because it closes the last clause on the
+    // surface a person is actually holding when they come back: this
+    // phone could already stop the motebit and decide an approval, and
+    // could see nothing of what either was about.
+    case "halt":
+    case "resume":
+    case "halted":
+    case "pending":
+    case "approve":
+    case "deny":
+    case "runs": {
+      const remote: { cmd: string; args?: string } =
+        command === "halt"
+          ? // Free text is a REASON and only a reason; scope rides in an
+            // explicit `--goal` marker. See `haltRemote`.
+            haltRemote(args)
+          : command === "resume"
+            ? { cmd: "resume", ...(args ? { args } : {}) }
+            : command === "runs"
+              ? { cmd: "runs", ...(args ? { args } : {}) }
+              : command === "halted"
+                ? { cmd: "halt-status" }
+                : command === "pending"
+                  ? { cmd: "approvals" }
+                  : { cmd: "approvals", args: `${command} ${args ?? ""}`.trim() };
+      if ((command === "approve" || command === "deny") && !args) {
+        addSystemMessage(`/${command} <approval_id> — which one?`);
+        break;
+      }
+      void (async () => {
+        try {
+          const result = await a.sendRemoteCommand(remote.cmd, remote.args);
+          addSystemMessage(
+            result.detail != null && result.detail !== ""
+              ? `${result.summary}\n${result.detail}`
+              : result.summary,
+          );
+        } catch (err: unknown) {
+          addSystemMessage(err instanceof Error ? err.message : String(err));
+        }
+      })();
+      break;
+    }
     case "proposals":
       void (async () => {
         try {
@@ -689,7 +767,14 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
           "/plan <goal> — decompose into steps\n" +
           "/balance — show account balance\n" +
           "/deposits — show deposit history\n" +
-          "/approvals — pending approvals\n" +
+          "/approvals — pending approvals on THIS device\n" +
+          "/pending — approvals waiting on you at the running runtime\n" +
+          "/approve <id> · /deny <id> [reason] — decide one of them\n" +
+          "/halt [reason] — stop the runtime acting unattended\n" +
+          "/halt --goal <id> [reason] — stop one goal, leave the rest\n" +
+          "/resume [id|all] — give that permission back\n" +
+          "/runs [id] — what happened while you were away; an id opens one run\n" +
+          "/halted — what is stopped, and whether it acknowledged\n" +
           "/proposals — active proposals\n" +
           "/forget <nodeId> — delete a memory\n" +
           "/clear — clear conversation\n" +

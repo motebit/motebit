@@ -84,10 +84,17 @@ async function main(): Promise<void> {
       serviceDescription:
         "Audits agents against the public verification surface — identity binding, key succession, operator revocation, receipt spot-checks, bond integrity — and returns a signed eval attestation whose every measurement is a per-axis verdict you can re-check yourself. No LLM; pure verification.",
       capabilities: ["audit_agent"],
-      ...(config.authToken != null ? { authToken: config.authToken } : {}),
+      // No static inbound bearer: callers present a motebit signed token (the
+      // relay's per-task dispatch token) or are refused. Until 2026-09-15 the
+      // deploy script set MOTEBIT_AUTH_TOKEN to the relay OPERATOR's master
+      // token on every worker — a second copy of the secret #649 retired.
       ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
-      ...(config.apiToken != null ? { apiToken: config.apiToken } : {}),
       ...(config.publicUrl != null ? { publicUrl: config.publicUrl } : {}),
+      ...(config.relayPublicKey != null ? { relayPublicKeyHex: config.relayPublicKey } : {}),
+      // Task admission (docs/doctrine/task-admission.md): a priced listing is a
+      // promise that the work is bought — run only relay-admitted work. Escape
+      // hatch for an operator who must reopen it: MOTEBIT_TASK_ADMISSION=open.
+      taskAdmission: process.env["MOTEBIT_TASK_ADMISSION"] === "open" ? "open" : "relay",
     },
     (identity) => {
       const { motebitId, deviceId, publicKey, privateKey } = identity;

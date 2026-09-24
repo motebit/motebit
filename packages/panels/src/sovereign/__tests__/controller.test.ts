@@ -37,6 +37,7 @@ function createAdapter(overrides?: {
   getSolanaAddress?: () => string | null;
   getSolanaBalanceMicro?: () => Promise<number | null>;
   getLocalCredentials?: () => CredentialEntry[];
+  getLocalLedger?: () => Promise<GoalRow[]>;
 }): {
   adapter: SovereignFetchAdapter;
   calls: Array<{ path: string; init?: SovereignFetchInit }>;
@@ -58,6 +59,7 @@ function createAdapter(overrides?: {
     getSolanaAddress: overrides?.getSolanaAddress ?? (() => null),
     getSolanaBalanceMicro: overrides?.getSolanaBalanceMicro ?? (async () => null),
     getLocalCredentials: overrides?.getLocalCredentials ?? (() => []),
+    ...(overrides?.getLocalLedger ? { getLocalLedger: overrides.getLocalLedger } : {}),
   };
 
   return { adapter, calls };
@@ -589,5 +591,93 @@ describe("SovereignController — present / verify", () => {
     const result = await ctrl.verify({});
     expect(result.valid).toBe(false);
     expect(result.reason).toContain("network down");
+  });
+});
+
+// ── Local ledger (getLocalLedger) — #594 Inc 3a ──────────────────────
+
+describe("SovereignController — local ledger", () => {
+  const localRows: GoalRow[] = [
+    {
+      goal_id: "g-local-only",
+      prompt: "local only goal",
+      status: "completed",
+      created_at: 300,
+      local_verification: "verified",
+    },
+    {
+      goal_id: "g-shared",
+      prompt: "local version",
+      status: "completed",
+      created_at: 100,
+      local_verification: "failed",
+    },
+  ];
+
+  it("renders local rows when the relay fetch fails (local-first)", async () => {
+    const { adapter } = createAdapter({
+      handlers: new Map([["/api/v1/goals/mb_test", { throws: new Error("offline") }]]),
+      getLocalLedger: async () => localRows,
+    });
+    const ctrl = createSovereignController(adapter);
+    await ctrl.refresh();
+    expect(ctrl.getState().goals.map((g) => g.goal_id)).toEqual(["g-local-only", "g-shared"]);
+  });
+
+  it("merges local + relay: local wins on goal_id collision, sorted created_at desc", async () => {
+    const { adapter } = createAdapter({
+      handlers: new Map([
+        [
+          "/api/v1/goals/mb_test",
+          {
+            body: {
+              goals: [
+                {
+                  goal_id: "g-shared",
+                  prompt: "relay version",
+                  status: "completed",
+                  created_at: 100,
+                },
+                { goal_id: "g-relay-only", prompt: "relay only", status: "failed", created_at: 50 },
+              ],
+            },
+          },
+        ],
+      ]),
+      getLocalLedger: async () => localRows,
+    });
+    const ctrl = createSovereignController(adapter);
+    await ctrl.refresh();
+    const goals = ctrl.getState().goals;
+    expect(goals.map((g) => g.goal_id)).toEqual(["g-local-only", "g-shared", "g-relay-only"]);
+    // Local wins as the signed-locally truth — prompt AND the adapter-
+    // supplied verification survive the merge.
+    const shared = goals.find((g) => g.goal_id === "g-shared");
+    expect(shared?.prompt).toBe("local version");
+    expect(shared?.local_verification).toBe("failed");
+    expect(goals.find((g) => g.goal_id === "g-relay-only")?.local_verification).toBeUndefined();
+  });
+
+  it("getLocalLedger throwing degrades to relay-only, never to a crash", async () => {
+    const { adapter } = createAdapter({
+      handlers: new Map([
+        [
+          "/api/v1/goals/mb_test",
+          {
+            body: {
+              goals: [
+                { goal_id: "g-relay", prompt: "relay goal", status: "completed", created_at: 10 },
+              ],
+            },
+          },
+        ],
+      ]),
+      getLocalLedger: async () => {
+        throw new Error("localStorage exploded");
+      },
+    });
+    const ctrl = createSovereignController(adapter);
+    await ctrl.refresh();
+    expect(ctrl.getState().goals.map((g) => g.goal_id)).toEqual(["g-relay"]);
   });
 });

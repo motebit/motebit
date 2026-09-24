@@ -134,6 +134,11 @@ export interface ConsolidationCycleDeps {
    */
   toolAuditSink?: AuditLogSink | null;
   /**
+   * Run evidence, flushed in lockstep with the audit rows it sits beside
+   * — see `RunEvidenceSink.eraseForCall`.
+   */
+  runEvidenceSink?: import("@motebit/sdk").RunEvidenceSink | null;
+  /**
    * Settlement-floor resolver for tool-audit records per
    * docs/doctrine/retention-policy.md §"Decision 3". Returns the
    * minimum-retention floor in milliseconds for a given record. The
@@ -217,6 +222,14 @@ export interface ConsolidationCycleResult {
     prunedRetention?: number;
     flushedConversations?: number;
     flushedToolAudits?: number;
+    /**
+     * Evidence rows erased this cycle. Counted AND surfaced: the counter
+     * existed one round before this field did, so a cycle that erased
+     * five hundred rows and signed five hundred certificates still
+     * reported doing nothing — the exact silence the counter was added
+     * to end, one layer further out.
+     */
+    flushedEvidence?: number;
   };
 }
 
@@ -371,6 +384,7 @@ export async function runConsolidationCycle(
           const out = await flushPhase(deps, ctx);
           result.summary.flushedConversations = out.flushedConversations;
           result.summary.flushedToolAudits = out.flushedToolAudits;
+          result.summary.flushedEvidence = out.flushedEvidence;
           break;
         }
       }
@@ -745,11 +759,15 @@ async function prunePhase(
 async function flushPhase(
   deps: ConsolidationCycleDeps,
   ctx: PhaseContext,
-): Promise<{ flushedConversations: number; flushedToolAudits: number }> {
+): Promise<{ flushedConversations: number; flushedToolAudits: number; flushedEvidence: number }> {
   const defaultSensitivity = deps.preClassificationDefaultSensitivity ?? SensitivityLevel.Personal;
 
   let flushedConversations = 0;
   let flushedToolAudits = 0;
+  // Counted, like its siblings. The one store with a dedicated horizon
+  // was the one whose flushes reported nothing, so a cycle that signed
+  // certificates and deleted rows looked like a cycle that did nothing.
+  let flushedEvidence = 0;
 
   // Conversations — sensitivity floor only; no obligation floor on
   // conversation messages (the obligation discipline applies to the
@@ -817,6 +835,69 @@ async function flushPhase(
         });
         deps.toolAuditSink.erase(candidate.callId);
         flushedToolAudits++;
+        // The evidence pointer beside this call gets its OWN
+        // certificate, naming the record the horizon sweep names.
+        //
+        // It was erased under the tool-audit certificate, whose target
+        // is the bare call id — so a record this codebase identifies as
+        // `run_evidence:<call id>` was destroyed with nothing attesting
+        // to it, while the certificate that WAS signed spoke only for
+        // the audit row. The two erase paths disagreed about what
+        // identifies an evidence row, which is how one of them came to
+        // delete without a proof.
+        //
+        // In its own guard, too: inside the audit row's try, a locked
+        // database here would be reported as "tool_audit erase failed"
+        // and skip the increment, blaming a primary success for a
+        // secondary fault.
+        try {
+          // Only when there is something to delete.
+          //
+          // Gated on the sink existing, this signed a certificate for
+          // every tool call that aged out — and most never
+          // content-address anything, so most have no evidence row at
+          // all. Worse, the two sweeps run on different clocks (90 days
+          // here by horizon, 365 by the default tier), so a call that
+          // DID produce evidence got a second, identical certificate
+          // long after the horizon had already deleted it. That is the
+          // two-signed-claims-for-one-identifier defect this changeset
+          // says it closed two rounds ago, reintroduced by splitting the
+          // horizons. Asking first is the whole fix.
+          // A sink that cannot COUNT still gets its rows erased.
+          //
+          // `?? 0` made the absent method read as "nothing there", so a
+          // sink implementing erase but not count would keep verbatim
+          // third-party content forever while its audit row was flushed
+          // — the inversion the block above argues against, arriving
+          // through the optional half of the port rather than the rule.
+          // Unknown means erase; the certificate is what must not be
+          // signed for a record nobody could confirm.
+          const evidenceCount = deps.runEvidenceSink?.countForCall?.(candidate.callId);
+          if (deps.runEvidenceSink?.eraseForCall != null && evidenceCount !== 0) {
+            if (evidenceCount != null && evidenceCount > 0) {
+              await deps.privacy.signFlushCert({
+                targetKind: "run_evidence",
+                targetId: `run_evidence:${candidate.callId}`,
+                sensitivity: recordSensitivity,
+                reason: lazyClassified
+                  ? "retention_enforcement_post_classification"
+                  : "self_enforcement",
+              });
+            }
+            deps.runEvidenceSink.eraseForCall(candidate.callId);
+            // Counted only when rows were CONFIRMED to exist. The
+            // erase-anyway branch covers a sink that cannot count, and
+            // incrementing there reported an evidence flush for every
+            // tool-audit row when none existed — a counter added to stop
+            // this cycle misreporting itself, misreporting itself.
+            if (evidenceCount != null) flushedEvidence += evidenceCount;
+          }
+        } catch (err: unknown) {
+          deps.logger.warn("flush phase: run_evidence erase failed", {
+            callId: candidate.callId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       } catch (err: unknown) {
         deps.logger.warn("flush phase: tool_audit erase failed", {
           callId: candidate.callId,
@@ -826,8 +907,99 @@ async function flushPhase(
     }
   }
 
-  return { flushedConversations, flushedToolAudits };
+  // Evidence has a horizon of its own, independent of any
+  // classification.
+  //
+  // A tool call's retention floor comes from its sensitivity, nothing
+  // classifies tool calls today, so every one reads as `None` — which is
+  // `Infinity`. Inheriting that made verbatim retrieved third-party
+  // content the single record this motebit kept forever by default,
+  // which is the inverse of what not knowing its sensitivity should
+  // mean. Unclassified is a reason to hold something for LESS time.
+  //
+  // The certificate's TARGET ID names the record, because the signed
+  // certificate has nowhere else to say it.
+  //
+  // First attempt set `targetKind: "run_evidence"` and called this
+  // fixed. It was not: `targetKind` reaches only the local audit row's
+  // `target_type`. The signed `consolidation_flush` variant carries
+  // `target_id`, `sensitivity`, `reason`, `flushed_to` and `flushed_at`
+  // — no kind at all. So the signed attestation still said only "the
+  // record identified by this call id was flushed" while the tool-audit
+  // row for that call was still there, and a second, byte-indistinguish-
+  // able certificate followed when the audit row aged out. Two signed
+  // claims for one identifier, one of them false.
+  //
+  // A deletion certificate is the proof of deletion under this repo's
+  // own self-attesting doctrine, so the identifier has to distinguish
+  // the two records. It does now.
+  if (deps.runEvidenceSink?.enumerateStale && deps.runEvidenceSink.eraseForCall) {
+    const cutoffTs = ctx.now - EVIDENCE_HORIZON_DAYS * MS_PER_DAY;
+    // Calls still inside a retention OBLIGATION — a settlement or
+    // dispute window — keep their evidence, however old.
+    //
+    // The tool-audit loop above already takes the max of the sensitivity
+    // ceiling and the obligation floor per decision 3, deliberately
+    // holding a disputed call past its ceiling. A flat horizon here
+    // ignored that and destroyed the re-checkable evidence for a
+    // disputed call while the audit row beside it was being kept on
+    // purpose — the one case where being able to re-check matters most.
+    // INERT TODAY, and deliberately kept. Nothing in this repo supplies
+    // `toolAuditObligationFloorMs` yet — the resolver is declared for
+    // decision 3 and has no producer — so this set is empty and evidence
+    // for a settlement- or dispute-bound call IS erased at the horizon.
+    // That is the honest state: the guard is the shape the obligation
+    // will arrive into, not a protection in force. Saying so here beats
+    // a comment that reads as though it were.
+    //
+    // Bounded like its sibling above. Enumerating to `now` would parse
+    // every audit row in the table on every cycle. The same cutoff does:
+    // a call whose EVIDENCE is stale has an audit row at least as old,
+    // since both are written when the call runs.
+    const obligationHeld = new Set<string>();
+    const obligationFloor = deps.toolAuditObligationFloorMs;
+    if (obligationFloor != null && deps.toolAuditSink?.enumerateForFlush) {
+      for (const entry of deps.toolAuditSink.enumerateForFlush(cutoffTs)) {
+        const held = obligationFloor(entry);
+        if (held > 0 && ctx.now - entry.timestamp <= held) obligationHeld.add(entry.callId);
+      }
+    }
+    for (const callId of deps.runEvidenceSink.enumerateStale(cutoffTs)) {
+      if (ctx.signal.aborted) break;
+      if (obligationHeld.has(callId)) continue;
+      try {
+        await deps.privacy.signFlushCert({
+          targetKind: "run_evidence",
+          targetId: `run_evidence:${callId}`,
+          sensitivity: defaultSensitivity,
+          reason: "retention_enforcement_post_classification",
+        });
+        deps.runEvidenceSink.eraseForCall(callId);
+        flushedEvidence++;
+      } catch (err: unknown) {
+        deps.logger.warn("flush phase: run_evidence horizon erase failed", {
+          callId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  return { flushedConversations, flushedToolAudits, flushedEvidence };
 }
+
+/**
+ * How long a re-checkable evidence pointer is kept.
+ *
+ * Matched to the medical/financial tier. That is not the strictest
+ * finite tier — `Secret` is thirty days — and the choice is deliberate
+ * rather than maximal: this row holds content retrieved from somewhere
+ * else, which nothing here can classify, so it takes the floor used for
+ * the sensitive-but-not-secret tiers. Long enough to answer "what did it
+ * do while I was away" on any realistic return; far short of forever,
+ * which is what it inherited before.
+ */
+const EVIDENCE_HORIZON_DAYS = 90;
 
 /**
  * Reference flush ceilings, in days, per sensitivity tier. Mirrors

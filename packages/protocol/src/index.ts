@@ -6,7 +6,12 @@ import type { MemorySource } from "./memory-source.js";
 // Local bindings for `Citation.provenance` + the producer-side `source_digest`
 // fields below (re-exported with the rest of the evidence-provenance vocabulary
 // near the bottom of this barrel).
-import type { EvidenceProvenance, DigestRef } from "./evidence-provenance.js";
+import type {
+  EvidenceProvenance,
+  EvidenceRef,
+  DigestRef,
+  ProjectionClass,
+} from "./evidence-provenance.js";
 
 // === Branded ID Types ===
 //
@@ -165,7 +170,26 @@ export interface AgentTrustRecord {
    * the cross-capability bleed). See
    * `docs/doctrine/first-person-worker-routing.md`.
    */
-  capability_stats?: Record<string, { successful_tasks: number; failed_tasks: number }>;
+  capability_stats?: Record<
+    string,
+    {
+      successful_tasks: number;
+      failed_tasks: number;
+      /**
+       * Extra pseudo-failures accumulated from PAID failures — the buyer's money
+       * loss recorded as a first-person fact (docs/doctrine/paid-failure-recourse.md:
+       * the recourse on the sovereign rail is the trust graph, so the graph must
+       * weigh a paid failure more than a free one). Each paid failure adds
+       * `paidFailureWeight(amountUsd) − 1` here on top of the 1 it adds to
+       * `failed_tasks`; the routing posterior reads
+       * `failed_tasks + paid_failure_penalty`. Integer, so the seeded Beta
+       * sampler stays exact and a transcript still recomputes. The `"*"` key
+       * holds penalties whose capability was unknown (aggregate-only reads).
+       * Local-only like the rest of this map; never on the wire.
+       */
+      paid_failure_penalty?: number;
+    }
+  >;
   /**
    * Most-recent verified hardware-attestation snapshot about the remote
    * agent. Projected from the latest peer-issued `AgentTrustCredential`
@@ -735,6 +759,15 @@ export enum EventType {
   // `perception.ts`. STRICTLY metadata — count + credential-class label names, never
   // the secret content. Doctrine: security-boundaries.md.
   SecretRedactedFromEgress = "secret_redacted_from_egress",
+  // Halt — withdrawing the standing permission to act unattended.
+  // Three events, never two: the request and the acknowledgement are
+  // separate facts (a daemon that is offline has been asked and has not
+  // stopped), and lifting is its own authority act. Payloads carry
+  // halt_id + scope + origin; `HaltAcknowledged` also carries what
+  // stopping entailed. See `HaltRequest`.
+  HaltRequested = "halt_requested",
+  HaltAcknowledged = "halt_acknowledged",
+  HaltLifted = "halt_lifted",
 }
 
 export enum MemoryType {
@@ -923,6 +956,16 @@ export interface PolicyDecision {
   /** Owner-facing typed residual of a refusal/raise. See `AuthorityDelta`
    *  for the asymmetry + predictor invariants. */
   missing_authority?: AuthorityDelta;
+  /**
+   * Audit call id the gate wrote this decision under (the `callId` of the
+   * `ToolAuditEntry` row appended BEFORE execution). Lets the executor
+   * record the completion (`PolicyGate.recordResult`) against the same
+   * row, so an allowed decision with no completion is a re-checkable
+   * "intended, outcome unknown" state after a crash — never silently
+   * retried. Optional for source-compat with hand-built decisions; the
+   * gate sets it on every decision it returns.
+   */
+  callId?: string;
 }
 
 export interface TurnContext {
@@ -1091,13 +1134,21 @@ export interface ToolDefinition {
    * address bar, halt indicator). State-chrome tools belong in the
    * latter; the slab item projection is for the former.
    *
+   * `"band"` — the tool's act is narrated in the slab's chrome band
+   * ("Searching …", "Reading …") and NEVER opens a body item. This is
+   * the projection for tools whose result is text the chat reply
+   * already carries (search, file read, generic API tools): a body
+   * card would render the model's raw tool food under a third-person
+   * label, which motebit-computer.md §"Not on the slab" forbids. The
+   * runtime's `tool-policy.ts` applies `band` by default; a tool
+   * declares it here only to override a policy row.
+   *
    * Plumbing: read on the tool_status chunk by ai-core's loop.ts
    * and consumed by the runtime's slab-projection at open time.
    * The closed-string-literal union keeps additions backward
-   * compatible (a future `"observation"` variant could narrow
-   * further without breaking existing consumers).
+   * compatible.
    */
-  slabProjection?: "none" | "tool_call";
+  slabProjection?: "none" | "tool_call" | "band";
   /**
    * When this tool's money facts become known — the R4 metering axis
    * (standing-delegation §3.3; the loop's gate-allow ∧ meter-allow
@@ -1168,6 +1219,28 @@ export interface ToolResult {
    * resolves it via an injected `resolveProjection`. Back-compat by absence.
    */
   source_projection?: string;
+  /**
+   * What was read, named by the producing tool in its OWN terms — a URL
+   * for `read_url`, a path for a file reader.
+   *
+   * Set alongside {@link source_digest}. Without it a stored evidence
+   * pointer carries a digest and a span but no source, so "re-fetch the
+   * record and check the span is present" names nothing to re-fetch and
+   * the whole affordance is unusable. The tool names it because only the
+   * tool knows: a consumer that guessed from an argument key would be
+   * putting domain knowledge in the layer that must not have it.
+   */
+  source_ref?: string;
+  /**
+   * How re-checkable {@link source_projection} is, when the recipe is
+   * NOT reimplementable from a published spec to byte identity.
+   *
+   * Absent means `spec-reproducible`, the strong rung — so the weaker
+   * one is opt-in and can never be claimed by omission. A `tool-pinned`
+   * recipe that omits this over-claims. Only the tool knows which rung
+   * its recipe meets, so only the tool may say.
+   */
+  source_projection_class?: ProjectionClass;
 }
 
 export type ToolHandler = (args: Record<string, unknown>) => Promise<ToolResult>;
@@ -1373,6 +1446,34 @@ export enum DeviceCapability {
    * (spec/credential-v1.md §3.4).
    */
   SecureEnclave = "secure_enclave",
+  /**
+   * This surface runs unattended work AND wires the durable halt and
+   * approval stores, so it can honor a stop and decide a queued
+   * approval. Distinct from `Background`, which several surfaces
+   * announce because they can do work in the background — the desktop
+   * app announces `Background` and cannot be halted, so routing a stop
+   * by that capability would let a surface answer "cannot be halted"
+   * while the real runtime kept running, which reads exactly like a
+   * refusal. A surface announces this only when the stores are wired;
+   * saying so falsely is worse than not saying it.
+   */
+  UnattendedRuntime = "unattended_runtime",
+  /**
+   * This surface OWNS the run ledger — it is the process that fires
+   * goals, so the runs, outcomes, tool audit and evidence are its own
+   * records.
+   *
+   * Narrower than `UnattendedRuntime` on purpose. `motebit serve` runs
+   * unattended work and can be halted, but the work it runs is
+   * relay-dispatched tasks, not goal runs, so its database holds no run
+   * rows of its own making. Co-located with the daemon it shares the
+   * file and sees everything; on its own machine it sees nothing — and
+   * answering "what happened while you were away" from there returns
+   * "No runs recorded yet" about a motebit that worked all night. The
+   * false empty is the exact failure the return view exists to remove,
+   * so the question routes by the record, not by the capability to act.
+   */
+  RunLedger = "run_ledger",
 }
 
 /** Push notification platform for wake-on-demand mobile execution. */
@@ -1479,6 +1580,18 @@ export interface ExecutionReceipt {
    * directly). Copied into `Citation.provenance.projection`. Back-compat by absence.
    */
   source_projection?: string;
+  /**
+   * How re-checkable {@link source_projection} is — set from the tool's
+   * {@link ToolResult.source_projection_class}; signature-bound.
+   *
+   * Carried here for the same reason it exists at all: absence means
+   * `spec-reproducible`, the strong rung, so a receipt that drops the
+   * class asserts the strong rung on behalf of a recipe that may only
+   * meet the weaker one. The run-evidence pointer and the signed receipt
+   * describe the SAME call, and the one a stranger verifies must not
+   * claim more than the one kept locally.
+   */
+  source_projection_class?: ProjectionClass;
   /**
    * How this task was authorized for invocation. Discriminates user-explicit
    * affordances (chip tap, slash command, scene click) from AI-mediated
@@ -2037,6 +2150,8 @@ export interface DelegatedStepResult {
     sub_scores: Record<string, number>;
     routing_paths: string[][];
     alternatives_considered: number;
+    /** Optional (additive): the vouching path that justified `sub_scores.trust` — evidence, not execution. */
+    trust_evidence_path?: string[];
   };
 }
 
@@ -2094,35 +2209,6 @@ export interface SeedEscrowPayload {
    *  post-decryption check: a restored seed that does not re-derive to this key
    *  is discarded — an AEAD success is not yet a restore. */
   identity_pubkey_check: string;
-}
-
-/**
- * A key succession record proving that one Ed25519 key has been replaced by another.
- * Both the old and new keys sign the record, creating a cryptographic chain of custody.
- * Structurally compatible with @motebit/crypto KeySuccessionRecord.
- *
- * Guardian recovery records have `recovery: true` and `guardian_signature` instead of
- * `old_key_signature`. This allows identity recovery when the primary key is compromised.
- */
-export interface KeySuccessionRecord {
-  old_public_key: string; // hex
-  new_public_key: string; // hex
-  timestamp: number;
-  reason?: string;
-  /**
-   * Cryptosuite discriminator. Always `"motebit-jcs-ed25519-hex-v1"` for
-   * this artifact today — JCS canonicalization of the unsigned payload,
-   * Ed25519 primitive, hex signature encoding, hex public-key encoding.
-   * The same suite as the identity frontmatter (spec/identity-v1.md §3.8).
-   * Verifiers reject missing or unknown suite values fail-closed.
-   */
-  suite: "motebit-jcs-ed25519-hex-v1";
-  old_key_signature?: string; // hex — present in normal rotation, absent in guardian recovery
-  new_key_signature: string; // hex, new key signs the canonical payload
-  /** Guardian recovery: true when succession was authorized by guardian, not old key. */
-  recovery?: boolean;
-  /** Guardian signature — present only when recovery is true. */
-  guardian_signature?: string; // hex
 }
 
 /**
@@ -2204,10 +2290,12 @@ export interface ExecutionStepSummary {
         capability_match: number;
         availability: number;
       };
-      /** Derivation paths through the agent graph. */
+      /** `[0]` = the PLANNED EXECUTION route (agent ids, caller → worker: the hops the task takes — `[worker]` for a direct hire, `[peer_relay, worker]` for a federated one) whose composed execution metrics the sub_scores reflect; then the non-dominated planned-route alternatives, best first. Pinned hires report `[[worker]]`. */
       routing_paths: string[][];
-      /** Number of candidate agents that were scored. */
+      /** Number of non-dominated planned execution routes to the selected agent the policy chose among (0 for a pinned hire). */
       alternatives_considered: number;
+      /** Optional (additive, 2026-09-14): the path through EVERY edge — recorded delegations included — that justified `sub_scores.trust`. A chain of vouching, never a record of who executed the task. */
+      trust_evidence_path?: string[];
     };
   };
 }
@@ -3252,6 +3340,18 @@ export interface AuditChainStoreAdapter {
 
 export interface AuditLogSink {
   append(entry: ToolAuditEntry): void;
+  /**
+   * Apply a COMPLETION (an entry carrying `result`) to the entry already
+   * recorded under the same `callId`: only `result` and `timestamp` are
+   * written onto the existing entry — the decision as recorded (including
+   * an `approval_satisfied:*` reason) is preserved. Keyed stores update the
+   * row in place, unkeyed stores merge by `callId`; when no entry is known
+   * the completion is appended whole. Optional — a sink without it receives
+   * the completion via `append`, which in an unkeyed store leaves two
+   * entries per call and double-counts `queryStatsSince`. Every shipped
+   * sink implements it.
+   */
+  complete?(entry: ToolAuditEntry): void;
   query(turnId: string): ToolAuditEntry[];
   getAll(): ToolAuditEntry[];
   queryStatsSince(afterTimestamp: number): AuditStatsSince;
@@ -3271,6 +3371,250 @@ export interface AuditLogSink {
    * decision 7. Optional — paired with `enumerateForFlush`.
    */
   erase?(callId: string): void;
+}
+
+// ── Run evidence ───────────────────────────────────────────────────
+// What a returning owner can RE-CHECK, as opposed to what the motebit
+// says it did.
+//
+// `PolicyGate.recordResult` writes the tool's own verdict, and its
+// contract says plainly what that verdict is not: "attribution + the
+// tool's report, not an independent verification of the external
+// effect — a claimed result should link to evidence from the affected
+// system; that pointer is a sibling artifact, never inferred from this
+// row." This is that sibling artifact.
+//
+// The pointer is minted by the code path that PRODUCED the evidence —
+// a fetch tool that content-addressed the bytes it read — and never by
+// a model summarizing afterwards. That is the same
+// attribution-because-produced rule the accrual basis follows: a span
+// nobody fetched cannot be placed into the record, because the only
+// writer is the fetch itself. See docs/doctrine/evidence-provenance.md.
+
+/**
+ * Why a pointer that COULD have been recorded was not.
+ *
+ * Only ever a deliberate withholding. A tool that retrieved nothing, or
+ * that did not content-address what it read, produces no entry at all —
+ * that is an honest absence and needs no marker. This is the other case:
+ * evidence existed and was refused, which a reader must be able to tell
+ * apart from nothing having happened.
+ */
+export type RunEvidenceWithheldReason = "credential_in_span" | "credential_in_source";
+
+export const ALL_RUN_EVIDENCE_WITHHELD_REASONS: readonly RunEvidenceWithheldReason[] =
+  Object.freeze(["credential_in_span", "credential_in_source"]);
+
+export function isRunEvidenceWithheldReason(v: unknown): v is RunEvidenceWithheldReason {
+  return (
+    typeof v === "string" && (ALL_RUN_EVIDENCE_WITHHELD_REASONS as readonly string[]).includes(v)
+  );
+}
+
+/**
+ * One re-checkable pointer produced during a run — or, when
+ * `withheld_reason` is set, the record that one was refused.
+ *
+ * A pointer is emitted ONLY when the producing tool content-addressed
+ * its bytes (`ToolResult.source_digest`). A tool that did not retrieve
+ * anything emits nothing at all: absence is honest there, and a bare
+ * pointer with no provenance is never a claim the producer cannot back.
+ */
+export interface RunEvidenceEntry {
+  evidence_id: string;
+  /** The goal run this belongs to, when the call ran under one. */
+  run_id?: string;
+  turn_id: string;
+  /** The audit row this evidence sits beside — the join to the tool call. */
+  call_id: string;
+  tool: string;
+  recorded_at: number;
+  /**
+   * The re-checkable pointer itself. `ref` names WHAT was read in the
+   * producing tool's own terms (a URL); `provenance` is what a stranger
+   * re-verifies with `verifyEvidenceProvenance` and no trust in us.
+   */
+  evidence: EvidenceRef;
+  /**
+   * Present when this row records a REFUSAL rather than a pointer.
+   *
+   * The guard that withholds credential-class content had the same flaw
+   * as the thing this vocabulary exists to fix: it made evidence
+   * disappear, and a reader could not tell a withheld pointer from a
+   * tool that never retrieved anything. So a guard whose whole purpose
+   * is honesty produced, inside itself, an absence that means two
+   * different things.
+   *
+   * A withheld row carries NO retrieved content — no digest, no span,
+   * and a `ref` that is the call id rather than the source, because the
+   * source is one of the places a credential hides. It says only that
+   * something was read and deliberately not kept, and why. That is
+   * enough to tell the two absences apart, and enough to notice a guard
+   * firing where it should not.
+   */
+  withheld_reason?: RunEvidenceWithheldReason;
+}
+
+// ── The return view ────────────────────────────────────────────────
+// What a person sees when they come back, from a surface that is not
+// the one that did the work.
+//
+// The run ledger, the outcomes and the evidence all live where the
+// daemon runs. No other surface holds them — not the phone, which is
+// the consent root and can already stop the motebit and decide an
+// approval, and not the desktop, which has no goal stores at all. So
+// "show me evidence when I return" reaches those surfaces the same way
+// stopping does: as a signed request to the runtime that has the
+// answer, which replies with a view of its own record.
+//
+// These shapes are purpose-built for that reply rather than mirrors of
+// the stores. They cross a wire to a surface that cannot check them
+// against anything, so they carry only what a returning owner needs
+// and say plainly what they are not: the verbatim result is elided,
+// because an artifact that must be verified is fetched from the
+// machine that signed it, not summarized across a relay.
+
+/** One run, as it appears in a list of what happened while you were away. */
+export interface RunLedgerSummary {
+  run_id: string;
+  goal_id: string;
+  status: string;
+  started_at: number;
+  /**
+   * True when this run is holding its goal open, waiting on a person.
+   *
+   * Distinct from `status`: an `interrupted` run that has been
+   * acknowledged and one that is still waiting read identically by
+   * status alone, and only one of them is something the returning owner
+   * has to act on. The reader sorts these first; without the flag the
+   * order carries the fact and nothing renders it.
+   */
+  holding: boolean;
+  /** Why it is holding its goal, when it is. */
+  note?: string;
+  /** True when this run's result carries a signature. */
+  signed: boolean;
+  /** Re-checkable pointers this run produced. */
+  evidence_count: number;
+  /** Pointers it produced and deliberately did not keep. */
+  withheld_count: number;
+}
+
+/** One run in full, as far as a remote surface is allowed to see it. */
+export interface RunLedgerDetail extends RunLedgerSummary {
+  /** The outcome's own status and reason, per recorded outcome. */
+  outcomes: ReadonlyArray<{
+    status: string;
+    error_message?: string;
+    /**
+     * A bounded, redaction-passed preview — NOT the artifact.
+     *
+     * The whole result stays on the machine that produced and signed
+     * it. A summary that crossed a relay could not be checked against
+     * the signature by the surface reading it, so presenting it as the
+     * result would offer proof that is not there.
+     */
+    summary_preview?: string;
+    signed: boolean;
+  }>;
+  tool_calls: ReadonlyArray<{ tool: string; verdict: string }>;
+  /** Each pointer's source and digest — enough to re-fetch and re-hash. */
+  evidence: ReadonlyArray<{
+    tool: string;
+    ref: string;
+    digest: string;
+    projection?: string;
+  }>;
+  withheld: ReadonlyArray<{ tool: string; reason: string }>;
+}
+
+/**
+ * What a lookup found — three outcomes, never collapsed into two.
+ *
+ * A prefix that matches several runs is not a prefix that matches none.
+ * Returning nothing for both would make this view answer "no such run"
+ * about a run the list had just printed, which is the ambiguous absence
+ * the whole vocabulary exists to remove, reproduced in its own reader.
+ */
+export type RunLedgerLookup =
+  | { readonly kind: "found"; readonly run: RunLedgerDetail }
+  | { readonly kind: "ambiguous"; readonly matches: readonly string[] }
+  | { readonly kind: "missing" };
+
+/**
+ * Where the return view gets its answer.
+ *
+ * Registered by the surface that owns the run ledger — today the
+ * daemon, which is the only one that has it. A runtime with no reader
+ * answers that it cannot see the ledger, which is the honest reply from
+ * a process that did not do the work, and is not the same as saying
+ * nothing happened.
+ */
+export interface RunLedgerReader {
+  /** Newest first, with runs that are holding a goal raised to the top. */
+  listRecent(limit: number): RunLedgerSummary[];
+  /** Accepts a full id or the short prefix a person reads off a list. */
+  get(runIdOrPrefix: string): RunLedgerLookup;
+}
+
+/**
+ * Where an evidence pointer is kept, and erased.
+ *
+ * Mirrors `ToolAuditSink`'s shape: the runtime holds the port, a
+ * surface supplies the implementation. A surface that wires none
+ * records no evidence, which every reader must render as "none
+ * recorded", never as "nothing was read".
+ *
+ * Separate from the audit sink because the two have different retention
+ * floors: an evidence row carries verbatim retrieved content where the
+ * audit row carries redacted arguments, so it is the more revealing of
+ * the pair and must die at least as early. Implemented by the surface
+ * that owns durable storage; a runtime with no sink records nothing,
+ * which the return view reports as "no pointer was kept" rather than as
+ * "nothing was read".
+ */
+export interface RunEvidenceSink {
+  record(entry: RunEvidenceEntry): void;
+  /** Every pointer produced by one run, oldest first. */
+  listForRun(runId: string): RunEvidenceEntry[];
+  /**
+   * Erase every pointer sitting beside one tool call.
+   *
+   * An evidence row is a sibling of the audit row for the same
+   * `call_id`, and it carries strictly MORE than that row does —
+   * verbatim retrieved content, where the audit row holds redacted
+   * args. So it inherits that row's retention floor and dies in the
+   * same act, under the same deletion certificate. Without this the
+   * flush erased the audit row and left the more revealing sibling
+   * behind forever, which inverts the retention policy it was enforcing.
+   *
+   * Optional — a sink without it is never flushed, which a surface must
+   * treat as a reason not to wire it rather than as a licence to keep
+   * content indefinitely.
+   */
+  eraseForCall?(callId: string): void;
+  /**
+   * How many pointers sit beside one tool call.
+   *
+   * A deletion certificate must not be signed for a record that is not
+   * there. Most tool calls never content-address anything, so most have
+   * no evidence at all — and signing anyway produced a verifiable
+   * attestation that something was deleted when nothing was. Callers
+   * ask before they sign.
+   */
+  countForCall?(callId: string): number;
+  /**
+   * Call ids whose pointers were recorded before `beforeTimestamp`.
+   *
+   * Evidence needs a horizon of its OWN, not only the audit row's. A
+   * tool call's retention floor comes from its sensitivity, and nothing
+   * classifies tool calls today, so every one falls to the `None` tier —
+   * which is `Infinity`. Inheriting that meant verbatim third-party
+   * content, the most revealing thing in the database, was the one
+   * record kept forever by default. Unclassified is a reason to hold it
+   * for less time, never for more.
+   */
+  enumerateStale?(beforeTimestamp: number): string[];
 }
 
 export interface PlanStoreAdapter {
@@ -3309,11 +3653,157 @@ export interface CredentialStoreAdapter {
   list(motebitId: string, type?: string, limit?: number): StoredCredential[];
 }
 
+export type ApprovalStatus = "pending" | "approved" | "denied" | "expired";
+
+/**
+ * One queued tool call awaiting a human decision.
+ *
+ * Wire-facing: this is what a remote consent surface (the phone) is
+ * shown before it decides, so `args_preview` must carry enough of the
+ * real call — destination, payload, the parameters that make it
+ * consequential — that a person is deciding on the action rather than
+ * on its name. `args_hash` is over the full arguments, so a preview
+ * that differs from what would execute is detectable; `args_json`
+ * (local only) is what an out-of-band decision actually runs.
+ */
+export interface ApprovalItem {
+  approval_id: string;
+  motebit_id: string;
+  goal_id: string;
+  tool_name: string;
+  args_preview: string;
+  args_hash: string;
+  risk_level: number;
+  status: ApprovalStatus;
+  created_at: number;
+  expires_at: number;
+  resolved_at: number | null;
+  denied_reason: string | null;
+  /**
+   * Full JSON of the paused call's arguments — what a decision made
+   * after a restart executes EXACTLY. Local state: it is deliberately
+   * NOT sent to a remote consent surface, which receives the preview
+   * and the hash.
+   */
+  args_json?: string | null;
+}
+
 export interface ApprovalStoreAdapter {
   /** Collect a quorum approval vote. Returns whether threshold is met and collected voter IDs. */
   collectApproval(approvalId: string, approverId: string): { met: boolean; collected: string[] };
   /** Set quorum metadata on a pending approval item. */
   setQuorum(approvalId: string, required: number, approvers: string[]): void;
+  // The decision surface. Optional because the port shipped narrower
+  // (quorum only) and an implementer may still be at that shape; a
+  // consent surface that cannot read the queue says so rather than
+  // pretending it is empty.
+  /** Queued calls still awaiting a decision, oldest first. */
+  listPending?(motebitId: string): ApprovalItem[];
+  get?(approvalId: string): ApprovalItem | null;
+  /** Record a human's decision. */
+  resolve?(approvalId: string, status: "approved" | "denied", deniedReason?: string): void;
+  /**
+   * Flip rows past their TTL to `expired`, and report how many.
+   *
+   * The daemon sweeps on every tick, so a consent surface would not
+   * normally need this — except that a remote surface is used exactly
+   * when the daemon may be down, and nothing else flips the row. Without
+   * a sweep at the decision point, a past-TTL approval keeps appearing
+   * as pending and every attempt to decide it is refused.
+   */
+  expireStale?(now: number): number;
+}
+
+// ── Halt ───────────────────────────────────────────────────────────
+// Withdrawing autonomy. A halt is durable state, not a message: a
+// message a stopped process never receives is not a stop, and a stop a
+// restart forgets is not a stop either.
+//
+// Halt is not approval's sibling. Approval AUTHORIZES one exact pending
+// action; halt REVOKES the standing permission to act unattended, and
+// aborts whatever is in flight. They compose: a halted motebit does not
+// execute an approval the human granted before the halt.
+
+/**
+ * A request to stop acting unattended.
+ *
+ * Deliberately only the ASK. Whether anything stopped is not a field
+ * here, and cannot be: more than one process runs unattended work for
+ * one motebit — `motebit run` and `motebit serve` do, on one machine,
+ * against one database — so "has it stopped" is N facts, never one.
+ * Ask `HaltStoreAdapter.acknowledgements(halt_id)`, which returns them
+ * all with the executor that produced each.
+ *
+ * This type once carried the first acknowledger's timestamp for
+ * display. Three separate readers rendered it as "Stopped" while other
+ * processes kept working, each time after a comment on the field said
+ * not to. The field is gone rather than better documented — a reader
+ * that cannot reach the wrong fact cannot report it.
+ */
+export interface HaltRequest {
+  halt_id: string;
+  motebit_id: string;
+  /**
+   * `null` halts ALL unattended execution for this motebit. A goal id
+   * halts only that goal — the rest of the interior keeps running.
+   */
+  goal_id: string | null;
+  requested_at: number;
+  /**
+   * Where the request came in. `local` is this machine (a terminal
+   * command); `remote` is a signed command envelope that arrived over
+   * the relay — the consent root reaching the runtime.
+   */
+  origin: HaltOrigin;
+  /** Free text the requester attached, shown wherever the halt is shown. */
+  reason: string | null;
+  /** When a human lifted it. A lifted halt no longer blocks anything. */
+  lifted_at: number | null;
+}
+
+export type HaltOrigin = "local" | "remote";
+
+/** One executor's account of stopping. See `HaltStoreAdapter.acknowledge`. */
+export interface HaltAcknowledgement {
+  halt_id: string;
+  /** The process that stopped — not the device; a machine can run several. */
+  executor_id: string;
+  acknowledged_at: number;
+  acknowledgement: string;
+}
+
+/**
+ * Durable halt state. Mirrors `ApprovalStoreAdapter`'s shape: the
+ * runtime holds the port, a surface supplies the implementation.
+ */
+export interface HaltStoreAdapter {
+  /** Record a request to stop. Not yet a stop — see `HaltRequest`. */
+  request(halt: HaltRequest): void;
+  /**
+   * Record that ONE executor has stopped, and what that took.
+   *
+   * `executorId` identifies the process, not the device: two processes
+   * on one machine share a device id and must acknowledge separately,
+   * because each stops different work. Idempotent per executor.
+   */
+  acknowledge(haltId: string, executorId: string, acknowledgement: string, at?: number): void;
+  /** Has this executor already stopped for this halt? */
+  hasAcknowledged(haltId: string, executorId: string): boolean;
+  /** Every executor that has stopped for this halt, and what it stopped. */
+  acknowledgements(haltId: string): HaltAcknowledgement[];
+  /** Lift a halt. Returns false when no un-lifted halt has that id. */
+  lift(haltId: string, at?: number): boolean;
+  /**
+   * The halt in force for this goal right now, or `null`. A motebit-wide
+   * halt (`goal_id === null`) covers every goal; a goal-scoped halt
+   * covers only its own. Omit `goalId` to ask about unattended execution
+   * in general — which only a motebit-wide halt blocks.
+   */
+  activeFor(motebitId: string, goalId?: string): HaltRequest | null;
+  /** Every halt in force, motebit-wide and per-goal. */
+  listActive(motebitId: string): HaltRequest[];
+  get(haltId: string): HaltRequest | null;
+  listRecent(motebitId: string, limit?: number): HaltRequest[];
 }
 
 // ── Semiring Algebra (protocol-level) ──────────────────────────────
@@ -3396,6 +3886,23 @@ export type {
 // motebit/discovery@1.0.
 
 export type { RelayMetadata, RelayMetadataPeer, AgentResolutionResult } from "./discovery.js";
+
+/**
+ * Identity-binding transparency wire types (`spec/identity-v1.md` §7.6) — the
+ * shapes an external verifier codes against to answer "does this key really
+ * belong to this motebit_id?". Promoted from the relay service to the
+ * permissive floor when `GET /api/v1/identity/:motebitId` became foundation
+ * law (#574): a wire commitment third parties depend on cannot live inside a
+ * BSL service, and `check-api-surface` can only pin a shape that is exported
+ * from here.
+ */
+export type {
+  IdentityBinding,
+  IdentityLogProof,
+  AnchoredInclusion,
+  IdentityBindingBundle,
+  KeySuccessionRecord,
+} from "./identity-binding.js";
 
 // Virtual-account balance read — the market-v1 §2 account state projected
 // across the HTTP boundary (decimal USD; conversion happens only at the
@@ -3511,6 +4018,16 @@ export { hexToBytes32 } from "./hex.js";
 
 export type { BondCommitment } from "./bond.js";
 export { BOND_COMMITMENT_SPEC_ID, isBondCommitment } from "./bond.js";
+
+// === Machine roster — docs/doctrine/machine-roster.md ===
+export type { HostEnrollment, HostRetirement } from "./host-roster.js";
+export {
+  HOST_ROSTER_SPEC_ID,
+  HOST_ENROLLMENT_TYPE,
+  HOST_RETIREMENT_TYPE,
+  isHostEnrollment,
+  isHostRetirement,
+} from "./host-roster.js";
 
 // === Cryptosuite Registry ===
 // Every signed wire-format artifact in motebit declares its verification
@@ -3774,8 +4291,9 @@ export {
   fromCents,
   computeP2pFeeMicro,
   computeFederatedFeeSplit,
+  roundSettlementSplitMicro,
 } from "./money.js";
-export type { FederatedFeeSplit } from "./money.js";
+export type { FederatedFeeSplit, SettlementSplitMicro } from "./money.js";
 
 // Token audiences — closed registry of `aud` claim values for the
 // Routing primitive — closed-registry types for the auto-router.
@@ -3826,6 +4344,7 @@ export {
   TASK_SUBMIT_AUDIENCE,
   TASK_QUERY_AUDIENCE,
   TASK_RESULT_AUDIENCE,
+  TASK_DISPATCH_AUDIENCE,
   ADMIN_QUERY_AUDIENCE,
   PROPOSAL_AUDIENCE,
   MARKET_LISTING_AUDIENCE,

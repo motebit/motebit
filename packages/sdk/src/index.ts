@@ -38,6 +38,8 @@ import type {
   LatencyStatsStoreAdapter,
   CredentialStoreAdapter,
   ApprovalStoreAdapter,
+  HaltStoreAdapter,
+  RunEvidenceSink,
   MotebitIdentity,
   AuditRecord,
 } from "@motebit/protocol";
@@ -544,6 +546,19 @@ export interface StorageAdapters {
   latencyStatsStore?: LatencyStatsStoreAdapter;
   credentialStore?: CredentialStoreAdapter;
   approvalStore?: ApprovalStoreAdapter;
+  /**
+   * Durable halt state — the withdrawal of unattended autonomy. Optional
+   * for the same reason `approvalStore` is: a surface without it simply
+   * cannot be halted remotely, which is honest rather than silently
+   * unenforced. The daemon always supplies one.
+   */
+  haltStore?: HaltStoreAdapter;
+  /**
+   * Where a run's re-checkable evidence pointers are kept. Optional: a
+   * surface without one records no evidence, which every reader must
+   * render as "none recorded" and never as "nothing was read".
+   */
+  runEvidenceSink?: RunEvidenceSink;
 }
 
 // === Credential & Verification Boundaries ===
@@ -602,3 +617,19 @@ export interface ServerVerifier {
     tools: ToolDefinition[],
   ): Promise<VerificationResult>;
 }
+
+// Outbound URL policy — the one law for fetching a URL motebit did not
+// author (SSRF boundary). docs/doctrine/security-boundaries.md §"Outbound URLs".
+export {
+  checkOutboundUrl,
+  assertOutboundUrl,
+  fetchPublic,
+  isPublicAddress,
+  OutboundUrlRefusedError,
+} from "./outbound-url.js";
+export type {
+  OutboundUrlOptions,
+  OutboundUrlRefusal,
+  OutboundUrlVerdict,
+  FetchPublicOptions,
+} from "./outbound-url.js";

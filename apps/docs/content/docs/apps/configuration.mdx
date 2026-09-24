@@ -34,7 +34,7 @@ Location: `~/.motebit/config.json`
 |---|---|---|
 | `motebit_id` | string | Your motebit's UUID (auto-generated on first launch) |
 | `device_id` | string | This device's registration ID |
-| `default_provider` | `"ollama"` \| `"anthropic"` | LLM provider |
+| `default_provider` | `"anthropic"` \| `"openai"` \| `"google"` \| `"groq"` \| `"deepseek"` \| `"local-server"` \| `"proxy"` | LLM provider (`"ollama"` is read as a deprecated alias for `"local-server"`) |
 | `default_model` | string | Model identifier |
 | `sync_url` | string | Sync relay server URL (optional) |
 | `mcp_servers` | array | MCP server configurations (see [Tools](/docs/developer/tools)) |
@@ -45,10 +45,11 @@ Secrets are stored in the OS keyring, never in the config file:
 
 | Key | Description |
 |---|---|
-| `api_key` | LLM provider API key |
+| `device_private_key` | Ed25519 device private key (the CLI keeps it PBKDF2-encrypted in `config.json` instead) |
+| `<vendor>_api_key` | Per-vendor LLM keys: `anthropic_api_key`, `openai_api_key`, `google_api_key`, `deepseek_api_key`, `groq_api_key`; voice keys `elevenlabs_api_key`, `inworld_api_key`, `deepgram_api_key` |
 | `sync_master_token` | Sync relay authentication token |
-| `operator_pin_hash` | SHA-256 hash of operator PIN |
-| `private_key` | Ed25519 private key (or PBKDF2-encrypted in CLI) |
+| `operator_pin_hash` | Operator PIN as a salted PBKDF2-SHA256 digest (100 000 iterations, `salt:derived`) |
+| `api_key` | Legacy single-vendor slot — read for migration only, never written |
 
 On desktop, the Tauri keyring API handles storage. On CLI, the private key is encrypted with PBKDF2 and stored in the config file (the only exception to the "no secrets in config" rule, and it's encrypted).
 

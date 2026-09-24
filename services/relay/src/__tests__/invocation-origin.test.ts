@@ -23,6 +23,7 @@ const JSON_AUTH = { "Content-Type": "application/json", ...AUTH };
 
 async function createTestRelay(): Promise<SyncRelay> {
   return createSyncRelay({
+    allowPrivateEndpoints: true,
     apiToken: API_TOKEN,
     enableDeviceAuth: true,
     x402: {

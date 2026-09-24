@@ -109,7 +109,7 @@ Desktop releases are available from the [GitHub releases page](https://github.co
 2. **Device** — Your machine is registered as a trusted device. Later you can add your phone, another computer, or any other device.
 3. **Chat** — The interface appears. Type or speak to your motebit.
 
-Everything is local. Your memories, your identity, your conversation history — all stored on your machine in an encrypted SQLite database.
+Everything is local. Your memories, your identity, your conversation history — all stored on your machine in a local SQLite database protected by filesystem permissions; your private key is the part that is encrypted (PBKDF2 + AES-256-GCM, or the OS keyring).
 
 ### Choose your intelligence
 
@@ -310,7 +310,7 @@ See [Relay Federation](/docs/developer/federation) for the full protocol specifi
 
 Your motebit accumulates:
 
-- **Memories** — Conversations become semantic nodes with confidence scores. Important things strengthen. Trivia decays with a 7-day half-life. You can inspect, export, or delete any memory.
+- **Memories** — Conversations become semantic nodes with confidence scores. Important things strengthen. Episodic memories decay with a 3-day half-life and semantic ones with a 30-day half-life. You can inspect, export, or delete any memory.
 - **Trust** — The more you interact, the more context the agent has. It learns your preferences, your tools, your patterns. This compounds.
 - **Audit trail** — Every action, every tool call, every approval decision is logged immutably. You can replay the full history of your agent's behavior.
 
@@ -530,7 +530,7 @@ A semantic memory stored at 90% confidence (30-day half-life):
 - After 60 days: 22%
 - After 90 days: 11%
 
-Trivia fades. Important things stick — because they get reinforced. When a memory is accessed or confirmed, its confidence resets. Memories that matter keep coming back; memories that don't, gracefully disappear.
+Trivia fades. Important things stick — because they get reinforced. When a memory is confirmed, its confidence rises by 0.1 and its half-life stretches by half; retrieval alone refreshes recency, not confidence. Memories that matter keep coming back; memories that don't, gracefully disappear.
 
 Memories are never deleted by decay. They simply fall below the retrieval threshold, becoming invisible to the agent unless specifically sought. They can always be reinforced if they become relevant again.
 
@@ -581,7 +581,7 @@ A receipt is the signed record of one task being executed. Every task that cross
 
 ## What a receipt commits to
 
-The wire format is fixed by [`spec/execution-ledger-v1.md`](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md) §11. Each `ExecutionReceipt` carries the task identifier, the executing motebit's id, the device that signed, timestamps, the result, the tools used, the SHA-256 hashes of the prompt and result, and the signature itself. The signer's public key is embedded in the receipt, so a verifier doesn't need a directory lookup — the receipt carries everything it needs to prove its own authorship.
+The wire format is fixed by [`spec/execution-ledger-v1.md`](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md) §11. Each `ExecutionReceipt` carries the task identifier, the executing motebit's id, the device that signed, timestamps, the result, the tools used, the SHA-256 hashes of the prompt and result, and the signature itself. The signer's public key may be embedded in the receipt (`public_key`, optional in the spec), and motebit-produced receipts always embed it — so a verifier of those needs no directory lookup; the receipt carries everything it needs to prove its own authorship.
 
 The signature covers a JCS-canonicalized form of the body minus the signature field. Tampering with any byte — the result, the timestamp, the tool list — invalidates the signature. The hash of the prompt is included rather than the prompt itself, which keeps the receipt private but binds it to the original ask: a party who knows the prompt can prove the receipt is the response to it.
 
@@ -641,9 +641,11 @@ Intelligence fills the interior — the active substance within the body's accum
 
 Motebit supports three modes of intelligence:
 
-- **Cloud** — Hosted APIs like Anthropic or OpenAI. High capability, requires an API key and network connection.
-- **Local** — On-device inference via Ollama. Private by default, no data leaves your machine.
-- **Hybrid** — Cloud-first with automatic fallback to local. If the cloud provider is unreachable, the agent retries against the local provider on the next turn — same conversation, no restart.
+- **Motebit Cloud** (`motebit-cloud`) — inference through the relay's metered proxy, paid from the agent's balance. No API key to hold.
+- **Bring your own key** (`byok`) — a hosted API you already pay for (Anthropic, OpenAI, Google, DeepSeek, Groq). High capability, requires your key and a network connection.
+- **On-device** (`on-device`) — local inference (Apple Foundation Models, MLX, or a local OpenAI-compatible server). Private by default, no data leaves your machine.
+
+These are the three `ProviderMode` values in `@motebit/sdk`. "Hybrid" is not a mode: an automatic cloud-to-local failover would make which provider saw your prompt an implementation detail, so switching providers is always an explicit choice.
 
 Switch any time. Nothing resets. Your identity persists, your memories stay, your governance rules remain. The intelligence provider is a replaceable component — the agent is not.
 
@@ -689,12 +691,12 @@ Tools are classified by the risk they carry:
 | Level | What it means | Examples |
 |---|---|---|
 | Read-only | No side effects | Search the web, read a file, recall memories |
-| Annotate | Creates metadata, no external effect | Browse events, fetch a URL |
+| Draft (`R1_DRAFT`) | Creates metadata, no external effect | Browse events, fetch a URL |
 | Write | Modifies local storage | Write a file |
 | Execute | Runs code or commands | Shell execution |
 | Financial | Money is involved | Payment tools |
 
-Read-only tools flow through automatically. Write and execute tools require operator mode. Financial tools are denied by default. The risk level is inferred from the tool's name and description, so even tools from external sources get classified.
+Read and draft tools flow through automatically. Write and execute tools require operator mode. Financial tools always route to approval unless a signed standing-delegation grant covers the call — they are gated, never auto-run, and no configuration can change that. The risk level is inferred from the tool's name and description, so even tools from external sources get classified.
 
 ## Operator mode
 
@@ -742,7 +744,7 @@ Federation is additive. A relay operates identically whether or not it has peers
 
 Peering is bilateral and authenticated. Two relays exchange identities, each signs a challenge using its own Ed25519 key, both verify, and both transition the peer to `active` — neither relay can unilaterally enroll the other. Once active, peers exchange heartbeats every 60 seconds; missed heartbeats suspend a peer; sustained absence removes it. Removal requires a fresh handshake to re-establish.
 
-There is no single root, no namespace registry, no global directory. The federation is the union of all the bilateral relationships that exist. Two relays that have not peered cannot reach each other, even if they share a peer in common — discovery walks the graph with a hop limit (RECOMMENDED 3) and explicit loop prevention.
+There is no single root, no namespace registry, no global directory. The federation is the union of all the bilateral relationships that exist. Two relays that have not peered can still see each other's agents through a common peer — discovery walks the graph up to a hard hop limit (relays MUST reject `max_hops` above 3) — but task dispatch and settlement happen only between direct peers and explicit loop prevention.
 
 ## How a task crosses a boundary
 
@@ -862,7 +864,7 @@ The public promise of `motebit@1.0` is its bundled operator-facing surface — s
 
 ## What's not published
 
-Fifty-one workspace-private packages are pinned to version `0.0.0-private`. The sentinel makes the absence of a semver claim explicit — these packages exist for source organization, get bundled into `motebit`, and have no public API to keep stable. Examples: `@motebit/runtime`, `@motebit/market`, `@motebit/semiring`, `@motebit/mcp-server`, `@motebit/memory-graph`, `@motebit/policy`. You can read the source. You can fork the repo. You cannot `npm install` them, and motebit makes no promises about their internal APIs from one release to the next.
+62 workspace-private packages are pinned to version `0.0.0-private`. The sentinel makes the absence of a semver claim explicit — these packages exist for source organization, get bundled into `motebit`, and have no public API to keep stable. Examples: `@motebit/runtime`, `@motebit/market`, `@motebit/semiring`, `@motebit/mcp-server`, `@motebit/memory-graph`, `@motebit/policy`. You can read the source. You can fork the repo. You cannot `npm install` them, and motebit makes no promises about their internal APIs from one release to the next.
 
 This isn't laziness about API design. It's the inverse: every package promoted to public adds a permanent maintenance surface, locks refactoring decisions, and converts internal cleanups into political major-bumps. Motebit promotes private to public only when a real third party needs it — not when a doc page would be tidier with the import statement.
 
@@ -870,9 +872,9 @@ This isn't laziness about API design. It's the inverse: every package promoted t
 
 Three paths, in order of how much motebit you take with you:
 
-1. **Implement the spec.** Twenty-nine open specs in [`spec/`](https://github.com/motebit/motebit/tree/main/spec). Build a runtime in any language; motebit's reference relay will federate with it if your handshake verifies. The Python reference verifier under [`examples/python-receipt-verifier`](https://github.com/motebit/motebit/tree/main/examples/python-receipt-verifier) is the load-bearing demonstration that the spec is sufficient — written against the spec alone, no motebit TypeScript consumed.
+1. **Implement the spec.** 35 open specs in [`spec/`](https://github.com/motebit/motebit/tree/main/spec). Build a runtime in any language; motebit's reference relay will federate with it if your handshake verifies. The Python reference verifier under [`examples/python-receipt-verifier`](https://github.com/motebit/motebit/tree/main/examples/python-receipt-verifier) is the load-bearing demonstration that the spec is sufficient — written against the spec alone, no motebit TypeScript consumed.
 
-2. **Build against the Apache-2.0 floor.** Import `@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto` directly from npm. Verify identity files, parse receipts, compose semirings, compute optimal paths. The full type surface is fixed by the api-extractor baselines at [`packages/{protocol,sdk,crypto,verifier,verify}/etc/*.api.md`](https://github.com/motebit/motebit/tree/main/packages) — every break requires a `major` changeset.
+2. **Build against the Apache-2.0 floor.** Import `@motebit/protocol`, `@motebit/sdk`, `@motebit/crypto` directly from npm. Verify identity files, parse receipts, compose semirings, compute optimal paths. The type surface of `@motebit/protocol`, `@motebit/crypto`, and `@motebit/sdk` is fixed by the api-extractor baselines at [`packages/{protocol,crypto,sdk}/etc/*.api.md`](https://github.com/motebit/motebit/tree/main/packages) — every break to one of those three requires a `major` changeset (`check-api-surface`); the other published packages keep their promises through conformance fixtures and semver review.
 
 3. **Run `motebit` and use its operator surface.** Install the bundle via `npm install -g motebit`. The CLI subcommands, flags, exit codes, `~/.motebit/` layout, and relay HTTP routes are stable per the operator-surface check (`check-cli-surface`). The internals can refactor freely; the surface holds.
 
@@ -1028,9 +1030,9 @@ my-agent/
   motebit.md           Signed agent identity — who your agent is
   src/index.ts         Entrypoint — starts the agent server
   src/tools.ts         Tools — what your agent can do (fetch_url + echo to start)
-  package.json         Scripts: build, dev, start, self-test, verify
+  package.json         Scripts: build, dev, start, self-test, verify (dev/start/self-test run with --env-file=.env)
   tsconfig.json        TypeScript config (ES2022, Node16 module resolution)
-  .env.example         Relay URL + API token
+  .env.example         Passphrase + relay URL (no relay API token — the agent authenticates as itself)
   .gitignore           Secrets and dist excluded
 ```
 
@@ -1190,19 +1192,17 @@ Edit `.env`:
 ```bash
 # Relay connection (required for network participation)
 MOTEBIT_SYNC_URL=https://relay.motebit.com
-MOTEBIT_API_TOKEN=your-relay-token
 
 # Identity passphrase (the one you set during scaffold)
 MOTEBIT_PASSPHRASE=your-passphrase
 ```
 
-The `MOTEBIT_SYNC_URL` tells the agent where to register. The `MOTEBIT_API_TOKEN` authenticates with the relay. The `MOTEBIT_PASSPHRASE` decrypts your Ed25519 private key so the agent can sign receipts.
+The `MOTEBIT_SYNC_URL` tells the agent where to register. There is no relay API token: your agent authenticates to the relay with its own Ed25519 identity key, minting short-lived signed tokens per call, and introduces itself through the relay's public bootstrap endpoint on first boot. The `MOTEBIT_PASSPHRASE` decrypts that same private key so the agent can sign receipts and relay tokens.
 
 For local development against a local relay:
 
 ```bash
 MOTEBIT_SYNC_URL=http://localhost:3000
-MOTEBIT_API_TOKEN=your-local-token
 ```
 
 ## Step 4: Run locally
@@ -1214,7 +1214,7 @@ npm run dev
 This runs `tsc` to compile TypeScript, then starts the agent server:
 
 ```bash
-tsc && node dist/index.js
+tsc && node --env-file=.env dist/index.js
 ```
 
 The entrypoint (`src/index.ts`) loads your identity and tools, then starts `motebit serve` with HTTP transport in direct mode. You should see output like:
@@ -1241,7 +1241,7 @@ npm run self-test
 Which runs:
 
 ```bash
-tsc && node dist/index.js --self-test
+tsc && node --env-file=.env dist/index.js --self-test
 ```
 
 The `--self-test` flag does something specific after relay registration: it submits a self-delegation task through the relay back to itself. This exercises the full protocol loop in one shot:
@@ -1374,7 +1374,6 @@ Required environment variables for production:
 | Variable                  | Purpose                                                                          |
 | ------------------------- | -------------------------------------------------------------------------------- |
 | `MOTEBIT_SYNC_URL`        | Relay URL for registration and task routing                                      |
-| `MOTEBIT_API_TOKEN`       | Auth token for relay API                                                         |
 | `MOTEBIT_PASSPHRASE`      | Passphrase for Ed25519 key decryption                                            |
 | `MOTEBIT_PRIVATE_KEY_HEX` | (Optional) Private key as hex — avoids passphrase-based decryption in production |
 | `MOTEBIT_PUBLIC_URL`      | Public URL where other agents can reach your service                             |
@@ -1384,12 +1383,11 @@ Deploy:
 ```bash
 fly launch
 fly secrets set MOTEBIT_SYNC_URL=https://relay.motebit.com
-fly secrets set MOTEBIT_API_TOKEN=your-token
 fly secrets set MOTEBIT_PASSPHRASE=your-passphrase
 fly deploy
 ```
 
-The `--self-test` in the `start` script runs on every deploy, confirming the full protocol loop works against the live relay.
+`start` does not pass `--self-test`; run `npm run self-test` (or add `--self-test` to your deploy command) to confirm the full protocol loop against the live relay on each deploy.
 
 See [Architecture](/docs/operator/architecture) for relay deployment and configuration.
 
@@ -1489,14 +1487,14 @@ Their names are **claims, not verified handles**. A Discover card renders `claim
 
 | Service      | Capability    | Display name     | Kind     | Price       |
 | ------------ | ------------- | ---------------- | -------- | ----------- |
-| `web-search` | `web_search`  | —                | atom     | free        |
-| `read-url`   | `read_url`    | —                | atom     | free        |
+| `web-search` | `web_search`  | —                | atom     | $0.003/task (`MOTEBIT_UNIT_COST`) |
+| `read-url`   | `read_url`    | —                | atom     | $0.002/task |
 | `summarize`  | `summarize_search` | —           | atom     | free        |
 | `research`   | `research`    | The Researcher   | molecule | $0.25/task  |
 | `auditor`    | `audit_agent` | The Auditor      | molecule | $0.01/task  |
 | `clerk`      | `execute_delegation` | The Clerk | molecule | $0.01/task  |
 
-Atoms run at zero cost today: the delegation chain is relay-visible and every hop is receipted, but nothing settles until the multi-hop settlement arc lands — the listings don't pretend otherwise. Molecules are priced and paid P2P at the top of the chain.
+The multi-hop settlement arc has landed: `web-search` and `read-url` are priced market participants (the molecule pays them P2P for each sub-hop, receipted at every hop) and only `summarize` is free today. Molecules are priced and paid P2P at the top of the chain. Prices are operator-set per deployment (`scripts/deploy-archetype-slate.ts`).
 
 ## The Researcher
 
@@ -1597,7 +1595,7 @@ A version number is a claim about what changed. Motebit's published packages ver
 | `@motebit/sdk` | `2.x` | Developer contract — types + adapter interfaces |
 | `@motebit/crypto-{appattest,android-keystore,tpm,webauthn}` | `1.x` | Platform attestation verifiers |
 | `create-motebit` | `1.x` | Project scaffolder |
-| `motebit` (CLI bundle) | `1.x` | Operator surface: subcommands, flags, exit codes, `~/.motebit/` layout, relay HTTP routes |
+| `motebit` (CLI bundle) | `1.x` | Operator surface: subcommands, flags, exit codes, `~/.motebit/` layout |
 | `@motebit/state-export-client` | `0.x` | **Pre-1.0 — the API may still change. Pin the exact version.** |
 | workspace-private (`0.0.0-private`) | — | **No public contract.** Bundled into `motebit`; internals can change between any two releases. Don't `npm install` or depend on them. |
 
@@ -1607,8 +1605,8 @@ The full published list and the protocol/package boundary live in [Public surfac
 
 You don't have to take motebit's word for it — the stability is mechanical:
 
-- **`check-api-surface`** pins the exported type surface of `protocol`, `sdk`, `crypto`, `verifier`, and `verify` to committed api-extractor baselines (`packages/*/etc/*.api.md`). Any change to an exported signature **fails CI** unless a `major` changeset ships with it. A breaking change *cannot* be released as a patch.
-- **`check-cli-surface`** locks the `motebit` CLI's subcommands, flags, exit codes, `~/.motebit/` layout, and relay routes the same way.
+- **`check-api-surface`** pins the exported type surface of `@motebit/protocol`, `@motebit/crypto`, and `@motebit/sdk` to committed api-extractor baselines (`packages/{protocol,crypto,sdk}/etc/*.api.md`); the other published packages are covered by their own conformance fixtures and semver review, not by an extracted baseline. Any change to an exported signature **fails CI** unless a `major` changeset ships with it. A breaking change *cannot* be released as a patch.
+- **`check-cli-surface`** locks the `motebit` CLI's subcommands, top-level flags, exit codes, and `~/.motebit/` layout the same way. Relay HTTP routes are documented per spec (`check-spec-routes`) but are not part of this gate.
 
 These are drift gates that break the build — the same discipline that keeps the docs honest keeps the API honest.
 
@@ -1650,7 +1648,7 @@ Node >= 20 and pnpm 9.15+ are required.
 
 ## Running a local relay
 
-The relay lives in `services/relay/`. Two environment variables are required:
+The relay lives in `services/relay/`. One environment variable is required (`X402_PAY_TO_ADDRESS`); `MOTEBIT_API_TOKEN` is optional but the `Bearer` examples below use it:
 
 ```bash
 cd services/relay
@@ -1752,12 +1750,7 @@ curl -X POST http://localhost:3000/api/v1/agents/agent-alice/listing \
 
 If the service listing has pricing, the caller needs funds for budget allocation:
 
-```bash
-curl -X POST http://localhost:3000/api/v1/agents/agent-caller/deposit \
-  -H "Authorization: Bearer test-token" \
-  -H "Content-Type: application/json" \
-  -d '{ "amount": 10.0, "currency": "USD", "description": "Test deposit" }'
-```
+> The self-declared deposit route (`POST /api/v1/agents/:id/deposit`) no longer exists — it was removed as a treasury-drain vector, and balance is credited only by verified server-side funding (Stripe checkout via `POST /api/v1/agents/:id/checkout`, or on-chain USDC picked up by the deposit detector). For a local loop, register an unpriced listing (`unit_cost: 0`) so no balance is needed.
 
 Returns the new balance:
 
@@ -1917,7 +1910,7 @@ What it validates:
 
 If self-test passes, the agent is correctly wired to the relay. If it fails, the output tells you why — common causes are missing relay URL, auth failure, or unfunded budget.
 
-Every `npm run dev` from a scaffolded agent (`npm create motebit -- --agent`) exercises self-test automatically, so sybil defense regressions are caught by every new developer during onboarding.
+`npm run self-test` from a scaffolded agent (`npm create motebit -- --agent`) exercises the self-delegation probe against the live relay (`dev` and `start` do not pass `--self-test`), so sybil defense regressions are caught by every new developer who runs it during onboarding.
 
 ## Reading the inspector dashboard
 
@@ -1954,7 +1947,7 @@ The relay is not running. Start it with `pnpm run dev` in `services/relay/`.
 
 The delegating agent's budget account has insufficient funds. Either:
 
-- Fund the account with `POST /api/v1/agents/:id/deposit`
+- Fund the account through a verified path (Stripe checkout, or the on-chain deposit detector) — the self-declared `/deposit` route was removed as a treasury-drain vector; for local testing, use an unpriced listing
 - Remove pricing from the service listing (free agents do not require budget locks)
 - Set `X402_PAY_TO_ADDRESS` to the zero address (disables real payment settlement, but virtual budget accounting still applies)
 
@@ -2240,7 +2233,7 @@ Signed tokens authenticate sync requests between a device and the relay server. 
 
 **Payload fields:**
 
-All fields below are **required** — a verifier MUST reject a token missing any of them (spec `auth-token@1.0` §3). Build the token with `createSignedToken`, which sets them for you; do not hand-assemble a `{mid,did,iat,exp}` payload — it will be rejected for missing `jti`/`aud`/`suite`.
+All fields below are **required** — a verifier MUST reject a token missing any of them (spec `auth-token@1.0` §3). `createSignedToken` stamps only `suite`; every other field is the caller's to supply, so mint with `mintAudienceToken` (which fills `jti`, `iat` and `exp` and binds `aud`) rather than hand-assembling a `{mid,did,iat,exp}` payload — that would be rejected for missing `jti`/`aud`.
 
 | Field   | Required | Description                                                                                                    |
 | ------- | -------- | -------------------------------------------------------------------------------------------------------------- |
@@ -2492,7 +2485,7 @@ POST /api/v1/credentials/verify
 Public endpoint — no authentication required. Accepts a `VerifiableCredential` JSON body and returns whether the signature is valid.
 
 ```json
-{ "valid": true }
+{ "valid": true, "issuer": "did:key:z6Mk…", "subject": "did:key:z6Mk…" }
 ```
 
 This endpoint verifies the `eddsa-jcs-2022` proof by extracting the public key from the `verificationMethod` DID, reconstructing the canonical hashes, and checking the Ed25519 signature. It also rejects expired credentials (where `validUntil` is in the past).
@@ -2833,7 +2826,7 @@ Independent of identity verification, the client computes a SHA-256 hash of the 
 
 ### Sensitivity caps for external callers
 
-External callers cannot store high-sensitivity memories. The `motebit_remember` tool rejects any request with sensitivity level `medical`, `financial`, or `secret`. Memory queries via `motebit_recall` filter out these sensitivity levels before returning results.
+External callers cannot store high-sensitivity memories. The `motebit_remember` tool rejects any request with sensitivity level `personal`, `medical`, `financial`, or `secret` — only `none` is accepted from an external caller. Memory queries via `motebit_recall` filter out these sensitivity levels before returning results.
 
 ### Signed token authentication
 
@@ -2882,7 +2875,7 @@ The sub-delegation flow inside Bob's task handler:
 3. Open an MCP StreamableHTTP session to Charlie's endpoint.
 4. Authenticate with a signed token (`createSignedToken` — Ed25519, 5-minute expiry).
 5. If a relay is configured (`MOTEBIT_SYNC_URL`), submit a relay task for budget allocation before calling Charlie.
-6. Call `motebit_task` on Charlie with the URL as the prompt, passing `relay_task_id` for economic binding.
+6. Call `motebit_task` on Charlie with the URL as the prompt, passing `relay_task_id` for economic binding and the relay's `dispatch_token` (returned by the task submission) as proof of admission — a worker configured for task admission refuses the hop without it.
 7. Parse Charlie's receipt from the response.
 8. Nest Charlie's receipt in `delegation_receipts` when constructing Bob's own receipt.
 
@@ -2957,7 +2950,7 @@ interface ExecutionReceipt {
   memories_formed: number;
   prompt_hash: string; // hex(SHA-256(UTF-8(prompt))) — plain SHA-256 of the prompt string
   result_hash: string; // hex(SHA-256(UTF-8(result))) — plain SHA-256 of the result string (NOT canonicalized)
-  relay_task_id?: string; // binds receipt to the relay's economic identity
+  relay_task_id: string; // binds receipt to the relay's economic identity — required; the relay rejects a receipt without it
   delegation_receipts?: ExecutionReceipt[]; // nested sub-delegation proofs
   suite: "motebit-jcs-ed25519-b64-v1"; // REQUIRED, signed — stamped by signExecutionReceipt
   signature: string; // Ed25519 over the JCS-canonical UTF-8 bytes of all other fields (not a hash of them)
@@ -3277,7 +3270,7 @@ The agent submits its signed execution ledger after goal completion. The relay s
 GET /agent/:motebitId/ledger/:goalId
 ```
 
-Returns the execution ledger for a specific goal. If the agent submitted a signed ledger, that is returned. Otherwise, the relay reconstructs one from synced events (unsigned).
+Returns the execution ledger the agent submitted for a specific goal — signed by the agent. If none was submitted, this route returns 404. For a relay-reconstructed ledger assembled from synced events (unsigned), use `GET /api/v1/execution/:motebitId/:goalId` (the state-export surface, which wraps the body in a relay-signed `ContentArtifactManifest`).
 
 The relay-constructed ledger has the same structure but omits the `signature` field. It can be verified for content integrity (the content hash matches the timeline) but not for authenticity.
 
@@ -3293,7 +3286,7 @@ Returns the relay-reconstructed execution manifest. This endpoint builds the led
 
 To verify a ledger:
 
-1. Check `spec` is `"motebit/execution-ledger@1.0"`.
+1. Check `spec` is `"motebit/execution-ledger@1.0"` or `"motebit/execution-ledger@1.1"` (1.1 is what the relay emits when it archives the inner `signed_receipts`; agent-produced ledgers are 1.0).
 2. Recompute the content hash from the timeline using canonical JSON serialization.
 3. Compare the recomputed hash against `content_hash`. If they differ, the timeline has been tampered with.
 4. If `signature` is present, decode it from base64url and verify the Ed25519 signature over the raw content hash bytes using the agent's public key.
@@ -3359,7 +3352,7 @@ This is the one place producers reliably get wrong. There are **two different ha
 
 > **The trap.** `result_hash` and `prompt_hash` are **plain SHA-256 of the UTF-8 string** — **not** canonicalized. `args_hash` (on a `ToolInvocationReceipt`) is `canonicalSha256` of an object. Using `canonicalSha256` on a string adds JSON quotes (`canonicalSha256("x")` hashes `"x"` _with_ the quotes), so it does **not** equal `SHA-256("x")` — and a third party recomputing per spec gets a mismatch. A signed receipt whose `result_hash` nobody can reproduce from its own `result` is a signed number, not a proof.
 
-From the spec (§ Hash fields), verbatim:
+From the spec — the two string hashes are §11.4 "Content Hashing"; `args_hash` is defined in §3.1 (tool-invocation fields):
 
 ```
 prompt_hash = hex(SHA-256(UTF-8(prompt_string)))   // plain SHA-256 of the STRING
@@ -3455,7 +3448,7 @@ Source: https://docs.motebit.com/docs/developer/verify-a-receipt
 
 You have an `ExecutionReceipt` and you want to prove it's real. The whole point of the protocol is that you can do this yourself, offline, with no relay and no account. This page is the shortest correct path — for JavaScript/TypeScript, for the command line, and for any other language.
 
-The one thing to internalize first: **the verifier is already published. Do not write your own.** Canonicalization (JCS / RFC 8785) and cryptosuite dispatch are exactly where hand-rolled verifiers silently pass on one receipt and fail on the next. The permissive-floor library handles both, is Apache-2.0 with a patent grant, has zero monorepo dependencies, and runs in the browser.
+The one thing to internalize first: **the verifier is already published. Do not write your own.** Canonicalization (JCS / RFC 8785) and cryptosuite dispatch are exactly where hand-rolled verifiers silently pass on one receipt and fail on the next. The permissive-floor library handles both, is Apache-2.0 with a patent grant, has zero third-party dependencies (it pulls in only `@motebit/crypto` and `@motebit/protocol`), and runs in the browser.
 
 ## Try it now — real receipts to verify
 
@@ -3535,7 +3528,7 @@ Every signed artifact carries an explicit `suite` field on the wire — for exam
 
 ### Delegation chains
 
-If the receipt delegated sub-tasks, each nested receipt is independently signed and verified. Walk `result.delegations` to inspect every hop; the library recurses for you (the spec caps nesting depth at 10).
+If the receipt delegated sub-tasks, each nested receipt is independently signed and verified. Walk `result.delegations` to inspect every hop; the library recurses for you. The spec _recommends_ a nesting-depth limit of 10; the library does not enforce one today, so bound untrusted input yourself before verifying.
 
 ## Command line — two binaries, split by audience
 
@@ -3554,11 +3547,11 @@ npx @motebit/verify ./receipt_9f4c.json        # binary is `motebit-verify`
 motebit verify receipt ./receipt_9f4c.json
 ```
 
-`motebit-verify` is the **fuller** surface — it wires the canonical hardware-attestation leaves (App Attest, TPM, Android Keystore, WebAuthn) for credentials that carry them, and covers `content-artifact`. Both binaries bottom out in `@motebit/crypto`'s canonical verify, so they report the **same** binding-ladder rung on the same receipt — no second implementation to drift. Why two namespaces at all: keeping `motebit-verify` standalone (and Apache-2.0) is what lets a verifier run without adopting the BSL runtime — verification independence is a trust property, not a CLI-ergonomics one. For the _library_ axis (which package to import), see [Choosing a Verify Surface](/docs/developer/choosing-a-verify-surface).
+`motebit-verify` is the **fuller** surface — it wires the canonical hardware-attestation leaves (App Attest, TPM, Android Keystore, WebAuthn) for credentials that carry them, and covers `content-artifact`. Both binaries bottom out in `@motebit/crypto`'s canonical verify, so a receipt that verifies in one verifies in the other; only `motebit-verify` (via `@motebit/verifier`) computes and reports the binding-ladder rung — `motebit verify receipt` checks schema, suite and signature and prints no rung. Same receipt — no second implementation to drift. Why two namespaces at all: keeping `motebit-verify` standalone (and Apache-2.0) is what lets a verifier run without adopting the BSL runtime — verification independence is a trust property, not a CLI-ergonomics one. For the _library_ axis (which package to import), see [Choosing a Verify Surface](/docs/developer/choosing-a-verify-surface).
 
 ## No web page, no install — see it work
 
-Paste any receipt into [receipt.computer](https://receipt.computer): a public, login-free verifier that runs the _same_ verification client-side and reports the same rung. Because it uses `@motebit/verifier`, a receipt you verify in your own code and a receipt you verify there produce the byte-identical verdict — that agreement is the proof, not a claim about it.
+Paste any receipt into [receipt.computer](https://receipt.computer): a public, login-free verifier that runs the _same_ verification client-side and reports the same rung. It runs `@motebit/state-export-client`, which shares the same `@motebit/crypto` floor as `@motebit/verifier`, and `check-receipt-conformance` holds the two to the same verdict on the shared fixtures — so a receipt you verify in your own code and a receipt you verify there produce the byte-identical verdict — that agreement is the proof, not a claim about it.
 
 ## Any other language
 
@@ -3629,7 +3622,7 @@ const result = await verifyEvidenceProvenance(bytes, citation.provenance);
 // { present: false, reason: "span_absent" }     → the span was fabricated.
 ```
 
-`@motebit/verifier` is the Apache-2.0, zero-monorepo-dependency, browser-safe consumer surface. `verifyEvidenceProvenance` (and the `EvidenceProvenance` / `EvidenceProvenanceResult` types) re-export from `@motebit/crypto` through it.
+`@motebit/verifier` is the Apache-2.0, browser-safe consumer surface with zero third-party dependencies (its only dependencies are `@motebit/crypto` and `@motebit/protocol`). `verifyEvidenceProvenance` (and the `EvidenceProvenance` / `EvidenceProvenanceResult` types) re-export from `@motebit/crypto` through it.
 
 ## The recipe path (HTML)
 
@@ -3646,7 +3639,7 @@ const result = await verifyEvidenceProvenance(rawHtmlBytes, citation.provenance,
 
 The verifier is **domain-blind by construction** — it owns no recipe catalog (that would be document-format authority). You bring a resolver only for recipes you trust; for any other recipe the check fails closed with `projection_unresolved`. To signal "I can't resolve this," _omit_ the recipe from your resolver — never throw as a "not supported" signal (a throw propagates as a caller fault, never a false `present: false`).
 
-The one recipe in use today, [`agency.html-text.v1`](https://github.com/agency-computer/html-text-spec), is a frozen, world-public spec. A conforming implementation reproduces its output **byte-for-byte** from §2 of that spec — five ordered steps, ASCII-only whitespace, a single-pass entity decode. The canonical port to copy is the stdlib-only [Python reference](https://github.com/motebit/motebit/blob/main/examples/python-receipt-verifier/verify_evidence_provenance.py) (`project_agency_html_text_v1`). (If you are already running a motebit, `@motebit/tools` exports `projectAgencyHtmlTextV1`; a lightweight standalone resolver package is on the roadmap — file an issue if you want it sooner.)
+The one recipe in use today, [`agency.html-text.v1`](https://github.com/agency-computer/html-text-spec), is a frozen, world-public spec. A conforming implementation reproduces its output **byte-for-byte** from §2 of that spec — five ordered steps, ASCII-only whitespace, a single-pass entity decode. The canonical port to copy is the stdlib-only [Python reference](https://github.com/motebit/motebit/blob/main/examples/python-receipt-verifier/verify_evidence_provenance.py) (`project_agency_html_text_v1`). (If you are already running a motebit, the workspace-private `@motebit/tools` package (not published to npm — port it, do not depend on it) exports `projectAgencyHtmlTextV1`; a lightweight standalone resolver package is on the roadmap — file an issue if you want it sooner.)
 
 ## Verify in any language
 
@@ -4048,7 +4041,7 @@ Three outcomes:
 
 | Receipt Status           | Ledger                             | Settlement                                               |
 | ------------------------ | ---------------------------------- | -------------------------------------------------------- |
-| `"completed"`            | All steps completed (or no ledger) | **Full settlement** — locked amount is paid              |
+| `"completed"`            | All steps completed (or no ledger) | **Full settlement** — locked amount minus the platform fee is paid |
 | `"completed"`            | Some steps completed, some failed  | **Partial settlement** — proportional to completed steps |
 | `"failed"` or `"denied"` | Any                                | **Refund** — locked amount returned, `amount_settled: 0` |
 
@@ -4058,15 +4051,18 @@ The settlement record includes:
 {
   settlement_id: string;
   allocation_id: string;
+  motebit_id: string;
   receipt_hash: string; // links to the execution receipt
   ledger_hash: string | null; // links to the execution ledger
-  amount_settled: number;
+  amount_settled: number; // gross minus platform_fee
+  platform_fee: number;
+  platform_fee_rate: number; // PLATFORM_FEE_RATE (0.05)
   status: "completed" | "partial" | "refunded";
   settled_at: number;
 }
 ```
 
-Partial settlement uses the execution ledger to determine the proportion: `completed_steps / total_steps * amount_locked`, rounded to two decimal places. This requires the delegating agent to have access to the ledger — if no ledger is provided and the receipt is completed, full settlement applies.
+Partial settlement uses the execution ledger to determine the proportion: `completed_steps / total_steps * amount_locked`, with the platform fee taken from the gross and every amount rounded to six decimal places (USDC micro-units). This requires the delegating agent to have access to the ledger — if no ledger is provided and the receipt is completed, full settlement applies.
 
 ## Candidate scoring
 
@@ -4121,7 +4117,7 @@ Returns scored and ranked candidates matching the specified criteria.
 
 ### Budget (via relay internals)
 
-Budget allocations and settlements are stored on the relay and linked to task submissions. The relay tracks allocations (`relay_budget_allocations`) and settlement records (`relay_settlements`) per task. When a task is submitted with a `max_budget`, the relay runs cost estimation and budget allocation before forwarding to the candidate. Settlement occurs automatically when the execution receipt is verified.
+Budget allocations and settlements are stored on the relay and linked to task submissions. The relay tracks allocations (`relay_allocations`) and settlement records (`relay_settlements`) per task. A task is priced from the worker's service listing at submission — there is no `max_budget` request field on `POST /agent/:motebitId/task` (`max_budget` is a query parameter of the candidates endpoint above). When a priced task is submitted, the relay runs cost estimation and budget allocation before forwarding to the candidate. Settlement occurs automatically when the execution receipt is verified.
 
 ---
 
@@ -4143,6 +4139,8 @@ A semiring `(S, +, *, 0, 1)` is an algebraic structure with two operations:
 
 The key property: `mul` distributes over `add`. This means the graph traversal algorithm can compose edges and aggregate alternatives in any order and get the same answer. One algorithm works for every routing concern.
 
+Two further preconditions make the traversal below terminate with that answer. `add` must be **idempotent** (`add(a, a) = a` — combining a route with itself changes nothing), and weights must be **0-closed**: going around a cycle never improves a path (`add(one, x) = one`). Every scalar semiring in the table is in fact **selective** (`add(a, b)` is always one of `a` or `b` — a choice, not a sum), which is stronger than idempotent; the frontier semiring below is idempotent but _not_ selective (the union of two frontiers is neither operand), and the traversal is correct for it all the same. Trust and reliability are ≤ 1 under `*`, costs and latencies are ≥ 0 under `+`, so a loop can only make a route worse. A weight outside its domain (a trust edge above 1, a negative cost) breaks the guarantee, which is why edge weights are validated at the boundary.
+
 ## Concrete semirings
 
 Each semiring models a different routing concern over the same graph:
@@ -4158,7 +4156,7 @@ Each semiring models a different routing concern over the same graph:
 | `RegulatoryRiskSemiring` | `(min, +, Inf, 0)`       | Lowest regulatory risk path                                     |
 | `MaxProductLogSemiring`  | `(max, +, -Inf, 0)`      | Most likely path in log space (avoids underflow on long chains) |
 
-Trust and reliability compose multiplicatively — chaining two 80% trust edges yields 64% effective trust. Cost, latency, and regulatory risk compose additively — chaining a $0.01 edge and a $0.02 edge costs $0.03. Bottleneck composes via `min` — the capacity of a chain is its weakest link.
+Trust and reliability compose multiplicatively — chaining two 80% trust edges yields 64% effective trust. That is a modeling choice, not a law of nature: the product treats each hop as an independent chance of failure. It guarantees only that a chain is never more trustworthy than any one of its own links; it says nothing about how a chain compares with a _separate_ direct edge (a 0.9 × 0.9 chain outranks a 0.1 direct edge), and independence is an assumption a correlated failure would violate. Cost, latency, and regulatory risk compose additively — chaining a $0.01 edge and a $0.02 edge costs $0.03. Bottleneck composes via `min` — the capacity of a chain is its weakest link.
 
 ```typescript
 import {
@@ -4225,17 +4223,23 @@ const RouteWeightSemiring = recordSemiring({
 
 One graph traversal computes trust, cost, latency, reliability, and regulatory risk in a single pass.
 
+Read the result for what it is. Because `add` is component-wise, the value a record semiring assigns to a node reachable by two routes is the best trust of one route beside the best cost of the other — a true summary of the optima achievable **per dimension**, not a route. `{ trust: 0.81, cost: 1 }` can come back for a node whose only routes are `(0.81, 10)` and `(0.2, 1)`. Ranking on that summary, or reporting it as the hire's metrics, describes a route that does not exist. Ranking therefore runs over the [Pareto frontier semiring](#path-preserving-ranking-the-pareto-frontier-semiring) below, which keeps the pairs together.
+
 ### Mapped semiring
 
-Transform a semiring through an isomorphism — useful for branded types or unit conversions:
+Transform a semiring through an isomorphism — a pair of maps that are exact inverses of each other. The semiring laws survive only if nothing is lost in either direction, so a rounding step is not a valid map (`round(x * 100) / 100 ≠ x` breaks `add(a, a) = a` and associativity in the last digit). The intended uses are branded types and lossless unit changes:
 
 ```typescript
 import { mappedSemiring, CostSemiring } from "@motebit/protocol";
 
-const CentsSemiring = mappedSemiring(
+// Branded micro-units over the same integer arithmetic (1 USD = 1_000_000).
+// The maps are identities on the value — only the type changes — so every
+// semiring law holds exactly. Money enters the graph already in micro-units.
+type Micro = number & { readonly __brand: "Micro" };
+const MicroCostSemiring = mappedSemiring(
   CostSemiring,
-  (dollars) => Math.round(dollars * 100), // to cents
-  (cents) => cents / 100, // from cents
+  (micro: Micro) => micro as number,
+  (n: number) => n as Micro,
 );
 ```
 
@@ -4272,7 +4276,7 @@ const paths = optimalPaths(graph, "alice");
 
 Over `TrustSemiring`, this finds the most trusted delegation chain. Over `CostSemiring`, the cheapest pipeline. Over `BooleanSemiring`, the reachable set. Same algorithm, different semiring, different answer.
 
-Complexity: O(V \* E). Early termination when no values change.
+Complexity: O(V \* E) semiring operations for the scalar semirings, under the idempotent and 0-closed preconditions above. Early termination when no values change. For the frontier semiring each operation is itself O(frontier size), which `maxPaths` bounds.
 
 ### Floyd-Warshall: all-pairs transitive closure
 
@@ -4323,7 +4327,7 @@ import { TrustSemiring, WeightedDigraph, optimalPaths } from "@motebit/protocol"
 
 The protocol-floor symbols above are Apache-2.0 public surface. The `annotatedSemiring` combinator itself is reference-implementation judgment:
 
-<ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/annotated.ts">
+<ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/provenance.ts">
 
 ```typescript
 import { annotatedSemiring } from "@motebit/semiring";
@@ -4350,13 +4354,13 @@ const carol = paths.get("carol");
 
 </ReferenceExample>
 
-Every query returns both the optimal value and the derivation paths that produced it.
+Every query returns the per-dimension optimal value together with the set of paths that were **considered** in reaching it — the union of every route that survived the component-wise `add`. That set explains the derivation; it does not say which one route yields `value`, and under a record semiring no single route may. When the question is "which route was chosen, and what were its metrics?", ask the frontier semiring instead.
 
 ### Bounded provenance
 
 Provenance can grow exponentially in graphs with many parallel paths. `boundedProvenanceSemiring(maxPaths)` caps the number of tracked derivations, keeping the shortest paths (fewest hops = simplest explanation):
 
-<ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/annotated.ts">
+<ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/provenance.ts">
 
 ```typescript
 import { boundedProvenanceSemiring } from "@motebit/semiring";
@@ -4367,6 +4371,47 @@ const bounded = boundedProvenanceSemiring(10); // keep top 10 shortest derivatio
 </ReferenceExample>
 
 The `annotatedSemiring` function uses bounded provenance by default (cap of 100 paths).
+
+## Path-preserving ranking: the Pareto frontier semiring
+
+Change what "best path" means by changing the semiring — the routing doctrine applied to its own weak spot. When several routes reach the same agent and no single route is best in every dimension, the honest value of that node is the **set** of routes nothing else dominates. That set is a semiring element:
+
+- `add` (parallel) = union of the two frontiers, then drop every pair some other pair beats in **every** dimension — "either route works; keep only the ones a policy could pick"
+- `mul` (sequential) = compose weight **and** path pairwise, then drop dominated pairs
+- `zero` = the empty frontier (unreachable)
+- `one` = `{ (identity weight, []) }` (the empty route)
+
+Each element a query returns is a route that exists, carrying exactly the metrics its own edges compose to. A policy then chooses **among** real routes, and the chosen route's metrics are the chosen route's metrics.
+
+<ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/pareto.ts">
+
+```typescript
+import { frontierPaths, chooseFromFrontier, ROUTE_WEIGHT_DIMENSIONS } from "@motebit/semiring";
+
+// graph: self → worker (trust 0.2, cost 1) and self → helper → worker (trust 0.81, cost 10)
+const frontiers = frontierPaths(graph, ROUTE_WEIGHT_DIMENSIONS, "self");
+frontiers.get("worker");
+// [
+//   { weight: { trust: 0.2,  cost: 1,  … }, path: ["worker"] },
+//   { weight: { trust: 0.81, cost: 10, … }, path: ["helper", "worker"] },
+// ]
+// — never { trust: 0.81, cost: 1 }, which is what the record semiring reports.
+
+const trustFirst = chooseFromFrontier(frontiers.get("worker")!, (w) => w.trust);
+// trustFirst.chosen.path   → ["helper", "worker"]
+// trustFirst.chosen.weight → { trust: 0.81, cost: 10, … }   (its own edges, composed)
+// trustFirst.ordered       → chosen first, then the alternatives the policy weighed
+```
+
+</ReferenceExample>
+
+`paretoPathSemiring(dims, { maxPaths })` is the semiring itself, for callers that want to run `optimalPaths` over it directly. Dominance is judged per dimension by that dimension's own `add` (max for trust-like, min for cost-like), so adding a routing concern to the dimension record extends the frontier with no new code.
+
+What is exact and what is not — the contract a caller is relying on:
+
+1. **Unbounded, the frontier is exact.** It equals the Pareto set of simple paths from the source (ties on weight resolve to the fewest-hop path), independent of edge insertion order. The reference tests check this against brute-force enumeration on random graphs.
+2. **A policy must be monotone in the frontier's dimensions.** Pruning discards a route only when another is at least as good in _every_ dimension, so a policy that could still prefer the discarded route — one that reads an input outside the dimensions — is unsound. The market ranks on six dimensions, not five, for exactly this reason: chain hardware attestation multiplies trust after the frontier is formed, so it is lifted into the weight (`min` along the route) rather than applied afterwards.
+3. **The bound is an approximation with no optimality-gap guarantee.** `maxPaths` (default 32) keeps the fewest-hop pairs; it can drop the pair a policy would have chosen, nothing bounds how far the policy's pick can then fall below its optimum, and addition under it is order-sensitive in the tail. Reported metrics stay honest — a surviving pair is still a real route with its own metrics. Same discipline and same caveat as bounded provenance.
 
 ## Agent network bridge
 
@@ -4386,11 +4431,11 @@ interface RouteWeight {
 }
 ```
 
-`RouteWeightSemiring` is a `recordSemiring` over these five dimensions. One traversal computes all five simultaneously.
+`ROUTE_WEIGHT_DIMENSIONS` names the five per-dimension semirings; `RouteWeightSemiring` is the `recordSemiring` over them (one traversal, five per-dimension optima — a summary), and `frontierPaths(graph, ROUTE_WEIGHT_DIMENSIONS, source)` is the path-preserving traversal ranking uses.
 
 ### Building an agent graph
 
-<ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/agent-graph.ts">
+<ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/agent-network.ts">
 
 ```typescript
 import {
@@ -4409,7 +4454,7 @@ const trusted = mostTrustedPath(graph, selfId, targetId);
 const cheap = cheapestPath(graph, selfId, targetId);
 // { cost: 0.015, path: ["self", "agent-xyz"] }
 
-// Multi-dimensional ranking
+// Multi-dimensional ranking over each agent's frontier of real routes
 const ranked = rankReachableAgents(graph, selfId, {
   trust: 0.3,
   cost: 0.2,
@@ -4417,7 +4462,8 @@ const ranked = rankReachableAgents(graph, selfId, {
   reliability: 0.15,
   regulatory_risk: 0.2,
 });
-// [{ motebit_id, score, route }, ...]
+// [{ motebit_id, score, route, path, alternatives }, ...]
+//   route = the CHOSEN route's own composed metrics; path = that route's hops
 ```
 
 </ReferenceExample>
@@ -4432,7 +4478,7 @@ import { TrustSemiring } from "@motebit/protocol";
 
 `TrustSemiring` is on the Apache-2.0 floor; the `projectGraph` combinator that consumes it is reference-implementation judgment:
 
-<ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/agent-graph.ts">
+<ReferenceExample pkg="@motebit/semiring" source="packages/semiring/src/agent-network.ts">
 
 ```typescript
 import { projectGraph } from "@motebit/semiring";
@@ -4447,11 +4493,16 @@ const trustOnly = projectGraph(graph, TrustSemiring, (w) => w.trust);
 
 The `@motebit/market` package's `graphRankCandidates` function is the primary routing entry point. It bridges the semiring algebra with the market's candidate scoring system:
 
-1. Builds a `WeightedDigraph<RouteWeight>` from candidate profiles.
-2. Runs `optimalPaths` to compute algebraically composed per-dimension values.
-3. Normalizes additive accumulators (cost, latency, risk) to `[0,1]` via sigmoid mapping.
-4. Applies a configurable composite function (default: weighted sum) to produce a single ordering value.
-5. Returns `RouteScore[]` for backward compatibility.
+1. Builds a `WeightedDigraph<RouteWeight>` from candidate profiles plus peer edges. Every peer edge declares what it **is** for this task: `kind: "evidence"` (a recorded delegation — it vouches, the task will not traverse it) or `kind: "traversed"` (a federation relay hop the task really takes).
+2. **Trust** is evidence about the agent: the best transitive trust over _every_ edge, with the vouching path that attains it (`trust_evidence_path`).
+3. **Execution metrics** — cost, latency, reliability, regulatory risk, hardware custody — describe work that will happen: `frontierPaths` over the graph restricted to hops the task will take (the direct hire, or a traversed relay path) gives, per candidate, the Pareto frontier of real planned execution routes. A delegation record's price and latency are a past job's, never this task's, so they never enter.
+4. Normalizes additive accumulators (cost, latency, risk) to `[0,1]` via sigmoid mapping.
+5. Applies a configurable composite function (default: weighted sum) to every planned execution route — evidence trust, that route's own execution metrics, that route's own custody boost — and keeps the winner.
+6. Returns `RouteScore[]` whose `sub_scores` are the evidence trust and the chosen planned execution route's metrics.
+
+Why the split: a relationship can vouch for an agent, but only hops the task takes can cost it money or time. Before this split (2026-09-14), hiring B directly with A's recorded delegation to B in the graph priced the hire with A's cost and latency added on.
+
+Two rules keep the graph and the dispatcher in agreement. **Only dispatchable hops enter execution ranking:** a candidate discovered through a federation peer carries `reachable_via`, gets no direct edge, and its own metrics sit on the peer → agent leg. **Dispatch consumes the selected route:** the relay forwards to the peer the planned route names, never to one chosen independently. The route reported at selection time is the _planned execution route_; who actually took part is established afterwards by receipts.
 
 <ReferenceExample pkg="@motebit/market" source="packages/market/src/graph-routing.ts">
 
@@ -4478,7 +4529,7 @@ const scores = graphRankCandidates(
 
 ### Explained routing
 
-`explainedRankCandidates` extends `graphRankCandidates` with provenance tracking. Each result includes `routing_paths` — the derivation paths that explain why the agent was chosen:
+`explainedRankCandidates` extends `graphRankCandidates` with both paths a decision rests on. `routing_paths[0]` is the **planned execution route** — the hops the task will take, whose composed execution metrics the score reports (`["agent-xyz"]` for a direct hire; `["relay-a", "agent-xyz"]` for a federated one) — and the remaining entries are the non-dominated planned-route alternatives the policy weighed, best first. `alternatives_considered` is the size of that frontier. `trust_evidence_path` is the vouching chain, through every edge kind, that justified the trust value:
 
 <ReferenceExample pkg="@motebit/market" source="packages/market/src/graph-routing.ts">
 
@@ -4487,12 +4538,16 @@ import { explainedRankCandidates } from "@motebit/market";
 
 const explained = explainedRankCandidates(selfId, candidates, requirements);
 // explained[0].routing_paths → [["relay-a", "agent-xyz"], ["agent-xyz"]]
+//   [0] = the planned execution route whose cost/latency/custody sub_scores report (via relay-a)
+//   [1] = the direct route, viable but not chosen under this policy
 // explained[0].alternatives_considered → 2
+// explained[0].trust_evidence_path → ["agent-abc", "agent-xyz"]
+//   the vouching chain behind sub_scores.trust — evidence, not execution
 ```
 
 </ReferenceExample>
 
-This provenance flows end-to-end: the relay returns `routing_choice` on task submission, `PlanEngine` attaches it to the delegation step summary, and it is signed into the execution ledger manifest — creating an immutable audit trail from semiring algebra to cryptographic proof.
+This flows end-to-end: the relay returns `routing_choice` on task submission, `PlanEngine` attaches it to the delegation step summary, and it is signed into the execution ledger manifest — an audit trail from semiring algebra to cryptographic proof. It is only worth signing because it is exact: the transcript names routes that exist and each route's own metrics, so a verifier can recompute them from the same edges. A component-wise summary would have signed a route that does not exist. Read each path for what it is: `routing_paths[0]` is the planned execution route (the hops the task takes — direct, or via the federation peer named on it), `trust_evidence_path` is the vouching chain (recorded delegation history, discovery, peers) behind the trust value. Neither is a claim about who did the work; that is proven by receipts.
 
 ### Composite functions
 
@@ -4506,8 +4561,15 @@ import { weightedSumComposite, lexicographicComposite } from "@motebit/market";
 // Default: weighted sum (all dimensions contribute proportionally)
 // composite = trust * 0.3 + costScore * 0.2 + latencyNorm * 0.15 + ...
 
-// Lexicographic: trust first, then reliability, then cost
-// composite = trust * 1e6 + reliability * 1e3 + costScore
+// Lexicographic: trust first, then reliability, then cost — exact over
+// keys QUANTIZED to 1e-3. Each key is rounded to 0..1000 and packed in
+// base 1001, so a trust gap of one quantum or more can never be outweighed
+// by the keys below it; two trusts inside the same 1e-3 band are equal by
+// policy and reliability decides. That band is the declared tie tolerance.
+// (`trust * 1e6 + reliability * 1e3 + costScore` had no such contract: an
+// unquantized reliability spanned the whole 1e3 band.)
+// lexicographicOver(["costScore", "reliability", "trust"]) builds the same
+// quantized order for any key priority — the relay's `cost` strategy uses it.
 ```
 
 </ReferenceExample>
@@ -4595,18 +4657,18 @@ Relay A (initiator)                         Relay B (responder)
     |                                            |
     |  1. POST /federation/v1/peer/propose       |
     |  { relay_id, public_key, endpoint_url,     |
-    |    display_name, nonce_a }                  |
+    |    display_name, nonce }                    |
     | -----------------------------------------> |
     |                                            |
     |  2. 200 OK                                 |
     |  { relay_id, public_key, endpoint_url,     |
-    |    display_name, nonce_b,                  |
-    |    challenge: Sign(nonce_a, key_b) }       |
+    |    display_name, nonce,                    |
+    |    challenge: Sign(relay_id:nonce:suite, key_b) } |
     | <----------------------------------------- |
     |                                            |
     |  3. POST /federation/v1/peer/confirm       |
     |  { relay_id,                               |
-    |    challenge_response: Sign(nonce_b, key_a)|
+    |    challenge_response: Sign(relay_id:nonce:suite, key_a)|
     |  }                                         |
     | -----------------------------------------> |
     |                                            |
@@ -4614,7 +4676,7 @@ Relay A (initiator)                         Relay B (responder)
     | <----------------------------------------- |
 ```
 
-Step 1: Relay A sends its identity and a 32-byte random nonce. Step 2: Relay B signs `relay_id:nonce_a` with its private key, proving key possession. Step 3: Relay A verifies B's signature, then signs `relay_id:nonce_b` with its own key. Relay B verifies. Both transition to `active`.
+Step 1: Relay A sends its identity and a 32-byte random `nonce`. Step 2: Relay B signs `${relay_id}:${nonce}:${suite}` (the wire field is `nonce`; the cryptosuite id is part of the signed message) with its private key, proving key possession. Step 3: Relay A verifies B's signature, then signs the same shape over B's `nonce` with its own key. Relay B verifies. Both transition to `active`.
 
 If any verification fails, the handshake is aborted and the peer record is discarded.
 
@@ -4630,7 +4692,7 @@ Active peers exchange heartbeats to confirm liveness:
 | Suspend threshold | 3 consecutive missed heartbeats                   |
 | Remove threshold  | 5 consecutive missed heartbeats                   |
 
-The signature covers `relay_id || timestamp` to prevent replay. A suspended peer is excluded from discovery and routing. A single successful heartbeat reactivates a suspended peer. After 5 misses, the peer is removed and requires a full handshake to re-establish.
+The signature covers `relay_id || timestamp` to prevent replay. A suspended peer is excluded from discovery and routing. Recovery has hysteresis: each successful heartbeat decrements the missed count by one, so a peer suspended at 3 misses needs 3 consecutive successes to return to `active`. After 5 misses, the peer is removed and requires a full handshake to re-establish.
 
 ### Peer states
 
@@ -4772,13 +4834,13 @@ Settlement records may include optional on-chain payment proof fields (`x402_tx_
 
 When a settlement forward fails, the originating relay queues it for exponential backoff retry:
 
-| Parameter    | Value                                |
-| ------------ | ------------------------------------ |
-| Max attempts | 5                                    |
-| Backoff      | 30s, 2min, 8min, 32min, 2h           |
-| Status       | `pending` -> `completed` or `failed` |
+| Parameter    | Value                                                                                   |
+| ------------ | --------------------------------------------------------------------------------------- |
+| Max attempts | `max_attempts` on the retry row (default 5); the policy ceiling is `maxRetries: 8`       |
+| Backoff      | Exponential from 5 s (5 s, 10 s, 20 s, 40 s, …) with ±20% jitter, capped at 1 hour       |
+| Status       | `pending` -> `completed` or `failed`                                                    |
 
-After 5 failed attempts, the settlement requires manual intervention.
+When attempts are exhausted the relay auto-refunds the delegator; nothing waits for manual intervention. Constants live in `services/relay/src/retry-policy.ts` (`DEFAULT_RETRY_POLICY`).
 
 ## Trust model
 
@@ -4792,11 +4854,13 @@ Trust is isolated per-subject. If a peer relay is demoted, only routes through t
 
 Every request to a federation endpoint must include:
 
-| Header              | Value                                                          |
-| ------------------- | -------------------------------------------------------------- |
-| `X-Relay-Id`        | The sending relay's `motebit_id`                               |
-| `X-Relay-Signature` | Base64url Ed25519 signature of the canonical JSON request body |
-| `X-Relay-Timestamp` | ISO 8601 timestamp; requests older than 5 minutes are rejected |
+| Body field     | Value                                                                                                             |
+| -------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `sender_relay` | The sending relay's `motebit_id` (some routes name it `relay_id`)                                                 |
+| `timestamp`    | Unix epoch milliseconds; requests more than 5 minutes from the receiver's clock are rejected                        |
+| `signature`    | Hex Ed25519 signature over the RFC 8785 canonical JSON of the request body with `signature` removed                |
+
+Authentication is carried **in the JSON body**, not in HTTP headers: the receiver looks up the sender's registered public key, drops `signature`, canonicalizes the rest and verifies.
 
 Federation endpoints use a dedicated rate limit tier: 30 requests per minute per peer relay, keyed by `X-Relay-Id`.
 
@@ -4828,15 +4892,15 @@ Federation is opt-in. All settings have sensible defaults.
 
 | Setting                         | Type     | Default | Description                           |
 | ------------------------------- | -------- | ------- | ------------------------------------- |
-| `federation.enabled`            | boolean  | `false` | Whether federation is active          |
-| `federation.max_peers`          | number   | `10`    | Maximum active peer relationships     |
+| `federation.enabled`            | boolean  | on when `endpoint_url` is set | Whether federation is active |
+| `federation.max_peers`          | number   | `50`    | Maximum active peer relationships     |
 | `federation.heartbeat_interval` | number   | `60000` | Heartbeat interval (ms)               |
 | `federation.max_hops`           | number   | `3`     | Maximum query forwarding depth        |
 | `federation.platform_fee_rate`  | number   | `0.05`  | Fee rate on forwarded tasks           |
 | `federation.auto_accept_peers`  | boolean  | `false` | Auto-accept incoming proposals        |
 | `federation.allowed_peers`      | string[] | `[]`    | Allowlist of permitted peer relay IDs |
 
-When `federation.enabled` is `false`, all `/federation/v1/` endpoints return HTTP 404.
+When `federation.enabled` is `false`, all `/federation/v1/` endpoints return HTTP 403 (`Federation is disabled on this relay`). When `enabled` is left unset, federation is on whenever `endpoint_url` is configured.
 
 ---
 
@@ -4925,10 +4989,10 @@ Sends a message through the full AI turn loop — memory retrieval, context pack
 
 ### motebit_remember
 
-Stores a memory in the motebit's semantic graph. External callers are capped at `"personal"` sensitivity — attempts to store `"medical"`, `"financial"`, or `"secret"` memories are denied (fail-closed).
+Stores a memory in the motebit's semantic graph. External callers may store only `"none"` sensitivity — attempts to store `"personal"`, `"medical"`, `"financial"`, or `"secret"` memories are denied (fail-closed).
 
 ```json
-{ "content": "The deploy key rotates every 90 days", "sensitivity": "personal" }
+{ "content": "The deploy key rotates every 90 days", "sensitivity": "none" }
 ```
 
 ### motebit_recall
@@ -5008,7 +5072,7 @@ Authorization: Bearer my-secret-token
 - `/health` — always public (returns `{ status: "ok", motebit_id: "..." }`)
 - `POST /mcp` — requires auth (StreamableHTTP transport, uses `Mcp-Session-Id` header for session management)
 
-Requests with a missing or incorrect token receive a `401 Unauthorized` response. If no `authToken` is configured, all endpoints are open.
+Requests with a missing or incorrect token receive a `401 Unauthorized` response. HTTP transport is **fail-closed**: if no `authToken` is configured, every request except `/health` is still rejected with 401 unless the caller presents a motebit signed token (`Authorization: Bearer motebit:<signed-token>`). Open access is never a default.
 
 ## Identity tagging
 
@@ -5032,18 +5096,24 @@ Tools give the motebit agency — the ability to read files, search the web, exe
 
 ## Built-in tools
 
-Motebit registers six tools by default:
+Motebit registers ten tools by default (`apps/cli/src/runtime-factory.ts`). Risk is not declared on the tool — the policy gate infers it from the tool's name and description, so these all classify as read-only except `rewrite_memory`, a governed memory write:
 
-| Tool                | Risk | Description                                  |
-| ------------------- | ---- | -------------------------------------------- |
-| `read_file`         | Read | Read a file from allowed paths               |
-| `web_search`        | Read | Search the web (Brave → DuckDuckGo fallback) |
-| `read_url`          | Read | Fetch and read a URL                         |
-| `recall_memories`   | Read | Query the agent's memory graph               |
-| `list_events`       | Read | Browse the agent's event log                 |
-| `delegate_to_agent` | Read | Delegate a task to a remote agent via relay  |
+| Tool                   | Description                                                   |
+| ---------------------- | ------------------------------------------------------------- |
+| `read_file`            | Read a file from allowed paths                                |
+| `current_time`         | The current date and time (proprioception, never guessed)     |
+| `web_search`           | Search the web (Brave → DuckDuckGo fallback)                  |
+| `read_url`             | Fetch and read a URL                                          |
+| `recall_memories`      | Query the agent's memory graph                                |
+| `search_conversations` | Keyword search across every past message                      |
+| `rewrite_memory`       | Supersede a stale memory with corrected content               |
+| `recall_self`          | Look up the agent's own interior knowledge (self-description) |
+| `list_events`          | Browse the agent's event log                                  |
+| `self_reflect`         | Structured reflection over recent interior state              |
 
-Additional tools (`write_file`, `shell_exec`) exist in `@motebit/tools` but are not registered by default. They require operator mode and explicit per-call approval — see [Daemon Mode & Approvals](/docs/operator/daemon-approvals) for the three-band governance thresholds that gate them.
+`delegate_to_agent` is registered only when interactive delegation is enabled (`enableInteractiveDelegation` in `@motebit/runtime`), not by default.
+
+Additional tools (`write_file`, `undo_write`, `shell_exec`) exist in `@motebit/tools` but are not registered by default. They require operator mode and explicit per-call approval — see [Daemon Mode & Approvals](/docs/operator/daemon-approvals) for the three-band governance thresholds that gate them.
 
 ## MCP integration
 
@@ -5074,7 +5144,7 @@ Additional tools (`write_file`, `shell_exec`) exist in `@motebit/tools` but are 
 | Field       | Type      | Description                                   |
 | ----------- | --------- | --------------------------------------------- |
 | `name`      | string    | Server identifier (used in tool namespacing)  |
-| `transport` | `"stdio"` | Transport type (stdio only for now)           |
+| `transport` | `"stdio"` \| `"http"` | Transport type                              |
 | `command`   | string    | Command to launch the server                  |
 | `args`      | string[]  | Command arguments                             |
 | `env`       | object    | Environment variables for the server process  |
@@ -5154,7 +5224,7 @@ interface ExecutionReceipt {
   prompt_hash: string;
   result_hash: string;
   delegation_receipts?: ExecutionReceipt[];
-  relay_task_id?: string;
+  relay_task_id: string; // required by the relay — a receipt without it is rejected (400)
   delegated_scope?: string;
   suite: "motebit-jcs-ed25519-b64-v1";
   signature: string;
@@ -5178,7 +5248,7 @@ interface ExecutionReceipt {
 | `prompt_hash`         | `string`              | `hex(SHA-256(UTF-8(prompt)))` — plain SHA-256 of the prompt **string**, lowercase hex (64 chars). Not canonicalized.                                                                                                                                                                                                                                                                                                                                           |
 | `result_hash`         | `string`              | `hex(SHA-256(UTF-8(result)))` — plain SHA-256 of the `result` **string**, lowercase hex (64 chars). Not canonicalized. Recompute it over the exact `result` bytes to re-check. (Canonical-JSON hashing applies only to object-valued fields like a `ToolInvocationReceipt`'s `args_hash`.)                                                                                                                                                                     |
 | `delegation_receipts` | `ExecutionReceipt[]?` | Nested receipts from sub-delegations. In multi-hop scenarios (Alice delegates to Bob, Bob sub-delegates to Charlie), Bob's receipt includes Charlie's receipt here. The relay verifies each nested receipt recursively.                                                                                                                                                                                                                                        |
-| `relay_task_id`       | `string?`             | Cryptographic binding to the relay's economic identity for this task. Included in the Ed25519 signature, so tampering breaks the signature. The relay enforces `relay_task_id === taskIdFromRoute` at settlement. Prevents cross-task replay attacks, including identical-prompt collisions.                                                                                                                                                                   |
+| `relay_task_id`       | `string`              | **Required** on any receipt posted to the relay. Cryptographic binding to the relay's economic identity for this task. Included in the Ed25519 signature, so tampering breaks the signature. The relay rejects a receipt without it (400) and enforces `relay_task_id === taskIdFromRoute` at settlement. Prevents cross-task replay attacks, including identical-prompt collisions.                                                                                                                                                                   |
 | `delegated_scope`     | `string?`             | Scope from the delegation token that authorized this execution. Restricts which tools the task can use (e.g., `"web_search,read_url"`).                                                                                                                                                                                                                                                                                                                        |
 | `suite`               | `string`              | **Required.** Cryptosuite discriminator — always `"motebit-jcs-ed25519-b64-v1"` today. It is part of the signed body: `signExecutionReceipt` stamps it, and a verifier rejects a receipt missing or carrying an unknown value (fail-closed). If you hand-build a receipt, include it **before** signing or the signature won't match.                                                                                                                          |
 | `signature`           | `string`              | Ed25519 signature, base64url. The signed message is the **JCS (RFC 8785) canonical UTF-8 bytes** of all other fields (keys sorted lexicographically, no whitespace, `undefined` omitted) — signed **directly**, with no intermediate SHA-256 of the body. (This differs from the _execution ledger_, which signs a 32-byte content hash, and from _credentials_, which sign concatenated field hashes — do not generalize one artifact's recipe onto another.) |
@@ -5240,7 +5310,7 @@ To verify a receipt:
 
 1. Extract `signature` from the receipt object.
 2. Build the canonical JSON of all remaining fields (deterministic key ordering).
-3. Verify the Ed25519 signature using the `public_key` from the receipt (or resolve it from the relay via `GET /api/v1/devices/:deviceId`).
+3. Verify the Ed25519 signature using the `public_key` from the receipt (or resolve it from the relay via `GET /api/v1/devices/:motebitId`).
 4. If `relay_task_id` is present, confirm it matches the expected task ID.
 5. Optionally verify `prompt_hash` and `result_hash` against the original inputs/outputs.
 
@@ -5267,6 +5337,7 @@ Submit an autonomous task for execution. Returns a signed `ExecutionReceipt`.
 | `delegation_token`      | `string`   | No       | Signed delegation token (JSON) authorizing this task within a specific scope. Verified via Ed25519 before execution.       |
 | `required_capabilities` | `string[]` | No       | Capability names required for this task (e.g., `["web_search"]`). Checked against the delegation token's scope if present. |
 | `relay_task_id`         | `string`   | No       | Relay-assigned task ID for economic binding. Included in the signed receipt for settlement.                                |
+| `dispatch_token`        | `string`   | No\*     | Relay-signed `task:dispatch` admission token. \*Required by workers configured for relay task admission (the default for priced listings) — see [Multi-hop](/docs/developer/multi-hop). |
 
 **Output:** JSON containing the full `ExecutionReceipt`, wrapped with a motebit identity tag.
 
@@ -5303,7 +5374,7 @@ Store a memory in the agent's semantic memory graph.
 | Parameter     | Type     | Required | Description                                                                                                                                            |
 | ------------- | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `content`     | `string` | Yes      | The content to remember.                                                                                                                               |
-| `sensitivity` | `string` | No       | Sensitivity level. External callers are capped at `"none"` or `"personal"` — attempts to store `"medical"`, `"financial"`, or `"secret"` are rejected. |
+| `sensitivity` | `string` | No       | Sensitivity level. External callers may store only `"none"` — `"personal"`, `"medical"`, `"financial"`, and `"secret"` are all rejected. |
 
 **Output:** JSON with `node_id` of the created memory node.
 
@@ -5443,6 +5514,8 @@ Submit a task for delegation. The relay scores registered agents using the semir
 }
 ```
 
+`dispatch_token` (optional) is the relay's signed task admission artifact, returned only when the relay did **not** dispatch the task itself (no WebSocket, no reachable MCP endpoint, no federation route). It is bound to the intended worker, the task id, and a SHA-256 of the prompt; pass it verbatim as `dispatch_token` on the worker's `motebit_task`. A worker configured for task admission refuses `motebit_task` without it and admits each task once. When the relay routed the task, the token travelled with that dispatch and you poll for the receipt instead.
+
 The `routing_choice` field contains semiring routing provenance — which agent was selected, why (sub-scores per dimension), what paths were considered, and how many alternatives were evaluated. This is `null` when scored routing was not used (e.g., broadcast fallback).
 
 **Error responses:**
@@ -5486,7 +5559,7 @@ Poll for the task result. Returns the current task status and receipt (if availa
 }
 ```
 
-The `receipt` field is `null` until the executing agent submits a result. Tasks expire after a TTL (default 15 minutes) — polling after expiry returns 404.
+The `receipt` field is `null` until the executing agent submits a result. Free tasks expire after a TTL of 10 minutes (results for P2P-paid tasks are retained longer) — polling after expiry returns 404.
 
 **Error responses:**
 
@@ -5510,7 +5583,7 @@ The executing agent posts a signed `ExecutionReceipt` to complete the task. The 
 
 1. **Structural validation** — Requires non-empty `task_id`, `motebit_id`, `signature`, and valid `status`.
 2. **Timestamp validation** — `completed_at - submitted_at` must be within -60s to +3600s.
-3. **Economic binding** — If the receipt has `relay_task_id`, it must match `taskId` from the URL. Mismatch returns 400.
+3. **Economic binding** — The receipt must carry `relay_task_id`, and it must match `taskId` from the URL. A missing or mismatched value returns 400.
 4. **Ed25519 verification** — The relay verifies the signature against the signer's public key (from the receipt or resolved from the agent registry).
 5. **Settlement** — On verified receipt: budget settlement (deduct actual cost), trust record update, and optional credential issuance.
 6. **Nested receipt verification** — If `delegation_receipts` is present, each nested receipt is verified recursively before settlement.
@@ -5579,43 +5652,9 @@ Transaction types: `deposit`, `withdrawal`, `allocation_hold`, `allocation_relea
 
 If no account exists, returns zero balance with empty transactions.
 
-### Deposit funds
+### Funding an account
 
-```
-POST /api/v1/agents/:motebitId/deposit
-```
-
-Credit the agent's virtual account.
-
-**Request body:**
-
-```json
-{
-  "amount": 1.0,
-  "currency": "USD",
-  "reference": "stripe-pi-abc123",
-  "description": "Deposit via Stripe"
-}
-```
-
-| Field         | Type     | Required | Description                                                                                                                              |
-| ------------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `amount`      | `number` | Yes      | Amount to deposit. Must be positive.                                                                                                     |
-| `currency`    | `string` | No       | Currency code (default: USD).                                                                                                            |
-| `reference`   | `string` | No       | Idempotency key. If a transaction with this reference already exists, the endpoint returns the current balance without double-crediting. |
-| `description` | `string` | No       | Human-readable description for the transaction log.                                                                                      |
-
-**Response (200):**
-
-```json
-{
-  "motebit_id": "019d03fd-...",
-  "balance": 2.5,
-  "transaction_id": "uuid"
-}
-```
-
-When a duplicate `reference` is detected, the response includes `"idempotent": true` and `"transaction_id": null`.
+There is no self-declared deposit endpoint — it was removed as a treasury-drain vector. Balance is credited only by verified server-side funding: the Stripe checkout flow (`POST /api/v1/agents/:motebitId/checkout`, then the Stripe webhook) or on-chain USDC deposits picked up by the relay's deposit detector. See [Budget & Settlement](/docs/developer/budget-settlement).
 
 ### How delegation charges work
 
@@ -5644,17 +5683,19 @@ The desktop app is the flagship surface — a Tauri app (Rust backend + webview)
 
 ## Running the desktop app
 
-In development mode (Vite + webview):
+In development mode with the Tauri backend (keyring, operator mode, sync):
 
 ```bash
-pnpm --filter @motebit/desktop dev
+pnpm --filter @motebit/desktop tauri:dev
 ```
 
-For a production build:
+`pnpm --filter @motebit/desktop dev` starts Vite alone — the UI without the Rust backend. For a production app bundle:
 
 ```bash
-pnpm --filter @motebit/desktop build
+pnpm --filter @motebit/desktop tauri:build
 ```
+
+(`build` is the TypeScript build only.)
 
 ## First launch
 
@@ -5683,7 +5724,7 @@ Set the model name in the **Model** field. Examples: `llama3.2`, `claude-sonnet-
 Operator mode unlocks high-risk tools (file writes, shell execution, payments). It's gated by a PIN:
 
 1. Toggle **Operator Mode** in settings
-2. First time: set a 4-6 digit PIN (stored as SHA-256 hash in keyring)
+2. First time: set a 4-6 digit PIN (stored in the keyring as a salted PBKDF2-SHA256 digest, never plaintext)
 3. Subsequent times: enter your PIN to enable
 
 While active, the agent can use R2+ risk tools. Tool calls still produce audit log entries, and specific tools can still require per-call approval.
@@ -5761,7 +5802,6 @@ Open settings (gear icon, top right) to configure your LLM:
 |---|---|
 | **Ollama** (default) | Requires a running Ollama instance. Set the endpoint URL in settings (default `http://localhost:11434`). |
 | **Anthropic** | Enter your API key. Stored in the device keychain, never on disk. |
-| **Hybrid** | Uses Anthropic as primary, falls back to Ollama on failure. Requires both an API key and an Ollama endpoint. |
 
 Set the model name in the **Model** field. Default: `qwen3`.
 
@@ -5824,7 +5864,7 @@ Goal outcomes (completed/failed) appear as system messages with summaries.
 
 Connect external tools via MCP (Model Context Protocol). Mobile supports **HTTP transport only** (no stdio).
 
-In the **Tools** settings tab:
+In the **Capabilities** panel (not the settings modal):
 
 1. Tap **Add Server** — enter name, URL, and optional trust toggle
 2. On connect, the manifest is SHA-256 hashed and pinned
@@ -5870,7 +5910,9 @@ The settings modal has 5 tabs:
 | **Governance** | Operator mode + PIN, tool approval preset (cautious/balanced/autonomous), memory persistence threshold, reject-secrets switch, max tool calls per turn |
 | **Identity** | Motebit ID, DID, device ID, public key (copy-to-clipboard), rotate key, link device, export identity file, export all data |
 | **Intelligence** | Provider mode (Motebit Cloud / BYOK / on-device), model, BYOK vendor, on-device backend (Apple FM / MLX / local server), voice settings (TTS, auto-send, neural VAD, TTS voice) |
-| **Tools** | MCP server list with trust toggles, add/remove servers, motebit-pinned public keys |
+| **Billing** | Motebit Cloud balance and funding for this motebit (`BillingPanel`) |
+
+MCP servers (server list with trust toggles, add/remove, motebit-pinned public keys) live in the **Capabilities** panel, not in the settings modal.
 
 ## Configuration storage
 
@@ -5889,18 +5931,18 @@ Source: https://docs.motebit.com/docs/apps/cli
 
 > The developer REPL — slash commands, streaming, and debugging.
 
-The CLI is a Node.js REPL for talking to your motebit — streaming responses, tool approvals, slash commands, and a daemon mode for scheduled goals. Same code that ships via `npm install -g motebit`; running `pnpm --filter motebit dev` from a monorepo clone invokes it with the package source instead of the published bundle.
+The CLI is a Node.js REPL for talking to your motebit — streaming responses, tool approvals, slash commands, and a daemon mode for scheduled goals. Same code that ships via `npm install -g motebit`; running `pnpm --filter motebit start` from a monorepo clone invokes it with the package source instead of the published bundle.
 
 ## Running the CLI
 
 ```bash
-pnpm --filter motebit dev
+pnpm --filter motebit start
 ```
 
 Or with options:
 
 ```bash
-pnpm --filter motebit dev -- \
+pnpm --filter motebit start -- \
   --provider anthropic \
   --model claude-sonnet-4-6 \
   --operator
@@ -5910,7 +5952,7 @@ pnpm --filter motebit dev -- \
 
 | Flag | Description |
 |---|---|
-| `--provider <name>` | `ollama` or `anthropic` |
+| `--provider <name>` | `anthropic`, `openai`, `google`, `groq`, `deepseek`, `local-server`, or `proxy` (`ollama` is a deprecated alias for `local-server`) |
 | `--model <name>` | Model identifier |
 | `--db-path <path>` | Custom SQLite database path |
 | `--no-stream` | Disable streaming (wait for full response) |
@@ -5957,7 +5999,7 @@ pnpm --filter motebit dev -- \
 | `/agents info <id>` | Full trust record detail for an agent |
 | `/agents trust <id> <level>` | Set trust level (first_contact, verified, trusted, blocked) |
 | `/agents block <id>` | Block an agent |
-| `/operator` | Toggle operator mode |
+| `/operator` | Show operator mode status |
 | `quit` / `exit` | Exit the CLI |
 
 ## Tool approval flow
@@ -5967,10 +6009,10 @@ When the agent requests a tool that requires approval, the CLI pauses and prompt
 ```
 Tool approval required: shellExec
   args: {"command": "ls -la"}
-Allow? (Y/n):
+Allow? (y/n):
 ```
 
-Type `Y` to approve, `n` to deny. The agent continues with the result (or denial) and completes the turn.
+Type `y` to approve; anything else denies. The agent continues with the result (or denial) and completes the turn.
 
 ## Identity bootstrap
 
@@ -6011,6 +6053,10 @@ The CLI supports several subcommands beyond the default interactive REPL:
 | `motebit doctor` | Diagnose configuration and connectivity issues |
 | `motebit goal add/list/remove/pause/resume` | Manage scheduled goals |
 | `motebit approvals list/show/approve/deny` | Manage the tool approval queue |
+| `motebit halt [goal <id>] [--reason "..."] [--remote]` | Withdraw the permission to act unattended; `--remote` signs a command to the running runtime and returns its acknowledgement |
+| `motebit resume [<halt_id>\|all] [--remote]` | Give that permission back |
+| `motebit halt-status [--remote]` | What is stopped, and whether the motebit has acknowledged it |
+| `motebit runs [list\|show <run_id>\|ack <run_id> --allow-fresh-run]` | Goal-run ledger: runs holding their goal (paused on you, or interrupted with side effects) and recent runs; `show` opens one run — what it produced and whether that result is signed, what its tools reported, and the evidence pointers a stranger could re-check against the original source; `ack --allow-fresh-run` releases a reviewed interrupted run, accepting that its goal's next run may repeat effects |
 | `motebit rotate [--reason "..."]` | Rotate Ed25519 keypair with signed succession record |
 
 ### Serve flags
@@ -6042,7 +6088,7 @@ motebit serve --identity ./motebit.md --tools ./dist/tools.js \
   --serve-transport http --direct --self-test
 ```
 
-In HTTP mode, the server registers with the sync relay (if configured) and sends a heartbeat every 5 minutes. Authentication is configured via the `authToken` field in `~/.motebit/config.json` — clients pass it as a bearer token.
+In HTTP mode, the server registers with the sync relay (if configured) and sends a heartbeat every 5 minutes. Authentication is fail-closed: callers present a motebit signed token (`Authorization: Bearer motebit:<signed-token>`, e.g. the relay's per-task `task:dispatch` token) and everything else except `/health` gets 401. There is no static `authToken` setting in `~/.motebit/config.json`.
 
 ---
 
@@ -6218,7 +6264,7 @@ Location: `~/.motebit/config.json`
 |---|---|---|
 | `motebit_id` | string | Your motebit's UUID (auto-generated on first launch) |
 | `device_id` | string | This device's registration ID |
-| `default_provider` | `"ollama"` \| `"anthropic"` | LLM provider |
+| `default_provider` | `"anthropic"` \| `"openai"` \| `"google"` \| `"groq"` \| `"deepseek"` \| `"local-server"` \| `"proxy"` | LLM provider (`"ollama"` is read as a deprecated alias for `"local-server"`) |
 | `default_model` | string | Model identifier |
 | `sync_url` | string | Sync relay server URL (optional) |
 | `mcp_servers` | array | MCP server configurations (see [Tools](/docs/developer/tools)) |
@@ -6229,10 +6275,11 @@ Secrets are stored in the OS keyring, never in the config file:
 
 | Key | Description |
 |---|---|
-| `api_key` | LLM provider API key |
+| `device_private_key` | Ed25519 device private key (the CLI keeps it PBKDF2-encrypted in `config.json` instead) |
+| `<vendor>_api_key` | Per-vendor LLM keys: `anthropic_api_key`, `openai_api_key`, `google_api_key`, `deepseek_api_key`, `groq_api_key`; voice keys `elevenlabs_api_key`, `inworld_api_key`, `deepgram_api_key` |
 | `sync_master_token` | Sync relay authentication token |
-| `operator_pin_hash` | SHA-256 hash of operator PIN |
-| `private_key` | Ed25519 private key (or PBKDF2-encrypted in CLI) |
+| `operator_pin_hash` | Operator PIN as a salted PBKDF2-SHA256 digest (100 000 iterations, `salt:derived`) |
+| `api_key` | Legacy single-vendor slot — read for migration only, never written |
 
 On desktop, the Tauri keyring API handles storage. On CLI, the private key is encrypted with PBKDF2 and stored in the config file (the only exception to the "no secrets in config" rule, and it's encrypted).
 
@@ -6291,7 +6338,7 @@ Source: https://docs.motebit.com/docs/operator/architecture
 
 Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **53 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 11 services · 34 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
+The shape is **53 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 11 services · 35 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 
 <DiagramFigure
   src="protocol-stack"
@@ -6338,6 +6385,9 @@ motebit/
 │   ├── crypto/                [L0 · Apache-2.0]    Sign/verify every motebit artifact. Suite dispatcher.
 │   │
 │   │   # Layer 1 — Primitives
+│   ├── create-motebit/        [L1 · Apache-2.0]    Public scaffolder. npm create motebit.
+│   ├── verifier/              [L1 · Apache-2.0]    Library — verifyFile, verifyArtifact, formatHuman helpers over @motebit/crypto. Permissive-floor-pure; no bin.
+│   ├── state-export-client/   [L1 · Apache-2.0]    Browser-safe verifier for `X-Motebit-Content-Manifest` HTTP headers on relay state exports. Trust-on-first-use bootstrap from `/.well-known/motebit-transparency.json` produces a `TransparencyAnchor`; per-call `verifiedStateExportFetch` wraps `fetch` with manifest-against-bytes verification + optional producer-key pin; `verifyInnerSignedReceipts` recursively audits v1.1 execution-ledger `signed_receipts[]` entries against each delegate motebit's own embedded key. Sibling of `motebit/verify` (CLI for files on disk); same crypto primitives, different consumer surface. Drift-locked by `check-state-export-consumer-verifies` (#87) + `check-execution-ledger-inner-receipt-verified` (#90).
 │   ├── voice/                 [L1]          VAD, STT, TTS adapters (provider-judgment; no protocol-level surface).
 │   ├── encryption/            [L1]          AES-256-GCM, PBKDF2, sync keys, deletion certs.
 │   ├── gradient/              [L1]          "What am I?" — narrative from gradient snapshots.
@@ -6376,6 +6426,7 @@ motebit/
 │   ├── identity-file/         [L2]          Generate/parse/verify motebit.md.
 │   │
 │   │   # Layer 3 — Lower composites
+│   ├── verify/                [L3 · Apache-2.0]    Canonical `motebit-verify` CLI — aggregates the canonical Apache-2.0 platform leaves (App Attest, Android Keystore, TPM, WebAuthn; plus deprecated Play Integrity for one minor cycle) with motebit-canonical defaults (bundle IDs, RP ID, integrity floor) for one-install offline verification. The defaults are overridable flags, not proprietary judgment — the permissive-floor line stays here.
 │   ├── privacy-layer/         [L3]          Retention rules, deletion certificates, export.
 │   ├── ai-core/               [L3]          Pluggable providers, agentic turn loop, context packing.
 │   ├── mcp-server/            [L3]          MCP server adapter, bearer auth, signed receipts.
@@ -6391,12 +6442,8 @@ motebit/
 │   ├── browser-persistence/   [L5]          IndexedDB adapters for web and spatial.
 │   ├── panels/                [L5]          Surface-agnostic panel controllers (Sovereign today). State + actions; render per surface.
 │   │
-│   │   # Layer 6 — Applications
-│   ├── create-motebit/        [L6 · Apache-2.0]    Public scaffolder. npm create motebit.
+│   │   # Layer 6 — Application-tier libraries (above the orchestrator; apps/services sit above this)
 │   ├── molecule-runner/       [L6]          Shared boot kernel for molecule/atom services — composes runtime + persistence + mcp-server + tools behind one `runMolecule` call.
-│   ├── verifier/              [L6 · Apache-2.0]    Library — verifyFile, verifyArtifact, formatHuman helpers over @motebit/crypto. Permissive-floor-pure; no bin.
-│   ├── verify/                [L6 · Apache-2.0]    Canonical `motebit-verify` CLI — aggregates the canonical Apache-2.0 platform leaves (App Attest, Android Keystore, TPM, WebAuthn; plus deprecated Play Integrity for one minor cycle) with motebit-canonical defaults (bundle IDs, RP ID, integrity floor) for one-install offline verification. The defaults are overridable flags, not proprietary judgment — the permissive-floor line stays here.
-│   ├── state-export-client/   [L6 · Apache-2.0]    Browser-safe verifier for `X-Motebit-Content-Manifest` HTTP headers on relay state exports. Trust-on-first-use bootstrap from `/.well-known/motebit-transparency.json` produces a `TransparencyAnchor`; per-call `verifiedStateExportFetch` wraps `fetch` with manifest-against-bytes verification + optional producer-key pin; `verifyInnerSignedReceipts` recursively audits v1.1 execution-ledger `signed_receipts[]` entries against each delegate motebit's own embedded key. Sibling of `motebit/verify` (CLI for files on disk); same crypto primitives, different consumer surface. Drift-locked by `check-state-export-consumer-verifies` (#87) + `check-execution-ledger-inner-receipt-verified` (#90).
 │   │
 │   │   # Standalone — outside the layer DAG
 │   └── github-action/         [—]           GitHub Action for identity verification in CI.
@@ -6414,7 +6461,7 @@ motebit/
 │   ├── browser-sandbox/       [atom]        Playwright-driven Chromium for the virtual_browser embodiment — second computer-use-v1 producer.
 │   └── proxy/                 [glue]        Vercel edge CORS proxy for the web app.
 │
-├── spec/                      # 34 open specifications, each motebit/<name>@1.0
+├── spec/                      # 35 open specifications, each motebit/<name>@1.0
 │   ├── identity-v1.md                       motebit.md format, signing, multi-device, guardian, succession.
 │   ├── execution-ledger-v1.md               Timeline, signed manifests, receipt structure.
 │   ├── relay-federation-v1.md               Peering, discovery, cross-relay routing, circuit breaker.
@@ -6448,7 +6495,8 @@ motebit/
 │   ├── bond-v1.md                           Agent's own sovereign capital as an anti-sybil staked signal — self-signed proof-of-funds, RPC-verified never custodied; address bound to identity. Phase 1: signal, not recourse.
 │   ├── evidence-provenance-v1.md            Re-verifiable provenance on a verdict's EvidenceRef — a content-addressed verbatim span in a primary record; the byte-determinism conformance requirement for projection recipes. Verifiable-locality from signatures to evidence.
 │   ├── eval-attestation-v1.md               Signed third-party measurement (subject ≠ signer) — per-axis verdicts embedded whole, closed EvalKind intake, envelope law only; the Auditor archetype's deliverable.
-│   └── routing-transcript-v1.md             Signed routing-decision transcript (subject = signer, receipt-family) — the frozen candidate set, posterior reads and draws, and decision parameters behind a paid hire; integrity + recomputable faithfulness, two rungs.
+│   ├── routing-transcript-v1.md             Signed routing-decision transcript (subject = signer, receipt-family) — the frozen candidate set, posterior reads and draws, and decision parameters behind a paid hire; integrity + recomputable faithfulness, two rungs.
+│   └── machine-roster-v1.md                 Which machines a motebit runs unattended work on — a sovereign-signed SET (enrolment + retirement, id = hash, merge = union, remove wins), relay-transported verbatim. Quantify over membership, annotate with liveness; never a lease, never an admission gate.
 │
 └── scripts/                   # Drift-defense CI gates
     ├── check-deps.ts                        Layer DAG enforcement. Source of truth for L0–L6.
@@ -6461,7 +6509,7 @@ motebit/
 
 ## Layer rule
 
-Layer N may depend on layers `0..N-1` in production and `0..N` in devDependencies. Apps and services live at L6 and may depend on any layer. The canonical source of truth is the `LAYER` map in `scripts/check-deps.ts`; the tree above mirrors it. `github-action` is a standalone build artifact for the GitHub Actions runtime and sits outside the DAG.
+Layer N may depend on layers `0..N-1` in production and `0..N` in devDependencies. Apps and services sit in the **application tier above** the seven package layers (`L0`–`L6`) and may depend on any layer — deliberately unenforced, because an app IS the top of the DAG. That tier is deliberately not one of the seven: while it shared the number `6`, every package explicitly mapped to L6 silently inherited the app tier's exemption and got no layer enforcement at all (#544). The canonical source of truth is the `LAYER` map in `scripts/check-deps.ts`; the tree above mirrors it. `github-action` is a standalone build artifact for the GitHub Actions runtime and sits outside the DAG.
 
 ## Permissive / BSL boundary
 
@@ -6476,10 +6524,10 @@ Layer N may depend on layers `0..N-1` in production and `0..N` in devDependencie
 | `@motebit/crypto-android-keystore`              | How is an Android Keystore Attestation chain verified?             | L2    |
 | `@motebit/crypto-tpm`                           | How is a TPM 2.0 quote verified?                                   | L2    |
 | `@motebit/crypto-webauthn`                      | How is a WebAuthn packed attestation verified?                     | L2    |
-| `@motebit/verifier`                             | How does a third party compose offline verification?               | L6    |
-| `@motebit/verify`                               | How does a one-install CLI verify any motebit artifact end-to-end? | L6    |
-| `@motebit/state-export-client`                  | How does a browser consumer verify a relay's signed state export?  | L6    |
-| `create-motebit`                                | How does a third party scaffold against the protocol?              | L6    |
+| `@motebit/verifier`                             | How does a third party compose offline verification?               | L1    |
+| `@motebit/verify`                               | How does a one-install CLI verify any motebit artifact end-to-end? | L3    |
+| `@motebit/state-export-client`                  | How does a browser consumer verify a relay's signed state export?  | L1    |
+| `create-motebit`                                | How does a third party scaffold against the protocol?              | L1    |
 
 The four canonical `crypto-*` platform leaves (`crypto-appattest`, `crypto-android-keystore`, `crypto-tpm`, `crypto-webauthn`) verify against each platform's published public trust anchor (Apple App Attest root, Google Hardware Attestation roots, TPM vendor roots, FIDO roots) — no motebit-specific judgment. `@motebit/verify` aggregates them with motebit-canonical defaults (bundle IDs, RP ID) into one install, but the defaults are overridable flags, not proprietary judgment — the permissive-floor line stays at the aggregator. The BSL line holds at `motebit` (the operator console) and everything below it: daemon, MCP server, delegation routing, market integration, federation wiring — the actual reference-implementation judgment.
 
@@ -6499,7 +6547,7 @@ The architectural role is "permissive floor"; the specific license instance (`Ap
 | `mobile`   | Surface    | Live     | React Native + Expo. Full parity — expo-gl Three.js, SQLite adapters, plan-based goals.                        |
 | `spatial`  | Surface    | Proto    | AR/VR/WebXR-first. Creature-as-scene. See _Spatial doctrine_ below.                                            |
 | `inspector` | Supporting | Internal | React + Vite single-agent inspector. 12 tabs: state, memory, behavior, events, audit, goals, plans, conversations, devices, gradient, trust, credentials. Reads one motebit's interior via the relay. |
-| `operator`  | Supporting | Internal | React + Vite relay-operator console. 6 tabs: withdrawals, federation peers, transparency, disputes, fees, credential anchoring. Master-token gated; fleet-shaped. |
+| `operator`  | Supporting | Internal | React + Vite relay-operator console. 10 tabs: health (default), withdrawals, federation peers, transparency, disputes, fees, credential anchoring, treasury reconciliation, receipts, freeze. Master-token gated; fleet-shaped. |
 | `identity` | Supporting | Public   | Static browser tool — drop a `motebit.md`, inspect the parsed, verified profile.                               |
 | `docs`     | Supporting | Public   | Fumadocs + Next.js. This site.                                                                                 |
 
@@ -6536,7 +6584,7 @@ Every task settles through the relay or directly peer-to-peer. Relay-mediated: b
 
 ## Specifications
 
-All 34 specs (listed in the tree above) are Apache-2.0, published in `spec/`, and have working reference implementations in this repo. A third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required.
+All 35 specs (listed in the tree above) are Apache-2.0, published in `spec/`, and have working reference implementations in this repo. A third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required.
 
 The `motebit.md` identity file is the most-used entry point: any tool can verify one with `@motebit/crypto`, with or without the motebit runtime.
 
@@ -6779,7 +6827,7 @@ On startup, the daemon:
 Daemon running. motebit_id: a1b2c3d4... Goals: 3. Policy: max_risk_auto=R1_DRAFT, deny_above=R4_MONEY
 ```
 
-Stop the daemon with `SIGINT` (Ctrl-C) or `SIGTERM`. On shutdown, all pending approvals are denied with reason `"daemon_shutdown"`.
+Stop the daemon with `SIGINT` (Ctrl-C) or `SIGTERM`. Pending approvals stay pending across a stop (see "Shutdown and restart" below); a run that was mid-turn at a graceful stop is closed as failed and re-fires on schedule.
 
 ## Managing goals
 
@@ -6886,9 +6934,194 @@ Error: approval a1b2c3d4 is already denied.
 
 **Expiry:** Pending approvals expire after 1 hour (3,600,000 ms). On each tick, the scheduler runs `expireStale()` before processing any goals. Expired approvals remain visible in `approvals list` with status `expired`.
 
-**Shutdown:** When the daemon stops (SIGINT/SIGTERM), all pending approvals in the suspended map are denied with reason `"daemon_shutdown"`.
+**Shutdown and restart:** A pending approval is a human's decision to make, and it survives the daemon. When the daemon stops, pending approvals stay `pending` and their goal runs stay `awaiting_approval` in the run ledger (`goal_runs`); the goal does not fire again while that run is unresolved. When the daemon comes back and you approve, the paused turn itself is gone with the old process, so the daemon executes **exactly the one call you approved** (full arguments are persisted alongside the preview, and their hash is re-checked) through the same policy gate, records the outcome, and closes the run. It does not re-run the rest of the goal's turn — the tool calls before the pause already happened. Denying closes the run without executing anything. A money action (R4) is never executed from a recovered run.
 
-**Restart:** After a daemon restart, previously expired or denied approvals are visible in the history but are not resumable. The current daemon does not resume suspended turns across restarts — the goal simply runs fresh on its next scheduled tick. Cross-restart resume is on the roadmap; track progress against the `motebit/goal-lifecycle@1.0` spec.
+**Interrupted runs:** If the daemon dies mid-run, the next start marks that run `interrupted` and reads the tool audit log for it: how many allowed tool calls recorded a completion, and how many have a decision row but no completion row (the process died between dispatch and recording — their external effect is unknown). If either count is non-zero the goal is **held**: it will not fire again until you run `motebit runs ack <run_id>`, because re-firing would repeat the completed calls and nobody can say what the unknown ones did. A run with no allowed tool calls at all resolves itself. `motebit ps` shows held goals; `motebit runs` lists the runs holding them. `motebit runs ack <run_id> --allow-fresh-run` retries nothing — it records that you looked and accepts that the goal's next run starts from scratch, which may repeat effects the interrupted run already caused; without the flag the command prints that consequence and releases nothing. A decision applied after a restart closes its run as `partial`, never `completed`: the one approved action ran (or was refused), and the goal's remaining work was not resumed.
+
+**What a restart cannot do:** it cannot resume the paused turn itself (its stream died with the old process), which is why a post-restart decision applies to the one approved call only and the run closes as `partial`. The 1-hour TTL bounds the decision, not the sweep: an approval granted after its expiry — for example while the daemon was down — is refused by `motebit approvals approve` and, if it slipped through, is never executed by the daemon.
+
+## Stopping it
+
+A halt withdraws the standing permission to act unattended. It is not the
+opposite of an approval — an approval authorizes one exact pending call,
+a halt revokes the permission to act at all, and a halt in force outranks
+an approval granted before it.
+
+```bash
+motebit halt --reason "going out"        # stop all unattended execution
+motebit halt goal a1b2c3d4               # stop one goal, leave the rest
+motebit halt-status                      # what was asked, and which processes acknowledged
+motebit resume a1b2c3d4                  # give the permission back
+motebit resume all
+```
+
+A halt stops new goal runs, recovered approvals, and idle consolidation,
+and signals an abort of the run in flight — the daemon checks for halts
+on its own interval, outside the guard that a long-running goal holds, so
+a stop reaches work in progress rather than queueing behind it. The
+signal is observed between steps, so a tool call already dispatched runs
+to its end; the acknowledgement says exactly that rather than claiming
+the run was cut off. A run stopped this way is not counted against the
+goal's retry budget — a stop you asked for is not a failure of the goal. A live
+conversation you are having at the keyboard is not unattended work and is
+not what a halt is for.
+
+A goal-scoped halt is genuinely scoped: it stops that goal's next run and
+that goal's pending approval, and leaves every other goal alone. The id
+is resolved before anything is recorded — the 8-character prefix
+`motebit goal list` prints is enough — and a scope naming a goal that
+does not exist is refused at the store, not merely at the command that
+happened to be written first. A halt that matched no goal would report a
+stop while the goal kept running, so that state cannot be recorded at
+all.
+
+**Where a halt is enforced.** Two chokepoints, not a list of call sites:
+every dispatched task passes through the runtime's task entry, and every
+idle cycle through the consolidation entry, so a path added later
+inherits the refusal instead of having to remember it. On top of those
+the scheduler will not fire a goal, execute a recovered approval, or
+resume a turn whose approval expired — that resume is a model turn, and
+under a halt it is unattended work starting.
+
+`motebit serve` is covered too: a halted worker does not claim
+relay-dispatched tasks. One limitation is worth stating plainly — the
+relay's task protocol has no decline verb, so an unclaimed task is
+re-dispatched and refused again until it times out, and the submitter
+learns only from that timeout. Answering them properly needs a decline
+verb, which belongs to the task protocol rather than to halt.
+
+**Several processes, several acknowledgements.** More than one process
+can run unattended work for one motebit — `motebit run` and
+`motebit serve` on the same machine, against the same database — and
+each stops different work. So each acknowledges for itself, and
+`halt-status` lists them by name. One process acknowledging never meant
+that everything had stopped; treating it as if it did let the other keep
+working under a surface that said "Stopped". So no surface here says a
+bare "Stopped" — `motebit halt` names which processes acknowledged and
+what each of them stopped, and a remote `halt` answers for the runtime
+that received it while listing the rest.
+
+**Two MACHINES is refused, not guessed between.** Everything above is
+about one machine's processes, which share a database — so whichever
+receives a remote halt, the record they all read is the same one. Two
+machines are not that: the halt store is local and nothing replicates
+it, so delivering to one would stop that machine and answer as though
+the motebit had stopped, while the other kept working. A remote `halt`
+on a motebit with unattended runtimes on two different machines is
+refused, and says so. Run it on each machine, or stop the runtime you
+do not want. Reaching every machine at once is the right answer and is
+tracked in [issue #681](https://github.com/motebit/motebit/issues/681);
+it is not built, and a refusal you can act on beats a "Stopped" that is
+not true.
+
+**Acknowledged is not stopped either.** A process acknowledging says it
+answered for itself, not that it had work to stop: the worker answers a
+goal-scoped halt with "nothing here runs under that goal — dispatched
+tasks continue", which is true, useful, and not the goal having
+stopped. So `halt-status` counts processes that ACKNOWLEDGED and prints
+what each one stopped underneath, rather than folding both facts into
+one word.
+
+**Requested is not stopped, and neither is one acknowledgement.** The
+request carries only the ask: who asked, what for, and when. Whether
+anything stopped is a separate record, one row per process, each naming
+the process and what stopping entailed there (`aborted run 1a2b3c4d; no
+further goal runs will start`). It is kept apart because a motebit's
+unattended work can run in several processes at once, so "has it
+stopped" is never one fact. A daemon that is offline, wedged, or
+mid-tool has been asked and has not stopped. `motebit halt` waits a few
+seconds, then names the processes that answered, and no surface reports
+a bare "Stopped" on the strength of one of them.
+
+The halt is durable and in force from the instant it is written — before
+anyone acknowledges it, and across a restart. A stop a restart forgets is
+not a stop.
+
+### From somewhere else
+
+`--remote` signs the command with the motebit's identity key and sends it
+to the running runtime over the relay
+(`signed-request-envelope@1.0`, audience `agent-command/{motebit_id}`).
+The relay verifies at ingress as defence in depth, forwards the envelope
+verbatim, and the runtime re-verifies fail-closed before acting.
+
+```bash
+motebit halt --remote --reason "from the train"
+motebit halt-status --remote
+motebit resume all --remote
+```
+
+Because that request reaches the process that is doing the work, the
+response **is** the acknowledgement: it says what was stopped, not that a
+message was delivered. If no unattended runtime is connected the command
+fails, and the honest reading of that failure is "not delivered" — never
+"stopped". A halt written locally is in force on that machine regardless.
+
+### Coming back to it
+
+The phone can already stop the motebit and decide an approval. `/runs`
+lets it see what either was about:
+
+```
+/runs                what happened while you were away
+/runs abc12345       one run in full
+```
+
+The run ledger, the outcomes and the evidence live where goals actually
+fire, and no other surface holds them — so this is a question sent to the
+runtime that has the answer, exactly as a remote halt is. A surface that
+cannot see the ledger says so, which is not the same sentence as "nothing
+happened".
+
+Two things it deliberately does not do. **The verbatim result does not
+travel.** A signed artifact is read on the machine that signed it, because
+a copy arriving over a relay cannot be checked against that signature by
+whatever surface receives it — presenting it as the result would offer
+proof that is not there. A bounded preview travels instead and says which
+it is. **And every piece of text that does cross** is masked at the
+boundary rather than trusted from the reader — by a wider membrane than
+an approval's arguments get, because the two are read for different
+things. An approval's arguments are read to decide, so masking the
+destination or the amount would leave nothing to consent to; a run's
+result is read as a report, where losing a field costs legibility and
+keeping one can cost a card number. An evidence source is a third case
+again — a URL you are told to re-fetch, so its path is left legible and
+its query, where an account number would sit, is not. Asked from the
+terminal that holds the ledger, nothing is masked at all: no wire is
+being crossed.
+
+What comes back is the same shape the terminal shows: the run's status,
+what it produced and whether that is signed, what its tools reported, the
+evidence pointers with their sources and full digests, and anything read
+and deliberately not kept.
+
+Every surface of a motebit holds an open socket, so the relay routes
+these verbs specifically to a peer that runs unattended work. Without
+that, a halt sent from the phone could be answered by the phone —
+"this surface cannot be halted" — while the daemon kept running, which
+reads exactly like a refusal.
+
+The phone speaks the same verbs as chat commands in the mobile app —
+halt, resume and halted, plus pending, approve and deny for the approval
+queue. (Those are mobile-app commands, not `motebit` CLI subcommands.)
+The phone can sign them because after a key-transfer pairing it holds the
+motebit's identity key; a device paired without key transfer will be told
+so rather than silently refused.
+
+Deciding an approval from the phone does not execute anything there. It
+writes the verdict into the same queue a terminal decision writes to; the
+daemon picks it up on its next tick, through the same policy gate, and a
+money action is still never executed from a recovered run.
+
+What the phone is shown is redacted the way any egress to a non-sovereign
+party is: the destination, the path and the amount are visible so the
+decision is real, while credential-class values are masked, and the full
+arguments never leave the machine. The preview is accompanied by a hash
+over the *whole* argument set. Note precisely what that hash buys: the
+phone holds neither the full arguments nor the un-redacted preview, so it
+cannot recompute anything. The hash lets a later check **on the machine
+that holds the arguments** detect a preview that diverged from what would
+execute; the phone carries it forward rather than verifying it.
 
 ## Governance enforcement
 
@@ -6965,7 +7198,7 @@ Operator mode is a PIN-protected session elevation — `sudo` for the agent. Whe
 
 | Aspect | Detail |
 |--------|--------|
-| **PIN** | 4-6 digits. SHA-256 hash stored in OS keyring — never plaintext, never sent over the network. |
+| **PIN** | 4-6 digits. Stored in the OS keyring as a salted PBKDF2-SHA256 digest (100 000 iterations) — never plaintext, never sent over the network. |
 | **Scope** | Session-level. Disabling operator mode re-locks everything immediately. |
 | **Separation from identity** | Operator mode is not part of the cryptographic identity. It is a runtime gate on the device. |
 
@@ -6975,7 +7208,7 @@ The `motebit.md` file can declare `operator_mode: true` or `false` as a governan
 
 The `BudgetEnforcer` rate-limits tool invocations to prevent runaway loops during goal execution:
 
-- `budgetMaxCalls` — maximum tool calls per turn (configurable per-device)
+- `maxCallsPerTurn` — maximum tool calls per turn (default 10; configurable per-device)
 - Turn elapsed time and cost accumulation are tracked in the `TurnContext`
 
 When the budget is exhausted, additional tool calls are denied with a reason explaining the limit. Budget state resets on each new turn.
@@ -7286,7 +7519,7 @@ Pairing codes have a short TTL. Generate a new one.
 
 ### HTTP 429 — Rate Limited
 
-The relay enforces 5-tier sliding-window rate limits per IP address:
+The relay enforces 5-tier fixed-window rate limits per IP address:
 
 | Tier | Limit | Endpoints |
 |---|---|---|
@@ -7372,7 +7605,7 @@ Normal operation — a settlement was successfully recorded.
 
 ### `settlement.retry.refunded`
 
-Settlement forwarding to a federation peer failed after 5 retry attempts (exponential backoff: 30s, 2min, 8min, 32min, 2h). The locked funds were automatically refunded to the delegator.
+Settlement forwarding to a federation peer failed after `max_attempts` retries (default 5; exponential backoff from 5 s with ±20% jitter, capped at 1 hour — `DEFAULT_RETRY_POLICY` in `retry-policy.ts`). The locked funds were automatically refunded to the delegator.
 
 ```json
 {"level":"info","msg":"settlement.retry.refunded","taskId":"task-123","amount":0.005,"delegator":"alice-id"}
@@ -7426,9 +7659,9 @@ A peer relay didn't respond to the heartbeat ping. The relay tracks consecutive 
 
 ### `federation.peer.suspended`
 
-A peer was suspended due to missed heartbeats or the forward-path circuit breaker (failure rate exceeds 50% over 6+ samples with 3+ consecutive failures). Agents on suspended peers are excluded from task routing.
+A peer is suspended after 3 missed heartbeats. Separately, the forward-path circuit breaker opens after 5 forward failures within a 120 s window and makes the relay skip forwarding to that peer until it half-opens — it does not change the peer's state. Agents on suspended peers are excluded from task routing.
 
-The peer will be restored to `active` on the next successful heartbeat.
+Recovery has hysteresis: each successful heartbeat decrements the missed count by one, so a peer suspended at 3 misses returns to `active` after 3 consecutive successes.
 
 ### `federation.receipt_signature_invalid`
 
@@ -7554,13 +7787,13 @@ The BSL-1.1 reference runtime:
 
 ## Workspace-private packages
 
-The 51 workspace-private packages (everything not in the table above) are pinned to `0.0.0-private` per the [public-surface doctrine](/docs/concepts/public-surface). They have no semver claim and no independent changelog — their behavior changes ship as part of `motebit`'s release cadence, documented in the `motebit` package's `CHANGELOG.md`. The Changesets `ignore` list locks them at the sentinel so internal-dependency bumps can't creep them upward. (`@motebit/state-export-client` joined the published Apache-2.0 surface 2026-05-11 — see the table above.)
+The 62 workspace-private packages (everything not in the table above) are pinned to `0.0.0-private` per the [public-surface doctrine](/docs/concepts/public-surface). They have no semver claim and no independent changelog — their behavior changes ship as part of `motebit`'s release cadence, documented in the `motebit` package's `CHANGELOG.md`. The Changesets `ignore` list holds them at the sentinel so internal-dependency bumps can't creep them upward (`check-private-versions` keeps the list and the sentinel in agreement). (`@motebit/state-export-client` joined the published Apache-2.0 surface 2026-05-11 — see the table above.)
 
 ## Versioning policy
 
-Each published package follows [semver 2.0.0](https://semver.org/). Breaking changes require a `major` changeset with a non-empty `## Migration` section per `check-changeset-discipline`. The Apache-2.0 packages use `check-api-surface` to enforce that the type-extracted baseline (`packages/<name>/etc/<name>.api.md`) cannot drift without an explicit major bump. The `motebit` CLI uses `check-cli-surface` against `apps/cli/etc/cli-surface.json` for the operator-facing surface (subcommands, flags, exit codes, paths).
+Each published package follows [semver 2.0.0](https://semver.org/). Breaking changes require a `major` changeset with a non-empty `## Migration` section per `check-changeset-discipline`. Three of the Apache-2.0 packages — `@motebit/protocol`, `@motebit/crypto`, `@motebit/sdk` — use `check-api-surface` to enforce that the type-extracted baseline (`packages/<name>/etc/<name>.api.md`) cannot drift without an explicit major bump. The `motebit` CLI uses `check-cli-surface` against `apps/cli/etc/cli-surface.json` for the operator-facing surface (subcommands, flags, exit codes, paths).
 
-11 of the 12 packages started at `1.0.0` in the coordinated initial release; `@motebit/state-export-client` joined later (initial release `0.1.0`, 2026-05-11). Each now versions independently on its own merit per [release-versioning doctrine](https://github.com/motebit/motebit/blob/main/docs/doctrine/release-versioning.md). Current versions are on each package's npm page.
+10 of the 12 packages converged on `1.0.0` in the coordinated initial release (five of them had shipped pre-1.0 versions to npm before it); `@motebit/state-export-client` joined later (first published version `0.2.0`, 2026-05-13). Each now versions independently on its own merit per [release-versioning doctrine](https://github.com/motebit/motebit/blob/main/docs/doctrine/release-versioning.md). Current versions are on each package's npm page.
 
 ---
 

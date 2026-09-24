@@ -547,10 +547,26 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
 
     // Step 5: Onboard the agent — register in agent_registry
     const now = Date.now();
+    // An UPSERT, not INSERT OR REPLACE: REPLACE named eight columns and so
+    // dropped `guardian_public_key`, `settlement_address`, `settlement_modes`,
+    // `metadata` and `sweep_threshold` for a returning identity (#703 F2).
+    // Everything not carried by the migration payload is kept, the same
+    // COALESCE discipline as /agents/register; arrival re-shelves the row
+    // (`revoked = 0`, `delisted_at = NULL`) because the identity has proven
+    // its key binding above and now lives here.
     db.prepare(
-      `INSERT OR REPLACE INTO agent_registry
+      `INSERT INTO agent_registry
        (motebit_id, public_key, endpoint_url, capabilities, registered_at, last_heartbeat, expires_at, federation_visible)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(motebit_id) DO UPDATE SET
+         public_key = excluded.public_key,
+         endpoint_url = excluded.endpoint_url,
+         capabilities = excluded.capabilities,
+         last_heartbeat = excluded.last_heartbeat,
+         expires_at = excluded.expires_at,
+         federation_visible = excluded.federation_visible,
+         revoked = 0,
+         delisted_at = NULL`,
     ).run(
       body.motebit_id,
       body.public_key,
@@ -753,8 +769,12 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
     }
     updateMigrationState(db, migration.token_id, "departed");
 
-    // Mark agent as inactive on this relay
-    db.prepare("UPDATE agent_registry SET revoked = 1 WHERE motebit_id = ?").run(motebitId);
+    // Mark agent as inactive on this relay — and off the shelf, in the same
+    // statement (registry-delist.ts). The row stays: the identity now lives
+    // elsewhere, but its history here is still verifiable.
+    db.prepare(
+      "UPDATE agent_registry SET revoked = 1, delisted_at = COALESCE(delisted_at, ?), endpoint_url = '', capabilities = '[]' WHERE motebit_id = ?",
+    ).run(Date.now(), motebitId);
 
     logger.info("migration.departed", {
       motebitId,

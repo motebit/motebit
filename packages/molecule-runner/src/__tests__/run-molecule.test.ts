@@ -635,13 +635,12 @@ describe("runMolecule", () => {
     expect(serverCfg.customRoutes).toBe(customRoutes);
   });
 
-  it("forwards authToken, syncUrl, apiToken, publicUrl when present", async () => {
+  it("forwards authToken, syncUrl, publicUrl when present — and signed relay self-auth, never a master token", async () => {
     const adapters = baseAdapters();
     const cfg: MoleculeConfig = {
       ...baseConfig(),
       authToken: "tok_auth",
       syncUrl: "https://relay.example",
-      apiToken: "tok_api",
       publicUrl: "https://self.example",
     };
 
@@ -650,8 +649,17 @@ describe("runMolecule", () => {
     const serverCfg = (adapters.startCalls[0] as { cfg: Record<string, unknown> }).cfg;
     expect(serverCfg.authToken).toBe("tok_auth");
     expect(serverCfg.syncUrl).toBe("https://relay.example");
-    expect(serverCfg.apiToken).toBe("tok_api");
     expect(serverCfg.publicEndpointUrl).toBe("https://self.example");
+    // The relay credential is the molecule's OWN key: a per-audience minter
+    // plus the bootstrap device id. There is no `apiToken` field to forward.
+    expect(serverCfg).not.toHaveProperty("apiToken");
+    const relayAuth = serverCfg.relayAuth as {
+      deviceId: string;
+      mint: (a: string) => Promise<string>;
+    };
+    expect(typeof relayAuth.deviceId).toBe("string");
+    const token = await relayAuth.mint("admin:query");
+    expect(token.split(".").length).toBeGreaterThanOrEqual(2);
   });
 
   it("omits optional server-config fields when config leaves them unset", async () => {
@@ -661,7 +669,6 @@ describe("runMolecule", () => {
     const serverCfg = (adapters.startCalls[0] as { cfg: Record<string, unknown> }).cfg;
     expect(serverCfg.authToken).toBeUndefined();
     expect(serverCfg.syncUrl).toBeUndefined();
-    expect(serverCfg.apiToken).toBeUndefined();
     expect(serverCfg.publicEndpointUrl).toBeUndefined();
   });
 

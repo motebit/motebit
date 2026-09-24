@@ -1137,6 +1137,34 @@ describe("McpServerAdapter — synthetic tool execution", () => {
     expect(result.content[0]!.text).toContain("completed");
   });
 
+  it("a halted motebit refuses motebit_task whatever handler is wired", async () => {
+    // The gate lives on the MCP surface, not inside the default
+    // handler, because `handleAgentTask` is an injection point: a
+    // surface can replace it wholesale, and `motebit serve --direct`
+    // does — executing tools itself and never reaching the runtime
+    // entry where the halt is otherwise enforced. This stub stands in
+    // for any such replacement.
+    let ran = false;
+    const handleAgentTask = async function* () {
+      ran = true;
+      yield { type: "text" as const, text: "should never run" };
+    };
+    const deps = makeDeps({ handleAgentTask });
+    deps.haltRefusal = () => "this motebit has been stopped by its owner (halt abcd1234)";
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    const handler = registrations.tools.get("motebit_task")!.handler;
+    const result = (await handler({ prompt: "do it" })) as {
+      content: Array<{ text: string }>;
+      isError?: boolean;
+    };
+
+    expect(ran).toBe(false);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("stopped by its owner");
+  });
+
   it("motebit_task returns fallback with receipt_missing when no receipt emitted", async () => {
     const handleAgentTask = async function* () {
       yield { type: "text" as const, text: "just text" };
@@ -1151,7 +1179,11 @@ describe("McpServerAdapter — synthetic tool execution", () => {
     };
 
     expect(result.content[0]!.text).toContain("just text");
-    expect(result.content[0]!.text).toContain("completed");
+    // Not "completed". This test used to assert the opposite, which pinned the
+    // defect: a receipt is the only completion, so a run that produced none —
+    // a halted worker refusing the task, a provider that died mid-stream — was
+    // telling a paying delegator the reverse of what happened.
+    expect(result.content[0]!.text).toContain("failed");
     expect(result.content[0]!.text).toContain("receipt_missing");
     expect(result.content[0]!.text).toContain("true");
   });
@@ -1948,5 +1980,388 @@ describe("McpServerAdapter — motebit_task scope enforcement", () => {
     expect(result.isError).toBeFalsy();
     expect(result.content[0]!.text).toContain("t4");
     expect(result.content[0]!.text).not.toContain("delegated_scope");
+  });
+});
+
+// ============================================================
+// Task admission — a priced worker runs only relay-admitted tasks
+// ============================================================
+
+describe("McpServerAdapter — task admission (dispatch_token)", () => {
+  // Real keys + the canonical mint seam: the fixtures are adversarial
+  // (wrong key / wrong audience / wrong worker / expired / replayed), which
+  // the seam structurally refuses to produce, so this file builds them.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  type Enc = typeof import("@motebit/encryption");
+  let enc: Enc;
+  const WORKER = "a1b2c3d4-e5f6-7890-abcd-ef0123456789";
+
+  beforeEach(async () => {
+    enc = await import("@motebit/encryption");
+  });
+
+  function captureTask(): {
+    handleAgentTask: NonNullable<MotebitServerDeps["handleAgentTask"]>;
+    calls: Array<{ prompt: string; relayTaskId?: string }>;
+  } {
+    const calls: Array<{ prompt: string; relayTaskId?: string }> = [];
+    const handleAgentTask: NonNullable<MotebitServerDeps["handleAgentTask"]> = async function* (
+      prompt,
+      options,
+    ) {
+      calls.push({ prompt, relayTaskId: options?.relayTaskId });
+      yield {
+        type: "task_result" as const,
+        receipt: { task_id: "t1", motebit_id: WORKER, signature: "s", status: "completed" },
+      };
+    };
+    return { handleAgentTask, calls };
+  }
+
+  async function digestOf(prompt: string): Promise<string> {
+    return enc.bytesToHex(await enc.sha256(new TextEncoder().encode(prompt)));
+  }
+
+  async function mint(
+    priv: Uint8Array,
+    over: Partial<{
+      mid: string;
+      aud: string;
+      sub: string | undefined;
+      digest: string | undefined;
+      nowMs: number;
+      ttlMs: number;
+    }> = {},
+  ): Promise<string> {
+    const { token } = await enc.mintAudienceToken(
+      {
+        mid: over.mid ?? WORKER,
+        did: "relay-did",
+        aud: over.aud ?? "task:dispatch",
+        ...("sub" in over ? (over.sub != null ? { sub: over.sub } : {}) : { sub: "task-1" }),
+        // Every fixture prompt is "p" unless a case says otherwise.
+        ...("digest" in over
+          ? over.digest != null
+            ? { digest: over.digest }
+            : {}
+          : { digest: await digestOf("p") }),
+        ...(over.nowMs != null ? { nowMs: over.nowMs } : {}),
+        ...(over.ttlMs != null ? { ttlMs: over.ttlMs } : {}),
+      },
+      priv,
+    );
+    return token;
+  }
+
+  async function adapterWith(
+    relayPublicKey: string | (() => Promise<string | null>),
+    handleAgentTask: MotebitServerDeps["handleAgentTask"],
+  ): Promise<ToolHandler> {
+    const adapter = new McpServerAdapter(
+      makeConfig({ taskAdmission: { relayPublicKey } }),
+      makeDeps({ handleAgentTask }),
+    );
+    await adapter.start();
+    return registrations.tools.get("motebit_task")!.handler;
+  }
+
+  function text(result: unknown): string {
+    return (result as { content: Array<{ text: string }> }).content[0]!.text;
+  }
+
+  it("without taskAdmission, motebit_task runs as before (no token required)", async () => {
+    const { handleAgentTask, calls } = captureTask();
+    const adapter = new McpServerAdapter(makeConfig(), makeDeps({ handleAgentTask }));
+    await adapter.start();
+    const handler = registrations.tools.get("motebit_task")!.handler;
+    await handler({ prompt: "p", relay_task_id: "r-1" });
+    expect(calls).toEqual([{ prompt: "p", relayTaskId: "r-1" }]);
+  });
+
+  it("denies a task with no dispatch_token before any work starts", async () => {
+    const relay = await enc.generateKeypair();
+    const { handleAgentTask, calls } = captureTask();
+    const handler = await adapterWith(enc.bytesToHex(relay.publicKey), handleAgentTask);
+    const res = await handler({ prompt: "p" });
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    expect(text(res)).toMatch(/^Denied: this service admits work only through its relay/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("admits a relay-signed token for this worker and binds relayTaskId to its sub", async () => {
+    const relay = await enc.generateKeypair();
+    const { handleAgentTask, calls } = captureTask();
+    const handler = await adapterWith(enc.bytesToHex(relay.publicKey), handleAgentTask);
+    const res = await handler({ prompt: "p", dispatch_token: await mint(relay.privateKey) });
+    expect((res as { isError?: boolean }).isError).toBeUndefined();
+    expect(calls).toEqual([{ prompt: "p", relayTaskId: "task-1" }]);
+  });
+
+  it("the token's sub is the binding — a claimed relay_task_id that disagrees is refused", async () => {
+    const relay = await enc.generateKeypair();
+    const { handleAgentTask, calls } = captureTask();
+    const handler = await adapterWith(enc.bytesToHex(relay.publicKey), handleAgentTask);
+    const res = await handler({
+      prompt: "p",
+      relay_task_id: "someone-elses-task",
+      dispatch_token: await mint(relay.privateKey),
+    });
+    expect(text(res)).toContain("relay_task_id does not match dispatch_token");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses tokens signed by a key other than the pinned relay key", async () => {
+    const relay = await enc.generateKeypair();
+    const impostor = await enc.generateKeypair();
+    const { handleAgentTask, calls } = captureTask();
+    const handler = await adapterWith(enc.bytesToHex(relay.publicKey), handleAgentTask);
+    const res = await handler({ prompt: "p", dispatch_token: await mint(impostor.privateKey) });
+    expect(text(res)).toContain("dispatch_token invalid or expired");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses a wrong audience, a token for another worker, a token with no sub, and an expired token", async () => {
+    const relay = await enc.generateKeypair();
+    const { handleAgentTask, calls } = captureTask();
+    const handler = await adapterWith(enc.bytesToHex(relay.publicKey), handleAgentTask);
+    const cases: Array<[string, string]> = [
+      [await mint(relay.privateKey, { aud: "task:submit" }), "audience mismatch"],
+      [await mint(relay.privateKey, { mid: "other-worker" }), "different worker"],
+      [await mint(relay.privateKey, { sub: undefined }), "carries no task id"],
+      [
+        await mint(relay.privateKey, { nowMs: Date.now() - 60_000, ttlMs: 1_000 }),
+        "invalid or expired",
+      ],
+    ];
+    for (const [token, reason] of cases) {
+      const res = await handler({ prompt: "p", dispatch_token: token });
+      expect(text(res)).toContain(reason);
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("the token admits THIS prompt — a different prompt, or a token with no digest, is refused", async () => {
+    const relay = await enc.generateKeypair();
+    const { handleAgentTask, calls } = captureTask();
+    const handler = await adapterWith(enc.bytesToHex(relay.publicKey), handleAgentTask);
+    const swapped = await handler({
+      prompt: "something more expensive",
+      dispatch_token: await mint(relay.privateKey),
+    });
+    expect(text(swapped)).toContain("digest mismatch");
+    const none = await handler({
+      prompt: "p",
+      dispatch_token: await mint(relay.privateKey, { sub: "task-2", digest: undefined }),
+    });
+    expect(text(none)).toContain("no prompt digest");
+    expect(calls).toHaveLength(0);
+    // A refused presentation must not consume the admission.
+    await handler({ prompt: "p", dispatch_token: await mint(relay.privateKey) });
+    expect(calls.map((c) => c.relayTaskId)).toEqual(["task-1"]);
+  });
+
+  it("uses an injected durable AdmittedTaskStore so a restart cannot re-admit a live token", async () => {
+    const relay = await enc.generateKeypair();
+    const persisted = new Map<string, number>();
+    const store = {
+      has: (id: string) => persisted.has(id),
+      add: (id: string, exp: number) => {
+        persisted.set(id, exp);
+      },
+    };
+    const relayKey = enc.bytesToHex(relay.publicKey);
+    const first = captureTask();
+    const a1 = new McpServerAdapter(
+      makeConfig({ taskAdmission: { relayPublicKey: relayKey, admittedStore: store } }),
+      makeDeps({ handleAgentTask: first.handleAgentTask }),
+    );
+    await a1.start();
+    const token = await mint(relay.privateKey, { sub: "durable-1" });
+    await registrations.tools.get("motebit_task")!.handler({ prompt: "p", dispatch_token: token });
+    expect(first.calls).toHaveLength(1);
+
+    // "Restart": a fresh adapter over the same store.
+    const second = captureTask();
+    const a2 = new McpServerAdapter(
+      makeConfig({ taskAdmission: { relayPublicKey: relayKey, admittedStore: store } }),
+      makeDeps({ handleAgentTask: second.handleAgentTask }),
+    );
+    await a2.start();
+    const res = await registrations.tools
+      .get("motebit_task")!
+      .handler({ prompt: "p", dispatch_token: token });
+    expect(text(res)).toContain("already admitted");
+    expect(second.calls).toHaveLength(0);
+  });
+
+  it("two SIMULTANEOUS presentations of one token admit exactly once, even over an async store", async () => {
+    const relay = await enc.generateKeypair();
+    const persisted = new Map<string, number>();
+    // An async store with a real gap between has() and add() — the shape that
+    // lets two callers both observe "not admitted".
+    const store = {
+      has: async (id: string) => {
+        await new Promise((r) => setTimeout(r, 5));
+        return persisted.has(id);
+      },
+      add: async (id: string, exp: number) => {
+        await new Promise((r) => setTimeout(r, 5));
+        persisted.set(id, exp);
+      },
+    };
+    const { handleAgentTask, calls } = captureTask();
+    const adapter = new McpServerAdapter(
+      makeConfig({
+        taskAdmission: { relayPublicKey: enc.bytesToHex(relay.publicKey), admittedStore: store },
+      }),
+      makeDeps({ handleAgentTask }),
+    );
+    await adapter.start();
+    const handler = registrations.tools.get("motebit_task")!.handler;
+    const token = await mint(relay.privateKey, { sub: "race-1" });
+    const results = await Promise.all([
+      handler({ prompt: "p", dispatch_token: token }),
+      handler({ prompt: "p", dispatch_token: token }),
+      handler({ prompt: "p", dispatch_token: token }),
+    ]);
+    expect(calls).toHaveLength(1);
+    expect(results.filter((r) => (r as { isError?: boolean }).isError).length).toBe(2);
+  });
+
+  it("re-admits a task whose earlier run produced NO receipt (honest retry), and refuses one that completed", async () => {
+    // The retry gap named in docs/doctrine/task-admission.md: an intent-stable
+    // resubmission replays the same token. A run cut short must not strand
+    // the task for the token's whole TTL; a run that produced a receipt must
+    // never run twice.
+    const relay = await enc.generateKeypair();
+    let produceReceipt = false;
+    const calls: string[] = [];
+    const handleAgentTask: NonNullable<MotebitServerDeps["handleAgentTask"]> = async function* (
+      prompt,
+    ) {
+      calls.push(prompt);
+      if (produceReceipt) {
+        yield {
+          type: "task_result" as const,
+          receipt: { task_id: "t1", motebit_id: WORKER, signature: "s", status: "completed" },
+        };
+      } else {
+        yield { type: "text" as const, text: "partial, then the provider died" };
+      }
+    };
+    const handler = await adapterWith(enc.bytesToHex(relay.publicKey), handleAgentTask);
+    const token = await mint(relay.privateKey, { sub: "retry-1" });
+
+    const first = await handler({ prompt: "p", dispatch_token: token });
+    expect(text(first)).toContain("receipt_missing");
+    // Same token, honest retry: admitted again because nothing completed.
+    produceReceipt = true;
+    const second = await handler({ prompt: "p", dispatch_token: token });
+    expect(text(second)).not.toContain("already admitted");
+    expect(calls).toHaveLength(2);
+    // Now a receipt exists: a third presentation is refused.
+    const third = await handler({ prompt: "p", dispatch_token: token });
+    expect(text(third)).toContain("one completed execution");
+    expect(calls).toHaveLength(2);
+  });
+
+  it("refuses a second presentation while the first run is still in flight", async () => {
+    const relay = await enc.generateKeypair();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const handleAgentTask: NonNullable<MotebitServerDeps["handleAgentTask"]> = async function* () {
+      await gate;
+      yield {
+        type: "task_result" as const,
+        receipt: { task_id: "t1", motebit_id: WORKER, signature: "s", status: "completed" },
+      };
+    };
+    const handler = await adapterWith(enc.bytesToHex(relay.publicKey), handleAgentTask);
+    const token = await mint(relay.privateKey, { sub: "inflight-1" });
+    const firstRun = handler({ prompt: "p", dispatch_token: token });
+    await new Promise((r) => setTimeout(r, 10));
+    const second = await handler({ prompt: "p", dispatch_token: token });
+    expect(text(second)).toContain("this task is running");
+    release();
+    const first = await firstRun;
+    expect((first as { isError?: boolean }).isError).not.toBe(true);
+  });
+
+  it("a store WITHOUT completion tracking keeps the strict rule: one admission, ever", async () => {
+    const relay = await enc.generateKeypair();
+    const persisted = new Map<string, number>();
+    const strictStore = {
+      has: (id: string) => persisted.has(id),
+      add: (id: string, exp: number) => {
+        persisted.set(id, exp);
+      },
+    };
+    const handleAgentTask: NonNullable<MotebitServerDeps["handleAgentTask"]> = async function* () {
+      yield { type: "text" as const, text: "no receipt" };
+    };
+    const adapter = new McpServerAdapter(
+      makeConfig({
+        taskAdmission: {
+          relayPublicKey: enc.bytesToHex(relay.publicKey),
+          admittedStore: strictStore,
+        },
+      }),
+      makeDeps({ handleAgentTask }),
+    );
+    await adapter.start();
+    const handler = registrations.tools.get("motebit_task")!.handler;
+    const token = await mint(relay.privateKey, { sub: "strict-1" });
+    await handler({ prompt: "p", dispatch_token: token });
+    const replay = await handler({ prompt: "p", dispatch_token: token });
+    expect(text(replay)).toContain("already admitted");
+  });
+
+  it("admits each relay task at most once — replaying the token or re-minting for the same sub is refused", async () => {
+    const relay = await enc.generateKeypair();
+    const { handleAgentTask, calls } = captureTask();
+    const handler = await adapterWith(enc.bytesToHex(relay.publicKey), handleAgentTask);
+    const token = await mint(relay.privateKey, { sub: "task-9" });
+    await handler({ prompt: "p", dispatch_token: token });
+    const replay = await handler({ prompt: "p", dispatch_token: token });
+    expect(text(replay)).toContain("already admitted");
+    const reminted = await handler({
+      prompt: "p",
+      dispatch_token: await mint(relay.privateKey, { sub: "task-9" }),
+    });
+    expect(text(reminted)).toContain("already admitted");
+    // A different task under the same key still runs.
+    await handler({
+      prompt: "p",
+      dispatch_token: await mint(relay.privateKey, { sub: "task-10" }),
+    });
+    expect(calls.map((c) => c.relayTaskId)).toEqual(["task-9", "task-10"]);
+  });
+
+  it("fails closed while the relay key resolver returns null, then admits once it resolves (memoized)", async () => {
+    const relay = await enc.generateKeypair();
+    const { handleAgentTask, calls } = captureTask();
+    let available = false;
+    const resolver = vi.fn(async () => (available ? enc.bytesToHex(relay.publicKey) : null));
+    const handler = await adapterWith(resolver, handleAgentTask);
+
+    const denied = await handler({ prompt: "p", dispatch_token: await mint(relay.privateKey) });
+    expect(text(denied)).toContain("relay public key unavailable");
+    expect(calls).toHaveLength(0);
+
+    available = true;
+    await handler({ prompt: "p", dispatch_token: await mint(relay.privateKey, { sub: "a" }) });
+    await handler({ prompt: "p", dispatch_token: await mint(relay.privateKey, { sub: "b" }) });
+    expect(calls.map((c) => c.relayTaskId)).toEqual(["a", "b"]);
+    // One failed attempt + one successful resolution; never re-fetched after success.
+    expect(resolver).toHaveBeenCalledTimes(2);
+  });
+
+  it("a resolver that yields a malformed key denies (never a partial or zero key)", async () => {
+    const relay = await enc.generateKeypair();
+    const { handleAgentTask, calls } = captureTask();
+    const handler = await adapterWith(async () => "not-hex", handleAgentTask);
+    const res = await handler({ prompt: "p", dispatch_token: await mint(relay.privateKey) });
+    expect(text(res)).toContain("relay public key unavailable");
+    expect(calls).toHaveLength(0);
   });
 });

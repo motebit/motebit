@@ -16,6 +16,7 @@ import { useTheme, type ThemeColors } from "../theme";
 import {
   createMemoryController,
   classifyCertainty,
+  memoryProvenance,
   resolveFeltMemory,
   resolveFeltConsolidation,
   feltHeadline,
@@ -295,9 +296,10 @@ export function MemoryPanel({ visible, app, onClose }: MemoryPanelProps): React.
                           <Text style={styles.sensitivityText}>{item.sensitivity}</Text>
                         </View>
                       )}
-                      <Text style={[styles.metaText, certaintyStyle]}>
-                        {certainty} · {Math.round(decayed * 100)}%
-                      </Text>
+                      {/* The word, not the score (felt-interior). */}
+                      <Text style={[styles.metaText, certaintyStyle]}>{certainty}</Text>
+                      {/* Provenance — same [from:X] vocabulary the agent sees. */}
+                      <Text style={styles.metaText}>{memoryProvenance(item.source)}</Text>
                       <Text style={styles.metaText}>
                         {Math.round(item.half_life / 86_400_000)}d half
                         {item.half_life > 30 * 86_400_000 ? " \u2191" : ""}

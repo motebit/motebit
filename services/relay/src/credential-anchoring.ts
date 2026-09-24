@@ -527,6 +527,22 @@ export function isCredentialPendingBatch(db: DatabaseDriver, credentialId: strin
 
 /**
  * List all credential anchor batches, most recent first.
+ *
+ * `created_at` is `Date.now()` at insert, so two batches cut back-to-back can
+ * share a millisecond — and `ORDER BY created_at DESC` alone leaves their
+ * relative order **unspecified**. SQLite is free to return either first, and
+ * under load it does: this surfaced as a flaky test (#615), but the test was
+ * only what noticed. The function's own contract says "most recent first", and
+ * an API that returns rows in an arbitrary order whenever two timestamps tie is
+ * a real, if small, contract gap — a paging consumer can see a row twice or miss
+ * one entirely.
+ *
+ * `rowid DESC` is the tiebreaker because it preserves the INTENDED meaning:
+ * rowid is monotonic with insertion, so on a tie the later-inserted batch is
+ * still the more recent one. A `batch_id` tiebreaker would be deterministic but
+ * arbitrary — stable ordering by the wrong key. (VACUUM may renumber rowids, but
+ * it rewrites in rowid order, so relative order survives; and the relay does not
+ * VACUUM routinely.)
  */
 export function listCredentialAnchorBatches(
   db: DatabaseDriver,
@@ -535,7 +551,7 @@ export function listCredentialAnchorBatches(
   const rows = db
     .prepare(
       `SELECT * FROM relay_credential_anchor_batches
-       ORDER BY created_at DESC
+       ORDER BY created_at DESC, rowid DESC
        LIMIT ?`,
     )
     .all(limit) as Array<{

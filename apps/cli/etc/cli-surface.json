@@ -30,6 +30,8 @@
       "resume"
     ],
     "grant": [],
+    "halt": [],
+    "halt-status": [],
     "id": [],
     "init": [],
     "keychain": [],
@@ -44,8 +46,14 @@
       "up"
     ],
     "restore": [],
+    "resume": [],
     "rotate": [],
     "run": [],
+    "runs": [
+      "ack",
+      "list",
+      "show"
+    ],
     "schema": [],
     "seed": [],
     "serve": [],
@@ -73,6 +81,11 @@
     {
       "name": "allow-commands",
       "type": "string"
+    },
+    {
+      "name": "allow-fresh-run",
+      "type": "boolean",
+      "default": false
     },
     {
       "name": "allowed-paths",
@@ -257,6 +270,11 @@
       "type": "string"
     },
     {
+      "name": "remote",
+      "type": "boolean",
+      "default": false
+    },
+    {
       "name": "routing-strategy",
       "type": "string"
     },
@@ -352,6 +370,7 @@
     "identity.md",
     "motebit.db",
     "motebit.md",
+    "pending-rotation.json",
     "relay",
     "relay/relay.db",
     "smoke-x402-buyer-eoa.txt",

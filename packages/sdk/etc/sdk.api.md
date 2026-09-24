@@ -18,6 +18,7 @@ import type { ConversationStoreAdapter } from '@motebit/protocol';
 import type { CredentialStoreAdapter } from '@motebit/protocol';
 import type { EventLogEntry } from '@motebit/protocol';
 import type { EventStoreAdapter } from '@motebit/protocol';
+import type { HaltStoreAdapter } from '@motebit/protocol';
 import type { IdentityStorage } from '@motebit/protocol';
 import type { LatencyStatsStoreAdapter } from '@motebit/protocol';
 import type { MemoryCandidate } from '@motebit/protocol';
@@ -26,6 +27,7 @@ import type { MotebitId } from '@motebit/protocol';
 import type { MotebitIdentity } from '@motebit/protocol';
 import type { NodeId } from '@motebit/protocol';
 import type { PlanStoreAdapter } from '@motebit/protocol';
+import type { RunEvidenceSink } from '@motebit/protocol';
 import { SensitivityLevel } from '@motebit/protocol';
 import type { ServiceListingStoreAdapter } from '@motebit/protocol';
 import type { SettlementStoreAdapter } from '@motebit/protocol';
@@ -70,7 +72,7 @@ export interface AIResponse {
 export const ANTHROPIC_CANONICAL_URL = "https://api.anthropic.com";
 
 // @public
-export const ANTHROPIC_MODELS: readonly ["claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-5-20251101", "claude-sonnet-4-5-20250929", "claude-opus-4-1-20250805"];
+export const ANTHROPIC_MODELS: readonly ["claude-fable-5-1", "claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-5-20251101", "claude-sonnet-4-5-20250929"];
 
 // @public (undocumented)
 export type AnthropicModel = (typeof ANTHROPIC_MODELS)[number];
@@ -116,6 +118,9 @@ export interface ApprovalPresetConfig {
     // (undocumented)
     requireApprovalAbove: number;
 }
+
+// @public
+export function assertOutboundUrl(raw: unknown, opts?: OutboundUrlOptions): Promise<URL>;
 
 // @public (undocumented)
 export interface BehaviorCues {
@@ -163,6 +168,9 @@ export type ByokVendor = "anthropic" | "openai" | "google" | "groq" | "deepseek"
 
 // @public
 export function canonicalVendorBaseUrl(vendor: ByokVendor): string;
+
+// @public
+export function checkOutboundUrl(raw: unknown, opts?: OutboundUrlOptions): Promise<OutboundUrlVerdict>;
 
 // @public
 export interface CloudProviderSpec {
@@ -324,6 +332,15 @@ export interface ExportManifest {
     motebit_id: MotebitId;
 }
 
+// @public
+export function fetchPublic(raw: string, init?: RequestInit, opts?: FetchPublicOptions): Promise<Response>;
+
+// @public (undocumented)
+export interface FetchPublicOptions extends OutboundUrlOptions {
+    fetchImpl?: typeof fetch;
+    maxRedirects?: number;
+}
+
 // @public (undocumented)
 export interface GeometrySpec {
     // (undocumented)
@@ -424,7 +441,7 @@ export interface GradientStoreAdapter {
 // @public
 export const GROQ_CANONICAL_URL = "https://api.groq.com/openai/v1";
 
-// @public
+// @public (undocumented)
 export const GROQ_MODELS: readonly ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"];
 
 // @public
@@ -450,6 +467,9 @@ export interface InteriorColor {
 
 // @public
 export function isLocalServerUrl(url: string | undefined | null): boolean;
+
+// @public
+export function isPublicAddress(address: string): boolean;
 
 // @public (undocumented)
 export interface LightingSpec {
@@ -677,6 +697,34 @@ export const OPENAI_MODELS: readonly ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"]
 // @public (undocumented)
 export type OpenAIModel = (typeof OPENAI_MODELS)[number];
 
+// @public (undocumented)
+export interface OutboundUrlOptions {
+    allowPrivateNetwork?: boolean;
+    resolve?: (hostname: string) => Promise<string[]>;
+}
+
+// @public
+export type OutboundUrlRefusal = "invalid_url" | "scheme_not_allowed" | "credentials_in_url" | "host_not_public" | "resolved_address_not_public" | "resolution_failed";
+
+// @public (undocumented)
+export class OutboundUrlRefusedError extends Error {
+    constructor(reason: OutboundUrlRefusal, detail?: string | undefined);
+    // (undocumented)
+    readonly detail?: string | undefined;
+    // (undocumented)
+    readonly reason: OutboundUrlRefusal;
+}
+
+// @public (undocumented)
+export type OutboundUrlVerdict = {
+    ok: true;
+    url: URL;
+} | {
+    ok: false;
+    reason: OutboundUrlRefusal;
+    detail?: string;
+};
+
 // @public
 export type PixelConsentState = "denied" | "session";
 
@@ -692,6 +740,12 @@ export interface PrecisionWeights {
 }
 
 // @public
+export const PROVIDER_NOTE: Readonly<Record<VerifiableProvider, string>>;
+
+// @public (undocumented)
+export const PROVIDER_VERIFICATION: Readonly<Record<VerifiableProvider, ProviderVerification>>;
+
+// @public
 export function providerAcceptsModel(provider: string, model: string): boolean;
 
 // @public
@@ -699,6 +753,13 @@ export type ProviderMode = "on-device" | "motebit-cloud" | "byok";
 
 // @public
 export type ProviderSpec = CloudProviderSpec | WebLLMProviderSpec | AppleFoundationModelsSpec | MlxProviderSpec;
+
+// @public
+export type ProviderVerification =
+/** A real turn has run through this vendor and is expected to keep working. */
+"verified"
+/** Wired and resolvable; no live turn has been witnessed yet. */
+| "available";
 
 // @public
 export const PROXY_MODELS: readonly ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
@@ -772,7 +833,13 @@ export interface SessionStateSnapshot {
     readonly memory?: MemorySelfState;
     readonly pixelConsent: PixelConsentState;
     readonly sensitivity: SensitivityLevel;
+    readonly settledDelegations?: ReadonlyArray<{
+        readonly capability: string;
+    }>;
     readonly staleBytesOmissionReason?: PixelOmittedReason;
+    readonly substrate?: {
+        readonly model: string;
+    };
 }
 
 // @public
@@ -830,6 +897,7 @@ export interface StorageAdapters {
     eventStore: EventStoreAdapter;
     // (undocumented)
     gradientStore?: GradientStoreAdapter;
+    haltStore?: HaltStoreAdapter;
     // (undocumented)
     identityStorage: IdentityStorage;
     // (undocumented)
@@ -838,6 +906,7 @@ export interface StorageAdapters {
     memoryStorage: MemoryStorageAdapter;
     // (undocumented)
     planStore?: PlanStoreAdapter;
+    runEvidenceSink?: RunEvidenceSink;
     // (undocumented)
     serviceListingStore?: ServiceListingStoreAdapter;
     // (undocumented)
@@ -900,6 +969,9 @@ export class UnsupportedBackendError extends Error {
     // (undocumented)
     backend: OnDeviceBackend;
 }
+
+// @public
+export type VerifiableProvider = "anthropic" | "openai" | "google" | "groq" | "deepseek" | "local-server";
 
 // @public
 export interface VerificationResult {

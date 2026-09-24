@@ -8,7 +8,6 @@ describe("loadConfig", () => {
     "MOTEBIT_DB_PATH",
     "MOTEBIT_DATA_DIR",
     "MOTEBIT_SYNC_URL",
-    "MOTEBIT_API_TOKEN",
     "MOTEBIT_PUBLIC_URL",
   ];
 
@@ -35,7 +34,6 @@ describe("loadConfig", () => {
     expect(config.dbPath).toBe("./data/read-url.db");
     expect(config.dataDir).toBe("./data");
     expect(config.syncUrl).toBeUndefined();
-    expect(config.apiToken).toBeUndefined();
     expect(config.publicUrl).toBeUndefined();
   });
 
@@ -55,14 +53,12 @@ describe("loadConfig", () => {
     process.env["MOTEBIT_DB_PATH"] = "/tmp/test.db";
     process.env["MOTEBIT_DATA_DIR"] = "/data";
     process.env["MOTEBIT_SYNC_URL"] = "https://relay.example.com";
-    process.env["MOTEBIT_API_TOKEN"] = "tok_123";
     process.env["MOTEBIT_PUBLIC_URL"] = "https://agent.example.com";
 
     const config = loadConfig();
     expect(config.dbPath).toBe("/tmp/test.db");
     expect(config.dataDir).toBe("/data");
     expect(config.syncUrl).toBe("https://relay.example.com");
-    expect(config.apiToken).toBe("tok_123");
     expect(config.publicUrl).toBe("https://agent.example.com");
   });
 });

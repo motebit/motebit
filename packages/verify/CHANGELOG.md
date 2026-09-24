@@ -1,5 +1,55 @@
 # @motebit/verify
 
+## 1.8.15
+
+### Patch Changes
+
+- Updated dependencies [965136f]
+- Updated dependencies [4ebe62b]
+- Updated dependencies [89d3d08]
+- Updated dependencies [f8dd5b3]
+- Updated dependencies [578cf94]
+- Updated dependencies [337bff7]
+- Updated dependencies [62d9069]
+- Updated dependencies [2db131e]
+- Updated dependencies [1d0f3ec]
+  - @motebit/protocol@3.18.0
+  - @motebit/crypto@3.20.0
+  - @motebit/crypto-android-keystore@1.1.33
+  - @motebit/crypto-appattest@1.0.35
+  - @motebit/crypto-tpm@1.1.34
+  - @motebit/crypto-webauthn@1.0.35
+  - @motebit/state-export-client@0.5.25
+  - @motebit/verifier@1.13.5
+
+## 1.8.14
+
+### Patch Changes
+
+- Updated dependencies [73a099a]
+  - @motebit/protocol@3.17.0
+  - @motebit/crypto@3.19.1
+  - @motebit/crypto-android-keystore@1.1.32
+  - @motebit/crypto-appattest@1.0.34
+  - @motebit/crypto-tpm@1.1.33
+  - @motebit/crypto-webauthn@1.0.34
+  - @motebit/state-export-client@0.5.24
+  - @motebit/verifier@1.13.4
+
+## 1.8.13
+
+### Patch Changes
+
+- Updated dependencies [40d7b6e]
+  - @motebit/protocol@3.16.0
+  - @motebit/crypto@3.19.1
+  - @motebit/crypto-android-keystore@1.1.31
+  - @motebit/crypto-appattest@1.0.33
+  - @motebit/crypto-tpm@1.1.32
+  - @motebit/crypto-webauthn@1.0.33
+  - @motebit/state-export-client@0.5.23
+  - @motebit/verifier@1.13.3
+
 ## 1.8.12
 
 ### Patch Changes

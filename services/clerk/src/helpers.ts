@@ -23,9 +23,7 @@ export interface ClerkServiceConfig {
    */
   dryRun: boolean;
   unitCost: number;
-  authToken: string | null;
   syncUrl: string | null;
-  apiToken: string | null;
   publicUrl: string | null;
 }
 
@@ -47,9 +45,7 @@ export function loadConfig(): ClerkServiceConfig {
     ceilingMicro: parseInt(process.env["MOTEBIT_CLERK_CEILING_MICRO"] ?? "1000000", 10), // $1 lifetime
     dryRun: parseDryRun(process.env["DRY_RUN"]),
     unitCost: parseFloat(process.env["MOTEBIT_UNIT_COST"] ?? "0.01"),
-    authToken: process.env["MOTEBIT_AUTH_TOKEN"] ?? null,
     syncUrl: process.env["MOTEBIT_SYNC_URL"] ?? null,
-    apiToken: process.env["MOTEBIT_API_TOKEN"] ?? null,
     publicUrl: process.env["MOTEBIT_PUBLIC_URL"] ?? null,
   };
 }

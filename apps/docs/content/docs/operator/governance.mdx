@@ -55,7 +55,7 @@ Operator mode is a PIN-protected session elevation — `sudo` for the agent. Whe
 
 | Aspect | Detail |
 |--------|--------|
-| **PIN** | 4-6 digits. SHA-256 hash stored in OS keyring — never plaintext, never sent over the network. |
+| **PIN** | 4-6 digits. Stored in the OS keyring as a salted PBKDF2-SHA256 digest (100 000 iterations) — never plaintext, never sent over the network. |
 | **Scope** | Session-level. Disabling operator mode re-locks everything immediately. |
 | **Separation from identity** | Operator mode is not part of the cryptographic identity. It is a runtime gate on the device. |
 
@@ -65,7 +65,7 @@ The `motebit.md` file can declare `operator_mode: true` or `false` as a governan
 
 The `BudgetEnforcer` rate-limits tool invocations to prevent runaway loops during goal execution:
 
-- `budgetMaxCalls` — maximum tool calls per turn (configurable per-device)
+- `maxCallsPerTurn` — maximum tool calls per turn (default 10; configurable per-device)
 - Turn elapsed time and cost accumulation are tracked in the `TurnContext`
 
 When the budget is exhausted, additional tool calls are denied with a reason explaining the limit. Budget state resets on each new turn.

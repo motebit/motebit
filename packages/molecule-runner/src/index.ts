@@ -27,11 +27,12 @@
  * single application-facing entry point.
  */
 
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { dirname, resolve as resolvePath } from "node:path";
 import { RiskLevel } from "@motebit/sdk";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import { bootstrapAndEmitIdentity, startServiceServer, wireServerDeps } from "@motebit/mcp-server";
+import type { AdmittedTaskStore, TaskAdmissionConfig } from "@motebit/mcp-server";
 import {
   deriveSolanaAddress,
   createSolanaWalletRail,
@@ -49,8 +50,10 @@ import type {
 } from "@motebit/mcp-server";
 import { openMotebitDatabase } from "@motebit/persistence";
 import type { MotebitDatabase } from "@motebit/persistence";
-import { MotebitRuntime, NullRenderer } from "@motebit/runtime";
+import { MotebitRuntime, NullRenderer, getOrPinRelayKey } from "@motebit/runtime";
+import type { RelayKeyPinStorage } from "@motebit/runtime";
 import type { PolicyConfig, StorageAdapters, GrantedDelegationResult } from "@motebit/runtime";
+import { createHash } from "node:crypto";
 import { signStandingDelegation, signDelegation, mintAudienceToken } from "@motebit/crypto";
 import type {
   StandingDelegation,
@@ -64,6 +67,8 @@ import type { ToolRegistry } from "@motebit/tools";
 // Re-export the receipt builder so molecule authors don't reach into
 // `@motebit/mcp-server` for this one helper — runner is the single
 // service-facing import.
+export { createProviderReadiness, classifyProviderFailure } from "./readiness.js";
+export type { ProviderReadiness, ReadinessVerdict } from "./readiness.js";
 export { buildServiceReceipt } from "@motebit/mcp-server";
 export type { BuildServiceReceiptInput } from "@motebit/mcp-server";
 export type { ServiceHandle } from "@motebit/mcp-server";
@@ -115,6 +120,14 @@ export interface MoleculeBuild {
   getServiceListing?: ServiceServerDepsSliceListing;
 
   /**
+   * Optional readiness probe. When it answers `ready: false`, the service
+   * withholds its relay heartbeat so discovery freshness decays instead of
+   * advertising work the agent cannot currently perform (#610). Build one with
+   * `createProviderReadiness`. Omitted ⇒ today's behavior (always advertise).
+   */
+  checkReadiness?: () => Promise<{ ready: boolean; reason?: string }>;
+
+  /**
    * Custom REST routes handled before MCP auth. Used by web-search for
    * its `/search` public endpoint.
    */
@@ -163,12 +176,39 @@ export interface MoleculeConfig {
 
   /** Optional bearer token guarding the MCP HTTP endpoint. */
   authToken?: string;
-  /** Sync relay URL — enables registration, heartbeat, and remote key resolution. */
+  /**
+   * Sync relay URL — enables registration, heartbeat, and remote key
+   * resolution. The molecule authenticates to it with its OWN identity key
+   * (short-lived audience-bound tokens minted by `makeAuthTokenMinter`); there
+   * is no operator-secret path, and `MOTEBIT_API_TOKEN` in a worker
+   * environment is refused at boot (`check-worker-no-master-token`).
+   */
   syncUrl?: string;
-  /** API token for relay calls. */
-  apiToken?: string;
   /** Externally-reachable URL the relay advertises for routing. */
   publicUrl?: string;
+  /**
+   * The relay operator's PINNED Ed25519 public key (hex) used to verify
+   * relay-signed task dispatch tokens. Falls back to `moneyExecution.
+   * relayPublicKeyHex`, then to a one-time fetch of the relay's
+   * `/.well-known/motebit.json` (trust-on-first-use, logged loudly). Pin it
+   * in production.
+   */
+  relayPublicKeyHex?: string;
+  /**
+   * Task admission posture (`docs/doctrine/task-admission.md`).
+   *   - `"relay"` — `motebit_task` runs only with a relay-signed
+   *     `dispatch_token` for this worker and task.
+   *   - `"open"`  — any authenticated caller may submit work (pre-admission
+   *     behavior).
+   * Default: `"relay"` when the molecule is PRICED (any listing entry with
+   * `unit_cost > 0`) and relay-registered — a priced listing is a promise
+   * that the work is bought — else `"open"`. Flipped 2026-09-13 once every
+   * first-party direct caller of a priced atom carried the relay's token
+   * (`docs/doctrine/task-admission.md`). Set `"open"` explicitly (or
+   * MOTEBIT_TASK_ADMISSION=open) to reopen a priced service; that is an
+   * operator decision, never a default.
+   */
+  taskAdmission?: "relay" | "open";
 
   /**
    * Money-execution seam — opt-in. When present, the molecule becomes a
@@ -298,6 +338,14 @@ export interface MoleculeRunnerAdapters {
   embedText?: ((text: string) => Promise<number[]>) | null;
   /** Override server start. Default: `startServiceServer` from @motebit/mcp-server. */
   startServer?: typeof startServiceServer;
+  /** HTTP fetch used for the relay well-known key lookup. Default: global `fetch`. */
+  fetch?: typeof fetch;
+  /**
+   * Durable stores for task admission. Default: JSON files under `dataDir`
+   * (`relay-key-pins.json`, `admitted-tasks.json`) — the same persistent
+   * volume that holds the identity. Tests inject in-memory stores.
+   */
+  admissionStores?: { pinStorage: RelayKeyPinStorage; admittedStore: AdmittedTaskStore };
   /**
    * Override construction of the sovereign wallet used for sweeping earnings.
    * Default: `createSolanaWalletRail({ rpcUrl, identitySeed })`. Tests inject a
@@ -554,6 +602,321 @@ export function defaultCreateMoneyRuntime(
 }
 
 // ---------------------------------------------------------------------------
+// Task admission — decide posture + resolve the relay key
+// ---------------------------------------------------------------------------
+
+/** Env-derived defaults for task admission; explicit config always wins. */
+export function taskAdmissionEnvDefaults(env: NodeJS.ProcessEnv = process.env): {
+  taskAdmission?: "relay" | "open";
+  relayPublicKeyHex?: string;
+} {
+  const out: { taskAdmission?: "relay" | "open"; relayPublicKeyHex?: string } = {};
+  const mode = env["MOTEBIT_TASK_ADMISSION"]?.trim();
+  if (mode === "relay" || mode === "open") out.taskAdmission = mode;
+  const key = env["MOTEBIT_RELAY_PUBLIC_KEY"]?.trim();
+  if (key) out.relayPublicKeyHex = key;
+  return out;
+}
+
+/**
+ * A tiny durable JSON map under `dataDir` — the admission state a worker
+ * must not lose across a restart (its relay-key pin and the task ids it has
+ * already admitted). Atomic write via rename; read on every access so a
+ * second process on the same volume sees the same truth.
+ */
+function jsonFileMap(path: string): {
+  get(key: string): string | null;
+  set(key: string, value: string): void;
+  entries(): Record<string, string>;
+  replace(all: Record<string, string>): void;
+} {
+  const read = (): Record<string, string> => {
+    try {
+      return JSON.parse(readFileSync(path, "utf8")) as Record<string, string>;
+    } catch {
+      return {};
+    }
+  };
+  const write = (all: Record<string, string>): void => {
+    const tmp = `${path}.tmp`;
+    writeFileSync(tmp, JSON.stringify(all), { mode: 0o600 });
+    renameSync(tmp, path);
+  };
+  return {
+    get: (k) => read()[k] ?? null,
+    set: (k, v) => {
+      const all = read();
+      all[k] = v;
+      write(all);
+    },
+    entries: read,
+    replace: write,
+  };
+}
+
+/** @internal exported for tests */
+export function fileAdmissionStores(dataDir: string): {
+  pinStorage: RelayKeyPinStorage;
+  admittedStore: AdmittedTaskStore;
+} {
+  const pins = jsonFileMap(resolvePath(dataDir, "relay-key-pins.json"));
+  const admitted = jsonFileMap(resolvePath(dataDir, "admitted-tasks.json"));
+  return {
+    pinStorage: { getItem: (k) => pins.get(k), setItem: (k, v) => pins.set(k, v) },
+    // Value format: "<expiresAt>" = admitted, "<expiresAt>:done" = completed.
+    // Legacy rows (pre-completion tracking) are bare numbers and read as
+    // admitted-not-completed, so a token whose run was cut short by a deploy
+    // stays re-presentable rather than being refused for its TTL.
+    admittedStore: {
+      has: (id) => {
+        const exp = Number(String(admitted.get(id) ?? "").split(":")[0]);
+        return Number.isFinite(exp) && exp > Date.now();
+      },
+      isCompleted: (id) => {
+        const raw = String(admitted.get(id) ?? "");
+        const exp = Number(raw.split(":")[0]);
+        return Number.isFinite(exp) && exp > Date.now() && raw.endsWith(":done");
+      },
+      add: (id, expiresAt) => {
+        const now = Date.now();
+        const all = admitted.entries();
+        for (const [k, v] of Object.entries(all)) {
+          if (Number(String(v).split(":")[0]) <= now) delete all[k];
+        }
+        all[id] = String(expiresAt);
+        admitted.replace(all);
+      },
+      complete: (id) => {
+        const raw = admitted.get(id);
+        if (raw == null) return;
+        const exp = String(raw).split(":")[0];
+        admitted.set(id, `${exp}:done`);
+      },
+    },
+  };
+}
+
+const HEX_64 = /^[0-9a-fA-F]{64}$/;
+
+/** @internal exported for tests — the pinned-or-TOFU relay key for transport trust. */
+export function resolveRelayTrust(
+  config: Pick<MoleculeConfig, "syncUrl" | "relayPublicKeyHex" | "moneyExecution">,
+  pinStorage: RelayKeyPinStorage,
+  fetchImpl: typeof fetch,
+  log: (msg: string) => void,
+): { relayPublicKey: string | (() => Promise<string | null>) } | undefined {
+  const pinned =
+    config.relayPublicKeyHex?.trim() ||
+    config.moneyExecution?.relayPublicKeyHex?.trim() ||
+    undefined;
+  if (pinned != null) {
+    if (!HEX_64.test(pinned)) {
+      throw new Error(
+        `relay trust: relayPublicKeyHex / MOTEBIT_RELAY_PUBLIC_KEY is not a 64-hex Ed25519 public key (got ${pinned.length} chars)`,
+      );
+    }
+    return { relayPublicKey: pinned };
+  }
+  const syncUrl = config.syncUrl?.replace(/\/+$/, "");
+  if (!syncUrl) return undefined;
+  return {
+    relayPublicKey: async () => {
+      const key = await getOrPinRelayKey(syncUrl, {
+        fetchImpl,
+        storage: pinStorage,
+        logger: { warn: (m, ctx) => log(`relay trust: ${m} ${ctx ? JSON.stringify(ctx) : ""}`) },
+      });
+      return key != null && HEX_64.test(key) ? key : null;
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Relay sub-task binding — the ONE way a molecule opens a relay task for a
+// hop it will present to the atom itself.
+// ---------------------------------------------------------------------------
+
+export type RelaySubTaskOutcome =
+  | { ok: true; relayTaskId: string; dispatchToken?: string }
+  | { ok: false; reason: string; status?: number; code?: string };
+
+/**
+ * Open a relay task for a sub-delegation this molecule will present DIRECTLY
+ * to the atom (`presenter: "submitter"`, delegation spec §3.1 1.2). The relay
+ * runs every settlement gate, does NOT route the task itself, and returns the
+ * `task:dispatch` token bound to the target — one admission, one presenter.
+ * The atom's receipt rides back in this molecule's own delegation chain, which
+ * is how the relay settles the sub-task (`settleSubReceipt`).
+ *
+ * Authenticated as THIS molecule (`task:submit` signed by its own key). Never
+ * an operator secret. Intent-stable idempotency key (caller × target ×
+ * prompt), so a retry replays the relay's original answer instead of minting
+ * a second task (#459).
+ *
+ * A refusal is returned, never swallowed: the caller decides whether the hop
+ * can proceed without admission (it cannot, once the atom enforces admission —
+ * docs/doctrine/task-admission.md § "The worker authenticates as itself").
+ */
+export async function openRelaySubTask(args: {
+  syncUrl: string;
+  /** Mints the caller's own `task:submit` bearer. */
+  mintToken: (audience: TokenAudience) => Promise<string>;
+  callerMotebitId: string;
+  targetMotebitId: string;
+  prompt: string;
+  capability: string;
+  fetchImpl?: typeof fetch;
+}): Promise<RelaySubTaskOutcome> {
+  const fetchImpl = args.fetchImpl ?? fetch;
+  const idempotencyKey = `sub-${createHash("sha256")
+    .update(`${args.callerMotebitId}\n${args.targetMotebitId}\n${args.prompt}`)
+    .digest("hex")
+    .slice(0, 32)}`;
+  try {
+    const resp = await fetchImpl(
+      `${args.syncUrl.replace(/\/+$/, "")}/agent/${args.targetMotebitId}/task`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${await args.mintToken("task:submit")}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": idempotencyKey,
+        },
+        body: JSON.stringify({
+          prompt: args.prompt,
+          submitted_by: args.callerMotebitId,
+          required_capabilities: [args.capability],
+          presenter: "submitter",
+        }),
+        signal: AbortSignal.timeout(15_000),
+      },
+    );
+    if (!resp.ok) {
+      let code: string | undefined;
+      let reason = `relay refused the sub-task (${resp.status})`;
+      try {
+        const err = (await resp.json()) as { code?: unknown; error?: unknown };
+        if (typeof err.code === "string") code = err.code;
+        if (typeof err.error === "string") reason = `${reason}: ${err.error}`;
+      } catch {
+        // non-JSON refusal body — status is the signal
+      }
+      return { ok: false, reason, status: resp.status, ...(code != null ? { code } : {}) };
+    }
+    const body = (await resp.json()) as { task_id?: unknown; dispatch_token?: unknown };
+    if (typeof body.task_id !== "string" || body.task_id === "") {
+      return { ok: false, reason: "relay answered without a task_id", status: resp.status };
+    }
+    return {
+      ok: true,
+      relayTaskId: body.task_id,
+      ...(typeof body.dispatch_token === "string" ? { dispatchToken: body.dispatch_token } : {}),
+    };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      reason: `relay unreachable: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/** @internal exported for tests */
+export async function resolveTaskAdmission(
+  config: Pick<
+    MoleculeConfig,
+    "syncUrl" | "relayPublicKeyHex" | "moneyExecution" | "taskAdmission" | "serviceName"
+  >,
+  molecule: Pick<MoleculeBuild, "getServiceListing">,
+  fetchImpl: typeof fetch,
+  log: (msg: string) => void,
+  stores: { pinStorage: RelayKeyPinStorage; admittedStore: AdmittedTaskStore },
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<TaskAdmissionConfig | undefined> {
+  const envDefaults = taskAdmissionEnvDefaults(env);
+  let priced = false;
+  if (molecule.getServiceListing) {
+    try {
+      const listing = await molecule.getServiceListing();
+      // A null listing is a service that publishes nothing — nothing priced.
+      priced = listing?.pricing.some((p) => p.unit_cost > 0) ?? false;
+    } catch (err) {
+      // A listing that cannot be read is treated as priced: the failure mode
+      // must be "refuse work until the relay admits it", never "work free".
+      priced = true;
+      log(
+        `task admission: listing unreadable (${err instanceof Error ? err.message : String(err)}) — treating as priced`,
+      );
+    }
+  }
+  const configured = config.taskAdmission ?? envDefaults.taskAdmission;
+  // Default: a PRICED, relay-registered listing is a promise that the work is
+  // bought, so it runs only relay-admitted work. Reopening it is an explicit
+  // operator decision (config or MOTEBIT_TASK_ADMISSION=open), logged as such.
+  const defaulted = priced && Boolean(config.syncUrl) ? "relay" : "open";
+  const mode = configured ?? defaulted;
+  if (mode === "open") {
+    if (configured != null && priced && config.syncUrl) {
+      log(
+        "task admission: OPEN by explicit operator choice on a PRICED relay-registered listing — any relay-registered identity can run this work without paying.",
+      );
+    } else {
+      log(`task admission: open (${configured != null ? "configured" : "unpriced or no relay"})`);
+    }
+    return undefined;
+  }
+  if (configured == null)
+    log("task admission: relay dispatch required (default for a priced listing)");
+
+  // Empty strings are "unset", never a pinned key; a NON-empty malformed pin is
+  // a configuration error that must stop the boot, not a silent deny-all that
+  // logs "pinned relay key".
+  const pinnedRaw =
+    config.relayPublicKeyHex?.trim() ||
+    config.moneyExecution?.relayPublicKeyHex?.trim() ||
+    envDefaults.relayPublicKeyHex ||
+    undefined;
+  if (pinnedRaw != null) {
+    if (!HEX_64.test(pinnedRaw)) {
+      throw new Error(
+        `task admission: relayPublicKeyHex / MOTEBIT_RELAY_PUBLIC_KEY is not a 64-hex Ed25519 public key (got ${pinnedRaw.length} chars) — fix the pin; refusing to start a priced service that could never admit work`,
+      );
+    }
+    log("task admission: relay dispatch required (pinned relay key)");
+    return { relayPublicKey: pinnedRaw, admittedStore: stores.admittedStore };
+  }
+  const syncUrl = config.syncUrl?.replace(/\/+$/, "");
+  if (!syncUrl) {
+    // Nothing to verify against and nothing to fetch from: deny all rather
+    // than open. The operator asked for admission without giving the worker
+    // a relay — a configuration error the first task surfaces, not a reason
+    // to work for free.
+    log(
+      "task admission: relay dispatch required but NO relay key and NO syncUrl — every task will be refused",
+    );
+    return { relayPublicKey: () => Promise.resolve(null), admittedStore: stores.admittedStore };
+  }
+  log(
+    `task admission: relay dispatch required — relay key NOT pinned in config; using the persisted trust-on-first-use pin for ${syncUrl} (rotation verified against the relay's signed succession chain). Set relayPublicKeyHex / MOTEBIT_RELAY_PUBLIC_KEY to pin explicitly.`,
+  );
+  return {
+    // The same TOFU-with-succession primitive every delegator surface uses
+    // for the P2P fee-leg treasury key (`@motebit/runtime` relay-key-pin):
+    // first fetch persists the pin; a later key change is honored only when
+    // the relay's signed succession chain roots at our pin; otherwise fail
+    // closed. Never a bare re-fetch on every task.
+    relayPublicKey: async () => {
+      const key = await getOrPinRelayKey(syncUrl, {
+        fetchImpl,
+        storage: stores.pinStorage,
+        logger: { warn: (m, ctx) => log(`task admission: ${m} ${ctx ? JSON.stringify(ctx) : ""}`) },
+      });
+      return key != null && HEX_64.test(key) ? key : null;
+    },
+    admittedStore: stores.admittedStore,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // runMolecule — the entrypoint services call
 // ---------------------------------------------------------------------------
 
@@ -675,6 +1038,23 @@ export async function runMolecule(
   log(`Runtime initialized (${config.serviceName})`);
 
   // 5. Wire server deps
+  //
+  // Relay self-auth: every call this molecule makes to its relay (bootstrap →
+  // register → heartbeat → listing → deregister, plus caller-key lookups) is
+  // signed by its own identity key. A worker never holds the relay operator's
+  // master token — before 2026-09-13 every first-party worker did, so a
+  // compromised worker container was a compromised relay.
+  const relayAuth = {
+    deviceId: identity.deviceId,
+    mint: makeAuthTokenMinter(identity),
+  };
+  if (process.env["MOTEBIT_API_TOKEN"] != null && process.env["MOTEBIT_API_TOKEN"] !== "") {
+    log(
+      `WARNING: MOTEBIT_API_TOKEN is set in this worker's environment but is NOT used — ` +
+        `workers authenticate to the relay with their own identity key. Remove the secret ` +
+        `from this deployment; a relay master token has no business in a worker container.`,
+    );
+  }
   const embedFn =
     adapters.embedText === null ? undefined : (adapters.embedText ?? defaultEmbedText);
   const wireOpts: WireServerDepsOptions = {
@@ -682,7 +1062,7 @@ export async function runMolecule(
     publicKeyHex: identity.publicKeyHex,
     identityFileContent: identity.identityContent,
     syncUrl: config.syncUrl,
-    apiToken: config.apiToken,
+    relayAuth,
   };
   if (embedFn) wireOpts.embedText = embedFn;
   if (molecule.handleAgentTask) wireOpts.handleAgentTask = molecule.handleAgentTask;
@@ -690,6 +1070,9 @@ export async function runMolecule(
   const deps = wireServerDeps(runtime as unknown as ServiceRuntime, wireOpts);
   if (molecule.getServiceListing) {
     deps.getServiceListing = molecule.getServiceListing;
+  }
+  if (molecule.checkReadiness) {
+    deps.checkReadiness = molecule.checkReadiness;
   }
 
   // 6. Start server
@@ -718,9 +1101,32 @@ export async function runMolecule(
       }
     },
   };
+  // Task admission — priced work enters through the relay's gate. Decided
+  // from the molecule's OWN listing so pricing and admission cannot drift
+  // apart: a service that charges is a service that requires the relay's
+  // signed admission before it spends. Doctrine: task-admission.md.
+  const admissionStores = adapters.admissionStores ?? fileAdmissionStores(config.dataDir);
+  const admission = await resolveTaskAdmission(
+    config,
+    molecule,
+    adapters.fetch ?? fetch,
+    log,
+    admissionStores,
+  );
+  if (admission != null) serverCfg.taskAdmission = admission;
+  // Relay trust is independent of admission posture: any relay-registered
+  // molecule lets its relay authenticate as itself on forwards (dispatch
+  // token as bearer) so the relay's master token never has to travel.
+  const relayTrust = resolveRelayTrust(
+    config,
+    admissionStores.pinStorage,
+    adapters.fetch ?? fetch,
+    log,
+  );
+  if (relayTrust != null) serverCfg.relayTrust = relayTrust;
   if (config.authToken != null) serverCfg.authToken = config.authToken;
   if (config.syncUrl != null) serverCfg.syncUrl = config.syncUrl;
-  if (config.apiToken != null) serverCfg.apiToken = config.apiToken;
+  serverCfg.relayAuth = relayAuth;
   if (config.publicUrl != null) serverCfg.publicEndpointUrl = config.publicUrl;
   if (molecule.customRoutes) serverCfg.customRoutes = molecule.customRoutes;
   if (adapters.serverLog) serverCfg.log = adapters.serverLog;

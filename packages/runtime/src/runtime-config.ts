@@ -23,7 +23,10 @@ import type { PolicyConfig, MemoryGovernanceConfig, GrantSpendStore } from "@mot
 /**
  * Default task router config for planning operations.
  * Uses the strongest model for decomposition + reflection — bad plans cascade.
- * Step execution stays on the user's current model (auto-routed per message).
+ * Step execution stays on the user's current model: since #533, tier
+ * "default" RESOLVES to the current model in every family (the sovereign's
+ * choice), so non-overridden tasks are a structural no-op hop — the old
+ * family-workhorse mapping silently borrowed a SKU the user never picked.
  *
  * Class aliases ("claude-opus") are resolved to current dated versions by the
  * proxy's resolveModelAlias(). When Anthropic ships a new Opus, update the
@@ -374,7 +377,13 @@ export type StreamChunk =
        * (e.g. `request_control`), not a body act. Default `"tool_call"`
        * (or omitted) preserves the existing card-per-call behavior.
        */
-      slabProjection?: "none" | "tool_call";
+      slabProjection?: "none" | "tool_call" | "band";
+      /**
+       * Runtime-produced band narration for a `"band"`-projected act
+       * ("Searching …"). Set by `projectSlabForTurn`, never by the
+       * model; surfaces render it in the `task_step_narration` register.
+       */
+      narration?: string;
       /**
        * Structured failure category, sourced from `ToolResult.reason`
        * (or a typed thrown error's `.reason`) and threaded through

@@ -124,7 +124,14 @@ describe("Revocation Propagation", () => {
   });
 
   describe("processIncomingRevocations", () => {
-    it("processes agent revocation with valid signature", async () => {
+    // These two asserted the defect #704 names: that a peer's signature was
+    // enough to de-list or re-key an identity this relay is the home of. They
+    // are inverted rather than deleted, because what they were really testing
+    // — "a validly signed event reaches its branch" — is still worth holding,
+    // and the row they plant into `agent_registry` is exactly the local
+    // identity a peer must not be able to touch. The route-level proof lives
+    // in `federation-peer-authority.test.ts`; this is the unit half.
+    it("refuses to revoke an identity this relay holds, even with a valid signature", async () => {
       const motebitId = "agent-to-revoke";
       const now = Date.now();
       db.prepare(
@@ -145,16 +152,20 @@ describe("Revocation Propagation", () => {
       ];
 
       const result = await processIncomingRevocations(db, events, identity.publicKey);
-      expect(result.processed).toBe(1);
+      // The signature is valid, so nothing is `rejected` — the event is
+      // well-formed and authentically from the peer. It is REFUSED, which is a
+      // statement about authority, not about authorship.
       expect(result.rejected).toBe(0);
+      expect(result.refused).toBe(1);
+      expect(result.processed).toBe(0);
 
       const agent = db
         .prepare("SELECT revoked FROM agent_registry WHERE motebit_id = ?")
         .get(motebitId) as { revoked: number };
-      expect(agent.revoked).toBe(1);
+      expect(agent.revoked).toBe(0);
     });
 
-    it("processes key rotation — updates public key", async () => {
+    it("refuses to re-key an identity this relay holds, even with a valid signature", async () => {
       const motebitId = "agent-rotating";
       const now = Date.now();
       db.prepare(
@@ -176,15 +187,42 @@ describe("Revocation Propagation", () => {
       ];
 
       const result = await processIncomingRevocations(db, events, identity.publicKey);
-      expect(result.processed).toBe(1);
+      expect(result.refused).toBe(1);
+      expect(result.processed).toBe(0);
 
       const agent = db
         .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
         .get(motebitId) as { public_key: string };
-      expect(agent.public_key).toBe("newkey123");
+      expect(agent.public_key).toBe("oldkey");
     });
 
-    it("processes credential revocation — stores in revoked credentials table", async () => {
+    it("applies an event about an identity this relay does NOT hold", async () => {
+      // The feed's legitimate direction: a peer describing its own identity.
+      // No local row, so nothing to protect and nothing to refuse — this is
+      // what keeps an honest peer's logs quiet.
+      const timestamp = Date.now();
+      const motebitId = "agent-elsewhere";
+      const payload = `revocation:key_rotated:${motebitId}:${timestamp}`;
+      const sig = await sign(new TextEncoder().encode(payload), identity.privateKey);
+
+      const result = await processIncomingRevocations(
+        db,
+        [
+          {
+            type: "key_rotated",
+            motebit_id: motebitId,
+            new_public_key: "somekey",
+            timestamp,
+            signature: bytesToHex(sig),
+          },
+        ],
+        identity.publicKey,
+      );
+      expect(result.processed).toBe(1);
+      expect(result.refused).toBe(0);
+    });
+
+    it("refuses a peer's credential revocation — a peer is neither subject nor issuer", async () => {
       const timestamp = Date.now();
       const motebitId = "agent-cred-revoked";
       const credentialId = "cred-fed-1";
@@ -202,13 +240,16 @@ describe("Revocation Propagation", () => {
       ];
 
       const result = await processIncomingRevocations(db, events, identity.publicKey);
-      expect(result.processed).toBe(1);
+      // Refused regardless of whether the subject is an identity this relay
+      // holds: the authority model for this act is "subject or issuer", and a
+      // peer relay is neither.
+      expect(result.refused).toBe(1);
+      expect(result.processed).toBe(0);
 
       const row = db
         .prepare("SELECT * FROM relay_revoked_credentials WHERE credential_id = ?")
         .get(credentialId) as Record<string, unknown> | undefined;
-      expect(row).toBeDefined();
-      expect(row!.revoked_by).toBe("federation");
+      expect(row).toBeUndefined();
     });
 
     it("rejects events with invalid signature (fail-closed)", async () => {

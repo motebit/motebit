@@ -114,6 +114,9 @@ export const ALL_EVENT_TYPES: readonly EventType[] = Object.freeze([
   "skill_loaded",
   "sensitivity_gate_fired",
   "secret_redacted_from_egress",
+  "halt_requested",
+  "halt_acknowledged",
+  "halt_lifted",
 ] as EventType[]);
 
 /**

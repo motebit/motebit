@@ -22,6 +22,7 @@ const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
 
 async function createTestRelay(): Promise<SyncRelay> {
   return createSyncRelay({
+    allowPrivateEndpoints: true,
     apiToken: API_TOKEN,
     enableDeviceAuth: true,
     x402: {

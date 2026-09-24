@@ -1849,4 +1849,60 @@ export const relayMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 40,
+    name: "auth_events",
+    up: (db) => {
+      // Durable auth-event record (services/relay/src/auth-events.ts): every
+      // master-token presentation and every refused signed token, so the
+      // operator's question "who presented the master token today, and what
+      // did we refuse?" is answered from a record the relay keeps — not from
+      // a hosting provider's rolling log buffer (which, on 2026-09-14, ended
+      // before the deploys it needed to cover). Kind, method, path, the
+      // token's CLAIMED motebit_id, expected audience, rejection reason,
+      // correlation id. No token bytes. No IP (the transparency declaration
+      // promises no app-level IP persistence). 30-day rolling retention,
+      // swept by the task-cleanup loop.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_auth_events (
+          id             INTEGER PRIMARY KEY AUTOINCREMENT,
+          at             INTEGER NOT NULL,
+          kind           TEXT NOT NULL,
+          method         TEXT,
+          path           TEXT NOT NULL,
+          motebit_id     TEXT,
+          audience       TEXT,
+          reason         TEXT,
+          correlation_id TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_auth_events_at ON relay_auth_events(at);
+        CREATE INDEX IF NOT EXISTS idx_auth_events_kind_at ON relay_auth_events(kind, at);
+      `);
+    },
+  },
+  {
+    version: 41,
+    name: "agent_registry_delisted_at",
+    up: (db) => {
+      // Identity key state outlives the discovery row (#703, proposal
+      // identity-key-state-v1 §4). `agent_registry` held two facts with two
+      // lifetimes in one row, and the shorter won: deregister and the 90-day
+      // janitor DELETEd the row — key, guardian and settlement configuration
+      // with it — and the CLI daemon deregisters on every shutdown. Rows are
+      // now DELISTED (registry-delist.ts): `delisted_at` set, discovery
+      // fields cleared, everything else kept until revocation. Rows already
+      // revoked are backfilled as delisted so "on the shelf" is one predicate
+      // (`delisted_at IS NULL`) from the first read after this migration.
+      try {
+        db.exec("ALTER TABLE agent_registry ADD COLUMN delisted_at INTEGER");
+      } catch (err) {
+        // A database that already carries the column (a partially applied
+        // run) must not fail the migration; any other error is real.
+        if (!(err instanceof Error && err.message.includes("duplicate column"))) throw err;
+      }
+      db.prepare(
+        "UPDATE agent_registry SET delisted_at = ? WHERE revoked = 1 AND delisted_at IS NULL",
+      ).run(Date.now());
+    },
+  },
 ];

@@ -50,7 +50,7 @@ export function registerIntakeRoutes(deps: IntakeRoutesDeps): void {
   /**
    * @experimental
    * @since 2026-06-08
-   * @stabilizes_by 2026-09-08
+   * @stabilizes_by 2026-12-08
    * @replacement none
    * @reason Sovereign-funnel intake endpoint. The announcement wire format may
    *   still change before it graduates to a versioned spec route — notably how
@@ -58,6 +58,25 @@ export function registerIntakeRoutes(deps: IntakeRoutesDeps): void {
    *   well-known descriptor today; trust-on-first-use vs a pinned relay id is
    *   still open) and possible sybil gating beyond the per-IP window. Promotes
    *   to `spec/motebit-announcement-v1.md` once stable.
+   *
+   *   EXTENDED ONCE 2026-09-08 (first extension), 09-08 -> 12-08. Re-measured
+   *   at the deadline rather than assumed: unlike the identity-transparency
+   *   route (#574), whose stated blocker had quietly closed months earlier,
+   *   BOTH blockers here are still genuinely open — no
+   *   `spec/motebit-announcement-v1.md` exists, and neither the audience
+   *   discovery question (trust-on-first-use vs a pinned relay id) nor sybil
+   *   gating beyond the per-IP window has been decided.
+   *
+   *   The two alternatives were considered and rejected. Promoting would write
+   *   a versioned wire commitment for a format that may still change — the
+   *   expensive mistake, since a spec route is a wire break to alter. Demoting
+   *   to `@internal` would be dishonest: this is a public, unauthenticated
+   *   endpoint that external clients call, and `@internal` says the opposite.
+   *
+   *   DO NOT EXTEND AGAIN. A second extension means the deadline is not doing
+   *   its job. Resolve the audience question and decide on sybil gating, then
+   *   promote — or if the funnel is not worth a spec, demote the endpoint
+   *   itself rather than its label.
    */
   app.post("/api/v1/motebits/announce", async (c) => {
     const ip = getClientIp(c);

@@ -10,13 +10,16 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { AgentTrustLevel, RiskLevel } from "@motebit/sdk";
+import { AgentTrustLevel, RiskLevel, TASK_DISPATCH_AUDIENCE } from "@motebit/sdk";
 import type { ToolDefinition, ToolResult, PolicyDecision } from "@motebit/sdk";
 import {
   hexPublicKeyToDidKey,
   hexToBytes,
+  bytesToHex,
+  sha256,
   verifyDelegation,
   parseScopeSet,
+  verifySignedToken as defaultVerifySignedToken,
 } from "@motebit/encryption";
 import type { DelegationToken } from "@motebit/encryption";
 import { startSelfWatchdog } from "./self-watchdog.js";
@@ -43,6 +46,7 @@ export type {
   ServiceMemoryGraph,
   ServiceEventStore,
   WireServerDepsOptions,
+  RelayAuth,
   ServiceServerConfig,
   ServiceHandle,
 } from "./service.js";
@@ -138,6 +142,16 @@ interface MotebitServerDeps {
     | { type: "task_result"; receipt: Record<string, unknown> }
     | { type: string; [key: string]: unknown }
   >;
+  /**
+   * Why this motebit is refusing work right now, or `null` when it is
+   * not. Called before every `motebit_task`, ahead of admission.
+   *
+   * It lives beside `handleAgentTask` rather than inside it because a
+   * surface may replace that handler entirely — `motebit serve
+   * --direct` does — and a stop that only the default handler honors is
+   * not a stop.
+   */
+  haltRefusal?(): string | null;
   identityFileContent?: string;
 
   /** Returns this agent's service listing (capabilities, pricing, SLA). */
@@ -147,6 +161,33 @@ interface MotebitServerDeps {
     sla: { max_latency_ms: number; availability_guarantee: number };
     description: string;
   } | null>;
+
+  /**
+   * Can this agent actually do the work it advertises, right now?
+   *
+   * Heartbeats assert LIVENESS ("my process is running"). That is not the same
+   * claim as READINESS ("I can perform the capability I list a price for"), and
+   * on 2026-08-27 the difference cost six nights: the staging Researcher's
+   * inference provider was out of credits, so every task failed instantly — yet
+   * it kept heartbeating, kept advertising `freshness: awake` with listed
+   * pricing, kept accepting PAID delegations, and returned a signed refusal for
+   * each one. The buyer's money moved before the work was attempted
+   * (`relay-delegation.ts:1365`), so on the sovereign rail it does not come back
+   * (#610). Selling a refusal is worse than being unreachable.
+   *
+   * When supplied and it answers `ready: false`, `runService` WITHHOLDS the
+   * heartbeat. Nothing is deregistered and no new protocol is involved: the
+   * relay's existing freshness ladder does the work, decaying
+   * `awake → recently_seen → dormant` on its own. The listing stays intact and a
+   * later `ready: true` restores it. Absent, behavior is exactly as before.
+   *
+   * The probe MUST be conservative — see `createProviderReadiness` in
+   * `@motebit/molecule-runner`. Only a durable operator condition (exhausted
+   * credit, revoked key) may answer `false`. Rate limits, 5xx, and timeouts are
+   * transient and must keep answering `true`: a jittery probe that withholds
+   * heartbeats takes the market dark, which is the more expensive failure.
+   */
+  checkReadiness?(): Promise<{ ready: boolean; reason?: string }>;
 
   /** Returns a signed Verifiable Presentation with agent credentials. */
   getCredentials?(): Promise<Record<string, unknown> | null>;
@@ -161,8 +202,85 @@ interface MotebitServerDeps {
   verifySignedToken?(
     token: string,
     publicKey: Uint8Array,
-  ): Promise<{ mid: string; did: string; iat: number; exp: number } | null>;
+  ): Promise<{
+    mid: string;
+    did: string;
+    iat: number;
+    exp: number;
+    aud?: string;
+    sub?: string;
+    digest?: string;
+    jti?: string;
+  } | null>;
 }
+
+// === Task admission ===
+
+/**
+ * Where a worker remembers which relay task ids it has already admitted.
+ * The default is an in-process Map — correct for one process that never
+ * restarts inside a token's TTL. A deployed worker SHOULD inject a durable
+ * store (molecule-runner persists one under its data dir) so a restart or a
+ * second instance cannot re-admit a task whose token is still live.
+ */
+export interface AdmittedTaskStore {
+  /** Was this task id admitted (run started) inside the retention window? */
+  has(relayTaskId: string): boolean | Promise<boolean>;
+  add(relayTaskId: string, expiresAt: number): void | Promise<void>;
+  /**
+   * Completion tracking (optional). A store that implements BOTH lets the
+   * worker re-admit a task whose earlier run never produced a receipt (the
+   * process died, the provider timed out) — the delegator's honest retry of
+   * an intent-stable submission replays the same token, and refusing it for
+   * the token's whole TTL strands the task. A store without these keeps the
+   * strict rule: one admission, ever. Never one without the other.
+   */
+  isCompleted?(relayTaskId: string): boolean | Promise<boolean>;
+  complete?(relayTaskId: string): void | Promise<void>;
+}
+
+/** See `McpServerConfig.taskAdmission`. */
+export interface TaskAdmissionConfig {
+  /** Relay Ed25519 public key (hex), or a resolver returning it (null = unavailable). */
+  relayPublicKey: string | (() => Promise<string | null>);
+  /** Durable single-use record of admitted task ids. Default: in-process. */
+  admittedStore?: AdmittedTaskStore;
+}
+
+/**
+ * Longest a verified dispatch token's `sub` is remembered for replay
+ * refusal. Bounded by the token's own `exp`, so the memory is small and
+ * self-pruning; the relay mints dispatch tokens with a short TTL.
+ */
+const ADMITTED_TASK_RETENTION_CAP_MS = 60 * 60 * 1000;
+
+/** In-process `AdmittedTaskStore` — prunes expired entries on every write. */
+class MemoryAdmittedTaskStore implements AdmittedTaskStore {
+  private readonly admitted = new Map<string, { exp: number; done: boolean }>();
+  has(id: string): boolean {
+    const row = this.admitted.get(id);
+    if (row == null) return false;
+    if (row.exp <= Date.now()) {
+      this.admitted.delete(id);
+      return false;
+    }
+    return true;
+  }
+  isCompleted(id: string): boolean {
+    return this.has(id) && (this.admitted.get(id)?.done ?? false);
+  }
+  add(id: string, expiresAt: number): void {
+    const now = Date.now();
+    for (const [k, row] of this.admitted) if (row.exp <= now) this.admitted.delete(k);
+    this.admitted.set(id, { exp: expiresAt, done: false });
+  }
+  complete(id: string): void {
+    const row = this.admitted.get(id);
+    if (row != null) row.done = true;
+  }
+}
+
+type AdmissionOutcome = { ok: true; relayTaskId: string } | { ok: false; reason: string };
 
 // === Config ===
 
@@ -182,6 +300,32 @@ interface McpServerConfig {
   motebitType?: "personal" | "service" | "collaborative";
   /** Timeout in milliseconds for motebit_task generator iteration (default: 300000 = 5 minutes). */
   taskTimeoutMs?: number;
+  /**
+   * Task admission — when set, `motebit_task` runs ONLY for a task the
+   * relay admitted: the caller must present a `dispatch_token` signed by
+   * the relay (`aud: "task:dispatch"`, `mid` = this motebit, `sub` = the
+   * relay task id), and each `sub` is admitted at most once per process
+   * lifetime. Transport auth (bearer / signed caller token) says WHO is
+   * calling; this says WHAT was admitted — a priced worker must not do
+   * work for a caller whose payment the relay never saw.
+   *
+   * `relayPublicKey` is the relay's Ed25519 key as hex, or a lazy resolver
+   * (e.g. a `/.well-known/motebit.json` fetch) so boot never blocks on the
+   * relay. Fail-closed: an unresolved key denies every task.
+   *
+   * See `docs/doctrine/task-admission.md`.
+   */
+  taskAdmission?: TaskAdmissionConfig;
+  /**
+   * The pinned relay public key (hex, or a lazy resolver) this worker
+   * trusts. Enables the relay to authenticate to this worker AS ITSELF on a
+   * forward — `Authorization: Bearer motebit:<dispatch_token>` — instead of
+   * sharing its master token with every registered endpoint. The same key
+   * verifies `taskAdmission` when that is configured (one trust root, two
+   * checks). Absent ⇒ relay-signed bearers are not recognised and only
+   * static / caller-signed bearers pass transport auth.
+   */
+  relayTrust?: { relayPublicKey: string | (() => Promise<string | null>) };
   /** Custom REST routes handled before MCP auth (same level as /health).
    *  Return true if handled, false to continue to MCP. */
   customRoutes?: (
@@ -313,6 +457,24 @@ export class McpServerAdapter {
   /** #459: loopback self-check that exits the process when unservable. */
   private selfWatchdog?: import("./self-watchdog.js").SelfWatchdogHandle;
   private lastVerifiedCaller: CallerIdentity | null = null;
+  /** Single-use record of admitted relay task ids (injected or in-process). */
+  private readonly admittedTasks: AdmittedTaskStore;
+  /**
+   * Synchronous reservation of task ids mid-admission. The durable store's
+   * `has` → `add` is two awaits apart, so two SIMULTANEOUS presentations of
+   * one token could both read "not admitted" before either wrote. A task id
+   * is reserved here in the same tick it is checked, before any await, and
+   * released only when the store has recorded it (or the attempt failed).
+   */
+  private readonly admittingNow = new Set<string>();
+  /**
+   * Task ids whose run is in flight in THIS process. With a completion-aware
+   * store, "already admitted" alone no longer refuses a re-presentation — a
+   * run that died without a receipt may be retried — so in-flight state must
+   * be held explicitly or a second presentation during the run would double
+   * the work.
+   */
+  private readonly runningNow = new Set<string>();
 
   /**
    * Hook for relay re-registration on health checks. Set by startServiceServer
@@ -323,6 +485,7 @@ export class McpServerAdapter {
   constructor(config: McpServerConfig, deps: MotebitServerDeps) {
     this.config = config;
     this.deps = deps;
+    this.admittedTasks = config.taskAdmission?.admittedStore ?? new MemoryAdmittedTaskStore();
   }
 
   /**
@@ -657,163 +820,233 @@ export class McpServerAdapter {
             .describe(
               "Relay-assigned task ID for economic binding — included in the signed receipt",
             ),
+          dispatch_token: z
+            .string()
+            .optional()
+            .describe(
+              "Relay-signed task admission token (aud task:dispatch). Required by workers that admit work only through their relay.",
+            ),
         },
         async (args: {
           prompt: string;
           delegation_token?: string;
           required_capabilities?: unknown;
           relay_task_id?: string;
+          dispatch_token?: string;
         }) => {
           const denied = await this.validateSyntheticTool(toolDef, args);
           if (denied) return denied;
 
-          // Parse and verify delegation token for scope enforcement
-          let delegatedScope: string | undefined;
-          if (args.delegation_token) {
-            let token: DelegationToken;
-            try {
-              token = JSON.parse(args.delegation_token) as DelegationToken;
-            } catch {
-              return {
-                content: [
-                  {
-                    type: "text" as const,
-                    text: "Denied: delegation_token is not valid JSON",
-                  },
-                ],
-                isError: true,
-              };
-            }
-
-            const sigValid = await verifyDelegation(token);
-            if (!sigValid) {
-              return {
-                content: [
-                  {
-                    type: "text" as const,
-                    text: "Denied: delegation token has invalid signature",
-                  },
-                ],
-                isError: true,
-              };
-            }
-
-            delegatedScope = token.scope;
-            const scopeSet = parseScopeSet(token.scope);
-
-            // Check required_capabilities against delegated scope
-            if (args.required_capabilities != null && Array.isArray(args.required_capabilities)) {
-              const required = args.required_capabilities as string[];
-              if (!scopeSet.has("*")) {
-                for (const cap of required) {
-                  if (!scopeSet.has(cap)) {
-                    return {
-                      content: [
-                        {
-                          type: "text" as const,
-                          text: `Denied: capability "${cap}" is not within delegated scope "${token.scope}"`,
-                        },
-                      ],
-                      isError: true,
-                    };
-                  }
-                }
-              }
-            }
-          }
-
-          let receipt: Record<string, unknown> | undefined;
-          let responseText = "";
-
-          const timeoutMs = this.config.taskTimeoutMs ?? 300_000;
-          const timeoutError = Symbol("timeout");
-          const timeoutPromise = new Promise<typeof timeoutError>((resolve) =>
-            setTimeout(() => resolve(timeoutError), timeoutMs),
-          );
-
-          const gen = handleAgentTask(args.prompt, {
-            delegatedScope,
-            relayTaskId: args.relay_task_id,
-          });
-          let timedOut = false;
-          try {
-            // Race each iteration of the generator against the timeout
-            // eslint-disable-next-line no-constant-condition -- intentional manual iteration with race
-            while (true) {
-              const result = await Promise.race([gen.next(), timeoutPromise]);
-              if (result === timeoutError) {
-                timedOut = true;
-                break;
-              }
-              const iterResult = result as IteratorResult<
-                | { type: "text"; text: string }
-                | { type: "task_result"; receipt: Record<string, unknown> }
-                | { type: string; [key: string]: unknown }
-              >;
-              if (iterResult.done) break;
-              const chunk = iterResult.value;
-              if (chunk.type === "text") {
-                responseText += (chunk as { type: "text"; text: string }).text;
-              } else if (chunk.type === "task_result") {
-                receipt = (chunk as { type: "task_result"; receipt: Record<string, unknown> })
-                  .receipt;
-              }
-            }
-          } finally {
-            // Ensure generator is cleaned up on timeout
-            if (timedOut) {
-              void gen.return(undefined);
-            }
-          }
-
-          if (timedOut) {
-            this.deps.logToolCall("motebit_task", args, {
-              ok: false,
-              error: `task timed out after ${timeoutMs}ms`,
-            });
+          // Halted? Refuse before admission is claimed.
+          //
+          // This sits in the MCP surface rather than behind the handler
+          // because `handleAgentTask` is an INJECTION POINT: a surface
+          // may replace it wholesale, and `motebit serve --direct` does
+          // — executing tools itself and never reaching the runtime
+          // entry where the halt is otherwise enforced. A guard inside
+          // the default handler protects only the default handler. This
+          // one covers every handler, including ones not written yet.
+          //
+          // Ahead of admission on purpose: being stopped is a refusal
+          // that owes nothing to whether the relay saw the money, and
+          // claiming a single-use admission for work that will not run
+          // would burn it.
+          const haltedReason = this.deps.haltRefusal?.() ?? null;
+          if (haltedReason != null) {
+            this.deps.logToolCall("motebit_task", args, { ok: false, error: "halted" });
             return {
-              content: [
-                {
-                  type: "text" as const,
-                  text: `Error: task timed out after ${timeoutMs}ms`,
-                },
-              ],
+              content: [{ type: "text" as const, text: `Refused: ${haltedReason}` }],
               isError: true,
             };
           }
 
-          if (receipt) {
-            // Validate receipt has required fields
-            const requiredFields = ["task_id", "motebit_id", "signature", "status"] as const;
-            const missing = requiredFields.filter((f) => receipt[f] == null);
-            if (missing.length > 0) {
+          // Task admission (fail-closed). Runs BEFORE any work — the agent
+          // loop, and therefore the provider spend, never starts for a task
+          // the relay did not admit. Transport auth already established WHO
+          // is calling; this establishes that the relay saw the money.
+          let relayTaskId = args.relay_task_id;
+          let admittedSub: string | undefined;
+          if (this.config.taskAdmission) {
+            const admission = await this.admitTask(
+              args.dispatch_token,
+              args.relay_task_id,
+              args.prompt,
+            );
+            if (!admission.ok) {
               this.deps.logToolCall("motebit_task", args, {
                 ok: false,
-                error: `malformed receipt: missing ${missing.join(", ")}`,
+                error: `admission denied: ${admission.reason}`,
+              });
+              return {
+                content: [{ type: "text" as const, text: `Denied: ${admission.reason}` }],
+                isError: true,
+              };
+            }
+            relayTaskId = admission.relayTaskId;
+            admittedSub = admission.relayTaskId;
+          }
+          let admissionCompleted = false;
+          try {
+            // Parse and verify delegation token for scope enforcement
+            let delegatedScope: string | undefined;
+            if (args.delegation_token) {
+              let token: DelegationToken;
+              try {
+                token = JSON.parse(args.delegation_token) as DelegationToken;
+              } catch {
+                return {
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: "Denied: delegation_token is not valid JSON",
+                    },
+                  ],
+                  isError: true,
+                };
+              }
+
+              const sigValid = await verifyDelegation(token);
+              if (!sigValid) {
+                return {
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: "Denied: delegation token has invalid signature",
+                    },
+                  ],
+                  isError: true,
+                };
+              }
+
+              delegatedScope = token.scope;
+              const scopeSet = parseScopeSet(token.scope);
+
+              // Check required_capabilities against delegated scope
+              if (args.required_capabilities != null && Array.isArray(args.required_capabilities)) {
+                const required = args.required_capabilities as string[];
+                if (!scopeSet.has("*")) {
+                  for (const cap of required) {
+                    if (!scopeSet.has(cap)) {
+                      return {
+                        content: [
+                          {
+                            type: "text" as const,
+                            text: `Denied: capability "${cap}" is not within delegated scope "${token.scope}"`,
+                          },
+                        ],
+                        isError: true,
+                      };
+                    }
+                  }
+                }
+              }
+            }
+
+            let receipt: Record<string, unknown> | undefined;
+            let responseText = "";
+
+            const timeoutMs = this.config.taskTimeoutMs ?? 300_000;
+            const timeoutError = Symbol("timeout");
+            const timeoutPromise = new Promise<typeof timeoutError>((resolve) =>
+              setTimeout(() => resolve(timeoutError), timeoutMs),
+            );
+
+            const gen = handleAgentTask(args.prompt, {
+              delegatedScope,
+              relayTaskId,
+            });
+            let timedOut = false;
+            try {
+              // Race each iteration of the generator against the timeout
+              // eslint-disable-next-line no-constant-condition -- intentional manual iteration with race
+              while (true) {
+                const result = await Promise.race([gen.next(), timeoutPromise]);
+                if (result === timeoutError) {
+                  timedOut = true;
+                  break;
+                }
+                const iterResult = result as IteratorResult<
+                  | { type: "text"; text: string }
+                  | { type: "task_result"; receipt: Record<string, unknown> }
+                  | { type: string; [key: string]: unknown }
+                >;
+                if (iterResult.done) break;
+                const chunk = iterResult.value;
+                if (chunk.type === "text") {
+                  responseText += (chunk as { type: "text"; text: string }).text;
+                } else if (chunk.type === "task_result") {
+                  receipt = (chunk as { type: "task_result"; receipt: Record<string, unknown> })
+                    .receipt;
+                }
+              }
+            } finally {
+              // Ensure generator is cleaned up on timeout
+              if (timedOut) {
+                void gen.return(undefined);
+              }
+            }
+
+            if (timedOut) {
+              this.deps.logToolCall("motebit_task", args, {
+                ok: false,
+                error: `task timed out after ${timeoutMs}ms`,
               });
               return {
                 content: [
                   {
                     type: "text" as const,
-                    text: `Error: malformed receipt — missing required fields: ${missing.join(", ")}`,
+                    text: `Error: task timed out after ${timeoutMs}ms`,
                   },
                 ],
                 isError: true,
               };
             }
 
-            // delegated_scope is now included by the service before signing —
-            // do NOT mutate the signed receipt here (breaks Ed25519 verification)
-            this.deps.logToolCall("motebit_task", args, { ok: true, data: receipt });
-            return fmt(receipt);
-          }
+            if (receipt) {
+              // Validate receipt has required fields
+              const requiredFields = ["task_id", "motebit_id", "signature", "status"] as const;
+              const missing = requiredFields.filter((f) => receipt[f] == null);
+              if (missing.length > 0) {
+                this.deps.logToolCall("motebit_task", args, {
+                  ok: false,
+                  error: `malformed receipt: missing ${missing.join(", ")}`,
+                });
+                return {
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: `Error: malformed receipt — missing required fields: ${missing.join(", ")}`,
+                    },
+                  ],
+                  isError: true,
+                };
+              }
 
-          this.deps.logToolCall("motebit_task", args, { ok: false, error: "no receipt" });
-          return fmt({
-            status: "completed",
-            response: responseText,
-            receipt_missing: true,
-          });
+              // delegated_scope is now included by the service before signing —
+              // do NOT mutate the signed receipt here (breaks Ed25519 verification)
+              admissionCompleted = true;
+              this.deps.logToolCall("motebit_task", args, { ok: true, data: receipt });
+              return fmt(receipt);
+            }
+
+            this.deps.logToolCall("motebit_task", args, { ok: false, error: "no receipt" });
+            // Not "completed". A receipt is the only completion — the
+            // `finally` below says exactly that when it releases the
+            // admission — so reporting completion without one told a
+            // paying delegator the opposite of the truth. A worker that
+            // refuses (because its owner halted it, say) reached here and
+            // answered `completed` with a body explaining it had refused.
+            return fmt({
+              status: "failed",
+              response: responseText,
+              receipt_missing: true,
+            });
+          } finally {
+            // A receipt is the only completion. Timeouts, malformed receipts,
+            // and "no receipt" release the in-flight slot without completing,
+            // so the delegator's retry of the same admission can run.
+            await this.settleAdmission(admittedSub, admissionCompleted);
+          }
         },
       );
     }
@@ -1029,6 +1262,134 @@ export class McpServerAdapter {
 
   // --- Caller Verification ---
 
+  /**
+   * Verify a relay-signed dispatch token against the pinned relay key and
+   * bind this invocation to its task id. Every failure is a denial with a
+   * closed reason; nothing here is best-effort.
+   */
+  private async admitTask(
+    dispatchToken: string | undefined,
+    claimedRelayTaskId: string | undefined,
+    prompt: string,
+  ): Promise<AdmissionOutcome> {
+    if (!dispatchToken) {
+      return {
+        ok: false,
+        reason:
+          "this service admits work only through its relay — submit the task to the relay and present the returned dispatch_token",
+      };
+    }
+    const key = await this.resolveRelayKey();
+    if (key == null) {
+      return { ok: false, reason: "relay public key unavailable — task admission cannot verify" };
+    }
+    const payload = this.deps.verifySignedToken
+      ? await this.deps.verifySignedToken(dispatchToken, key)
+      : await defaultVerifySignedToken(dispatchToken, key);
+    if (!payload) return { ok: false, reason: "dispatch_token invalid or expired" };
+    if (payload.aud !== TASK_DISPATCH_AUDIENCE) {
+      return { ok: false, reason: "dispatch_token audience mismatch" };
+    }
+    if (payload.mid !== this.deps.motebitId) {
+      return { ok: false, reason: "dispatch_token was issued for a different worker" };
+    }
+    const sub = payload.sub;
+    if (typeof sub !== "string" || sub.length === 0) {
+      return { ok: false, reason: "dispatch_token carries no task id" };
+    }
+    if (claimedRelayTaskId != null && claimedRelayTaskId !== sub) {
+      return { ok: false, reason: "relay_task_id does not match dispatch_token" };
+    }
+    // The token admits THIS work, not any work under this task id: the relay
+    // signed the SHA-256 of the prompt it accepted. A token replayed with a
+    // different prompt is refused. (Required — the relay always mints it.)
+    if (typeof payload.digest !== "string" || payload.digest.length === 0) {
+      return { ok: false, reason: "dispatch_token carries no prompt digest" };
+    }
+    const promptDigest = bytesToHex(await sha256(new TextEncoder().encode(prompt)));
+    if (payload.digest.toLowerCase() !== promptDigest) {
+      return { ok: false, reason: "prompt does not match the admitted task (digest mismatch)" };
+    }
+    // One admitted task ⇒ at most one COMPLETED execution, and at most one in
+    // flight. Reserve synchronously first: a concurrent presentation of the
+    // same task id is refused in this tick, not after both have raced past the
+    // durable store's read.
+    if (this.admittingNow.has(sub) || this.runningNow.has(sub)) {
+      return { ok: false, reason: "task already admitted — this task is running" };
+    }
+    this.admittingNow.add(sub);
+    try {
+      const store = this.admittedTasks;
+      const completionAware = store.isCompleted != null && store.complete != null;
+      if (await store.has(sub)) {
+        // Strict stores: one admission, ever. Completion-aware stores: refuse
+        // only a task that already PRODUCED a receipt; a run cut short (process
+        // died, provider timed out) is re-presentable by the honest retry.
+        if (!completionAware || (await store.isCompleted!(sub))) {
+          return {
+            ok: false,
+            reason: "task already admitted — a dispatch token admits one completed execution",
+          };
+        }
+      }
+      await store.add(sub, Math.min(payload.exp, Date.now() + ADMITTED_TASK_RETENTION_CAP_MS));
+      this.runningNow.add(sub);
+      return { ok: true, relayTaskId: sub };
+    } finally {
+      this.admittingNow.delete(sub);
+    }
+  }
+
+  /** The admitted run produced a receipt — record completion; release the in-flight slot. */
+  private async settleAdmission(sub: string | undefined, completed: boolean): Promise<void> {
+    if (sub == null) return;
+    try {
+      if (completed) await this.admittedTasks.complete?.(sub);
+    } finally {
+      this.runningNow.delete(sub);
+    }
+  }
+
+  /** Memoized pinned relay key (hex→bytes); shared by transport auth + admission. */
+  private relayKeyPromise: Promise<Uint8Array | null> | null = null;
+
+  private async resolveRelayKey(): Promise<Uint8Array | null> {
+    const source =
+      this.config.relayTrust?.relayPublicKey ?? this.config.taskAdmission?.relayPublicKey;
+    if (source == null) return null;
+    if (this.relayKeyPromise == null) {
+      this.relayKeyPromise = (async () => {
+        const hex = typeof source === "string" ? source : await source().catch(() => null);
+        if (!hex || !/^[0-9a-fA-F]{64}$/.test(hex)) return null;
+        return hexToBytes(hex);
+      })();
+    }
+    const key = await this.relayKeyPromise;
+    if (key == null) this.relayKeyPromise = null; // retry next time; never cache a miss forever
+    return key;
+  }
+
+  /**
+   * A relay-signed dispatch token presented as the transport bearer. Valid
+   * ⇒ the caller IS this worker's relay, dispatching a task it admitted for
+   * this worker. The token's `sub`/`digest` are checked again by
+   * `admitTask` when admission is on; here only identity + binding to this
+   * worker matter. Returns null (not a denial) when the bearer is not a
+   * relay token, so caller-signed bearers still take the normal path.
+   */
+  private async verifyRelayDispatchBearer(token: string): Promise<CallerIdentity | null> {
+    if (this.config.relayTrust == null && this.config.taskAdmission == null) return null;
+    const key = await this.resolveRelayKey();
+    if (key == null) return null;
+    const payload = this.deps.verifySignedToken
+      ? await this.deps.verifySignedToken(token, key)
+      : await defaultVerifySignedToken(token, key);
+    if (!payload) return null;
+    if (payload.aud !== TASK_DISPATCH_AUDIENCE) return null;
+    if (payload.mid !== this.deps.motebitId) return null;
+    return { motebitId: `relay:${payload.did}`, trustLevel: AgentTrustLevel.Verified };
+  }
+
   private async verifyCallerToken(token: string): Promise<CallerIdentity | null> {
     if (!this.deps.verifySignedToken) return null;
 
@@ -1155,8 +1516,13 @@ export class McpServerAdapter {
       const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
 
       if (bearerToken?.startsWith("motebit:")) {
-        // Motebit signed token — verify caller identity
-        const callerInfo = await this.verifyCallerToken(bearerToken.slice(8));
+        // The relay authenticating as itself with the per-task dispatch
+        // token (aud task:dispatch, mid = this worker, signed by the pinned
+        // relay key) — tried first so the relay never needs to hold a
+        // worker-accepted static secret. Falls through to the caller-signed
+        // path when it is not a relay token.
+        const relayCaller = await this.verifyRelayDispatchBearer(bearerToken.slice(8));
+        const callerInfo = relayCaller ?? (await this.verifyCallerToken(bearerToken.slice(8)));
         if (!callerInfo) {
           res.writeHead(401, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "invalid motebit token" }));

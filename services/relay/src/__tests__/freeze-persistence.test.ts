@@ -90,6 +90,7 @@ describe("freeze persistence (integration)", () => {
 
     // First relay: activate freeze
     relay = await createSyncRelay({
+      allowPrivateEndpoints: true,
       dbPath,
       apiToken: API_TOKEN,
       enableDeviceAuth: false,
@@ -111,6 +112,7 @@ describe("freeze persistence (integration)", () => {
 
     // Second relay: same DB, freeze should be restored from DB
     relay = await createSyncRelay({
+      allowPrivateEndpoints: true,
       dbPath,
       apiToken: API_TOKEN,
       enableDeviceAuth: false,
@@ -155,6 +157,7 @@ describe("freeze persistence (integration)", () => {
 
     // First relay: freeze then unfreeze
     relay = await createSyncRelay({
+      allowPrivateEndpoints: true,
       dbPath,
       apiToken: API_TOKEN,
       enableDeviceAuth: false,
@@ -179,6 +182,7 @@ describe("freeze persistence (integration)", () => {
 
     // Second relay: should start unfrozen
     relay = await createSyncRelay({
+      allowPrivateEndpoints: true,
       dbPath,
       apiToken: API_TOKEN,
       enableDeviceAuth: false,
@@ -205,6 +209,7 @@ describe("freeze persistence (integration)", () => {
 
     // First relay: start with config override
     relay = await createSyncRelay({
+      allowPrivateEndpoints: true,
       dbPath,
       apiToken: API_TOKEN,
       enableDeviceAuth: false,
@@ -221,6 +226,7 @@ describe("freeze persistence (integration)", () => {
 
     // Second relay: no config override, but DB should have persisted freeze
     relay = await createSyncRelay({
+      allowPrivateEndpoints: true,
       dbPath,
       apiToken: API_TOKEN,
       enableDeviceAuth: false,

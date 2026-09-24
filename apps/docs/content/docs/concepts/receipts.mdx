@@ -7,7 +7,7 @@ A receipt is the signed record of one task being executed. Every task that cross
 
 ## What a receipt commits to
 
-The wire format is fixed by [`spec/execution-ledger-v1.md`](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md) §11. Each `ExecutionReceipt` carries the task identifier, the executing motebit's id, the device that signed, timestamps, the result, the tools used, the SHA-256 hashes of the prompt and result, and the signature itself. The signer's public key is embedded in the receipt, so a verifier doesn't need a directory lookup — the receipt carries everything it needs to prove its own authorship.
+The wire format is fixed by [`spec/execution-ledger-v1.md`](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md) §11. Each `ExecutionReceipt` carries the task identifier, the executing motebit's id, the device that signed, timestamps, the result, the tools used, the SHA-256 hashes of the prompt and result, and the signature itself. The signer's public key may be embedded in the receipt (`public_key`, optional in the spec), and motebit-produced receipts always embed it — so a verifier of those needs no directory lookup; the receipt carries everything it needs to prove its own authorship.
 
 The signature covers a JCS-canonicalized form of the body minus the signature field. Tampering with any byte — the result, the timestamp, the tool list — invalidates the signature. The hash of the prompt is included rather than the prompt itself, which keeps the receipt private but binds it to the original ask: a party who knows the prompt can prove the receipt is the response to it.
 

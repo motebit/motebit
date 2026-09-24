@@ -402,6 +402,32 @@ export interface LoopPolicyGate {
     runId?: string,
   ): void;
   createTurnContext(runId?: string): TurnContext;
+  /**
+   * Record the re-checkable evidence pointer for a call that content-
+   * addressed what it read. Called right after `recordResult`, with the
+   * tool's whole result rather than a verdict, because the digest and
+   * the text live there. Optional for duck-typed gates.
+   */
+  recordEvidence?(
+    ctx: TurnContext,
+    decision: PolicyDecision,
+    tool: string,
+    result: ToolResult,
+  ): void;
+  /**
+   * Close the audit row `validate` opened for this call with the tool's
+   * outcome — the completion half of the intent/completion ledger. The
+   * loop calls it right after `tools.execute` returns or throws. Optional
+   * for duck-typed gates; the real `PolicyGate` implements it.
+   */
+  recordResult?(
+    ctx: TurnContext,
+    decision: PolicyDecision,
+    tool: string,
+    args: Record<string, unknown>,
+    ok: boolean,
+    durationMs: number,
+  ): void;
   recordToolCall(ctx: TurnContext, cost?: number): TurnContext;
 }
 
@@ -726,11 +752,21 @@ export type AgenticChunk =
        * not a body act, and its visible representation is a different
        * surface (the slab control band). When `"tool_call"` (default
        * when omitted), the runtime opens a generic `tool_call` slab
-       * item. Closed string-literal union — additive (future variants
-       * like `"observation"` could narrow further without breaking
-       * existing callers).
+       * item. When `"band"`, the runtime opens NO body item and
+       * narrates the act in the slab's chrome band instead (see
+       * `narration`). Closed string-literal union — additive.
        */
-      slabProjection?: "none" | "tool_call";
+      slabProjection?: "none" | "tool_call" | "band";
+      /**
+       * Band narration for a `"band"`-projected act — produced by the
+       * RUNTIME's `describeToolStep` from the tool name + `context`,
+       * never by the model and never set here in ai-core. Surfaces
+       * render it in the same chrome register as `task_step_narration`
+       * ("Searching "dreamversal"", "Reading robots.txt"). Present only
+       * on `calling` chunks the runtime re-emitted with
+       * `slabProjection: "band"`.
+       */
+      narration?: string;
       /**
        * Structured failure category, sourced from `ToolResult.reason`
        * (or from a typed error's `.reason` field when the handler
@@ -755,6 +791,16 @@ export type AgenticChunk =
       args: Record<string, unknown>;
       risk_level?: number;
       quorum?: { required: number; approvers: string[]; collected: string[] };
+      /**
+       * The gate's audit `callId` for the decision that paused here
+       * (`PolicyDecision.callId`) and the turn it belongs to. A resume
+       * path that executes the approved call outside the loop records
+       * the completion against the same row (`recordResult`), so an
+       * approved-then-executed action is never left looking "intended,
+       * outcome unknown" in the ledger.
+       */
+      audit_call_id?: string;
+      turn_id?: string;
     }
   | { type: "injection_warning"; tool_name: string; patterns: string[] }
   | {
@@ -1284,6 +1330,8 @@ export async function* runTurnStreaming(
             args: toolCall.args,
             risk_level: profile.risk,
             ...(decision.quorum ? { quorum: decision.quorum } : {}),
+            ...(decision.callId != null ? { audit_call_id: decision.callId } : {}),
+            turn_id: turnCtx.turnId,
           };
           conversationHistory.push({
             role: "tool",
@@ -1343,8 +1391,13 @@ export async function* runTurnStreaming(
           }
         }
 
-        // Allowed — execute and record
+        // Allowed — execute and record. The gate already appended the
+        // decision row (intent) under `decision.callId` BEFORE this point;
+        // the "calling" chunk below is consumed by the streaming wrapper
+        // before the generator resumes, so any consumer-side persistence
+        // of the intent also lands strictly before `execute`.
         allBlocked = false;
+        const dispatchedAt = Date.now();
         yield {
           type: "tool_status",
           name: toolCall.name,
@@ -1352,7 +1405,7 @@ export async function* runTurnStreaming(
           context: toolContext(toolCall.name, toolCall.args),
           tool_call_id: toolCall.id,
           args: toolCall.args,
-          started_at: Date.now(),
+          started_at: dispatchedAt,
           mode: toolDef.embodimentMode,
           slabProjection: toolDef.slabProjection,
         };
@@ -1362,6 +1415,17 @@ export async function* runTurnStreaming(
           result = await deps.tools.execute(toolCall.name, toolCall.args);
         } catch (err: unknown) {
           toolCallsFailed++;
+          // Completion row: the handler threw, so the tool reports failure.
+          // Written BEFORE anything else so a crash in the yield below still
+          // leaves the ledger closed.
+          deps.policyGate.recordResult?.(
+            turnCtx,
+            decision,
+            toolCall.name,
+            toolCall.args,
+            false,
+            Date.now() - dispatchedAt,
+          );
           const msg = err instanceof Error ? err.message : String(err);
           // Thrown errors with a typed `.reason` (e.g.
           // ComputerDispatcherError) propagate the category onto the
@@ -1385,6 +1449,37 @@ export async function* runTurnStreaming(
             content: JSON.stringify({ ok: false, error: msg }),
           });
           continue;
+        }
+        // Completion row for the intent the gate wrote — the tool's own
+        // verdict, recorded the moment execution returns and before any
+        // projection/sanitization can throw. Attribution + the tool's
+        // report, never an independent proof of the external effect.
+        deps.policyGate.recordResult?.(
+          turnCtx,
+          decision,
+          toolCall.name,
+          toolCall.args,
+          result.ok,
+          Date.now() - dispatchedAt,
+        );
+        // The sibling artifact the completion row's own contract names:
+        // a pointer to evidence from the affected system, never inferred
+        // from that row. Minted here, beside the result, because this is
+        // where the tool's content-addressed bytes still exist — by the
+        // time a summary is written they are gone, and a span nobody
+        // fetched must not be able to enter the record. No-ops unless the
+        // tool attested a digest.
+        // Guarded: the evidence store raises on a bad write by design,
+        // and a secondary record must not be able to abort the turn
+        // whose tool has already run.
+        try {
+          deps.policyGate.recordEvidence?.(turnCtx, decision, toolCall.name, result);
+        } catch {
+          // Absorbed, not silenced: the gate reports the failure through
+          // its own logger before rethrowing, and this catch exists only
+          // so a pointer cannot abort a turn whose tool already ran.
+          // Without the gate's report this would be silence, which is
+          // the one thing this record must never produce.
         }
         turnCtx = deps.policyGate.recordToolCall(turnCtx);
 

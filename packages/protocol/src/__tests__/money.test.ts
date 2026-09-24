@@ -15,6 +15,7 @@ import {
   fromCents,
   computeP2pFeeMicro,
   computeFederatedFeeSplit,
+  roundSettlementSplitMicro,
 } from "../money.js";
 
 describe("micro-units", () => {
@@ -131,5 +132,60 @@ describe("computeFederatedFeeSplit", () => {
   it("throws when feeRate is out of [0, 1)", () => {
     expect(() => computeFederatedFeeSplit(1_000_000, 1)).toThrow();
     expect(() => computeFederatedFeeSplit(1_000_000, -0.1)).toThrow();
+  });
+});
+
+describe("roundSettlementSplitMicro", () => {
+  /** The fractional but conserving pair `settleOnReceipt` returns. */
+  function exactSplit(gross: number, feeRate: number): { net: number; fee: number } {
+    const fee = Math.round(gross * feeRate * 1_000_000) / 1_000_000;
+    const net = Math.round((gross - fee) * 1_000_000) / 1_000_000;
+    return { net, fee };
+  }
+
+  it("conserves the gross across the whole 5%-boundary class that independent rounding breaks", () => {
+    const feeRate = 0.05;
+    // At feeRate 0.05 every gross ≡ 10 (mod 20) puts BOTH legs on a .5
+    // boundary — the class where `Math.round` applied separately to each half
+    // sums to gross + 1.
+    for (let gross = 10; gross <= 20_000; gross += 20) {
+      const { net, fee } = exactSplit(gross, feeRate);
+
+      // The break this function exists to close.
+      expect(Math.round(net) + Math.round(fee)).toBe(gross + 1);
+
+      const { netMicro, feeMicro } = roundSettlementSplitMicro(net, fee);
+      expect(netMicro + feeMicro).toBe(gross);
+      expect(Number.isInteger(netMicro)).toBe(true);
+      expect(Number.isInteger(feeMicro)).toBe(true);
+    }
+  });
+
+  it("conserves for every integer gross in a dense sweep, at several fee rates", () => {
+    for (const feeRate of [0.05, 0.03, 0.1, 0.025]) {
+      for (let gross = 0; gross <= 5_000; gross++) {
+        const { net, fee } = exactSplit(gross, feeRate);
+        const { netMicro, feeMicro } = roundSettlementSplitMicro(net, fee);
+        expect(netMicro + feeMicro).toBe(gross);
+        expect(netMicro).toBeGreaterThanOrEqual(0);
+        expect(feeMicro).toBeGreaterThanOrEqual(0);
+      }
+    }
+  });
+
+  it("rounds the FEE leg and gives the remainder to the net — same dust direction as the P2P lane", () => {
+    // computeP2pFeeMicro rounds the fee and the worker takes the remainder;
+    // the relay-custody lane must not disagree about who absorbs the dust.
+    const gross = 10;
+    const { net, fee } = exactSplit(gross, 0.05); // 9.5 / 0.5
+    expect(roundSettlementSplitMicro(net, fee)).toEqual({ netMicro: 9, feeMicro: 1 });
+  });
+
+  it("is a no-op on pairs that are already whole micro-units", () => {
+    expect(roundSettlementSplitMicro(1_000_000, 52_632)).toEqual({
+      netMicro: 1_000_000,
+      feeMicro: 52_632,
+    });
+    expect(roundSettlementSplitMicro(0, 0)).toEqual({ netMicro: 0, feeMicro: 0 });
   });
 });

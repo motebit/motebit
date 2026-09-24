@@ -196,40 +196,77 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
       throw new HTTPException(400, { message: "credential_id is required" });
     }
 
-    // Determine caller DID for issuer check
-    let callerDid: string | undefined;
-    if (callerMotebitId) {
-      const identity = await identityManager.load(asMotebitId(callerMotebitId));
-      const devices = identity
-        ? await identityManager.listDevices(asMotebitId(callerMotebitId))
-        : [];
-      if (devices[0]?.public_key) {
-        callerDid = hexPublicKeyToDidKey(devices[0].public_key);
-      }
+    // The credential decides who may revoke it, so it is resolved BEFORE any
+    // authorization question is asked. The previous shape asked whether the
+    // caller matched `:motebitId` — a value the CALLER supplies — and never
+    // compared the named credential to it, so naming yourself in the path
+    // authorized you over anyone's credential. Authority has to bind to the
+    // object being acted on, not to a parameter of the request.
+    const credRow = db
+      .prepare(
+        "SELECT subject_motebit_id, issuer_did FROM relay_credentials WHERE credential_id = ?",
+      )
+      .get(body.credential_id) as { subject_motebit_id: string; issuer_did: string } | undefined;
+
+    // A master-token caller is the operator (no `callerMotebitId` is set by
+    // the device-auth middleware). The operator may still name a credential
+    // this relay does not hold — that is a blocklist, it predates this change
+    // and is exercised (`revocation.test.ts`), and it is bounded by holding
+    // the operator token. An AGENT may not: with no row there is no subject
+    // and no issuer, so there is nobody the caller could be, and permitting
+    // it is what let an identifier be denied before it was ever issued.
+    const isOperator = callerMotebitId === undefined;
+    if (credRow === undefined && !isOperator) {
+      throw new HTTPException(404, { message: "Credential not found" });
     }
 
-    // Check authorization: caller must be the subject OR the issuer
-    const isSubject = !callerMotebitId || callerMotebitId === motebitId;
+    // The path segment names the credential's holder. Keeping it consistent
+    // with the credential keeps the route's own meaning honest; it is not
+    // what authorizes, and it is checked after existence so a mismatch and a
+    // miss are the same answer.
+    if (credRow !== undefined && credRow.subject_motebit_id !== motebitId) {
+      throw new HTTPException(404, { message: "Credential not found for this agent" });
+    }
+
+    let isSubject = isOperator;
     let isIssuer = false;
-    if (!isSubject && callerDid) {
-      const credRow = db
-        .prepare("SELECT issuer_did FROM relay_credentials WHERE credential_id = ?")
-        .get(body.credential_id) as { issuer_did: string } | undefined;
-      isIssuer = credRow?.issuer_did === callerDid;
+    if (!isOperator && credRow !== undefined) {
+      isSubject = callerMotebitId === credRow.subject_motebit_id;
+      if (!isSubject) {
+        // Every device of the caller, not the first row of an unordered
+        // query. `listDevices` is `SELECT * FROM devices WHERE motebit_id = ?`
+        // with no ORDER BY, so `devices[0]` was an arbitrary choice among a
+        // multi-device identity's keys — a legitimate issuer whose issuing
+        // key sat in any other row got a nondeterministic refusal.
+        const identity = await identityManager.load(asMotebitId(callerMotebitId));
+        const devices = identity
+          ? await identityManager.listDevices(asMotebitId(callerMotebitId))
+          : [];
+        isIssuer = devices.some(
+          (d) =>
+            d.public_key !== undefined &&
+            d.public_key !== "" &&
+            hexPublicKeyToDidKey(d.public_key) === credRow.issuer_did,
+        );
+      }
     }
 
     if (!isSubject && !isIssuer) {
       throw new HTTPException(403, { message: "Only the credential subject or issuer can revoke" });
     }
 
-    const revokedBy = callerMotebitId ?? motebitId;
+    // Attribute the row to the credential's actual holder. It used to record
+    // the path segment, so a revocation written by someone else was filed
+    // under whatever identity the request named.
+    const subjectId = credRow?.subject_motebit_id ?? motebitId;
+    const revokedBy = callerMotebitId ?? subjectId;
     db.prepare(
       "INSERT OR REPLACE INTO relay_revoked_credentials (credential_id, motebit_id, reason, revoked_by) VALUES (?, ?, ?, ?)",
-    ).run(body.credential_id, motebitId, body.reason ?? null, revokedBy);
+    ).run(body.credential_id, subjectId, body.reason ?? null, revokedBy);
 
     // Emit revocation event for federation propagation
     try {
-      await insertRevocationEvent(db, relayIdentity, "credential_revoked", motebitId, {
+      await insertRevocationEvent(db, relayIdentity, "credential_revoked", subjectId, {
         credentialId: body.credential_id,
       });
     } catch {

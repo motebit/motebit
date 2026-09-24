@@ -27,14 +27,32 @@
 import { defineConfig, type ViteUserConfig } from "vitest/config";
 import type { InlineConfig } from "vitest/node";
 
+/** The four coverage axes, as a package floor or a per-glob floor. */
+export interface CoverageFloors {
+  statements: number;
+  branches: number;
+  functions: number;
+  lines: number;
+}
+
 export interface MotebitVitestOptions {
-  /** Per-package coverage thresholds. Required. */
-  thresholds: {
-    statements: number;
-    branches: number;
-    functions: number;
-    lines: number;
-  };
+  /**
+   * Per-package coverage thresholds. Required.
+   *
+   * Optionally carries per-glob floors alongside the package-wide ones, e.g.
+   * `{ statements: 58, …, "**​/adapters.ts": { statements: 100, … } }`.
+   * Vitest applies a glob entry to the files it matches and the bare axes to
+   * everything else.
+   *
+   * The reason this exists (#568): widening `coverage.include` to cover a file
+   * that was previously excluded necessarily drags the PACKAGE aggregate down
+   * toward the newly-measured file, which reads as "someone lowered the
+   * thresholds" even when strictly more code became guarded. A per-glob floor
+   * lets the already-well-covered file keep its own high bar, so widening
+   * scope never costs enforcement anywhere — which is what the project's
+   * "never lower coverage thresholds" policy is actually protecting.
+   */
+  thresholds: CoverageFloors & Record<string, CoverageFloors | number>;
   /** Extra test-file exclude globs (e.g., "**​/e2e/**", "**​/src-tauri/**"). */
   testExclude?: string[];
   /** Override `coverage.include` (default: `["src/**​/*.ts"]`). */
@@ -84,6 +102,15 @@ export function defineMotebitTest(opts: MotebitVitestOptions): ViteUserConfig {
         include: coverageInclude ?? BASE_COVERAGE_INCLUDE,
         exclude: [...BASE_COVERAGE_EXCLUDE, ...coverageExclude],
         thresholds,
+        // vitest's own defaults plus `json-summary`, which writes
+        // `coverage/coverage-summary.json` — the machine-readable totals that
+        // `scripts/measure-coverage-slack.ts` compares against the declared
+        // floors. Deliberately vitest's numbers rather than arithmetic of our
+        // own over `coverage-final.json`: these are the exact figures the
+        // thresholds are checked against, so a slack report can never disagree
+        // with the gate that enforces them. The four defaults are re-listed
+        // because naming `reporter` replaces the list rather than extending it.
+        reporter: ["text", "html", "clover", "json", "json-summary"],
       },
     },
   });

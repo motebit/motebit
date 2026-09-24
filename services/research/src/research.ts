@@ -23,10 +23,10 @@
  * primitive; they should not reinvent the transport.
  */
 
-import { createHash } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { McpClientAdapter } from "@motebit/mcp-client";
-import type { Citation, ExecutionReceipt } from "@motebit/sdk";
+import { openRelaySubTask } from "@motebit/molecule-runner";
+import type { Citation, ExecutionReceipt, TokenAudience } from "@motebit/sdk";
 import { querySelfKnowledge } from "@motebit/self-knowledge";
 import { reportShapeIssues } from "./report-shape.js";
 
@@ -143,7 +143,13 @@ export interface ResearchConfig {
   maxToolCalls: number;
   /** Optional: relay sync URL for budget-binding sub-delegations. */
   syncUrl?: string;
-  apiToken?: string;
+  /**
+   * Mints a short-lived `task:submit` bearer signed by THIS service's identity
+   * key, for opening the relay task that binds a sub-delegation's budget. A
+   * worker authenticates to its relay as itself — never with the operator's
+   * master token (`docs/doctrine/task-admission.md`).
+   */
+  mintRelayToken?: (audience?: TokenAudience) => Promise<string>;
   webSearchTargetId?: string;
   readUrlTargetId?: string;
   /**
@@ -346,49 +352,45 @@ export function withPrefixCacheBreakpoint(
 
 // === Optional relay budget binding ===
 
+/** What the relay hands back at submission: the task id plus the admission artifact. */
+interface RelayBinding {
+  relayTaskId: string;
+  /** Relay-signed admission artifact — forwarded verbatim to the atom. */
+  dispatchToken?: string;
+}
+
 /**
- * When relay credentials + a target motebit ID are configured, open a relay
- * task for budget allocation. Returns the relay-issued task_id (forwarded to
- * the atom as `relay_task_id` so the atom binds its receipt to the same
- * economic contract). Best-effort: any failure yields undefined and the
- * delegation proceeds without binding.
+ * Open the relay task that binds a sub-delegation's budget, as the ONE
+ * presenter (`presenter: "submitter"` — the relay admits but does not route, so
+ * the returned dispatch_token is the only one). Returns the binding, or a
+ * refusal the caller must honor: once the atom enforces admission the hop
+ * cannot run without the token, and before that, running it free would be the
+ * silent-free path this arc exists to close (docs/doctrine/task-admission.md).
+ * `undefined` means no relay binding was CONFIGURED for this hop (dev / direct
+ * atom), which is the only case the direct call proceeds untokened.
  */
 async function bindRelayBudget(
   config: ResearchConfig,
   prompt: string,
   capabilityHint: string,
   targetMotebitId: string | undefined,
-): Promise<string | undefined> {
-  if (config.syncUrl == null || config.apiToken == null || targetMotebitId == null)
+): Promise<RelayBinding | { refused: string } | undefined> {
+  if (config.syncUrl == null || config.mintRelayToken == null || targetMotebitId == null)
     return undefined;
-  try {
-    const resp = await fetch(`${config.syncUrl}/agent/${targetMotebitId}/task`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.apiToken}`,
-        "Content-Type": "application/json",
-        // Intent-stable, not per-attempt (#459): the same logical sub-hop
-        // (caller × target × prompt) presents the same key, so a retry
-        // REPLAYS the relay's cached response instead of minting a new
-        // task per attempt (the fresh-UUID pattern defeated relay
-        // idempotency during the 2026-07-29 amplification incident).
-        "Idempotency-Key": `sub-${createHash("sha256")
-          .update(`${config.callerMotebitId}\n${targetMotebitId}\n${prompt}`)
-          .digest("hex")
-          .slice(0, 32)}`,
-      },
-      body: JSON.stringify({
-        prompt,
-        submitted_by: config.callerMotebitId,
-        required_capabilities: [capabilityHint],
-      }),
-    });
-    if (!resp.ok) return undefined;
-    const body = (await resp.json()) as { task_id?: string };
-    return body.task_id;
-  } catch {
-    return undefined;
-  }
+  const mint = config.mintRelayToken;
+  const outcome = await openRelaySubTask({
+    syncUrl: config.syncUrl,
+    mintToken: (aud) => mint(aud),
+    callerMotebitId: config.callerMotebitId,
+    targetMotebitId,
+    prompt,
+    capability: capabilityHint,
+  });
+  if (!outcome.ok) return { refused: outcome.reason };
+  return {
+    relayTaskId: outcome.relayTaskId,
+    ...(outcome.dispatchToken != null ? { dispatchToken: outcome.dispatchToken } : {}),
+  };
 }
 
 /** Extract the human-readable result text from a receipt — what Claude needs to see. */
@@ -444,6 +446,29 @@ async function ensureReport(params: {
     ? "Your previous reply contained no report text."
     : `Your previous reply is not a finished report (${issues.map((i) => i.detail).join("; ")}).`;
 
+  /**
+   * The re-synthesis instruction.
+   *
+   * The original named the format as a parenthetical aside — "(Question /
+   * Findings with inline [N] citations / Sources)" — which a model can read as
+   * prose guidance rather than a literal requirement. Measured over the
+   * scheduled conformance history (8 runs that reached the shape check, 2 red),
+   * the failing mode was always the same: a readable 1600-char answer with no
+   * `Findings` heading and no `Sources` list, where the retry ran and did not
+   * add them. `hasSection` matches literal headings, so the instruction now
+   * SHOWS the headings instead of describing them.
+   *
+   * `strict` is the escalation used only after a retry produced no improvement
+   * at all — the observed dead end, where the previous code simply gave up.
+   */
+  const instruction = (strict: boolean): string =>
+    `${deficiency} Write the complete report NOW from the sources you already gathered. ` +
+    `Do not call any tools.${strict ? " This is your final attempt — output the report and nothing else." : ""}\n\n` +
+    `Your reply MUST contain these literal section headings, in this order:\n\n` +
+    `## Question\n<restate the question in one line>\n\n` +
+    `## Findings\n<the substantive answer, with inline [N] citations>\n\n` +
+    `## Sources\n[1] <title> — <url>\n`;
+
   const retry = await params.client.messages.create({
     model: "claude-sonnet-4-6",
     max_tokens: 4096,
@@ -457,7 +482,7 @@ async function ensureReport(params: {
         : []),
       {
         role: "user" as const,
-        content: `${deficiency} Write the complete report NOW from the sources you already gathered, following the report format (Question / Findings with inline [N] citations / Sources). Do not call any tools.`,
+        content: instruction(false),
       },
     ],
   });
@@ -480,8 +505,46 @@ async function ensureReport(params: {
 
   const retriedIssues = reportShapeIssues(retried, { sourcesRead: sourcesReadFor(retried) });
   if (retriedIssues.length >= issues.length && !wasEmpty) {
+    // The observed dead end: the retry came back readable but still shapeless.
+    // Previously this gave up here. One more attempt, with the strict framing —
+    // bounded at two, and only on this branch, so the improved-but-imperfect
+    // and regressed-to-empty paths are untouched.
     console.log(
-      `[research] report shape: retry did not improve (${retriedIssues.map((i) => i.code).join(",")} vs ${issues.map((i) => i.code).join(",")}), delivering original`,
+      `[research] report shape: retry did not improve (${retriedIssues.map((i) => i.code).join(",")} vs ${issues.map((i) => i.code).join(",")}), escalating to a final strict attempt`,
+    );
+    const final = await params.client.messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 4096,
+      system: SYSTEM_PROMPT,
+      messages: [
+        ...params.messages,
+        { role: "assistant" as const, content: params.lastContent },
+        { role: "user" as const, content: instruction(true) },
+      ],
+    });
+    params.addUsage(final);
+    // NOTE on the assistant turn above: no `lastContent.length > 0` guard is
+    // needed here (unlike the first retry). Empty content yields empty text,
+    // which sets `wasEmpty`, and this escalation only runs when `!wasEmpty` —
+    // so `lastContent` is non-empty by construction on this path. Guarding it
+    // anyway would be an unreachable branch, which the 100% coverage floor
+    // correctly refuses to accept as untested.
+    const finalText = responseText(final.content);
+    if (finalText.trim() === "") {
+      console.log(`[research] report shape: strict attempt came back empty, delivering original`);
+      return params.report;
+    }
+    const finalIssues = reportShapeIssues(finalText, { sourcesRead: sourcesReadFor(finalText) });
+    if (finalIssues.length < issues.length) {
+      if (finalIssues.length > 0) {
+        console.log(
+          `[research] report shape: delivering strict attempt with residual issues [${finalIssues.map((i) => i.code).join(",")}]`,
+        );
+      }
+      return finalText;
+    }
+    console.log(
+      `[research] report shape: strict attempt did not improve either (${finalIssues.map((i) => i.code).join(",")}), delivering original`,
     );
     return params.report;
   }
@@ -708,9 +771,26 @@ export async function research(question: string, config: ResearchConfig): Promis
       }
 
       if (receipt == null) {
-        const relayTaskId = await bindRelayBudget(config, prompt, capabilityHint, targetId);
+        const binding = await bindRelayBudget(config, prompt, capabilityHint, targetId);
+        if (binding != null && "refused" in binding) {
+          // Fail honestly: a relay-bound hop the relay would not admit is not
+          // done for free. (The paid lane above is the way to buy a priced
+          // atom; this is the free lane being told no.)
+          console.log(
+            `[research] sub-hop: relay REFUSED cap=${capabilityHint} target=${targetId} — ${binding.refused}`,
+          );
+          return {
+            type: "tool_result",
+            tool_use_id: tu.id,
+            content: `delegation to ${tu.name} was not admitted by the relay (${binding.refused})`,
+            is_error: true,
+          };
+        }
         const args: Record<string, unknown> = { prompt };
-        if (relayTaskId != null) args.relay_task_id = relayTaskId;
+        if (binding != null) {
+          args.relay_task_id = binding.relayTaskId;
+          if (binding.dispatchToken != null) args.dispatch_token = binding.dispatchToken;
+        }
 
         const result = await adapter.executeTool(qualified, args);
         // McpClientAdapter captures any motebit-shaped receipt during executeTool.

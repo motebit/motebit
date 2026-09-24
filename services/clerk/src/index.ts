@@ -81,10 +81,16 @@ async function main(): Promise<void> {
       serviceDescription:
         "Executes paid sub-delegations under a signed standing grant, within a self-imposed spend ceiling — the fail-closed proof of the R4 money spine. An over-ceiling or out-of-scope spend is refused with a signed denial; no payment. Dry-run-first.",
       capabilities: ["execute_delegation"],
-      ...(config.authToken != null ? { authToken: config.authToken } : {}),
+      // No static inbound bearer: callers present a motebit signed token (the
+      // relay's per-task dispatch token) or are refused. Until 2026-09-15 the
+      // deploy script set MOTEBIT_AUTH_TOKEN to the relay OPERATOR's master
+      // token on every worker — a second copy of the secret #649 retired.
       ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
-      ...(config.apiToken != null ? { apiToken: config.apiToken } : {}),
       ...(config.publicUrl != null ? { publicUrl: config.publicUrl } : {}),
+      // Task admission (docs/doctrine/task-admission.md): a priced listing is a
+      // promise that the work is bought — run only relay-admitted work. Escape
+      // hatch for an operator who must reopen it: MOTEBIT_TASK_ADMISSION=open.
+      taskAdmission: process.env["MOTEBIT_TASK_ADMISSION"] === "open" ? "open" : "relay",
       moneyExecution: {
         solanaRpcUrl: config.solanaRpcUrl,
         relayPublicKeyHex: config.relayPublicKey,

@@ -2887,6 +2887,12 @@
         font-style: italic;
         opacity: 0.75;
       }
+      /* Provenance marker — [from:X] vocabulary, quiet record annotation. */
+      .mem-provenance {
+        color: var(--text-faint);
+        letter-spacing: 0.02em;
+        opacity: 0.75;
+      }
       .mem-pin-btn {
         position: absolute;
         top: 8px;
@@ -7257,6 +7263,10 @@
 
             <!-- BYOK mode — user brings their own API key. -->
             <div class="provider-mode-section" id="mode-section-byok">
+              <!-- Sovereignty framing (#594 Inc 5): mirrors web. -->
+              <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px">
+                Your key, your provider — the intelligence is pluggable. The body stays yours.
+              </div>
               <div class="settings-field" style="margin-bottom: 10px">
                 <label>Vendor</label>
                 <div style="display: flex; gap: 6px">
@@ -7317,6 +7327,7 @@
                   <button
                     class="byok-provider-btn"
                     data-byok="groq"
+                    title="Groq — fast hosting for open models (Llama, gpt-oss). Not xAI&apos;s Grok."
                     type="button"
                     style="
                       flex: 1;
@@ -7350,7 +7361,12 @@
                   >
                     DeepSeek
                   </button>
-                </div>
+                
+                <p
+                  id="byok-vendor-note"
+                  style="margin: 8px 0 0; font-size: 12px; color: var(--text-muted)"
+                ></p>
+              </div>
               </div>
               <div class="settings-field">
                 <label for="settings-apikey">API Key</label>

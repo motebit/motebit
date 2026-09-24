@@ -13,7 +13,6 @@
  * handleAgentTask that runs web_search and optionally sub-delegates
  * read_url to a downstream atom.
  */
-import { createHash } from "node:crypto";
 
 import {
   InMemoryToolRegistry,
@@ -26,9 +25,15 @@ import {
   DuckDuckGoSearchProvider,
   BiasedSearchProvider,
   TavilySearchProvider,
+  nodeAddressResolver,
 } from "@motebit/tools";
 import type { SearchProvider } from "@motebit/tools";
-import { buildServiceReceipt, runMolecule } from "@motebit/molecule-runner";
+import {
+  buildServiceReceipt,
+  runMolecule,
+  makeAuthTokenMinter,
+  openRelaySubTask,
+} from "@motebit/molecule-runner";
 import type { ExecutionReceipt } from "@motebit/molecule-runner";
 import { McpClientAdapter } from "@motebit/mcp-client";
 import { loadConfig, canonicalizeResults } from "./helpers.js";
@@ -77,20 +82,6 @@ export function resetSubDelegateCircuitForTest(): void {
   subDelegateCooldownUntil = 0;
 }
 
-/**
- * Stable intent-derived Idempotency-Key (#459): the same logical
- * sub-delegation (caller × target × prompt) always presents the SAME key,
- * so a retry REPLAYS the relay's cached response instead of minting a
- * brand-new task per attempt — the fresh-UUID-per-attempt pattern is what
- * made every retry a distinct task/allocation/settlement during the
- * incident and defeated the relay's idempotency entirely. Safe now that a
- * failed submission releases its claim relay-side (same arc).
- */
-export function stableSubmissionKey(caller: string, target: string, prompt: string): string {
-  const digest = createHash("sha256").update(`${caller}\n${target}\n${prompt}`).digest("hex");
-  return `sub-${digest.slice(0, 32)}`;
-}
-
 /** Record one sub-delegation outcome; opens the cooldown at the ceiling. */
 export function recordSubDelegateOutcome(ok: boolean, nowMs: number): void {
   if (ok) {
@@ -115,8 +106,8 @@ async function subDelegate(
   callerPrivateKey: Uint8Array,
   /** Relay URL for budget allocation (optional). */
   syncUrl?: string,
-  /** API token for relay calls. */
-  apiToken?: string,
+  /** Mints a `task:submit` bearer signed by THIS service — never an operator secret. */
+  mintRelayToken?: () => Promise<string>,
   /** Target motebit ID for relay task submission. */
   targetMotebitId?: string,
 ): Promise<ExecutionReceipt | null> {
@@ -127,36 +118,28 @@ async function subDelegate(
     return null;
   }
 
-  // Optional relay budget binding — best-effort, failures don't block the chain
+  // Relay budget binding as the ONE presenter (`presenter: "submitter"`): the
+  // relay admits the hop and hands back the dispatch_token; it does not route.
+  // A refusal is honored — the read-url enrichment is skipped, never done free
+  // (docs/doctrine/task-admission.md). No relay configured ⇒ direct call (dev).
   let subRelayTaskId: string | undefined;
-  if (syncUrl != null && syncUrl !== "" && apiToken != null && targetMotebitId != null) {
-    try {
-      const taskResp = await fetch(`${syncUrl}/agent/${targetMotebitId}/task`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiToken}`,
-          "Content-Type": "application/json",
-          // Intent-stable, not per-attempt (#459) — retries replay, never
-          // mint a new task.
-          "Idempotency-Key": stableSubmissionKey(callerMotebitId, targetMotebitId, prompt),
-        },
-        body: JSON.stringify({
-          prompt,
-          submitted_by: callerMotebitId,
-          required_capabilities: ["read_url"],
-        }),
-      });
-      if (taskResp.ok) {
-        const taskBody = (await taskResp.json()) as { task_id: string };
-        subRelayTaskId = taskBody.task_id;
-        log(`sub-delegation relay task: ${subRelayTaskId.slice(0, 12)}…`);
-      } else {
-        log(`sub-delegation relay task failed: ${taskResp.status}`);
-      }
-    } catch (relayErr: unknown) {
-      const msg = relayErr instanceof Error ? relayErr.message : String(relayErr);
-      log(`sub-delegation relay task error: ${msg}`);
+  let subDispatchToken: string | undefined;
+  if (syncUrl != null && syncUrl !== "" && mintRelayToken != null && targetMotebitId != null) {
+    const bound = await openRelaySubTask({
+      syncUrl,
+      mintToken: () => mintRelayToken(),
+      callerMotebitId,
+      targetMotebitId,
+      prompt,
+      capability: "read_url",
+    });
+    if (!bound.ok) {
+      log(`sub-delegation not admitted by relay — skipping read_url hop: ${bound.reason}`);
+      return null;
     }
+    subRelayTaskId = bound.relayTaskId;
+    if (bound.dispatchToken != null) subDispatchToken = bound.dispatchToken;
+    log(`sub-delegation relay task: ${subRelayTaskId.slice(0, 12)}…`);
   }
 
   const adapter = new McpClientAdapter({
@@ -174,6 +157,7 @@ async function subDelegate(
     await adapter.connect();
     const args: Record<string, unknown> = { prompt };
     if (subRelayTaskId != null) args.relay_task_id = subRelayTaskId;
+    if (subDispatchToken != null) args.dispatch_token = subDispatchToken;
     await adapter.executeTool("read-url__motebit_task", args);
     const receipts = adapter.getAndResetDelegationReceipts();
     recordSubDelegateOutcome(true, Date.now());
@@ -239,17 +223,30 @@ async function main(): Promise<void> {
       displayName: "Web Search",
       serviceDescription: "Brave/DuckDuckGo web search + multi-hop delegation to read-url",
       capabilities: ["web_search", "read_url"],
-      ...(config.authToken != null ? { authToken: config.authToken } : {}),
+      // No static inbound bearer: callers present a motebit signed token (the
+      // relay's per-task dispatch token, or a caller-signed token) or are
+      // refused. Until 2026-09-15 the deploy script set MOTEBIT_AUTH_TOKEN to the
+      // relay OPERATOR's master token on every worker — a second copy of the
+      // secret #649 retired.
       ...(config.syncUrl != null ? { syncUrl: config.syncUrl } : {}),
-      ...(config.apiToken != null ? { apiToken: config.apiToken } : {}),
       ...(config.publicUrl != null ? { publicUrl: config.publicUrl } : {}),
+      ...(config.relayPublicKey != null ? { relayPublicKeyHex: config.relayPublicKey } : {}),
+      // Task admission (docs/doctrine/task-admission.md): a priced listing is a
+      // promise that the work is bought — run only relay-admitted work. Escape
+      // hatch for an operator who must reopen it: MOTEBIT_TASK_ADMISSION=open.
+      taskAdmission: process.env["MOTEBIT_TASK_ADMISSION"] === "open" ? "open" : "relay",
     },
     (identity) => {
       const { motebitId, publicKey, privateKey } = identity;
+      // Relay budget binding for the read-url hop signs as this atom.
+      const mintRelayToken = (): Promise<string> => makeAuthTokenMinter(identity)("task:submit");
 
       const registry = new InMemoryToolRegistry();
       registry.register(webSearchDefinition, createWebSearchHandler(searchProvider));
-      registry.register(readUrlDefinition, createReadUrlHandler());
+      registry.register(
+        readUrlDefinition,
+        createReadUrlHandler({ resolve: nodeAddressResolver() }),
+      );
 
       const handleAgentTask = async function* (
         prompt: string,
@@ -274,6 +271,10 @@ async function main(): Promise<void> {
           result = await registry.execute("web_search", { query: query || prompt });
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
+          // An honest failure must be as loud in the log as an honest success —
+          // otherwise a dead service reads as a quiet one. See the research
+          // service for the six-night staging outage this silence hid.
+          log(`web_search FAILED: ${msg}`);
           result = { ok: false, error: msg };
         }
         const searchCompletedAt = Date.now();
@@ -309,7 +310,7 @@ async function main(): Promise<void> {
                 "web-search-service",
                 privateKey,
                 config.syncUrl,
-                config.apiToken,
+                mintRelayToken,
                 config.delegateTargetId,
               );
               if (charlieReceipt) {

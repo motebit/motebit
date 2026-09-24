@@ -3,19 +3,27 @@
  * `check-archetype-slate` — three-way parity for the archetype slate
  * (docs/doctrine/agent-archetypes.md).
  *
- * The slate is declared in three places that MUST agree on
+ * The slate is declared in four places that MUST agree on
  * (service, capability, display-name):
  *
  *   1. `scripts/deploy-archetype-slate.ts` `SLATE`         — what deploys
  *   2. `scripts/archetype-conformance.ts` `ARCHETYPES`     — what the daily probe checks
  *   3. `apps/docs/content/docs/developer/agent-archetypes.mdx` slate table — what the gallery claims
+ *   4. `.github/workflows/deploy-archetype-staging.yml` matrix — what STAYS FRESH
  *
  * Drift class: a service added to the deploy ceremony but not the probe is
  * a showcase the conformance run silently stops proving ("they work"
  * becomes marketing); a gallery row with no deployed backing is a
  * documented lie. Same shape as the other structural-parity gates
  * (`check-computer-use-dispatcher-parity`, `check-tool-guard-parity`) —
- * textual extraction from each surface, set equality across all three.
+ * textual extraction from each surface, set equality across all four.
+ *
+ * Surface 4 was added after #570: the probe graded a staging slate that no
+ * workflow deployed, so a fix merged to main (#564) never reached the
+ * processes it fixed and the probe stayed red for nine days against an
+ * already-solved bug. Membership of the freshness matrix is therefore part
+ * of what it MEANS to be on the slate — an archetype nobody redeploys is
+ * one the conformance verdict cannot speak for.
  */
 
 import { readFileSync } from "node:fs";
@@ -51,6 +59,22 @@ function parseDeploySlate(src: string): Map<string, string> {
   while ((m = entryPattern.exec(src)) !== null) {
     services.set(m[1] as string, m[2] as string);
   }
+  return services;
+}
+
+/**
+ * Staging freshness matrix: the `service:` list between the `slate:begin` /
+ * `slate:end` markers in the staging deploy workflow. Markers rather than a
+ * bare YAML walk so the extraction cannot silently start matching some other
+ * list if the workflow grows one.
+ */
+function parseStagingMatrix(src: string): Set<string> {
+  const block = /#\s*slate:begin([\s\S]*?)#\s*slate:end/.exec(src);
+  if (block == null) return new Set();
+  const services = new Set<string>();
+  const pattern = /^\s*-\s*([a-z-]+)\s*$/gm;
+  let m: RegExpExecArray | null;
+  while ((m = pattern.exec(block[1] as string)) !== null) services.add(m[1] as string);
   return services;
 }
 
@@ -112,19 +136,20 @@ function serviceAdvertisedCapabilities(service: string): string[] | null {
 
 function main(): void {
   console.log(
-    "▸ check-archetype-slate — deploy SLATE × conformance ARCHETYPES × docs gallery table three-way parity + service-reality check",
+    "▸ check-archetype-slate — deploy SLATE × conformance ARCHETYPES × docs gallery table × staging freshness matrix four-way parity + service-reality check",
   );
 
   const deploy = parseDeploySlate(read("scripts/deploy-archetype-slate.ts"));
   const conformance = parseConformance(read("scripts/archetype-conformance.ts"));
   const gallery = parseGalleryTable(read("apps/docs/content/docs/developer/agent-archetypes.mdx"));
+  const staging = parseStagingMatrix(read(".github/workflows/deploy-archetype-staging.yml"));
 
-  if (deploy.size === 0 || conformance.length === 0 || gallery.length === 0) {
+  if (deploy.size === 0 || conformance.length === 0 || gallery.length === 0 || staging.size === 0) {
     console.error(
-      `check-archetype-slate: parse failure (deploy=${deploy.size}, conformance=${conformance.length}, gallery=${gallery.length} entries).`,
+      `check-archetype-slate: parse failure (deploy=${deploy.size}, conformance=${conformance.length}, gallery=${gallery.length}, staging-matrix=${staging.size} entries).`,
     );
     console.error(
-      "Fix: keep SLATE entries as literal { name, capability } objects, ARCHETYPES as literal { service, capability, displayName } objects, and the gallery slate table rows as | `service` | `capability` | Display name |.",
+      "Fix: keep SLATE entries as literal { name, capability } objects, ARCHETYPES as literal { service, capability, displayName } objects, the gallery slate table rows as | `service` | `capability` | Display name |, and the staging matrix as a `- <service>` list between the `# slate:begin` / `# slate:end` markers in .github/workflows/deploy-archetype-staging.yml.",
     );
     process.exit(1);
   }
@@ -133,7 +158,12 @@ function main(): void {
 
   const confByService = new Map(conformance.map((r) => [r.service, r]));
   const galByService = new Map(gallery.map((r) => [r.service, r]));
-  const allServices = new Set([...deploy.keys(), ...confByService.keys(), ...galByService.keys()]);
+  const allServices = new Set([
+    ...deploy.keys(),
+    ...confByService.keys(),
+    ...galByService.keys(),
+    ...staging,
+  ]);
 
   for (const svc of allServices) {
     const d = deploy.get(svc);
@@ -145,6 +175,13 @@ function main(): void {
       violations.push(`  ${svc}: missing from conformance ARCHETYPES (archetype-conformance.ts)`);
     if (g == null)
       violations.push(`  ${svc}: missing from the docs gallery slate table (agent-archetypes.mdx)`);
+    // FRESHNESS drift — a slate service the staging workflow does not deploy
+    // is graded by the daily probe against whatever code was hand-deployed
+    // last. That is #570: nine red days against a bug already fixed in main.
+    if (!staging.has(svc))
+      violations.push(
+        `  ${svc}: missing from the staging freshness matrix (deploy-archetype-staging.yml) — the conformance probe would grade it against stale code`,
+      );
     if (d != null && c != null && d !== c.capability) {
       violations.push(
         `  ${svc}: capability drift — deploy "${d}" vs conformance "${c.capability}"`,
@@ -179,14 +216,14 @@ function main(): void {
     console.error(`check-archetype-slate: ${violations.length} parity violation(s):`);
     for (const v of violations) console.error(v);
     console.error(
-      "Fix: the slate is one vocabulary declared in three surfaces — update scripts/deploy-archetype-slate.ts (SLATE), scripts/archetype-conformance.ts (ARCHETYPES), and the slate table in apps/docs/content/docs/developer/agent-archetypes.mdx in the same commit.",
+      "Fix: the slate is one vocabulary declared in four surfaces — update scripts/deploy-archetype-slate.ts (SLATE), scripts/archetype-conformance.ts (ARCHETYPES), the slate table in apps/docs/content/docs/developer/agent-archetypes.mdx, and the matrix in .github/workflows/deploy-archetype-staging.yml in the same commit.",
     );
     console.error("Doctrine: docs/doctrine/agent-archetypes.md.");
     process.exit(1);
   }
 
   console.log(
-    `✓ check-archetype-slate: ${allServices.size} slate service(s) in three-way parity (deploy × conformance × gallery).`,
+    `✓ check-archetype-slate: ${allServices.size} slate service(s) in four-way parity (deploy × conformance × gallery × staging-freshness).`,
   );
 }
 

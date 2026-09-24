@@ -5,8 +5,11 @@ import {
   explainedRankCandidates,
   computeTrustClosure,
   findTrustedRoute,
+  lexicographicOver,
+  lexicographicComposite,
 } from "../graph-routing.js";
 import type { ExplainedRouteScore } from "../graph-routing.js";
+import { HW_ATTESTATION_HARDWARE } from "@motebit/semiring";
 import type { CandidateProfile, TaskRequirements } from "../scoring.js";
 import { AgentTrustLevel, asMotebitId, asListingId } from "@motebit/protocol";
 import type { AgentTrustRecord, AgentServiceListing } from "@motebit/protocol";
@@ -149,6 +152,7 @@ describe("buildRoutingGraph", () => {
       {
         from: "agent-a",
         to: "agent-b",
+        kind: "traversed" as const,
         weight: { trust: 0.8, cost: 5, latency: 200, reliability: 0.95 } as RouteWeight,
       },
     ];
@@ -263,6 +267,7 @@ describe("graphRankCandidates", () => {
       {
         from: "agent-a",
         to: "agent-b",
+        kind: "evidence" as const,
         weight: { trust: 0.8, cost: 1, latency: 100, reliability: 0.9 } as RouteWeight,
       },
     ];
@@ -275,10 +280,293 @@ describe("graphRankCandidates", () => {
     expect(scoreA).toBeDefined();
     expect(scoreB).toBeDefined();
 
-    // agent-b's trust should reflect multi-hop composition
-    // Direct trust for B is 0.1 (default), but via A it's 0.9 * 0.8 = 0.72
-    // The semiring picks max(0.1, 0.72) = 0.72
-    expect(scoreB!.sub_scores.trust).toBeGreaterThan(0.1);
+    // agent-b is reachable two ways: directly (trust 0.1, the cold-start
+    // default) and via A (0.9 * 0.8 = 0.72). Under the default weighted-sum
+    // policy the trusted two-hop route wins, and the reported trust is THAT
+    // route's trust — not a maximum taken across routes.
+    expect(scoreB!.sub_scores.trust).toBeCloseTo(0.72, 10);
+    // …while B's EXECUTION metrics are B's own direct hop — A's latency is a
+    // past job's, and the task will not traverse A.
+    const directB = buildRoutingGraph(SELF_ID, [agentA, agentB], peerEdges).getEdge(
+      SELF_ID,
+      "agent-b",
+    )!;
+    expect(scoreB!.sub_scores.latency).toBeCloseTo(
+      1 - directB.latency / (directB.latency + 5000),
+      10,
+    );
+  });
+
+  it("competing EXECUTED routes: the selected route's execution metrics exactly match its hops under either policy; trust is evidence either way", () => {
+    // Two executed routes to the SAME worker: direct (cheap, fast, no custody)
+    // and via a hardware-backed helper (traversed hop — slower, pricier,
+    // hardware custody along every hop). Trust is EVIDENCE about the worker:
+    // the helper's vouching lifts it to 0.81 whichever route executes.
+    const helper = makeCandidate({
+      motebit_id: asMotebitId("helper"),
+      trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Trusted }),
+      hardware_attestation: { platform: "secure_enclave", key_exported: false },
+      listing: makeListing({ capabilities: ["web_search"], motebit_id: asMotebitId("helper") }),
+      latency_stats: { avg_ms: 1000, p95_ms: 3000, sample_count: 50 },
+    });
+    const worker = makeCandidate({
+      motebit_id: asMotebitId("worker"),
+      trust_record: null, // direct trust = 0.1 cold-start default
+      listing: makeListing({ capabilities: ["web_search"], motebit_id: asMotebitId("worker") }),
+      latency_stats: { avg_ms: 1000, p95_ms: 3000, sample_count: 50 },
+    });
+    const hop: RouteWeight = {
+      trust: 0.9,
+      cost: 0.5,
+      latency: 200,
+      reliability: 0.9,
+      regulatory_risk: 0,
+    };
+    const peerEdges = [
+      {
+        from: "helper",
+        to: "worker",
+        kind: "traversed" as const,
+        weight: hop,
+        hw_attestation: HW_ATTESTATION_HARDWARE,
+      },
+    ];
+    const graph = buildRoutingGraph(SELF_ID, [helper, worker], peerEdges);
+    const direct = graph.getEdge(SELF_ID, "worker")!;
+    const toHelper = graph.getEdge(SELF_ID, "helper")!;
+    const latencySub = (ms: number) => 1 - ms / (ms + 5000);
+    const evidenceTrust = toHelper.trust * hop.trust; // 0.81 > direct 0.1
+
+    // Weighted-sum policy with trust-heavy weights: the hardware-backed
+    // route wins on the custody boost. Every execution metric is the two-hop
+    // route's own composition; trust is the evidence value, boosted by THAT
+    // route's custody.
+    const trustHeavy = {
+      trust: 0.6,
+      cost: 0.1,
+      latency: 0.1,
+      reliability: 0.1,
+      regulatory_risk: 0.1,
+    };
+    const viaHelper = explainedRankCandidates(SELF_ID, [helper, worker], defaultReqs, {
+      peerEdges,
+      weights: trustHeavy,
+    }).find((s) => s.motebit_id === "worker")!;
+    expect(viaHelper.routing_paths).toEqual([["helper", "worker"], ["worker"]]);
+    expect(viaHelper.alternatives_considered).toBe(2);
+    expect(viaHelper.trust_evidence_path).toEqual(["helper", "worker"]);
+    expect(viaHelper.sub_scores.trust).toBeCloseTo(Math.min(1, evidenceTrust * 1.2), 10);
+    expect(viaHelper.sub_scores.latency).toBeCloseTo(
+      latencySub(toHelper.latency + hop.latency),
+      10,
+    );
+
+    // Cost-first policy: the cheap direct route wins. Its latency is the
+    // direct hop's, its custody is the worker's own (none — no boost), and
+    // its trust is STILL the evidence value 0.81 — the helper vouched for the
+    // worker; that does not change because the task goes direct. (The old
+    // component-wise ranking reported the helper route's custody-boosted
+    // trust beside the direct route's cost: a route that never existed.)
+    const cheap = explainedRankCandidates(SELF_ID, [helper, worker], defaultReqs, {
+      peerEdges,
+      compositeFunction: lexicographicOver(["costScore", "reliability", "trust"]),
+    }).find((s) => s.motebit_id === "worker")!;
+    expect(cheap.routing_paths[0]).toEqual(["worker"]);
+    expect(cheap.trust_evidence_path).toEqual(["helper", "worker"]);
+    expect(cheap.sub_scores.trust).toBeCloseTo(evidenceTrust, 10);
+    expect(cheap.sub_scores.latency).toBeCloseTo(latencySub(direct.latency), 10);
+
+    // graphRankCandidates ranks over the same routes: same chosen metrics.
+    const plain = graphRankCandidates(SELF_ID, [helper, worker], defaultReqs, {
+      peerEdges,
+      weights: trustHeavy,
+    }).find((s) => s.motebit_id === "worker")!;
+    expect(plain.sub_scores.trust).toBeCloseTo(viaHelper.sub_scores.trust, 10);
+    expect(plain.composite).toBeCloseTo(viaHelper.composite, 10);
+  });
+
+  it("a candidate discovered through a peer is NOT directly reachable: its planned route is [peer, agent] and carries the peer hop", () => {
+    // Federation shape: the caller trusts peer relay P (traversed hop, 200 ms);
+    // P's discover response lists agent R with its own pricing. R is
+    // dispatchable only THROUGH P.
+    const peerId = "peer-relay-P";
+    const remote = makeCandidate({
+      motebit_id: asMotebitId("remote-r"),
+      trust_record: null,
+      chain_trust: 0.5, // the peer's vouch on the P → R leg
+      reachable_via: peerId,
+      listing: makeListing({ capabilities: ["web_search"], motebit_id: asMotebitId("remote-r") }),
+      latency_stats: null, // no local data; SLA 5000 ms is the leg's latency
+    });
+    const local = makeCandidate({
+      motebit_id: asMotebitId("local-l"),
+      trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Verified }),
+      listing: makeListing({ capabilities: ["web_search"], motebit_id: asMotebitId("local-l") }),
+    });
+    const hop: RouteWeight = {
+      trust: 0.9,
+      cost: 0,
+      latency: 200,
+      reliability: 0.99,
+      regulatory_risk: 0,
+    };
+    const peerEdges = [
+      { from: String(SELF_ID), to: peerId, kind: "traversed" as const, weight: hop },
+    ];
+
+    const graph = buildRoutingGraph(SELF_ID, [remote, local], peerEdges);
+    const directTargets = [...graph.neighbors(SELF_ID)].map(([n]) => n);
+    expect(directTargets).not.toContain("remote-r"); // discovery ≠ direct reachability
+    expect(directTargets).toContain(peerId);
+    expect([...graph.neighbors(peerId)].map(([n]) => n)).toContain("remote-r"); // R's own metrics sit on the P → R leg
+    const leg = graph.getEdge(peerId, "remote-r")!;
+    expect(leg.latency).toBe(5000);
+
+    const r = explainedRankCandidates(SELF_ID, [remote, local], defaultReqs, { peerEdges }).find(
+      (s) => s.motebit_id === "remote-r",
+    )!;
+    expect(r.routing_paths).toEqual([[peerId, "remote-r"]]); // the only dispatchable route
+    expect(r.alternatives_considered).toBe(1);
+    expect(r.trust_evidence_path).toEqual([peerId, "remote-r"]);
+    // Trust = our trust in the peer × the peer's vouch; latency = hop + leg.
+    expect(r.sub_scores.trust).toBeCloseTo(hop.trust * leg.trust, 10);
+    const composedLatency = hop.latency + leg.latency;
+    expect(r.sub_scores.latency).toBeCloseTo(1 - composedLatency / (composedLatency + 5000), 10);
+
+    // A caller's placeholder for the same leg must not overwrite the real one.
+    const withPlaceholder = buildRoutingGraph(
+      SELF_ID,
+      [remote, local],
+      [
+        ...peerEdges,
+        {
+          from: peerId,
+          to: "remote-r",
+          kind: "traversed" as const,
+          weight: { trust: 0.5, cost: 0, latency: 0, reliability: 0.99, regulatory_risk: 0 },
+        },
+      ],
+    );
+    expect(withPlaceholder.getEdge(peerId, "remote-r")!.latency).toBe(5000);
+
+    // Without the self → peer hop the remote agent is unreachable — never scored.
+    const unreachable = explainedRankCandidates(SELF_ID, [remote, local], defaultReqs);
+    expect(unreachable.find((s) => s.motebit_id === "remote-r")).toBeUndefined();
+  });
+
+  it("an EVIDENCE edge never prices the hire: same graph, evidence kind ⇒ one executed route, trust still propagated", () => {
+    const helper = makeCandidate({
+      motebit_id: asMotebitId("helper"),
+      trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Trusted }),
+      listing: makeListing({ capabilities: ["web_search"], motebit_id: asMotebitId("helper") }),
+    });
+    const worker = makeCandidate({
+      motebit_id: asMotebitId("worker"),
+      trust_record: null,
+      listing: makeListing({ capabilities: ["web_search"], motebit_id: asMotebitId("worker") }),
+    });
+    const record = {
+      from: "helper",
+      to: "worker",
+      kind: "evidence" as const,
+      // A past job: expensive and slow. Must not touch this hire's metrics.
+      weight: { trust: 0.9, cost: 50, latency: 90_000, reliability: 0.2, regulatory_risk: 9 },
+    };
+    const graph = buildRoutingGraph(SELF_ID, [helper, worker], [record]);
+    const direct = graph.getEdge(SELF_ID, "worker")!;
+    const w = explainedRankCandidates(SELF_ID, [helper, worker], defaultReqs, {
+      peerEdges: [record],
+    }).find((s) => s.motebit_id === "worker")!;
+    expect(w.routing_paths).toEqual([["worker"]]);
+    expect(w.alternatives_considered).toBe(1);
+    expect(w.trust_evidence_path).toEqual(["helper", "worker"]);
+    expect(w.sub_scores.trust).toBeCloseTo(graph.getEdge(SELF_ID, "helper")!.trust * 0.9, 10);
+    expect(w.sub_scores.latency).toBeCloseTo(1 - direct.latency / (direct.latency + 5000), 10);
+    // Identical execution metrics to the same worker with no record at all.
+    const bare = explainedRankCandidates(SELF_ID, [helper, worker], defaultReqs).find(
+      (s) => s.motebit_id === "worker",
+    )!;
+    expect(w.sub_scores.latency).toBe(bare.sub_scores.latency);
+    expect(w.sub_scores.price_efficiency).toBe(bare.sub_scores.price_efficiency);
+  });
+
+  it("hardware attestation is a frontier dimension: a route dominated on the five plain dimensions but hardware-backed survives pruning and can win", () => {
+    // Direct: self → worker, no attestation (hw 0). Via helper (traversed):
+    // self → helper (hardware-attested) → worker (hardware-attested hop):
+    // more cost, more latency, lower reliability — dominated on the four
+    // plain execution dimensions. Its chain custody is 1.0, so after the
+    // boost the evidence trust scores 0.9 × 1.2 vs 0.9. Pruning without
+    // custody as a dimension would have discarded it before the boost.
+    const helper = makeCandidate({
+      motebit_id: asMotebitId("helper"),
+      trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Trusted }),
+      hardware_attestation: { platform: "secure_enclave", key_exported: false },
+      listing: makeListing({ capabilities: ["web_search"], motebit_id: asMotebitId("helper") }),
+    });
+    const worker = makeCandidate({
+      motebit_id: asMotebitId("worker"),
+      trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Trusted }),
+      listing: makeListing({ capabilities: ["web_search"], motebit_id: asMotebitId("worker") }),
+    });
+    const peerEdges = [
+      {
+        from: "helper",
+        to: "worker",
+        kind: "traversed" as const,
+        weight: { trust: 0.85, cost: 0.5, latency: 200, reliability: 0.9, regulatory_risk: 0 },
+        hw_attestation: HW_ATTESTATION_HARDWARE,
+      },
+    ];
+    const graph = buildRoutingGraph(SELF_ID, [helper, worker], peerEdges);
+    const direct = graph.getEdge(SELF_ID, "worker")!;
+    const toHelper = graph.getEdge(SELF_ID, "helper")!;
+    // Precondition of the test: the two-hop route really is dominated on the
+    // four plain execution dimensions (cost, latency, reliability, risk).
+    expect(toHelper.cost + 0.5).toBeGreaterThan(direct.cost);
+    expect(toHelper.latency + 200).toBeGreaterThan(direct.latency);
+    expect(toHelper.reliability * 0.9).toBeLessThanOrEqual(direct.reliability);
+
+    const w = explainedRankCandidates(SELF_ID, [helper, worker], defaultReqs, {
+      peerEdges,
+      compositeFunction: lexicographicComposite, // trust first
+    }).find((s) => s.motebit_id === "worker")!;
+    expect(w.alternatives_considered).toBe(2); // both executed routes on the frontier
+    expect(w.routing_paths[0]).toEqual(["helper", "worker"]);
+    // Trust is evidence: the direct edge (0.9) is the best evidence, and the
+    // executed hardware-backed route boosts it.
+    expect(w.trust_evidence_path).toEqual(["worker"]);
+    expect(w.sub_scores.trust).toBeCloseTo(Math.min(1, direct.trust * 1.2), 10);
+    expect(w.sub_scores.trust).toBeGreaterThan(direct.trust);
+  });
+
+  it("a peer edge with a missing component never poisons the ranking with NaN", () => {
+    const a = makeCandidate({
+      motebit_id: asMotebitId("agent-a"),
+      trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Trusted }),
+      listing: makeListing({ capabilities: ["web_search"] }),
+    });
+    const b = makeCandidate({
+      motebit_id: asMotebitId("agent-b"),
+      trust_record: null,
+      listing: makeListing({ capabilities: ["web_search"], motebit_id: asMotebitId("agent-b") }),
+    });
+    const peerEdges = [
+      {
+        from: "agent-a",
+        to: "agent-b",
+        kind: "evidence" as const,
+        // nullable column shape: regulatory_risk absent
+        weight: { trust: 0.8, cost: 1, latency: 100, reliability: 0.9 } as RouteWeight,
+      },
+    ];
+    const scores = explainedRankCandidates(SELF_ID, [a, b], defaultReqs, { peerEdges });
+    for (const s of scores) {
+      expect(Number.isFinite(s.composite)).toBe(true);
+      for (const v of Object.values(s.sub_scores)) expect(Number.isFinite(v)).toBe(true);
+    }
+    const scoreB = scores.find((s) => s.motebit_id === "agent-b")!;
+    expect(scoreB.routing_paths[0]).toEqual(["agent-b"]);
+    expect(scoreB.trust_evidence_path).toEqual(["agent-a", "agent-b"]);
   });
 
   it("returns empty array when all candidates are offline or blocked", () => {
@@ -331,6 +619,7 @@ describe("computeTrustClosure", () => {
       {
         from: "agent-a",
         to: "agent-c",
+        kind: "traversed" as const,
         weight: { trust: 0.8, cost: 0, latency: 100, reliability: 0.9 } as RouteWeight,
       },
     ];
@@ -376,6 +665,7 @@ describe("findTrustedRoute", () => {
       {
         from: "agent-a",
         to: "agent-c",
+        kind: "traversed" as const,
         weight: { trust: 0.8, cost: 0, latency: 100, reliability: 0.9 } as RouteWeight,
       },
     ];
@@ -442,6 +732,7 @@ describe("explainedRankCandidates", () => {
       {
         from: "agent-a",
         to: "agent-b",
+        kind: "traversed" as const,
         weight: {
           trust: 0.8,
           cost: 1,
@@ -456,15 +747,17 @@ describe("explainedRankCandidates", () => {
 
     const scoreB = scores.find((s) => s.motebit_id === "agent-b");
     expect(scoreB).toBeDefined();
-    // Multi-hop path should include agent-a as intermediate
-    const hasMultiHop = scoreB!.routing_paths.some(
-      (p) => p.length >= 2 && p.includes("agent-a") && p.includes("agent-b"),
-    );
-    expect(hasMultiHop).toBe(true);
+    // The intermediary appears where it belongs: on the trust-evidence path
+    // (A vouched for B). The executed route is the direct hire — going via A
+    // is worse on every execution dimension, so it is not an alternative.
+    expect(scoreB!.trust_evidence_path).toEqual(["agent-a", "agent-b"]);
+    expect(scoreB!.routing_paths).toEqual([["agent-b"]]);
   });
 
-  it("counts alternatives_considered from the number of derivation paths", () => {
-    // self -> A, self -> B, A -> C, B -> C — C has two paths
+  it("counts alternatives_considered from the number of non-dominated EXECUTED routes", () => {
+    // self -> A, self -> B, A -> C, B -> C. Via A is dominated by the direct
+    // hire on every execution dimension; via B is hardware-backed end to
+    // end (custody 1.0 vs the direct hop's 0), so it survives.
     const agentA = makeCandidate({
       motebit_id: asMotebitId("agent-a"),
       trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Trusted }),
@@ -473,6 +766,7 @@ describe("explainedRankCandidates", () => {
     const agentB = makeCandidate({
       motebit_id: asMotebitId("agent-b"),
       trust_record: makeTrustRecord({ trust_level: AgentTrustLevel.Verified }),
+      hardware_attestation: { platform: "secure_enclave", key_exported: false },
       listing: makeListing({ capabilities: ["web_search"] }),
     });
     const agentC = makeCandidate({
@@ -486,6 +780,7 @@ describe("explainedRankCandidates", () => {
       {
         from: "agent-a",
         to: "agent-c",
+        kind: "traversed" as const,
         weight: {
           trust: 0.7,
           cost: 1,
@@ -497,6 +792,7 @@ describe("explainedRankCandidates", () => {
       {
         from: "agent-b",
         to: "agent-c",
+        kind: "traversed" as const,
         weight: {
           trust: 0.6,
           cost: 2,
@@ -504,6 +800,7 @@ describe("explainedRankCandidates", () => {
           reliability: 0.85,
           regulatory_risk: 0,
         } as RouteWeight,
+        hw_attestation: HW_ATTESTATION_HARDWARE,
       },
     ];
 
@@ -622,8 +919,65 @@ describe("lexicographicComposite", () => {
       { trust: 1.0, cost: 0, latency: 0, reliability: 1.0, regulatory_risk: 0 },
       { trust: 1.0, reliability: 1.0, costScore: 1.0, latencyNorm: 1.0, riskScore: 1.0 },
     );
-    // 1.0 * 1e6 + 1.0 * 1e3 + 1.0 = 1_001_001
-    expect(result).toBeCloseTo(1_001_001, 0);
+    // Each key quantized to 0..1000 and packed in base 1001:
+    // 1000·1001² + 1000·1001 + 1000 = 1_003_003_000
+    expect(result).toBe(1_003_003_000);
+  });
+
+  it("is exact over QUANTIZED keys (1e-3 bands): a full quantum at a higher key can never be outweighed below it; within a band the next key decides", async () => {
+    const { lexicographicComposite, lexicographicOver } = await import("../graph-routing.js");
+    const route = { trust: 0, cost: 0, latency: 0, reliability: 0, regulatory_risk: 0 };
+    // Under the old `trust*1e6 + reliability*1e3 + cost` packing, a 1e-3 trust
+    // gap (1000 units) was matched by a full-range reliability gap (1000 units)
+    // and reversed by the cost term; here one quantum of trust always wins.
+    const slightlyMoreTrusted = lexicographicComposite(route, {
+      trust: 0.801,
+      reliability: 0,
+      costScore: 0,
+      latencyNorm: 0,
+      riskScore: 0,
+    });
+    const slightlyLessTrusted = lexicographicComposite(route, {
+      trust: 0.8,
+      reliability: 1,
+      costScore: 1,
+      latencyNorm: 1,
+      riskScore: 1,
+    });
+    expect(slightlyMoreTrusted).toBeGreaterThan(slightlyLessTrusted);
+    // Within one quantum of the top key the next key decides.
+    const sameBandLowRel = lexicographicComposite(route, {
+      trust: 0.80004,
+      reliability: 0.2,
+      costScore: 1,
+      latencyNorm: 1,
+      riskScore: 1,
+    });
+    const sameBandHighRel = lexicographicComposite(route, {
+      trust: 0.8,
+      reliability: 0.9,
+      costScore: 0,
+      latencyNorm: 0,
+      riskScore: 0,
+    });
+    expect(sameBandHighRel).toBeGreaterThan(sameBandLowRel);
+    // The builder generalizes the same quantized order to any key priority (the relay's cost-first policy).
+    const costFirst = lexicographicOver(["costScore", "reliability", "trust"]);
+    const cheaper = costFirst(route, {
+      trust: 0,
+      reliability: 0,
+      costScore: 0.501,
+      latencyNorm: 0,
+      riskScore: 0,
+    });
+    const pricier = costFirst(route, {
+      trust: 1,
+      reliability: 1,
+      costScore: 0.5,
+      latencyNorm: 1,
+      riskScore: 1,
+    });
+    expect(cheaper).toBeGreaterThan(pricier);
   });
 });
 
@@ -1221,6 +1575,7 @@ describe("hardware attestation chain bottleneck (product semiring)", () => {
       {
         from: "sw-intermediate",
         to: targetB,
+        kind: "traversed" as const,
         weight: {
           trust: peerHigh,
           cost: 0,
@@ -1235,6 +1590,7 @@ describe("hardware attestation chain bottleneck (product semiring)", () => {
       {
         from: "se-intermediate",
         to: targetB,
+        kind: "traversed" as const,
         weight: {
           trust: peerHigh,
           cost: 0,
@@ -1247,9 +1603,11 @@ describe("hardware attestation chain bottleneck (product semiring)", () => {
 
     const scoresSoft = graphRankCandidates(SELF_ID, [swViaA, terminalNoLocalHw], defaultReqs, {
       peerEdges: peerEdgesSoft,
+      compositeFunction: lexicographicComposite, // trust-first: the custody-boosted chain is chosen when it is better
     });
     const scoresSE = graphRankCandidates(SELF_ID, [seViaA, terminalNoLocalHw], defaultReqs, {
       peerEdges: peerEdgesSE,
+      compositeFunction: lexicographicComposite, // trust-first: the custody-boosted chain is chosen when it is better
     });
 
     const tSoft = scoresSoft.find((s) => s.motebit_id === targetB)!;
@@ -1301,6 +1659,7 @@ describe("hardware attestation chain bottleneck (product semiring)", () => {
       {
         from: "mid-a",
         to: "mid-b",
+        kind: "traversed" as const,
         weight: {
           trust: 0.95,
           cost: 0,
@@ -1313,6 +1672,7 @@ describe("hardware attestation chain bottleneck (product semiring)", () => {
       {
         from: "mid-b",
         to: targetC,
+        kind: "traversed" as const,
         weight: {
           trust: 0.95,
           cost: 0,
@@ -1326,6 +1686,7 @@ describe("hardware attestation chain bottleneck (product semiring)", () => {
 
     const scoresAllHw = graphRankCandidates(SELF_ID, [a, terminal], defaultReqs, {
       peerEdges: allHardware,
+      compositeFunction: lexicographicComposite, // trust-first: the custody-boosted chain is chosen when it is better
     });
     const termAllHw = scoresAllHw.find((s) => s.motebit_id === targetC)!;
     // chainTrust = 0.9 * 0.95 * 0.95 = 0.81225; chainHw = min(1,1,1) = 1.0
@@ -1337,6 +1698,7 @@ describe("hardware attestation chain bottleneck (product semiring)", () => {
       {
         from: "mid-a",
         to: "mid-b",
+        kind: "traversed" as const,
         weight: {
           trust: 0.95,
           cost: 0,
@@ -1349,6 +1711,7 @@ describe("hardware attestation chain bottleneck (product semiring)", () => {
       {
         from: "mid-b",
         to: targetC,
+        kind: "traversed" as const,
         weight: {
           trust: 0.95,
           cost: 0,
@@ -1361,6 +1724,7 @@ describe("hardware attestation chain bottleneck (product semiring)", () => {
     ];
     const scoresMixed = graphRankCandidates(SELF_ID, [a, terminal], defaultReqs, {
       peerEdges: mixed,
+      compositeFunction: lexicographicComposite, // trust-first: the custody-boosted chain is chosen when it is better
     });
     const termMixed = scoresMixed.find((s) => s.motebit_id === targetC)!;
     // chainTrust = 0.9 * 0.95 * 0.95; chainHw = min(1, 0.1, 1) = 0.1
@@ -1401,6 +1765,7 @@ describe("hardware attestation chain bottleneck (product semiring)", () => {
       {
         from: "anchor-a",
         to: "mid-unknown",
+        kind: "traversed" as const,
         weight: {
           trust: 0.95,
           cost: 0,
@@ -1413,6 +1778,7 @@ describe("hardware attestation chain bottleneck (product semiring)", () => {
       {
         from: "mid-unknown",
         to: targetD,
+        kind: "traversed" as const,
         weight: {
           trust: 0.95,
           cost: 0,
@@ -1425,6 +1791,7 @@ describe("hardware attestation chain bottleneck (product semiring)", () => {
     ];
     const scores = graphRankCandidates(SELF_ID, [a, terminal], defaultReqs, {
       peerEdges: chainWithZero,
+      compositeFunction: lexicographicComposite, // trust-first: the custody-boosted chain is chosen when it is better
     });
     const term = scores.find((s) => s.motebit_id === targetD)!;
     // chainHw = min(1.0, 0, 1.0) = 0 (absent-claim annihilation).
@@ -1438,6 +1805,7 @@ describe("hardware attestation chain bottleneck (product semiring)", () => {
       {
         from: "anchor-a",
         to: "mid-unknown",
+        kind: "traversed" as const,
         weight: {
           trust: 0.95,
           cost: 0,
@@ -1450,6 +1818,7 @@ describe("hardware attestation chain bottleneck (product semiring)", () => {
       {
         from: "mid-unknown",
         to: targetD,
+        kind: "traversed" as const,
         weight: {
           trust: 0.95,
           cost: 0,
@@ -1462,6 +1831,7 @@ describe("hardware attestation chain bottleneck (product semiring)", () => {
     ];
     const scoresAllHw = graphRankCandidates(SELF_ID, [a, terminal], defaultReqs, {
       peerEdges: chainAllHw,
+      compositeFunction: lexicographicComposite, // trust-first: the custody-boosted chain is chosen when it is better
     });
     const termAllHw = scoresAllHw.find((s) => s.motebit_id === targetD)!;
     // Chain with all-nonzero HW gets a small boost; chain with an

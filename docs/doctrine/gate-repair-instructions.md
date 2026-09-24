@@ -33,6 +33,27 @@ So the enforcement ladder has three rungs, strongest first, and every invariant 
 
 And the residue is real: the machine maintains **type and behavioral** coherence, not **semantic** coherence. "Is this label honest / is this the right thing to build" is an irreducible judgment layer no gate closes — which is why motebit keeps a _signed sovereign decision_ in the money path rather than pretending to gate it. Coherence is not truth. A perfectly-typed system can still say something false; the gates keep it consistent and legible, and a human still owns the claim.
 
+## The second boundary: aperture
+
+The rungs above ask whether a gate's _verdict_ is trustworthy. The other half is whether its **scope** is — and that one fails silently, which makes it worse.
+
+A green gate makes a claim, and the claim is only as wide as the set it examined. `check-affordance-routing` enforced surface determinism while scanning **57 of 322** app source files — six of nine apps saw ZERO — and printed _"9 apps clean"_ (#545). It was not wrong about what it looked at. It was silent about how little that was.
+
+That shape surfaced **seven separate times in a single day**: `check-deps` exempting every package mapped to layer 6; a service with no vitest config where coverage measured only the files its tests happened to import (so 34% branches reported as 82%); a conformance probe that turned one legible error into three JSON syntax errors; a threshold parser reading a per-glob floor as the package's. In every case the predicate was correct. What was missing is that nothing forced the aperture into the open.
+
+**Aperture drift is invisible by construction.** A narrow gate never goes red, so nothing prompts anyone to check it — and a hardcoded candidate list narrows on its own every time the repo grows a directory, a surface, or a package. There is no failing test to notice, because the failure mode _is_ the absence of failures.
+
+So the contract has a second, inverse surface. Where `hasRepairInstruction` governs what a gate owes its reader **when it fails**, `hasApertureDisclosure` governs what a scanning gate owes its reader **when it passes**: a stated count of what was examined. A reader who sees `322 file(s) scanned` can sanity-check that number against the repo; a reader who sees `clean` cannot.
+
+Same partial-gate honesty applies, and for the same reason. Disclosure proves a gate **said** a number, never that the number covers the right set — no mechanical check can know a gate's true candidate set, because that is the author's judgement about what the invariant ranges over. What it does is move the aperture from **assumed** (rung 3) to **instrumented** (rung 2): a wrong aperture becomes arguable instead of invisible.
+
+Two deliberate non-mandates:
+
+- **It is not enforced.** `scripts/measure-gate-aperture.ts` reports it. Measured 2026-09-02: **107 of 137** passing gates already state their aperture (78%). Of the 30 that don't, some genuinely shouldn't — a gate validating a single manifest has no meaningful count, and a number there would be noise. Mandating across all of them would manufacture false precision in exactly the places it adds none. The named cluster worth fixing is the seven `check-*-primitives` gates, which report their allowlist size but never how much source they scanned.
+- **Prefer widening to disclosing.** Disclosure is the floor, not the goal. `check-affordance-routing`'s real fix was not printing a number — it was replacing a hardcoded subdirectory list with a walk of all of `src/`, so the aperture _cannot_ narrow as the repo grows. A list of directories is a moving target; a rule that derives the set is not.
+
+**The checklist question**, to be asked when adding or reviewing any gate: _what fraction of the candidate set does this actually see, and would I notice if that fraction shrank?_
+
 ## Why this is a sibling of the existing principles
 
 - [`runtime-invariants-over-prompt-rules`](runtime-invariants-over-prompt-rules.md) — make illegal states unrepresentable. Here the "illegal state" is a gate that catches drift but can't tell you how to repair it; the contract makes that state fail CI.

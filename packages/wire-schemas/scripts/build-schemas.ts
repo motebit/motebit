@@ -47,7 +47,12 @@ import {
   buildAgentRevocationRecordJsonSchema,
   buildAgentRevocationFeedJsonSchema,
 } from "../src/agent-revocation.js";
+import { buildIdentityBindingBundleJsonSchema } from "../src/identity-binding.js";
 import { buildBondCommitmentJsonSchema } from "../src/bond.js";
+import {
+  buildHostEnrollmentJsonSchema,
+  buildHostRetirementJsonSchema,
+} from "../src/host-roster.js";
 import { buildEvidenceProvenanceJsonSchema } from "../src/evidence-provenance.js";
 import { buildEvalAttestationJsonSchema } from "../src/eval-attestation.js";
 import { buildRoutingTranscriptJsonSchema } from "../src/routing-transcript.js";
@@ -146,8 +151,11 @@ const SCHEMA_DIR = join(__dirname, "..", "..", "..", "spec", "schemas");
 const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }> = [
   { filename: "execution-receipt-v1.json", build: buildExecutionReceiptJsonSchema },
   { filename: "agent-revocation-record-v1.json", build: buildAgentRevocationRecordJsonSchema },
+  { filename: "identity-binding-bundle-v1.json", build: buildIdentityBindingBundleJsonSchema },
   { filename: "agent-revocation-feed-v1.json", build: buildAgentRevocationFeedJsonSchema },
   { filename: "bond-commitment-v1.json", build: buildBondCommitmentJsonSchema },
+  { filename: "host-enrollment-v1.json", build: buildHostEnrollmentJsonSchema },
+  { filename: "host-retirement-v1.json", build: buildHostRetirementJsonSchema },
   { filename: "evidence-provenance-v1.json", build: buildEvidenceProvenanceJsonSchema },
   { filename: "eval-attestation-v1.json", build: buildEvalAttestationJsonSchema },
   { filename: "routing-transcript-v1.json", build: buildRoutingTranscriptJsonSchema },

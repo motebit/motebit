@@ -52,20 +52,9 @@ describe("loadConfig", () => {
     }
   });
 
-  describe("auth path validation (MOTEBIT_API_TOKEN | MOTEBIT_TRUSTED_RELAY_PUBKEY)", () => {
-    it("throws when neither auth path is set", () => {
-      expect(() => loadConfig()).toThrowError(/at least one of/i);
-    });
-
-    it("throws when both auth paths are empty", () => {
-      process.env["MOTEBIT_API_TOKEN"] = "";
-      process.env["MOTEBIT_TRUSTED_RELAY_PUBKEY"] = "";
-      expect(() => loadConfig()).toThrowError(/at least one of/i);
-    });
-
-    it("throws when MOTEBIT_API_TOKEN is set but shorter than 16 chars", () => {
-      process.env["MOTEBIT_API_TOKEN"] = "x".repeat(15);
-      expect(() => loadConfig()).toThrowError(/shorter than 16 chars/);
+  describe("auth root (MOTEBIT_TRUSTED_RELAY_PUBKEY only)", () => {
+    it("throws when the pinned relay key is unset — there is no fallback path", () => {
+      expect(() => loadConfig()).toThrowError(/MOTEBIT_TRUSTED_RELAY_PUBKEY is required/);
     });
 
     it("throws when MOTEBIT_TRUSTED_RELAY_PUBKEY is set but malformed", () => {
@@ -73,25 +62,12 @@ describe("loadConfig", () => {
       expect(() => loadConfig()).toThrowError(/64-char hex/);
     });
 
-    it("accepts MOTEBIT_API_TOKEN alone (legacy single-tenant)", () => {
-      process.env["MOTEBIT_API_TOKEN"] = "x".repeat(16);
-      const config = loadConfig();
-      expect(config.apiToken).toBe("x".repeat(16));
-      expect(config.trustedRelayPublicKeyHex).toBeNull();
-    });
-
-    it("accepts MOTEBIT_TRUSTED_RELAY_PUBKEY alone (federation-grade)", () => {
-      process.env["MOTEBIT_TRUSTED_RELAY_PUBKEY"] = STRONG_RELAY_PUBKEY;
-      const config = loadConfig();
-      expect(config.apiToken).toBeNull();
-      expect(config.trustedRelayPublicKeyHex).toBe(STRONG_RELAY_PUBKEY);
-    });
-
-    it("accepts both — dualAuth transition", () => {
+    it("a stale MOTEBIT_API_TOKEN is neither read nor honored (retired 2026-09-14)", () => {
       process.env["MOTEBIT_API_TOKEN"] = STRONG_TOKEN;
+      expect(() => loadConfig()).toThrowError(/MOTEBIT_TRUSTED_RELAY_PUBKEY is required/);
       process.env["MOTEBIT_TRUSTED_RELAY_PUBKEY"] = STRONG_RELAY_PUBKEY;
       const config = loadConfig();
-      expect(config.apiToken).toBe(STRONG_TOKEN);
+      expect(config).not.toHaveProperty("apiToken");
       expect(config.trustedRelayPublicKeyHex).toBe(STRONG_RELAY_PUBKEY);
     });
 
@@ -102,8 +78,8 @@ describe("loadConfig", () => {
   });
 
   describe("defaults", () => {
-    it("returns sensible defaults when only the token is set", () => {
-      process.env["MOTEBIT_API_TOKEN"] = STRONG_TOKEN;
+    it("returns sensible defaults when only the relay key is set", () => {
+      process.env["MOTEBIT_TRUSTED_RELAY_PUBKEY"] = STRONG_RELAY_PUBKEY;
       const config = loadConfig();
       expect(config.port).toBe(3500);
       expect(config.maxConcurrentSessions).toBe(4);
@@ -115,7 +91,7 @@ describe("loadConfig", () => {
 
   describe("env overrides", () => {
     beforeEach(() => {
-      process.env["MOTEBIT_API_TOKEN"] = STRONG_TOKEN;
+      process.env["MOTEBIT_TRUSTED_RELAY_PUBKEY"] = STRONG_RELAY_PUBKEY;
     });
 
     it("honors MOTEBIT_PORT when set", () => {
@@ -144,7 +120,7 @@ describe("loadConfig", () => {
 
   describe("parseIntEnv fallback shape", () => {
     beforeEach(() => {
-      process.env["MOTEBIT_API_TOKEN"] = STRONG_TOKEN;
+      process.env["MOTEBIT_TRUSTED_RELAY_PUBKEY"] = STRONG_RELAY_PUBKEY;
     });
 
     it("falls back to default for empty string env", () => {

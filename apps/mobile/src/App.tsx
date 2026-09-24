@@ -238,8 +238,20 @@ export default function App(): React.ReactElement {
     }>
   >([]);
 
-  // Model indicator
+  // Model indicator — a transition cue, not a nameplate: shows when the
+  // active model changes, then clears (the standing record lives in
+  // Settings → Intelligence). Mirrors web/desktop.
   const [currentModel, setCurrentModel] = useState<string | null>(null);
+  const [modelCue, setModelCue] = useState<string | null>(null);
+  useEffect(() => {
+    if (currentModel == null) {
+      setModelCue(null);
+      return;
+    }
+    setModelCue(currentModel);
+    const timer = setTimeout(() => setModelCue(null), 6000);
+    return () => clearTimeout(timer);
+  }, [currentModel]);
 
   // Goal scheduler state
   const [goalRunning, setGoalRunning] = useState(false);
@@ -1179,8 +1191,8 @@ export default function App(): React.ReactElement {
           }}
         />
 
-        {/* Model indicator */}
-        {currentModel ? <Text style={ds.modelIndicator}>{currentModel}</Text> : null}
+        {/* Model transition cue — visible briefly on model change only */}
+        {modelCue ? <Text style={ds.modelIndicator}>{modelCue}</Text> : null}
 
         {/* Input Bar */}
         <View style={ds.inputBar}>
