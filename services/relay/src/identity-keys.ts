@@ -49,7 +49,6 @@ export const IDENTITY_KEY_SOURCES = [
   "migration",
   "backfill:registry",
   "backfill:chain",
-  "backfill:devices",
 ] as const;
 export type IdentityKeySource = (typeof IDENTITY_KEY_SOURCES)[number];
 
@@ -299,19 +298,44 @@ export function recordFirstIdentityKey(
 }
 
 /**
+ * A verified guardian attestation, recorded on the holder the identity
+ * already has. `/agents/register` calls it when the attestation arrives
+ * WITHOUT a key: the registry takes the new guardian, and a holder left on
+ * the old one would answer `identityGuardianFor` with it — a guardian the
+ * identity replaced could still recover it (#750 review). No holder row ⇒
+ * nothing to update: the registry's guardian is then the one truth.
+ */
+export function recordIdentityGuardian(
+  db: DatabaseDriver,
+  input: { motebitId: string; guardianPublicKey: string; now: number },
+): void {
+  const guardian = input.guardianPublicKey.toLowerCase();
+  if (!HEX_64.test(guardian)) {
+    throw new Error("recordIdentityGuardian: guardian must be a 64-hex Ed25519 public key");
+  }
+  db.prepare(
+    "UPDATE identity_keys SET guardian_public_key = ?, updated_at = ? WHERE motebit_id = ?",
+  ).run(input.guardianPublicKey, input.now, input.motebitId);
+}
+
+/**
  * The backfill, as SQL the migration runs once and a test can run against a
- * planted database: registry key, else chain head, else the one key every
- * keyed device row agrees on. Identities with none of these — or with
- * disagreeing device rows — are left for their next bootstrap or register.
+ * planted database: registry key, else chain head. NEVER a device row — the
+ * holder is the authority, and authority never comes from devices (§5a A4):
+ * a lone paired device's own key is indistinguishable in SQL from the
+ * identity's, and backfilling it would make the paired device the identity
+ * (#750 review). An identity whose only evidence is device rows is left for
+ * its next bootstrap or register-self, which records the first key exactly
+ * as a new identity's; until then `identityKeyFor` still SERVES the key its
+ * device rows agree on, and `departureFrom`'s last rung still lets it rotate.
  */
 export const IDENTITY_KEYS_BACKFILL_SQL = `
   INSERT INTO identity_keys (motebit_id, public_key, guardian_public_key, source, first_seen, updated_at)
   SELECT p.motebit_id,
-         COALESCE(p.reg, p.head, p.dev) AS public_key,
+         COALESCE(p.reg, p.head) AS public_key,
          p.guardian,
          CASE WHEN p.reg IS NOT NULL THEN 'backfill:registry'
-              WHEN p.head IS NOT NULL THEN 'backfill:chain'
-              ELSE 'backfill:devices' END AS source,
+              ELSE 'backfill:chain' END AS source,
          COALESCE(p.registered_at, p.first_device, ?) AS first_seen,
          ? AS updated_at
   FROM (
@@ -320,8 +344,6 @@ export const IDENTITY_KEYS_BACKFILL_SQL = `
       (SELECT r.guardian_public_key FROM agent_registry r WHERE r.motebit_id = i.motebit_id) AS guardian,
       (SELECT r.registered_at FROM agent_registry r WHERE r.motebit_id = i.motebit_id) AS registered_at,
       (SELECT s.new_public_key FROM relay_key_successions s WHERE s.motebit_id = i.motebit_id ORDER BY s.id DESC LIMIT 1) AS head,
-      (SELECT CASE WHEN COUNT(DISTINCT d.public_key) = 1 THEN MIN(d.public_key) END
-         FROM devices d WHERE d.motebit_id = i.motebit_id AND d.public_key != '') AS dev,
       (SELECT MIN(d.registered_at) FROM devices d WHERE d.motebit_id = i.motebit_id) AS first_device
     FROM (
       SELECT motebit_id FROM agent_registry
@@ -329,6 +351,6 @@ export const IDENTITY_KEYS_BACKFILL_SQL = `
       UNION SELECT motebit_id FROM relay_key_successions
     ) i
   ) p
-  WHERE COALESCE(p.reg, p.head, p.dev) IS NOT NULL
+  WHERE COALESCE(p.reg, p.head) IS NOT NULL
     AND p.motebit_id NOT IN (SELECT motebit_id FROM identity_keys)
 `;

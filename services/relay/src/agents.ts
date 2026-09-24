@@ -27,6 +27,7 @@ import {
   identityKeyFor,
   provenIdentityKey,
   recordFirstIdentityKey,
+  recordIdentityGuardian,
   recordIdentityKey,
 } from "./identity-keys.js";
 
@@ -1147,18 +1148,19 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       });
     }
 
-    // Resolve public key: request body > device records > empty
+    // Resolve public key: request body > the proven key on file > empty.
+    // A body without a key proves nothing, so it keeps the key the identity
+    // has already proven (§5b's authority) — never a device row's. The old
+    // fallback took the first-listed device row, which for an identity whose
+    // rows disagree could be a paired device's own key, and the registry rung
+    // would then have served it as the identity's (#750 review, §5a A4).
+    const keyFromBody =
+      typeof body.public_key === "string" && /^[0-9a-f]{64}$/i.test(body.public_key);
     let publicKey = "";
-    if (
-      body.public_key &&
-      typeof body.public_key === "string" &&
-      /^[0-9a-f]{64}$/i.test(body.public_key)
-    ) {
-      publicKey = body.public_key;
+    if (keyFromBody) {
+      publicKey = body.public_key as string;
     } else {
-      const devices = await identityManager.listDevices(motebitId);
-      const deviceWithKey = devices.find((d) => d.public_key);
-      publicKey = deviceWithKey ? deviceWithKey.public_key : "";
+      publicKey = provenIdentityKey(moteDb.db, motebitId)?.publicKey ?? "";
     }
 
     // --- Succession chain validation on re-registration ---
@@ -1388,8 +1390,12 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // first build also required every device row to agree before recording a
     // first key; this door writes `agent_registry.public_key` unconditionally
     // and the registry rung would serve it anyway, so that predicate only let
-    // the holder disagree with the registry (§5b).
-    if (publicKey !== "") {
+    // the holder disagree with the registry (§5b). Only a key the BODY
+    // presented is recorded: the fallback above is the holder's own answer.
+    // A verified guardian attestation reaches the holder with or without a
+    // key — the registry just took it, and a holder left on the old guardian
+    // would let that guardian recover the identity (#750 review).
+    if (keyFromBody) {
       recordIdentityKey(moteDb.db, {
         motebitId,
         publicKey,
@@ -1397,6 +1403,8 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         source: "register",
         now,
       });
+    } else if (guardianPublicKey) {
+      recordIdentityGuardian(moteDb.db, { motebitId, guardianPublicKey, now });
     }
 
     // Auto-create a default service listing if one doesn't exist.

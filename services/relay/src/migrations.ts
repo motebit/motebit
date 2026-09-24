@@ -1913,9 +1913,11 @@ export const relayMigrations: Migration[] = [
       // One holder for "this identity's current key" (#703 Inc 2, proposal
       // identity-key-state-v1 §5; services/relay/src/identity-keys.ts). Written
       // by every door that proves a key; read by the one resolver. Backfilled
-      // here in the resolver's own precedence — registry key, else chain head,
-      // else the one key every keyed device row agrees on — and ONLY where that
-      // is unambiguous (D5). Production 2026-09-24: 50 of 50 identities fill.
+      // here from the AUTHORITY's rungs only — registry key, else chain head —
+      // never a device row (§5a A4; the device rung was dropped in #750's
+      // review: a lone paired device's own key is indistinguishable in SQL
+      // from the identity's). Device-only identities record their first key
+      // at their next bootstrap or register-self.
       db.exec(`
         CREATE TABLE IF NOT EXISTS identity_keys (
           motebit_id          TEXT PRIMARY KEY,

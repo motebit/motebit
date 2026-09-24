@@ -19,6 +19,11 @@
  * key rotation is the authenticated `/rotate-key` succession route (which
  * proves possession of the CURRENT key), never a receipt.
  *
+ * Since #750's review the fallback VERIFIES only — it no longer writes the
+ * registry at all. A paired device's own key is a device's, not the
+ * identity's: healing the registry to it left the registry stuck on the paired
+ * key after the owner's next succession. The second test pins that.
+ *
  * SEVERING (recorded): drop the `embeddedIsRegisteredDevice` guard in
  * tasks.ts's fallback → the forged receipt verifies against the attacker's
  * embedded key and overwrites the victim's registry key → this test's
@@ -140,5 +145,83 @@ describe("receipt ingestion — cross-identity registry-key hijack is refused", 
     // The load-bearing assertion: the victim's registry key is UNCHANGED. Under
     // the severing (drop the device-membership guard) this flips to attackerPubHex.
     expect(registryKey(relay, victim.motebitId)).toBe(victimPubHex);
+  });
+
+  it("a paired device's own-key receipt verifies, and the registry keeps the IDENTITY's key (#750 review)", async () => {
+    const ownerKp = await generateKeypair();
+    const pairedKp = await generateKeypair();
+    const ownerPubHex = bytesToHex(ownerKp.publicKey);
+    const pairedPubHex = bytesToHex(pairedKp.publicKey);
+
+    const owner = await createAgent(relay, ownerPubHex);
+    await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify({
+        motebit_id: owner.motebitId,
+        public_key: ownerPubHex,
+        endpoint_url: "http://localhost:1/mcp",
+        capabilities: ["web_search"],
+      }),
+    });
+    // A device paired without key transfer: its row holds its OWN key.
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO devices (device_id, motebit_id, device_token, public_key, registered_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run("paired", owner.motebitId, "tok-paired", pairedPubHex, Date.now());
+
+    const taskRes = await relay.app.request(`/agent/${owner.motebitId}/task`, {
+      method: "POST",
+      headers: jsonAuthWithIdempotency(),
+      body: JSON.stringify({
+        prompt: "paired probe",
+        submitted_by: owner.motebitId,
+        target_agent: owner.motebitId,
+        required_capabilities: ["web_search"],
+      }),
+    });
+    expect(taskRes.status).toBe(201);
+    const { task_id } = (await taskRes.json()) as { task_id: string };
+
+    const token = await createSignedToken(
+      {
+        mid: owner.motebitId,
+        did: "paired",
+        iat: Date.now(),
+        exp: Date.now() + 5 * 60 * 1000,
+        jti: crypto.randomUUID(),
+        aud: "task:result",
+      },
+      pairedKp.privateKey,
+    );
+    const enc = new TextEncoder();
+    const receipt = await signExecutionReceipt(
+      {
+        task_id,
+        relay_task_id: task_id,
+        motebit_id: owner.motebitId,
+        public_key: pairedPubHex,
+        device_id: "paired",
+        submitted_at: Date.now() - 1000,
+        completed_at: Date.now(),
+        status: "completed" as const,
+        result: "ok",
+        tools_used: [] as string[],
+        memories_formed: 0,
+        prompt_hash: await sha256(enc.encode("paired probe")),
+        result_hash: await sha256(enc.encode("ok")),
+      } as unknown as Parameters<typeof signExecutionReceipt>[0],
+      pairedKp.privateKey,
+      pairedKp.publicKey,
+    );
+    const res = await relay.app.request(`/agent/${owner.motebitId}/task/${task_id}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(receipt),
+    });
+    expect(res.status).toBe(200);
+    // Under the old heal this read pairedPubHex.
+    expect(registryKey(relay, owner.motebitId)).toBe(ownerPubHex);
   });
 });

@@ -500,7 +500,7 @@ export async function handleReceiptIngestion(
 
   let receiptValid = await verifyExecutionReceipt(receipt, hexToBytes(pubKeyHex));
 
-  // Fallback: reconcile the registry from the key embedded in the receipt —
+  // Fallback: verify against the key embedded in the receipt —
   // but ONLY when that embedded key is ALREADY a registered device of
   // receipt.motebit_id. Without this binding, an attacker could POST a receipt
   // under a VICTIM's motebit_id carrying its own key embedded: the fallback
@@ -520,14 +520,17 @@ export async function handleReceiptIngestion(
     const embeddedIsRegisteredDevice = devices.some((d) => d.public_key === receipt.public_key);
     if (embeddedIsRegisteredDevice) {
       receiptValid = await verifyExecutionReceipt(receipt, hexToBytes(receipt.public_key));
+      // Verify only — never write the registry. The embedded key may be a
+      // paired device's own key, which is a device's, not the identity's; the
+      // heal used to set `agent_registry.public_key` to it, after which the
+      // owner's next succession (scoped to the key it retires) could not move
+      // the registry and the paired device read as the identity everywhere
+      // the registry is read (#750 review). The identity's key moves only
+      // through a door that proves it.
       if (receiptValid) {
-        moteDb.db
-          .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
-          .run(receipt.public_key, receipt.motebit_id);
-        logger.info("receipt.public_key_updated", {
+        logger.info("receipt.verified_by_device_key", {
           correlationId: taskId,
           motebitId: receipt.motebit_id,
-          reason: "embedded key is a registered device, registry reconciled",
         });
       }
     }

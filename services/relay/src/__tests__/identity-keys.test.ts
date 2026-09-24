@@ -348,7 +348,7 @@ describe("identity-keys", () => {
       ).toBe(true);
     });
 
-    it("the backfill fills registry, chain and agreeing-device identities, and leaves the ambiguous alone", () => {
+    it("the backfill fills registry and chain identities only — never from device rows, agreeing or not (§5a A4, #750 review)", () => {
       plantRegistry(db, "bf-reg", A, E);
       plantDevice(db, "bf-reg", "r1", D); // registry wins even with a device row
       plantChain(db, "bf-chain", A, C);
@@ -371,21 +371,18 @@ describe("identity-keys", () => {
           source: "backfill:chain",
         },
         {
-          motebit_id: "bf-dev",
-          public_key: D,
-          guardian_public_key: null,
-          source: "backfill:devices",
-        },
-        {
           motebit_id: "bf-reg",
           public_key: A,
           guardian_public_key: E,
           source: "backfill:registry",
         },
       ]);
+      // Agreeing device rows are still what the READER serves — just never the authority.
+      expect(identityKeyFor(db, "bf-dev")).toMatchObject({ publicKey: D, rung: "devices" });
+      expect(provenIdentityKey(db, "bf-dev")).toBeNull();
       db.prepare(IDENTITY_KEYS_BACKFILL_SQL).run(8, 8);
       expect((db.prepare("SELECT COUNT(*) AS n FROM identity_keys").get() as { n: number }).n).toBe(
-        3,
+        2,
       );
     });
 
@@ -447,9 +444,71 @@ describe("identity-keys", () => {
 
     it("/agents/register: a lone paired device's own key does not force a succession at registration (A4)", async () => {
       plantDevice(db, "mote-lone", "paired", D);
+      // Through the migration too: the backfill must not make the paired row the authority.
+      db.prepare(IDENTITY_KEYS_BACKFILL_SQL).run(9, 9);
+      expect(holderRow(db, "mote-lone")).toBeUndefined();
       expect(provenIdentityKey(db, "mote-lone")).toBeNull();
       expect((await registerAgent("mote-lone", { public_key: A })).status).toBe(200);
       expect(identityKeyFor(db, "mote-lone")?.publicKey).toBe(A);
+    });
+
+    it("/agents/register without a key records nothing it did not prove: the registry keeps the proven key, else '' — never a device row's (#750 review)", async () => {
+      // Disagreeing device rows, nothing proven: the old fallback took the first-listed row.
+      plantDevice(db, "mote-nokey", "dA", A);
+      plantDevice(db, "mote-nokey", "dB", B);
+      expect((await registerAgent("mote-nokey", {})).status).toBe(200);
+      expect(holderRow(db, "mote-nokey")).toBeUndefined();
+      expect(provenIdentityKey(db, "mote-nokey")).toBeNull();
+      const reg = () =>
+        (
+          db
+            .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+            .get("mote-nokey") as {
+            public_key: string;
+          }
+        ).public_key;
+      expect(reg()).toBe("");
+      // A lone paired device's row does not reach the registry either (A4).
+      plantDevice(db, "mote-nokey-lone", "paired", D);
+      expect((await registerAgent("mote-nokey-lone", {})).status).toBe(200);
+      expect(provenIdentityKey(db, "mote-nokey-lone")).toBeNull();
+      // With a proven key, a keyless registration keeps it on the registry and leaves the holder's source alone.
+      recordIdentityKey(db, { motebitId: "mote-nokey", publicKey: C, source: "bootstrap", now: 1 });
+      expect((await registerAgent("mote-nokey", {})).status).toBe(200);
+      expect(reg()).toBe(C);
+      expect(holderRow(db, "mote-nokey")).toMatchObject({ public_key: C, source: "bootstrap" });
+    });
+
+    it("/agents/register: a guardian attested WITHOUT a key reaches the holder — the replaced guardian cannot recover (#750 review)", async () => {
+      const mid = crypto.randomUUID();
+      const k1 = await generateKeypair();
+      const k2 = await generateKeypair();
+      const g1 = await generateKeypair();
+      const g2 = await generateKeypair();
+      expect(
+        (await registerAgent(mid, { public_key: hex(k1), ...(await guardianFields(mid, g1)) }))
+          .status,
+      ).toBe(200);
+      expect((await registerAgent(mid, await guardianFields(mid, g2))).status).toBe(200);
+      expect(identityGuardianFor(db, mid)).toBe(hex(g2));
+      expect(holderRow(db, mid)).toMatchObject({
+        public_key: hex(k1),
+        guardian_public_key: hex(g2),
+      });
+      const stale = await signGuardianRecoverySuccession(
+        g1.privateKey,
+        k2.privateKey,
+        k1.publicKey,
+        k2.publicKey,
+      );
+      expect(await presentRecovery(mid, stale)).toBe(400);
+      const fresh = await signGuardianRecoverySuccession(
+        g2.privateKey,
+        k2.privateKey,
+        k1.publicKey,
+        k2.publicKey,
+      );
+      expect(await presentRecovery(mid, fresh)).toBe(200);
     });
 
     it("bootstrap and register-self record a first key, and never overwrite a holder — 'new' is provenIdentityKey === null, not 'no identities row' (A2)", async () => {
@@ -722,7 +781,7 @@ describe("identity-keys", () => {
             .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
             .run(hex(old), mid),
         chain: () => plantChain(db, mid, D, hex(old)),
-        "devices agree": () => {
+        "devices agree (unfilled)": () => {
           plantDevice(db, mid, `${mid}-1`, hex(old));
           plantDevice(db, mid, `${mid}-2`, hex(old));
         },
