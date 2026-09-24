@@ -136,7 +136,7 @@ async function setupDbAndIdentity(): Promise<void> {
   const moteDb = await openMotebitDatabase(":memory:");
   createFederationTables(moteDb.db);
   moteDb.db.exec(
-    "CREATE TABLE IF NOT EXISTS agent_registry (motebit_id TEXT PRIMARY KEY, expires_at INTEGER)",
+    "CREATE TABLE IF NOT EXISTS agent_registry (motebit_id TEXT PRIMARY KEY, expires_at INTEGER, delisted_at INTEGER)",
   );
   db = moteDb.db;
 }

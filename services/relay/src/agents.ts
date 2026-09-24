@@ -21,6 +21,7 @@ import { applySuccession } from "./succession-apply.js";
 import type { TaskRouter } from "./task-routing.js";
 import { evaluateSettlementEligibility } from "./task-routing.js";
 import { REFERENCE_MIN_BONDED_SIGNAL_MICRO } from "./bond-store.js";
+import { ON_SHELF, delistRegistration } from "./registry-delist.js";
 
 /**
  * Fields the ORIGIN relay computes itself and MUST NOT accept from a federated
@@ -1353,7 +1354,8 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         federation_visible = excluded.federation_visible,
         settlement_address = COALESCE(excluded.settlement_address, agent_registry.settlement_address),
         settlement_modes = COALESCE(excluded.settlement_modes, agent_registry.settlement_modes),
-        sweep_threshold = COALESCE(excluded.sweep_threshold, agent_registry.sweep_threshold)
+        sweep_threshold = COALESCE(excluded.sweep_threshold, agent_registry.sweep_threshold),
+        delisted_at = CASE WHEN agent_registry.revoked = 1 THEN agent_registry.delisted_at ELSE NULL END
     `,
       )
       .run(
@@ -1935,7 +1937,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     const row = moteDb.db
       .prepare(
         `
-      SELECT * FROM agent_registry WHERE motebit_id = ?
+      SELECT * FROM agent_registry WHERE motebit_id = ?${ON_SHELF}
     `,
       )
       .get(motebitId) as Record<string, unknown> | undefined;
@@ -1964,7 +1966,11 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       throw new HTTPException(400, { message: "Cannot determine motebit_id from token" });
     }
 
-    moteDb.db.prepare(`DELETE FROM agent_registry WHERE motebit_id = ?`).run(callerMotebitId);
+    // Departure from DISCOVERY, not from the relay's knowledge of who this
+    // identity is: the row is delisted (registry-delist.ts), never deleted.
+    // The CLI daemon calls this on every shutdown; deleting here discarded
+    // the guardian and the key with each restart (#703).
+    delistRegistration(moteDb.db, callerMotebitId, Date.now());
     return c.json({ ok: true });
   });
 

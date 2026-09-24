@@ -181,6 +181,7 @@ import {
   X402SettlementRail,
   BridgeSettlementRail,
 } from "@motebit/settlement-rails";
+import { delistExpired } from "./registry-delist.js";
 
 // === Re-exports for backward compatibility (tests and sibling modules import from index) ===
 
@@ -869,8 +870,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     // Discoverability is driven by the `freshness` discriminant in
     // task-routing.ts; an agent stays findable while asleep and is only
     // removed here if no heartbeat arrived for 90 days (presumed dead).
-    const stmtClean = moteDb.db.prepare("DELETE FROM agent_registry WHERE expires_at < ?");
-    stmtClean.run(now);
+    // …and "removed" means DELISTED, never deleted (registry-delist.ts,
+    // #703): the discovery fields go, the identity's key state stays until
+    // revocation. Silence is not a reason to forget who someone is.
+    const delisted = delistExpired(moteDb.db, now);
+    if (delisted > 0) logger.info("agent_registry.delisted_expired", { delisted });
     // Clean expired rate limit entries
     for (const limiter of allLimiters) {
       limiter.cleanup();

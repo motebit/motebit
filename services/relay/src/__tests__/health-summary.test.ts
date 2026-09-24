@@ -112,6 +112,7 @@ describe("aggregateHealthSummary", () => {
     const now = Date.now();
     const out = aggregateHealthSummary(relay.moteDb.db, now);
     expect(out.motebits.total_registered).toBe(0);
+    expect(out.motebits.total_known).toBe(0);
     expect(out.motebits.active_24h).toBe(0);
     expect(out.motebits.active_7d).toBe(0);
     expect(out.motebits.active_30d).toBe(0);
@@ -142,6 +143,7 @@ describe("aggregateHealthSummary", () => {
 
     const out = aggregateHealthSummary(relay.moteDb.db, now);
     expect(out.motebits.total_registered).toBe(5);
+    expect(out.motebits.total_known).toBe(5);
     expect(out.motebits.active_24h).toBe(2); // fresh + yesterday
     expect(out.motebits.active_7d).toBe(3); // + this-week
     expect(out.motebits.active_30d).toBe(4); // + this-month (stale excluded)

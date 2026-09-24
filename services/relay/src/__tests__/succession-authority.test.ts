@@ -266,9 +266,12 @@ describe("the route answers to the audience the spec names", () => {
 
 describe("a record must depart from a key this relay holds for the identity", () => {
   it("refuses a plant under an identity whose daemon has shut down — the poisoning this closes", async () => {
-    // The daemon deregisters on every shutdown, so "no registry row" is a
-    // routine state. The planted chain was served afterwards as the
-    // victim's key history.
+    // The daemon deregisters on every shutdown. Until #703 that DELETED the
+    // registry row, so "relay holds no registry key" was a routine state
+    // and the planted chain was served afterwards as the victim's key
+    // history. Deregister now DELISTS: the row leaves discovery and the
+    // key stays on file — so the relay still holds the victim's key, and
+    // the plant is refused for departing from a key it does not hold.
     const victim = crypto.randomUUID();
     const vk = await generateKeypair();
     expect(await registerSelf(victim, `${victim}-laptop`, vk)).toBe(201);
@@ -278,7 +281,7 @@ describe("a record must depart from a key this relay holds for the identity", ()
       headers: { Authorization: `Bearer ${await token(victim, `${victim}-laptop`, vk)}` },
     });
     expect(res.status).toBe(200);
-    expect(registryKey(victim)).toBeUndefined();
+    expect(registryKey(victim)).toBe(bytesToHex(vk.publicKey));
 
     // Carried under the VICTIM's own id, so the caller check cannot be what
     // refuses it: an attacker with any token for this identity, or the

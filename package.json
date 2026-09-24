@@ -189,6 +189,7 @@
     "check-playwright-image-parity": "npx tsx scripts/check-playwright-image-parity.ts",
     "check-docs-script-claims": "npx tsx scripts/check-docs-script-claims.ts",
     "check-relay-frame-origin": "npx tsx scripts/check-relay-frame-origin.ts",
+    "check-registry-never-deleted": "npx tsx scripts/check-registry-never-deleted.ts",
     "check-worker-no-master-token": "npx tsx scripts/check-worker-no-master-token.ts",
     "build-self-knowledge": "npx tsx scripts/build-self-knowledge.ts",
     "lint:pack": "turbo run lint:pack",

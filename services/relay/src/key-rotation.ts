@@ -377,7 +377,18 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     const agent = moteDb.db
       .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
       .get(motebitId) as { public_key: string } | undefined;
-    moteDb.db.prepare("UPDATE agent_registry SET revoked = 1 WHERE motebit_id = ?").run(motebitId);
+    // Revocation also DELISTS (identity-key-state-v1 §10 Q1): a revoked
+    // identity cannot act, so it must not be for hire; one statement, one
+    // audit site. The row itself stays — the identity log keeps the
+    // binding and its end for verifiers walking old receipt chains.
+    // The SET clause is written out here, not imported: the writers gate
+    // reads statement text, and an authority write hidden in a constant is
+    // an authority write the gate cannot see.
+    moteDb.db
+      .prepare(
+        "UPDATE agent_registry SET revoked = 1, delisted_at = COALESCE(delisted_at, ?), endpoint_url = '', capabilities = '[]' WHERE motebit_id = ?",
+      )
+      .run(Date.now(), motebitId);
     try {
       await insertRevocationEvent(moteDb.db, relayIdentity, "agent_revoked", motebitId, {
         revokedPublicKey: agent?.public_key,

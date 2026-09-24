@@ -41,9 +41,24 @@
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
+import { ON_SHELF } from "./registry-delist.js";
 
 export interface HealthMotebits {
+  /**
+   * Agents currently SERVING — on the shelf: not delisted, so discoverable
+   * and for hire. Since 2026-09-24 (#703) a departed or long-silent agent's
+   * row is delisted rather than deleted, so this is no longer "every row";
+   * the number was continuous at the cutover (every row that existed was
+   * serving, or the janitor would have deleted it) and its documented
+   * meaning is unchanged. `total_known` is every row.
+   */
   total_registered: number;
+  /**
+   * Every identity this relay holds a registry row for, serving or
+   * delisted — the key-state population, which only revocation shrinks
+   * (and revocation keeps the row too). ≥ `total_registered`.
+   */
+  total_known: number;
   active_24h: number;
   active_7d: number;
   active_30d: number;
@@ -135,7 +150,8 @@ export function aggregateHealthSummary(
   const cutoff30d = nowMs - 30 * DAY_MS;
 
   const motebits: HealthMotebits = {
-    total_registered: count(db, "SELECT COUNT(*) AS n FROM agent_registry"),
+    total_registered: count(db, `SELECT COUNT(*) AS n FROM agent_registry WHERE 1=1${ON_SHELF}`),
+    total_known: count(db, "SELECT COUNT(*) AS n FROM agent_registry"),
     active_24h: count(
       db,
       "SELECT COUNT(*) AS n FROM agent_registry WHERE last_heartbeat >= ?",

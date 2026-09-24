@@ -23,6 +23,7 @@ function mockHealth(body: unknown) {
 const ZERO_SUMMARY = {
   motebits: {
     total_registered: 0,
+    total_known: 0,
     active_24h: 0,
     active_7d: 0,
     active_30d: 0,
@@ -82,6 +83,7 @@ describe("HealthPanel", () => {
       ...ZERO_SUMMARY,
       motebits: {
         total_registered: 12,
+        total_known: 14,
         active_24h: 3,
         active_7d: 7,
         active_30d: 12,

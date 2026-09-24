@@ -41,6 +41,7 @@ import { signDiscoverBody } from "./federation.js";
 import { CircuitBreaker } from "@motebit/circuit-breaker";
 import type { CircuitBreakerConfig, CircuitBreakerState } from "@motebit/circuit-breaker";
 import { createLogger } from "./logger.js";
+import { ON_SHELF } from "./registry-delist.js";
 
 const logger = createLogger({ service: "relay", module: "task-routing" });
 const circuitBreakerLogger = createLogger({ service: "relay", module: "circuit-breaker" });
@@ -773,7 +774,9 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
     // No `expires_at > now` filter: discoverability is a protocol property,
     // not a heartbeat property. `last_heartbeat` drives the freshness
     // discriminant below, which is a render hint for the caller.
-    const revokedFilter = " AND (revoked IS NULL OR revoked = 0)";
+    // …and delisted rows (departed, lease lapsed, or revoked — one predicate,
+    // registry-delist.ts): the row is kept for its key state, not for hire.
+    const revokedFilter = ` AND (revoked IS NULL OR revoked = 0)${ON_SHELF}`;
     const fedFilter = federatedOnly
       ? " AND (federation_visible IS NULL OR federation_visible != 0)"
       : "";

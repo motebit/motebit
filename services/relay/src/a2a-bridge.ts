@@ -17,6 +17,7 @@ import type { Hono } from "hono";
 import type { DatabaseDriver } from "@motebit/persistence";
 import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { RelayIdentity } from "./federation.js";
+import { ON_SHELF } from "./registry-delist.js";
 
 // ---------------------------------------------------------------------------
 // A2A Types (subset of the spec, enough for the bridge)
@@ -199,7 +200,7 @@ export function registerA2ARoutes(app: Hono, db: DatabaseDriver, config: A2ABrid
     // Look up agent in registry
     const agent = db
       .prepare(
-        "SELECT motebit_id, public_key, endpoint_url, capabilities, metadata FROM agent_registry WHERE motebit_id = ? AND expires_at > ?",
+        `SELECT motebit_id, public_key, endpoint_url, capabilities, metadata FROM agent_registry WHERE motebit_id = ? AND expires_at > ?${ON_SHELF}`,
       )
       .get(motebitId, Date.now()) as
       | {
