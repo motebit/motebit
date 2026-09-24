@@ -163,6 +163,12 @@ export const RETENTION_MANIFEST_CONTENT: Pick<
       "TTL expiry is a different mechanism than the signed deletion certificates " +
       "this manifest enumerates. Presence retention is governed by the " +
       "operator-transparency manifest, not this one.",
+    "different_mechanism: the device registry (devices) is NEITHER TTL-based nor " +
+      "retention-cert-shaped — rows carry no TTL, are never reaped for silence, and " +
+      "no deletion certificate is issued for them. Declared as its own category " +
+      "(retention.device_registry) in /.well-known/motebit-transparency.json since " +
+      "2026-09-24 (#696); a future per-device removal would be a signed revocation, " +
+      "not a retention shape in this manifest.",
     "pending: onchain anchor of this manifest is not yet in place; only cached " +
       "copies of the JSON survive operator deletion. Sibling concern to the " +
       "operator-transparency manifest's onchain anchor (also pending).",

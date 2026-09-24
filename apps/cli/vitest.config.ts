@@ -31,5 +31,10 @@ export default defineConfig({
     // vitest workers there, or thin that step to a build/smoke check. Do NOT
     // just bump this past 30s — that IS the treadmill.
     testTimeout: 30_000,
+    // Same contention budget for HOOKS. `relay.test.ts`'s beforeAll (an
+    // in-process relay boot) blew vitest's 10s hook default when the pre-push
+    // gauntlet ran the whole repo after a @motebit/protocol change (#696 item
+    // 4); it passes standalone 22/22. A hook and a test starve the same way.
+    hookTimeout: 30_000,
   },
 });

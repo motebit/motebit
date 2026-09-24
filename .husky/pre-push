@@ -72,6 +72,13 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
 
   run_phase "gates (pnpm check)" pnpm check
 
+  # The gates' own tests (scripts/__tests__). ~8s. Until 2026-09-24 only CI's
+  # gate-effectiveness job ran them, so a self-test broken by the calendar
+  # (#694: a literal fixture date expired at UTC midnight) was CI-only by
+  # construction and reached main red. Not diff-scoped like the probe below:
+  # the #694 class is not a scripts/ change, it is a day passing.
+  run_phase "gate self-tests (scripts/__tests__)" pnpm test:gates
+
   # check-gates-effective PERTURBS every gate (re-runs each gate under an
   # injected failure to prove it bites) — the most expensive step, and its
   # result changes ONLY when GATE CODE changes. So run it locally only when

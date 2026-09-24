@@ -79,6 +79,23 @@ export const DECLARATION_CONTENT = {
       ],
       retention_window: "indefinite while motebit is active; expires per TTL after last heartbeat",
     },
+    // Its own category, not a line under presence: presence is TTL-governed
+    // and this table is not, and one `retention_window` string per category
+    // cannot say both. Undeclared until 2026-09-24 (#696).
+    device_registry: {
+      tables: ["devices"],
+      observable: [
+        "device_id",
+        "the motebit_id the device belongs to",
+        "the device's Ed25519 public key",
+        "registered_at timestamp",
+        "optional device_name",
+        "an opaque per-device bearer token (never the identity's private key)",
+        "optional self-issued hardware-attestation credential (JSON) for the device",
+      ],
+      retention_window:
+        "indefinite — device rows carry no TTL and are never reaped for silence; there is no automatic removal",
+    },
     operational: {
       tables: [
         "relay_tasks",
@@ -559,6 +576,16 @@ export function renderMarkdown(): string {
   lines.push(`Retention window: ${c.retention.presence.retention_window}.`);
   lines.push("");
 
+  lines.push("### Device registry");
+  lines.push("");
+  lines.push(`Tables: ${c.retention.device_registry.tables.map((t) => `\`${t}\``).join(", ")}.`);
+  lines.push("");
+  lines.push("Observable:");
+  for (const item of c.retention.device_registry.observable) lines.push(`- ${item}`);
+  lines.push("");
+  lines.push(`Retention window: ${c.retention.device_registry.retention_window}.`);
+  lines.push("");
+
   lines.push("### Operational");
   lines.push("");
   lines.push(`Tables: ${c.retention.operational.tables.map((t) => `\`${t}\``).join(", ")}.`);
@@ -577,7 +604,7 @@ export function renderMarkdown(): string {
   for (const item of c.retention.content.observable) lines.push(`- ${item}`);
   lines.push("");
   lines.push(`Retention window: ${c.retention.content.retention_window}.`);
-  lines.push("");
+  lines.push(`Enforcement: ${c.retention.content.enforcement}.`);
   lines.push("");
   lines.push("### Auth events");
   lines.push("");
@@ -587,7 +614,6 @@ export function renderMarkdown(): string {
   for (const item of c.retention.auth_events.observable) lines.push(`- ${item}`);
   lines.push("");
   lines.push(`Retention window: ${c.retention.auth_events.retention_window}.`);
-  lines.push(`Enforcement: ${c.retention.content.enforcement}.`);
   lines.push("");
 
   lines.push("### IP addresses");
