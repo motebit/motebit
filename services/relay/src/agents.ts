@@ -1148,19 +1148,20 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       });
     }
 
-    // Resolve public key: request body > the proven key on file > empty.
-    // A body without a key proves nothing, so it keeps the key the identity
-    // has already proven (§5b's authority) — never a device row's. The old
-    // fallback took the first-listed device row, which for an identity whose
-    // rows disagree could be a paired device's own key, and the registry rung
-    // would then have served it as the identity's (#750 review, §5a A4).
+    // Resolve public key: request body > the key the relay already SERVES
+    // (`identityKeyFor`: the proven key, else the one key every keyed device
+    // row agrees on) > empty. A body without a key proves nothing, so this
+    // publishes the served answer and the holder is NOT written from it
+    // below. The old fallback took the first-listed device row, which for an
+    // identity whose rows disagree could be a paired device's own key (#750
+    // review). Discovery needs the key: the CLI daemon registers without one.
     const keyFromBody =
       typeof body.public_key === "string" && /^[0-9a-f]{64}$/i.test(body.public_key);
     let publicKey = "";
     if (keyFromBody) {
       publicKey = body.public_key as string;
     } else {
-      publicKey = provenIdentityKey(moteDb.db, motebitId)?.publicKey ?? "";
+      publicKey = identityKeyFor(moteDb.db, motebitId)?.publicKey ?? "";
     }
 
     // --- Succession chain validation on re-registration ---

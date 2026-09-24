@@ -452,30 +452,28 @@ describe("identity-keys", () => {
       expect(identityKeyFor(db, "mote-lone")?.publicKey).toBe(A);
     });
 
-    it("/agents/register without a key records nothing it did not prove: the registry keeps the proven key, else '' — never a device row's (#750 review)", async () => {
+    it("/agents/register without a key records nothing in the holder, and publishes the SERVED key — never the first-listed of disagreeing rows (#750 review)", async () => {
+      const reg = (mid: string) =>
+        (
+          db.prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?").get(mid) as {
+            public_key: string;
+          }
+        ).public_key;
       // Disagreeing device rows, nothing proven: the old fallback took the first-listed row.
       plantDevice(db, "mote-nokey", "dA", A);
       plantDevice(db, "mote-nokey", "dB", B);
       expect((await registerAgent("mote-nokey", {})).status).toBe(200);
       expect(holderRow(db, "mote-nokey")).toBeUndefined();
-      expect(provenIdentityKey(db, "mote-nokey")).toBeNull();
-      const reg = () =>
-        (
-          db
-            .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
-            .get("mote-nokey") as {
-            public_key: string;
-          }
-        ).public_key;
-      expect(reg()).toBe("");
-      // A lone paired device's row does not reach the registry either (A4).
-      plantDevice(db, "mote-nokey-lone", "paired", D);
-      expect((await registerAgent("mote-nokey-lone", {})).status).toBe(200);
-      expect(provenIdentityKey(db, "mote-nokey-lone")).toBeNull();
+      expect(reg("mote-nokey")).toBe("");
+      // Agreeing rows (the daemon's shape): discovery gets the key the relay serves; the holder stays unwritten.
+      plantDevice(db, "mote-nokey-agree", "d1", D);
+      expect((await registerAgent("mote-nokey-agree", {})).status).toBe(200);
+      expect(reg("mote-nokey-agree")).toBe(D);
+      expect(holderRow(db, "mote-nokey-agree")).toBeUndefined();
       // With a proven key, a keyless registration keeps it on the registry and leaves the holder's source alone.
       recordIdentityKey(db, { motebitId: "mote-nokey", publicKey: C, source: "bootstrap", now: 1 });
       expect((await registerAgent("mote-nokey", {})).status).toBe(200);
-      expect(reg()).toBe(C);
+      expect(reg("mote-nokey")).toBe(C);
       expect(holderRow(db, "mote-nokey")).toMatchObject({ public_key: C, source: "bootstrap" });
     });
 
