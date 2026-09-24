@@ -571,8 +571,10 @@ describe("the public succession route answers the departure question with the ru
     );
     expect(await present(mid, `${mid}-laptop`, k1, mid, record)).toBe(200);
     relay.moteDb.db.prepare("DELETE FROM agent_registry WHERE motebit_id = ?").run(mid);
+    // `current_public_key` is what the relay SERVES, from the one reader
+    // (§5a A6) — no longer a registry read that goes null when the row goes.
     expect(await read(mid, hex(k2))).toMatchObject({
-      current_public_key: null,
+      current_public_key: hex(k2),
       held_public_key: hex(k2),
       departable: true,
     });

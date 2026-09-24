@@ -22,7 +22,13 @@ import type { TaskRouter } from "./task-routing.js";
 import { evaluateSettlementEligibility } from "./task-routing.js";
 import { REFERENCE_MIN_BONDED_SIGNAL_MICRO } from "./bond-store.js";
 import { ON_SHELF, delistRegistration } from "./registry-delist.js";
-import { identityKeyFor, keyHeldByEveryDevice, recordIdentityKey } from "./identity-keys.js";
+import {
+  identityGuardianFor,
+  identityKeyFor,
+  provenIdentityKey,
+  recordFirstIdentityKey,
+  recordIdentityKey,
+} from "./identity-keys.js";
 
 /**
  * Fields the ORIGIN relay computes itself and MUST NOT accept from a federated
@@ -802,10 +808,11 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       receipt.device_id != null
         ? await identityManager.loadDeviceById(receipt.device_id, motebitId)
         : null;
+    const resolved = signingDevice?.public_key ? null : identityKeyFor(moteDb.db, motebitId);
     if (signingDevice?.public_key) {
       pubKeyHex = signingDevice.public_key;
-    } else if (identityKeyFor(moteDb.db, motebitId)) {
-      pubKeyHex = identityKeyFor(moteDb.db, motebitId)!.publicKey;
+    } else if (resolved) {
+      pubKeyHex = resolved.publicKey;
     } else {
       const devices = await identityManager.listDevices(motebitId);
       const device =
@@ -997,44 +1004,30 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       throw new HTTPException(409, { message: `${refusal.error} — ${refusal.remediation}` });
     }
 
-    // Check if identity already exists
+    // Idempotent for an identity that exists; a new identity is saved with the
+    // caller-provided motebit_id (self-sovereign: no server-assigned UUID).
     const existing = await identityManager.load(motebitId);
-    if (existing) {
-      // Same key (or no key yet) — idempotent: register/refresh device and return
-      const device = await identityManager.registerDevice(
-        motebitId,
-        body.device_id ?? "bootstrap-device",
-        body.public_key,
-        body.device_id,
-      );
-      return c.json(
-        {
-          motebit_id: motebitId,
-          device_id: device.device_id,
-          registered: false, // identity already existed
-        },
-        200,
-      );
+    if (!existing) {
+      await moteDb.identityStorage.save({
+        motebit_id: motebitId,
+        owner_id: motebitId, // Self-sovereign: the agent is its own owner
+        created_at: Date.now(),
+        version_clock: 0,
+      });
     }
-
-    // New identity — save directly with the caller-provided motebit_id (self-sovereign: no server-assigned UUID)
-    await moteDb.identityStorage.save({
-      motebit_id: motebitId,
-      owner_id: motebitId, // Self-sovereign: the agent is its own owner
-      created_at: Date.now(),
-      version_clock: 0,
-    });
     const device = await identityManager.registerDevice(
       motebitId,
       body.device_id ?? "bootstrap-device",
       body.public_key,
       body.device_id,
     );
-    // A NEW identity: this is its first key, proven by construction (the id was
-    // minted for it here). An EXISTING identity's bootstrap above records
-    // nothing: the guard accepts any key some device row holds, including a
-    // paired device's own, and that is not the identity's key (#703 Inc 2).
-    recordIdentityKey(moteDb.db, {
+    // The public doors' writer (§5b): the key is proven by this request, and it
+    // is THE IDENTITY's key only when nothing is proven yet and no keyed device
+    // row holds another key. "New" is `provenIdentityKey === null`, never "no
+    // identities row" (§5a A2): a service-mode identity registered through
+    // /agents/register has no identities row and DOES have a holder, and the
+    // first build overwrote it here with an unproven key.
+    recordFirstIdentityKey(moteDb.db, {
       motebitId,
       publicKey: body.public_key,
       source: "bootstrap",
@@ -1045,9 +1038,9 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       {
         motebit_id: motebitId,
         device_id: device.device_id,
-        registered: true,
+        registered: !existing,
       },
-      201,
+      existing ? 200 : 201,
     );
   });
 
@@ -1171,14 +1164,13 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // --- Succession chain validation on re-registration ---
     // If the agent already has a stored public key and the new key differs,
     // require a valid succession record proving key lineage.
-    const existingAgent = moteDb.db
-      .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
-      .get(motebitId) as { public_key: string } | undefined;
-    // The key on file is the ONE holder's when it has one (#703 Inc 2); the
-    // registry row is the pre-holder fallback. A daemon that deregistered has
-    // no registry row and would otherwise re-register under any key unproven.
-    const keyOnFileForRegister =
-      identityKeyFor(moteDb.db, motebitId)?.publicKey ?? existingAgent?.public_key;
+    // The key on file is the AUTHORITY (§5b): holder, else registry, else chain
+    // head — never a device row, so a lone paired device's own key cannot make
+    // this door demand a succession from a key the identity never held (§5a
+    // A4); and a legacy row's empty key reads as none, so the first key is
+    // recorded instead of compared against '' (A5). A daemon that deregistered
+    // has no registry row and would otherwise re-register under any key.
+    const keyOnFileForRegister = provenIdentityKey(moteDb.db, motebitId)?.publicKey;
 
     if (keyOnFileForRegister && publicKey && keyOnFileForRegister !== publicKey) {
       const succession = (body as Record<string, unknown>).succession as
@@ -1192,10 +1184,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       // Verify the succession record signatures
       let guardianPubKeyForVerify: string | undefined;
       if (succession.recovery) {
-        const agentGuardian = moteDb.db
-          .prepare("SELECT guardian_public_key FROM agent_registry WHERE motebit_id = ?")
-          .get(motebitId) as { guardian_public_key: string | null } | undefined;
-        guardianPubKeyForVerify = agentGuardian?.guardian_public_key ?? undefined;
+        guardianPubKeyForVerify = identityGuardianFor(moteDb.db, motebitId) ?? undefined;
         if (!guardianPubKeyForVerify) {
           throw new HTTPException(400, {
             message: "Agent has no guardian registered — cannot use guardian recovery",
@@ -1390,22 +1379,17 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         sweepThreshold,
       );
 
-    // Auto-create a default service listing if one doesn't exist.
-    // The key this door just proved (its own token, or the operator's) lands in
-    // the ONE holder too (#703 Inc 2). A registration without a key (legacy
-    // callers) proves nothing about the key and records nothing.
-    // Proven how: a differing key passed the succession check above (and
-    // applySuccession recorded it); the same key is a no-op refresh (guardian
-    // may update); a FIRST key is recorded only when the device rows do not
-    // contradict it — every keyed row holds it, or there are none (service
-    // mode). A key that some device row does not hold is not shown to be the
-    // identity's, so it is not recorded (D5).
-    if (
-      publicKey !== "" &&
-      (keyOnFileForRegister === publicKey ||
-        (keyOnFileForRegister === undefined &&
-          keyHeldByEveryDevice(moteDb.db, motebitId, publicKey)))
-    ) {
+    // The key this door just proved lands in the holder, with the guardian it
+    // just attested, on EVERY path (§5a A3 — the first build's succession path
+    // recorded the key without the guardian, leaving two guardian truths): the
+    // same key is a refresh, a differing key passed the succession check above,
+    // a first key is the identity's first proof at this door. A registration
+    // without a key (legacy callers) proves nothing and records nothing. The
+    // first build also required every device row to agree before recording a
+    // first key; this door writes `agent_registry.public_key` unconditionally
+    // and the registry rung would serve it anyway, so that predicate only let
+    // the holder disagree with the registry (§5b).
+    if (publicKey !== "") {
       recordIdentityKey(moteDb.db, {
         motebitId,
         publicKey,
@@ -1414,6 +1398,8 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         now,
       });
     }
+
+    // Auto-create a default service listing if one doesn't exist.
 
     // Registration populates agent_registry (for discovery); routing reads from
     // relay_service_listings. Without this, registered agents are discoverable

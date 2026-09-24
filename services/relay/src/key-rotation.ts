@@ -19,6 +19,7 @@ import { readSuccessionChain } from "./identity-transparency.js";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
 import type { AuthEvent } from "./auth-events.js";
+import { identityGuardianFor, identityKeyFor } from "./identity-keys.js";
 
 const logger = createLogger({ service: "key-rotation" });
 
@@ -149,10 +150,8 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
         );
       }
       // Look up the guardian public key from agent's identity
-      const agentGuardian = moteDb.db
-        .prepare("SELECT guardian_public_key FROM agent_registry WHERE motebit_id = ?")
-        .get(motebitId) as { guardian_public_key: string | null } | undefined;
-      const guardianPubKey = agentGuardian?.guardian_public_key;
+      // The one guardian truth (§5a A3), not a registry read of its own.
+      const guardianPubKey = identityGuardianFor(moteDb.db, motebitId);
       if (!guardianPubKey) {
         throw refuse(
           400,
@@ -307,16 +306,16 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
         ? departureFrom(moteDb.db, motebitId, from).admissible
         : null;
 
-    const agent = moteDb.db
-      .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
-      .get(motebitId) as { public_key: string } | undefined;
-
     logger.info("agent.succession.query", { correlationId, motebitId, chainLength: chain.length });
 
     return c.json({
       motebit_id: motebitId,
       chain,
-      current_public_key: agent?.public_key ?? null,
+      // What the relay SERVES as the identity's key, from the one reader
+      // (§5a A6) — the same answer the §7.6 bundle gives; `held_public_key`
+      // is the authority a rotation may depart from, and the two differ only
+      // by the device rung.
+      current_public_key: identityKeyFor(moteDb.db, motebitId)?.publicKey ?? null,
       held_public_key: onFile.held,
       ...(from != null ? { departable_from: from, departable } : {}),
     });

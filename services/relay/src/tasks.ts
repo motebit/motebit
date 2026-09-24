@@ -101,6 +101,7 @@ import {
 } from "./errors.js";
 import { listRevokedGrantIds } from "./delegation-revocations.js";
 import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
+import { identityGuardianFor } from "./identity-keys.js";
 
 const logger = createLogger({ service: "tasks" });
 
@@ -3171,11 +3172,9 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                   ? weightedSumComposite
                   : undefined;
 
-          // Look up caller's guardian key for organizational trust baseline
-          const callerGuardianRow = moteDb.db
-            .prepare("SELECT guardian_public_key FROM agent_registry WHERE motebit_id = ?")
-            .get(callerMotebitId ?? motebitId) as
-            { guardian_public_key: string | null } | undefined;
+          // The caller's guardian for the organizational trust baseline — the
+          // one guardian truth (§5a A3), not a registry read of its own.
+          const callerGuardian = identityGuardianFor(moteDb.db, callerMotebitId ?? motebitId);
 
           const ranked = explainedRankCandidates(
             asMotebitId(callerMotebitId ?? motebitId),
@@ -3189,7 +3188,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               explorationWeight,
               peerEdges: allPeerEdges,
               compositeFunction,
-              callerGuardianPublicKey: callerGuardianRow?.guardian_public_key ?? undefined,
+              callerGuardianPublicKey: callerGuardian ?? undefined,
             },
           );
           const selected = ranked.filter((r) => r.selected && r.composite > 0);
