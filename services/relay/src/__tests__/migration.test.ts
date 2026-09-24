@@ -569,6 +569,43 @@ describe("Migration: accept-migration (destination)", () => {
     expect(discoverBody.found).toBe(true);
   });
 
+  it("arrival keeps what the payload does not carry — guardian, settlement, sweep — and re-shelves a departed row (#703 F2)", async () => {
+    const { payload, motebitId } = await buildPinnedAcceptPayload(relay, {
+      tokenId: `mig-keep-${Date.now()}`,
+    });
+    // The identity departed this relay earlier: its row is revoked + delisted
+    // but still holds a guardian and settlement configuration. INSERT OR
+    // REPLACE used to drop all of it.
+    const t = Date.now() - 1000;
+    relay.moteDb.db
+      .prepare(
+        `INSERT INTO agent_registry
+           (motebit_id, public_key, endpoint_url, capabilities, registered_at, last_heartbeat, expires_at,
+            guardian_public_key, settlement_address, settlement_modes, sweep_threshold, revoked, delisted_at)
+         VALUES (?, ?, '', '[]', ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+      )
+      .run(motebitId, payload.public_key, t, t, t, "g".repeat(64), "SettleAddr", "relay", 42, t);
+
+    const res = await relay.app.request(`/api/v1/agents/accept-migration`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify(payload),
+    });
+    expect(res.status).toBe(200);
+
+    const row = relay.moteDb.db
+      .prepare(
+        "SELECT guardian_public_key, settlement_address, settlement_modes, sweep_threshold, revoked, delisted_at FROM agent_registry WHERE motebit_id = ?",
+      )
+      .get(motebitId) as Record<string, unknown>;
+    expect(row.guardian_public_key).toBe("g".repeat(64));
+    expect(row.settlement_address).toBe("SettleAddr");
+    expect(row.settlement_modes).toBe("relay");
+    expect(row.sweep_threshold).toBe(42);
+    expect(row.revoked).toBe(0);
+    expect(row.delisted_at).toBeNull();
+  });
+
   it("rejects a bundle whose agent signature is invalid (§8.2 step 4 — required-and-verified)", async () => {
     const { payload } = await buildPinnedAcceptPayload(relay, {
       tokenId: `mig-tamper-${Date.now()}`,

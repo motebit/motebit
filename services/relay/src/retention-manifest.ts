@@ -158,11 +158,13 @@ export const RETENTION_MANIFEST_CONTENT: Pick<
       "consolidation cycle — covered by each motebit's own retention manifest, " +
       "not this operator-level one. They will never appear in this `stores` list.",
     "different_mechanism: presence data (agent_registry, relay_identity, " +
-      "pairing_sessions) is TTL-based (declared in " +
+      "pairing_sessions) is lease-based (declared in " +
       "/.well-known/motebit-transparency.json) and is not retention-cert-shaped — " +
-      "TTL expiry is a different mechanism than the signed deletion certificates " +
-      "this manifest enumerates. Presence retention is governed by the " +
-      "operator-transparency manifest, not this one.",
+      "a lapsed lease DELISTS the agent_registry row (clears its discovery fields; " +
+      "since 2026-09-24, #703) rather than deleting it, because the row also holds " +
+      "identity key state that only revocation may end; neither the delisting nor " +
+      "a revocation issues a deletion certificate. Presence retention is governed " +
+      "by the operator-transparency manifest, not this one.",
     "different_mechanism: the device registry (devices) is NEITHER TTL-based nor " +
       "retention-cert-shaped — rows carry no TTL, are never reaped for silence, and " +
       "no deletion certificate is issued for them. Declared as its own category " +

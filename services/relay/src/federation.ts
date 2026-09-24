@@ -41,6 +41,7 @@ import { persistWitnessOmissionDispute, resolveHorizonCertBySignature } from "./
 // dispatcher). The `suite` literal below is the stable contract between
 // services and the registry in @motebit/protocol.
 const FEDERATION_SUITE = "motebit-concat-ed25519-hex-v1" as const;
+import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
 
 /**
  * Wire-reported relay-federation spec version. Single source of truth for the
@@ -863,7 +864,9 @@ export async function sendHeartbeats(
   const encoder = new TextEncoder();
   const timestamp = Date.now();
   const agentCount = (
-    db.prepare("SELECT COUNT(*) as cnt FROM agent_registry").get() as { cnt: number }
+    db.prepare(`SELECT COUNT(*) as cnt FROM agent_registry WHERE ${ON_SHELF_PREDICATE}`).get() as {
+      cnt: number;
+    }
   ).cnt;
   // Heartbeat signing payload format (FEDERATION_SUITE = motebit-concat-ed25519-hex-v1):
   //   `{relay_id}|{timestamp}|{suite}`  — UTF-8 concatenation, Ed25519 sign, hex encode
@@ -1667,7 +1670,11 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
     const ourTimestamp = Date.now();
     const localAgentCount = (
-      db.prepare("SELECT COUNT(*) as cnt FROM agent_registry").get() as { cnt: number }
+      db
+        .prepare(`SELECT COUNT(*) as cnt FROM agent_registry WHERE ${ON_SHELF_PREDICATE}`)
+        .get() as {
+        cnt: number;
+      }
     ).cnt;
     const responseSig = await sign(
       encoder.encode(`${relayIdentity.relayMotebitId}|${ourTimestamp}|${FEDERATION_SUITE}`),
@@ -2321,8 +2328,10 @@ export function registerFederationRoutes(deps: FederationDeps): void {
     // `forwardTaskViaMcp` downstream, not by this existence gate. Gating
     // peer-forwards on a 15-min heartbeat window was punishing peers for
     // agent sleep, which they can't control.
+    // A delisted agent (departed, lapsed, revoked) is not serving: 404, the
+    // same answer a peer got when the row used to be deleted.
     const agent = db
-      .prepare("SELECT 1 FROM agent_registry WHERE motebit_id = ?")
+      .prepare(`SELECT 1 FROM agent_registry WHERE motebit_id = ?${ON_SHELF}`)
       .get(body.target_agent);
     if (agent == null)
       throw new HTTPException(404, { message: "Target agent not found on this relay" });

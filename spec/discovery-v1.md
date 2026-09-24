@@ -312,7 +312,7 @@ The seven routes below are the binding cross-implementation contract for the dis
 - `GET /api/v1/discover/:motebitId` — agent resolution by `motebit_id` (§5).
 - `POST /api/v1/agents/register` — service motebit registers with the relay; `motebit_id`, `public_key`, `endpoint_url`, `capabilities`.
 - `POST /api/v1/agents/heartbeat` — refresh the registration TTL.
-- `DELETE /api/v1/agents/deregister` — voluntary departure from the registry.
+- `DELETE /api/v1/agents/deregister` — voluntary departure from _discovery_: the entry's `endpoint_url` and `capabilities` are cleared and it stops appearing in `discover` and task routing. The relay's knowledge of the identity — its public key, guardian key and settlement configuration — is retained until revocation (`identity-v1.md` §7.6 keeps answering for a departed agent). A lapsed heartbeat lease departs the same way; only `/revoke` ends key state, and it too keeps the record.
 - `GET /api/v1/agents/discover` — registry-wide query (filtered by capability).
 - `GET /agent/:motebitId/capabilities` — per-entry capability list.
 

@@ -27,7 +27,7 @@ Observable:
 - expires_at TTL
 - optional device label (claiming_device_name) when set by user during pairing
 
-Retention window: indefinite while motebit is active; expires per TTL after last heartbeat.
+Retention window: discovery fields (endpoint_url, capabilities) are cleared when the motebit deregisters, is revoked, or 90 days pass without a heartbeat (the lease); the row itself — motebit_id, public key, guardian key, settlement configuration — is retained until revocation, and revocation keeps the row with its revoked mark so the identity's binding and its end stay verifiable (#703, since 2026-09-24).
 
 ### Device registry
 

@@ -312,7 +312,10 @@ export function triggerUnfreeze(): Promise<{ status: string; message: string }> 
 // === Health ===
 
 export interface HealthMotebits {
+  /** Serving (on the shelf) — not delisted. */
   total_registered: number;
+  /** Every registry row, serving or delisted; ≥ total_registered (#703). */
+  total_known: number;
   active_24h: number;
   active_7d: number;
   active_30d: number;

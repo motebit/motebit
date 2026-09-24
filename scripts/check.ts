@@ -998,6 +998,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-relay-frame-origin",
   },
   {
+    name: "check-registry-never-deleted",
+    defends:
+      "no relay source runs `DELETE FROM agent_registry` — a departed or long-silent identity is DELISTED (services/relay/src/registry-delist.ts: discovery fields cleared, delisted_at set, key/guardian/settlement kept) and never forgotten. Until 2026-09-24 deregister and the 90-day janitor both deleted the row, and the CLI daemon deregisters on every shutdown, so a routine restart discarded the guardian and the key (#703, the precondition #701 needed). Nothing fails when a door deletes: discover is empty as expected and the tests pass; only the guardian recovery that comes later finds nothing. Same permanent-structural-lock shape as check-relay-frame-origin. Invariant #162, added 2026-09-24",
+    script: "check-registry-never-deleted",
+  },
+  {
     name: "check-docs-script-claims",
     defends:
       "every package script a docs page tells the reader to run exists in the manifest it would run against: `pnpm --filter <pkg> <script>` resolves to a workspace package by name and one of its `scripts`; `pnpm run <script>` resolves against the most recent `cd <workspace-dir>` in the same fenced block (else the repo root); `npm run <script>` resolves against the scripts the create-motebit scaffold generates. The 2026-09-14 docs-vs-code cross-audit (#667) found three of the five app pages OPENING with a command that did not exist or did something other than the sentence claimed — the first command a new contributor types was the least-checked sentence on the site; `check-docs-tree` enforced the directory listing and `check-docs-cli-claims` the CLI subcommands, but nothing tied a documented script to a package.json. Invariant #157, added 2026-09-14",

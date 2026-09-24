@@ -100,6 +100,7 @@ import {
   TaskError,
 } from "./errors.js";
 import { listRevokedGrantIds } from "./delegation-revocations.js";
+import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
 
 const logger = createLogger({ service: "tasks" });
 
@@ -2804,7 +2805,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       } else {
         const pinnedReg = moteDb.db
           .prepare(
-            "SELECT endpoint_url FROM agent_registry WHERE motebit_id = ? AND expires_at > ?",
+            `SELECT endpoint_url FROM agent_registry WHERE motebit_id = ? AND expires_at > ?${ON_SHELF}`,
           )
           .get(pinnedId, Date.now()) as { endpoint_url: string } | undefined;
         if (pinnedReg?.endpoint_url?.trim()) {
@@ -3343,7 +3344,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                   // No WebSocket — try HTTP MCP forwarding via registered endpoint_url
                   const regRow = moteDb.db
                     .prepare(
-                      "SELECT endpoint_url FROM agent_registry WHERE motebit_id = ? AND expires_at > ?",
+                      `SELECT endpoint_url FROM agent_registry WHERE motebit_id = ? AND expires_at > ?${ON_SHELF}`,
                     )
                     .get(selId, Date.now()) as { endpoint_url: string } | undefined;
                   if (regRow?.endpoint_url?.trim()) {
@@ -3420,7 +3421,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       const httpCandidate = moteDb.db
         .prepare(
           `SELECT r.motebit_id, r.endpoint_url FROM agent_registry r
-           WHERE r.expires_at > ? AND r.endpoint_url != ''
+           WHERE r.expires_at > ? AND r.endpoint_url != '' AND r.${ON_SHELF_PREDICATE}
              AND r.motebit_id != ?
              AND EXISTS (SELECT 1 FROM json_each(r.capabilities) WHERE value = ?)
            LIMIT 1`,

@@ -2617,6 +2617,22 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-registry-never-deleted",
+    proves:
+      "flags a relay source file that DELETEs an agent_registry row — the #703 class (deregister and the janitor deleted the row, so every daemon shutdown discarded the identity's guardian and key). Drops a fixture door under services/relay/src that runs the forbidden statement; the gate names the file and line.",
+    perturb: () =>
+      writeFixture(
+        `services/relay/src/${PROBE_PREFIX}forgetful_door.ts`,
+        [
+          "// Probe fixture — a door that forgets who someone is.",
+          "export function forget(db: { prepare(sql: string): { run(...a: unknown[]): unknown } }, id: string) {",
+          '  db.prepare("DELETE FROM agent_registry WHERE motebit_id = ?").run(id);',
+          "}",
+          "",
+        ].join("\n"),
+      ),
+  },
+  {
     script: "check-worker-no-master-token",
     proves:
       "flags a worker reading the relay master token again — the 2026-09-13 blast-radius class (every first-party worker held MOTEBIT_API_TOKEN, so a compromised worker container was a compromised relay). Probe reinstates the env read in research's config loader; byte-identical restoration on cleanup.",

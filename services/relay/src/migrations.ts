@@ -1880,4 +1880,29 @@ export const relayMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 41,
+    name: "agent_registry_delisted_at",
+    up: (db) => {
+      // Identity key state outlives the discovery row (#703, proposal
+      // identity-key-state-v1 §4). `agent_registry` held two facts with two
+      // lifetimes in one row, and the shorter won: deregister and the 90-day
+      // janitor DELETEd the row — key, guardian and settlement configuration
+      // with it — and the CLI daemon deregisters on every shutdown. Rows are
+      // now DELISTED (registry-delist.ts): `delisted_at` set, discovery
+      // fields cleared, everything else kept until revocation. Rows already
+      // revoked are backfilled as delisted so "on the shelf" is one predicate
+      // (`delisted_at IS NULL`) from the first read after this migration.
+      try {
+        db.exec("ALTER TABLE agent_registry ADD COLUMN delisted_at INTEGER");
+      } catch (err) {
+        // A database that already carries the column (a partially applied
+        // run) must not fail the migration; any other error is real.
+        if (!(err instanceof Error && err.message.includes("duplicate column"))) throw err;
+      }
+      db.prepare(
+        "UPDATE agent_registry SET delisted_at = ? WHERE revoked = 1 AND delisted_at IS NULL",
+      ).run(Date.now());
+    },
+  },
 ];
