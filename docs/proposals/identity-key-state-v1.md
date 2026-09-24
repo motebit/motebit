@@ -1,6 +1,6 @@
 # PROPOSAL — identity key state outlives the discovery row (DRAFT, not built)
 
-**Status:** DRAFT for design review, 2026-09-23. Nothing here is built.
+**Status:** DRAFT for design review, 2026-09-23; §10 DECIDED 2026-09-24 (founder delegated the three questions to PE judgement). Nothing here is built.
 **Author:** motebit PE
 **Closes when built:** #703 (a daemon shutdown discards the identity's guardian and key state)
 **Prerequisite for:** roster part B (the successor to withdrawn #698), then #691 / #687 / #681 — the roster's key model was found inert against production data because of exactly this conflation.
@@ -93,7 +93,15 @@ Withdraw on a **wrong answer**: an identity key served from a foundation-law rou
 
 Dropping `agent_registry.public_key`; the `devices` table's own lifecycle; the per-device kill-switch; the roster itself (this is its prerequisite, not its first increment).
 
-## 10. Open for the founder
+## 10. Open for the founder — DECIDED 2026-09-24
+
+Decided by PE under founder delegation ("do this for me, I trust your judgement"), each with the reason, so a later reader can re-open the reason and not just the answer.
+
+- **Q1 — yes, `/revoke` delists.** A revoked identity cannot act, so it must not be for hire; `task-routing` already excludes `revoked = 1` rows from the shelf, so this makes one predicate of what is today two. Shape: revocation SETS `delisted_at` (and clears the discovery fields) rather than the shelf readers growing a second clause — "on the shelf" is then exactly `delisted_at IS NULL`, and a future reader cannot forget the revoked half. D3 is unchanged: the revoked identity stays in the identity log, with its revocation, because a verifier walking an old receipt chain needs the binding and its end. Re-registration after revocation is refused, as today; delisting never un-revokes.
+- **Q2 — keep `total_registered`, keep its documented meaning ("serving"), add `total_known`.** The alternative (keep the old NUMBER under the old name, add `total_serving`) is the one that changes a meaning silently: after delisting, "all rows" includes departed agents, which the field's own doc-comment says it does not count. At cutover the number is continuous — every row that exists today is serving, or the janitor would have deleted it — so the dashboard sees no step. Siblings in the same PR: `services/relay/src/health-summary.ts` doc-comment, `apps/operator/src/api.ts` type, `HealthPanel.tsx` renders `total_known` beside it, and the docs page for the health summary if one names the field.
+- **Q3 — Increment 2 does not WAIT on the count; the count is its first commit.** The count changes nothing about what is built (D5 is unambiguous-only then lazy regardless of the number); it changes what the PR promises. So it is not a gate, it is sequencing: a read-only, re-runnable script (`scripts/measure-identity-key-ambiguity.ts` — the number moves as identities bootstrap) runs against production before the backfill is written, its output is pasted into the PR, and the same number ships as an operator metric (`identity_keys_unfilled` in health-summary) so it keeps being read after the PR. If the count says most of the 42 are ambiguous, the design still holds — §7.6 keeps 404ing for them until their next bootstrap, honestly — but the PR says so in its first line instead of implying the backfill closed the gap.
+
+Next: Increment 1 PR (§4), built as written.
 
 - **Q1** — Should `/revoke` also delist (an agent revoked for abuse should not stay on the shelf)? The note assumes yes.
 - **Q2** — `total_registered` narrowing to "serving" is visible on the health dashboard; acceptable, or keep the old number under the old name and add `total_serving`?
