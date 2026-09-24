@@ -1,6 +1,6 @@
 # PROPOSAL — identity key state outlives the discovery row (DRAFT, not built)
 
-**Status:** DRAFT for design review, 2026-09-23; §10 DECIDED 2026-09-24 (founder delegated the three questions to PE judgement). **Increment 1 (§4) BUILT 2026-09-24** — `registry-delist.ts`, migration v41, gate #162 (#744). **Increment 2 (§5) PART A: first build #747 WITHDRAWN 2026-09-24 under §8 (two in-kind review rounds); amendments in §5a; branch kept.** Was: — `identity_keys` (migration v42, backfill; production count 50/50 unambiguous, 0 unfilled), `recordIdentityKey` at every door that proves a key, `identityKeyFor` the one resolver, the three named resolvers (auth's service fallback, verify-receipt, `keyOnFile`/`departureFrom`) and the identity log + §7.6 bundle on it. PART B not built: the remaining second-family readers (tasks.ts ×5, disputes.ts ×3, command-route, bond-store, device-registration-guard, federation-callbacks, index.ts, migration.ts ×3, key-rotation.ts recovery, trust-graph) and `check-identity-key-resolver`.
+**Status:** DRAFT for design review, 2026-09-23; §10 DECIDED 2026-09-24 (founder delegated the three questions to PE judgement). **Increment 1 (§4) BUILT 2026-09-24** — `registry-delist.ts`, migration v41, gate #162 (#744). **Increment 2 (§5) PART A: first build #747 WITHDRAWN 2026-09-24 under §8 (two in-kind review rounds); amendments in §5a; branch kept; rebuild design in §5b (2026-09-24).** Was: — `identity_keys` (migration v42, backfill; production count 50/50 unambiguous, 0 unfilled), `recordIdentityKey` at every door that proves a key, `identityKeyFor` the one resolver, the three named resolvers (auth's service fallback, verify-receipt, `keyOnFile`/`departureFrom`) and the identity log + §7.6 bundle on it. PART B not built: the remaining second-family readers (tasks.ts ×5, disputes.ts ×3, command-route, bond-store, device-registration-guard, federation-callbacks, index.ts, migration.ts ×3, key-rotation.ts recovery, trust-graph) and `check-identity-key-resolver`.
 **Author:** motebit PE
 **Closes when built:** #703 (a daemon shutdown discards the identity's guardian and key state)
 **Prerequisite for:** roster part B (the successor to withdrawn #698), then #691 / #687 / #681 — the roster's key model was found inert against production data because of exactly this conflation.
@@ -76,6 +76,46 @@ Two review rounds, eight in-kind findings, all the same shape: **a reader that t
 - **A5 — `''` is not a key on file.** A legacy registry row with an empty key must read as "no key", so the first-key record fires; normalize to `undefined` before the comparison.
 - **A6 — `GET /succession` serves `current_public_key` from the resolver**, not a direct registry read, or drops the field. It is a foundation-law read and belongs in Part A, not Part B.
 - **Kept as built:** the holder table and its one writer, the v42 backfill and D5, the resolver's precedence, the succession write scoped to the key it retires, exact key spelling, the auth fallback gated on keyed device rows, the receipt's own device row before the holder, the writers-gate entry. The 50/50 production count stands.
+
+## 5b. Rebuild design — the guard-and-resolver interplay (2026-09-24, before code)
+
+Written before the rebuild, as the note the amendments asked for. Eight in-kind findings had one cause: the relay asks **three different questions** about an identity's key, and each round moved one door's answer to the holder while a sibling kept answering a different question from the old tables. The rebuild names the questions, gives each ONE function, and states the laws between them as tests.
+
+**The three questions.**
+
+- **Q-current** — _what is THE identity's key?_ A single key. Asked when serving (§7.6 bundle, identity log, `GET /succession`) and when verifying a caller with no device row.
+- **Q-held** — _which keys does this identity answer to?_ A SET. Asked by the public-door guard: a device linked without key transfer holds its own key, and that device may legitimately register again from a second machine. The guard is not asking Q-current, which is why the round-2 guard finding was not fixable by "call the resolver".
+- **Q-device** — _does THIS device's key verify this token?_ Asked by `auth.ts` per `did`. Stays where it is; the holder is its fallback only for an identity with no keyed device row (kept from the first build).
+
+**The functions** (`services/relay/src/identity-keys.ts` — the only module that reads any of the four tables for a key; Part B's `check-identity-key-resolver` locks that):
+
+| Function                      | Answers   | Rungs                                                                                     | Callers                                                                                                                                                                      |
+| ----------------------------- | --------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provenIdentityKey(db, id)`   | authority | `identity_keys` → registry (`''` ⇒ none, A5) → chain head. **Never devices** (A4)         | `departureFrom` (the device rung is removed), the register door's key-on-file (replaces the raw registry read, A5), `applySuccession`'s holder scope                         |
+| `identityKeyFor(db, id)`      | Q-current | `provenIdentityKey`, else the one key every keyed device row agrees on                    | bundle, identity log, auth's service-mode fallback, verify-receipt, `GET /succession` `current_public_key` (A6 — the field stays: web, desktop and inspector panels read it) |
+| `keysHeldBy(db, id)`          | Q-held    | holder ∪ registry ∪ every keyed device row, compared case-insensitively as the guard does | `refusePublicDeviceRegistration` (A1), `recordFirstIdentityKey`                                                                                                              |
+| `identityGuardianFor(db, id)` | guardian  | holder's guardian, else the registry's                                                    | the five guardian readers, ALL moved in Part A (A3): `/rotate-key` recovery, register's succession-on-register, trust-graph boost, tasks routing boost, bundle               |
+
+Two precedence lists in one module was the branch's own smell (`keyOnFile` filtered the resolver's answer by `source` and re-read the registry and chain itself). Now the reader IS the authority plus one rung, so A4 holds by construction, not by each caller filtering.
+
+**The writers** (each an entry in `check-identity-authority-writers`, each proving before it writes):
+
+- `recordFirstIdentityKey(db, {id, key, source})` — writes only when `provenIdentityKey === null` AND `keysHeldBy ⊆ {key}`. Both public doors call it unconditionally after the guard; the "identities row exists" test is gone (A2). A brand-new identity records its first key; a second machine after key transfer is a no-op; an identity whose device rows disagree stays unfilled (D5).
+- `recordIdentityKey(db, …)` — the unconditional upsert, kept: `applySuccession` (scoped to the key it retires, kept), accept-migration after the binding check, and `/agents/register` after its bearer and succession checks. The register door drops the first build's device-agreement predicate: the same door writes `agent_registry.public_key` unconditionally and the resolver's registry rung would serve that key anyway, so the predicate protected nothing and only made the holder disagree with the registry.
+- `recordIdentityGuardian(db, {id, guardian, source})` — the register door's attestation, on EVERY key path (same key, first key, and succession). The round-2 "two guardian truths" was the succession path recording the key without the guardian.
+
+**The laws, each a test that plants `identity_keys`, `agent_registry`, `relay_key_successions` and `devices` against each other:**
+
+- **L1 — guard superset.** `keysHeldBy(id) ⊇ {identityKeyFor(id).publicKey}` in every planted state. Whatever auth will verify against, the guard already counts as held; the round-2 guard finding is this law's failure.
+- **L2 — a stranger's key never lands.** For each state (holder only; registry only; chain only; devices agree; devices disagree; registry `''` beside a holder) and each public door, a key ∉ `keysHeldBy` is refused and the holder is byte-identical afterwards. §8's first clause, enumerated.
+- **L3 — departure is proven.** `departureFrom(id, k).admissible ⇔ k === provenIdentityKey(id)`. Named consequence: an identity with only disagreeing device rows and no registry row can no longer rotate from a device key (`no_key_on_file`); it registers first, then rotates. Zero such identities in production (50/50). Guardian recovery is untouched, because a guardian exists only through `/agents/register`, which implies a registry row.
+- **L4 — serve what you admit.** Bundle `current_public_key` = `GET /succession` `current_public_key` = `identityKeyFor`; `held_public_key` = `provenIdentityKey`. The two may differ only by the device rung, and the response says which.
+- **L5 — one guardian.** After register-with-succession carrying a new attestation, recovery, the bundle and the trust-graph boost all read the new guardian.
+- **L6 — §8's second clause, enumerated.** For each backfill source, guardian recovery succeeds after v42 exactly when it did before.
+
+**Corrections to §5 read while designing.** Federation `key_rotated` is not a key writer — `federation-callbacks.ts` only reads, and the writers gate lists no federation door — so it is struck from the writer list. "Guardian attestation" is the register door's attestation, not a door of its own.
+
+**Scope of the one PR.** Part A as kept, plus A1–A6, the guard, and the five guardian readers. Part B stays the signature-verifying readers (`tasks.ts` ×5, `disputes.ts` ×3, `command-route.ts`, `bond-store.ts`, `federation-callbacks.ts`, the remaining `index.ts` read, `migration.ts` ×3) and the read-side gate: after Part A the registry key still tracks the holder on every door (`applySuccession` moves both in one transaction), so Part B is a legibility pass, not a safety pass. The §8 stopping rule applies unchanged.
 
 ## 6. Decisions
 
