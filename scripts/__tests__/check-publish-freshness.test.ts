@@ -209,12 +209,12 @@ describe("the gate bites", () => {
     expect(r.out).toMatch(/1 verified against the registry/);
   });
 
-  it("reds on [behind] with the token repair, and names the manifest", async () => {
+  it("reds on [behind] with the trusted-publisher repair, and names the manifest", async () => {
     const r = await run(serving("0.9.0"));
     expect(r.code).toBe(1);
     expect(r.findings.map((f) => f.standing.kind)).toEqual(["behind"]);
     expect(r.out).toMatch(/\[behind\] @pf-test\/one \(packages\/one\/package\.json\)/);
-    expect(r.out).toMatch(/NPM_TOKEN/);
+    expect(r.out).toMatch(/Trusted Publisher/);
     expect(r.out).toMatch(/release\.yml/);
   });
 
