@@ -316,6 +316,11 @@ export interface HealthMotebits {
   total_registered: number;
   /** Every registry row, serving or delisted; ≥ total_registered (#703). */
   total_known: number;
+  /** Identity-key population (registry ∪ devices ∪ successions) and how many of them the relay can name one key for without guessing (#703 Inc 2, D5). */
+  identity_keys_total: number;
+  identity_keys_unambiguous: number;
+  identity_keys_ambiguous: number;
+  identity_keys_keyless: number;
   active_24h: number;
   active_7d: number;
   active_30d: number;

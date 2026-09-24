@@ -123,6 +123,16 @@ export function HealthPanel(): React.ReactElement {
       React.createElement(
         "div",
         { className: "stat-card" },
+        React.createElement("div", { className: "label" }, "Key-ambiguous identities"),
+        React.createElement(
+          "div",
+          { className: "value" },
+          `${motebits.identity_keys_ambiguous} of ${motebits.identity_keys_total}`,
+        ),
+      ),
+      React.createElement(
+        "div",
+        { className: "stat-card" },
         React.createElement("div", { className: "label" }, "Active 24h"),
         React.createElement("div", { className: "value" }, String(motebits.active_24h)),
       ),

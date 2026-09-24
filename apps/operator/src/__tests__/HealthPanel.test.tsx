@@ -24,6 +24,10 @@ const ZERO_SUMMARY = {
   motebits: {
     total_registered: 0,
     total_known: 0,
+    identity_keys_total: 0,
+    identity_keys_unambiguous: 0,
+    identity_keys_ambiguous: 0,
+    identity_keys_keyless: 0,
     active_24h: 0,
     active_7d: 0,
     active_30d: 0,
@@ -84,6 +88,10 @@ describe("HealthPanel", () => {
       motebits: {
         total_registered: 12,
         total_known: 14,
+        identity_keys_total: 51,
+        identity_keys_unambiguous: 40,
+        identity_keys_ambiguous: 9,
+        identity_keys_keyless: 2,
         active_24h: 3,
         active_7d: 7,
         active_30d: 12,
