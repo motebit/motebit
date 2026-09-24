@@ -372,7 +372,15 @@ jobs:
       # E404). No grace here: this run IS the publish, and propagation was
       # already waited for above. The daily publish-freshness.yml is the
       # same assertion from the other side, for the days no release runs.
+      # …read against the COMMIT THAT WAS PUSHED, not the working tree: in
+      # version mode the changesets action runs `pnpm version-packages` right
+      # here, bumping every manifest for the Version Packages branch, and the
+      # first five runs of this step read those bumps as "main is a patch ahead
+      # of npm" (2026-09-24, five red runs, nothing actually unpublished). The
+      # manifests are restored from the pushed sha first.
       - name: Registry matches main (publish-freshness, no grace)
         env:
           PUBLISH_FRESHNESS_HOURS: "0"
-        run: npx tsx scripts/check-publish-freshness.ts --require-registry
+        run: |
+          git checkout -q "${{ github.sha }}" -- pnpm-workspace.yaml packages apps services
+          npx tsx scripts/check-publish-freshness.ts --require-registry
