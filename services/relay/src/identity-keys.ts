@@ -73,7 +73,8 @@ export interface IdentityKey {
 const HEX_64 = /^[0-9a-f]{64}$/i;
 
 /** `''` is not a key on file (§5a A5): a legacy row with an empty key reads as none. */
-const keyOrNull = (k: string | null | undefined): string | null => (k != null && k !== "" ? k : null);
+const keyOrNull = (k: string | null | undefined): string | null =>
+  k != null && k !== "" ? k : null;
 
 // ── The raw reads. Each rung has ONE reader; the resolvers compose them. ──
 
@@ -281,7 +282,12 @@ export function recordIdentityKey(
  */
 export function recordFirstIdentityKey(
   db: DatabaseDriver,
-  input: { motebitId: string; publicKey: string; source: "bootstrap" | "register-self"; now: number },
+  input: {
+    motebitId: string;
+    publicKey: string;
+    source: "bootstrap" | "register-self";
+    now: number;
+  },
 ): boolean {
   if (provenIdentityKey(db, input.motebitId) !== null) return false;
   const key = input.publicKey.toLowerCase();
