@@ -15,8 +15,11 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
+    "@motebit/core-identity": "workspace:*",
+    "@motebit/encryption": "workspace:*",
     "@motebit/mcp-client": "workspace:*",
-    "@motebit/sdk": "workspace:*"
+    "@motebit/sdk": "workspace:*",
+    "@motebit/sync-engine": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",

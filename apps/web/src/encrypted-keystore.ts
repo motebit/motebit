@@ -76,7 +76,21 @@ function hasIndexedDB(): boolean {
 
 // === Primary: WebCrypto + IndexedDB ===
 
-async function storeWithWebCrypto(hex: string): Promise<void> {
+/** A second protected slot beside the key: a rotation's write-ahead (#709). Never a new name for the key's own slot. */
+const IDB_PENDING_KEY = "pending_rotation";
+const LS_PENDING_CIPHER_KEY = "motebit:encrypted_pending_rotation";
+const LS_PENDING_IV_KEY = "motebit:pending_rotation_iv";
+
+function idbDelete(db: IDBDatabase, key: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    const req = tx.objectStore(IDB_STORE).delete(key);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error ?? new Error("IndexedDB delete failed"));
+  });
+}
+
+async function storeWithWebCrypto(hex: string, idbKey: string = IDB_KEY): Promise<void> {
   const wrappingKey = await crypto.subtle.generateKey(
     { name: "AES-GCM", length: 256 },
     false, // non-extractable
@@ -88,13 +102,13 @@ async function storeWithWebCrypto(hex: string): Promise<void> {
   const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, wrappingKey, encoded);
 
   const db = await openKeystoreDB();
-  await idbPut(db, IDB_KEY, { wrappingKey, iv, ciphertext });
+  await idbPut(db, idbKey, { wrappingKey, iv, ciphertext });
   db.close();
 }
 
-async function loadWithWebCrypto(): Promise<string | null> {
+async function loadWithWebCrypto(idbKey: string = IDB_KEY): Promise<string | null> {
   const db = await openKeystoreDB();
-  const record = (await idbGet(db, IDB_KEY)) as
+  const record = (await idbGet(db, idbKey)) as
     | {
         wrappingKey: CryptoKey;
         iv: Uint8Array;
@@ -151,7 +165,11 @@ async function deriveKeyFromOrigin(): Promise<{ key: CryptoKey; salt: Uint8Array
   return { key, salt: useSalt };
 }
 
-async function storeWithFallback(hex: string): Promise<void> {
+async function storeWithFallback(
+  hex: string,
+  cipherKey: string = LS_CIPHER_KEY,
+  ivKey: string = LS_IV_KEY,
+): Promise<void> {
   // eslint-disable-next-line no-console
   console.warn(
     "[motebit] Using localStorage fallback for private key storage. " +
@@ -163,13 +181,16 @@ async function storeWithFallback(hex: string): Promise<void> {
   const encoded = new TextEncoder().encode(hex);
   const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoded);
 
-  localStorage.setItem(LS_CIPHER_KEY, btoa(String.fromCharCode(...new Uint8Array(ciphertext))));
-  localStorage.setItem(LS_IV_KEY, btoa(String.fromCharCode(...iv)));
+  localStorage.setItem(cipherKey, btoa(String.fromCharCode(...new Uint8Array(ciphertext))));
+  localStorage.setItem(ivKey, btoa(String.fromCharCode(...iv)));
 }
 
-async function loadWithFallback(): Promise<string | null> {
-  const cipherB64 = localStorage.getItem(LS_CIPHER_KEY);
-  const ivB64 = localStorage.getItem(LS_IV_KEY);
+async function loadWithFallback(
+  cipherKey: string = LS_CIPHER_KEY,
+  ivKey: string = LS_IV_KEY,
+): Promise<string | null> {
+  const cipherB64 = localStorage.getItem(cipherKey);
+  const ivB64 = localStorage.getItem(ivKey);
   if (cipherB64 == null || cipherB64 === "" || ivB64 == null || ivB64 === "") return null;
 
   const { key } = await deriveKeyFromOrigin();
@@ -194,6 +215,35 @@ export class EncryptedKeyStore implements BootstrapKeyStore {
       await storeWithWebCrypto(hex);
     } else {
       await storeWithFallback(hex);
+    }
+  }
+
+  /** The rotation write-ahead, protected exactly as the key is (same wrapping, its own slot). */
+  async storePendingRotation(json: string): Promise<void> {
+    if (this.useIndexedDB) await storeWithWebCrypto(json, IDB_PENDING_KEY);
+    else await storeWithFallback(json, LS_PENDING_CIPHER_KEY, LS_PENDING_IV_KEY);
+  }
+
+  async loadPendingRotation(): Promise<string | null> {
+    try {
+      if (this.useIndexedDB) return await loadWithWebCrypto(IDB_PENDING_KEY);
+      return await loadWithFallback(LS_PENDING_CIPHER_KEY, LS_PENDING_IV_KEY);
+    } catch {
+      return null;
+    }
+  }
+
+  async clearPendingRotation(): Promise<void> {
+    if (this.useIndexedDB) {
+      const db = await openKeystoreDB();
+      try {
+        await idbDelete(db, IDB_PENDING_KEY);
+      } finally {
+        db.close();
+      }
+    } else {
+      localStorage.removeItem(LS_PENDING_CIPHER_KEY);
+      localStorage.removeItem(LS_PENDING_IV_KEY);
     }
   }
 

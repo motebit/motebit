@@ -72,7 +72,6 @@ import { ScreencastFrameBus } from "./screencast-bus.js";
 import { setLiveBrowserSuppressionPredicate } from "./ui/slab-items.js";
 import {
   bootstrapIdentity,
-  rotateIdentityKeys,
   registerDeviceWithRelay,
   announceMotebit,
   writeRestoredIdentity,
@@ -139,6 +138,7 @@ import {
 } from "./storage.js";
 import { LocalStorageKeyringAdapter } from "./browser-keyring";
 import { EncryptedKeyStore } from "./encrypted-keystore";
+import { rotateWebKey } from "./key-rotation";
 import { createWebGoalsScheduler } from "./goal-scheduler";
 import { createWebGoalsAdapter } from "./goals-adapter";
 import type { GoalsEngine } from "./goal-engine";
@@ -2308,72 +2308,20 @@ export class UnbootedWebApp {
    * and submit to relay if syncing.
    */
   async rotateKey(reason?: string): Promise<{ newPublicKey: string }> {
-    // 1. Load existing private key from encrypted keystore
-    const oldPrivKeyHex = await this.keyStore.loadPrivateKey();
-    if (oldPrivKeyHex == null || oldPrivKeyHex === "") {
-      throw new Error("No private key available — bootstrap first");
-    }
-
-    const oldPrivKeyBytes = new Uint8Array(oldPrivKeyHex.length / 2);
-    for (let i = 0; i < oldPrivKeyHex.length; i += 2) {
-      oldPrivKeyBytes[i / 2] = parseInt(oldPrivKeyHex.slice(i, i + 2), 16);
-    }
-
-    try {
-      // 2. Derive old public key bytes from hex
-      const oldPubHex = this._publicKeyHex;
-      if (!oldPubHex) throw new Error("No public key available — bootstrap first");
-      const oldPubKeyBytes = new Uint8Array(oldPubHex.length / 2);
-      for (let i = 0; i < oldPubHex.length; i += 2) {
-        oldPubKeyBytes[i / 2] = parseInt(oldPubHex.slice(i, i + 2), 16);
-      }
-
-      // 3. Rotate: generates new keypair + signed succession record
-      const rotateResult = await rotateIdentityKeys({
-        oldPrivateKey: oldPrivKeyBytes,
-        oldPublicKey: oldPubKeyBytes,
-        reason,
-      });
-
-      const newPubKeyHex = rotateResult.newPublicKeyHex;
-      const newPrivKeyHex = bytesToHex(rotateResult.newPrivateKey);
-      secureErase(rotateResult.newPrivateKey);
-
-      // 4. Store new private key in encrypted IndexedDB
-      await this.keyStore.storePrivateKey(newPrivKeyHex);
-
-      // 5. Update public key in localStorage and in-memory
-      localStorage.setItem("motebit:device_public_key", newPubKeyHex);
-      this._publicKeyHex = newPubKeyHex;
-
-      // 6. Submit to relay if syncing (best-effort)
-      try {
-        const token = await this.createSyncToken("device:auth");
-        if (token != null) {
-          const syncUrl = loadSyncUrl();
-          if (syncUrl != null && syncUrl !== "") {
-            await fetch(`${syncUrl}/api/v1/agents/${this._motebitId}/key-rotation`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${token}`,
-              },
-              body: JSON.stringify({
-                device_id: this._deviceId,
-                new_public_key: newPubKeyHex,
-                succession_record: rotateResult.successionRecord,
-              }),
-            });
-          }
-        }
-      } catch {
-        // Non-fatal — relay notification is best-effort
-      }
-
-      return { newPublicKey: newPubKeyHex };
-    } finally {
-      secureErase(oldPrivKeyBytes);
-    }
+    // The state machine lives in @motebit/surface-kit (#709): it reads the
+    // relay first, writes the new key ahead, submits signed by the RETIRING
+    // key, and moves local state only after the relay confirms. A stop or a
+    // lost answer rejects with the honest next action — never "rotated".
+    return rotateWebKey({
+      keyStore: this.keyStore,
+      motebitId: this._motebitId,
+      deviceId: this._deviceId,
+      syncUrl: loadSyncUrl() ?? null,
+      onCommitted: (publicKeyHex) => {
+        this._publicKeyHex = publicKeyHex;
+      },
+      ...(reason !== undefined ? { reason } : {}),
+    });
   }
 
   // === MCP Management ===

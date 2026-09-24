@@ -52,12 +52,7 @@ import {
   type AppearanceConfig,
   type DeletionCertificate,
 } from "@motebit/sdk";
-import {
-  mintAudienceToken,
-  secureErase,
-  bytesToHex,
-  signAgentCommandEnvelope,
-} from "@motebit/encryption";
+import { mintAudienceToken, secureErase, signAgentCommandEnvelope } from "@motebit/encryption";
 
 /** The runtime's answer to a remote command (mirrors `@motebit/runtime`). */
 export interface CommandResult {
@@ -67,7 +62,6 @@ export interface CommandResult {
 }
 import {
   bootstrapIdentity as sharedBootstrapIdentity,
-  rotateIdentityKeys,
   writeRestoredIdentity,
   type BootstrapConfigStore,
   type BootstrapKeyStore,
@@ -101,7 +95,6 @@ import {
   importIdentityFile as importIdentityFileFromContent,
   parse as parseIdentityFile,
   governanceToPolicyConfig,
-  rotate as rotateIdentityFile,
   validateRestoreRequest,
   verify as verifyIdentityFile,
   type ImportIdentityResult,
@@ -114,6 +107,7 @@ import { SkillRegistry } from "@motebit/skills";
 import { WebViewGLAdapter } from "./adapters/webview-gl";
 import { ASYNC_STORAGE_KEYS, KEYRING_KEYS } from "./storage-keys";
 import { SecureStoreAdapter } from "./adapters/secure-store";
+import { rotateMobileKey } from "./key-rotation";
 import {
   MobileGoalScheduler,
   type GoalCompleteEvent,
@@ -1832,83 +1826,26 @@ export class MobileApp {
    * key in expo-secure-store, and submit to relay if configured.
    */
   async rotateKey(reason?: string): Promise<{ newPublicKey: string }> {
-    // 1. Load existing private key
-    const oldPrivKeyBytes = await this.getPrivKeyBytes();
-
-    try {
-      // 2. Derive old public key from the stored hex
-      const oldPubKeyHex = this.publicKey;
-      if (!oldPubKeyHex) throw new Error("No public key available — bootstrap first");
-      const oldPubKeyBytes = new Uint8Array(oldPubKeyHex.length / 2);
-      for (let i = 0; i < oldPubKeyHex.length; i += 2) {
-        oldPubKeyBytes[i / 2] = parseInt(oldPubKeyHex.slice(i, i + 2), 16);
-      }
-
-      // 3. Rotate identity file if it exists (generates keypair + succession internally)
-      const existingIdentityFile = await AsyncStorage.getItem(IDENTITY_FILE_KEY);
-      let newPubKeyHex: string;
-      let newPrivKeyHex: string;
-      let successionRecord: unknown;
-
-      if (existingIdentityFile != null && existingIdentityFile !== "") {
-        const rotateResult = await rotateIdentityKeys({
-          oldPrivateKey: oldPrivKeyBytes,
-          oldPublicKey: oldPubKeyBytes,
-          reason,
-        });
-        const rotatedContent = await rotateIdentityFile({
-          existingContent: existingIdentityFile,
-          newPublicKey: rotateResult.newPublicKey,
-          newPrivateKey: rotateResult.newPrivateKey,
-          successionRecord: rotateResult.successionRecord,
-        });
-        await AsyncStorage.setItem(IDENTITY_FILE_KEY, rotatedContent);
-        newPubKeyHex = rotateResult.newPublicKeyHex;
-        newPrivKeyHex = bytesToHex(rotateResult.newPrivateKey);
-        successionRecord = rotateResult.successionRecord;
-        secureErase(rotateResult.newPrivateKey);
-      } else {
-        // No identity file — generate raw keypair for device key rotation only
-        const { generateKeypair } = await import("@motebit/encryption");
-        const newKeypair = await generateKeypair();
-        newPubKeyHex = bytesToHex(newKeypair.publicKey);
-        newPrivKeyHex = bytesToHex(newKeypair.privateKey);
-        secureErase(newKeypair.privateKey);
-      }
-
-      // 4. Store new private key in secure store
-      await this.keyring.set("device_private_key", newPrivKeyHex);
-
-      // 5. Update public key in secure store and in-memory
-      await this.keyring.set("device_public_key", newPubKeyHex);
-      this.publicKey = newPubKeyHex;
-
-      // 6. Submit to relay if configured (best-effort)
-      try {
-        const syncUrl = await this.getSyncUrl();
-        if (syncUrl != null && syncUrl !== "") {
-          const token = await this.createSyncToken("device:auth");
-          await fetch(`${syncUrl}/api/v1/agents/${this.motebitId}/key-rotation`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({
-              device_id: this.deviceId,
-              new_public_key: newPubKeyHex,
-              ...(successionRecord != null ? { succession_record: successionRecord } : {}),
-            }),
-          });
-        }
-      } catch {
-        // Non-fatal — relay notification is best-effort
-      }
-
-      return { newPublicKey: newPubKeyHex };
-    } finally {
-      secureErase(oldPrivKeyBytes);
-    }
+    // The state machine lives in @motebit/surface-kit (#709): read the relay
+    // first, write the new key ahead, submit signed by the RETIRING key,
+    // commit only after the relay confirms. A stop rejects with the honest
+    // next action. A succession record is ALWAYS minted now — the old
+    // "no identity file ⇒ raw keypair, no succession" branch produced a
+    // rotation no relay could ever accept.
+    return rotateMobileKey({
+      keyring: this.keyring,
+      motebitId: this.motebitId,
+      deviceId: this.deviceId,
+      syncUrl: await this.getSyncUrl(),
+      identityFile: {
+        load: () => AsyncStorage.getItem(IDENTITY_FILE_KEY),
+        save: (content) => AsyncStorage.setItem(IDENTITY_FILE_KEY, content),
+      },
+      onCommitted: (publicKeyHex) => {
+        this.publicKey = publicKeyHex;
+      },
+      ...(reason !== undefined ? { reason } : {}),
+    });
   }
 
   // === Governance ===
