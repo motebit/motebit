@@ -66,7 +66,7 @@ export const DECLARATION_CONTENT = {
   },
   retention: {
     presence: {
-      tables: ["agent_registry", "relay_identity", "pairing_sessions"],
+      tables: ["agent_registry", "relay_identity", "pairing_sessions", "devices"],
       observable: [
         "motebit_id (UUID v7)",
         "Ed25519 public key",
@@ -76,8 +76,10 @@ export const DECLARATION_CONTENT = {
         "last heartbeat timestamp",
         "expires_at TTL",
         "optional device label (claiming_device_name) when set by user during pairing",
+        "per registered device (devices): device_id, the motebit_id it belongs to, the device's Ed25519 public key, registered_at, optional device_name, an opaque per-device bearer token, and an optional self-issued hardware-attestation credential (JSON)",
       ],
-      retention_window: "indefinite while motebit is active; expires per TTL after last heartbeat",
+      retention_window:
+        "indefinite while motebit is active; expires per TTL after last heartbeat. Device rows are NOT reaped for silence — retained indefinitely (relay rule 11; declared 2026-09-24, #696)",
     },
     operational: {
       tables: [
@@ -577,7 +579,7 @@ export function renderMarkdown(): string {
   for (const item of c.retention.content.observable) lines.push(`- ${item}`);
   lines.push("");
   lines.push(`Retention window: ${c.retention.content.retention_window}.`);
-  lines.push("");
+  lines.push(`Enforcement: ${c.retention.content.enforcement}.`);
   lines.push("");
   lines.push("### Auth events");
   lines.push("");
@@ -587,7 +589,6 @@ export function renderMarkdown(): string {
   for (const item of c.retention.auth_events.observable) lines.push(`- ${item}`);
   lines.push("");
   lines.push(`Retention window: ${c.retention.auth_events.retention_window}.`);
-  lines.push(`Enforcement: ${c.retention.content.enforcement}.`);
   lines.push("");
 
   lines.push("### IP addresses");

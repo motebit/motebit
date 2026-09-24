@@ -52,7 +52,11 @@ function runClean(): string {
 
 const VERIFIER = "packages/verifier/package.json";
 
-describe("check-deps layer enforcement", () => {
+// Each case spawns the real gate through `npx tsx` — seconds under load,
+// not milliseconds. vitest's 5s default timed one out once when the pre-push
+// gauntlet ran everything at once (#696 item 5); a contention budget, not a
+// masked hang (the cli package's vitest.config.ts says why 30s).
+describe("check-deps layer enforcement", { timeout: 30_000 }, () => {
   afterEach(() => {
     const stale = resolve(ROOT, `${VERIFIER}.deps-test-backup`);
     if (existsSync(stale)) rmSync(stale, { force: true });

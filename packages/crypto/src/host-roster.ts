@@ -131,18 +131,23 @@ async function signBody<T extends object>(body: T, privateKey: Uint8Array): Prom
   return toBase64Url(await signBySuite(HOST_ROSTER_SUITE, message, privateKey));
 }
 
+/**
+ * Only ever called on an artifact that passed `isHostEnrollment` /
+ * `isHostRetirement`, whose guards hold `public_key` to 64 lowercase hex
+ * characters — so the key decodes and is 32 bytes by construction. The
+ * try/catch covers the one thing the guards do not decide: whether the
+ * signature bytes verify (or decode at all).
+ */
 async function verifyBody(artifact: { public_key: string; signature: string }): Promise<boolean> {
-  let key: Uint8Array;
-  try {
-    key = hexToBytes(artifact.public_key);
-  } catch {
-    return false;
-  }
-  if (key.length !== 32) return false;
   const { signature, ...body } = artifact;
   try {
     const message = new TextEncoder().encode(canonicalJson(body));
-    return await verifyBySuite(HOST_ROSTER_SUITE, message, fromBase64Url(signature), key);
+    return await verifyBySuite(
+      HOST_ROSTER_SUITE,
+      message,
+      fromBase64Url(signature),
+      hexToBytes(artifact.public_key),
+    );
   } catch {
     return false;
   }

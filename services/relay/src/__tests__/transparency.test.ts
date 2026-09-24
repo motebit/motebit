@@ -351,3 +351,21 @@ describe("transparency HTTP endpoints (auth boundary)", () => {
     }
   });
 });
+
+describe("#696 follow-ups — the declaration names every durable table, and the renderer files each line under its own record", () => {
+  it("declares the devices table under presence (relay rule 11)", () => {
+    expect(DECLARATION_CONTENT.retention.presence.tables).toContain("devices");
+    expect(DECLARATION_CONTENT.retention.presence.observable.join("\n")).toMatch(/devices\)/);
+    expect(DECLARATION_CONTENT.retention.presence.retention_window).toMatch(
+      /Device rows are NOT reaped/,
+    );
+  });
+
+  it("renders content's enforcement line under Content, not under Auth events", () => {
+    const md = renderMarkdown();
+    const content = md.slice(md.indexOf("### Content"), md.indexOf("### Auth events"));
+    const auth = md.slice(md.indexOf("### Auth events"), md.indexOf("### IP addresses"));
+    expect(content).toMatch(/^Enforcement: three layers/m);
+    expect(auth).not.toMatch(/^Enforcement:/m);
+  });
+});

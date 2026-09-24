@@ -15,7 +15,7 @@ Doctrine: [`docs/doctrine/operator-transparency.md`](../../docs/doctrine/operato
 
 ### Presence
 
-Tables: `agent_registry`, `relay_identity`, `pairing_sessions`.
+Tables: `agent_registry`, `relay_identity`, `pairing_sessions`, `devices`.
 
 Observable:
 - motebit_id (UUID v7)
@@ -26,8 +26,9 @@ Observable:
 - last heartbeat timestamp
 - expires_at TTL
 - optional device label (claiming_device_name) when set by user during pairing
+- per registered device (devices): device_id, the motebit_id it belongs to, the device's Ed25519 public key, registered_at, optional device_name, an opaque per-device bearer token, and an optional self-issued hardware-attestation credential (JSON)
 
-Retention window: indefinite while motebit is active; expires per TTL after last heartbeat.
+Retention window: indefinite while motebit is active; expires per TTL after last heartbeat. Device rows are NOT reaped for silence — retained indefinitely (relay rule 11; declared 2026-09-24, #696).
 
 ### Operational
 
@@ -59,7 +60,7 @@ Observable:
 - memory node projections for cross-device restore, subject to the same sensitivity ceiling
 
 Retention window: while the motebit's sync data is active; memory content above the none/personal sensitivity ceiling is never stored (ingress-redacted before write); a synced DeleteRequested for a memory node erases that node's stored memory_formed content from the relay's event store (deletion propagation — services/relay/src/deletion-propagation.ts); clients MAY end-to-end encrypt event payloads, in which case the relay stores ciphertext only and erasure is the client-side key lifecycle.
-
+Enforcement: three layers — agent-boundary gating in packages/privacy-layer, relay ingress redaction in services/relay/src/redaction.ts (applied on both the HTTP and WebSocket sync push paths before eventStore.append), and optional client-side E2E encryption in packages/sync-engine.
 
 ### Auth events
 
@@ -71,7 +72,6 @@ Observable:
 - never the token bytes; never the client IP (see ip_addresses below)
 
 Retention window: 30-day rolling window, swept every minute by the task-cleanup loop; an operator's audit aid ("who presented the master token, what did we refuse") readable at GET /api/v1/admin/auth-events, not a surveillance log.
-Enforcement: three layers — agent-boundary gating in packages/privacy-layer, relay ingress redaction in services/relay/src/redaction.ts (applied on both the HTTP and WebSocket sync push paths before eventStore.append), and optional client-side E2E encryption in packages/sync-engine.
 
 ### IP addresses
 
