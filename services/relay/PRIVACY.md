@@ -15,7 +15,7 @@ Doctrine: [`docs/doctrine/operator-transparency.md`](../../docs/doctrine/operato
 
 ### Presence
 
-Tables: `agent_registry`, `relay_identity`, `pairing_sessions`, `devices`.
+Tables: `agent_registry`, `relay_identity`, `pairing_sessions`.
 
 Observable:
 - motebit_id (UUID v7)
@@ -26,9 +26,23 @@ Observable:
 - last heartbeat timestamp
 - expires_at TTL
 - optional device label (claiming_device_name) when set by user during pairing
-- per registered device (devices): device_id, the motebit_id it belongs to, the device's Ed25519 public key, registered_at, optional device_name, an opaque per-device bearer token, and an optional self-issued hardware-attestation credential (JSON)
 
-Retention window: indefinite while motebit is active; expires per TTL after last heartbeat. Device rows are NOT reaped for silence — retained indefinitely (relay rule 11; declared 2026-09-24, #696).
+Retention window: indefinite while motebit is active; expires per TTL after last heartbeat.
+
+### Device registry
+
+Tables: `devices`.
+
+Observable:
+- device_id
+- the motebit_id the device belongs to
+- the device's Ed25519 public key
+- registered_at timestamp
+- optional device_name
+- an opaque per-device bearer token (never the identity's private key)
+- optional self-issued hardware-attestation credential (JSON) for the device
+
+Retention window: indefinite — device rows carry no TTL and are never reaped for silence; there is no automatic removal.
 
 ### Operational
 

@@ -353,12 +353,11 @@ describe("transparency HTTP endpoints (auth boundary)", () => {
 });
 
 describe("#696 follow-ups — the declaration names every durable table, and the renderer files each line under its own record", () => {
-  it("declares the devices table under presence (relay rule 11)", () => {
-    expect(DECLARATION_CONTENT.retention.presence.tables).toContain("devices");
-    expect(DECLARATION_CONTENT.retention.presence.observable.join("\n")).toMatch(/devices\)/);
-    expect(DECLARATION_CONTENT.retention.presence.retention_window).toMatch(
-      /Device rows are NOT reaped/,
-    );
+  it("declares the devices table as its own category — TTL-free, so not a line under TTL-governed presence", () => {
+    expect(DECLARATION_CONTENT.retention.device_registry.tables).toEqual(["devices"]);
+    expect(DECLARATION_CONTENT.retention.presence.tables).not.toContain("devices");
+    expect(DECLARATION_CONTENT.retention.device_registry.retention_window).toMatch(/never reaped/);
+    expect(renderMarkdown()).toMatch(/^### Device registry$/m);
   });
 
   it("renders content's enforcement line under Content, not under Auth events", () => {

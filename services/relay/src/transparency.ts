@@ -66,7 +66,7 @@ export const DECLARATION_CONTENT = {
   },
   retention: {
     presence: {
-      tables: ["agent_registry", "relay_identity", "pairing_sessions", "devices"],
+      tables: ["agent_registry", "relay_identity", "pairing_sessions"],
       observable: [
         "motebit_id (UUID v7)",
         "Ed25519 public key",
@@ -76,10 +76,25 @@ export const DECLARATION_CONTENT = {
         "last heartbeat timestamp",
         "expires_at TTL",
         "optional device label (claiming_device_name) when set by user during pairing",
-        "per registered device (devices): device_id, the motebit_id it belongs to, the device's Ed25519 public key, registered_at, optional device_name, an opaque per-device bearer token, and an optional self-issued hardware-attestation credential (JSON)",
+      ],
+      retention_window: "indefinite while motebit is active; expires per TTL after last heartbeat",
+    },
+    // Its own category, not a line under presence: presence is TTL-governed
+    // and this table is not, and one `retention_window` string per category
+    // cannot say both. Undeclared until 2026-09-24 (#696).
+    device_registry: {
+      tables: ["devices"],
+      observable: [
+        "device_id",
+        "the motebit_id the device belongs to",
+        "the device's Ed25519 public key",
+        "registered_at timestamp",
+        "optional device_name",
+        "an opaque per-device bearer token (never the identity's private key)",
+        "optional self-issued hardware-attestation credential (JSON) for the device",
       ],
       retention_window:
-        "indefinite while motebit is active; expires per TTL after last heartbeat. Device rows are NOT reaped for silence — retained indefinitely (relay rule 11; declared 2026-09-24, #696)",
+        "indefinite — device rows carry no TTL and are never reaped for silence; there is no automatic removal",
     },
     operational: {
       tables: [
@@ -559,6 +574,16 @@ export function renderMarkdown(): string {
   for (const item of c.retention.presence.observable) lines.push(`- ${item}`);
   lines.push("");
   lines.push(`Retention window: ${c.retention.presence.retention_window}.`);
+  lines.push("");
+
+  lines.push("### Device registry");
+  lines.push("");
+  lines.push(`Tables: ${c.retention.device_registry.tables.map((t) => `\`${t}\``).join(", ")}.`);
+  lines.push("");
+  lines.push("Observable:");
+  for (const item of c.retention.device_registry.observable) lines.push(`- ${item}`);
+  lines.push("");
+  lines.push(`Retention window: ${c.retention.device_registry.retention_window}.`);
   lines.push("");
 
   lines.push("### Operational");

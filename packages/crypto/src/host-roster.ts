@@ -132,13 +132,14 @@ async function signBody<T extends object>(body: T, privateKey: Uint8Array): Prom
 }
 
 /**
- * Only ever called on an artifact that passed `isHostEnrollment` /
- * `isHostRetirement`, whose guards hold `public_key` to 64 lowercase hex
- * characters — so the key decodes and is 32 bytes by construction. The
- * try/catch covers the one thing the guards do not decide: whether the
- * signature bytes verify (or decode at all).
+ * Takes a GUARDED artifact — the parameter type is the narrowed union the
+ * `isHostEnrollment` / `isHostRetirement` guards produce, so a caller
+ * cannot reach this with an unchecked object, and the guards hold
+ * `public_key` to 64 lowercase hex characters (32 bytes by construction).
+ * The try/catch covers the one thing the guards do not decide: whether
+ * the signature bytes verify (or decode at all).
  */
-async function verifyBody(artifact: { public_key: string; signature: string }): Promise<boolean> {
+async function verifyBody(artifact: HostEnrollment | HostRetirement): Promise<boolean> {
   const { signature, ...body } = artifact;
   try {
     const message = new TextEncoder().encode(canonicalJson(body));
