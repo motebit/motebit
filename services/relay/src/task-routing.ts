@@ -41,7 +41,7 @@ import { signDiscoverBody } from "./federation.js";
 import { CircuitBreaker } from "@motebit/circuit-breaker";
 import type { CircuitBreakerConfig, CircuitBreakerState } from "@motebit/circuit-breaker";
 import { createLogger } from "./logger.js";
-import { ON_SHELF } from "./registry-delist.js";
+import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
 
 const logger = createLogger({ service: "relay", module: "task-routing" });
 const circuitBreakerLogger = createLogger({ service: "relay", module: "circuit-breaker" });
@@ -264,7 +264,12 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
   ): { profiles: CandidateProfile[]; requirements: TaskRequirements } {
     const now = Date.now();
 
-    // Query service listings, optionally filtered by capability.
+    // Query service listings, optionally filtered by capability. A listing
+    // whose agent row is delisted or revoked is not a candidate (#703): the
+    // listing outlives the shelf by up to seven days, and before delisting a
+    // deleted row made the LEFT JOIN yield nulls, which is what kept a
+    // departed worker out of the ranking. (`r.delisted_at IS NULL` is also
+    // true for a listing with no registry row, as before.)
     // `last_heartbeat` is pulled so the candidate's freshness can drive
     // `is_online` instead of the old `expires_at > now` gate (which
     // created a visibility deadlock with Fly.io auto_stop).
@@ -276,6 +281,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
            FROM relay_service_listings l
            LEFT JOIN agent_registry r ON l.motebit_id = r.motebit_id
            WHERE EXISTS (SELECT 1 FROM json_each(l.capabilities) WHERE value = ?)
+             AND r.${ON_SHELF_PREDICATE} AND (r.revoked IS NULL OR r.revoked = 0)
            LIMIT ?`,
         )
         .all(capabilityFilter, limit) as Array<Record<string, unknown>>;
@@ -285,6 +291,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
           `SELECT l.*, r.public_key, r.last_heartbeat, r.guardian_public_key, r.endpoint_url AS agent_endpoint_url
            FROM relay_service_listings l
            LEFT JOIN agent_registry r ON l.motebit_id = r.motebit_id
+           WHERE r.${ON_SHELF_PREDICATE} AND (r.revoked IS NULL OR r.revoked = 0)
            LIMIT ?`,
         )
         .all(limit) as Array<Record<string, unknown>>;

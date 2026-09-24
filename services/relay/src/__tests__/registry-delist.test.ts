@@ -15,7 +15,12 @@ import { SqlJsDriver, type DatabaseDriver } from "@motebit/persistence";
 
 import type { SyncRelay } from "../index.js";
 import { relayMigrations } from "../migrations.js";
-import { delistExpired, delistRegistration } from "../registry-delist.js";
+import { DELIST_SET, delistExpired, delistRegistration } from "../registry-delist.js";
+import { createTaskRouter } from "../task-routing.js";
+import type { RelayIdentity } from "../federation.js";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { readIdentityBindings } from "../identity-transparency.js";
 import { aggregateHealthSummary } from "../health-summary.js";
 import { createTestRelay, AUTH_HEADER } from "./test-helpers.js";
@@ -103,7 +108,7 @@ describe("registry-delist — off the shelf, never forgotten", () => {
     expect(readIdentityBindings(db).map((b) => b.motebit_id)).toContain("mote-a");
   });
 
-  it("every shelf reader excludes a delisted row: discover list, GET /agents/:id, the A2A card, task routing", async () => {
+  it("every shelf reader excludes a delisted row: discover list, the A2A card, the relay card count — and the key reader still answers", async () => {
     insertServing(db, "mote-shelf", now, "summarize");
     delistRegistration(db, "mote-shelf", now);
 
@@ -112,8 +117,11 @@ describe("registry-delist — off the shelf, never forgotten", () => {
     });
     expect(((await list.json()) as { agents: unknown[] }).agents).toHaveLength(0);
 
+    // GET /agents/:id is a KEY reader (mcp-server's last-resort caller-key
+    // lookup): it keeps answering for a delisted row.
     const one = await relay.app.request("/api/v1/agents/mote-shelf", { headers: AUTH_HEADER });
-    expect(one.status).toBe(404);
+    expect(one.status).toBe(200);
+    expect(((await one.json()) as { public_key: string }).public_key).toBe(KEY_A);
 
     const card = await relay.app.request("/a2a/agents/mote-shelf/agent.json");
     expect(card.status).toBe(404);
@@ -203,13 +211,125 @@ describe("registry-delist — off the shelf, never forgotten", () => {
     expect(await onShelf(relay, "mote-revoked")).toBe(false);
   });
 
-  it("health-summary: total_registered is the shelf, total_known is every row", () => {
+  it("health-summary: total_registered and the active windows are the shelf, total_known is every row", () => {
     insertServing(db, "mote-h1", now);
     insertServing(db, "mote-h2", now);
     delistRegistration(db, "mote-h2", now);
     const out = aggregateHealthSummary(db, now);
     expect(out.motebits.total_registered).toBe(1);
     expect(out.motebits.total_known).toBe(2);
+    expect(out.motebits.active_24h).toBe(1);
+  });
+
+  it("a heartbeat from a delisted identity is 'not registered', as it was when the row was deleted", async () => {
+    insertServing(db, "mote-hb", now);
+    delistRegistration(db, "mote-hb", now);
+    const res = await relay.app.request("/api/v1/agents/heartbeat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ motebit_id: "mote-hb" }),
+    });
+    expect(res.status).toBe(404);
+    expect(row(db, "mote-hb")!.delisted_at).toBe(now);
+  });
+
+  it("the scored routing path over listings drops a delisted or revoked agent's listing", async () => {
+    const idRow = db.prepare("SELECT * FROM relay_identity").get() as {
+      relay_motebit_id: string;
+      public_key: string;
+      private_key_hex: string;
+      did: string;
+    };
+    const relayIdentity: RelayIdentity = {
+      relayMotebitId: idRow.relay_motebit_id,
+      publicKey: Uint8Array.from(Buffer.from(idRow.public_key, "hex")),
+      privateKey: Uint8Array.from(Buffer.from(idRow.private_key_hex, "hex")),
+      publicKeyHex: idRow.public_key,
+      did: idRow.did,
+    };
+    const router = createTaskRouter({ db, relayIdentity });
+    const listing = db.prepare(
+      "INSERT INTO relay_service_listings (listing_id, motebit_id, capabilities, pricing, updated_at) VALUES (?, ?, ?, '[]', ?)",
+    );
+    insertServing(db, "mote-l-serving", now, "translate");
+    insertServing(db, "mote-l-delisted", now, "translate");
+    insertServing(db, "mote-l-revoked", now, "translate");
+    listing.run("lst-1", "mote-l-serving", JSON.stringify(["translate"]), now);
+    listing.run("lst-2", "mote-l-delisted", JSON.stringify(["translate"]), now);
+    listing.run("lst-3", "mote-l-revoked", JSON.stringify(["translate"]), now);
+    delistRegistration(db, "mote-l-delisted", now);
+    db.prepare("UPDATE agent_registry SET revoked = 1 WHERE motebit_id = ?").run("mote-l-revoked");
+
+    const ids = (cap?: string) =>
+      router
+        .buildCandidateProfiles(cap, undefined, 20)
+        .profiles.map((p) => p.motebit_id)
+        .sort();
+    expect(ids("translate")).toEqual(["mote-l-serving"]);
+    expect(ids()).toEqual(["mote-l-serving"]);
+  });
+
+  it("the operator's revoke-listing is a hold: off the shelf, fields kept; restore-listing puts it straight back", async () => {
+    insertServing(db, "mote-op", now, "query");
+    const revoke = await relay.app.request("/api/v1/agents/mote-op/revoke-listing", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({ reason: "spam" }),
+    });
+    expect(revoke.status).toBe(200);
+    const op = row(db, "mote-op")!;
+    expect(op.revoked).toBe(1);
+    expect(op.delisted_at).not.toBeNull();
+    expect(op.endpoint_url).toBe("https://agent.example/mcp"); // a hold keeps the fields
+    expect(await onShelf(relay, "mote-op")).toBe(false);
+
+    const restore = await relay.app.request("/api/v1/agents/mote-op/restore-listing", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({}),
+    });
+    expect(restore.status).toBe(200);
+    expect(row(db, "mote-op")!.revoked).toBe(0);
+    expect(row(db, "mote-op")!.delisted_at).toBeNull();
+    expect(await onShelf(relay, "mote-op")).toBe(true);
+  });
+
+  it("re-registration of a REVOKED identity restores no discovery field — the endpoint a task could be forwarded to stays blank", async () => {
+    insertServing(db, "mote-rr", now);
+    await relay.app.request("/api/v1/agents/mote-rr/revoke", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+    });
+    await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        motebit_id: "mote-rr",
+        public_key: KEY_A,
+        endpoint_url: "https://attacker.example/mcp",
+        capabilities: ["query"],
+      }),
+    });
+    const r = row(db, "mote-rr")!;
+    expect(r.revoked).toBe(1);
+    expect(r.delisted_at).not.toBeNull();
+    expect(r.endpoint_url).toBe("");
+    expect(JSON.parse(r.capabilities)).toEqual([]);
+  });
+
+  it("the revocation doors spell DELIST_SET exactly — a synchronization invariant, pinned", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    for (const door of ["key-rotation.ts", "migration.ts"]) {
+      const src = readFileSync(resolve(here, "..", door), "utf-8");
+      expect(src, `${door} must write revoked = 1 together with DELIST_SET verbatim`).toContain(
+        `revoked = 1, ${DELIST_SET}`,
+      );
+    }
+    // The operator's hold writes the delisted_at half and keeps the fields.
+    const half = DELIST_SET.split(", endpoint_url")[0];
+    expect(readFileSync(resolve(here, "..", "agents.ts"), "utf-8")).toContain(
+      `revoked = 1, ${half} WHERE`,
+    );
   });
 });
 

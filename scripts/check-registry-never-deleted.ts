@@ -61,12 +61,21 @@ function main(): void {
   const sites: string[] = [];
   for (const file of walk(join(ROOT, SCAN_ROOT))) {
     scanned++;
-    const lines = readFileSync(file, "utf-8").split("\n");
-    lines.forEach((line, i) => {
-      // A comment that names the forbidden statement is prose, not a write.
-      if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;
-      if (FORBIDDEN.test(line)) sites.push(`${relative(ROOT, file)}:${i + 1}: ${line.trim()}`);
-    });
+    // Whole-file match with comments stripped (blanked, so offsets hold), so
+    // a statement split across lines in the repo's multi-line template style
+    // — `DELETE FROM\n  agent_registry` — is still a match, and a comment
+    // that names the statement is prose, not a write.
+    const src = readFileSync(file, "utf-8");
+    const code = src
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+      .replace(
+        /(^|[^:"'`])\/\/[^\n]*/g,
+        (m, lead: string) => lead + " ".repeat(m.length - lead.length),
+      );
+    for (const m of code.matchAll(new RegExp(FORBIDDEN.source, "gi"))) {
+      const line = code.slice(0, m.index).split("\n").length;
+      sites.push(`${relative(ROOT, file)}:${line}: ${src.split("\n")[line - 1]?.trim() ?? ""}`);
+    }
   }
 
   if (sites.length > 0) {
@@ -81,7 +90,7 @@ function main(): void {
   }
 
   console.log(
-    `✓ check-registry-never-deleted: ${scanned} file(s) scanned under ${SCAN_ROOT} (excluding __tests__/dist) — no DELETE FROM agent_registry. Blind to a statement assembled at runtime.`,
+    `✓ check-registry-never-deleted: ${scanned} file(s) scanned under ${SCAN_ROOT} (excluding __tests__/dist), whole-file match across line breaks with comments stripped — no DELETE FROM agent_registry. Blind to a statement assembled at runtime from parts.`,
   );
 }
 

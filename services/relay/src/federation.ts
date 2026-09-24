@@ -41,7 +41,7 @@ import { persistWitnessOmissionDispute, resolveHorizonCertBySignature } from "./
 // dispatcher). The `suite` literal below is the stable contract between
 // services and the registry in @motebit/protocol.
 const FEDERATION_SUITE = "motebit-concat-ed25519-hex-v1" as const;
-import { ON_SHELF } from "./registry-delist.js";
+import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
 
 /**
  * Wire-reported relay-federation spec version. Single source of truth for the
@@ -864,7 +864,7 @@ export async function sendHeartbeats(
   const encoder = new TextEncoder();
   const timestamp = Date.now();
   const agentCount = (
-    db.prepare(`SELECT COUNT(*) as cnt FROM agent_registry WHERE 1=1${ON_SHELF}`).get() as {
+    db.prepare(`SELECT COUNT(*) as cnt FROM agent_registry WHERE ${ON_SHELF_PREDICATE}`).get() as {
       cnt: number;
     }
   ).cnt;
@@ -1670,7 +1670,9 @@ export function registerFederationRoutes(deps: FederationDeps): void {
 
     const ourTimestamp = Date.now();
     const localAgentCount = (
-      db.prepare(`SELECT COUNT(*) as cnt FROM agent_registry WHERE 1=1${ON_SHELF}`).get() as {
+      db
+        .prepare(`SELECT COUNT(*) as cnt FROM agent_registry WHERE ${ON_SHELF_PREDICATE}`)
+        .get() as {
         cnt: number;
       }
     ).cnt;

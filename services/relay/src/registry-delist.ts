@@ -17,10 +17,14 @@
  * carries (`ON_SHELF`), so revocation and departure and silence all leave
  * the shelf the same way and a future reader cannot forget one of them.
  *
- * Four doors call this: deregister (voluntary departure), the janitor
- * (lease lapsed), `/revoke` and migration departure (both also set
- * `revoked = 1`, which delisting never undoes — re-registration clears
- * `delisted_at` only for a row that is not revoked).
+ * Five doors delist: deregister (voluntary departure), the janitor (lease
+ * lapsed), the two TERMINAL revocation doors — the identity's own `/revoke`
+ * and migration departure — which also set `revoked = 1` and clear the
+ * fields, and the operator's revoke-listing, a reversible moderation hold
+ * that sets `revoked = 1` and `delisted_at` but KEEPS the fields so
+ * restore-listing can put the agent straight back on the shelf. Delisting
+ * never undoes a revocation: re-registration re-shelves only a row that is
+ * not revoked.
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
@@ -32,10 +36,17 @@ import type { DatabaseDriver } from "@motebit/persistence";
  * row (`identity-transparency.ts`, signature verification, guardian
  * recovery).
  */
-export const ON_SHELF = " AND delisted_at IS NULL";
+export const ON_SHELF_PREDICATE = "delisted_at IS NULL";
+/** The same predicate, ready to append to an existing WHERE. */
+export const ON_SHELF = ` AND ${ON_SHELF_PREDICATE}`;
 
-/** The SET clause shared by every delisting writer. Binds one `now`. */
-const DELIST_SET = "delisted_at = COALESCE(delisted_at, ?), endpoint_url = '', capabilities = '[]'";
+/**
+ * The SET clause shared by every delisting writer. Binds one `now`.
+ * Exported so the test that pins the three revocation doors' spellings to
+ * this one can read it; production code calls the two functions below.
+ */
+export const DELIST_SET =
+  "delisted_at = COALESCE(delisted_at, ?), endpoint_url = '', capabilities = '[]'";
 
 /** Voluntary departure from discovery. Keys, guardian and settlement stay. */
 export function delistRegistration(db: DatabaseDriver, motebitId: string, now: number): void {
@@ -53,9 +64,12 @@ export function delistExpired(db: DatabaseDriver, now: number): number {
   return result.changes ?? 0;
 }
 
-// The two REVOCATION doors (`/revoke` in key-rotation.ts, migration
+// The two TERMINAL revocation doors (`/revoke` in key-rotation.ts, migration
 // departure in migration.ts) write `revoked = 1` together with this same
-// clause, but spell it out in their own statement text on purpose:
-// `check-identity-authority-writers` reads statement text, and an
-// authority write assembled from an imported constant is one the gate
-// cannot see. Keep the three spellings identical when this clause changes.
+// clause, and the operator's revoke-listing (agents.ts) writes `revoked = 1`
+// with the `delisted_at` half of it; all three spell it out in their own
+// statement text on purpose: `check-identity-authority-writers` reads
+// statement text, and an authority write assembled from an imported
+// constant is one the gate cannot see. The spellings are pinned to
+// `DELIST_SET` by a test (registry-delist.test.ts), so changing the clause
+// here without changing them there is red, not drift.

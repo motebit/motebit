@@ -1345,8 +1345,8 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(motebit_id) DO UPDATE SET
         public_key = excluded.public_key,
-        endpoint_url = excluded.endpoint_url,
-        capabilities = excluded.capabilities,
+        endpoint_url = CASE WHEN agent_registry.revoked = 1 THEN agent_registry.endpoint_url ELSE excluded.endpoint_url END,
+        capabilities = CASE WHEN agent_registry.revoked = 1 THEN agent_registry.capabilities ELSE excluded.capabilities END,
         metadata = excluded.metadata,
         last_heartbeat = excluded.last_heartbeat,
         expires_at = excluded.expires_at,
@@ -1429,11 +1429,14 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     const result = moteDb.db
       .prepare(
         `
-      UPDATE agent_registry SET last_heartbeat = ?, expires_at = ? WHERE motebit_id = ?
+      UPDATE agent_registry SET last_heartbeat = ?, expires_at = ? WHERE motebit_id = ?${ON_SHELF}
     `,
       )
       .run(now, expiresAt, motebitId);
 
+    // A delisted row answers as the deleted row used to: not registered.
+    // A heartbeat must not keep a lease fresh, or count as active, for an
+    // identity that is not on the shelf — it re-registers to come back.
     if (result.changes === 0) {
       throw new HTTPException(404, { message: "Agent not registered" });
     }
@@ -1774,8 +1777,19 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // Flip the discoverability flag (what Discover filters) and append the
     // signed record in the same path. Append-only: never an update/delete.
     moteDb.db
-      .prepare("UPDATE agent_registry SET revoked = ? WHERE motebit_id = ?")
-      .run(revoked ? 1 : 0, motebitId);
+      // The operator's door is a reversible MODERATION HOLD, so it delists
+      // (identity-key-state-v1 §10 Q1: off the shelf in the same write) but
+      // KEEPS the discovery fields, and restore-listing puts the agent
+      // straight back on the shelf. The two terminal doors — the identity's
+      // own /revoke and migration departure — clear the fields as well.
+      // Spelled out, not imported: check-identity-authority-writers reads
+      // statement text.
+      .prepare(
+        revoked
+          ? "UPDATE agent_registry SET revoked = 1, delisted_at = COALESCE(delisted_at, ?) WHERE motebit_id = ?"
+          : "UPDATE agent_registry SET revoked = 0, delisted_at = NULL WHERE motebit_id = ? AND ? IS NOT NULL",
+      )
+      .run(...(revoked ? [Date.now(), motebitId] : [motebitId, Date.now()]));
 
     const record = await buildSignedRevocationRecord(relayIdentity, {
       motebitId,
@@ -1930,14 +1944,15 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
   app.get("/api/v1/agents/:motebitId", (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
 
-    // No `expires_at > now` filter: public-key lookups for receipt
-    // verification must survive a sleeping agent. The janitor TTL (90d
-    // no-heartbeat) removes truly abandoned rows; `revoked = 0` is the
-    // correct "don't show this agent" filter.
+    // A KEY reader, not a shelf reader: public-key lookups for receipt
+    // verification (mcp-server's last-resort caller lookup) must survive a
+    // sleeping, departed, or delisted agent, so this route carries no
+    // `expires_at`, `revoked` or `delisted_at` filter. Whether the agent is
+    // for hire is discover's question (#703).
     const row = moteDb.db
       .prepare(
         `
-      SELECT * FROM agent_registry WHERE motebit_id = ?${ON_SHELF}
+      SELECT * FROM agent_registry WHERE motebit_id = ?
     `,
       )
       .get(motebitId) as Record<string, unknown> | undefined;

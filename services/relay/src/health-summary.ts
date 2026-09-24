@@ -41,7 +41,7 @@
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
-import { ON_SHELF } from "./registry-delist.js";
+import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
 
 export interface HealthMotebits {
   /**
@@ -53,6 +53,9 @@ export interface HealthMotebits {
    * meaning is unchanged. `total_known` is every row.
    */
   total_registered: number;
+  // active_* below count heartbeats among SERVING rows only: a delisted
+  // identity's heartbeat is refused (404) and its old heartbeats must not
+  // read as activity the operator could hire.
   /**
    * Every identity this relay holds a registry row for, serving or
    * delisted — the key-state population, which only revocation shrinks
@@ -150,21 +153,24 @@ export function aggregateHealthSummary(
   const cutoff30d = nowMs - 30 * DAY_MS;
 
   const motebits: HealthMotebits = {
-    total_registered: count(db, `SELECT COUNT(*) AS n FROM agent_registry WHERE 1=1${ON_SHELF}`),
+    total_registered: count(
+      db,
+      `SELECT COUNT(*) AS n FROM agent_registry WHERE ${ON_SHELF_PREDICATE}`,
+    ),
     total_known: count(db, "SELECT COUNT(*) AS n FROM agent_registry"),
     active_24h: count(
       db,
-      "SELECT COUNT(*) AS n FROM agent_registry WHERE last_heartbeat >= ?",
+      `SELECT COUNT(*) AS n FROM agent_registry WHERE last_heartbeat >= ?${ON_SHELF}`,
       cutoff24h,
     ),
     active_7d: count(
       db,
-      "SELECT COUNT(*) AS n FROM agent_registry WHERE last_heartbeat >= ?",
+      `SELECT COUNT(*) AS n FROM agent_registry WHERE last_heartbeat >= ?${ON_SHELF}`,
       cutoff7d,
     ),
     active_30d: count(
       db,
-      "SELECT COUNT(*) AS n FROM agent_registry WHERE last_heartbeat >= ?",
+      `SELECT COUNT(*) AS n FROM agent_registry WHERE last_heartbeat >= ?${ON_SHELF}`,
       cutoff30d,
     ),
     // Acquisition — the durable intake ledger (append-only, never reaped),
