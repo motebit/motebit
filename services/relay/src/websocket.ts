@@ -25,6 +25,9 @@ import type { TaskQueueEntry } from "./tasks.js";
 import type { createLogger } from "./logger.js";
 import type { AuthEvent } from "./auth-events.js";
 
+/** `WebSocket.OPEN` — the only state in which a socket is registered or counted. */
+export const WS_OPEN = 1;
+
 export interface ConnectedDevice {
   ws: WSContext;
   deviceId: string;
@@ -285,6 +288,18 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
         // Idempotent: a query-param token and an auth frame can both finish
         // verifying for one socket; it is registered once.
         if (registered) return;
+        // Only an OPEN socket is ever registered. Token verification is
+        // awaited (the query-token path in onOpen, the auth-frame path in
+        // onMessage), and a client can close during that await: onClose
+        // then runs first, finds no peer, and does nothing — so a socket
+        // registered after it would be a CLOSED peer nobody ever removes.
+        // It would be served as open, re-observed by every liveness flush,
+        // and shield its row from the sweep until restart. (Main had the
+        // same zombie in `connections`; the roster made it visible.)
+        if (ws.readyState !== WS_OPEN) {
+          logger.info("ws.closed_before_finalize", { motebitId, deviceId });
+          return;
+        }
         registered = true;
         // Parse device capabilities from URL query param
         const capsParam = url.searchParams.get("capabilities");

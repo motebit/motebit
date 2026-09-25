@@ -22,13 +22,16 @@
  */
 import type { Context, Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
+import { bodyLimit } from "hono/body-limit";
 import type { DatabaseDriver } from "@motebit/persistence";
+import { WS_OPEN } from "./websocket.js";
 import type { ConnectedDevice } from "./websocket.js";
 import type { VerifiedKeySource } from "./auth.js";
 import {
   HOST_LIVENESS_RETENTION_DAYS,
   HOST_LIVENESS_RETENTION_MS,
   MAX_ROSTER_ENTRIES_PER_REQUEST,
+  MAX_ROSTER_REQUEST_BYTES,
   boundKeyOf,
   hostsUnattendedWork,
   ingestHostRoster,
@@ -55,12 +58,15 @@ export interface HostLivenessRow {
   /**
    * The last time this relay held a socket bound as this (device, key) pair
    * open — no heartbeat yet, so a half-open socket reads as open (#691), and
-   * the flush keeps refreshing it until the relay notices the close. Null
-   * only for a live host socket not yet persisted.
+   * the flush keeps refreshing it until the relay notices the close. After a
+   * crash without the shutdown flush it is a LOWER bound, up to one flush
+   * interval (five minutes) early. Null only for a live host socket not yet
+   * persisted.
    */
   last_seen_at: number | null;
   /**
-   * Sockets bound as this (device_id, bound_under) the relay BELIEVES open.
+   * Sockets bound as this (device_id, bound_under) the relay BELIEVES open —
+   * ANY bound socket for the pair, whether or not it announces unattended work.
    * "Open", not "connected": no heartbeat deadline yet (#691), so a
    * half-open socket counts. More than one is `motebit doctor`'s hint for a
    * copied device_id — never a verdict.
@@ -102,53 +108,66 @@ export function registerHostRosterRoutes(deps: HostRosterRouteDeps): void {
   const { app, db, connections, relayMotebitId } = deps;
 
   /** @spec motebit/machine-roster@1.0 */
-  app.post("/api/v1/agents/:motebitId/roster", async (c) => {
-    const motebitId = c.req.param("motebitId");
-    const callerKey = requireFirstPersonDevice(c, motebitId);
-    const body = (await c.req.json().catch(() => null)) as {
-      enrollments?: unknown;
-      retirements?: unknown;
-    } | null;
-    // A field that is PRESENT and not a list is a malformed request, not
-    // an absent field — read as absent it answered 200 with nothing taken.
-    const listOrAbsent = (v: unknown, name: string): unknown[] | null => {
-      if (v === undefined) return null;
-      if (!Array.isArray(v)) {
+  app.post(
+    "/api/v1/agents/:motebitId/roster",
+    // Bounded before the body is parsed: 64 entries of at most
+    // MAX_ROSTER_ENTRY_BYTES each, plus slack. Larger is refused whole.
+    bodyLimit({
+      maxSize: MAX_ROSTER_REQUEST_BYTES,
+      onError: () => {
+        throw new HTTPException(413, {
+          message: `A presentation's body may be at most ${MAX_ROSTER_REQUEST_BYTES} bytes. Send it in chunks. Nothing was stored.`,
+        });
+      },
+    }),
+    async (c) => {
+      const motebitId = c.req.param("motebitId");
+      const callerKey = requireFirstPersonDevice(c, motebitId);
+      const body = (await c.req.json().catch(() => null)) as {
+        enrollments?: unknown;
+        retirements?: unknown;
+      } | null;
+      // A field that is PRESENT and not a list is a malformed request, not
+      // an absent field — read as absent it answered 200 with nothing taken.
+      const listOrAbsent = (v: unknown, name: string): unknown[] | null => {
+        if (v === undefined) return null;
+        if (!Array.isArray(v)) {
+          throw new HTTPException(400, {
+            message: `\`${name}\` must be an array. Nothing was stored.`,
+          });
+        }
+        return v as unknown[];
+      };
+      const enrollments = listOrAbsent(body?.enrollments, "enrollments");
+      const retirements = listOrAbsent(body?.retirements, "retirements");
+      if (enrollments == null && retirements == null) {
         throw new HTTPException(400, {
-          message: `\`${name}\` must be an array. Nothing was stored.`,
+          message: "Body must carry `enrollments` and/or `retirements` arrays",
         });
       }
-      return v as unknown[];
-    };
-    const enrollments = listOrAbsent(body?.enrollments, "enrollments");
-    const retirements = listOrAbsent(body?.retirements, "retirements");
-    if (enrollments == null && retirements == null) {
-      throw new HTTPException(400, {
-        message: "Body must carry `enrollments` and/or `retirements` arrays",
-      });
-    }
-    const total = (enrollments?.length ?? 0) + (retirements?.length ?? 0);
-    if (total > MAX_ROSTER_ENTRIES_PER_REQUEST) {
-      throw new HTTPException(413, {
-        message: `A presentation may carry at most ${MAX_ROSTER_ENTRIES_PER_REQUEST} entries; this one carries ${total}. Send it in chunks. Nothing was stored.`,
-      });
-    }
+      const total = (enrollments?.length ?? 0) + (retirements?.length ?? 0);
+      if (total > MAX_ROSTER_ENTRIES_PER_REQUEST) {
+        throw new HTTPException(413, {
+          message: `A presentation may carry at most ${MAX_ROSTER_ENTRIES_PER_REQUEST} entries; this one carries ${total}. Send it in chunks. Nothing was stored.`,
+        });
+      }
 
-    const result = await ingestHostRoster(db, motebitId, callerKey, {
-      enrollments: enrollments ?? [],
-      retirements: retirements ?? [],
-    });
-    if (result.refused.length > 0) {
-      logger.warn("host_roster.refused", {
-        motebitId,
-        refused: result.refused.map((r) => `${r.kind}[${r.index}]:${r.reason}`),
+      const result = await ingestHostRoster(db, motebitId, callerKey, {
+        enrollments: enrollments ?? [],
+        retirements: retirements ?? [],
       });
-    }
-    // A PARTIAL presentation is not a success: a surface re-presenting its
-    // whole cached set checks one thing — was it taken. What WAS taken
-    // stays taken: one refused neighbour is not a veto.
-    return c.json({ motebit_id: motebitId, ...result }, result.refused.length > 0 ? 422 : 200);
-  });
+      if (result.refused.length > 0) {
+        logger.warn("host_roster.refused", {
+          motebitId,
+          refused: result.refused.map((r) => `${r.kind}[${r.index}]:${r.reason}`),
+        });
+      }
+      // A PARTIAL presentation is not a success: a surface re-presenting its
+      // whole cached set checks one thing — was it taken. What WAS taken
+      // stays taken: one refused neighbour is not a veto.
+      return c.json({ motebit_id: motebitId, ...result }, result.refused.length > 0 ? 422 : 200);
+    },
+  );
 
   /** @spec motebit/machine-roster@1.0 */
   app.get("/api/v1/agents/:motebitId/roster", (c) => {
@@ -167,6 +186,8 @@ export function registerHostRosterRoutes(deps: HostRosterRouteDeps): void {
       { device_id: string; bound_under: string; sockets: number; host: boolean }
     >();
     for (const peer of connections.get(motebitId) ?? []) {
+      // Defence in depth: only a socket that is OPEN right now counts.
+      if (peer.ws.readyState !== WS_OPEN) continue;
       const boundUnder = boundKeyOf(peer);
       if (boundUnder == null) continue;
       const k = pairKey(peer.deviceId, boundUnder);

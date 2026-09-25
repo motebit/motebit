@@ -403,8 +403,15 @@ about membership.
   flush while the connection is open. With no heartbeat (#691) a half-open
   connection reads as open, so an idle, silently dead connection keeps
   refreshing it until the store notices the close; `sockets_open` likewise
-  counts connections the store **believes** open. Neither is proof the machine
-  is alive.
+  counts connections the store **believes** open — **any** connection bound as
+  that pair, whether or not it announces unattended work. Neither is proof the
+  machine is alive. And it is a **lower bound**: a store that stops without its
+  shutdown flush (a crash) loses up to one flush interval (five minutes at the
+  reference relay), so a connection may have been open somewhat after the value
+  served.
+- A store only ever counts or records a connection that is OPEN when it is
+  registered. A client that closes while its credential is still being verified
+  is never registered at all.
 - A store that expires last-seen values MUST serve its retention window and the
   time from which it has been observing, so that a consumer can say "not
   observed in the last N days" rather than "never seen", and MUST NOT expire a
@@ -559,7 +566,8 @@ bucket, 256 entries in the foreign bucket, 64 entries per request.
 
 **A partial presentation is not a success.** The response reports, per entry,
 `accepted` (`stored` or `already_held`, with the id) and `refused` (with its index
-and a reason: `malformed`, `wrong_motebit`, `bad_signature`, `roster_full`). If
+and a reason: `malformed`, `wrong_motebit`, `too_large`, `bad_signature`,
+`roster_full`). If
 anything was refused the status MUST NOT be 2xx: a surface re-presenting its
 whole cached set checks one thing — was it taken — and a 2xx over a body it must
 remember to read is how half a roster comes to be believed to be all of it. What
@@ -568,6 +576,14 @@ field that is present and not a list is a malformed request (400), and a
 presentation larger than the per-request limit is refused whole (413); a surface
 sends its set in chunks and treats anything other than every chunk taken as not
 taken.
+
+**A store bounds what it holds.** The law bounds no string length, and its
+signed bodies are frozen for major 1, so a store bounds each entry itself, and
+never by changing what verifies. The reference relay refuses an entry whose
+canonical JSON, signature included, exceeds **4096 bytes** as `too_large` (a
+store's refusal, not a verdict on validity, decided before the signature is
+checked), and refuses a request body over **266,240 bytes** (64 entries × 4096,
+plus slack) whole with 413. A well-formed entry is about 400 bytes.
 
 **The retrieval.** `GET` returns:
 
@@ -584,9 +600,10 @@ device **and** by the key each connection verified under (`bound_under`, §8).
 `rows` are the persisted observations plus open bound connections that announce
 unattended work; `live_unenrolled` are open bound connections with no row.
 `last_seen_at` is the last time the store held a connection bound as that
-`(device_id, bound_under)` open, and `sockets_open` counts the connections bound
-as that pair the store believes open — with no heartbeat, a half-open connection
-counts (§8). Both are per observed pair, never over machines.
+`(device_id, bound_under)` open — a lower bound after a crash (§8) — and
+`sockets_open` counts **every** connection bound as that pair the store believes
+open, host or not; with no heartbeat, a half-open connection counts (§8). Both
+are per observed pair, never over machines.
 
 **The store does not reduce.** It returns the set; the consumer reduces it (§6)
 against a key chain the consumer verified, and joins liveness to it: an active

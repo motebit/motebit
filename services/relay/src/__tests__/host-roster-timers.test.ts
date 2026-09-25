@@ -79,3 +79,29 @@ describe("liveness housekeeping over 3 × 31 days", () => {
     expect(rows.has("closed-host")).toBe(false);
   });
 });
+
+describe("a CLOSED peer left in connections (defence in depth)", () => {
+  it("is neither flushed nor protects its row from the sweep", async () => {
+    const t0 = Date.now();
+    const db = relay.moteDb.db;
+    const rid = relay.relayIdentity.relayMotebitId;
+    const zombie = {
+      ...peer("zombie", ["unattended_runtime"]),
+      ws: { readyState: 3, send: () => {}, close: () => {} },
+    } as unknown as ConnectedDevice;
+    relay.connections.set(motebitId, [zombie]);
+    observeHostConnection(db, motebitId, zombie, rid, t0);
+
+    vi.setSystemTime(t0 + 31 * DAY);
+    await vi.advanceTimersByTimeAsync(61_000);
+    // Not refreshed by the flush.
+    expect(readHostLiveness(db, motebitId)[0]?.last_seen_at).toBe(t0);
+
+    for (let month = 2; month <= 3; month++) {
+      vi.setSystemTime(t0 + month * 31 * DAY);
+      await vi.advanceTimersByTimeAsync(61_000);
+    }
+    // Not shielded by the live-skip.
+    expect(readHostLiveness(db, motebitId)).toEqual([]);
+  });
+});

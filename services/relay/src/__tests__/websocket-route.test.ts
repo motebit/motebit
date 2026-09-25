@@ -185,6 +185,33 @@ describe("a declared device id is VERIFIED only when the signed token proves it"
     expect(connections.get(MID)?.[0]?.boundUnder).toBeUndefined();
   });
 
+  it("two auth frames racing through verification register the socket ONCE", async () => {
+    const kp = await generateKeypair();
+    const h = harness({ devices: new Map([["dev-2", bytesToHex(kp.publicKey)]]) });
+    const { handlers, ws, connections } = connect("?device_id=dev-2", h);
+    await handlers.onOpen({}, ws);
+    const frame = { data: JSON.stringify({ type: "auth", token: await tokenFor("dev-2", kp) }) };
+    await Promise.all([handlers.onMessage(frame, ws), handlers.onMessage(frame, ws)]);
+    expect(connections.get(MID)).toHaveLength(1);
+    expect(h.bound).toHaveLength(1);
+  });
+
+  it("a socket no longer OPEN when verification finishes is never registered", async () => {
+    const kp = await generateKeypair();
+    const h = harness({ devices: new Map([["dev-2", bytesToHex(kp.publicKey)]]) });
+    const { handlers, ws, connections } = connect("?device_id=dev-2", h);
+    await handlers.onOpen({}, ws);
+    const pending = handlers.onMessage(
+      { data: JSON.stringify({ type: "auth", token: await tokenFor("dev-2", kp) }) },
+      ws,
+    );
+    (ws as { readyState: number }).readyState = 3; // the client went away mid-verification
+    handlers.onClose({}, ws);
+    await pending;
+    expect(connections.get(MID) ?? []).toEqual([]);
+    expect(h.bound).toEqual([]);
+  });
+
   it("proven through the post-connect auth frame too, not only the query token", async () => {
     const kp = await generateKeypair();
     const h = harness({ devices: new Map([["dev-2", bytesToHex(kp.publicKey)]]) });

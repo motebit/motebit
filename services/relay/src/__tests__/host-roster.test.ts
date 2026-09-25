@@ -596,6 +596,42 @@ describe("liveness: per device AND key, hosts only, served beside the set (D4, D
     expect(live.observing_since).toBeLessThanOrEqual(Date.now());
   });
 
+  it("a CLOSED socket left in connections counts nowhere in GET (defence in depth)", async () => {
+    const closed = {
+      ...peer("vps"),
+      ws: { readyState: 3, send: () => {} },
+    } as unknown as ConnectedDevice;
+    connectPeer(closed);
+    connectPeer(peer("phone", { capabilities: ["sync"] }));
+    const zombieHost = { ...peer("phone", { capabilities: ["sync"] }), ws: { readyState: 2 } };
+    connectPeer(zombieHost as unknown as ConnectedDevice);
+    observe(peer("vps"), 7_000); // a persisted row for the closed host
+    const live = (await read()).json.liveness as Liveness;
+    expect(live.rows).toEqual([
+      { device_id: "vps", bound_under: pub, last_seen_at: 7_000, sockets_open: 0 },
+    ]);
+    expect(live.live_unenrolled).toEqual([
+      { device_id: "phone", bound_under: pub, sockets_open: 1 },
+    ]);
+  });
+
+  it("an over-long entry is refused too_large before it is verified or held", async () => {
+    const huge = await enrol("x".repeat(5_000));
+    const r = await present({ enrollments: [huge, await enrol("laptop")] });
+    expect(r.status).toBe(422);
+    expect(r.json.refused).toEqual([{ kind: "enrollment", index: 0, reason: "too_large" }]);
+    expect(rows()).toBe(1);
+  });
+
+  it("a request body over the limit is refused whole with 413", async () => {
+    const res = await as(motebitId, "laptop", owner, rosterPath(), {
+      method: "POST",
+      body: JSON.stringify({ enrollments: [], pad: "x".repeat(300_000) }),
+    });
+    expect(res.status).toBe(413);
+    expect(rows()).toBe(0);
+  });
+
   it("the TTL sweep deletes a row unseen for 90 days — and skips one with a live bound socket", () => {
     const now = 1_000 * DAY;
     const db = relay.moteDb.db;

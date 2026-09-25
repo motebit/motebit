@@ -79,7 +79,7 @@ import { createRelaySchema } from "./schema.js";
 import { createRelayConfigTable, loadFreezeState, persistFreeze } from "./freeze.js";
 import { parseTokenPayloadUnsafe, verifySignedTokenForDevice } from "./auth.js";
 import { registerMiddleware, registerAuthMiddleware } from "./middleware.js";
-import { registerWebSocketRoutes } from "./websocket.js";
+import { registerWebSocketRoutes, WS_OPEN } from "./websocket.js";
 import { createAuthEventSink } from "./auth-events.js";
 import type { ConnectedDevice } from "./websocket.js";
 import { registerSyncRoutes, redactSensitiveEvents } from "./sync-routes.js";
@@ -884,15 +884,21 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       });
     }
   };
+  // Only OPEN sockets are flushed or protect a row from the sweep — a
+  // closed peer left in `connections` must neither refresh last_seen_at
+  // nor keep its row alive (defence in depth; websocket.ts registers only
+  // open sockets).
   const flushHostLiveness = (at: number): void => {
     for (const [motebitId, peers] of connections) {
-      for (const peer of peers) observeHost(motebitId, peer, at);
+      for (const peer of peers) {
+        if (peer.ws.readyState === WS_OPEN) observeHost(motebitId, peer, at);
+      }
     }
   };
   /** Is a socket bound as (device_id, bound_under) open right now? The sweep skips it. */
   const isHostLive = (motebitId: string, deviceId: string, boundUnder: string): boolean =>
     (connections.get(motebitId) ?? []).some(
-      (p) => p.deviceId === deviceId && boundKeyOf(p) === boundUnder,
+      (p) => p.ws.readyState === WS_OPEN && p.deviceId === deviceId && boundKeyOf(p) === boundUnder,
     );
   const taskCleanupInterval = superviseInterval(loopSupervisor, "task-cleanup", 60_000, () => {
     const now = Date.now();

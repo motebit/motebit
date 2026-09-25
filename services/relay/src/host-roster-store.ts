@@ -42,6 +42,18 @@ import { HostEnrollmentSchema, HostRetirementSchema } from "@motebit/wire-schema
 /** Entries one presentation may carry. Clients chunk a larger set (proposal D8). */
 export const MAX_ROSTER_ENTRIES_PER_REQUEST = 64;
 /**
+ * The relay's own bound on one held entry: its canonical JSON, signature
+ * included, in UTF-8 bytes. The law bounds no string length (and its
+ * published schemas are frozen for major 1), so a `device_id` of megabytes
+ * would verify and be held — and served, verbatim, forever. A well-formed
+ * entry is ~400 bytes; this is ten times that. Refused as `too_large`, a
+ * store's refusal, never a verdict on the entry's validity.
+ */
+export const MAX_ROSTER_ENTRY_BYTES = 4096;
+/** A presentation's request body: the per-request entry count × the per-entry cap, plus slack. */
+export const MAX_ROSTER_REQUEST_BYTES =
+  MAX_ROSTER_ENTRIES_PER_REQUEST * MAX_ROSTER_ENTRY_BYTES + 4096;
+/**
  * A signer key's OWN bucket: enrolments signed by the key the caller's
  * token verified under. Only a holder of that key can fill it, so a thief
  * of an old key fills only the old key's bucket, and a rotation moves the
@@ -77,7 +89,8 @@ export const HOSTS_UNATTENDED_WORK = "unattended_runtime";
 export type RosterEntryKind = "enrollment" | "retirement";
 /** Which cap an entry counts against — decided at ingest, stored, never re-derived. */
 export type RosterBucket = "own" | "foreign";
-export type RosterRefusalReason = "malformed" | "wrong_motebit" | "bad_signature" | "roster_full";
+export type RosterRefusalReason =
+  "malformed" | "wrong_motebit" | "too_large" | "bad_signature" | "roster_full";
 
 export interface RosterIngestResult {
   accepted: Array<{ kind: RosterEntryKind; id: string; status: "stored" | "already_held" }>;
@@ -135,6 +148,13 @@ export async function ingestHostRoster(
         result.refused.push({ kind, index, reason: "wrong_motebit" });
         continue;
       }
+      // Before the signature check: bounding what a store holds needs no
+      // trust decision, and costs no verification.
+      const bodyJson = canonicalJson(artifact);
+      if (new TextEncoder().encode(bodyJson).length > MAX_ROSTER_ENTRY_BYTES) {
+        result.refused.push({ kind, index, reason: "too_large" });
+        continue;
+      }
       // Verify BEFORE hold (spec §9): the id excludes the signature, so an
       // unverified copy could squat the slot and make the authentic one a
       // no-op. Under the key the entry NAMES — integrity only.
@@ -165,7 +185,7 @@ export async function ingestHostRoster(
       // Canonical JSON, byte-stable: what is served back re-serialises to
       // the same signed body, so a consumer's verification does not depend
       // on anything this relay did to it.
-      const written = insert.run(motebitId, id, kind, signer, bucket, canonicalJson(artifact), now);
+      const written = insert.run(motebitId, id, kind, signer, bucket, bodyJson, now);
       // Another presentation may have stored it between the look and the
       // write; say what actually happened.
       const stored = (written as { changes?: number } | undefined)?.changes !== 0;

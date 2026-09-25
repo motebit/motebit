@@ -8,7 +8,8 @@
  * `observeHostConnection`, and GET's join over `connections`.
  * (docs/proposals/machine-roster-relay-v1.md D4/D6.)
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { IdentityManager } from "@motebit/core-identity";
 import type { AddressInfo } from "node:net";
 import { serve } from "@hono/node-server";
 import type { Hono } from "hono";
@@ -206,5 +207,69 @@ describe("liveness over a real socket", () => {
     expect(persisted()).toEqual([
       expect.objectContaining({ device_id: "laptop", bound_under: pub }),
     ]);
+  });
+});
+
+describe("a socket that closes WHILE its token is being verified is never registered (#769 round 2, A1)", () => {
+  // The race: onClose runs during the verification await, finds no peer,
+  // and does nothing; finalizeConnection then used to push the CLOSED
+  // socket into `connections` and write last_seen_at — served as open,
+  // refreshed by every flush, and shielding its row from the sweep until
+  // restart. Made deterministic by holding the device-row lookup inside
+  // verification until the client's close has been processed.
+  function holdVerification() {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let entered = false;
+    const original = IdentityManager.prototype.loadDeviceById;
+    const spy = vi
+      .spyOn(IdentityManager.prototype, "loadDeviceById")
+      .mockImplementation(async function (this: IdentityManager, ...args) {
+        entered = true;
+        await gate;
+        return original.apply(this, args);
+      });
+    return { release, entered: () => entered, restore: () => spy.mockRestore() };
+  }
+
+  async function terminateAndRelease(ws: WebSocket, hold: ReturnType<typeof holdVerification>) {
+    await waitFor(() => hold.entered(), "verification to start");
+    const closed = new Promise<void>((r) => ws.once("close", () => r()));
+    ws.terminate();
+    await closed;
+    await new Promise((r) => setTimeout(r, 50)); // the relay's onClose runs
+    hold.release();
+    await new Promise((r) => setTimeout(r, 50)); // verification completes
+    hold.restore();
+  }
+
+  async function expectNothingRegistered() {
+    expect(relay.connections.get(motebitId) ?? []).toEqual([]);
+    expect(persisted()).toEqual([]);
+    const live = await liveness();
+    expect(live.rows).toEqual([]);
+    expect(live.live_unenrolled).toEqual([]);
+  }
+
+  it("query-token path", async () => {
+    const hold = holdVerification();
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${port}/ws/sync/${motebitId}?token=${await syncToken("laptop", owner)}&device_id=laptop&capabilities=unattended_runtime`,
+    );
+    open.push(ws);
+    await terminateAndRelease(ws, hold);
+    await expectNothingRegistered();
+  });
+
+  it("auth-frame path", async () => {
+    const hold = holdVerification();
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${port}/ws/sync/${motebitId}?device_id=laptop&capabilities=unattended_runtime`,
+    );
+    open.push(ws);
+    await new Promise<void>((r) => ws.once("open", () => r()));
+    ws.send(JSON.stringify({ type: "auth", token: await syncToken("laptop", owner) }));
+    await terminateAndRelease(ws, hold);
+    await expectNothingRegistered();
   });
 });
