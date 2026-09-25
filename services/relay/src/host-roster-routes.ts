@@ -52,12 +52,18 @@ export interface HostLivenessRow {
   device_id: string;
   /** The key the observed socket(s) verified under — never re-read. */
   bound_under: string;
-  /** Relay-observed; null only for a live host socket not yet persisted. */
+  /**
+   * The last time this relay held a socket bound as this (device, key) pair
+   * open — no heartbeat yet, so a half-open socket reads as open (#691), and
+   * the flush keeps refreshing it until the relay notices the close. Null
+   * only for a live host socket not yet persisted.
+   */
   last_seen_at: number | null;
   /**
-   * Open sockets bound as this (device_id, bound_under) right now. "Open",
-   * not "connected": no heartbeat deadline yet (#691). More than one is
-   * `motebit doctor`'s hint for a copied device_id — never a verdict.
+   * Sockets bound as this (device_id, bound_under) the relay BELIEVES open.
+   * "Open", not "connected": no heartbeat deadline yet (#691), so a
+   * half-open socket counts. More than one is `motebit doctor`'s hint for a
+   * copied device_id — never a verdict.
    */
   sockets_open: number;
 }
@@ -65,6 +71,7 @@ export interface HostLivenessRow {
 export interface HostLiveUnenrolled {
   device_id: string;
   bound_under: string;
+  /** Sockets the relay believes open — see `HostLivenessRow.sockets_open`. */
   sockets_open: number;
 }
 

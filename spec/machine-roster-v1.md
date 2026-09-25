@@ -397,6 +397,14 @@ about membership.
   and key equal the enrolment's (the binding rule above); an observation under
   another key is that machine's id connected under a key that is not its
   enrolment's, never "not in the roster".
+- A store MUST say what its last-seen value means. The reference relay's
+  `last_seen_at` is **the last time it held a connection bound as that
+  `(device_id, key)` open** — refreshed at bind, at close and on a periodic
+  flush while the connection is open. With no heartbeat (#691) a half-open
+  connection reads as open, so an idle, silently dead connection keeps
+  refreshing it until the store notices the close; `sockets_open` likewise
+  counts connections the store **believes** open. Neither is proof the machine
+  is alive.
 - A store that expires last-seen values MUST serve its retention window and the
   time from which it has been observing, so that a consumer can say "not
   observed in the last N days" rather than "never seen", and MUST NOT expire a
@@ -575,13 +583,30 @@ taken.
 device **and** by the key each connection verified under (`bound_under`, §8).
 `rows` are the persisted observations plus open bound connections that announce
 unattended work; `live_unenrolled` are open bound connections with no row.
-`sockets_open` counts open connections bound as that `(device_id, bound_under)`
-— a count per observed pair, never over machines.
+`last_seen_at` is the last time the store held a connection bound as that
+`(device_id, bound_under)` open, and `sockets_open` counts the connections bound
+as that pair the store believes open — with no heartbeat, a half-open connection
+counts (§8). Both are per observed pair, never over machines.
 
 **The store does not reduce.** It returns the set; the consumer reduces it (§6)
 against a key chain the consumer verified, and joins liveness to it: an active
 machine's observation is the row with its `device_id` and `bound_under` equal to
-its enrolment's `public_key`. A store MUST NOT evaluate the reduction, decide
+its enrolment's `public_key`. Rows left over are classified, never dropped and
+never counted as members:
+
+- that machine's `device_id` under a **different key** — "this machine's id,
+  connected under a key that is not its enrolment's" (the theft signal);
+- a row whose `bound_under` is **not the chain head** lights no line, not even a
+  superseded one with the same `device_id` and key — "a socket open under a
+  superseded key";
+- a `device_id` with no line — "connected, not in the roster";
+- an `untrusted_key` refusal whose key is a device key the consumer knows for
+  this motebit (a device linked without key transfer, enrolling itself) —
+  "enrolled under a key that is not this motebit's identity key"; only a refusal
+  under a key the consumer does NOT know, whose `device_id` has liveness, reads
+  "your chain may be stale — refresh".
+
+A store MUST NOT evaluate the reduction, decide
 membership, or compute any quantity over a motebit's machines — a store that
 cannot compute a roster cannot compute a wrong one. If the consumer has no
 usable chain, it shows **no roster**, never an empty one (§6 Step 0).
