@@ -23,22 +23,23 @@ import type { SuccessionRecord } from "@motebit/crypto";
 import { buildIdentityLog } from "./identity-log.js";
 import type { AnchoredInclusion, IdentityBinding, IdentityBindingBundle } from "@motebit/protocol";
 import { getLatestAnchoredSnapshot } from "./identity-log-anchoring.js";
-import { identityKeyFor } from "./identity-keys.js";
+import { identityGuardianFor, identityKey } from "./identity-keys.js";
 
 /** The relay's succession records are always under this suite (no per-row column). */
 const SUCCESSION_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
 
 /** Read every registered `motebit_id → current key` binding for the log. */
 export function readIdentityBindings(db: DatabaseDriver): IdentityBinding[] {
-  // The one holder (#703 Inc 2), plus any registry row it does not yet hold —
-  // a row planted before its door recorded the key, or a legacy registration
-  // without one. The holder's key wins where both exist.
+  // The log states the AUTHORITY (§5f): the holder's key. A registry row
+  // with no holder is logged with '' — main's shape for a keyless row — never
+  // its registry key: anything may write that, and anchoring it would put an
+  // unproven key into a foundation-law log (G1).
   const rows = db
     .prepare(
       `SELECT motebit_id, public_key FROM identity_keys
        UNION ALL
-       SELECT r.motebit_id, r.public_key FROM agent_registry r
-        WHERE r.public_key != '' AND r.motebit_id NOT IN (SELECT motebit_id FROM identity_keys)
+       SELECT r.motebit_id, '' AS public_key FROM agent_registry r
+        WHERE r.motebit_id NOT IN (SELECT motebit_id FROM identity_keys)
        ORDER BY motebit_id`,
     )
     .all() as Array<{ motebit_id: string; public_key: string }>;
@@ -100,14 +101,19 @@ export async function buildIdentityBindingBundle(
   db: DatabaseDriver,
   motebitId: string,
 ): Promise<IdentityBindingBundle | null> {
-  // The one resolver (#703 Inc 2): §7.6 now answers for every identity the
-  // relay holds a key for, not only the ones with a registry row.
-  const held = identityKeyFor(db, motebitId);
-  if (!held) return null;
+  // §7.6 serves the AUTHORITY (§5f): the holder's key, else '' — main's wire
+  // shape for a keyless registry row (DB2), never null (the field is a
+  // string) and never the registry's key (not authority). Served when a
+  // registry row OR a holder exists (DA9); 404 only when neither does.
+  const held = identityKey(db, motebitId);
+  const reg = db
+    .prepare("SELECT registered_at FROM agent_registry WHERE motebit_id = ?")
+    .get(motebitId) as { registered_at: number } | undefined;
+  if (!held && !reg) return null;
   const agent = {
-    public_key: held.publicKey,
-    registered_at: held.firstSeen,
-    guardian_public_key: held.guardianPublicKey,
+    public_key: held?.publicKey ?? "",
+    registered_at: reg?.registered_at ?? held!.firstSeen,
+    guardian_public_key: identityGuardianFor(db, motebitId),
   };
 
   let anchored: AnchoredInclusion | null = null;

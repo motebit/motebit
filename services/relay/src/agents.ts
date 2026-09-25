@@ -23,12 +23,17 @@ import { evaluateSettlementEligibility } from "./task-routing.js";
 import { REFERENCE_MIN_BONDED_SIGNAL_MICRO } from "./bond-store.js";
 import { ON_SHELF, delistRegistration } from "./registry-delist.js";
 import {
+  admitKey,
+  discoveryKeyFor,
+  holderKeyOf,
   identityGuardianFor,
-  identityKeyFor,
-  provenIdentityKey,
+  isCanonicalKey,
+  proveSovereignFirstKey,
   recordFirstIdentityKey,
   recordIdentityGuardian,
-  recordIdentityKey,
+  recordOperatorServiceKey,
+  registryKeyOf,
+  verificationKeyFor,
 } from "./identity-keys.js";
 
 /**
@@ -801,27 +806,26 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       return c.json({ valid: false, reason: "motebit_id mismatch" });
     }
 
-    // Resolve the key: the receipt's OWN device row first — a linked device
-    // signs with its own key, which is not the identity's — else the identity's
-    // key through the ONE resolver (#703 Inc 2).
-    let pubKeyHex: string | undefined;
-    const signingDevice =
-      receipt.device_id != null
-        ? await identityManager.loadDeviceById(receipt.device_id, motebitId)
-        : null;
-    const resolved = signingDevice?.public_key ? null : identityKeyFor(moteDb.db, motebitId);
-    if (signingDevice?.public_key) {
-      pubKeyHex = signingDevice.public_key;
-    } else if (resolved) {
-      pubKeyHex = resolved.publicKey;
+    // Resolve the key: the holder when the identity has proven one (§5f);
+    // otherwise EXACTLY main's order (DB3) — registry key (service agents),
+    // else the receipt's own device row, else the first keyed row. The rebuild
+    // put the receipt's own device row first, which widened this public
+    // verdict: a paired device's own-key receipt became "valid".
+    let mainRead: string | undefined;
+    const regRow = moteDb.db
+      .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+      .get(motebitId) as { public_key: string } | undefined;
+    if (regRow?.public_key) {
+      mainRead = regRow.public_key;
     } else {
       const devices = await identityManager.listDevices(motebitId);
       const device =
         (receipt.device_id != null
           ? devices.find((d) => d.device_id === receipt.device_id)
           : undefined) ?? devices.find((d) => d.public_key);
-      if (device?.public_key) pubKeyHex = device.public_key;
+      if (device?.public_key) mainRead = device.public_key;
     }
+    const pubKeyHex = verificationKeyFor(moteDb.db, motebitId, mainRead) ?? undefined;
 
     if (!pubKeyHex) {
       return c.json({ valid: false, reason: "No public key on file for this agent" });
@@ -979,13 +983,17 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     if (!body.public_key || typeof body.public_key !== "string") {
       throw new HTTPException(400, { message: "Missing 'public_key' field" });
     }
-    if (!/^[0-9a-f]{64}$/i.test(body.public_key)) {
+    const motebitId = body.motebit_id.trim();
+    // A NEW key must arrive canonical — lowercase hex (DA1/DB4); a key already
+    // on file for this identity is admitted in its stored spelling (continuity).
+    // `hexToBytes` is lenient, so an alternate spelling of a key is not refused
+    // by verification — it must be refused here.
+    if (!admitKey(moteDb.db, motebitId, body.public_key)) {
       throw new HTTPException(400, {
-        message: "Invalid 'public_key' — must be 64-char hex string (32 bytes Ed25519 public key)",
+        message:
+          "Invalid 'public_key' — must be a 64-char LOWERCASE hex string (32 bytes Ed25519 public key)",
       });
     }
-
-    const motebitId = body.motebit_id.trim();
 
     // Who may add a device to an identity — the one rule this door
     // shares with `/devices/register-self`. It runs BEFORE the
@@ -1022,18 +1030,10 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       body.public_key,
       body.device_id,
     );
-    // The public doors' writer (§5b): the key is proven by this request, and it
-    // is THE IDENTITY's key only when nothing is proven yet and no keyed device
-    // row holds another key. "New" is `provenIdentityKey === null`, never "no
-    // identities row" (§5a A2): a service-mode identity registered through
-    // /agents/register has no identities row and DOES have a holder, and the
-    // first build overwrote it here with an unproven key.
-    recordFirstIdentityKey(moteDb.db, {
-      motebitId,
-      publicKey: body.public_key,
-      source: "bootstrap",
-      now: Date.now(),
-    });
+    // Bootstrap writes NOTHING to the holder (§5f, DB1): it takes no
+    // signature, so it proves nothing — not even current possession of the
+    // key it names. The rebuild let it record a first key and anyone could
+    // plant one for an id this relay had not seen (#750 round 2, W1).
 
     return c.json(
       {
@@ -1148,32 +1148,29 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       });
     }
 
-    // Resolve public key: request body > the key the relay already SERVES
-    // (`identityKeyFor`: the proven key, else the one key every keyed device
-    // row agrees on) > empty. A body without a key proves nothing, so this
-    // publishes the served answer and the holder is NOT written from it
-    // below. The old fallback took the first-listed device row, which for an
-    // identity whose rows disagree could be a paired device's own key (#750
-    // review). Discovery needs the key: the CLI daemon registers without one.
-    const keyFromBody =
-      typeof body.public_key === "string" && /^[0-9a-f]{64}$/i.test(body.public_key);
-    let publicKey = "";
-    if (keyFromBody) {
-      publicKey = body.public_key as string;
-    } else {
-      publicKey = identityKeyFor(moteDb.db, motebitId)?.publicKey ?? "";
+    // Resolve public key. ABSENT (missing or "") takes the keyless path (DB4):
+    // publish discovery's key (DA5 — the holder, else the one key every keyed
+    // device row agrees on, else '') and write nothing to the holder. A
+    // non-empty key must be admissible — canonical, or exactly a key already
+    // on file (DA1/DB4); main silently fell back on a malformed one.
+    const rawBodyKey = (body as Record<string, unknown>).public_key;
+    const keyFromBody = typeof rawBodyKey === "string" && rawBodyKey !== "";
+    if (keyFromBody && !admitKey(moteDb.db, motebitId, rawBodyKey)) {
+      throw new HTTPException(400, {
+        message:
+          "Invalid 'public_key' — must be a 64-char LOWERCASE hex string (32 bytes Ed25519 public key)",
+      });
     }
+    const publicKey = keyFromBody ? rawBodyKey : discoveryKeyFor(moteDb.db, motebitId);
 
     // --- Succession chain validation on re-registration ---
-    // If the agent already has a stored public key and the new key differs,
-    // require a valid succession record proving key lineage.
-    // The key on file is the AUTHORITY (§5b): holder, else registry, else chain
-    // head — never a device row, so a lone paired device's own key cannot make
-    // this door demand a succession from a key the identity never held (§5a
-    // A4); and a legacy row's empty key reads as none, so the first key is
-    // recorded instead of compared against '' (A5). A daemon that deregistered
-    // has no registry row and would otherwise re-register under any key.
-    const keyOnFileForRegister = provenIdentityKey(moteDb.db, motebitId)?.publicKey;
+    // A differing key needs a link from the key on file. Once the identity has
+    // a holder that is the only answer (§5f); before it has one, this is
+    // main's check against the registry key byte-for-byte — the registry
+    // write guards what the verification readers fall back to, so an
+    // unfilled identity keeps exactly main's protection (and '' is none, A5).
+    const keyOnFileForRegister =
+      holderKeyOf(moteDb.db, motebitId) ?? registryKeyOf(moteDb.db, motebitId);
 
     if (keyOnFileForRegister && publicKey && keyOnFileForRegister !== publicKey) {
       const succession = (body as Record<string, unknown>).succession as
@@ -1264,6 +1261,14 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       string | undefined;
 
     if (claimedGuardianKey) {
+      // Format-checked BEFORE any write (DB4): `hexToBytes` is lenient, so an
+      // alternate spelling of the identity's own key would pass the
+      // "guardian ≠ identity key" check below and still verify.
+      if (typeof claimedGuardianKey !== "string" || !isCanonicalKey(claimedGuardianKey)) {
+        throw new HTTPException(400, {
+          message: "Invalid 'guardian_public_key' — must be a 64-char LOWERCASE hex string",
+        });
+      }
       if (!guardianAttestation) {
         throw new HTTPException(400, {
           message:
@@ -1294,6 +1299,35 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       }
       guardianPublicKey = claimedGuardianKey;
     }
+
+    // E-sov's arithmetic, computed now (it is async); its write re-reads every
+    // condition in one transaction just before the registry upsert (DA2). The
+    // possession half (DB1): the bearer was verified by the device row that
+    // holds exactly this key — an operator bearer or a fallback proves none.
+    // The key that verified this bearer: the `/api/v1/agents/*` middleware
+    // verifies an agent token against the device row its `did` names, with no
+    // fallback — so that row's key IS the verifying key, and nothing else is.
+    let callerDeviceKey: string | undefined;
+    const bearer = c.req.header("authorization")?.slice(7);
+    const bearerClaims =
+      bearer != null && c.get("callerMotebitId" as never) != null
+        ? parseTokenPayloadUnsafe(bearer)
+        : null;
+    if (bearerClaims?.mid === motebitId && typeof bearerClaims.did === "string") {
+      const signer = await identityManager.loadDeviceById(bearerClaims.did, motebitId);
+      if (signer?.public_key) callerDeviceKey = signer.public_key;
+    }
+    // The key possession is proven for: the bearer's own device key. A body
+    // key counts only when it IS that key; a keyless registration (the CLI
+    // daemon's, which bootstraps and then registers without a key) presents
+    // the bearer's key itself — the same evidence (§5f build-time amendment).
+    const possessedKey =
+      callerDeviceKey !== undefined && (!keyFromBody || callerDeviceKey === publicKey)
+        ? callerDeviceKey
+        : undefined;
+    const sovereignProof =
+      possessedKey !== undefined ? await proveSovereignFirstKey(motebitId, possessedKey) : null;
+    const isOperatorBearer = c.get("callerMotebitId" as never) == null;
 
     const federationVisible = (body as Record<string, unknown>).federation_visible;
     const fedVisibleVal = federationVisible === false ? 0 : 1;
@@ -1346,6 +1380,26 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       sweepThreshold = rawSweepThreshold;
     }
 
+    // The holder's first key — BEFORE the registry upsert, whose write would
+    // otherwise fill the empty registry slot E-sov's predicate requires (DA2;
+    // round-3 prose fix). E-sov for a sovereign identity presenting its own
+    // key; E-op for an operator-registered service identity with no device,
+    // chain or holder (§5f). Each re-reads its conditions in one transaction.
+    if (sovereignProof) {
+      recordFirstIdentityKey(moteDb.db, sovereignProof, {
+        source: "register",
+        guardianPublicKey: guardianPublicKey ?? null,
+        now,
+      });
+    } else if (keyFromBody && isOperatorBearer) {
+      recordOperatorServiceKey(moteDb.db, {
+        motebitId,
+        publicKey,
+        guardianPublicKey: guardianPublicKey ?? null,
+        now,
+      });
+    }
+
     moteDb.db
       .prepare(
         `
@@ -1382,29 +1436,13 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         sweepThreshold,
       );
 
-    // The key this door just proved lands in the holder, with the guardian it
-    // just attested, on EVERY path (§5a A3 — the first build's succession path
-    // recorded the key without the guardian, leaving two guardian truths): the
-    // same key is a refresh, a differing key passed the succession check above,
-    // a first key is the identity's first proof at this door. A registration
-    // without a key (legacy callers) proves nothing and records nothing. The
-    // first build also required every device row to agree before recording a
-    // first key; this door writes `agent_registry.public_key` unconditionally
-    // and the registry rung would serve it anyway, so that predicate only let
-    // the holder disagree with the registry (§5b). Only a key the BODY
-    // presented is recorded: the fallback above is the holder's own answer.
-    // A verified guardian attestation reaches the holder with or without a
-    // key — the registry just took it, and a holder left on the old guardian
-    // would let that guardian recover the identity (#750 review).
-    if (keyFromBody) {
-      recordIdentityKey(moteDb.db, {
-        motebitId,
-        publicKey,
-        guardianPublicKey: guardianPublicKey ?? null,
-        source: "register",
-        now,
-      });
-    } else if (guardianPublicKey) {
+    // Every verified guardian attestation reaches the holder, whatever the key
+    // evidence (DA6): the registry just took it, and a holder left on an older
+    // guardian would let the replaced guardian recover the identity (R1).
+    // No other holder write at this door: a key moves through a verified link
+    // (applySuccession, above) or arrives as E-sov / E-op (above) — never
+    // because a registration named it (§5d W3).
+    if (guardianPublicKey) {
       recordIdentityGuardian(moteDb.db, { motebitId, guardianPublicKey, now });
     }
 

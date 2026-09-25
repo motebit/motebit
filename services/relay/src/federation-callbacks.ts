@@ -39,6 +39,7 @@ import type { RelayIdentity, VerifiedSettlement } from "./federation.js";
 import type { TaskQueueEntry } from "./tasks.js";
 import type { ConnectedDevice } from "./index.js";
 import { createLogger } from "./logger.js";
+import { verificationKeyFor } from "./identity-keys.js";
 
 const logger = createLogger({ service: "federation-callbacks" });
 
@@ -189,8 +190,14 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
         const regRow = moteDb.db
           .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
           .get(verified.receipt.motebit_id) as { public_key: string } | undefined;
-        if (regRow?.public_key) {
-          pubKeyHex = regRow.public_key;
+        // Holder, else main's registry read (§5f verification reader).
+        const localKey = verificationKeyFor(
+          moteDb.db,
+          verified.receipt.motebit_id,
+          regRow?.public_key,
+        );
+        if (localKey !== null) {
+          pubKeyHex = localKey;
           keySource = "local_registry";
         } else {
           const devices = await identityManager.listDevices(

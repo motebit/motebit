@@ -101,7 +101,7 @@ import {
 } from "./errors.js";
 import { listRevokedGrantIds } from "./delegation-revocations.js";
 import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
-import { identityGuardianFor } from "./identity-keys.js";
+import { identityGuardianFor, verificationKeyFor } from "./identity-keys.js";
 
 const logger = createLogger({ service: "tasks" });
 
@@ -475,8 +475,10 @@ export async function handleReceiptIngestion(
   const regRow = moteDb.db
     .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
     .get(receipt.motebit_id) as { public_key: string } | undefined;
-  if (regRow?.public_key) {
-    pubKeyHex = regRow.public_key;
+  // Holder, else main's registry read (§5f verification reader).
+  const ingestKey = verificationKeyFor(moteDb.db, receipt.motebit_id, regRow?.public_key);
+  if (ingestKey !== null) {
+    pubKeyHex = ingestKey;
   } else {
     const devices = await identityManager.listDevices(receipt.motebit_id);
     const device =
@@ -705,8 +707,10 @@ export async function handleReceiptIngestion(
             const subReg = moteDb.db
               .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
               .get(sub.motebit_id) as { public_key: string } | undefined;
-            if (subReg?.public_key) {
-              subPubKey = subReg.public_key;
+            // Holder, else main's registry read (§5f verification reader).
+            const subKey = verificationKeyFor(moteDb.db, sub.motebit_id, subReg?.public_key);
+            if (subKey !== null) {
+              subPubKey = subKey;
             } else {
               const subDevices = await identityManager.listDevices(asMotebitId(sub.motebit_id));
               subPubKey = subDevices.find((d) => d.public_key)?.public_key;
@@ -800,7 +804,9 @@ export async function handleReceiptIngestion(
         const subReg = moteDb.db
           .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
           .get(sub.motebit_id) as { public_key: string } | undefined;
-        if (subReg?.public_key) subPubKey = subReg.public_key;
+        // Holder, else main's registry read (§5f verification reader).
+        const subKey = verificationKeyFor(moteDb.db, sub.motebit_id, subReg?.public_key);
+        if (subKey !== null) subPubKey = subKey;
         else {
           const subDevices = await identityManager.listDevices(asMotebitId(sub.motebit_id));
           subPubKey = subDevices.find((d) => d.public_key)?.public_key;
@@ -1738,7 +1744,11 @@ export async function handleReceiptIngestion(
           task_id: taskId,
           origin_relay: relayIdentity.relayMotebitId,
           receipt,
-          ...(workerReg?.public_key ? { agent_public_key: workerReg.public_key } : {}),
+          ...((): { agent_public_key?: string } => {
+            // Holder, else main's registry read (§5f verification reader).
+            const k = verificationKeyFor(moteDb.db, receipt.motebit_id, workerReg?.public_key);
+            return k !== null ? { agent_public_key: k } : {};
+          })(),
           timestamp: Date.now(),
         };
         const resultBytes = new TextEncoder().encode(canonicalJson(resultBody));

@@ -31,6 +31,7 @@ import { HTTPException } from "hono/http-exception";
 import type { ConnectedDevice } from "./websocket.js";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { createLogger } from "./logger.js";
+import { verificationKeyFor } from "./identity-keys.js";
 
 /** Commands the relay can answer from its own database. */
 const RELAY_SIDE_COMMANDS = new Set(["balance", "deposits", "discover", "proposals"]);
@@ -231,7 +232,9 @@ export function registerCommandRoutes(deps: CommandRouteDeps): void {
     const registered = db
       .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
       .get(motebitId) as { public_key: string } | undefined;
-    if (!registered || registered.public_key === "") {
+    // Holder, else main's registry read (§5f verification reader).
+    const commandKey = verificationKeyFor(db, motebitId, registered?.public_key);
+    if (commandKey === null) {
       throw new HTTPException(401, {
         message: "Unknown agent identity — no registered public key to verify the command against",
       });
@@ -241,7 +244,7 @@ export function registerCommandRoutes(deps: CommandRouteDeps): void {
       command,
       args,
       motebitId,
-      identityPublicKey: registered.public_key,
+      identityPublicKey: commandKey,
     });
     if (!verdict.ok) {
       throw new HTTPException(401, { message: verdict.reason });

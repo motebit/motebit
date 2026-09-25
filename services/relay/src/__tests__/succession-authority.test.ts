@@ -34,6 +34,7 @@ import {
   signGuardianRecoverySuccession,
   canonicalJson,
   ed25519Sign,
+  deriveSovereignMotebitId,
 } from "@motebit/crypto";
 import type { KeyPair, KeySuccessionRecord } from "@motebit/crypto";
 import type { TokenAudience } from "@motebit/protocol";
@@ -191,8 +192,9 @@ describe("an ordinary succession is the identity's own act", () => {
   });
 
   it("and the identity's own rotation still lands", async () => {
-    const mid = crypto.randomUUID();
     const k1 = await generateKeypair();
+    // Shipped clients mint the id as the sovereign commitment to k1 (#703 §5f: E-sov).
+    const mid = await deriveSovereignMotebitId(hex(k1));
     const k2 = await generateKeypair();
     expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
     expect(await registerAgent(mid, k1)).toBe(200);
@@ -208,8 +210,9 @@ describe("an ordinary succession is the identity's own act", () => {
   });
 
   it("the operator's master token still carries one, as it did before", async () => {
-    const mid = crypto.randomUUID();
     const k1 = await generateKeypair();
+    // Shipped clients mint the id as the sovereign commitment to k1 (#703 §5f: E-sov).
+    const mid = await deriveSovereignMotebitId(hex(k1));
     const k2 = await generateKeypair();
     expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
     expect(await registerAgent(mid, k1)).toBe(200);
@@ -235,8 +238,9 @@ describe("the route answers to the audience the spec names", () => {
     // reached it were the operator's, and every signed client 401'd —
     // which is why no rotation has ever been recorded (#702). Narrowing it
     // also means an ordinary read token cannot be replayed here.
-    const mid = crypto.randomUUID();
     const k1 = await generateKeypair();
+    // Shipped clients mint the id as the sovereign commitment to k1 (#703 §5f: E-sov).
+    const mid = await deriveSovereignMotebitId(hex(k1));
     const k2 = await generateKeypair();
     expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
     expect(await registerAgent(mid, k1)).toBe(200);
@@ -303,8 +307,9 @@ describe("a record must depart from a key this relay holds for the identity", ()
     // A deregistered identity must still be able to rotate: its device row
     // holds the key the record departs from. Refusing this would lock out
     // every daemon that has shut down.
-    const mid = crypto.randomUUID();
     const k1 = await generateKeypair();
+    // Shipped clients mint the id as the sovereign commitment to k1 (#703 §5f: E-sov).
+    const mid = await deriveSovereignMotebitId(hex(k1));
     const k2 = await generateKeypair();
     expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
     const record = await signKeySuccession(
@@ -321,8 +326,9 @@ describe("a record must depart from a key this relay holds for the identity", ()
     // The caller check cannot be what refuses this: the identity carries
     // its own record. A registered identity's chain must continue from the
     // key on file, not from two keys nobody has seen.
-    const mid = crypto.randomUUID();
     const k1 = await generateKeypair();
+    // Shipped clients mint the id as the sovereign commitment to k1 (#703 §5f: E-sov).
+    const mid = await deriveSovereignMotebitId(hex(k1));
     expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
     expect(await registerAgent(mid, k1)).toBe(200);
     const a = await generateKeypair();
@@ -338,8 +344,9 @@ describe("a record must depart from a key this relay holds for the identity", ()
     // ''`. Treating that as the identity's key refuses the owner's honest
     // rotation; treating it as a key ON FILE that matches nothing would
     // lock the identity out of rotating for good.
-    const mid = crypto.randomUUID();
     const k1 = await generateKeypair();
+    // Shipped clients mint the id as the sovereign commitment to k1 (#703 §5f: E-sov).
+    const mid = await deriveSovereignMotebitId(hex(k1));
     const k2 = await generateKeypair();
     // Registered BEFORE any device exists, so there is no key to fall back
     // to and the row is written with the empty string.
@@ -371,8 +378,9 @@ describe("a record must depart from a key this relay holds for the identity", ()
     // device row is not re-keyed, so after the first rotation there was
     // nothing on file and the second was refused. Rotating twice worked
     // before this rule existed, so that was a regression.
-    const mid = crypto.randomUUID();
     const k1 = await generateKeypair();
+    // Shipped clients mint the id as the sovereign commitment to k1 (#703 §5f: E-sov).
+    const mid = await deriveSovereignMotebitId(hex(k1));
     const k2 = await generateKeypair();
     const k3 = await generateKeypair();
     expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
@@ -404,8 +412,9 @@ describe("a record must depart from a key this relay holds for the identity", ()
     // first. Recorded because it is easy to believe the comparison below
     // is what protects this — it is not, and severing that comparison
     // leaves this test green.
-    const mid = crypto.randomUUID();
     const k1 = await generateKeypair();
+    // Shipped clients mint the id as the sovereign commitment to k1 (#703 §5f: E-sov).
+    const mid = await deriveSovereignMotebitId(hex(k1));
     const k2 = await generateKeypair();
     expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
     expect(await registerAgent(mid, k1)).toBe(200);
@@ -421,8 +430,9 @@ describe("a record must depart from a key this relay holds for the identity", ()
   });
 
   it("refuses a record that goes nowhere", async () => {
-    const mid = crypto.randomUUID();
     const k1 = await generateKeypair();
+    // Shipped clients mint the id as the sovereign commitment to k1 (#703 §5f: E-sov).
+    const mid = await deriveSovereignMotebitId(hex(k1));
     expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
     expect(await registerAgent(mid, k1)).toBe(200);
     const circular = await signKeySuccession(
@@ -513,8 +523,9 @@ describe("guardian recovery is carried by someone else, and anchored to a key on
   });
 
   it("refuses a recovery for an identity with no guardian on file, however it is carried", async () => {
-    const mid = crypto.randomUUID();
     const k1 = await generateKeypair();
+    // Shipped clients mint the id as the sovereign commitment to k1 (#703 §5f: E-sov).
+    const mid = await deriveSovereignMotebitId(hex(k1));
     const mine = await generateKeypair();
     expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
     expect(await registerAgent(mid, k1)).toBe(200);
@@ -543,9 +554,10 @@ describe("the public succession route answers the departure question with the ru
     };
   }
 
-  it("registry rung: holds the registry key; departable only from it", async () => {
-    const mid = crypto.randomUUID();
+  it("a sovereign client that registered: the holder is its key; departable only from it", async () => {
     const k1 = await generateKeypair();
+    // Shipped clients mint the id as the sovereign commitment to k1 (#703 §5f: E-sov).
+    const mid = await deriveSovereignMotebitId(hex(k1));
     const other = await generateKeypair();
     expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
     expect(await registerAgent(mid, k1)).toBe(200);
@@ -557,9 +569,10 @@ describe("the public succession route answers the departure question with the ru
     expect((await read(mid)).departable).toBeUndefined();
   });
 
-  it("chain rung: a deregistered identity is held at its recorded head", async () => {
-    const mid = crypto.randomUUID();
+  it("a deregistered identity that rotated is held at the key its verified link moved the holder to", async () => {
     const k1 = await generateKeypair();
+    // Shipped clients mint the id as the sovereign commitment to k1 (#703 §5f: E-sov).
+    const mid = await deriveSovereignMotebitId(hex(k1));
     const k2 = await generateKeypair();
     expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
     expect(await registerAgent(mid, k1)).toBe(200);
@@ -586,8 +599,9 @@ describe("the public succession route answers the departure question with the ru
     // from the device row" — the split a client re-deriving "held" from
     // chain + registry fell into. The holder (identity_keys, written by
     // register-self) now answers even with the registry row gone.
-    const mid = crypto.randomUUID();
     const k1 = await generateKeypair();
+    // Shipped clients mint the id as the sovereign commitment to k1 (#703 §5f: E-sov).
+    const mid = await deriveSovereignMotebitId(hex(k1));
     const other = await generateKeypair();
     expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
     expect(await registerAgent(mid, k1)).toBe(200);
@@ -613,8 +627,9 @@ describe("the public succession route answers the departure question with the ru
   });
 
   it("truly unknown: no registry, no chain, no device row ⇒ held null and not departable from anything", async () => {
-    const mid = crypto.randomUUID();
     const k1 = await generateKeypair();
+    // Shipped clients mint the id as the sovereign commitment to k1 (#703 §5f: E-sov).
+    const mid = await deriveSovereignMotebitId(hex(k1));
     expect(await read(mid, hex(k1))).toMatchObject({
       held_public_key: null,
       chain: [],
@@ -624,8 +639,9 @@ describe("the public succession route answers the departure question with the ru
 
   it("the served answer and the route's decision are one function: severing agreement is a red test", async () => {
     // Registry says k1 after a rotation to k2; the holder says k2.
-    const mid = crypto.randomUUID();
     const k1 = await generateKeypair();
+    // Shipped clients mint the id as the sovereign commitment to k1 (#703 §5f: E-sov).
+    const mid = await deriveSovereignMotebitId(hex(k1));
     const k2 = await generateKeypair();
     expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
     expect(await registerAgent(mid, k1)).toBe(200);
@@ -684,8 +700,9 @@ describe("every refusal leaves a trace in the relay's own record", () => {
   });
 
   it("names the PRESENTER as the subject, not the identity that presented nothing", async () => {
-    const mid = crypto.randomUUID();
     const k1 = await generateKeypair();
+    // Shipped clients mint the id as the sovereign commitment to k1 (#703 §5f: E-sov).
+    const mid = await deriveSovereignMotebitId(hex(k1));
     expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
     expect(await registerAgent(mid, k1)).toBe(200);
     const a = await generateKeypair();
@@ -706,8 +723,9 @@ describe("every refusal leaves a trace in the relay's own record", () => {
   });
 
   it("records an ordinary rotation's signature refusal too — the record is complete or it misleads", async () => {
-    const mid = crypto.randomUUID();
     const k1 = await generateKeypair();
+    // Shipped clients mint the id as the sovereign commitment to k1 (#703 §5f: E-sov).
+    const mid = await deriveSovereignMotebitId(hex(k1));
     const k2 = await generateKeypair();
     expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
     expect(await registerAgent(mid, k1)).toBe(200);
@@ -1007,8 +1025,9 @@ describe("a recorded rotation ends the old key here", () => {
     k2: KeyPair;
     linked: KeyPair;
   }> {
-    const mid = crypto.randomUUID();
     const k1 = await generateKeypair();
+    // Shipped clients mint the id as the sovereign commitment to k1 (#703 §5f: E-sov).
+    const mid = await deriveSovereignMotebitId(hex(k1));
     const k2 = await generateKeypair();
     const linked = await generateKeypair();
     expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
@@ -1305,8 +1324,9 @@ describe("a recorded rotation ends the old key here", () => {
     // route refuses a mismatch. Carried across a rotation it would be
     // published beside a key it does not name, and a peer checking the
     // binding this relay itself enforces would reject the agent.
-    const mid = crypto.randomUUID();
     const k1 = await generateKeypair();
+    // Shipped clients mint the id as the sovereign commitment to k1 (#703 §5f: E-sov).
+    const mid = await deriveSovereignMotebitId(hex(k1));
     const k2 = await generateKeypair();
     expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
     expect(await registerAgent(mid, k1)).toBe(200);
@@ -1330,8 +1350,9 @@ describe("a recorded rotation ends the old key here", () => {
   });
 
   it("a guardian recovery ends the old key too", async () => {
-    const mid = crypto.randomUUID();
     const k1 = await generateKeypair();
+    // Shipped clients mint the id as the sovereign commitment to k1 (#703 §5f: E-sov).
+    const mid = await deriveSovereignMotebitId(hex(k1));
     const next = await generateKeypair();
     const guardian = await generateKeypair();
     expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
@@ -1359,8 +1380,9 @@ describe("a rotation retires a pairing approval that carried the old key", () =>
     // approved key is now the RETIRED one, and writing it back onto a
     // device row resurrects it, because the row is read before the
     // registry.
-    const mid = crypto.randomUUID();
     const k1 = await generateKeypair();
+    // Shipped clients mint the id as the sovereign commitment to k1 (#703 §5f: E-sov).
+    const mid = await deriveSovereignMotebitId(hex(k1));
     const k2 = await generateKeypair();
     const claimKey = await generateKeypair();
     expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);

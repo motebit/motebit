@@ -19,7 +19,7 @@ import { readSuccessionChain } from "./identity-transparency.js";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
 import type { AuthEvent } from "./auth-events.js";
-import { identityGuardianFor, identityKeyFor } from "./identity-keys.js";
+import { admitKey, identityGuardianFor, identityKey, verificationKeyFor } from "./identity-keys.js";
 
 const logger = createLogger({ service: "key-rotation" });
 
@@ -138,6 +138,17 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
       !body.new_key_signature
     ) {
       throw new HTTPException(400, { message: "Missing required fields in key succession record" });
+    }
+    // The key a rotation INTRODUCES must be canonical, or exactly a key
+    // already on file (DA1/DB4). The departing key is not format-checked: it
+    // must equal the stored spelling exactly, which `departureFrom` decides.
+    if (
+      typeof body.new_public_key !== "string" ||
+      !admitKey(moteDb.db, motebitId, body.new_public_key)
+    ) {
+      throw new HTTPException(400, {
+        message: "Succession new_public_key must be a 64-char LOWERCASE hex string",
+      });
     }
 
     if (body.recovery) {
@@ -302,7 +313,7 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     const onFile = keyOnFile(moteDb.db, motebitId);
     const from = c.req.query("from");
     const departable =
-      from != null && /^[0-9a-f]{64}$/i.test(from)
+      from != null && /^[0-9a-f]{64}$/i.test(from) // a departing key: stored spelling, any case (DA1)
         ? departureFrom(moteDb.db, motebitId, from).admissible
         : null;
 
@@ -311,11 +322,10 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     return c.json({
       motebit_id: motebitId,
       chain,
-      // What the relay SERVES as the identity's key, from the one reader
-      // (§5a A6) — the same answer the §7.6 bundle gives; `held_public_key`
-      // is the authority a rotation may depart from, and the two differ only
-      // by the device rung.
-      current_public_key: identityKeyFor(moteDb.db, motebitId)?.publicKey ?? null,
+      // The AUTHORITY (§5f, A6) — the same answer the §7.6 bundle gives.
+      // `held_public_key` is that same holder; `departable` answers the
+      // device rung for an identity with no holder.
+      current_public_key: identityKey(moteDb.db, motebitId)?.publicKey ?? null,
       held_public_key: onFile.held,
       ...(from != null ? { departable_from: from, departable } : {}),
     });
@@ -390,7 +400,7 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
       .run(Date.now(), motebitId);
     try {
       await insertRevocationEvent(moteDb.db, relayIdentity, "agent_revoked", motebitId, {
-        revokedPublicKey: agent?.public_key,
+        revokedPublicKey: verificationKeyFor(moteDb.db, motebitId, agent?.public_key) ?? undefined,
         effectiveAt: compromisedAt,
       });
     } catch {
@@ -533,11 +543,14 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
       .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
       .get(body.approver_id) as { public_key: string } | undefined;
     if (!approverAgent) throw new HTTPException(404, { message: "Approver agent not found" });
+    // Holder, else main's registry read (§5f verification reader).
+    const approverKey = verificationKeyFor(moteDb.db, body.approver_id, approverAgent.public_key);
+    if (approverKey === null) throw new HTTPException(404, { message: "Approver agent not found" });
 
     const sigValid = await verify(
       hexToBytes(body.signature),
       encoder.encode(votePayload),
-      hexToBytes(approverAgent.public_key),
+      hexToBytes(approverKey),
     );
     if (!sigValid) throw new HTTPException(403, { message: "Vote signature verification failed" });
 

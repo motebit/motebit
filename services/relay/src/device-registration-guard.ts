@@ -43,7 +43,10 @@ export async function refusePublicDeviceRegistration(
   deps: { identityManager: IdentityManager; db: DatabaseDriver },
   req: { motebitId: string; deviceId: string | undefined; publicKey: string },
 ): Promise<DeviceRegistrationRefusal | null> {
-  const key = req.publicKey.toLowerCase();
+  // EXACT (DA1/DB4): the doors admit only canonical keys or a stored key's
+  // exact spelling, so case-folding here could only let `UPPER(K)` join as a
+  // second device that a rotation (matching its old key) would then miss.
+  const key = req.publicKey;
 
   if (req.deviceId != null) {
     // The device table is keyed by device_id ALONE and written with
@@ -58,7 +61,7 @@ export async function refusePublicDeviceRegistration(
         remediation: "mint a fresh device_id for this machine",
       };
     }
-    if (holder != null && holder.public_key !== "" && holder.public_key.toLowerCase() !== key) {
+    if (holder != null && holder.public_key !== "" && holder.public_key !== key) {
       return {
         code: "DEVICE_KEY_CONFLICT",
         error: "device exists with a different public key",

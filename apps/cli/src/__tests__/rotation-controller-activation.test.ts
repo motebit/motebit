@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createSyncRelay } from "@motebit/relay";
 import type { SyncRelay } from "@motebit/relay";
-import { generateKeypair, bytesToHex } from "@motebit/encryption";
+import { deriveSovereignMotebitId, generateKeypair, bytesToHex } from "@motebit/encryption";
 import type { KeyPair } from "@motebit/encryption";
 import { performKeyRotation, type HeldRotation, type KeyRotationPorts } from "@motebit/surface-kit";
 
@@ -74,8 +74,10 @@ function device(mid: string, deviceId: string, a: KeyPair, fetchImpl: typeof fet
 }
 
 async function registered(): Promise<{ mid: string; deviceId: string; a: KeyPair }> {
-  const mid = crypto.randomUUID();
   const a = await generateKeypair();
+  // The CLI mints its id as the sovereign commitment to its key (core-identity),
+  // which is what lets the relay record that key on evidence (#703 §5f, E-sov).
+  const mid = await deriveSovereignMotebitId(hex(a));
   const deviceId = `${mid}-phone`;
   const handle = await registerWithRelay({
     syncUrl: SYNC_URL,

@@ -1,50 +1,45 @@
 /**
- * identity-keys — the holder and the resolvers for "this identity's key"
- * (#703, docs/proposals/identity-key-state-v1.md §5, §5a, §5b).
+ * identity-keys — the holder of "this identity's key", written by EVIDENCE,
+ * never by doors (#703; docs/proposals/identity-key-state-v1.md §5e, §5f).
  *
- * Until now the relay's knowledge of an identity's current key lived in
- * whichever table the door that proved it happened to write — `agent_registry`
- * (9 rows in production), `devices` (the rest), `relay_key_successions` (the
- * chain) — and three hand-rolled resolvers read them with two different
- * precedences. The first build of this module was withdrawn (#747) after two
- * review rounds found the same defect eight times: a door moved to the holder
- * while a sibling kept reasoning from the old tables. The cause was that the
- * relay asks THREE different questions about a key and had one function for
- * them (§5b):
+ * Two builds were withdrawn (#747, #750) because a door that merely passed
+ * a guard wrote the identity's key: a paired device's own key, an unsigned
+ * bootstrap, an unbound body key, an alternate spelling. §5f's founder
+ * decision: the holder is the ONLY authority, and only evidence writes it —
  *
- *  - Q-current — what is THE identity's key?               `identityKeyFor`
- *  - Q-held    — which keys does this identity answer to?   `keysHeldBy`
- *  - Q-device  — does THIS device's key verify this token?  auth.ts, per `did`
+ *  - E-sov   the id is the sovereign commitment to K (exact id, DA3) AND the
+ *            request proves CURRENT possession of K (DB1) — `proveSovereignFirstKey`
+ *            + `recordFirstIdentityKey`, as a first key only;
+ *  - E-link  a succession link verified by the HELD key (`applySuccession`);
+ *  - E-mig   a migration arrival's verified sovereign binding;
+ *  - E-main  the v42 backfill's one-time transplant of main's registry / chain head;
+ *  - E-op    an operator registration of a SERVICE identity with no holder, no
+ *            device row and no chain — the one case main already trusts the
+ *            operator for, and one no device can contest (§5f, build-time).
  *
- * `identity_keys` is the holder. It is written by every door that PROVES a
- * key, after the door has done its proving under its own principal (the doors
- * `check-identity-authority-writers` enumerates), through the two writers
- * here: `recordIdentityKey` (unconditional — a verified succession, a migration
- * arrival, an authenticated registration) and `recordFirstIdentityKey` (the
- * public doors — only when nothing is proven yet and no device row disagrees).
- * The migration backfills it in the resolver's own precedence and only where
- * the answer is unambiguous (D5: a wrong key served from a foundation-law route
- * is a planted binding; not knowing is honest, guessing is not).
+ * Two kinds of question, never conflated:
  *
- * `provenIdentityKey` is the AUTHORITY: holder, else registry, else chain head
- * — never a device row (§5a A4: a paired device holds its own key, and a
- * rotation or registration must not be forced to depart from a key the
- * identity never held). `identityKeyFor` is the READER: the authority, else the
- * one key every keyed device row agrees on — for the doors that would
- * otherwise answer nothing. One precedence list; the reader is the authority
- * plus one rung.
+ *  - AUTHORITY    — `identityKey`: the holder, else null. What the relay
+ *                   serves (§7.6 bundle, identity log, /succession), what a
+ *                   rotation departs from, what a registration is checked
+ *                   against. The registry key and the chain head are NOT
+ *                   authority: anything may write them, so nothing reads
+ *                   them as the identity's key (G1).
+ *  - VERIFICATION — `verificationKeyFor`: the holder, else exactly what that
+ *                   reader reads on main. Unfilled identities verify
+ *                   byte-identically to main; filled ones against the proven key.
  *
- * This module is the only one that reads any of the four tables for a key;
- * Part B's `check-identity-key-resolver` locks that.
+ * The public-door guard asks a third, per-SET question: `keysHeldBy`.
  */
 
+import { deriveSovereignMotebitId, verifySovereignBinding } from "@motebit/crypto";
 import type { DatabaseDriver } from "@motebit/persistence";
 
-/** Which door proved the key that is on file. Closed set; a new door adds a name here. */
+/** Which evidence recorded the key on file. Closed set; new evidence adds a name here. */
 export const IDENTITY_KEY_SOURCES = [
   "register",
-  "bootstrap",
   "register-self",
+  "operator",
   "succession",
   "migration",
   "backfill:registry",
@@ -52,30 +47,26 @@ export const IDENTITY_KEY_SOURCES = [
 ] as const;
 export type IdentityKeySource = (typeof IDENTITY_KEY_SOURCES)[number];
 
-/** Which rung answered. `holder` is the only rung a door wrote on purpose. */
-export type IdentityKeyRung = "holder" | "registry" | "chain" | "devices";
-/** The rungs a door may treat as the identity's key on file — never `devices` (§5a A4). */
-export type ProvenRung = Exclude<IdentityKeyRung, "devices">;
-export type ProvenIdentityKey = Omit<IdentityKey, "rung"> & { rung: ProvenRung };
-
 export interface IdentityKey {
   publicKey: string;
-  /** The one guardian truth (`identityGuardianFor`), whichever rung answered. */
+  /** The one guardian truth (`identityGuardianFor`). */
   guardianPublicKey: string | null;
-  rung: IdentityKeyRung;
-  /** The door that recorded the holder's key; null when a fallback rung answered. */
-  source: IdentityKeySource | null;
+  /** The evidence that recorded this key. */
+  source: IdentityKeySource;
   /** When this relay first held a key for the identity (ms epoch). */
   firstSeen: number;
 }
 
-const HEX_64 = /^[0-9a-f]{64}$/i;
+/** A key's shape as the writer stores it (spelling preserved — DA10). */
+const HEX_64_ANY_CASE = /^[0-9a-f]{64}$/i;
+/** The canonical spelling a NEW key must arrive in (DA1). */
+const HEX_64_CANONICAL = /^[0-9a-f]{64}$/;
 
-/** `''` is not a key on file (§5a A5): a legacy row with an empty key reads as none. */
+/** `''` is not a key on file (§5a A5). */
 const keyOrNull = (k: string | null | undefined): string | null =>
   k != null && k !== "" ? k : null;
 
-// ── The raw reads. Each rung has ONE reader; the resolvers compose them. ──
+// ── The raw reads. ──
 
 function readHolder(db: DatabaseDriver, motebitId: string) {
   return db
@@ -102,14 +93,6 @@ function readRegistry(db: DatabaseDriver, motebitId: string) {
     | undefined;
 }
 
-function readChainHead(db: DatabaseDriver, motebitId: string) {
-  return db
-    .prepare(
-      "SELECT new_public_key, (SELECT MIN(timestamp) FROM relay_key_successions WHERE motebit_id = ?) AS first_link FROM relay_key_successions WHERE motebit_id = ? ORDER BY id DESC LIMIT 1",
-    )
-    .get(motebitId, motebitId) as { new_public_key: string; first_link: number } | undefined;
-}
-
 function readDeviceKeys(db: DatabaseDriver, motebitId: string): string[] {
   return (
     db
@@ -118,27 +101,34 @@ function readDeviceKeys(db: DatabaseDriver, motebitId: string): string[] {
   ).map((r) => r.public_key);
 }
 
-/** The registry's key as a key on file — `''` is none. For reporting a rung, never for precedence. */
+/** The registry's key — discovery's copy, NOT authority (§5f). `''` is none. */
 export function registryKeyOf(db: DatabaseDriver, motebitId: string): string | null {
   return keyOrNull(readRegistry(db, motebitId)?.public_key);
 }
 
-/** The newest recorded link's `new_public_key`, by insertion order. */
+/** The newest recorded link's `new_public_key`, by insertion order — a record, NOT authority (§5f). */
 export function chainHeadOf(db: DatabaseDriver, motebitId: string): string | null {
-  return readChainHead(db, motebitId)?.new_public_key ?? null;
+  return (
+    (
+      db
+        .prepare(
+          "SELECT new_public_key FROM relay_key_successions WHERE motebit_id = ? ORDER BY id DESC LIMIT 1",
+        )
+        .get(motebitId) as { new_public_key: string } | undefined
+    )?.new_public_key ?? null
+  );
 }
 
-/** The holder's key, when a door has recorded one. */
+/** The holder's key, when evidence has recorded one. */
 export function holderKeyOf(db: DatabaseDriver, motebitId: string): string | null {
   return readHolder(db, motebitId)?.public_key ?? null;
 }
 
-// ── The resolvers. ──
+// ── The questions. ──
 
 /**
- * The one guardian truth (§5a A3): the holder's guardian, else the registry's
- * (the pre-holder copy the backfill already folded in). Every door that proves
- * a guardian writes the holder; every reader asks here.
+ * The one guardian truth (§5a A3): the holder's guardian, else the registry's.
+ * Every verified attestation writes the holder (DA6); every reader asks here.
  */
 export function identityGuardianFor(db: DatabaseDriver, motebitId: string): string | null {
   return (
@@ -148,98 +138,85 @@ export function identityGuardianFor(db: DatabaseDriver, motebitId: string): stri
 }
 
 /**
- * The AUTHORITY — the key a rotation may depart from and a registration is
- * compared against. Holder, else registry, else chain head; never a device
- * row (§5a A4). Null when the identity has proven no key to this relay.
+ * AUTHORITY (§5f) — the holder, else null. Never the registry, the chain head
+ * or a device row: each of those can be written without evidence, and reading
+ * one as the identity's key is how an unproven write became authority (G1).
  */
-export function provenIdentityKey(db: DatabaseDriver, motebitId: string): ProvenIdentityKey | null {
+export function identityKey(db: DatabaseDriver, motebitId: string): IdentityKey | null {
   const held = readHolder(db, motebitId);
-  if (held) {
-    return {
-      publicKey: held.public_key,
-      guardianPublicKey: identityGuardianFor(db, motebitId),
-      rung: "holder",
-      source: held.source,
-      firstSeen: held.first_seen,
-    };
-  }
-  const reg = readRegistry(db, motebitId);
-  const registryKey = keyOrNull(reg?.public_key);
-  if (registryKey !== null) {
-    return {
-      publicKey: registryKey,
-      guardianPublicKey: identityGuardianFor(db, motebitId),
-      rung: "registry",
-      source: null,
-      firstSeen: reg!.registered_at,
-    };
-  }
-  const head = readChainHead(db, motebitId);
-  if (head) {
-    return {
-      publicKey: head.new_public_key,
-      guardianPublicKey: identityGuardianFor(db, motebitId),
-      rung: "chain",
-      source: null,
-      firstSeen: reg?.registered_at ?? head.first_link,
-    };
-  }
-  return null;
-}
-
-/**
- * The READER — what the relay serves as the identity's current key. The
- * authority, else the one key EVERY keyed device row agrees on (a device
- * linked without key transfer holds its own key, so disagreeing rows answer
- * nothing — D5). Null when the relay holds no unambiguous key.
- */
-export function identityKeyFor(db: DatabaseDriver, motebitId: string): IdentityKey | null {
-  const proven = provenIdentityKey(db, motebitId);
-  if (proven) return proven;
-  const devices = readDeviceKeys(db, motebitId);
-  if (devices.length !== 1) return null;
-  const first = db
-    .prepare("SELECT MIN(registered_at) AS t FROM devices WHERE motebit_id = ?")
-    .get(motebitId) as { t: number };
+  if (!held) return null;
   return {
-    publicKey: devices[0]!,
+    publicKey: held.public_key,
     guardianPublicKey: identityGuardianFor(db, motebitId),
-    rung: "devices",
-    source: null,
-    firstSeen: first.t,
+    source: held.source,
+    firstSeen: held.first_seen,
   };
 }
 
 /**
- * Q-held — every key this identity answers to, lower-cased for comparison
- * the way the public-door guard compares: the holder's key, the registry's,
- * the recorded chain head's, and every keyed device row's. The guard's law
- * (§5b L1): this set contains whatever `identityKeyFor` answers, so a key
- * auth would verify against is a key the guard already counts as held. The
- * chain head is here because L1 said so — the first draft left it out, and a
- * deregistered daemon that had rotated (chain only) would have admitted a
- * stranger's device while auth verified its tokens against that head.
- * Empty means "no owner yet".
+ * VERIFICATION (§5f) — the key a signature reader verifies against: the
+ * holder, else `mainRead` — exactly what that reader read before the holder
+ * existed. An unfilled identity therefore verifies byte-identically to main;
+ * a filled one against its proven key. `''` / null / undefined read as none.
+ */
+export function verificationKeyFor(
+  db: DatabaseDriver,
+  motebitId: string,
+  mainRead: string | null | undefined,
+): string | null {
+  return holderKeyOf(db, motebitId) ?? keyOrNull(mainRead);
+}
+
+/**
+ * The public-door guard's SET — every key this identity answers to: the
+ * holder, the registry's, and every keyed device row's, compared EXACTLY
+ * (DA1/DB4 — a case-folding guard let `UPPER(K)` join as an extra device a
+ * rotation would miss). L1 holds by construction: every key auth or
+ * `verificationKeyFor` can verify a token against is in this set. Empty means
+ * "no owner yet".
  */
 export function keysHeldBy(db: DatabaseDriver, motebitId: string): Set<string> {
   const held = new Set<string>();
   const add = (k: string | null | undefined) => {
     const key = keyOrNull(k);
-    if (key !== null) held.add(key.toLowerCase());
+    if (key !== null) held.add(key);
   };
   add(holderKeyOf(db, motebitId));
   add(registryKeyOf(db, motebitId));
-  add(chainHeadOf(db, motebitId));
   for (const k of readDeviceKeys(db, motebitId)) add(k);
   return held;
+}
+
+/**
+ * DA1/DB4 — may this key ENTER through a door? Canonical lowercase hex, or a
+ * key that EXACTLY equals one already on file for the identity (holder,
+ * registry, chain head, a device row) — continuity, so a legacy identity
+ * whose stored spelling predates the rule keeps working. `hexToBytes` is
+ * lenient (`"a!"` reads as `0x0a`), so lowercasing is not canonicalization:
+ * anything else is refused, never normalized.
+ */
+export function admitKey(db: DatabaseDriver, motebitId: string, key: string): boolean {
+  if (HEX_64_CANONICAL.test(key)) return true;
+  if (key === "") return false;
+  return (
+    key === holderKeyOf(db, motebitId) ||
+    key === registryKeyOf(db, motebitId) ||
+    key === chainHeadOf(db, motebitId) ||
+    readDeviceKeys(db, motebitId).includes(key)
+  );
+}
+
+/** A NEW key with no identity context (a key that has never been on file): canonical only. */
+export function isCanonicalKey(key: string): boolean {
+  return HEX_64_CANONICAL.test(key);
 }
 
 // ── The writers. ──
 
 /**
- * Record a key a door has just PROVED. Upsert: a later proof replaces the key;
- * the guardian is kept unless the door supplies one. The caller is a door
- * with a registered principal — this function proves nothing itself.
+ * Record a key evidence has just PROVED (E-link, E-mig, or through
+ * `recordFirstIdentityKey`). Upsert; the guardian is kept unless given one.
+ * The caller holds the evidence — this function proves nothing itself.
  */
 export function recordIdentityKey(
   db: DatabaseDriver,
@@ -251,11 +228,10 @@ export function recordIdentityKey(
     now: number;
   },
 ): void {
-  // Stored as given, never normalized: every sibling store keeps the caller's
-  // spelling and rule 21's comparisons are EXACT, so a lowercased holder would
-  // refuse an uppercase registrant's own rotation.
+  // Stored as given: spelling is part of signed chains and anchored leaves
+  // (DA10), and every comparison is exact.
   const key = input.publicKey;
-  if (!HEX_64.test(key)) {
+  if (!HEX_64_ANY_CASE.test(key)) {
     throw new Error(`recordIdentityKey: not a 32-byte hex public key (source ${input.source})`);
   }
   db.prepare(
@@ -269,48 +245,125 @@ export function recordIdentityKey(
   ).run(input.motebitId, key, input.guardianPublicKey ?? null, input.source, input.now, input.now);
 }
 
+declare const sovereignFirstKey: unique symbol;
 /**
- * The public doors' writer (`/agents/bootstrap`, `/devices/register-self`).
- * They verified a signature by `publicKey` over the request, so the key is
- * proven — but it is THE IDENTITY's key only when the identity has proven
- * nothing yet (§5a A2: "new" means `provenIdentityKey === null`, never "no
- * identities row") and no keyed device row holds another key (a paired
- * device's own key passes the guard and is not the identity's — D5). Returns
- * whether it wrote. Called unconditionally after the guard; a second machine
- * after key transfer, or a restore from seed, is a no-op here.
+ * E-sov's arithmetic half, as a value only `proveSovereignFirstKey` can make:
+ * the id is EXACTLY the sovereign commitment to the key (DA3 — a case-folded
+ * id would mint an alias). The door supplies the other half — CURRENT
+ * possession of the key (DB1): register-self's signature by it, or a bearer
+ * token verified by the device row that holds it.
  */
-export function recordFirstIdentityKey(
-  db: DatabaseDriver,
-  input: {
-    motebitId: string;
-    publicKey: string;
-    source: "bootstrap" | "register-self";
-    now: number;
-  },
-): boolean {
-  if (provenIdentityKey(db, input.motebitId) !== null) return false;
-  const key = input.publicKey.toLowerCase();
-  for (const held of keysHeldBy(db, input.motebitId)) {
-    if (held !== key) return false;
+export type SovereignFirstKey = {
+  readonly motebitId: string;
+  readonly publicKey: string;
+  readonly [sovereignFirstKey]: true;
+};
+
+export async function proveSovereignFirstKey(
+  motebitId: string,
+  publicKey: string,
+): Promise<SovereignFirstKey | null> {
+  if (!HEX_64_CANONICAL.test(publicKey)) return null;
+  if (motebitId.startsWith("did:key:")) {
+    if (!(await verifySovereignBinding(motebitId, publicKey))) return null;
+  } else if (motebitId !== (await deriveSovereignMotebitId(publicKey))) {
+    return null;
   }
-  recordIdentityKey(db, input);
-  return true;
+  return { motebitId, publicKey } as SovereignFirstKey;
 }
 
 /**
- * A verified guardian attestation, recorded on the holder the identity
- * already has. `/agents/register` calls it when the attestation arrives
- * WITHOUT a key: the registry takes the new guardian, and a holder left on
- * the old one would answer `identityGuardianFor` with it — a guardian the
- * identity replaced could still recover it (#750 review). No holder row ⇒
- * nothing to update: the registry's guardian is then the one truth.
+ * E-sov's write (DA2): ONE synchronous transaction that re-reads and writes —
+ * only when the identity has no holder, no recorded chain, no registry key
+ * other than this one (absent, `''`, or equal), and every key it answers to
+ * IS this one. A rotation that
+ * lands while the door was hashing makes this a no-op; a leftover genesis row
+ * beside a paired device's own key leaves the identity unfilled. Returns
+ * whether it wrote. The door must have proven CURRENT possession (DB1).
+ */
+export function recordFirstIdentityKey(
+  db: DatabaseDriver,
+  proof: SovereignFirstKey,
+  input: { source: "register" | "register-self"; guardianPublicKey?: string | null; now: number },
+): boolean {
+  return db.transaction(() => {
+    const id = proof.motebitId;
+    if (holderKeyOf(db, id) !== null) return false;
+    if (chainHeadOf(db, id) !== null) return false;
+    // A registry key that DIFFERS blocks the write (it may be main's authority,
+    // transplanted or not); one equal to this key is discovery's copy of the
+    // same answer (§5f build-time amendment — a keyless daemon registration
+    // publishes it before the holder is filled).
+    const reg = registryKeyOf(db, id);
+    if (reg !== null && reg !== proof.publicKey) return false;
+    for (const held of keysHeldBy(db, id)) {
+      if (held !== proof.publicKey) return false;
+    }
+    recordIdentityKey(db, {
+      motebitId: id,
+      publicKey: proof.publicKey,
+      guardianPublicKey: input.guardianPublicKey ?? null,
+      source: input.source,
+      now: input.now,
+    });
+    return true;
+  });
+}
+
+/**
+ * E-op's write (§5f, found while building): an operator-bearer registration
+ * of a SERVICE identity — no holder, no device row, no recorded chain. Main
+ * trusts the operator's registry key as this identity's authority; without
+ * this, an operator-registered service identity first seen after v42 could
+ * never rotate or recover through its guardian (§8(b)). It cannot recreate
+ * G1, which needs device rows. One synchronous transaction, re-reading.
+ */
+export function recordOperatorServiceKey(
+  db: DatabaseDriver,
+  input: { motebitId: string; publicKey: string; guardianPublicKey?: string | null; now: number },
+): boolean {
+  return db.transaction(() => {
+    const id = input.motebitId;
+    if (holderKeyOf(db, id) !== null) return false;
+    if (chainHeadOf(db, id) !== null) return false;
+    if (readDeviceKeys(db, id).length > 0) return false;
+    if (db.prepare("SELECT 1 FROM devices WHERE motebit_id = ? LIMIT 1").get(id) != null) {
+      return false;
+    }
+    recordIdentityKey(db, {
+      motebitId: id,
+      publicKey: input.publicKey,
+      guardianPublicKey: input.guardianPublicKey ?? null,
+      source: "operator",
+      now: input.now,
+    });
+    return true;
+  });
+}
+
+/**
+ * The key a keyless `/agents/register` publishes to discovery (DA5): the
+ * holder, else the one key every keyed device row agrees on, else `''`. A
+ * discovery copy, NOT authority (§5f) — never written to the holder.
+ */
+export function discoveryKeyFor(db: DatabaseDriver, motebitId: string): string {
+  const held = holderKeyOf(db, motebitId);
+  if (held !== null) return held;
+  const devices = readDeviceKeys(db, motebitId);
+  return devices.length === 1 ? devices[0]! : "";
+}
+
+/**
+ * A verified guardian attestation, on the holder the identity already has
+ * (DA6 — every verified attestation, whatever the key evidence). No holder ⇒
+ * nothing to update: the registry's guardian is then the one truth. The door
+ * format-checks the guardian BEFORE any write (DB4).
  */
 export function recordIdentityGuardian(
   db: DatabaseDriver,
   input: { motebitId: string; guardianPublicKey: string; now: number },
 ): void {
-  const guardian = input.guardianPublicKey.toLowerCase();
-  if (!HEX_64.test(guardian)) {
+  if (!HEX_64_ANY_CASE.test(input.guardianPublicKey)) {
     throw new Error("recordIdentityGuardian: guardian must be a 64-hex Ed25519 public key");
   }
   db.prepare(
@@ -324,10 +377,10 @@ export function recordIdentityGuardian(
  * holder is the authority, and authority never comes from devices (§5a A4):
  * a lone paired device's own key is indistinguishable in SQL from the
  * identity's, and backfilling it would make the paired device the identity
- * (#750 review). An identity whose only evidence is device rows is left for
- * its next bootstrap or register-self, which records the first key exactly
- * as a new identity's; until then `identityKeyFor` still SERVES the key its
- * device rows agree on, and `departureFrom`'s last rung still lets it rotate.
+ * (#750 review). This is E-main (§5f): the ONE time the registry and chain
+ * head are read as authority — a transplant of main's answer, spelling as-is
+ * (DA10). An identity whose only evidence is device rows stays unfilled
+ * until E-sov, E-link or E-mig; `departureFrom`'s device rung lets it rotate.
  */
 export const IDENTITY_KEYS_BACKFILL_SQL = `
   INSERT INTO identity_keys (motebit_id, public_key, guardian_public_key, source, first_seen, updated_at)

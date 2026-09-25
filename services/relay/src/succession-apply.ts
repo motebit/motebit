@@ -28,7 +28,7 @@ import type { KeySuccessionRecord } from "@motebit/encryption";
 import {
   chainHeadOf,
   holderKeyOf,
-  provenIdentityKey,
+  identityKey,
   recordIdentityKey,
   registryKeyOf,
 } from "./identity-keys.js";
@@ -91,7 +91,7 @@ export interface KeyOnFile {
   registryKey: string | null;
   /** The `new_public_key` of the newest recorded link, by insertion order. */
   chainHead: string | null;
-  /** The AUTHORITY (`provenIdentityKey`, §5b): holder, else registry, else chain head, else null. */
+  /** The AUTHORITY (`identityKey`, §5f): the holder, else null. Registry and chain head are reported, never authority. */
   held: string | null;
 }
 
@@ -108,12 +108,12 @@ export function keyOnFile(db: DatabaseDriver, motebitId: string): KeyOnFile {
     holderKey: holderKeyOf(db, motebitId),
     registryKey: registryKeyOf(db, motebitId),
     chainHead: chainHeadOf(db, motebitId),
-    held: provenIdentityKey(db, motebitId)?.publicKey ?? null,
+    held: identityKey(db, motebitId)?.publicKey ?? null,
   };
 }
 
 export type Departure =
-  | { admissible: true; rung: "holder" | "registry" | "chain" | "device" }
+  | { admissible: true; rung: "holder" | "device" }
   | {
       admissible: false;
       reason: "not_from_current_key" | "not_from_chain_head" | "no_key_on_file";
@@ -121,24 +121,23 @@ export type Departure =
 
 /**
  * May a succession departing from `key` be recorded for this identity?
- * Admissible when `key` is the proven key (§5b L3) — and, ONLY when the
- * identity has proven no key at all, when some device row holds exactly
- * `key` (#736's last rung, kept). After the v42 backfill that last case is
- * the identity whose device rows disagree and that has no registry key and
- * no chain: the relay cannot say which row is the identity's, and refusing
- * would lock out a guardian recovery that landed before — §8's second
- * clause. The exact-row check is a different question from the reader's
- * ("does THIS row hold the key", not "do all rows agree"), so the rung is
- * named here and not in `provenIdentityKey`.
+ * The holder is the only authority (§5f): admissible when `key` IS the held
+ * key, exactly as stored (DA1 — a departing key is matched to its stored
+ * spelling, never format-checked). When the identity has NO holder — it has
+ * presented no evidence this relay can type — #736's exact-row device rung
+ * decides (DA4): some device row holds exactly `key`. That rung admits a
+ * rotation of that ROW; it never makes the new key the identity's
+ * (`applySuccession` writes the holder only for a holder-admitted link).
+ * The registry key and the chain head are not rungs: anything may write
+ * them, and reading them as authority is how an unproven write locked an
+ * owner out (G1).
  */
 export function departureFrom(db: DatabaseDriver, motebitId: string, key: string): Departure {
-  const proven = provenIdentityKey(db, motebitId);
-  if (proven !== null) {
-    if (proven.publicKey === key) return { admissible: true, rung: proven.rung };
-    return {
-      admissible: false,
-      reason: proven.rung === "chain" ? "not_from_chain_head" : "not_from_current_key",
-    };
+  const held = holderKeyOf(db, motebitId);
+  if (held !== null) {
+    return held === key
+      ? { admissible: true, rung: "holder" }
+      : { admissible: false, reason: "not_from_current_key" };
   }
   const heldByDevice = db
     .prepare("SELECT 1 FROM devices WHERE motebit_id = ? AND public_key = ? LIMIT 1")
@@ -188,8 +187,12 @@ export function applySuccession(
     // across a rotation would publish a credential naming a key the row no
     // longer holds — dropped, so the device re-attaches against the key it
     // now holds.
+    //
+    // Matched case-insensitively (DB4): retiring WIDER is fail-safe — a row
+    // that entered under another spelling of the retired key (main's guard
+    // case-folded) must not keep authenticating after the rotation.
     db.prepare(
-      "UPDATE devices SET public_key = ?, hardware_attestation_credential = NULL WHERE motebit_id = ? AND public_key = ?",
+      "UPDATE devices SET public_key = ?, hardware_attestation_credential = NULL WHERE motebit_id = ? AND lower(public_key) = lower(?)",
     ).run(record.new_public_key, motebitId, record.old_public_key);
 
     // A pairing session approved before this rotation carries the key that
@@ -207,7 +210,7 @@ export function applySuccession(
       `UPDATE pairing_sessions SET key_transfer_payload = NULL
        WHERE motebit_id = ? AND key_transfer_payload IS NOT NULL
          AND (json_valid(key_transfer_payload) = 0
-              OR json_extract(key_transfer_payload, '$.identity_pubkey_check') = ?)`,
+              OR lower(json_extract(key_transfer_payload, '$.identity_pubkey_check')) = lower(?))`,
     ).run(motebitId, record.old_public_key);
 
     // The registry key moves only FROM the key this link retires, or into an
@@ -220,12 +223,14 @@ export function applySuccession(
     db.prepare(
       "UPDATE agent_registry SET public_key = ? WHERE motebit_id = ? AND (public_key = ? OR COALESCE(public_key, '') = '')",
     ).run(record.new_public_key, motebitId, record.old_public_key);
-    // The one holder moves with the chain, in the same transaction — and, like
-    // the registry UPDATE above, only FROM the key this link retires or into an
-    // empty slot: a re-presented head link must not drag a holder that has
-    // since moved on back to an older key (#703 Inc 2 review).
+    // The holder moves ONLY for E-link (§5f): a link departing from the key it
+    // HOLDS. Never into an empty slot — an identity with no holder departed
+    // through the device rung, which proves a device row's key, not the
+    // identity's; and never from any other key, so a re-presented old link
+    // cannot drag a holder that has moved on. The registry above is
+    // discovery's copy, not authority, so it keeps main's behaviour.
     const holder = holderKeyOf(db, motebitId);
-    if (holder === null || holder === record.old_public_key) {
+    if (holder !== null && holder === record.old_public_key) {
       recordIdentityKey(db, {
         motebitId,
         publicKey: record.new_public_key,

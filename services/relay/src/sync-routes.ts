@@ -28,7 +28,7 @@ import { isSuiteId } from "@motebit/protocol";
 import { createLogger } from "./logger.js";
 import { refusePublicDeviceRegistration } from "./device-registration-guard.js";
 import type { ConnectedDevice } from "./index.js";
-import { recordFirstIdentityKey } from "./identity-keys.js";
+import { admitKey, proveSovereignFirstKey, recordFirstIdentityKey } from "./identity-keys.js";
 
 const logger = createLogger({ service: "sync-routes" });
 
@@ -156,7 +156,8 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
     }
     if (
       body.public_key !== undefined &&
-      (typeof body.public_key !== "string" || !/^[0-9a-f]{64}$/i.test(body.public_key))
+      (typeof body.public_key !== "string" ||
+        !admitKey(deps.moteDb.db, body.motebit_id, body.public_key))
     ) {
       throw new HTTPException(400, {
         message: "Invalid 'public_key' — must be 64-char hex string (32 bytes Ed25519 public key)",
@@ -225,6 +226,20 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
       );
     }
 
+    // A NEW key must be canonical; a key already on file is admitted in its
+    // stored spelling (DA1/DB4) — the signature verifies under any spelling
+    // `hexToBytes` accepts, so the spelling must be refused here.
+    if (!admitKey(deps.moteDb.db, body.motebit_id, body.public_key)) {
+      return c.json(
+        {
+          error: "public_key must be 64-char LOWERCASE hex",
+          code: "DEVICE_REGISTRATION_REJECTED",
+          reason: "non_canonical_public_key",
+        },
+        400,
+      );
+    }
+
     // Who may add a device to an identity that already exists — the one
     // rule this door shares with `/agents/bootstrap`. See the guard for
     // why a per-device conflict check was not enough.
@@ -267,18 +282,19 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
       );
     }
 
-    // The public doors' writer (§5b): this door verified a signature by
-    // `body.public_key` over the request, so the key is proven — it is the
-    // IDENTITY's key only when nothing is proven yet and no keyed device row
-    // holds another key (a paired device's own key passes the guard above and
-    // is not the identity's — D5). "New" is `provenIdentityKey === null`,
-    // never `created` (§5a A2).
-    recordFirstIdentityKey(deps.moteDb.db, {
-      motebitId: body.motebit_id,
-      publicKey: body.public_key,
-      source: "register-self",
-      now: Date.now(),
-    });
+    // E-sov (§5f): this door verified a signature by `body.public_key` over
+    // the request — CURRENT possession (DB1) — and the holder records it only
+    // when the id is EXACTLY the sovereign commitment to that key (DA3) and,
+    // re-read in one transaction, nothing else is on file (DA2). A paired
+    // device's own key is not sovereign-bound to the id and records nothing;
+    // a legacy (non-sovereign) id never fills through this door.
+    const sovereignProof = await proveSovereignFirstKey(body.motebit_id, body.public_key);
+    if (sovereignProof) {
+      recordFirstIdentityKey(deps.moteDb.db, sovereignProof, {
+        source: "register-self",
+        now: Date.now(),
+      });
+    }
 
     const registeredAt = Date.now();
     logger.info("device.self_register.ok", {
