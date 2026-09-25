@@ -687,8 +687,8 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   // === Recovery Seed Reveal ===
   //
   // Sensitive action — gated behind explicit click + confirmation +
-  // auto-hide. The keyring backend (macOS Keychain / Windows Credential
-  // Manager / Linux Secret Service) already protects at-rest; this is
+  // auto-hide. At rest the seed is in ~/.motebit/dev-keyring.json (0600
+  // plaintext; the OS keychain is not used yet); this is
   // the user-facing affordance to back the seed up to a password
   // manager. Reset on every panel open so it never persists across opens.
   const RECOVERY_SEED_AUTOHIDE_MS = 60_000;

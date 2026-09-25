@@ -381,9 +381,13 @@ fn db_execute(
 // R3 atomic owner-only + narrow on every load), the config rules in
 // `config_file` (the desktop never writes a `cli_*` field; binding changes
 // keep the old file; every writer is a field-level compare-and-swap merge),
-// and the secret store in `key_store` (OS keychain first, verified; the
-// plaintext `dev-keyring.json` only as the fallback when the keychain is
-// unavailable). One lock per file family serializes this process's writers.
+// and the secret store in `key_store`. Desktop keys are stored in
+// `~/.motebit/dev-keyring.json` (0600, PLAINTEXT — ssh-key-level protection:
+// readable by any process running as this user). The OS keychain is NOT used
+// yet — every build, signed or not; enabling it is a deferred arc gated on
+// real-device testing (docs/proposals/key-file-durability-v1.md, "The split:
+// file-only now, the keychain as its own arc"). One lock per file family
+// serializes this process's writers.
 
 static CONFIG_LOCK: Mutex<()> = Mutex::new(());
 static KEYSTORE_LOCK: Mutex<()> = Mutex::new(());
@@ -431,25 +435,22 @@ fn update_config(patch: String, expect: Option<String>) -> Result<(), String> {
     Ok(())
 }
 
-const KEYRING_SERVICE: &str = "com.motebit.desktop";
-
-fn key_store() -> Result<key_store::KeyStore<key_store::OsKeychain>, String> {
-    Ok(key_store::KeyStore::new(
-        key_store::OsKeychain::new(KEYRING_SERVICE),
-        durable_file::motebit_dir()?,
-    ))
+/// File-only (`NoKeychain`): the type names the store, so a keychain cannot
+/// be wired in here by accident.
+fn key_store() -> Result<key_store::KeyStore<key_store::NoKeychain>, String> {
+    key_store::KeyStore::default_for_app()
 }
 
-/// `Ok(None)` only for a true absence; a keychain or file that cannot be
-/// read is an `Err` (never "no key" — a first launch must not mint over it).
+/// `Ok(None)` only for a true absence; a file that cannot be read is an
+/// `Err` (never "no key" — a first launch must not mint over it).
 #[tauri::command]
 fn keyring_get(key: String) -> Result<Option<String>, String> {
     let _g = lock(&KEYSTORE_LOCK);
     key_store()?.get(&key)
 }
 
-/// Stores in the OS keychain (verified by reading back), else the fallback
-/// file. The previous value of a key-material name is preserved first.
+/// Stores in `dev-keyring.json` (atomic, 0600). The previous value of a
+/// key-material name is preserved first.
 #[tauri::command]
 fn keyring_set(key: String, value: String) -> Result<(), String> {
     let _g = lock(&KEYSTORE_LOCK);
@@ -469,49 +470,6 @@ fn keyring_delete(key: String) -> Result<(), String> {
 fn keyring_set_aside(key: String) -> Result<(), String> {
     let _g = lock(&KEYSTORE_LOCK);
     key_store()?.set_aside(&key)
-}
-
-/// Startup: move entries that live only in the plaintext fallback file into
-/// the OS keychain (verify, then keep the file aside). Logged, never fatal.
-fn migrate_dev_keyring() {
-    let _g = lock(&KEYSTORE_LOCK);
-    let store = match key_store() {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("[motebit] keyring migration skipped: {}", e);
-            return;
-        }
-    };
-    match store.migrate() {
-        Ok(r) => {
-            if !r.migrated.is_empty() {
-                eprintln!(
-                    "[motebit] moved {} secret(s) from {} into the OS keychain; the file's bytes are kept at {}",
-                    r.migrated.len(),
-                    store.dev_path().display(),
-                    r.preserved_file
-                        .as_ref()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_default()
-                );
-            }
-            if !r.conflicts.is_empty() {
-                eprintln!(
-                    "[motebit] WARNING: {} differ between {} and the OS keychain; left in the file, keychain untouched",
-                    r.conflicts.join(", "),
-                    store.dev_path().display()
-                );
-            }
-            if let Some(e) = r.keychain_unavailable {
-                eprintln!(
-                    "[motebit] secrets not moved to the OS keychain ({}); they stay in the fallback file. Store: {}",
-                    e,
-                    key_store::describe(store.dev_path().parent().unwrap_or(std::path::Path::new(".")))
-                );
-            }
-        }
-        Err(e) => eprintln!("[motebit] WARNING: keyring migration refused: {}", e),
-    }
 }
 
 // === MCP Discovery ===
@@ -1064,9 +1022,8 @@ fn main() {
     std::fs::create_dir_all(&dir).expect("Failed to create ~/.motebit directory");
     let db_path = dir.join("motebit.db");
 
-    // Finding B-0: secrets that only ever reached the plaintext fallback file
-    // move into the OS keychain now that the keychain backends are compiled in.
-    migrate_dev_keyring();
+    // No keychain migration: this build keeps keys in dev-keyring.json (see
+    // the secret-store note above `key_store()`).
 
     let db = Connection::open(&db_path).expect("Failed to open database");
 

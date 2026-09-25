@@ -143,14 +143,14 @@ export class IdentityManager {
 
     const keyStore: BootstrapKeyStore = {
       async storePrivateKey(privKeyHex) {
-        // Rust's keyring_set stores in the OS keychain (verified by a
-        // fresh read-back), else the 0600 fallback file; a previous value
-        // is preserved first. A resolved promise means it is durable.
+        // Rust's keyring_set stores in ~/.motebit/dev-keyring.json (0600,
+        // atomic; the OS keychain is not used yet); a previous value is
+        // preserved first. A resolved promise means it is durable.
         await invoke<void>("keyring_set", { key: "device_private_key", value: privKeyHex });
       },
       async hasPrivateKey() {
-        // R1: only a TRUE absence is `false`. A keychain that cannot be
-        // read, or a damaged fallback file, makes keyring_get reject — and
+        // R1: only a TRUE absence is `false`. A key file that cannot be
+        // read, or is damaged, makes keyring_get reject — and
         // that rejection propagates, so bootstrap stops instead of treating
         // the identity as orphaned and minting over it.
         const val = await invoke<string | null>("keyring_get", { key: "device_private_key" });
@@ -756,8 +756,8 @@ export interface IdentitySwitch {
 /**
  * Switch this device to another identity.
  *
- *  1. The whole switch is written ahead to the keychain (key material, so
- *     Rust preserves anything it replaces there).
+ *  1. The whole switch is written ahead to the key store (key material,
+ *     so Rust preserves anything it replaces there).
  *  2. The outgoing identity's rotation write-ahead is SET ASIDE (kept as
  *     `pending_rotation.preserved-<time>`, never deleted): left active, the
  *     next rotation would treat it as stale and clear it (C7).
@@ -801,13 +801,13 @@ export async function finishInterruptedIdentitySwitch(invoke: InvokeFn): Promise
     sw = JSON.parse(raw) as IdentitySwitch;
   } catch (err) {
     throw new Error(
-      `An interrupted identity switch (${SWITCH_KEY}) is held in the keychain but cannot be read; nothing was changed.`,
+      `An interrupted identity switch (${SWITCH_KEY}) is held in the key store but cannot be read; nothing was changed.`,
       { cause: err },
     );
   }
   if (typeof sw.motebit_id !== "string" || typeof sw.device_id !== "string") {
     throw new Error(
-      `An interrupted identity switch (${SWITCH_KEY}) is held in the keychain but is malformed; nothing was changed.`,
+      `An interrupted identity switch (${SWITCH_KEY}) is held in the key store but is malformed; nothing was changed.`,
     );
   }
   await applyIdentitySwitch(invoke, sw);

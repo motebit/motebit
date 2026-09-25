@@ -8,12 +8,12 @@
 
 use crate::config_file;
 use crate::key_store::tests::FakeKeychain;
-use crate::key_store::KeyStore;
+use crate::key_store::{KeyStore, NoKeychain, SecretStore};
 use serde_json::Value;
 
 const FIXTURE: &str = include_str!("../fixtures/identity-switch-restore.json");
 
-fn dispatch(store: &KeyStore<&FakeKeychain>, config: &std::path::Path, cmd: &str, args: &Value) {
+fn dispatch<S: SecretStore>(store: &KeyStore<S>, config: &std::path::Path, cmd: &str, args: &Value) {
     let s = |k: &str| args[k].as_str().unwrap().to_string();
     let r: Result<(), String> = match cmd {
         "keyring_set" => store.set(&s("key"), &s("value")),
@@ -62,6 +62,60 @@ fn restore_ipc_sequence_preserves_the_old_key_rotation_and_binding_in_the_real_s
         .collect();
     assert!(kept.iter().any(|v| *v == "KEY-A"), "A's key destroyed: {kept:?}");
     assert!(kept.iter().any(|v| *v == "HELD-A-PRIME"), "A's rotation destroyed: {kept:?}");
+
+    let now: Value = serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    assert_eq!(now["motebit_id"], "m-B");
+    let backups: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("config.json.clobbered-"))
+        .collect();
+    assert_eq!(backups.len(), 1, "{backups:?}");
+    assert_eq!(std::fs::read_to_string(dir.join(&backups[0])).unwrap(), a_config);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The same replay on the store the app actually ships: file-only
+/// (`KeyStore::file_only`, what `default_for_app` builds). A restore of B
+/// over A keeps A's key and A's in-flight rotation in dev-keyring.json and
+/// A's binding as a config backup; no keychain artifact appears.
+#[test]
+fn restore_ipc_sequence_on_the_file_only_app_store_keeps_everything_of_a() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("motebit-ipc-replay-file-{}-{}", std::process::id(), nonce));
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = dir.join("config.json");
+    let a_config = "{\"motebit_id\":\"m-A\",\"device_id\":\"d-A\",\"device_public_key\":\"aa\",\"_identity_file\":\"A-FILE\"}";
+    std::fs::write(&config, a_config).unwrap();
+    std::fs::write(
+        dir.join("dev-keyring.json"),
+        "{\"device_private_key\":\"KEY-A\",\"pending_rotation\":\"HELD-A-PRIME\"}",
+    )
+    .unwrap();
+    let store: KeyStore<NoKeychain> = KeyStore::file_only(dir.clone());
+
+    let steps: Vec<Value> = serde_json::from_str(FIXTURE).unwrap();
+    for step in &steps {
+        dispatch(&store, &config, step["cmd"].as_str().unwrap(), &step["args"]);
+    }
+
+    let file: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("dev-keyring.json")).unwrap()).unwrap();
+    let file = file.as_object().unwrap();
+    assert_eq!(file.get("device_private_key").and_then(Value::as_str), Some("KEY-B"));
+    assert!(file.get("pending_rotation").is_none(), "A's write-ahead left active");
+    assert!(file.get("pending_identity_switch").is_none(), "switch write-ahead left active");
+    let kept: Vec<&str> = file
+        .iter()
+        .filter(|(k, _)| k.contains(".preserved-"))
+        .filter_map(|(_, v)| v.as_str())
+        .collect();
+    assert!(kept.contains(&"KEY-A"), "A's key destroyed: {kept:?}");
+    assert!(kept.contains(&"HELD-A-PRIME"), "A's rotation destroyed: {kept:?}");
+    assert!(!dir.join("keychain-index.json").exists());
 
     let now: Value = serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
     assert_eq!(now["motebit_id"], "m-B");

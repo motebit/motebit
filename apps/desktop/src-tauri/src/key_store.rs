@@ -1,41 +1,48 @@
-//! The desktop's secret store: the OS keychain first, `~/.motebit/dev-keyring.json`
-//! as the documented fallback.
+//! The desktop's secret store.
 //!
-//! Finding B-0 (build 3): until this change `keyring = "3"` was compiled with
-//! NO platform backend, so every `keyring::Entry` was the crate's in-memory
-//! mock — `set_password` "succeeded" and nothing persisted — and the
-//! plaintext `dev-keyring.json` was the only persistent copy of the device
-//! private key on every install, signed or not. The backends are now enabled
-//! (`apple-native`, `windows-native`, `async-secret-service` + `crypto-rust` +
-//! `async-io` on Linux; see Cargo.toml). The file remains only as the
-//! fallback for a machine whose keychain is unavailable (e.g. a Linux session
-//! with no Secret Service running).
+//! **Where desktop keys live today:** `~/.motebit/dev-keyring.json` — one
+//! JSON object of strings, mode 0600, **plaintext**. That is ssh-key-level
+//! protection (any process running as the user can read it), and it is what
+//! every desktop build has always done: main's `keyring = "3"` had no
+//! backend and was the crate's in-memory mock (Finding B-0), so the file was
+//! the only persistent copy. **The OS keychain is NOT used yet.** The app's
+//! store is [`KeyStore::default_for_app`], built on [`NoKeychain`], whose
+//! every read is `Unavailable` — file-only mode — in every build.
+//!
+//! Enabling the keychain is its own deferred arc (founder split,
+//! 2026-09-25), gated on real-device testing: see
+//! docs/proposals/key-file-durability-v1.md, "The split: file-only now, the
+//! keychain as its own arc". Its code — [`OsKeychain`], [`classify`],
+//! [`KeyStore::migrate`] — is kept compiling behind the `os-keychain` Cargo
+//! feature (off by default) and is not wired into the app by it.
 //!
 //! Rules (R1–R3, as for every key-bearing file):
 //!
-//!  * The keychain laws K1–K6 (docs/proposals/key-file-durability-v1.md,
-//!    lane B): no keychain set/delete of a name without a SUCCESSFUL read of
-//!    it in the same operation (K1); a failed read is classified — an
-//!    UNAVAILABLE keychain (no provider) is file-only mode, a read FAILURE on
-//!    an available one refuses and is never "absent" (K2, [`classify`]); the
-//!    index is a hint (K3); key material is preserved before any overwrite
-//!    or delete (K4); two different values are an error, never a silent pick
-//!    (K5). A damaged / unreadable / dangling-symlink `dev-keyring.json` is
-//!    an `Err`, and nothing writes over it.
+//!  * R1 — only a missing file is "absent". A damaged / unreadable /
+//!    dangling-symlink `dev-keyring.json` is an `Err`, and nothing writes
+//!    over it.
 //!  * R2 — key material (`device_private_key`, `pending_rotation`,
 //!    `pending_identity_switch`) is never destroyed: an overwrite with a
 //!    different value, a delete, and a set-aside first keep the old value
 //!    under `<name>.preserved-<time>` in the same store, verified by reading
-//!    it back. Migration out of the file keeps the file (`.migrated-<time>`).
-//!  * R3 — the file and the index are written through
-//!    `durable_file::write_file_atomic_owner_only` and narrowed on every load.
+//!    it back.
+//!  * R3 — the file is written through
+//!    `durable_file::write_file_atomic_owner_only` (0600, atomic rename,
+//!    fsync'd) and narrowed to 0600 on every load.
 //!
-//! The keychain is behind [`SecretStore`] so the migrate / verify / preserve
-//! logic is unit-tested without touching a real keychain.
+//! The store logic is generic over [`SecretStore`] and is written to the
+//! keychain laws K1–K6 of the design doc, so the arc inherits it unchanged;
+//! those laws are unit-tested here against an in-memory `FakeKeychain`.
+//! Under [`NoKeychain`] they reduce to the file rules above, plus K3's
+//! one-way brake: a key-material name that `keychain-index.json` or a
+//! `dev-keyring.json.migrated-*` copy (left by a pre-release keychain build)
+//! says lives in a keychain is refused, never read as absent.
 
-use crate::durable_file::{preserve_aside, read_strict, write_file_atomic_owner_only, Keep};
+#[cfg(any(test, feature = "os-keychain"))]
+use crate::durable_file::{preserve_aside, Keep};
+use crate::durable_file::{read_strict, write_file_atomic_owner_only};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Names whose values are private-key material.
 pub const KEY_MATERIAL: [&str; 3] = [
@@ -55,7 +62,9 @@ pub enum ReadError {
     /// session): file-only mode, main's behavior.
     Unavailable(String),
     /// The store exists but this read failed (denied, cancelled, locked, a
-    /// transport fault): the operation refuses; never "absent".
+    /// transport fault): the operation refuses; never "absent". Only a real
+    /// keychain produces it (`os-keychain`; tests' FakeKeychain).
+    #[cfg_attr(not(feature = "os-keychain"), allow(dead_code))]
     Failed(String),
 }
 
@@ -77,11 +86,43 @@ pub trait SecretStore {
     fn delete(&self, name: &str) -> Result<(), String>;
 }
 
+/// Why [`NoKeychain`] answers `Unavailable`.
+pub const NO_KEYCHAIN: &str =
+    "this build does not use the OS keychain; desktop keys are kept in ~/.motebit/dev-keyring.json";
+
+/// The production secret store: there is no keychain to ask. Every read is
+/// [`ReadError::Unavailable`], so [`KeyStore`] runs in file-only mode (state
+/// table row 1a/2 — main's behavior) and never mutates a keychain (K1: a
+/// mutation needs a successful read, and none ever succeeds). `set` and
+/// `delete` are unreachable through `KeyStore` and refuse if called.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoKeychain;
+
+impl SecretStore for NoKeychain {
+    fn get(&self, _name: &str) -> Result<Option<String>, ReadError> {
+        Err(ReadError::Unavailable(NO_KEYCHAIN.to_string()))
+    }
+    fn set(&self, name: &str, _value: &str) -> Result<(), String> {
+        Err(format!("{} not written: {}", name, NO_KEYCHAIN))
+    }
+    fn delete(&self, name: &str) -> Result<(), String> {
+        Err(format!("{} not deleted: {}", name, NO_KEYCHAIN))
+    }
+}
+
 /// K2 for the real keychain, decided from keyring 3.6.3's own mapping
 /// (`src/{macos,windows,secret_service}.rs::decode_error`). The variants
 /// mean opposite things per platform — Linux maps Locked/Prompt/NoResult to
 /// `NoStorageAccess`, macOS maps a cancelled or denied prompt to
 /// `PlatformFailure` — so this is per platform, never per variant name.
+///
+/// `os-keychain` only (the deferred arc). NOTE for that arc: `NoEntry` is
+/// NOT proof of absence on every provider — KeePassXC answers a search on a
+/// LOCKED database with an empty result (#762's decisive round). The arc's
+/// design law: absence requires agreement — `NoEntry` AND no evidence the
+/// key ever lived there.
+#[cfg(feature = "os-keychain")]
+#[allow(dead_code)] // wired by the keychain arc, not by this build
 pub fn classify(err: keyring::Error) -> Result<Option<String>, ReadError> {
     match err {
         keyring::Error::NoEntry => Ok(None),
@@ -109,7 +150,7 @@ pub fn classify(err: keyring::Error) -> Result<Option<String>, ReadError> {
 ///    `org.freedesktop.secrets`, so "the destination has no owner" can only
 ///    mean that name.
 /// Any other D-Bus error is a read failure (fail closed).
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "os-keychain"))]
 fn is_no_secret_service(e: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
     match e.downcast_ref::<secret_service::Error>() {
         Some(secret_service::Error::Unavailable) => true,
@@ -119,7 +160,7 @@ fn is_no_secret_service(e: &(dyn std::error::Error + Send + Sync + 'static)) -> 
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "os-keychain"))]
 fn zbus_no_owner(z: &zbus::Error) -> bool {
     match z {
         zbus::Error::MethodError(name, _, _) => matches!(
@@ -131,7 +172,7 @@ fn zbus_no_owner(z: &zbus::Error) -> bool {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "os-keychain"))]
 fn fdo_no_owner(f: &zbus::fdo::Error) -> bool {
     matches!(
         f,
@@ -141,11 +182,15 @@ fn fdo_no_owner(f: &zbus::fdo::Error) -> bool {
 
 /// The real keychain via the `keyring` crate. Every call builds a FRESH
 /// `Entry`, so a read-back verifies what the platform store holds, not a
-/// value cached in this process.
+/// value cached in this process. `os-keychain` only; not used by the app.
+#[cfg(feature = "os-keychain")]
+#[allow(dead_code)] // wired by the keychain arc, not by this build
 pub struct OsKeychain {
     service: String,
 }
 
+#[cfg(feature = "os-keychain")]
+#[allow(dead_code)]
 impl OsKeychain {
     pub fn new(service: &str) -> Self {
         Self {
@@ -157,6 +202,7 @@ impl OsKeychain {
     }
 }
 
+#[cfg(feature = "os-keychain")]
 impl SecretStore for OsKeychain {
     fn get(&self, name: &str) -> Result<Option<String>, ReadError> {
         let entry = self.entry(name).map_err(ReadError::Failed)?;
@@ -178,7 +224,11 @@ impl SecretStore for OsKeychain {
     }
 }
 
-/// What migration did, for the startup log.
+/// What migration did. Migration (file → keychain) belongs to the deferred
+/// keychain arc: compiled for its tests and under `os-keychain`, never run
+/// by this build's startup.
+#[cfg(any(test, feature = "os-keychain"))]
+#[allow(dead_code)]
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct MigrationReport {
     pub migrated: Vec<String>,
@@ -198,6 +248,21 @@ pub struct KeyStore<S: SecretStore> {
 }
 
 type Map = BTreeMap<String, String>;
+
+/// The store every desktop build uses: FILE-ONLY. The type is the fence —
+/// `OsKeychain` does not exist without the `os-keychain` feature, and even
+/// with it this constructor stays on [`NoKeychain`]; wiring a keychain in is
+/// the deferred arc's change, made on purpose after its device tests.
+impl KeyStore<NoKeychain> {
+    pub fn default_for_app() -> Result<Self, String> {
+        Ok(Self::file_only(crate::durable_file::motebit_dir()?))
+    }
+
+    /// `default_for_app` at an explicit directory (tests; the same path).
+    pub fn file_only(dir: PathBuf) -> Self {
+        Self::new(NoKeychain, dir)
+    }
+}
 
 impl<S: SecretStore> KeyStore<S> {
     pub fn new(secret: S, dir: PathBuf) -> Self {
@@ -322,8 +387,11 @@ impl<S: SecretStore> KeyStore<S> {
         }
         if self.index_may_list(name) || self.migrated_copy_may_hold(name) {
             return Err(format!(
-                "{} is stored in the OS keychain, which is unavailable right now ({}). Unlock or start your keyring (e.g. gnome-keyring, or KeePassXC with its Secret Service enabled) and retry. Nothing was changed.",
-                name, why
+                "{} is recorded as stored in the OS keychain ({} / {}.migrated-*), which cannot be read right now ({}). Refusing to treat it as absent; nothing was changed. If your keyring is locked or stopped, unlock or start it and retry.",
+                name,
+                self.index_path().display(),
+                self.dev_path().display(),
+                why
             ));
         }
         Ok(())
@@ -600,6 +668,11 @@ impl<S: SecretStore> KeyStore<S> {
     /// drop the migrated entries from the live file. A conflict (the
     /// keychain already holds a DIFFERENT value) leaves that entry in the
     /// file. A keychain that refuses stops the migration; nothing is lost.
+    ///
+    /// The deferred keychain arc's: never called by this build (and a no-op
+    /// on [`NoKeychain`], whose reads are all `Unavailable`).
+    #[cfg(any(test, feature = "os-keychain"))]
+    #[allow(dead_code)]
     pub fn migrate(&self) -> Result<MigrationReport, String> {
         let mut report = MigrationReport::default();
         let Some(dev) = self.read_dev()? else {
@@ -680,21 +753,12 @@ fn keep_in_map(map: &mut Map, name: &str, value: String, stamp: &str) {
     map.insert(kept, value);
 }
 
-/// Where a preserved key lives, for the report; exposed for callers that
-/// want to name it.
-pub fn describe(dir: &Path) -> String {
-    format!(
-        "OS keychain (service com.motebit.desktop; names listed in {}), fallback {}",
-        dir.join("keychain-index.json").display(),
-        dir.join("dev-keyring.json").display()
-    )
-}
-
 #[cfg(test)]
 pub mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::collections::HashMap;
+    use std::path::Path;
 
     /// An in-memory keychain with switchable failure modes.
     #[derive(Default)]
@@ -1024,7 +1088,7 @@ pub mod tests {
         assert!(!dir.join("dev-keyring.json").exists());
         *kc.unavailable.borrow_mut() = true;
         let err = s.get("device_private_key").unwrap_err();
-        assert!(err.contains("stored in the OS keychain") && err.contains("Unlock or start"), "{err}");
+        assert!(err.contains("stored in the OS keychain") && err.contains("unlock or start"), "{err}");
         assert!(s.set("device_private_key", "MINTED").is_err());
         assert!(s.set_aside("device_private_key").is_err());
         assert!(s.store_raw("device_private_key", "MINTED", None).is_err());
@@ -1074,7 +1138,7 @@ pub mod tests {
     /// The live "session bus, no provider" shapes (#762 finding 1), built
     /// from the crates' own types: every one is UNAVAILABLE (row 1a/1b),
     /// while other D-Bus errors stay read FAILURES.
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "os-keychain"))]
     #[test]
     fn k2_linux_no_owner_of_org_freedesktop_secrets_is_unavailable() {
         use zbus::fdo;
@@ -1108,6 +1172,7 @@ pub mod tests {
     }
 
     /// K2 classification of the REAL keyring errors, per platform.
+    #[cfg(feature = "os-keychain")]
     #[test]
     fn k2_classify_uses_the_platform_meaning_of_each_variant() {
         fn boxed(m: &str) -> Box<dyn std::error::Error + Send + Sync> {
@@ -1319,8 +1384,10 @@ pub mod tests {
     }
 
     /// The REAL platform keychain (run explicitly:
-    /// `cargo test real_keychain -- --ignored`). Proves the backend is
-    /// compiled in: the crate's mock store would fail the fresh-Entry read.
+    /// `cargo test --features os-keychain real_keychain -- --ignored`).
+    /// Proves the backend is compiled in: the crate's mock store would fail
+    /// the fresh-Entry read.
+    #[cfg(feature = "os-keychain")]
     #[test]
     #[ignore]
     fn real_keychain_persists_across_fresh_entries() {
@@ -1346,5 +1413,120 @@ pub mod tests {
         assert!(s.get("device_private_key").is_err());
         assert!(s.set("device_private_key", "NEW").is_err());
         assert!(std::fs::symlink_metadata(dir.join("dev-keyring.json")).unwrap().file_type().is_symlink());
+    }
+
+    // ── The production path: file-only (founder split, 2026-09-25) ────────
+
+    fn app_store(dir: &Path) -> KeyStore<NoKeychain> {
+        let mut s = KeyStore::file_only(dir.to_path_buf());
+        s.stamp = || "T".to_string();
+        s
+    }
+
+    /// The fence, as types: the app's store is `KeyStore<NoKeychain>` — both
+    /// the constructor and the Tauri commands' `key_store()` in main.rs. A
+    /// keychain store there does not compile.
+    #[test]
+    fn the_app_store_is_file_only_by_type() {
+        let _: fn() -> Result<KeyStore<NoKeychain>, String> = KeyStore::<NoKeychain>::default_for_app;
+        let _: fn() -> Result<KeyStore<NoKeychain>, String> = crate::key_store;
+        // And NoKeychain never claims a keychain exists, or accepts a write.
+        assert!(matches!(NoKeychain.get("device_private_key"), Err(ReadError::Unavailable(_))));
+        assert!(NoKeychain.set("device_private_key", "K").is_err());
+        assert!(NoKeychain.delete("device_private_key").is_err());
+    }
+
+    /// Fresh machine → restart → rotate, end to end on the app's store:
+    /// every value lives in dev-keyring.json (0600), replaced key material
+    /// is preserved in the file, and no keychain artifact is ever created.
+    #[test]
+    fn file_only_fresh_machine_restart_and_rotate() {
+        let dir = scratch("app-e2e");
+        let s = app_store(&dir);
+        // First launch: a proven absence (no file), then the mint.
+        assert_eq!(s.get("device_private_key").unwrap(), None);
+        s.set("device_private_key", "K1").unwrap();
+        s.set("anthropic_api_key", "sk").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(dir.join("dev-keyring.json")).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        // Restart: a new store over the same directory reads the same keys.
+        let s = app_store(&dir);
+        assert_eq!(s.get("device_private_key").unwrap().as_deref(), Some("K1"));
+        // Rotate: write-ahead, commit, clear (the kit's sequence).
+        s.set("pending_rotation", "{\"new_private_key_hex\":\"K2\"}").unwrap();
+        s.set("device_private_key", "K2").unwrap();
+        s.delete("pending_rotation").unwrap();
+        let j = dev_json(&dir);
+        assert_eq!(j["device_private_key"], "K2");
+        assert_eq!(j["device_private_key.preserved-T"], "K1", "retired key kept");
+        assert_eq!(j["pending_rotation.preserved-T"], "{\"new_private_key_hex\":\"K2\"}");
+        assert!(j.get("pending_rotation").is_none());
+        assert_eq!(app_store(&dir).get("pending_rotation").unwrap(), None);
+        // Never a keychain artifact.
+        assert!(!dir.join("keychain-index.json").exists());
+        let names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(!names.iter().any(|n| n.contains(".migrated-")), "{names:?}");
+    }
+
+    /// Damage refuses on the app's store: nothing reads as absent (so no
+    /// first-launch mint), nothing writes over it.
+    #[test]
+    fn file_only_damaged_file_refuses_every_operation() {
+        let dir = scratch("app-damaged");
+        let s = app_store(&dir);
+        for body in ["{ \"device_private_key\": \"ab", "[]", "{\"device_private_key\": 7}", ""] {
+            std::fs::write(dir.join("dev-keyring.json"), body).unwrap();
+            assert!(s.get("device_private_key").is_err(), "{body:?}");
+            assert!(s.set("device_private_key", "MINTED").is_err(), "{body:?}");
+            assert!(s.set("operator_pin_hash", "h").is_err(), "{body:?}");
+            assert!(s.delete("anthropic_api_key").is_err(), "{body:?}");
+            assert!(s.set_aside("pending_rotation").is_err(), "{body:?}");
+            assert_eq!(std::fs::read_to_string(dir.join("dev-keyring.json")).unwrap(), body);
+        }
+    }
+
+    /// A 0644 file left by an older build is narrowed to 0600 on load.
+    #[cfg(unix)]
+    #[test]
+    fn file_only_a_0644_file_is_narrowed_on_load() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("app-0644");
+        let p = dir.join("dev-keyring.json");
+        std::fs::write(&p, "{\"device_private_key\":\"K\"}").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(app_store(&dir).get("device_private_key").unwrap().as_deref(), Some("K"));
+        assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+
+    /// K3's brake on the app's store: a directory a pre-release keychain
+    /// build migrated (index row or `.migrated-*` copy) refuses the key —
+    /// never "absent", never a file mint that would shadow it. A plain
+    /// file-only machine is unaffected (row 1a).
+    #[test]
+    fn file_only_keychain_evidence_refuses_never_absent() {
+        let dir = scratch("app-evidence");
+        std::fs::write(dir.join("keychain-index.json"), "{\"keys\":[\"device_private_key\"]}").unwrap();
+        let s = app_store(&dir);
+        let err = s.get("device_private_key").unwrap_err();
+        assert!(err.contains("recorded as stored in the OS keychain"), "{err}");
+        assert!(s.set("device_private_key", "MINTED").is_err());
+        assert!(!dir.join("dev-keyring.json").exists());
+        std::fs::remove_file(dir.join("keychain-index.json")).unwrap();
+        std::fs::write(
+            dir.join("dev-keyring.json.migrated-T"),
+            "{\"device_private_key\":\"K\"}",
+        )
+        .unwrap();
+        assert!(s.get("device_private_key").is_err());
+        // Non-key names are not braked.
+        s.set("anthropic_api_key", "sk").unwrap();
+        assert_eq!(s.get("anthropic_api_key").unwrap().as_deref(), Some("sk"));
     }
 }
