@@ -14,7 +14,13 @@ import {
   defaultModelForProvider,
 } from "./args.js";
 import type { CliConfig } from "./args.js";
-import { loadFullConfig, extractPersonality, persistMotebitPublicKeys, VERSION } from "./config.js";
+import {
+  ConfigDamagedError,
+  loadFullConfig,
+  extractPersonality,
+  persistMotebitPublicKeys,
+  VERSION,
+} from "./config.js";
 import {
   renderUpdateNudge,
   readUpdateState,
@@ -1263,6 +1269,13 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
+  // A damaged config is the one failure where a stack trace is the least
+  // useful thing to show: the user needs to know the file was left alone and
+  // what to do next, not where it was thrown.
+  if (err instanceof ConfigDamagedError) {
+    console.error(`Error: ${err.message}`);
+    process.exit(1);
+  }
   console.error("Fatal error:", err);
   process.exit(1);
 });

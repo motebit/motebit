@@ -11,6 +11,7 @@ import type {
 } from "@motebit/ai-core";
 import type { connectMcpServers } from "@motebit/mcp-client";
 import { type UnifiedProviderConfig, type GovernanceConfig } from "@motebit/sdk";
+import { preserveAside, tightenToOwnerOnly, writeFileAtomic } from "./durable-file.js";
 
 declare const __PKG_VERSION__: string;
 export const VERSION: string =
@@ -150,24 +151,126 @@ function isValidGovernanceConfig(value: unknown): value is GovernanceConfig {
   );
 }
 
-export function loadFullConfig(): FullConfig {
+/**
+ * The ONE name a damaged config is preserved under before anything replaces
+ * it: `config.json.clobbered-<time>`. Every writer that sets damage aside
+ * uses it (`saveFullConfig`, create-motebit's twin, the desktop's Rust
+ * `write_config`), and every reader that points a user at a backup looks for
+ * it (`doctor`, `migrate-keyring`, `identity.ts`'s missing-key remedy). It is
+ * the name those readers already shipped with; a second spelling would be a
+ * backup nobody is ever told about.
+ */
+const CONFIG_BACKUP_INFIX = ".clobbered-";
+export const CONFIG_BACKUP_PREFIX = `${path.basename(CONFIG_PATH)}${CONFIG_BACKUP_INFIX}`;
+
+/** Preserved copies of a damaged config in `CONFIG_DIR`, newest first. Never throws. */
+export function listConfigBackups(): string[] {
   try {
-    const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
-    const parsed = JSON.parse(raw) as FullConfig;
-    // Governance: validate the persisted blob. Drop invalid shapes — runtime
-    // construction falls back to DEFAULT_GOVERNANCE_CONFIG when absent.
-    if (parsed.governance !== undefined && !isValidGovernanceConfig(parsed.governance)) {
-      delete parsed.governance;
-    }
-    return parsed;
+    return fs
+      .readdirSync(CONFIG_DIR)
+      .filter((f) => f.startsWith(CONFIG_BACKUP_PREFIX))
+      .sort()
+      .reverse();
   } catch {
-    return {};
+    // The directory itself is unreadable — the dominant cause of the damage
+    // this is asked about. There is nothing to list, and nothing to throw.
+    return [];
   }
 }
 
-export function saveFullConfig(config: FullConfig): void {
+/**
+ * An existing config that cannot be read. Distinct from "no config", and the
+ * distinction is load-bearing: this file holds `cli_encrypted_key` — for a
+ * CLI identity, the only copy of the private key — and, for anyone who has
+ * not migrated, the deprecated `cli_private_key` in plaintext. Reporting
+ * damage as absence tells the user they have no identity, and the next save
+ * then overwrites whatever was recoverable with a fresh, nearly-empty file.
+ */
+export class ConfigDamagedError extends Error {
+  constructor(
+    readonly path: string,
+    readonly reason: string,
+    cause?: unknown,
+  ) {
+    super(
+      `${path} exists but could not be read (${reason}). It has NOT been changed. ` +
+        `If you hold your recovery seed, \`motebit restore\` rebuilds it and keeps this one as ` +
+        `${path}${CONFIG_BACKUP_INFIX}<time>; otherwise copy it aside before running anything that writes config.`,
+      cause !== undefined ? { cause } : undefined,
+    );
+    this.name = "ConfigDamagedError";
+  }
+}
+
+/**
+ * Read the config under the three-way split every config reader obeys:
+ * ABSENT (ENOENT) is a first run and reads as `{}`; anything else that is
+ * unreadable, unparseable, or valid JSON that is not an object is DAMAGE and
+ * throws `ConfigDamagedError` with the file untouched. Nothing but absence is
+ * ever answered "empty".
+ */
+function readConfigStrict(): FullConfig {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(CONFIG_PATH, "utf-8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return {};
+    throw new ConfigDamagedError(CONFIG_PATH, code ?? "unreadable", err);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new ConfigDamagedError(CONFIG_PATH, "not valid JSON", err);
+  }
+  // Valid JSON is not a valid config. `null` would throw a raw TypeError at
+  // the first field access; `[]`, `3`, `"x"` read back as a config whose every
+  // field is undefined — damage wearing absence's clothes.
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new ConfigDamagedError(CONFIG_PATH, "not a JSON object");
+  }
+  return parsed;
+}
+
+export function loadFullConfig(): FullConfig {
+  const config = readConfigStrict();
+  // A config written before owner-only was the rule is world-readable, and
+  // most commands only READ it — tightening on the next save alone would
+  // leave read-only users exposed indefinitely. Narrowing a mode is
+  // idempotent and loses nothing; it is best effort, so a failed chmod never
+  // refuses a read.
+  tightenToOwnerOnly(CONFIG_PATH);
+  // Governance: validate the persisted blob. Drop invalid shapes — runtime
+  // construction falls back to DEFAULT_GOVERNANCE_CONFIG when absent. A bad
+  // governance block is not damage: it is a field we know how to ignore.
+  if (config.governance !== undefined && !isValidGovernanceConfig(config.governance)) {
+    delete config.governance;
+  }
+  return config;
+}
+
+/**
+ * Replace the config atomically and owner-only — and never over damage.
+ *
+ * If the file on disk is damaged (see `readConfigStrict`), its bytes are
+ * first preserved as `CONFIG_BACKUP_PREFIX<time>`; if they cannot be
+ * preserved, the save refuses and nothing changes. A caller that loads first
+ * has already been refused by `loadFullConfig`; this is what makes the rule
+ * hold for a caller that builds a config without a readable one (restore)
+ * and for any writer added later. Returns the backup's path when one was made.
+ */
+export function saveFullConfig(config: FullConfig): string | null {
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
+  let preservedAs: string | null = null;
+  try {
+    readConfigStrict();
+  } catch (err) {
+    if (!(err instanceof ConfigDamagedError)) throw err;
+    preservedAs = preserveAside(CONFIG_PATH, CONFIG_BACKUP_INFIX);
+  }
+  writeFileAtomic(CONFIG_PATH, JSON.stringify(config, null, 2), 0o600);
+  return preservedAs;
 }
 
 /** Persist newly pinned motebit public keys from connected adapters back to config. */

@@ -18,6 +18,7 @@ import { generate as generateIdentityFile } from "@motebit/identity-file";
 import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
 import { CONFIG_DIR, loadFullConfig, saveFullConfig } from "../config.js";
+import { currentModeOr, writeFileAtomic } from "../durable-file.js";
 import {
   fromHex,
   promptPassphrase,
@@ -148,7 +149,7 @@ export async function handleExport(config: CliConfig): Promise<void> {
 
   // 1. Write identity file
   const identityPath = path.join(outputDir, "motebit.md");
-  fs.writeFileSync(identityPath, identityContent, "utf-8");
+  writeFileAtomic(identityPath, identityContent, currentModeOr(identityPath, 0o644));
   exported.push("identity");
 
   // Also refresh the config-dir snapshot. `~/.motebit/motebit.md` is written
@@ -158,7 +159,10 @@ export async function handleExport(config: CliConfig): Promise<void> {
   // address, #429). Export is the natural refresh point: every export now
   // heals the snapshot, and doctor flags any remaining divergence.
   try {
-    fs.writeFileSync(path.join(CONFIG_DIR, "motebit.md"), identityContent, "utf-8");
+    // Atomic: a torn snapshot would be worse than a stale one — doctor and
+    // wallet derivation read it.
+    const snapshotPath = path.join(CONFIG_DIR, "motebit.md");
+    writeFileAtomic(snapshotPath, identityContent, currentModeOr(snapshotPath, 0o644));
   } catch {
     // Best-effort — the primary export above already succeeded.
   }

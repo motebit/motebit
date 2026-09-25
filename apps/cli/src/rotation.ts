@@ -19,6 +19,7 @@ import { verify, rotate as rotateIdentityFile } from "@motebit/identity-file";
 import { performKeyRotation, type HeldRotation, type KeyRotationPorts } from "@motebit/surface-kit";
 import { hexToBytes } from "@motebit/encryption";
 import type { FullConfig } from "./config.js";
+import { currentModeOr, writeFileAtomic } from "./durable-file.js";
 import { decryptPrivateKey, encryptPrivateKey } from "./identity.js";
 import type { PendingRotation } from "./pending-rotation.js";
 
@@ -179,7 +180,9 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
             `rotated identity file failed self-verification; nothing was changed: ${check.errors?.[0]?.message ?? "invalid"}`,
           );
         }
-        fs.writeFileSync(deps.identityPath, rotated, "utf-8");
+        // Atomic: a torn write here would leave the only signed statement of
+        // the identity's succession unparseable, after the key had moved.
+        writeFileAtomic(deps.identityPath, rotated, currentModeOr(deps.identityPath, 0o644));
       }
     },
     ...(deps.reason !== undefined ? { reason: deps.reason } : {}),

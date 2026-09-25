@@ -1,6 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, rmSync, mkdirSync, existsSync } from "node:fs";
+import {
+  readFileSync,
+  writeFileSync,
+  rmSync,
+  mkdirSync,
+  existsSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -460,6 +468,65 @@ describe("create-motebit", () => {
     expect(after.motebit_id).toBeTruthy();
     // Non-identity fields preserved (saveConfig merges, doesn't replace).
     expect(after.some_other_field).toBe("still preserved");
+  });
+
+  // -- config.json key-file class: absence vs damage, damage preserved, 0600 --
+
+  it("writes the identity config owner-only (it holds the encrypted key)", () => {
+    const { exitCode } = run(["my-project", "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pw",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+    expect(exitCode).toBe(0);
+    expect(statSync(join(configDir, "config.json")).mode & 0o777).toBe(0o600);
+  });
+
+  it("refuses a damaged config instead of reading it as a fresh machine", () => {
+    // Damage-as-absence used to pass the clobber gate (it decides from
+    // motebit_id alone) and overwrite the only copy of the key.
+    mkdirSync(configDir, { recursive: true });
+    const configFile = join(configDir, "config.json");
+    const damaged = '{ "motebit_id": "019dc549", "cli_encrypted_key": { "ciph';
+    writeFileSync(configFile, damaged, "utf-8");
+
+    const { stdout, stderr, exitCode } = run(["my-project", "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pw",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+
+    expect(exitCode).not.toBe(0);
+    expect(stdout + stderr).toContain("could not be read");
+    expect(readFileSync(configFile, "utf-8")).toBe(damaged);
+    expect(readdirSync(configDir)).toEqual(["config.json"]);
+  });
+
+  it("--force over a damaged config keeps the damaged bytes as config.json.clobbered-*", () => {
+    mkdirSync(configDir, { recursive: true });
+    const configFile = join(configDir, "config.json");
+    const damaged = "[]";
+    writeFileSync(configFile, damaged, "utf-8");
+
+    const { exitCode } = run(["my-project", "--yes", "--force"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pw",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+
+    expect(exitCode).toBe(0);
+    const kept = readdirSync(configDir).filter((f) => f.startsWith("config.json.clobbered-"));
+    expect(kept).toHaveLength(1);
+    expect(readFileSync(join(configDir, kept[0]!), "utf-8")).toBe(damaged);
+    expect(JSON.parse(readFileSync(configFile, "utf-8")).motebit_id).toBeTruthy();
+    expect(statSync(configFile).mode & 0o777).toBe(0o600);
+  });
+
+  it("--agent writes the agent's own config owner-only", () => {
+    const { exitCode } = run(["my-agent", "--agent", "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pw",
+    });
+    expect(exitCode).toBe(0);
+    const agentConfig = join(testDir, "my-agent", ".motebit", "config.json");
+    expect(JSON.parse(readFileSync(agentConfig, "utf-8")).cli_encrypted_key).toBeTruthy();
+    expect(statSync(agentConfig).mode & 0o777).toBe(0o600);
   });
 
   it("--agent --yes refuses to clobber an existing local agent identity", () => {

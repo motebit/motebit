@@ -51,7 +51,13 @@ import {
   deriveSovereignMotebitId,
 } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
-import { loadFullConfig, saveFullConfig } from "../config.js";
+import {
+  CONFIG_BACKUP_PREFIX,
+  ConfigDamagedError,
+  loadFullConfig,
+  saveFullConfig,
+  type FullConfig,
+} from "../config.js";
 import { encryptPrivateKey, promptPassphrase } from "../identity.js";
 import {
   clearPendingRotation,
@@ -99,6 +105,26 @@ export function planRestore(
     return { kind: "fresh_install", motebitId: targetMotebitId };
   }
   return { kind: "replace", oldMotebitId: current.motebit_id, newMotebitId: targetMotebitId };
+}
+
+/**
+ * The config as restore must read it — EVERY read restore makes goes through
+ * here (the plan's and the commit's; the first fix for this guarded one of
+ * two and was withdrawn for it). A damaged config is not an error to restore:
+ * it is the case restore exists for. It reads as empty and the damage is
+ * returned so the caller can say so; the file itself is never touched here.
+ * Any other failure is not damage and propagates.
+ */
+export function loadConfigForRestore(): {
+  config: FullConfig;
+  damaged: ConfigDamagedError | null;
+} {
+  try {
+    return { config: loadFullConfig(), damaged: null };
+  } catch (err) {
+    if (err instanceof ConfigDamagedError) return { config: {}, damaged: err };
+    throw err;
+  }
 }
 
 /**
@@ -171,7 +197,19 @@ export async function handleRestore(config: CliConfig): Promise<void> {
   }
 
   // ── Plan: reset / fresh / replace ──
-  const full = loadFullConfig();
+  //
+  // Restore is the one command that must survive a config it cannot read:
+  // it is where `doctor` sends a user with a damaged one, and its job is to
+  // rebuild that file from the seed they have just proved they hold.
+  // Refusing here would be a loop with no exit. The damaged file is NOT
+  // touched now — the user may still abort — only at the final save, which
+  // preserves it before replacing it.
+  const { config: full, damaged } = loadConfigForRestore();
+  if (damaged != null) {
+    console.log(`\n  ${warn("Your current config could not be read")} (${damaged.reason}).`);
+    console.log(dim("  It will be kept, byte for byte, beside the new one when the restore"));
+    console.log(dim(`  completes (${CONFIG_BACKUP_PREFIX}<time>). Nothing is deleted.`));
+  }
   const plan = planRestore(publicKeyHex, metadata!.motebitId, full);
 
   if (plan.kind === "passphrase_reset") {
@@ -241,7 +279,9 @@ export async function handleRestore(config: CliConfig): Promise<void> {
   }
 
   const encrypted = await encryptPrivateKey(seedHex, pass1);
-  const next = loadFullConfig();
+  // Re-read, damage-tolerant like the plan's read above: the file may have
+  // been damaged (or repaired) while the user typed.
+  const { config: next } = loadConfigForRestore();
   next.cli_encrypted_key = encrypted;
   delete next.cli_private_key; // never leave a plaintext sibling behind
   next.device_public_key = publicKeyHex;
@@ -256,7 +296,12 @@ export async function handleRestore(config: CliConfig): Promise<void> {
   }
   // They demonstrably HOLD the seed — that is what "backed up" means.
   next.seed_backed_up_at = Date.now();
-  saveFullConfig(next);
+  // `saveFullConfig` preserves a damaged file before replacing it, or
+  // refuses — it never writes over bytes it has not kept.
+  const preservedAs = saveFullConfig(next);
+  if (preservedAs != null) {
+    console.log(dim(`  The unreadable config was kept as ${preservedAs}.`));
+  }
 
   const wallet = base58Encode(hexToBytes(publicKeyHex));
   console.log(`\n  ${success("Restored.")} ${bold(metadata!.motebitId)}`);

@@ -372,34 +372,247 @@ fn db_execute(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-fn read_config() -> Result<String, String> {
+// === ~/.motebit/config.json — shared with the CLI ===
+//
+// The CLI keeps `cli_encrypted_key` in this file — for a CLI identity the
+// only copy of the private key — so the desktop obeys the CLI's three rules
+// for it (`apps/cli/src/durable-file.ts` + `config.ts`, and create-motebit's
+// `config-file.ts` twin):
+//
+//  1. Absence is not damage: NotFound reads as `{}`; anything else unreadable,
+//     unparseable, or not a JSON object is an Err, file untouched.
+//  2. Damage is never overwritten: a write over a damaged file first keeps
+//     its bytes as `config.json.clobbered-<time>` (the one backup name every
+//     reader looks for), or refuses.
+//  3. A replacement is staged (created 0600 — never world-readable, not even
+//     for an instant), fsync'd, renamed, and the directory fsync'd; the
+//     scratch copy is removed on every failure path.
+
+fn motebit_config_path() -> Result<std::path::PathBuf, String> {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .map_err(|_| "Cannot determine home directory".to_string())?;
-    let path = std::path::Path::new(&home).join(".motebit").join("config.json");
-    match std::fs::read_to_string(&path) {
-        Ok(contents) => Ok(contents),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok("{}".to_string()),
-        Err(e) => Err(format!("Failed to read config: {}", e)),
+    Ok(std::path::Path::new(&home).join(".motebit").join("config.json"))
+}
+
+/// Rule 1. `Ok(None)` is absence; `Err` is damage.
+fn read_config_strict(path: &std::path::Path) -> Result<Option<String>, String> {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(format!(
+                "{} exists but could not be read ({}). It has NOT been changed.",
+                path.display(),
+                e
+            ))
+        }
+    };
+    match serde_json::from_str::<serde_json::Value>(&contents) {
+        Ok(serde_json::Value::Object(_)) => Ok(Some(contents)),
+        Ok(_) => Err(format!(
+            "{} exists but is not a JSON object. It has NOT been changed.",
+            path.display()
+        )),
+        Err(e) => Err(format!(
+            "{} exists but is not valid JSON ({}). It has NOT been changed.",
+            path.display(),
+            e
+        )),
+    }
+}
+
+/// Narrow a pre-existing world/group-readable config to 0600. Best effort:
+/// a failed chmod never refuses a read.
+fn tighten_to_owner_only(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(path) {
+            if meta.is_file() && meta.permissions().mode() & 0o077 != 0 {
+                let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
+/// The backup timestamp, spelled exactly as the TypeScript writers spell it —
+/// `new Date().toISOString()` with `:` and `.` replaced by `-`, e.g.
+/// `2026-09-24T17-03-09-123Z` — so every writer's backups sort together.
+fn backup_stamp(unix_millis: u128) -> String {
+    let ms = (unix_millis % 1000) as u32;
+    let secs = (unix_millis / 1000) as i64;
+    let (days, sod) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // Civil-from-days (H. Hinnant), proleptic Gregorian, UTC.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+    format!(
+        "{:04}-{:02}-{:02}T{:02}-{:02}-{:02}-{:03}Z",
+        y,
+        m,
+        d,
+        sod / 3600,
+        (sod % 3600) / 60,
+        sod % 60,
+        ms
+    )
+}
+
+/// Rule 2. Keep `path`'s bytes as `<path>.clobbered-<time>` without reading
+/// them (hard link; copy as fallback). Returns the backup path, or Err when
+/// neither works — the caller must then refuse to write.
+fn preserve_aside(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let stamp = backup_stamp(millis);
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "config.json".to_string());
+    let mut last_err = String::from("no backup name available");
+    for n in 0..100u32 {
+        let suffix = if n == 0 { String::new() } else { format!("-{}", n) };
+        let backup = path.with_file_name(format!("{}.clobbered-{}{}", name, stamp, suffix));
+        let made = match std::fs::hard_link(path, &backup) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => {
+                if backup.exists() {
+                    continue;
+                }
+                std::fs::copy(path, &backup).map(|_| ())
+            }
+        };
+        match made {
+            Ok(()) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(
+                        &backup,
+                        std::fs::Permissions::from_mode(0o600),
+                    );
+                }
+                return Ok(backup);
+            }
+            Err(e) => {
+                last_err = e.to_string();
+                break;
+            }
+        }
+    }
+    Err(format!(
+        "could not preserve {} before replacing it ({}); nothing was changed",
+        path.display(),
+        last_err
+    ))
+}
+
+/// Rule 3. Stage → fsync → rename → fsync dir, owner-only from creation.
+fn write_file_atomic_owner_only(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let dir = path
+        .parent()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "config path has no parent"))?;
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "config.json".to_string());
+    let staged = dir.join(format!("{}.{}.{}.tmp", name, std::process::id(), nonce));
+    let result = (|| -> std::io::Result<()> {
+        let mut opts = std::fs::OpenOptions::new();
+        // create_new: the mode below applies only on creation, so the staged
+        // name must be one that did not already exist.
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut file = opts.open(&staged)?;
+        file.write_all(contents)?;
+        #[cfg(unix)]
+        {
+            // Exact, not umask-narrowed; before the rename, so a failure here
+            // is reported as the failed write it is.
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&staged, path)
+    })();
+    if let Err(e) = result {
+        // Never leave the scratch copy behind; it holds the same secrets.
+        let _ = std::fs::remove_file(&staged);
+        return Err(e);
+    }
+    // Durability of the rename itself. Not every platform can open a
+    // directory for sync (Windows); the rename is still atomic.
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+    Ok(())
+}
+
+/// Rules 2 + 3 for one config file. Returns the backup path when damage was preserved.
+fn write_config_at(path: &std::path::Path, json: &str) -> Result<Option<std::path::PathBuf>, String> {
+    // Never persist something the next read would refuse as damage.
+    match serde_json::from_str::<serde_json::Value>(json) {
+        Ok(serde_json::Value::Object(_)) => {}
+        Ok(_) => return Err("Invalid config: not a JSON object".to_string()),
+        Err(e) => return Err(format!("Invalid JSON: {}", e)),
+    }
+    let dir = path
+        .parent()
+        .ok_or_else(|| "config path has no parent".to_string())?;
+    std::fs::create_dir_all(dir)
+        .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    let preserved = match read_config_strict(path) {
+        Ok(_) => None,
+        Err(_) => Some(preserve_aside(path)?),
+    };
+    write_file_atomic_owner_only(path, json.as_bytes())
+        .map_err(|e| format!("Failed to write config: {}", e))?;
+    Ok(preserved)
+}
+
+#[tauri::command]
+fn read_config() -> Result<String, String> {
+    let path = motebit_config_path()?;
+    match read_config_strict(&path)? {
+        None => Ok("{}".to_string()),
+        Some(contents) => {
+            tighten_to_owner_only(&path);
+            Ok(contents)
+        }
     }
 }
 
 #[tauri::command]
 fn write_config(json: String) -> Result<(), String> {
-    // Validate JSON
-    serde_json::from_str::<serde_json::Value>(&json)
-        .map_err(|e| format!("Invalid JSON: {}", e))?;
-
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map_err(|_| "Cannot determine home directory".to_string())?;
-    let dir = std::path::Path::new(&home).join(".motebit");
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("Failed to create config directory: {}", e))?;
-    let path = dir.join("config.json");
-    std::fs::write(&path, &json)
-        .map_err(|e| format!("Failed to write config: {}", e))?;
+    let path = motebit_config_path()?;
+    if let Some(backup) = write_config_at(&path, &json)? {
+        eprintln!(
+            "[motebit] unreadable config preserved as {} before replacing it",
+            backup.display()
+        );
+    }
     Ok(())
 }
 
@@ -1167,4 +1380,132 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod config_file_tests {
+    use super::*;
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "motebit-config-{}-{}-{}",
+            tag,
+            std::process::id(),
+            nonce
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn entries(dir: &std::path::Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn absence_reads_as_none_damage_as_err() {
+        let dir = scratch("read");
+        let path = dir.join("config.json");
+        assert_eq!(read_config_strict(&path).unwrap(), None);
+        for body in ["{ \"motebit_id\": ", "null", "[]", "3"] {
+            std::fs::write(&path, body).unwrap();
+            assert!(read_config_strict(&path).is_err(), "{body} must read as damage");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), body);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn damage_is_preserved_before_it_is_replaced() {
+        let dir = scratch("preserve");
+        let path = dir.join("config.json");
+        let damaged = "{ \"cli_encrypted_key\": { \"ciphertext\": \"ab";
+        std::fs::write(&path, damaged).unwrap();
+        let backup = write_config_at(&path, "{\"motebit_id\":\"m-2\"}")
+            .unwrap()
+            .expect("damage must be preserved");
+        assert!(backup
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("config.json.clobbered-"));
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), damaged);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{\"motebit_id\":\"m-2\"}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_healthy_config_is_replaced_without_a_backup() {
+        let dir = scratch("healthy");
+        let path = dir.join("config.json");
+        std::fs::write(&path, "{\"motebit_id\":\"m-1\"}").unwrap();
+        assert_eq!(write_config_at(&path, "{\"motebit_id\":\"m-2\"}").unwrap(), None);
+        assert_eq!(entries(&dir), vec!["config.json".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refuses_to_persist_a_non_object() {
+        let dir = scratch("nonobject");
+        let path = dir.join("config.json");
+        assert!(write_config_at(&path, "[]").is_err());
+        assert!(write_config_at(&path, "{").is_err());
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owner_only_including_a_pre_existing_0644_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("mode");
+        let path = dir.join("config.json");
+        std::fs::write(&path, "{}").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        // On read: tightened in place.
+        tighten_to_owner_only(&path);
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        // On write: the replacement is 0600 whatever the old mode was.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_config_at(&path, "{\"a\":1}").unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scratch_is_removed_when_the_replacement_fails() {
+        let dir = scratch("fail");
+        let path = dir.join("config.json");
+        // A non-empty directory where the file should be: staging succeeds,
+        // the rename cannot.
+        std::fs::create_dir_all(path.join("occupied")).unwrap();
+        assert!(write_file_atomic_owner_only(&path, b"{}").is_err());
+        let strays: Vec<String> = entries(&dir)
+            .into_iter()
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(strays.is_empty(), "stray scratch files: {strays:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn backup_stamp_matches_the_typescript_spelling() {
+        // new Date(1790000000123).toISOString() === "2026-09-21T14:13:20.123Z"
+        assert_eq!(backup_stamp(1_790_000_000_123), "2026-09-21T14-13-20-123Z");
+        assert_eq!(backup_stamp(0), "1970-01-01T00-00-00-000Z");
+        // A leap day, which is where hand-rolled calendars break.
+        // new Date(Date.UTC(2028, 1, 29, 23, 59, 59, 999)) → 1835481599999
+        assert_eq!(backup_stamp(1_835_481_599_999), "2028-02-29T23-59-59-999Z");
+    }
 }

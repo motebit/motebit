@@ -26,6 +26,7 @@ import * as path from "node:path";
 // vocabulary, and the SDK re-exports every protocol type.
 import type { KeySuccessionRecord } from "@motebit/sdk";
 import { CONFIG_DIR, type FullConfig } from "./config.js";
+import { writeFileAtomic } from "./durable-file.js";
 
 export interface PendingRotation {
   motebit_id: string;
@@ -55,12 +56,10 @@ export function savePendingRotation(pending: PendingRotation, dir: string = CONF
   fs.mkdirSync(dir, { recursive: true });
   const file = pendingRotationPath(dir);
   // Owner-only: it holds an encrypted private key, and the passphrase is
-  // the only thing between that and the identity. Written to a sibling and
+  // the only thing between that and the identity. Staged, fsync'd and
   // renamed so a crash mid-write leaves either the old file or the new one,
-  // never a torn one.
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(pending, null, 2), { mode: 0o600 });
-  fs.renameSync(tmp, file);
+  // never a torn one — the same discipline as config.json (`durable-file.ts`).
+  writeFileAtomic(file, JSON.stringify(pending, null, 2), 0o600);
 }
 
 /**

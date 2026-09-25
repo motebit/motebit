@@ -9,6 +9,14 @@
 
 import { verify } from "@motebit/crypto";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import {
+  CONFIG_BACKUP_INFIX,
+  ConfigDamagedError,
+  currentModeOr,
+  readConfigFile,
+  writeConfigFile,
+  writeFileAtomic,
+} from "./config-file.js";
 import { join, basename, resolve } from "node:path";
 import { homedir } from "node:os";
 import { generateIdentity, regenerateIdentityFile, decryptPrivateKey } from "./generate.js";
@@ -61,18 +69,50 @@ interface MotebitConfig {
   [key: string]: unknown;
 }
 
+/**
+ * Absent ⇒ `{}`; damaged ⇒ throws `ConfigDamagedError` (see config-file.ts).
+ * Reading damage as `{}` mattered twice over here: the clobber guard below
+ * decides from `motebit_id` alone, so an unreadable config looked like a
+ * fresh machine and was replaced.
+ */
 function loadConfig(): MotebitConfig {
+  return readConfigFile<MotebitConfig>(configPath());
+}
+
+/**
+ * The guided scaffold's read — EVERY read it makes goes through here. A
+ * damaged config refuses the scaffold unless `--force` was given; with it,
+ * the scaffold proceeds from `{}` and the save preserves the damaged bytes as
+ * `config.json.clobbered-<time>` before writing (`writeConfigFile`).
+ */
+let damageAnnounced = false;
+function loadConfigForScaffold(force: boolean): MotebitConfig {
   try {
-    return JSON.parse(readFileSync(configPath(), "utf-8")) as MotebitConfig;
-  } catch {
+    return loadConfig();
+  } catch (err) {
+    if (!(err instanceof ConfigDamagedError)) throw err;
+    const keptAs = `${basename(configPath())}${CONFIG_BACKUP_INFIX}<time>`;
+    if (!force) {
+      throw new Error(
+        `${err.message}\n    To replace it anyway, pass --force: the damaged file is kept as ${keptAs}, never deleted.`,
+        { cause: err },
+      );
+    }
+    if (!damageAnnounced) {
+      damageAnnounced = true;
+      console.log(
+        `  ${yellow("!")} ${dim(configPath())} could not be read (${err.reason}); --force given, it will be kept as ${keptAs}.`,
+      );
+    }
     return {};
   }
 }
 
 function saveConfig(config: MotebitConfig): void {
-  const dir = configDir();
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(configPath(), JSON.stringify(config, null, 2) + "\n", "utf-8");
+  const preservedAs = writeConfigFile(configPath(), config);
+  if (preservedAs != null) {
+    console.log(`  ${yellow("!")} The unreadable config was kept as ${dim(preservedAs)}.`);
+  }
 }
 
 /**
@@ -86,9 +126,12 @@ function saveConfig(config: MotebitConfig): void {
  * template, which makes the spawned `motebit serve` resolve the same path.
  */
 function writeAgentConfig(agentDir: string, config: MotebitConfig): void {
-  const dir = join(agentDir, ".motebit");
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "config.json"), JSON.stringify(config, null, 2) + "\n", "utf-8");
+  // The agent's `cli_encrypted_key` is its only key copy — same three rules
+  // as the operator's config: atomic, owner-only, damage preserved first.
+  const preservedAs = writeConfigFile(join(agentDir, ".motebit", "config.json"), config);
+  if (preservedAs != null) {
+    console.log(`  ${yellow("!")} The unreadable agent config was kept as ${dim(preservedAs)}.`);
+  }
 }
 
 /**
@@ -111,7 +154,7 @@ function writeAgentConfig(agentDir: string, config: MotebitConfig): void {
  */
 function assertNoExistingIdentity(force: boolean): void {
   if (force) return;
-  const existing = loadConfig();
+  const existing = loadConfigForScaffold(force);
   if (!existing.motebit_id) return;
 
   console.log();
@@ -785,7 +828,7 @@ async function guidedScaffold(
   let passphrase: string;
   let rl: ReturnType<typeof createRL> | null = null;
   let reuseExisting = false;
-  let existingConfig = loadConfig();
+  let existingConfig = loadConfigForScaffold(force);
 
   if (nonInteractive) {
     // Identity-clobber gate. Interactive mode prompts; --yes mode must
@@ -831,7 +874,7 @@ async function guidedScaffold(
     console.log();
 
     // Check for existing identity
-    existingConfig = loadConfig();
+    existingConfig = loadConfigForScaffold(force);
     if (existingConfig.motebit_id) {
       console.log(`  ${yellow("!")} Existing identity found: ${dim(existingConfig.motebit_id)}`);
       const overwrite = await select(rl, "  Overwrite with new identity?", [
@@ -984,7 +1027,7 @@ async function guidedScaffold(
             trustMode,
           });
           // Persist for future reuse
-          writeFileSync(existingMd, identityFileContent, "utf-8");
+          writeFileAtomic(existingMd, identityFileContent, currentModeOr(existingMd, 0o644));
         } catch {
           console.log(`  ${yellow("!")} Could not decrypt key — motebit.md will be omitted.`);
           console.log(
@@ -1012,7 +1055,7 @@ async function guidedScaffold(
     identityFileContent = result.identityFileContent;
 
     // Save identity to config (merge with existing)
-    const config = loadConfig();
+    const config = loadConfigForScaffold(force);
     config.name = dirName;
     config.motebit_id = result.motebitId;
     config.device_id = result.deviceId;
@@ -1022,7 +1065,11 @@ async function guidedScaffold(
     saveConfig(config);
 
     // Persist motebit.md to config dir so "keep existing" can reuse it
-    writeFileSync(join(configDir(), "motebit.md"), result.identityFileContent, "utf-8");
+    writeFileAtomic(
+      join(configDir(), "motebit.md"),
+      result.identityFileContent,
+      currentModeOr(join(configDir(), "motebit.md"), 0o644),
+    );
   }
 
   // Write project files
@@ -1268,15 +1315,19 @@ async function rotateCmd(
     return;
   }
 
-  // 5. Backup then write updated identity file
-  const backupPath = `${filePath}.backup`;
-  writeFileSync(backupPath, content, "utf-8");
-  writeFileSync(filePath, result.identityFileContent, "utf-8");
-
-  // 6. Update config
+  // 5. Update config FIRST — it holds the new private key. The reverse order
+  // had a crash window in which the identity file named a key whose private
+  // half existed nowhere. This order's window leaves the file on the old key
+  // while the new private key is held — the precondition for any repair, and
+  // the same order the CLI's rotation commits in (`apps/cli/src/rotation.ts`).
   config.device_public_key = result.newPublicKeyHex;
   config.cli_encrypted_key = result.newEncryptedKey;
   saveConfig(config);
+
+  // 6. Backup then replace the identity file, atomically.
+  const backupPath = `${filePath}.backup`;
+  writeFileSync(backupPath, content, "utf-8");
+  writeFileAtomic(filePath, result.identityFileContent, currentModeOr(filePath, 0o644));
 
   // 7. Verify the updated file
   const reVerify = await verify(result.identityFileContent, { expectedType: "identity" });
