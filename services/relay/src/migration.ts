@@ -41,6 +41,7 @@ import {
   CredentialBundleSchema,
   BalanceWaiverSchema,
 } from "@motebit/wire-schemas";
+import { admitKey, recordIdentityKey, verificationKeyFor } from "./identity-keys.js";
 
 const logger = createLogger({ service: "relay", module: "migration" });
 
@@ -176,9 +177,11 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
 
     // The request must carry the agent's own signature over its registered key
     // (§4.1). No registered key ⇒ cannot authorize departure ⇒ reject.
+    // Holder, else main's registry read (§5f verification reader).
+    const departingKey = verificationKeyFor(db, motebitId, agent.public_key);
     if (
-      !agent.public_key ||
-      !(await verifyMigrationRequest(request, hexToBytes(agent.public_key)))
+      departingKey === null ||
+      !(await verifyMigrationRequest(request, hexToBytes(departingKey)))
     ) {
       throw new HTTPException(401, { message: "MigrationRequest signature invalid" });
     }
@@ -527,6 +530,15 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
     // (never-rotated), or the agent's identity_file proves the presented key is
     // the current key in a sovereign-rooted succession chain (rotated key). A
     // thief who substituted a key satisfies neither.
+    // The arriving key enters this relay: canonical, or exactly a key already
+    // on file here (DA1/DB4). `hexToBytes` is lenient, so an alternate
+    // spelling verifies the binding AND the bundle — it must be refused here
+    // (design review round 1, F1: a respelled key locked the owner out).
+    if (typeof body.public_key !== "string" || !admitKey(db, body.motebit_id, body.public_key)) {
+      throw new HTTPException(400, {
+        message: "public_key must be a 64-char LOWERCASE hex string",
+      });
+    }
     if (!(await verifyMigratingKeyBinding(body.motebit_id, body.public_key, body.identity_file))) {
       throw new HTTPException(400, {
         message: "Migrating identity is not bound to the presented key",
@@ -577,6 +589,14 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
       now + 365 * 24 * 60 * 60 * 1000,
       1,
     );
+    // The migrating key was bound to the id above (step (i)); it is the
+    // identity's key here now — record it in the one holder (#703 Inc 2).
+    recordIdentityKey(db, {
+      motebitId: body.motebit_id,
+      publicKey: body.public_key,
+      source: "migration",
+      now,
+    });
 
     // Record acceptance for replay prevention
     db.prepare(
@@ -711,8 +731,10 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
       const regRow = db
         .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
         .get(motebitId) as { public_key: string } | undefined;
-      if (regRow?.public_key) {
-        pubKeyHex = regRow.public_key;
+      // Holder, else main's registry read (§5f verification reader).
+      const waiverKey = verificationKeyFor(db, motebitId, regRow?.public_key);
+      if (waiverKey !== null) {
+        pubKeyHex = waiverKey;
       } else {
         const device = db
           .prepare(

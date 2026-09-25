@@ -155,7 +155,7 @@ async function served(mid: string) {
 /** Replace concrete keys with role names so branch and main observations compare. */
 function name(v: unknown, roles: Record<string, string>): unknown {
   if (typeof v === "string") return roles[v] ?? roles[v.toLowerCase()] ?? v;
-  if (v !== null && typeof v === "object")
+  if (v && typeof v === "object")
     return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, name(x, roles)]));
   return v;
 }
@@ -298,4 +298,57 @@ it("STRANGER: a stranger's key registers onto an existing sovereign identity", a
   const bootS = await bootstrap(mid, `${mid}-s1`, hex(s));
   const selfS = await registerSelf(mid, `${mid}-s2`, s);
   obs["STRANGER"] = { bootS, selfS };
+});
+
+it("C1: chain-only identity (registry '' + guardian, chain K→K1): guardian recovers from K1", async () => {
+  const k = await generateKeypair();
+  const k1 = await generateKeypair();
+  const g = await generateKeypair();
+  const n = await generateKeypair();
+  const mid = `c1-${crypto.randomUUID()}`;
+  const roles = { [hex(k1)]: "K1", [hex(n)]: "N" };
+  await regOperator(mid, await guardianFields(mid, g));
+  db()
+    .prepare(
+      "INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, new_key_signature) VALUES (?, ?, ?, ?, 'sig')",
+    )
+    .run(mid, hex(k), hex(k1), 2000);
+  const rec = await signGuardianRecoverySuccession(
+    g.privateKey,
+    n.privateKey,
+    k1.publicKey,
+    n.publicKey,
+  );
+  const recover = await presentRecovery(mid, rec);
+  obs["C1"] = name({ recover, ...(await served(mid)) }, roles) as Record<string, unknown>;
+});
+
+it("C2: operator identity WITH a keyless device row: guardian recovers from the registry key", async () => {
+  const k = await generateKeypair();
+  const g = await generateKeypair();
+  const n = await generateKeypair();
+  const mid = `c2-${crypto.randomUUID()}`;
+  const roles = { [hex(k)]: "K", [hex(n)]: "N" };
+  plantDevice(mid, `${mid}-dev`, "");
+  const reg = await regOperator(mid, { public_key: hex(k), ...(await guardianFields(mid, g)) });
+  const rec = await signGuardianRecoverySuccession(
+    g.privateKey,
+    n.privateKey,
+    k.publicKey,
+    n.publicKey,
+  );
+  const recover = await presentRecovery(mid, rec);
+  obs["C2"] = name({ reg, recover, ...(await served(mid)) }, roles) as Record<string, unknown>;
+});
+
+it("C3: owner registered its key; a paired device tries to rotate its own key", async () => {
+  const { mid, kp } = await sovereign();
+  const paired = await generateKeypair();
+  const k3 = await generateKeypair();
+  const roles = { [hex(kp)]: "K0", [hex(k3)]: "K3" };
+  plantDevice(mid, `${mid}-o`, hex(kp));
+  plantDevice(mid, `${mid}-p`, hex(paired));
+  const reg = await regDevice(mid, `${mid}-o`, kp, { public_key: hex(kp) });
+  const pairedRotate = await rotateOwn(mid, `${mid}-p`, paired, k3);
+  obs["C3"] = name({ reg, pairedRotate, ...(await served(mid)) }, roles) as Record<string, unknown>;
 });

@@ -25,6 +25,13 @@
  */
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { KeySuccessionRecord } from "@motebit/encryption";
+import {
+  chainHeadOf,
+  holderKeyOf,
+  identityKey,
+  recordIdentityKey,
+  registryKeyOf,
+} from "./identity-keys.js";
 
 interface ChainHead {
   old_public_key: string;
@@ -78,38 +85,75 @@ export function successionAtHead(
  * function, so they cannot disagree.
  */
 export interface KeyOnFile {
+  /** The one holder's key (`identity_keys`), when a door has recorded one. */
+  holderKey: string | null;
   /** The registry key, when the row exists and holds one (`''` is not a key). */
   registryKey: string | null;
   /** The `new_public_key` of the newest recorded link, by insertion order. */
   chainHead: string | null;
-  /** The single most authoritative key: registry, else chain head, else null. */
+  /**
+   * What a rotation departs from (§5i, build 4): the holder when the identity
+   * has proven one; otherwise EXACTLY main's answer — registry key, else chain
+   * head. (What the relay SERVES is the holder alone — `identityKey`.)
+   */
   held: string | null;
 }
 
+/**
+ * The rungs are reported by name so a departure verdict can say which one
+ * answered; `held` comes from the one authority, not from the rungs listed
+ * beside it. A device row is not a rung here (§5a A4): a paired device holds
+ * its own key, and a rotation must not depart from a key the identity never
+ * held. The reader that answers "what key does the relay serve" is
+ * `identityKeyFor`; this is "what key may a rotation depart from".
+ */
 export function keyOnFile(db: DatabaseDriver, motebitId: string): KeyOnFile {
-  const row = db
-    .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
-    .get(motebitId) as { public_key: string | null } | undefined;
-  const registryKey = row?.public_key != null && row.public_key !== "" ? row.public_key : null;
-  const chainHead = successionHead(db, motebitId)?.new_public_key ?? null;
-  return { registryKey, chainHead, held: registryKey ?? chainHead };
+  return {
+    holderKey: holderKeyOf(db, motebitId),
+    registryKey: registryKeyOf(db, motebitId),
+    chainHead: chainHeadOf(db, motebitId),
+    held:
+      identityKey(db, motebitId)?.publicKey ??
+      registryKeyOf(db, motebitId) ??
+      chainHeadOf(db, motebitId),
+  };
 }
 
 export type Departure =
-  | { admissible: true; rung: "registry" | "chain" | "device" }
+  | { admissible: true; rung: "holder" | "registry" | "chain" | "device" }
   | {
       admissible: false;
       reason: "not_from_current_key" | "not_from_chain_head" | "no_key_on_file";
     };
 
-/** May a succession departing from `key` be recorded for this identity? */
+/**
+ * May a succession departing from `key` be recorded for this identity?
+ *
+ * Build 4 (§5i): the HOLDER when the identity has proven one — exactly, in its
+ * stored spelling (DA1). Otherwise EXACTLY main's rule: the registry key, else
+ * the recorded chain head, else a device row holding exactly `key` (#736).
+ * Build 3 made the holder the only departure authority and stranded states
+ * main supports (#753 C1: chain-only identities; C2: operator identities with
+ * a device row); for an identity with no holder this is main's rule by
+ * construction, so no rotation or recovery main allows can be refused. What
+ * the relay SERVES stays the holder alone (`identityKey`) — that half is what
+ * closed G1's actual harm, an unproven key served and anchored.
+ */
 export function departureFrom(db: DatabaseDriver, motebitId: string, key: string): Departure {
-  const { registryKey, chainHead } = keyOnFile(db, motebitId);
+  const held = holderKeyOf(db, motebitId);
+  if (held !== null) {
+    return held === key
+      ? { admissible: true, rung: "holder" }
+      : { admissible: false, reason: "not_from_current_key" };
+  }
+  // ── main's rule, byte-for-byte (origin/main succession-apply.ts) ──
+  const registryKey = registryKeyOf(db, motebitId);
   if (registryKey !== null) {
     return registryKey === key
       ? { admissible: true, rung: "registry" }
       : { admissible: false, reason: "not_from_current_key" };
   }
+  const chainHead = chainHeadOf(db, motebitId);
   if (chainHead !== null) {
     return chainHead === key
       ? { admissible: true, rung: "chain" }
@@ -163,8 +207,12 @@ export function applySuccession(
     // across a rotation would publish a credential naming a key the row no
     // longer holds — dropped, so the device re-attaches against the key it
     // now holds.
+    //
+    // Matched case-insensitively (DB4): retiring WIDER is fail-safe — a row
+    // that entered under another spelling of the retired key (main's guard
+    // case-folded) must not keep authenticating after the rotation.
     db.prepare(
-      "UPDATE devices SET public_key = ?, hardware_attestation_credential = NULL WHERE motebit_id = ? AND public_key = ?",
+      "UPDATE devices SET public_key = ?, hardware_attestation_credential = NULL WHERE motebit_id = ? AND lower(public_key) = lower(?)",
     ).run(record.new_public_key, motebitId, record.old_public_key);
 
     // A pairing session approved before this rotation carries the key that
@@ -182,7 +230,7 @@ export function applySuccession(
       `UPDATE pairing_sessions SET key_transfer_payload = NULL
        WHERE motebit_id = ? AND key_transfer_payload IS NOT NULL
          AND (json_valid(key_transfer_payload) = 0
-              OR json_extract(key_transfer_payload, '$.identity_pubkey_check') = ?)`,
+              OR lower(json_extract(key_transfer_payload, '$.identity_pubkey_check')) = lower(?))`,
     ).run(motebitId, record.old_public_key);
 
     // The registry key moves only FROM the key this link retires, or into an
@@ -195,6 +243,21 @@ export function applySuccession(
     db.prepare(
       "UPDATE agent_registry SET public_key = ? WHERE motebit_id = ? AND (public_key = ? OR COALESCE(public_key, '') = '')",
     ).run(record.new_public_key, motebitId, record.old_public_key);
+    // The holder moves ONLY for E-link (§5f): a link departing from the key it
+    // HOLDS. Never into an empty slot — an identity with no holder departed by
+    // main's rule (registry, chain head or a device row), none of which is
+    // evidence that the new key is the identity's; and never from any other
+    // key, so a re-presented old link cannot drag a holder that has moved on.
+    // The registry above keeps main's behaviour exactly.
+    const holder = holderKeyOf(db, motebitId);
+    if (holder !== null && holder === record.old_public_key) {
+      recordIdentityKey(db, {
+        motebitId,
+        publicKey: record.new_public_key,
+        source: "succession",
+        now: Date.now(),
+      });
+    }
 
     // The chain grows unless this link is already its head. A lost response
     // and a retry must not append the same link twice: the chain is served

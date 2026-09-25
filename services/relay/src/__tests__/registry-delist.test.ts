@@ -372,7 +372,7 @@ describe("migration v41 — rows already revoked are backfilled as delisted", ()
     expect(() => m41.up(db)).not.toThrow();
   });
 
-  it("is the newest migration, so a fresh database gets it", () => {
-    expect(Math.max(...relayMigrations.map((m) => m.version))).toBe(41);
+  it("is followed by v42 (identity_keys), so a fresh database gets both", () => {
+    expect(Math.max(...relayMigrations.map((m) => m.version))).toBe(42);
   });
 });

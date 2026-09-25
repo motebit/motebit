@@ -27,6 +27,7 @@
  */
 import type { IdentityManager } from "@motebit/core-identity";
 import type { DatabaseDriver } from "@motebit/persistence";
+import { keysHeldBy } from "./identity-keys.js";
 
 export interface DeviceRegistrationRefusal {
   code: "DEVICE_ID_TAKEN" | "DEVICE_KEY_CONFLICT" | "IDENTITY_KEY_CONFLICT";
@@ -42,6 +43,11 @@ export async function refusePublicDeviceRegistration(
   deps: { identityManager: IdentityManager; db: DatabaseDriver },
   req: { motebitId: string; deviceId: string | undefined; publicKey: string },
 ): Promise<DeviceRegistrationRefusal | null> {
+  // Case-folded, exactly as main (#758 review): an exact guard refused a
+  // lowercase K joining a legacy UPPER(K) identity that main admits. The risk
+  // the exact guard targeted — a second-spelling row a rotation misses — is
+  // closed where it lives: rotation retires device rows case-insensitively
+  // (DB4, `applySuccession`).
   const key = req.publicKey.toLowerCase();
 
   if (req.deviceId != null) {
@@ -66,20 +72,14 @@ export async function refusePublicDeviceRegistration(
     }
   }
 
-  // Every key this identity already answers to. The registry key counts:
-  // a service-mode motebit registers through /agents/register and may
-  // have no device row at all, and token auth falls back to the registry
-  // — so "no device yet" is not "no owner yet".
-  const held = new Set<string>();
-  for (const d of await deps.identityManager.listDevices(req.motebitId)) {
-    if (d.public_key !== "") held.add(d.public_key.toLowerCase());
-  }
-  const registry = deps.db
-    .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
-    .get(req.motebitId) as { public_key: string | null } | undefined;
-  if (registry?.public_key != null && registry.public_key !== "") {
-    held.add(registry.public_key.toLowerCase());
-  }
+  // Every key this identity already answers to (Q-held, §5b), from the one
+  // function whose law is that it contains whatever auth will verify against
+  // (L1): the holder's key, the registry's (a service-mode motebit registers
+  // through /agents/register and may have no device row — "no device yet" is
+  // not "no owner yet"), the chain head's, and every keyed device row's. The first build left
+  // the holder out of this set (§5a A1), so a stranger's key passed for an
+  // identity whose registry key was blank while its holder still answered.
+  const held = new Set([...keysHeldBy(deps.db, req.motebitId)].map((k) => k.toLowerCase()));
 
   if (held.size > 0 && !held.has(key)) {
     return {

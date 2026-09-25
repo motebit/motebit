@@ -18,6 +18,7 @@ import {
 import type { KeyPair } from "@motebit/crypto";
 import type { TokenAudience } from "@motebit/protocol";
 import { createTestRelay } from "./test-helpers.js";
+import { recordIdentityKey } from "../identity-keys.js";
 
 let relay: SyncRelay;
 let owner: KeyPair;
@@ -181,6 +182,34 @@ describe("bootstrap shares the rule", () => {
 
   it("admits the identity's own key on a new device", async () => {
     expect((await bootstrap(motebitId, "owner-vps", owner)).status).toBe(200);
+  });
+});
+
+describe("an identity whose registry key was blanked while its holder still answers", () => {
+  it("is protected by its HOLDER key — the guard counts what auth will verify against (§5a A1, §5b L1)", async () => {
+    // Round two of #747: auth verified against `identity_keys` while this
+    // guard built "keys held" from devices + registry only, so a stranger's
+    // key passed for an identity with no device row and a blank registry key.
+    const serviceId = crypto.randomUUID();
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, registered_at, last_heartbeat, expires_at) VALUES (?, '', '', 1, 1, 9999999999999)",
+      )
+      .run(serviceId);
+    recordIdentityKey(relay.moteDb.db, {
+      motebitId: serviceId,
+      publicKey: bytesToHex(owner.publicKey),
+      source: "register",
+      now: 1,
+    });
+    expect(deviceRows(serviceId)).toEqual([]);
+    const s = await registerSelf(serviceId, "stranger-laptop", stranger);
+    expect(s.status).toBe(409);
+    expect(s.json["code"]).toBe("IDENTITY_KEY_CONFLICT");
+    expect(deviceRows(serviceId)).toEqual([]);
+    expect((await bootstrap(serviceId, "stranger-box", stranger)).status).toBe(409);
+    // The owner's own key on a new machine is still admitted.
+    expect((await registerSelf(serviceId, "owner-desk", owner)).status).toBe(201);
   });
 });
 

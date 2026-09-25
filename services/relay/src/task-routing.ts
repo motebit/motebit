@@ -42,6 +42,7 @@ import { CircuitBreaker } from "@motebit/circuit-breaker";
 import type { CircuitBreakerConfig, CircuitBreakerState } from "@motebit/circuit-breaker";
 import { createLogger } from "./logger.js";
 import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
+import { verificationKeyFor } from "./identity-keys.js";
 
 const logger = createLogger({ service: "relay", module: "task-routing" });
 const circuitBreakerLogger = createLogger({ service: "relay", module: "circuit-breaker" });
@@ -1585,11 +1586,9 @@ export async function evaluateSettlementEligibility(
   // qualification path; unbound workers never reach it. See
   // `docs/doctrine/hardware-attestation.md` (binding strength is additive
   // scoring) and `docs/doctrine/identity-binding-verification.md`.
-  if (
-    trustRow &&
-    worker.public_key &&
-    (await verifySovereignBinding(workerId, worker.public_key))
-  ) {
+  // Holder, else main's registry read (§5f verification reader).
+  const workerKey = verificationKeyFor(db, workerId, worker.public_key);
+  if (trustRow && workerKey !== null && (await verifySovereignBinding(workerId, workerKey))) {
     const score = trustLevelToScore(trustRow.trust_level);
     if (
       score >= P2P_SOVEREIGN_MIN_TRUST_SCORE &&
