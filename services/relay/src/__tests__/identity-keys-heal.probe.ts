@@ -283,23 +283,5 @@ it("CASE-G: legacy stored UPPER(K) device row; owner registers lowercase K as a 
   obs["CASE-G"] = { boot, self };
 });
 
-it("CASE-ROT: unfilled legacy identity rotates to an UPPER new key", async () => {
-  const kp = await generateKeypair();
-  const n = await generateKeypair();
-  const a = await createAgent(relay, hex(kp));
-  const rec = await signKeySuccession(kp.privateKey, n.privateKey, n.publicKey, kp.publicKey);
-  (rec as unknown as Record<string, string>).new_public_key = hex(n).toUpperCase();
-  const { token } = await mintAudienceToken(
-    { mid: a.motebitId, did: a.deviceId, aud: "rotate-key" },
-    kp.privateKey,
-  );
-  const r = await relay.app.request(`/api/v1/agents/${a.motebitId}/rotate-key`, {
-    method: "POST",
-    headers: { ...J, Authorization: `Bearer ${token}` },
-    body: JSON.stringify(rec),
-  });
-  obs["CASE-ROT"] = { status: r.status };
-});
-
 // Helpers kept for probes that grow new scenarios (recovery, operator paths).
 void [_regOperator, _guardianFields, _presentRecovery];

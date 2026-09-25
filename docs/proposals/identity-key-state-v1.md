@@ -356,7 +356,8 @@ A cold review, which probed each candidate through `scripts/differential-vs-main
 
 The reviewer's probe is committed as `services/relay/src/__tests__/identity-keys-heal.probe.ts`, loading the branch's real backfill SQL. With the committed 12-scenario probe:
 
-- CASE-G, CASE-ROT and every rotation, recovery and admission result equal main's.
+- CASE-G and every rotation, recovery and admission result equal main's, **except DA1's stated refusal**: a succession or recovery record whose NEW key is non-canonical (e.g. uppercase) is refused where main accepts it (the decisive round's R-UROT/R-UREC). The same record with the canonical spelling succeeds, so it is never a lockout, and no shipped encoder emits uppercase. (An earlier CASE-ROT probe claimed parity here; it mutated the key after signing, so both trees refused it for a bad signature. It was vacuous and is removed.)
+- DB4's case-insensitive retire moves a legacy UPPER(K) device row on rotation, where main leaves it authenticating under the retired key (R-RETIRE). That is main's #702-class defect, closed on purpose.
 - HEAL-U/F differ only in serving `''` (§5j's stated cost).
 
 Under §8, the next in-kind finding withdraws.
