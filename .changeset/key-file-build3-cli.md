@@ -20,3 +20,5 @@ Key-file durability, build 3 (`docs/proposals/key-file-durability-v1.md`, lane A
 - The `write_file` / `undo_write` tools refuse to write inside `~/.motebit`, `$MOTEBIT_CONFIG_DIR` or any `.motebit` directory; their backups are `0600` in a `0700` directory, and a file that cannot be backed up is not overwritten.
 
 The rotation adapter stays a thin surface-kit adapter: the compare-and-swap before a rotation commit (`refuseIfKeyReplacedSince`) and the retired-key ruling (`retiredKeyChange`) live in `config.ts`, and the write-ahead port type (`PendingRotationPort`) in `pending-rotation.ts`.
+
+A kept copy is refused, rather than attempted, when the file to keep cannot be resolved at all (a dangling or looping link, or nothing there): nothing is changed.

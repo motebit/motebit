@@ -184,8 +184,9 @@ export function writeConfigFile(
     try {
       // Absent: nothing on disk to protect or revert — the write lands as given.
       onDisk = isTrulyAbsent(path) ? null : readConfigFile(path);
-    } catch (err) {
-      if (!(err instanceof ConfigDamagedError)) throw err;
+    } catch {
+      // `readConfigFile` throws only `ConfigDamagedError` (and `isTrulyAbsent`
+      // never throws): whatever was there is damage, kept before the write.
       preservedAs = preserveAside(path, CONFIG_BACKUP_INFIX);
       onDisk = null;
     }
@@ -402,21 +403,15 @@ export function moveAside(target: string, infix: string, now: Date = new Date())
 
 /** The file `target` names, through symlinks; refuses when a link cannot be resolved. */
 function resolveRealFile(target: string): string {
+  // A name that exists and is not a link always resolves (the parents that
+  // let it be stat'ed resolve too), so an unresolvable name is a dangling or
+  // looping link, or not there at all: nothing to keep, and never the LINK.
   try {
     return realpathSync(target);
   } catch (err) {
-    let isLink = true;
-    try {
-      isLink = lstatSync(target).isSymbolicLink();
-    } catch {
-      /* unknowable — treat as a link */
-    }
-    if (isLink) {
-      throw new Error(`could not resolve ${target} to preserve it; nothing was changed`, {
-        cause: err,
-      });
-    }
-    return target;
+    throw new Error(`could not resolve ${target} to preserve it; nothing was changed`, {
+      cause: err,
+    });
   }
 }
 

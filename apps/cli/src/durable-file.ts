@@ -271,21 +271,15 @@ export function backupStamp(now: Date): string {
  * of the file is the failure this exists to prevent.
  */
 function resolveRealFile(target: string): string {
+  // A name that exists and is not a link always resolves (the parents that
+  // let it be stat'ed resolve too), so an unresolvable name is a dangling or
+  // looping link, or not there at all: nothing to keep, and never the LINK.
   try {
     return fs.realpathSync(target);
   } catch (err) {
-    let isLink = true;
-    try {
-      isLink = fs.lstatSync(target).isSymbolicLink();
-    } catch {
-      /* unknowable — treat as a link */
-    }
-    if (isLink) {
-      throw new Error(`could not resolve ${target} to preserve it; nothing was changed`, {
-        cause: err,
-      });
-    }
-    return target;
+    throw new Error(`could not resolve ${target} to preserve it; nothing was changed`, {
+      cause: err,
+    });
   }
 }
 

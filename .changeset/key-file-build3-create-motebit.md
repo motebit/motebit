@@ -10,3 +10,5 @@ Key-file durability, build 3 (`docs/proposals/key-file-durability-v1.md`, lane A
 - **Replacing an identity keeps its rotation in flight.** A guided replace or `--agent --force` moves the replaced identity's `pending-rotation.json` aside as `pending-rotation.json.clobbered-<time>` instead of leaving it for the next `motebit rotate` to delete.
 - **`motebit.md`** files (project, agent, `~/.motebit` snapshot) are written atomically, and one that names another identity is kept as `motebit.md.clobbered-<time>`. An agent's key is written before the files that name it.
 - A damaged config readable by others is narrowed to `0600` by the read that refuses it; a config symlink whose target is missing is refused, never replaced; preserved copies are byte copies; config directories are created `0700`.
+
+A kept copy is refused, rather than attempted, when the file to keep cannot be resolved at all (a dangling or looping link, or nothing there): nothing is changed.
