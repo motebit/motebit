@@ -231,11 +231,13 @@ export async function bootstrapIdentity(
   passphrase: string,
 ): Promise<{ motebitId: string; isFirstLaunch: boolean }> {
   // The key and the identity it is bound to live in ONE file here, so they
-  // are committed in ONE atomic write: `storePrivateKey` (which core-identity
-  // calls first) only stages the key, and `configStore.write` persists key
-  // and binding together. A crash can no longer leave a key with no
-  // `motebit_id` — the state the next launch would otherwise mint over.
-  let stagedKey: NonNullable<FullConfig["cli_encrypted_key"]> | null = null;
+  // are committed in ONE atomic write: `configStore.write` (which
+  // core-identity calls first) only stages the binding, and
+  // `storePrivateKey` persists binding and key together. A crash can no
+  // longer leave a key with no `motebit_id` — the state the next launch would
+  // otherwise mint over — nor a binding without its key.
+  let stagedBinding: { motebit_id: string; device_id: string; device_public_key: string } | null =
+    null;
   const configStore: BootstrapConfigStore = {
     read() {
       if (fullConfig.motebit_id == null || fullConfig.motebit_id === "")
@@ -247,26 +249,29 @@ export async function bootstrapIdentity(
       });
     },
     write(state): Promise<void> {
-      fullConfig.motebit_id = state.motebit_id;
-      fullConfig.device_id = state.device_id;
-      fullConfig.device_public_key = state.device_public_key;
-      if (stagedKey != null) {
-        fullConfig.cli_encrypted_key = stagedKey;
-        delete fullConfig.cli_private_key;
-      }
-      // An identity change, declared: refused if another process changed the
-      // identity since this config was read, and whatever key or binding it
-      // replaces is kept first.
-      saveFullConfig(fullConfig, { identityChange: "preserve-replaced" });
+      stagedBinding = state;
       return Promise.resolve();
     },
   };
 
   const keyStore: BootstrapKeyStore = {
     async storePrivateKey(privKeyHex) {
+      if (stagedBinding == null) {
+        throw new Error(
+          "identity bootstrap: the key arrived before its binding; nothing was written",
+        );
+      }
       const encrypted = await encryptPrivateKey(privKeyHex, passphrase);
       if (encrypted == null) throw new Error("could not encrypt the new identity key");
-      stagedKey = encrypted;
+      fullConfig.motebit_id = stagedBinding.motebit_id;
+      fullConfig.device_id = stagedBinding.device_id;
+      fullConfig.device_public_key = stagedBinding.device_public_key;
+      fullConfig.cli_encrypted_key = encrypted;
+      delete fullConfig.cli_private_key;
+      // An identity change, declared: refused if another process changed the
+      // identity since this config was read, and whatever key or binding it
+      // replaces is kept first.
+      saveFullConfig(fullConfig, { identityChange: "preserve-replaced" });
     },
     // Rule R1 at the one shared absence decision: only a config with NO key
     // field is "no key". A key without a `motebit_id` is refused by

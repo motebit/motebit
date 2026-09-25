@@ -449,7 +449,7 @@ function toHex(bytes: Uint8Array): string {
  * 2. If found, verify it exists in DB — return existing
  * 3. If config has ID but DB doesn't, re-create in DB (robustness)
  * 4. On first launch: create identity, generate Ed25519 keypair, register device
- * 5. Persist private key via keyStore, write config via configStore
+ * 5. Write config via configStore (it may refuse), THEN persist the private key via keyStore
  */
 /**
  * Pre-write the MotebitIdentity record + `IdentityCreated` event for a
@@ -656,15 +656,23 @@ export async function bootstrapIdentity(opts: {
 
   const device = await identityManager.registerDevice(identity.motebit_id, surfaceName, pubKeyHex);
 
-  // Persist private key (surface-specific: OS keyring, encrypted config, etc.)
-  await keyStore.storePrivateKey(privKeyHex);
-
-  // Write identity metadata to config (surface-specific: file, Tauri IPC, etc.)
+  // The binding FIRST, the key second (key-file durability item 1). A config
+  // store that must refuse this write (it holds key material the mint would
+  // replace) refuses BEFORE any key is stored — storing a key and then
+  // refusing its binding left a key nothing names, and did so again on every
+  // launch. A crash between the two leaves a config naming an identity whose
+  // key was never stored: the next launch reads that as the divergent state
+  // (nothing held, nothing destroyed), never as a key to mint over.
+  // Surfaces that keep key and binding in ONE file (the CLI) stage the
+  // binding here and commit both atomically in `storePrivateKey`.
   await configStore.write({
     motebit_id: identity.motebit_id,
     device_id: device.device_id,
     device_public_key: pubKeyHex,
   });
+
+  // Persist private key (surface-specific: OS keyring, encrypted config, etc.)
+  await keyStore.storePrivateKey(privKeyHex);
 
   return {
     motebitId: identity.motebit_id,

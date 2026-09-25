@@ -117,6 +117,13 @@ describe("handleMigrateKeyring", () => {
     expect(saved.cli_encrypted_key).toBeDefined();
     expect(saved.cli_encrypted_key?.ciphertext).toBeTruthy();
     expect(fs.existsSync(devKeyringPath)).toBe(false);
+    // R2: moved aside whole, owner-only — never zeroed, never erased.
+    const kept = fs.readdirSync(tmpDir).filter((f) => f.startsWith("dev-keyring.json.migrated-"));
+    expect(kept).toHaveLength(1);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(tmpDir, kept[0]!), "utf-8")).device_private_key,
+    ).toBe(toHex(privateKey));
+    expect(fs.statSync(path.join(tmpDir, kept[0]!)).mode & 0o777).toBe(0o600);
   });
 
   it("fails closed when dev-keyring private key derives to a DIFFERENT public than config.device_public_key", async () => {
@@ -265,12 +272,21 @@ describe("handleMigrateKeyring", () => {
     expect(saveFullConfigMock.mock.calls[0]?.[1]).toEqual({ identityChange: "preserve-replaced" });
   });
 
-  it("item 11: a keyring that holds MORE than the migrated key (the desktop's rotation write-ahead) is left in place, owner-only", async () => {
-    const p = await migrate({ pending_rotation: '{"new_private_key_hex":"ab"}' });
-    expect(fs.existsSync(p)).toBe(true);
-    expect(JSON.parse(fs.readFileSync(p, "utf-8")).pending_rotation).toBeTruthy();
-    expect(fs.statSync(p).mode & 0o777).toBe(0o600);
-  });
+  it.each([
+    { pending_rotation: '{"new_private_key_hex":"ab"}' },
+    { pending_identity_switch: "{}" },
+    { "device_private_key.preserved-2026-01-01T00-00-00-000Z": "cd".repeat(32) },
+  ])(
+    "item 11 / F3: a keyring that holds MORE than the migrated key (%j) is left in place, owner-only",
+    async (extra) => {
+      const p = await migrate(extra);
+      expect(fs.existsSync(p)).toBe(true);
+      expect(Object.keys(JSON.parse(fs.readFileSync(p, "utf-8")))).toEqual(
+        expect.arrayContaining(Object.keys(extra)),
+      );
+      expect(fs.statSync(p).mode & 0o777).toBe(0o600);
+    },
+  );
 
   it("item 11: a SYMLINKED keyring is unlinked, its target never zeroed", async () => {
     const target = path.join(tmpDir, "elsewhere.json");

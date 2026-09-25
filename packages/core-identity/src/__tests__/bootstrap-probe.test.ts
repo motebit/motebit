@@ -107,6 +107,21 @@ describe("bootstrapIdentity with probePrivateKey", () => {
     expect(s.state.configWrites).toBe(1);
   });
 
+  it.each([true, false])(
+    "a config store that REFUSES the first-launch write refuses it BEFORE any key is stored (probe adapter: %s)",
+    async (withProbe) => {
+      // Lane-B review F2: the desktop's config store refuses a first-launch
+      // write over a config holding the CLI's key. Storing the new key first
+      // and only then refusing its binding left an unbound key — on EVERY
+      // launch.
+      const s = stores(null, { state: "absent" });
+      s.configStore.write = () => Promise.reject(new Error("config holds key material"));
+      if (!withProbe) delete s.keyStore.probePrivateKey;
+      await expect(run(s)).rejects.toThrow("config holds key material");
+      expect(s.state.storeCalls).toBe(0);
+    },
+  );
+
   it("provably absent + an identity ⇒ the divergent-state recovery (nothing held to destroy)", async () => {
     const s = stores(
       { motebit_id: "m-1", device_id: "d-1", device_public_key: "aa" },
