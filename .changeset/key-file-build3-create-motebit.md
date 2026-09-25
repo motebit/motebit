@@ -14,3 +14,5 @@ Key-file durability, build 3 (`docs/proposals/key-file-durability-v1.md`, lane A
 A kept copy is refused, rather than attempted, when the file to keep cannot be resolved at all (a dangling or looping link, or nothing there): nothing is changed.
 
 An identity-changing config write also keeps a replaced `motebit_id` / `device_id` / `device_public_key`, and a stale config lock is broken atomically.
+
+The config lock identifies a lock by its content (`<pid> <nonce>`), never its inode (Linux reuses inodes); a holder releases only its own lock.

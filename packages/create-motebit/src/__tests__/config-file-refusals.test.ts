@@ -347,3 +347,31 @@ describe("create-motebit rotate commit failure points", () => {
     expect(fs.readFileSync(e.newKeyAt!, "utf-8")).toContain("NEW_KEY");
   });
 });
+
+describe("the config lock's stale break (the create-motebit twin; #761 CI, Linux inode reuse)", () => {
+  it("never deletes a FRESH lock another waiter took, and breaks exactly the judged-stale one; a holder releases only its own lock", async () => {
+    const { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, unlinkSync } =
+      await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const cf = await import("../config-file.js");
+    const dir = mkdtempSync(join(tmpdir(), "cm-lock-"));
+    const target = join(dir, "config.json");
+    const lock = `${target}.lock`;
+    writeFileSync(lock, "2147483646 aa");
+    const staleToken = readFileSync(lock, "utf-8");
+    unlinkSync(lock);
+    writeFileSync(lock, "A-fresh"); // may reuse the stale inode on Linux
+    cf.breakStaleLock(lock, staleToken);
+    expect(readFileSync(lock, "utf-8")).toBe("A-fresh");
+    rmSync(lock);
+    writeFileSync(lock, "2147483646 aa");
+    cf.breakStaleLock(lock, "2147483646 aa");
+    expect(existsSync(lock)).toBe(false);
+    cf.withFileLock(target, () => {
+      writeFileSync(lock, "999999 someone-else");
+    });
+    expect(readFileSync(lock, "utf-8")).toBe("999999 someone-else");
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

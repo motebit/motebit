@@ -24,3 +24,5 @@ The rotation adapter stays a thin surface-kit adapter: the compare-and-swap befo
 A kept copy is refused, rather than attempted, when the file to keep cannot be resolved at all (a dangling or looping link, or nothing there): nothing is changed.
 
 A config that names an identity but holds no CLI key — what the desktop app writes into the shared `~/.motebit/config.json`, or a CLI identity whose key was lost — is refused with a pointer to `motebit migrate-keyring` / `motebit restore`, never replaced by a freshly minted identity. An identity-changing save now also keeps the replaced `motebit_id` / `device_id` / `device_public_key`. A second `undo_write` no longer re-applies the write the first one undid. `doctor` also lists `dev-keyring.json.migrated-*` and `motebit.md.clobbered-*`. Every creation of `~/.motebit` (grants, skills, the update check) is `0700`. A stale config lock is broken atomically, so two waiters never both hold it.
+
+The config lock identifies a lock by its CONTENT (`<pid> <nonce>`), not its inode: Linux reuses inode numbers, so an inode check could break a fresh lock. A holder releases only a lock that still carries its own token.

@@ -220,20 +220,33 @@ describe("the config lock (shared with create-motebit)", () => {
     const durable = await import("../durable-file.js");
     fs.mkdirSync(tmpDir, { recursive: true });
     const lock = `${CONFIG}.lock`;
-    fs.writeFileSync(lock, "2147483646"); // stale: dead pid
-    const staleIno = fs.statSync(lock).ino;
+    fs.writeFileSync(lock, "2147483646 aa"); // stale: dead pid
+    const staleToken = fs.readFileSync(lock, "utf-8");
     // Waiter A breaks it and takes a fresh lock before waiter B acts on its
-    // (now outdated) judgement.
+    // (now outdated) judgement. On Linux the fresh file may REUSE the stale
+    // one's inode — which is why the judgement is content, not inode (CI).
     fs.unlinkSync(lock);
     fs.writeFileSync(lock, "A-fresh");
-    durable.breakStaleLock(lock, staleIno); // waiter B
+    durable.breakStaleLock(lock, staleToken); // waiter B
     expect(fs.readFileSync(lock, "utf-8")).toBe("A-fresh");
     expect(fs.readdirSync(tmpDir).filter((f) => f.includes(".stale-"))).toEqual([]);
     // And the judged-stale inode itself IS broken.
     fs.rmSync(lock);
-    fs.writeFileSync(lock, "2147483646");
-    durable.breakStaleLock(lock, fs.statSync(lock).ino);
+    fs.writeFileSync(lock, "2147483646 aa");
+    durable.breakStaleLock(lock, "2147483646 aa");
     expect(fs.existsSync(lock)).toBe(false);
+  });
+
+  it("a holder releases only ITS lock — a lock another process put at the name stands", async () => {
+    const durable = await import("../durable-file.js");
+    fs.mkdirSync(tmpDir, { recursive: true });
+    const lock = `${CONFIG}.lock`;
+    durable.withFileLock(CONFIG, () => {
+      // Someone else's lock replaces ours while we hold it (a racing breaker).
+      fs.writeFileSync(lock, "999999 someone-else");
+    });
+    expect(fs.readFileSync(lock, "utf-8")).toBe("999999 someone-else");
+    fs.rmSync(lock);
   });
 
   it("two concurrent waiters over a stale lock never hold it at the same time", async () => {
