@@ -5,9 +5,10 @@
  * the write-ahead, the config file for the published key and the identity
  * file that is re-signed on commit.
  */
-import { parseHeldRotation, rotateOrThrow } from "@motebit/surface-kit";
+import { parseHeldRotation, rotateOrThrow, type KeyRotationPorts } from "@motebit/surface-kit";
 import { parse as parseIdentityFile, rotate as rotateIdentityFile } from "@motebit/identity-file";
 import { hexToBytes } from "@motebit/encryption";
+import { updateConfig } from "./config-update";
 
 export type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -41,42 +42,70 @@ export async function rotateDesktopKey(
       const published = c["device_public_key"];
       return typeof published === "string" ? published : null;
     },
-    writeAhead: {
-      load: async () => {
-        // A keyring read that throws (prompt cancelled, locked) is not an
-        // empty slot; it is a slot this run cannot see into.
-        let raw: string | null;
-        try {
-          raw = await deps.invoke<string | null>("keyring_get", { key: PENDING_KEY });
-        } catch {
-          return "unreadable";
-        }
-        return parseHeldRotation(raw);
-      },
-      save: (held) =>
-        deps.invoke<void>("keyring_set", { key: PENDING_KEY, value: JSON.stringify(held) }),
-      clear: () => deps.invoke<void>("keyring_delete", { key: PENDING_KEY }).catch(() => undefined),
-    },
+    writeAhead: desktopWriteAhead(deps.invoke),
     commit: async ({ privateKeyHex, publicKeyHex, record }) => {
+      // The retiring key is kept by keyring_set as
+      // `device_private_key.preserved-<time>` (R2): the kit calls commit only
+      // after the relay accepted the succession (or with no relay), and the
+      // key is kept even then — erasing it is permitted, never required.
       await deps.invoke<void>("keyring_set", { key: "device_private_key", value: privateKeyHex });
-      const next = await readConfig();
-      const existing = next["_identity_file"];
+      const current = await readConfig();
+      const existing = current["_identity_file"];
+      const patch: Record<string, unknown> = { device_public_key: publicKeyHex };
       if (typeof existing === "string" && existing !== "" && fileKey(existing) !== publicKeyHex) {
-        next["_identity_file"] = await rotateIdentityFile({
+        patch["_identity_file"] = await rotateIdentityFile({
           existingContent: existing,
           newPublicKey: hexToBytes(publicKeyHex),
           newPrivateKey: hexToBytes(privateKeyHex),
           successionRecord: record,
         });
       }
-      next["device_public_key"] = publicKeyHex;
-      await deps.invoke<void>("write_config", { json: JSON.stringify(next) });
+      // Compare-and-swap on the identity file the new one was signed over:
+      // another writer (a CLI rotation, a restore) that changed it since the
+      // read above makes this refuse instead of reverting it.
+      await updateConfig(deps.invoke, patch, { _identity_file: existing ?? null });
       deps.onCommitted(publicKeyHex);
     },
     ...(deps.reason !== undefined ? { reason: deps.reason } : {}),
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
   });
   return { newPublicKeyHex: outcome.newPublicKeyHex };
+}
+
+/**
+ * The desktop's write-ahead port. `setAside` is the surface-kit port's
+ * set-aside verb ("move the current write-ahead out of the active slot
+ * WITHOUT destroying its bytes; resolves when durable; throws on failure").
+ * Declared on this object (not a fresh literal inside the ports) so it
+ * satisfies the port both before and after the kit gains the member.
+ */
+export function desktopWriteAhead(
+  invoke: InvokeFn,
+): KeyRotationPorts["writeAhead"] & { setAside(): Promise<void> } {
+  return {
+    load: async () => {
+      // A keyring read that throws (prompt cancelled, keychain locked, a
+      // damaged fallback file — Rust's keyring_get no longer folds those
+      // into "none") is not an empty slot; it is one this run cannot see into.
+      let raw: string | null;
+      try {
+        raw = await invoke<string | null>("keyring_get", { key: PENDING_KEY });
+      } catch {
+        return "unreadable";
+      }
+      return parseHeldRotation(raw);
+    },
+    save: (held) => invoke<void>("keyring_set", { key: PENDING_KEY, value: JSON.stringify(held) }),
+    // Rust's keyring_delete of key material keeps the value as
+    // `pending_rotation.preserved-<time>` before removing it (R2), so no
+    // clear() destroys the write-ahead's new private key. A failure leaves
+    // the entry in place, which loses nothing.
+    clear: () => invoke<void>("keyring_delete", { key: PENDING_KEY }).catch(() => undefined),
+    // Move the write-ahead out of the active slot WITHOUT destroying its
+    // bytes: resolves only once the preserved copy is verified; rejects
+    // (the caller must stop) otherwise.
+    setAside: () => invoke<void>("keyring_set_aside", { key: PENDING_KEY }),
+  };
 }
 
 /** The key an identity file currently names, or null when it cannot be read. */

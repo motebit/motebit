@@ -30,7 +30,8 @@ import {
   DEEPGRAM_API_KEY_SLOT,
 } from "./keyring-keys";
 import { ELEVENLABS_VOICES, DEEPGRAM_VOICES } from "@motebit/voice";
-import { mergeSettingsIntoConfig } from "./settings-config";
+import { settingsPatch } from "./settings-config";
+import { updateConfig } from "../config-update";
 
 // === DOM Refs ===
 
@@ -1663,13 +1664,11 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       if (localServerEndpointValue !== "") {
         configData.local_server_endpoint = localServerEndpointValue;
       }
-      // Merge into what is on disk — never replace it: the same file holds
-      // the identity (and the CLI's only key copy). A read that fails (a
-      // damaged config) throws here and nothing is written.
-      const onDisk = JSON.parse(await invoke<string>("read_config")) as Record<string, unknown>;
-      await invoke("write_config", {
-        json: JSON.stringify(mergeSettingsIntoConfig(onDisk, configData)),
-      });
+      // Send only the fields the form owns; Rust merges them into the file
+      // as it is at commit time (the same file holds the identity and the
+      // CLI's only key copy, which a stale read-then-write would revert). A
+      // damaged config refuses the merge and nothing is written.
+      await updateConfig(invoke, settingsPatch(configData));
 
       if (apiKey != null && apiKey !== "") {
         const slot = byokKeyringKey(provider);

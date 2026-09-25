@@ -18,6 +18,7 @@
 import type { McpServerConfig } from "../index";
 import type { NameCollision } from "../mcp-discovery";
 import type { DesktopContext } from "../types";
+import { updateConfig } from "../config-update";
 
 // ---------------------------------------------------------------------------
 // In-memory state — owned here, accessed from main.ts (boot + discover +
@@ -136,15 +137,9 @@ export function initMcpConnections(ctx: DesktopContext): McpConnectionsAPI {
           const inv = appConfig.invoke;
           config.spawnApproved = true;
           // Persist spawnApproved so we don't re-prompt after restart
-          void inv<string>("read_config")
-            .then((raw) => {
-              const parsed = JSON.parse(raw) as Record<string, unknown>;
-              parsed.mcp_servers = mcpServersConfig;
-              return inv("write_config", { json: JSON.stringify(parsed) });
-            })
-            .catch(() => {
-              /* non-fatal */
-            });
+          void updateConfig(inv, { mcp_servers: mcpServersConfig }).catch(() => {
+            /* non-fatal */
+          });
           void ctx.app
             .connectMcpServerViaTauri(config, inv)
             .then((status) => {
@@ -158,15 +153,9 @@ export function initMcpConnections(ctx: DesktopContext): McpConnectionsAPI {
                 ctx.showToast(parts.join(", "));
               }
               // Persist updated manifest hash
-              void inv<string>("read_config")
-                .then((raw) => {
-                  const parsed = JSON.parse(raw) as Record<string, unknown>;
-                  parsed.mcp_servers = mcpServersConfig;
-                  return inv("write_config", { json: JSON.stringify(parsed) });
-                })
-                .catch(() => {
-                  /* non-fatal */
-                });
+              void updateConfig(inv, { mcp_servers: mcpServersConfig }).catch(() => {
+                /* non-fatal */
+              });
               renderMcpServerList();
             })
             .catch(() => {

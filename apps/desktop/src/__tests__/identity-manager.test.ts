@@ -42,6 +42,7 @@ const mockCtrl = vi.hoisted(() => ({
   walletHasValue: false,
   restoreValidateReason: null as string | null,
   writeRestoredIdentityCalls: [] as Array<{ bornAtMs: number; motebitId: string }>,
+  lastBootstrapOpts: null as unknown,
 }));
 
 // ---------------------------------------------------------------------------
@@ -49,7 +50,10 @@ const mockCtrl = vi.hoisted(() => ({
 // ---------------------------------------------------------------------------
 
 vi.mock("@motebit/core-identity", () => ({
-  bootstrapIdentity: vi.fn(async () => mockCtrl.bootstrapResult),
+  bootstrapIdentity: vi.fn(async (opts: unknown) => {
+    mockCtrl.lastBootstrapOpts = opts;
+    return mockCtrl.bootstrapResult;
+  }),
   rotateIdentityKeys: vi.fn(async () => mockCtrl.rotateResult),
   writeRestoredIdentity: vi.fn(async (opts: { bornAtMs: number; motebitId: string }) => {
     mockCtrl.writeRestoredIdentityCalls.push(opts);
@@ -141,25 +145,64 @@ import { IdentityManager } from "../identity-manager";
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * A fake of the Rust IPC with the SAME contract the Rust tests pin
+ * (src-tauri/src/{config_file,key_store}.rs): `update_config` merges (null
+ * removes), honours `expect`, and refuses `cli_*` fields; key material
+ * (`device_private_key`, `pending_rotation`, `pending_identity_switch`) is
+ * never destroyed — a different overwrite, a delete and a set-aside keep the
+ * old value as `<name>.preserved-<n>`. Keyring entries live in the same map
+ * as `__keyring_<name>` so a test can read the whole machine state at once.
+ */
+const KEY_MATERIAL = ["device_private_key", "pending_rotation", "pending_identity_switch"];
 function makeInvoke(config: Record<string, unknown> = {}) {
   let cfg: Record<string, unknown> = { ...config };
+  let preservedSeq = 0;
+  const kk = (name: string) => `__keyring_${name}`;
+  const preserve = (name: string) => {
+    const old = cfg[kk(name)];
+    if (old !== undefined) cfg[kk(`${name}.preserved-${preservedSeq++}`)] = old;
+  };
   return vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
     if (cmd === "read_config") return JSON.stringify(cfg);
     if (cmd === "write_config") {
       cfg = JSON.parse((args as { json: string }).json);
       return undefined;
     }
-    if (cmd === "keyring_get") {
-      return (cfg as Record<string, unknown>)[`__keyring_${(args as { key: string }).key}`] ?? null;
-    }
-    if (cmd === "keyring_set") {
-      cfg[`__keyring_${(args as { key: string; value: string }).key}`] = (
-        args as { key: string; value: string }
-      ).value;
+    if (cmd === "update_config") {
+      const patch = JSON.parse((args as { patch: string }).patch) as Record<string, unknown>;
+      const expectRaw = (args as { expect?: string }).expect;
+      if (Object.keys(patch).some((k) => k.startsWith("cli_"))) {
+        throw new Error("Refusing to update config: cli_* is owned by the motebit CLI");
+      }
+      if (expectRaw !== undefined) {
+        for (const [k, want] of Object.entries(JSON.parse(expectRaw) as Record<string, unknown>)) {
+          if (JSON.stringify(cfg[k] ?? null) !== JSON.stringify(want)) {
+            throw new Error(`Refusing to update config: ${k} changed since it was read`);
+          }
+        }
+      }
+      for (const [k, v] of Object.entries(patch)) {
+        if (v === null) delete cfg[k];
+        else cfg[k] = v;
+      }
       return undefined;
     }
-    if (cmd === "keyring_delete") {
-      delete cfg[`__keyring_${(args as { key: string }).key}`];
+    if (cmd === "keyring_get") {
+      return (cfg as Record<string, unknown>)[kk((args as { key: string }).key)] ?? null;
+    }
+    if (cmd === "keyring_set") {
+      const { key, value } = args as { key: string; value: string };
+      if (KEY_MATERIAL.includes(key) && cfg[kk(key)] !== undefined && cfg[kk(key)] !== value) {
+        preserve(key);
+      }
+      cfg[kk(key)] = value;
+      return undefined;
+    }
+    if (cmd === "keyring_delete" || cmd === "keyring_set_aside") {
+      const { key } = args as { key: string };
+      if (cmd === "keyring_set_aside" || KEY_MATERIAL.includes(key)) preserve(key);
+      delete cfg[kk(key)];
       return undefined;
     }
     if (cmd === "db_execute") {
@@ -530,17 +573,12 @@ describe("IdentityManager.restoreIdentity", () => {
       key: "device_private_key",
       value: "b".repeat(64),
     });
-    // The last write_config call captures the post-restore state.
-    const writeCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
-      ([cmd]) => cmd === "write_config",
-    );
-    expect(writeCalls.length).toBeGreaterThan(0);
-    const lastWritten = JSON.parse(
-      (writeCalls[writeCalls.length - 1]![1] as { json: string }).json,
-    ) as Record<string, unknown>;
-    expect(lastWritten.motebit_id).toBe("restored-motebit");
-    expect(lastWritten.device_public_key).toBe("a".repeat(64));
-    expect(lastWritten.device_id).toMatch(/[a-f0-9-]{36}/);
+    const cfg = JSON.parse((await invoke("read_config")) as string) as Record<string, unknown>;
+    expect(cfg.motebit_id).toBe("restored-motebit");
+    expect(cfg.device_public_key).toBe("a".repeat(64));
+    expect(cfg.device_id).toMatch(/[a-f0-9-]{36}/);
+    // The switch write-ahead is gone from the active slot once done.
+    expect(cfg.__keyring_pending_identity_switch).toBeUndefined();
   });
 
   it("preserves originalContent in `_identity_file` when supplied (motebit.md path)", async () => {
@@ -553,13 +591,8 @@ describe("IdentityManager.restoreIdentity", () => {
       originalContent: "---SIGNED-MD-CONTENT---",
       preserveMemories: false,
     });
-    const writeCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
-      ([cmd]) => cmd === "write_config",
-    );
-    const lastWritten = JSON.parse(
-      (writeCalls[writeCalls.length - 1]![1] as { json: string }).json,
-    ) as Record<string, unknown>;
-    expect(lastWritten._identity_file).toBe("---SIGNED-MD-CONTENT---");
+    const cfg = JSON.parse((await invoke("read_config")) as string) as Record<string, unknown>;
+    expect(cfg._identity_file).toBe("---SIGNED-MD-CONTENT---");
   });
 
   it("clears stale `_identity_file` from config when originalContent is omitted (seed-only path)", async () => {
@@ -571,13 +604,8 @@ describe("IdentityManager.restoreIdentity", () => {
       metadata: sampleMetadata,
       preserveMemories: false,
     });
-    const writeCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
-      ([cmd]) => cmd === "write_config",
-    );
-    const lastWritten = JSON.parse(
-      (writeCalls[writeCalls.length - 1]![1] as { json: string }).json,
-    ) as Record<string, unknown>;
-    expect(lastWritten._identity_file).toBeUndefined();
+    const cfg = JSON.parse((await invoke("read_config")) as string) as Record<string, unknown>;
+    expect(cfg._identity_file).toBeUndefined();
   });
 
   it("returns 'keystore_write_failed' when keyring_set throws", async () => {
@@ -731,6 +759,18 @@ describe("IdentityManager.rotateKey", () => {
     const cfg = JSON.parse((await invoke("read_config")) as string) as Record<string, unknown>;
     expect(cfg._identity_file).toBe(mockCtrl.rotateFileContent);
     expect(cfg.__keyring_pending_rotation).toBeUndefined();
+    // The commit is a compare-and-swap merge on the identity file it signed
+    // over (a CLI rotation that changed it in between is refused, not reverted)…
+    expect(invoke).toHaveBeenCalledWith("update_config", {
+      patch: expect.any(String),
+      expect: JSON.stringify({ _identity_file: "OLD-IDENTITY" }),
+    });
+    // …and the retired key is kept (founder ruling: erased only after the
+    // relay accepted the succession — permitted, never required).
+    const kept = Object.entries(cfg)
+      .filter(([k]) => k.startsWith("__keyring_device_private_key.preserved-"))
+      .map(([, v]) => v);
+    expect(kept).toEqual([SEED]);
   });
   it("always mints a succession — an identity without an identity file no longer gets a raw keypair the relay cannot accept", async () => {
     const { mgr, invoke } = manager({ sync_url: "https://relay" });
@@ -980,5 +1020,194 @@ describe("IdentityManager.completePairing", () => {
     // Best-effort — completes without crashing
     expect(mgr.motebitId).toBe("new-mot");
     expect(result).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Key-file durability, build 3 (desktop): R1 on the key probe, the CLI's
+// identity is never minted over, and identity switches (restore / pairing)
+// keep what they replace and cannot be left half-done.
+// ---------------------------------------------------------------------------
+
+type Stores = {
+  configStore: { write(s: Record<string, string>): Promise<void> };
+  keyStore: { hasPrivateKey(): Promise<boolean> };
+};
+async function storesFor(
+  invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>,
+): Promise<Stores> {
+  const mgr = new IdentityManager();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await mgr.bootstrap(invoke as any);
+  return mockCtrl.lastBootstrapOpts as Stores;
+}
+
+describe("bootstrap key probe (C1: R1)", () => {
+  it("a keyring that cannot be read REJECTS — never 'no key', so nothing is minted over it", async () => {
+    const base = makeInvoke({ motebit_id: "m-A", device_public_key: "a".repeat(64) });
+    const locked = vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "keyring_get" && (args as { key: string }).key === "device_private_key") {
+        throw new Error("keychain read of device_private_key failed: locked");
+      }
+      return base(cmd, args);
+    });
+    const stores = await storesFor(locked);
+    await expect(stores.keyStore.hasPrivateKey()).rejects.toThrow(/locked/);
+    // Sanity: the healthy probe answers a true absence as false.
+    const healthy = await storesFor(base);
+    await expect(healthy.keyStore.hasPrivateKey()).resolves.toBe(false);
+  });
+
+  it("refuses to treat the CLI's identity as orphaned when the desktop has no key for it", async () => {
+    const invoke = makeInvoke({
+      motebit_id: "m-cli",
+      device_public_key: "c".repeat(64),
+      cli_encrypted_key: { ciphertext: "KEY" },
+    });
+    const { keyStore, configStore } = await storesFor(invoke);
+    await expect(keyStore.hasPrivateKey()).rejects.toThrow(/motebit CLI's identity m-cli/);
+    // …and the config writer will not rebind it either.
+    await expect(
+      configStore.write({ motebit_id: "m-new", device_id: "d", device_public_key: "d".repeat(64) }),
+    ).rejects.toThrow(/will not mint a new identity over it/);
+    const cfg = JSON.parse((await invoke("read_config")) as string) as Record<string, unknown>;
+    expect(cfg.motebit_id).toBe("m-cli");
+  });
+
+  it("first-launch config write is a field merge (update_config), never a whole-file write", async () => {
+    const invoke = makeInvoke({ theme: "dark" });
+    const { configStore } = await storesFor(invoke);
+    await configStore.write({ motebit_id: "m-1", device_id: "d-1", device_public_key: "p" });
+    const cmds = invoke.mock.calls.map(([c]) => c);
+    expect(cmds).toContain("update_config");
+    expect(cmds).not.toContain("write_config");
+    const cfg = JSON.parse((await invoke("read_config")) as string) as Record<string, unknown>;
+    expect(cfg).toMatchObject({ motebit_id: "m-1", theme: "dark" });
+  });
+});
+
+describe("identity switch (C5 restore, C6 pairing)", () => {
+  const meta = {
+    motebitId: "m-B",
+    publicKey: "b".repeat(64),
+    ownerId: "o",
+    bornAt: "not-a-date",
+    devices: [],
+    governance: {
+      trust_mode: "guarded" as const,
+      max_risk_auto: "R1_DRAFT",
+      require_approval_above: "R1_DRAFT",
+      deny_above: "R4_MONEY",
+      operator_mode: false,
+    },
+    memory: { half_life_days: 7, confidence_threshold: 0.3, per_turn_limit: 5 },
+  };
+
+  it("restore keeps A's key, sets aside A's in-flight rotation, and binds B", async () => {
+    const invoke = makeInvoke({
+      motebit_id: "m-A",
+      device_public_key: "a".repeat(64),
+      __keyring_device_private_key: "KEY-A",
+      __keyring_pending_rotation: '{"new_private_key_hex":"KEY-A-PRIME"}',
+    });
+    const mgr = new IdentityManager();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const r = await mgr.restoreIdentity(invoke as any, {
+      privateKeyHex: "KEY-B",
+      metadata: meta,
+      preserveMemories: false,
+    });
+    expect(r.ok).toBe(true);
+    const cfg = JSON.parse((await invoke("read_config")) as string) as Record<string, unknown>;
+    expect(cfg.motebit_id).toBe("m-B");
+    expect(cfg.__keyring_device_private_key).toBe("KEY-B");
+    // A's in-flight rotation (A′'s private key) is out of the active slot —
+    // so B's next rotation cannot clear it as stale — and still held.
+    expect(cfg.__keyring_pending_rotation).toBeUndefined();
+    const kept = Object.entries(cfg)
+      .filter(([k]) => k.includes(".preserved-"))
+      .map(([, v]) => v);
+    expect(kept).toContain('{"new_private_key_hex":"KEY-A-PRIME"}');
+    expect(kept).toContain("KEY-A");
+    // Order: the rotation is set aside BEFORE the key is replaced.
+    const cmds = invoke.mock.calls.map(
+      ([c, a]) => `${c}:${(a as { key?: string } | undefined)?.key ?? ""}`,
+    );
+    expect(cmds.indexOf("keyring_set_aside:pending_rotation")).toBeGreaterThan(-1);
+    expect(cmds.indexOf("keyring_set_aside:pending_rotation")).toBeLessThan(
+      cmds.indexOf("keyring_set:device_private_key"),
+    );
+  });
+
+  it("a restore interrupted after the key write is finished at the next launch", async () => {
+    const inner = makeInvoke({
+      motebit_id: "m-A",
+      device_public_key: "a".repeat(64),
+      __keyring_device_private_key: "KEY-A",
+    });
+    let crash = true;
+    const invoke = vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "update_config" && crash) throw new Error("power lost");
+      return inner(cmd, args);
+    });
+    const mgr = new IdentityManager();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const r = await mgr.restoreIdentity(invoke as any, {
+      privateKeyHex: "KEY-B",
+      metadata: meta,
+      preserveMemories: false,
+    });
+    expect(r.ok).toBe(false);
+    let cfg = JSON.parse((await inner("read_config")) as string) as Record<string, unknown>;
+    // The torn state: key B, config still A — and the write-ahead that names it.
+    expect(cfg.__keyring_device_private_key).toBe("KEY-B");
+    expect(cfg.motebit_id).toBe("m-A");
+    expect(typeof cfg.__keyring_pending_identity_switch).toBe("string");
+    // Next launch.
+    crash = false;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await new IdentityManager().bootstrap(invoke as any);
+    cfg = JSON.parse((await inner("read_config")) as string) as Record<string, unknown>;
+    expect(cfg.motebit_id).toBe("m-B");
+    expect(cfg.device_public_key).toBe("b".repeat(64));
+    expect(cfg.__keyring_pending_identity_switch).toBeUndefined();
+  });
+
+  it("an unreadable switch write-ahead stops bootstrap (R1)", async () => {
+    const invoke = makeInvoke({ __keyring_pending_identity_switch: "{ torn" });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await expect(new IdentityManager().bootstrap(invoke as any)).rejects.toThrow(/cannot be read/);
+  });
+
+  it("pairing with key transfer keeps the replaced key and sets aside the old rotation", async () => {
+    const invoke = makeInvoke({
+      motebit_id: "m-A",
+      __keyring_device_private_key: "b".repeat(64),
+      __keyring_pending_rotation: "HELD-A",
+    });
+    const mgr = new IdentityManager();
+    await mgr.completePairing(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      invoke as any,
+      { motebitId: "new-mot", deviceId: "new-dev" },
+      {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        keyTransfer: mockCtrl.keyTransferPayload as any,
+        ephemeralPrivateKey: new Uint8Array(32),
+        pairingCode: "ABC",
+        syncUrl: "https://relay",
+        pairingId: "pid-1",
+      },
+    );
+    const cfg = JSON.parse((await invoke("read_config")) as string) as Record<string, unknown>;
+    expect(cfg.motebit_id).toBe("new-mot");
+    expect(cfg.device_public_key).toBe(mockCtrl.keyTransferPayload.identity_pubkey_check);
+    expect(cfg.__keyring_device_private_key).toBe("0".repeat(64));
+    expect(cfg.__keyring_pending_rotation).toBeUndefined();
+    const kept = Object.entries(cfg)
+      .filter(([k]) => k.includes(".preserved-"))
+      .map(([, v]) => v);
+    expect(kept).toContain("b".repeat(64));
+    expect(kept).toContain("HELD-A");
   });
 });

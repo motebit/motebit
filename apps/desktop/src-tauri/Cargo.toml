@@ -9,7 +9,15 @@ tauri-build = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
-keyring = "3"
+# The platform backends MUST be named: with no feature, keyring 3 compiles to
+# its in-memory MOCK store on every OS (Finding B-0 — nothing persisted and
+# `~/.motebit/dev-keyring.json` silently became the only key store). Each
+# backend's deps are target-gated inside the crate, so one line serves all:
+# macOS Keychain, Windows Credential Manager, and on Linux the Secret Service
+# over pure-Rust zbus (`async-io` runtime, `crypto-rust`) — no system
+# packages at build time; a session without a Secret Service at run time
+# falls back to the 0600 file (see src/key_store.rs).
+keyring = { version = "3", features = ["apple-native", "windows-native", "async-secret-service", "crypto-rust", "async-io"] }
 base64 = "0.22"
 reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
 xcap = "0.9"
