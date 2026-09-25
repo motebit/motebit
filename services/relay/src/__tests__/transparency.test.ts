@@ -360,6 +360,17 @@ describe("#696 follow-ups — the declaration names every durable table, and the
     expect(renderMarkdown()).toMatch(/^### Device registry$/m);
   });
 
+  it("declares the machine roster as its own category — entries indefinite with no removal path, liveness hosts-only on a 90-day TTL", () => {
+    const roster = DECLARATION_CONTENT.retention.machine_roster;
+    expect(roster.tables).toEqual(["relay_host_roster_entries", "relay_host_liveness"]);
+    expect(roster.retention_window).toMatch(/indefinite/);
+    expect(roster.retention_window).toMatch(/no removal path/);
+    expect(roster.retention_window).toMatch(/90 days after last_seen_at/);
+    expect(roster.observable.join(" ")).toMatch(/unattended_runtime/);
+    expect(roster.access).toMatch(/master token is refused/);
+    expect(renderMarkdown()).toMatch(/^### Machine roster$/m);
+  });
+
   it("renders content's enforcement line under Content, not under Auth events", () => {
     const md = renderMarkdown();
     const content = md.slice(md.indexOf("### Content"), md.indexOf("### Auth events"));

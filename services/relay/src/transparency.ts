@@ -164,6 +164,25 @@ export const DECLARATION_CONTENT = {
       retention_window:
         '30-day rolling window, swept every minute by the task-cleanup loop; an operator\'s audit aid ("who presented the master token, what did we refuse") readable at GET /api/v1/admin/auth-events, not a surveillance log',
     },
+    // The machine roster (docs/doctrine/machine-roster.md; design:
+    // docs/proposals/machine-roster-relay-v1.md D3/D4). Its own category:
+    // one table is indefinite with no removal path, the other TTL-governed,
+    // and one retention_window string per category must say both.
+    machine_roster: {
+      tables: ["relay_host_roster_entries", "relay_host_liveness"],
+      observable: [
+        "the sovereign-signed HostEnrollment / HostRetirement artifacts a motebit presents (motebit_id, device_id, the signing public key, a self-asserted time, the signature), stored verbatim as signed; the relay never mints, edits, reorders, expires, or evaluates one, and never decides which machines are members",
+        "when the relay received each artifact",
+        "for a connection that proved its device id with a signed device token AND announced that it hosts unattended work (unattended_runtime): ONE overwritten value per (device_id, the key that token verified under) — the last time this relay held a socket bound as that pair open (there is no heartbeat yet, so a half-open socket reads as open; and after a crash without the shutdown flush it is a lower bound, up to five minutes early) — never a history of connections, and not the capabilities it announced",
+        "nothing stored about any other connection — phones, browsers, desktop sessions, and sockets that did not prove their device id; sockets the relay believes open are reported live (a count per device and key, any bound socket) and never persisted",
+        "no entry larger than 4096 bytes (canonical JSON, signature included) is held — refused as too_large — and a presentation's request body is capped at 266,240 bytes",
+        "never the client IP",
+      ],
+      retention_window:
+        "signed roster entries: indefinite — never pruned by age (a retirement must stay present for remove-wins to hold, and a machine silent for a year is still a line) and no removal path exists, per-identity erase included; growth is bounded by per-signer-key caps. Liveness values: deleted 90 days after last_seen_at, swept every five minutes by the task-cleanup loop, except while a socket bound as that (device_id, key) is open",
+      access:
+        "first-person only: readable and writable solely with a device token of that motebit (GET/POST /api/v1/agents/:motebitId/roster, audience device:auth); the operator master token is refused; never published, ranked, aggregated, reduced, or served to another identity",
+    },
     ip_addresses: {
       handling: "transient",
       detail:
@@ -615,6 +634,17 @@ export function renderMarkdown(): string {
   for (const item of c.retention.auth_events.observable) lines.push(`- ${item}`);
   lines.push("");
   lines.push(`Retention window: ${c.retention.auth_events.retention_window}.`);
+  lines.push("");
+
+  lines.push("### Machine roster");
+  lines.push("");
+  lines.push(`Tables: ${c.retention.machine_roster.tables.map((t) => `\`${t}\``).join(", ")}.`);
+  lines.push("");
+  lines.push("Observable:");
+  for (const item of c.retention.machine_roster.observable) lines.push(`- ${item}`);
+  lines.push("");
+  lines.push(`Retention window: ${c.retention.machine_roster.retention_window}.`);
+  lines.push(`Access: ${c.retention.machine_roster.access}.`);
   lines.push("");
 
   lines.push("### IP addresses");

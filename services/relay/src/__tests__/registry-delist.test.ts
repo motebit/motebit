@@ -373,6 +373,9 @@ describe("migration v41 — rows already revoked are backfilled as delisted", ()
   });
 
   it("is followed by v42 (identity_keys), so a fresh database gets both", () => {
-    expect(Math.max(...relayMigrations.map((m) => m.version))).toBe(42);
+    // Asserted by name, not as the maximum: later migrations (v43
+    // host_roster) follow, and the property is that v42 is present.
+    expect(relayMigrations.find((m) => m.version === 42)?.name).toBe("identity_keys");
+    expect(Math.max(...relayMigrations.map((m) => m.version))).toBeGreaterThanOrEqual(42);
   });
 });

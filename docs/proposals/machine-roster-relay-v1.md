@@ -32,7 +32,7 @@ Every design choice below follows from this rule. A relay that cannot compute a 
 
 ## 2. Decisions
 
-**D1 — Storage.** Keep #698's table: `relay_host_roster_entries(motebit_id, entry_id, kind, signer_key, body_json, received_at)`. `entry_id` is the law's id (sha256 of the signed body). `signer_key` is the key the entry names; it is what the partitioned caps in D2 count by. Ingest is an idempotent union with no freshness window. The first copy that verifies is held (the spec requires verify-before-hold). The migration takes the next free version, because v41 and v42 are now taken on main.
+**D1 — Storage.** Keep #698's table: `relay_host_roster_entries(motebit_id, entry_id, kind, signer_key, bucket, body_json, received_at)`. `entry_id` is the law's id (sha256 of the signed body). `signer_key` is the key the entry names. `bucket` (`'own' | 'foreign'`) is decided once at ingest, stored, and what the partitioned caps in D2 count by (see §6). `body_json` is the whole artifact as canonical JSON, signature included. Ingest is an idempotent union with no freshness window. The first copy that verifies is held (the spec requires verify-before-hold). The migration takes the next free version, because v41 and v42 are now taken on main.
 
 **D2 — Ingest verification, and caps partitioned by signer key.** An entry is held when all three hold:
 
@@ -48,7 +48,9 @@ The caps are **partitioned by signer key** (review F2):
 - Every other signer key shares one **foreign bucket** (proposed: 256 entries). It exists to replicate the lines of other epochs.
 - Refusal in either bucket is `roster_full`. A partial presentation gets 422.
 
-**Stated residual.** Whoever fills a key's own bucket holds that key. A thief of an old key can therefore fill only that old key's bucket, and a rotation moves the sovereign to a new, empty one. The foreign bucket is shared, so a key-holder can exhaust it. The worst that can then happen is that superseded lines from other epochs stop replicating through this relay. An **active** line is never lost this way: it is signed by the current key, and the current key's holders are the only writers of its bucket. This needs the auth middleware to expose the key it verified under. That is an additive `onVerified(key)` callback beside `onReject` in `auth.ts`, the same contract as D4.
+**Stated residual.** Whoever fills a key's own bucket holds that key. A thief of an old key can therefore fill only that old key's bucket, and a rotation moves the sovereign to a new, empty one. The foreign bucket is shared, so a key-holder can exhaust it. The worst that can then happen is that superseded lines from other epochs stop replicating through this relay. An **active** line is never lost this way: it is signed by the current key, and the current key's holders are the only writers of its bucket. This needs the auth middleware to expose the key it verified under. That is an additive `onVerified(key, source)` callback beside `onReject` in `auth.ts`, the same contract as D4 (`source` is `"device"` or `"agent_registry"`; see §6).
+
+The bucket is **stored at ingest**, never recomputed against whoever is asking: an entry is `own` iff its `signer_key` equals the presenting caller's verified key, else `foreign`. The own cap counts `bucket = 'own' AND signer_key = K`; the foreign cap counts `bucket = 'foreign'`. A comparative count ("rows not signed by me") would let a thief who fills an old key's own bucket saturate every other caller's foreign view, so that after a rotation the sovereign could never replicate a superseded line. An entry already held keeps its bucket when another caller re-presents it (idempotent).
 
 **D3 — Entries are never pruned, and there is no removal path.** An entry is never removed by age. Retirements must stay, because remove-wins needs them present, and a machine silent for a year is still a line (doctrine). The relay has **no per-identity erase** of first-person data today (review F6: its only deletes are TTL and horizon sweeps, and `devices` is declared indefinite). So roster entries are declared **"indefinite; no removal path exists"**, with the same honesty as `device_registry`, plus a `different_mechanism` honest-gap line in the retention manifest. The partitioned caps bound growth.
 
@@ -56,12 +58,12 @@ The caps are **partitioned by signer key** (review F2):
 
 - **`bound_under` is captured when the token is verified:** the key returned by the same `devices` row read that verified the socket's token, delivered through `onVerified(key)`. It is stored on `ConnectedDevice` and **never re-read** (review F1). Rotation rewrites device rows (`succession-apply.ts`) and closes no sockets, so re-reading would let a socket opened under the old key read as bound under the new one.
 - **Persisted rows are keyed by `(motebit_id, device_id, bound_under)`**, so two holders of different keys claiming one `device_id` never overwrite each other. Each row holds `last_seen_at` (one overwritten value) and `observed_by`.
-- **Only a verified socket that announces `unattended_runtime` gets a persisted row** (review F5). "Verified" means its token verified and its `did` equals the claimed `device_id` (`deviceIdVerified`). Phones, browsers and desktops leave no stored record, which matches the doctrine's scope and spec §8's "one value per member". Master-token and `enableDeviceAuth=false` sockets are never bound.
-- **`last_seen_at` is written at bind, at close, and on the coarse periodic flush,** not only at data-frame time (review F4). Clients send no periodic frames, so an idle daemon would otherwise age while connected.
-- **`socket_open` is never persisted.** GET computes it from `connections`: an open-socket count per `(device_id, bound_under)`. That count is also `motebit doctor`'s hint for a copied `device_id`.
+- **Only a verified socket that announces `unattended_runtime` gets a persisted row** (review F5). "Verified" means its token verified and its `did` equals the claimed `device_id` (`deviceIdVerified`). Phones, browsers and desktops leave no stored record, which matches the doctrine's scope and spec §8's "one value per member". Master-token and `enableDeviceAuth=false` sockets are never bound, and neither is a socket whose token verified through the agent-registry fallback (no device row).
+- **`last_seen_at` is written at bind (and on a late `capabilities_announce`, through the websocket's `onPeerBound` hook), at close, and on the coarse periodic flush,** not only at data-frame time (review F4). Clients send no periodic frames, so an idle daemon would otherwise age while connected. It means exactly: **the last time this relay held a socket bound as this (device, key) pair open.** There is no heartbeat yet (#691), so a half-open socket reads as open and the flush keeps refreshing its row until the relay notices the close.
+- **`sockets_open` is never persisted.** GET computes it from `connections`: the count of sockets bound as `(device_id, bound_under)` that the relay **believes** open (a half-open socket counts until #691). That count is also `motebit doctor`'s hint for a copied `device_id`.
 - **Retention.** The TTL sweep on `last_seen_at` (proposed: 90 days) skips any row with a live bound socket. GET serves the retention window and `observing_since`, so a consumer can say "not observed in the last 90 days" rather than "never seen". The doctrine's liveness bullet and spec §8 are amended in the same PR, and the declaration block is rewritten, not reused.
 
-**D5 — First-person, built as "caller present and equal".** Both routes require `callerMotebitId` to be **present and equal** to the path id (review F7). #698's `requireFirstPerson` passed when it was unset, which is exactly the master-token case. The operator master token therefore gets 403, and a test pins it. The token audience is named explicitly, never left to the `admin:query` default. Service-mode molecules have no device row and cannot use these routes, and the note says so.
+**D5 — First-person, built as "caller present and equal".** Both routes require `callerMotebitId` to be **present and equal** to the path id (review F7). #698's `requireFirstPerson` passed when it was unset, which is exactly the master-token case. The operator master token therefore gets 403, and a test pins it. The token audience is named explicitly, never left to the `admin:query` default: **`device:auth`**, an existing audience (the doctrine keeps the roster off a new one). Service-mode molecules have no device row and cannot use these routes: a token that verified through the agent-registry fallback (`onVerified` source `"agent_registry"`) gets 403.
 
 **D6 — The consumer joins; the relay never does.**
 `GET` returns:
@@ -73,7 +75,7 @@ The caps are **partitioned by signer key** (review F2):
               live_unenrolled: [{device_id, bound_under, sockets_open}] } }
 ```
 
-Here `rows` is the persisted rows plus live bound host sockets, and `live_unenrolled` is live bound sockets with no persisted row.
+Here `rows` is the persisted rows plus live bound host sockets, and `live_unenrolled` is live bound sockets with no persisted row. Unbound sockets (master token, declared-only ids, device auth off, agent-registry fallback) are not attributable and are omitted. `observed_by` is the relay's own motebit id. `observing_since` is the later of the time the liveness table began (the applied time of the migration that created it) and now minus the retention window. There is no `last_announced`: the relay does not keep announced capabilities.
 
 The consumer does the following:
 
@@ -83,11 +85,12 @@ The consumer does the following:
 4. **Classify** the rows left over:
    - (a) that machine's `device_id` under a **different key** is shown as "this machine's id, connected under a key that is not its enrolment's". That is the theft signal, never "not in the roster".
    - (b) a `device_id` with no line is shown as "connected, not in the roster", beside the set.
-   - (c) an `untrusted_key` refusal whose `device_id` has liveness is shown as "your chain may be stale — refresh".
+   - (c) an `untrusted_key` refusal whose key is **not** a device key the consumer knows for this motebit, and whose `device_id` has liveness, is shown as "your chain may be stale — refresh". A refusal under a device key the consumer does know (a device linked without key transfer, enrolling itself under its own `K_d`) is shown as "enrolled under a key that is not this motebit's identity key".
+   - (d) a row whose `bound_under` is a **non-head** key never lights any line — not even a superseded enrolment with the same `(device_id, key)`. It is shown as "socket open under a superseded key" (see #767: rotation closes no sockets bound under the retired key).
 
 If there is no usable chain, the consumer shows **no roster**, never an empty one.
 
-**D7 — Fan-out without quantification (sets up #687; not built here).** The command route sends to every open socket bound under `deviceIdVerified` for the motebit. Each answer line carries `device_id` **and `bound_under`**. The route returns those lines, the raw entry set, and the liveness block, and never reports "N machines", "all" or "none". The client marks an enrolled machine **reached only when a line's `bound_under` equals the enrolment key**, names an enrolled machine with no such line `unreached`, and quantifies over membership. The drift gate allows exactly three reads of the entry table: the per-signer-key cap count, the insert-or-ignore, and GET serialisation.
+**D7 — Fan-out without quantification (sets up #687; not built here).** The command route sends to every open socket bound under `deviceIdVerified` for the motebit. Each answer line carries `device_id` **and `bound_under`**. The route returns those lines, the raw entry set, and the liveness block, and never reports "N machines", "all" or "none". The client marks an enrolled machine **reached only when a line's `bound_under` equals the enrolment key**, names an enrolled machine with no such line `unreached`, and quantifies over membership. The drift gate allows exactly four reads of the entry table: the already-held check (which runs before any cap, so re-presenting a full set is never refused), the per-bucket cap count, the insert-or-ignore, and GET serialisation. **That gate is not built:** it lands with #687. What exists now is the test that scans every relay source for a call or import of `verifyHostRoster`.
 
 **D8 — Clients (part C; named here so D6 is buildable).**
 
@@ -150,3 +153,17 @@ Verdict: **sound with required changes.** The one rule held. Every change below 
 | F7      | Required     | first-person means caller present and equal; master-token test                                                                                | D5     |
 | F8      | Non-blocking | fan-out lines carry `bound_under`; socket-close-on-rotation issue                                                                             | D7, §4 |
 | F9      | Non-blocking | chunked presentation; audience named; service-mode molecules excluded                                                                         | D5, D8 |
+
+## 6. Build notes (2026-09-25)
+
+Gaps the build filled, each reflected in §2 above. §5 is the review record and is unchanged.
+
+- **D1/D2 — stored bucket.** `bucket` (`'own' | 'foreign'`) is a column, decided at ingest from the presenting caller's verified key and never re-derived. Own cap: `bucket = 'own' AND signer_key = K` (512 enrolments / 2048 retirements). Foreign cap: `bucket = 'foreign'` (256). An already-held entry keeps its bucket.
+- **D5 — `onVerified(key, source)`.** The callback carries where the key came from (`"device"` or `"agent_registry"`). The routes require `"device"`, so service-mode tokens get 403. The audience is `device:auth`.
+- **D4 — `onPeerBound`.** A websocket hook fires at bind and again on a late `capabilities_announce`, so a socket that announces `unattended_runtime` after connecting is written at that point. `bound_under` is set only for a `deviceIdVerified` socket whose key came from the device row.
+- **D6 — GET.** Unbound sockets are omitted. `observed_by` is the relay's motebit id. `observing_since` = max(applied time of the migration that created the liveness table, now − 90 days). No `last_announced`.
+- **D7 — reads of the entry table: four.** The already-held check (before any cap), the per-bucket cap count, the insert-or-ignore, and GET serialisation. The drift gate that would enforce this is **not built**; it lands with #687. Only the `verifyHostRoster` scan test exists.
+- **D4/D6 — what liveness means.** `last_seen_at` is the last time this relay held a socket bound as the (device, key) pair open, and `sockets_open` counts sockets the relay believes open. Neither is proof of life until the heartbeat (#691).
+- **D4 — only OPEN sockets exist (#769 round 2, A1).** `finalizeConnection` registers a socket only if it is OPEN when token verification finishes; a client that closes during the verification await is never registered. The GET join, the flush and the sweep's live-skip also count only OPEN sockets (defence in depth). `last_seen_at` is a lower bound after a crash without the shutdown flush. `sockets_open` counts any bound socket for the pair.
+- **D2 — a relay-side size bound.** An entry whose canonical JSON exceeds 4096 bytes is refused `too_large` before verification; a POST body over 266,240 bytes is refused whole (413). The law's published guards are unchanged.
+- **D6 — two more consumer classes.** A row under a non-head key lights no line (#767). A refusal under a device key the consumer knows is a self-enrolment under `K_d`, not a stale chain.
