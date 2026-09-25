@@ -502,7 +502,7 @@ export async function handleReceiptIngestion(
 
   let receiptValid = await verifyExecutionReceipt(receipt, hexToBytes(pubKeyHex));
 
-  // Fallback: verify against the key embedded in the receipt —
+  // Fallback: reconcile the registry from the key embedded in the receipt —
   // but ONLY when that embedded key is ALREADY a registered device of
   // receipt.motebit_id. Without this binding, an attacker could POST a receipt
   // under a VICTIM's motebit_id carrying its own key embedded: the fallback
@@ -522,17 +522,19 @@ export async function handleReceiptIngestion(
     const embeddedIsRegisteredDevice = devices.some((d) => d.public_key === receipt.public_key);
     if (embeddedIsRegisteredDevice) {
       receiptValid = await verifyExecutionReceipt(receipt, hexToBytes(receipt.public_key));
-      // Verify only — never write the registry. The embedded key may be a
-      // paired device's own key, which is a device's, not the identity's; the
-      // heal used to set `agent_registry.public_key` to it, after which the
-      // owner's next succession (scoped to the key it retires) could not move
-      // the registry and the paired device read as the identity everywhere
-      // the registry is read (#750 review). The identity's key moves only
-      // through a door that proves it.
+      // Main's heal, restored exactly (#758 review): the registry is departure's
+      // and the signature readers' INPUT for an identity with no holder, and
+      // build 4's contract is main's rule with main's inputs. It is never
+      // SERVED (the holder is), so R2's harm — a paired device's key read as
+      // the identity's — no longer reaches a foundation-law route.
       if (receiptValid) {
-        logger.info("receipt.verified_by_device_key", {
+        moteDb.db
+          .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
+          .run(receipt.public_key, receipt.motebit_id);
+        logger.info("receipt.public_key_updated", {
           correlationId: taskId,
           motebitId: receipt.motebit_id,
+          reason: "embedded key is a registered device, registry reconciled",
         });
       }
     }

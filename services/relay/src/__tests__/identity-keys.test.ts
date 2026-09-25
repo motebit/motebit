@@ -348,6 +348,19 @@ describe("identity-keys", () => {
       expect(holderRow(db, "bf-chain")).toBeUndefined();
       expect(holderRow(db, "bf-dev")).toBeUndefined();
       expect(holderRow(db, "bf-blank")).toBeUndefined();
+      // HEAL-F (#758 review): a registry key a paired device may have captured —
+      // device rows name a DIFFERENT key — is not transplanted.
+      plantRegistry(db, "bf-captured", B);
+      plantDevice(db, "bf-captured", "cap-owner", A);
+      plantDevice(db, "bf-captured", "cap-paired", B);
+      plantRegistry(db, "bf-agree", C);
+      plantDevice(db, "bf-agree", "agree-1", C.toUpperCase());
+      db.prepare(IDENTITY_KEYS_BACKFILL_SQL).run(8, 8);
+      expect(holderRow(db, "bf-captured")).toBeUndefined();
+      expect(holderRow(db, "bf-agree")).toMatchObject({
+        public_key: C,
+        source: "backfill:registry",
+      });
     });
   });
 
@@ -526,12 +539,12 @@ describe("identity-keys", () => {
       expect(registryKey(db, "svc-ng")).toBeUndefined();
     });
 
-    it("continuity — a legacy identity stored UPPER(K) keeps bootstrapping with UPPER(K); a lowercase K cannot join it (F-D, F-E)", async () => {
+    it("continuity — a legacy identity stored UPPER(K) keeps bootstrapping with UPPER(K), and lowercase K joins as on main (guard case-folds, #758 review)", async () => {
       const k = await generateKeypair();
       const upper = hex(k).toUpperCase();
       plantDevice(db, "legacy-up", "d1", upper);
       expect(await bootstrap("legacy-up", "d1", upper)).toBeLessThan(300);
-      expect(await bootstrap("legacy-up", "d2", hex(k))).toBe(409);
+      expect(await bootstrap("legacy-up", "d2", hex(k))).toBeLessThan(300);
     });
   });
 

@@ -367,7 +367,8 @@ export function recordIdentityGuardian(
  * Never the chain head: a device-rung rotation appends a link from a paired
  * device's own key, so the head can be a key the identity never proved, and
  * main never served it (#753 review item 1). An identity with no registry key
- * stays unfilled until E-sov, E-link, E-mig or E-op; `departureFrom`'s device
+ * — or whose keyed device rows name a DIFFERENT key (HEAL-F) — stays
+ * unfilled until E-sov, E-link, E-mig or E-op; `departureFrom`'s device
  * rung lets it rotate meanwhile.
  */
 export const IDENTITY_KEYS_BACKFILL_SQL = `
@@ -391,5 +392,15 @@ export const IDENTITY_KEYS_BACKFILL_SQL = `
     ) i
   ) p
   WHERE p.reg IS NOT NULL
+    -- Only where no keyed device row holds a DIFFERENT key (#758 review,
+    -- HEAL-F): with rows that disagree the relay cannot tell whose key the
+    -- registry names — a paired device may have captured it — and a
+    -- transplant would freeze that capture as the identity's authority where
+    -- main's receipt heal would take it back. Unfilled ⇒ main's rule exactly.
+    AND NOT EXISTS (
+      SELECT 1 FROM devices d
+       WHERE d.motebit_id = p.motebit_id AND d.public_key != ''
+         AND lower(d.public_key) != lower(p.reg)
+    )
     AND p.motebit_id NOT IN (SELECT motebit_id FROM identity_keys)
 `;

@@ -147,7 +147,7 @@ describe("receipt ingestion — cross-identity registry-key hijack is refused", 
     expect(registryKey(relay, victim.motebitId)).toBe(victimPubHex);
   });
 
-  it("a paired device's own-key receipt verifies, and the registry keeps the IDENTITY's key (#750 review)", async () => {
+  it("a paired device's own-key receipt verifies and heals the registry exactly as main — and the paired key is never served (#703 build 4)", async () => {
     const ownerKp = await generateKeypair();
     const pairedKp = await generateKeypair();
     const ownerPubHex = bytesToHex(ownerKp.publicKey);
@@ -221,7 +221,15 @@ describe("receipt ingestion — cross-identity registry-key hijack is refused", 
       body: JSON.stringify(receipt),
     });
     expect(res.status).toBe(200);
-    // Under the old heal this read pairedPubHex.
-    expect(registryKey(relay, owner.motebitId)).toBe(ownerPubHex);
+    // Main's heal, kept exactly (#703 build 4): the registry — departure's input
+    // for an identity with no holder — reconciles to the paired key, as on main.
+    expect(registryKey(relay, owner.motebitId)).toBe(pairedPubHex);
+    // …but it is never SERVED: the §7.6 bundle reads the evidence-written holder.
+    const bundle = await relay.app.request(`/api/v1/identity/${owner.motebitId}`);
+    const served =
+      bundle.status === 200
+        ? ((await bundle.json()) as { current_public_key: string }).current_public_key
+        : "";
+    expect(served).not.toBe(pairedPubHex);
   });
 });

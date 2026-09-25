@@ -346,6 +346,21 @@ Built from §5i as decided. Building it found one thing: build 4's premise is "d
 
 None of this refuses a rotation or recovery main allows, and none serves a key the identity did not prove. Consumers that fall back from the bundle to discovery (for example mcp-server's caller lookup) still find the registry key there.
 
+### 5k. Build 4 code review round 1 (#758) — the one fix round
+
+A cold review, which probed each candidate through `scripts/differential-vs-main.ts`, returned _fix-then-merge_. All three findings had one shape, the one §5j already named: **a changed write that main's departure rule reads.**
+
+- **K1 — the receipt heal is restored, exactly as main.** R2 (the rebuild) had deleted `handleReceiptIngestion`'s registry heal, so the rule's input changed. HEAL-U: an unfilled owner's rotation after its own receipt returned 400 on build 4 and 200 on main. The registry is never served, so R2's harm (a paired key read as the identity's) does not reach a foundation-law route. The writers-gate entry is back.
+- **K2 — E-main skips identities whose device rows name a different key.** HEAL-F: v42 transplanted a registry key that a paired device had captured on main, froze it as authority, and locked the owner out after main's heal would have taken it back. When device rows disagree, the relay cannot tell whose key the registry names, so that identity stays unfilled and gets main's rule exactly. (The migration comment and the backfill test pin this.)
+- **K3 — the public-door guard case-folds again, as main does.** CASE-G: an exact guard refused a lowercase K joining a legacy UPPER(K) identity that main admits. The risk it targeted (a second-spelling row that a rotation misses) is closed where it lives: rotation retires rows case-insensitively (DB4).
+
+The reviewer's probe is committed as `services/relay/src/__tests__/identity-keys-heal.probe.ts`, loading the branch's real backfill SQL. With the committed 12-scenario probe:
+
+- CASE-G, CASE-ROT and every rotation, recovery and admission result equal main's.
+- HEAL-U/F differ only in serving `''` (§5j's stated cost).
+
+Under §8, the next in-kind finding withdraws.
+
 ## 6. Decisions
 
 - **D1 — delist, do not delete.** Deleting and moving keys to a new table in one step would touch ~35 read sites before anything is safer; delisting fixes the row-holding identities with a column and a filter, and is reversible.

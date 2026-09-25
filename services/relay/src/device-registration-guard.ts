@@ -43,10 +43,12 @@ export async function refusePublicDeviceRegistration(
   deps: { identityManager: IdentityManager; db: DatabaseDriver },
   req: { motebitId: string; deviceId: string | undefined; publicKey: string },
 ): Promise<DeviceRegistrationRefusal | null> {
-  // EXACT (DA1/DB4): the doors admit only canonical keys or a stored key's
-  // exact spelling, so case-folding here could only let `UPPER(K)` join as a
-  // second device that a rotation (matching its old key) would then miss.
-  const key = req.publicKey;
+  // Case-folded, exactly as main (#758 review): an exact guard refused a
+  // lowercase K joining a legacy UPPER(K) identity that main admits. The risk
+  // the exact guard targeted — a second-spelling row a rotation misses — is
+  // closed where it lives: rotation retires device rows case-insensitively
+  // (DB4, `applySuccession`).
+  const key = req.publicKey.toLowerCase();
 
   if (req.deviceId != null) {
     // The device table is keyed by device_id ALONE and written with
@@ -61,7 +63,7 @@ export async function refusePublicDeviceRegistration(
         remediation: "mint a fresh device_id for this machine",
       };
     }
-    if (holder != null && holder.public_key !== "" && holder.public_key !== key) {
+    if (holder != null && holder.public_key !== "" && holder.public_key.toLowerCase() !== key) {
       return {
         code: "DEVICE_KEY_CONFLICT",
         error: "device exists with a different public key",
@@ -77,7 +79,7 @@ export async function refusePublicDeviceRegistration(
   // not "no owner yet"), the chain head's, and every keyed device row's. The first build left
   // the holder out of this set (§5a A1), so a stranger's key passed for an
   // identity whose registry key was blank while its holder still answered.
-  const held = keysHeldBy(deps.db, req.motebitId);
+  const held = new Set([...keysHeldBy(deps.db, req.motebitId)].map((k) => k.toLowerCase()));
 
   if (held.size > 0 && !held.has(key)) {
     return {

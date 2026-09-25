@@ -95,6 +95,14 @@ const WRITERS: readonly Writer[] = [
       "`recordIdentityGuardian`, called only by /agents/register after it verified the guardian's attestation over {action, guardian_public_key, motebit_id} and wrote the same guardian to the registry — so the holder never answers with a guardian the identity replaced (#750 review). Updates an existing holder row only; proves nothing itself",
   },
   {
+    file: "services/relay/src/tasks.ts",
+    verb: "UPDATE",
+    table: "agent_registry",
+    count: 1,
+    principal:
+      "the identity itself — a receipt may reconcile the registry key ONLY to a key already registered as one of that identity's devices; an arbitrary embedded key is refused. Main's heal, kept exactly (#703 build 4): the registry is departure's input for an identity with no holder and is never served",
+  },
+  {
     file: "services/relay/src/agents.ts",
     verb: "INSERT",
     table: "agent_registry",
