@@ -5,9 +5,9 @@
  *
  * Recovery path for users whose `cli_encrypted_key` is missing from
  * config but who still have a valid private key on disk under
- * `~/.motebit/dev-keyring.json` (written by the desktop Tauri app's
- * Keychain-failure fallback in `apps/desktop/src/identity-manager.ts`,
- * or by older scaffold flows).
+ * `~/.motebit/dev-keyring.json` (the desktop Tauri app's key store — every
+ * shipped desktop keeps its keys there, no OS keychain — or written by
+ * older scaffold flows).
  *
  * The alternative — running the interactive setup again — would create
  * a brand new identity, abandoning whatever motebit_id was active and
@@ -72,20 +72,20 @@ export async function handleMigrateKeyring(config: CliConfig): Promise<void> {
   // Rule R1: only ENOENT of the name itself is "no keyring". A dangling
   // symlink or an unreadable directory is something there, not nothing.
   if (isTrulyAbsent(devKeyringPath)) {
-    // The desktop moves its secrets into the OS keychain: dev-keyring.json is
-    // then gone on purpose, its bytes kept as dev-keyring.json.migrated-<t>
-    // and the names it held listed in keychain-index.json. That is not "no
-    // keyring" — say where the key went. (This command never recreates a
-    // plaintext dev-keyring.json.)
+    // A previous run of this command retired the plaintext keyring whole to
+    // dev-keyring.json.migrated-<t> (owner-only, kept, never erased). That
+    // is not "no keyring" — say where it went. (No shipped desktop uses the
+    // OS keychain; a keychain-index.json is left only by a pre-release
+    // desktop build. This command never recreates a plaintext keyring.)
     const migrated = migratedKeyringEvidence();
     if (migrated.length > 0) {
       console.error(
-        `Error: ${devKeyringPath} is gone because the desktop app moved its keys into the OS keychain (${migrated.join(", ")}).`,
+        `Error: ${devKeyringPath} is gone because a previous \`motebit migrate-keyring\` run retired it (${migrated.join(", ")}).`,
       );
       console.error(
-        "  This command reads only the plaintext keyring, so there is nothing for it to migrate. The\n" +
-          "  identity key is in the OS keychain (and the migrated copy above, owner-only); recover the\n" +
-          "  CLI identity with `motebit restore` (recovery seed) rather than recreating a plaintext keyring.",
+        "  A `.migrated-*` copy is that run's retired plaintext keyring, kept owner-only; this command\n" +
+          "  does not read it back. Recover the CLI identity with `motebit restore` (recovery seed), or\n" +
+          "  move that copy back to dev-keyring.json yourself and run this command again.",
       );
       process.exit(1);
     }
@@ -236,8 +236,9 @@ export async function handleMigrateKeyring(config: CliConfig): Promise<void> {
 /**
  * Retire the migrated plaintext keyring from its active name WITHOUT
  * destroying it (R2): the whole file moves to `dev-keyring.json.migrated-<time>`
- * (owner-only) — the same convention the desktop uses when it moves its
- * secrets into the OS keychain. A SYMLINK's target is never touched: its
+ * (owner-only). (The desktop's keychain migration — arc-only, #764 — keeps
+ * its copy under a different name, `dev-keyring.json.keychain-migrated-<t>`,
+ * so the two never read as each other.) A SYMLINK's target is never touched: its
  * bytes are copied aside and only the link is removed. Nothing is zeroed —
  * this command never erases key bytes, migrated or not. Returns the kept
  * path, or null (with a warning) when it could not be moved.
@@ -254,9 +255,9 @@ function retirePlaintextKeyring(devKeyringPath: string): string | null {
 }
 
 /**
- * Evidence that the desktop already moved `dev-keyring.json` into the OS
- * keychain: its kept copy (`dev-keyring.json.migrated-<time>`) or the index
- * of names now in the keychain (`keychain-index.json`). Never throws.
+ * Evidence that the plaintext keyring was retired on purpose: a previous
+ * run's kept copy (`dev-keyring.json.migrated-<time>`), or a pre-release
+ * desktop build's `keychain-index.json`. Never throws.
  */
 function migratedKeyringEvidence(): string[] {
   try {

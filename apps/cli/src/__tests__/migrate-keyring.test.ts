@@ -334,7 +334,7 @@ describe("handleMigrateKeyring", () => {
     }
   });
 
-  it("a keyring the desktop already moved into the OS keychain is reported as such, not as 'no keyring'", async () => {
+  it("a keyring a previous run retired is reported as such, not as 'no keyring' — and never blamed on an OS keychain", async () => {
     const { publicKey } = await generateKeypair();
     loadFullConfigMock.mockReturnValue({
       motebit_id: "m-1",
@@ -349,7 +349,9 @@ describe("handleMigrateKeyring", () => {
     try {
       await expect(handleMigrateKeyring(baseCliConfig)).rejects.toThrow("PROCESS_EXIT_CALLED");
       const said = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
-      expect(said).toMatch(/OS keychain/);
+      expect(said).toMatch(/previous `motebit migrate-keyring` run retired it/);
+      expect(said).toMatch(/dev-keyring\.json\.migrated-2026-01-01T00-00-00-000Z/);
+      expect(said).not.toMatch(/keychain/i);
       expect(fs.existsSync(path.join(tmpDir, "dev-keyring.json"))).toBe(false);
     } finally {
       exitSpy.mockRestore();

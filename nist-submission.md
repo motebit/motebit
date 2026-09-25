@@ -213,7 +213,7 @@ Delegation is a three-party interaction: the delegating agent submits a task to 
 
 **How do we bind agent identity with human identity for human-in-the-loop?**
 
-The identity file's `owner_id` field binds the agent to a human identity. The operator mode requires PIN authentication (SHA-256 hashed, stored in OS keyring) before granting elevated privileges. Every approval decision records both the agent identity and the approval context in the audit log.
+The identity file's `owner_id` field binds the agent to a human identity. The operator mode requires PIN authentication (a salted PBKDF2-SHA256 digest, stored in the device's key store — on desktop `~/.motebit/dev-keyring.json`) before granting elevated privileges. Every approval decision records both the agent identity and the approval context in the audit log.
 
 **Relationship to NGAC:** Motebit's PolicyGate implements attribute-based access control with risk-level attributes on tools and sensitivity-level attributes on data. NGAC's graph-based policy representation and native delegation support are architecturally aligned — a Motebit deployment could use NGAC as an upstream policy source while the PolicyGate enforces decisions at the agent boundary.
 

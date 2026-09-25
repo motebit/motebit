@@ -361,8 +361,8 @@ export async function bootstrapIdentity(
 //
 // Sources NOT supported (deliberate):
 //
-//   - `~/.motebit/dev-keyring.json` — written by the desktop Tauri app's
-//     Keychain-failure fallback (`apps/desktop/src/identity-manager.ts`).
+//   - `~/.motebit/dev-keyring.json` — the desktop Tauri app's key store
+//     (every shipped desktop keeps its keys there; no OS keychain is used).
 //     Cross-surface keystore unification is a real architectural pass; a
 //     silent fallback chain is the wrong shape for it. The right shape is
 //     an explicit `IdentityKeyAdapter` per surface, same family as the
