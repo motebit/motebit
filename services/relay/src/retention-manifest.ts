@@ -171,6 +171,14 @@ export const RETENTION_MANIFEST_CONTENT: Pick<
       "(retention.device_registry) in /.well-known/motebit-transparency.json since " +
       "2026-09-24 (#696); a future per-device removal would be a signed revocation, " +
       "not a retention shape in this manifest.",
+    "different_mechanism: the machine roster (relay_host_roster_entries, " +
+      "relay_host_liveness) is not retention-cert-shaped. Signed roster entries are " +
+      "held indefinitely with NO removal path — not by age (a retirement must stay " +
+      "present for remove-wins) and not per identity (the relay has no per-identity " +
+      "erase of first-person data today); growth is bounded by per-signer-key caps. " +
+      "Liveness rows are a 90-day TTL on last_seen_at that skips rows with a live " +
+      "bound socket, and issue no deletion certificate. Declared as its own category " +
+      "(retention.machine_roster) in /.well-known/motebit-transparency.json.",
     "pending: onchain anchor of this manifest is not yet in place; only cached " +
       "copies of the JSON survive operator deletion. Sibling concern to the " +
       "operator-transparency manifest's onchain anchor (also pending).",

@@ -386,8 +386,21 @@ about membership.
   bound how stale that claim is (a heartbeat with a deadline). Without one, the
   honest word is that a connection is _open_.
 - A store that persists last-seen time MUST keep a single overwritten value per
-  member — never a history — and MUST declare it and its retention window to its
-  users.
+  observed `(device_id, key)` — never a history — and MUST declare it and its
+  retention window to its users. The key is the one the connection's credential
+  was **verified under, captured at verification**; a store MUST NOT re-derive it
+  later from mutable state, because a key rotation rewrites a store's device
+  records without closing connections authenticated under the old key. A store
+  does not know membership (§1), so it keys by what it observed, never by roster
+  line, and SHOULD persist only for connections that announce hosting unattended
+  work. A consumer attaches an observation to a line only when its `device_id`
+  and key equal the enrolment's (the binding rule above); an observation under
+  another key is that machine's id connected under a key that is not its
+  enrolment's, never "not in the roster".
+- A store that expires last-seen values MUST serve its retention window and the
+  time from which it has been observing, so that a consumer can say "not
+  observed in the last N days" rather than "never seen", and MUST NOT expire a
+  value while a connection bound as it is open.
 - Liveness MUST be served visibly apart from the signed entries, so that no
   consumer can mistake a store's observation for the sovereign's statement.
 
@@ -488,3 +501,84 @@ This is the content-addressed-record pattern — an id that is the hash of a fix
 serialization, a frozen shape, and evolution by new kinds that link to old ones
 by id. "Must-understand extension" schemes do not apply: even an ignorable
 unknown field changes the hash.
+
+## 11. Presentation and retrieval
+
+How roster entries reach a store, and how a consumer gets them back.
+
+#### Routes (foundation law)
+
+The two routes below are the binding cross-implementation contract. Renaming or
+relocating either of them is a wire break.
+
+- `POST /api/v1/agents/:motebitId/roster` — present entries. The body is
+  `{ enrollments?: HostEnrollment[], retirements?: HostRetirement[] }`, at least
+  one of them present. The store takes the **idempotent union** (§9).
+- `GET /api/v1/agents/:motebitId/roster` — the set as held, and beside it the
+  store's liveness observation (§8).
+
+**Both are first-person, and the caller must be present.** A roster says where
+someone's agent runs and when each machine was last seen. A store MUST serve and
+accept it only under a credential that names that motebit — **present and
+equal**: a credential that names no motebit (an operator's master credential)
+is refused, not waved through. A store MUST NOT publish, rank, or aggregate
+rosters, nor serve one to another identity. The reference relay accepts a signed
+device token of audience `device:auth`, verified under a registered device's
+key; security is still in the artifact, so the routes need no audience of their
+own.
+
+**Ingest is integrity only.** Each entry is validated against its wire schema,
+its `motebit_id` must equal the path's, and its signature must verify under the
+key it names (§5, §9); an entry already held is a no-op, and entries of any age
+are accepted. A store has no trusted key chain for most identities and must hold
+entries under keys the motebit has rotated away from — after a rotation those
+lines are how a consumer sees the machine that was cut off — so it does **not**
+refuse an entry for its key.
+
+**Caps are partitioned by signer key.** An entry signed by the key the caller's
+credential verified under counts against that key's **own** bucket, which only a
+holder of that key can fill; every other entry counts against one shared
+**foreign** bucket, which exists to replicate the lines of other epochs. A holder
+of an old key can therefore fill only that key's bucket, and a rotation moves the
+sovereign to a new, empty one. The foreign bucket can be exhausted by anyone;
+the worst that follows is that superseded lines stop replicating through that
+store. An **active** line is signed by the current key and is never lost this
+way. The reference relay's caps: 512 enrolments and 2048 retirements per own
+bucket, 256 entries in the foreign bucket, 64 entries per request.
+
+**A partial presentation is not a success.** The response reports, per entry,
+`accepted` (`stored` or `already_held`, with the id) and `refused` (with its index
+and a reason: `malformed`, `wrong_motebit`, `bad_signature`, `roster_full`). If
+anything was refused the status MUST NOT be 2xx: a surface re-presenting its
+whole cached set checks one thing — was it taken — and a 2xx over a body it must
+remember to read is how half a roster comes to be believed to be all of it. What
+was accepted stays accepted; a refused entry does not veto its neighbours. A
+field that is present and not a list is a malformed request (400), and a
+presentation larger than the per-request limit is refused whole (413); a surface
+sends its set in chunks and treats anything other than every chunk taken as not
+taken.
+
+**The retrieval.** `GET` returns:
+
+```
+{ motebit_id, enrollments, retirements,
+  liveness: { observed_by, retention_days, observing_since,
+              rows: [{ device_id, bound_under, last_seen_at, sockets_open }],
+              live_unenrolled: [{ device_id, bound_under, sockets_open }] } }
+```
+
+`enrollments` and `retirements` are served as the motebit signed them.
+`liveness` is the store's own observation, named by `observed_by`, keyed by
+device **and** by the key each connection verified under (`bound_under`, §8).
+`rows` are the persisted observations plus open bound connections that announce
+unattended work; `live_unenrolled` are open bound connections with no row.
+`sockets_open` counts open connections bound as that `(device_id, bound_under)`
+— a count per observed pair, never over machines.
+
+**The store does not reduce.** It returns the set; the consumer reduces it (§6)
+against a key chain the consumer verified, and joins liveness to it: an active
+machine's observation is the row with its `device_id` and `bound_under` equal to
+its enrolment's `public_key`. A store MUST NOT evaluate the reduction, decide
+membership, or compute any quantity over a motebit's machines — a store that
+cannot compute a roster cannot compute a wrong one. If the consumer has no
+usable chain, it shows **no roster**, never an empty one (§6 Step 0).
