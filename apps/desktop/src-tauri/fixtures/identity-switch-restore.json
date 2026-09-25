@@ -1,0 +1,34 @@
+[
+  {
+    "cmd": "keyring_set",
+    "args": {
+      "key": "pending_identity_switch",
+      "value": "{\"motebit_id\":\"m-B\",\"device_id\":\"00000000-0000-4000-8000-00000000000b\",\"device_public_key\":\"bb\",\"private_key_hex\":\"KEY-B\",\"identity_file\":\"B-FILE\"}"
+    }
+  },
+  {
+    "cmd": "keyring_set_aside",
+    "args": {
+      "key": "pending_rotation"
+    }
+  },
+  {
+    "cmd": "keyring_set",
+    "args": {
+      "key": "device_private_key",
+      "value": "KEY-B"
+    }
+  },
+  {
+    "cmd": "update_config",
+    "args": {
+      "patch": "{\"motebit_id\":\"m-B\",\"device_id\":\"00000000-0000-4000-8000-00000000000b\",\"device_public_key\":\"bb\",\"_identity_file\":\"B-FILE\"}"
+    }
+  },
+  {
+    "cmd": "keyring_set_aside",
+    "args": {
+      "key": "pending_identity_switch"
+    }
+  }
+]

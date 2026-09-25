@@ -3,6 +3,8 @@
 mod computer_use;
 mod config_file;
 mod durable_file;
+#[cfg(test)]
+mod ipc_replay_tests;
 mod key_store;
 mod runtime_host;
 mod secure_enclave;

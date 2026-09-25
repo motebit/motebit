@@ -13,12 +13,16 @@
 //!
 //! Rules (R1–R3, as for every key-bearing file):
 //!
-//!  * R1 — absence is not damage. `keychain-index.json` records which names
-//!    live in the keychain, so a keychain that errors (locked, prompt
-//!    cancelled, service down) for a name it is supposed to hold is an `Err`,
-//!    never "no key" — and a first launch never mints over a key it could not
-//!    read. A damaged / unreadable / dangling-symlink `dev-keyring.json` is an
-//!    `Err` too, and nothing writes over it.
+//!  * R1 — absence is not damage. The keychain itself is asked for every
+//!    name on every read and write; `keychain-index.json` is only a hint
+//!    (a cache of names seen there, written after a verified keychain write)
+//!    and never decides existence. A keychain that cannot be read (locked,
+//!    prompt cancelled, service down) is an `Err` for key material — never
+//!    "no key" — once there is evidence this install keeps keys there (the
+//!    index exists, or the config names an identity whose key is not in the
+//!    file); a first launch never mints over a key it could not read. A
+//!    damaged / unreadable / dangling-symlink `dev-keyring.json` is an `Err`
+//!    too, and nothing writes over it.
 //!  * R2 — key material (`device_private_key`, `pending_rotation`,
 //!    `pending_identity_switch`) is never destroyed: an overwrite with a
 //!    different value, a delete, and a set-aside first keep the old value
@@ -169,24 +173,35 @@ impl<S: SecretStore> KeyStore<S> {
         write_file_atomic_owner_only(&self.dev_path(), json.as_bytes(), None)
     }
 
-    fn read_index(&self) -> Result<BTreeSet<String>, String> {
+    /// The index is a HINT (a cache of names seen in the keychain), never the
+    /// authority for whether a key exists: the keychain itself is asked on
+    /// every read and write. A damaged index is ignored (and rewritten), not
+    /// an error — it holds names, not keys.
+    fn index_hint(&self) -> BTreeSet<String> {
         let path = self.index_path();
-        let Some(bytes) = read_strict(&path)? else {
-            return Ok(BTreeSet::new());
+        let bytes = match read_strict(&path) {
+            Ok(Some(b)) => b,
+            Ok(None) => return BTreeSet::new(),
+            Err(e) => {
+                eprintln!("[motebit] WARNING: ignoring keychain index: {}", e);
+                return BTreeSet::new();
+            }
         };
         #[derive(serde::Deserialize)]
         struct Index {
             keys: Vec<String>,
         }
-        serde_json::from_slice::<Index>(&bytes)
-            .map(|i| i.keys.into_iter().collect())
-            .map_err(|e| {
-                format!(
-                    "{} is damaged ({}); it records which secrets live in the OS keychain. It has NOT been changed.",
+        match serde_json::from_slice::<Index>(&bytes) {
+            Ok(i) => i.keys.into_iter().collect(),
+            Err(e) => {
+                eprintln!(
+                    "[motebit] WARNING: ignoring damaged keychain index {} ({})",
                     path.display(),
                     e
-                )
-            })
+                );
+                BTreeSet::new()
+            }
+        }
     }
 
     fn write_index(&self, keys: &BTreeSet<String>) -> Result<(), String> {
@@ -195,43 +210,86 @@ impl<S: SecretStore> KeyStore<S> {
         write_file_atomic_owner_only(&self.index_path(), json.as_bytes(), None)
     }
 
+    /// Best-effort cache maintenance; a failure is logged, never fatal (the
+    /// keychain, not the index, decides existence).
+    fn note_in_keychain(&self, name: &str, present: bool) {
+        let mut index = self.index_hint();
+        let changed = if present {
+            index.insert(name.to_string())
+        } else {
+            index.remove(name)
+        };
+        if changed {
+            if let Err(e) = self.write_index(&index) {
+                eprintln!("[motebit] WARNING: keychain index not updated: {}", e);
+            }
+        }
+    }
+
+    /// Evidence that this install keeps secrets in the OS keychain, so a
+    /// keychain that cannot be read is NOT an empty one: the index file
+    /// exists (it is only ever written after a verified keychain write), or
+    /// the config names an identity whose key is not in the fallback file
+    /// (so it can only be in the keychain). Without either — a first launch,
+    /// or a machine that has only ever used the file (no Secret Service) —
+    /// a keychain error on a name the file lacks is a true absence.
+    fn keychain_in_use(&self, dev: &Option<Map>) -> bool {
+        if std::fs::symlink_metadata(self.index_path()).is_ok() {
+            return true;
+        }
+        if dev.as_ref().is_some_and(|m| m.contains_key("device_private_key")) {
+            return false;
+        }
+        config_claims_identity(&self.dir.join("config.json"))
+    }
+
     // ── reads ────────────────────────────────────────────────────────────
 
-    /// R1. `Ok(None)` means: not indexed in the keychain AND the fallback file
-    /// is absent or has no such entry. Everything uncertain is an `Err`.
+    /// R1. The keychain is asked for EVERY name, indexed or not:
+    ///  * keychain has it → present (and cached in the index);
+    ///  * keychain has no such entry → the fallback file decides (a name the
+    ///    index lists but the keychain lacks — a crash, an external delete —
+    ///    is absent from the keychain, never a permanent error);
+    ///  * keychain cannot be read → the file's value if it has one; else, for
+    ///    key material (or an indexed name) on an install that uses the
+    ///    keychain, an `Err` — never "absent", so nothing mints over it.
     pub fn get(&self, name: &str) -> Result<Option<String>, String> {
-        let index = self.read_index()?;
         let dev = self.read_dev()?;
         let in_dev = dev.as_ref().and_then(|m| m.get(name)).cloned();
-        if index.contains(name) {
-            return match self.secret.get(name) {
-                Ok(Some(v)) => Ok(Some(v)),
-                Ok(None) => match in_dev {
-                    Some(v) => Ok(Some(v)),
-                    None => Err(format!(
-                        "{} is recorded as stored in the OS keychain but the keychain has no such entry. Treating that as damage, not absence; nothing was changed.",
-                        name
-                    )),
-                },
-                Err(e) => match in_dev {
-                    Some(v) => Ok(Some(v)),
-                    None => Err(format!(
-                        "{} could not be read from the OS keychain ({}). It is not absent; nothing was changed.",
-                        name, e
-                    )),
-                },
-            };
+        match self.secret.get(name) {
+            Ok(Some(v)) => {
+                self.note_in_keychain(name, true);
+                Ok(Some(v))
+            }
+            Ok(None) => {
+                self.note_in_keychain(name, false);
+                Ok(in_dev)
+            }
+            Err(e) => match in_dev {
+                Some(v) => Ok(Some(v)),
+                None => {
+                    let guarded = guards_absence(name) || self.index_hint().contains(name);
+                    if guarded && self.keychain_in_use(&dev) {
+                        Err(format!(
+                            "{} could not be read from the OS keychain ({}). It is not absent; nothing was changed.",
+                            name, e
+                        ))
+                    } else {
+                        Ok(None)
+                    }
+                }
+            },
         }
-        Ok(in_dev)
     }
 
     // ── writes ───────────────────────────────────────────────────────────
 
     /// Store `value` under `name`: the keychain when it accepts and verifies
     /// the write, else the fallback file. The previous value of a
-    /// key-material name is preserved first when it differs.
+    /// key-material name — wherever it lives, indexed or not — is preserved
+    /// first when it differs.
     pub fn set(&self, name: &str, value: &str) -> Result<(), String> {
-        let old = self.get(name)?; // refuses on any uncertainty
+        let old = self.get(name)?; // asks the keychain; refuses on any uncertainty
         if let Some(old) = old.as_deref() {
             if old != value && is_key_material(name) {
                 self.preserve_value(name, old)?;
@@ -282,16 +340,36 @@ impl<S: SecretStore> KeyStore<S> {
         Err(format!("no free name to preserve {}; nothing was changed", name))
     }
 
-    /// Write without the preserve step. `previous` is what `get` returned.
+    /// Write without the preserve step. `previous` is what `get` returned —
+    /// the only value this write is allowed to replace. The keychain is read
+    /// again here (never trusting the index): a value there that is neither
+    /// `previous` nor `value` would be destroyed, so the write refuses.
     fn store_raw(&self, name: &str, value: &str, previous: Option<&str>) -> Result<(), String> {
-        let mut index = self.read_index()?;
         let dev = self.read_dev()?;
-        // Record the name BEFORE writing the keychain, so a crash after the
-        // keychain write still finds it (R1: listed-but-missing is damage).
-        let newly_indexed = index.insert(name.to_string());
-        if newly_indexed {
-            self.write_index(&index)?;
+        let current = match self.secret.get(name) {
+            Ok(v) => v,
+            Err(e) => {
+                if (guards_absence(name) || self.index_hint().contains(name)) && self.keychain_in_use(&dev) {
+                    return Err(format!(
+                        "{} could not be read from the OS keychain before writing ({}); refusing to write over what it may hold. Nothing was changed.",
+                        name, e
+                    ));
+                }
+                None
+            }
+        };
+        if let Some(cur) = current.as_deref() {
+            if cur != value && Some(cur) != previous {
+                return Err(format!(
+                    "the OS keychain holds a value for {} that this write did not account for; refusing to overwrite it. Nothing was changed.",
+                    name
+                ));
+            }
         }
+        // Keychain first, index after: a crash between leaves a keychain
+        // entry the index does not list, which `get` still finds (the index
+        // is only a hint). The reverse order could leave the index naming an
+        // entry that never existed.
         let keychain = self
             .secret
             .set(name, value)
@@ -302,23 +380,13 @@ impl<S: SecretStore> KeyStore<S> {
             });
         match keychain {
             Ok(()) => {
+                self.note_in_keychain(name, true);
                 // The keychain is now authoritative. A different value left in
                 // the file for this name is key material we must not drop.
                 if let Some(mut map) = dev {
                     if let Some(stale) = map.remove(name) {
                         if stale != value && is_key_material(name) && previous != Some(stale.as_str()) {
-                            let stamp = (self.stamp)();
-                            let kept = (0..)
-                                .map(|n: u32| {
-                                    if n == 0 {
-                                        format!("{}.preserved-{}", name, stamp)
-                                    } else {
-                                        format!("{}.preserved-{}-{}", name, stamp, n)
-                                    }
-                                })
-                                .find(|k| !map.contains_key(k))
-                                .unwrap_or_default();
-                            map.insert(kept, stale);
+                            keep_in_map(&mut map, name, stale, &(self.stamp)());
                         }
                         self.write_dev(&map)?;
                     }
@@ -326,10 +394,21 @@ impl<S: SecretStore> KeyStore<S> {
                 Ok(())
             }
             Err(keychain_err) => {
-                // Fallback: the file. The keychain may still hold an OLD
-                // value for this name; un-index it so reads go to the file
-                // (the old keychain value is left in place, never deleted).
+                // The keychain still holding a value for this name would make
+                // every later read return IT, not the file's: refuse rather
+                // than write a value no read would see.
+                if let Ok(Some(_)) = self.secret.get(name) {
+                    return Err(format!(
+                        "the OS keychain refused to replace {} ({}) and still holds the old value; nothing was changed",
+                        name, keychain_err
+                    ));
+                }
                 let mut map = dev.unwrap_or_default();
+                if let Some(old_in_file) = map.get(name).cloned() {
+                    if old_in_file != value && is_key_material(name) && previous != Some(old_in_file.as_str()) {
+                        keep_in_map(&mut map, name, old_in_file, &(self.stamp)());
+                    }
+                }
                 map.insert(name.to_string(), value.to_string());
                 self.write_dev(&map).map_err(|e| {
                     format!(
@@ -337,9 +416,6 @@ impl<S: SecretStore> KeyStore<S> {
                         name, keychain_err, e
                     )
                 })?;
-                if index.remove(name) {
-                    self.write_index(&index)?;
-                }
                 eprintln!(
                     "[motebit] OS keychain unavailable for {} ({}); stored in {} (plaintext, 0600)",
                     name,
@@ -351,14 +427,18 @@ impl<S: SecretStore> KeyStore<S> {
         }
     }
 
+    /// Callers preserve first. Keychain entry deleted first, then the index
+    /// hint, then the file entry — a crash leaves at worst an index row
+    /// naming a missing entry, which reads as absent-from-keychain.
     fn remove_raw(&self, name: &str) -> Result<(), String> {
-        let mut index = self.read_index()?;
-        if index.contains(name) {
-            self.secret.delete(name)?;
-            index.remove(name);
-            self.write_index(&index)?;
+        let dev = self.read_dev()?;
+        if let Err(e) = self.secret.delete(name) {
+            if self.keychain_in_use(&dev) {
+                return Err(e);
+            }
         }
-        if let Some(mut map) = self.read_dev()? {
+        self.note_in_keychain(name, false);
+        if let Some(mut map) = dev {
             if map.remove(name).is_some() {
                 self.write_dev(&map)?;
             }
@@ -379,31 +459,26 @@ impl<S: SecretStore> KeyStore<S> {
         let Some(dev) = self.read_dev()? else {
             return Ok(report);
         };
-        let mut index = self.read_index()?;
         let mut done: Vec<String> = Vec::new();
         for (name, value) in &dev {
             match self.secret.get(name) {
                 Ok(Some(existing)) if &existing == value => {
-                    if index.insert(name.clone()) {
-                        self.write_index(&index)?;
-                    }
+                    self.note_in_keychain(name, true);
                     done.push(name.clone());
                 }
                 Ok(Some(_)) => report.conflicts.push(name.clone()),
                 Ok(None) => {
-                    if index.insert(name.clone()) {
-                        self.write_index(&index)?;
-                    }
                     let ok = self.secret.set(name, value).and_then(|()| match self.secret.get(name) {
                         Ok(Some(v)) if &v == value => Ok(()),
                         Ok(_) => Err(format!("{} did not read back from the keychain", name)),
                         Err(e) => Err(e),
                     });
                     match ok {
-                        Ok(()) => done.push(name.clone()),
+                        Ok(()) => {
+                            self.note_in_keychain(name, true);
+                            done.push(name.clone());
+                        }
                         Err(e) => {
-                            index.remove(name);
-                            self.write_index(&index)?;
                             report.keychain_unavailable = Some(e);
                             break;
                         }
@@ -434,6 +509,43 @@ impl<S: SecretStore> KeyStore<S> {
         report.migrated = done;
         Ok(report)
     }
+}
+
+/// Names whose absence must be proven, not assumed: key material and every
+/// preserved copy of it.
+fn guards_absence(name: &str) -> bool {
+    is_key_material(name) || name.contains(".preserved-")
+}
+
+/// Does `config.json` name an identity? A damaged or unreadable config
+/// counts as yes (it cannot prove there is none).
+fn config_claims_identity(path: &Path) -> bool {
+    match read_strict(path) {
+        Ok(None) => false,
+        Ok(Some(bytes)) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+            Ok(serde_json::Value::Object(o)) => o
+                .get("motebit_id")
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| !s.is_empty()),
+            _ => true,
+        },
+        Err(_) => true,
+    }
+}
+
+/// Keep `value` in the fallback map under a free `<name>.preserved-<stamp>`.
+fn keep_in_map(map: &mut Map, name: &str, value: String, stamp: &str) {
+    let kept = (0..)
+        .map(|n: u32| {
+            if n == 0 {
+                format!("{}.preserved-{}", name, stamp)
+            } else {
+                format!("{}.preserved-{}-{}", name, stamp, n)
+            }
+        })
+        .find(|k| !map.contains_key(k))
+        .unwrap_or_default();
+    map.insert(kept, value);
 }
 
 /// Where a preserved key lives, for the report; exposed for callers that
@@ -513,8 +625,8 @@ pub mod tests {
         let dir = scratch("absent");
         let kc = FakeKeychain::default();
         assert_eq!(store(&kc, &dir).get("device_private_key").unwrap(), None);
-        // Not indexed ⇒ the keychain is not even asked (a locked keychain
-        // cannot turn a true absence into an error, nor the reverse).
+        // A keychain that errors on an install with no evidence of using it
+        // (no index, no identity in the config) is a first launch: absent.
         *kc.fail_get.borrow_mut() = true;
         assert_eq!(store(&kc, &dir).get("device_private_key").unwrap(), None);
     }
@@ -548,9 +660,110 @@ pub mod tests {
         *kc.fail_get.borrow_mut() = true;
         let err = s.get("device_private_key").unwrap_err();
         assert!(err.contains("not absent"), "{err}");
+        // F1: an entry the index lists but the keychain no longer has (an
+        // external delete; a crash between the keychain delete and the index
+        // update) is absent-from-keychain — the file decides — never a
+        // permanent error. It is a real absence; nothing is fabricated.
         *kc.fail_get.borrow_mut() = false;
-        kc.entries.borrow_mut().clear(); // deleted outside the app
+        kc.entries.borrow_mut().clear();
+        assert_eq!(s.get("device_private_key").unwrap(), None);
+    }
+
+    // ── #760 review: the index is a hint, never the authority ─────────────
+
+    #[test]
+    fn index_missing_the_keychain_key_is_still_found_and_preserved_on_overwrite() {
+        // The reviewer's probe: a key written from one ~/.motebit, then read
+        // and overwritten from another that has no index (moved aside,
+        // restored from an older backup, or the index deleted).
+        let kc = FakeKeychain::default();
+        let dir_a = scratch("index-a");
+        store(&kc, &dir_a).set("device_private_key", "K2").unwrap();
+        let dir_b = scratch("index-b");
+        let s = store(&kc, &dir_b);
+        assert_eq!(s.get("device_private_key").unwrap().as_deref(), Some("K2"));
+        s.set("device_private_key", "K3").unwrap();
+        let entries = kc.entries.borrow();
+        assert_eq!(entries["device_private_key"], "K3");
+        assert!(
+            entries.values().any(|v| v == "K2"),
+            "K2 destroyed: {entries:?}"
+        );
+    }
+
+    #[test]
+    fn a_migration_conflict_then_a_set_preserves_both_differing_values() {
+        let dir = scratch("conflict-set");
+        std::fs::write(dir.join("dev-keyring.json"), "{\"device_private_key\":\"FILE\"}").unwrap();
+        let kc = FakeKeychain::default();
+        kc.entries.borrow_mut().insert("device_private_key".into(), "KEYCHAIN".into());
+        let s = store(&kc, &dir);
+        assert_eq!(s.migrate().unwrap().conflicts, vec!["device_private_key".to_string()]);
+        s.set("device_private_key", "NEW").unwrap();
+        assert_eq!(kc.entries.borrow()["device_private_key"], "NEW");
+        let mut kept: Vec<String> = kc
+            .entries
+            .borrow()
+            .iter()
+            .filter(|(k, _)| k.contains(".preserved-"))
+            .map(|(_, v)| v.clone())
+            .collect();
+        if dir.join("dev-keyring.json").exists() {
+            if let serde_json::Value::Object(o) = dev_json(&dir) {
+                kept.extend(o.into_iter().filter(|(k, _)| k.contains(".preserved-")).filter_map(|(_, v)| v.as_str().map(String::from)));
+            }
+        }
+        assert!(kept.contains(&"KEYCHAIN".to_string()), "{kept:?}");
+        assert!(kept.contains(&"FILE".to_string()), "{kept:?}");
+    }
+
+    #[test]
+    fn a_keychain_read_error_refuses_writes_and_reads_of_key_material_once_the_keychain_is_in_use() {
+        let dir = scratch("kc-error");
+        let kc = FakeKeychain::default();
+        // In use by evidence of the config alone (no index, key not in the file).
+        std::fs::write(dir.join("config.json"), "{\"motebit_id\":\"m-1\"}").unwrap();
+        kc.entries.borrow_mut().insert("device_private_key".into(), "K".into());
+        *kc.fail_get.borrow_mut() = true;
+        let s = store(&kc, &dir);
         assert!(s.get("device_private_key").is_err());
+        assert!(s.set("device_private_key", "NEW").is_err());
+        assert!(s.set_aside("pending_rotation").is_err());
+        // The write path's own re-read refuses too (not only `set`'s get).
+        assert!(s.store_raw("device_private_key", "NEW", Some("K")).is_err());
+        *kc.fail_get.borrow_mut() = false;
+        assert_eq!(kc.entries.borrow()["device_private_key"], "K");
+        assert!(!dir.join("dev-keyring.json").exists());
+    }
+
+    #[test]
+    fn a_keychain_that_never_worked_is_a_file_only_install_not_an_error() {
+        // Linux with no Secret Service: every keychain call errors, the file
+        // is the store, and absent names are absent (a first launch works).
+        let dir = scratch("file-only");
+        let kc = FakeKeychain::default();
+        *kc.fail_get.borrow_mut() = true;
+        *kc.fail_set.borrow_mut() = true;
+        let s = store(&kc, &dir);
+        assert_eq!(s.get("device_private_key").unwrap(), None);
+        s.set("device_private_key", "K").unwrap();
+        std::fs::write(dir.join("config.json"), "{\"motebit_id\":\"m-1\"}").unwrap();
+        assert_eq!(s.get("device_private_key").unwrap().as_deref(), Some("K"));
+        assert_eq!(s.get("pending_rotation").unwrap(), None);
+        s.set("pending_rotation", "P").unwrap();
+        s.set_aside("pending_rotation").unwrap();
+        assert_eq!(dev_json(&dir)["pending_rotation.preserved-T"], "P");
+    }
+
+    #[test]
+    fn a_write_never_replaces_a_keychain_value_it_did_not_read() {
+        let dir = scratch("unaccounted");
+        let kc = FakeKeychain::default();
+        let s = store(&kc, &dir);
+        kc.entries.borrow_mut().insert("device_private_key".into(), "THEIRS".into());
+        // store_raw with a stale `previous` (as if get had raced another writer).
+        assert!(s.store_raw("device_private_key", "MINE", Some("STALE")).is_err());
+        assert_eq!(kc.entries.borrow()["device_private_key"], "THEIRS");
     }
 
     #[test]
