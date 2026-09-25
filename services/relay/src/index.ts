@@ -1605,6 +1605,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     isTokenBlacklisted,
     isAgentRevoked,
     retireKeyConnections,
+    recordAuthEvent: authEvents.record,
   });
 
   // --- Service listings + market queries ---
