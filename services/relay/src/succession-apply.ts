@@ -167,6 +167,15 @@ export function departureFrom(db: DatabaseDriver, motebitId: string, key: string
     : { admissible: false, reason: "no_key_on_file" };
 }
 
+/**
+ * What a rotation retires beyond the stored rows: every open connection the
+ * retired key admitted (`closeSocketsAuthenticatedUnder` in `websocket.ts`,
+ * bound over the relay's `connections` in `index.ts`). A port, because this
+ * module holds no sockets — and a REQUIRED argument of `applySuccession`, so
+ * no door can apply a succession without saying what it closes (#767).
+ */
+export type RetireKeyConnections = (motebitId: string, retiredKey: string) => void;
+
 export interface SuccessionApplied {
   /** Whether the chain grew. False for a retry of the link already at its head. */
   applied: boolean;
@@ -186,13 +195,22 @@ export interface SuccessionApplied {
  *
  * The caller has verified the record's signatures and decided whether it is
  * admissible (freshness, key on file). This function only applies it.
+ *
+ * After the rows commit, the retired key's open connections are closed
+ * (`retireConnections`): rewriting the rows stops the key admitting a NEW
+ * socket, and without the close a socket it had already admitted kept
+ * syncing — and kept a roster liveness row beside a superseded line — until
+ * it happened to drop (#767). It runs on a retry too (idempotent: nothing
+ * the key admitted is left to close), and after the transaction, never
+ * inside it: a rollback must not have closed anything.
  */
 export function applySuccession(
   db: DatabaseDriver,
   motebitId: string,
   record: KeySuccessionRecord,
+  retireConnections: RetireKeyConnections,
 ): SuccessionApplied {
-  return db.transaction((): SuccessionApplied => {
+  const result = db.transaction((): SuccessionApplied => {
     const atHead = successionAtHead(db, motebitId, record);
 
     // The old key stops being a credential HERE. A device row's `public_key`
@@ -279,4 +297,9 @@ export function applySuccession(
     );
     return { applied: true };
   });
+  // A link from a key to itself (in any spelling) retires nothing.
+  if (record.old_public_key.toLowerCase() !== record.new_public_key.toLowerCase()) {
+    retireConnections(motebitId, record.old_public_key);
+  }
+  return result;
 }

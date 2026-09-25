@@ -17,7 +17,7 @@ import { scoreAttestation } from "@motebit/market";
 import type { ConnectedDevice } from "./index.js";
 import type { RelayIdentity } from "./federation.js";
 import { insertRevocationEvent, signDiscoverBody } from "./federation.js";
-import { applySuccession } from "./succession-apply.js";
+import { applySuccession, type RetireKeyConnections } from "./succession-apply.js";
 import type { TaskRouter } from "./task-routing.js";
 import { evaluateSettlementEligibility } from "./task-routing.js";
 import { REFERENCE_MIN_BONDED_SIGNAL_MICRO } from "./bond-store.js";
@@ -421,6 +421,12 @@ export interface AgentsDeps {
   ) => Promise<boolean>;
   isTokenBlacklisted: (jti: string, motebitId: string) => boolean;
   isAgentRevoked: (motebitId: string) => boolean;
+  /**
+   * Closes the connections a retired key admitted — the register door's
+   * succession path applies a rotation too (`applySuccession`, #767).
+   * Required: optional, it would be a rotation that silently ends nothing.
+   */
+  retireKeyConnections: RetireKeyConnections;
 }
 
 /** Subset of AgentsDeps the auth middleware needs. */
@@ -1250,7 +1256,12 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       // device row on the retired key — a rotation that ended nothing, and a
       // state a second route then had to finish (#702 relay half). One
       // writer for both doors makes that state unrepresentable.
-      const { applied } = applySuccession(moteDb.db, motebitId, succession);
+      const { applied } = applySuccession(
+        moteDb.db,
+        motebitId,
+        succession,
+        deps.retireKeyConnections,
+      );
 
       logger.info("agent.key.succession_on_register", {
         motebitId,
