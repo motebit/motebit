@@ -26,6 +26,7 @@ import {
   HOST_LIVENESS_RETENTION_MS,
   MAX_FOREIGN_ENTRIES_PER_MOTEBIT,
   MAX_OWN_ENROLLMENTS_PER_KEY,
+  MAX_OWN_RETIREMENTS_PER_KEY,
   observeHostConnection,
   readHostLiveness,
   sweepHostLiveness,
@@ -126,12 +127,30 @@ function rows(): number {
   ).n;
 }
 
-/** Fill a bucket directly: `n` enrolment rows signed (as far as the table says) by `signer`. */
-function fill(signer: string, n: number, kind: "enrollment" | "retirement" = "enrollment") {
+/**
+ * Fill a bucket directly: `n` rows signed (as far as the table says) by
+ * `signer`, held in `bucket` — as if presented by that key's holder
+ * ("own") or by some other caller ("foreign").
+ */
+function fill(
+  signer: string,
+  n: number,
+  bucket: "own" | "foreign",
+  kind: "enrollment" | "retirement" = "enrollment",
+) {
   const ins = relay.moteDb.db.prepare(
-    "INSERT INTO relay_host_roster_entries (motebit_id, entry_id, kind, signer_key, body_json, received_at) VALUES (?, ?, ?, ?, '{}', 1)",
+    "INSERT INTO relay_host_roster_entries (motebit_id, entry_id, kind, signer_key, bucket, body_json, received_at) VALUES (?, ?, ?, ?, ?, '{}', 1)",
   );
-  for (let i = 0; i < n; i++) ins.run(motebitId, `filler-${signer}-${kind}-${i}`, kind, signer);
+  for (let i = 0; i < n; i++)
+    ins.run(motebitId, `filler-${signer}-${bucket}-${kind}-${i}`, kind, signer, bucket);
+}
+
+function bucketOf(entryId: string): string | undefined {
+  return (
+    relay.moteDb.db
+      .prepare("SELECT bucket FROM relay_host_roster_entries WHERE motebit_id = ? AND entry_id = ?")
+      .get(motebitId, entryId) as { bucket: string } | undefined
+  )?.bucket;
 }
 
 beforeEach(async () => {
@@ -279,7 +298,7 @@ describe("caps are partitioned by signer key (review F2)", () => {
   it("a full own bucket refuses the next own enrolment with roster_full — and still takes a retirement", async () => {
     const vps = await enrol("vps");
     await present({ enrollments: [vps] });
-    fill(pub, MAX_OWN_ENROLLMENTS_PER_KEY - 1);
+    fill(pub, MAX_OWN_ENROLLMENTS_PER_KEY - 1, "own");
     const another = await present({ enrollments: [await enrol("one-too-many")] });
     expect(another.status).toBe(422);
     expect(another.json.refused).toEqual([{ kind: "enrollment", index: 0, reason: "roster_full" }]);
@@ -291,7 +310,7 @@ describe("caps are partitioned by signer key (review F2)", () => {
   it("an entry already held is a no-op BEFORE any cap — a full bucket never refuses a re-presentation", async () => {
     const vps = await enrol("vps");
     await present({ enrollments: [vps] });
-    fill(pub, MAX_OWN_ENROLLMENTS_PER_KEY);
+    fill(pub, MAX_OWN_ENROLLMENTS_PER_KEY, "own");
     const again = await present({ enrollments: [vps] });
     expect(again.status).toBe(200);
     expect((again.json.accepted as Array<{ status: string }>)[0]?.status).toBe("already_held");
@@ -306,7 +325,7 @@ describe("caps are partitioned by signer key (review F2)", () => {
     const kOld = await generateKeypair();
     addDevice("old-box", kOld);
     const kOldHex = bytesToHex(kOld.publicKey);
-    fill(kOldHex, MAX_OWN_ENROLLMENTS_PER_KEY - 1);
+    fill(kOldHex, MAX_OWN_ENROLLMENTS_PER_KEY - 1, "own");
     // One more of its own through the route — its own bucket is now full.
     const own = await presentAs("old-box", kOld, {
       enrollments: [await enrolUnder(kOld, "ghost-0")],
@@ -317,7 +336,7 @@ describe("caps are partitioned by signer key (review F2)", () => {
         .refused,
     ).toEqual([{ kind: "enrollment", index: 0, reason: "roster_full" }]);
     // The foreign bucket, filled with entries under junk keys.
-    fill("f".repeat(64), MAX_FOREIGN_ENTRIES_PER_MOTEBIT);
+    fill("f".repeat(64), MAX_FOREIGN_ENTRIES_PER_MOTEBIT, "foreign");
 
     // The current key's holder: an active line, and the retirement of the
     // stolen machine's line, both taken.
@@ -333,7 +352,7 @@ describe("caps are partitioned by signer key (review F2)", () => {
   it("the old-key caller cannot even carry the current key's entries into the full foreign bucket — but their holder can", async () => {
     const kOld = await generateKeypair();
     addDevice("old-box", kOld);
-    fill("f".repeat(64), MAX_FOREIGN_ENTRIES_PER_MOTEBIT);
+    fill("f".repeat(64), MAX_FOREIGN_ENTRIES_PER_MOTEBIT, "foreign");
     const line = await enrol("vps");
     const viaThief = await presentAs("old-box", kOld, { enrollments: [line] });
     expect(viaThief.json.refused).toEqual([
@@ -343,9 +362,44 @@ describe("caps are partitioned by signer key (review F2)", () => {
     expect(viaOwner.status).toBe(200);
   });
 
+  it("after a rotation, an old-key thief who FILLED its own bucket cannot stop the sovereign replicating a superseded line", async () => {
+    // With a comparative count ("rows not signed by the caller"), K_old's
+    // full OWN bucket read as a full FOREIGN bucket to every other caller,
+    // so the honest K_new holder could never replicate a superseded line.
+    // The bucket is stored at ingest; K_old's own rows are not foreign.
+    const kOld = await generateKeypair();
+    const kOldHex = bytesToHex(kOld.publicKey);
+    fill(kOldHex, MAX_OWN_ENROLLMENTS_PER_KEY, "own");
+    fill(kOldHex, MAX_OWN_RETIREMENTS_PER_KEY, "own", "retirement");
+    // The superseded line: the old VPS, enrolled under K_old before the
+    // rotation, carried by the sovereign (owner = K_new) from its cache.
+    const superseded = await enrolUnder(kOld, "old-vps");
+    const r = await present({ enrollments: [superseded] });
+    expect(r.status).toBe(200);
+    expect((r.json.accepted as Array<{ status: string }>)[0]?.status).toBe("stored");
+    expect(bucketOf(await hostEnrollmentId(superseded))).toBe("foreign");
+    // ...and it is refused only when the foreign bucket ITSELF is full.
+    fill("f".repeat(64), MAX_FOREIGN_ENTRIES_PER_MOTEBIT - 1, "foreign");
+    const next = await present({ enrollments: [await enrolUnder(kOld, "old-nas")] });
+    expect(next.json.refused).toEqual([{ kind: "enrollment", index: 0, reason: "roster_full" }]);
+  });
+
+  it("an entry held in one bucket stays held there when another caller re-presents it", async () => {
+    const kOld = await generateKeypair();
+    addDevice("old-box", kOld);
+    const line = await enrolUnder(kOld, "old-vps");
+    expect((await presentAs("old-box", kOld, { enrollments: [line] })).status).toBe(200);
+    const id = await hostEnrollmentId(line);
+    expect(bucketOf(id)).toBe("own");
+    const again = await present({ enrollments: [line] });
+    expect(again.status).toBe(200);
+    expect((again.json.accepted as Array<{ status: string }>)[0]?.status).toBe("already_held");
+    expect(bucketOf(id)).toBe("own");
+  });
+
   it("the foreign bucket is one shared bucket of 256", async () => {
     const other = await generateKeypair();
-    fill("e".repeat(64), MAX_FOREIGN_ENTRIES_PER_MOTEBIT - 1);
+    fill("e".repeat(64), MAX_FOREIGN_ENTRIES_PER_MOTEBIT - 1, "foreign");
     expect((await present({ enrollments: [await enrolUnder(other, "a")] })).status).toBe(200);
     const full = await present({ enrollments: [await enrolUnder(other, "b")] });
     expect(full.json.refused).toEqual([{ kind: "enrollment", index: 0, reason: "roster_full" }]);

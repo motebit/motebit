@@ -1945,8 +1945,10 @@ export const relayMigrations: Migration[] = [
       // HostEnrollment / HostRetirement artifacts, stored verbatim as
       // canonical JSON (signature included) in `body_json`, keyed by the
       // law's entry id (spec §4). INSERT OR IGNORE on the primary key IS
-      // the idempotent union. `signer_key` is the key the entry names; the
-      // per-signer-key caps count by it (proposal D2). `received_at` is
+      // the idempotent union. `signer_key` is the key the entry names.
+      // `bucket` is decided once at ingest — 'own' iff the entry is signed
+      // by the key the PRESENTING caller's token verified under, else
+      // 'foreign' — and the caps count by it (proposal D2). `received_at` is
       // this relay's own observation, never the artifact's self-asserted
       // time. Never pruned; no removal path (proposal D3).
       //
@@ -1962,12 +1964,13 @@ export const relayMigrations: Migration[] = [
           entry_id     TEXT NOT NULL,
           kind         TEXT NOT NULL CHECK (kind IN ('enrollment', 'retirement')),
           signer_key   TEXT NOT NULL,
+          bucket       TEXT NOT NULL CHECK (bucket IN ('own', 'foreign')),
           body_json    TEXT NOT NULL,
           received_at  INTEGER NOT NULL,
           PRIMARY KEY (motebit_id, entry_id)
         );
         CREATE INDEX IF NOT EXISTS idx_host_roster_signer
-          ON relay_host_roster_entries (motebit_id, signer_key, kind);
+          ON relay_host_roster_entries (motebit_id, bucket, signer_key, kind);
         CREATE TABLE IF NOT EXISTS relay_host_liveness (
           motebit_id    TEXT NOT NULL,
           device_id     TEXT NOT NULL,

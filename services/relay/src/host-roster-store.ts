@@ -55,8 +55,13 @@ export const MAX_OWN_ENROLLMENTS_PER_KEY = 512;
  */
 export const MAX_OWN_RETIREMENTS_PER_KEY = 2048;
 /**
- * The ONE shared foreign bucket: every entry whose signer key is not the
- * key the caller verified under. It exists to replicate the lines of other
+ * The ONE shared foreign bucket: every entry that was PRESENTED by a
+ * caller whose verified key is not the entry's signer key. The bucket is
+ * decided once, at ingest, and stored (`bucket`); it is never re-derived
+ * from whoever is asking now — a comparative count ("rows not signed by
+ * me") let a thief who filled an old key's OWN bucket saturate every other
+ * caller's foreign view, so after a rotation the sovereign could never
+ * replicate a superseded line. It exists to replicate the lines of other
  * epochs, and any caller can exhaust it (anyone can mint entries under a
  * fresh keypair) — the stated residual: superseded lines stop replicating
  * through this relay. An ACTIVE line is signed by the current key and so
@@ -70,6 +75,8 @@ export const HOST_LIVENESS_RETENTION_MS = HOST_LIVENESS_RETENTION_DAYS * 24 * 60
 export const HOSTS_UNATTENDED_WORK = "unattended_runtime";
 
 export type RosterEntryKind = "enrollment" | "retirement";
+/** Which cap an entry counts against — decided at ingest, stored, never re-derived. */
+export type RosterBucket = "own" | "foreign";
 export type RosterRefusalReason = "malformed" | "wrong_motebit" | "bad_signature" | "roster_full";
 
 export interface RosterIngestResult {
@@ -93,19 +100,20 @@ export async function ingestHostRoster(
 ): Promise<RosterIngestResult> {
   const result: RosterIngestResult = { accepted: [], refused: [] };
   const insert = db.prepare(
-    "INSERT OR IGNORE INTO relay_host_roster_entries (motebit_id, entry_id, kind, signer_key, body_json, received_at) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT OR IGNORE INTO relay_host_roster_entries (motebit_id, entry_id, kind, signer_key, bucket, body_json, received_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
   );
   const held = db.prepare(
     "SELECT 1 FROM relay_host_roster_entries WHERE motebit_id = ? AND entry_id = ?",
   );
-  // The per-signer-key cap counts. Counted at the moment of each write,
-  // not once up front: verification is awaited between entries, and
-  // concurrent presentations would all work from the same stale number.
+  // The per-bucket cap counts, over the bucket STORED at ingest. Counted at
+  // the moment of each write, not once up front: verification is awaited
+  // between entries, and concurrent presentations would all work from the
+  // same stale number.
   const ownCount = db.prepare(
-    "SELECT COUNT(*) AS n FROM relay_host_roster_entries WHERE motebit_id = ? AND signer_key = ? AND kind = ?",
+    "SELECT COUNT(*) AS n FROM relay_host_roster_entries WHERE motebit_id = ? AND bucket = 'own' AND signer_key = ? AND kind = ?",
   );
   const foreignCount = db.prepare(
-    "SELECT COUNT(*) AS n FROM relay_host_roster_entries WHERE motebit_id = ? AND signer_key != ?",
+    "SELECT COUNT(*) AS n FROM relay_host_roster_entries WHERE motebit_id = ? AND bucket = 'foreign'",
   );
   const caller = callerKey.toLowerCase();
 
@@ -137,16 +145,19 @@ export async function ingestHostRoster(
       const id = await idOf(artifact);
       // Already held is a no-op BEFORE any cap: a surface re-presenting
       // its whole cached set must not be refused for what is already here.
+      // It keeps the bucket it was first held in, whoever presents it now.
       if (held.get(motebitId, id) != null) {
         result.accepted.push({ kind, id, status: "already_held" });
         continue;
       }
       const signer = artifact.public_key;
+      // Own iff the entry is signed by the key the PRESENTING caller's
+      // token verified under — decided here, once, and stored.
+      const bucket: RosterBucket = signer === caller ? "own" : "foreign";
       const full =
-        signer === caller
+        bucket === "own"
           ? (ownCount.get(motebitId, signer, kind) as { n: number }).n >= ownCap
-          : (foreignCount.get(motebitId, caller) as { n: number }).n >=
-            MAX_FOREIGN_ENTRIES_PER_MOTEBIT;
+          : (foreignCount.get(motebitId) as { n: number }).n >= MAX_FOREIGN_ENTRIES_PER_MOTEBIT;
       if (full) {
         result.refused.push({ kind, index, reason: "roster_full" });
         continue;
@@ -154,7 +165,7 @@ export async function ingestHostRoster(
       // Canonical JSON, byte-stable: what is served back re-serialises to
       // the same signed body, so a consumer's verification does not depend
       // on anything this relay did to it.
-      const written = insert.run(motebitId, id, kind, signer, canonicalJson(artifact), now);
+      const written = insert.run(motebitId, id, kind, signer, bucket, canonicalJson(artifact), now);
       // Another presentation may have stored it between the look and the
       // write; say what actually happened.
       const stored = (written as { changes?: number } | undefined)?.changes !== 0;
