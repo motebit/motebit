@@ -1245,6 +1245,19 @@ export type RosterChainAncestry =
     kind: "recovery_limited";
     key: string;
     predecessors: string[];
+}
+/**
+* A verified predecessor of `chain[0]` is already on the chain: the
+* history below closes a cycle (a self-loop, or a rotation back to a
+* key below `held`). The walk stops BEFORE the repeat. Only holders of
+* keys below `held` can mint one — ancestry, which cannot change the
+* active set — so it is disclosed, never refused. `predecessors` lists
+* the repeated keys.
+*/
+| {
+    kind: "cycle_below";
+    key: string;
+    predecessors: string[];
 };
 
 // @public

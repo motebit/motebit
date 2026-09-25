@@ -74,7 +74,7 @@ Part C therefore has two halves, and the first is the one that can go wrong:
    - **Optional, for sovereign ids:** at a fork, the branch that roots to the id may be chosen. Stopping is enough.
    - **A recovery predecessor that cannot be checked** (no pinned guardian), alone or next to a verified normal predecessor: stop at `K` and disclose `recovery_limited(K)`.
 2. **The three refusals** (`ok: false`, no roster):
-   - **`duplicate_key`:** a key repeats on the resolved path (#775). This refusal is checked first.
+   - **`duplicate_key`:** a cycle through `held` (#775): `held` is its own verified ancestor. It needs a record with `old == held`, so only the holder of `held` or the guardian can cause it. This refusal is checked first. A repeat met strictly below `held` is ancestry, which old-key holders alone can mint, and is disclosed as `cycle_below(K)`, never refused.
    - **`fork_at_held`:** two verified predecessors of `held` itself, which only the holder of `held` can create.
    - **`held_key_superseded`:** a verified successor of `held` **on the resolved path**, meaning a record with `old == held` whose new key reaches the served or held head. This client's key was rotated away. A normal record of this kind carries `held`'s signature; a recovery record carries the guardian's (R11). The remedy text depends on the state (R15):
      - if a rotation write-ahead exists (a crash after the relay recorded the link, before the local commit): "finish the rotation: `motebit rotate` resumes it";
@@ -225,7 +225,7 @@ The decision is taken on the **current** verdict over **the cache ∪ a successf
 - **N13: ordering with #775.** C-0 lands after #775, or its tests pin the behaviour against it.
 - **C-0 build notes.** These record where the primitive (`resolveRosterKeyChain`) departs from this text:
   - **No `cached` key-list input.** The cache is passed as **signed records** among `records`. A key list carries no signatures, so the primitive could only trust it (storage acting as authority) or ignore it, which would silently give `[held]` after a relay loss. R26's persisted records are the cache.
-  - **`duplicate_key` also covers a cycle through `held`.** A rotation back to a non-genesis key (K0→K1→K2→K1, with K1 held) gives `held` two predecessors, and would otherwise read as `fork_at_held`. A reachability check over verified links runs first, and N10 does not stop it.
+  - **`duplicate_key` is a cycle through `held`, and only that.** A rotation back to a non-genesis key (K0→K1→K2→K1, with K1 held) gives `held` two predecessors, and would otherwise read as `fork_at_held`. A reachability check over verified links runs first, and N10 does not stop it. A cycle strictly below `held` (an old-key self-loop, or a 2-cycle minted below the head, with or without the linking record withheld) stops the walk before the repeat and is disclosed as a fifth ancestry kind, `cycle_below(K)`: by property 7 it cannot change the active set. Self-loops are never reported as a branch or as a genesis predecessor; they cannot be real rotations, and the relay refuses them.
   - **`malformed_input`** is refused for a malformed _call_ (empty id, non-canonical `held` or guardian, `records` not an array). No record content can produce it.
   - **A recovery record with no pinned guardian** is checked for its new key's signature only. It can count as a predecessor (giving `recovery_limited`), but never as a successor or a branch, because anyone can mint one to their own key.
 

@@ -276,14 +276,53 @@ describe("resolveRosterKeyChain — the three refusals", () => {
     expect(refused(await resolve(K[0]!, [l01, back], { motebitId: id }))).toBe("duplicate_key");
   });
 
-  it("a cycle below the held key is duplicate_key", async () => {
-    const r = await resolve(K[2]!, [
-      await rotate(K[0]!, K[1]!),
-      await rotate(K[1]!, K[0]!),
-      await rotate(K[1]!, K[2]!),
-    ]);
-    // K2 ← K1 ← K0 ← K1: K1 has one verified predecessor (K0), K0 one (K1).
-    expect(refused(r)).toBe("duplicate_key");
+  it("a cycle strictly BELOW the held key is disclosed as cycle_below, never refused", async () => {
+    // K2 ← K1 ← K0 ← K1: the holders of K0 and K1 (old keys) closed a
+    // cycle below the head. Ancestry — it cannot change the active set.
+    const l01 = await rotate(K[0]!, K[1]!);
+    const l10 = await rotate(K[1]!, K[0]!);
+    const l12 = await rotate(K[1]!, K[2]!);
+    const r = ok(await resolve(K[2]!, [l01, l10, l12]));
+    expect(r.chain).toEqual([hex[0], hex[1], hex[2]]); // stopped BEFORE the repeat
+    expect(r.links).toEqual([l01, l12]);
+    expect(r.ancestry).toEqual({ kind: "cycle_below", key: hex[0], predecessors: [hex[1]] });
+  });
+
+  it("an old-key self-loop below held (the relay refuses these) is cycle_below, never refused", async () => {
+    const loop = await rotate(K[1]!, K[1]!);
+    const r = ok(
+      await resolve(K[2]!, [await rotate(K[0]!, K[1]!), loop, await rotate(K[1]!, K[2]!)]),
+    );
+    expect(r.chain).toEqual([hex[1], hex[2]]);
+    expect(r.ancestry).toEqual({ kind: "cycle_below", key: hex[1], predecessors: [hex[1]] });
+    // Nor is it a branch "at K1 to K1".
+    expect(r.branches).toEqual([]);
+  });
+
+  it("a 2-cycle minted by an old key with the linking record withheld is cycle_below (sovereign id)", async () => {
+    // Sovereign id rooted at K0; K0 → K1 withheld; the holder of K1 mints K1 → K5 and K5 → K1.
+    const id = await deriveSovereignMotebitId(hex[0]!);
+    const r = ok(
+      await resolve(
+        K[2]!,
+        [await rotate(K[1]!, K[5]!), await rotate(K[5]!, K[1]!), await rotate(K[1]!, K[2]!)],
+        { motebitId: id },
+      ),
+    );
+    expect(r.chain).toEqual([hex[5], hex[1], hex[2]]);
+    expect(r.ancestry).toEqual({ kind: "cycle_below", key: hex[5], predecessors: [hex[1]] });
+    expect(r.sovereign_id).toBe(true);
+  });
+
+  it("P1 — a self-loop at the rooted genesis is neither a predecessor nor a branch", async () => {
+    const id = await deriveSovereignMotebitId(hex[0]!);
+    const r = ok(
+      await resolve(K[1]!, [await rotate(K[0]!, K[0]!), await rotate(K[0]!, K[1]!)], {
+        motebitId: id,
+      }),
+    );
+    expect(r.ancestry).toEqual({ kind: "rooted", key: hex[0], predecessors: [] });
+    expect(r.branches).toEqual([]);
   });
 
   it("fork_at_held — two verified predecessors of the held key", async () => {

@@ -17,10 +17,12 @@
  * **Exactly three refusals**, each one only a narrow set of parties can
  * cause:
  *
- * - `duplicate_key` — a key repeats on the resolved path (#775 accepts a
- *   rotation back to an earlier key). The law refuses such a chain
- *   (`verifyHostRoster` → `duplicate_key`), so there is no chain to hand
- *   it. Checked first.
+ * - `duplicate_key` — a cycle through `held`: `held` is its own verified
+ *   ancestor (#775 accepts a rotation back to an earlier key). It needs a
+ *   record with `old == held`, so only the holder of `held` or the
+ *   guardian makes one. Checked first. A repeat met strictly BELOW `held`
+ *   is ancestry, which an old-key holder alone can mint, so it is the
+ *   disclosure `cycle_below`, never a refusal.
  * - `fork_at_held` — two verified predecessors of `held`. Each carries
  *   `held`'s own new-key signature, so only the holder of `held` makes one.
  * - `held_key_superseded` — a verified record with `old == held`: normal
@@ -94,7 +96,16 @@ export type RosterChainAncestry =
    * check (no pinned guardian key), alone or beside a verified
    * predecessor. `predecessors` lists the old keys of those records.
    */
-  | { kind: "recovery_limited"; key: string; predecessors: string[] };
+  | { kind: "recovery_limited"; key: string; predecessors: string[] }
+  /**
+   * A verified predecessor of `chain[0]` is already on the chain: the
+   * history below closes a cycle (a self-loop, or a rotation back to a
+   * key below `held`). The walk stops BEFORE the repeat. Only holders of
+   * keys below `held` can mint one — ancestry, which cannot change the
+   * active set — so it is disclosed, never refused. `predecessors` lists
+   * the repeated keys.
+   */
+  | { kind: "cycle_below"; key: string; predecessors: string[] };
 
 /**
  * A verified successor of a key on the path that is NOT the next key on
@@ -143,9 +154,9 @@ export type RosterKeyChainRefusal =
   | {
       ok: false;
       reason: "duplicate_key";
-      /** The key that repeats. */
+      /** Always `held`: the key that is its own ancestor. */
       key: string;
-      /** The verified records of the walk up to the repeat. */
+      /** The verified cycle `held` → … → `held`, oldest → newest. */
       evidence: KeySuccessionRecord[];
       detail: string;
     }
@@ -228,7 +239,8 @@ function normalize(value: unknown): Candidate | null {
  * fork at `held`). Then, at each key `K`:
  * 1. `K` binds to a sovereign-shaped id → stop, `rooted` (N10: its
  *    predecessors are disclosed, never walked).
- * 2. A verified predecessor already on the path → `duplicate_key`.
+ * 2. A verified predecessor already on the path (a cycle strictly below
+ *    `held`) → stop before it, `cycle_below(K)`.
  * 3. `K ≠ held` with two or more verified predecessors → stop,
  *    `forked_below(K)`. At `held` → refusal `fork_at_held`.
  * 4. An uncheckable recovery predecessor → stop, `recovery_limited(K)`.
@@ -368,7 +380,7 @@ export async function resolveRosterKeyChain(input: {
     reason: "duplicate_key",
     key,
     evidence,
-    detail: `key ${key} repeats on the chain; a chain with a repeated key has no epoch order`,
+    detail: `the held key ${key} is its own ancestor (a cycle through it); a chain with a repeated key has no epoch order`,
   });
 
   // ── duplicate_key through the held key, checked FIRST ─────────────
@@ -423,19 +435,22 @@ export async function resolveRosterKeyChain(input: {
 
     // N10 — the genesis key ends the walk, at `held` too.
     if (sovereignId && (await verifySovereignBinding(motebitId, key))) {
-      ancestry = { kind: "rooted", key, predecessors: sortedPreds };
+      // A self-loop is not a predecessor: it cannot be a real rotation.
+      ancestry = { kind: "rooted", key, predecessors: sortedPreds.filter((k) => k !== key) };
       break;
     }
 
     const verified = sortedPreds.filter((k) => preds.get(k)!.kind !== "recovery_unchecked");
     const unchecked = sortedPreds.filter((k) => preds.get(k)!.kind === "recovery_unchecked");
 
-    // A verified predecessor already on the path closes a cycle: the key
-    // repeats. Checked before a fork at the same key, which it would
-    // otherwise read as.
-    const repeat = verified.find((k) => onPath.has(k));
-    if (repeat !== undefined) {
-      return duplicate(repeat, [preds.get(repeat)!.record, ...pathLinks]);
+    // A verified predecessor already on the path closes a cycle. The
+    // pre-walk check has ruled out a cycle through `held`, so this one is
+    // strictly below it: stop before the repeat and disclose. Checked
+    // before a fork at the same key, which it would otherwise read as.
+    const repeats = verified.filter((k) => onPath.has(k));
+    if (repeats.length > 0) {
+      ancestry = { kind: "cycle_below", key, predecessors: repeats };
+      break;
     }
 
     if (verified.length >= 2) {
@@ -494,7 +509,8 @@ export async function resolveRosterKeyChain(input: {
       const l = succ.get(to)!;
       // An uncheckable recovery SUCCESSOR carries only its new key's
       // signature — anyone can mint one to a key of their own. Ignored.
-      if (to === next || l.kind === "recovery_unchecked") continue;
+      // A self-loop is never a sibling: it cannot be a real rotation.
+      if (to === next || to === at || l.kind === "recovery_unchecked") continue;
       branches.push({ at, to, guardian_verified: l.kind === "recovery", record: l.record });
     }
   }

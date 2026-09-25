@@ -42,7 +42,7 @@ import type { HostEnrollment, HostRetirement } from "@motebit/protocol";
 const LEGACY_ID = "019d903f-13de-75a4-8341-58319e0a2f16";
 const REFUSALS = new Set(["duplicate_key", "fork_at_held", "held_key_superseded"]);
 
-let K: KeyPair[]; // K0..K3 the true chain; K4..K9 the keys the hazards bring in
+let K: KeyPair[]; // K0..K3 the true chain; K4..K11 the keys the hazards bring in
 let hex: string[];
 let G: KeyPair;
 let sovereignId: string;
@@ -59,7 +59,7 @@ const recover = (g: KeyPair, a: KeyPair, b: KeyPair) =>
   signGuardianRecoverySuccession(g.privateKey, b.privateKey, a.publicKey, b.publicKey);
 
 beforeAll(async () => {
-  K = await Promise.all([0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(() => generateKeypair()));
+  K = await Promise.all([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(() => generateKeypair()));
   hex = K.map((k) => bytesToHex(k.publicKey));
   G = await generateKeypair();
   const S = await generateKeypair();
@@ -68,7 +68,7 @@ beforeAll(async () => {
 
   truth = [await rotate(K[0]!, K[1]!), await rotate(K[1]!, K[2]!), await rotate(K[2]!, K[3]!)];
   // Each hazard brings in its OWN key, so the pool is acyclic except
-  // where a cycle is the hazard (#775).
+  // where a cycle is the hazard (#775, and the cycles below the head).
   hazards = [
     await rotate(K[4]!, K[1]!), // ancestor fork at K1
     await rotate(K[1]!, K[6]!), // normal sibling branch at K1
@@ -77,6 +77,12 @@ beforeAll(async () => {
     await rotate(K[8]!, K[0]!), // a predecessor of the genesis (N10)
     await rotate(K[3]!, K[1]!), // rotation back to an earlier key (#775)
     await rotate(K[3]!, K[9]!), // rotates the head away
+    // Cycles BELOW the head, each minted by old keys alone (W1):
+    await rotate(K[1]!, K[1]!), // a self-loop (the relay refuses these; a holder of K1 can still sign one)
+    await rotate(K[0]!, K[10]!), // with the next: a 2-cycle by the legacy-genesis holder
+    await rotate(K[10]!, K[0]!),
+    await rotate(K[1]!, K[11]!), // with the next: a 2-cycle at a non-genesis key (bites when K0→K1 is withheld)
+    await rotate(K[11]!, K[1]!),
   ];
   const base = truth[1]!;
   junk = [
@@ -137,7 +143,7 @@ const SLOW = 120_000;
 
 const pool = () => [...truth, ...hazards];
 const subset = () => fc.subarray(pool(), { maxLength: 10 });
-const heldIndex = () => fc.integer({ min: 0, max: 9 });
+const heldIndex = () => fc.integer({ min: 0, max: 11 });
 const guardianOpt = () => fc.constantFrom<"G" | "none">("G", "none");
 const idOpt = () => fc.constantFrom<"legacy" | "sovereign">("legacy", "sovereign");
 
@@ -163,7 +169,7 @@ function shuffleWith<T>(xs: T[], seed: fc.Stream<number>): T[] {
 
 describe("resolveRosterKeyChain — properties", () => {
   it("the pool reaches every outcome (so the properties below quantify over all of them)", async () => {
-    const [f41, s16, g25, r72, p80, back31, away39] = hazards;
+    const [f41, s16, g25, r72, p80, back31, away39, loop11, c0a, c0b, c1a, c1b] = hazards;
     const outcome = (r: RosterKeyChainResult) =>
       r.ok ? `${r.ancestry.kind}${r.suppress_universal_claims ? "+suppressed" : ""}` : r.reason;
     const cases: Array<[unknown[], number, "G" | "none", "legacy" | "sovereign", string]> = [
@@ -177,6 +183,9 @@ describe("resolveRosterKeyChain — properties", () => {
       [[...truth, back31!], 3, "none", "legacy", "duplicate_key"],
       [[truth[1]!, r72!], 2, "G", "legacy", "fork_at_held"],
       [[...truth, away39!], 3, "none", "legacy", "held_key_superseded"],
+      [[...truth, loop11!], 3, "none", "legacy", "cycle_below"],
+      [[...truth, c0a!, c0b!], 3, "none", "legacy", "cycle_below"],
+      [[truth[1]!, truth[2]!, c1a!, c1b!], 3, "none", "sovereign", "cycle_below"],
     ];
     for (const [recs, held, g, id, want] of cases) {
       expect(outcome(await run(recs, held, g, id))).toBe(want);
