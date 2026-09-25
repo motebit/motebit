@@ -77,15 +77,31 @@ export async function handleMigrateKeyring(config: CliConfig): Promise<void> {
     // is not "no keyring" — say where it went. (No shipped desktop uses the
     // OS keychain; a keychain-index.json is left only by a pre-release
     // desktop build. This command never recreates a plaintext keyring.)
-    const migrated = migratedKeyringEvidence();
-    if (migrated.length > 0) {
+    const evidence = migratedKeyringEvidence();
+    const retired = evidence.filter((p) =>
+      path.basename(p).startsWith("dev-keyring.json.migrated-"),
+    );
+    if (retired.length > 0) {
       console.error(
-        `Error: ${devKeyringPath} is gone because a previous \`motebit migrate-keyring\` run retired it (${migrated.join(", ")}).`,
+        `Error: ${devKeyringPath} is gone because a previous \`motebit migrate-keyring\` run retired it (${retired.join(", ")}).`,
       );
       console.error(
         "  A `.migrated-*` copy is that run's retired plaintext keyring, kept owner-only; this command\n" +
           "  does not read it back. Recover the CLI identity with `motebit restore` (recovery seed), or\n" +
           "  move that copy back to dev-keyring.json yourself and run this command again.",
+      );
+      process.exit(1);
+    }
+    if (evidence.length > 0) {
+      // Only keychain-index.json: a pre-release desktop build that tried the
+      // OS keychain wrote it. No run of this command retired anything.
+      console.error(
+        `Error: no plaintext keyring at ${devKeyringPath}; ${evidence.join(", ")} is present.`,
+      );
+      console.error(
+        "  That index was left by a pre-release desktop build that tried the OS keychain (no shipped\n" +
+          "  desktop uses one); the names it lists were stored there, which this command does not read.\n" +
+          "  Recover the CLI identity with `motebit restore` (recovery seed).",
       );
       process.exit(1);
     }

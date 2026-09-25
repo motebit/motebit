@@ -12,9 +12,13 @@
 //!  * Lost updates: every desktop writer goes through `update_config_at`, a
 //!    field-level merge done in one Rust call (no JS read→write window), and
 //!    the rename happens only if the file still holds the bytes the merge
-//!    was computed from (compare-and-swap, retried). The CLI takes no lock,
-//!    so a CLI write landing between that final comparison and the rename
-//!    (microseconds) is the residual window — named, not hidden.
+//!    was computed from (compare-and-swap, retried). The CLI and
+//!    create-motebit take `config.json.lock`; the DESKTOP does not (it
+//!    serializes its own writers with an in-process mutex plus this byte
+//!    compare-and-swap). So a CLI write landing between the desktop's final
+//!    comparison and its rename (microseconds) is reverted — the residual
+//!    window, named, not hidden; adopting the shared lock is a #764
+//!    follow-up.
 
 use crate::durable_file::{preserve_aside, read_strict, write_file_atomic_owner_only, Keep};
 use serde_json::{Map, Value};

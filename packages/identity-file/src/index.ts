@@ -330,8 +330,8 @@ export async function synthesizeSeedRestoreMetadata(
 //
 // The type lives in this package alongside `ImportIdentityResult` so
 // every surface consumes one contract. The implementation is per-surface
-// because each surface owns its own keystore (web IDB, desktop OS keyring
-// via Tauri IPC, mobile Expo SecureStore) and its own identity-config
+// because each surface owns its own keystore (web IDB, desktop
+// dev-keyring.json via Tauri IPC, mobile Expo SecureStore) and its own identity-config
 // store (web localStorage, desktop Tauri config file, mobile SecureStore).
 
 export interface RestoreIdentityRequest {

@@ -135,7 +135,7 @@ export class IdentityManager {
         // binding fields change; this refuses the change outright.)
         const current = JSON.parse(await invoke<string>("read_config")) as Record<string, unknown>;
         if (holdsCliKey(current) && current.motebit_id !== state.motebit_id) {
-          throw new Error(cliIdentityRefusal(current));
+          throw new Error(cliIdentityRefusal(current, await retiredKeyrings(invoke)));
         }
         await updateConfig(invoke, { ...state });
       },
@@ -160,7 +160,9 @@ export class IdentityManager {
             string,
             unknown
           >;
-          if (holdsCliKey(current)) throw new Error(cliIdentityRefusal(current));
+          if (holdsCliKey(current)) {
+            throw new Error(cliIdentityRefusal(current, await retiredKeyrings(invoke)));
+          }
         }
         return present;
       },
@@ -406,7 +408,7 @@ export class IdentityManager {
   }
 
   // Side-effecting restore: materialize an imported identity onto this
-  // device. Writes the new private key to the OS keyring, motebit_id +
+  // device. Writes the new private key to the key store, motebit_id +
   // device_id + device_public_key to the Tauri config file, and the
   // original signed motebit.md content to the `_identity_file` config
   // slot so bootstrap reads governance from its cryptographic anchor on
@@ -818,14 +820,32 @@ function holdsCliKey(config: Record<string, unknown>): boolean {
   return present(config.cli_encrypted_key) || present(config.cli_private_key);
 }
 
-function cliIdentityRefusal(config: Record<string, unknown>): string {
+function cliIdentityRefusal(config: Record<string, unknown>, retired: string[]): string {
   const id = typeof config.motebit_id === "string" ? config.motebit_id : "(no id)";
+  // A listing, never an inference: `motebit migrate-keyring` moves this
+  // desktop's whole dev-keyring.json aside to these names.
+  const moved =
+    retired.length > 0
+      ? `This desktop's own key may be in ${retired.join(", ")} (a keyring \`motebit migrate-keyring\` moved aside); ` +
+        `moving that file back to ~/.motebit/dev-keyring.json recovers it. `
+      : "";
   return (
     `~/.motebit/config.json holds the motebit CLI's identity ${id} and its only key copy, ` +
     `and this desktop has no key for it. The desktop will not mint a new identity over it. ` +
+    moved +
     `To use that identity here, restore it from its recovery seed (Settings → Identity → Restore). ` +
     `Nothing was changed.`
   );
+}
+
+/** `dev-keyring.json.migrated-*` paths, for the refusal message; [] if the listing fails. */
+async function retiredKeyrings(invoke: InvokeFn): Promise<string[]> {
+  try {
+    const got = await invoke<unknown>("keyring_retired_copies");
+    return Array.isArray(got) ? got.filter((p): p is string => typeof p === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 /**

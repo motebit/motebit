@@ -140,12 +140,16 @@ fn scratch_dir(tag: &str) -> std::path::PathBuf {
     dir
 }
 
-/// #765's decisive trigger, end to end: after a real `motebit migrate-keyring`
-/// the directory holds ONLY the CLI's retired plaintext keyring,
-/// `dev-keyring.json.migrated-<t>` = {"device_private_key": …}. On the
-/// file-only app store the bootstrap probe reads the key as absent (so
-/// bootstrap does not refuse on keychain grounds), and the restore IPC
-/// sequence (applyIdentitySwitch) completes — as on main.
+/// The STORE half of #765's trigger: a `~/.motebit` whose only keyring file
+/// is the CLI's retired plaintext keyring, `dev-keyring.json.migrated-<t>`
+/// = {"device_private_key": …}. The file-only store never refuses on
+/// keychain grounds: the probe reads the key as absent, and the restore IPC
+/// sequence (applyIdentitySwitch) completes.
+///
+/// Not the whole user-visible outcome: a real `migrate-keyring` also writes
+/// `cli_encrypted_key` into config.json, so the desktop's TS bootstrap then
+/// stops at `cliIdentityRefusal` (intended — main silently re-minted over
+/// the CLI's key). That half is `identity-after-migrate-keyring.test.ts`.
 #[test]
 fn after_cli_migrate_keyring_the_file_only_store_bootstraps_and_restores() {
     let dir = scratch_dir("after-migrate-keyring");

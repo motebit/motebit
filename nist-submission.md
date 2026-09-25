@@ -139,7 +139,7 @@ This is analogous to mutual TLS but at the agent identity layer rather than the 
 **How do we handle key management for agents?**
 
 - **Generation:** Ed25519 keypair generated on first launch via the platform's cryptographic RNG
-- **Storage:** Private keys stored in the OS secure keychain (macOS Keychain via Tauri, expo-secure-store on mobile) or encrypted at rest with PBKDF2 (600,000 iterations for user-provided passphrases, 100,000 for operator PIN where rate-limiting is the primary defense). Private keys never appear in configuration files or identity files.
+- **Storage:** Private keys stored in the platform's key store (iOS Keychain / Android Keystore via expo-secure-store on mobile; on desktop an owner-only plaintext file, `~/.motebit/dev-keyring.json`, with OS-keychain storage a pending arc) or encrypted at rest with PBKDF2 (600,000 iterations for user-provided passphrases, 100,000 for operator PIN where rate-limiting is the primary defense). Private keys never appear in configuration files or identity files.
 - **Per-device keys:** Each registered device has its own Ed25519 keypair. Device compromise does not compromise the agent identity — only the device key needs rotation.
 - **Rotation:** Key rotation uses signed succession records (identity specification §3.8). The old keypair signs a tombstone declaring the new keypair as successor — both keys sign the canonical payload, providing non-repudiation and acknowledgment. The `motebit_id` persists across rotations. Succession chains are verifiable end-to-end: any party can prove identity continuity from genesis key to current key without trusting any intermediary. No centralized revocation authority.
 - **Revocation:** No centralized revocation authority required by default. This is a deliberate tradeoff. **When rotation is possible** (the owner has access to the old key): the succession record cryptographically transfers identity continuity to the new key. The old key is tombstoned. Relays re-register the new public key. **When rotation is not possible** (the old key is lost or compromised without access) and no guardian is configured: the identity is abandoned. A new identity is generated. Trust records, credentials, and memory from the old identity do not transfer — the new identity starts from zero. **Compromise window:** between key compromise and detection, an attacker holding the private key can sign valid receipts and delegations. Succession tombstones the old key, but receipts signed during the compromise window remain cryptographically valid. Relying parties should evaluate receipt recency relative to the succession timestamp when trusting receipts from rotated identities. Guardian-recovered identities carry a `recovery: true` flag that signals this risk to verifiers.
@@ -157,7 +157,7 @@ This is analogous to mutual TLS but at the agent identity layer rather than the 
 **Relevant artifacts:**
 
 - Signed token issuance/verification: `packages/crypto/`
-- Key storage: OS keyring integration in `apps/desktop/`, `apps/mobile/`
+- Key storage: the desktop key store in `apps/desktop/src-tauri/src/key_store.rs` (file-only today), SecureStore in `apps/mobile/`
 - PBKDF2 key derivation: `packages/crypto/src/index.ts`
 
 ---

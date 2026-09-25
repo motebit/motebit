@@ -83,8 +83,8 @@ export function desktopWriteAhead(
 ): KeyRotationPorts["writeAhead"] & { setAside(): Promise<void> } {
   return {
     load: async () => {
-      // A keyring read that throws (prompt cancelled, keychain locked, a
-      // damaged fallback file — Rust's keyring_get no longer folds those
+      // A key-store read that throws (a damaged or unreadable
+      // dev-keyring.json — Rust's keyring_get no longer folds those
       // into "none") is not an empty slot; it is one this run cannot see into.
       let raw: string | null;
       try {

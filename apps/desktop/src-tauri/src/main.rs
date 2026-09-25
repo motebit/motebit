@@ -472,6 +472,14 @@ fn keyring_set_aside(key: String) -> Result<(), String> {
     key_store()?.set_aside(&key)
 }
 
+/// Full paths of the CLI's retired plaintext keyrings
+/// (`dev-keyring.json.migrated-*`) in `~/.motebit` — names only, never
+/// contents. A listing for a refusal message; no inference is drawn.
+#[tauri::command]
+fn keyring_retired_copies() -> Result<Vec<String>, String> {
+    Ok(key_store::retired_keyring_copies(&durable_file::motebit_dir()?))
+}
+
 // === MCP Discovery ===
 
 /// Read MCP config files from known, allowlisted locations only.
@@ -1057,6 +1065,7 @@ fn main() {
             keyring_set,
             keyring_delete,
             keyring_set_aside,
+            keyring_retired_copies,
             update_config,
             discover_mcp_configs,
             read_file_tool,

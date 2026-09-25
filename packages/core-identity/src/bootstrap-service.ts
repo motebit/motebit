@@ -9,7 +9,7 @@
  * Every other surface in the monorepo bootstraps its identity through
  * `bootstrapIdentity()` with a surface-specific storage pair:
  *
- *   - desktop   → Tauri JSON config + OS keyring
+ *   - desktop   → Tauri JSON config + ~/.motebit/dev-keyring.json
  *   - mobile    → SecureStore
  *   - web/spatial → IndexedDB + EncryptedKeyStore
  *   - cli       → ~/.motebit/config.json + encrypted file

@@ -53,6 +53,23 @@ pub const KEY_MATERIAL: [&str; 3] = [
     "pending_identity_switch",
 ];
 
+/// The CLI's retired plaintext keyrings in `dir` — `dev-keyring.json.migrated-<t>`,
+/// written by `motebit migrate-keyring` — as sorted full paths. Names only;
+/// the contents are never read here. A listing for a message (where this
+/// desktop's key may be), never evidence about a keychain.
+pub fn retired_keyring_copies(dir: &std::path::Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().starts_with("dev-keyring.json.migrated-"))
+        .map(|e| e.path().display().to_string())
+        .collect();
+    out.sort();
+    out
+}
+
 pub fn is_key_material(name: &str) -> bool {
     KEY_MATERIAL.contains(&name)
 }
@@ -369,6 +386,7 @@ impl<S: SecretStore> KeyStore<S> {
         }
     }
 
+    /// Only caller: `note_in_keychain`, which is keychain-only.
     fn write_index(&self, keys: &BTreeSet<String>) -> Result<(), String> {
         crate::durable_file::mkdir_owner_only(&self.dir)?;
         let json = serde_json::json!({ "keys": keys }).to_string();
@@ -376,8 +394,13 @@ impl<S: SecretStore> KeyStore<S> {
     }
 
     /// Best-effort cache maintenance; a failure is logged, never fatal (the
-    /// keychain, not the index, decides existence).
+    /// keychain, not the index, decides existence). With no keychain there
+    /// is nothing to index: the file-only build never reads or writes
+    /// `keychain-index.json` (a file a pre-release build may have left).
     fn note_in_keychain(&self, name: &str, present: bool) {
+        if !S::HAS_KEYCHAIN {
+            return;
+        }
         let mut index = self.index_hint();
         let changed = if present {
             index.insert(name.to_string())
@@ -1563,6 +1586,54 @@ pub mod tests {
             std::fs::read_to_string(dir.join("dev-keyring.json.migrated-T")).unwrap(),
             "{\"device_private_key\":\"aa\"}"
         );
+    }
+
+    /// The refusal message's listing: only the CLI's `migrate-keyring`
+    /// copies, sorted, as paths; the desktop's own names are not listed.
+    #[test]
+    fn retired_keyring_copies_lists_only_the_cli_copies() {
+        let dir = scratch("retired-list");
+        for f in [
+            "dev-keyring.json.migrated-2",
+            "dev-keyring.json.migrated-1",
+            "dev-keyring.json.keychain-migrated-1",
+            "dev-keyring.json",
+            "keychain-index.json",
+        ] {
+            std::fs::write(dir.join(f), "{}").unwrap();
+        }
+        let got = retired_keyring_copies(&dir);
+        let want: Vec<String> = ["dev-keyring.json.migrated-1", "dev-keyring.json.migrated-2"]
+            .iter()
+            .map(|f| dir.join(f).display().to_string())
+            .collect();
+        assert_eq!(got, want);
+        assert!(retired_keyring_copies(&dir.join("absent")).is_empty());
+    }
+
+    /// #766 F3: the file-only build never writes `keychain-index.json`. A
+    /// pre-release build's index is left byte-identical through every file
+    /// write, delete and set-aside (the index maintenance is keychain-only).
+    #[test]
+    fn file_only_never_rewrites_a_keychain_index() {
+        let dir = scratch("app-index-untouched");
+        let index = "{\"keys\":[\"device_private_key\",\"pending_rotation\"]}";
+        std::fs::write(dir.join("keychain-index.json"), index).unwrap();
+        let s = app_store(&dir);
+        s.set("pending_rotation", "P").unwrap();
+        s.set_aside("pending_rotation").unwrap();
+        s.set("device_private_key", "K").unwrap();
+        s.set("device_private_key", "K2").unwrap();
+        s.set("anthropic_api_key", "sk").unwrap();
+        s.delete("anthropic_api_key").unwrap();
+        s.delete("device_private_key").unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("keychain-index.json")).unwrap(), index);
+        // And a fresh machine never gains one.
+        let fresh = scratch("app-no-index");
+        let s = app_store(&fresh);
+        s.set("pending_rotation", "P").unwrap();
+        s.set_aside("pending_rotation").unwrap();
+        assert!(!fresh.join("keychain-index.json").exists());
     }
 
     /// The arc's brake (a real keychain, here unavailable) reads only the

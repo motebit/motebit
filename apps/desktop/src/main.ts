@@ -1120,7 +1120,7 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
         const isTauriMissing =
           /__TAURI|tauri/i.test(msg) && /undefined|not (defined|available)/i.test(msg);
         statusText.textContent = isTauriMissing
-          ? "Sync needs the Tauri desktop app — relay auth uses the device key in the OS keyring."
+          ? "Sync needs the Tauri desktop app — relay auth uses the device key it keeps in ~/.motebit/dev-keyring.json."
           : `Failed: ${msg}`;
         statusText.classList.add("error");
       } finally {

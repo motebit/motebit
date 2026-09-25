@@ -359,6 +359,31 @@ describe("handleMigrateKeyring", () => {
     }
   });
 
+  it("only a pre-release desktop's keychain-index.json (no retired copy): says so, never claims a previous run", async () => {
+    const { publicKey } = await generateKeypair();
+    loadFullConfigMock.mockReturnValue({
+      motebit_id: "m-1",
+      device_id: "d-1",
+      device_public_key: toHex(publicKey),
+    });
+    fs.writeFileSync(path.join(tmpDir, "keychain-index.json"), '{"keys":["device_private_key"]}');
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("PROCESS_EXIT_CALLED");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(handleMigrateKeyring(baseCliConfig)).rejects.toThrow("PROCESS_EXIT_CALLED");
+      const said = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(said).toMatch(/keychain-index\.json is present/);
+      expect(said).toMatch(/pre-release desktop build/);
+      expect(said).not.toMatch(/previous `motebit migrate-keyring` run/);
+      expect(fs.existsSync(path.join(tmpDir, "dev-keyring.json"))).toBe(false);
+    } finally {
+      exitSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
   it("derives the same public key the helper would (sanity check on encryption layer)", async () => {
     // Verify getPublicKeyBySuite (the @motebit/encryption export) matches
     // what we'd get by re-encrypting + re-decrypting in a round trip. This

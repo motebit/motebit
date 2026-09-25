@@ -1074,6 +1074,68 @@ describe("bootstrap key probe (C1: R1)", () => {
     expect(cfg.motebit_id).toBe("m-cli");
   });
 
+  it("after a real `motebit migrate-keyring` (#766 F1): refuses, lists the moved-aside keyring, and restore still works", async () => {
+    // The whole outcome of the #765 trigger: migrate-keyring wrote
+    // cli_encrypted_key into config.json and moved this desktop's
+    // dev-keyring.json aside, so the desktop holds no key. Bootstrap stops
+    // at the CLI refusal (main re-minted over the CLI's key instead) and
+    // names where this desktop's own key went — a listing, no inference.
+    const moved = "/home/u/.motebit/dev-keyring.json.migrated-2026-09-25T00-00-00-000Z";
+    const base = makeInvoke({
+      motebit_id: "m-cli",
+      device_id: "d-cli",
+      device_public_key: "c".repeat(64),
+      cli_encrypted_key: { ciphertext: "KEY" },
+    });
+    const invoke = vi.fn(async (cmd: string, args?: Record<string, unknown>) =>
+      cmd === "keyring_retired_copies" ? [moved] : base(cmd, args),
+    );
+    const { keyStore, configStore } = await storesFor(invoke);
+    const refusal = keyStore.hasPrivateKey();
+    await expect(refusal).rejects.toThrow(/motebit CLI's identity m-cli/);
+    await expect(refusal).rejects.toThrow(moved);
+    await expect(refusal).rejects.toThrow(
+      /moving that file back to ~\/\.motebit\/dev-keyring\.json/,
+    );
+    await expect(refusal).rejects.not.toThrow(/keychain/i);
+    await expect(
+      configStore.write({ motebit_id: "m-new", device_id: "d", device_public_key: "d".repeat(64) }),
+    ).rejects.toThrow(moved);
+
+    // Restore (Settings → Identity → Restore) still succeeds on this machine.
+    const r = await new IdentityManager().restoreIdentity(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      invoke as any,
+      {
+        privateKeyHex: "KEY-B",
+        metadata: {
+          motebitId: "m-B",
+          publicKey: "b".repeat(64),
+          ownerId: "o",
+          bornAt: "not-a-date",
+          devices: [],
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any,
+        preserveMemories: false,
+      },
+    );
+    expect(r.ok).toBe(true);
+    const cfg = JSON.parse((await invoke("read_config")) as string) as Record<string, unknown>;
+    expect(cfg.motebit_id).toBe("m-B");
+    expect(cfg.__keyring_device_private_key).toBe("KEY-B");
+    expect(cfg.cli_encrypted_key).toEqual({ ciphertext: "KEY" });
+  });
+
+  it("the CLI refusal lists nothing when no keyring was moved aside (or the listing fails)", async () => {
+    const invoke = makeInvoke({
+      motebit_id: "m-cli",
+      device_public_key: "c".repeat(64),
+      cli_encrypted_key: { ciphertext: "KEY" },
+    });
+    const { keyStore } = await storesFor(invoke);
+    await expect(keyStore.hasPrivateKey()).rejects.not.toThrow(/may be in/);
+  });
+
   it("first-launch config write is a field merge (update_config), never a whole-file write", async () => {
     const invoke = makeInvoke({ theme: "dark" });
     const { configStore } = await storesFor(invoke);

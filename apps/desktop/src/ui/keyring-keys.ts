@@ -2,7 +2,7 @@
 //
 // All keyring slot names live here so future vendors and features don't
 // invent parallel naming conventions. Desktop keyring keys use underscore
-// snake_case without any prefix (the OS keyring namespaces them by app).
+// snake_case without any prefix (JSON keys in ~/.motebit/dev-keyring.json).
 //
 // Per-vendor BYOK slots were introduced after the provider-mode refactor
 // (2026-04-06). Before that, desktop used a single `api_key` slot shared by

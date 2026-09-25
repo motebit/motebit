@@ -17,10 +17,10 @@ import type { ToolAuditEntry } from "@motebit/sdk";
 import type { InvokeFn } from "./tauri-storage.js";
 
 /**
- * Bridges the OS keyring (managed by Tauri's `keyring` plugin) to the
- * `KeyringAdapter` interface that the runtime + identity layers consume.
- * Three operations: get, set, delete. Errors propagate from the Tauri
- * layer (e.g. user denying keychain access) and are surfaced to callers.
+ * Bridges the desktop key store (Rust `keyring_*` IPC over
+ * `~/.motebit/dev-keyring.json`; no OS keychain) to the `KeyringAdapter`
+ * interface that the runtime + identity layers consume. Three operations:
+ * get, set, delete. Errors (a damaged key file) are surfaced to callers.
  */
 export class TauriKeyringAdapter implements KeyringAdapter {
   constructor(private invoke: InvokeFn) {}
