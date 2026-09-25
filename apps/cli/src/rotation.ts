@@ -154,7 +154,7 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
       },
       clear: () => Promise.resolve(deps.pending.clear()),
       // A throw (bytes could not be kept) becomes a rejection; the kit stops.
-      setAside: async () => void deps.pending.setAside(),
+      setAside: () => Promise.resolve().then(() => void deps.pending.setAside()),
     },
     commit: async ({ privateKeyHex, publicKeyHex, record, relay }) => {
       // Config (the private key) first, the identity file second; idempotent:
