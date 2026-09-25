@@ -2978,6 +2978,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "xcap",
+ "zbus 4.4.0",
 ]
 
 [[package]]

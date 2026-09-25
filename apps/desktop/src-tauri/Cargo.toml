@@ -34,6 +34,9 @@ libc = "0.2"
 # available one (refuse) by downcasting — law K2, never by message text.
 [target.'cfg(target_os = "linux")'.dependencies]
 secret-service = { version = "4", default-features = false }
+# The zbus major secret-service 4 is built on (4.x; tauri's own zbus 5 is a
+# separate major), for the typed "no owner of org.freedesktop.secrets" match.
+zbus = { version = "4", default-features = false }
 
 # macOS Vision framework — native, offline, state-of-the-art OCR used by
 # `do_screenshot` to extract text + bounding boxes so the TS sensitivity

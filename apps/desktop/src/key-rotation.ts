@@ -98,9 +98,21 @@ export function desktopWriteAhead(
     save: (held) => invoke<void>("keyring_set", { key: PENDING_KEY, value: JSON.stringify(held) }),
     // Rust's keyring_delete of key material keeps the value as
     // `pending_rotation.preserved-<time>` before removing it (R2), so no
-    // clear() destroys the write-ahead's new private key. A failure leaves
-    // the entry in place, which loses nothing.
-    clear: () => invoke<void>("keyring_delete", { key: PENDING_KEY }).catch(() => undefined),
+    // clear() destroys the write-ahead's new private key. A failure (the
+    // keychain could not be read, or the preserved copy not verified) leaves
+    // the entry in place — and is SURFACED, never swallowed: the kit's
+    // pre-mint clears (stale write-ahead, discard before a fresh mint) must
+    // stop rather than proceed as if the slot were empty.
+    clear: async () => {
+      try {
+        await invoke<void>("keyring_delete", { key: PENDING_KEY });
+      } catch (err) {
+        throw new Error(
+          `the rotation write-ahead could not be set aside (${err instanceof Error ? err.message : String(err)}); it is still held and nothing was lost`,
+          { cause: err },
+        );
+      }
+    },
     // Move the write-ahead out of the active slot WITHOUT destroying its
     // bytes: resolves only once the preserved copy is verified; rejects
     // (the caller must stop) otherwise.

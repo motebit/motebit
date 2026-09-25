@@ -95,14 +95,47 @@ pub fn classify(err: keyring::Error) -> Result<Option<String>, ReadError> {
     }
 }
 
-/// Linux: the Secret Service is unavailable only when the crate says so —
-/// `secret_service::Error::Unavailable` ("no secret service provider or dbus
-/// session found"). Any other D-Bus error is a read failure (fail closed).
+/// Linux: "there is no Secret Service to ask", decided on TYPES, never on
+/// message text. Two shapes, both observed live (see the Docker probes in
+/// the #762 report):
+///  * no session bus at all ⇒ `secret_service::Error::Unavailable` (the
+///    crate maps zbus `Address`/`InterfaceNotFound` to it);
+///  * a session bus on which NOTHING owns `org.freedesktop.secrets` (i3 /
+///    sway / xfce without gnome-keyring; KeePassXC closed) ⇒ the bus daemon
+///    answers the first call with the standard D-Bus error
+///    `org.freedesktop.DBus.Error.ServiceUnknown` (or `NameHasNoOwner`),
+///    reaching us as `Zbus(MethodError(name, ..))`, `Zbus(FDO(..))` or
+///    `ZbusFdo(..)`. Every secret-service call is addressed to
+///    `org.freedesktop.secrets`, so "the destination has no owner" can only
+///    mean that name.
+/// Any other D-Bus error is a read failure (fail closed).
 #[cfg(target_os = "linux")]
 fn is_no_secret_service(e: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
+    match e.downcast_ref::<secret_service::Error>() {
+        Some(secret_service::Error::Unavailable) => true,
+        Some(secret_service::Error::Zbus(z)) => zbus_no_owner(z),
+        Some(secret_service::Error::ZbusFdo(f)) => fdo_no_owner(f),
+        _ => false,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn zbus_no_owner(z: &zbus::Error) -> bool {
+    match z {
+        zbus::Error::MethodError(name, _, _) => matches!(
+            name.as_str(),
+            "org.freedesktop.DBus.Error.ServiceUnknown" | "org.freedesktop.DBus.Error.NameHasNoOwner"
+        ),
+        zbus::Error::FDO(f) => fdo_no_owner(f),
+        _ => false,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn fdo_no_owner(f: &zbus::fdo::Error) -> bool {
     matches!(
-        e.downcast_ref::<secret_service::Error>(),
-        Some(secret_service::Error::Unavailable)
+        f,
+        zbus::fdo::Error::ServiceUnknown(_) | zbus::fdo::Error::NameHasNoOwner(_)
     )
 }
 
@@ -275,6 +308,57 @@ impl<S: SecretStore> KeyStore<S> {
         }
     }
 
+    /// K3's one-way use of the index: it can only make the store MORE
+    /// conservative. Key material the index lists — or that a
+    /// `dev-keyring.json.migrated-*` copy shows was moved into the keychain —
+    /// lives in the keychain; while the keychain is unavailable such a name
+    /// is refused, never read as absent (so no first launch mints over it)
+    /// and never written to the file (so no second candidate appears). A
+    /// damaged index or migrated copy counts as evidence. The index never
+    /// makes anything exist; it only withholds "absent".
+    fn refuse_if_keychain_held(&self, name: &str, why: &str) -> Result<(), String> {
+        if !guards_absence(name) {
+            return Ok(());
+        }
+        if self.index_may_list(name) || self.migrated_copy_may_hold(name) {
+            return Err(format!(
+                "{} is stored in the OS keychain, which is unavailable right now ({}). Unlock or start your keyring (e.g. gnome-keyring, or KeePassXC with its Secret Service enabled) and retry. Nothing was changed.",
+                name, why
+            ));
+        }
+        Ok(())
+    }
+
+    fn index_may_list(&self, name: &str) -> bool {
+        match read_strict(&self.index_path()) {
+            Ok(None) => false,
+            Ok(Some(bytes)) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                Ok(v) => v["keys"]
+                    .as_array()
+                    .map_or(true, |keys| keys.iter().any(|k| k.as_str() == Some(name))),
+                Err(_) => true,
+            },
+            Err(_) => true,
+        }
+    }
+
+    fn migrated_copy_may_hold(&self, name: &str) -> bool {
+        let Ok(entries) = std::fs::read_dir(&self.dir) else {
+            return false;
+        };
+        entries.filter_map(|e| e.ok()).any(|e| {
+            let file = e.file_name().to_string_lossy().into_owned();
+            if !file.starts_with("dev-keyring.json.migrated-") {
+                return false;
+            }
+            match read_strict(&e.path()) {
+                Ok(Some(bytes)) => serde_json::from_slice::<serde_json::Value>(&bytes)
+                    .map_or(true, |v| v.get(name).is_some()),
+                _ => true,
+            }
+        })
+    }
+
     // ── reads ────────────────────────────────────────────────────────────
 
     /// The value held for `name`, per the laws in
@@ -305,7 +389,13 @@ impl<S: SecretStore> KeyStore<S> {
                 self.note_in_keychain(name, false);
                 Ok(in_dev)
             }
-            Err(ReadError::Unavailable(_)) => Ok(in_dev),
+            Err(ReadError::Unavailable(why)) => {
+                // K3 brake: the index (or a migrated copy) says this key
+                // lives in the keychain — an absent keychain is not an
+                // absent key.
+                self.refuse_if_keychain_held(name, &why)?;
+                Ok(in_dev)
+            }
             Err(e @ ReadError::Failed(_)) => Err(format!(
                 "{} could not be read ({}). It is not absent; nothing was changed. Allow Motebit keychain access and retry.",
                 name, e
@@ -380,6 +470,9 @@ impl<S: SecretStore> KeyStore<S> {
         let current = match self.secret.get(name) {
             Ok(v) => v,
             Err(ReadError::Unavailable(why)) => {
+                // K3 brake: a key that lives in the keychain is never
+                // shadowed by a file write while the keychain is away.
+                self.refuse_if_keychain_held(name, &why)?;
                 // File-only mode: the keychain is not mutated (K1).
                 return self.write_file_entry(dev, name, value, previous, &why);
             }
@@ -481,7 +574,8 @@ impl<S: SecretStore> KeyStore<S> {
         let dev = self.read_dev()?;
         match self.secret.get(name) {
             Ok(Some(_)) => self.secret.delete(name)?,
-            Ok(None) | Err(ReadError::Unavailable(_)) => {}
+            Ok(None) => {}
+            Err(ReadError::Unavailable(why)) => self.refuse_if_keychain_held(name, &why)?,
             Err(e @ ReadError::Failed(_)) => {
                 return Err(format!(
                     "{} could not be read before removing it ({}); nothing was changed",
@@ -914,6 +1008,103 @@ pub mod tests {
         assert!(s.set("device_private_key", "NEW").is_err());
         assert_eq!(kc.entries.borrow()["device_private_key.preserved-T"], "K");
         assert!(!dir.join("dev-keyring.json").exists());
+    }
+
+    /// Reviewer probe Q1 (#762): a key migrated INTO the keychain, then the
+    /// keychain goes away (no provider). Row 1b: the index brake refuses —
+    /// no Ok(None), so no first-launch / divergence mint over it, and no
+    /// file write that would become a second candidate.
+    #[test]
+    fn q1_migrated_key_with_keychain_unavailable_refuses_never_absent() {
+        let dir = scratch("q1");
+        std::fs::write(dir.join("dev-keyring.json"), "{\"device_private_key\":\"K\"}").unwrap();
+        let kc = FakeKeychain::default();
+        let s = store(&kc, &dir);
+        assert_eq!(s.migrate().unwrap().migrated, vec!["device_private_key".to_string()]);
+        assert!(!dir.join("dev-keyring.json").exists());
+        *kc.unavailable.borrow_mut() = true;
+        let err = s.get("device_private_key").unwrap_err();
+        assert!(err.contains("stored in the OS keychain") && err.contains("Unlock or start"), "{err}");
+        assert!(s.set("device_private_key", "MINTED").is_err());
+        assert!(s.set_aside("device_private_key").is_err());
+        assert!(s.store_raw("device_private_key", "MINTED", None).is_err());
+        assert!(s.remove_raw("device_private_key").is_err());
+        assert!(!dir.join("dev-keyring.json").exists(), "no second candidate written");
+        // The evidence survives the index being lost: the migrated copy.
+        std::fs::remove_file(dir.join("keychain-index.json")).unwrap();
+        assert!(s.get("device_private_key").is_err());
+        // Keychain back: the key reads normally.
+        *kc.unavailable.borrow_mut() = false;
+        assert_eq!(s.get("device_private_key").unwrap().as_deref(), Some("K"));
+    }
+
+    /// Row 1b from the index alone (no migrated copy): the index row brakes.
+    #[test]
+    fn row1b_an_index_row_alone_brakes_key_material() {
+        let dir = scratch("row1b-index");
+        std::fs::write(dir.join("keychain-index.json"), "{\"keys\":[\"device_private_key\"]}").unwrap();
+        let kc = FakeKeychain::default();
+        *kc.unavailable.borrow_mut() = true;
+        let s = store(&kc, &dir);
+        assert!(s.get("device_private_key").is_err());
+        assert!(s.set("device_private_key", "MINTED").is_err());
+        assert!(!dir.join("dev-keyring.json").exists());
+        // A damaged index is evidence too.
+        std::fs::write(dir.join("keychain-index.json"), "{ torn").unwrap();
+        assert!(s.get("device_private_key").is_err());
+    }
+
+    /// Row 1b brake is key-material only, and a fresh file-only machine
+    /// (no index, no migrated copy) stays exactly main's behavior.
+    #[test]
+    fn row1a_fresh_file_only_machine_is_unaffected_by_the_brake() {
+        let dir = scratch("row1a");
+        let kc = FakeKeychain::default();
+        *kc.unavailable.borrow_mut() = true;
+        let s = store(&kc, &dir);
+        assert_eq!(s.get("device_private_key").unwrap(), None);
+        s.set("device_private_key", "K").unwrap();
+        assert_eq!(s.get("device_private_key").unwrap().as_deref(), Some("K"));
+        // An indexed NON-key name (an API key) is not braked.
+        std::fs::write(dir.join("keychain-index.json"), "{\"keys\":[\"anthropic_api_key\"]}").unwrap();
+        assert_eq!(s.get("anthropic_api_key").unwrap(), None);
+        assert_eq!(s.get("device_private_key").unwrap().as_deref(), Some("K"));
+    }
+
+    /// The live "session bus, no provider" shapes (#762 finding 1), built
+    /// from the crates' own types: every one is UNAVAILABLE (row 1a/1b),
+    /// while other D-Bus errors stay read FAILURES.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn k2_linux_no_owner_of_org_freedesktop_secrets_is_unavailable() {
+        use zbus::fdo;
+        let wrap = |e: secret_service::Error| classify(keyring::Error::PlatformFailure(Box::new(e)));
+        let unavailable = |r: Result<Option<String>, ReadError>| matches!(r, Err(ReadError::Unavailable(_)));
+        let msg = "The name org.freedesktop.secrets was not provided by any .service files".to_string();
+        assert!(unavailable(wrap(secret_service::Error::ZbusFdo(fdo::Error::ServiceUnknown(msg.clone())))));
+        assert!(unavailable(wrap(secret_service::Error::ZbusFdo(fdo::Error::NameHasNoOwner(msg.clone())))));
+        assert!(unavailable(wrap(secret_service::Error::Zbus(zbus::Error::FDO(Box::new(
+            fdo::Error::ServiceUnknown(msg.clone())
+        ))))));
+        // The exact live shape: Zbus(MethodError("…ServiceUnknown", …)).
+        let reply = zbus::Message::method("/org/freedesktop/secrets", "OpenSession")
+            .unwrap()
+            .build(&())
+            .unwrap();
+        let name = zbus::names::OwnedErrorName::try_from("org.freedesktop.DBus.Error.ServiceUnknown").unwrap();
+        assert!(unavailable(wrap(secret_service::Error::Zbus(zbus::Error::MethodError(
+            name,
+            Some(msg.clone()),
+            reply.clone()
+        )))));
+        // A different D-Bus error from an AVAILABLE provider is a failure.
+        let denied = zbus::names::OwnedErrorName::try_from("org.freedesktop.DBus.Error.AccessDenied").unwrap();
+        assert!(!unavailable(wrap(secret_service::Error::Zbus(zbus::Error::MethodError(
+            denied,
+            None,
+            reply
+        )))));
+        assert!(!unavailable(wrap(secret_service::Error::ZbusFdo(fdo::Error::AccessDenied(msg)))));
     }
 
     /// K2 classification of the REAL keyring errors, per platform.

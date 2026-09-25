@@ -79,6 +79,16 @@ describe("desktop write-ahead port", () => {
     await expect(desktopWriteAhead(failing as never).setAside()).rejects.toThrow(/preserved copy/);
   });
 
+  it("clear surfaces a failed set-aside instead of swallowing it (#762 follow-up)", async () => {
+    const ok = vi.fn(async () => undefined);
+    await desktopWriteAhead(ok as never).clear();
+    expect(ok).toHaveBeenCalledWith("keyring_delete", { key: "pending_rotation" });
+    const failing = vi.fn(async () => {
+      throw new Error("pending_rotation could not be read before removing it");
+    });
+    await expect(desktopWriteAhead(failing as never).clear()).rejects.toThrow(/still held/);
+  });
+
   it("a store that cannot be read loads as 'unreadable', never as nothing held (C8)", async () => {
     const damaged = vi.fn(async () => {
       throw new Error("dev-keyring.json is not a JSON object of strings: damaged");
