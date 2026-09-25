@@ -31,6 +31,21 @@ pub fn motebit_dir() -> Result<PathBuf, String> {
     Ok(PathBuf::from(home).join(".motebit"))
 }
 
+/// Create `dir` (and any missing parents) owner-only: 0700 on Unix for every
+/// directory this call creates; an existing directory keeps its mode (item
+/// 16, the desktop twin of the CLI's `mkdirOwnerOnly`). Elsewhere a plain
+/// `create_dir_all` (Windows ACLs are out of scope, item 32).
+pub fn mkdir_owner_only(dir: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    let made = {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)
+    };
+    #[cfg(not(unix))]
+    let made = std::fs::create_dir_all(dir);
+    made.map_err(|e| format!("could not create {}: {}", dir.display(), e))
+}
+
 /// Narrow a group/world-readable file to 0600. `Ok(true)` when it was
 /// narrowed, `Ok(false)` when there was nothing to do (already owner-only,
 /// absent, not a regular file, or not a Unix platform), `Err` when the chmod
@@ -394,6 +409,28 @@ pub fn write_file_atomic_owner_only(
 
 #[cfg(test)]
 mod tests {
+    /// Item 16: a created `~/.motebit` (and parents) is 0700; an existing
+    /// directory keeps its mode.
+    #[cfg(unix)]
+    #[test]
+    fn mkdir_owner_only_creates_0700_and_leaves_an_existing_dir_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("motebit-mkdir-{}-{}", std::process::id(), nonce));
+        let dir = root.join("home").join(".motebit");
+        super::mkdir_owner_only(&dir).unwrap();
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&dir), 0o700);
+        assert_eq!(mode(&root.join("home")), 0o700);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        super::mkdir_owner_only(&dir).unwrap();
+        assert_eq!(mode(&dir), 0o755, "an existing directory keeps its mode");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     use super::*;
 
     pub fn scratch(tag: &str) -> PathBuf {

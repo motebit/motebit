@@ -167,7 +167,7 @@ fn commit(
     let dir = path
         .parent()
         .ok_or_else(|| "config path has no parent".to_string())?;
-    std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create config directory: {}", e))?;
+    crate::durable_file::mkdir_owner_only(dir)?;
     // A byte copy, not a link: if the replacement below is refused (the
     // compare-and-swap lost a race) the live name survives, and an older
     // in-place writer would otherwise rewrite the "kept" bytes through a link.

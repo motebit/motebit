@@ -315,7 +315,7 @@ impl<S: SecretStore> KeyStore<S> {
     }
 
     fn write_dev(&self, map: &Map) -> Result<(), String> {
-        std::fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
+        crate::durable_file::mkdir_owner_only(&self.dir)?;
         let json = serde_json::to_string_pretty(map).map_err(|e| e.to_string())?;
         write_file_atomic_owner_only(&self.dev_path(), json.as_bytes(), None)
     }
@@ -352,7 +352,7 @@ impl<S: SecretStore> KeyStore<S> {
     }
 
     fn write_index(&self, keys: &BTreeSet<String>) -> Result<(), String> {
-        std::fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
+        crate::durable_file::mkdir_owner_only(&self.dir)?;
         let json = serde_json::json!({ "keys": keys }).to_string();
         write_file_atomic_owner_only(&self.index_path(), json.as_bytes(), None)
     }
@@ -1441,7 +1441,8 @@ pub mod tests {
     /// is preserved in the file, and no keychain artifact is ever created.
     #[test]
     fn file_only_fresh_machine_restart_and_rotate() {
-        let dir = scratch("app-e2e");
+        // A ~/.motebit that does not exist yet: the first write creates it 0700.
+        let dir = scratch("app-e2e").join(".motebit");
         let s = app_store(&dir);
         // First launch: a proven absence (no file), then the mint.
         assert_eq!(s.get("device_private_key").unwrap(), None);
@@ -1452,6 +1453,8 @@ pub mod tests {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(dir.join("dev-keyring.json")).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600);
+            let dmode = std::fs::metadata(&dir).unwrap().permissions().mode();
+            assert_eq!(dmode & 0o777, 0o700, "item 16: ~/.motebit created owner-only");
         }
         // Restart: a new store over the same directory reads the same keys.
         let s = app_store(&dir);

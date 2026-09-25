@@ -1019,7 +1019,7 @@ async fn fetch_url(url: String) -> Result<FetchUrlResponse, String> {
 
 fn main() {
     let dir = durable_file::motebit_dir().expect("Cannot determine home directory");
-    std::fs::create_dir_all(&dir).expect("Failed to create ~/.motebit directory");
+    durable_file::mkdir_owner_only(&dir).expect("Failed to create ~/.motebit directory");
     let db_path = dir.join("motebit.db");
 
     // No keychain migration: this build keeps keys in dev-keyring.json (see
