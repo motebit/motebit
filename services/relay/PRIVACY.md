@@ -94,8 +94,8 @@ Tables: `relay_host_roster_entries`, `relay_host_liveness`.
 Observable:
 - the sovereign-signed HostEnrollment / HostRetirement artifacts a motebit presents (motebit_id, device_id, the signing public key, a self-asserted time, the signature), stored verbatim as signed; the relay never mints, edits, reorders, expires, or evaluates one, and never decides which machines are members
 - when the relay received each artifact
-- for a connection that proved its device id with a signed device token AND announced that it hosts unattended work (unattended_runtime): ONE overwritten value per (device_id, the key that token verified under) — when the relay last saw that connection — never a history of connections, and not the capabilities it announced
-- nothing stored about any other connection — phones, browsers, desktop sessions, and sockets that did not prove their device id; open sockets are reported live (a count per device and key) and never persisted
+- for a connection that proved its device id with a signed device token AND announced that it hosts unattended work (unattended_runtime): ONE overwritten value per (device_id, the key that token verified under) — the last time this relay held a socket bound as that pair open (there is no heartbeat yet, so a half-open socket reads as open) — never a history of connections, and not the capabilities it announced
+- nothing stored about any other connection — phones, browsers, desktop sessions, and sockets that did not prove their device id; sockets the relay believes open are reported live (a count per device and key) and never persisted
 - never the client IP
 
 Retention window: signed roster entries: indefinite — never pruned by age (a retirement must stay present for remove-wins to hold, and a machine silent for a year is still a line) and no removal path exists, per-identity erase included; growth is bounded by per-signer-key caps. Liveness values: deleted 90 days after last_seen_at, swept every five minutes by the task-cleanup loop, except while a socket bound as that (device_id, key) is open.
