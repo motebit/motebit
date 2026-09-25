@@ -177,7 +177,7 @@ pnpm --filter @motebit/runtime test   # Test single package
 - Export from `src/index.ts`; tests in `src/__tests__/` using Vitest.
 - Error rethrows: `throw new Error("description", { cause: err })`.
 - Error messages: `err instanceof Error ? err.message : String(err)`.
-- Secrets in OS keyring. Config: `~/.motebit/config.json`. DB: `~/.motebit/motebit.db`.
+- Secrets: mobile in the OS keychain (SecureStore); CLI passphrase-encrypted in `config.json`; desktop in `~/.motebit/dev-keyring.json` (0600 plaintext; the OS keychain is #764). Config: `~/.motebit/config.json`. DB: `~/.motebit/motebit.db`.
 - CSS inline in HTML (desktop, admin).
 - Branded ID types (`MotebitId`, `DeviceId`) for compile-time safety.
 - Relay: `createLogger(module)` with `x-correlation-id`. Runtime: pluggable `logger` (default `console.warn`).

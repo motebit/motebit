@@ -34,7 +34,7 @@ Operator mode is a PIN-protected escalation that unlocks higher-risk tools. Thin
 3. While active, write and execute tools can proceed (still subject to per-tool approval rules)
 4. Disable operator mode to re-lock everything immediately
 
-The PIN is hashed and stored in the device's key store (the iOS Keychain / Android Keystore on mobile; the owner-only (`0600`) `~/.motebit/dev-keyring.json` file on desktop). It's never stored in plaintext and never sent over the network.
+The PIN is hashed and stored in the device's key store (the iOS Keychain / Android Keystore on mobile; the owner-only (`0600` on Unix; Windows is best-effort) `~/.motebit/dev-keyring.json` file on desktop). It's never stored in plaintext and never sent over the network.
 
 ## Audit trail
 

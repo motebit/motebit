@@ -44,7 +44,7 @@ The policy gate isn't a feature — it's surface tension manifested in the infor
 
 The medium persists. Liquescentia is the standing condition that exists whether or not any particular droplet is present.
 
-**Identity-side cohesion.** `@motebit/core-identity`'s Ed25519 keypair (generated locally, stored in OS keyring, never garbage-collected on session end) is the body's irreducible binding force.
+**Identity-side cohesion.** `@motebit/core-identity`'s Ed25519 keypair (generated locally, stored in the surface's local key store — the OS keychain on mobile, a passphrase-encrypted file on the CLI, an owner-only file on desktop — never garbage-collected on session end) is the body's irreducible binding force.
 
 **Dissolution spectrum.** The medium reclaims state at multiple rates simultaneously — memory recency, trust score, credential validity, retention horizon, audit capacity. See [`dissolution-spectrum.md`](dissolution-spectrum.md) for the five axes, their constants, and the three structural forms (exponential / cliff / capacity).
 

@@ -1,6 +1,6 @@
 # Hardware attestation
 
-A motebit's identity key is Ed25519, stored in the OS keyring on desktop and in the app-sandboxed equivalent on mobile. That key is **software-custody**: the private bytes are readable by any process running as the user. A self-attesting system that stops there has a clear ceiling — a third party can verify the signature, but not that any piece of hardware has ever seen the key.
+A motebit's identity key is Ed25519, stored on desktop in an owner-only plaintext file (`~/.motebit/dev-keyring.json`; the OS keychain is a pending arc, [#764](https://github.com/motebit/motebit/issues/764)) and in the OS keychain (SecureStore) on mobile. That key is **software-custody**: the private bytes are readable by any process running as the user. A self-attesting system that stops there has a clear ceiling — a third party can verify the signature, but not that any piece of hardware has ever seen the key.
 
 Hardware attestation closes that gap without moving the identity. A separate hardware-native keypair — Apple Secure Enclave issues ECDSA P-256, Windows TPM issues RSA/ECDSA, Android StrongBox issues EC, DeviceCheck / Play Integrity issue platform-signed assertions — signs a canonical claim that binds itself to the Ed25519 identity. The identity stays where it is. The hardware signature is **additive evidence** a verifier can rank against.
 

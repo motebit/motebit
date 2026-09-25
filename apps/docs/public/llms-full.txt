@@ -105,7 +105,7 @@ Desktop releases are available from the [GitHub releases page](https://github.co
 
 ### First launch
 
-1. **Identity** — The app generates an Ed25519 keypair and stores the private key in the owner-only (`0600`) `~/.motebit/dev-keyring.json` (the OS keychain is not used on desktop yet). This is your agent's identity. It never leaves your device.
+1. **Identity** — The app generates an Ed25519 keypair and stores the private key in the owner-only (`0600` on Unix; Windows is best-effort) `~/.motebit/dev-keyring.json` (the OS keychain is not used on desktop yet). This is your agent's identity. It never leaves your device.
 2. **Device** — Your machine is registered as a trusted device. Later you can add your phone, another computer, or any other device.
 3. **Chat** — The interface appears. Type or speak to your motebit.
 
@@ -389,7 +389,7 @@ Retention is governed too. Deleted data produces a signed **deletion certificate
 
 Your motebit's identity is an **Ed25519 keypair**. The public key (and the `motebit_id` derived from it) is shareable; the private key is the root of all authority.
 
-- **At rest.** On mobile the private key lives in the iOS Keychain / Android Keystore. On desktop it lives in `~/.motebit/dev-keyring.json`, an owner-only (`0600`) file — access-controlled, not application-encrypted (the same protection as an SSH key). The OS keychain is not used yet; enabling it is its own arc, gated on real-device testing (`docs/proposals/key-file-durability-v1.md`). On the CLI it is encrypted with your passphrase using PBKDF2 (600,000 iterations, SHA-256) and AES-256-GCM. It never crosses the network and never enters the non-secret config metadata.
+- **At rest.** On mobile the private key lives in the iOS Keychain / Android Keystore. On desktop it lives in `~/.motebit/dev-keyring.json`, an owner-only (`0600` on Unix; Windows is best-effort) file — access-controlled, not application-encrypted (the same protection as an SSH key). The OS keychain is not used yet; enabling it is its own arc, gated on real-device testing (`docs/proposals/key-file-durability-v1.md`). On the CLI it is encrypted with your passphrase using PBKDF2 (600,000 iterations, SHA-256) and AES-256-GCM. It never crosses the network and never enters the non-secret config metadata.
 - **Recovery.** A recovery seed re-derives a sovereign identity. A sovereign `motebit_id` is a cryptographic commitment to its genesis key, so the binding between an id and its key is checkable offline by anyone.
 - **Rotation & succession.** Keys can be rotated; a signed succession chain (old and new keys both sign) preserves continuity, so a rotated key does not orphan past receipts.
 - **Hardware attestation is additive.** Secure Enclave / TPM / StrongBox attestations *raise* an identity's assurance score — they never replace the Ed25519 key, and their absence never blocks a software identity. Software identity is the floor.
@@ -442,7 +442,7 @@ The identity belongs to its owner, not to a service provider. Switch AI provider
 
 ## Cryptographic keys
 
-Each device that hosts a motebit generates an Ed25519 keypair. The private key is stored in the device's key store: the iOS Keychain / Android Keystore on mobile, a passphrase-encrypted file on the CLI, and an owner-only (`0600`) key file on desktop (the OS keychain is not used on desktop yet) — it never leaves the device and never gets sent over the network. The public key is shared with services that need to verify the agent's identity.
+Each device that hosts a motebit generates an Ed25519 keypair. The private key is stored in the device's key store: the iOS Keychain / Android Keystore on mobile, a passphrase-encrypted file on the CLI, and an owner-only (`0600` on Unix; Windows is best-effort) key file on desktop (the OS keychain is not used on desktop yet) — it never leaves the device and never gets sent over the network. The public key is shared with services that need to verify the agent's identity.
 
 Ed25519 was chosen for its speed, small key size, and resistance to timing attacks. It's the same signature scheme used by SSH, Signal, and WireGuard.
 
@@ -707,7 +707,7 @@ Operator mode is a PIN-protected escalation that unlocks higher-risk tools. Thin
 3. While active, write and execute tools can proceed (still subject to per-tool approval rules)
 4. Disable operator mode to re-lock everything immediately
 
-The PIN is hashed and stored in the device's key store (the iOS Keychain / Android Keystore on mobile; the owner-only (`0600`) `~/.motebit/dev-keyring.json` file on desktop). It's never stored in plaintext and never sent over the network.
+The PIN is hashed and stored in the device's key store (the iOS Keychain / Android Keystore on mobile; the owner-only (`0600` on Unix; Windows is best-effort) `~/.motebit/dev-keyring.json` file on desktop). It's never stored in plaintext and never sent over the network.
 
 ## Audit trail
 
@@ -2149,7 +2149,7 @@ The signature is stored as a hex-encoded value in an HTML comment after the clos
 | Threat                             | Mitigation                                                                                    |
 | ---------------------------------- | --------------------------------------------------------------------------------------------- |
 | Frontmatter tampering              | Ed25519 signature — any change invalidates                                                    |
-| Private key theft                  | Encrypted at rest (PBKDF2 + AES-256-GCM) in config on the CLI; the OS keychain on mobile; an owner-only (`0600`) key file on desktop (access-controlled, not encrypted); never in the identity file |
+| Private key theft                  | Encrypted at rest (PBKDF2 + AES-256-GCM) in config on the CLI; the OS keychain on mobile; an owner-only (`0600` on Unix; Windows is best-effort) key file on desktop (access-controlled, not encrypted); never in the identity file |
 | Identity impersonation             | Public key is self-certifying; verification requires the matching keypair                     |
 | Key compromise (with succession)   | Old key signs succession record delegating to new key; chain is verifiable end-to-end         |
 | Key compromise (guardian recovery) | Guardian signs recovery succession; `motebit_id` and trust preserved                          |
@@ -2195,7 +2195,7 @@ For the conceptual foundation, see [Identity](/docs/concepts/identity). For wher
 On first launch, the system runs a shared bootstrap protocol (`bootstrapIdentity` in `@motebit/core-identity`):
 
 1. **Generate an Ed25519 keypair** using `@noble/ed25519` — a zero-dependency, audited library. The same signing scheme used by SSH, Signal, and WireGuard.
-2. **Store the private key** in the platform's secure storage. On desktop, `~/.motebit/dev-keyring.json` — an owner-only (mode `0600`) file, access-controlled rather than application-encrypted; the OS keychain is not used yet (its enablement is a separate arc gated on real-device testing, because keychain providers differ in ways that can lose a key). On CLI, PBKDF2-encrypted as `cli_encrypted_key` in `~/.motebit/config.json`. On mobile, `expo-secure-store` (iOS Keychain / Android Keystore, no fallback). The private key never appears in the non-secret `config.json` and never crosses the network; on desktop the key file is access-controlled but not application-encrypted (moving it into the OS keychain is tracked as its own arc — see [security boundaries](https://github.com/motebit/motebit/blob/main/docs/doctrine/security-boundaries.md)).
+2. **Store the private key** in the platform's secure storage. On desktop, `~/.motebit/dev-keyring.json` — an owner-only (mode `0600` on Unix; Windows is best-effort) file, access-controlled rather than application-encrypted; the OS keychain is not used yet (its enablement is a separate arc gated on real-device testing, because keychain providers differ in ways that can lose a key). On CLI, PBKDF2-encrypted as `cli_encrypted_key` in `~/.motebit/config.json`. On mobile, `expo-secure-store` (iOS Keychain / Android Keystore, no fallback). The private key never appears in the non-secret `config.json` and never crosses the network; on desktop the key file is access-controlled but not application-encrypted (moving it into the OS keychain is tracked as its own arc — see [security boundaries](https://github.com/motebit/motebit/blob/main/docs/doctrine/security-boundaries.md)).
 3. **Generate a UUID v7** `motebit_id` (time-ordered, sortable) and a `device_id`.
 4. **Register the device** against the identity, binding the device's public key to the `motebit_id`.
 5. **Write config** — the `motebit_id`, `device_id`, and public key are persisted to `~/.motebit/config.json` (non-secret metadata only).
@@ -5702,7 +5702,7 @@ pnpm --filter @motebit/desktop tauri:build
 On first launch, you'll see a welcome overlay explaining that motebit creates a local identity and device key. Click **Get started** to:
 
 1. Generate an Ed25519 keypair
-2. Store the private key in `~/.motebit/dev-keyring.json` (owner-only, `0600`)
+2. Store the private key in `~/.motebit/dev-keyring.json` (owner-only, `0600` on Unix; Windows is best-effort)
 3. Create your motebit identity
 4. Register this device
 
@@ -5724,7 +5724,7 @@ Set the model name in the **Model** field. Examples: `llama3.2`, `claude-sonnet-
 Operator mode unlocks high-risk tools (file writes, shell execution, payments). It's gated by a PIN:
 
 1. Toggle **Operator Mode** in settings
-2. First time: set a 4-6 digit PIN (stored in the keyring as a salted PBKDF2-SHA256 digest, never plaintext)
+2. First time: set a 4-6 digit PIN (stored in the desktop key store, `~/.motebit/dev-keyring.json`, as a salted PBKDF2-SHA256 digest, never plaintext)
 3. Subsequent times: enter your PIN to enable
 
 While active, the agent can use R2+ risk tools. Tool calls still produce audit log entries, and specific tools can still require per-call approval.
@@ -6281,7 +6281,7 @@ Secrets are stored in the platform key store, never in the config file (desktop:
 | `operator_pin_hash` | Operator PIN as a salted PBKDF2-SHA256 digest (100 000 iterations, `salt:derived`) |
 | `api_key` | Legacy single-vendor slot — read for migration only, never written |
 
-On desktop, the Tauri app keeps these in `~/.motebit/dev-keyring.json` — owner-only (`0600`), access-controlled rather than application-encrypted; moving them into the OS keychain is its own arc. On CLI, the private key is encrypted with PBKDF2 and stored in the config file (the only exception to the "no secrets in config" rule, and it's encrypted).
+On desktop, the Tauri app keeps these in `~/.motebit/dev-keyring.json` — owner-only (`0600` on Unix; Windows is best-effort), access-controlled rather than application-encrypted; moving them into the OS keychain is its own arc. On CLI, the private key is encrypted with PBKDF2 and stored in the config file (the only exception to the "no secrets in config" rule, and it's encrypted).
 
 ## Environment variables (dev mode)
 
@@ -6319,7 +6319,7 @@ Ollama runs on `http://localhost:11434` by default.
 
 ### Anthropic
 
-Set your API key via the desktop settings panel (stored in keyring) or environment variable. Set `default_provider: "anthropic"` and `default_model: "claude-sonnet-4-6"`.
+Set your API key via the desktop settings panel (stored in `~/.motebit/dev-keyring.json`) or environment variable. Set `default_provider: "anthropic"` and `default_model: "claude-sonnet-4-6"`.
 
 ### Custom endpoints
 
@@ -6643,7 +6643,7 @@ The cryptographic shape is invariant across hops. The executor signs `ExecutionR
 On first launch the system bootstraps a cryptographic identity.
 
 1. **Generate** an Ed25519 keypair.
-2. **Store** the private key on the device — an owner-only (`0600`) key file on desktop (the OS keychain is not used yet), PBKDF2-encrypted file (600K iterations) on CLI, expo-secure-store on mobile, IndexedDB with a derived-key envelope on web. The key never leaves the device.
+2. **Store** the private key on the device — an owner-only (`0600` on Unix; Windows is best-effort) key file on desktop (the OS keychain is not used yet), PBKDF2-encrypted file (600K iterations) on CLI, expo-secure-store on mobile, IndexedDB with a derived-key envelope on web. The key never leaves the device.
 3. **Register** the device against the identity (UUID v7). Multi-device pairing uses X25519 + HKDF + AES to transfer the identity key through the relay without exposing it to the relay.
 4. **Authenticate** with the sync relay using signed bearer tokens (suite `motebit-jwt-ed25519-v1`) with required `aud` audience binding (`sync`, `task:submit`, `admin:query`, `rotate-key`, `pair`, `register-device`) to prevent cross-endpoint replay.
 
@@ -8610,7 +8610,7 @@ An Ed25519 keypair is generated — crystallized from entropy, as a droplet crys
 
 The public key is the surface — the part of the identity that the world can observe, verify, and interact with. It is derived from the private key as the surface is derived from the interior. You can see the surface. You cannot reverse it to obtain the interior. The asymmetry is mathematical, and it mirrors the physical asymmetry: the surface reveals the interior's existence without exposing its structure.
 
-The keypair is not assigned by a platform. It is not a session token that expires when a server decides. It is generated locally, stored in the most protected layer available — the OS keyring, the deepest interior — and persists for the lifetime of the entity. A motebit does not rent its identity. It generates it. It owns it.
+The keypair is not assigned by a platform. It is not a session token that expires when a server decides. It is generated locally, stored in the most protected layer the surface offers — the OS keychain on mobile, a passphrase-encrypted file on the CLI, an owner-only file on the desktop until its keychain arc lands — and persists for the lifetime of the entity. A motebit does not rent its identity. It generates it. It owns it.
 
 ### 2.3 — Persistence Across Medium
 
@@ -9315,7 +9315,7 @@ For an existing AI agent vendor to ship the same shape, two things must change:
 
 **The proof has to compose without operator participation.** A receipt that requires the operator's verifier to interpret it is not portable. A Merkle anchor whose root is held in the operator's database is not third-party-verifiable. The verification path must use only public primitives (Ed25519, SHA-256, JCS) and a public substrate (a public chain). The reference verifier must run with no operator dependency. This rules out every "verifier microservice" that operators build to retain a central role.
 
-Motebit makes both trades by construction. Identity is generated locally in `@motebit/core-identity` and stored in the OS keyring. Receipts sign with that key in `@motebit/runtime`. Verification runs through `@motebit/encryption` (BSL) + `@motebit/crypto` (Apache-2.0 permissive floor) — no relay, no motebit-operated service. The Solana anchor is a memo on a public chain, signed by the motebit's address (= its identity public key). Anyone can run the verification path. Anyone can build a competing verifier in a different language from the JSON Schemas in `@motebit/wire-schemas` and the spec in `spec/consolidation-receipt-v1.md` (Stable).
+Motebit makes both trades by construction. Identity is generated locally in `@motebit/core-identity` and stored in the surface's local key store (the OS keychain on mobile; a passphrase-encrypted file on the CLI; an owner-only file on desktop until its keychain arc, #764). Receipts sign with that key in `@motebit/runtime`. Verification runs through `@motebit/encryption` (BSL) + `@motebit/crypto` (Apache-2.0 permissive floor) — no relay, no motebit-operated service. The Solana anchor is a memo on a public chain, signed by the motebit's address (= its identity public key). Anyone can run the verification path. Anyone can build a competing verifier in a different language from the JSON Schemas in `@motebit/wire-schemas` and the spec in `spec/consolidation-receipt-v1.md` (Stable).
 
 The asymmetry is structural, not engineered. It is the moat.
 

@@ -310,7 +310,7 @@ The cryptographic shape is invariant across hops. The executor signs `ExecutionR
 On first launch the system bootstraps a cryptographic identity.
 
 1. **Generate** an Ed25519 keypair.
-2. **Store** the private key on the device — an owner-only (`0600`) key file on desktop (the OS keychain is not used yet), PBKDF2-encrypted file (600K iterations) on CLI, expo-secure-store on mobile, IndexedDB with a derived-key envelope on web. The key never leaves the device.
+2. **Store** the private key on the device — an owner-only (`0600` on Unix; Windows is best-effort) key file on desktop (the OS keychain is not used yet), PBKDF2-encrypted file (600K iterations) on CLI, expo-secure-store on mobile, IndexedDB with a derived-key envelope on web. The key never leaves the device.
 3. **Register** the device against the identity (UUID v7). Multi-device pairing uses X25519 + HKDF + AES to transfer the identity key through the relay without exposing it to the relay.
 4. **Authenticate** with the sync relay using signed bearer tokens (suite `motebit-jwt-ed25519-v1`) with required `aud` audience binding (`sync`, `task:submit`, `admin:query`, `rotate-key`, `pair`, `register-device`) to prevent cross-endpoint replay.
 
