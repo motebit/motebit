@@ -175,6 +175,19 @@ describe("sync socket: nothing is acted on before registration", () => {
       0,
     );
     expect(relay.connections.get(motebitId)?.length).toBe(1);
+
+    // Relay rule 6: the refusal is recorded (this door used to record nothing).
+    const refusals = relay.moteDb.db
+      .prepare(
+        "SELECT kind, path, motebit_id, audience, reason FROM relay_auth_events WHERE path = ?",
+      )
+      .all(`/ws/sync/${motebitId}`) as Array<Record<string, string>>;
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]).toMatchObject({
+      kind: "device_token_rejected",
+      motebit_id: motebitId,
+      audience: "sync",
+    });
   });
 
   it("a valid query token's frames sent before registration are refused, and accepted after", async () => {

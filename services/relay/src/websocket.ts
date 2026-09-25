@@ -66,6 +66,8 @@ export interface WebSocketDeps {
     expectedAudience: TokenAudience,
     blacklistCheck?: (jti: string, motebitId: string) => boolean,
     agentRevokedCheck?: (motebitId: string) => boolean,
+    agentKeyLookup?: (motebitId: string) => string | null,
+    onReject?: (reason: string) => void,
   ) => Promise<boolean>;
   parseTokenPayloadUnsafe: (token: string) => import("./auth.js").TokenPayload | null;
   logger: ReturnType<typeof createLogger>;
@@ -156,6 +158,13 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
                 }),
               );
             }
+            deps.recordAuthEvent?.({
+              kind: "device_token_rejected",
+              path: `/ws/sync/${mid}`,
+              motebitId: mid,
+              audience: "sync",
+              reason: "legacy_token",
+            });
             ws.close(4003, "Legacy device tokens are no longer accepted");
             return false;
           }
@@ -167,6 +176,20 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
             "sync",
             isTokenBlacklisted,
             isAgentRevoked,
+            undefined,
+            // Relay rule 6: every refused signed token is recorded — this door
+            // was the one that recorded nothing, so a forged sync socket left no
+            // durable trace.
+            (reason: string) => {
+              logger.warn("auth.ws_token_rejected", { motebitId: mid, reason });
+              deps.recordAuthEvent?.({
+                kind: "device_token_rejected",
+                path: `/ws/sync/${mid}`,
+                motebitId: mid,
+                audience: "sync",
+                reason,
+              });
+            },
           );
           if (!verified) {
             if (sendAuthResult) {
