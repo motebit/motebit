@@ -160,7 +160,7 @@ function isValidGovernanceConfig(value: unknown): value is GovernanceConfig {
  * the name those readers already shipped with; a second spelling would be a
  * backup nobody is ever told about.
  */
-const CONFIG_BACKUP_INFIX = ".clobbered-";
+export const CONFIG_BACKUP_INFIX = ".clobbered-";
 export const CONFIG_BACKUP_PREFIX = `${path.basename(CONFIG_PATH)}${CONFIG_BACKUP_INFIX}`;
 
 /** Preserved copies of a damaged config in `CONFIG_DIR`, newest first. Never throws. */

@@ -89,6 +89,18 @@ describe("a held rotation", () => {
     }
   });
 
+  it("a world-readable write-ahead (it holds an encrypted key) is narrowed to 0600 on load", () => {
+    writeFileSync(pendingRotationPath(dir), JSON.stringify(held));
+    chmodSync(pendingRotationPath(dir), 0o644);
+    expect(loadAnyPendingRotation(dir)).toEqual(held);
+    expect(statSync(pendingRotationPath(dir)).mode & 0o777).toBe(0o600);
+    // …and so is a damaged one: its bytes may still be key material.
+    writeFileSync(pendingRotationPath(dir), "{torn");
+    chmodSync(pendingRotationPath(dir), 0o644);
+    expect(loadAnyPendingRotation(dir)).toBe("unreadable");
+    expect(statSync(pendingRotationPath(dir)).mode & 0o777).toBe(0o600);
+  });
+
   it("an unreadable write-ahead is set aside with its bytes kept, never deleted", () => {
     writeFileSync(pendingRotationPath(dir), "{torn");
     const kept = setAsidePendingRotation(dir);

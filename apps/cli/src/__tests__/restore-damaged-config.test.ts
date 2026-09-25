@@ -38,6 +38,19 @@ vi.mock("../identity.js", async (importOriginal) => {
   };
 });
 
+// The REPLACE confirmation reads a visible line through node:readline.
+let replaceAnswer = "REPLACE IDENTITY";
+vi.mock("node:readline", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:readline")>();
+  return {
+    ...actual,
+    createInterface: () => ({
+      question: (_q: string, cb: (a: string) => void) => cb(replaceAnswer),
+      close: () => {},
+    }),
+  };
+});
+
 class Exit extends Error {
   constructor(readonly code: number | undefined) {
     super(`process.exit(${String(code)})`);
@@ -55,6 +68,7 @@ beforeEach(() => {
   for (const f of fs.readdirSync(tmpDir)) fs.rmSync(path.join(tmpDir, f), { recursive: true });
   onPassphrase = null;
   promptCall = 0;
+  replaceAnswer = "REPLACE IDENTITY";
   vi.spyOn(process, "exit").mockImplementation((code?: string | number | null) => {
     throw new Exit(typeof code === "number" ? code : undefined);
   });
@@ -211,10 +225,95 @@ describe("restore over a damaged config", () => {
     );
   });
 
-  it("only a write-ahead POSITIVELY another identity's, against a readable config, is cleared", async () => {
+  it("even a write-ahead POSITIVELY another identity's is kept aside — restore never deletes one", async () => {
     writeAhead({ motebit_id: "someone-else", old_public_key: "ab".repeat(32) });
     expect(await runRestore()).toBe(0);
-    expect(newKeyHolders()).toEqual([]);
+    expect(newKeyHolders().some((f) => f.startsWith("pending-rotation.json.clobbered-"))).toBe(
+      true,
+    );
+    expect(fs.existsSync(path.join(tmpDir, "pending-rotation.json"))).toBe(false); // deactivated
+  });
+
+  // --- #759 round 1: a REPLACED identity's key and its in-flight rotation ---
+
+  /** Files (other than the live config) holding `marker`, each asserted 0600. */
+  function keptHolding(marker: string): string[] {
+    const hits = fs
+      .readdirSync(tmpDir)
+      .filter((f) => f !== "config.json")
+      .filter((f) => fs.readFileSync(path.join(tmpDir, f), "utf-8").includes(marker));
+    for (const f of hits) expect(fs.statSync(path.join(tmpDir, f)).mode & 0o777).toBe(0o600);
+    return hits;
+  }
+
+  function configWith(fields: Record<string, unknown>): void {
+    fs.writeFileSync(CONFIG, JSON.stringify(fields), { mode: 0o600 });
+  }
+
+  function aRotation(motebit_id: string, oldKey: string, secret: string): void {
+    fs.writeFileSync(
+      path.join(tmpDir, "pending-rotation.json"),
+      JSON.stringify({
+        motebit_id,
+        old_public_key: oldKey,
+        new_public_key: "dd".repeat(32),
+        record: { note: "succession" },
+        encrypted_new_key: { ciphertext: secret, nonce: "n", tag: "t", salt: "s" },
+        written_at: 1,
+      }),
+      { mode: 0o600 },
+    );
+  }
+
+  it("REVIEWER'S PROBE: REPLACE over identity A with A's rotation in flight ⇒ KA and KA' both kept, 0600", async () => {
+    const KA_PUB = "a1".repeat(32);
+    configWith({
+      motebit_id: "identity-A",
+      device_public_key: KA_PUB,
+      cli_encrypted_key: { ciphertext: "KA_SECRET", nonce: "n", tag: "t", salt: "s" },
+    });
+    aRotation("identity-A", KA_PUB, "KA_PRIME_SECRET");
+    expect(await runRestore()).toBe(0);
+    expect(keptHolding("KA_SECRET")).toHaveLength(1);
+    expect(keptHolding("KA_SECRET")[0]).toMatch(/^config\.json\.clobbered-/);
+    expect(keptHolding("KA_PRIME_SECRET")).toHaveLength(1);
+    expect(keptHolding("KA_PRIME_SECRET")[0]).toMatch(/^pending-rotation\.json\.clobbered-/);
+    expectRestoredConfig();
+  });
+
+  it("variant (i): the SAME sovereign id on a rotated key, restored from the genesis seed ⇒ the rotated key is kept", async () => {
+    const { mid } = await seedIdentity();
+    configWith({
+      motebit_id: mid,
+      device_public_key: "b2".repeat(32),
+      cli_encrypted_key: { ciphertext: "K1_SECRET", nonce: "n", tag: "t", salt: "s" },
+    });
+    expect(await runRestore()).toBe(0);
+    expect(keptHolding("K1_SECRET")).toHaveLength(1);
+  });
+
+  it("variant (ii): a key but NO motebit_id (plan fresh_install) ⇒ that key and its own rotation are kept", async () => {
+    const KX_PUB = "c3".repeat(32);
+    configWith({
+      device_public_key: KX_PUB,
+      cli_encrypted_key: { ciphertext: "KX_SECRET", nonce: "n", tag: "t", salt: "s" },
+    });
+    aRotation("identity-X", KX_PUB, "KX_PRIME_SECRET");
+    expect(await runRestore()).toBe(0);
+    expect(keptHolding("KX_SECRET")).toHaveLength(1);
+    expect(keptHolding("KX_PRIME_SECRET")).toHaveLength(1);
+  });
+
+  it("an aborted REPLACE keeps nothing aside and changes nothing", async () => {
+    configWith({
+      motebit_id: "identity-A",
+      device_public_key: "a1".repeat(32),
+      cli_encrypted_key: { ciphertext: "KA_SECRET", nonce: "n", tag: "t", salt: "s" },
+    });
+    aRotation("identity-A", "a1".repeat(32), "KA_PRIME_SECRET");
+    replaceAnswer = "no";
+    expect(await runRestore()).toBe(1);
+    expect(fs.readdirSync(tmpDir).sort()).toEqual(["config.json", "pending-rotation.json"]);
   });
 
   it("every config read in restore goes through the damage-tolerant loader", () => {

@@ -5,7 +5,12 @@
  * identity, so the classification is locked as data.
  */
 import { describe, it, expect } from "vitest";
-import { planRestore, isSovereignId, classifyWriteAhead } from "../subcommands/restore.js";
+import {
+  planRestore,
+  isSovereignId,
+  classifyWriteAhead,
+  holdsIdentityKey,
+} from "../subcommands/restore.js";
 import { seedBackupStatus } from "../subcommands/seed.js";
 import { deriveSovereignMotebitId } from "@motebit/crypto";
 
@@ -106,34 +111,22 @@ describe("seedBackupStatus", () => {
   });
 });
 
-describe("classifyWriteAhead — restore deletes a write-ahead only on positive foreign attribution", () => {
-  const ctx = { seedMotebitIds: ["seed-id"], seedPublicKeyHex: PUB, configWasReadable: true };
-  const held = (motebit_id: string, old_public_key: string, new_public_key = "ee".repeat(32)) => ({
-    motebit_id,
-    old_public_key,
-    new_public_key,
+describe("classifyWriteAhead — restore never deletes a write-ahead", () => {
+  it("from the seed's own key → in flight here (left in place)", () => {
+    expect(classifyWriteAhead({ old_public_key: PUB }, PUB)).toBe("in-flight-here");
+    expect(classifyWriteAhead({ old_public_key: PUB.toUpperCase() }, PUB)).toBe("in-flight-here");
   });
 
-  it("from the seed's own key → in flight here (left in place), whatever else it says", () => {
-    expect(classifyWriteAhead(held("seed-id", PUB), ctx)).toBe("in-flight-here");
-    expect(classifyWriteAhead(held("other", PUB.toUpperCase()), ctx)).toBe("in-flight-here");
-    expect(classifyWriteAhead(held("seed-id", PUB), { ...ctx, configWasReadable: false })).toBe(
-      "in-flight-here",
-    );
+  it("anything else — including another identity's — is kept aside; there is no clearing outcome", () => {
+    expect(classifyWriteAhead({ old_public_key: OTHER_PUB }, PUB)).toBe("keep-aside");
   });
+});
 
-  it("naming the seed's id or key → kept aside, never cleared", () => {
-    expect(classifyWriteAhead(held("seed-id", OTHER_PUB), ctx)).toBe("keep-aside");
-    expect(classifyWriteAhead(held("other", OTHER_PUB, PUB), ctx)).toBe("keep-aside");
-  });
-
-  it("foreign but the config was unreadable → kept aside (attribution uncertain)", () => {
-    expect(classifyWriteAhead(held("other", OTHER_PUB), { ...ctx, configWasReadable: false })).toBe(
-      "keep-aside",
-    );
-  });
-
-  it("positively foreign against a readable config → the only case that clears", () => {
-    expect(classifyWriteAhead(held("other", OTHER_PUB), ctx)).toBe("clear-foreign");
+describe("holdsIdentityKey — what a restore must keep before overwriting", () => {
+  it("an encrypted or a plaintext key counts; an empty config does not", () => {
+    expect(holdsIdentityKey({ cli_encrypted_key: { ciphertext: "c" } })).toBe(true);
+    expect(holdsIdentityKey({ cli_private_key: "ab" })).toBe(true);
+    expect(holdsIdentityKey({ cli_private_key: "" })).toBe(false);
+    expect(holdsIdentityKey({})).toBe(false);
   });
 });

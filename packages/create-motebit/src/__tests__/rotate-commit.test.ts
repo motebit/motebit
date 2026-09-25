@@ -3,12 +3,16 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
+  renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -16,6 +20,7 @@ import { tmpdir } from "node:os";
 import {
   commitRotation,
   defaultRotationCommitOps,
+  finishRotationCommand,
   RotationCommitError,
   type RotationCommitOps,
   type RotationCommitStep,
@@ -109,6 +114,25 @@ describe("commitRotation", () => {
       expect(holders(names === "new" ? "NEW_KEY" : "OLD_KEY").length).toBeGreaterThan(0);
     },
   );
+
+  it("the finishing command for a config-step failure names the REAL config, so following it keeps a symlink", () => {
+    const real = join(dir, "dotfiles-config.json");
+    writeFileSync(real, JSON.stringify(OLD_CONFIG));
+    rmSync(configPath);
+    symlinkSync(real, configPath);
+    let caught: RotationCommitError | undefined;
+    try {
+      commitRotation(plan(), failingAt("config"));
+    } catch (err) {
+      caught = err as RotationCommitError;
+    }
+    const cmd = finishRotationCommand(caught!.newKeyAt!, configPath);
+    expect(cmd).toBe(`mv "${caught!.newKeyAt}" "${realpathSync(real)}"`);
+    // Follow it, as a user would: the link survives and now reads the new key.
+    renameSync(caught!.newKeyAt!, realpathSync(real));
+    expect(lstatSync(configPath).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(readFileSync(configPath, "utf-8")).cli_encrypted_key).toBe("NEW_KEY");
+  });
 
   it("the reviewer's probe: a directory at motebit.md.backup changes nothing that names a key", () => {
     // EISDIR on the backup write once left config.json on the NEW key with

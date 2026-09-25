@@ -23,7 +23,7 @@ import { homedir } from "node:os";
 import { generateIdentity, regenerateIdentityFile, decryptPrivateKey } from "./generate.js";
 import type { TrustMode, EncryptedKey, ServiceIdentityOptions } from "./generate.js";
 import { rotateKey } from "./rotate.js";
-import { commitRotation, RotationCommitError } from "./rotate-commit.js";
+import { commitRotation, finishRotationCommand, RotationCommitError } from "./rotate-commit.js";
 import { createRL, input, password, select } from "./prompts.js";
 
 // ---------------------------------------------------------------------------
@@ -1373,7 +1373,7 @@ async function rotateCmd(
         `    ${filePath} now names the NEW key, but ${configPath()} still holds the old one.`,
       );
       console.log(`    The new key is held at ${err.newKeyAt} — move it into place:`);
-      console.log(`      ${dim(`mv "${err.newKeyAt}" "${configPath()}"`)}`);
+      console.log(`      ${dim(finishRotationCommand(err.newKeyAt, configPath()))}`);
       console.log(`    The old key is kept at ${err.oldKeyAt}.`);
     }
     console.log();

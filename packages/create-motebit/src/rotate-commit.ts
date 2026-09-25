@@ -21,7 +21,7 @@
  * A failure at 1 or 2 changes nothing that names a key. A failure at 3, 4 or
  * 5 leaves both keys on disk and a `RotationCommitError` that names where.
  */
-import { rmSync } from "node:fs";
+import { realpathSync, rmSync } from "node:fs";
 import {
   backupStamp,
   currentModeOr,
@@ -76,6 +76,21 @@ export class RotationCommitError extends Error {
     );
     this.name = "RotationCommitError";
   }
+}
+
+/**
+ * The one command that finishes a rotation stopped at the config step: move
+ * the held next config into place. It names the config's REAL path — a `mv`
+ * onto a symlinked config's name would replace the link with a regular file.
+ */
+export function finishRotationCommand(newKeyAt: string, configPath: string): string {
+  let target = configPath;
+  try {
+    target = realpathSync(configPath);
+  } catch {
+    /* not resolvable — name it as given */
+  }
+  return `mv "${newKeyAt}" "${target}"`;
 }
 
 export interface RotationCommitResult {

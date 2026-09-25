@@ -26,7 +26,7 @@ import * as path from "node:path";
 // vocabulary, and the SDK re-exports every protocol type.
 import type { KeySuccessionRecord } from "@motebit/sdk";
 import { CONFIG_DIR, type FullConfig } from "./config.js";
-import { preserveAside, writeFileAtomic } from "./durable-file.js";
+import { preserveAside, tightenToOwnerOnly, writeFileAtomic } from "./durable-file.js";
 
 export interface PendingRotation {
   motebit_id: string;
@@ -101,8 +101,13 @@ export function loadAnyPendingRotation(dir: string = CONFIG_DIR): PendingRotatio
   try {
     raw = fs.readFileSync(pendingRotationPath(dir), "utf-8");
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "ENOENT" ? null : "unreadable";
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    tightenToOwnerOnly(pendingRotationPath(dir));
+    return "unreadable";
   }
+  // It holds an encrypted private key: one written world-readable (by an
+  // older version, or by hand) is narrowed on load, as config.json is.
+  tightenToOwnerOnly(pendingRotationPath(dir));
   let pending: unknown;
   try {
     pending = JSON.parse(raw);
