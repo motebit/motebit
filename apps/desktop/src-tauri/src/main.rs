@@ -1017,9 +1017,16 @@ async fn fetch_url(url: String) -> Result<FetchUrlResponse, String> {
 // — ElevenLabs / Inworld / Deepgram / WebSpeech — at
 // `apps/desktop/src/ui/voice.ts:rebuildTtsProvider`.)
 
+/// Startup: create `~/.motebit` (at `dir`) owner-only — 0700 on Unix when
+/// it is created, an existing directory keeps its mode (item 16). `main()`
+/// calls this; `ipc_replay_tests` pins it.
+fn prepare_motebit_dir(dir: &std::path::Path) -> Result<(), String> {
+    durable_file::mkdir_owner_only(dir)
+}
+
 fn main() {
     let dir = durable_file::motebit_dir().expect("Cannot determine home directory");
-    durable_file::mkdir_owner_only(&dir).expect("Failed to create ~/.motebit directory");
+    prepare_motebit_dir(&dir).expect("Failed to create ~/.motebit directory");
     let db_path = dir.join("motebit.db");
 
     // No keychain migration: this build keeps keys in dev-keyring.json (see

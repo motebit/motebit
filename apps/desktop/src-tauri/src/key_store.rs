@@ -33,10 +33,12 @@
 //! The store logic is generic over [`SecretStore`] and is written to the
 //! keychain laws K1–K6 of the design doc, so the arc inherits it unchanged;
 //! those laws are unit-tested here against an in-memory `FakeKeychain`.
-//! Under [`NoKeychain`] they reduce to the file rules above, plus K3's
-//! one-way brake: a key-material name that `keychain-index.json` or a
-//! `dev-keyring.json.migrated-*` copy (left by a pre-release keychain build)
-//! says lives in a keychain is refused, never read as absent.
+//! Under [`NoKeychain`] they reduce to exactly the file rules above: with no
+//! keychain there is nothing to brake, so K3's brake is inert by type
+//! (`SecretStore::HAS_KEYCHAIN`). `keychain-index.json` and any
+//! `dev-keyring.json.*migrated-*` copy are just files to this build — the
+//! CLI's `motebit migrate-keyring` writes `dev-keyring.json.migrated-<t>`
+//! (its retired plaintext keyring), which proves nothing about a keychain.
 
 #[cfg(any(test, feature = "os-keychain"))]
 use crate::durable_file::{preserve_aside, Keep};
@@ -81,10 +83,25 @@ impl std::fmt::Display for ReadError {
 /// (a successful read that found nothing); every other outcome is a
 /// classified [`ReadError`]. `delete` of a missing entry is `Ok`.
 pub trait SecretStore {
+    /// Whether a keychain can exist behind this store at all. `false` only
+    /// for [`NoKeychain`]: with no keychain there is nothing a key could be
+    /// held in, so K3's brake has nothing to protect and never fires — the
+    /// files it would read as evidence (`keychain-index.json`, a migrated
+    /// copy) are just files. Decided by the TYPE, so a file-only build
+    /// cannot be made to consult them.
+    const HAS_KEYCHAIN: bool = true;
     fn get(&self, name: &str) -> Result<Option<String>, ReadError>;
     fn set(&self, name: &str, value: &str) -> Result<(), String>;
     fn delete(&self, name: &str) -> Result<(), String>;
 }
+
+/// The tag [`KeyStore::migrate`] keeps the pre-migration file under:
+/// `dev-keyring.json.keychain-migrated-<time>`. Deliberately NOT the CLI's
+/// `migrate-keyring` name (`dev-keyring.json.migrated-<time>`, a retired
+/// plaintext keyring that says nothing about any keychain) — see "Shared
+/// names between lanes" in docs/proposals/key-file-durability-v1.md.
+const KEYCHAIN_MIGRATED_TAG: &str = "keychain-migrated";
+const KEYCHAIN_MIGRATED_PREFIX: &str = "dev-keyring.json.keychain-migrated-";
 
 /// Why [`NoKeychain`] answers `Unavailable`.
 pub const NO_KEYCHAIN: &str =
@@ -99,6 +116,7 @@ pub const NO_KEYCHAIN: &str =
 pub struct NoKeychain;
 
 impl SecretStore for NoKeychain {
+    const HAS_KEYCHAIN: bool = false;
     fn get(&self, _name: &str) -> Result<Option<String>, ReadError> {
         Err(ReadError::Unavailable(NO_KEYCHAIN.to_string()))
     }
@@ -373,21 +391,27 @@ impl<S: SecretStore> KeyStore<S> {
         }
     }
 
-    /// K3's one-way use of the index: it can only make the store MORE
-    /// conservative. Key material the index lists — or that a
-    /// `dev-keyring.json.migrated-*` copy shows was moved into the keychain —
-    /// lives in the keychain; while the keychain is unavailable such a name
-    /// is refused, never read as absent (so no first launch mints over it)
-    /// and never written to the file (so no second candidate appears). A
-    /// damaged index or migrated copy counts as evidence. The index never
-    /// makes anything exist; it only withholds "absent".
+    /// K3's one-way use of the index (the keychain arc's; inert without a
+    /// keychain): it can only make the store MORE conservative. Key
+    /// material the index lists — or that a `dev-keyring.json.keychain-
+    /// migrated-*` copy (written only by [`KeyStore::migrate`]) shows was
+    /// moved into the keychain — lives in the keychain; while the keychain
+    /// is unavailable such a name is refused, never read as absent (so no
+    /// first launch mints over it) and never written to the file (so no
+    /// second candidate appears). A damaged index or migrated copy counts
+    /// as evidence. The index never makes anything exist; it only withholds
+    /// "absent".
+    ///
+    /// NOT evidence: the CLI's `motebit migrate-keyring` also keeps
+    /// `dev-keyring.json.migrated-<t>` (its retired plaintext keyring). That
+    /// name says nothing about any keychain, so the brake never reads it.
     fn refuse_if_keychain_held(&self, name: &str, why: &str) -> Result<(), String> {
-        if !guards_absence(name) {
+        if !S::HAS_KEYCHAIN || !guards_absence(name) {
             return Ok(());
         }
         if self.index_may_list(name) || self.migrated_copy_may_hold(name) {
             return Err(format!(
-                "{} is recorded as stored in the OS keychain ({} / {}.migrated-*), which cannot be read right now ({}). Refusing to treat it as absent; nothing was changed. If your keyring is locked or stopped, unlock or start it and retry.",
+                "{} is recorded as stored in the OS keychain ({} / {}.keychain-migrated-*), which cannot be read right now ({}). Refusing to treat it as absent; nothing was changed. If your keyring is locked or stopped, unlock or start it and retry.",
                 name,
                 self.index_path().display(),
                 self.dev_path().display(),
@@ -416,7 +440,7 @@ impl<S: SecretStore> KeyStore<S> {
         };
         entries.filter_map(|e| e.ok()).any(|e| {
             let file = e.file_name().to_string_lossy().into_owned();
-            if !file.starts_with("dev-keyring.json.migrated-") {
+            if !file.starts_with(KEYCHAIN_MIGRATED_PREFIX) {
                 return false;
             }
             match read_strict(&e.path()) {
@@ -664,7 +688,7 @@ impl<S: SecretStore> KeyStore<S> {
 
     /// Copy every entry that exists only in `dev-keyring.json` into the
     /// keychain, verify each by reading it back, and only then keep the file
-    /// aside (`dev-keyring.json.migrated-<time>`, a byte copy, 0600) and
+    /// aside (`dev-keyring.json.keychain-migrated-<time>`, a byte copy, 0600) and
     /// drop the migrated entries from the live file. A conflict (the
     /// keychain already holds a DIFFERENT value) leaves that entry in the
     /// file. A keychain that refuses stops the migration; nothing is lost.
@@ -716,7 +740,7 @@ impl<S: SecretStore> KeyStore<S> {
         }
         // Every migrated entry is verified in the keychain. Keep the file's
         // bytes before editing it (never deleted blind).
-        report.preserved_file = Some(preserve_aside(&self.dev_path(), "migrated", Keep::CopyBytes)?);
+        report.preserved_file = Some(preserve_aside(&self.dev_path(), KEYCHAIN_MIGRATED_TAG, Keep::CopyBytes)?);
         let mut remaining = dev.clone();
         for name in &done {
             remaining.remove(name);
@@ -1314,7 +1338,7 @@ pub mod tests {
         // The live file is gone only because its bytes were kept first.
         assert!(!dir.join("dev-keyring.json").exists());
         let kept = report.preserved_file.expect("file kept aside");
-        assert!(kept.file_name().unwrap().to_string_lossy().starts_with("dev-keyring.json.migrated-"));
+        assert!(kept.file_name().unwrap().to_string_lossy().starts_with("dev-keyring.json.keychain-migrated-"));
         assert!(std::fs::read_to_string(&kept).unwrap().contains("\"DK\""));
         #[cfg(unix)]
         {
@@ -1508,28 +1532,59 @@ pub mod tests {
         assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
     }
 
-    /// K3's brake on the app's store: a directory a pre-release keychain
-    /// build migrated (index row or `.migrated-*` copy) refuses the key —
-    /// never "absent", never a file mint that would shadow it. A plain
-    /// file-only machine is unaffected (row 1a).
+    /// #765's decisive finding, inverted: in the FILE-ONLY build there is no
+    /// keychain, so nothing is braked. A `keychain-index.json` listing the
+    /// key and `.migrated-*` copies holding it (the CLI's `migrate-keyring`
+    /// writes exactly `dev-keyring.json.migrated-<t>`) are just files: the
+    /// store behaves as main — absent reads as absent, so first launch,
+    /// divergence and restore work.
     #[test]
-    fn file_only_keychain_evidence_refuses_never_absent() {
+    fn file_only_ignores_keychain_evidence() {
         let dir = scratch("app-evidence");
         std::fs::write(dir.join("keychain-index.json"), "{\"keys\":[\"device_private_key\"]}").unwrap();
+        for tag in ["migrated-T", "keychain-migrated-T"] {
+            std::fs::write(
+                dir.join(format!("dev-keyring.json.{tag}")),
+                "{\"device_private_key\":\"aa\"}",
+            )
+            .unwrap();
+        }
         let s = app_store(&dir);
-        let err = s.get("device_private_key").unwrap_err();
-        assert!(err.contains("recorded as stored in the OS keychain"), "{err}");
-        assert!(s.set("device_private_key", "MINTED").is_err());
-        assert!(!dir.join("dev-keyring.json").exists());
-        std::fs::remove_file(dir.join("keychain-index.json")).unwrap();
+        assert_eq!(s.get("device_private_key").unwrap(), None);
+        // The restore / switch sequence, key-material writes included.
+        s.set("pending_identity_switch", "{\"motebit_id\":\"m-B\"}").unwrap();
+        s.set_aside("pending_rotation").unwrap();
+        s.set("device_private_key", "KEY-B").unwrap();
+        s.set_aside("pending_identity_switch").unwrap();
+        assert_eq!(s.get("device_private_key").unwrap().as_deref(), Some("KEY-B"));
+        assert_eq!(s.get("pending_identity_switch").unwrap(), None);
+        // The evidence files are untouched: this build neither reads nor edits them.
+        assert_eq!(
+            std::fs::read_to_string(dir.join("dev-keyring.json.migrated-T")).unwrap(),
+            "{\"device_private_key\":\"aa\"}"
+        );
+    }
+
+    /// The arc's brake (a real keychain, here unavailable) reads only the
+    /// desktop's own `keychain-migrated-*` name — never the CLI's
+    /// `migrate-keyring` copy (`dev-keyring.json.migrated-*`), a retired
+    /// plaintext keyring that says nothing about any keychain.
+    #[test]
+    fn the_brake_never_reads_the_cli_migrate_keyring_copy() {
+        let dir = scratch("cli-migrated");
+        std::fs::write(dir.join("dev-keyring.json.migrated-T"), "{\"device_private_key\":\"aa\"}").unwrap();
+        let kc = FakeKeychain::default();
+        *kc.unavailable.borrow_mut() = true;
+        let s = store(&kc, &dir);
+        assert_eq!(s.get("device_private_key").unwrap(), None);
+        s.set("device_private_key", "K").unwrap();
+        // The desktop's own migration name still brakes (row 1b).
+        let dir2 = scratch("desktop-migrated");
         std::fs::write(
-            dir.join("dev-keyring.json.migrated-T"),
-            "{\"device_private_key\":\"K\"}",
+            dir2.join("dev-keyring.json.keychain-migrated-T"),
+            "{\"device_private_key\":\"aa\"}",
         )
         .unwrap();
-        assert!(s.get("device_private_key").is_err());
-        // Non-key names are not braked.
-        s.set("anthropic_api_key", "sk").unwrap();
-        assert_eq!(s.get("anthropic_api_key").unwrap().as_deref(), Some("sk"));
+        assert!(store(&kc, &dir2).get("device_private_key").is_err());
     }
 }

@@ -129,3 +129,59 @@ fn restore_ipc_sequence_on_the_file_only_app_store_keeps_everything_of_a() {
     assert_eq!(std::fs::read_to_string(dir.join(&backups[0])).unwrap(), a_config);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn scratch_dir(tag: &str) -> std::path::PathBuf {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("motebit-{}-{}-{}", tag, std::process::id(), nonce));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// #765's decisive trigger, end to end: after a real `motebit migrate-keyring`
+/// the directory holds ONLY the CLI's retired plaintext keyring,
+/// `dev-keyring.json.migrated-<t>` = {"device_private_key": …}. On the
+/// file-only app store the bootstrap probe reads the key as absent (so
+/// bootstrap does not refuse on keychain grounds), and the restore IPC
+/// sequence (applyIdentitySwitch) completes — as on main.
+#[test]
+fn after_cli_migrate_keyring_the_file_only_store_bootstraps_and_restores() {
+    let dir = scratch_dir("after-migrate-keyring");
+    std::fs::write(dir.join("dev-keyring.json.migrated-T"), "{\"device_private_key\":\"aa\"}").unwrap();
+    let config = dir.join("config.json");
+    std::fs::write(&config, "{\"motebit_id\":\"m-A\",\"device_id\":\"d-A\",\"device_public_key\":\"aa-pub\"}").unwrap();
+    let store: KeyStore<NoKeychain> = KeyStore::file_only(dir.clone());
+
+    // Bootstrap's hasPrivateKey probe: a TRUE absence, never an error.
+    assert_eq!(store.get("device_private_key").unwrap(), None);
+
+    // Restore: every step of the pinned IPC sequence succeeds.
+    let steps: Vec<Value> = serde_json::from_str(FIXTURE).unwrap();
+    for step in &steps {
+        dispatch(&store, &config, step["cmd"].as_str().unwrap(), &step["args"]);
+    }
+    assert_eq!(store.get("device_private_key").unwrap().as_deref(), Some("KEY-B"));
+    assert_eq!(store.get("pending_identity_switch").unwrap(), None, "no write-ahead left behind");
+    let now: Value = serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    assert_eq!(now["motebit_id"], "m-B");
+    // The CLI's copy is left exactly as it was.
+    assert_eq!(
+        std::fs::read_to_string(dir.join("dev-keyring.json.migrated-T")).unwrap(),
+        "{\"device_private_key\":\"aa\"}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Item 16 at the call main() makes: a new `~/.motebit` is 0700.
+#[cfg(unix)]
+#[test]
+fn startup_creates_the_motebit_dir_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = scratch_dir("startup-dir");
+    let dir = root.join("home").join(".motebit");
+    crate::prepare_motebit_dir(&dir).unwrap();
+    assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+    let _ = std::fs::remove_dir_all(&root);
+}
