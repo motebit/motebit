@@ -1932,4 +1932,53 @@ export const relayMigrations: Migration[] = [
       db.prepare(IDENTITY_KEYS_BACKFILL_SQL).run(now, now);
     },
   },
+  {
+    version: 43,
+    name: "host_roster",
+    up: (db) => {
+      // The machine roster, part B (docs/doctrine/machine-roster.md,
+      // spec/machine-roster-v1.md §8/§9/§11, docs/proposals/
+      // machine-roster-relay-v1.md). Two tables because two categories
+      // that must never mix, and the relay evaluates neither:
+      //
+      // relay_host_roster_entries — MEMBERSHIP, as signed. Sovereign-signed
+      // HostEnrollment / HostRetirement artifacts, stored verbatim as
+      // canonical JSON (signature included) in `body_json`, keyed by the
+      // law's entry id (spec §4). INSERT OR IGNORE on the primary key IS
+      // the idempotent union. `signer_key` is the key the entry names; the
+      // per-signer-key caps count by it (proposal D2). `received_at` is
+      // this relay's own observation, never the artifact's self-asserted
+      // time. Never pruned; no removal path (proposal D3).
+      //
+      // relay_host_liveness — LIVENESS, observed. One overwritten
+      // `last_seen_at` per (motebit_id, device_id, bound_under), where
+      // `bound_under` is the key the socket's token verified under,
+      // captured at verification. Only for verified sockets announcing
+      // `unattended_runtime`. Swept 90 days after `last_seen_at`, never
+      // while a bound socket is live (proposal D4).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_host_roster_entries (
+          motebit_id   TEXT NOT NULL,
+          entry_id     TEXT NOT NULL,
+          kind         TEXT NOT NULL CHECK (kind IN ('enrollment', 'retirement')),
+          signer_key   TEXT NOT NULL,
+          body_json    TEXT NOT NULL,
+          received_at  INTEGER NOT NULL,
+          PRIMARY KEY (motebit_id, entry_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_host_roster_signer
+          ON relay_host_roster_entries (motebit_id, signer_key, kind);
+        CREATE TABLE IF NOT EXISTS relay_host_liveness (
+          motebit_id    TEXT NOT NULL,
+          device_id     TEXT NOT NULL,
+          bound_under   TEXT NOT NULL,
+          last_seen_at  INTEGER NOT NULL,
+          observed_by   TEXT NOT NULL,
+          PRIMARY KEY (motebit_id, device_id, bound_under)
+        );
+        CREATE INDEX IF NOT EXISTS idx_host_liveness_seen
+          ON relay_host_liveness (last_seen_at);
+      `);
+    },
+  },
 ];
