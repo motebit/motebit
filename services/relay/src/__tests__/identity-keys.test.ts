@@ -343,7 +343,7 @@ describe("identity-keys", () => {
       );
     });
 
-    it("the v42 backfill (E-main) transplants registry, else chain head — never a device row (R4), spelling as-is (DA10)", () => {
+    it("the v42 backfill (E-main) transplants the registry key only — never a device row (R4) nor the chain head, spelling as-is (DA10)", () => {
       plantRegistry(db, "bf-reg", A.toUpperCase(), C);
       plantChain(db, "bf-chain", A, B);
       plantDevice(db, "bf-dev", "d1", D);
@@ -354,7 +354,8 @@ describe("identity-keys", () => {
         guardian_public_key: C,
         source: "backfill:registry",
       });
-      expect(holderRow(db, "bf-chain")).toMatchObject({ public_key: B, source: "backfill:chain" });
+      // Never the chain head (#753 review item 1): it can be a paired device's own rotated key.
+      expect(holderRow(db, "bf-chain")).toBeUndefined();
       expect(holderRow(db, "bf-dev")).toBeUndefined();
       expect(holderRow(db, "bf-blank")).toBeUndefined();
     });
@@ -568,6 +569,39 @@ describe("identity-keys", () => {
       expect(departureFrom(db, "g1b", hex(owner)).admissible).toBe(true);
       const next = await generateKeypair();
       expect(await rotateOwn("g1b", "owner", owner, next)).toBe(200);
+    });
+  });
+
+  describe("#753 review round 1", () => {
+    it("item 1 — a paired device's device-rung rotation, then v42: the chain head is NOT transplanted, nothing is served (main: 404)", async () => {
+      const owner = await generateKeypair();
+      const paired = await generateKeypair();
+      plantDevice(db, "r1-chain", "owner", hex(owner));
+      plantDevice(db, "r1-chain", "paired", hex(paired));
+      const k3 = await generateKeypair();
+      expect(await rotateOwn("r1-chain", "paired", paired, k3)).toBe(200);
+      db.prepare(IDENTITY_KEYS_BACKFILL_SQL).run(9, 9);
+      expect(holderRow(db, "r1-chain")).toBeUndefined();
+      expect((await bundleKey("r1-chain")).status).toBe(404);
+      expect(readIdentityBindings(db).some((b) => b.motebit_id === "r1-chain")).toBe(false);
+    });
+
+    it("item 2 — a keyless register never blanks a registry key, so a paired device cannot then install X without a succession (main: 400)", async () => {
+      const owner = await generateKeypair();
+      const paired = await generateKeypair();
+      plantDevice(db, "r1-blank", "owner", hex(owner));
+      plantDevice(db, "r1-blank", "paired", hex(paired));
+      expect(
+        (await registerAsDevice("r1-blank", "owner", owner, { public_key: hex(owner) })).status,
+      ).toBe(200);
+      expect(registryKey(db, "r1-blank")).toBe(hex(owner));
+      expect((await registerAsDevice("r1-blank", "paired", paired, {})).status).toBe(200);
+      expect(registryKey(db, "r1-blank")).toBe(hex(owner));
+      const x = await generateKeypair();
+      expect(
+        (await registerAsDevice("r1-blank", "paired", paired, { public_key: hex(x) })).status,
+      ).toBe(400);
+      expect(registryKey(db, "r1-blank")).toBe(hex(owner));
     });
   });
 

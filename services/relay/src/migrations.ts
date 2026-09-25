@@ -1913,8 +1913,8 @@ export const relayMigrations: Migration[] = [
       // One holder for "this identity's current key" (#703 Inc 2, proposal
       // identity-key-state-v1 §5; services/relay/src/identity-keys.ts). Written
       // by every door that proves a key; read by the one resolver. Backfilled
-      // here from the AUTHORITY's rungs only — registry key, else chain head —
-      // never a device row (§5a A4; the device rung was dropped in #750's
+      // here from main's registry key ONLY (E-main, §5f/§5g) — never the chain
+      // head (#753 review) and never a device row (§5a A4; the device rung was dropped in #750's
       // review: a lone paired device's own key is indistinguishable in SQL
       // from the identity's). Device-only identities record their first key
       // at their next bootstrap or register-self.

@@ -293,6 +293,17 @@ Four findings surfaced while building. Each is resolved with evidence the protoc
 - **Stated cost:** G1a, L3 and LEGACY, all legacy (non-sovereign) ids, serve `''` where main served its registry key. New identities are sovereign by default, and every identity with a registry row at migration is transplanted by E-main.
 - **Named residual:** in G1a, for an unfilled legacy identity, a paired device's own key can reach the registry, and verification readers fall back to the registry. Main does the same in the other row order. Closing it means verification readers stop falling back to the registry, which is out of this build's scope.
 
+### 5h. Build 3 code review round 1 (#753) — the one fix round under §8
+
+An independent code review, which probed each candidate on the branch and on an `origin/main` copy, returned _fix-then-merge_ with two in-kind findings. Both are fixed; each has a test that goes red when the fix is removed:
+
+- **H1 (§8(a) kind) — E-main no longer reads the chain head.** A paired device's device-rung rotation (K2→K3) appends a link, so a chain head can be a key the identity never proved. The v42 transplant would have made K3 the holder and served and anchored it, where main 404s. E-main now transplants **main's registry key only**. Main never served the chain head, so nothing main served is lost. This supersedes §5f's "registry key, else chain head" and DB2's "benign" note.
+- **H2 (DB3's kind) — a keyless registration never blanks a registry key.** With rows that disagree, `discoveryKeyFor` answers `''`, and the upsert replaced the owner's registry key with it. The paired device's next keyed registration then needed no succession, and every unfilled verification reader moved to its key, where main refuses in every row order. Keyless now falls back to the existing registry key before `''`. §5g's residual is corrected to the state main shares exactly: a registry that is ALREADY `''`.
+- **Stated cost, widened (review item 3):** a sovereign identity whose FIRST rotation happens through the device rung before it is filled never fills. Any chain row blocks E-sov, and E-link needs a holder. Main serves its current key; build 3 serves `''`. Letting E-sov accept a chain whose root departs from the genesis key is the named follow-up.
+- **Prose corrected (review item 4):** the `/api/v1/agents/*` middleware DOES fall back (holder, else registry) when no row exists for the token's `did`. The register door's possession key is taken only from a device row, and E-sov's soundness also rests on DA2's predicate, which the reviewer confirmed closes the fallback path.
+
+This was the one fix round. Under §8, a further in-kind finding means withdraw.
+
 ## 6. Decisions
 
 - **D1 — delist, do not delete.** Deleting and moving keys to a new table in one step would touch ~35 read sites before anything is safer; delisting fixes the row-holding identities with a column and a filter, and is reversible.

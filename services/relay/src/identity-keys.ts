@@ -12,7 +12,7 @@
  *            + `recordFirstIdentityKey`, as a first key only;
  *  - E-link  a succession link verified by the HELD key (`applySuccession`);
  *  - E-mig   a migration arrival's verified sovereign binding;
- *  - E-main  the v42 backfill's one-time transplant of main's registry / chain head;
+ *  - E-main  the v42 backfill's one-time transplant of main's registry key;
  *  - E-op    an operator registration of a SERVICE identity with no holder, no
  *            device row and no chain — the one case main already trusts the
  *            operator for, and one no device can contest (§5f, build-time).
@@ -43,7 +43,6 @@ export const IDENTITY_KEY_SOURCES = [
   "succession",
   "migration",
   "backfill:registry",
-  "backfill:chain",
 ] as const;
 export type IdentityKeySource = (typeof IDENTITY_KEY_SOURCES)[number];
 
@@ -372,23 +371,23 @@ export function recordIdentityGuardian(
 }
 
 /**
- * The backfill, as SQL the migration runs once and a test can run against a
- * planted database: registry key, else chain head. NEVER a device row — the
- * holder is the authority, and authority never comes from devices (§5a A4):
- * a lone paired device's own key is indistinguishable in SQL from the
- * identity's, and backfilling it would make the paired device the identity
- * (#750 review). This is E-main (§5f): the ONE time the registry and chain
- * head are read as authority — a transplant of main's answer, spelling as-is
- * (DA10). An identity whose only evidence is device rows stays unfilled
- * until E-sov, E-link or E-mig; `departureFrom`'s device rung lets it rotate.
+ * The backfill (E-main), as SQL the migration runs once and a test can run
+ * against a planted database: main's registry key, and NOTHING else — the
+ * one time the registry is read as authority, a transplant of what main
+ * already served (spelling as-is, DA10). Never a device row (R4: a lone
+ * paired device's own key is indistinguishable in SQL from the identity's).
+ * Never the chain head: a device-rung rotation appends a link from a paired
+ * device's own key, so the head can be a key the identity never proved, and
+ * main never served it (#753 review item 1). An identity with no registry key
+ * stays unfilled until E-sov, E-link, E-mig or E-op; `departureFrom`'s device
+ * rung lets it rotate meanwhile.
  */
 export const IDENTITY_KEYS_BACKFILL_SQL = `
   INSERT INTO identity_keys (motebit_id, public_key, guardian_public_key, source, first_seen, updated_at)
   SELECT p.motebit_id,
-         COALESCE(p.reg, p.head) AS public_key,
+         p.reg AS public_key,
          p.guardian,
-         CASE WHEN p.reg IS NOT NULL THEN 'backfill:registry'
-              ELSE 'backfill:chain' END AS source,
+         'backfill:registry' AS source,
          COALESCE(p.registered_at, p.first_device, ?) AS first_seen,
          ? AS updated_at
   FROM (
@@ -396,7 +395,6 @@ export const IDENTITY_KEYS_BACKFILL_SQL = `
       (SELECT r.public_key FROM agent_registry r WHERE r.motebit_id = i.motebit_id AND r.public_key != '') AS reg,
       (SELECT r.guardian_public_key FROM agent_registry r WHERE r.motebit_id = i.motebit_id) AS guardian,
       (SELECT r.registered_at FROM agent_registry r WHERE r.motebit_id = i.motebit_id) AS registered_at,
-      (SELECT s.new_public_key FROM relay_key_successions s WHERE s.motebit_id = i.motebit_id ORDER BY s.id DESC LIMIT 1) AS head,
       (SELECT MIN(d.registered_at) FROM devices d WHERE d.motebit_id = i.motebit_id) AS first_device
     FROM (
       SELECT motebit_id FROM agent_registry
@@ -404,6 +402,6 @@ export const IDENTITY_KEYS_BACKFILL_SQL = `
       UNION SELECT motebit_id FROM relay_key_successions
     ) i
   ) p
-  WHERE COALESCE(p.reg, p.head) IS NOT NULL
+  WHERE p.reg IS NOT NULL
     AND p.motebit_id NOT IN (SELECT motebit_id FROM identity_keys)
 `;

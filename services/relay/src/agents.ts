@@ -1161,7 +1161,13 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
           "Invalid 'public_key' — must be a 64-char LOWERCASE hex string (32 bytes Ed25519 public key)",
       });
     }
-    const publicKey = keyFromBody ? rawBodyKey : discoveryKeyFor(moteDb.db, motebitId);
+    // A keyless registration never REPLACES a key the registry already holds
+    // with '' (#753 review item 2): unfilled verification readers fall back to
+    // the registry, so blanking it would let the next keyed registration — by
+    // a paired device — install any key without a succession.
+    const publicKey = keyFromBody
+      ? rawBodyKey
+      : discoveryKeyFor(moteDb.db, motebitId) || (registryKeyOf(moteDb.db, motebitId) ?? "");
 
     // --- Succession chain validation on re-registration ---
     // A differing key needs a link from the key on file. Once the identity has
@@ -1304,9 +1310,12 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // condition in one transaction just before the registry upsert (DA2). The
     // possession half (DB1): the bearer was verified by the device row that
     // holds exactly this key — an operator bearer or a fallback proves none.
-    // The key that verified this bearer: the `/api/v1/agents/*` middleware
-    // verifies an agent token against the device row its `did` names, with no
-    // fallback — so that row's key IS the verifying key, and nothing else is.
+    // The key that verified this bearer, when a device row verified it: the
+    // row its `did` names. (The middleware falls back to the holder, else the
+    // registry, only when no row exists for that did — and then this stays
+    // undefined.) E-sov needs CURRENT possession of the key it records (DB1);
+    // its soundness also rests on recordFirstIdentityKey's predicate (DA2),
+    // which refuses any identity already holding a different key.
     let callerDeviceKey: string | undefined;
     const bearer = c.req.header("authorization")?.slice(7);
     const bearerClaims =
