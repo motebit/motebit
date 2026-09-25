@@ -157,7 +157,7 @@ The signature is stored as a hex-encoded value in an HTML comment after the clos
 | Threat                             | Mitigation                                                                                    |
 | ---------------------------------- | --------------------------------------------------------------------------------------------- |
 | Frontmatter tampering              | Ed25519 signature — any change invalidates                                                    |
-| Private key theft                  | Encrypted at rest (PBKDF2 + AES-256-GCM) in config or OS keychain; never in the identity file |
+| Private key theft                  | Encrypted at rest (PBKDF2 + AES-256-GCM) in config on the CLI; the OS keychain on mobile; an owner-only (`0600` on Unix; Windows is best-effort) key file on desktop (access-controlled, not encrypted); never in the identity file |
 | Identity impersonation             | Public key is self-certifying; verification requires the matching keypair                     |
 | Key compromise (with succession)   | Old key signs succession record delegating to new key; chain is verifiable end-to-end         |
 | Key compromise (guardian recovery) | Guardian signs recovery succession; `motebit_id` and trust preserved                          |

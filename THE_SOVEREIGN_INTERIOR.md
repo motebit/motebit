@@ -46,7 +46,7 @@ An Ed25519 keypair is generated — crystallized from entropy, as a droplet crys
 
 The public key is the surface — the part of the identity that the world can observe, verify, and interact with. It is derived from the private key as the surface is derived from the interior. You can see the surface. You cannot reverse it to obtain the interior. The asymmetry is mathematical, and it mirrors the physical asymmetry: the surface reveals the interior's existence without exposing its structure.
 
-The keypair is not assigned by a platform. It is not a session token that expires when a server decides. It is generated locally, stored in the most protected layer available — the OS keyring, the deepest interior — and persists for the lifetime of the entity. A motebit does not rent its identity. It generates it. It owns it.
+The keypair is not assigned by a platform. It is not a session token that expires when a server decides. It is generated locally, stored in the most protected layer the surface offers — the OS keychain on mobile, a passphrase-encrypted file on the CLI, an owner-only file on the desktop until its keychain arc lands — and persists for the lifetime of the entity. A motebit does not rent its identity. It generates it. It owns it.
 
 ### 2.3 — Persistence Across Medium
 

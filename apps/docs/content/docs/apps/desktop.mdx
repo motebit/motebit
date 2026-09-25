@@ -26,7 +26,7 @@ pnpm --filter @motebit/desktop tauri:build
 On first launch, you'll see a welcome overlay explaining that motebit creates a local identity and device key. Click **Get started** to:
 
 1. Generate an Ed25519 keypair
-2. Store the private key in your OS keyring
+2. Store the private key in `~/.motebit/dev-keyring.json` (owner-only, `0600` on Unix; Windows is best-effort)
 3. Create your motebit identity
 4. Register this device
 
@@ -39,7 +39,7 @@ Open settings (gear icon, top right) to configure your LLM provider:
 | Provider | Setup |
 |---|---|
 | **Ollama** (default) | Install [Ollama](https://ollama.ai), pull a model (`ollama pull qwen3`), and select "Ollama" in settings |
-| **Anthropic** | Enter your API key in settings. Key is stored in the OS keyring, never on disk. |
+| **Anthropic** | Enter your API key in settings. Key is stored in the owner-only (`0600`) `~/.motebit/dev-keyring.json`, never in `config.json`. |
 
 Set the model name in the **Model** field. Examples: `llama3.2`, `claude-sonnet-4-6`.
 
@@ -48,7 +48,7 @@ Set the model name in the **Model** field. Examples: `llama3.2`, `claude-sonnet-
 Operator mode unlocks high-risk tools (file writes, shell execution, payments). It's gated by a PIN:
 
 1. Toggle **Operator Mode** in settings
-2. First time: set a 4-6 digit PIN (stored in the keyring as a salted PBKDF2-SHA256 digest, never plaintext)
+2. First time: set a 4-6 digit PIN (stored in the desktop key store, `~/.motebit/dev-keyring.json`, as a salted PBKDF2-SHA256 digest, never plaintext)
 3. Subsequent times: enter your PIN to enable
 
 While active, the agent can use R2+ risk tools. Tool calls still produce audit log entries, and specific tools can still require per-call approval.
@@ -93,6 +93,6 @@ No keyring, no operator mode, no sync — just the chat and rendering. Useful fo
 | Data | Storage |
 |---|---|
 | Provider, model | `~/.motebit/config.json` |
-| API key | OS keyring (via Tauri) |
-| Operator PIN hash | OS keyring (via Tauri) |
+| API key | `~/.motebit/dev-keyring.json` (owner-only, via Tauri) |
+| Operator PIN hash | `~/.motebit/dev-keyring.json` (owner-only, via Tauri) |
 | Identity, events, memories | `~/.motebit/motebit.db` (SQLite, WAL mode) |

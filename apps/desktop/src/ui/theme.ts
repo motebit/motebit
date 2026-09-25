@@ -1,3 +1,5 @@
+import { updateConfig, type ConfigInvoke } from "../config-update";
+
 export type ThemePreference = "light" | "dark" | "system";
 
 const THEME_KEY = "motebit-theme";
@@ -41,16 +43,9 @@ function persist(pref: ThemePreference, isTauri: boolean, invoke?: unknown): voi
   }
 
   if (isTauri && invoke != null) {
-    const invokeFn = invoke as (cmd: string, args: Record<string, unknown>) => Promise<string>;
-    void invokeFn("read_config", {})
-      .then((raw: string) => {
-        const parsed = JSON.parse(raw) as Record<string, unknown>;
-        parsed.theme = pref;
-        return invokeFn("write_config", { json: JSON.stringify(parsed) });
-      })
-      .catch(() => {
-        /* Non-fatal */
-      });
+    void updateConfig(invoke as ConfigInvoke, { theme: pref }).catch(() => {
+      /* Non-fatal */
+    });
   }
 }
 

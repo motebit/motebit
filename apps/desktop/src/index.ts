@@ -98,6 +98,7 @@ import { runDesktopMigrations } from "./tauri-migrations.js";
 import * as memoryCommands from "./memory-commands.js";
 import * as rendererCommands from "./renderer-commands.js";
 import { IdentityManager } from "./identity-manager.js";
+import { updateConfig } from "./config-update.js";
 import { McpManager } from "./mcp-manager.js";
 import { registerDesktopTools } from "./desktop-tools.js";
 import type { ComputerToolRegistration } from "./computer-tool.js";
@@ -586,11 +587,11 @@ export class DesktopApp {
 
   /**
    * Reveal the Ed25519 private seed for backup. Returns the 64-char hex
-   * string from the OS keyring. The caller (settings UI) is responsible
-   * for the user-facing protection: explicit click, blur-on-display,
-   * copy + auto-hide. The keyring backend (macOS Keychain / Windows
-   * Credential Manager / Linux Secret Service) gates access via OS-level
-   * authentication where supported; this method just reads what's there.
+   * string from the key store (~/.motebit/dev-keyring.json, 0600 plaintext;
+   * the OS keychain is not used yet, so there is no OS-level gate). The
+   * caller (settings UI) is responsible for the user-facing protection:
+   * explicit click, blur-on-display, copy + auto-hide; this method just
+   * reads what's there.
    */
   async revealRecoverySeed(invoke: InvokeFn): Promise<string | null> {
     const kp = await this.identity.getDeviceKeypair(invoke);
@@ -962,22 +963,11 @@ export class DesktopApp {
       saveToken: (data) => {
         this._proxyTokenCache = data;
         // Persist to Tauri config (best-effort, non-blocking)
-        void invoke<string>("read_config")
-          .then((raw) => {
-            const config = { ...(JSON.parse(raw) as Record<string, unknown>), _proxy_token: data };
-            return invoke<void>("write_config", { json: JSON.stringify(config) });
-          })
-          .catch(() => {});
+        void updateConfig(invoke, { _proxy_token: data }).catch(() => {});
       },
       clearToken: () => {
         this._proxyTokenCache = null;
-        void invoke<string>("read_config")
-          .then((raw) => {
-            const config = JSON.parse(raw) as Record<string, unknown>;
-            delete config._proxy_token;
-            return invoke<void>("write_config", { json: JSON.stringify(config) });
-          })
-          .catch(() => {});
+        void updateConfig(invoke, { _proxy_token: null }).catch(() => {});
       },
       mintAuthToken: async (): Promise<string | null> => {
         const keypair = await this.getDeviceKeypair(invoke);

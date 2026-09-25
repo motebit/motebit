@@ -3,7 +3,7 @@ title: Configuration
 description: Config files, environment variables, models, and MCP servers.
 ---
 
-Motebit uses a layered configuration system: config file for non-secret settings, OS keyring for secrets, environment variables for development overrides.
+Motebit uses a layered configuration system: config file for non-secret settings, the platform key store for secrets, environment variables for development overrides.
 
 ## Config file
 
@@ -41,7 +41,7 @@ Location: `~/.motebit/config.json`
 
 ## Secrets
 
-Secrets are stored in the OS keyring, never in the config file:
+Secrets are stored in the platform key store, never in the config file (desktop: the owner-only `~/.motebit/dev-keyring.json`; mobile: the iOS Keychain / Android Keystore):
 
 | Key | Description |
 |---|---|
@@ -51,7 +51,7 @@ Secrets are stored in the OS keyring, never in the config file:
 | `operator_pin_hash` | Operator PIN as a salted PBKDF2-SHA256 digest (100 000 iterations, `salt:derived`) |
 | `api_key` | Legacy single-vendor slot — read for migration only, never written |
 
-On desktop, the Tauri keyring API handles storage. On CLI, the private key is encrypted with PBKDF2 and stored in the config file (the only exception to the "no secrets in config" rule, and it's encrypted).
+On desktop, the Tauri app keeps these in `~/.motebit/dev-keyring.json` — owner-only (`0600` on Unix; Windows is best-effort), access-controlled rather than application-encrypted; moving them into the OS keychain is its own arc. On CLI, the private key is encrypted with PBKDF2 and stored in the config file (the only exception to the "no secrets in config" rule, and it's encrypted).
 
 ## Environment variables (dev mode)
 
@@ -89,7 +89,7 @@ Ollama runs on `http://localhost:11434` by default.
 
 ### Anthropic
 
-Set your API key via the desktop settings panel (stored in keyring) or environment variable. Set `default_provider: "anthropic"` and `default_model: "claude-sonnet-4-6"`.
+Set your API key via the desktop settings panel (stored in `~/.motebit/dev-keyring.json`) or environment variable. Set `default_provider: "anthropic"` and `default_model: "claude-sonnet-4-6"`.
 
 ### Custom endpoints
 

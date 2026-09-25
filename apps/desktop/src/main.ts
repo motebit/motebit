@@ -16,6 +16,7 @@ import {
 import type { DesktopContext } from "./types";
 import { formatTimeAgo } from "./types";
 import { loadDesktopConfig } from "./ui/config";
+import { updateConfig } from "./config-update";
 import {
   addMessage,
   addActionMessage,
@@ -440,10 +441,7 @@ async function persistMcpConfig(
   servers: McpServerConfig[],
 ): Promise<void> {
   try {
-    const raw = await invoke<string>("read_config");
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    parsed.mcp_servers = servers;
-    await invoke("write_config", { json: JSON.stringify(parsed) });
+    await updateConfig(invoke, { mcp_servers: servers });
   } catch {
     // Config write failed — servers are still in memory for this session
   }
@@ -922,14 +920,7 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
     invoke: import("./tauri-storage").InvokeFn,
     url: string | null,
   ): Promise<void> {
-    const raw = await invoke<string>("read_config");
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    if (url == null) {
-      delete parsed.sync_url;
-    } else {
-      parsed.sync_url = url;
-    }
-    await invoke("write_config", { json: JSON.stringify(parsed) });
+    await updateConfig(invoke, { sync_url: url ?? null });
   }
 
   function hideAllOverlays(): void {
@@ -1129,7 +1120,7 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
         const isTauriMissing =
           /__TAURI|tauri/i.test(msg) && /undefined|not (defined|available)/i.test(msg);
         statusText.textContent = isTauriMissing
-          ? "Sync needs the Tauri desktop app — relay auth uses the device key in the OS keyring."
+          ? "Sync needs the Tauri desktop app — relay auth uses the device key it keeps in ~/.motebit/dev-keyring.json."
           : `Failed: ${msg}`;
         statusText.classList.add("error");
       } finally {

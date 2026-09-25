@@ -64,7 +64,7 @@ interface BootstrapKeyStore {
 ```
 
 - **CLI:** PBKDF2 + AES-256-GCM encryption, stored in config
-- **Desktop:** OS keyring via Tauri
+- **Desktop:** `~/.motebit/dev-keyring.json` via Tauri (owner-only, plaintext; the OS keychain is a pending arc, #764)
 - **Mobile (future):** expo-secure-store (iOS Keychain / Android Keystore)
 - **Spatial (future):** localStorage (WebCrypto wrapping recommended)
 

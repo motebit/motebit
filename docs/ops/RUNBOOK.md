@@ -823,7 +823,7 @@ Service agents (web-search, read-url, etc.)
 Peer relays (not yet in production)
 ```
 
-Identity is Ed25519 keypairs. Relay stores them in SQLite, encrypted at rest with AES-256-GCM when `MOTEBIT_RELAY_KEY_PASSPHRASE` is set. Clients store in OS keyring (desktop/CLI) or expo-secure-store (mobile) or IndexedDB (web).
+Identity is Ed25519 keypairs. Relay stores them in SQLite, encrypted at rest with AES-256-GCM when `MOTEBIT_RELAY_KEY_PASSPHRASE` is set. Clients store them in `~/.motebit/dev-keyring.json` (desktop; owner-only plaintext), passphrase-encrypted in `~/.motebit/config.json` (CLI), expo-secure-store (mobile), or IndexedDB (web).
 
 ---
 

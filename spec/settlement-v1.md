@@ -343,7 +343,7 @@ In the default implementation, a single Ed25519 private key signs all of the fol
 - The sync encryption key derivation (deterministic AES-256 key: HKDF-SHA256 over the identity private key with empty salt and the info string `"motebit-sync-encryption-v1"`)
 - Solana SPL token transfers (because the Solana keypair _is_ the Ed25519 identity keypair via curve coincidence)
 
-The key is stored locally, in a platform-specific keystore: browser IndexedDB (web), Tauri OS keychain (desktop), Expo SecureStore backed by Secure Enclave / Keystore (mobile), or filesystem at mode 0600 (CLI).
+The key is stored locally, in a platform-specific keystore: browser IndexedDB (web), an owner-only file, `~/.motebit/dev-keyring.json` (desktop), Expo SecureStore backed by Secure Enclave / Keystore (mobile), or filesystem at mode 0600 (CLI).
 
 ### 10.2 Blast radius of compromise
 

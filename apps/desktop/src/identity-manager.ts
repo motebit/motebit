@@ -77,6 +77,7 @@ import {
   type RestoreIdentityResult,
 } from "@motebit/identity-file";
 import { rotateDesktopKey } from "./key-rotation";
+import { updateConfig } from "./config-update";
 import type { BootstrapResult } from "./index.js";
 import { createTauriStorage } from "./index.js";
 
@@ -112,6 +113,10 @@ export class IdentityManager {
    * keyring.
    */
   async bootstrap(invoke: InvokeFn): Promise<BootstrapResult> {
+    // A restore or key-transfer pairing interrupted between its key write
+    // and its config write is finished before anything reads either half.
+    await finishInterruptedIdentitySwitch(invoke);
+
     const configStore: BootstrapConfigStore = {
       async read() {
         const raw = await invoke<string>("read_config");
@@ -124,34 +129,42 @@ export class IdentityManager {
         };
       },
       async write(state) {
-        const raw = await invoke<string>("read_config");
-        const config = { ...(JSON.parse(raw) as Record<string, unknown>), ...state };
-        await invoke<void>("write_config", { json: JSON.stringify(config) });
+        // Never bind a new identity over the CLI's: the shared config's
+        // `cli_encrypted_key` is that identity's only key copy, and moving
+        // `motebit_id` off it orphans it. (Rust keeps the old file whenever
+        // binding fields change; this refuses the change outright.)
+        const current = JSON.parse(await invoke<string>("read_config")) as Record<string, unknown>;
+        if (holdsCliKey(current) && current.motebit_id !== state.motebit_id) {
+          throw new Error(cliIdentityRefusal(current, await retiredKeyrings(invoke)));
+        }
+        await updateConfig(invoke, { ...state });
       },
     };
 
     const keyStore: BootstrapKeyStore = {
       async storePrivateKey(privKeyHex) {
-        // Rust's keyring_set is dual-store: tries the OS Keychain (with
-        // a verify-read to detect macOS ad-hoc-signing silent-drops),
-        // then falls back to a mode-0600 file at
-        // `~/.motebit/dev-keyring.json` if the Keychain didn't persist.
-        // A resolved promise here means the value is stored somewhere
-        // durable; no TS-side verify needed.
+        // Rust's keyring_set stores in ~/.motebit/dev-keyring.json (0600,
+        // atomic; the OS keychain is not used yet); a previous value is
+        // preserved first. A resolved promise means it is durable.
         await invoke<void>("keyring_set", { key: "device_private_key", value: privKeyHex });
       },
       async hasPrivateKey() {
-        try {
-          // Rust's keyring_get checks Keychain first, then the dev-
-          // keyring file. Returns null if neither has the key.
-          const val = await invoke<string | null>("keyring_get", { key: "device_private_key" });
-          return val != null && val !== "";
-        } catch {
-          // Keyring backend unavailable entirely (unusual) — treat as
-          // absent. The first-launch recovery will try to write through
-          // the same keyring, which surfaces any real storage failure.
-          return false;
+        // R1: only a TRUE absence is `false`. A key file that cannot be
+        // read, or is damaged, makes keyring_get reject — and
+        // that rejection propagates, so bootstrap stops instead of treating
+        // the identity as orphaned and minting over it.
+        const val = await invoke<string | null>("keyring_get", { key: "device_private_key" });
+        const present = val != null && val !== "";
+        if (!present) {
+          const current = JSON.parse(await invoke<string>("read_config")) as Record<
+            string,
+            unknown
+          >;
+          if (holdsCliKey(current)) {
+            throw new Error(cliIdentityRefusal(current, await retiredKeyrings(invoke)));
+          }
         }
+        return present;
       },
     };
 
@@ -192,12 +205,9 @@ export class IdentityManager {
               },
               privKeyBytes,
             );
-            const raw = await invoke<string>("read_config");
-            const config = {
-              ...(JSON.parse(raw) as Record<string, unknown>),
-              _identity_file: identityFileContent,
-            };
-            await invoke<void>("write_config", { json: JSON.stringify(config) });
+            // A previous identity's `_identity_file` (a divergence-mint) is
+            // binding material: Rust keeps the old config before replacing it.
+            await updateConfig(invoke, { _identity_file: identityFileContent });
           } finally {
             secureErase(privKeyBytes);
           }
@@ -398,7 +408,7 @@ export class IdentityManager {
   }
 
   // Side-effecting restore: materialize an imported identity onto this
-  // device. Writes the new private key to the OS keyring, motebit_id +
+  // device. Writes the new private key to the key store, motebit_id +
   // device_id + device_public_key to the Tauri config file, and the
   // original signed motebit.md content to the `_identity_file` config
   // slot so bootstrap reads governance from its cryptographic anchor on
@@ -455,29 +465,27 @@ export class IdentityManager {
     }
 
     const newDeviceId = crypto.randomUUID();
+    const sw: IdentitySwitch = {
+      motebit_id: request.metadata.motebitId,
+      device_id: newDeviceId,
+      device_public_key: request.metadata.publicKey,
+      private_key_hex: request.privateKeyHex,
+      // Seed-only restore: the old identity file names the replaced
+      // identity; bootstrap regenerates one from the new keypair. (The old
+      // one is kept with the replaced config, never destroyed.)
+      identity_file: request.originalContent !== undefined ? request.originalContent : null,
+    };
     try {
-      await invoke<void>("keyring_set", {
-        key: "device_private_key",
-        value: request.privateKeyHex,
-      });
+      // Written ahead first: from here on a crash is finished at the next
+      // launch, so the key and the config can never be left mismatched.
+      await invoke<void>("keyring_set", { key: SWITCH_KEY, value: JSON.stringify(sw) });
     } catch {
       return { ok: false, reason: "keystore_write_failed" };
     }
     try {
-      const raw = await invoke<string>("read_config");
-      const configData = JSON.parse(raw) as Record<string, unknown>;
-      configData.motebit_id = request.metadata.motebitId;
-      configData.device_id = newDeviceId;
-      configData.device_public_key = request.metadata.publicKey;
-      if (request.originalContent !== undefined) {
-        configData._identity_file = request.originalContent;
-      } else {
-        // Seed-only restore: clear stale identity-file content. Bootstrap
-        // regenerates a fresh one from the new keypair on next launch.
-        delete configData._identity_file;
-      }
-      await invoke<void>("write_config", { json: JSON.stringify(configData) });
+      await applyIdentitySwitch(invoke, sw);
     } catch {
+      // The write-ahead stays; the next launch finishes the switch.
       return { ok: false, reason: "config_write_failed" };
     }
     return { ok: true, motebitId: request.metadata.motebitId, needsReload: true };
@@ -662,15 +670,13 @@ export class IdentityManager {
       pairingId: string;
     },
   ): Promise<string | undefined> {
-    const raw = await invoke<string>("read_config");
-    const config = JSON.parse(raw) as Record<string, unknown>;
     let walletWarning: string | undefined;
 
-    let updatedConfig: Record<string, unknown> = {
-      ...config,
+    const sw: IdentitySwitch = {
       motebit_id: result.motebitId,
       device_id: result.deviceId,
     };
+    let adoptedPublicKey: string | undefined;
 
     // Decrypt and install the identity key if key transfer is available
     if (keyTransferOpts) {
@@ -697,14 +703,13 @@ export class IdentityManager {
           }
 
           if (!walletWarning) {
-            // Replace private key in OS keyring
-            const newPrivHex = bytesToHex(identitySeed);
-            await invoke<void>("keyring_set", { key: "device_private_key", value: newPrivHex });
-
-            // The new public key is identity_pubkey_check (verified during decryption)
+            // The adopted key replaces this device's key through the
+            // identity-switch write-ahead below (the replaced key is kept).
+            // The new public key is identity_pubkey_check (verified during decryption).
             const newPubHex = keyTransfer.identity_pubkey_check;
-            updatedConfig = { ...updatedConfig, device_public_key: newPubHex };
-            this.publicKey = newPubHex;
+            sw.private_key_hex = bytesToHex(identitySeed);
+            sw.device_public_key = newPubHex;
+            adoptedPublicKey = newPubHex;
 
             // Update the relay's device registration with the new public key
             const client = new PairingClient({ relayUrl: syncUrl });
@@ -721,11 +726,125 @@ export class IdentityManager {
       }
     }
 
-    await invoke<void>("write_config", { json: JSON.stringify(updatedConfig) });
+    // One switch: the old identity's rotation write-ahead is set aside, the
+    // replaced key and binding are kept, and a crash is finished at launch.
+    await switchIdentity(invoke, sw);
 
+    if (adoptedPublicKey !== undefined) this.publicKey = adoptedPublicKey;
     this.motebitId = result.motebitId;
     this.deviceId = result.deviceId;
     return walletWarning;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Identity switch (restore, key-transfer pairing) — a write-ahead so the
+// key write and the config write can never be left half-done.
+// ---------------------------------------------------------------------------
+
+const SWITCH_KEY = "pending_identity_switch";
+
+/** What an identity switch installs. `identity_file: null` removes it. */
+export interface IdentitySwitch {
+  motebit_id: string;
+  device_id: string;
+  device_public_key?: string;
+  /** Present ⇒ `device_private_key` is replaced (the old one is kept by Rust). */
+  private_key_hex?: string;
+  /** Present ⇒ `_identity_file` is set (string) or removed (null). */
+  identity_file?: string | null;
+}
+
+/**
+ * Switch this device to another identity.
+ *
+ *  1. The whole switch is written ahead to the key store (key material,
+ *     so Rust preserves anything it replaces there).
+ *  2. The outgoing identity's rotation write-ahead is SET ASIDE (kept as
+ *     `pending_rotation.preserved-<time>`, never deleted): left active, the
+ *     next rotation would treat it as stale and clear it (C7).
+ *  3. The key, then the config (Rust keeps the replaced key as
+ *     `device_private_key.preserved-<time>` and the replaced config as
+ *     `config.json.clobbered-<time>`).
+ *  4. The write-ahead is removed (kept as preserved, like all key material).
+ *
+ * A crash anywhere after (1) is finished by the next bootstrap
+ * (`finishInterruptedIdentitySwitch`); before (1) nothing has changed.
+ */
+export async function switchIdentity(invoke: InvokeFn, sw: IdentitySwitch): Promise<void> {
+  await invoke<void>("keyring_set", { key: SWITCH_KEY, value: JSON.stringify(sw) });
+  await applyIdentitySwitch(invoke, sw);
+}
+
+async function applyIdentitySwitch(invoke: InvokeFn, sw: IdentitySwitch): Promise<void> {
+  await invoke<void>("keyring_set_aside", { key: "pending_rotation" });
+  if (sw.private_key_hex !== undefined) {
+    await invoke<void>("keyring_set", { key: "device_private_key", value: sw.private_key_hex });
+  }
+  const patch: Record<string, unknown> = {
+    motebit_id: sw.motebit_id,
+    device_id: sw.device_id,
+  };
+  if (sw.device_public_key !== undefined) patch.device_public_key = sw.device_public_key;
+  if (sw.identity_file !== undefined) patch._identity_file = sw.identity_file;
+  await updateConfig(invoke, patch);
+  await invoke<void>("keyring_set_aside", { key: SWITCH_KEY });
+}
+
+/**
+ * Finish a switch the last run started. An unreadable write-ahead stops
+ * bootstrap (R1: it may be the only record of which key is current).
+ */
+export async function finishInterruptedIdentitySwitch(invoke: InvokeFn): Promise<void> {
+  const raw = await invoke<string | null>("keyring_get", { key: SWITCH_KEY });
+  if (raw == null || raw === "") return;
+  let sw: IdentitySwitch;
+  try {
+    sw = JSON.parse(raw) as IdentitySwitch;
+  } catch (err) {
+    throw new Error(
+      `An interrupted identity switch (${SWITCH_KEY}) is held in the key store but cannot be read; nothing was changed.`,
+      { cause: err },
+    );
+  }
+  if (typeof sw.motebit_id !== "string" || typeof sw.device_id !== "string") {
+    throw new Error(
+      `An interrupted identity switch (${SWITCH_KEY}) is held in the key store but is malformed; nothing was changed.`,
+    );
+  }
+  await applyIdentitySwitch(invoke, sw);
+}
+
+function holdsCliKey(config: Record<string, unknown>): boolean {
+  const present = (v: unknown) => v != null && v !== "";
+  return present(config.cli_encrypted_key) || present(config.cli_private_key);
+}
+
+function cliIdentityRefusal(config: Record<string, unknown>, retired: string[]): string {
+  const id = typeof config.motebit_id === "string" ? config.motebit_id : "(no id)";
+  // A listing, never an inference: `motebit migrate-keyring` moves this
+  // desktop's whole dev-keyring.json aside to these names.
+  const moved =
+    retired.length > 0
+      ? `This desktop's own key may be in ${retired.join(", ")} (a keyring \`motebit migrate-keyring\` moved aside); ` +
+        `moving that file back to ~/.motebit/dev-keyring.json recovers it. `
+      : "";
+  return (
+    `~/.motebit/config.json holds the motebit CLI's identity ${id} and its only key copy, ` +
+    `and this desktop has no key for it. The desktop will not mint a new identity over it. ` +
+    moved +
+    `To use that identity here, restore it from its recovery seed (Settings → Identity → Restore). ` +
+    `Nothing was changed.`
+  );
+}
+
+/** `dev-keyring.json.migrated-*` paths, for the refusal message; [] if the listing fails. */
+async function retiredKeyrings(invoke: InvokeFn): Promise<string[]> {
+  try {
+    const got = await invoke<unknown>("keyring_retired_copies");
+    return Array.isArray(got) ? got.filter((p): p is string => typeof p === "string") : [];
+  } catch {
+    return [];
   }
 }
 
