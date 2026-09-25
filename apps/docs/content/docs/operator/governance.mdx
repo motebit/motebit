@@ -55,7 +55,7 @@ Operator mode is a PIN-protected session elevation — `sudo` for the agent. Whe
 
 | Aspect | Detail |
 |--------|--------|
-| **PIN** | 4-6 digits. Stored in the OS keyring as a salted PBKDF2-SHA256 digest (100 000 iterations) — never plaintext, never sent over the network. |
+| **PIN** | 4-6 digits. Stored in the device key store (the owner-only `~/.motebit/dev-keyring.json` on desktop) as a salted PBKDF2-SHA256 digest (100 000 iterations) — never plaintext, never sent over the network. |
 | **Scope** | Session-level. Disabling operator mode re-locks everything immediately. |
 | **Separation from identity** | Operator mode is not part of the cryptographic identity. It is a runtime gate on the device. |
 

@@ -23,11 +23,11 @@ Desktop releases are available from the [GitHub releases page](https://github.co
 
 ### First launch
 
-1. **Identity** — The app generates an Ed25519 keypair and stores the private key in your OS keychain. This is your agent's identity. It never leaves your device.
+1. **Identity** — The app generates an Ed25519 keypair and stores the private key in the owner-only (`0600`) `~/.motebit/dev-keyring.json` (the OS keychain is not used on desktop yet). This is your agent's identity. It never leaves your device.
 2. **Device** — Your machine is registered as a trusted device. Later you can add your phone, another computer, or any other device.
 3. **Chat** — The interface appears. Type or speak to your motebit.
 
-Everything is local. Your memories, your identity, your conversation history — all stored on your machine in a local SQLite database protected by filesystem permissions; your private key is the part that is encrypted (PBKDF2 + AES-256-GCM, or the OS keyring).
+Everything is local. Your memories, your identity, your conversation history — all stored on your machine in a local SQLite database protected by filesystem permissions; your private key is kept apart: encrypted on the CLI (PBKDF2 + AES-256-GCM), in the iOS Keychain / Android Keystore on mobile, and in an owner-only (`0600`) key file on desktop.
 
 ### Choose your intelligence
 
@@ -36,7 +36,7 @@ Your motebit doesn't care which LLM powers it. Open settings and pick a provider
 | Provider | What you need |
 |----------|--------------|
 | **Ollama** | Install [Ollama](https://ollama.ai), pull a model (`ollama pull llama3.2`). Free, local, private. |
-| **Anthropic** | Enter your API key. Stored in OS keychain, never on disk. |
+| **Anthropic** | Enter your API key. Stored in the owner-only (`0600`) `~/.motebit/dev-keyring.json`, never in `config.json`. |
 
 You can switch providers at any time. Your identity, memory, and governance stay the same — only the intelligence changes.
 
@@ -52,7 +52,7 @@ By default, your motebit can only read. To let it write files, run commands, or 
 2. Enter your PIN to enable operator mode
 3. High-risk tools now require per-call approval — the agent shows you what it wants to do and waits for you to allow or deny
 
-Your PIN hash is stored in the OS keychain. Every tool call is logged to an audit trail.
+Your PIN hash is stored in the owner-only (`0600`) `~/.motebit/dev-keyring.json`. Every tool call is logged to an audit trail.
 
 ## Command line
 
@@ -268,4 +268,4 @@ If a private key is compromised, rotate immediately. If rotation isn't possible 
 npm create motebit
 ```
 
-The old identity is abandoned. Memories do not migrate between identities — each identity has its own isolated memory graph. Hardware-backed storage (OS keychain on desktop and mobile) makes compromise unlikely in practice.
+The old identity is abandoned. Memories do not migrate between identities — each identity has its own isolated memory graph. Hardware-backed storage on mobile (iOS Keychain / Android Keystore) and owner-only files on desktop and CLI make compromise unlikely in practice.
