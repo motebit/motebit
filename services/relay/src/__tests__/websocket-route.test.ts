@@ -87,6 +87,8 @@ function connect(query: string, h: Harness) {
         onVerified,
       )) as typeof verifySignedTokenForDevice,
     parseTokenPayloadUnsafe,
+    // index.ts's resolution over the harness's own stores: device row, else registry.
+    keyThatVerifiesNow: (_mid: string, did: string) => h.devices.get(did) ?? h.registryKey ?? null,
     wsLimiter: { check: () => ({ allowed: true }) },
     logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
     onPeerBound: (_m: string, peer: ConnectedDevice) => h.bound.push({ ...peer }),
@@ -231,7 +233,8 @@ describe("a declared device id is VERIFIED only when the signed token proves it"
 
 describe("bound_under is captured at verification and never re-read (review F1)", () => {
   it("a socket verified under K_old stays bound under K_old after its device row is rotated to K_new", async () => {
-    // succession-apply.ts rewrites device rows and closes no sockets. A
+    // succession-apply.ts rewrites device rows; its socket close (#767) is a
+    // handshake, and a hand-built harness has no applySuccession at all. A
     // socket opened under the old key must never read as bound under the
     // new one — not at a later announce, and not at close.
     const kOld = await generateKeypair();

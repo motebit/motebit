@@ -79,7 +79,8 @@ import { createRelaySchema } from "./schema.js";
 import { createRelayConfigTable, loadFreezeState, persistFreeze } from "./freeze.js";
 import { parseTokenPayloadUnsafe, verifySignedTokenForDevice } from "./auth.js";
 import { registerMiddleware, registerAuthMiddleware } from "./middleware.js";
-import { registerWebSocketRoutes, WS_OPEN } from "./websocket.js";
+import { closeSocketsAuthenticatedUnder, registerWebSocketRoutes, WS_OPEN } from "./websocket.js";
+import type { RetireKeyConnections } from "./succession-apply.js";
 import { createAuthEventSink } from "./auth-events.js";
 import type { ConnectedDevice } from "./websocket.js";
 import { registerSyncRoutes, redactSensitiveEvents } from "./sync-routes.js";
@@ -750,6 +751,15 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   const logger = createLogger({ service: "relay" });
 
+  // The one binding of "a key was retired" to the sockets it admitted (#767).
+  // Every door that retires a key a socket can have been admitted under takes
+  // it as a REQUIRED dep: `/rotate-key` and the `/agents/register` succession
+  // path through `applySuccession`, and pairing's `update-key`.
+  const retireKeyConnections: RetireKeyConnections = (motebitId, retiredKey) => {
+    const closed = closeSocketsAuthenticatedUnder(connections, motebitId, retiredKey, logger);
+    if (closed > 0) logger.info("ws.key_retired_sockets_closed", { motebitId, closed });
+  };
+
   // --- Settlement rail manifest: log at boot so missing env-var gating is
   // visible. A rail registered at config time but not listed here means the
   // adapter silently disabled itself. Mirrors /health/ready's rails section.
@@ -779,6 +789,18 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
       .get(mid) as { public_key?: string } | undefined;
     return verificationKeyFor(moteDb.db, mid, row?.public_key);
+  };
+  // The same resolution the verifier performs — the device row for the
+  // token's `did` (the relay's device store IS this table), else the
+  // fallback above — read synchronously. The WS route asks it right before
+  // registering a socket, so a rotation that landed during the verification
+  // await cannot leave a socket registered under the key it retired (#767).
+  const keyThatVerifiesNow = (mid: string, did: string): string | null => {
+    const device = moteDb.db
+      .prepare("SELECT public_key FROM devices WHERE device_id = ? AND motebit_id = ?")
+      .get(did, mid) as { public_key: string | null } | undefined;
+    if (device != null) return device.public_key ?? null;
+    return agentRegistryKeyLookup(mid);
   };
   const verifySignedTokenForDeviceWithFallback: typeof verifySignedTokenForDevice = (
     token,
@@ -999,6 +1021,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     isAgentRevoked,
     verifySignedTokenForDevice: verifySignedTokenForDeviceWithFallback,
     parseTokenPayloadUnsafe,
+    keyThatVerifiesNow,
     logger,
     onCommandResponse: handleCommandResponse,
     // The roster's liveness record (proposal D4): written at bind, at
@@ -1429,6 +1452,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     verifySignedTokenForDevice: verifySignedTokenForDeviceWithFallback,
     isTokenBlacklisted,
     isAgentRevoked,
+    retireKeyConnections,
   });
 
   // --- State export routes (read-only agent state queries) ---
@@ -1458,6 +1482,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     moteDb,
     relayIdentity,
     recordAuthEvent: authEvents.record,
+    retireKeyConnections,
   });
 
   // --- Browser-sandbox dispatcher-token endpoint ---
@@ -1574,6 +1599,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     verifySignedTokenForDevice: verifySignedTokenForDeviceWithFallback,
     isTokenBlacklisted,
     isAgentRevoked,
+    retireKeyConnections,
   });
 
   // --- Service listings + market queries ---

@@ -14,7 +14,13 @@ import {
   hexToBytes,
 } from "@motebit/encryption";
 import { insertRevocationEvent } from "./federation.js";
-import { applySuccession, departureFrom, keyOnFile, successionAtHead } from "./succession-apply.js";
+import {
+  applySuccession,
+  departureFrom,
+  keyOnFile,
+  successionAtHead,
+  type RetireKeyConnections,
+} from "./succession-apply.js";
 import { readSuccessionChain } from "./identity-transparency.js";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
@@ -33,11 +39,17 @@ export interface KeyRotationDeps {
    * recorded the day a refactor drops the field, with nothing going red.
    */
   recordAuthEvent: (event: AuthEvent) => void;
+  /**
+   * Closes the connections a retired key admitted (`applySuccession`, #767).
+   * Required for the same reason as the recorder: optional, it is a rotation
+   * that silently stops ending anything the day a refactor drops the field.
+   */
+  retireKeyConnections: RetireKeyConnections;
 }
 
 /** Initialize approval tables and register all key-rotation/revocation/approval routes. */
 export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
-  const { app, moteDb, relayIdentity, recordAuthEvent } = deps;
+  const { app, moteDb, relayIdentity, recordAuthEvent, retireKeyConnections } = deps;
 
   // --- Approval tables (idempotent) ---
   moteDb.db.exec(`
@@ -264,7 +276,7 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
       }
     }
 
-    const { applied } = applySuccession(moteDb.db, motebitId, body);
+    const { applied } = applySuccession(moteDb.db, motebitId, body, retireKeyConnections);
 
     if (applied) {
       // The old key ceased to be authoritative at the rotation moment, not

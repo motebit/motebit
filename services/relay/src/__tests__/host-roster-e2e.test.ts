@@ -183,7 +183,9 @@ describe("liveness over a real socket", () => {
     await waitFor(() => persisted().length === 1, "the bind write");
     const boundAt = persisted()[0]!.last_seen_at;
 
-    // The rotation: succession-apply rewrites device rows, closes nothing.
+    // The row rewrite alone (direct SQL): what `applySuccession` does to the
+    // rows. Its socket close (#767) is not in play here — this isolates the
+    // capture, which must hold for the whole of a close handshake.
     relay.moteDb.db
       .prepare("UPDATE devices SET public_key = ? WHERE motebit_id = ?")
       .run(bytesToHex(k2.publicKey), motebitId);

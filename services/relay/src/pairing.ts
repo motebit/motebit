@@ -11,6 +11,7 @@ import { createLogger } from "./logger.js";
 import { admitKey, isCanonicalKey } from "./identity-keys.js";
 import type { IdentityManager } from "@motebit/core-identity";
 import type { DatabaseDriver } from "@motebit/persistence";
+import type { RetireKeyConnections } from "./succession-apply.js";
 
 // --- Pairing Code Generator ---
 
@@ -47,6 +48,13 @@ export interface PairingDeps {
   ) => Promise<boolean>;
   isTokenBlacklisted: (jti: string, motebitId: string) => boolean;
   isAgentRevoked: (motebitId: string) => boolean;
+  /**
+   * Closes the connections a retired key admitted. `update-key` replaces the
+   * paired device's own claiming key with the transferred identity key, so
+   * the claiming key stops admitting new sockets — and must stop holding the
+   * ones it already admitted (#767). Required, like `applySuccession`'s port.
+   */
+  retireKeyConnections: RetireKeyConnections;
 }
 
 // --- Table creation ---
@@ -475,6 +483,15 @@ export function registerPairingRoutes(deps: PairingDeps): void {
     }
 
     await identityManager.updateDevicePublicKey(deviceId, body.public_key);
+
+    // The key the row held until now (the claiming key) no longer admits a
+    // socket; close the ones it already admitted, so the device reconnects
+    // under the key it now holds. A re-presentation writes the same key
+    // again and retires nothing.
+    const previous = device.public_key;
+    if (previous !== "" && previous.toLowerCase() !== body.public_key.toLowerCase()) {
+      deps.retireKeyConnections(motebitId, previous);
+    }
 
     return c.json({ ok: true });
   });

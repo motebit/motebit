@@ -28,6 +28,55 @@ import type { AuthEvent } from "./auth-events.js";
 /** `WebSocket.OPEN` — the only state in which a socket is registered or counted. */
 export const WS_OPEN = 1;
 
+/**
+ * Close code for a socket whose admitting key was retired by a key
+ * succession (#767). Not a refusal of the client: its identity moved on to
+ * a new key, and it should re-authenticate under that key. Distinct from
+ * 4003 (a token that does not verify) so a client can tell "your credential
+ * is stale" from "your credential is wrong".
+ */
+export const WS_CLOSE_KEY_RETIRED = 4010;
+const WS_CLOSE_KEY_RETIRED_REASON = "Key rotated; re-authenticate";
+
+/**
+ * Close every registered socket of `motebitId` whose token verified under
+ * `retiredKey` (compared case-insensitively, the way `applySuccession`
+ * retires device rows — retiring WIDER is fail-safe). Sockets admitted
+ * under any other key stay open: a device linked without key transfer holds
+ * its own key, which a rotation of the identity key is not about. Sockets
+ * admitted by no identity key (master token, device auth off) stay open:
+ * the retired key never admitted them.
+ *
+ * The socket is only asked to close; it leaves `connections` through the
+ * route's `onClose`, which is what writes the roster's `last_seen_at`
+ * (`onPeerClosed`). Returns the number of sockets asked to close.
+ */
+export function closeSocketsAuthenticatedUnder(
+  connections: Map<string, ConnectedDevice[]>,
+  motebitId: string,
+  retiredKey: string,
+  logger?: { warn: (msg: string, ctx?: Record<string, unknown>) => void },
+): number {
+  const retired = retiredKey.toLowerCase();
+  let closed = 0;
+  for (const peer of connections.get(motebitId) ?? []) {
+    if (peer.authenticatedUnder == null || peer.authenticatedUnder.toLowerCase() !== retired) {
+      continue;
+    }
+    try {
+      peer.ws.close(WS_CLOSE_KEY_RETIRED, WS_CLOSE_KEY_RETIRED_REASON);
+      closed++;
+    } catch (err: unknown) {
+      logger?.warn("ws.key_retired_close_failed", {
+        motebitId,
+        deviceId: peer.deviceId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return closed;
+}
+
 export interface ConnectedDevice {
   ws: WSContext;
   deviceId: string;
@@ -66,11 +115,25 @@ export interface ConnectedDevice {
    * the device row (not the agent-registry fallback).
    *
    * Never re-read, because rotation rewrites device rows
-   * (`succession-apply.ts`) and closes no sockets: a socket opened under
-   * the old key would otherwise read as bound under the new one
-   * (docs/proposals/machine-roster-relay-v1.md D4, review F1).
+   * (`succession-apply.ts`): a socket opened under the old key would
+   * otherwise read as bound under the new one
+   * (docs/proposals/machine-roster-relay-v1.md D4, review F1). Rotation
+   * also CLOSES such a socket (`authenticatedUnder`, #767), but a close is
+   * a handshake, and until it completes the socket is still here.
    */
   boundUnder?: string;
+  /**
+   * The public key (lowercase hex) the socket's signed token verified
+   * under — from the device row for the token's `did`, or the
+   * agent-registry fallback (service-mode motebits) — captured at
+   * verification, never re-read. Unlike `boundUnder` it does not depend on
+   * the declared device id: it answers "which credential admitted this
+   * socket", which is what a rotation retires
+   * (`closeSocketsAuthenticatedUnder`, #767). Absent for the master token
+   * and with device auth off — those sockets were admitted by no identity
+   * key, so no rotation retires them.
+   */
+  authenticatedUnder?: string;
   capabilities?: string[];
 }
 
@@ -103,6 +166,15 @@ export interface WebSocketDeps {
     onVerified?: (publicKey: string, source: import("./auth.js").VerifiedKeySource) => void,
   ) => Promise<boolean>;
   parseTokenPayloadUnsafe: (token: string) => import("./auth.js").TokenPayload | null;
+  /**
+   * The key a signed token for (`motebitId`, `did`) would verify under RIGHT
+   * NOW — the resolution `verifySignedTokenForDevice` performs (the device
+   * row for the `did`, else the agent-registry fallback), read SYNCHRONOUSLY,
+   * so no rotation can land between this read and the registration that
+   * depends on it (`keyRetiredDuringVerification`, #767). Required: optional,
+   * the mid-verification race would silently reopen the day it was dropped.
+   */
+  keyThatVerifiesNow: (motebitId: string, did: string) => string | null;
   logger: ReturnType<typeof createLogger>;
   onCommandResponse?: (commandId: string, result: unknown) => void;
   /**
@@ -171,6 +243,9 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
       // `ConnectedDevice.deviceIdVerified` / `boundUnder`.
       let verifiedDid: string | null = null;
       let verifiedDeviceKey: string | null = null;
+      // The key the token verified under, whatever its source (device row or
+      // agent-registry fallback). See `ConnectedDevice.authenticatedUnder`.
+      let verifiedKey: string | null = null;
       // Track whether we're still waiting for an auth frame (connection not yet finalized)
       let awaitingAuthFrame = false;
       // The one gate for every non-auth frame: set only by finalizeConnection,
@@ -222,6 +297,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
           // Signed token verification. The key that verified it is captured
           // HERE, from the row the verifier read — never looked up again.
           let keyFromDeviceRow: string | null = null;
+          let keyVerified: string | null = null;
           const verified = await verifySignedTokenForDevice(
             token,
             mid,
@@ -245,6 +321,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
             },
             (key, source) => {
               keyFromDeviceRow = source === "device" ? key : null;
+              keyVerified = key;
             },
           );
           if (!verified) {
@@ -258,6 +335,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
           // here: the signature over these claims has just been checked.
           verifiedDid = deps.parseTokenPayloadUnsafe(token)?.did ?? null;
           verifiedDeviceKey = keyFromDeviceRow;
+          verifiedKey = keyVerified;
           return true;
         }
         // No device auth — check apiToken (shared secret)
@@ -269,6 +347,21 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
           return false;
         }
         return true;
+      }
+
+      /**
+       * Was the key this socket's token verified under retired WHILE it was
+       * being verified? Verification awaits (the device-row read, then the
+       * signature), and a succession applied inside that await closes only
+       * sockets already registered — this one is not yet. Checked
+       * synchronously right before registration, so nothing can land between
+       * the check and the push into `connections`; from then on
+       * `closeSocketsAuthenticatedUnder` sees it (#767).
+       */
+      function keyRetiredDuringVerification(): boolean {
+        if (verifiedKey == null || verifiedDid == null) return false;
+        const current = deps.keyThatVerifiesNow(motebitId, verifiedDid);
+        return current == null || current.toLowerCase() !== verifiedKey;
       }
 
       /** Tell the observer a peer is bound (or re-announced); never let it take the socket down. */
@@ -320,6 +413,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
           ...(deviceIdVerified && verifiedDeviceKey != null
             ? { boundUnder: verifiedDeviceKey }
             : {}),
+          ...(verifiedKey != null ? { authenticatedUnder: verifiedKey } : {}),
           capabilities,
         };
         connections.get(motebitId)!.push(peer);
@@ -363,6 +457,11 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
           if (queryToken != null && queryToken !== "") {
             const authResult = await validateToken(queryToken, motebitId, ws);
             if (!authResult) return; // ws already closed by validateToken
+            if (keyRetiredDuringVerification()) {
+              logger.info("ws.key_retired_during_verification", { motebitId, deviceId });
+              ws.close(WS_CLOSE_KEY_RETIRED, WS_CLOSE_KEY_RETIRED_REASON);
+              return;
+            }
             authenticated = true;
           } else if (enableDeviceAuth) {
             // Device auth required but no query token — wait for post-connect auth frame
@@ -418,6 +517,18 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
               const valid = await validateToken(token, motebitId, ws, true);
               if (!valid) {
                 // validateToken already sent auth_result with ok:false and closed
+                return;
+              }
+              if (keyRetiredDuringVerification()) {
+                logger.info("ws.key_retired_during_verification", { motebitId, deviceId });
+                ws.send(
+                  JSON.stringify({
+                    type: "auth_result",
+                    ok: false,
+                    error: WS_CLOSE_KEY_RETIRED_REASON,
+                  }),
+                );
+                ws.close(WS_CLOSE_KEY_RETIRED, WS_CLOSE_KEY_RETIRED_REASON);
                 return;
               }
               authenticated = true;

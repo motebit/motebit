@@ -186,8 +186,8 @@ export async function verifySignedTokenForDevice(
   // again. A caller that attributes anything to "the key this token
   // verified under" (the machine roster's own bucket and `bound_under`)
   // must get it here: a later re-read of the device row can return a
-  // different key, because rotation rewrites device rows and closes
-  // nothing that authenticated under the old one.
+  // different key, because rotation rewrites device rows (and closes what
+  // the old key admitted only afterwards, through a handshake — #767).
   onVerified?.(pubKeyHex.toLowerCase(), source);
   return true;
 }
