@@ -9,7 +9,7 @@ The desktop keeps secrets in the OS keychain. `~/.motebit/dev-keyring.json` (pla
 ### Laws
 
 - **K1: no blind keychain mutation.** Within one operation, the store may set or delete name N in the keychain only after a successful keychain read of N. NotFound counts as a successful read that found nothing. A read error means no keychain mutation of N in that operation. The store then either writes the file (K2 "unavailable") or refuses.
-- **K2: unavailable is not unreadable.** A failed keychain read is classified by `OsKeychain::classify`, using keyring 3.6.3's own error mapping:
+- **K2: unavailable is not unreadable.** A failed keychain read is classified by `key_store::classify`, using keyring 3.6.3's own error mapping:
   - **Unavailable** means there is no store to ask. The operation runs in file-only mode (main's behavior). Unavailable is exactly:
     - macOS: `NoStorageAccess` (errSecNotAvailable, ReadOnly, NoSuchKeychain, InvalidKeychain).
     - Windows: `NoStorageAccess` (ERROR_NO_SUCH_LOGON_SESSION).
