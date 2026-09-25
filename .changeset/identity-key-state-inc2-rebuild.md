@@ -2,7 +2,7 @@
 "@motebit/relay": minor
 ---
 
-An identity's key is now held by evidence, not by whichever door wrote last (#703 Increment 2, build 3). The new `identity_keys` holder is the only authority for what the relay serves (the identity bundle, the identity log, `/succession`), what a rotation departs from, and what a registration is checked against.
+An identity's key is now held by evidence, not by whichever door wrote last (#703 Increment 2, build 3). The new `identity_keys` holder is what the relay serves as an identity's key (the identity bundle, the identity log, `/succession`). What a rotation departs from, and what a registration is checked against, is the holder when there is one, and otherwise exactly what it was before.
 
 It is written only by:
 
@@ -10,7 +10,7 @@ It is written only by:
 - a succession link from the key already held;
 - a migration's binding;
 - an operator registration of a service identity with no devices;
-- the one-time migration transplant of the existing registry key or chain head (v42).
+- the one-time migration transplant of the existing registry key (v42).
 
 Unsigned bootstrap, a bearer naming some other key, and a rotation admitted through a device row write nothing to the holder. New keys must arrive as lowercase hex; a key already on file is admitted in its stored spelling. Signature checks elsewhere use the holder once it exists, and otherwise read exactly what they did before.
 

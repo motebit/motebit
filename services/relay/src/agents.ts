@@ -24,7 +24,6 @@ import { REFERENCE_MIN_BONDED_SIGNAL_MICRO } from "./bond-store.js";
 import { ON_SHELF, delistRegistration } from "./registry-delist.js";
 import {
   admitKey,
-  discoveryKeyFor,
   holderKeyOf,
   identityGuardianFor,
   isCanonicalKey,
@@ -1148,10 +1147,8 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       });
     }
 
-    // Resolve public key. ABSENT (missing or "") takes the keyless path (DB4):
-    // publish discovery's key (DA5 — the holder, else the one key every keyed
-    // device row agrees on, else '') and write nothing to the holder. A
-    // non-empty key must be admissible — canonical, or exactly a key already
+    // Resolve public key. ABSENT (missing or "") takes the keyless path (DB4)
+    // and writes nothing to the holder. A non-empty key must be admissible — canonical, or exactly a key already
     // on file (DA1/DB4); main silently fell back on a malformed one.
     const rawBodyKey = (body as Record<string, unknown>).public_key;
     const keyFromBody = typeof rawBodyKey === "string" && rawBodyKey !== "";
@@ -1161,13 +1158,25 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
           "Invalid 'public_key' — must be a 64-char LOWERCASE hex string (32 bytes Ed25519 public key)",
       });
     }
-    // A keyless registration never REPLACES a key the registry already holds
-    // with '' (#753 review item 2): unfilled verification readers fall back to
-    // the registry, so blanking it would let the next keyed registration — by
-    // a paired device — install any key without a succession.
-    const publicKey = keyFromBody
-      ? rawBodyKey
-      : discoveryKeyFor(moteDb.db, motebitId) || (registryKeyOf(moteDb.db, motebitId) ?? "");
+    // Keyless: the holder when the identity has proven one; otherwise EXACTLY
+    // main's value — the first-listed keyed device row, else ''. Build 4 (§5i):
+    // the registry is never SERVED (the holder is), so main's first-listed
+    // write no longer mints a served key (R3's harm); and departure for an
+    // unfilled identity is main's rule, so its INPUT must be main's too — a
+    // different registry value here (DA5's '') refused an owner main admits
+    // (build-4 differential, G1a).
+    let publicKey: string;
+    if (keyFromBody) {
+      publicKey = rawBodyKey;
+    } else {
+      const held = holderKeyOf(moteDb.db, motebitId);
+      if (held !== null) {
+        publicKey = held;
+      } else {
+        const devices = await identityManager.listDevices(motebitId);
+        publicKey = devices.find((d) => d.public_key)?.public_key ?? "";
+      }
+    }
 
     // --- Succession chain validation on re-registration ---
     // A differing key needs a link from the key on file. Once the identity has

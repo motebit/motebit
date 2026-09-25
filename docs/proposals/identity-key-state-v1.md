@@ -1,6 +1,6 @@
 # PROPOSAL — identity key state outlives the discovery row (DRAFT, not built)
 
-**Status:** DRAFT for design review, 2026-09-23; §10 DECIDED 2026-09-24 (founder delegated the three questions to PE judgement). **Increment 1 (§4) BUILT 2026-09-24** — `registry-delist.ts`, migration v41, gate #162 (#744). **Increment 2 (§5) PART A: first build #747 WITHDRAWN 2026-09-24 under §8 (two in-kind review rounds); amendments in §5a; branch kept; rebuild design in §5b (2026-09-24). **Rebuild #750 WITHDRAWN 2026-09-24 under §8:** round 1 (§5c) fixed four findings, and round 2 (§5d) found two §8 wrong answers, both regressions. Branch `relay/identity-key-state-inc2-rebuild` kept. §5e passed three design-review rounds narrowing to G1; founder decided option 2 (§5f: the holder is the ONLY authority). Build 3 BUILT 2026-09-25 (§5g) and WITHDRAWN under §8 (#753, §5i: C1/C2, departure regressions). Build 4 DECIDED 2026-09-25 (§5i): serving evidence-only; departure = holder else main's exact rule.** Was: — `identity_keys` (migration v42, backfill; production count 50/50 unambiguous, 0 unfilled), `recordIdentityKey` at every door that proves a key, `identityKeyFor` the one resolver, the three named resolvers (auth's service fallback, verify-receipt, `keyOnFile`/`departureFrom`) and the identity log + §7.6 bundle on it. PART B not built: the remaining second-family readers (tasks.ts ×5, disputes.ts ×3, command-route, bond-store, device-registration-guard, federation-callbacks, index.ts, migration.ts ×3, key-rotation.ts recovery, trust-graph) and `check-identity-key-resolver`.
+**Status:** DRAFT for design review, 2026-09-23; §10 DECIDED 2026-09-24 (founder delegated the three questions to PE judgement). **Increment 1 (§4) BUILT 2026-09-24** — `registry-delist.ts`, migration v41, gate #162 (#744). **Increment 2 (§5) PART A: first build #747 WITHDRAWN 2026-09-24 under §8 (two in-kind review rounds); amendments in §5a; branch kept; rebuild design in §5b (2026-09-24). **Rebuild #750 WITHDRAWN 2026-09-24 under §8:** round 1 (§5c) fixed four findings, and round 2 (§5d) found two §8 wrong answers, both regressions. Branch `relay/identity-key-state-inc2-rebuild` kept. §5e passed three design-review rounds narrowing to G1; founder decided option 2 (§5f: the holder is the ONLY authority). Build 3 BUILT 2026-09-25 (§5g) and WITHDRAWN under §8 (#753, §5i: C1/C2, departure regressions). Build 4 DECIDED and BUILT 2026-09-25 (§5i, §5j): serving evidence-only; departure = holder else main's exact rule, fed main's exact registry value.** Was: — `identity_keys` (migration v42, backfill; production count 50/50 unambiguous, 0 unfilled), `recordIdentityKey` at every door that proves a key, `identityKeyFor` the one resolver, the three named resolvers (auth's service fallback, verify-receipt, `keyOnFile`/`departureFrom`) and the identity log + §7.6 bundle on it. PART B not built: the remaining second-family readers (tasks.ts ×5, disputes.ts ×3, command-route, bond-store, device-registration-guard, federation-callbacks, index.ts, migration.ts ×3, key-rotation.ts recovery, trust-graph) and `check-identity-key-resolver`.
 **Author:** motebit PE
 **Closes when built:** #703 (a daemon shutdown discards the identity's guardian and key state)
 **Prerequisite for:** roster part B (the successor to withdrawn #698), then #691 / #687 / #681 — the roster's key model was found inert against production data because of exactly this conflation.
@@ -325,6 +325,26 @@ Neither C1 nor C2 is reachable from the shipped self-sovereign clients. The rule
 - **Proof contract unchanged:** E4, the differential against main, now run with `scripts/differential-vs-main.ts`. It adds the review rounds' own probes: the C1/C2 states, the W/G scenarios, and the round-1 H1/H2 states.
 
 **DECIDED (founder, 2026-09-25): build 4 as recommended, with one correction made while scoping it.** E-op and the registry-equal clause are **kept**, not deleted. The text above called them rescue paths for departure, but each also fills the holder for an identity main serves (operator service identities; CLI daemons that register without a key). Once departure uses main's rule for an unfilled identity, neither is load-bearing for departure, so keeping them costs no §8(b) exposure and avoids a serving loss. The one mechanism that changes from build 3 is `departureFrom`: the holder, else main's registry → chain head → exact device row.
+
+### 5j. Build 4 — what building it found, and the differential (2026-09-25)
+
+Built from §5i as decided. Building it found one thing: build 4's premise is "departure is main's rule for an unfilled identity", so the rule's **inputs** must be main's too. DA5 made a keyless registration write `''` when device rows disagree, where main writes the first-listed keyed row. The differential caught it: in G1a, the owner's rotation got **400 on build 4 and 200 on main**. DA5 existed only because the registry used to be served. The registry now never is, since serving reads the holder, so the keyless write reverts to exactly main's: the holder when there is one, else main's first-listed keyed row, else `''`. `discoveryKeyFor` is deleted.
+
+**The differential** (`scripts/differential-vs-main.ts`, 12 scenarios including the #753 decisive round's C1/C2/C3). **Every rotation, recovery and admission result equals main's in all 12.** The only differences are in serving:
+
+| Scenario                    | Difference from main                                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------ |
+| W2                          | a stranger's non-canonical plant is refused; the owner's evidence-proven key is served where main 404s |
+| G1a, L3, LEGACY, C1, C2, C3 | an identity with no holder serves `''` where main serves its registry key                              |
+
+**Stated cost, restated precisely.** An identity whose key no evidence has proven serves `''` in the §7.6 bundle, the identity log and `/succession` `current_public_key`. After v42 that means:
+
+- every identity with a registry key at migration time is transplanted (E-main), so it is served;
+- a sovereign identity fills on its first register-self, or its first keyed or keyless registration by its own device. The exception is when another device row holds a different key first (C3, DA2's predicate), and then it stays unfilled until the E-sov-over-a-genesis-rooted-chain follow-up;
+- an operator service identity fills via E-op unless it already has a device row (C2);
+- a legacy id never fills.
+
+None of this refuses a rotation or recovery main allows, and none serves a key the identity did not prove. Consumers that fall back from the bundle to discovery (for example mcp-server's caller lookup) still find the registry key there.
 
 ## 6. Decisions
 

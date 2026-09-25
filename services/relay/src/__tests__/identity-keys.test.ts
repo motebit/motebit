@@ -30,7 +30,6 @@ import type { SyncRelay } from "../index.js";
 import {
   IDENTITY_KEYS_BACKFILL_SQL,
   admitKey,
-  discoveryKeyFor,
   identityGuardianFor,
   identityKey,
   keysHeldBy,
@@ -255,15 +254,6 @@ describe("identity-keys", () => {
       });
       expect(identityGuardianFor(db, "m-g")).toBe(C);
     });
-
-    it("discoveryKeyFor: the holder, else the ONE key every keyed device row agrees on, else '' (DA5)", () => {
-      plantDevice(db, "m-dk", "d1", A);
-      expect(discoveryKeyFor(db, "m-dk")).toBe(A);
-      plantDevice(db, "m-dk", "d2", B);
-      expect(discoveryKeyFor(db, "m-dk")).toBe("");
-      recordIdentityKey(db, { motebitId: "m-dk", publicKey: C, source: "succession", now: 1 });
-      expect(discoveryKeyFor(db, "m-dk")).toBe(C);
-    });
   });
 
   describe("evidence", () => {
@@ -440,12 +430,14 @@ describe("identity-keys", () => {
       expect(holderRow(db, mid)).toBeUndefined();
       expect(registryKey(db, mid)).toBe(hex(x));
       expect(await bundleKey(mid)).toEqual({ status: 200, key: "" });
-      // …and the owner still rotates from its genesis row (the device rung).
+      // Departure for an identity with no holder is main's rule (§5i, build 4):
+      // the registry now names X, so — exactly as on main — the owner's
+      // rotation from genesis is refused. Stated cost; X is never SERVED.
       const next = await generateKeypair();
-      expect(await rotateOwn(mid, "genesis", kp, next)).toBe(200);
+      expect(await rotateOwn(mid, "genesis", kp, next)).toBe(400);
     });
 
-    it("keyless /agents/register publishes discovery's key and writes no holder (DA5, R3); '' when rows disagree", async () => {
+    it("keyless /agents/register writes main's exact registry value (first-listed keyed device) and no holder (build 4, §5i)", async () => {
       plantDevice(db, "kl-agree", "d1", A);
       expect((await registerAsOperator("kl-agree", {})).status).toBe(200);
       expect(registryKey(db, "kl-agree")).toBe(A);
@@ -453,7 +445,10 @@ describe("identity-keys", () => {
       plantDevice(db, "kl-dis", "kd1", A);
       plantDevice(db, "kl-dis", "kd2", B);
       expect((await registerAsOperator("kl-dis", {})).status).toBe(200);
-      expect(registryKey(db, "kl-dis")).toBe("");
+      // Main's first-listed row (not DA5's ''): the registry is discovery and
+      // departure input, never served, so it must equal main's exactly.
+      expect(registryKey(db, "kl-dis")).toBe(A);
+      expect(holderRow(db, "kl-dis")).toBeUndefined();
       // "" is absent, not malformed (DB4); a malformed non-empty key is refused.
       expect((await registerAsOperator("kl-dis", { public_key: "" })).status).toBe(200);
       expect((await registerAsOperator("kl-dis", { public_key: "zz" })).status).toBe(400);
@@ -541,23 +536,26 @@ describe("identity-keys", () => {
   });
 
   describe("G1 — 'no key on file' is not ownerless", () => {
-    it("(a) a paired device naming X cannot make X served or force the owner through a succession from X", async () => {
+    it("(a) exactly main's outcome, and nothing unproven is SERVED: the owner's key (first-listed) blocks X; the owner rotates", async () => {
       const owner = await generateKeypair();
       const paired = await generateKeypair();
       plantDevice(db, "g1a", "owner", hex(owner));
       plantDevice(db, "g1a", "paired", hex(paired));
-      expect((await registerAsOperator("g1a", {})).status).toBe(200); // keyless: '' (rows disagree)
+      // Keyless: main's first-listed keyed row — here the owner's (build 4, §5i).
+      expect((await registerAsOperator("g1a", {})).status).toBe(200);
+      expect(registryKey(db, "g1a")).toBe(hex(owner));
       const x = await generateKeypair();
       expect((await registerAsDevice("g1a", "paired", paired, { public_key: hex(x) })).status).toBe(
-        200,
+        400,
       );
+      // The registry is not authority for SERVING: nothing unproven is served or logged.
       expect((await bundleKey("g1a")).key).toBe("");
       expect(readIdentityBindings(db).find((b) => b.motebit_id === "g1a")?.public_key).toBe("");
       const next = await generateKeypair();
       expect(await rotateOwn("g1a", "owner", owner, next)).toBe(200);
     });
 
-    it("(b) a paired device's own rotation moves its row only — never the holder, the served key, or the owner's departure", async () => {
+    it("(b) a paired device's own rotation moves its row only — never the holder or the served key; the owner's departure is main's (stated cost)", async () => {
       const owner = await generateKeypair();
       const paired = await generateKeypair();
       plantDevice(db, "g1b", "owner", hex(owner));
@@ -566,9 +564,15 @@ describe("identity-keys", () => {
       expect(await rotateOwn("g1b", "paired", paired, k3)).toBe(200);
       expect(holderRow(db, "g1b")).toBeUndefined();
       expect((await bundleKey("g1b")).status).toBe(404);
-      expect(departureFrom(db, "g1b", hex(owner)).admissible).toBe(true);
+      // Main's rule: the chain head (K3) is on file, so the owner's departure
+      // from its own key is refused — main's pre-existing lockout, the cost
+      // build 4 states (§5i). Closing it by evidence is the named follow-up.
+      expect(departureFrom(db, "g1b", hex(owner))).toMatchObject({
+        admissible: false,
+        reason: "not_from_chain_head",
+      });
       const next = await generateKeypair();
-      expect(await rotateOwn("g1b", "owner", owner, next)).toBe(200);
+      expect(await rotateOwn("g1b", "owner", owner, next)).toBe(400);
     });
   });
 
@@ -602,6 +606,58 @@ describe("identity-keys", () => {
         (await registerAsDevice("r1-blank", "paired", paired, { public_key: hex(x) })).status,
       ).toBe(400);
       expect(registryKey(db, "r1-blank")).toBe(hex(owner));
+    });
+  });
+
+  describe("#753 decisive round — build 4's departure is main's rule when unfilled", () => {
+    it("C1 — a chain-only identity (registry '' or absent) still rotates and recovers from its chain head", async () => {
+      const k = await generateKeypair();
+      const k1 = await generateKeypair();
+      const g = await generateKeypair();
+      plantRegistry(db, "c1", "", hex(g));
+      plantChain(db, "c1", hex(k), hex(k1));
+      db.prepare(IDENTITY_KEYS_BACKFILL_SQL).run(9, 9);
+      expect(holderRow(db, "c1")).toBeUndefined();
+      expect(departureFrom(db, "c1", hex(k1))).toMatchObject({ admissible: true, rung: "chain" });
+      const n = await generateKeypair();
+      const rec = await signGuardianRecoverySuccession(
+        g.privateKey,
+        n.privateKey,
+        k1.publicKey,
+        n.publicKey,
+      );
+      expect(await presentRotation("c1", rec)).toBe(200);
+    });
+
+    it("C2 — an operator identity WITH a device row rotates and recovers from its registry key", async () => {
+      const k = await generateKeypair();
+      const g = await generateKeypair();
+      plantDevice(db, "c2", "c2-dev", "");
+      expect(
+        (await registerAsOperator("c2", { public_key: hex(k), ...(await guardianFields("c2", g)) }))
+          .status,
+      ).toBe(200);
+      expect(holderRow(db, "c2")).toBeUndefined();
+      expect(departureFrom(db, "c2", hex(k))).toMatchObject({ admissible: true, rung: "registry" });
+      const n = await generateKeypair();
+      const rec = await signGuardianRecoverySuccession(
+        g.privateKey,
+        n.privateKey,
+        k.publicKey,
+        n.publicKey,
+      );
+      expect(await presentRotation("c2", rec)).toBe(200);
+    });
+
+    it("C3 — a paired device cannot rotate where main refuses (registry names the owner)", async () => {
+      const { mid, kp } = await sovereign();
+      const paired = await generateKeypair();
+      plantDevice(db, mid, "owner", hex(kp));
+      plantDevice(db, mid, "paired", hex(paired));
+      expect((await registerAsDevice(mid, "owner", kp, { public_key: hex(kp) })).status).toBe(200);
+      expect(holderRow(db, mid)).toBeUndefined(); // the paired row blocks E-sov (DA2)
+      const k3 = await generateKeypair();
+      expect(await rotateOwn(mid, "paired", paired, k3)).toBe(400);
     });
   });
 

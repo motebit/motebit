@@ -341,18 +341,6 @@ export function recordOperatorServiceKey(
 }
 
 /**
- * The key a keyless `/agents/register` publishes to discovery (DA5): the
- * holder, else the one key every keyed device row agrees on, else `''`. A
- * discovery copy, NOT authority (§5f) — never written to the holder.
- */
-export function discoveryKeyFor(db: DatabaseDriver, motebitId: string): string {
-  const held = holderKeyOf(db, motebitId);
-  if (held !== null) return held;
-  const devices = readDeviceKeys(db, motebitId);
-  return devices.length === 1 ? devices[0]! : "";
-}
-
-/**
  * A verified guardian attestation, on the holder the identity already has
  * (DA6 — every verified attestation, whatever the key evidence). No holder ⇒
  * nothing to update: the registry's guardian is then the one truth. The door
