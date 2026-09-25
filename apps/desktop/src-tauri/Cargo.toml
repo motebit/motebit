@@ -28,6 +28,13 @@ sha2 = "0.10"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# Linux only: the SAME secret-service crate keyring's backend uses (4.x,
+# features unified with keyring's), named here so src/key_store.rs can tell
+# "no Secret Service provider" (file-only mode) from a failed read on an
+# available one (refuse) by downcasting — law K2, never by message text.
+[target.'cfg(target_os = "linux")'.dependencies]
+secret-service = { version = "4", default-features = false }
+
 # macOS Vision framework — native, offline, state-of-the-art OCR used by
 # `do_screenshot` to extract text + bounding boxes so the TS sensitivity
 # classifier can fail-close on screen captures containing secrets / cards /

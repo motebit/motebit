@@ -504,7 +504,7 @@ fn migrate_dev_keyring() {
             }
             if let Some(e) = r.keychain_unavailable {
                 eprintln!(
-                    "[motebit] OS keychain unavailable ({}); secrets stay in the fallback file. Store: {}",
+                    "[motebit] secrets not moved to the OS keychain ({}); they stay in the fallback file. Store: {}",
                     e,
                     key_store::describe(store.dev_path().parent().unwrap_or(std::path::Path::new(".")))
                 );
