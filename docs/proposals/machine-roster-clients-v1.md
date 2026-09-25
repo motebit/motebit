@@ -223,6 +223,11 @@ The decision is taken on the **current** verdict over **the cache ∪ a successf
   - C6.2 says "socket open" only when `sockets_open > 0`, and otherwise "last seen under a superseded key".
   - After a restore that gives a fresh `device_id`, offer to retire the prior line.
 - **N13: ordering with #775.** C-0 lands after #775, or its tests pin the behaviour against it.
+- **C-0 build notes.** These record where the primitive (`resolveRosterKeyChain`) departs from this text:
+  - **No `cached` key-list input.** The cache is passed as **signed records** among `records`. A key list carries no signatures, so the primitive could only trust it (storage acting as authority) or ignore it, which would silently give `[held]` after a relay loss. R26's persisted records are the cache.
+  - **`duplicate_key` also covers a cycle through `held`.** A rotation back to a non-genesis key (K0→K1→K2→K1, with K1 held) gives `held` two predecessors, and would otherwise read as `fork_at_held`. A reachability check over verified links runs first, and N10 does not stop it.
+  - **`malformed_input`** is refused for a malformed _call_ (empty id, non-canonical `held` or guardian, `records` not an array). No record content can produce it.
+  - **A recovery record with no pinned guardian** is checked for its new key's signature only. It can count as a predecessor (giving `recovery_limited`), but never as a successor or a branch, because anyone can mint one to their own key.
 
 ## 3. Open questions (none remaining)
 
