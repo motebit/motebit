@@ -90,10 +90,19 @@ export function parseTokenPayloadUnsafe(token: string): TokenPayload | null {
   }
 }
 
+/**
+ * Where the key that verified a token came from: the device row named by
+ * the token's `did`, or the agent-registry sibling fallback (service-mode
+ * motebits, which have no device row).
+ */
+export type VerifiedKeySource = "device" | "agent_registry";
+
 /** Verify a signed token against a specific device's public key. O(1) lookup by did.
  *  Rejects tokens whose `aud` claim doesn't match `expectedAudience` (cross-endpoint replay prevention).
  *  Optional blacklistCheck callback rejects tokens whose jti appears in the token blacklist.
  *  Optional agentRevokedCheck callback rejects tokens for revoked agents.
+ *  Optional onVerified callback receives, on success only, the (lowercased)
+ *  public key the token verified under and where that key came from.
  *
  *  `expectedAudience` is typed as `TokenAudience` (not `string`) so an
  *  enforcement site naming an unregistered audience is a compile error —
@@ -110,6 +119,7 @@ export async function verifySignedTokenForDevice(
   agentRevokedCheck?: (motebitId: string) => boolean,
   agentKeyLookup?: (motebitId: string) => string | null,
   onReject?: (reason: string) => void,
+  onVerified?: (publicKey: string, source: VerifiedKeySource) => void,
 ): Promise<boolean> {
   // Rejection legibility (#460): every `return false` names its reason via
   // the optional callback so the enforcement site can LOG why — witnessed
@@ -147,8 +157,10 @@ export async function verifySignedTokenForDevice(
   // checking only the device store silently 401s every service-mode caller.
   const device = await identityManager.loadDeviceById(claims.did, motebitId);
   let pubKeyHex: string | null = device?.public_key ?? null;
+  let source: VerifiedKeySource = "device";
   if (pubKeyHex === null && agentKeyLookup) {
     pubKeyHex = agentKeyLookup(motebitId);
+    source = "agent_registry";
   }
   if (pubKeyHex === null) {
     onReject?.("no_key_for_device_or_agent");
@@ -170,5 +182,12 @@ export async function verifySignedTokenForDevice(
     return false;
   }
 
+  // The key that verified — from the SAME row read above, never looked up
+  // again. A caller that attributes anything to "the key this token
+  // verified under" (the machine roster's own bucket and `bound_under`)
+  // must get it here: a later re-read of the device row can return a
+  // different key, because rotation rewrites device rows and closes
+  // nothing that authenticated under the old one.
+  onVerified?.(pubKeyHex.toLowerCase(), source);
   return true;
 }
