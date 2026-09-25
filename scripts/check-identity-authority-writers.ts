@@ -52,6 +52,7 @@ const TABLES = [
   "devices",
   "relay_key_successions",
   "relay_revoked_credentials",
+  "identity_keys",
 ] as const;
 
 /** Columns that carry authority. An UPDATE touching none of these is routine. */
@@ -77,6 +78,22 @@ interface Writer {
  * still fails — which is exactly how #713 and #719 were added.
  */
 const WRITERS: readonly Writer[] = [
+  {
+    file: "services/relay/src/identity-keys.ts",
+    verb: "INSERT",
+    table: "identity_keys",
+    count: 2,
+    principal:
+      "two statements: `recordIdentityKey` (with `recordFirstIdentityKey` routing through it), called by a door under its own registered principal, and the one-time migration backfill (IDENTITY_KEYS_BACKFILL_SQL, v42) that copies keys those doors already proved, only where unambiguous. The doors: /agents/register (the identity's token or the operator; the key it just proved — the same key, a succession from the proven key on file, or a first key — with the guardian it attested, on every path), the sovereign-signed /api/v1/devices/register-self and /agents/bootstrap (only when the identity has proven no key yet and no keyed device row holds another — `recordFirstIdentityKey`), applySuccession (the verified link, from the key it retires, in its transaction), accept-migration (the sovereign binding verified in step (i)). The holder is written only AFTER a door has proven the key; this function proves nothing itself (#703 Inc 2, proposal §5b)",
+  },
+  {
+    file: "services/relay/src/identity-keys.ts",
+    verb: "UPDATE",
+    table: "identity_keys",
+    count: 1,
+    principal:
+      "`recordIdentityGuardian`, called only by /agents/register after it verified the guardian's attestation over {action, guardian_public_key, motebit_id} and wrote the same guardian to the registry — so the holder never answers with a guardian the identity replaced (#750 review). Updates an existing holder row only; proves nothing itself",
+  },
   {
     file: "services/relay/src/agents.ts",
     verb: "INSERT",
@@ -148,14 +165,6 @@ const WRITERS: readonly Writer[] = [
     count: 1,
     principal:
       "the identity itself — departure is initiated by the identity's own migration token; the row is marked revoked because the identity now lives elsewhere",
-  },
-  {
-    file: "services/relay/src/tasks.ts",
-    verb: "UPDATE",
-    table: "agent_registry",
-    count: 1,
-    principal:
-      "the identity itself — a receipt may reconcile the registry key ONLY to a key already registered as one of that identity's devices; an arbitrary embedded key is refused",
   },
   {
     file: "packages/persistence/src/index.ts",

@@ -28,6 +28,7 @@ import { isSuiteId } from "@motebit/protocol";
 import { createLogger } from "./logger.js";
 import { refusePublicDeviceRegistration } from "./device-registration-guard.js";
 import type { ConnectedDevice } from "./index.js";
+import { recordFirstIdentityKey } from "./identity-keys.js";
 
 const logger = createLogger({ service: "sync-routes" });
 
@@ -265,6 +266,19 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
         body.device_id,
       );
     }
+
+    // The public doors' writer (§5b): this door verified a signature by
+    // `body.public_key` over the request, so the key is proven — it is the
+    // IDENTITY's key only when nothing is proven yet and no keyed device row
+    // holds another key (a paired device's own key passes the guard above and
+    // is not the identity's — D5). "New" is `provenIdentityKey === null`,
+    // never `created` (§5a A2).
+    recordFirstIdentityKey(deps.moteDb.db, {
+      motebitId: body.motebit_id,
+      publicKey: body.public_key,
+      source: "register-self",
+      now: Date.now(),
+    });
 
     const registeredAt = Date.now();
     logger.info("device.self_register.ok", {

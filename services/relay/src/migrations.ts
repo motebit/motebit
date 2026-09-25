@@ -14,6 +14,7 @@ import {
   redactMemoryAuditPayload,
   redactMemoryConsolidatedPayload,
 } from "./redaction.js";
+import { IDENTITY_KEYS_BACKFILL_SQL } from "./identity-keys.js";
 
 const logger = createLogger({ service: "migrations" });
 
@@ -1903,6 +1904,32 @@ export const relayMigrations: Migration[] = [
       db.prepare(
         "UPDATE agent_registry SET delisted_at = ? WHERE revoked = 1 AND delisted_at IS NULL",
       ).run(Date.now());
+    },
+  },
+  {
+    version: 42,
+    name: "identity_keys",
+    up: (db) => {
+      // One holder for "this identity's current key" (#703 Inc 2, proposal
+      // identity-key-state-v1 §5; services/relay/src/identity-keys.ts). Written
+      // by every door that proves a key; read by the one resolver. Backfilled
+      // here from the AUTHORITY's rungs only — registry key, else chain head —
+      // never a device row (§5a A4; the device rung was dropped in #750's
+      // review: a lone paired device's own key is indistinguishable in SQL
+      // from the identity's). Device-only identities record their first key
+      // at their next bootstrap or register-self.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS identity_keys (
+          motebit_id          TEXT PRIMARY KEY,
+          public_key          TEXT NOT NULL,
+          guardian_public_key TEXT,
+          source              TEXT NOT NULL,
+          first_seen          INTEGER,
+          updated_at          INTEGER NOT NULL
+        );
+      `);
+      const now = Date.now();
+      db.prepare(IDENTITY_KEYS_BACKFILL_SQL).run(now, now);
     },
   },
 ];

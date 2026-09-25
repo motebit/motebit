@@ -41,6 +41,7 @@ import {
   CredentialBundleSchema,
   BalanceWaiverSchema,
 } from "@motebit/wire-schemas";
+import { recordIdentityKey } from "./identity-keys.js";
 
 const logger = createLogger({ service: "relay", module: "migration" });
 
@@ -577,6 +578,14 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
       now + 365 * 24 * 60 * 60 * 1000,
       1,
     );
+    // The migrating key was bound to the id above (step (i)); it is the
+    // identity's key here now — record it in the one holder (#703 Inc 2).
+    recordIdentityKey(db, {
+      motebitId: body.motebit_id,
+      publicKey: body.public_key,
+      source: "migration",
+      now,
+    });
 
     // Record acceptance for replay prevention
     db.prepare(

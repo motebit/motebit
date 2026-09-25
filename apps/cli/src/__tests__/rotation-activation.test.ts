@@ -334,6 +334,11 @@ describe("S5: the relay holds some other key", () => {
     relay.moteDb.db
       .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
       .run(hex(c), f.mid);
+    // …and the ONE holder the relay now answers from (#703 Inc 2): a rotation
+    // door would have moved it in the same transaction.
+    relay.moteDb.db
+      .prepare("UPDATE identity_keys SET public_key = ? WHERE motebit_id = ?")
+      .run(hex(c), f.mid);
     relay.moteDb.db
       .prepare(
         "INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, new_key_signature) VALUES (?, ?, ?, ?, ?)",

@@ -163,6 +163,10 @@ describe("the shared controller against the real relay", () => {
     relay.moteDb.db
       .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
       .run(hex(c), mid);
+    // …and the ONE holder the relay now answers from (#703 Inc 2).
+    relay.moteDb.db
+      .prepare("UPDATE identity_keys SET public_key = ? WHERE motebit_id = ?")
+      .run(hex(c), mid);
     const d = device(mid, deviceId, a);
     expect(await performKeyRotation(d.ports)).toMatchObject({
       kind: "stopped",

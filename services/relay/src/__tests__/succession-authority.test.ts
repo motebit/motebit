@@ -571,18 +571,21 @@ describe("the public succession route answers the departure question with the ru
     );
     expect(await present(mid, `${mid}-laptop`, k1, mid, record)).toBe(200);
     relay.moteDb.db.prepare("DELETE FROM agent_registry WHERE motebit_id = ?").run(mid);
+    // `current_public_key` is what the relay SERVES, from the one reader
+    // (§5a A6) — no longer a registry read that goes null when the row goes.
     expect(await read(mid, hex(k2))).toMatchObject({
-      current_public_key: null,
+      current_public_key: hex(k2),
       held_public_key: hex(k2),
       departable: true,
     });
     expect(await read(mid, hex(k1))).toMatchObject({ departable: false });
   });
 
-  it("device rung: a daemon that shut down before ever rotating leaves its key ONLY on a device row — held is null, yet departable", async () => {
-    // The state a client that re-derived "held" from chain + registry read
-    // as UNREGISTERED and rotated locally into the split — the relay would
-    // have accepted the rotation all along.
+  it("a daemon that shut down before ever rotating: the one holder still names its key, and the route departs from it", async () => {
+    // Before #703 Inc 2 this state read as "held is null, yet departable
+    // from the device row" — the split a client re-deriving "held" from
+    // chain + registry fell into. The holder (identity_keys, written by
+    // register-self) now answers even with the registry row gone.
     const mid = crypto.randomUUID();
     const k1 = await generateKeypair();
     const other = await generateKeypair();
@@ -590,11 +593,14 @@ describe("the public succession route answers the departure question with the ru
     expect(await registerAgent(mid, k1)).toBe(200);
     relay.moteDb.db.prepare("DELETE FROM agent_registry WHERE motebit_id = ?").run(mid);
     expect(await read(mid, hex(k1))).toMatchObject({
-      held_public_key: null,
+      held_public_key: hex(k1),
       chain: [],
       departable: true,
     });
-    expect(await read(mid, hex(other))).toMatchObject({ held_public_key: null, departable: false });
+    expect(await read(mid, hex(other))).toMatchObject({
+      held_public_key: hex(k1),
+      departable: false,
+    });
     // And /rotate-key agrees: the departure the route said yes to lands.
     const k2 = await generateKeypair();
     const record = await signKeySuccession(
@@ -617,10 +623,7 @@ describe("the public succession route answers the departure question with the ru
   });
 
   it("the served answer and the route's decision are one function: severing agreement is a red test", async () => {
-    // Registry says k1, chain head says k2 (registry re-created on an old key
-    // — a residual rule 21 names). Precedence puts the registry first, so
-    // departing from k2 is refused and from k1 is allowed; the read says the
-    // same, because it IS the same rule.
+    // Registry says k1 after a rotation to k2; the holder says k2.
     const mid = crypto.randomUUID();
     const k1 = await generateKeypair();
     const k2 = await generateKeypair();
@@ -633,11 +636,15 @@ describe("the public succession route answers the departure question with the ru
       k1.publicKey,
     );
     expect(await present(mid, `${mid}-laptop`, k1, mid, record)).toBe(200);
+    // A residual rule 21 names: the registry re-created on an old key. Since
+    // #703 Inc 2 a direct registry edit no longer moves the answer — the ONE
+    // holder does, and only a door writes it — so the read and the route
+    // both still say k2, and they say it because they are the same rule.
     relay.moteDb.db
       .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
       .run(hex(k1), mid);
-    expect(await read(mid, hex(k2))).toMatchObject({ held_public_key: hex(k1), departable: false });
-    expect(await read(mid, hex(k1))).toMatchObject({ departable: true });
+    expect(await read(mid, hex(k2))).toMatchObject({ held_public_key: hex(k2), departable: true });
+    expect(await read(mid, hex(k1))).toMatchObject({ departable: false });
     const k3 = await generateKeypair();
     const fromK2 = await signKeySuccession(
       k2.privateKey,
@@ -645,7 +652,7 @@ describe("the public succession route answers the departure question with the ru
       k3.publicKey,
       k2.publicKey,
     );
-    expect(await present(mid, `${mid}-laptop`, k2, mid, fromK2)).toBe(400);
+    expect(await present(mid, `${mid}-laptop`, k2, mid, fromK2)).toBe(200);
   });
 });
 
@@ -1080,6 +1087,10 @@ describe("a recorded rotation ends the old key here", () => {
     relay.moteDb.db
       .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
       .run(hex(k3), mid);
+    // …and the one holder, which the doors would have moved with them (#703 Inc 2).
+    relay.moteDb.db
+      .prepare("UPDATE identity_keys SET public_key = ? WHERE motebit_id = ?")
+      .run(hex(k3), mid);
     // Fail the LAST statement only. Renaming the table would break the
     // read that runs before any write, so the request would never reach
     // the writes and this would prove nothing.
@@ -1107,6 +1118,14 @@ describe("a recorded rotation ends the old key here", () => {
     expect(registryKey(mid)).toBe(hex(k3));
     expect(deviceKey(`${mid}-laptop`)).toBe(hex(k3));
     expect(successions(mid)).toBe(before);
+    // The holder is inside the same transaction: it did not move either.
+    expect(
+      (
+        relay.moteDb.db
+          .prepare("SELECT public_key FROM identity_keys WHERE motebit_id = ?")
+          .get(mid) as { public_key: string }
+      ).public_key,
+    ).toBe(hex(k3));
   });
 
   it("the register door applies the same cascade, so a link it recorded is already finished — re-presenting it is a retry", async () => {
