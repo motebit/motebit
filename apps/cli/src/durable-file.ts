@@ -120,30 +120,80 @@ export function tightenToOwnerOnly(file: string): void {
  * Returns the backup's path.
  */
 export function preserveAside(target: string, infix: string, now: Date = new Date()): string {
+  // Link or copy the REAL file, never the name as given. `writeFileAtomic`
+  // replaces a symlink's target; link(2) on Linux does NOT follow symlinks,
+  // so linking the name would make the "backup" a second name for the LINK —
+  // which reads the NEW bytes the moment the write lands.
+  const real = resolveRealFile(target);
   const stamp = now.toISOString().replace(/[:.]/g, "-");
   let lastErr: unknown;
   for (let n = 0; n < 100; n++) {
     const backup = `${target}${infix}${stamp}${n === 0 ? "" : `-${n}`}`;
     try {
-      fs.linkSync(target, backup);
+      fs.linkSync(real, backup);
+      try {
+        fs.chmodSync(backup, 0o600);
+      } catch {
+        /* best effort — the bytes are preserved, which is the load-bearing part */
+      }
+      return backup;
     } catch (linkErr) {
       if ((linkErr as NodeJS.ErrnoException).code === "EEXIST") continue;
+      // No hard links here (another filesystem, FAT, a sandbox): copy the
+      // bytes into a file that is owner-only from the moment it exists.
       try {
-        fs.copyFileSync(target, backup, fs.constants.COPYFILE_EXCL);
+        copyOwnerOnly(real, backup);
+        return backup;
       } catch (copyErr) {
         if ((copyErr as NodeJS.ErrnoException).code === "EEXIST") continue;
         lastErr = copyErr;
         break;
       }
     }
-    try {
-      fs.chmodSync(backup, 0o600);
-    } catch {
-      /* best effort — the bytes are preserved, which is the load-bearing part */
-    }
-    return backup;
   }
   throw new Error(`could not preserve ${target} before replacing it; nothing was changed`, {
     cause: lastErr,
   });
+}
+
+/**
+ * The file `target` names, through any symlinks. If it cannot be resolved
+ * and `target` is (or may be) a symlink, refuse: preserving the link instead
+ * of the file is the failure this exists to prevent.
+ */
+function resolveRealFile(target: string): string {
+  try {
+    return fs.realpathSync(target);
+  } catch (err) {
+    let isLink = true;
+    try {
+      isLink = fs.lstatSync(target).isSymbolicLink();
+    } catch {
+      /* unknowable — treat as a link */
+    }
+    if (isLink) {
+      throw new Error(`could not resolve ${target} to preserve it; nothing was changed`, {
+        cause: err,
+      });
+    }
+    return target;
+  }
+}
+
+/** Copy `src` to a NEW file `dest`, created 0600 (exclusive), fsync'd; `dest` removed on failure. */
+function copyOwnerOnly(src: string, dest: string): void {
+  const bytes = fs.readFileSync(src);
+  const fd = fs.openSync(dest, "wx", 0o600);
+  try {
+    try {
+      fs.writeFileSync(fd, bytes);
+      fs.fchmodSync(fd, 0o600);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (err) {
+    fs.rmSync(dest, { force: true });
+    throw err;
+  }
 }

@@ -5,7 +5,7 @@
  * identity, so the classification is locked as data.
  */
 import { describe, it, expect } from "vitest";
-import { planRestore, isSovereignId } from "../subcommands/restore.js";
+import { planRestore, isSovereignId, classifyWriteAhead } from "../subcommands/restore.js";
 import { seedBackupStatus } from "../subcommands/seed.js";
 import { deriveSovereignMotebitId } from "@motebit/crypto";
 
@@ -103,5 +103,37 @@ describe("seedBackupStatus", () => {
     expect(
       seedBackupStatus({ cli_encrypted_key: { ciphertext: "x" }, seed_backed_up_at: 123 }),
     ).toBe("backed_up");
+  });
+});
+
+describe("classifyWriteAhead — restore deletes a write-ahead only on positive foreign attribution", () => {
+  const ctx = { seedMotebitIds: ["seed-id"], seedPublicKeyHex: PUB, configWasReadable: true };
+  const held = (motebit_id: string, old_public_key: string, new_public_key = "ee".repeat(32)) => ({
+    motebit_id,
+    old_public_key,
+    new_public_key,
+  });
+
+  it("from the seed's own key → in flight here (left in place), whatever else it says", () => {
+    expect(classifyWriteAhead(held("seed-id", PUB), ctx)).toBe("in-flight-here");
+    expect(classifyWriteAhead(held("other", PUB.toUpperCase()), ctx)).toBe("in-flight-here");
+    expect(classifyWriteAhead(held("seed-id", PUB), { ...ctx, configWasReadable: false })).toBe(
+      "in-flight-here",
+    );
+  });
+
+  it("naming the seed's id or key → kept aside, never cleared", () => {
+    expect(classifyWriteAhead(held("seed-id", OTHER_PUB), ctx)).toBe("keep-aside");
+    expect(classifyWriteAhead(held("other", OTHER_PUB, PUB), ctx)).toBe("keep-aside");
+  });
+
+  it("foreign but the config was unreadable → kept aside (attribution uncertain)", () => {
+    expect(classifyWriteAhead(held("other", OTHER_PUB), { ...ctx, configWasReadable: false })).toBe(
+      "keep-aside",
+    );
+  });
+
+  it("positively foreign against a readable config → the only case that clears", () => {
+    expect(classifyWriteAhead(held("other", OTHER_PUB), ctx)).toBe("clear-foreign");
   });
 });

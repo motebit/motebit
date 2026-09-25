@@ -154,6 +154,69 @@ describe("restore over a damaged config", () => {
     expect(fs.readFileSync(CONFIG, "utf-8")).toBe(before);
   });
 
+  // --- #757 round 2, C2: a READABLE write-ahead of the seed's own identity ---
+
+  async function seedIdentity(): Promise<{ pub: string; mid: string }> {
+    const { getPublicKeyBySuite, hexToBytes, bytesToHex, deriveSovereignMotebitId } =
+      await import("@motebit/encryption");
+    const pub = bytesToHex(
+      await getPublicKeyBySuite(hexToBytes(SEED), "motebit-jcs-ed25519-hex-v1"),
+    );
+    return { pub, mid: await deriveSovereignMotebitId(pub) };
+  }
+
+  function writeAhead(fields: { motebit_id: string; old_public_key: string }): string {
+    const body = JSON.stringify({
+      ...fields,
+      new_public_key: "ee".repeat(32),
+      record: { note: "succession record" },
+      encrypted_new_key: { ciphertext: "NEWKEY", nonce: "n", tag: "t", salt: "s" },
+      written_at: 1,
+    });
+    fs.writeFileSync(path.join(tmpDir, "pending-rotation.json"), body, { mode: 0o600 });
+    return body;
+  }
+
+  /** Every file in the config dir holding the rotated key's bytes. */
+  const newKeyHolders = (): string[] =>
+    fs
+      .readdirSync(tmpDir)
+      .filter((f) => fs.readFileSync(path.join(tmpDir, f), "utf-8").includes("NEWKEY"));
+
+  it("REVIEWER'S PROBE: damaged config + this identity's in-flight write-ahead ⇒ NEWKEY survives, in place", async () => {
+    const { pub, mid } = await seedIdentity();
+    fs.writeFileSync(CONFIG, "{ damaged");
+    const body = writeAhead({ motebit_id: mid, old_public_key: pub });
+    expect(await runRestore()).toBe(0);
+    // Left exactly where `motebit rotate` will look for it.
+    expect(fs.readFileSync(path.join(tmpDir, "pending-rotation.json"), "utf-8")).toBe(body);
+    expect(newKeyHolders()).toContain("pending-rotation.json");
+  });
+
+  it("a write-ahead naming this identity (from another key) is kept aside, never deleted", async () => {
+    const { mid } = await seedIdentity();
+    writeAhead({ motebit_id: mid, old_public_key: "ab".repeat(32) });
+    expect(await runRestore()).toBe(0);
+    expect(newKeyHolders().some((f) => f.startsWith("pending-rotation.json.clobbered-"))).toBe(
+      true,
+    );
+  });
+
+  it("a foreign-looking write-ahead is kept aside when the config was damaged (attribution uncertain)", async () => {
+    fs.writeFileSync(CONFIG, "[]");
+    writeAhead({ motebit_id: "someone-else", old_public_key: "ab".repeat(32) });
+    expect(await runRestore()).toBe(0);
+    expect(newKeyHolders().some((f) => f.startsWith("pending-rotation.json.clobbered-"))).toBe(
+      true,
+    );
+  });
+
+  it("only a write-ahead POSITIVELY another identity's, against a readable config, is cleared", async () => {
+    writeAhead({ motebit_id: "someone-else", old_public_key: "ab".repeat(32) });
+    expect(await runRestore()).toBe(0);
+    expect(newKeyHolders()).toEqual([]);
+  });
+
   it("every config read in restore goes through the damage-tolerant loader", () => {
     // Structural: the withdrawn fix guarded one of two reads. A third direct
     // read added later would reopen the hole this closes.

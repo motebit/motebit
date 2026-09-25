@@ -12,4 +12,4 @@
 
 The agent-identity guard now applies to interactive runs too: `create-motebit <dir> --agent` refuses when `<dir>/.motebit/config.json` already exists, unless `--force`. With `--force` — here and when a guided scaffold replaces an existing identity — the replaced config is kept as `config.json.clobbered-<time>` before anything is written.
 
-Deliberate edges: a symlinked config is replaced at the file it points to (the link survives); a config readable by group or others is narrowed to `0600` when read, even if that was deliberate; an empty config is damage, not a first run.
+Deliberate edges: a symlinked config is replaced at the file it points to (the link survives), and every preserved copy is of the real file's bytes (a hard link to the resolved file, or a copy created `0600` from the start), never a second name for the symlink; a config readable by group or others is narrowed to `0600` when read, even if that was deliberate; an empty config is damage, not a first run.

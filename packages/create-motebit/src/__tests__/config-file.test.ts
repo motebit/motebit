@@ -5,12 +5,14 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   chmodSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -62,6 +64,17 @@ describe("rule 2 — damage is never overwritten", () => {
     expect(kept!).toMatch(/config\.json\.clobbered-/);
     expect(readFileSync(kept!, "utf-8")).toBe(body);
     expect(mode(kept!)).toBe(0o600);
+    expect(readConfigFile<{ motebit_id?: string }>(cfg).motebit_id).toBe("m-new");
+  });
+
+  it("a damaged SYMLINKED config: the kept copy still reads the old bytes after the write", () => {
+    const real = join(dir, "dotfiles-config.json");
+    writeFileSync(real, "{ damaged");
+    symlinkSync(real, cfg);
+    const kept = writeConfigFile(cfg, { motebit_id: "m-new" });
+    expect(readFileSync(kept!, "utf-8")).toBe("{ damaged");
+    expect(lstatSync(kept!).isSymbolicLink()).toBe(false);
+    expect(lstatSync(cfg).isSymbolicLink()).toBe(true);
     expect(readConfigFile<{ motebit_id?: string }>(cfg).motebit_id).toBe("m-new");
   });
 

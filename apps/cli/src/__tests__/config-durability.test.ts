@@ -183,6 +183,18 @@ describe("rule 3 — atomic, owner-only replacement", () => {
     expect(mode(real)).toBe(0o600);
   });
 
+  it("a DAMAGED symlinked config: the kept copy still reads the old bytes after the save", () => {
+    // Linux link(2) does not follow symlinks; a backup linked by NAME would
+    // read the new config. Linux CI enforces this; see durable-file-preserve.
+    const real = path.join(tmpDir, "dotfiles-config.json");
+    fs.writeFileSync(real, "{ damaged");
+    fs.symlinkSync(real, mod.CONFIG_PATH);
+    const kept = mod.saveFullConfig({ motebit_id: "m-new" });
+    expect(fs.readFileSync(kept!, "utf-8")).toBe("{ damaged");
+    expect(fs.lstatSync(kept!).isSymbolicLink()).toBe(false);
+    expect(mod.loadFullConfig().motebit_id).toBe("m-new");
+  });
+
   it("a public file keeps a mode its owner narrowed", () => {
     const md = path.join(tmpDir, "motebit.md");
     fs.writeFileSync(md, "old");

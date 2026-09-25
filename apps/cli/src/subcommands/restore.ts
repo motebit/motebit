@@ -130,6 +130,31 @@ export function loadConfigForRestore(): {
 }
 
 /**
+ * What restore may do with a READABLE rotation write-ahead. Pure — the whole
+ * decision, extracted so the one destructive branch is locked as data.
+ *
+ *  - `"in-flight-here"`: a rotation FROM the seed's own key. Left in place;
+ *    the relay may already hold its new key.
+ *  - `"keep-aside"`: it names the identity being restored, or the config was
+ *    unreadable so nothing can be attributed with confidence. Its bytes are
+ *    kept, never deleted.
+ *  - `"clear-foreign"`: POSITIVELY another identity's (neither its id nor
+ *    either of its keys is the seed's), judged against a readable config. The
+ *    only case in which restore deletes it.
+ */
+export function classifyWriteAhead(
+  held: { motebit_id: string; old_public_key: string; new_public_key: string },
+  ctx: { seedMotebitIds: readonly string[]; seedPublicKeyHex: string; configWasReadable: boolean },
+): "in-flight-here" | "keep-aside" | "clear-foreign" {
+  const key = ctx.seedPublicKeyHex.toLowerCase();
+  if (held.old_public_key.toLowerCase() === key) return "in-flight-here";
+  const namesSeed =
+    ctx.seedMotebitIds.includes(held.motebit_id) || held.new_public_key.toLowerCase() === key;
+  if (namesSeed || !ctx.configWasReadable) return "keep-aside";
+  return "clear-foreign";
+}
+
+/**
  * Is this metadata's id the sovereign commitment to its key? Legacy
  * (pre-sovereign) ids are not — and the copy must say what that means for
  * the user's recovery options rather than letting them find out at loss time.
@@ -290,15 +315,54 @@ export async function handleRestore(config: CliConfig): Promise<void> {
     );
     process.exit(1);
   }
-  // Only a write-ahead that was READ, and found to belong elsewhere, is cleared.
-  const stale = hasPendingRotation() ? loadAnyPendingRotation() : null;
-  if (stale != null && stale !== "unreadable") {
-    console.log(
-      dim(
-        `  Note: a held rotation (${pendingRotationPath()}) did not belong to this identity and key; cleared.`,
-      ),
-    );
-    clearPendingRotation();
+  // A READABLE write-ahead is cleared only on a POSITIVE attribution to a
+  // different identity, made against a config that could be read. One that
+  // belongs to the identity being restored — or whose attribution is
+  // uncertain because the config was damaged — is never deleted.
+  const held = hasPendingRotation() ? loadAnyPendingRotation() : null;
+  if (held != null && held !== "unreadable") {
+    const verdict = classifyWriteAhead(held, {
+      seedMotebitIds: [
+        metadata!.motebitId,
+        plan.kind === "replace" ? plan.newMotebitId : plan.motebitId,
+      ],
+      seedPublicKeyHex: publicKeyHex,
+      configWasReadable: damaged == null,
+    });
+    if (verdict === "in-flight-here") {
+      // A rotation of THIS identity from THIS key: the relay may already hold
+      // its new key. It is left exactly where it is — the restored config
+      // will hold its old key, which is what `motebit rotate` pairs it with.
+      console.log(
+        `\n  ${warn("A key rotation of this identity is in flight")} (${pendingRotationPath()}); it is left in place.`,
+      );
+      console.log(
+        dim("  Its new key is encrypted under the passphrase the rotation was started with —"),
+      );
+      console.log(dim("  use that passphrase below, then run `motebit rotate` to finish it."));
+    } else if (verdict === "keep-aside") {
+      let kept: string;
+      try {
+        kept = setAsidePendingRotation();
+      } catch (err) {
+        console.error(
+          `  A key rotation write-ahead (${pendingRotationPath()}) could not be kept aside: ${err instanceof Error ? err.message : String(err)}. Nothing changed.`,
+        );
+        process.exit(1);
+      }
+      console.log(
+        dim(
+          `  Note: a held rotation that may belong to this identity was kept as ${kept}, not deleted.`,
+        ),
+      );
+    } else {
+      console.log(
+        dim(
+          `  Note: a held rotation (${pendingRotationPath()}) belonged to a different identity (${held.motebit_id}); cleared.`,
+        ),
+      );
+      clearPendingRotation();
+    }
   }
   const pass1 = await promptPassphrase("  New passphrase: ");
   if (pass1 === "") {

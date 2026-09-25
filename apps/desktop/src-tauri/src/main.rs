@@ -480,21 +480,32 @@ fn preserve_aside(path: &std::path::Path) -> Result<std::path::PathBuf, String> 
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "config.json".to_string());
+    // Link or copy the REAL file, never the name as given: `hard_link` is
+    // linkat(…, 0) on Linux and does not follow symlinks, so linking a
+    // symlinked config's NAME would make the "backup" a second name for the
+    // link — reading the NEW bytes once the write (which replaces the link's
+    // target) lands. An unresolvable path that is (or may be) a link refuses.
+    let real = match std::fs::canonicalize(path) {
+        Ok(r) => r,
+        Err(e) => {
+            let is_link = std::fs::symlink_metadata(path)
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(true);
+            if is_link {
+                return Err(format!(
+                    "could not resolve {} to preserve it ({}); nothing was changed",
+                    path.display(),
+                    e
+                ));
+            }
+            path.to_path_buf()
+        }
+    };
     let mut last_err = String::from("no backup name available");
     for n in 0..100u32 {
         let suffix = if n == 0 { String::new() } else { format!("-{}", n) };
         let backup = path.with_file_name(format!("{}.clobbered-{}{}", name, stamp, suffix));
-        let made = match std::fs::hard_link(path, &backup) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(_) => {
-                if backup.exists() {
-                    continue;
-                }
-                std::fs::copy(path, &backup).map(|_| ())
-            }
-        };
-        match made {
+        match std::fs::hard_link(&real, &backup) {
             Ok(()) => {
                 #[cfg(unix)]
                 {
@@ -506,10 +517,15 @@ fn preserve_aside(path: &std::path::Path) -> Result<std::path::PathBuf, String> 
                 }
                 return Ok(backup);
             }
-            Err(e) => {
-                last_err = e.to_string();
-                break;
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => match copy_owner_only(&real, &backup) {
+                Ok(()) => return Ok(backup),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => {
+                    last_err = e.to_string();
+                    break;
+                }
+            },
         }
     }
     Err(format!(
@@ -517,6 +533,36 @@ fn preserve_aside(path: &std::path::Path) -> Result<std::path::PathBuf, String> 
         path.display(),
         last_err
     ))
+}
+
+/// Copy `src` into a NEW file `dest`, owner-only from creation (create_new +
+/// mode 0600), fsync'd; `dest` removed on failure.
+fn copy_owner_only(src: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
+    use std::io::Write;
+    let bytes = std::fs::read(src)?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(dest)?;
+    let written = (|| -> std::io::Result<()> {
+        file.write_all(&bytes)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
+        file.sync_all()
+    })();
+    if let Err(e) = written {
+        drop(file);
+        let _ = std::fs::remove_file(dest);
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// Rule 3. Stage → fsync → rename → fsync dir, owner-only from creation.
@@ -1522,6 +1568,49 @@ mod config_file_tests {
             "{\"motebit_id\":\"m-1\",\"device_id\":\"d-2\",\"cli_encrypted_key\":{\"ciphertext\":\"c2\"}}",
         )
         .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_damaged_symlinked_config_is_preserved_as_its_old_bytes() {
+        // The invariant, stated so Linux CI enforces it: after the write, the
+        // backup still reads the OLD bytes. (Linking the symlink's NAME — what
+        // linkat(…, 0) does on Linux — would make it read the new ones.)
+        let dir = scratch("symlink-damage");
+        let real_dir = scratch("symlink-damage-real");
+        let real = real_dir.join("real-config.json");
+        let link = dir.join("config.json");
+        std::fs::write(&real, "{OLD damaged").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let backup = write_config_at(&link, "{\"motebit_id\":\"m-new\"}")
+            .unwrap()
+            .expect("damage must be preserved");
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), "{OLD damaged");
+        assert!(!std::fs::symlink_metadata(&backup).unwrap().file_type().is_symlink());
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "{\"motebit_id\":\"m-new\"}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&real_dir);
+    }
+
+    #[test]
+    fn the_copy_fallback_is_owner_only_from_creation_and_exclusive() {
+        let dir = scratch("copy");
+        let src = dir.join("src.json");
+        let dest = dir.join("dest.json");
+        std::fs::write(&src, "{bytes").unwrap();
+        copy_owner_only(&src, &dest).unwrap();
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "{bytes");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        assert_eq!(
+            copy_owner_only(&src, &dest).unwrap_err().kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -22,11 +22,10 @@
 import {
   chmodSync,
   closeSync,
-  constants,
-  copyFileSync,
   fchmodSync,
   fsyncSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -166,30 +165,74 @@ export function backupStamp(now: Date): string {
 
 /** Keep `target`'s bytes under `${target}${infix}<time>` without reading them (hard link; copy as fallback), or throw. */
 export function preserveAside(target: string, infix: string, now: Date = new Date()): string {
+  // Link or copy the REAL file, never the name as given: link(2) on Linux
+  // does not follow symlinks, so linking a symlinked config's NAME makes the
+  // "backup" a second name for the link — reading the NEW bytes once
+  // `writeFileAtomic` (which replaces the link's target) lands.
+  const real = resolveRealFile(target);
   const stamp = backupStamp(now);
   let lastErr: unknown;
   for (let n = 0; n < 100; n++) {
     const backup = `${target}${infix}${stamp}${n === 0 ? "" : `-${n}`}`;
     try {
-      linkSync(target, backup);
+      linkSync(real, backup);
+      try {
+        chmodSync(backup, 0o600);
+      } catch {
+        /* best effort — the bytes are preserved */
+      }
+      return backup;
     } catch (linkErr) {
       if ((linkErr as NodeJS.ErrnoException).code === "EEXIST") continue;
       try {
-        copyFileSync(target, backup, constants.COPYFILE_EXCL);
+        copyOwnerOnly(real, backup);
+        return backup;
       } catch (copyErr) {
         if ((copyErr as NodeJS.ErrnoException).code === "EEXIST") continue;
         lastErr = copyErr;
         break;
       }
     }
-    try {
-      chmodSync(backup, 0o600);
-    } catch {
-      /* best effort — the bytes are preserved */
-    }
-    return backup;
   }
   throw new Error(`could not preserve ${target} before replacing it; nothing was changed`, {
     cause: lastErr,
   });
+}
+
+/** The file `target` names, through symlinks; refuses when a link cannot be resolved. */
+function resolveRealFile(target: string): string {
+  try {
+    return realpathSync(target);
+  } catch (err) {
+    let isLink = true;
+    try {
+      isLink = lstatSync(target).isSymbolicLink();
+    } catch {
+      /* unknowable — treat as a link */
+    }
+    if (isLink) {
+      throw new Error(`could not resolve ${target} to preserve it; nothing was changed`, {
+        cause: err,
+      });
+    }
+    return target;
+  }
+}
+
+/** Copy `src` to a NEW file `dest`, created 0600 (exclusive), fsync'd; `dest` removed on failure. */
+function copyOwnerOnly(src: string, dest: string): void {
+  const bytes = readFileSync(src);
+  const fd = openSync(dest, "wx", 0o600);
+  try {
+    try {
+      writeFileSync(fd, bytes);
+      fchmodSync(fd, 0o600);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  } catch (err) {
+    rmSync(dest, { force: true });
+    throw err;
+  }
 }
