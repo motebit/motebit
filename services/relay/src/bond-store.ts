@@ -21,6 +21,7 @@ import type { DatabaseDriver } from "@motebit/persistence";
 import { canonicalJson } from "@motebit/encryption";
 import { verifyBondCommitment, type BondCommitment } from "@motebit/crypto";
 import { createLogger } from "./logger.js";
+import { verificationKeyFor } from "./identity-keys.js";
 
 const logger = createLogger({ service: "relay", module: "bond-store" });
 
@@ -105,10 +106,12 @@ export async function recordBondCommitment(
   const reg = db
     .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
     .get(commitment.motebit_id) as { public_key: string | null } | undefined;
-  if (!reg?.public_key) {
+  // Holder, else main's registry read (§5f): the proven key once there is one.
+  const regKey = verificationKeyFor(db, commitment.motebit_id, reg?.public_key);
+  if (!reg?.public_key && regKey === null) {
     return { ok: false, reason: "bonding_agent_not_registered" };
   }
-  if (reg.public_key.toLowerCase() !== commitment.bonded_public_key.toLowerCase()) {
+  if (regKey === null || regKey.toLowerCase() !== commitment.bonded_public_key.toLowerCase()) {
     return { ok: false, reason: "bonded_key_not_registry_key" };
   }
 

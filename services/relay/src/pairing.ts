@@ -8,7 +8,9 @@ import type { Hono } from "hono";
 import type { TokenAudience } from "@motebit/protocol";
 import { HTTPException } from "hono/http-exception";
 import { createLogger } from "./logger.js";
+import { admitKey, isCanonicalKey } from "./identity-keys.js";
 import type { IdentityManager } from "@motebit/core-identity";
+import type { DatabaseDriver } from "@motebit/persistence";
 
 // --- Pairing Code Generator ---
 
@@ -29,10 +31,7 @@ function generatePairingCode(): string {
 // --- Dependencies ---
 
 export interface PairingDeps {
-  db: {
-    prepare(sql: string): { run(...args: unknown[]): void; get(...args: unknown[]): unknown };
-    exec(sql: string): void;
-  };
+  db: DatabaseDriver;
 
   app: Hono;
   apiToken: string | undefined;
@@ -155,8 +154,11 @@ export function registerPairingRoutes(deps: PairingDeps): void {
     if (!device_name || typeof device_name !== "string") {
       throw new HTTPException(400, { message: "Missing device_name" });
     }
-    if (!public_key || typeof public_key !== "string" || !/^[0-9a-f]{64}$/i.test(public_key)) {
-      throw new HTTPException(400, { message: "Invalid public_key — must be 64-char hex string" });
+    if (!public_key || typeof public_key !== "string" || !isCanonicalKey(public_key)) {
+      // A NEW device key: canonical only (DA1/DB4).
+      throw new HTTPException(400, {
+        message: "Invalid public_key — must be 64-char LOWERCASE hex string",
+      });
     }
     if (
       x25519_pubkey != null &&
@@ -277,7 +279,11 @@ export function registerPairingRoutes(deps: PairingDeps): void {
             typeof kt.encrypted_seed === "string" &&
             typeof kt.nonce === "string" &&
             typeof kt.tag === "string" &&
-            typeof kt.identity_pubkey_check === "string"
+            typeof kt.identity_pubkey_check === "string" &&
+            // The key update-key will later write onto the device row: canonical
+            // or exactly a key already on file (DB4). Unvalidated, it was
+            // written verbatim.
+            admitKey(db, session.motebit_id as string, kt.identity_pubkey_check)
           ) {
             keyTransferJson = JSON.stringify(kt);
           }
@@ -383,6 +389,8 @@ export function registerPairingRoutes(deps: PairingDeps): void {
       typeof body.public_key !== "string" ||
       !/^[0-9a-f]{64}$/i.test(body.public_key)
     ) {
+      // Shape only here; the key must also equal the approval's
+      // identity_pubkey_check EXACTLY (below), which approve admitted (DB4).
       throw new HTTPException(400, { message: "Invalid public_key — must be 64-char hex string" });
     }
 

@@ -54,6 +54,7 @@ import {
   recordOrchestrationAttempt,
   type OrchestrationRow,
 } from "./dispute-orchestration.js";
+import { verificationKeyFor } from "./identity-keys.js";
 
 const logger = createLogger({ service: "relay", module: "disputes" });
 
@@ -1046,12 +1047,14 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     const filerRow = db
       .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
       .get(req.filed_by) as { public_key: string } | undefined;
-    if (!filerRow?.public_key) {
+    // Holder, else main's registry read (§5f verification reader).
+    const filerRowKey = verificationKeyFor(db, req.filed_by, filerRow?.public_key);
+    if (filerRowKey === null) {
       throw new HTTPException(401, {
         message: "Filing party is not registered; cannot verify DisputeRequest signature",
       });
     }
-    const filerPubKey = hexToBytes(filerRow.public_key);
+    const filerPubKey = hexToBytes(filerRowKey);
     const sigValid = await verifyDisputeRequest(req, filerPubKey);
     if (!sigValid) {
       throw new HTTPException(401, {
@@ -1249,12 +1252,14 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     const submitterRow = db
       .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
       .get(ev.submitted_by) as { public_key: string } | undefined;
-    if (!submitterRow?.public_key) {
+    // Holder, else main's registry read (§5f verification reader).
+    const submitterRowKey = verificationKeyFor(db, ev.submitted_by, submitterRow?.public_key);
+    if (submitterRowKey === null) {
       throw new HTTPException(401, {
         message: "Submitting party is not registered; cannot verify DisputeEvidence signature",
       });
     }
-    const sigValid = await verifyDisputeEvidence(ev, hexToBytes(submitterRow.public_key));
+    const sigValid = await verifyDisputeEvidence(ev, hexToBytes(submitterRowKey));
     if (!sigValid) {
       throw new HTTPException(401, {
         message: "DisputeEvidence signature verification failed",
@@ -1583,12 +1588,14 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     const appealerRow = db
       .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
       .get(ap.appealed_by) as { public_key: string } | undefined;
-    if (!appealerRow?.public_key) {
+    // Holder, else main's registry read (§5f verification reader).
+    const appealerRowKey = verificationKeyFor(db, ap.appealed_by, appealerRow?.public_key);
+    if (appealerRowKey === null) {
       throw new HTTPException(401, {
         message: "Appealing party is not registered; cannot verify DisputeAppeal signature",
       });
     }
-    const sigValid = await verifyDisputeAppeal(ap, hexToBytes(appealerRow.public_key));
+    const sigValid = await verifyDisputeAppeal(ap, hexToBytes(appealerRowKey));
     if (!sigValid) {
       throw new HTTPException(401, {
         message: "DisputeAppeal signature verification failed",

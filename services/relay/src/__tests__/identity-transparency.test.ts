@@ -26,6 +26,7 @@ import {
   submitIdentityLogAnchorOnChain,
 } from "../identity-log-anchoring.js";
 import { createTestRelay } from "./test-helpers.js";
+import { recordIdentityKey } from "../identity-keys.js";
 
 async function key(): Promise<string> {
   return bytesToHex((await generateKeypair()).publicKey);
@@ -84,6 +85,16 @@ describe("identity-transparency bundle", () => {
         reason TEXT, old_key_signature TEXT, new_key_signature TEXT NOT NULL, recovery INTEGER DEFAULT 0,
         guardian_signature TEXT)`,
     );
+    db.exec("DROP TABLE IF EXISTS identity_keys");
+    db.exec(
+      "CREATE TABLE identity_keys (motebit_id TEXT PRIMARY KEY, public_key TEXT NOT NULL, guardian_public_key TEXT, source TEXT NOT NULL, first_seen INTEGER, updated_at INTEGER NOT NULL)",
+    );
+    db.exec(
+      "CREATE TABLE IF NOT EXISTS devices (device_id TEXT PRIMARY KEY, motebit_id TEXT NOT NULL, device_token TEXT, public_key TEXT NOT NULL, registered_at INTEGER NOT NULL)",
+    );
+    db.exec(
+      "CREATE TABLE IF NOT EXISTS relay_key_successions (id INTEGER PRIMARY KEY, motebit_id TEXT NOT NULL, old_public_key TEXT NOT NULL, new_public_key TEXT NOT NULL, timestamp INTEGER NOT NULL, reason TEXT, old_key_signature TEXT, new_key_signature TEXT NOT NULL, recovery INTEGER DEFAULT 0, guardian_signature TEXT)",
+    );
     createIdentityLogAnchorTables(db);
     const kp = await generateKeypair();
     relayIdentity = {
@@ -95,11 +106,31 @@ describe("identity-transparency bundle", () => {
     };
   });
 
+  /**
+   * A registered agent whose key the relay has PROVEN — the registry row plus
+   * the holder, the state the v42 transplant (E-main) or an evidenced door
+   * leaves (#703 §5f). A registry row alone is discovery's copy and is served
+   * as '' (pinned in its own test below).
+   */
   function register(motebitId: string, publicKey: string, registeredAt: number): void {
     db.prepare(
       "INSERT INTO agent_registry (motebit_id, public_key, registered_at) VALUES (?, ?, ?)",
     ).run(motebitId, publicKey, registeredAt);
+    recordIdentityKey(db, {
+      motebitId,
+      publicKey,
+      source: "backfill:registry",
+      now: registeredAt,
+    });
   }
+
+  it("a registry row with no holder is served and logged as '' — discovery's copy, not authority (#703 §5f, G1)", async () => {
+    db.prepare(
+      "INSERT INTO agent_registry (motebit_id, public_key, registered_at) VALUES (?, ?, ?)",
+    ).run("mote-unproven", await key(), 1000);
+    expect((await buildIdentityBindingBundle(db, "mote-unproven"))!.current_public_key).toBe("");
+    expect(readIdentityBindings(db)).toEqual([{ motebit_id: "mote-unproven", public_key: "" }]);
+  });
 
   /** Cut + confirm an anchor over the current binding set. */
   async function anchorAndConfirm(txHash = "tx-1"): Promise<void> {

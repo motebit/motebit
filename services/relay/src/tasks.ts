@@ -101,6 +101,7 @@ import {
 } from "./errors.js";
 import { listRevokedGrantIds } from "./delegation-revocations.js";
 import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
+import { identityGuardianFor, verificationKeyFor } from "./identity-keys.js";
 
 const logger = createLogger({ service: "tasks" });
 
@@ -474,8 +475,10 @@ export async function handleReceiptIngestion(
   const regRow = moteDb.db
     .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
     .get(receipt.motebit_id) as { public_key: string } | undefined;
-  if (regRow?.public_key) {
-    pubKeyHex = regRow.public_key;
+  // Holder, else main's registry read (§5f verification reader).
+  const ingestKey = verificationKeyFor(moteDb.db, receipt.motebit_id, regRow?.public_key);
+  if (ingestKey !== null) {
+    pubKeyHex = ingestKey;
   } else {
     const devices = await identityManager.listDevices(receipt.motebit_id);
     const device =
@@ -519,6 +522,11 @@ export async function handleReceiptIngestion(
     const embeddedIsRegisteredDevice = devices.some((d) => d.public_key === receipt.public_key);
     if (embeddedIsRegisteredDevice) {
       receiptValid = await verifyExecutionReceipt(receipt, hexToBytes(receipt.public_key));
+      // Main's heal, restored exactly (#758 review): the registry is departure's
+      // and the signature readers' INPUT for an identity with no holder, and
+      // build 4's contract is main's rule with main's inputs. It is never
+      // SERVED (the holder is), so R2's harm — a paired device's key read as
+      // the identity's — no longer reaches a foundation-law route.
       if (receiptValid) {
         moteDb.db
           .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
@@ -701,8 +709,10 @@ export async function handleReceiptIngestion(
             const subReg = moteDb.db
               .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
               .get(sub.motebit_id) as { public_key: string } | undefined;
-            if (subReg?.public_key) {
-              subPubKey = subReg.public_key;
+            // Holder, else main's registry read (§5f verification reader).
+            const subKey = verificationKeyFor(moteDb.db, sub.motebit_id, subReg?.public_key);
+            if (subKey !== null) {
+              subPubKey = subKey;
             } else {
               const subDevices = await identityManager.listDevices(asMotebitId(sub.motebit_id));
               subPubKey = subDevices.find((d) => d.public_key)?.public_key;
@@ -796,7 +806,9 @@ export async function handleReceiptIngestion(
         const subReg = moteDb.db
           .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
           .get(sub.motebit_id) as { public_key: string } | undefined;
-        if (subReg?.public_key) subPubKey = subReg.public_key;
+        // Holder, else main's registry read (§5f verification reader).
+        const subKey = verificationKeyFor(moteDb.db, sub.motebit_id, subReg?.public_key);
+        if (subKey !== null) subPubKey = subKey;
         else {
           const subDevices = await identityManager.listDevices(asMotebitId(sub.motebit_id));
           subPubKey = subDevices.find((d) => d.public_key)?.public_key;
@@ -1734,7 +1746,11 @@ export async function handleReceiptIngestion(
           task_id: taskId,
           origin_relay: relayIdentity.relayMotebitId,
           receipt,
-          ...(workerReg?.public_key ? { agent_public_key: workerReg.public_key } : {}),
+          ...((): { agent_public_key?: string } => {
+            // Holder, else main's registry read (§5f verification reader).
+            const k = verificationKeyFor(moteDb.db, receipt.motebit_id, workerReg?.public_key);
+            return k !== null ? { agent_public_key: k } : {};
+          })(),
           timestamp: Date.now(),
         };
         const resultBytes = new TextEncoder().encode(canonicalJson(resultBody));
@@ -3171,11 +3187,9 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                   ? weightedSumComposite
                   : undefined;
 
-          // Look up caller's guardian key for organizational trust baseline
-          const callerGuardianRow = moteDb.db
-            .prepare("SELECT guardian_public_key FROM agent_registry WHERE motebit_id = ?")
-            .get(callerMotebitId ?? motebitId) as
-            { guardian_public_key: string | null } | undefined;
+          // The caller's guardian for the organizational trust baseline — the
+          // one guardian truth (§5a A3), not a registry read of its own.
+          const callerGuardian = identityGuardianFor(moteDb.db, callerMotebitId ?? motebitId);
 
           const ranked = explainedRankCandidates(
             asMotebitId(callerMotebitId ?? motebitId),
@@ -3189,7 +3203,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               explorationWeight,
               peerEdges: allPeerEdges,
               compositeFunction,
-              callerGuardianPublicKey: callerGuardianRow?.guardian_public_key ?? undefined,
+              callerGuardianPublicKey: callerGuardian ?? undefined,
             },
           );
           const selected = ranked.filter((r) => r.selected && r.composite > 0);

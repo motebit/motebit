@@ -52,6 +52,7 @@ const TABLES = [
   "devices",
   "relay_key_successions",
   "relay_revoked_credentials",
+  "identity_keys",
 ] as const;
 
 /** Columns that carry authority. An UPDATE touching none of these is routine. */
@@ -77,6 +78,30 @@ interface Writer {
  * still fails — which is exactly how #713 and #719 were added.
  */
 const WRITERS: readonly Writer[] = [
+  {
+    file: "services/relay/src/identity-keys.ts",
+    verb: "INSERT",
+    table: "identity_keys",
+    count: 2,
+    principal:
+      "two statements: `recordIdentityKey`, and the one-time v42 backfill (IDENTITY_KEYS_BACKFILL_SQL — E-main, main's registry key only — never the chain head or a device row). The holder is what the relay SERVES and is written only on EVIDENCE (#703 §5f, §5i): E-sov — the id is exactly the sovereign commitment to the key AND the request proved current possession (register-self's signature, or an /agents/register bearer verified by the device row holding that key), through `recordFirstIdentityKey` in one transaction; E-link — `applySuccession`, only for a link from the key the holder holds; E-mig — accept-migration after the sovereign binding verifies; E-op — an operator registration of a bare service identity (no holder, device row or chain), `recordOperatorServiceKey`. Bootstrap, a bearer naming a key, and the operator naming a key for an identity with devices write nothing. This function proves nothing itself",
+  },
+  {
+    file: "services/relay/src/identity-keys.ts",
+    verb: "UPDATE",
+    table: "identity_keys",
+    count: 1,
+    principal:
+      "`recordIdentityGuardian`, called only by /agents/register after it verified the guardian's attestation over {action, guardian_public_key, motebit_id} and wrote the same guardian to the registry — so the holder never answers with a guardian the identity replaced (#750 review). Updates an existing holder row only; proves nothing itself",
+  },
+  {
+    file: "services/relay/src/tasks.ts",
+    verb: "UPDATE",
+    table: "agent_registry",
+    count: 1,
+    principal:
+      "the identity itself — a receipt may reconcile the registry key ONLY to a key already registered as one of that identity's devices; an arbitrary embedded key is refused. Main's heal, kept exactly (#703 build 4): the registry is departure's input for an identity with no holder and is never served",
+  },
   {
     file: "services/relay/src/agents.ts",
     verb: "INSERT",
@@ -148,14 +173,6 @@ const WRITERS: readonly Writer[] = [
     count: 1,
     principal:
       "the identity itself — departure is initiated by the identity's own migration token; the row is marked revoked because the identity now lives elsewhere",
-  },
-  {
-    file: "services/relay/src/tasks.ts",
-    verb: "UPDATE",
-    table: "agent_registry",
-    count: 1,
-    principal:
-      "the identity itself — a receipt may reconcile the registry key ONLY to a key already registered as one of that identity's devices; an arbitrary embedded key is refused",
   },
   {
     file: "packages/persistence/src/index.ts",

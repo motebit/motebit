@@ -13,7 +13,12 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createSyncRelay } from "@motebit/relay";
 import type { SyncRelay } from "@motebit/relay";
 import { generate, verify } from "@motebit/identity-file";
-import { generateKeypair, bytesToHex, signKeySuccession } from "@motebit/encryption";
+import {
+  deriveSovereignMotebitId,
+  generateKeypair,
+  bytesToHex,
+  signKeySuccession,
+} from "@motebit/encryption";
 import type { KeyPair } from "@motebit/encryption";
 
 import type { FullConfig } from "../config.js";
@@ -83,8 +88,10 @@ interface Fixture {
 
 /** A local identity: motebit.md + config with the key encrypted under PASS. */
 async function localIdentity(): Promise<Fixture> {
-  const mid = crypto.randomUUID();
   const a = await generateKeypair();
+  // The CLI mints its id as the sovereign commitment to its key (core-identity),
+  // which is what lets the relay record that key on evidence (#703 §5f, E-sov).
+  const mid = await deriveSovereignMotebitId(hex(a));
   const identityPath = join(dir, "motebit.md");
   writeFileSync(
     identityPath,
@@ -365,6 +372,11 @@ describe("S5: the relay holds some other key", () => {
     );
     relay.moteDb.db
       .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
+      .run(hex(c), f.mid);
+    // …and the ONE holder the relay now answers from (#703 Inc 2): a rotation
+    // door would have moved it in the same transaction.
+    relay.moteDb.db
+      .prepare("UPDATE identity_keys SET public_key = ? WHERE motebit_id = ?")
       .run(hex(c), f.mid);
     relay.moteDb.db
       .prepare(

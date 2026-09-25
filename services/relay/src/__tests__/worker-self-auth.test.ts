@@ -25,6 +25,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
 import { generateKeypair, bytesToHex, createSignedToken } from "@motebit/encryption";
+// eslint-disable-next-line no-restricted-imports -- the sovereign id derivation a shipped worker mints with
+import { deriveSovereignMotebitId } from "@motebit/crypto";
 import type { TokenAudience } from "@motebit/protocol";
 import type { SyncRelay } from "../index.js";
 import { createTestRelay } from "./test-helpers.js";
@@ -35,7 +37,10 @@ describe("worker self-auth — a service authenticates to its relay with its own
   let relay: SyncRelay;
   let kp: { publicKey: Uint8Array; privateKey: Uint8Array };
   let pubKeyHex: string;
-  const motebitId = `worker-${crypto.randomUUID()}`;
+  // A shipped worker's id is the sovereign commitment to its key
+  // (core-identity mints sovereign by default), so the relay can serve its
+  // key from the §7.6 bundle on evidence (#703 §5f, E-sov) — set per test.
+  let motebitId = "";
   const deviceId = "worker-primary";
 
   const mint = async (aud: TokenAudience, mid = motebitId, did = deviceId): Promise<string> =>
@@ -58,6 +63,7 @@ describe("worker self-auth — a service authenticates to its relay with its own
   beforeEach(async () => {
     relay = await createTestRelay();
     kp = await generateKeypair();
+    motebitId = await deriveSovereignMotebitId(bytesToHex(kp.publicKey));
     pubKeyHex = bytesToHex(kp.publicKey);
   });
   afterEach(async () => {

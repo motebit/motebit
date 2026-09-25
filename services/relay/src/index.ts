@@ -182,6 +182,7 @@ import {
   BridgeSettlementRail,
 } from "@motebit/settlement-rails";
 import { delistExpired } from "./registry-delist.js";
+import { verificationKeyFor } from "./identity-keys.js";
 
 // === Re-exports for backward compatibility (tests and sibling modules import from index) ===
 
@@ -767,11 +768,15 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // auth.ts); bound once here and injected at every auth site so a service-mode
   // caller is verified uniformly rather than 401'd on the routes that happen to
   // omit the fallback.
+  // The service-mode fallback: main's gate, unchanged (§5f DA7), verifying
+  // against the holder when the identity has proven one and main's registry
+  // read otherwise. The rebuild gated it on "no keyed device rows" and 401'd
+  // surface-kit's `did:key` rotation client where main answers 200.
   const agentRegistryKeyLookup = (mid: string): string | null => {
     const row = moteDb.db
       .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
       .get(mid) as { public_key?: string } | undefined;
-    return row?.public_key ?? null;
+    return verificationKeyFor(moteDb.db, mid, row?.public_key);
   };
   const verifySignedTokenForDeviceWithFallback: typeof verifySignedTokenForDevice = (
     token,

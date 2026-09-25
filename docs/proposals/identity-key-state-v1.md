@@ -1,6 +1,6 @@
 # PROPOSAL — identity key state outlives the discovery row (DRAFT, not built)
 
-**Status:** DRAFT for design review, 2026-09-23; §10 DECIDED 2026-09-24 (founder delegated the three questions to PE judgement). **Increment 1 (§4) BUILT 2026-09-24** — `registry-delist.ts`, migration v41, gate #162 (#744). **Increment 2 (§5) PART A: first build #747 WITHDRAWN 2026-09-24 under §8 (two in-kind review rounds); amendments in §5a; branch kept; rebuild design in §5b (2026-09-24). **Rebuild #750 WITHDRAWN 2026-09-24 under §8:** round 1 (§5c) fixed four findings, and round 2 (§5d) found two §8 wrong answers, both regressions. Branch `relay/identity-key-state-inc2-rebuild` kept. §5e passed three design-review rounds narrowing to G1; founder decided option 2 (§5f: the holder is the ONLY authority). Build 3 in progress from §5f.** Was: — `identity_keys` (migration v42, backfill; production count 50/50 unambiguous, 0 unfilled), `recordIdentityKey` at every door that proves a key, `identityKeyFor` the one resolver, the three named resolvers (auth's service fallback, verify-receipt, `keyOnFile`/`departureFrom`) and the identity log + §7.6 bundle on it. PART B not built: the remaining second-family readers (tasks.ts ×5, disputes.ts ×3, command-route, bond-store, device-registration-guard, federation-callbacks, index.ts, migration.ts ×3, key-rotation.ts recovery, trust-graph) and `check-identity-key-resolver`.
+**Status:** DRAFT for design review, 2026-09-23; §10 DECIDED 2026-09-24 (founder delegated the three questions to PE judgement). **Increment 1 (§4) BUILT 2026-09-24** — `registry-delist.ts`, migration v41, gate #162 (#744). **Increment 2 (§5) PART A: first build #747 WITHDRAWN 2026-09-24 under §8 (two in-kind review rounds); amendments in §5a; branch kept; rebuild design in §5b (2026-09-24). **Rebuild #750 WITHDRAWN 2026-09-24 under §8:** round 1 (§5c) fixed four findings, and round 2 (§5d) found two §8 wrong answers, both regressions. Branch `relay/identity-key-state-inc2-rebuild` kept. §5e passed three design-review rounds narrowing to G1; founder decided option 2 (§5f: the holder is the ONLY authority). Build 3 BUILT 2026-09-25 (§5g) and WITHDRAWN under §8 (#753, §5i: C1/C2, departure regressions). Build 4 DECIDED and BUILT 2026-09-25 (§5i, §5j): serving evidence-only; departure = holder else main's exact rule, fed main's exact registry value.** Was: — `identity_keys` (migration v42, backfill; production count 50/50 unambiguous, 0 unfilled), `recordIdentityKey` at every door that proves a key, `identityKeyFor` the one resolver, the three named resolvers (auth's service fallback, verify-receipt, `keyOnFile`/`departureFrom`) and the identity log + §7.6 bundle on it. PART B not built: the remaining second-family readers (tasks.ts ×5, disputes.ts ×3, command-route, bond-store, device-registration-guard, federation-callbacks, index.ts, migration.ts ×3, key-rotation.ts recovery, trust-graph) and `check-identity-key-resolver`.
 **Author:** motebit PE
 **Closes when built:** #703 (a daemon shutdown discards the identity's guardian and key state)
 **Prerequisite for:** roster part B (the successor to withdrawn #698), then #691 / #687 / #681 — the roster's key model was found inert against production data because of exactly this conflation.
@@ -262,6 +262,105 @@ The final round (per the convergence rule) confirmed one §8-kind flaw, several 
 **Stated costs.** A legacy (non-sovereign) identity first seen after v42, which never presents E-sov or E-link, serves `''` in the bundle where main would serve its registry key. New identities are sovereign by default, and every identity with a registry row at migration time is transplanted. A sovereign identity fills on its first register-self or keyed register by its own key.
 
 **Proof contract (E4, the build's gate):** for every writer and every authority reader, probes by a principal holding NO private key, in canonical and alternate spellings, over the planted states of §5b, §5d and G1, run against the branch AND `origin/main`. The branch must never serve or depart from a key main would not, except where this section states a cost. Then one code-review round under §8.
+
+### 5g. Build 3 — what building §5f found, and the differential (2026-09-25)
+
+Four findings surfaced while building. Each is resolved with evidence the protocol already has, and none adds trust:
+
+- **E-op — an operator-registered service identity.** It has no device row, so no door can present E-sov, and under holder-only authority it could neither rotate nor recover through its guardian, where main allows both (§8(b)). Main trusts the operator's registry key for exactly this identity. So an operator registration fills the holder only when the identity has no holder, no device row and no chain (`recordOperatorServiceKey`, one transaction). It cannot recreate G1, which needs device rows.
+- **E-sov through a KEYLESS registration.** The CLI daemon bootstraps (unsigned), then registers without a key. As first built, no CLI identity would ever fill, and every new daemon's bundle would serve `''`. A keyless `/agents/register` under a device bearer proves current possession of that device's key: the token was verified by that row, with no fallback. With the exact sovereign id that is E-sov, the same evidence as DB1.
+- **DA2's registry clause.** A registry key EQUAL to the candidate does not block the first-key write. Under §5f the registry is discovery's copy, and a keyless registration publishes the same key before the holder fills. A differing registry key still blocks.
+- **DB5, clarified.** A device-rung departure moves its device row and the registry (discovery's copy, main's behaviour) and appends the chain. It never writes the holder. The registry restriction in DB5 existed only because the registry was authority.
+
+**The E4 differential.** One HTTP-only scenario file, run against the branch and against an `origin/main` copy of the relay:
+
+| Scenario                                                               | main                                | build 3                                               |
+| ---------------------------------------------------------------------- | ----------------------------------- | ----------------------------------------------------- |
+| W1 — a stranger bootstraps an unseen id's genesis key                  | 404                                 | 404                                                   |
+| W2 — a stranger plants UPPER(K), then the owner registers and rotates  | plant 201; nothing served           | plant **400**; owner rotates; the proven K2 is served |
+| G1a — a paired device names X after a keyless register                 | X refused (row order); OWNER served | X reaches discovery; `''` served; the owner rotates   |
+| G1b — a paired device rotates its own key                              | **owner's rotation refused (400)**  | owner rotates (200)                                   |
+| L3 — a guardian recovery on a blank-key row with devices that disagree | recovers; NEXT served               | recovers; `''` served                                 |
+| SVC — an operator service identity with a guardian                     | recovers; served                    | same                                                  |
+| CLI — sovereign daemon: bootstrap, keyless register, rotate            | served K, then NEXT                 | same                                                  |
+| LEGACY — legacy-id daemon                                              | served K                            | `''`                                                  |
+| STRANGER — a stranger's key onto an existing identity                  | 409 / 409                           | same                                                  |
+
+**Results:**
+
+- No rotation or recovery fails on the branch where it succeeds on main, and G1b now succeeds where main refused.
+- The branch serves a key main does not only in W2, and that key is evidence-proven.
+- **Stated cost:** G1a, L3 and LEGACY, all legacy (non-sovereign) ids, serve `''` where main served its registry key. New identities are sovereign by default, and every identity with a registry row at migration is transplanted by E-main.
+- **Named residual:** in G1a, for an unfilled legacy identity, a paired device's own key can reach the registry, and verification readers fall back to the registry. Main does the same in the other row order. Closing it means verification readers stop falling back to the registry, which is out of this build's scope.
+
+### 5h. Build 3 code review round 1 (#753) — the one fix round under §8
+
+An independent code review, which probed each candidate on the branch and on an `origin/main` copy, returned _fix-then-merge_ with two in-kind findings. Both are fixed; each has a test that goes red when the fix is removed:
+
+- **H1 (§8(a) kind) — E-main no longer reads the chain head.** A paired device's device-rung rotation (K2→K3) appends a link, so a chain head can be a key the identity never proved. The v42 transplant would have made K3 the holder and served and anchored it, where main 404s. E-main now transplants **main's registry key only**. Main never served the chain head, so nothing main served is lost. This supersedes §5f's "registry key, else chain head" and DB2's "benign" note.
+- **H2 (DB3's kind) — a keyless registration never blanks a registry key.** With rows that disagree, `discoveryKeyFor` answers `''`, and the upsert replaced the owner's registry key with it. The paired device's next keyed registration then needed no succession, and every unfilled verification reader moved to its key, where main refuses in every row order. Keyless now falls back to the existing registry key before `''`. §5g's residual is corrected to the state main shares exactly: a registry that is ALREADY `''`.
+- **Stated cost, widened (review item 3):** a sovereign identity whose FIRST rotation happens through the device rung before it is filled never fills. Any chain row blocks E-sov, and E-link needs a holder. Main serves its current key; build 3 serves `''`. Letting E-sov accept a chain whose root departs from the genesis key is the named follow-up.
+- **Prose corrected (review item 4):** the `/api/v1/agents/*` middleware DOES fall back (holder, else registry) when no row exists for the token's `did`. The register door's possession key is taken only from a device row, and E-sov's soundness also rests on DA2's predicate, which the reviewer confirmed closes the fallback path.
+
+This was the one fix round. Under §8, a further in-kind finding means withdraw.
+
+### 5i. Build 3 WITHDRAWN under §8 (#753, 2026-09-25) — and what three builds taught
+
+The decisive code review, run after round 1's fixes, confirmed two §8(b) regressions against main. Each was probed on the branch and on an `origin/main` copy:
+
+- **C1 — chain-only identities are stranded.** Holder-only departure drops main's chain rung. An identity with a blank or absent registry key and a recorded chain can no longer rotate or be recovered through its guardian (main 200, build 3 400). Main's own routes reach that state. H1 (§5h) removed the only transplant that covered it.
+- **C2 — an operator identity with any device row is stranded.** E-op excludes any identity with a device row (even a keyless one), and nothing else fills its holder. Rotation and guardian recovery: main 200, build 3 400.
+- C3, not §8 kind but unstated: a paired device's device-rung rotation leaves the served chain with broken linkage, and the owner's served key at `''` for good.
+
+Neither C1 nor C2 is reachable from the shipped self-sovereign clients. The rule counts kind, not reachability, so build 3 is withdrawn. Branch `relay/identity-key-state-build3` is kept: its serving half, its tests, its differential probe and every round's findings are the parts bin for build 4.
+
+**The pattern, read across all three builds and six review rounds.** Every §8(a) finding (a key served that the identity never proved) was fixed and **stayed** fixed once SERVING read the holder only. Every §8(b) regression in the last three rounds (E-op's origin, C1, C2) had one shape: departure authority had been removed from a rung main relies on (registry, chain head), and a state main supports was stranded. Building a new evidence path for each stranded state (E-op, the keyless E-sov, the registry-equal clause) is the same failure as #747's: re-deriving an answer door by door, one review round at a time.
+
+**Recommendation for build 4** (a founder decision, because it narrows §5f's option 2):
+
+- **Serving stays evidence-only.** `identityKey` is the holder, else `''` or 404, for the §7.6 bundle, the identity log and `/succession`. This half held under every review, and it closes G1's actual harm: an unproven key served and anchored.
+- **Departure, recovery and the registration check** become the holder, else **exactly main's rule** (registry → chain head → exact device row). That is `verificationKeyFor`'s pattern applied to departure. For an identity with no holder, departure is main's by construction, so §8(b) cannot regress. For a filled identity it is the proven key.
+- **Cost, stated:** G1b's improvement (an owner whose paired device rotated first can still rotate) is dropped. That lockout is main's pre-existing behaviour, so it is not a regression. It becomes a named follow-up that can be closed by evidence (E-sov accepting a chain rooted at the genesis key) without touching the departure rule.
+- **Deleted, not built:** E-op and the registry-equal clause, which existed only to rescue departure. The keyless E-sov stays, because it serves the CLI daemon's key, a serving concern.
+- **Proof contract unchanged:** E4, the differential against main, now run with `scripts/differential-vs-main.ts`. It adds the review rounds' own probes: the C1/C2 states, the W/G scenarios, and the round-1 H1/H2 states.
+
+**DECIDED (founder, 2026-09-25): build 4 as recommended, with one correction made while scoping it.** E-op and the registry-equal clause are **kept**, not deleted. The text above called them rescue paths for departure, but each also fills the holder for an identity main serves (operator service identities; CLI daemons that register without a key). Once departure uses main's rule for an unfilled identity, neither is load-bearing for departure, so keeping them costs no §8(b) exposure and avoids a serving loss. The one mechanism that changes from build 3 is `departureFrom`: the holder, else main's registry → chain head → exact device row.
+
+### 5j. Build 4 — what building it found, and the differential (2026-09-25)
+
+Built from §5i as decided. Building it found one thing: build 4's premise is "departure is main's rule for an unfilled identity", so the rule's **inputs** must be main's too. DA5 made a keyless registration write `''` when device rows disagree, where main writes the first-listed keyed row. The differential caught it: in G1a, the owner's rotation got **400 on build 4 and 200 on main**. DA5 existed only because the registry used to be served. The registry now never is, since serving reads the holder, so the keyless write reverts to exactly main's: the holder when there is one, else main's first-listed keyed row, else `''`. `discoveryKeyFor` is deleted.
+
+**The differential** (`scripts/differential-vs-main.ts`, 12 scenarios including the #753 decisive round's C1/C2/C3). **Every rotation, recovery and admission result equals main's in all 12.** The only differences are in serving:
+
+| Scenario                    | Difference from main                                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------ |
+| W2                          | a stranger's non-canonical plant is refused; the owner's evidence-proven key is served where main 404s |
+| G1a, L3, LEGACY, C1, C2, C3 | an identity with no holder serves `''` where main serves its registry key                              |
+
+**Stated cost, restated precisely.** An identity whose key no evidence has proven serves `''` in the §7.6 bundle, the identity log and `/succession` `current_public_key`. After v42 that means:
+
+- every identity with a registry key at migration time is transplanted (E-main), so it is served;
+- a sovereign identity fills on its first register-self, or its first keyed or keyless registration by its own device. The exception is when another device row holds a different key first (C3, DA2's predicate), and then it stays unfilled until the E-sov-over-a-genesis-rooted-chain follow-up;
+- an operator service identity fills via E-op unless it already has a device row (C2);
+- a legacy id never fills.
+
+None of this refuses a rotation or recovery main allows, and none serves a key the identity did not prove. Consumers that fall back from the bundle to discovery (for example mcp-server's caller lookup) still find the registry key there.
+
+### 5k. Build 4 code review round 1 (#758) — the one fix round
+
+A cold review, which probed each candidate through `scripts/differential-vs-main.ts`, returned _fix-then-merge_. All three findings had one shape, the one §5j already named: **a changed write that main's departure rule reads.**
+
+- **K1 — the receipt heal is restored, exactly as main.** R2 (the rebuild) had deleted `handleReceiptIngestion`'s registry heal, so the rule's input changed. HEAL-U: an unfilled owner's rotation after its own receipt returned 400 on build 4 and 200 on main. The registry is never served, so R2's harm (a paired key read as the identity's) does not reach a foundation-law route. The writers-gate entry is back.
+- **K2 — E-main skips identities whose device rows name a different key.** HEAL-F: v42 transplanted a registry key that a paired device had captured on main, froze it as authority, and locked the owner out after main's heal would have taken it back. When device rows disagree, the relay cannot tell whose key the registry names, so that identity stays unfilled and gets main's rule exactly. (The migration comment and the backfill test pin this.)
+- **K3 — the public-door guard case-folds again, as main does.** CASE-G: an exact guard refused a lowercase K joining a legacy UPPER(K) identity that main admits. The risk it targeted (a second-spelling row that a rotation misses) is closed where it lives: rotation retires rows case-insensitively (DB4).
+
+The reviewer's probe is committed as `services/relay/src/__tests__/identity-keys-heal.probe.ts`, loading the branch's real backfill SQL. With the committed 12-scenario probe:
+
+- CASE-G and every rotation, recovery and admission result equal main's, **except DA1's stated refusal**: a succession or recovery record whose NEW key is non-canonical (e.g. uppercase) is refused where main accepts it (the decisive round's R-UROT/R-UREC). The same record with the canonical spelling succeeds, so it is never a lockout, and no shipped encoder emits uppercase. (An earlier CASE-ROT probe claimed parity here; it mutated the key after signing, so both trees refused it for a bad signature. It was vacuous and is removed.)
+- DB4's case-insensitive retire moves a legacy UPPER(K) device row on rotation, where main leaves it authenticating under the retired key (R-RETIRE). That is main's #702-class defect, closed on purpose.
+- HEAL-U/F differ only in serving `''` (§5j's stated cost).
+
+Under §8, the next in-kind finding withdraws.
 
 ## 6. Decisions
 
