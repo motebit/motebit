@@ -379,6 +379,98 @@ describe("pairing's update-key closes the sockets the claiming key admitted", ()
   });
 });
 
+describe("a retired socket whose client never answers the close frame acts on nothing (#767 B1)", () => {
+  // `ws.close()` only moves the socket to CLOSING; `ws` still delivers its
+  // inbound frames until the peer answers or `ws`'s ~30 s close timer fires.
+  // A client that never reads the close frame (its socket paused here) can
+  // still write — and before this fix, a push 300 ms after the rotation was
+  // appended and fanned out while the relay's end read CLOSING.
+  it("a push after rotation is not appended and not fanned out; the roster close write happens once", async () => {
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    const kd = await generateKeypair();
+    const mid = await deriveSovereignMotebitId(hex(k1));
+    await registerSelf(mid, "laptop", k1);
+    const phone = await registerOwnKeyDevice(mid, kd);
+
+    const a = await connect(
+      mid,
+      `token=${await syncToken(mid, "laptop", k1)}&device_id=laptop&capabilities=unattended_runtime`,
+    );
+    const b = await connect(mid, `token=${await syncToken(mid, phone, kd)}&device_id=${phone}`);
+    const toPhone: string[] = [];
+    b.ws.on("message", (d: Buffer) => toPhone.push(d.toString("utf8")));
+    await waitFor(() => readHostLiveness(relay.moteDb.db, mid).length === 1, "the bind write");
+    const boundAt = readHostLiveness(relay.moteDb.db, mid)[0]!.last_seen_at!;
+
+    // The client stops reading: it will never see (or answer) the close frame.
+    (a.ws as unknown as { _socket: { pause(): void; resume(): void } })._socket.pause();
+    await new Promise((r) => setTimeout(r, 5));
+
+    await rotateKey(mid, "laptop", k1, k2);
+
+    // Synchronously out of `connections`, and its close-time observation made.
+    expect(peers(mid).map((p) => p.deviceId)).toEqual([phone]);
+    const retiredAt = readHostLiveness(relay.moteDb.db, mid)[0]!.last_seen_at!;
+    expect(retiredAt).toBeGreaterThan(boundAt);
+
+    await new Promise((r) => setTimeout(r, 300));
+    expect(a.ws.readyState).toBe(WebSocket.OPEN); // the client never saw the close
+    a.ws.send(
+      JSON.stringify({
+        type: "push",
+        events: [
+          {
+            event_id: crypto.randomUUID(),
+            motebit_id: mid,
+            timestamp: Date.now(),
+            event_type: "memory_formed",
+            payload: { content: "AFTER-RETIRE" },
+            version_clock: 1,
+            tombstoned: false,
+          },
+        ],
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 300));
+
+    const events = relay.moteDb.db
+      .prepare("SELECT payload FROM events WHERE motebit_id = ?")
+      .all(mid) as Array<{ payload: string }>;
+    expect(events.filter((e) => String(e.payload).includes("AFTER-RETIRE"))).toHaveLength(0);
+    expect(toPhone.filter((m) => m.includes("AFTER-RETIRE"))).toHaveLength(0);
+
+    // The client reads again, answers the close; the relay's onClose finds
+    // nothing to remove and writes nothing more.
+    (a.ws as unknown as { _socket: { resume(): void } })._socket.resume();
+    expect(await closeCodeOf(a)).toBe(WS_CLOSE_KEY_RETIRED);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(readHostLiveness(relay.moteDb.db, mid)).toEqual([
+      expect.objectContaining({
+        device_id: "laptop",
+        bound_under: hex(k1),
+        last_seen_at: retiredAt,
+      }),
+    ]);
+    await expectStillOpen(mid, b);
+  });
+});
+
+function expectRaceRefusalRecorded(mid: string): void {
+  // Relay rule 6: the refusal is recorded like every other refused token.
+  const rows = relay.moteDb.db
+    .prepare("SELECT kind, motebit_id, audience, reason FROM relay_auth_events WHERE path = ?")
+    .all(`/ws/sync/${mid}`) as Array<Record<string, string>>;
+  expect(rows).toEqual([
+    {
+      kind: "device_token_rejected",
+      motebit_id: mid,
+      audience: "sync",
+      reason: "key_retired_during_verification",
+    },
+  ]);
+}
+
 describe("a rotation that lands WHILE a socket's token is being verified (#767)", () => {
   // The verifier has already read the device row (K_old) and is awaiting the
   // signature check when the rotation applies; the socket is not registered
@@ -433,6 +525,7 @@ describe("a rotation that lands WHILE a socket's token is being verified (#767)"
     hold.release();
     expect(await closeCodeOf(sock)).toBe(WS_CLOSE_KEY_RETIRED);
     expect(peers(mid)).toEqual([]);
+    expectRaceRefusalRecorded(mid);
   });
 
   it("auth-frame path: auth_result is refused and the socket closed 4010, never registered", async () => {
@@ -464,5 +557,6 @@ describe("a rotation that lands WHILE a socket's token is being verified (#767)"
     expect(await closeCodeOf(sock)).toBe(WS_CLOSE_KEY_RETIRED);
     expect(frames.find((f) => f.type === "auth_result")?.ok).toBe(false);
     expect(peers(mid)).toEqual([]);
+    expectRaceRefusalRecorded(mid);
   });
 });

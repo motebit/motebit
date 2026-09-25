@@ -15,7 +15,7 @@ import { describe, it, expect } from "vitest";
 import { Hono } from "hono";
 import { generateKeypair, createSignedToken, bytesToHex } from "@motebit/crypto";
 import type { KeyPair } from "@motebit/crypto";
-import { registerWebSocketRoutes } from "../websocket.js";
+import { closeSocketsAuthenticatedUnder, registerWebSocketRoutes } from "../websocket.js";
 import type { WebSocketDeps, ConnectedDevice } from "../websocket.js";
 import { parseTokenPayloadUnsafe, verifySignedTokenForDevice } from "../auth.js";
 
@@ -316,5 +316,54 @@ describe("a bound or closed connection is reported to the liveness observer", ()
     handlers.onClose({}, ws);
     expect(h.bound).toEqual([]);
     expect(h.closed).toEqual([]);
+  });
+});
+
+describe("a socket that is closing or retired is acted on for nothing (#767 B1)", () => {
+  // `task_claim` for an unknown task always answers `task_claim_rejected`,
+  // so "the frame was acted on" is visible as a send. Each gate is driven
+  // in isolation: a real `ws.close()` makes both true at once, so the
+  // real-socket test in key-retirement-sockets.test.ts cannot tell them apart.
+  async function registered() {
+    const kp = await generateKeypair();
+    const key = bytesToHex(kp.publicKey);
+    const h = harness({ devices: new Map([["dev-2", key]]) });
+    const c = connect(`?token=${await tokenFor("dev-2", kp)}&device_id=dev-2`, h);
+    const sent: string[] = [];
+    const ws = { send: (m: string) => sent.push(m), close: () => {}, readyState: 1 };
+    await c.handlers.onOpen({}, ws);
+    expect(c.connections.get(MID)).toHaveLength(1);
+    const claim = () =>
+      c.handlers.onMessage({ data: JSON.stringify({ type: "task_claim", task_id: "t-1" }) }, ws);
+    return { ...c, h, ws, sent, key, claim };
+  }
+
+  it("a registered socket's frame is acted on (the control)", async () => {
+    const s = await registered();
+    await s.claim();
+    expect(s.sent.some((m) => m.includes("task_claim_rejected"))).toBe(true);
+  });
+
+  it("CLOSING (readyState 2), not retired: nothing is acted on", async () => {
+    const s = await registered();
+    s.ws.readyState = 2;
+    await s.claim();
+    expect(s.sent).toEqual([]);
+  });
+
+  it("retired while still OPEN: nothing is acted on, and onClose reports nothing more", async () => {
+    const s = await registered();
+    const removed: ConnectedDevice[] = [];
+    expect(
+      closeSocketsAuthenticatedUnder(s.connections, MID, s.key.toUpperCase(), {
+        onRemoved: (_m, p) => removed.push(p),
+      }),
+    ).toBe(1);
+    expect(removed).toHaveLength(1);
+    expect(s.connections.has(MID)).toBe(false);
+    await s.claim();
+    expect(s.sent).toEqual([]);
+    s.handlers.onClose({}, s.ws);
+    expect(s.h.closed).toEqual([]); // the one close-time report was onRemoved
   });
 });

@@ -751,15 +751,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   const logger = createLogger({ service: "relay" });
 
-  // The one binding of "a key was retired" to the sockets it admitted (#767).
-  // Every door that retires a key a socket can have been admitted under takes
-  // it as a REQUIRED dep: `/rotate-key` and the `/agents/register` succession
-  // path through `applySuccession`, and pairing's `update-key`.
-  const retireKeyConnections: RetireKeyConnections = (motebitId, retiredKey) => {
-    const closed = closeSocketsAuthenticatedUnder(connections, motebitId, retiredKey, logger);
-    if (closed > 0) logger.info("ws.key_retired_sockets_closed", { motebitId, closed });
-  };
-
   // --- Settlement rail manifest: log at boot so missing env-var gating is
   // visible. A rail registered at config time but not listed here means the
   // adapter silently disabled itself. Mirrors /health/ready's rails section.
@@ -905,6 +896,20 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  };
+
+  // The one binding of "a key was retired" to the sockets it admitted (#767).
+  // Every door that retires a key a socket can have been admitted under takes
+  // it as a REQUIRED dep: `/rotate-key` and the `/agents/register` succession
+  // path through `applySuccession`, and pairing's `update-key`. A retired
+  // peer leaves `connections` synchronously, so its later `onClose` makes no
+  // `onPeerClosed`; its one close-time roster observation is made here.
+  const retireKeyConnections: RetireKeyConnections = (motebitId, retiredKey) => {
+    const closed = closeSocketsAuthenticatedUnder(connections, motebitId, retiredKey, {
+      onRemoved: (mid, peer) => observeHost(mid, peer),
+      logger,
+    });
+    if (closed > 0) logger.info("ws.key_retired_sockets_closed", { motebitId, closed });
   };
   // Only OPEN sockets are flushed or protect a row from the sweep — a
   // closed peer left in `connections` must neither refresh last_seen_at

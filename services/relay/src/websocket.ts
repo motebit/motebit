@@ -47,34 +47,62 @@ const WS_CLOSE_KEY_RETIRED_REASON = "Key rotated; re-authenticate";
  * admitted by no identity key (master token, device auth off) stay open:
  * the retired key never admitted them.
  *
- * The socket is only asked to close; it leaves `connections` through the
- * route's `onClose`, which is what writes the roster's `last_seen_at`
- * (`onPeerClosed`). Returns the number of sockets asked to close.
+ * `ws.close()` only STARTS a close handshake: the socket is CLOSING until
+ * the peer answers (or `ws`'s own close timer fires, ~30 s), and inbound
+ * frames are still delivered meanwhile. So retirement does not wait for the
+ * handshake. Synchronously, each retired peer is
+ *  1. marked `retired` — the route's `onMessage` acts on no frame from it;
+ *  2. removed from `connections` — no fan-out, task dispatch, command or
+ *     roster read reaches it, and the route's `onClose` later finds nothing
+ *     and does nothing;
+ *  3. handed to `onRemoved` — the ONE close-time observation (the roster's
+ *     `last_seen_at`), in place of the `onPeerClosed` its `onClose` will no
+ *     longer make;
+ * and only then asked to close with 4010. Returns the number retired.
  */
 export function closeSocketsAuthenticatedUnder(
   connections: Map<string, ConnectedDevice[]>,
   motebitId: string,
   retiredKey: string,
-  logger?: { warn: (msg: string, ctx?: Record<string, unknown>) => void },
+  hooks: {
+    onRemoved: (motebitId: string, peer: ConnectedDevice) => void;
+    logger?: { warn: (msg: string, ctx?: Record<string, unknown>) => void };
+  },
 ): number {
   const retired = retiredKey.toLowerCase();
-  let closed = 0;
-  for (const peer of connections.get(motebitId) ?? []) {
-    if (peer.authenticatedUnder == null || peer.authenticatedUnder.toLowerCase() !== retired) {
-      continue;
+  const peers = connections.get(motebitId);
+  if (peers == null) return 0;
+  // A copy: the live array is spliced below, and by the route's onClose.
+  const retiring = peers.filter(
+    (p) => p.authenticatedUnder != null && p.authenticatedUnder.toLowerCase() === retired,
+  );
+  for (const peer of retiring) {
+    peer.retired = true;
+    const idx = peers.indexOf(peer);
+    if (idx !== -1) peers.splice(idx, 1);
+  }
+  if (peers.length === 0) connections.delete(motebitId);
+  for (const peer of retiring) {
+    try {
+      hooks.onRemoved(motebitId, peer);
+    } catch (err: unknown) {
+      hooks.logger?.warn("ws.key_retired_observe_failed", {
+        motebitId,
+        deviceId: peer.deviceId,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
     try {
       peer.ws.close(WS_CLOSE_KEY_RETIRED, WS_CLOSE_KEY_RETIRED_REASON);
-      closed++;
     } catch (err: unknown) {
-      logger?.warn("ws.key_retired_close_failed", {
+      hooks.logger?.warn("ws.key_retired_close_failed", {
         motebitId,
         deviceId: peer.deviceId,
         error: err instanceof Error ? err.message : String(err),
       });
     }
   }
-  return closed;
+  return retiring.length;
 }
 
 export interface ConnectedDevice {
@@ -118,8 +146,9 @@ export interface ConnectedDevice {
    * (`succession-apply.ts`): a socket opened under the old key would
    * otherwise read as bound under the new one
    * (docs/proposals/machine-roster-relay-v1.md D4, review F1). Rotation
-   * also CLOSES such a socket (`authenticatedUnder`, #767), but a close is
-   * a handshake, and until it completes the socket is still here.
+   * also retires such a socket (`authenticatedUnder`, #767), but only a
+   * rotation through `applySuccession` does; a row rewritten any other way
+   * leaves the socket as it was.
    */
   boundUnder?: string;
   /**
@@ -134,6 +163,13 @@ export interface ConnectedDevice {
    * key, so no rotation retires them.
    */
   authenticatedUnder?: string;
+  /**
+   * Set when the key that admitted this socket was retired
+   * (`closeSocketsAuthenticatedUnder`). The peer is out of `connections`
+   * and its close handshake may still be pending; no frame from it is acted
+   * on.
+   */
+  retired?: boolean;
   capabilities?: string[];
 }
 
@@ -254,6 +290,9 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
       // `awaitingAuthFrame` are both false and onMessage keeps running — so no
       // flag describing *how* auth is proceeding may stand in for "registered".
       let registered = false;
+      // This socket's entry in `connections`, once registered. A retirement
+      // (`closeSocketsAuthenticatedUnder`) marks it and removes it.
+      let registeredPeer: ConnectedDevice | null = null;
 
       /**
        * Validate a bearer token (shared by query-param and post-connect auth frame paths).
@@ -364,6 +403,28 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
         return current == null || current.toLowerCase() !== verifiedKey;
       }
 
+      /**
+       * Refuse a socket whose key was retired during its verification: log
+       * it, RECORD it (relay rule 6 — every refused token is recorded), tell
+       * an auth-frame client why, and close it 4010.
+       */
+      function refuseRetiredDuringVerification(ws: WSContext, sendAuthResult: boolean): void {
+        logger.info("ws.key_retired_during_verification", { motebitId, deviceId });
+        deps.recordAuthEvent?.({
+          kind: "device_token_rejected",
+          path: `/ws/sync/${motebitId}`,
+          motebitId,
+          audience: "sync",
+          reason: "key_retired_during_verification",
+        });
+        if (sendAuthResult) {
+          ws.send(
+            JSON.stringify({ type: "auth_result", ok: false, error: WS_CLOSE_KEY_RETIRED_REASON }),
+          );
+        }
+        ws.close(WS_CLOSE_KEY_RETIRED, WS_CLOSE_KEY_RETIRED_REASON);
+      }
+
       /** Tell the observer a peer is bound (or re-announced); never let it take the socket down. */
       function notifyBound(peer: ConnectedDevice): void {
         try {
@@ -417,6 +478,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
           capabilities,
         };
         connections.get(motebitId)!.push(peer);
+        registeredPeer = peer;
         notifyBound(peer);
 
         // Task recovery: re-dispatch any pending tasks for this agent to the
@@ -458,8 +520,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
             const authResult = await validateToken(queryToken, motebitId, ws);
             if (!authResult) return; // ws already closed by validateToken
             if (keyRetiredDuringVerification()) {
-              logger.info("ws.key_retired_during_verification", { motebitId, deviceId });
-              ws.close(WS_CLOSE_KEY_RETIRED, WS_CLOSE_KEY_RETIRED_REASON);
+              refuseRetiredDuringVerification(ws, false);
               return;
             }
             authenticated = true;
@@ -479,6 +540,10 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
 
         // eslint-disable-next-line @typescript-eslint/no-misused-promises -- hono ws adapter supports async handlers
         async onMessage(event, ws) {
+          // A socket that is not OPEN (a close handshake is pending, and `ws`
+          // still delivers its inbound frames) or whose admitting key was
+          // retired is acted on for nothing, auth frames included (#767).
+          if (ws.readyState !== WS_OPEN || registeredPeer?.retired === true) return;
           // Per-connection rate limiting (shared FixedWindowLimiter, keyed by connection)
           const { allowed } = wsLimiter.check(wsRateKey);
           if (!allowed) {
@@ -520,15 +585,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
                 return;
               }
               if (keyRetiredDuringVerification()) {
-                logger.info("ws.key_retired_during_verification", { motebitId, deviceId });
-                ws.send(
-                  JSON.stringify({
-                    type: "auth_result",
-                    ok: false,
-                    error: WS_CLOSE_KEY_RETIRED_REASON,
-                  }),
-                );
-                ws.close(WS_CLOSE_KEY_RETIRED, WS_CLOSE_KEY_RETIRED_REASON);
+                refuseRetiredDuringVerification(ws, true);
                 return;
               }
               authenticated = true;
