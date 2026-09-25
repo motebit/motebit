@@ -21,6 +21,8 @@ About **three lanes that write, plus read-only helpers**. Past that, integration
 
 Before launching, ask: **does this share state with anything in flight?** State means the checkout, a subsystem, the gate lock, or a deploy. If yes, serialize it.
 
+**Gates versus worktrees.** An isolated worktree lives at `.claude/worktrees/<agent>/`: a gitignored second copy of the repo inside the checkout. A gate that walks the filesystem from the root, rather than asking git for its file list, scans that copy too. It then re-reports findings under new paths, or passes on files it shouldn't count. The first parallel run found exactly this (`check-liquescent-ontology`). The four other root walkers already skip `.claude` or all dot-directories. A new root-walking gate must skip `.claude/worktrees/`.
+
 ## The two agent types
 
 - [`.claude/agents/scoped-builder.md`](../../.claude/agents/scoped-builder.md): one bounded change in a worktree. It fixes the class, not the instance, and watches each test fail with its fix removed. It commits locally and stops; it never pushes.

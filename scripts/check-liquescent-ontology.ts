@@ -167,6 +167,9 @@ const EXCLUDED_FILES = new Set<string>([
  */
 const EXCLUDED_PATTERNS: ReadonlyArray<RegExp> = [
   /\/node_modules\//,
+  // An agent's isolated git worktree is a second copy of the repo (gitignored);
+  // scanning it re-reports every allowlisted line under a new path.
+  /\/\.claude\/worktrees\//,
   /\/dist\//,
   /\/coverage\//,
   /\/\.git\//,
