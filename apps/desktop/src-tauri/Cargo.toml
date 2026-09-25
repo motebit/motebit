@@ -9,7 +9,15 @@ tauri-build = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
-keyring = "3"
+# The OS keychain is OFF in the default build (founder split, 2026-09-25):
+# desktop keys live in ~/.motebit/dev-keyring.json (0600, plaintext), as on
+# main. The keychain code (src/key_store.rs `OsKeychain`, `classify`) stays
+# compiling behind the `os-keychain` feature for the deferred keychain arc —
+# docs/proposals/key-file-durability-v1.md, "The split". With no backend
+# named, keyring 3 is its in-memory MOCK store (Finding B-0), so the feature
+# names every platform backend (macOS Keychain, Windows Credential Manager,
+# Linux Secret Service over pure-Rust zbus).
+keyring = { version = "3", optional = true, features = ["apple-native", "windows-native", "async-secret-service", "crypto-rust", "async-io"] }
 base64 = "0.22"
 reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
 xcap = "0.9"
@@ -19,6 +27,14 @@ sha2 = "0.10"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Linux, `os-keychain` only: the SAME secret-service crate keyring's backend
+# uses (4.x), and the zbus major it is built on (4.x; tauri's zbus 5 is a
+# separate major), so `classify` can tell "no Secret Service provider" from
+# a failed read by downcasting — law K2, never by message text.
+[target.'cfg(target_os = "linux")'.dependencies]
+secret-service = { version = "4", default-features = false, optional = true }
+zbus = { version = "4", default-features = false, optional = true }
 
 # macOS Vision framework — native, offline, state-of-the-art OCR used by
 # `do_screenshot` to extract text + bounding boxes so the TS sensitivity
@@ -44,6 +60,14 @@ objc2-core-graphics = "0.3"
 # crate pulled in.
 security-framework = "3.7"
 core-foundation = "0.10"
+
+[features]
+default = []
+# The deferred keychain arc's code, compiled and unit-tested but NOT wired
+# into the app: `KeyStore::default_for_app()` is file-only in every build.
+# Enabling the keychain for users is gated on the arc's real-device entry
+# criteria (docs/proposals/key-file-durability-v1.md).
+os-keychain = ["dep:keyring", "dep:secret-service", "dep:zbus"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

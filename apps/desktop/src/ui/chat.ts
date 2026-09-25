@@ -11,6 +11,7 @@ import {
   SLASH_COMMANDS,
 } from "./slash-commands";
 import type { DesktopContext, MicState } from "../types";
+import { updateConfig } from "../config-update";
 import type { GoalApprovalEvent } from "../index";
 
 // === DOM Refs (captured at module load) ===
@@ -1396,10 +1397,7 @@ End with a question — you are curious about who they are.`;
     // Mark greeting complete so it never fires again
     if (config?.isTauri === true && config.invoke != null) {
       try {
-        const raw = await config.invoke<string>("read_config");
-        const parsed = JSON.parse(raw) as Record<string, unknown>;
-        parsed.first_run_greeting_sent = true;
-        await config.invoke("write_config", { json: JSON.stringify(parsed) });
+        await updateConfig(config.invoke, { first_run_greeting_sent: true });
       } catch {
         /* non-fatal */
       }

@@ -22,6 +22,24 @@ export const SETTINGS_OWNED_REMOVABLE_FIELDS = [
   "custom_soul_color",
 ] as const;
 
+/**
+ * The field-level patch a Settings Save sends to `update_config`: the form's
+ * fields, plus `null` (remove) for each owned field the form left unset.
+ * Applied to any config it equals `mergeSettingsIntoConfig`.
+ */
+export function settingsPatch(settings: Record<string, unknown>): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+  for (const key of SETTINGS_OWNED_REMOVABLE_FIELDS) {
+    if (!(key in settings)) patch[key] = null;
+  }
+  // `undefined` would vanish in JSON (leaving the old value on disk); the
+  // whole-object write it replaces removed such a key, so send `null`.
+  for (const [key, value] of Object.entries(settings)) {
+    patch[key] = value === undefined ? null : value;
+  }
+  return patch;
+}
+
 export function mergeSettingsIntoConfig(
   existing: Record<string, unknown>,
   settings: Record<string, unknown>,

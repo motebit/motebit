@@ -1,6 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod computer_use;
+mod config_file;
+mod durable_file;
+#[cfg(test)]
+mod ipc_replay_tests;
+mod key_store;
 mod runtime_host;
 mod secure_enclave;
 mod skills;
@@ -22,8 +27,6 @@ use skills::{
 use tpm::{tpm_available, tpm_mint_quote};
 use rusqlite::{params_from_iter, types::Value as SqlValue, Connection};
 use serde_json::Value as JsonValue;
-use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::State;
 
@@ -372,485 +375,101 @@ fn db_execute(
         .map_err(|e| e.to_string())
 }
 
-// === ~/.motebit/config.json — shared with the CLI ===
+// === ~/.motebit/config.json (shared with the CLI) and the secret store ===
 //
-// The CLI keeps `cli_encrypted_key` in this file — for a CLI identity the
-// only copy of the private key — so the desktop obeys the CLI's three rules
-// for it (`apps/cli/src/durable-file.ts` + `config.ts`, and create-motebit's
-// `config-file.ts` twin):
-//
-//  1. Absence is not damage: NotFound reads as `{}`; anything else unreadable,
-//     unparseable, or not a JSON object is an Err, file untouched.
-//  2. Damage is never overwritten: a write over a damaged file first keeps
-//     its bytes as `config.json.clobbered-<time>` (the one backup name every
-//     reader looks for), or refuses.
-//  3. A replacement is staged (created 0600 — never world-readable, not even
-//     for an instant), fsync'd, renamed, and the directory fsync'd; the
-//     scratch copy is removed on every failure path.
+// The file rules live in `durable_file` (R1 absence≠damage, R2 never destroy,
+// R3 atomic owner-only + narrow on every load), the config rules in
+// `config_file` (the desktop never writes a `cli_*` field; binding changes
+// keep the old file; every writer is a field-level compare-and-swap merge),
+// and the secret store in `key_store`. Desktop keys are stored in
+// `~/.motebit/dev-keyring.json` (0600, PLAINTEXT — ssh-key-level protection:
+// readable by any process running as this user). The OS keychain is NOT used
+// yet — every build, signed or not; enabling it is a deferred arc gated on
+// real-device testing (docs/proposals/key-file-durability-v1.md, "The split:
+// file-only now, the keychain as its own arc"). One lock per file family
+// serializes this process's writers.
 
-fn motebit_config_path() -> Result<std::path::PathBuf, String> {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map_err(|_| "Cannot determine home directory".to_string())?;
-    Ok(std::path::Path::new(&home).join(".motebit").join("config.json"))
-}
+static CONFIG_LOCK: Mutex<()> = Mutex::new(());
+static KEYSTORE_LOCK: Mutex<()> = Mutex::new(());
 
-/// Rule 1. `Ok(None)` is absence; `Err` is damage.
-fn read_config_strict(path: &std::path::Path) -> Result<Option<String>, String> {
-    let contents = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => {
-            return Err(format!(
-                "{} exists but could not be read ({}). It has NOT been changed.",
-                path.display(),
-                e
-            ))
-        }
-    };
-    match serde_json::from_str::<serde_json::Value>(&contents) {
-        Ok(serde_json::Value::Object(_)) => Ok(Some(contents)),
-        Ok(_) => Err(format!(
-            "{} exists but is not a JSON object. It has NOT been changed.",
-            path.display()
-        )),
-        Err(e) => Err(format!(
-            "{} exists but is not valid JSON ({}). It has NOT been changed.",
-            path.display(),
-            e
-        )),
-    }
-}
-
-/// Narrow a pre-existing world/group-readable config to 0600. Best effort:
-/// a failed chmod never refuses a read.
-fn tighten_to_owner_only(path: &std::path::Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = std::fs::metadata(path) {
-            if meta.is_file() && meta.permissions().mode() & 0o077 != 0 {
-                let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-            }
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = path;
-}
-
-/// The backup timestamp, spelled exactly as the TypeScript writers spell it —
-/// `new Date().toISOString()` with `:` and `.` replaced by `-`, e.g.
-/// `2026-09-24T17-03-09-123Z` — so every writer's backups sort together.
-fn backup_stamp(unix_millis: u128) -> String {
-    let ms = (unix_millis % 1000) as u32;
-    let secs = (unix_millis / 1000) as i64;
-    let (days, sod) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
-    // Civil-from-days (H. Hinnant), proleptic Gregorian, UTC.
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
-    format!(
-        "{:04}-{:02}-{:02}T{:02}-{:02}-{:02}-{:03}Z",
-        y,
-        m,
-        d,
-        sod / 3600,
-        (sod % 3600) / 60,
-        sod % 60,
-        ms
-    )
-}
-
-/// Rule 2. Keep `path`'s bytes as `<path>.clobbered-<time>` without reading
-/// them (hard link; copy as fallback). Returns the backup path, or Err when
-/// neither works — the caller must then refuse to write.
-fn preserve_aside(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
-    let millis = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let stamp = backup_stamp(millis);
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "config.json".to_string());
-    // Link or copy the REAL file, never the name as given: `hard_link` is
-    // linkat(…, 0) on Linux and does not follow symlinks, so linking a
-    // symlinked config's NAME would make the "backup" a second name for the
-    // link — reading the NEW bytes once the write (which replaces the link's
-    // target) lands. An unresolvable path that is (or may be) a link refuses.
-    let real = match std::fs::canonicalize(path) {
-        Ok(r) => r,
-        Err(e) => {
-            let is_link = std::fs::symlink_metadata(path)
-                .map(|m| m.file_type().is_symlink())
-                .unwrap_or(true);
-            if is_link {
-                return Err(format!(
-                    "could not resolve {} to preserve it ({}); nothing was changed",
-                    path.display(),
-                    e
-                ));
-            }
-            path.to_path_buf()
-        }
-    };
-    let mut last_err = String::from("no backup name available");
-    for n in 0..100u32 {
-        let suffix = if n == 0 { String::new() } else { format!("-{}", n) };
-        let backup = path.with_file_name(format!("{}.clobbered-{}{}", name, stamp, suffix));
-        match std::fs::hard_link(&real, &backup) {
-            Ok(()) => {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(
-                        &backup,
-                        std::fs::Permissions::from_mode(0o600),
-                    );
-                }
-                return Ok(backup);
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(_) => match copy_owner_only(&real, &backup) {
-                Ok(()) => return Ok(backup),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(e) => {
-                    last_err = e.to_string();
-                    break;
-                }
-            },
-        }
-    }
-    Err(format!(
-        "could not preserve {} before replacing it ({}); nothing was changed",
-        path.display(),
-        last_err
-    ))
-}
-
-/// Copy `src` into a NEW file `dest`, owner-only from creation (create_new +
-/// mode 0600), fsync'd; `dest` removed on failure.
-fn copy_owner_only(src: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
-    use std::io::Write;
-    let bytes = std::fs::read(src)?;
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    let mut file = opts.open(dest)?;
-    let written = (|| -> std::io::Result<()> {
-        file.write_all(&bytes)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        }
-        file.sync_all()
-    })();
-    if let Err(e) = written {
-        drop(file);
-        let _ = std::fs::remove_file(dest);
-        return Err(e);
-    }
-    Ok(())
-}
-
-/// Rule 3. Stage → fsync → rename → fsync dir, owner-only from creation.
-fn write_file_atomic_owner_only(requested: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    // Replace a symlink's TARGET, not the link: renaming over the link would
-    // turn it into a regular file and orphan the real config. A path that
-    // does not exist yet is written where it was named.
-    let resolved = std::fs::canonicalize(requested).unwrap_or_else(|_| requested.to_path_buf());
-    let path = resolved.as_path();
-    let dir = path
-        .parent()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "config path has no parent"))?;
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "config.json".to_string());
-    let staged = dir.join(format!("{}.{}.{}.tmp", name, std::process::id(), nonce));
-    let result = (|| -> std::io::Result<()> {
-        let mut opts = std::fs::OpenOptions::new();
-        // create_new: the mode below applies only on creation, so the staged
-        // name must be one that did not already exist.
-        opts.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let mut file = opts.open(&staged)?;
-        file.write_all(contents)?;
-        #[cfg(unix)]
-        {
-            // Exact, not umask-narrowed; before the rename, so a failure here
-            // is reported as the failed write it is.
-            use std::os::unix::fs::PermissionsExt;
-            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        }
-        file.sync_all()?;
-        drop(file);
-        std::fs::rename(&staged, path)
-    })();
-    if let Err(e) = result {
-        // Never leave the scratch copy behind; it holds the same secrets.
-        let _ = std::fs::remove_file(&staged);
-        return Err(e);
-    }
-    // Durability of the rename itself. Not every platform can open a
-    // directory for sync (Windows); the rename is still atomic.
-    if let Ok(d) = std::fs::File::open(dir) {
-        let _ = d.sync_all();
-    }
-    Ok(())
-}
-
-/// Fields no desktop write may REMOVE from the shared config. They may change
-/// (a rotation, a restore); they may not vanish. `cli_encrypted_key` is the
-/// CLI's only copy of its identity key (and `cli_private_key` its un-migrated
-/// plaintext predecessor); the ids are the identity itself. A caller that
-/// builds a config from scratch instead of merging (Settings Save once did)
-/// drops them — refused here, so the next such caller cannot.
-const IDENTITY_FIELDS: [&str; 5] = [
-    "motebit_id",
-    "device_id",
-    "device_public_key",
-    "cli_encrypted_key",
-    "cli_private_key",
-];
-
-fn refuse_dropped_identity_fields(existing: &str, next: &str) -> Result<(), String> {
-    let (Ok(serde_json::Value::Object(old)), Ok(serde_json::Value::Object(new))) = (
-        serde_json::from_str::<serde_json::Value>(existing),
-        serde_json::from_str::<serde_json::Value>(next),
-    ) else {
-        // Both were validated as objects by the callers; nothing to compare.
-        return Ok(());
-    };
-    let dropped: Vec<&str> = IDENTITY_FIELDS
-        .iter()
-        .copied()
-        .filter(|k| old.get(*k).is_some_and(|v| !v.is_null()) && new.get(*k).map_or(true, |v| v.is_null()))
-        .collect();
-    if dropped.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "Refusing to write config: it would remove {} from the existing file (merge into read_config, never replace it). Nothing was changed.",
-            dropped.join(", ")
-        ))
-    }
-}
-
-/// Rules 2 + 3 for one config file. Returns the backup path when damage was preserved.
-fn write_config_at(path: &std::path::Path, json: &str) -> Result<Option<std::path::PathBuf>, String> {
-    // Never persist something the next read would refuse as damage.
-    match serde_json::from_str::<serde_json::Value>(json) {
-        Ok(serde_json::Value::Object(_)) => {}
-        Ok(_) => return Err("Invalid config: not a JSON object".to_string()),
-        Err(e) => return Err(format!("Invalid JSON: {}", e)),
-    }
-    let dir = path
-        .parent()
-        .ok_or_else(|| "config path has no parent".to_string())?;
-    std::fs::create_dir_all(dir)
-        .map_err(|e| format!("Failed to create config directory: {}", e))?;
-    let preserved = match read_config_strict(path) {
-        Ok(Some(existing)) => {
-            refuse_dropped_identity_fields(&existing, json)?;
-            None
-        }
-        Ok(None) => None,
-        Err(_) => Some(preserve_aside(path)?),
-    };
-    write_file_atomic_owner_only(path, json.as_bytes())
-        .map_err(|e| format!("Failed to write config: {}", e))?;
-    Ok(preserved)
+fn lock(m: &'static Mutex<()>) -> std::sync::MutexGuard<'static, ()> {
+    // A panic while holding the lock leaves the files as consistent as the
+    // atomic writes made them; poisoning is not a reason to refuse.
+    m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 #[tauri::command]
 fn read_config() -> Result<String, String> {
-    let path = motebit_config_path()?;
-    match read_config_strict(&path)? {
-        None => Ok("{}".to_string()),
-        Some(contents) => {
-            tighten_to_owner_only(&path);
-            Ok(contents)
-        }
-    }
+    let _g = lock(&CONFIG_LOCK);
+    let path = config_file::config_path()?;
+    Ok(config_file::read_config_at(&path)?.unwrap_or_else(|| "{}".to_string()))
 }
 
+/// Full-document write. Kept for compatibility; every desktop caller now
+/// uses `update_config`. Refuses to drop an identity field or change a
+/// `cli_*` field; keeps the old file when binding material changes.
 #[tauri::command]
 fn write_config(json: String) -> Result<(), String> {
-    let path = motebit_config_path()?;
-    if let Some(backup) = write_config_at(&path, &json)? {
-        eprintln!(
-            "[motebit] unreadable config preserved as {} before replacing it",
-            backup.display()
-        );
+    let _g = lock(&CONFIG_LOCK);
+    let path = config_file::config_path()?;
+    if let Some(backup) = config_file::write_config_at(&path, &json)? {
+        eprintln!("[motebit] previous config kept as {}", backup.display());
     }
     Ok(())
 }
 
-const KEYRING_SERVICE: &str = "com.motebit.desktop";
-
-// === Dev-mode keyring fallback ===
-//
-// Ad-hoc-signed dev binaries on macOS (the common `cargo run --debug`
-// output) can have the Security framework silently drop generic-password
-// writes: `keyring::Entry::set_password` returns Ok(()) but the entry
-// never persists to the user's login keychain. Observable signature:
-// `security dump-keychain` shows zero entries for com.motebit.desktop
-// after a bootstrap that appeared to succeed.
-//
-// Signed production builds (`tauri build` with a Developer ID
-// certificate wired via tauri.conf.json `bundle.macOS.signingIdentity`)
-// are unaffected — macOS trusts their stable code identity and honors
-// the Security framework writes.
-//
-// Rather than leave dev contributors locked out of any feature that
-// depends on keyring storage (device identity, BYOK API keys, sync
-// tokens), every `keyring_*` IPC falls through to a file-backed store
-// at `~/.motebit/dev-keyring.json`, mode 0600. The file is plaintext
-// JSON — a local attacker with read access to `~/.motebit/` already
-// has read access to `config.json` (which contains your motebit_id)
-// and `motebit.db` (which contains your entire event log). The threat
-// model is "signed code can use the OS Keychain; dev binaries fall
-// back to the same file-level perms as the rest of the user's
-// motebit state." Mode 0600 matches what `~/.ssh/id_ed25519` uses —
-// standard Unix file protection, not cryptographic protection.
-//
-// Reads always try the OS Keychain first; if absent (or transient
-// error), fall back to the dev file. Writes attempt the Keychain,
-// verify the write persisted (round-trip read), and fall back to the
-// dev file if verify fails. Deletes clear both. Signed prod builds
-// take the Keychain branch on every call, the dev file never opens.
-// A future cleanup once every contributor has a signed dev build can
-// remove this fallback entirely.
-
-fn dev_keyring_path() -> Option<PathBuf> {
-    std::env::var("HOME")
-        .ok()
-        .map(|home| PathBuf::from(home).join(".motebit").join("dev-keyring.json"))
-}
-
-fn dev_keyring_read_all() -> HashMap<String, String> {
-    let path = match dev_keyring_path() {
-        Some(p) => p,
-        None => return HashMap::new(),
-    };
-    let contents = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(_) => return HashMap::new(),
-    };
-    serde_json::from_str(&contents).unwrap_or_default()
-}
-
-fn dev_keyring_write_all(map: &HashMap<String, String>) -> Result<(), String> {
-    let path = dev_keyring_path().ok_or_else(|| "HOME not set".to_string())?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let json = serde_json::to_string_pretty(map).map_err(|e| e.to_string())?;
-    std::fs::write(&path, &json).map_err(|e| e.to_string())?;
-    // mode 0600 — user-only read/write. Matches ~/.ssh/id_ed25519's
-    // protection level. On non-Unix (Windows) the permissions model
-    // is different and this cfg-gated block is skipped; Windows dev
-    // users on Tauri are rare and the fallback still works there, the
-    // only gap is Unix-style file perms enforcement.
-    #[cfg(unix)]
+/// Field-level merge into the shared config: `patch` keys are set (`null`
+/// removes), everything else on disk is carried through as it is at commit
+/// time; `expect` keys must still hold the given values. Never writes a
+/// `cli_*` field; never merges into a damaged file.
+#[tauri::command]
+fn update_config(patch: String, expect: Option<String>) -> Result<(), String> {
+    let _g = lock(&CONFIG_LOCK);
+    let path = config_file::config_path()?;
+    if let config_file::Updated::Written {
+        preserved: Some(backup),
+    } = config_file::update_config_at(&path, &patch, expect.as_deref())?
     {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&path)
-            .map_err(|e| e.to_string())?
-            .permissions();
-        perms.set_mode(0o600);
-        std::fs::set_permissions(&path, perms).map_err(|e| e.to_string())?;
+        eprintln!("[motebit] previous identity binding kept as {}", backup.display());
     }
     Ok(())
 }
 
+/// File-only (`NoKeychain`): the type names the store, so a keychain cannot
+/// be wired in here by accident.
+fn key_store() -> Result<key_store::KeyStore<key_store::NoKeychain>, String> {
+    key_store::KeyStore::default_for_app()
+}
+
+/// `Ok(None)` only for a true absence; a file that cannot be read is an
+/// `Err` (never "no key" — a first launch must not mint over it).
 #[tauri::command]
 fn keyring_get(key: String) -> Result<Option<String>, String> {
-    // Try OS keychain first — signed production builds resolve here.
-    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, &key) {
-        match entry.get_password() {
-            Ok(val) => return Ok(Some(val)),
-            Err(keyring::Error::NoEntry) => {
-                // Not in keychain — fall through to dev file.
-            }
-            Err(_) => {
-                // Transient keychain error (permission prompt cancelled,
-                // backend unavailable). Fall through rather than failing
-                // hard — the dev-file fallback may still have the value.
-            }
-        }
-    }
-    // Dev fallback
-    let map = dev_keyring_read_all();
-    Ok(map.get(&key).cloned())
+    let _g = lock(&KEYSTORE_LOCK);
+    key_store()?.get(&key)
 }
 
+/// Stores in `dev-keyring.json` (atomic, 0600). The previous value of a
+/// key-material name is preserved first.
 #[tauri::command]
 fn keyring_set(key: String, value: String) -> Result<(), String> {
-    // Dual-write: Keychain (best-effort) + dev file (authoritative).
-    //
-    // An earlier attempt verified the Keychain write via a round-trip
-    // read, but `keyring::Entry` is consistent within the process even
-    // when the Security framework silently drops the write on macOS
-    // ad-hoc-signed dev binaries — set_password returns Ok, the
-    // subsequent get_password returns the same value, yet `security
-    // dump-keychain` from another process shows nothing. The in-process
-    // cache hides the drop from the verify step.
-    //
-    // Fix: always write to the dev file too. Signed production builds
-    // read from Keychain first (gets the fresh value). Dev builds read
-    // from Keychain (empty) and fall through to the dev file (fresh).
-    // In both cases the reader sees the latest value. A stale dev file
-    // never causes a read bug because reads prefer Keychain whenever
-    // it has the key.
-    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, &key) {
-        let _ = entry.set_password(&value); // ignore — file below is authoritative
-    }
-    let mut map = dev_keyring_read_all();
-    map.insert(key, value);
-    dev_keyring_write_all(&map)
+    let _g = lock(&KEYSTORE_LOCK);
+    key_store()?.set(&key, &value)
 }
 
+/// Removes an entry; key material is preserved first (never destroyed).
 #[tauri::command]
 fn keyring_delete(key: String) -> Result<(), String> {
-    // Best-effort delete from both stores; idempotent.
-    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, &key) {
-        let _ = entry.delete_credential();
-    }
-    let mut map = dev_keyring_read_all();
-    if map.remove(&key).is_some() {
-        // Intentionally swallow write errors on delete — the caller's
-        // intent ("make sure this key is gone") is satisfied as long
-        // as future reads return None. The Keychain delete above
-        // handles the signed-build case; if the dev file is already
-        // unwritable (e.g. perms changed), future reads of a still-
-        // present-in-file key would surface a stale value. Better
-        // to report that on next read than to throw here.
-        let _ = dev_keyring_write_all(&map);
-    }
-    Ok(())
+    let _g = lock(&KEYSTORE_LOCK);
+    key_store()?.delete(&key)
+}
+
+/// Moves an entry out of its active slot without destroying its bytes;
+/// resolves only when the preserved copy is verified; errors otherwise.
+#[tauri::command]
+fn keyring_set_aside(key: String) -> Result<(), String> {
+    let _g = lock(&KEYSTORE_LOCK);
+    key_store()?.set_aside(&key)
 }
 
 // === MCP Discovery ===
@@ -1399,12 +1018,12 @@ async fn fetch_url(url: String) -> Result<FetchUrlResponse, String> {
 // `apps/desktop/src/ui/voice.ts:rebuildTtsProvider`.)
 
 fn main() {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .expect("Cannot determine home directory");
-    let dir = std::path::Path::new(&home).join(".motebit");
+    let dir = durable_file::motebit_dir().expect("Cannot determine home directory");
     std::fs::create_dir_all(&dir).expect("Failed to create ~/.motebit directory");
     let db_path = dir.join("motebit.db");
+
+    // No keychain migration: this build keeps keys in dev-keyring.json (see
+    // the secret-store note above `key_store()`).
 
     let db = Connection::open(&db_path).expect("Failed to open database");
 
@@ -1430,6 +1049,8 @@ fn main() {
             keyring_get,
             keyring_set,
             keyring_delete,
+            keyring_set_aside,
+            update_config,
             discover_mcp_configs,
             read_file_tool,
             write_file_tool,
@@ -1472,213 +1093,4 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-}
-
-#[cfg(test)]
-mod config_file_tests {
-    use super::*;
-
-    fn scratch(tag: &str) -> std::path::PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!(
-            "motebit-config-{}-{}-{}",
-            tag,
-            std::process::id(),
-            nonce
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    fn entries(dir: &std::path::Path) -> Vec<String> {
-        let mut v: Vec<String> = std::fs::read_dir(dir)
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        v.sort();
-        v
-    }
-
-    #[test]
-    fn absence_reads_as_none_damage_as_err() {
-        let dir = scratch("read");
-        let path = dir.join("config.json");
-        assert_eq!(read_config_strict(&path).unwrap(), None);
-        for body in ["{ \"motebit_id\": ", "null", "[]", "3"] {
-            std::fs::write(&path, body).unwrap();
-            assert!(read_config_strict(&path).is_err(), "{body} must read as damage");
-            assert_eq!(std::fs::read_to_string(&path).unwrap(), body);
-        }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn damage_is_preserved_before_it_is_replaced() {
-        let dir = scratch("preserve");
-        let path = dir.join("config.json");
-        let damaged = "{ \"cli_encrypted_key\": { \"ciphertext\": \"ab";
-        std::fs::write(&path, damaged).unwrap();
-        let backup = write_config_at(&path, "{\"motebit_id\":\"m-2\"}")
-            .unwrap()
-            .expect("damage must be preserved");
-        assert!(backup
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .starts_with("config.json.clobbered-"));
-        assert_eq!(std::fs::read_to_string(&backup).unwrap(), damaged);
-        assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
-            "{\"motebit_id\":\"m-2\"}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn a_healthy_config_is_replaced_without_a_backup() {
-        let dir = scratch("healthy");
-        let path = dir.join("config.json");
-        std::fs::write(&path, "{\"motebit_id\":\"m-1\"}").unwrap();
-        assert_eq!(write_config_at(&path, "{\"motebit_id\":\"m-2\"}").unwrap(), None);
-        assert_eq!(entries(&dir), vec!["config.json".to_string()]);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn refuses_a_write_that_would_drop_the_cli_key_or_identity() {
-        // Settings Save once rebuilt the config from scratch, dropping the
-        // CLI's only key copy. The writer now refuses that shape outright.
-        let dir = scratch("drop");
-        let path = dir.join("config.json");
-        let existing = "{\"motebit_id\":\"m-1\",\"device_id\":\"d-1\",\"cli_encrypted_key\":{\"ciphertext\":\"c\"},\"theme\":\"dark\"}";
-        std::fs::write(&path, existing).unwrap();
-        let err = write_config_at(&path, "{\"default_provider\":\"anthropic\"}").unwrap_err();
-        assert!(err.contains("cli_encrypted_key"), "{err}");
-        assert!(err.contains("motebit_id"), "{err}");
-        let err = write_config_at(&path, "{\"motebit_id\":\"m-1\",\"device_id\":\"d-1\",\"cli_encrypted_key\":null}").unwrap_err();
-        assert!(err.contains("cli_encrypted_key"), "{err}");
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), existing);
-        // A merge that keeps them (and changes other fields) is fine; so is
-        // CHANGING an identity field (rotation, restore).
-        write_config_at(
-            &path,
-            "{\"motebit_id\":\"m-1\",\"device_id\":\"d-2\",\"cli_encrypted_key\":{\"ciphertext\":\"c2\"}}",
-        )
-        .unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_damaged_symlinked_config_is_preserved_as_its_old_bytes() {
-        // The invariant, stated so Linux CI enforces it: after the write, the
-        // backup still reads the OLD bytes. (Linking the symlink's NAME — what
-        // linkat(…, 0) does on Linux — would make it read the new ones.)
-        let dir = scratch("symlink-damage");
-        let real_dir = scratch("symlink-damage-real");
-        let real = real_dir.join("real-config.json");
-        let link = dir.join("config.json");
-        std::fs::write(&real, "{OLD damaged").unwrap();
-        std::os::unix::fs::symlink(&real, &link).unwrap();
-        let backup = write_config_at(&link, "{\"motebit_id\":\"m-new\"}")
-            .unwrap()
-            .expect("damage must be preserved");
-        assert_eq!(std::fs::read_to_string(&backup).unwrap(), "{OLD damaged");
-        assert!(!std::fs::symlink_metadata(&backup).unwrap().file_type().is_symlink());
-        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
-        assert_eq!(std::fs::read_to_string(&real).unwrap(), "{\"motebit_id\":\"m-new\"}");
-        let _ = std::fs::remove_dir_all(&dir);
-        let _ = std::fs::remove_dir_all(&real_dir);
-    }
-
-    #[test]
-    fn the_copy_fallback_is_owner_only_from_creation_and_exclusive() {
-        let dir = scratch("copy");
-        let src = dir.join("src.json");
-        let dest = dir.join("dest.json");
-        std::fs::write(&src, "{bytes").unwrap();
-        copy_owner_only(&src, &dest).unwrap();
-        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "{bytes");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777, 0o600);
-        }
-        assert_eq!(
-            copy_owner_only(&src, &dest).unwrap_err().kind(),
-            std::io::ErrorKind::AlreadyExists
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_symlinked_config_is_written_through_the_link_not_over_it() {
-        let dir = scratch("symlink");
-        let real = dir.join("real-config.json");
-        let link = dir.join("config.json");
-        std::fs::write(&real, "{\"motebit_id\":\"m-1\"}").unwrap();
-        std::os::unix::fs::symlink(&real, &link).unwrap();
-        write_config_at(&link, "{\"motebit_id\":\"m-2\"}").unwrap();
-        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
-        assert_eq!(std::fs::read_to_string(&real).unwrap(), "{\"motebit_id\":\"m-2\"}");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn refuses_to_persist_a_non_object() {
-        let dir = scratch("nonobject");
-        let path = dir.join("config.json");
-        assert!(write_config_at(&path, "[]").is_err());
-        assert!(write_config_at(&path, "{").is_err());
-        assert!(!path.exists());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn owner_only_including_a_pre_existing_0644_file() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = scratch("mode");
-        let path = dir.join("config.json");
-        std::fs::write(&path, "{}").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-        // On read: tightened in place.
-        tighten_to_owner_only(&path);
-        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
-        // On write: the replacement is 0600 whatever the old mode was.
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-        write_config_at(&path, "{\"a\":1}").unwrap();
-        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn scratch_is_removed_when_the_replacement_fails() {
-        let dir = scratch("fail");
-        let path = dir.join("config.json");
-        // A non-empty directory where the file should be: staging succeeds,
-        // the rename cannot.
-        std::fs::create_dir_all(path.join("occupied")).unwrap();
-        assert!(write_file_atomic_owner_only(&path, b"{}").is_err());
-        let strays: Vec<String> = entries(&dir)
-            .into_iter()
-            .filter(|n| n.ends_with(".tmp"))
-            .collect();
-        assert!(strays.is_empty(), "stray scratch files: {strays:?}");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn backup_stamp_matches_the_typescript_spelling() {
-        // new Date(1790000000123).toISOString() === "2026-09-21T14:13:20.123Z"
-        assert_eq!(backup_stamp(1_790_000_000_123), "2026-09-21T14-13-20-123Z");
-        assert_eq!(backup_stamp(0), "1970-01-01T00-00-00-000Z");
-        // A leap day, which is where hand-rolled calendars break.
-        // new Date(Date.UTC(2028, 1, 29, 23, 59, 59, 999)) → 1835481599999
-        assert_eq!(backup_stamp(1_835_481_599_999), "2028-02-29T23-59-59-999Z");
-    }
 }

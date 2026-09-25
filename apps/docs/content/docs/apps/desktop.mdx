@@ -26,7 +26,7 @@ pnpm --filter @motebit/desktop tauri:build
 On first launch, you'll see a welcome overlay explaining that motebit creates a local identity and device key. Click **Get started** to:
 
 1. Generate an Ed25519 keypair
-2. Store the private key in your OS keyring
+2. Store the private key in `~/.motebit/dev-keyring.json` (owner-only, `0600`)
 3. Create your motebit identity
 4. Register this device
 
@@ -39,7 +39,7 @@ Open settings (gear icon, top right) to configure your LLM provider:
 | Provider | Setup |
 |---|---|
 | **Ollama** (default) | Install [Ollama](https://ollama.ai), pull a model (`ollama pull qwen3`), and select "Ollama" in settings |
-| **Anthropic** | Enter your API key in settings. Key is stored in the OS keyring, never on disk. |
+| **Anthropic** | Enter your API key in settings. Key is stored in the owner-only (`0600`) `~/.motebit/dev-keyring.json`, never in `config.json`. |
 
 Set the model name in the **Model** field. Examples: `llama3.2`, `claude-sonnet-4-6`.
 
@@ -93,6 +93,6 @@ No keyring, no operator mode, no sync — just the chat and rendering. Useful fo
 | Data | Storage |
 |---|---|
 | Provider, model | `~/.motebit/config.json` |
-| API key | OS keyring (via Tauri) |
-| Operator PIN hash | OS keyring (via Tauri) |
+| API key | `~/.motebit/dev-keyring.json` (owner-only, via Tauri) |
+| Operator PIN hash | `~/.motebit/dev-keyring.json` (owner-only, via Tauri) |
 | Identity, events, memories | `~/.motebit/motebit.db` (SQLite, WAL mode) |
