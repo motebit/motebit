@@ -73,14 +73,12 @@ function plantDevice(db: DatabaseDriver, mid: string, id: string, key: string) {
 }
 function holderRow(db: DatabaseDriver, mid: string) {
   return db.prepare("SELECT * FROM identity_keys WHERE motebit_id = ?").get(mid) as
-    | { public_key: string; guardian_public_key: string | null; source: string }
-    | undefined;
+    { public_key: string; guardian_public_key: string | null; source: string } | undefined;
 }
 function registryKey(db: DatabaseDriver, mid: string): string | undefined {
   return (
     db.prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?").get(mid) as
-      | { public_key: string }
-      | undefined
+      { public_key: string } | undefined
   )?.public_key;
 }
 
@@ -295,7 +293,11 @@ describe("identity-keys", () => {
         ["nothing on file", () => {}, true],
         ["its own device row only", (mid, k) => plantDevice(db, mid, `${mid}-own`, k), true],
         ["a DIFFERENT registry key", (mid) => plantRegistry(db, mid, B), false],
-        ["a registry key equal to it (discovery's copy)", (mid, k) => plantRegistry(db, mid, k), true],
+        [
+          "a registry key equal to it (discovery's copy)",
+          (mid, k) => plantRegistry(db, mid, k),
+          true,
+        ],
         ["a '' registry row", (mid) => plantRegistry(db, mid, ""), true],
         ["a recorded chain", (mid) => plantChain(db, mid, B, C), false],
         [
@@ -431,9 +433,9 @@ describe("identity-keys", () => {
       plantDevice(db, mid, "genesis", hex(kp));
       plantDevice(db, mid, "paired", hex(paired));
       const x = await generateKeypair();
-      expect(
-        (await registerAsDevice(mid, "paired", paired, { public_key: hex(x) })).status,
-      ).toBe(200);
+      expect((await registerAsDevice(mid, "paired", paired, { public_key: hex(x) })).status).toBe(
+        200,
+      );
       expect(holderRow(db, mid)).toBeUndefined();
       expect(registryKey(db, mid)).toBe(hex(x));
       expect(await bundleKey(mid)).toEqual({ status: 200, key: "" });
@@ -545,9 +547,9 @@ describe("identity-keys", () => {
       plantDevice(db, "g1a", "paired", hex(paired));
       expect((await registerAsOperator("g1a", {})).status).toBe(200); // keyless: '' (rows disagree)
       const x = await generateKeypair();
-      expect(
-        (await registerAsDevice("g1a", "paired", paired, { public_key: hex(x) })).status,
-      ).toBe(200);
+      expect((await registerAsDevice("g1a", "paired", paired, { public_key: hex(x) })).status).toBe(
+        200,
+      );
       expect((await bundleKey("g1a")).key).toBe("");
       expect(readIdentityBindings(db).find((b) => b.motebit_id === "g1a")?.public_key).toBe("");
       const next = await generateKeypair();

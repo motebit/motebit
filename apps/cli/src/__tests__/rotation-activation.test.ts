@@ -13,7 +13,12 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createSyncRelay } from "@motebit/relay";
 import type { SyncRelay } from "@motebit/relay";
 import { generate, verify } from "@motebit/identity-file";
-import { deriveSovereignMotebitId, generateKeypair, bytesToHex, signKeySuccession } from "@motebit/encryption";
+import {
+  deriveSovereignMotebitId,
+  generateKeypair,
+  bytesToHex,
+  signKeySuccession,
+} from "@motebit/encryption";
 import type { KeyPair } from "@motebit/encryption";
 
 import type { FullConfig } from "../config.js";
