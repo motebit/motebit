@@ -230,6 +230,12 @@ export async function bootstrapIdentity(
   fullConfig: FullConfig,
   passphrase: string,
 ): Promise<{ motebitId: string; isFirstLaunch: boolean }> {
+  // The key and the identity it is bound to live in ONE file here, so they
+  // are committed in ONE atomic write: `storePrivateKey` (which core-identity
+  // calls first) only stages the key, and `configStore.write` persists key
+  // and binding together. A crash can no longer leave a key with no
+  // `motebit_id` — the state the next launch would otherwise mint over.
+  let stagedKey: NonNullable<FullConfig["cli_encrypted_key"]> | null = null;
   const configStore: BootstrapConfigStore = {
     read() {
       if (fullConfig.motebit_id == null || fullConfig.motebit_id === "")
@@ -244,16 +250,44 @@ export async function bootstrapIdentity(
       fullConfig.motebit_id = state.motebit_id;
       fullConfig.device_id = state.device_id;
       fullConfig.device_public_key = state.device_public_key;
-      saveFullConfig(fullConfig);
+      if (stagedKey != null) {
+        fullConfig.cli_encrypted_key = stagedKey;
+        delete fullConfig.cli_private_key;
+      }
+      // An identity change, declared: refused if another process changed the
+      // identity since this config was read, and whatever key or binding it
+      // replaces is kept first.
+      saveFullConfig(fullConfig, { identityChange: "preserve-replaced" });
       return Promise.resolve();
     },
   };
 
   const keyStore: BootstrapKeyStore = {
     async storePrivateKey(privKeyHex) {
-      fullConfig.cli_encrypted_key = await encryptPrivateKey(privKeyHex, passphrase);
-      delete fullConfig.cli_private_key;
-      saveFullConfig(fullConfig);
+      const encrypted = await encryptPrivateKey(privKeyHex, passphrase);
+      if (encrypted == null) throw new Error("could not encrypt the new identity key");
+      stagedKey = encrypted;
+    },
+    // Rule R1 at the one shared absence decision: only a config with NO key
+    // field is "no key". A key without a `motebit_id` is refused by
+    // core-identity rather than minted over; a key that decrypts to a public
+    // key other than the one the config names is refused as a mismatch.
+    async probePrivateKey() {
+      const legacy = fullConfig.cli_private_key;
+      if (fullConfig.cli_encrypted_key != null) {
+        try {
+          const hex = await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
+          const pub = await getPublicKeyBySuite(fromHex(hex), "motebit-jcs-ed25519-hex-v1");
+          return { state: "present" as const, publicKeyHex: toHex(pub) };
+        } catch (err) {
+          return {
+            state: "unreadable" as const,
+            reason: `cli_encrypted_key did not open (${err instanceof Error ? err.message : String(err)})`,
+          };
+        }
+      }
+      if (legacy != null && legacy !== "") return { state: "present" as const };
+      return { state: "absent" as const };
     },
   };
 

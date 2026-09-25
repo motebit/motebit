@@ -6,7 +6,7 @@
  * route is stubbed; a link severed anywhere in between goes red here
  * (`docs/doctrine/composition-preserves-enforcement.md`).
  */
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -20,6 +20,7 @@ import type { FullConfig } from "../config.js";
 import { encryptPrivateKey, decryptPrivateKey } from "../identity.js";
 import {
   clearPendingRotation,
+  setAsidePendingRotation,
   loadAnyPendingRotation,
   loadPendingRotation,
   pendingRotationPath,
@@ -41,6 +42,11 @@ let relay: SyncRelay;
 let dir: string;
 let config: FullConfig;
 let posts: number;
+/** How the last commit told saveConfig to treat the retired key. */
+let lastIdentityChange: string | undefined;
+/** Set-aside write-aheads in `dir` (kept, never deleted). */
+const keptAside = () =>
+  readdirSync(dir).filter((f) => f.startsWith("pending-rotation.json.clobbered-"));
 
 /** The relay reached through its app — fetch-compatible, no server, nothing stubbed. */
 const viaRelay: typeof fetch = async (input, init) => {
@@ -121,14 +127,16 @@ function deps(f: Fixture, over: Partial<RotationDeps> = {}): RotationDeps {
   return {
     identityPath: f.identityPath,
     loadConfig: () => ({ ...config }),
-    saveConfig: (c) => {
+    saveConfig: (c, o) => {
       config = c;
+      lastIdentityChange = o.identityChange;
     },
     pending: {
       load: (mid, key) => loadPendingRotation(mid, key, dir),
       loadAny: () => loadAnyPendingRotation(dir),
       save: (p) => savePendingRotation(p, dir),
       clear: () => clearPendingRotation(dir),
+      setAside: () => setAsidePendingRotation(dir),
       path: pendingRotationPath(dir),
     },
     passphrase: PASS,
@@ -190,6 +198,8 @@ describe("S0 → S2: a registered identity rotates, relay first, local second", 
     expect(local.publicKeyHex).toBe(o.newPublicKeyHex);
     expect(config.device_public_key).toBe(o.newPublicKeyHex);
     expect(loadPendingRotation(f.mid, hex(f.a), dir)).toBeNull();
+    // The relay RECORDED the succession: the retired key may be erased.
+    expect(lastIdentityChange).toBe("retire-relay-accepted");
     expect(posts).toBe(1);
   });
 
@@ -303,6 +313,8 @@ describe("S0 with a stale write-ahead: the relay never applied it", () => {
       .all(f.mid) as Array<{ new_public_key: string }>;
     expect(chain.map((r) => r.new_public_key)).not.toContain(hex(ghost));
     expect(loadPendingRotation(f.mid, hex(f.a), dir)).toBeNull();
+    // Superseded, never destroyed: the ghost write-ahead is kept aside.
+    expect(keptAside()).toHaveLength(1);
   });
 });
 
@@ -320,6 +332,8 @@ describe("refusal: the relay answered and said no", () => {
     expect(chainLength(f.mid)).toBe(0);
     expect((await localKey(f)).publicKeyHex).toBe(hex(f.a));
     expect(loadPendingRotation(f.mid, hex(f.a), dir)).toBeNull();
+    // Kept aside, not deleted (R2: the kit never destroys key material).
+    expect(keptAside()).toHaveLength(1);
   });
 });
 
@@ -332,6 +346,9 @@ describe("S4: the relay holds nothing for this identity", () => {
     expect((await localKey(f)).publicKeyHex).toBe(o.newPublicKeyHex);
     expect(chainLength(f.mid)).toBe(0);
     expect(posts).toBe(0);
+    // The founder's ruling: the relay CONFIRMED nothing, so the retired key
+    // is kept, not erased.
+    expect(lastIdentityChange).toBe("preserve-replaced");
   });
 });
 
@@ -516,6 +533,12 @@ describe("a write-ahead that is not this machine's", () => {
       oldPublicKey: hex(other),
     });
     expect(loadAnyPendingRotation(dir)).toBeNull();
+    // #759 finding (a): another identity's in-flight key is KEPT, byte for
+    // byte — the relay may have accepted it for that identity.
+    expect(keptAside()).toHaveLength(1);
+    expect(JSON.parse(readFileSync(join(dir, keptAside()[0]!), "utf-8")).motebit_id).toBe(
+      "someone-else",
+    );
   });
 });
 

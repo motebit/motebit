@@ -45,6 +45,7 @@ import {
 
 import type { CliConfig } from "../args.js";
 import { CONFIG_DIR } from "../config.js";
+import { isTrulyAbsent, mkdirOwnerOnly, narrowOnLoad, writeFileAtomic } from "../durable-file.js";
 import { getRelayUrl } from "./_helpers.js";
 
 // ---------------------------------------------------------------------------
@@ -210,26 +211,57 @@ async function loadOrGenerateEoa(filePath: string, label: string): Promise<Buyer
   // Lazy import — viem is a heavy dep, skip the cost on the not-x402
   // dispatch paths.
   const { generatePrivateKey, privateKeyToAccount } = await import("viem/accounts");
+  const { key, justGenerated } = loadOrCreateEoaKeyFile(filePath, generatePrivateKey);
+  const privateKey = key as `0x${string}`;
+  const account = privateKeyToAccount(privateKey);
+  if (justGenerated) console.log(`Generated ${label} EOA at ${filePath} (mode 0600)`);
+  return { address: account.address, privateKey, justGenerated };
+}
 
-  if (fs.existsSync(filePath)) {
-    const privateKey = fs.readFileSync(filePath, "utf-8").trim() as `0x${string}`;
-    if (!/^0x[0-9a-f]{64}$/i.test(privateKey)) {
+/**
+ * The EVM private key in `filePath` — it may control funds — under the
+ * key-file rules (`docs/proposals/key-file-durability-v1.md`):
+ *
+ *  - R1: only ENOENT of the name is "no key yet". A file that exists but
+ *    cannot be read, or a dangling symlink, is refused, never regenerated
+ *    over.
+ *  - R2: a file that does not hold a valid key is left UNTOUCHED and the run
+ *    refuses — it is never overwritten, and the user is never told to delete
+ *    it.
+ *  - R3: narrowed to owner-only on every load; a new key is written
+ *    atomically, 0600 from creation, fsync'd, in an owner-only directory.
+ *
+ * Exported for tests.
+ */
+export function loadOrCreateEoaKeyFile(
+  filePath: string,
+  generate: () => string,
+): { key: string; justGenerated: boolean } {
+  let raw: string | null = null;
+  try {
+    raw = fs.readFileSync(filePath, "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT" || !isTrulyAbsent(filePath)) {
       throw new Error(
-        `${filePath} is not a valid EOA private key (expected 0x + 64 hex). Delete the file to regenerate.`,
+        `${filePath} exists but could not be read (${(err as NodeJS.ErrnoException).code ?? "unreadable"}); it may hold a funded key and was not changed.`,
+        { cause: err },
       );
     }
-    const account = privateKeyToAccount(privateKey);
-    return { address: account.address, privateKey, justGenerated: false };
   }
-
-  // Fresh keypair. Write with 0600 permissions — these are loaded each
-  // run and the only protection is filesystem ACL.
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const privateKey = generatePrivateKey();
-  fs.writeFileSync(filePath, privateKey, { mode: 0o600 });
-  const account = privateKeyToAccount(privateKey);
-  console.log(`Generated ${label} EOA at ${filePath} (mode 0600)`);
-  return { address: account.address, privateKey, justGenerated: true };
+  if (raw != null) {
+    narrowOnLoad(filePath);
+    const key = raw.trim();
+    if (!/^0x[0-9a-f]{64}$/i.test(key)) {
+      throw new Error(
+        `${filePath} is not a valid EOA private key (expected 0x + 64 hex). It was left untouched — it may still hold a key that controls funds. Move it aside yourself to have a new one generated.`,
+      );
+    }
+    return { key, justGenerated: false };
+  }
+  mkdirOwnerOnly(path.dirname(filePath));
+  const key = generate();
+  writeFileAtomic(filePath, key, 0o600);
+  return { key, justGenerated: true };
 }
 
 // ---------------------------------------------------------------------------

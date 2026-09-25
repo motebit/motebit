@@ -18,7 +18,7 @@ import * as fs from "node:fs";
 import { verify, rotate as rotateIdentityFile } from "@motebit/identity-file";
 import { performKeyRotation, type HeldRotation, type KeyRotationPorts } from "@motebit/surface-kit";
 import { hexToBytes } from "@motebit/encryption";
-import type { FullConfig } from "./config.js";
+import type { FullConfig, IdentityChange } from "./config.js";
 import { currentModeOr, writeFileAtomic } from "./durable-file.js";
 import { decryptPrivateKey, encryptPrivateKey } from "./identity.js";
 import type { PendingRotation, PendingRotationRead } from "./pending-rotation.js";
@@ -27,13 +27,20 @@ export interface RotationDeps {
   /** The motebit.md to rotate. Read, verified, rewritten only on commit. */
   identityPath: string;
   loadConfig: () => FullConfig;
-  saveConfig: (config: FullConfig) => void;
+  /** Returns the path of a kept copy of the replaced config, when one was made. */
+  saveConfig: (
+    config: FullConfig,
+    opts: { identityChange: IdentityChange },
+  ) => string | null | void;
   pending: {
     load: (motebitId: string, currentPublicKey: string) => PendingRotationRead;
     /** Whatever write-ahead exists, whoever it belongs to. `null` is absence only. */
     loadAny: () => PendingRotationRead;
     save: (pending: PendingRotation) => void;
+    /** DELETE — only for a write-ahead whose key is now the committed key. */
     clear: () => void;
+    /** Move out of the active slot, bytes kept; throws when they cannot be kept. */
+    setAside: () => unknown;
     /** For messages that name the file. */
     path: string;
   };
@@ -56,6 +63,7 @@ export class RotationUnlockError extends Error {
 export type RotationNote =
   | { kind: "stale-write-ahead-cleared"; motebitId: string; oldPublicKey: string }
   | { kind: "write-ahead-discarded"; ageMs: number }
+  | { kind: "refused-write-ahead-set-aside" }
   | { kind: "interrupted-commit-finished"; newPublicKeyHex: string };
 
 export type RotationOutcome =
@@ -66,6 +74,13 @@ export type RotationOutcome =
       relay: "recorded" | "already-held" | "none";
       rotations: number;
       relayKeyBefore: string | null;
+      /**
+       * Where the retired key was kept, when it was: the relay did not confirm
+       * the succession (it holds no key for this identity), so it is not
+       * erased. `null` when the relay recorded it and the retired key was
+       * erased, as a rotation intends.
+       */
+      retiredKeyKeptAt: string | null;
       notes: RotationNote[];
     }
   | {
@@ -104,6 +119,7 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
   // translates, and remembers whether a held key failed to open so the
   // kit's "unreadable" can be named honestly below.
   let heldWouldNotOpen = false;
+  let retiredKeyKeptAt: string | null = null;
   const toHeld = async (p: PendingRotation): Promise<HeldRotation | "unreadable"> => {
     try {
       const hex = await decryptPrivateKey(p.encrypted_new_key, deps.passphrase);
@@ -156,16 +172,43 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
         });
       },
       clear: () => Promise.resolve(deps.pending.clear()),
+      // Synchronous underneath; a throw (the bytes could not be kept) becomes
+      // a rejection, and the kit stops.
+      setAside: () =>
+        new Promise<void>((resolve) => {
+          deps.pending.setAside();
+          resolve();
+        }),
     },
-    commit: async ({ privateKeyHex, publicKeyHex, record }) => {
+    commit: async ({ privateKeyHex, publicKeyHex, record, relay }) => {
       // Config (the private key) first, the identity file second; idempotent:
       // a file already on the new key is not re-signed again.
       const encrypted = await encryptPrivateKey(privateKeyHex, deps.passphrase);
       if (encrypted == null) throw new Error("could not encrypt the new key; nothing was changed");
       const next = deps.loadConfig();
+      // The key this rotation departs from must still be the one on disk. If
+      // another process (a second `motebit rotate`, `restore`, create-motebit,
+      // the desktop) replaced it meanwhile, committing here would destroy
+      // THAT key: stop, and the write-ahead (not cleared on a throw) stays.
+      if (
+        JSON.stringify(next.cli_encrypted_key) !== JSON.stringify(config.cli_encrypted_key) &&
+        next.device_public_key !== publicKeyHex
+      ) {
+        throw new Error(
+          "the key in config.json changed while this rotation ran (another motebit process replaced it); nothing local was changed — the new key stays held in the write-ahead",
+        );
+      }
       next.cli_encrypted_key = encrypted;
       next.device_public_key = publicKeyHex;
-      deps.saveConfig(next);
+      // The founder's ruling on a retired key: it is erased ONLY once the
+      // relay has accepted the succession (or no relay is configured —
+      // never the case here, `motebit rotate` always resolves one). A relay
+      // that holds no key for this identity confirmed nothing, so the
+      // retired key is kept (0600) beside the new config.
+      const kept = deps.saveConfig(next, {
+        identityChange: relay === "none" ? "preserve-replaced" : "retire-relay-accepted",
+      });
+      if (typeof kept === "string") retiredKeyKeptAt = kept;
       const current = fs.readFileSync(deps.identityPath, "utf-8");
       const onFile = await verify(current, { expectedType: "identity" });
       const fileKey =
@@ -210,6 +253,7 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
         relay: outcome.relay,
         rotations,
         relayKeyBefore: outcome.relayKeyBefore,
+        retiredKeyKeptAt,
         notes,
       };
     }

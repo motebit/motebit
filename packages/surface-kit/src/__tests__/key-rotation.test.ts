@@ -30,6 +30,12 @@ interface Fake {
   privateKeyHex: () => string | null;
   publicKeyHex: () => string | null;
   held: () => HeldRotation | null | "unreadable";
+  /** Every write-ahead the kit set aside (kept), in order. */
+  keptAside: (HeldRotation | "unreadable")[];
+  /** How many times the kit DELETED the write-ahead. */
+  cleared: number;
+  /** The `relay` the kit told `commit`. */
+  committedRelay: string[];
   commits: number;
   posts: number;
 }
@@ -54,6 +60,9 @@ function device(
   let pub: string | null = opts.published === undefined ? hex(a) : opts.published;
   let held: HeldRotation | null | "unreadable" = opts.held ?? null;
   const fake: Fake = {
+    keptAside: [],
+    cleared: 0,
+    committedRelay: [],
     commits: 0,
     posts: 0,
     privateKeyHex: () => priv,
@@ -71,11 +80,17 @@ function device(
           held = h;
         },
         clear: async () => {
+          fake.cleared++;
+          held = null;
+        },
+        setAside: async () => {
+          if (held != null) fake.keptAside.push(held);
           held = null;
         },
       },
       commit: async (next) => {
         fake.commits++;
+        fake.committedRelay.push(next.relay);
         priv = next.privateKeyHex;
         pub = next.publicKeyHex;
       },
@@ -172,9 +187,11 @@ describe("performKeyRotation", () => {
     expect(o.kind).toBe("rotated");
     expect(o.notes).toContainEqual({ kind: "write-ahead-discarded", ageMs: 16 * 60_000 });
     expect(f.publicKeyHex()).not.toBe(hex(ghost));
+    // Superseded, not destroyed: its bytes are kept aside.
+    expect(f.keptAside).toEqual([held]);
   });
 
-  it("a write-ahead that is not this device's is said and cleared, never finished", async () => {
+  it("a write-ahead that is not this device's is said and SET ASIDE (kept), never finished, never deleted", async () => {
     const a = await generateKeypair();
     const other = await generateKeypair();
     const held: HeldRotation = {
@@ -199,6 +216,12 @@ describe("performKeyRotation", () => {
       oldPublicKey: hex(other),
     });
     expect(f.held()).toBeNull();
+    // #759 finding (a): another identity's in-flight key may be the only copy
+    // of a key the relay accepted for it. It is kept, never deleted.
+    expect(f.keptAside).toEqual([held]);
+    // The only delete is the post-commit one, of the write-ahead for the key
+    // just committed.
+    expect(f.cleared).toBe(1);
   });
 
   it("S4: the relay holds nothing ⇒ rotates locally, relay: none, no POST", async () => {
@@ -230,7 +253,7 @@ describe("performKeyRotation", () => {
     expect(f.held()).toBeNull();
   });
 
-  it("refused ⇒ old key works, nothing committed, write-ahead removed", async () => {
+  it("refused ⇒ old key works, nothing committed, write-ahead set aside (kept), not deleted", async () => {
     const a = await generateKeypair();
     const f = device(a, {
       departable: true,
@@ -242,6 +265,78 @@ describe("performKeyRotation", () => {
     expect(f.commits).toBe(0);
     expect(f.publicKeyHex()).toBe(hex(a));
     expect(f.held()).toBeNull();
+    expect(f.keptAside).toHaveLength(1);
+    expect(f.cleared).toBe(0);
+    expect(o.notes).toContainEqual({ kind: "refused-write-ahead-set-aside" });
+  });
+
+  it("no relay configured, a held rotation of THIS key: set aside (the relay once configured may hold it), never deleted", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const held: HeldRotation = {
+      motebit_id: MID,
+      old_public_key: hex(a),
+      new_public_key: hex(b),
+      record: await signKeySuccession(a.privateKey, b.privateKey, b.publicKey, a.publicKey),
+      new_private_key_hex: bytesToHex(b.privateKey),
+      written_at: 1,
+    };
+    const f = device(a, null, { held });
+    const o = await performKeyRotation(f.ports);
+    expect(o).toMatchObject({ kind: "rotated", relay: "none" });
+    expect(f.keptAside).toEqual([held]);
+    expect(f.committedRelay).toEqual(["none"]);
+  });
+
+  it("unregistered relay, a held rotation of THIS key: set aside, never deleted", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const held: HeldRotation = {
+      motebit_id: MID,
+      old_public_key: hex(a),
+      new_public_key: hex(b),
+      record: await signKeySuccession(a.privateKey, b.privateKey, b.publicKey, a.publicKey),
+      new_private_key_hex: bytesToHex(b.privateKey),
+      written_at: 1,
+    };
+    const f = device(a, { departable: false, held_public_key: null }, { held });
+    const o = await performKeyRotation(f.ports);
+    expect(o).toMatchObject({ kind: "rotated", relay: "none" });
+    expect(f.keptAside).toEqual([held]);
+  });
+
+  it("a set-aside that fails STOPS the rotation: nothing minted, nothing committed, the write-ahead left where it was", async () => {
+    const a = await generateKeypair();
+    const other = await generateKeypair();
+    const held: HeldRotation = {
+      motebit_id: "someone-else",
+      old_public_key: hex(other),
+      new_public_key: hex(other),
+      record: await signKeySuccession(
+        other.privateKey,
+        other.privateKey,
+        other.publicKey,
+        other.publicKey,
+      ),
+      new_private_key_hex: bytesToHex(other.privateKey),
+      written_at: 1,
+    };
+    const f = device(a, { departable: true, held_public_key: hex(a) }, { held });
+    f.ports.writeAhead.setAside = () => Promise.reject(new Error("disk full"));
+    await expect(performKeyRotation(f.ports)).rejects.toThrow("disk full");
+    expect(f.commits).toBe(0);
+    expect(f.posts).toBe(0);
+    expect(f.held()).toEqual(held);
+  });
+
+  it("commit is told what the relay did: recorded after a 200, none when unregistered", async () => {
+    const a = await generateKeypair();
+    const f = device(a, { departable: true, held_public_key: hex(a) });
+    await performKeyRotation(f.ports);
+    expect(f.committedRelay).toEqual(["recorded"]);
+    const g = device(a, { departable: false, held_public_key: null });
+    await performKeyRotation(g.ports);
+    expect(g.committedRelay).toEqual(["none"]);
   });
 
   it("lost response ⇒ held: nothing committed, the write-ahead stays for the next run", async () => {

@@ -11,6 +11,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import type { CliConfig } from "../args.js";
+import { isKeyBearingFile } from "../durable-file.js";
 
 const DEFAULT_PATH = "motebit.yaml";
 
@@ -68,6 +69,16 @@ export function handleInit(config: CliConfig): void {
   const target = path.isAbsolute(targetRelative)
     ? targetRelative
     : path.join(process.cwd(), targetRelative);
+
+  // `--force` replaces the target wholesale. A file that holds key or
+  // identity-binding material is never an acceptable target for a scaffold,
+  // forced or not: it would be overwritten with a yaml template, unkept.
+  if (isKeyBearingFile(target)) {
+    console.error(
+      `Error: ${target} holds (or is named like a file that holds) identity key material; \`motebit init\` never writes over it. Choose another --file path.`,
+    );
+    process.exit(1);
+  }
 
   if (fs.existsSync(target) && !config.force) {
     console.error(

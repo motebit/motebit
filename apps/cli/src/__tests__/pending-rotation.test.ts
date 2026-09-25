@@ -103,7 +103,7 @@ describe("a held rotation", () => {
 
   it("an unreadable write-ahead is set aside with its bytes kept, never deleted", () => {
     writeFileSync(pendingRotationPath(dir), "{torn");
-    const kept = setAsidePendingRotation(dir);
+    const kept = setAsidePendingRotation(dir)!;
     expect(kept).toMatch(/pending-rotation\.json\.clobbered-/);
     expect(readFileSync(kept, "utf-8")).toBe("{torn");
     expect(statSync(kept).mode & 0o777).toBe(0o600);

@@ -15,8 +15,12 @@
  *   3. write `motebit.md.backup` (the old identity file)
  *   4. replace `motebit.md` atomically (now it names the NEW key — held by 2)
  *   5. replace the config atomically (now it holds the NEW key)
- *   6. only then remove 1 and 2 — the old key is retired on purpose, which is
- *      what a rotation is for, and 2 is now identical to the config.
+ *   6. only then remove 2 — it is now identical to the config. 1 (the OLD
+ *      key) is KEPT: the founder's ruling is that a retired key is erased
+ *      only after a relay has accepted the succession, and this command
+ *      never talks to a relay (`create-motebit rotate` refuses an identity
+ *      with a relay configured; one without could still have been
+ *      registered with the default relay by `motebit`). The caller names it.
  *
  * A failure at 1 or 2 changes nothing that names a key. A failure at 3, 4 or
  * 5 leaves both keys on disk and a `RotationCommitError` that names where.
@@ -52,8 +56,9 @@ export interface RotationCommitOps {
 export const defaultRotationCommitOps: RotationCommitOps = {
   writeBackup: (p, c) => writeFileAtomic(p, c, currentModeOr(p, 0o644)),
   writeIdentity: (p, c) => writeFileAtomic(p, c, currentModeOr(p, 0o644)),
+  // The replaced (old) key is already kept by step 1: no second copy.
   writeConfig: (p, cfg) => {
-    writeConfigFile(p, cfg);
+    writeConfigFile(p, cfg, { identityChange: "retired-kept-elsewhere" });
   },
 };
 
@@ -95,6 +100,8 @@ export function finishRotationCommand(newKeyAt: string, configPath: string): str
 
 export interface RotationCommitResult {
   backupPath: string;
+  /** Where the retired (old) key is kept, owner-only. */
+  oldKeyKeptAt: string;
 }
 
 export function commitRotation(
@@ -140,8 +147,8 @@ export function commitRotation(
     throw new RotationCommitError("config", oldCopy, newCopy, "new", err);
   }
 
-  // 6. Committed. The new copy is now the config; the old key is retired.
+  // 6. Committed. The new copy is now the config and goes; the old key is
+  //    retired but KEPT (see the header).
   rmSync(newCopy, { force: true });
-  rmSync(oldCopy, { force: true });
-  return { backupPath };
+  return { backupPath, oldKeyKeptAt: oldCopy };
 }

@@ -18,7 +18,7 @@ import { generate as generateIdentityFile } from "@motebit/identity-file";
 import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
 import { CONFIG_DIR, loadFullConfig, saveFullConfig } from "../config.js";
-import { currentModeOr, writeFileAtomic } from "../durable-file.js";
+import { replaceIdentityFile } from "../durable-file.js";
 import {
   fromHex,
   promptPassphrase,
@@ -78,7 +78,7 @@ export async function handleExport(config: CliConfig): Promise<void> {
     }
     fullConfig.cli_encrypted_key = await encryptPrivateKey(fullConfig.cli_private_key, passphrase);
     delete fullConfig.cli_private_key;
-    saveFullConfig(fullConfig);
+    saveFullConfig(fullConfig, { identityChange: "reencrypt-same-key" });
   } else {
     passphrase =
       envPassphrase ?? (await promptPassphrase(rl, "Set a passphrase for your mote's key: "));
@@ -148,8 +148,15 @@ export async function handleExport(config: CliConfig): Promise<void> {
   const skipped: string[] = [];
 
   // 1. Write identity file
+  // Atomic, and binding material is never overwritten unkept: an export
+  // directory still holding ANOTHER identity's motebit.md (the identity a
+  // restore replaced — for a legacy id, its only recovery path) keeps it as
+  // motebit.md.clobbered-<time>.
   const identityPath = path.join(outputDir, "motebit.md");
-  writeFileAtomic(identityPath, identityContent, currentModeOr(identityPath, 0o644));
+  const keptExport = replaceIdentityFile(identityPath, identityContent);
+  if (keptExport != null) {
+    console.log(`  Another identity's motebit.md was kept as ${keptExport}.`);
+  }
   exported.push("identity");
 
   // Also refresh the config-dir snapshot. `~/.motebit/motebit.md` is written
@@ -161,8 +168,13 @@ export async function handleExport(config: CliConfig): Promise<void> {
   try {
     // Atomic: a torn snapshot would be worse than a stale one — doctor and
     // wallet derivation read it.
+    // A snapshot of a DIFFERENT identity (the pre-restore one) is kept, not
+    // overwritten.
     const snapshotPath = path.join(CONFIG_DIR, "motebit.md");
-    writeFileAtomic(snapshotPath, identityContent, currentModeOr(snapshotPath, 0o644));
+    const keptSnapshot = replaceIdentityFile(snapshotPath, identityContent);
+    if (keptSnapshot != null) {
+      console.log(`  The previous identity's snapshot was kept as ${keptSnapshot}.`);
+    }
   } catch {
     // Best-effort — the primary export above already succeeded.
   }

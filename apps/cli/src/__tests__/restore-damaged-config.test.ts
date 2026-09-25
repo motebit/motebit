@@ -120,9 +120,17 @@ describe("restore over a damaged config", () => {
     expect(fs.readFileSync(path.join(tmpDir, kept[0]!), "utf-8")).toBe(damaged);
   });
 
-  it("damage appearing before the COMMIT read: restore completes and keeps the damaged bytes", async () => {
-    // Healthy (absent) at the plan read; damaged by the time of the commit read.
+  it("damage appearing before the COMMIT read: restore REFUSES (the plan was decided on another state) and changes nothing", async () => {
+    // Healthy (absent) at the plan read; damaged by the time of the commit
+    // read. The plan ("fresh install") no longer describes the file; a
+    // passphrase-reset plan in the same position would write a config with
+    // no motebit_id (#9). Nothing is written; a re-run plans on the damage.
     onPassphrase = () => fs.writeFileSync(CONFIG, "[]");
+    expect(await runRestore()).toBe(1);
+    expect(fs.readFileSync(CONFIG, "utf-8")).toBe("[]");
+    expect(backups()).toEqual([]);
+    promptCall = 0;
+    onPassphrase = null;
     expect(await runRestore()).toBe(0);
     expectRestoredConfig();
     const kept = backups();
@@ -314,6 +322,44 @@ describe("restore over a damaged config", () => {
     replaceAnswer = "no";
     expect(await runRestore()).toBe(1);
     expect(fs.readdirSync(tmpDir).sort()).toEqual(["config.json", "pending-rotation.json"]);
+  });
+
+  async function seedPublicKey(): Promise<string> {
+    const { getPublicKeyBySuite, bytesToHex, hexToBytes } = await import("@motebit/encryption");
+    return bytesToHex(await getPublicKeyBySuite(hexToBytes(SEED), "motebit-jcs-ed25519-hex-v1"));
+  }
+
+  it("item 8: a PASSPHRASE RESET over a config whose cli_encrypted_key is NOT the seed's keeps that key", async () => {
+    // planRestore matches on device_public_key; the encrypted key beside it
+    // may encrypt a different key (a config shared with the desktop, a
+    // half-written one). It is kept, never trusted to be the seed's.
+    configWith({
+      motebit_id: "identity-S",
+      device_public_key: await seedPublicKey(),
+      cli_encrypted_key: { ciphertext: "KOTHER_SECRET", nonce: "n", tag: "t", salt: "s" },
+    });
+    expect(await runRestore()).toBe(0);
+    expectRestoredConfig();
+    expect(JSON.parse(fs.readFileSync(CONFIG, "utf-8"))["motebit_id"]).toBe("identity-S");
+    expect(keptHolding("KOTHER_SECRET")).toHaveLength(1);
+  });
+
+  it("item 9: the identity changing while the user types refuses the commit; nothing is written", async () => {
+    configWith({
+      motebit_id: "identity-S",
+      device_public_key: await seedPublicKey(),
+      cli_encrypted_key: { ciphertext: "KS_SECRET", nonce: "n", tag: "t", salt: "s" },
+    });
+    // Another process (a `motebit rotate`) commits a new key meanwhile.
+    const rotatedMeanwhile = JSON.stringify({
+      motebit_id: "identity-S",
+      device_public_key: "b2".repeat(32),
+      cli_encrypted_key: { ciphertext: "KB_SECRET", nonce: "n", tag: "t", salt: "s" },
+    });
+    onPassphrase = () => fs.writeFileSync(CONFIG, rotatedMeanwhile);
+    expect(await runRestore()).toBe(1);
+    expect(fs.readFileSync(CONFIG, "utf-8")).toBe(rotatedMeanwhile);
+    expect(backups()).toEqual([]);
   });
 
   it("every config read in restore goes through the damage-tolerant loader", () => {

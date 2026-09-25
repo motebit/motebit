@@ -55,6 +55,57 @@ export function isPathAllowed(candidate: string, allowedPaths: string[]): PathCh
 }
 
 /**
+ * Is `candidate` inside motebit's own state — the directories that hold
+ * identity key files (`config.json` with `cli_encrypted_key`, the rotation
+ * write-ahead, `dev-keyring.json`, the relay database)? Those are:
+ *
+ *  - `~/.motebit` (`$HOME` or `%USERPROFILE%`),
+ *  - `$MOTEBIT_CONFIG_DIR` when set, and
+ *  - any directory named `.motebit` — a scaffolded agent keeps its only key
+ *    copy in `<agent>/.motebit/config.json`, and the CLI's default
+ *    `allowedPaths` (the cwd) puts it in reach when `motebit` runs there.
+ *
+ * The file tools never write there: a model has no legitimate reason to
+ * replace its own key files, and an approved `write_file` or `undo_write`
+ * over one destroys the key (`docs/proposals/key-file-durability-v1.md`
+ * item 28). Mirrors the desktop's `tool_guard::is_protected_path`. Symlinks
+ * are resolved (the parent, for a file not there yet), so a link from an
+ * allowed directory into `~/.motebit` is denied too.
+ */
+export function isProtectedStatePath(candidate: string): boolean {
+  const resolved = path.resolve(candidate);
+  let canonical = resolved;
+  try {
+    canonical = fsSync.realpathSync(resolved);
+  } catch {
+    try {
+      canonical = path.join(fsSync.realpathSync(path.dirname(resolved)), path.basename(resolved));
+    } catch {
+      /* unresolvable — judge the path as given */
+    }
+  }
+  const roots: string[] = [];
+  const home = process.env["HOME"] ?? process.env["USERPROFILE"];
+  if (home != null && home !== "") roots.push(path.join(home, ".motebit"));
+  const configDir = process.env["MOTEBIT_CONFIG_DIR"];
+  if (configDir != null && configDir !== "") roots.push(configDir);
+  for (const candidatePath of [resolved, canonical]) {
+    if (candidatePath.split(path.sep).includes(".motebit")) return true;
+    for (const root of roots) {
+      let r = path.resolve(root);
+      try {
+        r = fsSync.realpathSync(r);
+      } catch {
+        /* not there — compare lexically */
+      }
+      if (candidatePath === r || candidatePath.startsWith(r.endsWith(path.sep) ? r : r + path.sep))
+        return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Check if a directory path is within the allowed directories.
  * Unlike isPathAllowed, the directory must exist (no ENOENT fallback).
  * Used for shell_exec cwd validation.

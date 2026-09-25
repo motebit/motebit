@@ -11,7 +11,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { openMotebitDatabase } from "@motebit/persistence";
 import { createRuntimeCoverage, describeGap } from "../runtime-coverage.js";
-import { CONFIG_DIR, listConfigBackups, loadFullConfig } from "../config.js";
+import { CONFIG_DIR, listConfigBackups, listKeptKeyFiles, loadFullConfig } from "../config.js";
+import { mkdirOwnerOnly } from "../durable-file.js";
 import { seedBackupStatus } from "./seed.js";
 import { getDbPath } from "../runtime-factory.js";
 
@@ -49,7 +50,7 @@ export async function handleDoctor(): Promise<void> {
 
   // Config directory writable
   try {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    mkdirOwnerOnly(CONFIG_DIR);
     const testFile = path.join(CONFIG_DIR, ".doctor-test");
     fs.writeFileSync(testFile, "ok", "utf-8");
     fs.unlinkSync(testFile);
@@ -122,6 +123,27 @@ export async function handleDoctor(): Promise<void> {
     // cannot be read. Non-zero like every failing check: doctor is a
     // readiness probe, and supervisors gate on its exit code.
     process.exit(1);
+  }
+  // Kept key copies. Everything that set key material aside instead of
+  // destroying it (a damaged or replaced config, a set-aside rotation
+  // write-ahead, a create-motebit rotation stopped half-way, a staging file
+  // a crash stranded) is named here — a key kept where nobody is told is
+  // only a slower loss. Informational: keeping them is correct; the owner
+  // decides when one is no longer needed.
+  const kept = listKeptKeyFiles();
+  if (kept.length > 0) {
+    const unfinished = kept.some((f) => f.includes(".rotation-next-"));
+    checks.push({
+      name: "Kept key copies",
+      ok: !unfinished,
+      detail: `${kept.length} in ${CONFIG_DIR} (owner-only): ${kept.slice(0, 5).join(", ")}${kept.length > 5 ? ", …" : ""}`,
+      ...(unfinished
+        ? {
+            remedy:
+              "a `create-motebit rotate` stopped before its config step: config.json.rotation-next-* holds the NEW key that motebit.md may already name — run `npx create-motebit rotate` again for instructions, or move that file over config.json",
+          }
+        : {}),
+    });
   }
   if (fullCfg.motebit_id != null && fullCfg.motebit_id !== "") {
     checks.push({ name: "Identity", ok: true, detail: `${fullCfg.motebit_id.slice(0, 8)}...` });

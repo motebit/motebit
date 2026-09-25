@@ -48,11 +48,22 @@ describe("preserveAside through a symlink", () => {
     expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
   });
 
-  it("MECHANISM: it links the resolved real file, never the name as given", () => {
+  it("MECHANISM: a readable file is kept as a BYTE COPY of the real file, never a hard link", () => {
     const { link, real } = symlinkedConfig("{OLD");
-    preserveAside(link, ".clobbered-");
-    expect(vi.mocked(fs.linkSync)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(fs.linkSync).mock.calls[0]![0]).toBe(fs.realpathSync(real));
+    const kept = preserveAside(link, ".clobbered-");
+    expect(vi.mocked(fs.linkSync)).not.toHaveBeenCalled();
+    expect(fs.statSync(kept).ino).not.toBe(fs.statSync(real).ino);
+  });
+
+  it("X5: an in-place writer (an older installed motebit CLI) rewriting the live config cannot change the kept bytes", () => {
+    // create-motebit (npx-latest) and the installed CLI release independently;
+    // an older CLI writes config.json IN PLACE. A hard-link pre-rotation copy
+    // would have been rewritten with it.
+    const live = path.join(dir, "config.json");
+    fs.writeFileSync(live, "{OLD KEY");
+    const kept = preserveAside(live, ".pre-rotation-");
+    fs.writeFileSync(live, "{SOMETHING ELSE");
+    expect(fs.readFileSync(kept, "utf-8")).toBe("{OLD KEY");
   });
 
   it("the copy fallback (no hard links, e.g. across filesystems) keeps old bytes, 0600 from creation", () => {

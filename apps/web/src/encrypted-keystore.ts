@@ -233,6 +233,28 @@ export class EncryptedKeyStore implements BootstrapKeyStore {
     }
   }
 
+  /**
+   * Move the rotation write-ahead out of its slot WITHOUT destroying it: its
+   * bytes are stored (same wrapping) under a timestamped slot first, then
+   * the active slot is freed. Throws if the slot cannot be read or the copy
+   * cannot be stored — the caller (the surface-kit rotation) then stops.
+   */
+  async setAsidePendingRotation(): Promise<void> {
+    const raw = this.useIndexedDB
+      ? await loadWithWebCrypto(IDB_PENDING_KEY)
+      : await loadWithFallback(LS_PENDING_CIPHER_KEY, LS_PENDING_IV_KEY);
+    if (raw == null || raw === "") return;
+    const stamp = Date.now();
+    if (this.useIndexedDB) await storeWithWebCrypto(raw, `${IDB_PENDING_KEY}.set_aside.${stamp}`);
+    else
+      await storeWithFallback(
+        raw,
+        `${LS_PENDING_CIPHER_KEY}.set_aside.${stamp}`,
+        `${LS_PENDING_IV_KEY}.set_aside.${stamp}`,
+      );
+    await this.clearPendingRotation();
+  }
+
   async clearPendingRotation(): Promise<void> {
     if (this.useIndexedDB) {
       const db = await openKeystoreDB();

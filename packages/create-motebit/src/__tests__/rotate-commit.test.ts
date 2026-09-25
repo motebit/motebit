@@ -78,12 +78,16 @@ function failingAt(step: "backup" | "identity" | "config"): RotationCommitOps {
 }
 
 describe("commitRotation", () => {
-  it("succeeds: config holds the new key, the file names it, nothing extra is left", () => {
-    const { backupPath } = commitRotation(plan());
+  it("succeeds: config holds the new key, the file names it, and the RETIRED key is kept (owner-only), never erased", () => {
+    // The founder's ruling: a retired key is erased only after a relay has
+    // accepted the succession — this command never talks to one.
+    const { backupPath, oldKeyKeptAt } = commitRotation(plan());
     expect(JSON.parse(readFileSync(configPath, "utf-8")).cli_encrypted_key).toBe("NEW_KEY");
     expect(readFileSync(identityPath, "utf-8")).toBe(NEW_ID);
     expect(readFileSync(backupPath, "utf-8")).toBe(OLD_ID);
-    expect(readdirSync(dir).sort()).toEqual(["config.json", "motebit.md", "motebit.md.backup"]);
+    expect(readFileSync(oldKeyKeptAt, "utf-8")).toContain("OLD_KEY");
+    expect(statSync(oldKeyKeptAt).mode & 0o777).toBe(0o600);
+    expect(readdirSync(dir).filter((f) => f.includes("rotation-next-"))).toEqual([]);
     expect(statSync(configPath).mode & 0o777).toBe(0o600);
   });
 

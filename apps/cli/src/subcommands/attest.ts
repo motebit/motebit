@@ -118,7 +118,7 @@ export async function handleAttest(config: CliConfig): Promise<void> {
     }
     fullConfig.cli_encrypted_key = await encryptPrivateKey(fullConfig.cli_private_key, passphrase);
     delete fullConfig.cli_private_key;
-    saveFullConfig(fullConfig);
+    saveFullConfig(fullConfig, { identityChange: "reencrypt-same-key" });
   } else {
     passphrase = envPassphrase ?? (await promptPassphrase(rl, "Set a passphrase: "));
     if (!passphrase) {

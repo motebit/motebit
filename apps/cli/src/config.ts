@@ -11,7 +11,14 @@ import type {
 } from "@motebit/ai-core";
 import type { connectMcpServers } from "@motebit/mcp-client";
 import { type UnifiedProviderConfig, type GovernanceConfig } from "@motebit/sdk";
-import { preserveAside, tightenToOwnerOnly, writeFileAtomic } from "./durable-file.js";
+import {
+  isTrulyAbsent,
+  mkdirOwnerOnly,
+  narrowOnLoad,
+  preserveAside,
+  withFileLock,
+  writeFileAtomic,
+} from "./durable-file.js";
 
 declare const __PKG_VERSION__: string;
 export const VERSION: string =
@@ -152,23 +159,46 @@ function isValidGovernanceConfig(value: unknown): value is GovernanceConfig {
 }
 
 /**
- * The ONE name a damaged config is preserved under before anything replaces
- * it: `config.json.clobbered-<time>`. Every writer that sets damage aside
- * uses it (`saveFullConfig`, create-motebit's twin, the desktop's Rust
- * `write_config`), and every reader that points a user at a backup looks for
- * it (`doctor`, `migrate-keyring`, `identity.ts`'s missing-key remedy). It is
- * the name those readers already shipped with; a second spelling would be a
- * backup nobody is ever told about.
+ * The ONE name a damaged or replaced config is preserved under before
+ * anything replaces it: `config.json.clobbered-<time>`. Every writer that
+ * sets bytes aside uses it (`saveFullConfig`, create-motebit's twin, the
+ * desktop's Rust `write_config`), and every reader that points a user at a
+ * backup looks for it (`doctor`, `migrate-keyring`, `identity.ts`'s
+ * missing-key remedy). It is the name those readers already shipped with; a
+ * second spelling would be a backup nobody is ever told about.
  */
 export const CONFIG_BACKUP_INFIX = ".clobbered-";
 export const CONFIG_BACKUP_PREFIX = `${path.basename(CONFIG_PATH)}${CONFIG_BACKUP_INFIX}`;
 
-/** Preserved copies of a damaged config in `CONFIG_DIR`, newest first. Never throws. */
+/** Preserved copies of a damaged or replaced config in `CONFIG_DIR`, newest first. Never throws. */
 export function listConfigBackups(): string[] {
+  return listKeptKeyFiles().filter((f) => f.startsWith(CONFIG_BACKUP_PREFIX));
+}
+
+/**
+ * Every file in `CONFIG_DIR` that is a kept or stranded copy of key
+ * material, newest first: preserved configs (`config.json.clobbered-*`), a
+ * rotation `create-motebit` left unfinished (`config.json.pre-rotation-*`
+ * holds the OLD key, `config.json.rotation-next-*` the NEW one), set-aside
+ * rotation write-aheads (`pending-rotation.json.clobbered-*`), and staging
+ * files a crash left behind (`config.json.*.tmp`, `pending-rotation.json.*.tmp`).
+ * `doctor` names every one, so no key is ever kept where nobody is told.
+ * Never throws.
+ */
+export function listKeptKeyFiles(): string[] {
   try {
+    const cfg = path.basename(CONFIG_PATH);
     return fs
       .readdirSync(CONFIG_DIR)
-      .filter((f) => f.startsWith(CONFIG_BACKUP_PREFIX))
+      .filter(
+        (f) =>
+          f.startsWith(CONFIG_BACKUP_PREFIX) ||
+          f.startsWith(`${cfg}.pre-rotation-`) ||
+          f.startsWith(`${cfg}.rotation-next-`) ||
+          f.startsWith("pending-rotation.json.clobbered-") ||
+          ((f.startsWith(`${cfg}.`) || f.startsWith("pending-rotation.json.")) &&
+            f.endsWith(".tmp")),
+      )
       .sort()
       .reverse();
   } catch {
@@ -203,11 +233,82 @@ export class ConfigDamagedError extends Error {
 }
 
 /**
+ * The identity in `config.json` changed on disk after this command read it —
+ * another `motebit` process (`rotate`, `restore`), `create-motebit`, or the
+ * desktop app committed a new key or identity meanwhile. Writing this
+ * command's copy back would revert that commit and destroy the key it wrote.
+ * Nothing was changed; re-run the command.
+ */
+export class ConfigIdentityChangedError extends Error {
+  constructor(readonly path: string) {
+    super(
+      `the identity in ${path} changed while this command ran (another motebit process, ` +
+        `create-motebit, or the desktop app committed a new key or identity). Nothing was changed — ` +
+        `re-run the command so it works from the current identity.`,
+    );
+    this.name = "ConfigIdentityChangedError";
+  }
+}
+
+/**
+ * The fields of `config.json` that ARE the identity: the key (encrypted or
+ * legacy plaintext), its public half, the id and device it is bound to, and
+ * the embedded signed identity file. A write that changes any of them is an
+ * identity change and must say so (`saveFullConfig`'s `identityChange`); a
+ * write that does not is never allowed to change them — not even by writing
+ * back a stale copy.
+ */
+const IDENTITY_FIELDS = [
+  "motebit_id",
+  "device_id",
+  "device_public_key",
+  "cli_encrypted_key",
+  "cli_private_key",
+  "_identity_file",
+] as const;
+
+/**
+ * The identity fields as this process last READ them from disk, carried on
+ * the config object itself (an enumerable symbol: object spread copies it,
+ * `JSON.stringify` never writes it). It is the compare half of
+ * `saveFullConfig`'s compare-and-swap.
+ */
+const IDENTITY_BASELINE: unique symbol = Symbol("motebit.config.identityBaseline");
+
+type Baselined = FullConfig & { [IDENTITY_BASELINE]?: string };
+
+/** A canonical fingerprint of a config's identity fields (absent ≡ empty). Exported for commands that must compare two reads. */
+export function identityFingerprint(config: FullConfig): string {
+  const c = config as Record<string, unknown>;
+  return JSON.stringify(
+    IDENTITY_FIELDS.map((f) => {
+      const v = c[f];
+      return v === undefined || v === null || v === "" ? null : v;
+    }),
+  );
+}
+
+/** Does `from` hold key or binding material that writing `to` would lose? */
+function losesIdentityMaterial(from: FullConfig, to: FullConfig): boolean {
+  const f = from as Record<string, unknown>;
+  const t = to as Record<string, unknown>;
+  for (const field of ["cli_encrypted_key", "cli_private_key", "_identity_file"] as const) {
+    const v = f[field];
+    if (v === undefined || v === null || v === "") continue;
+    if (JSON.stringify(v) !== JSON.stringify(t[field])) return true;
+  }
+  return false;
+}
+
+/**
  * Read the config under the three-way split every config reader obeys:
- * ABSENT (ENOENT) is a first run and reads as `{}`; anything else that is
- * unreadable, unparseable, or valid JSON that is not an object is DAMAGE and
- * throws `ConfigDamagedError` with the file untouched. Nothing but absence is
- * ever answered "empty".
+ * ABSENT (ENOENT of the name itself) is a first run and reads as `{}`;
+ * anything else that is unreadable, unparseable, valid JSON that is not an
+ * object, or a symlink whose target is missing is DAMAGE and throws
+ * `ConfigDamagedError` with the file's bytes untouched. Nothing but absence
+ * is ever answered "empty". The file is narrowed to owner-only on EVERY read
+ * that finds it — before any damage is reported, since damaged bytes are
+ * still key bytes.
  */
 function readConfigStrict(): FullConfig {
   let raw: string;
@@ -215,9 +316,18 @@ function readConfigStrict(): FullConfig {
     raw = fs.readFileSync(CONFIG_PATH, "utf-8");
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") return {};
-    throw new ConfigDamagedError(CONFIG_PATH, code ?? "unreadable", err);
+    if (code === "ENOENT" && isTrulyAbsent(CONFIG_PATH)) return {};
+    narrowOnLoad(CONFIG_PATH);
+    throw new ConfigDamagedError(
+      CONFIG_PATH,
+      code === "ENOENT" ? "a symlink whose target is missing" : (code ?? "unreadable"),
+      err,
+    );
   }
+  // A config written before owner-only was the rule is world-readable, and
+  // most commands only READ it — tightening on the next save alone would
+  // leave read-only users exposed indefinitely.
+  narrowOnLoad(CONFIG_PATH);
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -230,17 +340,13 @@ function readConfigStrict(): FullConfig {
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new ConfigDamagedError(CONFIG_PATH, "not a JSON object");
   }
-  return parsed;
+  const config = parsed as Baselined;
+  config[IDENTITY_BASELINE] = identityFingerprint(config);
+  return config;
 }
 
 export function loadFullConfig(): FullConfig {
   const config = readConfigStrict();
-  // A config written before owner-only was the rule is world-readable, and
-  // most commands only READ it — tightening on the next save alone would
-  // leave read-only users exposed indefinitely. Narrowing a mode is
-  // idempotent and loses nothing; it is best effort, so a failed chmod never
-  // refuses a read.
-  tightenToOwnerOnly(CONFIG_PATH);
   // Governance: validate the persisted blob. Drop invalid shapes — runtime
   // construction falls back to DEFAULT_GOVERNANCE_CONFIG when absent. A bad
   // governance block is not damage: it is a field we know how to ignore.
@@ -251,26 +357,92 @@ export function loadFullConfig(): FullConfig {
 }
 
 /**
- * Replace the config atomically and owner-only — and never over damage.
+ * How a save that CHANGES the identity fields treats what it replaces.
  *
- * If the file on disk is damaged (see `readConfigStrict`), its bytes are
- * first preserved as `CONFIG_BACKUP_PREFIX<time>`; if they cannot be
- * preserved, the save refuses and nothing changes. A caller that loads first
- * has already been refused by `loadFullConfig`; this is what makes the rule
- * hold for a caller that builds a config without a readable one (restore)
- * and for any writer added later. Returns the backup's path when one was made.
+ *  - `"preserve-replaced"` — the default for every identity change: if the
+ *    config on disk holds key or binding material the new one does not
+ *    carry (`cli_encrypted_key`, `cli_private_key`, `_identity_file`), its
+ *    bytes are kept as `config.json.clobbered-<time>` first, or the save
+ *    refuses.
+ *  - `"retire-relay-accepted"` — a key rotation whose succession the relay
+ *    has RECORDED (or an identity with no relay configured): the retired key
+ *    may be erased. The founder's ruling (`docs/proposals/key-file-durability-v1.md`):
+ *    a retired key is erased only then; before relay confirmation it is kept.
+ *  - `"reencrypt-same-key"` — the SAME private key re-encoded (the legacy
+ *    plaintext `cli_private_key` migrated to `cli_encrypted_key`): no key is
+ *    replaced, and keeping the plaintext would defeat the migration.
  */
-export function saveFullConfig(config: FullConfig): string | null {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  let preservedAs: string | null = null;
-  try {
-    readConfigStrict();
-  } catch (err) {
-    if (!(err instanceof ConfigDamagedError)) throw err;
-    preservedAs = preserveAside(CONFIG_PATH, CONFIG_BACKUP_INFIX);
-  }
-  writeFileAtomic(CONFIG_PATH, JSON.stringify(config, null, 2), 0o600);
-  return preservedAs;
+export type IdentityChange = "preserve-replaced" | "retire-relay-accepted" | "reencrypt-same-key";
+
+/**
+ * Replace the config atomically and owner-only — never over damage, and
+ * never over an identity this caller did not read.
+ *
+ * Under the config lock (`config.json.lock`, shared with create-motebit):
+ *
+ *  1. If the file on disk is damaged, its bytes are first preserved as
+ *     `CONFIG_BACKUP_PREFIX<time>`, or the save refuses.
+ *  2. A save that does NOT declare `identityChange` never changes the
+ *     identity fields. If another process changed them since this config
+ *     was read (a `motebit rotate` while a REPL was open), the on-disk
+ *     identity is kept and only this caller's other fields are written — a
+ *     `/model` or `/mcp add` can never revert a rotation. A save that would
+ *     change them without declaring it throws.
+ *  3. A save that DOES declare an identity change is refused
+ *     (`ConfigIdentityChangedError`) if the identity on disk is no longer
+ *     the one this config was read with — the caller decided on a state that
+ *     no longer exists. Replaced key/binding material is kept first unless
+ *     the change is `"retire-relay-accepted"`.
+ *
+ * Returns the path of a kept copy when one was made.
+ */
+export function saveFullConfig(
+  config: FullConfig,
+  opts: { identityChange?: IdentityChange } = {},
+): string | null {
+  mkdirOwnerOnly(CONFIG_DIR);
+  return withFileLock(CONFIG_PATH, () => {
+    const write = config as Baselined;
+    const baseline = write[IDENTITY_BASELINE];
+    let preservedAs: string | null = null;
+    let onDisk: FullConfig | null;
+    try {
+      // Absent (deleted since it was read): nothing on disk to protect or
+      // revert — the write lands as given, as it always has.
+      onDisk = isTrulyAbsent(CONFIG_PATH) ? null : readConfigStrict();
+    } catch (err) {
+      if (!(err instanceof ConfigDamagedError)) throw err;
+      preservedAs = preserveAside(CONFIG_PATH, CONFIG_BACKUP_INFIX);
+      onDisk = null;
+    }
+    if (onDisk != null && identityFingerprint(onDisk) !== identityFingerprint(write)) {
+      const diskPrint = identityFingerprint(onDisk);
+      const untouched = baseline !== undefined && identityFingerprint(write) === baseline;
+      if (opts.identityChange === undefined && untouched) {
+        // The caller never touched the identity; the disk moved under it.
+        // The disk's identity wins.
+        const w = write as Record<string, unknown>;
+        const d = onDisk as Record<string, unknown>;
+        for (const f of IDENTITY_FIELDS) {
+          if (d[f] === undefined) delete w[f];
+          else w[f] = d[f];
+        }
+      } else {
+        // An identity change — declared, or (for a config built without a
+        // read) implied. Decided on a state that must still be the state.
+        if (baseline !== undefined && baseline !== diskPrint) {
+          throw new ConfigIdentityChangedError(CONFIG_PATH);
+        }
+        const mode = opts.identityChange ?? "preserve-replaced";
+        if (mode === "preserve-replaced" && losesIdentityMaterial(onDisk, write)) {
+          preservedAs = preserveAside(CONFIG_PATH, CONFIG_BACKUP_INFIX);
+        }
+      }
+    }
+    writeFileAtomic(CONFIG_PATH, JSON.stringify(write, null, 2), 0o600);
+    write[IDENTITY_BASELINE] = identityFingerprint(write);
+    return preservedAs;
+  });
 }
 
 /** Persist newly pinned motebit public keys from connected adapters back to config. */

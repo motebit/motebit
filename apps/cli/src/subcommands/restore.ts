@@ -52,7 +52,7 @@ import {
 } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
 import {
-  CONFIG_BACKUP_INFIX,
+  identityFingerprint,
   CONFIG_BACKUP_PREFIX,
   CONFIG_PATH,
   ConfigDamagedError,
@@ -60,7 +60,7 @@ import {
   saveFullConfig,
   type FullConfig,
 } from "../config.js";
-import { preserveAside } from "../durable-file.js";
+
 import { encryptPrivateKey, promptPassphrase } from "../identity.js";
 import {
   hasPendingRotation,
@@ -353,31 +353,28 @@ export async function handleRestore(config: CliConfig): Promise<void> {
   }
 
   const encrypted = await encryptPrivateKey(seedHex, pass1);
-  // Re-read, damage-tolerant like the plan's read above: the file may have
-  // been damaged (or repaired) while the user typed.
-  const { config: next } = loadConfigForRestore();
+  // Re-read, damage-tolerant like the plan's read above. The plan was decided
+  // on the state read THEN; if the config changed while the user typed —
+  // damaged, repaired, or given another identity or key by another process
+  // (a `motebit rotate`, the desktop) — that decision no longer applies, and
+  // committing it could write a passphrase reset with no `motebit_id` (which
+  // the next launch would mint over) or replace a key nobody decided to
+  // replace. Refuse; nothing has changed yet.
+  const { config: next, damaged: damagedNow } = loadConfigForRestore();
+  const sameState =
+    (damaged == null) === (damagedNow == null) &&
+    (damaged != null || identityFingerprint(full) === identityFingerprint(next));
+  if (!sameState) {
+    console.error(
+      `  ${CONFIG_PATH} changed while the restore was in progress. Nothing changed — run \`motebit restore\` again.`,
+    );
+    process.exit(1);
+  }
 
   // ── Commit. Nothing below destroys a key. ──
-  // 1. A readable config whose key is about to be REPLACED (a replace, or a
-  //    "fresh install" over a config that has a key but no id) is kept first,
-  //    whatever its state — the identity being replaced may have no other
-  //    copy of its key. (A passphrase reset keeps the same key; a damaged
-  //    config is kept by `saveFullConfig` itself.)
-  if (plan.kind !== "passphrase_reset" && holdsIdentityKey(next)) {
-    let kept: string;
-    try {
-      kept = preserveAside(CONFIG_PATH, CONFIG_BACKUP_INFIX);
-    } catch (err) {
-      console.error(
-        `  The current config could not be kept before replacing it: ${err instanceof Error ? err.message : String(err)}. Nothing changed.`,
-      );
-      process.exit(1);
-    }
-    console.log(dim(`  The replaced identity's config (and key) was kept as ${kept}.`));
-  }
-  // 2. A write-ahead that must not stay active is set aside, never deleted.
+  // 1. A write-ahead that must not stay active is set aside, never deleted.
   if (setAsideAtCommit && hasPendingRotation()) {
-    let kept: string;
+    let kept: string | null;
     try {
       kept = setAsidePendingRotation();
     } catch (err) {
@@ -403,11 +400,31 @@ export async function handleRestore(config: CliConfig): Promise<void> {
   }
   // They demonstrably HOLD the seed — that is what "backed up" means.
   next.seed_backed_up_at = Date.now();
-  // `saveFullConfig` preserves a damaged file before replacing it, or
-  // refuses — it never writes over bytes it has not kept.
-  const preservedAs = saveFullConfig(next);
+  // 2. The config. `saveFullConfig` keeps whatever it replaces: a damaged
+  //    file byte for byte, and — this being a declared identity change — any
+  //    key or signed identity file the new config does not carry, on EVERY
+  //    plan. That includes a passphrase reset: `planRestore` matches on
+  //    `device_public_key`, but `cli_encrypted_key` / `cli_private_key` may
+  //    hold a DIFFERENT key (a config shared with the desktop, or a
+  //    half-written one), and it is kept rather than trusted to be the
+  //    seed's. It refuses if the identity changed since the re-read above.
+  let preservedAs: string | null;
+  try {
+    preservedAs = saveFullConfig(next, { identityChange: "preserve-replaced" });
+  } catch (err) {
+    console.error(
+      `  The config could not be written without losing what it holds: ${err instanceof Error ? err.message : String(err)}. The config was not changed.`,
+    );
+    process.exit(1);
+  }
   if (preservedAs != null) {
-    console.log(dim(`  The unreadable config was kept as ${preservedAs}.`));
+    console.log(
+      dim(
+        damaged != null
+          ? `  The unreadable config was kept as ${preservedAs}.`
+          : `  The replaced config (and the key it held) was kept as ${preservedAs}.`,
+      ),
+    );
   }
 
   const wallet = base58Encode(hexToBytes(publicKeyHex));

@@ -62,6 +62,9 @@ function device(mid: string, deviceId: string, a: KeyPair, fetchImpl: typeof fet
       clear: async () => {
         held = null;
       },
+      setAside: async () => {
+        held = null;
+      },
     },
     commit: async (next) => {
       commits++;

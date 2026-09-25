@@ -48,18 +48,41 @@ describe("preserveAside through a symlink", () => {
     expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
   });
 
-  it("MECHANISM: it links the resolved real file, never the name as given", () => {
+  it("MECHANISM: a readable file is kept as a BYTE COPY, never a hard link (a second name for the same inode)", () => {
     const { link, real } = symlinkedConfig("{OLD");
-    preserveAside(link, ".clobbered-");
-    expect(vi.mocked(fs.linkSync)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(fs.linkSync).mock.calls[0]![0]).toBe(fs.realpathSync(real));
+    const kept = preserveAside(link, ".clobbered-");
+    expect(vi.mocked(fs.linkSync)).not.toHaveBeenCalled();
+    expect(fs.statSync(kept).ino).not.toBe(fs.statSync(real).ino);
   });
 
-  it("the copy fallback (no hard links, e.g. across filesystems) keeps old bytes, 0600 from creation", () => {
+  it("X5: an IN-PLACE writer (an older CLI, the write_file tool) rewriting the live file cannot change the kept bytes", () => {
+    // A hard-link "backup" shares the live file's inode: when the live name
+    // survives (create-motebit's pre-rotation copy after a failed step, a
+    // restore that preserved and then exited), any O_TRUNC write through the
+    // live name rewrote the "kept" old key too.
+    const live = path.join(dir, "config.json");
+    fs.writeFileSync(live, "{OLD KEY");
+    const kept = preserveAside(live, ".pre-rotation-");
+    fs.writeFileSync(live, "{SOMETHING ELSE"); // in place, same inode
+    expect(fs.readFileSync(kept, "utf-8")).toBe("{OLD KEY");
+  });
+
+  it("a file this process cannot READ is kept by hard link (it cannot be copied), owner-only", () => {
+    if (process.getuid?.() === 0) return; // root reads everything
+    const live = path.join(dir, "config.json");
+    fs.writeFileSync(live, "{UNREADABLE");
+    fs.chmodSync(live, 0o000);
+    try {
+      const kept = preserveAside(live, ".clobbered-");
+      expect(vi.mocked(fs.linkSync)).toHaveBeenCalledTimes(1);
+      expect(fs.statSync(kept).ino).toBe(fs.statSync(live).ino);
+    } finally {
+      fs.chmodSync(live, 0o600);
+    }
+  });
+
+  it("the copy is 0600 from creation, even under a permissive umask", () => {
     const { link } = symlinkedConfig("{OLD");
-    vi.mocked(fs.linkSync).mockImplementationOnce(() => {
-      throw Object.assign(new Error("EXDEV"), { code: "EXDEV" });
-    });
     const prev = process.umask(0o000); // a copy-then-chmod would be 0666 until the chmod
     let kept: string;
     try {

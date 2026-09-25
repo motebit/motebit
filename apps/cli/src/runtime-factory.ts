@@ -1,6 +1,5 @@
 // --- Provider creation, tool registry, runtime bootstrap ---
 
-import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
@@ -86,6 +85,7 @@ import { dim } from "./colors.js";
 import { createCliLogger } from "./cli-logger.js";
 import type { CliConfig } from "./args.js";
 import { CONFIG_DIR, loadFullConfig } from "./config.js";
+import { mkdirOwnerOnly } from "./durable-file.js";
 import { resolveRelayUrl } from "./subcommands/_helpers.js";
 
 export function getApiKey(
@@ -168,7 +168,7 @@ export function getDbPath(override?: string): string {
   if (override != null && override !== "") return override;
   const envPath = process.env["MOTEBIT_DB_PATH"];
   if (envPath != null && envPath !== "") return envPath;
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  mkdirOwnerOnly(CONFIG_DIR);
   return path.join(CONFIG_DIR, "motebit.db");
 }
 

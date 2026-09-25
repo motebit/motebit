@@ -1,0 +1,20 @@
+---
+"motebit": patch
+---
+
+Key-file durability, build 3 (`docs/proposals/key-file-durability-v1.md`, lane A) — every door onto a file that holds an identity key now follows the same three rules: absence is not damage, key material is never destroyed, writes are atomic and owner-only.
+
+- **No lost update on `config.json`.** A command that read the config before another process committed a new key (a `motebit` REPL open while `motebit rotate` runs elsewhere, `register`, `up`, a passphrase prompt) can no longer write the old key back: a save that does not change the identity keeps the identity on disk, and a save that does change it is refused if the identity changed since it was read. Replaced key or signed-identity material is kept as `config.json.clobbered-<time>`. Saves take an advisory lock, `config.json.lock` (exclusive create, the holder's pid; a dead holder's lock is broken, a live one is waited on for up to 5 s).
+- **Identity bootstrap never mints over a key.** A config that holds a key but no `motebit_id`, a key that will not open under the passphrase, or a key that derives to a public key other than the config's is refused with a message, never replaced by a fresh identity. A first launch writes the key and its identity in one atomic write.
+- **Rotation keeps what the relay has not confirmed.** A rotation write-ahead that belongs to another identity, that a fresh rotation supersedes, or that the relay refused is kept as `pending-rotation.json.clobbered-<time>` instead of being deleted — it may be the only copy of a key the relay accepted. The retired key is erased only when the relay recorded the succession; when the relay holds no key for the identity, it is kept and `motebit rotate` says where.
+- **Restore** keeps a key it replaces on every plan, including a passphrase reset over a config whose encrypted key is not the seed's, and refuses (changing nothing) if the config changed while the passphrases were typed.
+- **Damaged and dangling files.** A key file readable by others is narrowed to `0600` on every load, including a load that reports it damaged. A symlinked key file whose target is missing is damage, never "no file": it is refused, and the link is never replaced.
+- **Preserved copies are byte copies** (`0600`, directory fsync'd), so an older writer rewriting the live file in place cannot change them; a hard link is used only for a file this process cannot read.
+- **`migrate-keyring`**: `--force` keeps the replaced encrypted key; a keyring that holds more than the migrated key (the desktop's rotation write-ahead) is left in place; a symlinked keyring's target is never zeroed; a keyring the desktop already moved into the OS keychain is reported as such.
+- **`init --file … --force`** refuses to write over a key or identity file.
+- **`motebit relay up`**: `~/.motebit/relay/` is created `0700`, and the relay database (which holds the relay's private key, in plaintext unless a passphrase is set) is created `0600` and narrowed, with its journal files, on every start.
+- **`smoke-x402`**: its EVM key files are written atomically `0600`, narrowed on load, and never regenerated over a file that cannot be read or does not hold a key.
+- **`export`** keeps another identity's `motebit.md` (in the export directory or the `~/.motebit` snapshot) as `motebit.md.clobbered-<time>` instead of overwriting it.
+- **`doctor`** lists every kept or stranded key copy (`*.clobbered-*`, `create-motebit rotate`'s `pre-rotation-*` / `rotation-next-*`, stranded `*.tmp`), and fails on a stranded `rotation-next-*`.
+- `~/.motebit` (and a scaffolded agent's `.motebit`) is created `0700`.
+- The `write_file` / `undo_write` tools refuse to write inside `~/.motebit`, `$MOTEBIT_CONFIG_DIR` or any `.motebit` directory; their backups are `0600` in a `0700` directory, and a file that cannot be backed up is not overwritten.

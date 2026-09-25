@@ -602,6 +602,146 @@ describe("create-motebit", () => {
     expect(afterBytes).toBe(beforeBytes);
   });
 
+  // -- key-file durability build 3 (docs/proposals/key-file-durability-v1.md) --
+
+  const A_ROTATION = JSON.stringify({
+    motebit_id: "identity-A",
+    old_public_key: "a1".repeat(32),
+    new_public_key: "a2".repeat(32),
+    record: { note: "succession" },
+    encrypted_new_key: { ciphertext: "KA_PRIME_SECRET", nonce: "n", tag: "t", salt: "s" },
+    written_at: 1,
+  });
+
+  it("item 17: replacing an identity (--yes --force) keeps its in-flight rotation aside, never armed, never deleted", () => {
+    // #759 finding (a): the replaced identity's write-ahead left in place was
+    // deleted by the next `motebit rotate` (step 1c) — possibly the only copy
+    // of a key the relay accepted for it.
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, "config.json"),
+      JSON.stringify({ motebit_id: "identity-A", cli_encrypted_key: { ciphertext: "KA" } }),
+    );
+    writeFileSync(join(configDir, "pending-rotation.json"), A_ROTATION);
+    const { exitCode } = run(["my-project", "--yes", "--force"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pw",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+    expect(exitCode).toBe(0);
+    expect(existsSync(join(configDir, "pending-rotation.json"))).toBe(false);
+    const kept = readdirSync(configDir).filter((f) =>
+      f.startsWith("pending-rotation.json.clobbered-"),
+    );
+    expect(kept).toHaveLength(1);
+    expect(readFileSync(join(configDir, kept[0]!), "utf-8")).toBe(A_ROTATION);
+    expect(statSync(join(configDir, kept[0]!)).mode & 0o777).toBe(0o600);
+  });
+
+  it("item 17: --agent --force keeps the replaced agent's in-flight rotation aside too", () => {
+    const localDir = join(testDir, "my-agent", ".motebit");
+    mkdirSync(localDir, { recursive: true });
+    writeFileSync(
+      join(localDir, "config.json"),
+      JSON.stringify({ motebit_id: "identity-A", cli_encrypted_key: { ciphertext: "KA" } }),
+    );
+    writeFileSync(join(localDir, "pending-rotation.json"), A_ROTATION);
+    const { exitCode } = run(["my-agent", "--agent", "--yes", "--force"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pw",
+    });
+    expect(exitCode).toBe(0);
+    expect(existsSync(join(localDir, "pending-rotation.json"))).toBe(false);
+    const kept = readdirSync(localDir).filter((f) =>
+      f.startsWith("pending-rotation.json.clobbered-"),
+    );
+    expect(kept).toHaveLength(1);
+    expect(readFileSync(join(localDir, kept[0]!), "utf-8")).toBe(A_ROTATION);
+  });
+
+  it("item 20: another identity's motebit.md in the target directory is kept, not overwritten", () => {
+    const projectDir = join(testDir, "my-project");
+    mkdirSync(projectDir, { recursive: true });
+    const other = `---\nspec: motebit/identity@1.0\nmotebit_id: "identity-OTHER"\n---\n`;
+    writeFileSync(join(projectDir, "motebit.md"), other);
+    const { exitCode } = run(["my-project", "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pw",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+    expect(exitCode).toBe(0);
+    const kept = readdirSync(projectDir).filter((f) => f.startsWith("motebit.md.clobbered-"));
+    expect(kept).toHaveLength(1);
+    expect(readFileSync(join(projectDir, kept[0]!), "utf-8")).toBe(other);
+  });
+
+  it("item 4: a damaged 0644 config is narrowed to 0600 by the read that refuses it", () => {
+    mkdirSync(configDir, { recursive: true });
+    const configFile = join(configDir, "config.json");
+    writeFileSync(configFile, "{ torn", { mode: 0o644 });
+    execFileSync("chmod", ["644", configFile]);
+    const { exitCode } = run(["my-project", "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pw",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+    expect(exitCode).not.toBe(0);
+    expect(readFileSync(configFile, "utf-8")).toBe("{ torn");
+    expect(statSync(configFile).mode & 0o777).toBe(0o600);
+  });
+
+  function scaffoldForRotate(subDir: string): string {
+    run([subDir, "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-rotate",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+    return join(testDir, subDir, "motebit.md");
+  }
+  function rotate(identityPath: string, env: Record<string, string> = {}) {
+    return run(["rotate", identityPath, "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-rotate",
+      MOTEBIT_CONFIG_DIR: configDir,
+      MOTEBIT_SYNC_URL: "",
+      ...env,
+    });
+  }
+
+  it("item 18: rotate REFUSES an identity with a relay configured (it never talks to one) and changes nothing", () => {
+    const identityPath = scaffoldForRotate("rotate-relay");
+    const configFile = join(configDir, "config.json");
+    const cfg = JSON.parse(readFileSync(configFile, "utf-8"));
+    cfg.sync_url = "https://relay.example";
+    writeFileSync(configFile, JSON.stringify(cfg));
+    const before = readFileSync(configFile, "utf-8");
+    const beforeId = readFileSync(identityPath, "utf-8");
+    const { stdout, exitCode } = rotate(identityPath);
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("motebit rotate");
+    expect(readFileSync(configFile, "utf-8")).toBe(before);
+    expect(readFileSync(identityPath, "utf-8")).toBe(beforeId);
+  });
+
+  it("item 18: MOTEBIT_SYNC_URL in the environment counts as a relay configured", () => {
+    const identityPath = scaffoldForRotate("rotate-env-relay");
+    const { exitCode } = rotate(identityPath, { MOTEBIT_SYNC_URL: "https://relay.example" });
+    expect(exitCode).toBe(1);
+  });
+
+  it("item 17: rotate REFUSES while a `motebit rotate` is in flight (its key may be the relay's)", () => {
+    const identityPath = scaffoldForRotate("rotate-inflight");
+    writeFileSync(join(configDir, "pending-rotation.json"), A_ROTATION);
+    const before = readFileSync(join(configDir, "config.json"), "utf-8");
+    const { stdout, exitCode } = rotate(identityPath);
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("in flight");
+    expect(readFileSync(join(configDir, "config.json"), "utf-8")).toBe(before);
+    expect(readFileSync(join(configDir, "pending-rotation.json"), "utf-8")).toBe(A_ROTATION);
+  });
+
+  it("item 19: rotate REFUSES while an earlier rotate's new key is stranded in rotation-next-*", () => {
+    const identityPath = scaffoldForRotate("rotate-stranded");
+    writeFileSync(join(configDir, "config.json.rotation-next-2026-01-01T00-00-00-000Z"), "{}");
+    const { stdout, exitCode } = rotate(identityPath);
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("rotation-next");
+  });
+
   // -- verify --
 
   it("handles missing file gracefully", () => {
@@ -692,7 +832,7 @@ describe("create-motebit", () => {
     expect(readFileSync(join(configDir, kept[0]!), "utf-8")).toBe(configBefore);
   });
 
-  it("a successful rotate leaves no key copies behind", () => {
+  it("a successful rotate keeps the retired key (owner-only) and no other copy", () => {
     const subDir = "rotate-clean";
     run([subDir, "--yes"], testDir, {
       MOTEBIT_PASSPHRASE: "test-pass-rotate",
@@ -704,9 +844,11 @@ describe("create-motebit", () => {
       MOTEBIT_CONFIG_DIR: configDir,
     });
     expect(exitCode).toBe(0);
-    expect(
-      readdirSync(configDir).filter((f) => f.startsWith("config.json") && f !== "config.json"),
-    ).toEqual([]);
+    const copies = readdirSync(configDir).filter(
+      (f) => f.startsWith("config.json") && f !== "config.json",
+    );
+    expect(copies).toHaveLength(1);
+    expect(copies[0]).toMatch(/^config\.json\.pre-rotation-/);
   });
 
   it("rotate on missing file fails gracefully", () => {
