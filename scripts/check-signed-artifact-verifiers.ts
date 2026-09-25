@@ -182,6 +182,11 @@ export const REGISTRY: Record<string, Classification> = {
   RelayMetadata: { kind: "verifier", verifier: "verifyRelayMetadata" },
 
   // ── B: verified within a parent artifact's verifier ─────────────────────
+  RosterChainAncestry: {
+    kind: "within",
+    verifier: "resolveRosterKeyChain",
+    note: "a result shape, not an artifact: its keys come only from KeySuccessionRecords that resolveRosterKeyChain verified (verifyKeySuccession, or the pinned guardian); the gate matched the word in its doc comments",
+  },
   AgentSettlementAnchorBatch: {
     kind: "within",
     verifier: "verifyAgentSettlementAnchor",
