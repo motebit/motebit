@@ -488,3 +488,36 @@ export function extractPersonality(full: FullConfig): MotebitPersonalityConfig {
     temperature: full.temperature,
   };
 }
+
+/**
+ * Compare-and-swap for a rotation's commit (key-file durability item 3): the
+ * key a rotation departs from must still be the one on disk. If another
+ * process (a second `motebit rotate`, `restore`, create-motebit, the desktop)
+ * replaced it meanwhile, committing would destroy THAT key — refuse, and the
+ * caller's write-ahead (never cleared on a throw) keeps the new key.
+ * `after` already holding `newPublicKeyHex` is a retry of this commit.
+ */
+export function refuseIfKeyReplacedSince(
+  before: FullConfig,
+  after: FullConfig,
+  newPublicKeyHex: string,
+): void {
+  if (
+    JSON.stringify(after.cli_encrypted_key) !== JSON.stringify(before.cli_encrypted_key) &&
+    after.device_public_key !== newPublicKeyHex
+  ) {
+    throw new Error(
+      "the key in config.json changed while this rotation ran (another motebit process replaced it); nothing local was changed — the new key stays held in the write-ahead",
+    );
+  }
+}
+
+/**
+ * The founder's ruling on a key retired by rotation
+ * (docs/proposals/key-file-durability-v1.md): it is erased ONLY once the
+ * relay has accepted the succession. A relay that holds no key for this
+ * identity ("none") confirmed nothing, so the retired key is kept (0600).
+ */
+export function retiredKeyChange(relay: "recorded" | "already-held" | "none"): IdentityChange {
+  return relay === "none" ? "preserve-replaced" : "retire-relay-accepted";
+}

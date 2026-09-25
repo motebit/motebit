@@ -176,3 +176,17 @@ export function clearPendingRotation(dir: string = CONFIG_DIR): void {
     // Nothing held, or already gone.
   }
 }
+
+/** The write-ahead port `performRotation` (rotation.ts) is handed: this module's functions, bound. */
+export interface PendingRotationPort {
+  load: (motebitId: string, currentPublicKey: string) => PendingRotationRead;
+  /** Whatever write-ahead exists, whoever it belongs to. `null` is absence only. */
+  loadAny: () => PendingRotationRead;
+  save: (pending: PendingRotation) => void;
+  /** DELETE — only for a write-ahead whose key is now the committed key. */
+  clear: () => void;
+  /** Move out of the active slot, bytes kept; throws when they cannot be kept. */
+  setAside: () => unknown;
+  /** For messages that name the file. */
+  path: string;
+}

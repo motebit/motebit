@@ -1,27 +1,25 @@
 /**
- * Key rotation for the CLI — a thin adapter over `@motebit/surface-kit`'s
- * `performKeyRotation`, the ONE state machine of
- * `docs/proposals/key-rotation-client-v1.md` §3 that web, mobile and desktop
- * also run (#709). What is CLI-specific is only plumbing, inverted into
- * ports: the private key is a passphrase-encrypted config entry, the
- * published key is the one `motebit.md` names, the write-ahead is
- * `~/.motebit/pending-rotation.json` holding the new key encrypted under the
- * same passphrase, and commit re-signs the identity file and saves the
- * config. The outcome vocabulary below is the CLI's own and is mapped from
- * the kit's; the terminal prints it.
- *
- * Everything that touches the world is injected, so the activation test
- * drives THIS function against an in-process relay with the relay half
- * applied (`docs/doctrine/composition-preserves-enforcement.md`).
+ * Key rotation for the CLI — a thin adapter over surface-kit's
+ * `performKeyRotation`, the ONE state machine (key-rotation-client-v1 §3)
+ * every surface runs (#709). CLI plumbing only, as ports: the key is a
+ * passphrase-encrypted config entry, the published key is `motebit.md`'s, the
+ * write-ahead is `~/.motebit/pending-rotation.json`. Everything touching the
+ * world is injected, so the activation test drives THIS function against an
+ * in-process relay (composition-preserves-enforcement).
  */
 import * as fs from "node:fs";
 import { verify, rotate as rotateIdentityFile } from "@motebit/identity-file";
 import { performKeyRotation, type HeldRotation, type KeyRotationPorts } from "@motebit/surface-kit";
 import { hexToBytes } from "@motebit/encryption";
-import type { FullConfig, IdentityChange } from "./config.js";
+import {
+  refuseIfKeyReplacedSince,
+  retiredKeyChange,
+  type FullConfig,
+  type IdentityChange,
+} from "./config.js";
 import { currentModeOr, writeFileAtomic } from "./durable-file.js";
 import { decryptPrivateKey, encryptPrivateKey } from "./identity.js";
-import type { PendingRotation, PendingRotationRead } from "./pending-rotation.js";
+import type { PendingRotation, PendingRotationPort } from "./pending-rotation.js";
 
 export interface RotationDeps {
   /** The motebit.md to rotate. Read, verified, rewritten only on commit. */
@@ -32,18 +30,7 @@ export interface RotationDeps {
     config: FullConfig,
     opts: { identityChange: IdentityChange },
   ) => string | null | void;
-  pending: {
-    load: (motebitId: string, currentPublicKey: string) => PendingRotationRead;
-    /** Whatever write-ahead exists, whoever it belongs to. `null` is absence only. */
-    loadAny: () => PendingRotationRead;
-    save: (pending: PendingRotation) => void;
-    /** DELETE — only for a write-ahead whose key is now the committed key. */
-    clear: () => void;
-    /** Move out of the active slot, bytes kept; throws when they cannot be kept. */
-    setAside: () => unknown;
-    /** For messages that name the file. */
-    path: string;
-  };
+  pending: PendingRotationPort;
   passphrase: string;
   reason?: string;
   syncUrl: string;
@@ -167,11 +154,7 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
       },
       clear: () => Promise.resolve(deps.pending.clear()),
       // A throw (bytes could not be kept) becomes a rejection; the kit stops.
-      setAside: () =>
-        new Promise<void>((resolve) => {
-          deps.pending.setAside();
-          resolve();
-        }),
+      setAside: async () => void deps.pending.setAside(),
     },
     commit: async ({ privateKeyHex, publicKeyHex, record, relay }) => {
       // Config (the private key) first, the identity file second; idempotent:
@@ -179,23 +162,10 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
       const encrypted = await encryptPrivateKey(privateKeyHex, deps.passphrase);
       if (encrypted == null) throw new Error("could not encrypt the new key; nothing was changed");
       const next = deps.loadConfig();
-      // The departed-from key must still be on disk; another process replacing
-      // it meanwhile means committing would destroy THAT key — stop (write-ahead stays).
-      if (
-        JSON.stringify(next.cli_encrypted_key) !== JSON.stringify(config.cli_encrypted_key) &&
-        next.device_public_key !== publicKeyHex
-      ) {
-        throw new Error(
-          "the key in config.json changed while this rotation ran (another motebit process replaced it); nothing local was changed — the new key stays held in the write-ahead",
-        );
-      }
+      refuseIfKeyReplacedSince(config, next, publicKeyHex);
       next.cli_encrypted_key = encrypted;
       next.device_public_key = publicKeyHex;
-      // Retired key: erased only once the relay accepted the succession
-      // (docs/proposals/key-file-durability-v1.md); relay "none" ⇒ kept 0600.
-      const kept = deps.saveConfig(next, {
-        identityChange: relay === "none" ? "preserve-replaced" : "retire-relay-accepted",
-      });
+      const kept = deps.saveConfig(next, { identityChange: retiredKeyChange(relay) });
       if (typeof kept === "string") retiredKeyKeptAt = kept;
       const current = fs.readFileSync(deps.identityPath, "utf-8");
       const onFile = await verify(current, { expectedType: "identity" });
