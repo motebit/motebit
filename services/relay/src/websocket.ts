@@ -120,6 +120,12 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
       let authenticated = false;
       // Track whether we're still waiting for an auth frame (connection not yet finalized)
       let awaitingAuthFrame = false;
+      // The one gate for every non-auth frame: set only by finalizeConnection,
+      // i.e. after the token verified (or when no auth is configured). While a
+      // query-param token is still being verified, `authenticated` and
+      // `awaitingAuthFrame` are both false and onMessage keeps running — so no
+      // flag describing *how* auth is proceeding may stand in for "registered".
+      let registered = false;
 
       /**
        * Validate a bearer token (shared by query-param and post-connect auth frame paths).
@@ -184,6 +190,10 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
 
       /** Finalize a connection: register in connections map, recover pending tasks. */
       function finalizeConnection(ws: WSContext): void {
+        // Idempotent: a query-param token and an auth frame can both finish
+        // verifying for one socket; it is registered once.
+        if (registered) return;
+        registered = true;
         // Parse device capabilities from URL query param
         const capsParam = url.searchParams.get("capabilities");
         const capabilities =
@@ -300,8 +310,9 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
               return;
             }
 
-            // Reject all non-auth messages if still waiting for auth frame
-            if (awaitingAuthFrame) {
+            // Reject every non-auth message until the connection is registered —
+            // including while a query-param token is still being verified.
+            if (!registered) {
               ws.send(
                 JSON.stringify({
                   type: "error",
