@@ -1151,6 +1151,14 @@ export interface ReputationCredentialSubject {
 }
 
 // @public
+export function resolveRosterKeyChain(input: {
+    motebitId: string;
+    held: string;
+    records: readonly unknown[];
+    guardianKey?: string;
+}): Promise<RosterKeyChainResult>;
+
+// @public
 export function resolveTreeHashVersion(raw: string | undefined): MerkleTreeVersion | null;
 
 // @public
@@ -1193,6 +1201,101 @@ export { RevocationFreshness }
 export { RevocationStatus }
 
 export { RevocationVerdict }
+
+// @public
+export type RosterChainAncestry =
+/**
+* `chain[0]` binds to a sovereign-shaped `motebitId`
+* (`verifySovereignBinding`): the genesis key. It ends the walk (N10);
+* any verified predecessor of it is listed in `predecessors`,
+* never walked.
+*/
+    {
+    kind: "rooted";
+    key: string;
+    predecessors: string[];
+}
+/**
+* No verified predecessor of `chain[0]`, and it does not bind to the
+* id (a legacy id, or a sovereign id whose older links this client
+* cannot see — see `RosterKeyChainOk.sovereign_id`).
+*/
+| {
+    kind: "unrooted";
+    key: string;
+}
+/**
+* Two or more verified predecessors of `chain[0]`, which is not
+* `held`. Each carries `key`'s own new-key signature: the holder of
+* `key` signed two histories leading to it. Stopped here, not refused:
+* the history below cannot change the active set.
+*/
+| {
+    kind: "forked_below";
+    key: string;
+    predecessors: string[];
+}
+/**
+* A guardian-recovery predecessor of `chain[0]` whose new-key
+* signature verifies but whose guardian signature this client cannot
+* check (no pinned guardian key), alone or beside a verified
+* predecessor. `predecessors` lists the old keys of those records.
+*/
+| {
+    kind: "recovery_limited";
+    key: string;
+    predecessors: string[];
+};
+
+// @public
+export interface RosterChainBranch {
+    at: string;
+    guardian_verified: boolean;
+    record: KeySuccessionRecord;
+    to: string;
+}
+
+// @public (undocumented)
+export interface RosterKeyChainOk {
+    // (undocumented)
+    ancestry: RosterChainAncestry;
+    branches: RosterChainBranch[];
+    chain: string[];
+    head: string;
+    links: KeySuccessionRecord[];
+    // (undocumented)
+    ok: true;
+    sovereign_id: boolean;
+    suppress_universal_claims: boolean;
+}
+
+// @public (undocumented)
+export type RosterKeyChainRefusal = {
+    ok: false;
+    reason: "duplicate_key";
+    key: string;
+    evidence: KeySuccessionRecord[];
+    detail: string;
+} | {
+    ok: false;
+    reason: "fork_at_held";
+    key: string;
+    evidence: KeySuccessionRecord[];
+    detail: string;
+} | {
+    ok: false;
+    reason: "held_key_superseded";
+    key: string;
+    evidence: KeySuccessionRecord[];
+    detail: string;
+} | {
+    ok: false;
+    reason: "malformed_input";
+    detail: string;
+};
+
+// @public (undocumented)
+export type RosterKeyChainResult = RosterKeyChainOk | RosterKeyChainRefusal;
 
 // @public
 export const ROUTING_TRANSCRIPT_SPEC_MIRROR: "motebit/routing-transcript@1.0";

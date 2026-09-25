@@ -191,6 +191,27 @@ export {
   // sovereign commitment to this seed's key, or a legacy mint?) without
   // reaching into the Layer-0 floor (check-app-primitives).
   deriveSovereignMotebitId,
+  // The machine roster (spec/machine-roster-v1.md): the signers, the
+  // entry ids, the one reduction, and the key chain a consumer reduces
+  // under. Re-exported so surface-kit's roster controller (part C, C2)
+  // consumes them through its existing layer-1 edge rather than a new
+  // direct `@motebit/crypto` one.
+  signHostEnrollment,
+  signHostRetirement,
+  hostEnrollmentId,
+  hostRetirementId,
+  verifyHostRoster,
+  resolveRosterKeyChain,
+  type HostRosterResult,
+  type HostRosterVerdict,
+  type HostRosterMachine,
+  type HostRosterEntry,
+  type HostRosterRejection,
+  type RosterKeyChainResult,
+  type RosterKeyChainOk,
+  type RosterKeyChainRefusal,
+  type RosterChainAncestry,
+  type RosterChainBranch,
 } from "@motebit/crypto";
 
 // ── Re-export credential signing from @motebit/crypto ───────────────
