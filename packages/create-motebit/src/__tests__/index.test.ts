@@ -28,12 +28,15 @@ function run(
   args: string[],
   cwd?: string,
   env?: Record<string, string>,
+  stdin?: string,
 ): { stdout: string; stderr: string; exitCode: number } {
   try {
     const stdout = execFileSync("node", [BIN, ...args], {
       encoding: "utf-8",
       cwd,
       env: { ...process.env, NO_COLOR: "1", ...env },
+      ...(stdin !== undefined ? { input: stdin } : {}),
+      timeout: 60_000,
     });
     return { stdout, stderr: "", exitCode: 0 };
   } catch (err: unknown) {
@@ -529,6 +532,48 @@ describe("create-motebit", () => {
     expect(statSync(agentConfig).mode & 0o777).toBe(0o600);
   });
 
+  it("interactive --agent refuses to clobber an existing local agent identity too", () => {
+    // The gate once ran only under --yes: an interactive run with an agent
+    // key already in <dir>/.motebit/ (and no package.json) replaced it silently.
+    const agentDir = join(testDir, "my-agent");
+    mkdirSync(join(agentDir, ".motebit"), { recursive: true });
+    const localConfigFile = join(agentDir, ".motebit", "config.json");
+    writeFileSync(
+      localConfigFile,
+      JSON.stringify({ motebit_id: "m-agent", cli_encrypted_key: { ciphertext: "OLD" } }),
+    );
+    const beforeBytes = readFileSync(localConfigFile, "utf-8");
+
+    // Answers for every prompt (name, description), passphrase from env.
+    const { stdout, exitCode } = run(
+      ["my-agent", "--agent"],
+      testDir,
+      { MOTEBIT_PASSPHRASE: "test-pw" },
+      "\n\n\n\n",
+    );
+
+    expect(exitCode).not.toBe(0);
+    expect(stdout).toContain("existing motebit agent identity");
+    expect(readFileSync(localConfigFile, "utf-8")).toBe(beforeBytes);
+  });
+
+  it("--agent --force keeps the replaced agent key as config.json.clobbered-*", () => {
+    const agentDir = join(testDir, "my-agent");
+    const localDir = join(agentDir, ".motebit");
+    mkdirSync(localDir, { recursive: true });
+    const old = JSON.stringify({ motebit_id: "m-agent", cli_encrypted_key: { ciphertext: "OLD" } });
+    writeFileSync(join(localDir, "config.json"), old);
+
+    const { exitCode } = run(["my-agent", "--agent", "--yes", "--force"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pw",
+    });
+
+    expect(exitCode).toBe(0);
+    const kept = readdirSync(localDir).filter((f) => f.startsWith("config.json.clobbered-"));
+    expect(kept).toHaveLength(1);
+    expect(readFileSync(join(localDir, kept[0]!), "utf-8")).toBe(old);
+  });
+
   it("--agent --yes refuses to clobber an existing local agent identity", () => {
     // Self-contained agent identity lives at `<agent>/.motebit/config.json`,
     // not the global `~/.motebit/`. The clobber gate guards the local path:
@@ -617,6 +662,51 @@ describe("create-motebit", () => {
     const { stdout: verifyOut, exitCode: verifyExit } = run(["verify", identityPath]);
     expect(verifyExit).toBe(0);
     expect(verifyOut).toContain("valid");
+  });
+
+  it("rotate with an unwritable motebit.md.backup changes neither key file (reviewer's probe)", () => {
+    const subDir = "rotate-probe";
+    run([subDir, "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-rotate",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+    const identityPath = join(testDir, subDir, "motebit.md");
+    const configFile = join(configDir, "config.json");
+    const configBefore = readFileSync(configFile, "utf-8");
+    const identityBefore = readFileSync(identityPath, "utf-8");
+    mkdirSync(`${identityPath}.backup`); // EISDIR on the backup write
+
+    const { stdout, exitCode } = run(["rotate", identityPath, "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-rotate",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+
+    expect(exitCode).not.toBe(0);
+    expect(stdout).toContain("rotation stopped");
+    // The config still holds the key motebit.md names — the old one.
+    expect(readFileSync(configFile, "utf-8")).toBe(configBefore);
+    expect(readFileSync(identityPath, "utf-8")).toBe(identityBefore);
+    // And the old key is additionally kept, owner-only.
+    const kept = readdirSync(configDir).filter((f) => f.startsWith("config.json.pre-rotation-"));
+    expect(kept).toHaveLength(1);
+    expect(readFileSync(join(configDir, kept[0]!), "utf-8")).toBe(configBefore);
+  });
+
+  it("a successful rotate leaves no key copies behind", () => {
+    const subDir = "rotate-clean";
+    run([subDir, "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-rotate",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+    const identityPath = join(testDir, subDir, "motebit.md");
+    const { exitCode } = run(["rotate", identityPath, "--yes"], testDir, {
+      MOTEBIT_PASSPHRASE: "test-pass-rotate",
+      MOTEBIT_CONFIG_DIR: configDir,
+    });
+    expect(exitCode).toBe(0);
+    expect(
+      readdirSync(configDir).filter((f) => f.startsWith("config.json") && f !== "config.json"),
+    ).toEqual([]);
   });
 
   it("rotate on missing file fails gracefully", () => {

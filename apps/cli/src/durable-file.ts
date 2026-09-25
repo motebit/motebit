@@ -34,7 +34,17 @@ import { randomBytes } from "node:crypto";
  *
  * A reader sees the old file or the new one, never a partial one.
  */
-export function writeFileAtomic(target: string, contents: string, mode: number): void {
+export function writeFileAtomic(requested: string, contents: string, mode: number): void {
+  // A symlinked target (a config kept in a dotfiles repo, say) is replaced
+  // at the file it points to: renaming over the LINK would silently turn it
+  // into a regular file and orphan the real one. A target that does not
+  // exist yet (or a dangling link) is written where it was named.
+  let target = requested;
+  try {
+    target = fs.realpathSync(requested);
+  } catch {
+    /* not there yet — write it where it was named */
+  }
   const dir = path.dirname(target);
   const staged = `${target}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {

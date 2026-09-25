@@ -173,6 +173,16 @@ describe("rule 3 — atomic, owner-only replacement", () => {
     expect(fs.readdirSync(tmpDir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
   });
 
+  it("a symlinked config is replaced at its target — the link survives", () => {
+    const real = path.join(tmpDir, "dotfiles-config.json");
+    fs.writeFileSync(real, JSON.stringify({ motebit_id: "m-1" }));
+    fs.symlinkSync(real, mod.CONFIG_PATH);
+    mod.saveFullConfig({ motebit_id: "m-2" });
+    expect(fs.lstatSync(mod.CONFIG_PATH).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(fs.readFileSync(real, "utf-8")).motebit_id).toBe("m-2");
+    expect(mode(real)).toBe(0o600);
+  });
+
   it("a public file keeps a mode its owner narrowed", () => {
     const md = path.join(tmpDir, "motebit.md");
     fs.writeFileSync(md, "old");

@@ -26,7 +26,7 @@ import * as path from "node:path";
 // vocabulary, and the SDK re-exports every protocol type.
 import type { KeySuccessionRecord } from "@motebit/sdk";
 import { CONFIG_DIR, type FullConfig } from "./config.js";
-import { writeFileAtomic } from "./durable-file.js";
+import { preserveAside, writeFileAtomic } from "./durable-file.js";
 
 export interface PendingRotation {
   motebit_id: string;
@@ -63,18 +63,28 @@ export function savePendingRotation(pending: PendingRotation, dir: string = CONF
 }
 
 /**
+ * What a read of the write-ahead can find. `null` is ABSENCE only. A file
+ * that exists but cannot be read, does not parse, or lacks a field is
+ * `"unreadable"` — never `null`: it may be the only copy of a new key the
+ * relay has already accepted, and a caller that took it for "nothing held"
+ * would clear it (the same rule config.json obeys, `config.ts`).
+ */
+export type PendingRotationRead = PendingRotation | null | "unreadable";
+
+/**
  * The held rotation, if it is one THIS identity, from THIS key, could still
  * have in flight. A record departing from a key this machine no longer
  * holds is evidence of a different problem (an older config restored over a
  * newer one), not an instruction — it is reported by the caller and cleared.
+ * `"unreadable"` passes through: whose it is cannot be known.
  */
 export function loadPendingRotation(
   motebitId: string,
   currentPublicKey: string,
   dir: string = CONFIG_DIR,
-): PendingRotation | null {
+): PendingRotationRead {
   const pending = loadAnyPendingRotation(dir);
-  if (pending == null) return null;
+  if (pending == null || pending === "unreadable") return pending;
   if (pending.motebit_id !== motebitId || pending.old_public_key !== currentPublicKey) return null;
   return pending;
 }
@@ -83,26 +93,45 @@ export function loadPendingRotation(
  * Whatever write-ahead exists, whoever it belongs to — for reconciliation
  * (a crash between the two local commit writes leaves the identity file and
  * the config on different keys, and the write-ahead is what bridges them)
- * and for naming a stale one before it is cleared. `null` when there is
- * none or it cannot be read.
+ * and for naming a stale one before it is cleared. `null` only when there is
+ * none; `"unreadable"` when there is one that cannot be used.
  */
-export function loadAnyPendingRotation(dir: string = CONFIG_DIR): PendingRotation | null {
+export function loadAnyPendingRotation(dir: string = CONFIG_DIR): PendingRotationRead {
   let raw: string;
   try {
     raw = fs.readFileSync(pendingRotationPath(dir), "utf-8");
-  } catch {
-    return null;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ENOENT" ? null : "unreadable";
   }
+  let pending: unknown;
   try {
-    const pending = JSON.parse(raw) as Partial<PendingRotation>;
-    if (typeof pending.motebit_id !== "string" || typeof pending.old_public_key !== "string")
-      return null;
-    if (typeof pending.new_public_key !== "string" || pending.record == null) return null;
-    if (pending.encrypted_new_key == null) return null;
-    return pending as PendingRotation;
+    pending = JSON.parse(raw);
   } catch {
-    return null;
+    return "unreadable";
   }
+  if (pending === null || typeof pending !== "object" || Array.isArray(pending)) {
+    return "unreadable";
+  }
+  const p = pending as Partial<PendingRotation>;
+  if (typeof p.motebit_id !== "string" || typeof p.old_public_key !== "string") {
+    return "unreadable";
+  }
+  if (typeof p.new_public_key !== "string" || p.record == null) return "unreadable";
+  if (p.encrypted_new_key == null) return "unreadable";
+  return p as PendingRotation;
+}
+
+/**
+ * Move an unreadable write-ahead out of the way WITHOUT destroying it: its
+ * bytes are kept as `pending-rotation.json.clobbered-<time>` (owner-only),
+ * then the original name is freed. Throws — leaving the file where it is —
+ * when the bytes cannot be kept. Returns the backup's path.
+ */
+export function setAsidePendingRotation(dir: string = CONFIG_DIR): string {
+  const file = pendingRotationPath(dir);
+  const kept = preserveAside(file, ".clobbered-");
+  fs.unlinkSync(file);
+  return kept;
 }
 
 /** Whether ANY write-ahead file exists, readable or not. */

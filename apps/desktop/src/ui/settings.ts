@@ -30,6 +30,7 @@ import {
   DEEPGRAM_API_KEY_SLOT,
 } from "./keyring-keys";
 import { ELEVENLABS_VOICES, DEEPGRAM_VOICES } from "@motebit/voice";
+import { mergeSettingsIntoConfig } from "./settings-config";
 
 // === DOM Refs ===
 
@@ -1662,7 +1663,13 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
       if (localServerEndpointValue !== "") {
         configData.local_server_endpoint = localServerEndpointValue;
       }
-      await invoke("write_config", { json: JSON.stringify(configData) });
+      // Merge into what is on disk — never replace it: the same file holds
+      // the identity (and the CLI's only key copy). A read that fails (a
+      // damaged config) throws here and nothing is written.
+      const onDisk = JSON.parse(await invoke<string>("read_config")) as Record<string, unknown>;
+      await invoke("write_config", {
+        json: JSON.stringify(mergeSettingsIntoConfig(onDisk, configData)),
+      });
 
       if (apiKey != null && apiKey !== "") {
         const slot = byokKeyringKey(provider);

@@ -24,15 +24,15 @@ const CONFIG = path.join(tmpDir, "config.json");
 // Prompts in order: seed, new passphrase, confirmation. `onPassphrase` runs at
 // the first passphrase prompt — i.e. between restore's two config reads.
 let onPassphrase: (() => void) | null = null;
+let promptCall = 0; // reset per test, so each run starts at the seed prompt
 vi.mock("../identity.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../identity.js")>();
-  let calls = 0;
   return {
     ...actual,
     promptPassphrase: vi.fn(async () => {
-      calls++;
-      if (calls % 3 === 1) return SEED;
-      if (calls % 3 === 2) onPassphrase?.();
+      promptCall++;
+      if (promptCall === 1) return SEED;
+      if (promptCall === 2) onPassphrase?.();
       return PASS;
     }),
   };
@@ -54,6 +54,7 @@ beforeAll(async () => {
 beforeEach(() => {
   for (const f of fs.readdirSync(tmpDir)) fs.rmSync(path.join(tmpDir, f), { recursive: true });
   onPassphrase = null;
+  promptCall = 0;
   vi.spyOn(process, "exit").mockImplementation((code?: string | number | null) => {
     throw new Exit(typeof code === "number" ? code : undefined);
   });
@@ -123,6 +124,34 @@ describe("restore over a damaged config", () => {
     expect(await runRestore()).toBe(1);
     expect(fs.readFileSync(CONFIG, "utf-8")).toBe("{");
     expect(backups()).toEqual([]);
+  });
+
+  it("an unreadable rotation write-ahead is kept aside, never deleted, on a fresh install", async () => {
+    // It may be the only copy of a rotated key the relay already accepted.
+    const pending = path.join(tmpDir, "pending-rotation.json");
+    fs.writeFileSync(pending, '{ "encrypted_new_key": { "ciph');
+    expect(await runRestore()).toBe(0);
+    expectRestoredConfig();
+    const kept = fs
+      .readdirSync(tmpDir)
+      .filter((f) => f.startsWith("pending-rotation.json.clobbered-"));
+    expect(kept).toHaveLength(1);
+    expect(fs.readFileSync(path.join(tmpDir, kept[0]!), "utf-8")).toBe(
+      '{ "encrypted_new_key": { "ciph',
+    );
+  });
+
+  it("an unreadable rotation write-ahead blocks a passphrase reset and is left untouched", async () => {
+    // First restore installs the seed's identity; the second is then a
+    // passphrase reset, where the write-ahead could be THIS identity's.
+    expect(await runRestore()).toBe(0);
+    const before = fs.readFileSync(CONFIG, "utf-8");
+    const pending = path.join(tmpDir, "pending-rotation.json");
+    fs.writeFileSync(pending, "{torn");
+    promptCall = 0;
+    expect(await runRestore()).toBe(1);
+    expect(fs.readFileSync(pending, "utf-8")).toBe("{torn");
+    expect(fs.readFileSync(CONFIG, "utf-8")).toBe(before);
   });
 
   it("every config read in restore goes through the damage-tolerant loader", () => {

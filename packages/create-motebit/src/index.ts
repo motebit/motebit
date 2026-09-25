@@ -13,6 +13,7 @@ import {
   CONFIG_BACKUP_INFIX,
   ConfigDamagedError,
   currentModeOr,
+  preserveAside,
   readConfigFile,
   writeConfigFile,
   writeFileAtomic,
@@ -22,6 +23,7 @@ import { homedir } from "node:os";
 import { generateIdentity, regenerateIdentityFile, decryptPrivateKey } from "./generate.js";
 import type { TrustMode, EncryptedKey, ServiceIdentityOptions } from "./generate.js";
 import { rotateKey } from "./rotate.js";
+import { commitRotation, RotationCommitError } from "./rotate-commit.js";
 import { createRL, input, password, select } from "./prompts.js";
 
 // ---------------------------------------------------------------------------
@@ -660,15 +662,16 @@ async function agentScaffold(
   let agentName: string;
   let agentDescription: string;
 
-  if (nonInteractive) {
-    // Local-config-clobber gate. Agent identities live in `<agent>/.motebit/`
-    // (self-contained, see writeAgentConfig). The package.json check above
-    // already catches "scaffolding into an existing project"; this catch
-    // covers the partial-state case where `.motebit/config.json` exists in
-    // an otherwise empty directory. Replaces the previous global ~/.motebit
-    // clobber gate, which became inert once agents stopped writing globally.
-    const localConfigPath = join(absDir, ".motebit", "config.json");
-    if (!force && existsSync(localConfigPath)) {
+  // Local-config-clobber gate — on BOTH paths. Agent identities live in
+  // `<agent>/.motebit/` (self-contained, see writeAgentConfig), and that
+  // config holds the agent's only key copy. The package.json check above
+  // catches "scaffolding into an existing project"; this catches the
+  // partial-state case where `.motebit/config.json` exists in an otherwise
+  // empty directory. It once ran only under --yes, so an interactive run
+  // replaced a healthy agent key without a word.
+  const localConfigPath = join(absDir, ".motebit", "config.json");
+  if (existsSync(localConfigPath)) {
+    if (!force) {
       console.log();
       console.log(
         `  ${red("!")} An existing motebit agent identity is present at ${dim(localConfigPath)}`,
@@ -677,9 +680,17 @@ async function agentScaffold(
       console.log(`    Refusing to overwrite without explicit consent.`);
       console.log();
       console.log(`    To intentionally replace it: ${dim("npx create-motebit ... --force")}`);
+      console.log(`    ${dim("(the existing config is kept as config.json.clobbered-<time>)")}`);
       console.log();
       process.exit(1);
     }
+    // Consent given — still never destroy a key: the replaced config's
+    // bytes are kept before anything is written.
+    const kept = preserveAside(localConfigPath, CONFIG_BACKUP_INFIX);
+    console.log(`  ${yellow("!")} Replacing the existing agent identity; kept as ${dim(kept)}.`);
+  }
+
+  if (nonInteractive) {
     passphrase = process.env["MOTEBIT_PASSPHRASE"] ?? "";
     if (!passphrase) {
       console.log(`  ${red("!")} --yes requires MOTEBIT_PASSPHRASE environment variable.`);
@@ -1056,6 +1067,12 @@ async function guidedScaffold(
 
     // Save identity to config (merge with existing)
     const config = loadConfigForScaffold(force);
+    if (config.cli_encrypted_key != null || config.cli_private_key != null) {
+      // Replacing an identity is consented to (--force, or the interactive
+      // "Overwrite?" prompt) — destroying its key is not: keep the bytes.
+      const kept = preserveAside(configPath(), CONFIG_BACKUP_INFIX);
+      console.log(`  ${yellow("!")} The replaced identity's config was kept as ${dim(kept)}.`);
+    }
     config.name = dirName;
     config.motebit_id = result.motebitId;
     config.device_id = result.deviceId;
@@ -1315,26 +1332,50 @@ async function rotateCmd(
     return;
   }
 
-  // 5. Update config FIRST — it holds the new private key. The reverse order
-  // had a crash window in which the identity file named a key whose private
-  // half existed nowhere. This order's window leaves the file on the old key
-  // while the new private key is held — the precondition for any repair, and
-  // the same order the CLI's rotation commits in (`apps/cli/src/rotation.ts`).
-  config.device_public_key = result.newPublicKeyHex;
-  config.cli_encrypted_key = result.newEncryptedKey;
-  saveConfig(config);
-
-  // 6. Backup then replace the identity file, atomically.
-  const backupPath = `${filePath}.backup`;
-  writeFileSync(backupPath, content, "utf-8");
-  writeFileAtomic(filePath, result.identityFileContent, currentModeOr(filePath, 0o644));
-
-  // 7. Verify the updated file
+  // 5. Verify the rotated file BEFORE anything on disk changes.
   const reVerify = await verify(result.identityFileContent, { expectedType: "identity" });
   if (!reVerify.valid) {
     const errorMessage = reVerify.errors?.[0]?.message ?? "unknown error";
-    console.log(`  ${red("!")} Post-rotation verification failed: ${errorMessage}`);
-    console.log(`    The identity file may be corrupted. Restore from: ${backupPath}`);
+    console.log(`  ${red("!")} Rotated identity failed verification: ${errorMessage}`);
+    console.log(`    Nothing was changed.`);
+    console.log();
+    process.exit(1);
+    return;
+  }
+
+  // 6. Commit: both keys are held on disk before any file that names or
+  // holds one is replaced, so no failure point loses either (rotate-commit.ts).
+  const nextConfig: MotebitConfig = {
+    ...config,
+    device_public_key: result.newPublicKeyHex,
+    cli_encrypted_key: result.newEncryptedKey,
+  };
+  let backupPath: string;
+  try {
+    ({ backupPath } = commitRotation({
+      configPath: configPath(),
+      identityPath: filePath,
+      previousIdentity: content,
+      nextIdentity: result.identityFileContent,
+      nextConfig,
+    }));
+  } catch (err) {
+    if (!(err instanceof RotationCommitError)) throw err;
+    console.log(`  ${red("!")} ${err.message}`);
+    if (err.newKeyAt == null) {
+      console.log(`    Nothing was changed; the identity is still on its old key.`);
+    } else if (err.identityNames === "old") {
+      console.log(`    ${filePath} and ${configPath()} are unchanged (old key).`);
+      console.log(`    The new key was never published; its copy can be deleted: ${err.newKeyAt}`);
+      console.log(`    The old key is also kept at ${err.oldKeyAt}.`);
+    } else {
+      console.log(
+        `    ${filePath} now names the NEW key, but ${configPath()} still holds the old one.`,
+      );
+      console.log(`    The new key is held at ${err.newKeyAt} — move it into place:`);
+      console.log(`      ${dim(`mv "${err.newKeyAt}" "${configPath()}"`)}`);
+      console.log(`    The old key is kept at ${err.oldKeyAt}.`);
+    }
     console.log();
     process.exit(1);
     return;

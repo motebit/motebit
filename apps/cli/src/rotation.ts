@@ -21,7 +21,7 @@ import { hexToBytes } from "@motebit/encryption";
 import type { FullConfig } from "./config.js";
 import { currentModeOr, writeFileAtomic } from "./durable-file.js";
 import { decryptPrivateKey, encryptPrivateKey } from "./identity.js";
-import type { PendingRotation } from "./pending-rotation.js";
+import type { PendingRotation, PendingRotationRead } from "./pending-rotation.js";
 
 export interface RotationDeps {
   /** The motebit.md to rotate. Read, verified, rewritten only on commit. */
@@ -29,9 +29,9 @@ export interface RotationDeps {
   loadConfig: () => FullConfig;
   saveConfig: (config: FullConfig) => void;
   pending: {
-    load: (motebitId: string, currentPublicKey: string) => PendingRotation | null;
-    /** Whatever write-ahead exists, whoever it belongs to. */
-    loadAny: () => PendingRotation | null;
+    load: (motebitId: string, currentPublicKey: string) => PendingRotationRead;
+    /** Whatever write-ahead exists, whoever it belongs to. `null` is absence only. */
+    loadAny: () => PendingRotationRead;
     save: (pending: PendingRotation) => void;
     clear: () => void;
     /** For messages that name the file. */
@@ -136,7 +136,10 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
     publishedPublicKeyHex: () => Promise.resolve(identity.identity.public_key),
     writeAhead: {
       load: async () => {
+        // The port contract distinguishes "nothing held" from "something held
+        // that cannot be read"; the kit stops on the latter and never clears it.
         const any = deps.pending.loadAny();
+        if (any === "unreadable") return "unreadable";
         return any == null ? null : toHeld(any);
       },
       save: async (h) => {

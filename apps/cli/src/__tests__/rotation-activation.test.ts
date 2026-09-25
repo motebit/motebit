@@ -218,18 +218,19 @@ describe("S1: the response was lost after the relay committed", () => {
     expect(first.kind).toBe("held");
     // Relay applied it; local did not move; the write-ahead holds B.
     expect(chainLength(f.mid)).toBe(1);
-    const held = loadPendingRotation(f.mid, hex(f.a), dir);
-    expect(held).not.toBeNull();
-    expect(relayKey(f.mid)).toBe(held!.new_public_key);
+    const read = loadPendingRotation(f.mid, hex(f.a), dir);
+    if (read == null || read === "unreadable") throw new Error("expected a readable write-ahead");
+    const held = read;
+    expect(relayKey(f.mid)).toBe(held.new_public_key);
     expect((await localKey(f)).publicKeyHex).toBe(hex(f.a));
 
     posts = 0;
     const second = rotated(await performRotation(deps(f)));
     expect(second.relay).toBe("already-held");
-    expect(second.newPublicKeyHex).toBe(held!.new_public_key);
+    expect(second.newPublicKeyHex).toBe(held.new_public_key);
     expect(posts).toBe(0); // read, never re-signed, never replayed
     expect(chainLength(f.mid)).toBe(1);
-    expect((await localKey(f)).publicKeyHex).toBe(held!.new_public_key);
+    expect((await localKey(f)).publicKeyHex).toBe(held.new_public_key);
     expect(loadPendingRotation(f.mid, hex(f.a), dir)).toBeNull();
   });
 
@@ -252,6 +253,20 @@ describe("S1: the response was lost after the relay committed", () => {
     expect((o as { message: string }).message).toContain("guardian");
     expect(chainLength(f.mid)).toBe(1);
     expect((await localKey(f, "new passphrase")).publicKeyHex).toBe(hex(f.a));
+  });
+
+  it("a write-ahead that cannot be READ stops the rotation and is left exactly where it is", async () => {
+    // Damage is not absence: an unparseable write-ahead may be the only copy
+    // of a key the relay already accepted. Reading it as "nothing held" would
+    // let the kit mint a fresh rotation and clear it.
+    const f = await registered();
+    const torn = '{ "motebit_id": "' + f.mid + '", "encrypted_new_key": { "ciph';
+    writeFileSync(pendingRotationPath(dir), torn);
+    const o = await performRotation(deps(f));
+    expect(o).toMatchObject({ kind: "stopped", state: "held-unopenable" });
+    expect(readFileSync(pendingRotationPath(dir), "utf-8")).toBe(torn);
+    expect(chainLength(f.mid)).toBe(0);
+    expect((await localKey(f)).publicKeyHex).toBe(hex(f.a));
   });
 });
 

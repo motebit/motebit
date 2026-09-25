@@ -30,6 +30,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -100,7 +101,15 @@ export function writeConfigFile(path: string, config: object): string | null {
 }
 
 /** Stage (exclusive create at `mode`, explicit chmod, fsync) → rename → fsync dir; scratch removed on failure. */
-export function writeFileAtomic(target: string, contents: string, mode: number): void {
+export function writeFileAtomic(requested: string, contents: string, mode: number): void {
+  // Replace a symlink's TARGET, not the link (renaming over the link would
+  // turn it into a regular file and orphan the real one).
+  let target = requested;
+  try {
+    target = realpathSync(requested);
+  } catch {
+    /* not there yet — write it where it was named */
+  }
   const staged = `${target}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
     const fd = openSync(staged, "wx", mode);
@@ -150,9 +159,14 @@ function tightenToOwnerOnly(file: string): void {
   }
 }
 
+/** The one timestamp spelling every backup name uses: ISO-8601 with `:` and `.` as `-`. */
+export function backupStamp(now: Date): string {
+  return now.toISOString().replace(/[:.]/g, "-");
+}
+
 /** Keep `target`'s bytes under `${target}${infix}<time>` without reading them (hard link; copy as fallback), or throw. */
 export function preserveAside(target: string, infix: string, now: Date = new Date()): string {
-  const stamp = now.toISOString().replace(/[:.]/g, "-");
+  const stamp = backupStamp(now);
   let lastErr: unknown;
   for (let n = 0; n < 100; n++) {
     const backup = `${target}${infix}${stamp}${n === 0 ? "" : `-${n}`}`;

@@ -520,8 +520,13 @@ fn preserve_aside(path: &std::path::Path) -> Result<std::path::PathBuf, String> 
 }
 
 /// Rule 3. Stage → fsync → rename → fsync dir, owner-only from creation.
-fn write_file_atomic_owner_only(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+fn write_file_atomic_owner_only(requested: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
+    // Replace a symlink's TARGET, not the link: renaming over the link would
+    // turn it into a regular file and orphan the real config. A path that
+    // does not exist yet is written where it was named.
+    let resolved = std::fs::canonicalize(requested).unwrap_or_else(|_| requested.to_path_buf());
+    let path = resolved.as_path();
     let dir = path
         .parent()
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "config path has no parent"))?;
@@ -570,6 +575,43 @@ fn write_file_atomic_owner_only(path: &std::path::Path, contents: &[u8]) -> std:
     Ok(())
 }
 
+/// Fields no desktop write may REMOVE from the shared config. They may change
+/// (a rotation, a restore); they may not vanish. `cli_encrypted_key` is the
+/// CLI's only copy of its identity key (and `cli_private_key` its un-migrated
+/// plaintext predecessor); the ids are the identity itself. A caller that
+/// builds a config from scratch instead of merging (Settings Save once did)
+/// drops them — refused here, so the next such caller cannot.
+const IDENTITY_FIELDS: [&str; 5] = [
+    "motebit_id",
+    "device_id",
+    "device_public_key",
+    "cli_encrypted_key",
+    "cli_private_key",
+];
+
+fn refuse_dropped_identity_fields(existing: &str, next: &str) -> Result<(), String> {
+    let (Ok(serde_json::Value::Object(old)), Ok(serde_json::Value::Object(new))) = (
+        serde_json::from_str::<serde_json::Value>(existing),
+        serde_json::from_str::<serde_json::Value>(next),
+    ) else {
+        // Both were validated as objects by the callers; nothing to compare.
+        return Ok(());
+    };
+    let dropped: Vec<&str> = IDENTITY_FIELDS
+        .iter()
+        .copied()
+        .filter(|k| old.get(*k).is_some_and(|v| !v.is_null()) && new.get(*k).map_or(true, |v| v.is_null()))
+        .collect();
+    if dropped.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Refusing to write config: it would remove {} from the existing file (merge into read_config, never replace it). Nothing was changed.",
+            dropped.join(", ")
+        ))
+    }
+}
+
 /// Rules 2 + 3 for one config file. Returns the backup path when damage was preserved.
 fn write_config_at(path: &std::path::Path, json: &str) -> Result<Option<std::path::PathBuf>, String> {
     // Never persist something the next read would refuse as damage.
@@ -584,7 +626,11 @@ fn write_config_at(path: &std::path::Path, json: &str) -> Result<Option<std::pat
     std::fs::create_dir_all(dir)
         .map_err(|e| format!("Failed to create config directory: {}", e))?;
     let preserved = match read_config_strict(path) {
-        Ok(_) => None,
+        Ok(Some(existing)) => {
+            refuse_dropped_identity_fields(&existing, json)?;
+            None
+        }
+        Ok(None) => None,
         Err(_) => Some(preserve_aside(path)?),
     };
     write_file_atomic_owner_only(path, json.as_bytes())
@@ -1452,6 +1498,44 @@ mod config_file_tests {
         std::fs::write(&path, "{\"motebit_id\":\"m-1\"}").unwrap();
         assert_eq!(write_config_at(&path, "{\"motebit_id\":\"m-2\"}").unwrap(), None);
         assert_eq!(entries(&dir), vec!["config.json".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refuses_a_write_that_would_drop_the_cli_key_or_identity() {
+        // Settings Save once rebuilt the config from scratch, dropping the
+        // CLI's only key copy. The writer now refuses that shape outright.
+        let dir = scratch("drop");
+        let path = dir.join("config.json");
+        let existing = "{\"motebit_id\":\"m-1\",\"device_id\":\"d-1\",\"cli_encrypted_key\":{\"ciphertext\":\"c\"},\"theme\":\"dark\"}";
+        std::fs::write(&path, existing).unwrap();
+        let err = write_config_at(&path, "{\"default_provider\":\"anthropic\"}").unwrap_err();
+        assert!(err.contains("cli_encrypted_key"), "{err}");
+        assert!(err.contains("motebit_id"), "{err}");
+        let err = write_config_at(&path, "{\"motebit_id\":\"m-1\",\"device_id\":\"d-1\",\"cli_encrypted_key\":null}").unwrap_err();
+        assert!(err.contains("cli_encrypted_key"), "{err}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), existing);
+        // A merge that keeps them (and changes other fields) is fine; so is
+        // CHANGING an identity field (rotation, restore).
+        write_config_at(
+            &path,
+            "{\"motebit_id\":\"m-1\",\"device_id\":\"d-2\",\"cli_encrypted_key\":{\"ciphertext\":\"c2\"}}",
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_config_is_written_through_the_link_not_over_it() {
+        let dir = scratch("symlink");
+        let real = dir.join("real-config.json");
+        let link = dir.join("config.json");
+        std::fs::write(&real, "{\"motebit_id\":\"m-1\"}").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        write_config_at(&link, "{\"motebit_id\":\"m-2\"}").unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "{\"motebit_id\":\"m-2\"}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

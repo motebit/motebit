@@ -62,7 +62,9 @@ import { encryptPrivateKey, promptPassphrase } from "../identity.js";
 import {
   clearPendingRotation,
   hasPendingRotation,
+  loadAnyPendingRotation,
   loadPendingRotation,
+  setAsidePendingRotation,
   pendingRotationPath,
 } from "../pending-rotation.js";
 import { bold, dim, error as errorColor, success, warn } from "./../colors.js";
@@ -248,8 +250,37 @@ export async function handleRestore(config: CliConfig): Promise<void> {
   // Scoped to THIS identity and THIS key: a write-ahead for another identity,
   // or from a key this machine no longer holds, is stale and must not block a
   // passphrase change forever — it is cleared, and said.
+  //
+  // An UNREADABLE write-ahead is never cleared: it may be the only copy of a
+  // new key the relay already accepted. Whose it is cannot be known, so on a
+  // passphrase reset it is treated as this identity's (refuse, like any
+  // rotation in flight); on a fresh install or a replace its bytes are kept
+  // as `pending-rotation.json.clobbered-<time>` and the name freed.
   const inFlight =
     plan.kind === "passphrase_reset" ? loadPendingRotation(plan.motebitId, publicKeyHex) : null;
+  if (inFlight === "unreadable") {
+    console.error(
+      `  A key rotation write-ahead is present (${pendingRotationPath()}) but could not be read; it may hold a rotated key.`,
+    );
+    console.error(
+      "  Changing the passphrase could make it unrecoverable. Inspect or move that file aside first. Nothing changed.",
+    );
+    process.exit(1);
+  }
+  if (plan.kind !== "passphrase_reset" && loadAnyPendingRotation() === "unreadable") {
+    let kept: string;
+    try {
+      kept = setAsidePendingRotation();
+    } catch (err) {
+      console.error(
+        `  A key rotation write-ahead (${pendingRotationPath()}) could not be read, and could not be kept aside: ${err instanceof Error ? err.message : String(err)}. Nothing changed.`,
+      );
+      process.exit(1);
+    }
+    console.log(
+      dim(`  Note: an unreadable rotation write-ahead was kept as ${kept}, not deleted.`),
+    );
+  }
   if (inFlight != null) {
     console.error(
       `  A key rotation is in flight (${pendingRotationPath()}); its new key is encrypted under the current passphrase.`,
@@ -259,7 +290,9 @@ export async function handleRestore(config: CliConfig): Promise<void> {
     );
     process.exit(1);
   }
-  if (hasPendingRotation()) {
+  // Only a write-ahead that was READ, and found to belong elsewhere, is cleared.
+  const stale = hasPendingRotation() ? loadAnyPendingRotation() : null;
+  if (stale != null && stale !== "unreadable") {
     console.log(
       dim(
         `  Note: a held rotation (${pendingRotationPath()}) did not belong to this identity and key; cleared.`,
