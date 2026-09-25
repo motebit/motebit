@@ -101,14 +101,34 @@ Authorization now resolves the credential first and binds to it. The path segmen
 
 ---
 
+## 2026-09-25 — anyone could write into another identity's synced conversations
+
+**Fixed in [#771](https://github.com/motebit/motebit/pull/771), live in relay release v973.**
+
+A device keeps its conversations and events in sync over a websocket to the relay. The socket names the identity in its path and proves itself with a signed token, which it can send in two ways: as a message after connecting, or in the connection URL.
+
+On the URL path, the relay started checking the token and then kept handling messages while the check was still running. The only guard against unauthenticated messages was a flag set on the other path, so on this one it was never set. Anything the client sent straight after connecting was acted on as if it came from the identity named in the path. That covered pushed conversations, messages and events, task claims and command responses.
+
+So anyone who knew an identity's id, which is public, and held a token signed by **any** key at all could write into that identity's synced conversations and events. The relay would pass them on to the identity's own connected devices before it finished checking the token and closed the connection. A synced conversation is part of what an agent reads back as its own history, so this was a way to put words in someone else's agent's memory.
+
+The socket now acts on nothing until the connection is registered, and registration happens only after the token has been verified. None of our own clients send a token in the URL, so none of them behaved differently.
+
+**What we checked, 2026-09-25, against the production database.** An injected conversation would carry an identifier and an identity chosen by whoever sent it. All 77 synced conversations have the identifier shape our clients generate, belong to identities that hold device records, and carry no future timestamps. Of 20,543 events, one belongs to an identity with no device record: an identity-creation event from March, written before device records existed.
+
+**What that check cannot see.** Most of it. Rejected tokens are recorded in an auth-event log, but this door never wrote to it, so an attempt left no durable record. A careful attacker would also have used ordinary-looking identifiers, and the check only looks at shape and ownership, not content. We found no sign of exploitation, and we cannot say it did not happen. The fix also makes this door record every refused token, so this question can be answered next time.
+
+**How it was found.** By an adversarial review of an unrelated change to the same socket, a fix for a connection that closes while its token is being checked. The reviewer went looking for other places where the socket's state could change during that same wait, and found this one.
+
+---
+
 ## Known and open
 
 We do not only publish what we have finished. Weaknesses we have found and not yet closed are tracked in the open, without the detail that would help someone use them before we do:
 
-- [#702](https://github.com/motebit/motebit/issues/702) — no shipped client can reach the key-rotation route, so rotating an identity's key currently removes it from the relay.
-- [#703](https://github.com/motebit/motebit/issues/703) — a routine daemon shutdown discards an identity's guardian and key state along with its discovery record.
 - [#705](https://github.com/motebit/motebit/issues/705) — two routes are unauthenticated on a deployment configured without an operator token.
 - [#706](https://github.com/motebit/motebit/issues/706) — a key history can be recorded in an order a verifier will reject.
 - [#707](https://github.com/motebit/motebit/issues/707) — an identity holding no key at all is claimable at the public registration doors.
 - [#714](https://github.com/motebit/motebit/issues/714) — there is no authenticated way for one relay to tell another about a revocation, so revocations do not cross relays at all.
 - [#715](https://github.com/motebit/motebit/issues/715) — a setting we publish as an anti-sybil boundary is read by nothing, so the posture it declares is not the posture we hold.
+- [#767](https://github.com/motebit/motebit/issues/767) — rotating an identity's key does not end connections already open under the old key.
+- [#772](https://github.com/motebit/motebit/issues/772) — the sync socket allows some activity before a connection has proven itself; none of it reaches another identity's data.
