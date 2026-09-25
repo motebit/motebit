@@ -74,12 +74,7 @@ export type RotationOutcome =
       relay: "recorded" | "already-held" | "none";
       rotations: number;
       relayKeyBefore: string | null;
-      /**
-       * Where the retired key was kept, when it was: the relay did not confirm
-       * the succession (it holds no key for this identity), so it is not
-       * erased. `null` when the relay recorded it and the retired key was
-       * erased, as a rotation intends.
-       */
+      /** Where the retired key was kept (relay confirmed nothing); null = erased as intended. */
       retiredKeyKeptAt: string | null;
       notes: RotationNote[];
     }
@@ -152,8 +147,7 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
     publishedPublicKeyHex: () => Promise.resolve(identity.identity.public_key),
     writeAhead: {
       load: async () => {
-        // The port contract distinguishes "nothing held" from "something held
-        // that cannot be read"; the kit stops on the latter and never clears it.
+        // "unreadable" ≠ absent: the kit stops on it and never clears it.
         const any = deps.pending.loadAny();
         if (any === "unreadable") return "unreadable";
         return any == null ? null : toHeld(any);
@@ -172,8 +166,7 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
         });
       },
       clear: () => Promise.resolve(deps.pending.clear()),
-      // Synchronous underneath; a throw (the bytes could not be kept) becomes
-      // a rejection, and the kit stops.
+      // A throw (bytes could not be kept) becomes a rejection; the kit stops.
       setAside: () =>
         new Promise<void>((resolve) => {
           deps.pending.setAside();
@@ -186,10 +179,8 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
       const encrypted = await encryptPrivateKey(privateKeyHex, deps.passphrase);
       if (encrypted == null) throw new Error("could not encrypt the new key; nothing was changed");
       const next = deps.loadConfig();
-      // The key this rotation departs from must still be the one on disk. If
-      // another process (a second `motebit rotate`, `restore`, create-motebit,
-      // the desktop) replaced it meanwhile, committing here would destroy
-      // THAT key: stop, and the write-ahead (not cleared on a throw) stays.
+      // The departed-from key must still be on disk; another process replacing
+      // it meanwhile means committing would destroy THAT key — stop (write-ahead stays).
       if (
         JSON.stringify(next.cli_encrypted_key) !== JSON.stringify(config.cli_encrypted_key) &&
         next.device_public_key !== publicKeyHex
@@ -200,11 +191,8 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
       }
       next.cli_encrypted_key = encrypted;
       next.device_public_key = publicKeyHex;
-      // The founder's ruling on a retired key: it is erased ONLY once the
-      // relay has accepted the succession (or no relay is configured —
-      // never the case here, `motebit rotate` always resolves one). A relay
-      // that holds no key for this identity confirmed nothing, so the
-      // retired key is kept (0600) beside the new config.
+      // Retired key: erased only once the relay accepted the succession
+      // (docs/proposals/key-file-durability-v1.md); relay "none" ⇒ kept 0600.
       const kept = deps.saveConfig(next, {
         identityChange: relay === "none" ? "preserve-replaced" : "retire-relay-accepted",
       });
@@ -226,8 +214,7 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
             `rotated identity file failed self-verification; nothing was changed: ${check.errors?.[0]?.message ?? "invalid"}`,
           );
         }
-        // Atomic: a torn write here would leave the only signed statement of
-        // the identity's succession unparseable, after the key had moved.
+        // Atomic: a torn write would leave the succession's only signed record unparseable.
         writeFileAtomic(deps.identityPath, rotated, currentModeOr(deps.identityPath, 0o644));
       }
     },
