@@ -2,4 +2,16 @@
 "@motebit/relay": minor
 ---
 
-One holder and the three resolvers for an identity's key (#703 Increment 2, part A). `identity_keys` (migration v42, backfilled from registry and chain only where unambiguous — never from device rows) is written by every door that proves a key: `/agents/register` records the key its body presented with the guardian it attested (a guardian attested without a key still reaches the holder), `/agents/bootstrap` and `/devices/register-self` record a first key only when the identity has proven none and no device row disagrees, a recorded succession moves it from the key it retires, and a migration arrival records the bound key. `provenIdentityKey` (holder, registry, chain head — never a device row) is what a rotation may depart from and what a registration is compared against; `identityKeyFor` (the authority, else the one key every device row agrees on) is what the §7.6 bundle, the identity log, the succession route's `current_public_key` and the service-mode auth fallback serve; `keysHeldBy` (holder, registry, chain head, every keyed device row) is what the public-door guard counts as held; `identityGuardianFor` is the one guardian every recovery, routing boost and bundle reads. `GET /api/v1/identity/:id` now answers for every identity the relay holds a key for, not only the ones with a registry row. Receipt ingestion no longer rewrites `agent_registry.public_key` to a device key embedded in a receipt: it verifies against it and writes nothing, and a registration without a key publishes the key the relay serves instead of the first-listed device row's.
+An identity's key is now held by evidence, not by whichever door wrote last (#703 Increment 2, build 3). The new `identity_keys` holder is the only authority for what the relay serves (the identity bundle, the identity log, `/succession`), what a rotation departs from, and what a registration is checked against.
+
+It is written only by:
+
+- a sovereign binding plus current possession of the key (register-self's signature, or a register bearer verified by the device holding that key);
+- a succession link from the key already held;
+- a migration's binding;
+- an operator registration of a service identity with no devices;
+- the one-time migration transplant of the existing registry key or chain head (v42).
+
+Unsigned bootstrap, a bearer naming some other key, and a rotation admitted through a device row write nothing to the holder. New keys must arrive as lowercase hex; a key already on file is admitted in its stored spelling. Signature checks elsewhere use the holder once it exists, and otherwise read exactly what they did before.
+
+A legacy (non-sovereign) identity with no evidence now serves `''` in its identity bundle instead of its registry key. Receipt ingestion no longer rewrites the registry key from a receipt's embedded key.

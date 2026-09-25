@@ -1,6 +1,6 @@
 # PROPOSAL — identity key state outlives the discovery row (DRAFT, not built)
 
-**Status:** DRAFT for design review, 2026-09-23; §10 DECIDED 2026-09-24 (founder delegated the three questions to PE judgement). **Increment 1 (§4) BUILT 2026-09-24** — `registry-delist.ts`, migration v41, gate #162 (#744). **Increment 2 (§5) PART A: first build #747 WITHDRAWN 2026-09-24 under §8 (two in-kind review rounds); amendments in §5a; branch kept; rebuild design in §5b (2026-09-24). **Rebuild #750 WITHDRAWN 2026-09-24 under §8:** round 1 (§5c) fixed four findings, and round 2 (§5d) found two §8 wrong answers, both regressions. Branch `relay/identity-key-state-inc2-rebuild` kept. §5e passed three design-review rounds narrowing to G1; founder decided option 2 (§5f: the holder is the ONLY authority). Build 3 in progress from §5f.** Was: — `identity_keys` (migration v42, backfill; production count 50/50 unambiguous, 0 unfilled), `recordIdentityKey` at every door that proves a key, `identityKeyFor` the one resolver, the three named resolvers (auth's service fallback, verify-receipt, `keyOnFile`/`departureFrom`) and the identity log + §7.6 bundle on it. PART B not built: the remaining second-family readers (tasks.ts ×5, disputes.ts ×3, command-route, bond-store, device-registration-guard, federation-callbacks, index.ts, migration.ts ×3, key-rotation.ts recovery, trust-graph) and `check-identity-key-resolver`.
+**Status:** DRAFT for design review, 2026-09-23; §10 DECIDED 2026-09-24 (founder delegated the three questions to PE judgement). **Increment 1 (§4) BUILT 2026-09-24** — `registry-delist.ts`, migration v41, gate #162 (#744). **Increment 2 (§5) PART A: first build #747 WITHDRAWN 2026-09-24 under §8 (two in-kind review rounds); amendments in §5a; branch kept; rebuild design in §5b (2026-09-24). **Rebuild #750 WITHDRAWN 2026-09-24 under §8:** round 1 (§5c) fixed four findings, and round 2 (§5d) found two §8 wrong answers, both regressions. Branch `relay/identity-key-state-inc2-rebuild` kept. §5e passed three design-review rounds narrowing to G1; founder decided option 2 (§5f: the holder is the ONLY authority). Build 3 BUILT 2026-09-25 (§5g: four build-time findings, the E4 differential).** Was: — `identity_keys` (migration v42, backfill; production count 50/50 unambiguous, 0 unfilled), `recordIdentityKey` at every door that proves a key, `identityKeyFor` the one resolver, the three named resolvers (auth's service fallback, verify-receipt, `keyOnFile`/`departureFrom`) and the identity log + §7.6 bundle on it. PART B not built: the remaining second-family readers (tasks.ts ×5, disputes.ts ×3, command-route, bond-store, device-registration-guard, federation-callbacks, index.ts, migration.ts ×3, key-rotation.ts recovery, trust-graph) and `check-identity-key-resolver`.
 **Author:** motebit PE
 **Closes when built:** #703 (a daemon shutdown discards the identity's guardian and key state)
 **Prerequisite for:** roster part B (the successor to withdrawn #698), then #691 / #687 / #681 — the roster's key model was found inert against production data because of exactly this conflation.
@@ -262,6 +262,36 @@ The final round (per the convergence rule) confirmed one §8-kind flaw, several 
 **Stated costs.** A legacy (non-sovereign) identity first seen after v42, which never presents E-sov or E-link, serves `''` in the bundle where main would serve its registry key. New identities are sovereign by default, and every identity with a registry row at migration time is transplanted. A sovereign identity fills on its first register-self or keyed register by its own key.
 
 **Proof contract (E4, the build's gate):** for every writer and every authority reader, probes by a principal holding NO private key, in canonical and alternate spellings, over the planted states of §5b, §5d and G1, run against the branch AND `origin/main`. The branch must never serve or depart from a key main would not, except where this section states a cost. Then one code-review round under §8.
+
+### 5g. Build 3 — what building §5f found, and the differential (2026-09-25)
+
+Four findings surfaced while building. Each is resolved with evidence the protocol already has, and none adds trust:
+
+- **E-op — an operator-registered service identity.** It has no device row, so no door can present E-sov, and under holder-only authority it could neither rotate nor recover through its guardian, where main allows both (§8(b)). Main trusts the operator's registry key for exactly this identity. So an operator registration fills the holder only when the identity has no holder, no device row and no chain (`recordOperatorServiceKey`, one transaction). It cannot recreate G1, which needs device rows.
+- **E-sov through a KEYLESS registration.** The CLI daemon bootstraps (unsigned), then registers without a key. As first built, no CLI identity would ever fill, and every new daemon's bundle would serve `''`. A keyless `/agents/register` under a device bearer proves current possession of that device's key: the token was verified by that row, with no fallback. With the exact sovereign id that is E-sov, the same evidence as DB1.
+- **DA2's registry clause.** A registry key EQUAL to the candidate does not block the first-key write. Under §5f the registry is discovery's copy, and a keyless registration publishes the same key before the holder fills. A differing registry key still blocks.
+- **DB5, clarified.** A device-rung departure moves its device row and the registry (discovery's copy, main's behaviour) and appends the chain. It never writes the holder. The registry restriction in DB5 existed only because the registry was authority.
+
+**The E4 differential.** One HTTP-only scenario file, run against the branch and against an `origin/main` copy of the relay:
+
+| Scenario                                                               | main                                | build 3                                               |
+| ---------------------------------------------------------------------- | ----------------------------------- | ----------------------------------------------------- |
+| W1 — a stranger bootstraps an unseen id's genesis key                  | 404                                 | 404                                                   |
+| W2 — a stranger plants UPPER(K), then the owner registers and rotates  | plant 201; nothing served           | plant **400**; owner rotates; the proven K2 is served |
+| G1a — a paired device names X after a keyless register                 | X refused (row order); OWNER served | X reaches discovery; `''` served; the owner rotates   |
+| G1b — a paired device rotates its own key                              | **owner's rotation refused (400)**  | owner rotates (200)                                   |
+| L3 — a guardian recovery on a blank-key row with devices that disagree | recovers; NEXT served               | recovers; `''` served                                 |
+| SVC — an operator service identity with a guardian                     | recovers; served                    | same                                                  |
+| CLI — sovereign daemon: bootstrap, keyless register, rotate            | served K, then NEXT                 | same                                                  |
+| LEGACY — legacy-id daemon                                              | served K                            | `''`                                                  |
+| STRANGER — a stranger's key onto an existing identity                  | 409 / 409                           | same                                                  |
+
+**Results:**
+
+- No rotation or recovery fails on the branch where it succeeds on main, and G1b now succeeds where main refused.
+- The branch serves a key main does not only in W2, and that key is evidence-proven.
+- **Stated cost:** G1a, L3 and LEGACY, all legacy (non-sovereign) ids, serve `''` where main served its registry key. New identities are sovereign by default, and every identity with a registry row at migration is transplanted by E-main.
+- **Named residual:** in G1a, for an unfilled legacy identity, a paired device's own key can reach the registry, and verification readers fall back to the registry. Main does the same in the other row order. Closing it means verification readers stop falling back to the registry, which is out of this build's scope.
 
 ## 6. Decisions
 

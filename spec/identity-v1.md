@@ -75,6 +75,8 @@ Cryptographic identity. The public half of the keypair that signs this file.
 | `algorithm`  | string | yes      | Signing algorithm. MUST be `"Ed25519"` for this version.       |
 | `public_key` | string | yes      | Hex-encoded Ed25519 public key (64 hex characters = 32 bytes). |
 
+Producers SHOULD emit public keys as **lowercase** hex. A key has one byte string but, under a lenient hex decoder, more than one spelling, and a relay compares keys as strings. A relay MAY refuse a non-lowercase spelling of a key that is new to it, and MUST NOT refuse a key it already holds in that exact spelling, so an identity whose key predates this note keeps working (identity-key-state-v1 §5e DB4).
+
 ### 3.3 — `guardian` (optional)
 
 Organizational custody and key recovery. When present, the guardian key can perform succession on behalf of the primary key — enabling identity recovery after key compromise without centralized revocation.
