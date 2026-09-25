@@ -116,6 +116,7 @@ import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import { getAccountBalanceDetailed } from "./accounts.js";
 import { listStoredReceipts, getStoredReceiptJson } from "./receipts-store.js";
 import type { AuthEvent } from "./auth-events.js";
+import type { VerifiedKeySource } from "./auth.js";
 import {
   isAgentRevocationReason,
   type AgentRevocationReason,
@@ -416,6 +417,7 @@ export interface AgentsDeps {
     agentRevokedCheck?: (motebitId: string) => boolean,
     agentKeyLookup?: (motebitId: string) => string | null,
     onReject?: (reason: string) => void,
+    onVerified?: (publicKey: string, source: VerifiedKeySource) => void,
   ) => Promise<boolean>;
   isTokenBlacklisted: (jti: string, motebitId: string) => boolean;
   isAgentRevoked: (motebitId: string) => boolean;
@@ -593,10 +595,20 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
       agentAudience = "account:withdraw";
     } else if (path.endsWith("/checkout")) {
       agentAudience = "account:checkout";
+    } else if (path.endsWith("/roster")) {
+      // The machine roster (spec/machine-roster-v1.md §11): a per-DEVICE
+      // credential, because the route needs the key a device row holds (its
+      // own cap bucket, D5 of docs/proposals/machine-roster-relay-v1.md).
+      // An existing audience, named explicitly — never the admin:query
+      // default; the doctrine keeps the roster off a new audience.
+      agentAudience = "device:auth";
     } else {
       agentAudience = "admin:query";
     }
 
+    // The key the token verified under, from the row that verified it —
+    // captured here, never re-read by a route (auth.ts `onVerified`).
+    const verified: { key?: string; via?: VerifiedKeySource } = {};
     const valid = await verifySignedTokenForDevice(
       token,
       claims.mid,
@@ -625,12 +637,20 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
           correlationId: c.req.header("x-correlation-id") ?? null,
         });
       },
+      (key, via) => {
+        verified.key = key;
+        verified.via = via;
+      },
     );
     if (!valid) {
       throw new HTTPException(401, { message: "Token verification failed" });
     }
 
     c.set("callerMotebitId" as never, claims.mid);
+    if (verified.key != null && verified.via != null) {
+      c.set("callerVerifiedKey" as never, verified.key);
+      c.set("callerVerifiedKeySource" as never, verified.via);
+    }
     await next();
   });
 }

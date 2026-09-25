@@ -168,6 +168,8 @@ import { startSweepLoop } from "./sweep.js";
 import { startBatchWithdrawalLoop, getPendingWithdrawalsSummary } from "./batch-withdrawals.js";
 import { LoopSupervisor, superviseInterval } from "./loop-supervisor.js";
 import { registerAgentRoutes, registerAgentAuthMiddleware } from "./agents.js";
+import { registerHostRosterRoutes } from "./host-roster-routes.js";
+import { observeHostConnection, sweepHostLiveness, boundKeyOf } from "./host-roster-store.js";
 import { createFederationCallbacks } from "./federation-callbacks.js";
 import { registerTaskRoutes, TASK_TTL_MS } from "./tasks.js";
 import { ExpoPushAdapter } from "./push-adapter.js";
@@ -787,6 +789,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     agentRevokedCheck,
     agentKeyLookup,
     onReject,
+    onVerified,
   ) =>
     verifySignedTokenForDevice(
       token,
@@ -800,6 +803,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       // (2026-09-14 finding): every `auth.*_token_rejected` log line and, now,
       // every rejection record depends on it reaching the verifier.
       onReject,
+      // And the verification callback, for the same reason: a wrapper that
+      // dropped it would leave every caller unable to say which key a token
+      // verified under (the machine roster's own bucket and `bound_under`).
+      onVerified,
     );
 
   // --- Middleware (rate limiting, CORS, security headers, auth, error handling, health) ---
@@ -859,12 +866,56 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       `STALE_ALLOCATION_HORIZON_MS (${STALE_ALLOCATION_HORIZON_MS}ms) must be >= 3x TASK_TTL_MS (${TASK_TTL_MS}ms) — sweeping a live task's allocation opens a refund/settlement double-credit race`,
     );
   }
+  // Machine roster liveness (host-roster-store.ts, proposal D4). One door:
+  // `observeHostConnection` — bind, close, this coarse flush, and the
+  // shutdown flush all go through it. Clients send no periodic frames, so
+  // without the flush an idle connected daemon would age while connected.
+  const HOST_LIVENESS_FLUSH_MS = 5 * 60_000;
+  let lastHostLivenessFlushAt = Date.now();
+  const observeHost = (motebitId: string, peer: ConnectedDevice, at?: number): void => {
+    try {
+      observeHostConnection(moteDb.db, motebitId, peer, relayIdentity.relayMotebitId, at);
+    } catch (err: unknown) {
+      // A relay's one observation of a machine is not worth a crashed
+      // socket handler or a starved cleanup tick.
+      logger.warn("host_roster.observe_failed", {
+        motebitId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+  const flushHostLiveness = (at: number): void => {
+    for (const [motebitId, peers] of connections) {
+      for (const peer of peers) observeHost(motebitId, peer, at);
+    }
+  };
+  /** Is a socket bound as (device_id, bound_under) open right now? The sweep skips it. */
+  const isHostLive = (motebitId: string, deviceId: string, boundUnder: string): boolean =>
+    (connections.get(motebitId) ?? []).some(
+      (p) => p.deviceId === deviceId && boundKeyOf(p) === boundUnder,
+    );
   const taskCleanupInterval = superviseInterval(loopSupervisor, "task-cleanup", 60_000, () => {
     const now = Date.now();
     // Expire completed/failed tasks and tasks past their TTL
     taskQueue.cleanup(now);
     // Auth-event record: 30-day rolling window (auth-events.ts).
     authEvents.sweep(now);
+    // Machine roster liveness, every five minutes: refresh the one
+    // overwritten last-seen value for bound host sockets open right now,
+    // then sweep rows unseen for 90 days that have no live bound socket.
+    // Guarded: this tick also evicts the task queue and cleans the rate
+    // limiters, and a corrupt row must not starve them.
+    if (now - lastHostLivenessFlushAt >= HOST_LIVENESS_FLUSH_MS) {
+      lastHostLivenessFlushAt = now;
+      flushHostLiveness(now);
+      try {
+        sweepHostLiveness(moteDb.db, isHostLive, now);
+      } catch (err: unknown) {
+        logger.warn("host_roster.sweep_failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
     // Evict oldest entries if queue exceeds hard cap (defensive against flooding)
     const evicted = taskQueue.evict(MAX_TASK_QUEUE_SIZE);
     if (evicted > 0) {
@@ -944,6 +995,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     parseTokenPayloadUnsafe,
     logger,
     onCommandResponse: handleCommandResponse,
+    // The roster's liveness record (proposal D4): written at bind, at
+    // close, and by the flush — only for verified host sockets, keyed by
+    // the key each socket's token verified under.
+    onPeerBound: (motebitId, peer) => observeHost(motebitId, peer),
+    onPeerClosed: (motebitId, peer) => observeHost(motebitId, peer),
     isDraining: () => draining,
   });
 
@@ -1529,6 +1585,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // early-registered middleware, unaffected by this move.)
   registerListingsRoutes({ app, moteDb, taskRouter });
 
+  // --- Machine roster (docs/doctrine/machine-roster.md) ---
+  // After registerAgentAuthMiddleware, whose `/agents/*` middleware sets
+  // `callerMotebitId` and the verified key under the `device:auth` audience.
+  registerHostRosterRoutes({
+    app,
+    db: moteDb.db,
+    connections,
+    relayMotebitId: relayIdentity.relayMotebitId,
+  });
+
   // --- Command endpoint (unified remote execution) ---
   registerCommandRoutes({ app, db: moteDb.db, connections, logger });
 
@@ -2024,6 +2090,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       disconnected: totalBefore - remainingAfterGrace,
       remaining: remainingAfterGrace,
     });
+
+    // Before the force close: a force-closed socket may never reach its
+    // close hook, so a restart would leave every connected host's last-seen
+    // value up to five minutes stale. "Not seen since" has to survive it.
+    flushHostLiveness(Date.now());
 
     // Phase 3: Force close — terminate remaining connections with 1001 (Going Away)
     for (const peers of connections.values()) {
