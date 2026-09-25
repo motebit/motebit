@@ -538,7 +538,10 @@ refuse an entry for its key.
 **Caps are partitioned by signer key.** An entry signed by the key the caller's
 credential verified under counts against that key's **own** bucket, which only a
 holder of that key can fill; every other entry counts against one shared
-**foreign** bucket, which exists to replicate the lines of other epochs. A holder
+**foreign** bucket, which exists to replicate the lines of other epochs. The
+bucket is decided when the entry is first held and is stored with it — never
+recomputed against whoever presents next — so one key's full own bucket never
+reads as a full foreign bucket to another caller. A holder
 of an old key can therefore fill only that key's bucket, and a rotation moves the
 sovereign to a new, empty one. The foreign bucket can be exhausted by anyone;
 the worst that follows is that superseded lines stop replicating through that
