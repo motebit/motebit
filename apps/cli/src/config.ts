@@ -196,6 +196,10 @@ export function listKeptKeyFiles(): string[] {
           f.startsWith(`${cfg}.pre-rotation-`) ||
           f.startsWith(`${cfg}.rotation-next-`) ||
           f.startsWith("pending-rotation.json.clobbered-") ||
+          // migrate-keyring's retired PLAINTEXT keyring, and binding files kept
+          // aside by export / create-motebit.
+          f.startsWith("dev-keyring.json.migrated-") ||
+          f.startsWith("motebit.md.clobbered-") ||
           ((f.startsWith(`${cfg}.`) || f.startsWith("pending-rotation.json.")) &&
             f.endsWith(".tmp")),
       )
@@ -292,7 +296,17 @@ export function identityFingerprint(config: FullConfig): string {
 function losesIdentityMaterial(from: FullConfig, to: FullConfig): boolean {
   const f = from as Record<string, unknown>;
   const t = to as Record<string, unknown>;
-  for (const field of ["cli_encrypted_key", "cli_private_key", "_identity_file"] as const) {
+  // The key (encrypted or legacy plaintext), the embedded signed identity,
+  // AND the binding itself: an identity-changing save that replaces a
+  // `motebit_id` / `device_id` / `device_public_key` keeps the old one too.
+  for (const field of [
+    "cli_encrypted_key",
+    "cli_private_key",
+    "_identity_file",
+    "motebit_id",
+    "device_id",
+    "device_public_key",
+  ] as const) {
     const v = f[field];
     if (v === undefined || v === null || v === "") continue;
     if (JSON.stringify(v) !== JSON.stringify(t[field])) return true;

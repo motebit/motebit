@@ -84,14 +84,23 @@ describe("R1 — what is and is not absence", () => {
 });
 
 describe("R2 — key bytes are kept, or nothing happens", () => {
-  it("a declared change that keeps the key does not make a copy (only replaced key material is kept)", () => {
+  it("a declared change that replaces no identity material makes no copy", () => {
     const p = path.join(dir, "config.json");
     fs.writeFileSync(p, JSON.stringify({ motebit_id: "m", cli_encrypted_key: { c: "A" } }));
     const c = readConfigFile<Record<string, unknown>>(p);
     c["name"] = "renamed";
-    c["motebit_id"] = "m2";
     expect(writeConfigFile(p, c, { identityChange: "preserve-replaced" })).toBeNull();
     expect(fs.readdirSync(dir)).toEqual(["config.json"]);
+  });
+
+  it("a declared change that replaces only the BINDING (motebit_id) keeps the old one", () => {
+    const p = path.join(dir, "config.json");
+    const body = JSON.stringify({ motebit_id: "m", device_public_key: "A" });
+    fs.writeFileSync(p, body);
+    const c = readConfigFile<Record<string, unknown>>(p);
+    c["motebit_id"] = "m2";
+    const kept = writeConfigFile(p, c, { identityChange: "preserve-replaced" });
+    expect(fs.readFileSync(kept!, "utf-8")).toBe(body);
   });
 
   it("a backup name already taken is never overwritten: the next free name is used", () => {

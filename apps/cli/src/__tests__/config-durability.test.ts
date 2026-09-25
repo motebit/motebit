@@ -90,8 +90,8 @@ describe("rule 2 — damage is never overwritten", () => {
   });
 
   it("a save over a healthy config makes no backup", () => {
-    mod.saveFullConfig({ motebit_id: "m-1" });
-    expect(mod.saveFullConfig({ motebit_id: "m-2" })).toBeNull();
+    mod.saveFullConfig({ name: "m-1" });
+    expect(mod.saveFullConfig({ name: "m-2" })).toBeNull();
     expect(others()).toEqual([]);
   });
 
@@ -159,8 +159,8 @@ describe("rule 3 — atomic, owner-only replacement", () => {
   });
 
   it("leaves no scratch file behind on success", () => {
-    mod.saveFullConfig({ motebit_id: "m-1" });
-    mod.saveFullConfig({ motebit_id: "m-2" });
+    mod.saveFullConfig({ name: "m-1" });
+    mod.saveFullConfig({ name: "m-2" });
     expect(others()).toEqual([]);
   });
 

@@ -12,3 +12,5 @@ Key-file durability, build 3 (`docs/proposals/key-file-durability-v1.md`, lane A
 - A damaged config readable by others is narrowed to `0600` by the read that refuses it; a config symlink whose target is missing is refused, never replaced; preserved copies are byte copies; config directories are created `0700`.
 
 A kept copy is refused, rather than attempted, when the file to keep cannot be resolved at all (a dangling or looping link, or nothing there): nothing is changed.
+
+An identity-changing config write also keeps a replaced `motebit_id` / `device_id` / `device_public_key`, and a stale config lock is broken atomically.

@@ -114,6 +114,28 @@ describe("what write_file overwrites is kept owner-only — or the write does no
     expect(fs.readFileSync(target, "utf-8")).toBe("OLD");
   });
 
+  it("a second undo_write does not re-apply the write the first one undid (v1→v2→v3, undo, undo ⇒ v2, v2)", async () => {
+    const target = path.join(dir, "notes.txt");
+    fs.writeFileSync(target, "V1");
+    const write = createWriteFileHandler({ allowedPaths: [dir], backupDir });
+    const undo = createUndoWriteHandler({ allowedPaths: [dir], backupDir });
+    await write({ path: target, content: "V2" });
+    await new Promise((r) => setTimeout(r, 5));
+    await write({ path: target, content: "V3" });
+    await new Promise((r) => setTimeout(r, 5));
+    expect((await undo({ path: target })).ok).toBe(true);
+    expect(fs.readFileSync(target, "utf-8")).toBe("V2");
+    await new Promise((r) => setTimeout(r, 5));
+    expect((await undo({ path: target })).ok).toBe(true);
+    expect(fs.readFileSync(target, "utf-8")).toBe("V2");
+    // The V3 bytes undo_write overwrote are still kept.
+    const kept = fs
+      .readdirSync(backupDir)
+      .filter((f) => !f.endsWith(".meta.json"))
+      .map((f) => fs.readFileSync(path.join(backupDir, f), "utf-8"));
+    expect(kept).toContain("V3");
+  });
+
   it("undo_write keeps the CURRENT bytes before restoring", async () => {
     const target = path.join(dir, "notes.txt");
     fs.writeFileSync(target, "V1");

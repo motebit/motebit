@@ -79,8 +79,8 @@ describe("rule 2 — damage is never overwritten", () => {
   });
 
   it("a write over a healthy config makes no backup", () => {
-    writeConfigFile(cfg, { motebit_id: "m-1" });
-    expect(writeConfigFile(cfg, { motebit_id: "m-2" })).toBeNull();
+    writeConfigFile(cfg, { name: "m-1" });
+    expect(writeConfigFile(cfg, { name: "m-2" })).toBeNull();
     expect(readdirSync(dir)).toEqual(["config.json"]);
   });
 

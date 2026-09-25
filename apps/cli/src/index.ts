@@ -35,6 +35,7 @@ import {
   decryptPrivateKey,
   bootstrapIdentity,
   fromHex,
+  refuseIdentityWithoutKey,
 } from "./identity.js";
 import {
   getDbPath,
@@ -699,7 +700,10 @@ async function main(): Promise<void> {
     saveFullConfig(fullConfig, { identityChange: "reencrypt-same-key" });
     console.log(dim("  Encrypted. Plaintext removed."));
   } else {
-    // Identity birth
+    // Identity birth — unless the config already names an identity whose key
+    // the CLI does not hold (the desktop's, or a lost CLI key): refused
+    // before any prompt, nothing written.
+    refuseIdentityWithoutKey(fullConfig);
     console.log();
     console.log(`  ${bold("Welcome to Motebit.")}`);
     console.log();

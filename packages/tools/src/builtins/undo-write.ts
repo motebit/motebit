@@ -63,8 +63,14 @@ export function createUndoWriteHandler(config?: {
       for (const metaFile of metaFiles) {
         try {
           const metaContent = await fs.readFile(path.join(backupDir, metaFile), "utf-8");
-          const meta = JSON.parse(metaContent) as { originalPath: string; timestamp: number };
-          if (meta.originalPath === resolved) {
+          const meta = JSON.parse(metaContent) as {
+            originalPath: string;
+            timestamp: number;
+            createdBy?: string;
+          };
+          // A copy undo_write kept of what it overwrote is kept bytes, never an
+          // undo target: selecting it would re-apply the undone write.
+          if (meta.originalPath === resolved && meta.createdBy !== "undo_write") {
             if (!latestBackup || meta.timestamp > latestBackup.timestamp) {
               latestBackup = {
                 path: path.join(backupDir, metaFile.replace(".meta.json", "")),
@@ -84,7 +90,7 @@ export function createUndoWriteHandler(config?: {
       // Read backup and restore. The CURRENT bytes are kept first (the undo
       // is itself undoable) — or the restore does not happen.
       const backupContent = await fs.readFile(latestBackup.path, "utf-8");
-      const kept = await backupExisting(resolved, backupDir);
+      const kept = await backupExisting(resolved, backupDir, "undo_write");
       if (!kept.ok) return { ok: false, error: kept.error };
       await fs.writeFile(resolved, backupContent, "utf-8");
 

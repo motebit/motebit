@@ -374,12 +374,9 @@ export function withFileLock<T>(
         }
       }
     }
-    if (lockIsStale(lock, staleMs)) {
-      try {
-        fs.unlinkSync(lock);
-      } catch {
-        /* another waiter broke it first */
-      }
+    const staleIno = staleLockInode(lock, staleMs);
+    if (staleIno !== null) {
+      breakStaleLock(lock, staleIno);
       continue;
     }
     if (Date.now() >= deadline) {
@@ -394,24 +391,64 @@ export function withFileLock<T>(
 /** Locks this process holds right now (for re-entrancy). */
 const heldLocks = new Set<string>();
 
-function lockIsStale(lock: string, staleMs: number): boolean {
+/**
+ * The inode of `lock` when it is stale (its holder is dead, or it is older
+ * than `staleMs`), else null. The inode is what `breakStaleLock` checks, so a
+ * lock that was broken and re-taken by another waiter in between is never
+ * mistaken for the stale one.
+ */
+function staleLockInode(lock: string, staleMs: number): number | null {
   let raw: string;
-  let mtimeMs: number;
+  let st: { ino: number; mtimeMs: number };
   try {
+    st = fs.statSync(lock);
     raw = fs.readFileSync(lock, "utf-8");
-    mtimeMs = fs.statSync(lock).mtimeMs;
   } catch {
-    return false; // gone (the retry acquires it) or unreadable (wait it out)
+    return null; // gone (the retry acquires it) or unreadable (wait it out)
   }
   const pid = Number.parseInt(raw, 10);
   if (Number.isInteger(pid) && pid > 0 && pid !== process.pid) {
     try {
       process.kill(pid, 0);
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ESRCH") return true;
+      if ((err as NodeJS.ErrnoException).code === "ESRCH") return st.ino;
     }
   }
-  return Date.now() - mtimeMs > staleMs;
+  return Date.now() - st.mtimeMs > staleMs ? st.ino : null;
+}
+
+/**
+ * Break the stale lock whose inode is `staleIno` — atomically, and only that
+ * one. Two waiters can judge the same lock stale; if the first breaks it and
+ * takes a FRESH lock at the same name, a plain unlink by the second would
+ * delete the fresh one and let both in. So the name is RENAMED to a private
+ * tombstone (one waiter wins the rename); if the tombstone turns out not to be
+ * the judged-stale inode, it was someone's live lock and is linked back under
+ * the lock name (`link` fails rather than replace a lock taken meanwhile).
+ * Exported for tests.
+ */
+export function breakStaleLock(lock: string, staleIno: number): void {
+  const tomb = `${lock}.stale-${process.pid}-${randomBytes(4).toString("hex")}`;
+  try {
+    fs.renameSync(lock, tomb);
+  } catch {
+    return; // another waiter broke it first
+  }
+  try {
+    if (fs.statSync(tomb).ino !== staleIno) {
+      try {
+        fs.linkSync(tomb, lock);
+      } catch {
+        /* a lock was taken at the name meanwhile: that one stands */
+      }
+    }
+  } finally {
+    try {
+      fs.unlinkSync(tomb);
+    } catch {
+      /* already gone */
+    }
+  }
 }
 
 function sleepSync(ms: number): void {

@@ -11,6 +11,7 @@ import {
 } from "@motebit/encryption";
 import type { EncryptedPayload } from "@motebit/encryption";
 import {
+  IdentityBootstrapRefusedError,
   bootstrapIdentity as sharedBootstrapIdentity,
   type BootstrapConfigStore,
   type BootstrapKeyStore,
@@ -225,11 +226,34 @@ export async function decryptPrivateKey(
   return new TextDecoder().decode(decrypted);
 }
 
+/**
+ * A config that names an identity (`motebit_id`) but holds no CLI key
+ * (`cli_encrypted_key` / `cli_private_key`) is NOT a first run. It is what the
+ * desktop app writes into the shared `~/.motebit/config.json` (its key lives
+ * in its own store), or a CLI identity whose key was lost. Minting here would
+ * overwrite that identity's binding — and the desktop's next launch would run
+ * its key under the CLI's new id. Refused, with the ways back; nothing is
+ * written (key-file durability item 1: never take the first-launch path over
+ * a store that holds identity material).
+ */
+export function refuseIdentityWithoutKey(fullConfig: FullConfig): void {
+  const id = fullConfig.motebit_id;
+  if (id == null || id === "") return;
+  if (fullConfig.cli_encrypted_key != null) return;
+  if (fullConfig.cli_private_key != null && fullConfig.cli_private_key !== "") return;
+  throw new IdentityBootstrapRefusedError(
+    "cli",
+    "identity-without-key",
+    `config.json names identity ${id} but holds no CLI key (the desktop app keeps its key in its own store, or this CLI's key was lost). Nothing was changed. To use that identity from the CLI: \`motebit migrate-keyring\` (a plaintext keyring is present) or \`motebit restore\` (recovery seed or its motebit.md).`,
+  );
+}
+
 export async function bootstrapIdentity(
   moteDb: MotebitDatabase,
   fullConfig: FullConfig,
   passphrase: string,
 ): Promise<{ motebitId: string; isFirstLaunch: boolean }> {
+  refuseIdentityWithoutKey(fullConfig);
   // The key and the identity it is bound to live in ONE file here, so they
   // are committed in ONE atomic write: `configStore.write` (which
   // core-identity calls first) only stages the binding, and

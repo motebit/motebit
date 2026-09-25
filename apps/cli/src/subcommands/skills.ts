@@ -13,7 +13,6 @@ import { skillScriptEnv, SKILL_ENV_DISCLOSURE } from "../skill-env.js";
 import {
   appendFileSync,
   existsSync,
-  mkdirSync,
   readFileSync,
   readdirSync,
   statSync,
@@ -53,6 +52,7 @@ import type {
 
 import type { CliConfig } from "../args.js";
 import { CONFIG_DIR, loadFullConfig } from "../config.js";
+import { mkdirOwnerOnly } from "../durable-file.js";
 import { decryptPrivateKey, fromHex, resolveUnlockPassphrase } from "../identity.js";
 import { bold, cyan, dim, error as errorColor, success, warn } from "../colors.js";
 
@@ -110,7 +110,7 @@ function makeAuditSink(): SkillAuditSink {
   // hosts that route through the CLI's registry instance land here too.
   return (event: SkillAuditEvent) => {
     const root = getSkillsRoot();
-    if (!existsSync(root)) mkdirSync(root, { recursive: true });
+    if (!existsSync(root)) mkdirOwnerOnly(root); // creates ~/.motebit 0700 on a first run
     appendFileSync(getAuditLogPath(), JSON.stringify(event) + "\n", "utf-8");
   };
 }

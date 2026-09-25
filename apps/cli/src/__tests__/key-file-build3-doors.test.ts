@@ -142,3 +142,26 @@ describe("X12 — motebit.md: another identity's signed file is kept, never over
     expect(replaceIdentityFile(f, md("identity-B"))).not.toBeNull();
   });
 });
+
+describe("item 16 — every creation of the motebit state directory is owner-only", () => {
+  it("no CLI source creates a directory except through mkdirOwnerOnly (the user-chosen export dir excepted)", () => {
+    const src = path.resolve(__dirname, "..");
+    const offenders: string[] = [];
+    const walk = (d: string): void => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) {
+          if (e.name !== "__tests__") walk(p);
+        } else if (p.endsWith(".ts") && !p.endsWith("durable-file.ts")) {
+          if (/\bmkdirSync\(/.test(fs.readFileSync(p, "utf-8"))) {
+            const rel = path.relative(src, p);
+            // export writes the user's chosen --output directory, not ~/.motebit.
+            if (rel !== path.join("subcommands", "export.ts")) offenders.push(rel);
+          }
+        }
+      }
+    };
+    walk(src);
+    expect(offenders).toEqual([]);
+  });
+});

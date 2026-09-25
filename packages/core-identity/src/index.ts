@@ -400,7 +400,12 @@ export interface BootstrapKeyStore {
 export class IdentityBootstrapRefusedError extends Error {
   constructor(
     readonly surfaceName: string,
-    readonly state: "keystore-unreadable" | "key-without-identity" | "key-mismatch",
+    readonly state:
+      | "keystore-unreadable"
+      | "key-without-identity"
+      | "key-mismatch"
+      /** A binding (`motebit_id`) held with no key this surface can use: minting would replace the binding. */
+      | "identity-without-key",
     detail: string,
   ) {
     super(`identity bootstrap refused (${state}): ${detail}`);

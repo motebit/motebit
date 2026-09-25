@@ -17,6 +17,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { CONFIG_DIR } from "./config.js";
+import { mkdirOwnerOnly } from "./durable-file.js";
 
 export interface UpdateCheckState {
   last_checked_at: number;
@@ -104,7 +105,7 @@ export function refreshUpdateCheckInBackground(params?: {
       if (!resp.ok) return;
       const body = (await resp.json()) as { version?: unknown };
       if (typeof body.version !== "string") return;
-      fs.mkdirSync(path.dirname(statePath), { recursive: true });
+      mkdirOwnerOnly(path.dirname(statePath)); // creates ~/.motebit 0700 on a first run
       fs.writeFileSync(
         statePath,
         JSON.stringify({ last_checked_at: now, latest: body.version } satisfies UpdateCheckState),

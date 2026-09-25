@@ -30,7 +30,7 @@
  * (§6 D4: offline worst-case exposure = short lifetime × signed ceiling).
  */
 
-import { readFileSync, writeFileSync, readdirSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import {
   signStandingDelegation,
@@ -44,6 +44,7 @@ import {
 } from "@motebit/encryption";
 import { openMotebitDatabase } from "@motebit/persistence";
 import { CONFIG_DIR, loadFullConfig } from "../config.js";
+import { mkdirOwnerOnly } from "../durable-file.js";
 import { getDbPath } from "../runtime-factory.js";
 import { loadActiveSigningKey } from "../identity.js";
 import type { CliConfig } from "../args.js";
@@ -93,7 +94,7 @@ export function loadStoredGrant(grantId: string): StoredGrant | null {
 }
 
 function saveStoredGrant(stored: StoredGrant): void {
-  mkdirSync(grantsDir(), { recursive: true });
+  mkdirOwnerOnly(grantsDir()); // creates ~/.motebit 0700 on a first run
   writeFileSync(
     join(grantsDir(), `${stored.grant.grant_id}.json`),
     JSON.stringify(stored, null, 2),

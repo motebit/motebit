@@ -128,6 +128,16 @@ describe("item 3 — a stale snapshot never reverts a committed key (lost update
     expect(onDisk()["cli_encrypted_key"]).toEqual(KEY_A);
   });
 
+  it("an identity-changing save that replaces only the BINDING (no key in the config) keeps the old binding", () => {
+    seed({ motebit_id: "m-1", device_id: "d-1", device_public_key: "A" });
+    const c = mod.loadFullConfig();
+    c.motebit_id = "m-2";
+    c.device_public_key = "B";
+    const keptAt = mod.saveFullConfig(c, { identityChange: "preserve-replaced" });
+    expect(keptAt).not.toBeNull();
+    expect(JSON.parse(fs.readFileSync(keptAt!, "utf-8")).motebit_id).toBe("m-1");
+  });
+
   it("a config built WITHOUT a read that replaces a key keeps the replaced key", () => {
     seed({ motebit_id: "m-1", cli_encrypted_key: KEY_A });
     const keptAt = mod.saveFullConfig({ motebit_id: "m-2", cli_encrypted_key: KEY_B });
@@ -190,19 +200,80 @@ describe("the rotation write-ahead's preserve verb", () => {
 });
 
 describe("the config lock (shared with create-motebit)", () => {
-  it("a save waits for a live holder and refuses on timeout, changing nothing", async () => {
-    const durable = await import("../durable-file.js");
+  it("saveFullConfig ITSELF takes the lock: with another live process holding it, the save waits, refuses, and changes nothing", () => {
     seed({ name: "before" });
-    // Held by a LIVE process (this one's parent is alive; its pid is not ours).
+    // Held by a LIVE process that is not this one (our parent), exactly as
+    // another motebit process or create-motebit would hold it. Nothing in
+    // this process holds it: the only lock taken is saveFullConfig's own.
     fs.writeFileSync(`${CONFIG}.lock`, String(process.ppid));
-    expect(() =>
-      durable.withFileLock(CONFIG, () => mod.saveFullConfig({ name: "after" }), {
-        timeoutMs: 100,
-      }),
-    ).toThrow(/locked by another motebit process/);
+    const started = Date.now();
+    expect(() => mod.saveFullConfig({ name: "after" })).toThrow(
+      /locked by another motebit process/,
+    );
+    expect(Date.now() - started).toBeGreaterThanOrEqual(4_000); // it WAITED (5 s budget)
     expect(onDisk()["name"]).toBe("before");
+    expect(fs.readFileSync(`${CONFIG}.lock`, "utf-8")).toBe(String(process.ppid)); // not broken
     fs.rmSync(`${CONFIG}.lock`);
+  }, 15_000);
+
+  it("breaking a stale lock never deletes a FRESH lock another waiter took at the same name", async () => {
+    const durable = await import("../durable-file.js");
+    fs.mkdirSync(tmpDir, { recursive: true });
+    const lock = `${CONFIG}.lock`;
+    fs.writeFileSync(lock, "2147483646"); // stale: dead pid
+    const staleIno = fs.statSync(lock).ino;
+    // Waiter A breaks it and takes a fresh lock before waiter B acts on its
+    // (now outdated) judgement.
+    fs.unlinkSync(lock);
+    fs.writeFileSync(lock, "A-fresh");
+    durable.breakStaleLock(lock, staleIno); // waiter B
+    expect(fs.readFileSync(lock, "utf-8")).toBe("A-fresh");
+    expect(fs.readdirSync(tmpDir).filter((f) => f.includes(".stale-"))).toEqual([]);
+    // And the judged-stale inode itself IS broken.
+    fs.rmSync(lock);
+    fs.writeFileSync(lock, "2147483646");
+    durable.breakStaleLock(lock, fs.statSync(lock).ino);
+    expect(fs.existsSync(lock)).toBe(false);
   });
+
+  it("two concurrent waiters over a stale lock never hold it at the same time", async () => {
+    const { spawn } = await import("node:child_process");
+    fs.mkdirSync(tmpDir, { recursive: true });
+    const log = path.join(root, "lock-log.txt");
+    fs.writeFileSync(log, "");
+    fs.writeFileSync(`${CONFIG}.lock`, "2147483646"); // stale from the start: both break it
+    const script = path.join(root, "waiter.mts");
+    const durablePath = path.resolve(__dirname, "..", "durable-file.ts");
+    fs.writeFileSync(
+      script,
+      `import * as fs from "node:fs";
+import { withFileLock } from ${JSON.stringify(durablePath)};
+const [target, logFile, id] = process.argv.slice(2);
+for (let i = 0; i < 15; i++) {
+  withFileLock(target, () => {
+    fs.appendFileSync(logFile, "in " + id + "\\n");
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3);
+    fs.appendFileSync(logFile, "out " + id + "\\n");
+  }, { timeoutMs: 20000 });
+}
+`,
+    );
+    const tsx = path.resolve(__dirname, "..", "..", "..", "..", "node_modules", ".bin", "tsx");
+    const run = (id: string) =>
+      new Promise<number>((resolve) => {
+        const p = spawn(tsx, [script, CONFIG, log, id], { stdio: "inherit" });
+        p.on("exit", (code) => resolve(code ?? 1));
+      });
+    const codes = await Promise.all([run("A"), run("B")]);
+    expect(codes).toEqual([0, 0]);
+    const lines = fs.readFileSync(log, "utf-8").trim().split("\n");
+    expect(lines).toHaveLength(60);
+    for (let i = 0; i < lines.length; i += 2) {
+      // Every "in X" is immediately followed by "out X": no overlap.
+      expect(lines[i]!.startsWith("in ")).toBe(true);
+      expect(lines[i + 1]).toBe(lines[i]!.replace("in ", "out "));
+    }
+  }, 60_000);
 
   it("a lock left by a dead process is broken", () => {
     seed({ name: "before" });
@@ -223,6 +294,8 @@ describe("item 15 — every kept copy of key material is listed", () => {
       "pending-rotation.json.clobbered-2026-01-01T00-00-00-000Z",
       "config.json.123.abcdef.tmp",
       "pending-rotation.json.tmp",
+      "dev-keyring.json.migrated-2026-01-01T00-00-00-000Z", // a PLAINTEXT key, kept
+      "motebit.md.clobbered-2026-01-01T00-00-00-000Z",
     ];
     for (const n of names) fs.writeFileSync(path.join(tmpDir, n), "x");
     fs.writeFileSync(path.join(tmpDir, "motebit.db"), "x");
@@ -232,6 +305,23 @@ describe("item 15 — every kept copy of key material is listed", () => {
 });
 
 describe("item 1 — the CLI's bootstrap adapter", () => {
+  it("a DESKTOP-written config (an identity, no CLI key) is REFUSED — never re-minted — and left byte-identical", async () => {
+    // What the desktop writes into the shared ~/.motebit/config.json: its
+    // key lives in its own store. Minting here overwrote the desktop's
+    // identity (review finding (i) on #761).
+    seed({
+      motebit_id: "desktop-id",
+      device_id: "desktop-dev",
+      device_public_key: "aa".repeat(32),
+    });
+    const before = fs.readFileSync(CONFIG, "utf-8");
+    await expect(boot(mod.loadFullConfig() as never)).rejects.toMatchObject({
+      state: "identity-without-key",
+    });
+    expect(fs.readFileSync(CONFIG, "utf-8")).toBe(before);
+    expect(fs.readdirSync(tmpDir).filter((f) => f !== "config.json")).toEqual([]);
+  });
+
   // The identity key for a fresh identity is written by core-identity via the
   // adapter; the DB is only asked for identity rows.
   async function boot(config: Record<string, unknown>) {

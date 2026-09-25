@@ -37,6 +37,13 @@ export const writeFileDefinition: ToolDefinition = {
 export async function backupExisting(
   resolved: string,
   backupDir: string,
+  /**
+   * Who is keeping the bytes. `undo_write` keeps the current bytes before it
+   * restores; those copies are kept but tagged `createdBy: "undo_write"` so
+   * the NEXT undo never selects them (it would re-apply the write the first
+   * undo just undid).
+   */
+  createdBy: "write_file" | "undo_write" = "write_file",
 ): Promise<{ ok: true; kept: string | null } | { ok: false; error: string }> {
   let existing: Buffer;
   try {
@@ -57,7 +64,12 @@ export async function backupExisting(
     await writeOwnerOnly(
       backupPath + ".meta.json",
       Buffer.from(
-        JSON.stringify({ originalPath: resolved, timestamp: Date.now(), size: existing.length }),
+        JSON.stringify({
+          originalPath: resolved,
+          timestamp: Date.now(),
+          size: existing.length,
+          createdBy,
+        }),
       ),
     );
     return { ok: true, kept: backupPath };

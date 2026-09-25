@@ -26,6 +26,7 @@ import {
   encryptPrivateKey,
   decryptPrivateKey,
   bootstrapIdentity,
+  refuseIdentityWithoutKey,
 } from "../identity.js";
 import { getDbPath } from "../runtime-factory.js";
 import { fetchRelayJson, getRelayAuthHeaders } from "./_helpers.js";
@@ -80,6 +81,7 @@ export async function handleExport(config: CliConfig): Promise<void> {
     delete fullConfig.cli_private_key;
     saveFullConfig(fullConfig, { identityChange: "reencrypt-same-key" });
   } else {
+    refuseIdentityWithoutKey(fullConfig); // a named identity with no CLI key is never re-minted
     passphrase =
       envPassphrase ?? (await promptPassphrase(rl, "Set a passphrase for your mote's key: "));
     if (!passphrase) {
