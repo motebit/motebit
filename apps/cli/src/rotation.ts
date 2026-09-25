@@ -1,41 +1,36 @@
 /**
- * Key rotation for the CLI — a thin adapter over `@motebit/surface-kit`'s
- * `performKeyRotation`, the ONE state machine of
- * `docs/proposals/key-rotation-client-v1.md` §3 that web, mobile and desktop
- * also run (#709). What is CLI-specific is only plumbing, inverted into
- * ports: the private key is a passphrase-encrypted config entry, the
- * published key is the one `motebit.md` names, the write-ahead is
- * `~/.motebit/pending-rotation.json` holding the new key encrypted under the
- * same passphrase, and commit re-signs the identity file and saves the
- * config. The outcome vocabulary below is the CLI's own and is mapped from
- * the kit's; the terminal prints it.
- *
- * Everything that touches the world is injected, so the activation test
- * drives THIS function against an in-process relay with the relay half
- * applied (`docs/doctrine/composition-preserves-enforcement.md`).
+ * Key rotation for the CLI — a thin adapter over surface-kit's
+ * `performKeyRotation`, the ONE state machine (key-rotation-client-v1 §3)
+ * every surface runs (#709). CLI plumbing only, as ports: the key is a
+ * passphrase-encrypted config entry, the published key is `motebit.md`'s, the
+ * write-ahead is `~/.motebit/pending-rotation.json`. Everything touching the
+ * world is injected, so the activation test drives THIS function against an
+ * in-process relay (composition-preserves-enforcement).
  */
 import * as fs from "node:fs";
 import { verify, rotate as rotateIdentityFile } from "@motebit/identity-file";
 import { performKeyRotation, type HeldRotation, type KeyRotationPorts } from "@motebit/surface-kit";
 import { hexToBytes } from "@motebit/encryption";
-import type { FullConfig } from "./config.js";
+import {
+  refuseIfKeyReplacedSince,
+  retiredKeyChange,
+  type FullConfig,
+  type IdentityChange,
+} from "./config.js";
+import { currentModeOr, writeFileAtomic } from "./durable-file.js";
 import { decryptPrivateKey, encryptPrivateKey } from "./identity.js";
-import type { PendingRotation } from "./pending-rotation.js";
+import type { PendingRotation, PendingRotationPort } from "./pending-rotation.js";
 
 export interface RotationDeps {
   /** The motebit.md to rotate. Read, verified, rewritten only on commit. */
   identityPath: string;
   loadConfig: () => FullConfig;
-  saveConfig: (config: FullConfig) => void;
-  pending: {
-    load: (motebitId: string, currentPublicKey: string) => PendingRotation | null;
-    /** Whatever write-ahead exists, whoever it belongs to. */
-    loadAny: () => PendingRotation | null;
-    save: (pending: PendingRotation) => void;
-    clear: () => void;
-    /** For messages that name the file. */
-    path: string;
-  };
+  /** Returns the path of a kept copy of the replaced config, when one was made. */
+  saveConfig: (
+    config: FullConfig,
+    opts: { identityChange: IdentityChange },
+  ) => string | null | void;
+  pending: PendingRotationPort;
   passphrase: string;
   reason?: string;
   syncUrl: string;
@@ -55,6 +50,7 @@ export class RotationUnlockError extends Error {
 export type RotationNote =
   | { kind: "stale-write-ahead-cleared"; motebitId: string; oldPublicKey: string }
   | { kind: "write-ahead-discarded"; ageMs: number }
+  | { kind: "refused-write-ahead-set-aside" }
   | { kind: "interrupted-commit-finished"; newPublicKeyHex: string };
 
 export type RotationOutcome =
@@ -65,6 +61,8 @@ export type RotationOutcome =
       relay: "recorded" | "already-held" | "none";
       rotations: number;
       relayKeyBefore: string | null;
+      /** Where the retired key was kept (relay confirmed nothing); null = erased as intended. */
+      retiredKeyKeptAt: string | null;
       notes: RotationNote[];
     }
   | {
@@ -103,6 +101,7 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
   // translates, and remembers whether a held key failed to open so the
   // kit's "unreadable" can be named honestly below.
   let heldWouldNotOpen = false;
+  let retiredKeyKeptAt: string | null = null;
   const toHeld = async (p: PendingRotation): Promise<HeldRotation | "unreadable"> => {
     try {
       const hex = await decryptPrivateKey(p.encrypted_new_key, deps.passphrase);
@@ -135,7 +134,9 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
     publishedPublicKeyHex: () => Promise.resolve(identity.identity.public_key),
     writeAhead: {
       load: async () => {
+        // "unreadable" ≠ absent: the kit stops on it and never clears it.
         const any = deps.pending.loadAny();
+        if (any === "unreadable") return "unreadable";
         return any == null ? null : toHeld(any);
       },
       save: async (h) => {
@@ -152,16 +153,20 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
         });
       },
       clear: () => Promise.resolve(deps.pending.clear()),
+      // A throw (bytes could not be kept) becomes a rejection; the kit stops.
+      setAside: () => Promise.resolve().then(() => void deps.pending.setAside()),
     },
-    commit: async ({ privateKeyHex, publicKeyHex, record }) => {
+    commit: async ({ privateKeyHex, publicKeyHex, record, relay }) => {
       // Config (the private key) first, the identity file second; idempotent:
       // a file already on the new key is not re-signed again.
       const encrypted = await encryptPrivateKey(privateKeyHex, deps.passphrase);
       if (encrypted == null) throw new Error("could not encrypt the new key; nothing was changed");
       const next = deps.loadConfig();
+      refuseIfKeyReplacedSince(config, next, publicKeyHex);
       next.cli_encrypted_key = encrypted;
       next.device_public_key = publicKeyHex;
-      deps.saveConfig(next);
+      const kept = deps.saveConfig(next, { identityChange: retiredKeyChange(relay) });
+      if (typeof kept === "string") retiredKeyKeptAt = kept;
       const current = fs.readFileSync(deps.identityPath, "utf-8");
       const onFile = await verify(current, { expectedType: "identity" });
       const fileKey =
@@ -179,7 +184,8 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
             `rotated identity file failed self-verification; nothing was changed: ${check.errors?.[0]?.message ?? "invalid"}`,
           );
         }
-        fs.writeFileSync(deps.identityPath, rotated, "utf-8");
+        // Atomic: a torn write would leave the succession's only signed record unparseable.
+        writeFileAtomic(deps.identityPath, rotated, currentModeOr(deps.identityPath, 0o644));
       }
     },
     ...(deps.reason !== undefined ? { reason: deps.reason } : {}),
@@ -204,6 +210,7 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
         relay: outcome.relay,
         rotations,
         relayKeyBefore: outcome.relayKeyBefore,
+        retiredKeyKeptAt,
         notes,
       };
     }

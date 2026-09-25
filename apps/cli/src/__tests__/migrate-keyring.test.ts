@@ -117,6 +117,13 @@ describe("handleMigrateKeyring", () => {
     expect(saved.cli_encrypted_key).toBeDefined();
     expect(saved.cli_encrypted_key?.ciphertext).toBeTruthy();
     expect(fs.existsSync(devKeyringPath)).toBe(false);
+    // R2: moved aside whole, owner-only — never zeroed, never erased.
+    const kept = fs.readdirSync(tmpDir).filter((f) => f.startsWith("dev-keyring.json.migrated-"));
+    expect(kept).toHaveLength(1);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(tmpDir, kept[0]!), "utf-8")).device_private_key,
+    ).toBe(toHex(privateKey));
+    expect(fs.statSync(path.join(tmpDir, kept[0]!)).mode & 0o777).toBe(0o600);
   });
 
   it("fails closed when dev-keyring private key derives to a DIFFERENT public than config.device_public_key", async () => {
@@ -226,6 +233,124 @@ describe("handleMigrateKeyring", () => {
       expect(saveFullConfigMock).not.toHaveBeenCalled();
       // dev-keyring preserved on mismatch.
       expect(fs.existsSync(devKeyringPath)).toBe(true);
+    } finally {
+      exitSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  async function migrate(devKeyring: Record<string, unknown>, force = false): Promise<string> {
+    const { privateKey, publicKey } = await generateKeypair();
+    loadFullConfigMock.mockReturnValue({
+      motebit_id: "m-1",
+      device_id: "d-1",
+      device_public_key: toHex(publicKey),
+      ...(force
+        ? { cli_encrypted_key: { ciphertext: "OLD", nonce: "n", tag: "t", salt: "s" } }
+        : {}),
+    });
+    promptPassphraseMock.mockResolvedValueOnce("p").mockResolvedValueOnce("p");
+    const devKeyringPath = path.join(tmpDir, "dev-keyring.json");
+    fs.writeFileSync(
+      devKeyringPath,
+      JSON.stringify({ device_private_key: toHex(privateKey), ...devKeyring }),
+    );
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await handleMigrateKeyring({ ...baseCliConfig, force } as CliConfig);
+    } finally {
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+    return devKeyringPath;
+  }
+
+  it("item 10: --force over an existing cli_encrypted_key declares an identity change that KEEPS the replaced key", async () => {
+    await migrate({}, true);
+    expect(saveFullConfigMock).toHaveBeenCalledOnce();
+    expect(saveFullConfigMock.mock.calls[0]?.[1]).toEqual({ identityChange: "preserve-replaced" });
+  });
+
+  it.each([
+    { pending_rotation: '{"new_private_key_hex":"ab"}' },
+    { pending_identity_switch: "{}" },
+    { "device_private_key.preserved-2026-01-01T00-00-00-000Z": "cd".repeat(32) },
+  ])(
+    "item 11 / F3: a keyring that holds MORE than the migrated key (%j) is left in place, owner-only",
+    async (extra) => {
+      const p = await migrate(extra);
+      expect(fs.existsSync(p)).toBe(true);
+      expect(Object.keys(JSON.parse(fs.readFileSync(p, "utf-8")))).toEqual(
+        expect.arrayContaining(Object.keys(extra)),
+      );
+      expect(fs.statSync(p).mode & 0o777).toBe(0o600);
+    },
+  );
+
+  it("item 11: a SYMLINKED keyring is unlinked, its target never zeroed", async () => {
+    const target = path.join(tmpDir, "elsewhere.json");
+    const { privateKey, publicKey } = await generateKeypair();
+    const body = JSON.stringify({ device_private_key: toHex(privateKey) });
+    fs.writeFileSync(target, body);
+    const devKeyringPath = path.join(tmpDir, "dev-keyring.json");
+    fs.symlinkSync(target, devKeyringPath);
+    loadFullConfigMock.mockReturnValue({
+      motebit_id: "m-1",
+      device_id: "d-1",
+      device_public_key: toHex(publicKey),
+    });
+    promptPassphraseMock.mockResolvedValueOnce("p").mockResolvedValueOnce("p");
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await handleMigrateKeyring(baseCliConfig);
+    } finally {
+      logSpy.mockRestore();
+    }
+    expect(fs.existsSync(devKeyringPath)).toBe(false);
+    expect(fs.readFileSync(target, "utf-8")).toBe(body);
+  });
+
+  it("item 11: a dangling-symlink keyring is not 'no keyring' (R1)", async () => {
+    const { publicKey } = await generateKeypair();
+    loadFullConfigMock.mockReturnValue({
+      motebit_id: "m-1",
+      device_id: "d-1",
+      device_public_key: toHex(publicKey),
+    });
+    fs.symlinkSync(path.join(tmpDir, "gone.json"), path.join(tmpDir, "dev-keyring.json"));
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("PROCESS_EXIT_CALLED");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(handleMigrateKeyring(baseCliConfig)).rejects.toThrow("PROCESS_EXIT_CALLED");
+      const said = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(said).toMatch(/malformed/);
+      expect(said).not.toMatch(/no plaintext keyring/);
+    } finally {
+      exitSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("a keyring the desktop already moved into the OS keychain is reported as such, not as 'no keyring'", async () => {
+    const { publicKey } = await generateKeypair();
+    loadFullConfigMock.mockReturnValue({
+      motebit_id: "m-1",
+      device_id: "d-1",
+      device_public_key: toHex(publicKey),
+    });
+    fs.writeFileSync(path.join(tmpDir, "dev-keyring.json.migrated-2026-01-01T00-00-00-000Z"), "{}");
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("PROCESS_EXIT_CALLED");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(handleMigrateKeyring(baseCliConfig)).rejects.toThrow("PROCESS_EXIT_CALLED");
+      const said = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(said).toMatch(/OS keychain/);
+      expect(fs.existsSync(path.join(tmpDir, "dev-keyring.json"))).toBe(false);
     } finally {
       exitSpy.mockRestore();
       errorSpy.mockRestore();

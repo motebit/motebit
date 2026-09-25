@@ -11,6 +11,7 @@ import {
 } from "@motebit/encryption";
 import type { EncryptedPayload } from "@motebit/encryption";
 import {
+  IdentityBootstrapRefusedError,
   bootstrapIdentity as sharedBootstrapIdentity,
   type BootstrapConfigStore,
   type BootstrapKeyStore,
@@ -225,11 +226,42 @@ export async function decryptPrivateKey(
   return new TextDecoder().decode(decrypted);
 }
 
+/**
+ * A config that names an identity (`motebit_id`) but holds no CLI key
+ * (`cli_encrypted_key` / `cli_private_key`) is NOT a first run. It is what the
+ * desktop app writes into the shared `~/.motebit/config.json` (its key lives
+ * in its own store), or a CLI identity whose key was lost. Minting here would
+ * overwrite that identity's binding — and the desktop's next launch would run
+ * its key under the CLI's new id. Refused, with the ways back; nothing is
+ * written (key-file durability item 1: never take the first-launch path over
+ * a store that holds identity material).
+ */
+export function refuseIdentityWithoutKey(fullConfig: FullConfig): void {
+  const id = fullConfig.motebit_id;
+  if (id == null || id === "") return;
+  if (fullConfig.cli_encrypted_key != null) return;
+  if (fullConfig.cli_private_key != null && fullConfig.cli_private_key !== "") return;
+  throw new IdentityBootstrapRefusedError(
+    "cli",
+    "identity-without-key",
+    `config.json names identity ${id} but holds no CLI key (the desktop app keeps its key in its own store, or this CLI's key was lost). Nothing was changed. To use that identity from the CLI: \`motebit migrate-keyring\` (a plaintext keyring is present) or \`motebit restore\` (recovery seed or its motebit.md).`,
+  );
+}
+
 export async function bootstrapIdentity(
   moteDb: MotebitDatabase,
   fullConfig: FullConfig,
   passphrase: string,
 ): Promise<{ motebitId: string; isFirstLaunch: boolean }> {
+  refuseIdentityWithoutKey(fullConfig);
+  // The key and the identity it is bound to live in ONE file here, so they
+  // are committed in ONE atomic write: `configStore.write` (which
+  // core-identity calls first) only stages the binding, and
+  // `storePrivateKey` persists binding and key together. A crash can no
+  // longer leave a key with no `motebit_id` — the state the next launch would
+  // otherwise mint over — nor a binding without its key.
+  let stagedBinding: { motebit_id: string; device_id: string; device_public_key: string } | null =
+    null;
   const configStore: BootstrapConfigStore = {
     read() {
       if (fullConfig.motebit_id == null || fullConfig.motebit_id === "")
@@ -241,19 +273,50 @@ export async function bootstrapIdentity(
       });
     },
     write(state): Promise<void> {
-      fullConfig.motebit_id = state.motebit_id;
-      fullConfig.device_id = state.device_id;
-      fullConfig.device_public_key = state.device_public_key;
-      saveFullConfig(fullConfig);
+      stagedBinding = state;
       return Promise.resolve();
     },
   };
 
   const keyStore: BootstrapKeyStore = {
     async storePrivateKey(privKeyHex) {
-      fullConfig.cli_encrypted_key = await encryptPrivateKey(privKeyHex, passphrase);
+      if (stagedBinding == null) {
+        throw new Error(
+          "identity bootstrap: the key arrived before its binding; nothing was written",
+        );
+      }
+      const encrypted = await encryptPrivateKey(privKeyHex, passphrase);
+      if (encrypted == null) throw new Error("could not encrypt the new identity key");
+      fullConfig.motebit_id = stagedBinding.motebit_id;
+      fullConfig.device_id = stagedBinding.device_id;
+      fullConfig.device_public_key = stagedBinding.device_public_key;
+      fullConfig.cli_encrypted_key = encrypted;
       delete fullConfig.cli_private_key;
-      saveFullConfig(fullConfig);
+      // An identity change, declared: refused if another process changed the
+      // identity since this config was read, and whatever key or binding it
+      // replaces is kept first.
+      saveFullConfig(fullConfig, { identityChange: "preserve-replaced" });
+    },
+    // Rule R1 at the one shared absence decision: only a config with NO key
+    // field is "no key". A key without a `motebit_id` is refused by
+    // core-identity rather than minted over; a key that decrypts to a public
+    // key other than the one the config names is refused as a mismatch.
+    async probePrivateKey() {
+      const legacy = fullConfig.cli_private_key;
+      if (fullConfig.cli_encrypted_key != null) {
+        try {
+          const hex = await decryptPrivateKey(fullConfig.cli_encrypted_key, passphrase);
+          const pub = await getPublicKeyBySuite(fromHex(hex), "motebit-jcs-ed25519-hex-v1");
+          return { state: "present" as const, publicKeyHex: toHex(pub) };
+        } catch (err) {
+          return {
+            state: "unreadable" as const,
+            reason: `cli_encrypted_key did not open (${err instanceof Error ? err.message : String(err)})`,
+          };
+        }
+      }
+      if (legacy != null && legacy !== "") return { state: "present" as const };
+      return { state: "absent" as const };
     },
   };
 

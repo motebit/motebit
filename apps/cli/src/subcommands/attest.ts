@@ -48,6 +48,7 @@ import {
   encryptPrivateKey,
   promptPassphrase,
   resolveUnlockPassphrase,
+  refuseIdentityWithoutKey,
 } from "../identity.js";
 import { getDbPath } from "../runtime-factory.js";
 
@@ -118,8 +119,9 @@ export async function handleAttest(config: CliConfig): Promise<void> {
     }
     fullConfig.cli_encrypted_key = await encryptPrivateKey(fullConfig.cli_private_key, passphrase);
     delete fullConfig.cli_private_key;
-    saveFullConfig(fullConfig);
+    saveFullConfig(fullConfig, { identityChange: "reencrypt-same-key" });
   } else {
+    refuseIdentityWithoutKey(fullConfig); // a named identity with no CLI key is never re-minted
     passphrase = envPassphrase ?? (await promptPassphrase(rl, "Set a passphrase: "));
     if (!passphrase) {
       process.stderr.write("Error: passphrase cannot be empty.\n");

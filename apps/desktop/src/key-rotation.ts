@@ -56,6 +56,23 @@ export async function rotateDesktopKey(
       save: (held) =>
         deps.invoke<void>("keyring_set", { key: PENDING_KEY, value: JSON.stringify(held) }),
       clear: () => deps.invoke<void>("keyring_delete", { key: PENDING_KEY }).catch(() => undefined),
+      // The kit's preserve verb (surface-kit `setAside`): the write-ahead's
+      // bytes move to a timestamped slot before the active slot is freed,
+      // and a failure at either step throws so the kit stops. A minimal
+      // implementation over the existing keyring IPC so desktop keeps
+      // compiling and never deletes a write-ahead the relay may hold; the
+      // desktop lane of key-file build 3 (items 21–27,
+      // docs/proposals/key-file-durability-v1.md) owns this adapter and the
+      // durability of the store underneath it.
+      setAside: async () => {
+        const raw = await deps.invoke<string | null>("keyring_get", { key: PENDING_KEY });
+        if (raw == null || raw === "") return;
+        await deps.invoke<void>("keyring_set", {
+          key: `${PENDING_KEY}.set_aside.${Date.now()}`,
+          value: raw,
+        });
+        await deps.invoke<void>("keyring_delete", { key: PENDING_KEY });
+      },
     },
     commit: async ({ privateKeyHex, publicKeyHex, record }) => {
       await deps.invoke<void>("keyring_set", { key: "device_private_key", value: privateKeyHex });

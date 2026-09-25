@@ -23,6 +23,7 @@ import {
   loadPendingRotation,
   pendingRotationPath,
   savePendingRotation,
+  setAsidePendingRotation,
 } from "../pending-rotation.js";
 import { performRotation, RotationUnlockError, type RotationNote } from "../rotation.js";
 import { resolveRelayUrl } from "./_helpers.js";
@@ -53,11 +54,13 @@ function discoverIdentityFile(): string | null {
 function describeNote(note: RotationNote): string {
   switch (note.kind) {
     case "stale-write-ahead-cleared":
-      return `Note: a held rotation for ${note.motebitId === "" ? "an unknown identity" : `identity ${note.motebitId.slice(0, 12)}…`} from key ${note.oldPublicKey.slice(0, 12)}… did not belong to this machine's current key and was cleared`;
+      return `Note: a held rotation for ${note.motebitId === "" ? "an unknown identity" : `identity ${note.motebitId.slice(0, 12)}…`} from key ${note.oldPublicKey.slice(0, 12)}… did not belong to this machine's current key; it was kept aside as ${pendingRotationPath()}.clobbered-<time>, not deleted`;
     case "write-ahead-discarded": {
       const minutes = Math.round(note.ageMs / 60_000);
-      return `Note: a held rotation from ${minutes} minute${minutes === 1 ? "" : "s"} ago was never recorded by the relay and was discarded; a fresh one was made`;
+      return `Note: a held rotation from ${minutes} minute${minutes === 1 ? "" : "s"} ago was never recorded by this relay; it was kept aside as ${pendingRotationPath()}.clobbered-<time> and a fresh one was made`;
     }
+    case "refused-write-ahead-set-aside":
+      return `Note: the refused rotation's new key was kept aside as ${pendingRotationPath()}.clobbered-<time>, not deleted`;
     case "interrupted-commit-finished":
       return `Note: the previous rotation was interrupted between its two local writes; finished it — this machine is on ${note.newPublicKeyHex.slice(0, 16)}…`;
   }
@@ -106,6 +109,7 @@ export async function handleRotate(config: CliConfig): Promise<void> {
         loadAny: loadAnyPendingRotation,
         save: savePendingRotation,
         clear: clearPendingRotation,
+        setAside: setAsidePendingRotation,
         path: pendingRotationPath(),
       },
       passphrase,
@@ -157,7 +161,11 @@ export async function handleRotate(config: CliConfig): Promise<void> {
             : "holds no key for this identity; nothing to record there (a later `motebit up` registers the new key)";
       console.log(`  Relay: ${relayLine}`);
       console.log("  Identity file: updated and re-signed");
-      console.log("  Config: new key encrypted and saved; old key erased");
+      console.log(
+        outcome.retiredKeyKeptAt != null
+          ? `  Config: new key encrypted and saved; the relay did not confirm the succession, so the old key is kept at ${outcome.retiredKeyKeptAt}`
+          : "  Config: new key encrypted and saved; old key erased (the relay recorded the succession)",
+      );
       console.log();
       console.log("Key rotation complete.");
       console.log(`  motebit_id   ${outcome.motebitId}`);

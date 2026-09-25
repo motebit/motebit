@@ -2,7 +2,7 @@
  * The write-ahead a rotation leaves before its request goes out
  * (`docs/proposals/key-rotation-client-v1.md` I2).
  */
-import { mkdtempSync, rmSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -14,6 +14,7 @@ import {
   loadPendingRotation,
   pendingRotationPath,
   savePendingRotation,
+  setAsidePendingRotation,
   type PendingRotation,
 } from "../pending-rotation.js";
 
@@ -57,15 +58,56 @@ describe("a held rotation", () => {
     expect(loadAnyPendingRotation(dir)).toEqual(held);
   });
 
-  it("is absent when nothing is held, and survives a corrupt or partial file", () => {
+  it("is absent (null) ONLY when nothing is there", () => {
     expect(loadPendingRotation("mid-1", "aa".repeat(32), dir)).toBeNull();
-    writeFileSync(pendingRotationPath(dir), "{not json");
-    expect(loadPendingRotation("mid-1", "aa".repeat(32), dir)).toBeNull();
-    writeFileSync(
-      pendingRotationPath(dir),
-      JSON.stringify({ motebit_id: "mid-1", old_public_key: "aa".repeat(32) }),
-    );
-    expect(loadPendingRotation("mid-1", "aa".repeat(32), dir)).toBeNull();
+    expect(loadAnyPendingRotation(dir)).toBeNull();
+  });
+
+  // Damage is not absence: a torn write-ahead may be the only copy of a key
+  // the relay already accepted, and "null" is what licenses clearing it.
+  it.each([
+    ["corrupt JSON", "{not json"],
+    ["a partial record", JSON.stringify({ motebit_id: "mid-1", old_public_key: "aa".repeat(32) })],
+    ["JSON null", "null"],
+    ["an array", "[]"],
+    ["an empty file", ""],
+  ])("reads %s as unreadable, never as absent — and leaves it on disk", (_label, body) => {
+    writeFileSync(pendingRotationPath(dir), body);
+    expect(loadAnyPendingRotation(dir)).toBe("unreadable");
+    expect(loadPendingRotation("mid-1", "aa".repeat(32), dir)).toBe("unreadable");
+    expect(readFileSync(pendingRotationPath(dir), "utf-8")).toBe(body);
+  });
+
+  it("reads a write-ahead it has no permission to read as unreadable", () => {
+    if (process.getuid?.() === 0) return; // root reads through mode 000
+    savePendingRotation(held, dir);
+    chmodSync(pendingRotationPath(dir), 0o000);
+    try {
+      expect(loadAnyPendingRotation(dir)).toBe("unreadable");
+    } finally {
+      chmodSync(pendingRotationPath(dir), 0o600);
+    }
+  });
+
+  it("a world-readable write-ahead (it holds an encrypted key) is narrowed to 0600 on load", () => {
+    writeFileSync(pendingRotationPath(dir), JSON.stringify(held));
+    chmodSync(pendingRotationPath(dir), 0o644);
+    expect(loadAnyPendingRotation(dir)).toEqual(held);
+    expect(statSync(pendingRotationPath(dir)).mode & 0o777).toBe(0o600);
+    // …and so is a damaged one: its bytes may still be key material.
+    writeFileSync(pendingRotationPath(dir), "{torn");
+    chmodSync(pendingRotationPath(dir), 0o644);
+    expect(loadAnyPendingRotation(dir)).toBe("unreadable");
+    expect(statSync(pendingRotationPath(dir)).mode & 0o777).toBe(0o600);
+  });
+
+  it("an unreadable write-ahead is set aside with its bytes kept, never deleted", () => {
+    writeFileSync(pendingRotationPath(dir), "{torn");
+    const kept = setAsidePendingRotation(dir)!;
+    expect(kept).toMatch(/pending-rotation\.json\.clobbered-/);
+    expect(readFileSync(kept, "utf-8")).toBe("{torn");
+    expect(statSync(kept).mode & 0o777).toBe(0o600);
+    expect(hasPendingRotation(dir)).toBe(false);
   });
 
   it("is written owner-only and atomically — it holds an encrypted private key", () => {

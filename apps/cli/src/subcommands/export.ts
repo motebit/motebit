@@ -18,6 +18,7 @@ import { generate as generateIdentityFile } from "@motebit/identity-file";
 import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
 import { CONFIG_DIR, loadFullConfig, saveFullConfig } from "../config.js";
+import { replaceIdentityFile } from "../durable-file.js";
 import {
   fromHex,
   promptPassphrase,
@@ -25,6 +26,7 @@ import {
   encryptPrivateKey,
   decryptPrivateKey,
   bootstrapIdentity,
+  refuseIdentityWithoutKey,
 } from "../identity.js";
 import { getDbPath } from "../runtime-factory.js";
 import { fetchRelayJson, getRelayAuthHeaders } from "./_helpers.js";
@@ -77,8 +79,9 @@ export async function handleExport(config: CliConfig): Promise<void> {
     }
     fullConfig.cli_encrypted_key = await encryptPrivateKey(fullConfig.cli_private_key, passphrase);
     delete fullConfig.cli_private_key;
-    saveFullConfig(fullConfig);
+    saveFullConfig(fullConfig, { identityChange: "reencrypt-same-key" });
   } else {
+    refuseIdentityWithoutKey(fullConfig); // a named identity with no CLI key is never re-minted
     passphrase =
       envPassphrase ?? (await promptPassphrase(rl, "Set a passphrase for your mote's key: "));
     if (!passphrase) {
@@ -147,8 +150,15 @@ export async function handleExport(config: CliConfig): Promise<void> {
   const skipped: string[] = [];
 
   // 1. Write identity file
+  // Atomic, and binding material is never overwritten unkept: an export
+  // directory still holding ANOTHER identity's motebit.md (the identity a
+  // restore replaced — for a legacy id, its only recovery path) keeps it as
+  // motebit.md.clobbered-<time>.
   const identityPath = path.join(outputDir, "motebit.md");
-  fs.writeFileSync(identityPath, identityContent, "utf-8");
+  const keptExport = replaceIdentityFile(identityPath, identityContent);
+  if (keptExport != null) {
+    console.log(`  Another identity's motebit.md was kept as ${keptExport}.`);
+  }
   exported.push("identity");
 
   // Also refresh the config-dir snapshot. `~/.motebit/motebit.md` is written
@@ -158,7 +168,15 @@ export async function handleExport(config: CliConfig): Promise<void> {
   // address, #429). Export is the natural refresh point: every export now
   // heals the snapshot, and doctor flags any remaining divergence.
   try {
-    fs.writeFileSync(path.join(CONFIG_DIR, "motebit.md"), identityContent, "utf-8");
+    // Atomic: a torn snapshot would be worse than a stale one — doctor and
+    // wallet derivation read it.
+    // A snapshot of a DIFFERENT identity (the pre-restore one) is kept, not
+    // overwritten.
+    const snapshotPath = path.join(CONFIG_DIR, "motebit.md");
+    const keptSnapshot = replaceIdentityFile(snapshotPath, identityContent);
+    if (keptSnapshot != null) {
+      console.log(`  The previous identity's snapshot was kept as ${keptSnapshot}.`);
+    }
   } catch {
     // Best-effort — the primary export above already succeeded.
   }

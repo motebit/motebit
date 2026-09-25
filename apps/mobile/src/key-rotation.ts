@@ -46,6 +46,18 @@ export async function rotateMobileKey(deps: MobileRotationDeps): Promise<{ newPu
       },
       save: (held) => deps.keyring.set(PENDING_KEY, JSON.stringify(held)),
       clear: () => deps.keyring.delete(PENDING_KEY),
+      // The kit's preserve verb: the write-ahead's bytes are copied to a
+      // timestamped SecureStore slot BEFORE the active slot is freed; either
+      // step failing throws, and the kit stops. Mobile SecureStore is outside
+      // key-file build 3's scope (tracked follow-up, item 29 of
+      // docs/proposals/key-file-durability-v1.md) — this keeps the bytes and
+      // nothing more (set-aside slots are not yet surfaced in the app).
+      setAside: async () => {
+        const raw = await deps.keyring.get(PENDING_KEY);
+        if (raw == null || raw === "") return;
+        await deps.keyring.set(`${PENDING_KEY}_set_aside_${Date.now()}`, raw);
+        await deps.keyring.delete(PENDING_KEY);
+      },
     },
     commit: async ({ privateKeyHex, publicKeyHex, record }) => {
       // Key first (the recoverable half), then the published key, then the

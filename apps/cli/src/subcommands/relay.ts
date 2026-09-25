@@ -67,6 +67,7 @@ import { serve } from "@hono/node-server";
 import { createSyncRelay, type SyncRelayConfig } from "@motebit/relay";
 import type { CliConfig } from "../args.js";
 import { RELAY_DIR, RELAY_DB_PATH } from "../config.js";
+import { mkdirOwnerOnly, narrowOnLoad } from "../durable-file.js";
 import { promptPassphrase } from "../identity.js";
 import { bold, dim, cyan, success } from "../colors.js";
 
@@ -142,8 +143,36 @@ export function resolveRelayDbPath(override: string | undefined): string {
   if (override != null && override !== "") return override;
   const envPath = process.env["MOTEBIT_RELAY_DB_PATH"];
   if (envPath != null && envPath !== "") return envPath;
-  fs.mkdirSync(RELAY_DIR, { recursive: true });
+  mkdirOwnerOnly(RELAY_DIR);
   return RELAY_DB_PATH;
+}
+
+/**
+ * The relay's SQLite database holds the relay's private key — in PLAINTEXT
+ * unless a passphrase is set, which is the `relay up` default. So it is a
+ * key file (`docs/proposals/key-file-durability-v1.md` R3): owner-only from
+ * creation, and narrowed on every open.
+ *
+ *  - A database that does not exist yet is created here, EMPTY and 0600,
+ *    before SQLite opens it (an empty file is a valid new database). SQLite
+ *    creates the `-wal` / `-shm` journal files with the database file's own
+ *    mode, so they are owner-only from creation too.
+ *  - An existing database, and any journal files beside it, readable by
+ *    group or others is narrowed to 0600 — before the relay opens it and
+ *    again after (for journal files the open itself created).
+ *
+ * Exported for tests.
+ */
+export function secureRelayDbFiles(dbPath: string): void {
+  if (dbPath === ":memory:") return;
+  try {
+    fs.closeSync(fs.openSync(dbPath, "wx", 0o600));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+  }
+  for (const f of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`, `${dbPath}-journal`]) {
+    narrowOnLoad(f);
+  }
 }
 
 async function resolveOptions(config: CliConfig): Promise<RelayCliOptions> {
@@ -245,7 +274,9 @@ export async function handleRelayUp(config: CliConfig): Promise<void> {
 
   printStartBanner(opts);
 
+  secureRelayDbFiles(opts.dbPath);
   const relay = await createSyncRelay(syncConfig);
+  secureRelayDbFiles(opts.dbPath);
 
   const server = serve({ fetch: relay.app.fetch, port: opts.port }, (info) => {
     printListeningBanner(info.port, relay.relayIdentity.relayMotebitId, relay.relayIdentity.did);

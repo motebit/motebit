@@ -1,7 +1,8 @@
 import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isPathAllowed } from "./path-sandbox.js";
+import { isPathAllowed, isProtectedStatePath } from "./path-sandbox.js";
+import { backupExisting } from "./write-file.js";
 
 /** @internal */
 export const undoWriteDefinition: ToolDefinition = {
@@ -40,6 +41,16 @@ export function createUndoWriteHandler(config?: {
       }
     }
 
+    // motebit's own state (identity key files) is never restored over: a
+    // pre-rotation config "restored" over the current one destroys the key
+    // the rotation committed.
+    if (isProtectedStatePath(filePath)) {
+      return {
+        ok: false,
+        error: `Access denied: "${filePath}" is inside motebit's own state (identity keys); the file tools never write there`,
+      };
+    }
+
     const resolved = path.resolve(filePath);
 
     try {
@@ -52,8 +63,14 @@ export function createUndoWriteHandler(config?: {
       for (const metaFile of metaFiles) {
         try {
           const metaContent = await fs.readFile(path.join(backupDir, metaFile), "utf-8");
-          const meta = JSON.parse(metaContent) as { originalPath: string; timestamp: number };
-          if (meta.originalPath === resolved) {
+          const meta = JSON.parse(metaContent) as {
+            originalPath: string;
+            timestamp: number;
+            createdBy?: string;
+          };
+          // A copy undo_write kept of what it overwrote is kept bytes, never an
+          // undo target: selecting it would re-apply the undone write.
+          if (meta.originalPath === resolved && meta.createdBy !== "undo_write") {
             if (!latestBackup || meta.timestamp > latestBackup.timestamp) {
               latestBackup = {
                 path: path.join(backupDir, metaFile.replace(".meta.json", "")),
@@ -70,8 +87,11 @@ export function createUndoWriteHandler(config?: {
         return { ok: false, error: `No backup found for "${resolved}"` };
       }
 
-      // Read backup and restore
+      // Read backup and restore. The CURRENT bytes are kept first (the undo
+      // is itself undoable) — or the restore does not happen.
       const backupContent = await fs.readFile(latestBackup.path, "utf-8");
+      const kept = await backupExisting(resolved, backupDir, "undo_write");
+      if (!kept.ok) return { ok: false, error: kept.error };
       await fs.writeFile(resolved, backupContent, "utf-8");
 
       return {

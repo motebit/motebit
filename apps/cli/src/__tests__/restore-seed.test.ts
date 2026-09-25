@@ -5,7 +5,12 @@
  * identity, so the classification is locked as data.
  */
 import { describe, it, expect } from "vitest";
-import { planRestore, isSovereignId } from "../subcommands/restore.js";
+import {
+  planRestore,
+  isSovereignId,
+  classifyWriteAhead,
+  holdsIdentityKey,
+} from "../subcommands/restore.js";
 import { seedBackupStatus } from "../subcommands/seed.js";
 import { deriveSovereignMotebitId } from "@motebit/crypto";
 
@@ -103,5 +108,25 @@ describe("seedBackupStatus", () => {
     expect(
       seedBackupStatus({ cli_encrypted_key: { ciphertext: "x" }, seed_backed_up_at: 123 }),
     ).toBe("backed_up");
+  });
+});
+
+describe("classifyWriteAhead — restore never deletes a write-ahead", () => {
+  it("from the seed's own key → in flight here (left in place)", () => {
+    expect(classifyWriteAhead({ old_public_key: PUB }, PUB)).toBe("in-flight-here");
+    expect(classifyWriteAhead({ old_public_key: PUB.toUpperCase() }, PUB)).toBe("in-flight-here");
+  });
+
+  it("anything else — including another identity's — is kept aside; there is no clearing outcome", () => {
+    expect(classifyWriteAhead({ old_public_key: OTHER_PUB }, PUB)).toBe("keep-aside");
+  });
+});
+
+describe("holdsIdentityKey — what a restore must keep before overwriting", () => {
+  it("an encrypted or a plaintext key counts; an empty config does not", () => {
+    expect(holdsIdentityKey({ cli_encrypted_key: { ciphertext: "c" } })).toBe(true);
+    expect(holdsIdentityKey({ cli_private_key: "ab" })).toBe(true);
+    expect(holdsIdentityKey({ cli_private_key: "" })).toBe(false);
+    expect(holdsIdentityKey({})).toBe(false);
   });
 });

@@ -27,7 +27,8 @@
  *   4. Encrypt the private key under the new passphrase via the
  *      same `encryptPrivateKey` flow `motebit init` uses.
  *   5. Write `cli_encrypted_key` to config.json.
- *   6. Securely erase + remove `dev-keyring.json` (with confirmation).
+ *   6. Move `dev-keyring.json` aside to `dev-keyring.json.migrated-<time>` (0600, never
+ *      erased) — or leave it in place when it holds entries beyond the migrated key.
  *
  * Idempotent on repeat: if `cli_encrypted_key` already exists, refuses
  * unless --force is passed (the user might be intentionally overwriting
@@ -39,6 +40,7 @@ import * as path from "node:path";
 import { secureErase, getPublicKeyBySuite } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
 import { CONFIG_DIR, loadFullConfig, saveFullConfig } from "../config.js";
+import { isTrulyAbsent, moveAside, narrowOnLoad } from "../durable-file.js";
 import { encryptPrivateKey, fromHex, toHex, promptPassphrase } from "../identity.js";
 
 interface DevKeyring {
@@ -67,7 +69,26 @@ export async function handleMigrateKeyring(config: CliConfig): Promise<void> {
   }
 
   const devKeyringPath = path.join(CONFIG_DIR, "dev-keyring.json");
-  if (!fs.existsSync(devKeyringPath)) {
+  // Rule R1: only ENOENT of the name itself is "no keyring". A dangling
+  // symlink or an unreadable directory is something there, not nothing.
+  if (isTrulyAbsent(devKeyringPath)) {
+    // The desktop moves its secrets into the OS keychain: dev-keyring.json is
+    // then gone on purpose, its bytes kept as dev-keyring.json.migrated-<t>
+    // and the names it held listed in keychain-index.json. That is not "no
+    // keyring" — say where the key went. (This command never recreates a
+    // plaintext dev-keyring.json.)
+    const migrated = migratedKeyringEvidence();
+    if (migrated.length > 0) {
+      console.error(
+        `Error: ${devKeyringPath} is gone because the desktop app moved its keys into the OS keychain (${migrated.join(", ")}).`,
+      );
+      console.error(
+        "  This command reads only the plaintext keyring, so there is nothing for it to migrate. The\n" +
+          "  identity key is in the OS keychain (and the migrated copy above, owner-only); recover the\n" +
+          "  CLI identity with `motebit restore` (recovery seed) rather than recreating a plaintext keyring.",
+      );
+      process.exit(1);
+    }
     console.error(`Error: no plaintext keyring at ${devKeyringPath}.`);
     console.error(
       "  This subcommand recovers from configs where cli_encrypted_key was lost\n" +
@@ -77,6 +98,9 @@ export async function handleMigrateKeyring(config: CliConfig): Promise<void> {
     process.exit(1);
   }
 
+  // It holds a PLAINTEXT private key: narrowed to owner-only on load, before
+  // anything else can fail (R3).
+  narrowOnLoad(devKeyringPath);
   let devKeyring: DevKeyring;
   try {
     const raw = fs.readFileSync(devKeyringPath, "utf-8");
@@ -166,29 +190,81 @@ export async function handleMigrateKeyring(config: CliConfig): Promise<void> {
   if (fullConfig.cli_private_key != null) {
     delete fullConfig.cli_private_key;
   }
-  saveFullConfig(fullConfig);
+  // An identity change, declared. With --force an existing
+  // `cli_encrypted_key` is REPLACED — and it may encrypt a different key than
+  // the one this keyring holds (it cannot be checked without its own
+  // passphrase), so the config it was in is kept as
+  // `config.json.clobbered-<time>` first. Refused if another process changed
+  // the identity while the passphrase was being typed.
+  const keptConfig = saveFullConfig(fullConfig, { identityChange: "preserve-replaced" });
+  if (keptConfig != null) {
+    console.log(`The replaced config (and its key) was kept as ${keptConfig}.`);
+  }
 
   // Securely overwrite the in-memory copy and remove the plaintext file
   // from disk. The file is the threat surface; once we're confident the
   // encrypted copy is persisted, the plaintext should not linger.
   secureErase(privateKeyBytes);
-  try {
-    // Best-effort secure remove: overwrite contents before unlink so a
-    // post-deletion recover from disk sectors yields zero bytes
-    // (filesystem-dependent; this is harm-reduction, not a guarantee).
-    const stat = fs.statSync(devKeyringPath);
-    fs.writeFileSync(devKeyringPath, "0".repeat(Math.min(stat.size, 4096)));
-    fs.unlinkSync(devKeyringPath);
-  } catch (err) {
+  // The keyring may hold MORE than this key — the desktop keeps a rotation
+  // write-ahead (`pending_rotation`, a new private key) and other secrets in
+  // the same file. Destroying those would destroy a key (R2), so the file is
+  // removed only when the migrated key is all it holds.
+  const otherEntries = Object.keys(devKeyring).filter((k) => k !== "device_private_key");
+  if (otherEntries.length > 0) {
     console.warn(
-      `Warning: could not remove ${devKeyringPath} (${err instanceof Error ? err.message : String(err)}).`,
+      `Warning: ${devKeyringPath} also holds ${otherEntries.join(", ")}; it was left in place (owner-only).`,
     );
-    console.warn("  Remove it manually — leaving a plaintext private key on disk is unsafe.");
+    console.warn(
+      "  The identity key is now encrypted in config.json. Remove the plaintext copy from that file",
+    );
+    console.warn("  only once nothing else (the desktop app) still needs the other entries.");
+  } else {
+    const kept = retirePlaintextKeyring(devKeyringPath);
+    if (kept != null) {
+      console.log(
+        `The plaintext keyring was moved aside to ${kept} (owner-only, not erased). Delete it yourself once you have confirmed the migration.`,
+      );
+    }
   }
-
   console.log("\nIdentity key migrated.");
   console.log(`  motebit_id:        ${fullConfig.motebit_id}`);
   console.log(`  device_public_key: ${fullConfig.device_public_key.slice(0, 12)}...`);
   console.log(`  storage:           cli_encrypted_key (passphrase-protected)`);
   console.log("\nNext step: `motebit register` to register this identity with the relay.");
+}
+
+/**
+ * Retire the migrated plaintext keyring from its active name WITHOUT
+ * destroying it (R2): the whole file moves to `dev-keyring.json.migrated-<time>`
+ * (owner-only) — the same convention the desktop uses when it moves its
+ * secrets into the OS keychain. A SYMLINK's target is never touched: its
+ * bytes are copied aside and only the link is removed. Nothing is zeroed —
+ * this command never erases key bytes, migrated or not. Returns the kept
+ * path, or null (with a warning) when it could not be moved.
+ */
+function retirePlaintextKeyring(devKeyringPath: string): string | null {
+  try {
+    return moveAside(devKeyringPath, ".migrated-");
+  } catch (err) {
+    console.warn(
+      `Warning: could not move ${devKeyringPath} aside (${err instanceof Error ? err.message : String(err)}); it was left in place (owner-only).`,
+    );
+    return null;
+  }
+}
+
+/**
+ * Evidence that the desktop already moved `dev-keyring.json` into the OS
+ * keychain: its kept copy (`dev-keyring.json.migrated-<time>`) or the index
+ * of names now in the keychain (`keychain-index.json`). Never throws.
+ */
+function migratedKeyringEvidence(): string[] {
+  try {
+    return fs
+      .readdirSync(CONFIG_DIR)
+      .filter((f) => f.startsWith("dev-keyring.json.migrated-") || f === "keychain-index.json")
+      .map((f) => path.join(CONFIG_DIR, f));
+  } catch {
+    return [];
+  }
 }

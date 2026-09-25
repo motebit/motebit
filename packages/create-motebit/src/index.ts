@@ -8,12 +8,25 @@
  */
 
 import { verify } from "@motebit/crypto";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import {
+  CONFIG_BACKUP_INFIX,
+  ConfigDamagedError,
+  identityFingerprint,
+  isTrulyAbsent,
+  moveAside,
+  pendingRotationPathIn,
+  readConfigFile,
+  replaceIdentityFile,
+  withFileLock,
+  writeConfigFile,
+} from "./config-file.js";
 import { join, basename, resolve } from "node:path";
 import { homedir } from "node:os";
 import { generateIdentity, regenerateIdentityFile, decryptPrivateKey } from "./generate.js";
 import type { TrustMode, EncryptedKey, ServiceIdentityOptions } from "./generate.js";
 import { rotateKey } from "./rotate.js";
+import { commitRotation, finishRotationCommand, RotationCommitError } from "./rotate-commit.js";
 import { createRL, input, password, select } from "./prompts.js";
 
 // ---------------------------------------------------------------------------
@@ -61,18 +74,85 @@ interface MotebitConfig {
   [key: string]: unknown;
 }
 
+/**
+ * Absent ⇒ `{}`; damaged ⇒ throws `ConfigDamagedError` (see config-file.ts).
+ * Reading damage as `{}` mattered twice over here: the clobber guard below
+ * decides from `motebit_id` alone, so an unreadable config looked like a
+ * fresh machine and was replaced.
+ */
 function loadConfig(): MotebitConfig {
+  return readConfigFile<MotebitConfig>(configPath());
+}
+
+/**
+ * The guided scaffold's read — EVERY read it makes goes through here. A
+ * damaged config refuses the scaffold unless `--force` was given; with it,
+ * the scaffold proceeds from `{}` and the save preserves the damaged bytes as
+ * `config.json.clobbered-<time>` before writing (`writeConfigFile`).
+ */
+let damageAnnounced = false;
+function loadConfigForScaffold(force: boolean): MotebitConfig {
   try {
-    return JSON.parse(readFileSync(configPath(), "utf-8")) as MotebitConfig;
-  } catch {
+    return loadConfig();
+  } catch (err) {
+    if (!(err instanceof ConfigDamagedError)) throw err;
+    const keptAs = `${basename(configPath())}${CONFIG_BACKUP_INFIX}<time>`;
+    if (!force) {
+      throw new Error(
+        `${err.message}\n    To replace it anyway, pass --force: the damaged file is kept as ${keptAs}, never deleted.`,
+        { cause: err },
+      );
+    }
+    if (!damageAnnounced) {
+      damageAnnounced = true;
+      console.log(
+        `  ${yellow("!")} ${dim(configPath())} could not be read (${err.reason}); --force given, it will be kept as ${keptAs}.`,
+      );
+    }
     return {};
   }
 }
 
-function saveConfig(config: MotebitConfig): void {
-  const dir = configDir();
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(configPath(), JSON.stringify(config, null, 2) + "\n", "utf-8");
+/**
+ * Save the operator config. A save that does not change the identity never
+ * changes it (another process's newer key is kept); one that does
+ * (`identityChange`) keeps whatever key it replaces and is refused if the
+ * identity changed since it was read (`config-file.ts`).
+ */
+function saveConfig(config: MotebitConfig, identityChange?: "preserve-replaced"): void {
+  const preservedAs = writeConfigFile(
+    configPath(),
+    config,
+    identityChange != null ? { identityChange } : {},
+  );
+  if (preservedAs != null) {
+    console.log(`  ${yellow("!")} The previous config was kept as ${dim(preservedAs)}.`);
+  }
+}
+
+/**
+ * A `motebit rotate` in flight in `dir` keeps its NEW key in
+ * `pending-rotation.json`. When the identity in that directory is replaced,
+ * that write-ahead must not stay armed: the next `motebit rotate` would find
+ * a write-ahead for another identity. It is moved aside (bytes kept, never
+ * deleted — the relay may already hold its key) as
+ * `pending-rotation.json.clobbered-<time>`.
+ */
+function setAsideWriteAhead(dir: string): void {
+  const kept = moveAside(pendingRotationPathIn(dir), CONFIG_BACKUP_INFIX);
+  if (kept != null) {
+    console.log(
+      `  ${yellow("!")} A key rotation in flight for the replaced identity was kept as ${dim(kept)}.`,
+    );
+  }
+}
+
+/** Write a signed identity file, keeping another identity's file that was there. */
+function writeIdentityFile(path: string, contents: string): void {
+  const kept = replaceIdentityFile(path, contents);
+  if (kept != null) {
+    console.log(`  ${yellow("!")} Another identity's ${basename(path)} was kept as ${dim(kept)}.`);
+  }
 }
 
 /**
@@ -86,9 +166,17 @@ function saveConfig(config: MotebitConfig): void {
  * template, which makes the spawned `motebit serve` resolve the same path.
  */
 function writeAgentConfig(agentDir: string, config: MotebitConfig): void {
-  const dir = join(agentDir, ".motebit");
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "config.json"), JSON.stringify(config, null, 2) + "\n", "utf-8");
+  // The agent's `cli_encrypted_key` is its only key copy — same three rules
+  // as the operator's config: atomic, owner-only, damage preserved first.
+  // A replaced agent identity (`--force`): its in-flight rotation is set
+  // aside first, and its config — key included — is kept by the write.
+  setAsideWriteAhead(join(agentDir, ".motebit"));
+  const preservedAs = writeConfigFile(join(agentDir, ".motebit", "config.json"), config, {
+    identityChange: "preserve-replaced",
+  });
+  if (preservedAs != null) {
+    console.log(`  ${yellow("!")} The previous agent config was kept as ${dim(preservedAs)}.`);
+  }
 }
 
 /**
@@ -111,7 +199,7 @@ function writeAgentConfig(agentDir: string, config: MotebitConfig): void {
  */
 function assertNoExistingIdentity(force: boolean): void {
   if (force) return;
-  const existing = loadConfig();
+  const existing = loadConfigForScaffold(force);
   if (!existing.motebit_id) return;
 
   console.log();
@@ -617,15 +705,18 @@ async function agentScaffold(
   let agentName: string;
   let agentDescription: string;
 
-  if (nonInteractive) {
-    // Local-config-clobber gate. Agent identities live in `<agent>/.motebit/`
-    // (self-contained, see writeAgentConfig). The package.json check above
-    // already catches "scaffolding into an existing project"; this catch
-    // covers the partial-state case where `.motebit/config.json` exists in
-    // an otherwise empty directory. Replaces the previous global ~/.motebit
-    // clobber gate, which became inert once agents stopped writing globally.
-    const localConfigPath = join(absDir, ".motebit", "config.json");
-    if (!force && existsSync(localConfigPath)) {
+  // Local-config-clobber gate — on BOTH paths. Agent identities live in
+  // `<agent>/.motebit/` (self-contained, see writeAgentConfig), and that
+  // config holds the agent's only key copy. The package.json check above
+  // catches "scaffolding into an existing project"; this catches the
+  // partial-state case where `.motebit/config.json` exists in an otherwise
+  // empty directory. It once ran only under --yes, so an interactive run
+  // replaced a healthy agent key without a word.
+  const localConfigPath = join(absDir, ".motebit", "config.json");
+  // R1: only ENOENT of the name is "no config" — a dangling symlink or an
+  // unreadable one is something there.
+  if (!isTrulyAbsent(localConfigPath)) {
+    if (!force) {
       console.log();
       console.log(
         `  ${red("!")} An existing motebit agent identity is present at ${dim(localConfigPath)}`,
@@ -634,9 +725,19 @@ async function agentScaffold(
       console.log(`    Refusing to overwrite without explicit consent.`);
       console.log();
       console.log(`    To intentionally replace it: ${dim("npx create-motebit ... --force")}`);
+      console.log(`    ${dim("(the existing config is kept as config.json.clobbered-<time>)")}`);
       console.log();
       process.exit(1);
     }
+    // Consent given — still never destroy a key: the replaced config's bytes
+    // (and any rotation it had in flight) are kept when the new one is
+    // written, after every prompt, so an aborted run changes nothing.
+    console.log(
+      `  ${yellow("!")} Replacing the existing agent identity; it will be kept as config.json.clobbered-<time>.`,
+    );
+  }
+
+  if (nonInteractive) {
     passphrase = process.env["MOTEBIT_PASSPHRASE"] ?? "";
     if (!passphrase) {
       console.log(`  ${red("!")} --yes requires MOTEBIT_PASSPHRASE environment variable.`);
@@ -696,23 +797,18 @@ async function agentScaffold(
   mkdirSync(absDir, { recursive: true });
   mkdirSync(join(absDir, "src"), { recursive: true });
 
-  writeFileSync(pkgPath, makeAgentPackageJson(dirName), "utf-8");
-  writeFileSync(join(absDir, "tsconfig.json"), makeAgentTsconfig(), "utf-8");
-  writeFileSync(join(absDir, "src", "index.ts"), makeAgentEntrypoint(agentName), "utf-8");
-  writeFileSync(join(absDir, "src", "tools.ts"), makeAgentTools(agentName), "utf-8");
-  writeFileSync(join(absDir, ".env.example"), makeAgentEnvExample(), "utf-8");
-  writeFileSync(join(absDir, ".gitignore"), AGENT_GITIGNORE, "utf-8");
-  writeFileSync(join(absDir, "motebit.md"), result.identityFileContent, "utf-8");
-  writeFileSync(join(absDir, "README.md"), makeAgentReadme(dirName, result.motebitId), "utf-8");
-
-  // Save identity to the agent's OWN config dir (`<agent>/.motebit/`), not
-  // the global `~/.motebit/`. This makes the agent self-contained: the
-  // signed identity (motebit.md), the encrypted private key (.motebit/
-  // config.json), the runnable code (src/), and the dependency manifest
-  // (package.json) all live under one directory. Copy that directory to
-  // another machine, set MOTEBIT_PASSPHRASE, run; identity travels with
-  // the agent. The operator's global ~/.motebit/ identity is left untouched
-  // so scaffolding never collides with `motebit relay up`.
+  // The key FIRST. Everything below names it (motebit.md) or blocks a rerun
+  // (package.json); written before the key, a failed or refused key write
+  // left a signed identity naming a key saved nowhere.
+  //
+  // Saved to the agent's OWN config dir (`<agent>/.motebit/`), not the
+  // global `~/.motebit/`. This makes the agent self-contained: the signed
+  // identity (motebit.md), the encrypted private key (.motebit/config.json),
+  // the runnable code (src/), and the dependency manifest (package.json)
+  // all live under one directory. Copy that directory to another machine,
+  // set MOTEBIT_PASSPHRASE, run; identity travels with the agent. The
+  // operator's global ~/.motebit/ identity is left untouched so scaffolding
+  // never collides with `motebit relay up`.
   const agentConfig: MotebitConfig = {
     name: dirName,
     motebit_id: result.motebitId,
@@ -721,6 +817,15 @@ async function agentScaffold(
     cli_encrypted_key: result.encryptedKey,
   };
   writeAgentConfig(absDir, agentConfig);
+
+  writeFileSync(pkgPath, makeAgentPackageJson(dirName), "utf-8");
+  writeFileSync(join(absDir, "tsconfig.json"), makeAgentTsconfig(), "utf-8");
+  writeFileSync(join(absDir, "src", "index.ts"), makeAgentEntrypoint(agentName), "utf-8");
+  writeFileSync(join(absDir, "src", "tools.ts"), makeAgentTools(agentName), "utf-8");
+  writeFileSync(join(absDir, ".env.example"), makeAgentEnvExample(), "utf-8");
+  writeFileSync(join(absDir, ".gitignore"), AGENT_GITIGNORE, "utf-8");
+  writeIdentityFile(join(absDir, "motebit.md"), result.identityFileContent);
+  writeFileSync(join(absDir, "README.md"), makeAgentReadme(dirName, result.motebitId), "utf-8");
 
   // Output
   const relDir = targetDir === "." ? "." : `./${dirName}`;
@@ -785,7 +890,7 @@ async function guidedScaffold(
   let passphrase: string;
   let rl: ReturnType<typeof createRL> | null = null;
   let reuseExisting = false;
-  let existingConfig = loadConfig();
+  let existingConfig = loadConfigForScaffold(force);
 
   if (nonInteractive) {
     // Identity-clobber gate. Interactive mode prompts; --yes mode must
@@ -831,7 +936,7 @@ async function guidedScaffold(
     console.log();
 
     // Check for existing identity
-    existingConfig = loadConfig();
+    existingConfig = loadConfigForScaffold(force);
     if (existingConfig.motebit_id) {
       console.log(`  ${yellow("!")} Existing identity found: ${dim(existingConfig.motebit_id)}`);
       const overwrite = await select(rl, "  Overwrite with new identity?", [
@@ -984,7 +1089,7 @@ async function guidedScaffold(
             trustMode,
           });
           // Persist for future reuse
-          writeFileSync(existingMd, identityFileContent, "utf-8");
+          writeIdentityFile(existingMd, identityFileContent);
         } catch {
           console.log(`  ${yellow("!")} Could not decrypt key — motebit.md will be omitted.`);
           console.log(
@@ -1011,18 +1116,33 @@ async function guidedScaffold(
     motebitId = result.motebitId;
     identityFileContent = result.identityFileContent;
 
-    // Save identity to config (merge with existing)
-    const config = loadConfig();
+    // Save identity to config (merge with existing). Replacing an identity is
+    // consented to (--force, or the interactive "Overwrite?" prompt) —
+    // destroying its key is not. The decision was made on `existingConfig`;
+    // if the identity on disk changed since (a `motebit rotate` or restore
+    // meanwhile), it no longer describes what would be replaced: refuse.
+    const config = loadConfigForScaffold(force);
+    if (identityFingerprint(config) !== identityFingerprint(existingConfig)) {
+      console.log(
+        `  ${red("!")} ${configPath()} changed while create-motebit was running (another motebit process). Nothing was changed — run it again.`,
+      );
+      console.log();
+      process.exit(1);
+    }
+    // The replaced identity's in-flight rotation is kept aside, and its
+    // config — key included — is kept by the save (`preserve-replaced`).
+    setAsideWriteAhead(configDir());
     config.name = dirName;
     config.motebit_id = result.motebitId;
     config.device_id = result.deviceId;
     config.device_public_key = result.publicKeyHex;
     config.cli_encrypted_key = result.encryptedKey;
     config.default_provider = provider;
-    saveConfig(config);
+    saveConfig(config, "preserve-replaced");
 
-    // Persist motebit.md to config dir so "keep existing" can reuse it
-    writeFileSync(join(configDir(), "motebit.md"), result.identityFileContent, "utf-8");
+    // Persist motebit.md to config dir so "keep existing" can reuse it. The
+    // replaced identity's signed file is kept, not overwritten.
+    writeIdentityFile(join(configDir(), "motebit.md"), result.identityFileContent);
   }
 
   // Write project files
@@ -1030,7 +1150,9 @@ async function guidedScaffold(
   writeFileSync(join(absDir, ".env.example"), makeEnvExample(provider), "utf-8");
   writeFileSync(join(absDir, ".gitignore"), GITIGNORE, "utf-8");
   if (identityFileContent) {
-    writeFileSync(join(absDir, "motebit.md"), identityFileContent, "utf-8");
+    // Atomic, and another identity's motebit.md already in the directory is
+    // kept, not overwritten (the guard above checks package.json only).
+    writeIdentityFile(join(absDir, "motebit.md"), identityFileContent);
   }
   writeFileSync(join(absDir, "verify.js"), makeVerifyExample(), "utf-8");
   // The motebitId is set on both branches above (existing-identity
@@ -1198,6 +1320,14 @@ async function rotateCmd(
     process.exit(1);
     return;
   }
+  const refusal = rotateRefusal(config);
+  if (refusal != null) {
+    console.log(`  ${red("!")} ${refusal}`);
+    console.log(`    Nothing was changed.`);
+    console.log();
+    process.exit(1);
+    return;
+  }
 
   // 3. Get the current passphrase
   let oldPassphrase: string;
@@ -1268,22 +1398,67 @@ async function rotateCmd(
     return;
   }
 
-  // 5. Backup then write updated identity file
-  const backupPath = `${filePath}.backup`;
-  writeFileSync(backupPath, content, "utf-8");
-  writeFileSync(filePath, result.identityFileContent, "utf-8");
-
-  // 6. Update config
-  config.device_public_key = result.newPublicKeyHex;
-  config.cli_encrypted_key = result.newEncryptedKey;
-  saveConfig(config);
-
-  // 7. Verify the updated file
+  // 5. Verify the rotated file BEFORE anything on disk changes.
   const reVerify = await verify(result.identityFileContent, { expectedType: "identity" });
   if (!reVerify.valid) {
     const errorMessage = reVerify.errors?.[0]?.message ?? "unknown error";
-    console.log(`  ${red("!")} Post-rotation verification failed: ${errorMessage}`);
-    console.log(`    The identity file may be corrupted. Restore from: ${backupPath}`);
+    console.log(`  ${red("!")} Rotated identity failed verification: ${errorMessage}`);
+    console.log(`    Nothing was changed.`);
+    console.log();
+    process.exit(1);
+    return;
+  }
+
+  // 6. Commit: both keys are held on disk before any file that names or
+  // holds one is replaced, so no failure point loses either (rotate-commit.ts).
+  const nextConfig: MotebitConfig = {
+    ...config,
+    device_public_key: result.newPublicKeyHex,
+    cli_encrypted_key: result.newEncryptedKey,
+  };
+  let backupPath: string;
+  let oldKeyKeptAt: string;
+  try {
+    // Held under the config lock the motebit CLI also takes, so no other
+    // motebit process can commit a key between the check and the last write.
+    ({ backupPath, oldKeyKeptAt } = withFileLock(configPath(), () => {
+      // The rotation departs from the key read at step 2. If the identity on
+      // disk changed while the passphrases were typed, rotating now would
+      // replace a key nobody decided to replace.
+      if (identityFingerprint(loadConfig()) !== identityFingerprint(config)) {
+        throw new RotationRaceError();
+      }
+      return commitRotation({
+        configPath: configPath(),
+        identityPath: filePath,
+        previousIdentity: content,
+        nextIdentity: result.identityFileContent,
+        nextConfig,
+      });
+    }));
+  } catch (err) {
+    if (err instanceof RotationRaceError) {
+      console.log(`  ${red("!")} ${err.message}`);
+      console.log();
+      process.exit(1);
+      return;
+    }
+    if (!(err instanceof RotationCommitError)) throw err;
+    console.log(`  ${red("!")} ${err.message}`);
+    if (err.newKeyAt == null) {
+      console.log(`    Nothing was changed; the identity is still on its old key.`);
+    } else if (err.identityNames === "old") {
+      console.log(`    ${filePath} and ${configPath()} are unchanged (old key).`);
+      console.log(`    The new key was never published; its copy can be deleted: ${err.newKeyAt}`);
+      console.log(`    The old key is also kept at ${err.oldKeyAt}.`);
+    } else {
+      console.log(
+        `    ${filePath} now names the NEW key, but ${configPath()} still holds the old one.`,
+      );
+      console.log(`    The new key is held at ${err.newKeyAt} — move it into place:`);
+      console.log(`      ${dim(finishRotationCommand(err.newKeyAt, configPath()))}`);
+      console.log(`    The old key is kept at ${err.oldKeyAt}.`);
+    }
     console.log();
     process.exit(1);
     return;
@@ -1304,7 +1479,63 @@ async function rotateCmd(
   console.log(`  Identity file updated: ${dim(filePath)}`);
   console.log(`  Backup saved:          ${dim(backupPath)}`);
   console.log(`  Config updated:        ${dim(configPath())}`);
+  console.log(`  Old key kept at:       ${dim(oldKeyKeptAt)} ${dim("(owner-only)")}`);
   console.log();
+  console.log(
+    `  ${dim("This command does not tell a relay. The old key is kept so the rotation can be undone")}`,
+  );
+  console.log(
+    `  ${dim("if this identity turns out to be registered with one; for a registered identity use `motebit rotate`.")}`,
+  );
+  console.log();
+}
+
+class RotationRaceError extends Error {
+  constructor() {
+    super(
+      `${configPath()} changed while the rotation was being prepared (another motebit process committed a key or identity). Nothing was changed — run it again.`,
+    );
+    this.name = "RotationRaceError";
+  }
+}
+
+/**
+ * Why `create-motebit rotate` must not rotate this identity, or null.
+ *
+ *  - A relay is configured (`sync_url`, a pinned `relay_public_key`, or
+ *    `MOTEBIT_SYNC_URL`): this command never talks to a relay, so it would
+ *    move the key locally while the relay still holds the old one — the
+ *    (local new, relay old) split #709 closed — and the founder's ruling is
+ *    that a retired key is erased only after a relay accepted the
+ *    succession. `motebit rotate` does that through the relay.
+ *  - A `motebit rotate` is in flight here (`pending-rotation.json`, readable
+ *    or not): its new key may already be the relay's. Rotating on top of it
+ *    would strand it.
+ *  - A previous `create-motebit rotate` stopped half-way
+ *    (`config.json.rotation-next-*`): the NEW key it held may be the one
+ *    `motebit.md` names. Finish or resolve that first.
+ */
+function rotateRefusal(config: MotebitConfig): string | null {
+  const syncUrl = typeof config["sync_url"] === "string" ? config["sync_url"] : "";
+  const relayKey = typeof config["relay_public_key"] === "string" ? config["relay_public_key"] : "";
+  const envRelay = process.env["MOTEBIT_SYNC_URL"] ?? "";
+  if (syncUrl !== "" || relayKey !== "" || envRelay !== "") {
+    return `This identity is registered with a relay (${syncUrl || envRelay || "a pinned relay key"}). create-motebit rotate never contacts a relay, so the relay would keep the old key. Rotate with \`motebit rotate\` instead — it records the succession at the relay first.`;
+  }
+  const pending = pendingRotationPathIn(configDir());
+  if (!isTrulyAbsent(pending)) {
+    return `A \`motebit rotate\` is in flight (${pending}); its new key may already be the relay's. Finish it with \`motebit rotate\` first.`;
+  }
+  let unfinished: string | undefined;
+  try {
+    unfinished = readdirSync(configDir()).find((f) => f.startsWith("config.json.rotation-next-"));
+  } catch {
+    unfinished = undefined;
+  }
+  if (unfinished != null) {
+    return `An earlier create-motebit rotate stopped before its last step: ${join(configDir(), unfinished)} holds a NEW key that motebit.md may already name. Resolve it first (compare it with motebit.md; \`motebit doctor\` lists it).`;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------

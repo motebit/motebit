@@ -26,6 +26,13 @@ import * as path from "node:path";
 // vocabulary, and the SDK re-exports every protocol type.
 import type { KeySuccessionRecord } from "@motebit/sdk";
 import { CONFIG_DIR, type FullConfig } from "./config.js";
+import {
+  isTrulyAbsent,
+  mkdirOwnerOnly,
+  moveAside,
+  narrowOnLoad,
+  writeFileAtomic,
+} from "./durable-file.js";
 
 export interface PendingRotation {
   motebit_id: string;
@@ -52,30 +59,38 @@ export function pendingRotationPath(dir: string = CONFIG_DIR): string {
 }
 
 export function savePendingRotation(pending: PendingRotation, dir: string = CONFIG_DIR): void {
-  fs.mkdirSync(dir, { recursive: true });
+  mkdirOwnerOnly(dir);
   const file = pendingRotationPath(dir);
   // Owner-only: it holds an encrypted private key, and the passphrase is
-  // the only thing between that and the identity. Written to a sibling and
+  // the only thing between that and the identity. Staged, fsync'd and
   // renamed so a crash mid-write leaves either the old file or the new one,
-  // never a torn one.
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(pending, null, 2), { mode: 0o600 });
-  fs.renameSync(tmp, file);
+  // never a torn one — the same discipline as config.json (`durable-file.ts`).
+  writeFileAtomic(file, JSON.stringify(pending, null, 2), 0o600);
 }
+
+/**
+ * What a read of the write-ahead can find. `null` is ABSENCE only. A file
+ * that exists but cannot be read, does not parse, or lacks a field is
+ * `"unreadable"` — never `null`: it may be the only copy of a new key the
+ * relay has already accepted, and a caller that took it for "nothing held"
+ * would clear it (the same rule config.json obeys, `config.ts`).
+ */
+export type PendingRotationRead = PendingRotation | null | "unreadable";
 
 /**
  * The held rotation, if it is one THIS identity, from THIS key, could still
  * have in flight. A record departing from a key this machine no longer
  * holds is evidence of a different problem (an older config restored over a
  * newer one), not an instruction — it is reported by the caller and cleared.
+ * `"unreadable"` passes through: whose it is cannot be known.
  */
 export function loadPendingRotation(
   motebitId: string,
   currentPublicKey: string,
   dir: string = CONFIG_DIR,
-): PendingRotation | null {
+): PendingRotationRead {
   const pending = loadAnyPendingRotation(dir);
-  if (pending == null) return null;
+  if (pending == null || pending === "unreadable") return pending;
   if (pending.motebit_id !== motebitId || pending.old_public_key !== currentPublicKey) return null;
   return pending;
 }
@@ -84,37 +99,94 @@ export function loadPendingRotation(
  * Whatever write-ahead exists, whoever it belongs to — for reconciliation
  * (a crash between the two local commit writes leaves the identity file and
  * the config on different keys, and the write-ahead is what bridges them)
- * and for naming a stale one before it is cleared. `null` when there is
- * none or it cannot be read.
+ * and for naming a stale one before it is cleared. `null` only when there is
+ * none; `"unreadable"` when there is one that cannot be used.
  */
-export function loadAnyPendingRotation(dir: string = CONFIG_DIR): PendingRotation | null {
+export function loadAnyPendingRotation(dir: string = CONFIG_DIR): PendingRotationRead {
   let raw: string;
   try {
     raw = fs.readFileSync(pendingRotationPath(dir), "utf-8");
-  } catch {
-    return null;
-  }
-  try {
-    const pending = JSON.parse(raw) as Partial<PendingRotation>;
-    if (typeof pending.motebit_id !== "string" || typeof pending.old_public_key !== "string")
+  } catch (err) {
+    // Only ENOENT of the NAME is absence: a dangling symlink reads ENOENT
+    // too, and it is something there that cannot be read.
+    if ((err as NodeJS.ErrnoException).code === "ENOENT" && isTrulyAbsent(pendingRotationPath(dir)))
       return null;
-    if (typeof pending.new_public_key !== "string" || pending.record == null) return null;
-    if (pending.encrypted_new_key == null) return null;
-    return pending as PendingRotation;
-  } catch {
-    return null;
+    narrowOnLoad(pendingRotationPath(dir));
+    return "unreadable";
   }
+  // It holds an encrypted private key: one written world-readable (by an
+  // older version, or by hand) is narrowed on load, as config.json is.
+  narrowOnLoad(pendingRotationPath(dir));
+  let pending: unknown;
+  try {
+    pending = JSON.parse(raw);
+  } catch {
+    return "unreadable";
+  }
+  if (pending === null || typeof pending !== "object" || Array.isArray(pending)) {
+    return "unreadable";
+  }
+  const p = pending as Partial<PendingRotation>;
+  if (typeof p.motebit_id !== "string" || typeof p.old_public_key !== "string") {
+    return "unreadable";
+  }
+  if (typeof p.new_public_key !== "string" || p.record == null) return "unreadable";
+  if (p.encrypted_new_key == null) return "unreadable";
+  return p as PendingRotation;
 }
 
-/** Whether ANY write-ahead file exists, readable or not. */
+/** Infix of a set-aside write-ahead: `pending-rotation.json.clobbered-<time>` (listed by `doctor`). */
+export const PENDING_ROTATION_SET_ASIDE_INFIX = ".clobbered-";
+
+/**
+ * Move a write-ahead out of the active slot WITHOUT destroying it — the
+ * surface-kit port's `setAside` verb. Its bytes become
+ * `pending-rotation.json.clobbered-<time>` (owner-only) in one atomic
+ * rename, so a write-ahead a concurrent `motebit rotate` saved an instant
+ * earlier is kept, never unlinked. Used for every write-ahead that may hold
+ * a key the relay accepted: another identity's, an unreadable one, one a
+ * fresh rotation supersedes, one the relay refused. Throws — leaving the
+ * file where it is — when the bytes cannot be kept. Returns the kept path,
+ * or `null` when there was nothing to move.
+ */
+export function setAsidePendingRotation(dir: string = CONFIG_DIR): string | null {
+  return moveAside(pendingRotationPath(dir), PENDING_ROTATION_SET_ASIDE_INFIX);
+}
+
+/**
+ * Whether ANY write-ahead exists, readable or not. Rule R1: only ENOENT of
+ * the name is absence — `existsSync` is also false for a dangling symlink
+ * or a directory this process cannot search, both of which are something
+ * there.
+ */
 export function hasPendingRotation(dir: string = CONFIG_DIR): boolean {
-  return fs.existsSync(pendingRotationPath(dir));
+  return !isTrulyAbsent(pendingRotationPath(dir));
 }
 
+/**
+ * DELETE the write-ahead. Only for one whose key is now durably the
+ * committed key (the relay recorded the succession and the local commit
+ * applied — the kit's post-commit `clear`): it holds nothing the config does
+ * not. Every other removal goes through `setAsidePendingRotation`.
+ */
 export function clearPendingRotation(dir: string = CONFIG_DIR): void {
   try {
     fs.unlinkSync(pendingRotationPath(dir));
   } catch {
     // Nothing held, or already gone.
   }
+}
+
+/** The write-ahead port `performRotation` (rotation.ts) is handed: this module's functions, bound. */
+export interface PendingRotationPort {
+  load: (motebitId: string, currentPublicKey: string) => PendingRotationRead;
+  /** Whatever write-ahead exists, whoever it belongs to. `null` is absence only. */
+  loadAny: () => PendingRotationRead;
+  save: (pending: PendingRotation) => void;
+  /** DELETE — only for a write-ahead whose key is now the committed key. */
+  clear: () => void;
+  /** Move out of the active slot, bytes kept; throws when they cannot be kept. */
+  setAside: () => unknown;
+  /** For messages that name the file. */
+  path: string;
 }

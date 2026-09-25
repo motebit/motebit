@@ -81,7 +81,24 @@ export interface KeyRotationPorts {
     /** `null` = nothing held; `"unreadable"` = something is there but could not be read. Never conflate them. */
     load(): Promise<HeldRotation | null | "unreadable">;
     save(held: HeldRotation): Promise<void>;
+    /**
+     * DELETE the write-ahead. The kit calls this ONLY after the relay is known
+     * to hold the key it names (or no relay is configured) AND `commit` has
+     * stored that key locally — at that point the write-ahead holds nothing
+     * the committed state does not.
+     */
     clear(): Promise<void>;
+    /**
+     * Move the current write-ahead out of the active slot WITHOUT destroying
+     * its bytes; resolves when the move is durable; THROWS on failure (the
+     * kit then stops — it never proceeds past a write-ahead it could not
+     * keep). Every write-ahead that may hold a key the relay accepted is set
+     * aside, never cleared: one for another identity or naming neither local
+     * key (step 1c), one a fresh mint supersedes (including the no-relay and
+     * unregistered branches), one the relay refused.
+     * `docs/proposals/key-file-durability-v1.md` rule R2.
+     */
+    setAside(): Promise<void>;
   };
   /**
    * Called ONLY after the relay is known (I1). Must store the key before
@@ -93,6 +110,14 @@ export interface KeyRotationPorts {
     privateKeyHex: string;
     publicKeyHex: string;
     record: KeySuccessionRecord;
+    /**
+     * What the relay did with this succession: `recorded` / `already-held` —
+     * the relay holds the new key, so the retired key may be erased;
+     * `none` — no relay configured, or the relay holds no key for this
+     * identity (unregistered). A surface that can keep the retired key keeps
+     * it on `none` when a relay IS configured: the relay never confirmed.
+     */
+    relay: "recorded" | "already-held" | "none";
   }): Promise<void>;
   reason?: string;
   fetchImpl?: typeof fetch;
@@ -102,6 +127,8 @@ export interface KeyRotationPorts {
 export type KeyRotationNote =
   | { kind: "stale-write-ahead-cleared"; motebitId: string; oldPublicKey: string }
   | { kind: "write-ahead-discarded"; ageMs: number }
+  /** The relay refused the rotation; its write-ahead was set aside (kept), not deleted. */
+  | { kind: "refused-write-ahead-set-aside" }
   | { kind: "no-relay-configured" }
   /** The last run's commit was interrupted between its writes; finished from the write-ahead. */
   | { kind: "interrupted-commit-finished"; newPublicKeyHex: string };
@@ -266,10 +293,15 @@ async function rotateWithin(
         "the write-ahead's private key does not derive to the key it names; nothing was changed — recover through the identity's guardian",
       );
     }
+    // Only a commit that started after the relay held the key is ever
+    // interrupted between its writes (every commit below is I1-gated), so the
+    // relay holds this one; once committed, the write-ahead holds nothing the
+    // committed state does not, and it is deleted.
     await ports.commit({
       privateKeyHex: target.new_private_key_hex,
       publicKeyHex: target.new_public_key,
       record: target.record,
+      relay: "already-held",
     });
     await ports.writeAhead.clear();
     notes.push({ kind: "interrupted-commit-finished", newPublicKeyHex: target.new_public_key });
@@ -284,8 +316,10 @@ async function rotateWithin(
 
   // 1c. A write-ahead for another identity, or one that names neither the
   //     key this device holds nor its published key, is evidence of a
-  //     different problem (an older store restored over a newer one), never
-  //     an instruction: said, then cleared. One that names the held key on
+  //     different problem (an older store restored over a newer one, another
+  //     identity scaffolded over this one), never an instruction: said, then
+  //     SET ASIDE — never deleted. Its new key may be the only copy of a key
+  //     the relay accepted for that identity. One that names the held key on
   //     either side is never stale.
   let held: HeldRotation | null = null;
   if (any != null) {
@@ -293,12 +327,12 @@ async function rotateWithin(
       any.old_public_key === oldPublicKeyHex || any.new_public_key === oldPublicKeyHex;
     if (any.motebit_id === ports.motebitId && any.old_public_key === oldPublicKeyHex) held = any;
     else if (any.motebit_id !== ports.motebitId || !namesHeldKey) {
+      await ports.writeAhead.setAside();
       notes.push({
         kind: "stale-write-ahead-cleared",
         motebitId: any.motebit_id,
         oldPublicKey: any.old_public_key,
       });
-      await ports.writeAhead.clear();
     }
   }
 
@@ -310,15 +344,25 @@ async function rotateWithin(
     relayKeyBefore: string | null,
   ): Promise<KeyRotationOutcome> => {
     // Local state moves ONLY here, and only after the relay is known (I1).
-    await ports.commit({ privateKeyHex: newPrivateKeyHex, publicKeyHex: newPublicKeyHex, record });
+    // The write-ahead, if one was saved for THIS key, now holds nothing the
+    // committed state does not: deleted. (Any other was set aside earlier.)
+    await ports.commit({
+      privateKeyHex: newPrivateKeyHex,
+      publicKeyHex: newPublicKeyHex,
+      record,
+      relay,
+    });
     await ports.writeAhead.clear();
     return { kind: "rotated", newPublicKeyHex, relay, relayKeyBefore, notes };
   };
 
   const mintFresh = async () => {
     if (held != null) {
+      // Superseded, not proven worthless: with no relay configured (or one
+      // that no longer knows the identity) nothing says the relay that was
+      // configured when it was written did not record it. Kept aside.
+      await ports.writeAhead.setAside();
       notes.push({ kind: "write-ahead-discarded", ageMs: Math.max(0, now() - held.written_at) });
-      await ports.writeAhead.clear();
     }
     const minted = await rotateIdentityKeys({
       oldPrivateKey,
@@ -442,8 +486,10 @@ async function rotateWithin(
       }
       if (submitted.kind === "refused") {
         // The relay said no. Nothing local changed; the write-ahead is for
-        // a rotation that will never land.
-        await ports.writeAhead.clear();
+        // a rotation that will never land — kept aside all the same (R2: key
+        // material is never destroyed on the kit's say-so).
+        await ports.writeAhead.setAside();
+        notes.push({ kind: "refused-write-ahead-set-aside" });
         return stopped(
           "refused",
           `the relay refused the rotation — ${submitted.reason}; your current key still works and nothing was changed`,

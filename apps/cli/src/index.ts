@@ -14,7 +14,15 @@ import {
   defaultModelForProvider,
 } from "./args.js";
 import type { CliConfig } from "./args.js";
-import { loadFullConfig, extractPersonality, persistMotebitPublicKeys, VERSION } from "./config.js";
+import { IdentityBootstrapRefusedError } from "@motebit/core-identity";
+import {
+  ConfigDamagedError,
+  ConfigIdentityChangedError,
+  loadFullConfig,
+  extractPersonality,
+  persistMotebitPublicKeys,
+  VERSION,
+} from "./config.js";
 import {
   renderUpdateNudge,
   readUpdateState,
@@ -27,6 +35,7 @@ import {
   decryptPrivateKey,
   bootstrapIdentity,
   fromHex,
+  refuseIdentityWithoutKey,
 } from "./identity.js";
 import {
   getDbPath,
@@ -685,10 +694,16 @@ async function main(): Promise<void> {
     fullConfig.cli_encrypted_key = await encryptPrivateKey(fullConfig.cli_private_key, passphrase);
     delete fullConfig.cli_private_key;
     const { saveFullConfig } = await import("./config.js");
-    saveFullConfig(fullConfig);
+    // The same key, re-encoded: nothing is replaced, and a kept copy of the
+    // plaintext would defeat the migration. Still refused if another process
+    // changed the identity while the passphrase was being typed.
+    saveFullConfig(fullConfig, { identityChange: "reencrypt-same-key" });
     console.log(dim("  Encrypted. Plaintext removed."));
   } else {
-    // Identity birth
+    // Identity birth — unless the config already names an identity whose key
+    // the CLI does not hold (the desktop's, or a lost CLI key): refused
+    // before any prompt, nothing written.
+    refuseIdentityWithoutKey(fullConfig);
     console.log();
     console.log(`  ${bold("Welcome to Motebit.")}`);
     console.log();
@@ -1263,6 +1278,17 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
+  // A damaged config is the one failure where a stack trace is the least
+  // useful thing to show: the user needs to know the file was left alone and
+  // what to do next, not where it was thrown.
+  if (
+    err instanceof ConfigDamagedError ||
+    err instanceof ConfigIdentityChangedError ||
+    err instanceof IdentityBootstrapRefusedError
+  ) {
+    console.error(`Error: ${err.message}`);
+    process.exit(1);
+  }
   console.error("Fatal error:", err);
   process.exit(1);
 });

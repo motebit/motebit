@@ -51,12 +51,22 @@ import {
   deriveSovereignMotebitId,
 } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
-import { loadFullConfig, saveFullConfig } from "../config.js";
+import {
+  identityFingerprint,
+  CONFIG_BACKUP_PREFIX,
+  CONFIG_PATH,
+  ConfigDamagedError,
+  loadFullConfig,
+  saveFullConfig,
+  type FullConfig,
+} from "../config.js";
+
 import { encryptPrivateKey, promptPassphrase } from "../identity.js";
 import {
-  clearPendingRotation,
   hasPendingRotation,
+  loadAnyPendingRotation,
   loadPendingRotation,
+  setAsidePendingRotation,
   pendingRotationPath,
 } from "../pending-rotation.js";
 import { bold, dim, error as errorColor, success, warn } from "./../colors.js";
@@ -99,6 +109,59 @@ export function planRestore(
     return { kind: "fresh_install", motebitId: targetMotebitId };
   }
   return { kind: "replace", oldMotebitId: current.motebit_id, newMotebitId: targetMotebitId };
+}
+
+/**
+ * The config as restore must read it — EVERY read restore makes goes through
+ * here (the plan's and the commit's; the first fix for this guarded one of
+ * two and was withdrawn for it). A damaged config is not an error to restore:
+ * it is the case restore exists for. It reads as empty and the damage is
+ * returned so the caller can say so; the file itself is never touched here.
+ * Any other failure is not damage and propagates.
+ */
+export function loadConfigForRestore(): {
+  config: FullConfig;
+  damaged: ConfigDamagedError | null;
+} {
+  try {
+    return { config: loadFullConfig(), damaged: null };
+  } catch (err) {
+    if (err instanceof ConfigDamagedError) return { config: {}, damaged: err };
+    throw err;
+  }
+}
+
+/**
+ * What restore does with a READABLE rotation write-ahead. Pure, and there is
+ * deliberately no destructive outcome: restore never deletes a write-ahead.
+ *
+ *  - `"in-flight-here"`: a rotation FROM the seed's own key. Left in place;
+ *    the relay may already hold its new key, and the restored config holds
+ *    the old key `motebit rotate` pairs it with.
+ *  - `"keep-aside"`: anything else — another identity's (an identity being
+ *    replaced may have had its rotation accepted at the relay, so its new key
+ *    exists nowhere else), or this identity's from another key. It must not
+ *    stay active against the restored config, so its bytes are kept as
+ *    `pending-rotation.json.clobbered-<time>`.
+ */
+export function classifyWriteAhead(
+  held: { old_public_key: string },
+  seedPublicKeyHex: string,
+): "in-flight-here" | "keep-aside" {
+  return held.old_public_key.toLowerCase() === seedPublicKeyHex.toLowerCase()
+    ? "in-flight-here"
+    : "keep-aside";
+}
+
+/** Whether a config carries a private key — the thing a restore must never overwrite unkept. */
+export function holdsIdentityKey(config: {
+  cli_encrypted_key?: unknown;
+  cli_private_key?: unknown;
+}): boolean {
+  return (
+    config.cli_encrypted_key != null ||
+    (config.cli_private_key != null && config.cli_private_key !== "")
+  );
 }
 
 /**
@@ -171,7 +234,19 @@ export async function handleRestore(config: CliConfig): Promise<void> {
   }
 
   // ── Plan: reset / fresh / replace ──
-  const full = loadFullConfig();
+  //
+  // Restore is the one command that must survive a config it cannot read:
+  // it is where `doctor` sends a user with a damaged one, and its job is to
+  // rebuild that file from the seed they have just proved they hold.
+  // Refusing here would be a loop with no exit. The damaged file is NOT
+  // touched now — the user may still abort — only at the final save, which
+  // preserves it before replacing it.
+  const { config: full, damaged } = loadConfigForRestore();
+  if (damaged != null) {
+    console.log(`\n  ${warn("Your current config could not be read")} (${damaged.reason}).`);
+    console.log(dim("  It will be kept, byte for byte, beside the new one when the restore"));
+    console.log(dim(`  completes (${CONFIG_BACKUP_PREFIX}<time>). Nothing is deleted.`));
+  }
   const plan = planRestore(publicKeyHex, metadata!.motebitId, full);
 
   if (plan.kind === "passphrase_reset") {
@@ -181,10 +256,13 @@ export async function handleRestore(config: CliConfig): Promise<void> {
     console.log(
       `\n  ${warn(bold("⚠ REPLACE"))} This machine currently holds ${bold(plan.oldMotebitId)}.`,
     );
-    console.log(dim("  Restoring will overwrite it. Local data keyed to the old identity"));
-    console.log(dim("  (memories, trust, ledger) stays on disk but orphaned — hard overwrite,"));
-    console.log(dim("  per docs/doctrine/identity-restore.md. This cannot be undone without"));
-    console.log(dim("  the OLD identity's own seed."));
+    console.log(dim("  Restoring makes the restored identity this machine's. Local data keyed to"));
+    console.log(dim("  the old identity (memories, trust, ledger) stays on disk but orphaned —"));
+    console.log(dim("  per docs/doctrine/identity-restore.md. Its key is NOT destroyed: the"));
+    console.log(dim(`  current config is kept as ${CONFIG_BACKUP_PREFIX}<time> (owner-only), and`));
+    console.log(
+      dim("  any rotation it had in progress as pending-rotation.json.clobbered-<time>."),
+    );
     const confirm = await askVisible(`  Type ${bold("REPLACE IDENTITY")} to continue: `);
     if (confirm.trim() !== "REPLACE IDENTITY") {
       console.log("\n  Nothing changed.");
@@ -210,8 +288,28 @@ export async function handleRestore(config: CliConfig): Promise<void> {
   // Scoped to THIS identity and THIS key: a write-ahead for another identity,
   // or from a key this machine no longer holds, is stale and must not block a
   // passphrase change forever — it is cleared, and said.
+  //
+  // An UNREADABLE write-ahead is never cleared: it may be the only copy of a
+  // new key the relay already accepted. Whose it is cannot be known, so on a
+  // passphrase reset it is treated as this identity's (refuse, like any
+  // rotation in flight); on a fresh install or a replace its bytes are kept
+  // as `pending-rotation.json.clobbered-<time>` and the name freed.
   const inFlight =
     plan.kind === "passphrase_reset" ? loadPendingRotation(plan.motebitId, publicKeyHex) : null;
+  if (inFlight === "unreadable") {
+    console.error(
+      `  A key rotation write-ahead is present (${pendingRotationPath()}) but could not be read; it may hold a rotated key.`,
+    );
+    console.error(
+      "  Changing the passphrase could make it unrecoverable. Inspect or move that file aside first. Nothing changed.",
+    );
+    process.exit(1);
+  }
+  // Restore NEVER deletes a write-ahead; one that must not stay active is set
+  // aside at commit time (below), after the user has confirmed everything —
+  // an aborted restore leaves it exactly where it was.
+  let setAsideAtCommit =
+    plan.kind !== "passphrase_reset" && loadAnyPendingRotation() === "unreadable";
   if (inFlight != null) {
     console.error(
       `  A key rotation is in flight (${pendingRotationPath()}); its new key is encrypted under the current passphrase.`,
@@ -221,13 +319,27 @@ export async function handleRestore(config: CliConfig): Promise<void> {
     );
     process.exit(1);
   }
-  if (hasPendingRotation()) {
-    console.log(
-      dim(
-        `  Note: a held rotation (${pendingRotationPath()}) did not belong to this identity and key; cleared.`,
-      ),
-    );
-    clearPendingRotation();
+  // A READABLE write-ahead is cleared only on a POSITIVE attribution to a
+  // different identity, made against a config that could be read. One that
+  // belongs to the identity being restored — or whose attribution is
+  // uncertain because the config was damaged — is never deleted.
+  const held = hasPendingRotation() ? loadAnyPendingRotation() : null;
+  if (held != null && held !== "unreadable") {
+    const verdict = classifyWriteAhead(held, publicKeyHex);
+    if (verdict === "in-flight-here") {
+      // A rotation of THIS identity from THIS key: the relay may already hold
+      // its new key. It is left exactly where it is — the restored config
+      // will hold its old key, which is what `motebit rotate` pairs it with.
+      console.log(
+        `\n  ${warn("A key rotation of this identity is in flight")} (${pendingRotationPath()}); it is left in place.`,
+      );
+      console.log(
+        dim("  Its new key is encrypted under the passphrase the rotation was started with —"),
+      );
+      console.log(dim("  use that passphrase below, then run `motebit rotate` to finish it."));
+    } else {
+      setAsideAtCommit = true;
+    }
   }
   const pass1 = await promptPassphrase("  New passphrase: ");
   if (pass1 === "") {
@@ -241,7 +353,39 @@ export async function handleRestore(config: CliConfig): Promise<void> {
   }
 
   const encrypted = await encryptPrivateKey(seedHex, pass1);
-  const next = loadFullConfig();
+  // Re-read, damage-tolerant like the plan's read above. The plan was decided
+  // on the state read THEN; if the config changed while the user typed —
+  // damaged, repaired, or given another identity or key by another process
+  // (a `motebit rotate`, the desktop) — that decision no longer applies, and
+  // committing it could write a passphrase reset with no `motebit_id` (which
+  // the next launch would mint over) or replace a key nobody decided to
+  // replace. Refuse; nothing has changed yet.
+  const { config: next, damaged: damagedNow } = loadConfigForRestore();
+  const sameState =
+    (damaged == null) === (damagedNow == null) &&
+    (damaged != null || identityFingerprint(full) === identityFingerprint(next));
+  if (!sameState) {
+    console.error(
+      `  ${CONFIG_PATH} changed while the restore was in progress. Nothing changed — run \`motebit restore\` again.`,
+    );
+    process.exit(1);
+  }
+
+  // ── Commit. Nothing below destroys a key. ──
+  // 1. A write-ahead that must not stay active is set aside, never deleted.
+  if (setAsideAtCommit && hasPendingRotation()) {
+    let kept: string | null;
+    try {
+      kept = setAsidePendingRotation();
+    } catch (err) {
+      console.error(
+        `  A key rotation write-ahead (${pendingRotationPath()}) could not be kept aside: ${err instanceof Error ? err.message : String(err)}. Nothing changed.`,
+      );
+      process.exit(1);
+    }
+    console.log(dim(`  A held key rotation was kept as ${kept}, not deleted.`));
+  }
+
   next.cli_encrypted_key = encrypted;
   delete next.cli_private_key; // never leave a plaintext sibling behind
   next.device_public_key = publicKeyHex;
@@ -256,7 +400,32 @@ export async function handleRestore(config: CliConfig): Promise<void> {
   }
   // They demonstrably HOLD the seed — that is what "backed up" means.
   next.seed_backed_up_at = Date.now();
-  saveFullConfig(next);
+  // 2. The config. `saveFullConfig` keeps whatever it replaces: a damaged
+  //    file byte for byte, and — this being a declared identity change — any
+  //    key or signed identity file the new config does not carry, on EVERY
+  //    plan. That includes a passphrase reset: `planRestore` matches on
+  //    `device_public_key`, but `cli_encrypted_key` / `cli_private_key` may
+  //    hold a DIFFERENT key (a config shared with the desktop, or a
+  //    half-written one), and it is kept rather than trusted to be the
+  //    seed's. It refuses if the identity changed since the re-read above.
+  let preservedAs: string | null;
+  try {
+    preservedAs = saveFullConfig(next, { identityChange: "preserve-replaced" });
+  } catch (err) {
+    console.error(
+      `  The config could not be written without losing what it holds: ${err instanceof Error ? err.message : String(err)}. The config was not changed.`,
+    );
+    process.exit(1);
+  }
+  if (preservedAs != null) {
+    console.log(
+      dim(
+        damaged != null
+          ? `  The unreadable config was kept as ${preservedAs}.`
+          : `  The replaced config (and the key it held) was kept as ${preservedAs}.`,
+      ),
+    );
+  }
 
   const wallet = base58Encode(hexToBytes(publicKeyHex));
   console.log(`\n  ${success("Restored.")} ${bold(metadata!.motebitId)}`);

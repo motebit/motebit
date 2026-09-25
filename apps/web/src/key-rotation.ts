@@ -41,6 +41,10 @@ export async function rotateWebKey(deps: WebRotationDeps): Promise<{ newPublicKe
       },
       save: (held) => deps.keyStore.storePendingRotation(JSON.stringify(held)),
       clear: () => deps.keyStore.clearPendingRotation(),
+      // The kit's preserve verb: kept (same wrapping as the key) under a
+      // timestamped slot before the active slot is freed. Web keystores are
+      // outside key-file build 3's scope; this only keeps the bytes.
+      setAside: () => deps.keyStore.setAsidePendingRotation(),
     },
     commit: async ({ privateKeyHex, publicKeyHex }) => {
       await deps.keyStore.storePrivateKey(privateKeyHex);

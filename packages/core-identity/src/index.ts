@@ -366,6 +366,51 @@ export interface BootstrapKeyStore {
    * encrypted file, or the secure-store entry exists and is non-empty.
    */
   hasPrivateKey?(): Promise<boolean>;
+  /**
+   * The tri-state probe (`docs/proposals/key-file-durability-v1.md` R1:
+   * absence is not damage). When provided it SUPERSEDES `hasPrivateKey`,
+   * whose boolean folds "could not read the keystore" into "no key" — the
+   * fold that let bootstrap mint a fresh identity over a key it merely
+   * failed to read.
+   *
+   *  - `absent` — the keystore provably holds no private key (the slot /
+   *    file / field does not exist). The only answer that permits a mint.
+   *  - `present` — a key is held. `publicKeyHex`, when the adapter can
+   *    derive it, is checked against the config's `device_public_key`.
+   *  - `unreadable` — something is there that could not be read, or the
+   *    probe itself failed. Bootstrap REFUSES: it never mints over, and
+   *    never overwrites, what it could not read.
+   *
+   * With this probe, bootstrap also refuses the first-launch path over a
+   * keystore that holds a key while the config names no identity — minting
+   * there would overwrite that key.
+   */
+  probePrivateKey?(): Promise<
+    | { state: "absent" }
+    | { state: "present"; publicKeyHex?: string }
+    | { state: "unreadable"; reason: string }
+  >;
+}
+
+/**
+ * `bootstrapIdentity` would have had to mint or overwrite over key material
+ * it could not read, could not bind, or that does not match its binding. It
+ * changed nothing; the message names the state and the way out.
+ */
+export class IdentityBootstrapRefusedError extends Error {
+  constructor(
+    readonly surfaceName: string,
+    readonly state:
+      | "keystore-unreadable"
+      | "key-without-identity"
+      | "key-mismatch"
+      /** A binding (`motebit_id`) held with no key this surface can use: minting would replace the binding. */
+      | "identity-without-key",
+    detail: string,
+  ) {
+    super(`identity bootstrap refused (${state}): ${detail}`);
+    this.name = "IdentityBootstrapRefusedError";
+  }
 }
 
 export interface BootstrapResult {
@@ -409,7 +454,7 @@ function toHex(bytes: Uint8Array): string {
  * 2. If found, verify it exists in DB — return existing
  * 3. If config has ID but DB doesn't, re-create in DB (robustness)
  * 4. On first launch: create identity, generate Ed25519 keypair, register device
- * 5. Persist private key via keyStore, write config via configStore
+ * 5. Write config via configStore (it may refuse), THEN persist the private key via keyStore
  */
 /**
  * Pre-write the MotebitIdentity record + `IdentityCreated` event for a
@@ -498,7 +543,43 @@ export async function bootstrapIdentity(opts: {
   //
   // The probe is optional — older keyStore impls that predate hasPrivateKey
   // keep the pre-2026-04-23 behavior (trust the config unconditionally).
-  const keyStoreIntact = existing && keyStore.hasPrivateKey ? await keyStore.hasPrivateKey() : true;
+  // The tri-state probe, when the adapter provides one, decides — and it is
+  // asked even when the config names no identity: a key held without a
+  // binding is exactly the key a first launch would overwrite.
+  let keyStoreIntact: boolean;
+  if (keyStore.probePrivateKey) {
+    const probe = await keyStore.probePrivateKey();
+    if (probe.state === "unreadable") {
+      throw new IdentityBootstrapRefusedError(
+        surfaceName,
+        "keystore-unreadable",
+        `the private key store could not be read (${probe.reason}); nothing was minted or overwritten`,
+      );
+    }
+    if (probe.state === "present" && (existing == null || !existing.motebit_id)) {
+      throw new IdentityBootstrapRefusedError(
+        surfaceName,
+        "key-without-identity",
+        "a private key is stored but no motebit_id is bound to it; minting a new identity would overwrite that key, so nothing was changed — restore the identity (`motebit restore` with the recovery seed or its motebit.md), or move the key aside first",
+      );
+    }
+    if (
+      probe.state === "present" &&
+      existing != null &&
+      probe.publicKeyHex !== undefined &&
+      existing.device_public_key !== "" &&
+      probe.publicKeyHex.toLowerCase() !== existing.device_public_key.toLowerCase()
+    ) {
+      throw new IdentityBootstrapRefusedError(
+        surfaceName,
+        "key-mismatch",
+        `the stored private key derives to ${probe.publicKeyHex.slice(0, 16)}… but the identity names ${existing.device_public_key.slice(0, 16)}…; nothing was changed — restore the identity before continuing`,
+      );
+    }
+    keyStoreIntact = probe.state === "present";
+  } else {
+    keyStoreIntact = existing && keyStore.hasPrivateKey ? await keyStore.hasPrivateKey() : true;
+  }
   const divergedFromMotebitId =
     existing && existing.motebit_id && !keyStoreIntact ? existing.motebit_id : undefined;
 
@@ -580,15 +661,23 @@ export async function bootstrapIdentity(opts: {
 
   const device = await identityManager.registerDevice(identity.motebit_id, surfaceName, pubKeyHex);
 
-  // Persist private key (surface-specific: OS keyring, encrypted config, etc.)
-  await keyStore.storePrivateKey(privKeyHex);
-
-  // Write identity metadata to config (surface-specific: file, Tauri IPC, etc.)
+  // The binding FIRST, the key second (key-file durability item 1). A config
+  // store that must refuse this write (it holds key material the mint would
+  // replace) refuses BEFORE any key is stored — storing a key and then
+  // refusing its binding left a key nothing names, and did so again on every
+  // launch. A crash between the two leaves a config naming an identity whose
+  // key was never stored: the next launch reads that as the divergent state
+  // (nothing held, nothing destroyed), never as a key to mint over.
+  // Surfaces that keep key and binding in ONE file (the CLI) stage the
+  // binding here and commit both atomically in `storePrivateKey`.
   await configStore.write({
     motebit_id: identity.motebit_id,
     device_id: device.device_id,
     device_public_key: pubKeyHex,
   });
+
+  // Persist private key (surface-specific: OS keyring, encrypted config, etc.)
+  await keyStore.storePrivateKey(privKeyHex);
 
   return {
     motebitId: identity.motebit_id,

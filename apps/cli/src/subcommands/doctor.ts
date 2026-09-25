@@ -11,7 +11,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { openMotebitDatabase } from "@motebit/persistence";
 import { createRuntimeCoverage, describeGap } from "../runtime-coverage.js";
-import { CONFIG_DIR, loadFullConfig } from "../config.js";
+import { CONFIG_DIR, listConfigBackups, listKeptKeyFiles, loadFullConfig } from "../config.js";
+import { mkdirOwnerOnly } from "../durable-file.js";
 import { seedBackupStatus } from "./seed.js";
 import { getDbPath } from "../runtime-factory.js";
 
@@ -49,7 +50,7 @@ export async function handleDoctor(): Promise<void> {
 
   // Config directory writable
   try {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    mkdirOwnerOnly(CONFIG_DIR);
     const testFile = path.join(CONFIG_DIR, ".doctor-test");
     fs.writeFileSync(testFile, "ok", "utf-8");
     fs.unlinkSync(testFile);
@@ -97,8 +98,53 @@ export async function handleDoctor(): Promise<void> {
     });
   }
 
-  // Existing identity
-  const fullCfg = loadFullConfig();
+  // Existing identity. `loadFullConfig` refuses a config it cannot read
+  // rather than reporting it as empty — and doctor is the one command that
+  // must survive that and SAY so, because it is where a user lands when
+  // something is wrong.
+  let fullCfg: ReturnType<typeof loadFullConfig>;
+  try {
+    fullCfg = loadFullConfig();
+  } catch (err) {
+    const backups = listConfigBackups();
+    checks.push({
+      name: "Config file",
+      ok: false,
+      detail: err instanceof Error ? err.message : String(err),
+      remedy:
+        backups.length > 0
+          ? `a preserved copy exists: ~/.motebit/${backups[0]}; if you hold your recovery seed, \`motebit restore\` rebuilds the config and keeps the damaged one`
+          : "if you hold your recovery seed, `motebit restore` rebuilds the config and keeps the damaged one; otherwise copy the file aside and seek help before running anything that writes config",
+    });
+    // Each check keeps its OWN status — printing them all as failures would
+    // bury the one that matters under false ones.
+    printChecks(checks);
+    // Every later check reads config; none can say anything true while it
+    // cannot be read. Non-zero like every failing check: doctor is a
+    // readiness probe, and supervisors gate on its exit code.
+    process.exit(1);
+  }
+  // Kept key copies. Everything that set key material aside instead of
+  // destroying it (a damaged or replaced config, a set-aside rotation
+  // write-ahead, a create-motebit rotation stopped half-way, a staging file
+  // a crash stranded) is named here — a key kept where nobody is told is
+  // only a slower loss. Informational: keeping them is correct; the owner
+  // decides when one is no longer needed.
+  const kept = listKeptKeyFiles();
+  if (kept.length > 0) {
+    const unfinished = kept.some((f) => f.includes(".rotation-next-"));
+    checks.push({
+      name: "Kept key copies",
+      ok: !unfinished,
+      detail: `${kept.length} in ${CONFIG_DIR} (owner-only): ${kept.slice(0, 5).join(", ")}${kept.length > 5 ? ", …" : ""}`,
+      ...(unfinished
+        ? {
+            remedy:
+              "a `create-motebit rotate` stopped before its config step: config.json.rotation-next-* holds the NEW key that motebit.md may already name — run `npx create-motebit rotate` again for instructions, or move that file over config.json",
+          }
+        : {}),
+    });
+  }
   if (fullCfg.motebit_id != null && fullCfg.motebit_id !== "") {
     checks.push({ name: "Identity", ok: true, detail: `${fullCfg.motebit_id.slice(0, 8)}...` });
   } else {
@@ -191,9 +237,7 @@ export async function handleDoctor(): Promise<void> {
         detail: "cli_private_key (plaintext, deprecated — re-encrypt at next run)",
       });
     } else {
-      const clobberedBackups = fs
-        .readdirSync(CONFIG_DIR)
-        .filter((f) => f.startsWith("config.json.clobbered-"));
+      const clobberedBackups = listConfigBackups();
       const restoreHint =
         clobberedBackups.length > 0
           ? `restore from ~/.motebit/${clobberedBackups[0]} (a clobbered backup is present)`
@@ -452,17 +496,8 @@ export async function handleDoctor(): Promise<void> {
   });
 
   // Print results
-  console.log("\nmotebit doctor\n");
-  let allOk = true;
-  for (const check of checks) {
-    const icon = check.ok ? (check.warn === true ? "warn" : "ok") : "FAIL";
-    console.log(`  ${icon.padEnd(6)} ${check.name.padEnd(20)} ${check.detail}`);
-    if (check.remedy != null && check.remedy !== "") {
-      console.log(`         ${" ".repeat(20)} → ${check.remedy}`);
-    }
-    if (!check.ok) allOk = false;
-  }
-  console.log();
+  printChecks(checks);
+  const allOk = checks.every((c) => c.ok);
 
   // Recent turn-failure summary. Surfaces what the stage-timeout telemetry
   // and scheduler failures would otherwise only log to stderr. Turns silent
@@ -581,6 +616,18 @@ export async function handleDoctor(): Promise<void> {
   } else {
     console.log("All checks passed.\n");
   }
+}
+
+function printChecks(checks: readonly DoctorCheck[]): void {
+  console.log("\nmotebit doctor\n");
+  for (const check of checks) {
+    const icon = check.ok ? (check.warn === true ? "warn" : "ok") : "FAIL";
+    console.log(`  ${icon.padEnd(6)} ${check.name.padEnd(20)} ${check.detail}`);
+    if (check.remedy != null && check.remedy !== "") {
+      console.log(`         ${" ".repeat(20)} → ${check.remedy}`);
+    }
+  }
+  console.log();
 }
 
 /**
