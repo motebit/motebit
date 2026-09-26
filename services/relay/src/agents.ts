@@ -27,7 +27,7 @@ import type { TaskRouter } from "./task-routing.js";
 import { evaluateSettlementEligibility } from "./task-routing.js";
 import { REFERENCE_MIN_BONDED_SIGNAL_MICRO } from "./bond-store.js";
 import { ON_SHELF, delistRegistration } from "./registry-delist.js";
-import { hasRevocationRecord, isDepartureInEffect, liftRevocation } from "./identity-revocation.js";
+import { hasRevocationRecord, liftRevocation } from "./identity-revocation.js";
 import {
   admitKey,
   holderKeyOf,
@@ -1959,19 +1959,13 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     if (!existing && !(!revoked && recorded)) {
       throw new HTTPException(404, { message: "Agent not registered" });
     }
-    // A migration departure is the identity's own act, reversed only by the
-    // identity arriving back — never by the operator (#788, departure half).
-    if (!revoked && isDepartureInEffect(moteDb.db, motebitId)) {
-      throw new HTTPException(409, {
-        message:
-          "Agent departed by migration — only its arrival back reverses that, not restore-listing",
-      });
-    }
     // A reinstate reverses the operator's hold AND lifts a `/revoke` record.
     // No record is terminal (#794/#796 withdrawn: terminality derived from a
     // key is unsound on a relay that has not seen the whole key chain), so an
-    // operator reinstate can reverse a sovereign's own revocation — the
-    // self-revocation half of #788, deliberately left open.
+    // operator reinstate can reverse an identity's own revocation, or its
+    // migration departure — #788 stays open: a departure's signing key can be
+    // a first-come squatter's (#798 review), so the relay cannot tell that
+    // either was the identity's own act.
     if (!revoked && recorded) liftRevocation(moteDb.db, motebitId);
 
     // Flip the discoverability flag (what Discover filters) and append the

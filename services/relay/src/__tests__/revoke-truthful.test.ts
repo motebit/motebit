@@ -16,9 +16,9 @@
  * a genesis key the owner rotated away from elsewhere) end the owner forever.
  * So every record is lifted by the owner's verified migration arrival or by
  * the operator's restore-listing; the master-token `/agents/register` refuses
- * (409) and never lifts. restore-listing still refuses while a migration
- * departure is in effect (#788's departure half); an operator reinstate CAN
- * reverse a self-revocation (#788's other half, left open).
+ * (409) and never lifts. An operator reinstate CAN reverse a self-revocation
+ * or a migration departure: #788 stays open (a departure's signing key can be
+ * a first-come squatter's — #798 review).
  *
  * Driven through the REAL routes over REAL sockets (`createTestRelay` behind
  * `@hono/node-server`, `ws` clients presenting signed `sync` tokens), plus a
@@ -518,25 +518,31 @@ describe("no record is terminal: the owner's verified arrival or the operator li
     expect(await httpStatus(mid, kp)).toBe(200);
   });
 
-  it("restore-listing does not reverse a migration departure; the identity arriving back does, and the operator's later hold is reversible again", async () => {
+  it("restore-listing reverses a migration departure (#788 open: a departure can be signed by a first-come squatter), and a keyless legacy id squatted + departed stays restorable", async () => {
     const sourceKp = await pinSourceRelay();
     const { kp, mid } = await selfOnlyIdentity();
     await registerAgent(mid, "laptop", kp);
     await depart(mid, kp);
     expect(await httpStatus(mid, kp)).toBe(403);
 
-    expect((await operator(mid, "restore-listing")).status).toBe(409);
-    expect(registryRow(mid)!.revoked).toBe(1);
-    expect(await httpStatus(mid, kp)).toBe(403);
-
-    await new Promise((r) => setTimeout(r, 5));
-    expect((await acceptMigration(mid, kp, sourceKp)).status).toBe(200);
+    expect((await operator(mid, "restore-listing")).status).toBe(200);
     expect(registryRow(mid)!.revoked).toBe(0);
     expect(await httpStatus(mid, kp)).toBe(200);
+    void sourceKp;
 
-    expect((await operator(mid, "revoke-listing")).status).toBe(200);
-    expect((await operator(mid, "restore-listing")).status).toBe(200);
-    expect(await httpStatus(mid, kp)).toBe(200);
+    // The #798 review's attack: a keyless operator-registered legacy id,
+    // squatted first-come, its registry key planted, then DEPARTED by the
+    // stranger — the operator must still be able to restore it (no arrival is
+    // possible for a non-sovereign id).
+    const legacy = `legacy-${crypto.randomUUID()}`;
+    expect(await masterRegister(legacy)).toBe(200);
+    const stranger = await generateKeypair();
+    await registerSelf(legacy, "evil", stranger);
+    await registerAgent(legacy, "evil", stranger);
+    await depart(legacy, stranger);
+    expect(registryRow(legacy)!.revoked).toBe(1);
+    expect((await operator(legacy, "restore-listing")).status).toBe(200);
+    expect(registryRow(legacy)!.revoked).toBe(0);
   });
 });
 

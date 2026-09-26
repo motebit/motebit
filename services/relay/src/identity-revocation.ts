@@ -110,22 +110,3 @@ export function isIdentityRevoked(db: DatabaseDriver, motebitId: string): boolea
       .get(motebitId, motebitId) !== undefined
   );
 }
-
-/**
- * Is a migration departure from this relay still in effect — the identity's
- * latest departure is later than its latest arrival back here? A departure is
- * the identity's own act (its signed migration request), reversed only by the
- * identity arriving again (accept-migration), never by the operator (#788).
- * Derived from `relay_migrations` + `relay_accepted_migrations`; writes nothing.
- */
-export function isDepartureInEffect(db: DatabaseDriver, motebitId: string): boolean {
-  const row = db
-    .prepare(
-      `SELECT
-         (SELECT MAX(departed_at) FROM relay_migrations WHERE motebit_id = ? AND state = 'departed') AS departed_at,
-         (SELECT MAX(accepted_at) FROM relay_accepted_migrations WHERE motebit_id = ?) AS accepted_at`,
-    )
-    .get(motebitId, motebitId) as { departed_at: number | null; accepted_at: number | null };
-  if (row.departed_at == null) return false;
-  return row.accepted_at == null || row.departed_at > row.accepted_at;
-}
