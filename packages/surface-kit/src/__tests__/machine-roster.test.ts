@@ -24,6 +24,7 @@ import type { HostEnrollment, HostRetirement, KeySuccessionRecord } from "@moteb
 import {
   MachineRoster,
   createRosterSigner,
+  hostSocketsOpen,
   parseServedRoster,
   type LiveUnenrolled,
   type LivenessRow,
@@ -2521,6 +2522,16 @@ describe("R17b (#790) — enroll never claims a superseded machine cannot hold t
     expect(out.kind).toBe("enrolled");
   });
 
+  it("a desktop SESSION under the head key proves it too: R17b reads sockets_open, not the host count", async () => {
+    // The daemon is down; only the desktop (same device_id) is connected
+    // under the head key. bound_under is the key its token verified under:
+    // it holds the current key exactly as a daemon would.
+    const { b, relay } = await selfRotatedNotReenrolled();
+    relay.live = [{ device_id: "vps", bound_under: hex(b), sockets_open: 1, host_sockets_open: 0 }];
+    const out = await machine(relay, b, { deviceId: "phone" }).roster.enroll("vps");
+    expect(out.kind).toBe("enrolled");
+  });
+
   it("not seen under the head key: refused with only what is seen (the superseded key)", async () => {
     const { a, b, relay } = await selfRotatedNotReenrolled();
     const out = await machine(relay, b, { deviceId: "phone" }).roster.enroll("vps");
@@ -2701,5 +2712,172 @@ describe("P5 (#792) — 'retired (advisory…)' only from a retirement the law a
     const view = buildRosterView(await acquired(machine(relay, b, { deviceId: "phone" })), NOW);
     const line = view.kind === "roster" ? view.lines.find((l) => l.device_id === "old") : null;
     expect(line?.text).toMatch(/retired at an older key \(advisory\)/);
+  });
+});
+
+// ── #806 review: two quantities, never one field for both ─────────────
+//
+// `sockets_open` = something is attached as this pair (any bound socket);
+// `host_sockets_open` = the host is running. The desktop shares the CLI
+// daemon's device_id, so the two differ exactly when a session is open
+// beside (or instead of) the daemon.
+
+describe("host_sockets_open vs sockets_open (#806 review)", () => {
+  async function activeVps() {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(a, "vps"));
+    return { a, relay };
+  }
+  const activeLine = (view: ReturnType<typeof buildRosterView>) =>
+    view.kind === "roster" ? view.lines.find((l) => l.device_id === "vps") : undefined;
+  const hasHint = (view: ReturnType<typeof buildRosterView>) =>
+    view.kind === "roster" && view.notes.some((n) => n.kind === "ambiguous");
+
+  it("S7 — a retired machine with only a desktop session open still reads CONNECTED", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const e = await enrol(a, "vps");
+    await relay.hold(e, await retireEntry(a, e));
+    relay.rows = [
+      {
+        device_id: "vps",
+        bound_under: hex(a),
+        last_seen_at: NOW - DAY,
+        sockets_open: 1,
+        host_sockets_open: 0,
+      },
+    ];
+    const view = buildRosterView(await acquired(machine(relay, a)), NOW);
+    const line = view.kind === "roster" ? view.lines.find((l) => l.device_id === "vps") : null;
+    expect(line).toMatchObject({ kind: "retired", connected: true });
+    expect(line?.text).toMatch(/the relay believes a socket is open/);
+  });
+
+  it("S8 — the daemon's row swept, only a desktop session left: NOT rendered as a live host", async () => {
+    const { a, relay } = await activeVps();
+    relay.live = [{ device_id: "vps", bound_under: hex(a), sockets_open: 1, host_sockets_open: 0 }];
+    const line = activeLine(buildRosterView(await acquired(machine(relay, a)), NOW));
+    expect(line).toMatchObject({ kind: "active" });
+    expect(line && "liveness" in line ? line.liveness.state : null).not.toBe("open");
+    expect(line?.text).not.toMatch(/believes a socket is open/);
+    expect(line?.text).toMatch(/a session \(not the host\) is connected/);
+  });
+
+  it("dead daemon + live desktop on an active line: last seen, never 'open'", async () => {
+    const { a, relay } = await activeVps();
+    relay.rows = [
+      {
+        device_id: "vps",
+        bound_under: hex(a),
+        last_seen_at: NOW - DAY,
+        sockets_open: 1,
+        host_sockets_open: 0,
+      },
+    ];
+    const line = activeLine(buildRosterView(await acquired(machine(relay, a)), NOW));
+    expect(line && "liveness" in line ? line.liveness : null).toEqual({
+      state: "last-seen",
+      at: NOW - DAY,
+    });
+    expect(line?.text).toMatch(/last seen .*; a session \(not the host\) is connected/);
+  });
+
+  it("a live daemon beside a desktop: open, counted as ONE host socket", async () => {
+    const { a, relay } = await activeVps();
+    relay.rows = [
+      {
+        device_id: "vps",
+        bound_under: hex(a),
+        last_seen_at: NOW,
+        sockets_open: 2,
+        host_sockets_open: 1,
+      },
+    ];
+    const m = machine(relay, a);
+    const first = buildRosterView(await acquired(m), NOW);
+    const line = activeLine(first);
+    expect(line && "liveness" in line ? line.liveness : null).toEqual({
+      state: "open",
+      sockets: 1,
+    });
+    // daemon + desktop is one machine: no hint, on any number of reads
+    expect(hasHint(buildRosterView(await acquired(m), NOW))).toBe(false);
+  });
+
+  it("two HOST sockets on one pair on two successive reads ⇒ the ambiguity hint", async () => {
+    const { a, relay } = await activeVps();
+    relay.rows = [
+      {
+        device_id: "vps",
+        bound_under: hex(a),
+        last_seen_at: NOW,
+        sockets_open: 2,
+        host_sockets_open: 2,
+      },
+    ];
+    const m = machine(relay, a);
+    expect(hasHint(buildRosterView(await acquired(m), NOW))).toBe(false);
+    expect(hasHint(buildRosterView(await acquired(m), NOW))).toBe(true);
+  });
+
+  it("desktop + interactive CLI (two non-host sockets, no row) ⇒ NO ambiguity hint", async () => {
+    const { a, relay } = await activeVps();
+    relay.live = [{ device_id: "vps", bound_under: hex(a), sockets_open: 2, host_sockets_open: 0 }];
+    const m = machine(relay, a);
+    expect(hasHint(buildRosterView(await acquired(m), NOW))).toBe(false);
+    expect(hasHint(buildRosterView(await acquired(m), NOW))).toBe(false);
+  });
+
+  it("an OLDER relay (no host_sockets_open): main's behaviour — sockets_open is liveness and the hint", async () => {
+    const { a, relay } = await activeVps();
+    relay.rows = [{ device_id: "vps", bound_under: hex(a), last_seen_at: NOW, sockets_open: 2 }];
+    const m = machine(relay, a);
+    const first = buildRosterView(await acquired(m), NOW);
+    const line = activeLine(first);
+    expect(line && "liveness" in line ? line.liveness : null).toEqual({
+      state: "open",
+      sockets: 2,
+    });
+    expect(line?.text).not.toMatch(/session/);
+    expect(hasHint(buildRosterView(await acquired(m), NOW))).toBe(true);
+  });
+
+  it("parseServedRoster keeps host_sockets_open when served and leaves it absent when not", () => {
+    const served = parseServedRoster({
+      enrollments: [],
+      retirements: [],
+      liveness: {
+        observed_by: "r",
+        retention_days: 90,
+        observing_since: 0,
+        rows: [
+          {
+            device_id: "d",
+            bound_under: "k",
+            last_seen_at: 1,
+            sockets_open: 2,
+            host_sockets_open: 1,
+          },
+        ],
+        live_unenrolled: [{ device_id: "e", bound_under: "k", sockets_open: 1 }],
+      },
+    });
+    expect(served?.liveness.rows[0]?.host_sockets_open).toBe(1);
+    expect("host_sockets_open" in (served?.liveness.live_unenrolled[0] ?? {})).toBe(false);
+    expect(hostSocketsOpen(served!.liveness.rows[0]!)).toBe(1);
+    expect(hostSocketsOpen(served!.liveness.live_unenrolled[0]!)).toBe(1);
+  });
+
+  it("retire() of a device with no line: a desktop session still reads socketOpen (something is attached)", async () => {
+    const { a, relay } = await activeVps();
+    relay.live = [
+      { device_id: "laptop", bound_under: hex(a), sockets_open: 1, host_sockets_open: 0 },
+    ];
+    expect(await machine(relay, a).roster.retire("laptop")).toEqual({
+      kind: "not-enrolled",
+      deviceId: "laptop",
+      socketOpen: true,
+    });
   });
 });

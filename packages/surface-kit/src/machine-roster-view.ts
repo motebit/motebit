@@ -25,7 +25,7 @@
  *      suppressed universal claims.
  */
 import type { RosterChainAncestry } from "@motebit/encryption";
-import { unplaceableEnrollments } from "./machine-roster.js";
+import { hostSocketsOpen, unplaceableEnrollments } from "./machine-roster.js";
 import type {
   RosterAcquired,
   RosterAcquisition,
@@ -215,6 +215,16 @@ export function buildRosterView(acq: RosterAcquisition, now: number): MachineRos
   return viewOf(acq, now);
 }
 
+/**
+ * A session (not the host) is attached as this machine: some bound socket is
+ * open, but none that hosts. Said beside the host's liveness, never as it.
+ */
+function sessionOnly(r: { sockets_open: number; host_sockets_open?: number }): string {
+  return r.sockets_open > 0 && hostSocketsOpen(r) === 0
+    ? "; a session (not the host) is connected"
+    : "";
+}
+
 function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
   const v = acq.verdict;
   const head = v.chain_head.public_key;
@@ -249,21 +259,25 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
     if (served == null) {
       liveness = { state: "unknown" };
       live = "liveness unknown (the relay was not read)";
-    } else if (row && row.sockets_open > 0) {
-      liveness = { state: "open", sockets: row.sockets_open };
+    } else if (row && hostSocketsOpen(row) > 0) {
+      // The HOST's socket (`hostSocketsOpen`): a desktop session beside a
+      // dead daemon is not this machine running.
+      liveness = { state: "open", sockets: hostSocketsOpen(row) };
       live = "the relay believes a socket is open (no heartbeat yet)";
     } else if (row && row.last_seen_at != null) {
       liveness = { state: "last-seen", at: row.last_seen_at };
-      live = `last seen ${iso(row.last_seen_at)}`;
+      live = `last seen ${iso(row.last_seen_at)}${sessionOnly(row)}`;
     } else {
       const windowDays = served.liveness.retention_days;
       const since = served.liveness.observing_since;
       // Exact: claim "the last N days" only when N whole days were observed.
       const windowFull = since <= now - windowDays * DAY_MS;
       liveness = { state: "not-observed", since, windowDays, windowFull };
-      live = windowFull
-        ? `not observed in the last ${windowDays} days`
-        : `not observed since ${iso(since)} (the relay's observation window)`;
+      live =
+        (windowFull
+          ? `not observed in the last ${windowDays} days`
+          : `not observed since ${iso(since)} (the relay's observation window)`) +
+        (row ? sessionOnly(row) : "");
     }
     activeLive.set(m.device_id, live);
     lines.push({
@@ -280,6 +294,9 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
   const retiredLines: RosterLine[] = [];
   for (const m of v.retired) {
     const row = take(m.device_id, head);
+    // ANY bound socket (`sockets_open`): a retired machine with only a
+    // desktop session open is still connected — the owner's "retirement
+    // didn't stop it" signal must never depend on the daemon.
     const connected = row != null && row.sockets_open > 0;
     // Retired under the CURRENT key, but its enrolment is on an older one:
     // the retirement is the sovereign's, the status is still advisory

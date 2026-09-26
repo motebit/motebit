@@ -36,6 +36,7 @@ export {
   MachineRoster,
   createRosterSigner,
   parseServedRoster,
+  hostSocketsOpen,
   mayMint,
   statusOf,
   unplaceableEnrollments,

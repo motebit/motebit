@@ -153,17 +153,40 @@ export interface MachineRosterPorts {
 
 // ── The served roster (part B D6), parsed defensively ────────────────
 
+/**
+ * Two quantities per observed pair (spec §11), never one field for both:
+ *   - `sockets_open` — every bound socket the relay believes open: SOMETHING
+ *     is attached as this pair (a desktop session sharing the daemon's
+ *     device_id counts). Read for "still connected" — a retired machine
+ *     with a session open must still read connected.
+ *   - `host_sockets_open` — the subset announcing `unattended_runtime`: the
+ *     HOST is running. Read for liveness ("active; a socket is open") and
+ *     the copied-id hint. Absent from an older relay: `undefined`, and
+ *     `hostSocketsOpen` falls back to `sockets_open` (that relay's meaning).
+ */
 export interface LivenessRow {
   device_id: string;
   bound_under: string;
   last_seen_at: number | null;
   sockets_open: number;
+  host_sockets_open?: number;
 }
 
 export interface LiveUnenrolled {
   device_id: string;
   bound_under: string;
   sockets_open: number;
+  host_sockets_open?: number;
+}
+
+/**
+ * The host's liveness count for one pair: `host_sockets_open` when the relay
+ * serves it, else `sockets_open` (an older relay, whose one field was all
+ * there was). The ONE reader of host liveness — never read either field
+ * for it directly.
+ */
+export function hostSocketsOpen(r: { sockets_open: number; host_sockets_open?: number }): number {
+  return r.host_sockets_open ?? r.sockets_open;
 }
 
 export interface ServedRoster {
@@ -198,6 +221,9 @@ export function parseServedRoster(body: unknown): ServedRoster | null {
       bound_under: r.bound_under,
       last_seen_at: typeof r.last_seen_at === "number" ? r.last_seen_at : null,
       sockets_open: typeof r.sockets_open === "number" ? r.sockets_open : 0,
+      ...(typeof r.host_sockets_open === "number"
+        ? { host_sockets_open: r.host_sockets_open }
+        : {}),
     });
   }
   const live: LiveUnenrolled[] = [];
@@ -209,6 +235,9 @@ export function parseServedRoster(body: unknown): ServedRoster | null {
       device_id: r.device_id,
       bound_under: r.bound_under,
       sockets_open: typeof r.sockets_open === "number" ? r.sockets_open : 0,
+      ...(typeof r.host_sockets_open === "number"
+        ? { host_sockets_open: r.host_sockets_open }
+        : {}),
     });
   }
   return {
@@ -322,7 +351,7 @@ export interface RosterAcquired {
   suppressed: SuppressionReason[];
   cache: ReplicaRead["kind"];
   replica: MachineRosterReplica;
-  /** Pairs with `sockets_open > 1` at the PREVIOUS read (C6.8's first read). */
+  /** Pairs with more than one HOST socket (`hostSocketsOpen > 1`) at the PREVIOUS read (C6.8's first read). */
   previousAmbiguous: string[];
   /** Device keys from the surface's own devices list (C6.3). */
   knownDeviceKeys: string[];
@@ -805,10 +834,12 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
 
     const previousAmbiguous = replica.ambiguous.pairs;
     if (served != null) {
-      const now = [
-        ...served.liveness.rows.filter((r) => r.sockets_open > 1),
-        ...served.liveness.live_unenrolled.filter((r) => r.sockets_open > 1),
-      ].map((r) => pairKey(r.device_id, r.bound_under));
+      // C6.8 — "two machines may share this id" is about HOSTS: a desktop
+      // session or an interactive CLI beside the daemon is not a second
+      // machine. `hostSocketsOpen` (falls back on an older relay).
+      const now = [...served.liveness.rows, ...served.liveness.live_unenrolled]
+        .filter((r) => hostSocketsOpen(r) > 1)
+        .map((r) => pairKey(r.device_id, r.bound_under));
       replica = {
         ...replica,
         ambiguous: {
@@ -970,7 +1001,9 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
         ? {
             kind: "not-enrolled",
             deviceId,
-            // W2: "connected" only when a socket is open now.
+            // W2: "connected" only when a socket is open now — ANY bound
+            // socket (`sockets_open`): something is still attached as this
+            // device, host or not.
             socketOpen: seen.some((r) => r.sockets_open > 0),
           }
         : { kind: "unknown-device", deviceId };
@@ -1024,6 +1057,9 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
         // this surface can see is on a superseded key. If liveness shows it
         // bound under the head key right now, it demonstrably holds the
         // current key, and the refusal would be false — no refusal (#790).
+        // ANY bound socket proves it (`sockets_open`, not the host count):
+        // `bound_under` is the key the socket's token verified under, which
+        // a desktop session proves exactly as well as a daemon.
         const head = acq.verdict.chain_head.public_key;
         const boundUnderHead = [
           ...(acq.served?.liveness.rows ?? []),

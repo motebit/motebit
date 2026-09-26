@@ -33,9 +33,10 @@ import {
   MAX_ROSTER_ENTRIES_PER_REQUEST,
   MAX_ROSTER_REQUEST_BYTES,
   boundKeyOf,
-  hostsUnattendedWork,
   ingestHostRoster,
+  livenessPairKey,
   livenessRecordingSince,
+  openHostSockets,
   readHostLiveness,
   readHostRoster,
 } from "./host-roster-store.js";
@@ -68,10 +69,20 @@ export interface HostLivenessRow {
    * Sockets bound as this (device_id, bound_under) the relay BELIEVES open —
    * ANY bound socket for the pair, whether or not it announces unattended work.
    * "Open", not "connected": no heartbeat deadline yet (#691), so a
-   * half-open socket counts. More than one is `motebit doctor`'s hint for a
-   * copied device_id — never a verdict.
+   * half-open socket counts. This is "something is attached as this pair" —
+   * a session signal (a retired machine with a desktop still open reads
+   * connected), NOT the host's liveness: see `host_sockets_open`.
    */
   sockets_open: number;
+  /**
+   * The subset of `sockets_open` that counts as the host's liveness — bound
+   * AND announcing `unattended_runtime` (`livenessKeyOf`, the one predicate
+   * that also writes `last_seen_at` and decides the sweep's live-skip).
+   * Additive (absent from an older relay: read `sockets_open` then). More
+   * than one is `motebit doctor`'s hint for a copied device_id — never a
+   * verdict.
+   */
+  host_sockets_open: number;
 }
 
 export interface HostLiveUnenrolled {
@@ -79,6 +90,11 @@ export interface HostLiveUnenrolled {
   bound_under: string;
   /** Sockets the relay believes open — see `HostLivenessRow.sockets_open`. */
   sockets_open: number;
+  /**
+   * See `HostLivenessRow.host_sockets_open`. Always 0 here: the GET puts
+   * every pair with a live host socket in `rows`, persisted or not.
+   */
+  host_sockets_open: number;
 }
 
 /**
@@ -180,11 +196,13 @@ export function registerHostRosterRoutes(deps: HostRosterRouteDeps): void {
     // the one captured when each socket's token verified — never a device
     // row read now. Unbound sockets (master token, declared-only ids,
     // device auth off) are not attributable and are not reported.
-    const pairKey = (d: string, k: string): string => JSON.stringify([d, k]);
-    const live = new Map<
-      string,
-      { device_id: string; bound_under: string; sockets: number; host: boolean }
-    >();
+    // Two quantities per pair, never one field for both: `sockets_open`
+    // counts every bound socket (something is attached); `host_sockets_open`
+    // counts the sockets that are the host's liveness (`openHostSockets` —
+    // the one predicate that also writes the row and guards the sweep).
+    const pairKey = livenessPairKey;
+    const hosts = openHostSockets(connections.get(motebitId) ?? []);
+    const live = new Map<string, { device_id: string; bound_under: string; sockets: number }>();
     for (const peer of connections.get(motebitId) ?? []) {
       // Defence in depth: only a socket that is OPEN right now counts.
       if (peer.ws.readyState !== WS_OPEN) continue;
@@ -195,30 +213,33 @@ export function registerHostRosterRoutes(deps: HostRosterRouteDeps): void {
         device_id: peer.deviceId,
         bound_under: boundUnder,
         sockets: 0,
-        host: false,
       };
       entry.sockets++;
-      entry.host ||= hostsUnattendedWork(peer);
       live.set(k, entry);
     }
+    const counts = (k: string): { sockets_open: number; host_sockets_open: number } => ({
+      sockets_open: live.get(k)?.sockets ?? 0,
+      host_sockets_open: hosts.get(k)?.sockets ?? 0,
+    });
 
     // rows = persisted rows ∪ live bound HOST sockets.
     const rows = new Map<string, HostLivenessRow>();
     for (const r of readHostLiveness(db, motebitId)) {
-      rows.set(pairKey(r.device_id, r.bound_under), {
+      const k = pairKey(r.device_id, r.bound_under);
+      rows.set(k, {
         device_id: r.device_id,
         bound_under: r.bound_under,
         last_seen_at: r.last_seen_at,
-        sockets_open: live.get(pairKey(r.device_id, r.bound_under))?.sockets ?? 0,
+        ...counts(k),
       });
     }
-    for (const [k, l] of live) {
-      if (!l.host || rows.has(k)) continue;
+    for (const [k, h] of hosts) {
+      if (rows.has(k)) continue;
       rows.set(k, {
-        device_id: l.device_id,
-        bound_under: l.bound_under,
+        device_id: h.device_id,
+        bound_under: h.bound_under,
         last_seen_at: null,
-        sockets_open: l.sockets,
+        ...counts(k),
       });
     }
     // live_unenrolled = live bound sockets with no row (not hosts: nothing
@@ -226,11 +247,7 @@ export function registerHostRosterRoutes(deps: HostRosterRouteDeps): void {
     const liveUnenrolled: HostLiveUnenrolled[] = [];
     for (const [k, l] of live) {
       if (rows.has(k)) continue;
-      liveUnenrolled.push({
-        device_id: l.device_id,
-        bound_under: l.bound_under,
-        sockets_open: l.sockets,
-      });
+      liveUnenrolled.push({ device_id: l.device_id, bound_under: l.bound_under, ...counts(k) });
     }
     const byPair = (
       a: { device_id: string; bound_under: string },

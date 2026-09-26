@@ -34,8 +34,14 @@ type Liveness = {
     bound_under: string;
     last_seen_at: number | null;
     sockets_open: number;
+    host_sockets_open: number;
   }>;
-  live_unenrolled: Array<{ device_id: string; bound_under: string; sockets_open: number }>;
+  live_unenrolled: Array<{
+    device_id: string;
+    bound_under: string;
+    sockets_open: number;
+    host_sockets_open: number;
+  }>;
 };
 
 async function waitFor(pred: () => boolean, what: string, ms = 3_000): Promise<void> {
@@ -131,7 +137,12 @@ describe("liveness over a real socket", () => {
     expect(persisted()[0]).toMatchObject({ device_id: "laptop", bound_under: pub });
     const live = await liveness();
     expect(live.rows).toEqual([
-      expect.objectContaining({ device_id: "laptop", bound_under: pub, sockets_open: 1 }),
+      expect.objectContaining({
+        device_id: "laptop",
+        bound_under: pub,
+        sockets_open: 1,
+        host_sockets_open: 1,
+      }),
     ]);
     expect(live.live_unenrolled).toEqual([]);
   });
@@ -142,7 +153,7 @@ describe("liveness over a real socket", () => {
     expect(persisted()).toEqual([]);
     expect(live.rows).toEqual([]);
     expect(live.live_unenrolled).toEqual([
-      { device_id: "laptop", bound_under: pub, sockets_open: 1 },
+      { device_id: "laptop", bound_under: pub, sockets_open: 1, host_sockets_open: 0 },
     ]);
   });
 
@@ -199,7 +210,12 @@ describe("liveness over a real socket", () => {
     });
     const live = ((await res.json()) as { liveness: Liveness }).liveness;
     expect(live.rows).toEqual([
-      expect.objectContaining({ device_id: "laptop", bound_under: pub, sockets_open: 1 }),
+      expect.objectContaining({
+        device_id: "laptop",
+        bound_under: pub,
+        sockets_open: 1,
+        host_sockets_open: 1,
+      }),
     ]);
     expect(live.rows.some((r) => r.bound_under === bytesToHex(k2.publicKey))).toBe(false);
 

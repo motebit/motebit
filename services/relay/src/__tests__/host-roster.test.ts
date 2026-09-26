@@ -486,13 +486,19 @@ describe("liveness: per device AND key, hosts only, served beside the set (D4, D
     bound_under: string;
     last_seen_at: number | null;
     sockets_open: number;
+    host_sockets_open: number;
   };
   type Liveness = {
     observed_by: string;
     retention_days: number;
     observing_since: number;
     rows: Row[];
-    live_unenrolled: Array<{ device_id: string; bound_under: string; sockets_open: number }>;
+    live_unenrolled: Array<{
+      device_id: string;
+      bound_under: string;
+      sockets_open: number;
+      host_sockets_open: number;
+    }>;
   };
 
   function peer(
@@ -535,7 +541,13 @@ describe("liveness: per device AND key, hosts only, served beside the set (D4, D
     // GET, read by the rotated laptop (its own row is K_new now too).
     const live = (await as(motebitId, "laptop", kNew, rosterPath())).json.liveness as Liveness;
     expect(live.rows).toEqual([
-      { device_id: "vps", bound_under: kOld, last_seen_at: 2_000, sockets_open: 1 },
+      {
+        device_id: "vps",
+        bound_under: kOld,
+        last_seen_at: 2_000,
+        sockets_open: 1,
+        host_sockets_open: 1,
+      },
     ]);
     expect(live.rows.some((r) => r.bound_under === bytesToHex(kNew.publicKey))).toBe(false);
     expect(live.live_unenrolled).toEqual([]);
@@ -567,7 +579,7 @@ describe("liveness: per device AND key, hosts only, served beside the set (D4, D
     const live = (await read()).json.liveness as Liveness;
     expect(live.rows).toEqual([]);
     expect(live.live_unenrolled).toEqual([
-      { device_id: "phone", bound_under: pub, sockets_open: 1 },
+      { device_id: "phone", bound_under: pub, sockets_open: 1, host_sockets_open: 0 },
     ]);
   });
 
@@ -587,8 +599,20 @@ describe("liveness: per device AND key, hosts only, served beside the set (D4, D
     observe(peer("nas"), 7_000); // seen, now offline
     const live = (await read()).json.liveness as Liveness;
     expect(live.rows).toEqual([
-      { device_id: "nas", bound_under: pub, last_seen_at: 7_000, sockets_open: 0 },
-      { device_id: "vps", bound_under: pub, last_seen_at: null, sockets_open: 2 },
+      {
+        device_id: "nas",
+        bound_under: pub,
+        last_seen_at: 7_000,
+        sockets_open: 0,
+        host_sockets_open: 0,
+      },
+      {
+        device_id: "vps",
+        bound_under: pub,
+        last_seen_at: null,
+        sockets_open: 2,
+        host_sockets_open: 2,
+      },
     ]);
     expect(live.observed_by).toBe(relay.relayIdentity.relayMotebitId);
     expect(live.retention_days).toBe(90);
@@ -610,10 +634,16 @@ describe("liveness: per device AND key, hosts only, served beside the set (D4, D
     observe(peer("vps"), 7_000); // a persisted row for the closed host
     const live = (await read()).json.liveness as Liveness;
     expect(live.rows).toEqual([
-      { device_id: "vps", bound_under: pub, last_seen_at: 7_000, sockets_open: 0 },
+      {
+        device_id: "vps",
+        bound_under: pub,
+        last_seen_at: 7_000,
+        sockets_open: 0,
+        host_sockets_open: 0,
+      },
     ]);
     expect(live.live_unenrolled).toEqual([
-      { device_id: "phone", bound_under: pub, sockets_open: 1 },
+      { device_id: "phone", bound_under: pub, sockets_open: 1, host_sockets_open: 0 },
     ]);
   });
 
@@ -640,14 +670,83 @@ describe("liveness: per device AND key, hosts only, served beside the set (D4, D
     observe(peer("idle-daemon"), now - 91 * DAY);
     observe(peer("gone"), now - 91 * DAY);
     observe(peer("recent"), now - 89 * DAY);
-    const liveNow = new Set(["idle-daemon"]);
-    const deleted = sweepHostLiveness(
-      db,
-      (m, d, k) => m === motebitId && k === pub && liveNow.has(d),
-      now,
-    );
+    const deleted = sweepHostLiveness(db, new Map([[motebitId, [peer("idle-daemon")]]]), now);
     expect(deleted).toBe(1);
     expect(persisted().map((r) => r.device_id)).toEqual(["idle-daemon", "recent"]);
+  });
+
+  // The desktop app and the CLI daemon share one device_id on a machine
+  // (surfaces §0), so they bind as the SAME (device_id, bound_under) pair.
+  // Only the daemon hosts unattended work; the desktop is not its liveness.
+  const DESKTOP = ["sync"];
+
+  it("two quantities: a host and a non-host socket on one pair read sockets_open 2, host_sockets_open 1", async () => {
+    connectPeer(peer("laptop")); // the daemon
+    connectPeer(peer("laptop", { capabilities: DESKTOP })); // the desktop app
+    const live = (await read()).json.liveness as Liveness;
+    expect(live.rows).toEqual([
+      {
+        device_id: "laptop",
+        bound_under: pub,
+        last_seen_at: null,
+        sockets_open: 2, // main's meaning, unchanged: every bound socket
+        host_sockets_open: 1, // the host's liveness: one daemon, no copied id
+      },
+    ]);
+    expect(live.live_unenrolled).toEqual([]);
+  });
+
+  it("dead daemon + live desktop: the row still reads a session (sockets_open 1) but no host (0), last_seen_at kept", async () => {
+    // S7 at the relay: a retired/stolen machine whose daemon once ran, with
+    // only a desktop session open, must still read CONNECTED to its owner.
+    observe(peer("laptop"), 7_000); // the daemon was seen, then went offline
+    const desktop = peer("laptop", { capabilities: DESKTOP });
+    connectPeer(desktop);
+    expect(observe(desktop, 9_000)).toBe(false); // the desktop writes nothing
+    const live = (await read()).json.liveness as Liveness;
+    expect(live.rows).toEqual([
+      {
+        device_id: "laptop",
+        bound_under: pub,
+        last_seen_at: 7_000,
+        sockets_open: 1,
+        host_sockets_open: 0,
+      },
+    ]);
+    expect(live.live_unenrolled).toEqual([]);
+  });
+
+  it("S8: after the sweep removes a dead daemon's row, the desktop reappears as a session, never a host", async () => {
+    const now = 1_000 * DAY;
+    observe(peer("laptop"), now - 91 * DAY);
+    const desktop = peer("laptop", { capabilities: DESKTOP });
+    connectPeer(desktop);
+    expect(sweepHostLiveness(relay.moteDb.db, relay.connections, now)).toBe(1);
+    const live = (await read()).json.liveness as Liveness;
+    expect(live.rows).toEqual([]);
+    expect(live.live_unenrolled).toEqual([
+      { device_id: "laptop", bound_under: pub, sockets_open: 1, host_sockets_open: 0 },
+    ]);
+  });
+
+  it("the TTL sweep does not skip a row kept alive only by a non-host socket", () => {
+    const now = 1_000 * DAY;
+    const db = relay.moteDb.db;
+    observe(peer("laptop"), now - 91 * DAY); // daemon, long dead
+    observe(peer("vps"), now - 91 * DAY); // daemon, idle but connected
+    const connections = new Map([
+      [motebitId, [peer("laptop", { capabilities: DESKTOP }), peer("vps")]],
+    ]);
+    expect(sweepHostLiveness(db, connections, now)).toBe(1);
+    expect(persisted().map((r) => r.device_id)).toEqual(["vps"]);
+  });
+
+  it("the TTL sweep does not skip a row kept alive only by a CLOSED host socket", () => {
+    const now = 1_000 * DAY;
+    observe(peer("vps"), now - 91 * DAY);
+    const closed = { ...peer("vps"), ws: { readyState: 3 } } as unknown as ConnectedDevice;
+    expect(sweepHostLiveness(relay.moteDb.db, new Map([[motebitId, [closed]]]), now)).toBe(1);
+    expect(persisted()).toEqual([]);
   });
 
   it("GET carries no count or quantifier over machines — only per-(device, key) socket counts", async () => {
@@ -686,6 +785,7 @@ describe("liveness: per device AND key, hosts only, served beside the set (D4, D
       expect(Object.keys(r).sort()).toEqual([
         "bound_under",
         "device_id",
+        "host_sockets_open",
         "last_seen_at",
         "sockets_open",
       ]);
