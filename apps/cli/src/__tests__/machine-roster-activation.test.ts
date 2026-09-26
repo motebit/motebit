@@ -234,7 +234,7 @@ describe("mint-on-announce against a real relay", () => {
     const text = formatRosterView(view, f.mid).join("\n");
     expect(text).toMatch(/No count: /);
     expect(text).not.toMatch(/no machine has enrolled/);
-    expect(text).toMatch(/nothing is held on this device/);
+    expect(text).toMatch(/this device holds no roster entries/);
   });
 
   it("an unreachable relay never blocks the start: one line, nothing minted", async () => {
@@ -774,5 +774,31 @@ describe("BUILD 5 (c) — the hook says when an active capture was not carried",
     expect(line).toBe(
       `  Machine roster: active before the rotation; not enrolled under the new key (the read after the rotation was incomplete) — \`motebit machines enroll ${f.deviceId}\``,
     );
+  });
+});
+
+describe("W3 (#792) — the start line qualifies a status the relay did not confirm", () => {
+  it("enrolled; retired elsewhere; roster 503 at the next start ⇒ not an unqualified 'active'", async () => {
+    const f = await registeredHost();
+    expect((await enrollOnAnnounce(ctx(f), () => {}))?.kind).toBe("minted");
+    // Retired ELSEWHERE: another surface (its own replica) retires this machine.
+    const phone = { ...ctx(f), dir: join(dir, "elsewhere") };
+    expect((await new MachineRoster(cliRosterPorts(phone)).retire(f.deviceId)).kind).toBe(
+      "retired",
+    );
+    const down: typeof fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/roster") && (init?.method ?? "GET").toUpperCase() === "GET") {
+        return new Response("{}", { status: 503 });
+      }
+      return viaRelay(input, init);
+    };
+    const lines: string[] = [];
+    const out = await enrollOnAnnounce({ ...ctx(f), fetchImpl: down }, (l) => lines.push(l));
+    // This machine's copy still shows it active; the line must not say so as fact.
+    expect(out).toMatchObject({ kind: "active", confirmed: false });
+    expect(lines).toEqual([
+      "Machine roster: not updated this start — the relay could not be read; this device's copy shows this machine active",
+    ]);
   });
 });

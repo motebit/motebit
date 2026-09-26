@@ -284,13 +284,7 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
     // the retirement is the sovereign's, the status is still advisory
     // (spec §6 Step 4) — never "retired at an older key".
     const ids = new Set(m.entries.map((e) => e.enrollment_id));
-    const byHead = acq.inputs.retirements.some(
-      (r) =>
-        typeof r === "object" &&
-        r !== null &&
-        (r as { public_key?: unknown }).public_key === head &&
-        ids.has((r as { enrollment_id?: unknown }).enrollment_id as string),
-    );
+    const byHead = acq.retiredByHead.some((id) => ids.has(id));
     const how = m.authenticated
       ? "retired under the current key"
       : byHead
@@ -302,7 +296,7 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
       this_device: m.device_id === me,
       authenticated: m.authenticated,
       connected,
-      text: `${m.device_id}${suffix(m.device_id)} — ${connected ? "retired, but connected" : how}${connected ? ` (${how})` : ""}`,
+      text: `${m.device_id}${suffix(m.device_id)} — ${connected ? `${how}; the relay believes a socket is open (no heartbeat yet)` : how}`,
     });
   }
 
@@ -320,6 +314,14 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
       sockets_open: r.sockets_open,
     };
     const kf = keyFingerprint(r.bound_under);
+    // W2 — "socket open" only when one is open now; a persisted row with
+    // none open says when it was last seen.
+    const seen =
+      r.sockets_open > 0
+        ? "socket open"
+        : r.last_seen_at != null
+          ? `last seen ${iso(r.last_seen_at)}`
+          : "observed by the relay";
     if (chain.has(r.bound_under) && r.bound_under !== head) {
       lines.push({
         kind: "superseded-key-socket",
@@ -334,13 +336,13 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
       lines.push({
         kind: "linked-device",
         ...base,
-        text: `${r.device_id} — a linked device without the identity key (${kf}…)`,
+        text: `${r.device_id} — a linked device without the identity key (${kf}…); ${seen}`,
       });
     } else if (enrolledSomehow(r.device_id) && !chain.has(r.bound_under)) {
       lines.push({
         kind: "unplaced-key-socket",
         ...base,
-        text: `${r.device_id} — connected under a key this device cannot place in this motebit's chain (${kf}…)`,
+        text: `${r.device_id} — ${seen} under a key this device cannot place in this motebit's chain (${kf}…)`,
       });
     } else if (!hasLine.has(r.device_id) && unplaceable.has(r.device_id)) {
       // Connected under a key on the chain, but enrolled only under keys it
@@ -348,13 +350,13 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
       lines.push({
         kind: "unplaced-key-socket",
         ...base,
-        text: `${r.device_id} — connected; enrolled only under keys this device cannot place in its chain`,
+        text: `${r.device_id} — ${seen}; enrolled only under keys this device cannot place in its chain`,
       });
     } else {
       lines.push({
         kind: "not-in-roster",
         ...base,
-        text: `${r.device_id} — connected, not in the roster${r.bound_under === head && hasLine.has(r.device_id) ? " under the current key" : ""}`,
+        text: `${r.device_id} — ${seen}, not in the roster${r.bound_under === head && hasLine.has(r.device_id) ? " under the current key" : ""}`,
       });
     }
   });
@@ -555,27 +557,33 @@ export function emptyState(held: {
   refused: number;
 }): { kind: "none-enrolled" | "none-standing" | "nothing-held"; text: string } | null {
   if (held.lines > 0) return null;
-  const unconfirmed = held.confirmed ? "" : " (not confirmed with the relay)";
+  // W1 (C6.10): unconfirmed, nothing may quantify over the motebit's
+  // machines — only what THIS DEVICE sees is described.
+  if (!held.confirmed) {
+    if (held.tombstones > 0) {
+      const n = held.tombstones;
+      return {
+        kind: "none-standing",
+        text: `this device sees no enrolment; it holds ${n} ${n === 1 ? "retirement" : "retirements"} for enrolments it has not seen`,
+      };
+    }
+    if (held.refused > 0) {
+      return { kind: "none-standing", text: "this device sees no enrolment it can verify" };
+    }
+    return { kind: "nothing-held", text: "this device holds no roster entries" };
+  }
   if (held.tombstones > 0) {
     // A pending tombstone names an enrolment: one existed.
     return {
       kind: "none-standing",
-      text: `no machine is enrolled; retirements are held for enrolments this device has not seen${unconfirmed}`,
+      text: "no machine is enrolled; retirements are held for enrolments this device has not seen",
     };
   }
   if (held.refused > 0) {
     // Refused copies exist: no enrolment this device can verify — not "none ever".
-    return {
-      kind: "none-standing",
-      text: `no machine is enrolled that this device can verify${unconfirmed}`,
-    };
+    return { kind: "none-standing", text: "no machine is enrolled that this device can verify" };
   }
-  return held.confirmed
-    ? { kind: "none-enrolled", text: "no machine has enrolled yet" }
-    : {
-        kind: "nothing-held",
-        text: "nothing is held on this device, and the roster could not be confirmed",
-      };
+  return { kind: "none-enrolled", text: "no machine has enrolled yet" };
 }
 
 /** The words for a suppression reason (why no count is shown). */

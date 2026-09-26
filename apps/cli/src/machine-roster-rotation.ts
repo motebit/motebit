@@ -82,9 +82,14 @@ export async function rosterHookAfterRotate(opts: {
     if (out.kind !== "frozen") return null;
     if (out.decided == null) {
       // (c) An active capture that could not be carried: say so, and how.
-      return out.captured === "active" && out.value === "absent"
-        ? `  Machine roster: active before the rotation; not enrolled under the new key (the read after the rotation was incomplete) — \`motebit machines enroll ${config.device_id}\``
-        : null;
+      if (out.captured !== "active" || out.notCarried == null) return null;
+      const why =
+        out.notCarried === "read-incomplete"
+          ? "the read after the rotation was incomplete"
+          : out.notCarried === "prior-frozen"
+            ? "an earlier run already recorded it as not active"
+            : "the key chain read does not end at this rotation";
+      return `  Machine roster: active before the rotation; not enrolled under the new key (${why}) — \`motebit machines enroll ${config.device_id}\``;
     }
     if (out.decided.kind === "minted") {
       return [

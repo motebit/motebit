@@ -717,7 +717,11 @@ describe("C4 — retire, and undo by enroll", () => {
     const relay = new FakeRelay();
     relay.live = [{ device_id: "phone", bound_under: hex(a), sockets_open: 1 }];
     const m = machine(relay, a);
-    expect(await m.roster.retire("phone")).toEqual({ kind: "not-enrolled", deviceId: "phone" });
+    expect(await m.roster.retire("phone")).toEqual({
+      kind: "not-enrolled",
+      deviceId: "phone",
+      socketOpen: true,
+    });
     expect(await m.roster.retire("nope")).toEqual({ kind: "unknown-device", deviceId: "nope" });
     expect(relay.ret.size).toBe(0);
   });
@@ -1000,10 +1004,12 @@ describe("C6 — the view", () => {
       /socket open under a superseded key .*: this machine's daemon before it restarted, or any holder of that key/,
     );
     expect(by("gone", "superseded-key-socket")?.text).toMatch(/last seen under a superseded key/);
-    expect(by("vps", "unplaced-key-socket")?.text).toMatch(/cannot place in this motebit's chain/);
+    expect(by("vps", "unplaced-key-socket")?.text).toMatch(
+      /socket open under a key this device cannot place in this motebit's chain/,
+    );
     expect(by("vps", "unplaced-key-socket")?.text).not.toMatch(/not this motebit/);
     expect(by("tablet", "linked-device")?.text).toMatch(/linked device without the identity key/);
-    expect(by("laptop", "not-in-roster")?.text).toMatch(/connected, not in the roster/);
+    expect(by("laptop", "not-in-roster")?.text).toMatch(/socket open, not in the roster/);
     expect(by("vps", "active")?.text).toMatch(/not observed in the last 90 days/);
   });
 
@@ -1037,7 +1043,9 @@ describe("C6 — the view", () => {
     relay.rows = [{ device_id: "vps", bound_under: hex(a), last_seen_at: NOW, sockets_open: 1 }];
     const view = buildRosterView(await acquired(machine(relay, a)), NOW);
     if (view.kind !== "roster") throw new Error("expected roster");
-    expect(view.lines.find((l) => l.device_id === "vps")?.text).toMatch(/retired, but connected/);
+    expect(view.lines.find((l) => l.device_id === "vps")?.text).toMatch(
+      /retired under the current key; the relay believes a socket is open \(no heartbeat yet\)/,
+    );
   });
 
   it("C6.8 — the ambiguity hint needs two successive reads, and says 'may'", async () => {
@@ -1282,6 +1290,7 @@ describe("edge cases", () => {
     expect(await machine(relay, a).roster.retire("host")).toEqual({
       kind: "not-enrolled",
       deviceId: "host",
+      socketOpen: false,
     });
   });
 
@@ -2319,7 +2328,7 @@ describe("F (#786) — a device whose only enrolments are unplaceable has enroll
       // socket under such a key is the "cannot place" signal, named by key.
       const k0Row = vps.find((l) => l.kind === "unplaced-key-socket" && l.bound_under === hex(k0));
       expect(k0Row?.text).toMatch(
-        /connected under a key this device cannot place in this motebit's chain/,
+        /socket open under a key this device cannot place in this motebit's chain/,
       );
     },
   );
@@ -2364,20 +2373,21 @@ describe("W1 (#790) — the empty state is derived from what is held, over the w
         return;
       }
       const text = e!.text;
+      // C6.10 (#792 W1): unconfirmed, NO text quantifies over the motebit's
+      // machines — it describes only what this device sees.
+      if (!confirmed) {
+        expect(text).not.toMatch(/\bno machines?\b|\bmachines\b|\benrolled\b/);
+        expect(text).toMatch(/^this device /);
+      }
       // Each absolute is conditioned on what is held.
       if (/no machine has enrolled yet/.test(text)) {
         expect([confirmed, tombstones, refused]).toEqual([true, 0, 0]);
       }
-      if (/nothing is held on this device/.test(text)) {
+      if (/holds no roster entries/.test(text)) {
         expect([confirmed, tombstones, refused]).toEqual([false, 0, 0]);
       }
-      if (tombstones > 0) expect(text).toMatch(/retirements are held for enrolments/);
-      else if (refused > 0)
-        expect(text).toMatch(/no machine is enrolled that this device can verify/);
-      // Unconfirmed never reads as settled.
-      if (!confirmed) {
-        expect(text).toMatch(/not confirmed with the relay|could not be confirmed/);
-      }
+      if (tombstones > 0) expect(text).toMatch(/retirements? .*for enrolments/);
+      else if (refused > 0) expect(text).toMatch(/can verify/);
     },
   );
 
@@ -2396,7 +2406,7 @@ describe("W1 (#790) — the empty state is derived from what is held, over the w
     if (view.kind !== "roster") throw new Error("expected roster");
     expect(view.claim).toBeNull();
     expect(view.empty?.text).toBe(
-      "no machine is enrolled; retirements are held for enrolments this device has not seen (not confirmed with the relay)",
+      "this device sees no enrolment; it holds 1 retirement for enrolments it has not seen",
     );
   });
 
@@ -2417,10 +2427,9 @@ describe("W1 (#790) — the empty state is derived from what is held, over the w
     if (view.kind !== "roster") throw new Error("expected roster");
     expect(view.suppressed).toContain("relay_omission");
     expect(view.notes.some((n) => n.kind === "omitted")).toBe(true);
-    expect(view.empty?.text).toMatch(
-      /retirements are held for enrolments this device has not seen/,
+    expect(view.empty?.text).toBe(
+      "this device sees no enrolment; it holds 1 retirement for enrolments it has not seen",
     );
-    expect(view.empty?.text).not.toMatch(/nothing is held/);
   });
 });
 
@@ -2549,5 +2558,148 @@ describe("(a) #790 — 'still missing' only when a re-read confirmed it", () => 
     const note2 =
       confirmed.kind === "roster" ? confirmed.notes.find((n) => n.kind === "omitted") : null;
     expect(note2?.text).toMatch(/still missing on re-read/);
+  });
+});
+
+// ── #792 round 1 ─────────────────────────────────────────────────────
+
+describe("W2 (#792) — 'connected' / 'socket open' only when a socket is open now", () => {
+  /** Every liveness-bearing row class, each with `sockets_open` = n. */
+  async function everyRowClass(n: number) {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const dk = await generateKeypair();
+    const stranger = await generateKeypair();
+    const relay = new FakeRelay();
+    relay.chain = [await rotate(a, b)];
+    const ret = await enrol(b, "ret");
+    await relay.hold(
+      await enrol(b, "act"),
+      await enrol(a, "sup"),
+      ret,
+      await retireEntry(b, ret),
+      await enrol(stranger, "unp"),
+    );
+    const row = (device_id: string, key: KeyPair) => ({
+      device_id,
+      bound_under: hex(key),
+      last_seen_at: NOW - DAY,
+      sockets_open: n,
+    });
+    relay.rows = [
+      row("act", b), // 1. active join
+      row("ret", b), // retired join
+      row("sup", a), // 2. superseded-key socket
+      row("tab", dk), // 3. linked device
+      row("act", stranger), // 4. a lined device under an unplaceable key
+      row("unp", b), // 4b. enrolled only under unplaceable keys
+      row("nol", b), // 5. no line
+    ];
+    const view = buildRosterView(
+      await acquired(machine(relay, b, { deviceId: "phone", knownDeviceKeys: [hex(dk)] })),
+      NOW,
+    );
+    if (view.kind !== "roster") throw new Error("expected roster");
+    return { view, relay, a, b };
+  }
+
+  it("with sockets_open 0, no line says connected or socket open; each says when it was last seen", async () => {
+    const { view } = await everyRowClass(0);
+    for (const l of view.lines) {
+      expect(l.text, l.kind).not.toMatch(/\bconnected\b|socket open|socket is open/);
+    }
+    const withRows = view.lines.filter(
+      (l) => l.kind !== "superseded" && l.kind !== "unplaced-enrollment",
+    );
+    for (const l of withRows) {
+      if (l.kind === "active" || l.kind === "retired") continue;
+      expect(l.text, l.kind).toMatch(/last seen /);
+    }
+    expect(view.lines.find((l) => l.kind === "active" && l.device_id === "act")?.text).toMatch(
+      /last seen /,
+    );
+  });
+
+  it("with a socket open, the same rows say so", async () => {
+    const { view } = await everyRowClass(1);
+    for (const l of view.lines) {
+      if (l.kind === "superseded" || l.kind === "unplaced-enrollment") continue;
+      expect(l.text, l.kind).toMatch(/socket open|socket is open/);
+    }
+  });
+
+  it("retire's not-enrolled and R17b's lift both need an OPEN socket", async () => {
+    const { relay, a, b } = await everyRowClass(0);
+    const phone = machine(relay, b, { deviceId: "phone" });
+    expect(await phone.roster.retire("nol")).toMatchObject({
+      kind: "not-enrolled",
+      socketOpen: false,
+    });
+    // R17b: a persisted head-key row with no socket open does not lift the refusal.
+    relay.rows = [{ device_id: "sup", bound_under: hex(b), last_seen_at: NOW, sockets_open: 0 }];
+    expect(await phone.roster.enroll("sup")).toMatchObject({
+      kind: "needs-force",
+      why: "all-superseded",
+      key: hex(a),
+    });
+  });
+});
+
+describe("W3 (#792) — a status read without the relay is this device's copy", () => {
+  it("enrolled; retired elsewhere; the roster read fails at the next start ⇒ active, but unconfirmed", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    expect((await machine(relay, a, { deviceId: "phone" }).roster.retire("dev-self")).kind).toBe(
+      "retired",
+    );
+    relay.getFails = true;
+    expect(await m.roster.ensureEnrolled()).toMatchObject({ kind: "active", confirmed: false });
+    relay.getFails = false;
+    expect(await m.roster.ensureEnrolled()).toMatchObject({ kind: "retired", confirmed: true });
+  });
+});
+
+describe("P3 (#792) — the hook says why an active capture was not carried", () => {
+  it("read-incomplete, then prior-frozen on the resumed run", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    await m.roster.captureBeforeRotation();
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    relay.getFails = true;
+    const d = machine(relay, b, { cache: m.cache });
+    expect(await d.roster.afterRotation({ signer: await signerOf(b), record })).toMatchObject({
+      value: "absent",
+      captured: "active",
+      notCarried: "read-incomplete",
+    });
+    relay.getFails = false;
+    expect(await d.roster.afterRotation({ signer: await signerOf(b), record })).toMatchObject({
+      value: "absent",
+      captured: "active",
+      notCarried: "prior-frozen",
+    });
+  });
+});
+
+describe("P5 (#792) — 'retired (advisory…)' only from a retirement the law admitted", () => {
+  it("a junk head-key retirement naming the line does not change the wording", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const e = await enrol(a, "old");
+    const byA = await retireEntry(a, e);
+    const junk = { ...(await retireEntry(b, e)), signature: `${"A".repeat(85)}A` };
+    relay.chain = [await rotate(a, b)];
+    await relay.hold(e, byA);
+    relay.ret.set("junk", junk as HostRetirement);
+    const view = buildRosterView(await acquired(machine(relay, b, { deviceId: "phone" })), NOW);
+    const line = view.kind === "roster" ? view.lines.find((l) => l.device_id === "old") : null;
+    expect(line?.text).toMatch(/retired at an older key \(advisory\)/);
   });
 });

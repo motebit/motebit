@@ -127,7 +127,11 @@ export function describeRetire(out: RetireOutcome): { lines: string[]; ok: boole
       return { lines: [`${out.deviceId} is already retired.`], ok: true };
     case "not-enrolled":
       return {
-        lines: [`${out.deviceId} is connected; this device sees no enrolment for it to retire.`],
+        lines: [
+          out.socketOpen
+            ? `${out.deviceId}: the relay believes a socket is open; this device sees no enrolment for it to retire.`
+            : `${out.deviceId}: the relay has seen it; this device sees no enrolment for it to retire.`,
+        ],
         ok: false,
       };
     case "unplaced-lines":
@@ -176,7 +180,7 @@ export function describeEnroll(out: EnrollOutcome): { lines: string[]; ok: boole
                   `If ${out.deviceId} now holds the current key: ${force}.`,
                 ]
               : [
-                  `${out.deviceId} is connected under a linked device's key (not the identity key)`,
+                  `the relay has seen ${out.deviceId} under a linked device's key (not the identity key)`,
                   `If intended: ${force}.`,
                 ];
       return { lines: [`Not enrolled: ${why}.`, `  ${next}`], ok: false };

@@ -193,14 +193,14 @@ describe("terminal wording", () => {
       relay: null,
       empty: {
         kind: "nothing-held",
-        text: "nothing is held on this device, and the roster could not be confirmed",
+        text: "this device holds no roster entries",
       },
     };
     const out = formatRosterView(view, MID).join("\n");
     expect(out).toMatch(/No count: the relay reports a newer key/);
     expect(out).toMatch(/motebit machines retire old/);
     // W1 — a suppressed, empty view never claims that no machine enrolled.
-    expect(out).toMatch(/nothing is held on this device/);
+    expect(out).toMatch(/this device holds no roster entries/);
     expect(out).not.toMatch(/no machine has enrolled/);
   });
 
@@ -274,7 +274,9 @@ describe("terminal wording", () => {
         expect.stringMatching(/Advisory: its line is on a superseded key/),
       ]),
     });
-    expect(describeRetire({ kind: "not-enrolled", deviceId: "v" }).ok).toBe(false);
+    expect(describeRetire({ kind: "not-enrolled", deviceId: "v", socketOpen: true }).ok).toBe(
+      false,
+    );
     expect(describeRetire({ kind: "unknown-device", deviceId: "v" }).ok).toBe(false);
     expect(describeRetire({ kind: "already-retired", deviceId: "v" }).ok).toBe(true);
     expect(describeRetire({ kind: "unreadable", detail: "down" }).lines[0]).toMatch(
@@ -348,9 +350,15 @@ describe("F (#786) — the CLI's words for lines this device cannot place", () =
   });
 
   it("retire: the no-enrolment wordings are conditioned on what this device can see", () => {
-    expect(describeRetire({ kind: "not-enrolled", deviceId: "t" }).lines[0]).toMatch(
-      /this device sees no enrolment for it to retire/,
+    expect(describeRetire({ kind: "not-enrolled", deviceId: "t", socketOpen: true }).lines[0]).toBe(
+      "t: the relay believes a socket is open; this device sees no enrolment for it to retire.",
     );
+    // W2 (#792): a persisted row with no socket open is never "connected".
+    const closed = describeRetire({ kind: "not-enrolled", deviceId: "t", socketOpen: false });
+    expect(closed.lines[0]).toBe(
+      "t: the relay has seen it; this device sees no enrolment for it to retire.",
+    );
+    expect(closed.lines.join(" ")).not.toMatch(/connected|socket/);
     expect(describeRetire({ kind: "unknown-device", deviceId: "t" }).lines[0]).toMatch(
       /on the roster this device can see/,
     );
@@ -473,6 +481,37 @@ describe("BUILD 5 — refusal and remedy wording states only what is proved", ()
   it("the restore remedy never offers the seed", () => {
     expect(remedyText("restore")).toBe(
       "this device's key was rotated away — `motebit restore` with the current motebit.md or a key transfer",
+    );
+  });
+});
+
+describe("#792 round 1 — CLI wording", () => {
+  const p = { taken: 1, notTaken: [], rosterFull: [] };
+  it("W3: a status from this device's copy alone is said to be the copy's", () => {
+    for (const [o, shows] of [
+      [{ kind: "active", presented: p, confirmed: false }, "shows this machine active"],
+      [{ kind: "retired", presented: p, confirmed: false }, "shows this machine retired"],
+      [
+        { kind: "superseded", frozen: null, presented: p, confirmed: false },
+        "shows this machine's line on a superseded key",
+      ],
+    ] as const) {
+      const line = describeEnsureOutcome(o, "vps");
+      expect(line).toMatch(
+        /^Machine roster: not updated this start — the relay could not be read; this device's copy /,
+      );
+      expect(line).toContain(shows);
+    }
+    // Confirmed: unchanged.
+    expect(
+      describeEnsureOutcome({ kind: "active", presented: p, confirmed: true }, "vps"),
+    ).toBeNull();
+  });
+
+  it("enroll's linked-device refusal says 'seen', not 'connected'", () => {
+    const out = describeEnroll({ kind: "needs-force", deviceId: "tab", why: "linked-device" });
+    expect(out.lines[0]).toBe(
+      "Not enrolled: the relay has seen tab under a linked device's key (not the identity key).",
     );
   });
 });

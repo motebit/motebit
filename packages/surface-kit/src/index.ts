@@ -63,6 +63,7 @@ export type {
   EnrollOutcome,
   EnrollRefusal,
   RotationHookOutcome,
+  NotCarried,
 } from "./machine-roster.js";
 export {
   emptyReplica,

@@ -232,16 +232,25 @@ export function describeEnsureOutcome(
     case "no-key":
       return null;
     case "active": {
+      if (out.confirmed === false) {
+        return `Machine roster: not updated ${when} — the relay could not be read; this device's copy shows this machine active`;
+      }
       const n = notTaken(out.presented);
       return n === "" ? null : `Machine roster: this machine's line is active${n}`;
     }
     case "minted":
       return `Machine roster: enrolled this machine (${out.enrollmentId.slice(0, 12)}…)${notTaken(out.presented)}`;
     case "retired":
+      if (out.confirmed === false) {
+        return `Machine roster: not updated ${when} — the relay could not be read; this device's copy shows this machine retired — ${enroll} to rejoin`;
+      }
       return context === "rotate"
         ? `Machine roster: this machine is retired; not enrolled under the new key — ${enroll} to rejoin`
         : `Machine roster: this machine is retired — ${enroll} to rejoin; \`motebit rotate\` if you did not retire it`;
     case "superseded":
+      if (out.confirmed === false) {
+        return `Machine roster: not updated ${when} — the relay could not be read; this device's copy shows this machine's line on a superseded key — ${enroll}`;
+      }
       return `Machine roster: this machine's line is on a superseded key; not covered — ${enroll}`;
     case "unplaced":
       return `Machine roster: this machine's entries are under keys this device cannot place, or unverified; not updated ${when} — ${enroll} if it should host`;

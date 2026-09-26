@@ -312,6 +312,11 @@ export interface RosterAcquired {
   previousAmbiguous: string[];
   /** Device keys from the surface's own devices list (C6.3). */
   knownDeviceKeys: string[];
+  /**
+   * Enrolment ids named by an ADMISSIBLE retirement signed by the head key
+   * (P5): the law admitted it — never a raw input that merely claims to be.
+   */
+  retiredByHead: string[];
   /** Raw entries reduced over. */
   inputs: { enrollments: unknown[]; retirements: unknown[] };
   /** Id → `device_id` / key of every well-formed input enrolment — R25 takes a refused entry's `device_id` from here. */
@@ -406,13 +411,22 @@ export function statusOf(
 export type EnsureEnrolledOutcome =
   | { kind: "no-key" }
   | { kind: "refused"; reason: RosterRefusalReason; detail: string; remedy: RosterRemedy }
-  /** Active at the head: nothing minted, the held bytes re-presented. */
-  | { kind: "active"; presented: PresentReport }
+  /**
+   * Active at the head: nothing minted, the held bytes re-presented.
+   * `confirmed: false` — the relay's roster or key chain was not read, so
+   * this is this device's copy (W3). Absent on the minting path's answers.
+   */
+  | { kind: "active"; presented: PresentReport; confirmed?: boolean }
   | { kind: "minted"; enrollmentId: string; firstLine: boolean; presented: PresentReport }
   /** Retired at some epoch: never re-enrolled without an explicit act (C3). */
-  | { kind: "retired"; presented: PresentReport }
+  | { kind: "retired"; presented: PresentReport; confirmed?: boolean }
   /** Superseded and no frozen `active` for its epoch: not covered until `enroll`. */
-  | { kind: "superseded"; frozen: FrozenValue | null; presented: PresentReport }
+  | {
+      kind: "superseded";
+      frozen: FrozenValue | null;
+      presented: PresentReport;
+      confirmed?: boolean;
+    }
   /**
    * No placeable line, but the input holds enrolments of this device the
    * chain cannot place (rule 2): not auto-minted — `enroll` is the act.
@@ -440,7 +454,7 @@ export type RetireOutcome =
     }
   | { kind: "already-retired"; deviceId: string }
   /** Connected, and no enrolment this device can see (placeable or not) — nothing to retire (C4). */
-  | { kind: "not-enrolled"; deviceId: string }
+  | { kind: "not-enrolled"; deviceId: string; socketOpen: boolean }
   /**
    * Its only enrolments are under keys this device cannot place in its
    * chain: it HAS enrolled, but nothing is retirable from here until the
@@ -474,6 +488,15 @@ export type EnrollOutcome =
     }
   | { kind: "enrolled"; deviceId: string; enrollmentId: string; presented: PresentReport };
 
+/** Why an active capture was not carried into the new epoch. */
+export type NotCarried =
+  /** This acquisition's reads were incomplete (roster, key chain, omission, or corrupt copy). */
+  | "read-incomplete"
+  /** A frozen value for this rotation was already stored, and it is not `active`. */
+  | "prior-frozen"
+  /** The resolved chain does not end old key → new key. */
+  | "chain-mismatch";
+
 export type RotationHookOutcome =
   | { kind: "no-verdict"; detail: string }
   | {
@@ -493,6 +516,8 @@ export type RotationHookOutcome =
       decided: EnsureEnrolledOutcome | null;
       /** The capture taken before the rotation was sent (`null`: none). */
       captured: "active" | "not-active" | "absent" | null;
+      /** When an `active` capture was not carried: why, as decided. */
+      notCarried?: NotCarried | null;
     };
 
 // ── The controller ───────────────────────────────────────────────────
@@ -712,6 +737,7 @@ export class MachineRoster {
       previousAmbiguous,
       knownDeviceKeys: (await this.ports.knownDeviceKeys?.()) ?? [],
       inputs: reduced.inputs,
+      retiredByHead: await retiredByHead(reduced.verdict, reduced.inputs.retirements),
       enrollmentIndex: await Promise.all(
         reduced.inputs.enrollments.filter(isHostEnrollment).map(async (e) => ({
           id: await hostEnrollmentId(e),
@@ -742,10 +768,17 @@ export class MachineRoster {
   ): Promise<EnsureEnrolledOutcome> {
     const { status, epoch } = statusOf(acq.verdict, acq.deviceId);
 
-    if (status === "active") return { kind: "active", presented: await this.present(acq) };
+    // W3 — a status read without the relay (its roster or key chain) is
+    // this device's copy, and the outcome says so.
+    const confirmed = acq.served != null && acq.succession.served && acq.omitted.length === 0;
+    if (status === "active") {
+      return { kind: "active", confirmed, presented: await this.present(acq) };
+    }
     // Retired at ANY epoch: never rejoins without an explicit act (spec §6
     // "Rejoining"), and a frozen value never overrides it (R14).
-    if (status === "retired") return { kind: "retired", presented: await this.present(acq) };
+    if (status === "retired") {
+      return { kind: "retired", confirmed, presented: await this.present(acq) };
+    }
 
     const blockedFromMinting = (): EnsureEnrolledOutcome | null =>
       acq.cache === "corrupt"
@@ -786,7 +819,7 @@ export class MachineRoster {
         ? "active"
         : frozenFor(acq.replica, acq.deviceId, hKey);
       if (frozen !== "active") {
-        return { kind: "superseded", frozen, presented: await this.present(acq) };
+        return { kind: "superseded", frozen, confirmed, presented: await this.present(acq) };
       }
       return blockedFromMinting() ?? this.mintOwn(acq, false, rotation);
     }
@@ -820,10 +853,18 @@ export class MachineRoster {
       }
       const unplaced = unplaceableEnrollments(v, acq.enrollmentIndex).get(deviceId);
       if (unplaced) return { kind: "unplaced-lines", deviceId, count: unplaced.count };
-      const connected =
-        acq.served?.liveness.rows.some((r) => r.device_id === deviceId) === true ||
-        acq.served?.liveness.live_unenrolled.some((r) => r.device_id === deviceId) === true;
-      return connected ? { kind: "not-enrolled", deviceId } : { kind: "unknown-device", deviceId };
+      const seen = [
+        ...(acq.served?.liveness.rows ?? []),
+        ...(acq.served?.liveness.live_unenrolled ?? []),
+      ].filter((r) => r.device_id === deviceId);
+      return seen.length > 0
+        ? {
+            kind: "not-enrolled",
+            deviceId,
+            // W2: "connected" only when a socket is open now.
+            socketOpen: seen.some((r) => r.sockets_open > 0),
+          }
+        : { kind: "unknown-device", deviceId };
     }
     const retirements: HostRetirement[] = [];
     for (const entry of line.entries) {
@@ -874,7 +915,7 @@ export class MachineRoster {
         const boundUnderHead = [
           ...(acq.served?.liveness.rows ?? []),
           ...(acq.served?.liveness.live_unenrolled ?? []),
-        ].some((r) => r.device_id === deviceId && r.bound_under === head);
+        ].some((r) => r.device_id === deviceId && r.bound_under === head && r.sockets_open > 0);
         if (!boundUnderHead) {
           const line = acq.verdict.superseded.find((m) => m.device_id === deviceId);
           const key = line ? acq.chain.chain[line.epoch] : undefined;
@@ -1003,19 +1044,31 @@ export class MachineRoster {
     // The ONLY input to the frozen decision: the capture taken before the
     // rotation was sent.
     const capture = corruptAtStart ? null : captureFor(acq.replica, deviceId, oldKey);
+    const chainMismatch = pre.length === 0 || pre[pre.length - 1] !== oldKey;
     const value: FrozenValue =
-      capture == null ||
-      capture.status === "absent" ||
-      pre.length === 0 ||
-      pre[pre.length - 1] !== oldKey ||
-      !mayAutoMint(acq)
+      capture == null || capture.status === "absent" || chainMismatch || !mayAutoMint(acq)
         ? "absent"
         : capture.status;
     const prior = frozenFor(acq.replica, deviceId, oldKey);
     if (value !== "active" || (prior != null && prior !== "active")) {
       // First write wins; and nothing but a frozen `active` goes further.
       const f = await freeze(value, acq.replica);
-      return { kind: "frozen", value: f.value, decided: null, captured: capture?.status ?? null };
+      // P3 — why an ACTIVE capture was not carried, as the code decided it.
+      const notCarried: NotCarried | null =
+        capture?.status !== "active"
+          ? null
+          : prior != null && prior !== "active"
+            ? "prior-frozen"
+            : chainMismatch
+              ? "chain-mismatch"
+              : "read-incomplete";
+      return {
+        kind: "frozen",
+        value: f.value,
+        decided: null,
+        captured: capture?.status ?? null,
+        notCarried,
+      };
     }
     // A frozen `active` is NEVER persisted on its own (F2): it is saved in
     // the mint's own critical section, in the same save as the head-key
@@ -1458,6 +1511,24 @@ export class MachineRoster {
     }
     return "restore";
   }
+}
+
+/** Ids named by admissible retirements under the head key — admissible = not refused by the law. */
+async function retiredByHead(
+  verdict: HostRosterVerdict,
+  retirements: unknown[],
+): Promise<string[]> {
+  const head = verdict.chain_head.public_key;
+  const refused = new Set(
+    verdict.rejected.filter((r) => r.kind === "retirement" && r.id != null).map((r) => r.id!),
+  );
+  const out = new Set<string>();
+  for (const r of retirements) {
+    if (!isHostRetirement(r) || r.public_key !== head) continue;
+    if (refused.has(await hostRetirementId(r))) continue;
+    out.add(r.enrollment_id);
+  }
+  return [...out];
 }
 
 function refusedOf(acq: Extract<RosterAcquisition, { kind: "refused" }>): {

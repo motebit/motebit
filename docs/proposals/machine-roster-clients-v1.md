@@ -238,6 +238,8 @@ The decision is taken on the **current** verdict over **the cache ∪ a successf
   - **A recovery record with no pinned guardian** is checked for its new key's signature only. It can count as a predecessor (giving `recovery_limited`), but never as a successor or a branch, because anyone can mint one to their own key.
 - **C-1 build notes.**
   - **`knownDeviceKeys` is absent on the CLI**: it keeps no devices list, so C6.3's "linked device" relabel, R17c's `enroll` refusal and R25's relabel never fire there. They are implemented and tested in the kit; the phone and desktop supply the port in C-2.
+  - **N8 conformance gap, stated:** on the CLI the mint step runs AFTER the socket has announced `unattended_runtime` (the announce is part of the connect) and only when registration with the relay succeeded, because the roster routes need the device row that registration creates. So an announcing process whose registration failed does not enrol that start. Moving the step before the announce is not trivial (the device-token routes need registration first); a CLI test pins that every source announcing the capability calls `enrollOnAnnounce`.
+  - **A status read without the relay is this device's copy** (#792 W3): when the roster or the key chain was not read, the start/rotate line says "not updated … — the relay could not be read; this device's copy shows …", never an unqualified status.
 
 ## 3. Open questions (none remaining)
 
