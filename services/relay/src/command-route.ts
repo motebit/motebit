@@ -420,7 +420,8 @@ export function settleCommandsDeliveredTo(peer: ConnectedDevice): number {
 
 /**
  * The ONE delivery rule for a single-use frame: deliver to exactly one
- * OPEN socket, preferring the NEWEST (#691 items 1 and 2). Returns the
+ * OPEN socket — VERIFIED peers before declared-only ones, the NEWEST first
+ * within each (#691 items 1, 2 and the compatible half of 7). Returns the
  * peer it went to, or null when none would take it.
  *
  * Newest, because `connections` is append-ordered (a peer is pushed when
@@ -447,14 +448,25 @@ export function settleCommandsDeliveredTo(peer: ConnectedDevice): number {
  * CONNECTING case, which does throw.
  */
 export function sendToOne(candidates: ConnectedDevice[], payload: string): ConnectedDevice | null {
-  for (let i = candidates.length - 1; i >= 0; i--) {
-    const peer = candidates[i]!;
-    if (peer.ws.readyState !== 1) continue;
-    try {
-      peer.ws.send(payload);
-      return peer;
-    } catch {
-      // CONNECTING throws; try the next-newest.
+  // VERIFIED first, then newest within each tier (#691 item 7, the
+  // compatible half). Newest-first alone made "connect last" the way for a
+  // peer that merely DECLARED a device id (any sync-token holder can) to
+  // take a first-wins halt from the daemon and answer it falsely. A peer
+  // whose declared id is the `did` of its signed token outranks every
+  // declared-only one. Nothing is excluded: with no verified peer (device
+  // auth off, a master-token runtime, an older client) the order is
+  // exactly newest-first, as before.
+  for (const tier of [true, false]) {
+    for (let i = candidates.length - 1; i >= 0; i--) {
+      const peer = candidates[i]!;
+      if ((peer.deviceIdVerified === true) !== tier) continue;
+      if (peer.ws.readyState !== 1) continue;
+      try {
+        peer.ws.send(payload);
+        return peer;
+      } catch {
+        // CONNECTING throws; try the next in order.
+      }
     }
   }
   return null;

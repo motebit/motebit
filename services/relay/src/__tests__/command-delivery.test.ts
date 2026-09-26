@@ -36,7 +36,7 @@ import {
 } from "@motebit/crypto";
 import type { KeyPair } from "@motebit/crypto";
 import type { SyncRelay, SyncRelayConfig } from "../index.js";
-import { JSON_AUTH, createTestRelay } from "./test-helpers.js";
+import { API_TOKEN, JSON_AUTH, createTestRelay } from "./test-helpers.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 const hex = (kp: KeyPair) => bytesToHex(kp.publicKey);
@@ -136,14 +136,22 @@ interface Sock {
 }
 
 /** A daemon socket for the identity's machine, registered with the relay before returning. */
-async function daemon(s: Stack, who: Identity): Promise<Sock> {
-  const minted = await mintAudienceToken(
-    { mid: who.mid, did: who.did, aud: "sync" },
-    who.kp.privateKey,
-  );
+async function daemon(
+  s: Stack,
+  who: Identity,
+  // The token that admits the socket. Default: a `sync` token whose `did` IS
+  // the declared device id, so the socket is VERIFIED. Pass another to make
+  // it declared-only (a token for another device, or the master token).
+  as?: { token: string; jti?: string },
+): Promise<Sock> {
+  const minted =
+    as == null
+      ? await mintAudienceToken({ mid: who.mid, did: who.did, aud: "sync" }, who.kp.privateKey)
+      : null;
+  const token = as?.token ?? minted!.token;
   const before = s.relay.connections.get(who.mid)?.length ?? 0;
   const ws = new WebSocket(
-    `ws://127.0.0.1:${s.port}/ws/sync/${who.mid}?token=${minted.token}&device_id=${who.did}&capabilities=unattended_runtime`,
+    `ws://127.0.0.1:${s.port}/ws/sync/${who.mid}?token=${token}&device_id=${who.did}&capabilities=unattended_runtime`,
   );
   sockets.push(ws);
   ws.on("error", () => {});
@@ -161,7 +169,7 @@ async function daemon(s: Stack, who: Identity): Promise<Sock> {
   );
   return {
     ws,
-    jti: minted.payload.jti,
+    jti: minted?.payload.jti ?? as?.jti ?? "",
     frames,
     commands: () => frames.filter((f) => f.type === "command_request"),
     answer: (id, result, extra) =>
@@ -235,6 +243,72 @@ describe("item 1 — delivery prefers the newest open socket, and never falls th
     expect(newest.commands()).toHaveLength(1);
     // Single-use per machine: a second delivery would be refused by the
     // machine's replay guard (a false "rejected") or executed twice.
+    expect(older.commands()).toEqual([]);
+  });
+});
+
+/**
+ * A device linked WITHOUT key transfer holds its own key, so it can mint a
+ * valid `sync` token only for its OWN device row. Declaring the daemon's
+ * device id with that token makes a declared-only socket: exactly the
+ * "any sync-token holder" impostor of #691 item 7.
+ */
+async function ownKeyDeviceToken(s: Stack, who: Identity): Promise<string> {
+  const kd = await generateKeypair();
+  const res = await s.relay.app.request("/device/register", {
+    method: "POST",
+    headers: JSON_AUTH,
+    body: JSON.stringify({ motebit_id: who.mid, device_name: "phone", public_key: hex(kd) }),
+  });
+  expect(res.status).toBe(201);
+  const phone = ((await res.json()) as { device_id: string }).device_id;
+  return (await mintAudienceToken({ mid: who.mid, did: phone, aud: "sync" }, kd.privateKey)).token;
+}
+
+describe("item 7 (compatible half) — a verified socket outranks a declared-only one", () => {
+  it("verified-OLD + declared-only-NEW ⇒ the verified daemon gets the halt, the impostor nothing", async () => {
+    const s = await startRelay({ commandTimeoutMs: 5_000 });
+    const who = await identity(s);
+    const real = await daemon(s, who);
+    // Connects LAST, declaring the daemon's device id under another device's token.
+    const impostor = await daemon(s, who, { token: await ownKeyDeviceToken(s, who) });
+    const peers = s.relay.connections.get(who.mid)!;
+    expect(peers.map((p) => p.deviceIdVerified)).toEqual([true, false]);
+
+    const pending = post(s, who, "halt");
+    await waitFor(() => real.commands().length === 1, "the verified daemon to receive the halt");
+    real.answer(real.commands()[0]!.id!, { summary: "Halted." });
+    const { status, json } = await pending;
+
+    expect(status).toBe(200);
+    expect(json.summary).toBe("Halted.");
+    expect(impostor.commands()).toEqual([]);
+  });
+
+  it("only declared-only sockets (master token) ⇒ the newest of them, exactly as before", async () => {
+    const s = await startRelay({ commandTimeoutMs: 5_000 });
+    const who = await identity(s);
+    const older = await daemon(s, who, { token: API_TOKEN });
+    const newer = await daemon(s, who, { token: API_TOKEN });
+    expect(s.relay.connections.get(who.mid)!.every((p) => p.deviceIdVerified !== true)).toBe(true);
+
+    const pending = post(s, who, "halt");
+    await waitFor(() => newer.commands().length === 1, "delivery to the newest");
+    newer.answer(newer.commands()[0]!.id!, { summary: "Halted." });
+    expect((await pending).status).toBe(200);
+    expect(older.commands()).toEqual([]);
+  });
+
+  it("a device-auth-OFF relay (nothing is ever verified) is unaffected: newest wins", async () => {
+    const s = await startRelay({ commandTimeoutMs: 5_000, enableDeviceAuth: false });
+    const who = await identity(s);
+    const older = await daemon(s, who, { token: API_TOKEN });
+    const newer = await daemon(s, who, { token: API_TOKEN });
+
+    const pending = post(s, who, "halt");
+    await waitFor(() => newer.commands().length === 1, "delivery to the newest");
+    newer.answer(newer.commands()[0]!.id!, { summary: "Halted." });
+    expect((await pending).status).toBe(200);
     expect(older.commands()).toEqual([]);
   });
 });

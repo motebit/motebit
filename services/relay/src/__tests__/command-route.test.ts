@@ -488,10 +488,12 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
  * `command-delivery.test.ts`.)
  */
 describe("sendToOne delivers to exactly one socket, the newest that will take it", () => {
-  function peer(label: string, readyState: number, throws = false) {
+  function peer(label: string, readyState: number, throws = false, verified = false) {
     const got: string[] = [];
     const p = {
       deviceId: label,
+      deviceIdDeclared: true,
+      deviceIdVerified: verified,
       ws: {
         readyState,
         send: (payload: string) => {
@@ -518,6 +520,29 @@ describe("sendToOne delivers to exactly one socket, the newest that will take it
     expect(sendToOne([old.p, mid.p, closing.p], "f")).toBe(old.p);
     expect(old.got).toEqual(["f"]);
     expect(closing.got).toEqual([]);
+  });
+
+  it("a VERIFIED socket outranks a newer declared-only one", () => {
+    const verified = peer("daemon", 1, false, true);
+    const declaredOnly = peer("impostor", 1);
+    expect(sendToOne([verified.p, declaredOnly.p], "f")).toBe(verified.p);
+    expect(verified.got).toEqual(["f"]);
+    expect(declaredOnly.got).toEqual([]);
+  });
+
+  it("two verified ⇒ the newest of them; declared-only still never outranks either", () => {
+    const oldV = peer("old", 1, false, true);
+    const newV = peer("new", 1, false, true);
+    const declaredOnly = peer("impostor", 1);
+    expect(sendToOne([oldV.p, newV.p, declaredOnly.p], "f")).toBe(newV.p);
+    expect(oldV.got).toEqual([]);
+    expect(declaredOnly.got).toEqual([]);
+  });
+
+  it("a verified socket that is not OPEN falls back to the declared-only tier (nothing excluded)", () => {
+    const deadV = peer("dead", 3, false, true);
+    const declaredOnly = peer("legacy", 1);
+    expect(sendToOne([declaredOnly.p, deadV.p], "f")).toBe(declaredOnly.p);
   });
 
   it("none OPEN ⇒ null, nothing sent", () => {
