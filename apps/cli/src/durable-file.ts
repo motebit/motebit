@@ -461,6 +461,76 @@ function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+/** In-process queue per async lock: re-entrancy by a Set does not hold across `await`. */
+const asyncLockQueues = new Map<string, Promise<void>>();
+
+/**
+ * `withFileLock` for a critical section that AWAITS (signing, hashing): the
+ * same exclusive `${target}.lock` file, the same stale-holder breaking, but
+ * polled without blocking the event loop, and serialized within this
+ * process by a queue (two tasks of one process must not both believe they
+ * hold it). Not re-entrant: never take it again inside `fn`, and never give
+ * it the name of a lock `fn` takes with `withFileLock`.
+ */
+export async function withFileLockAsync<T>(
+  target: string,
+  fn: () => Promise<T>,
+  opts: { timeoutMs?: number; staleMs?: number } = {},
+): Promise<T> {
+  const lock = `${target}.lock`;
+  const prev = asyncLockQueues.get(lock) ?? Promise.resolve();
+  let done!: () => void;
+  const gate = new Promise<void>((r) => (done = r));
+  const mine = prev.then(() => gate);
+  asyncLockQueues.set(lock, mine);
+  await prev;
+  try {
+    const timeoutMs = opts.timeoutMs ?? 10_000;
+    const staleMs = opts.staleMs ?? 30_000;
+    const deadline = Date.now() + timeoutMs;
+    const token = `${process.pid} ${randomBytes(8).toString("hex")}`;
+    for (;;) {
+      let fd: number | null = null;
+      try {
+        fd = fs.openSync(lock, "wx", 0o600);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      }
+      if (fd != null) {
+        try {
+          fs.writeFileSync(fd, token);
+        } finally {
+          fs.closeSync(fd);
+        }
+        break;
+      }
+      const staleToken = staleLockToken(lock, staleMs);
+      if (staleToken !== null) {
+        breakStaleLock(lock, staleToken);
+        continue;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `${target} is locked by another motebit process (${lock}); nothing was changed. If no other motebit command is running, remove that lock file and retry.`,
+        );
+      }
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    try {
+      return await fn();
+    } finally {
+      try {
+        if (fs.readFileSync(lock, "utf-8") === token) fs.unlinkSync(lock);
+      } catch {
+        /* already gone */
+      }
+    }
+  } finally {
+    done();
+    if (asyncLockQueues.get(lock) === mine) asyncLockQueues.delete(lock);
+  }
+}
+
 /**
  * Replace a signed identity file (`motebit.md`). It is PUBLIC — no private
  * key — but it is binding material: it names the `motebit_id` and key,

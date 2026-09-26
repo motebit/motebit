@@ -23,6 +23,7 @@ import {
   moveAside,
   narrowOnLoad,
   withFileLock,
+  withFileLockAsync,
   writeFileAtomic,
 } from "./durable-file.js";
 
@@ -120,4 +121,15 @@ export function saveReplica(replica: MachineRosterReplica, dir: string = CONFIG_
     base.replicas[replica.motebit_id] = existing ? mergeReplicas(existing, replica) : replica;
     writeFileAtomic(file, JSON.stringify(base, null, 2), 0o600);
   });
+}
+
+/**
+ * The MINT lock (`machine-roster.json.mint.lock`): held across the kit's
+ * decide → sign → save, so a `run` and a `serve` starting together never both
+ * mint for one machine. A different lock from the one `saveReplica` takes
+ * inside it, so the two never wait on each other.
+ */
+export function withMintLock<T>(fn: () => Promise<T>, dir: string = CONFIG_DIR): Promise<T> {
+  mkdirOwnerOnly(dir);
+  return withFileLockAsync(`${machineRosterPath(dir)}.mint`, fn);
 }
