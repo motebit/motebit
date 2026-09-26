@@ -234,7 +234,7 @@ export function describeEnsureOutcome(out: EnsureEnrolledOutcome, deviceId: stri
     case "retired":
       return `Machine roster: this machine is retired from the roster but running — \`motebit machines enroll ${deviceId}\` to rejoin, or rotate the key if the retirement was not yours`;
     case "superseded":
-      return `Machine roster: this machine's line is on a superseded key and not covered — \`motebit machines enroll ${deviceId}\` to enrol it under the current key`;
+      return `Machine roster: this machine's line is on a superseded key and not covered — \`motebit machines enroll ${deviceId}\` to enrol it under the current key (a rotation re-enrols only a line this machine minted itself)`;
     case "unplaced":
       return `Machine roster: not enrolled — this machine has lines this device cannot place in its key chain; if it should host, \`motebit machines enroll ${deviceId}\``;
     case "unknown":

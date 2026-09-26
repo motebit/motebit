@@ -34,6 +34,7 @@ import {
 import {
   captureFor,
   emptyReplica,
+  frozenFor,
   mergeReplicas,
   parseReplica,
   type MachineRosterReplica,
@@ -568,7 +569,7 @@ describe("C1 refusals — R23 remedies, R26 evidence kept", () => {
 
 // ── R21: the rotation hook ───────────────────────────────────────────
 
-describe("R21 — the rotation hook (option b: after commit, new key, pre-rotation chain)", () => {
+describe("R21 — the rotation hook (option (a): capture before the link, mint after the commit)", () => {
   it("an active host rotates → frozen active, and it enrols under the new key", async () => {
     const a = await generateKeypair();
     const b = await generateKeypair();
@@ -1132,6 +1133,7 @@ describe("edge cases", () => {
       frozen: [{ device_id: "vps", pre_rotation_key: hex(a), value: "active", taken_at: 1 }],
       roster_full: ["x"],
       own_device_ids: ["vps"],
+      own_minted: ["e"],
       ambiguous: { at: 5, pairs: ["p"] },
       integrity: { at: 3, suspect: true },
       rotation_captures: [
@@ -1155,6 +1157,7 @@ describe("edge cases", () => {
       { retirements: [{ nope: true }] },
       { roster_full: [1] },
       { own_device_ids: "x" },
+      { own_minted: [1] },
       { ambiguous: ["p"] },
       { ambiguous: { at: "x", pairs: [] } },
       { integrity: { at: 1, suspect: "yes" } },
@@ -1717,6 +1720,7 @@ describe("property — a machine the sovereign retired never ends active at the 
     "fail-roster",
     "interrupt-hook",
     "old-key-add",
+    "old-key-add-while-current",
   ] as const;
 
   it("over 300 seeded sequences of 12 steps (old-key lines may land between the link and a late hook)", async () => {
@@ -1730,6 +1734,11 @@ describe("property — a machine the sovereign retired never ends active at the 
       let pending: { record: KeySuccessionRecord; next: KeyPair } | null = null;
       let cache = new FakeCache();
       let retiredBySovereign = false;
+      /** Lines lit by a holder of the key (never this device): allowed to stand, never to be carried. */
+      const thiefIds = new Set<string>();
+      /** Every enrolment this device ever minted for itself, across cache deletions. */
+      const deviceMinted = new Set<string>();
+      let mintedAtRetire = -1;
       let clock = NOW;
       const head = () => keys[keys.length - 1]!;
       const dev = (k: KeyPair = held) => machine(relay, k, { cache, now: ++clock });
@@ -1812,8 +1821,23 @@ describe("property — a machine the sovereign retired never ends active at the 
             await relay.hold(await enrol(old, "dev-self", ++clock));
             break;
           }
+          case "old-key-add-while-current": {
+            // #786: a holder of the key this machine is about to rotate away
+            // re-lights it while that key is still the head.
+            if (held !== head()) break;
+            const e = await enrol(head(), "dev-self", ++clock);
+            thiefIds.add(await hostEnrollmentId(e));
+            await relay.hold(e);
+            break;
+          }
         }
+        for (const id of cache.value?.own_minted ?? []) deviceMinted.add(id);
+        if (retiredBySovereign && mintedAtRetire < 0) mintedAtRetire = deviceMinted.size;
         if (retiredBySovereign) {
+          // This device never mints for itself again without `enroll`.
+          expect(deviceMinted.size, `seed ${seed} (device minted): ${trace.join(" → ")}`).toBe(
+            mintedAtRetire,
+          );
           // The truth: the full chain, over everything anyone holds.
           const truth = await verifyHostRoster({
             motebitId: MID,
@@ -1821,8 +1845,11 @@ describe("property — a machine the sovereign retired never ends active at the 
             enrollments: [...relay.enr.values(), ...(cache.value?.enrollments ?? [])],
             retirements: [...relay.ret.values(), ...(cache.value?.retirements ?? [])],
           });
-          const active = truth.ok && truth.active.some((m) => m.device_id === "dev-self");
-          expect(active, `seed ${seed}: ${trace.join(" → ")}`).toBe(false);
+          // Active only by the key holder's own visible act at the head —
+          // never through a line the rotation carried into a new epoch.
+          const line = truth.ok ? truth.active.find((m) => m.device_id === "dev-self") : undefined;
+          const carried = line != null && line.entries.some((x) => !thiefIds.has(x.enrollment_id));
+          expect(carried, `seed ${seed}: ${trace.join(" → ")}`).toBe(false);
         }
       }
     }
@@ -2046,5 +2073,164 @@ describe("R21 option (a) — the hook reads the capture taken before the link, n
     const later = machine(relay, a, { cache: m.cache, now: NOW + 100 });
     expect((await later.roster.captureBeforeRotation()).status).toBe("not-active");
     expect(captureFor(m.cache.value!, "dev-self", hex(a))?.status).toBe("not-active");
+  });
+});
+
+// ── #786 round 1 ─────────────────────────────────────────────────────
+
+describe("W1 (#786) — a rotation never carries a line this device did not mint into the new epoch", () => {
+  /** D self-enrolled under A; the sovereign retires it; a holder of A (still current) re-lights it. */
+  async function relit() {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    await relay.hold(await retireEntry(a, m.cache.value!.enrollments[0]!));
+    const thief = await enrol(a, "dev-self", NOW + 3);
+    await relay.hold(thief);
+    return { a, b, relay, m, thief };
+  }
+
+  it("the capture reads not-active: D's standing line under A is not one it minted", async () => {
+    const { m } = await relit();
+    const acq = await acquired(m);
+    expect(acq.verdict.active.map((x) => x.device_id)).toEqual(["dev-self"]); // the thief's line
+    expect(await m.roster.captureBeforeRotation()).toMatchObject({
+      status: "not-active",
+      entries: [],
+    });
+  });
+
+  it("the hook mints nothing under B", async () => {
+    const { a, b, relay, m } = await relit();
+    await m.roster.captureBeforeRotation();
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    const out = await machine(relay, b, { cache: m.cache }).roster.afterRotation({
+      signer: await signerOf(b),
+      record,
+    });
+    expect(out).toEqual({ kind: "frozen", value: "not-active", decided: null });
+    expect([...relay.enr.values()].some((e) => e.public_key === hex(b))).toBe(false);
+  });
+
+  it("even a capture that names the thief's entry (an older client wrote it) authorizes nothing", async () => {
+    const { a, b, relay, m, thief } = await relit();
+    await m.cache.save({
+      ...emptyReplica(MID),
+      rotation_captures: [
+        {
+          motebit_id: MID,
+          device_id: "dev-self",
+          from_key: hex(a),
+          status: "active",
+          entries: [await hostEnrollmentId(thief)],
+          at: NOW,
+        },
+      ],
+    });
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    const out = await machine(relay, b, { cache: m.cache }).roster.afterRotation({
+      signer: await signerOf(b),
+      record,
+    });
+    expect(out.kind === "frozen" && out.decided?.kind).not.toBe("minted");
+    expect([...relay.enr.values()].some((e) => e.public_key === hex(b))).toBe(false);
+  });
+
+  it("the honest case still re-enrols: D minted its own line, active, rotates", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    expect(m.cache.value!.own_minted).toHaveLength(1);
+    expect((await m.roster.captureBeforeRotation()).status).toBe("active");
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    const out = await machine(relay, b, { cache: m.cache }).roster.afterRotation({
+      signer: await signerOf(b),
+      record,
+    });
+    expect(out).toMatchObject({ value: "active", decided: { kind: "minted" } });
+  });
+
+  it("the stated cost: a line enrolled for D from ANOTHER surface is not carried (enroll again after rotating)", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    // The phone enrols D explicitly; D itself never minted.
+    await machine(relay, a, { deviceId: "phone" }).roster.enroll("dev-self", { force: true });
+    const d = machine(relay, a);
+    expect((await d.roster.captureBeforeRotation()).status).toBe("not-active");
+  });
+});
+
+describe("P1 (#786) — the under-lock authorizes() re-check bites", () => {
+  it("a retirement of D's own line and a thief's re-light land between decide() and the lock ⇒ nothing minted", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const cache = new FakeCache();
+    const m = machine(relay, a, { cache });
+    await m.roster.ensureEnrolled();
+    const own = cache.value!.enrollments[0]!;
+    await m.roster.captureBeforeRotation(); // active, entries = [own]
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    const retirement = await retireEntry(b, own);
+    const thief = await enrol(a, "dev-self", NOW + 7);
+    const d = machine(relay, b, { cache });
+    const roster = new MachineRoster({
+      ...d.ports,
+      cache: interleaving(cache, () =>
+        cache.save({ ...emptyReplica(MID), enrollments: [thief], retirements: [retirement] }),
+      ),
+    });
+    const out = await roster.afterRotation({ signer: await signerOf(b), record });
+    expect(out.kind === "frozen" && out.decided?.kind).not.toBe("minted");
+    expect([...relay.enr.values()].some((e) => e.public_key === hex(b))).toBe(false);
+  });
+});
+
+describe("P3 (#786) — the hook reports the value actually persisted", () => {
+  it("already active under the new key: `already-active`, nothing frozen", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    await m.roster.captureBeforeRotation();
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    const d = machine(relay, b, { cache: m.cache });
+    expect((await d.roster.enroll("dev-self")).kind).toBe("enrolled"); // explicit, before the hook
+    const out = await d.roster.afterRotation({ signer: await signerOf(b), record });
+    expect(out).toMatchObject({
+      kind: "frozen",
+      value: "already-active",
+      decided: { kind: "active" },
+    });
+    expect(frozenFor(m.cache.value!, "dev-self", hex(a))).toBeNull();
+  });
+
+  it("retired before the lock: `not-active`, and that is what is stored", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    const own = m.cache.value!.enrollments[0]!;
+    await m.roster.captureBeforeRotation();
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    await relay.hold(await retireEntry(b, own));
+    const out = await machine(relay, b, { cache: m.cache }).roster.afterRotation({
+      signer: await signerOf(b),
+      record,
+    });
+    expect(out).toMatchObject({ value: "not-active", decided: { kind: "retired" } });
+    expect(frozenFor(m.cache.value!, "dev-self", hex(a))).toBe("not-active");
   });
 });

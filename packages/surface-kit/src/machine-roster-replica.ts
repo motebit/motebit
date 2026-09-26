@@ -18,6 +18,11 @@
  *     old-key holder could have influenced) never replaces it.
  *   - `roster_full` — ids a relay refused `roster_full`: permanent, reported
  *     once, never retried, and excluded from set-pinning (C5, R20).
+ *   - `own_minted` — ids of the enrolments this surface minted for ITSELF
+ *     (its own device id). A rotation capture counts only these (R21, #786):
+ *     a line a holder of the departing key lit for this device is not this
+ *     device's line, and the rotation must not carry it into the new epoch.
+ *     A union; only this surface's own mints are ever added.
  *   - `own_device_ids` — device ids this surface minted for ITSELF, so a
  *     restore that gives a fresh `device_id` can offer to retire the prior
  *     line (§2A N12).
@@ -78,6 +83,7 @@ export interface MachineRosterReplica {
   frozen: FrozenVerdict[];
   roster_full: string[];
   own_device_ids: string[];
+  own_minted: string[];
   /** The last read's pairs with `sockets_open > 1`; `at` = 0 means no read yet. */
   ambiguous: { at: number; pairs: string[] };
   rotation_captures: RotationCapture[];
@@ -99,6 +105,7 @@ export function emptyReplica(motebitId: string): MachineRosterReplica {
     frozen: [],
     roster_full: [],
     own_device_ids: [],
+    own_minted: [],
     ambiguous: { at: 0, pairs: [] },
     rotation_captures: [],
     integrity: { at: 0, suspect: false },
@@ -150,6 +157,9 @@ export function parseReplica(raw: unknown): MachineRosterReplica | null {
   }
   if (!Array.isArray(r.frozen) || !r.frozen.every(isFrozen)) return null;
   if (!isStringArray(r.roster_full) || !isStringArray(r.own_device_ids)) return null;
+  // Absent in a replica written before the field existed: none recorded.
+  const ownMinted = r.own_minted ?? [];
+  if (!isStringArray(ownMinted)) return null;
   const amb = r.ambiguous;
   if (!isObj(amb) || typeof amb.at !== "number" || !isStringArray(amb.pairs)) return null;
   // Absent in a replica written before the field existed: none taken.
@@ -169,6 +179,7 @@ export function parseReplica(raw: unknown): MachineRosterReplica | null {
     frozen: r.frozen,
     roster_full: r.roster_full,
     own_device_ids: r.own_device_ids,
+    own_minted: ownMinted,
     ambiguous: { at: amb.at, pairs: amb.pairs },
     rotation_captures: caps,
     integrity: { at: integ.at, suspect: integ.suspect },
@@ -245,6 +256,7 @@ export function mergeReplicas(
     frozen: unionBy(stored.frozen, incoming.frozen, frozenKey),
     roster_full: unionBy(stored.roster_full, incoming.roster_full, (s) => s),
     own_device_ids: unionBy(stored.own_device_ids, incoming.own_device_ids, (s) => s),
+    own_minted: unionBy(stored.own_minted, incoming.own_minted, (s) => s),
     ambiguous: incoming.ambiguous.at >= stored.ambiguous.at ? incoming.ambiguous : stored.ambiguous,
     rotation_captures: latestCaptures(stored.rotation_captures, incoming.rotation_captures),
     integrity:
