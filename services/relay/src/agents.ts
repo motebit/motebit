@@ -27,6 +27,7 @@ import type { TaskRouter } from "./task-routing.js";
 import { evaluateSettlementEligibility } from "./task-routing.js";
 import { REFERENCE_MIN_BONDED_SIGNAL_MICRO } from "./bond-store.js";
 import { ON_SHELF, delistRegistration } from "./registry-delist.js";
+import { hasRevocationRecord, liftRevocation } from "./identity-revocation.js";
 import {
   admitKey,
   holderKeyOf,
@@ -1170,6 +1171,25 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     if (!motebitId || typeof motebitId !== "string") {
       throw new HTTPException(400, { message: "Missing motebit_id" });
     }
+    // A revoked identity is not registered (#787). Its own tokens are already
+    // refused (`isAgentRevoked`); this is the master token's path, which would
+    // otherwise INSERT a fresh, unrevoked row — a revoked identity on the
+    // shelf. Registration never lifts a revocation as a side effect: the
+    // operator's door is restore-listing, the owner's a verified arrival.
+    if (hasRevocationRecord(moteDb.db, motebitId)) {
+      logger.warn("agent.register.refused_revoked", { motebitId, caller: callerMotebitId ?? null });
+      deps.recordAuthEvent({
+        kind: "agent_token_rejected",
+        method: "POST",
+        path: c.req.path,
+        motebitId: callerMotebitId ?? null,
+        reason: "register:identity_revoked",
+        correlationId: c.req.header("x-correlation-id") ?? null,
+      });
+      throw new HTTPException(409, {
+        message: "Identity is revoked — restore-listing first",
+      });
+    }
 
     if (!body.endpoint_url || typeof body.endpoint_url !== "string") {
       throw new HTTPException(400, { message: "Missing or invalid 'endpoint_url'" });
@@ -1933,9 +1953,20 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     const existing = moteDb.db
       .prepare("SELECT motebit_id FROM agent_registry WHERE motebit_id = ?")
       .get(motebitId) as { motebit_id: string } | undefined;
-    if (!existing) {
+    const recorded = hasRevocationRecord(moteDb.db, motebitId);
+    // A `/revoke` record may exist with no registry row (a register-self-only
+    // identity): restore-listing is its operator door too.
+    if (!existing && !(!revoked && recorded)) {
       throw new HTTPException(404, { message: "Agent not registered" });
     }
+    // A reinstate reverses the operator's hold AND lifts a `/revoke` record.
+    // No record is terminal (#794/#796 withdrawn: terminality derived from a
+    // key is unsound on a relay that has not seen the whole key chain), so an
+    // operator reinstate can reverse an identity's own revocation, or its
+    // migration departure — #788 stays open: a departure's signing key can be
+    // a first-come squatter's (#798 review), so the relay cannot tell that
+    // either was the identity's own act.
+    if (!revoked && recorded) liftRevocation(moteDb.db, motebitId);
 
     // Flip the discoverability flag (what Discover filters) and append the
     // signed record in the same path. Append-only: never an update/delete.
