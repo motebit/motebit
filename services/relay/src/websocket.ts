@@ -380,17 +380,18 @@ export interface WebSocketDeps {
   keyThatVerifiesNow: (motebitId: string, did: string) => string | null;
   logger: ReturnType<typeof createLogger>;
   /**
-   * A `command_response` frame arrived. `from.motebitId` is the motebit
-   * whose socket it arrived ON (the route's path id, never a field of the
-   * frame): a pending request is settled only by an answer from the motebit
-   * it was sent to (#691 item 6). The verdict lets this handler log a
-   * refused frame beside the fact it has — which socket sent it.
+   * A `command_response` frame arrived. `from` is the motebit and device id
+   * of the socket it arrived ON (the route's path id and this connection's
+   * device id, never fields of the frame): a pending request is settled
+   * only by an answer from the motebit it was sent to and the device it was
+   * delivered to (#691 item 6). The verdict lets this handler log a refused
+   * frame beside the fact it has — which socket sent it.
    */
   onCommandResponse?: (
     commandId: string,
     result: unknown,
-    from: { motebitId: string },
-  ) => "settled" | "no_pending" | "foreign_motebit";
+    from: { motebitId: string; deviceId: string },
+  ) => "settled" | "no_pending" | "foreign_motebit" | "foreign_device";
   /**
    * A connection was finalized, or re-announced its capabilities. Called
    * with the peer as it now is. The machine roster's liveness record is
@@ -849,13 +850,16 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
               typeof (msg as Record<string, unknown>).id === "string"
             ) {
               const cmdMsg = msg as unknown as { id: string; result: unknown };
-              const verdict = deps.onCommandResponse?.(cmdMsg.id, cmdMsg.result, { motebitId });
-              if (verdict === "foreign_motebit") {
+              const verdict = deps.onCommandResponse?.(cmdMsg.id, cmdMsg.result, {
+                motebitId,
+                deviceId,
+              });
+              if (verdict === "foreign_motebit" || verdict === "foreign_device") {
                 // An answer to ANOTHER motebit's request: refused, like a
                 // task_claim for another motebit's task. Not an auth event
                 // (no token was presented or refused — rule 6's record is
                 // about credentials), so it is logged, never acted on.
-                logger.warn("ws.command_response_foreign_motebit", {
+                logger.warn(`ws.command_response_${verdict}`, {
                   motebitId,
                   deviceId,
                   commandId: cmdMsg.id,

@@ -368,6 +368,13 @@ export interface SyncRelayConfig {
    * two relays in one process each keep their own (issue #691 item 5).
    */
   commandTimeoutMs?: number;
+  /**
+   * After the socket a command was delivered to closes or is retired, how
+   * long the relay still accepts that device's answer (on its reconnect)
+   * before answering 504 `closed_after_delivery`. Never past the deadline.
+   * Default 5000; per relay, like `commandTimeoutMs`.
+   */
+  commandCloseGraceMs?: number;
   /** Federation configuration. Omit to disable federation. */
   federation?: {
     /** Display name for this relay in the federation. */
@@ -1689,12 +1696,15 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   });
 
   // --- Command endpoint (unified remote execution) ---
-  registerCommandRoutes({
+  const commandRoutes = registerCommandRoutes({
     app,
     db: moteDb.db,
     connections,
     logger,
     ...(config.commandTimeoutMs !== undefined ? { commandTimeoutMs: config.commandTimeoutMs } : {}),
+    ...(config.commandCloseGraceMs !== undefined
+      ? { commandCloseGraceMs: config.commandCloseGraceMs }
+      : {}),
   });
 
   // --- Delegation-revocation cache (standing-delegation §5; signed artifacts,
@@ -2195,6 +2205,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     // close hook, so a restart would leave every connected host's last-seen
     // value up to five minutes stale. "Not seen since" has to survive it.
     flushHostLiveness(Date.now());
+
+    // Every command still waiting settles now, before the force close:
+    // `connections.clear()` below runs before the sockets' close hooks, so
+    // no `peerLeft` would reach them and each caller would wait out its
+    // whole deadline for a relay that is gone. No grace — nothing can
+    // answer a relay that is shutting down.
+    const settledCommands = commandRoutes.settleAllPending();
+    if (settledCommands > 0) logger.info("command.settled_on_close", { settledCommands });
 
     // Phase 3: Force close — terminate remaining connections with 1001 (Going Away)
     for (const peers of connections.values()) {

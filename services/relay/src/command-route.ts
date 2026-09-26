@@ -22,12 +22,17 @@
  * Runtime-side commands use a request/response correlation over WebSocket:
  * relay sends { type: "command_request", id, command, args, envelope }
  * agent responds { type: "command_response", id, result }
- * relay returns result to HTTP caller. Delivery is to ONE socket, the newest
- * open one (`sendToOne`); only a socket of the target motebit may answer.
- * Two 504s, both "delivered, no answer", told apart by an additive
- * `outcome`: `silent` (the deadline — 30 s unless the relay passes its own
- * `commandTimeoutMs`) and `closed_after_delivery` (the socket it went to
- * closed or was retired first, settled at once).
+ * relay returns result to HTTP caller. Delivery is to ONE socket
+ * (`sendToOne`): verified peers (declared device id === the signed token's
+ * `did`) before declared-only ones, the newest open socket first within
+ * each. Only a socket of the target motebit AND of the device the frame was
+ * delivered to may answer — the delivered socket itself, or that device's
+ * reconnect. Two 504s, both "delivered, no answer", told apart by an
+ * additive `outcome`: `silent` (the deadline — 30 s unless the relay passes
+ * its own `commandTimeoutMs`) and `closed_after_delivery` (the socket it
+ * went to closed or was retired, and no answer came from its device within
+ * the close grace — 5 s unless the relay passes `commandCloseGraceMs` — or
+ * the relay itself shut down).
  */
 
 import { verifyAgentCommandEnvelope } from "@motebit/crypto";
@@ -205,16 +210,25 @@ const INFO_COMMANDS: Record<string, string> = {
  *
  * The map is module-scoped because `handleCommandResponse` is a module
  * export (the CLI's multi-runtime harness answers through it). Nothing
- * PER RELAY lives here: each entry carries its own deadline timer, armed
- * from the route closure's `commandTimeoutMs` (#691 item 5), the motebit
- * it was sent to (item 6) and the socket it was delivered to (item 4).
- * Ids are fresh UUIDs, so two relays in one process never share an entry.
+ * PER RELAY lives in module state: each entry carries its own deadline and
+ * close grace, armed from the route closure (#691 item 5), the relay that
+ * owns it (so a relay's `close()` settles only its own), the motebit it was
+ * sent to (item 6) and the socket it was delivered to (item 4). Ids are
+ * fresh UUIDs, so two relays in one process never share an entry.
  */
 interface PendingCommand {
+  /** The route registration (one per relay) that created this entry. */
+  owner: object;
   /** The motebit the request was sent to — only its sockets may answer. */
   motebitId: string;
   /** The one socket the frame went to; null until `sendToOne` delivers. */
   deliveredTo: ConnectedDevice | null;
+  /** Epoch ms of the deadline; a close grace never runs past it. */
+  deadlineAt: number;
+  /** How long an answer may still come from the device after its socket left. */
+  graceMs: number;
+  /** Set when the delivered socket left; the timer is then the grace. */
+  closedAfterDelivery: boolean;
   resolve: (result: unknown) => void;
   reject: (err: unknown) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -225,12 +239,20 @@ const pendingCommands = new Map<string, PendingCommand>();
 /** Production deadline for a runtime's answer. A relay may pass its own. */
 export const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
 
+/** Production close grace. A relay may pass its own. */
+export const DEFAULT_COMMAND_CLOSE_GRACE_MS = 5_000;
+
 /**
  * The socket a command was delivered to left before it answered — closed,
- * or retired because the credential that admitted it ended. Its answer can
- * no longer arrive (a retired peer's frames are acted on for nothing, and a
- * reply written to a closed socket goes nowhere), so waiting out the
- * deadline would only cost the caller the rest of it.
+ * or retired because the credential that admitted it ended — and no answer
+ * came from that device within the close grace (or the relay shut down).
+ *
+ * The answer cannot come on the socket that left: a retired peer's frames
+ * are acted on for nothing, and the relay has dropped a closed one. It CAN
+ * still come from the same runtime on its reconnect — the daemon replies on
+ * whatever socket is current (`ws-adapter.ts` `sendRaw`), which after a
+ * sleep or a flap is a new one. So the request waits a short grace for that
+ * device, then settles, rather than waiting out the whole deadline.
  */
 export class CommandConnectionClosedError extends Error {
   constructor() {
@@ -251,11 +273,30 @@ export interface CommandRouteDeps {
    * deadline for all of them (#691 item 5). Default 30 s.
    */
   commandTimeoutMs?: number;
+  /**
+   * After the delivered socket closes or is retired, how long an answer may
+   * still arrive from the same device (its reconnect) before the request
+   * settles as `closed_after_delivery`. Never past the deadline. Per relay,
+   * like the deadline. Default 5 s.
+   */
+  commandCloseGraceMs?: number;
 }
 
-export function registerCommandRoutes(deps: CommandRouteDeps): void {
+/** What the relay needs back from its command routes. */
+export interface CommandRoutesHandle {
+  /**
+   * Settle every request THIS relay still has pending as
+   * `closed_after_delivery`, at once — the relay is going away, so no answer
+   * can arrive. Returns how many were settled.
+   */
+  settleAllPending(): number;
+}
+
+export function registerCommandRoutes(deps: CommandRouteDeps): CommandRoutesHandle {
   const { app, db, connections } = deps;
   const deadlineMs = deps.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
+  const graceMs = deps.commandCloseGraceMs ?? DEFAULT_COMMAND_CLOSE_GRACE_MS;
+  const owner = {};
 
   /** @internal */
   app.post("/api/v1/agents/:motebitId/command", async (c) => {
@@ -319,8 +360,10 @@ export function registerCommandRoutes(deps: CommandRouteDeps): void {
 
       try {
         const result = await forwardCommandToAgent(peers, command, args, body.envelope, {
+          owner,
           motebitId,
           deadlineMs,
+          graceMs,
         });
         return c.json(result);
       } catch (err: unknown) {
@@ -370,28 +413,50 @@ export function registerCommandRoutes(deps: CommandRouteDeps): void {
   // This is called from the WebSocket onMessage handler in websocket.ts
   /** @internal */
   app.get("/__internal/noop", (c) => c.text("ok")); // placeholder to keep Hono happy
+
+  return {
+    settleAllPending: () => {
+      let settled = 0;
+      for (const [commandId, pending] of pendingCommands) {
+        if (pending.owner !== owner) continue;
+        clearTimeout(pending.timer);
+        pendingCommands.delete(commandId);
+        pending.reject(new CommandConnectionClosedError());
+        settled += 1;
+      }
+      return settled;
+    },
+  };
 }
 
 /**
  * Called by the WebSocket message handler when an agent sends a
  * command_response. Resolves the pending Promise so the HTTP handler can
  * return the result — but only for an answer that arrived on a socket of
- * the motebit the request was SENT to (#691 item 6). The command id is an
+ * the motebit the request was SENT to (#691 item 6) AND of the device the
+ * frame was delivered to: the delivered socket, or that device's reconnect
+ * (the daemon answers on whatever socket is current). The command id is an
  * unguessable UUID, but one map spans every motebit on this relay, and an
- * id is not a relationship: an answer from any other motebit's socket is
- * refused and the request keeps waiting for its own runtime.
+ * id is not a relationship: an answer from another motebit, or from another
+ * device of the same motebit, is refused and the request keeps waiting.
  *
  * `from` is required, so a caller cannot forget it: an answer with no
- * origin is not an answer to anyone.
+ * origin is not an answer to anyone. Both fields are the SOCKET's, never
+ * the frame's. A peer that did not declare a device id gets a relay-made
+ * id per connection, so its reconnect cannot answer — it settles as
+ * `closed_after_delivery` after the grace, which is fail-closed.
  */
 export function handleCommandResponse(
   commandId: string,
   result: unknown,
-  from: { motebitId: string },
-): "settled" | "no_pending" | "foreign_motebit" {
+  from: { motebitId: string; deviceId: string },
+): "settled" | "no_pending" | "foreign_motebit" | "foreign_device" {
   const pending = pendingCommands.get(commandId);
   if (!pending) return "no_pending";
   if (pending.motebitId !== from.motebitId) return "foreign_motebit";
+  if (pending.deliveredTo == null || pending.deliveredTo.deviceId !== from.deviceId) {
+    return "foreign_device";
+  }
   clearTimeout(pending.timer);
   pendingCommands.delete(commandId);
   pending.resolve(result);
@@ -401,19 +466,30 @@ export function handleCommandResponse(
 /**
  * A peer left — its socket closed, or it was retired when the credential
  * that admitted it ended. Every request delivered to it and still waiting
- * settles now as `CommandConnectionClosedError` (#691 item 4): its answer
- * cannot arrive. Requests delivered to any OTHER socket are untouched.
+ * gets a short grace (#691 item 4): its answer can no longer come on that
+ * socket, but it can come from the same device's reconnect, and
+ * `handleCommandResponse` still accepts it there. If none arrives within
+ * `min(grace, time left to the deadline)`, it settles as
+ * `CommandConnectionClosedError` — not after the full deadline. Requests
+ * delivered to any OTHER socket are untouched. Returns how many entered
+ * the grace.
  */
 export function settleCommandsDeliveredTo(peer: ConnectedDevice): number {
-  let settled = 0;
+  let marked = 0;
   for (const [commandId, pending] of pendingCommands) {
     if (pending.deliveredTo == null || pending.deliveredTo.ws !== peer.ws) continue;
+    if (pending.closedAfterDelivery) continue;
+    pending.closedAfterDelivery = true;
     clearTimeout(pending.timer);
-    pendingCommands.delete(commandId);
-    pending.reject(new CommandConnectionClosedError());
-    settled += 1;
+    const wait = Math.max(0, Math.min(pending.graceMs, pending.deadlineAt - Date.now()));
+    pending.timer = setTimeout(() => {
+      if (pendingCommands.get(commandId) !== pending) return;
+      pendingCommands.delete(commandId);
+      pending.reject(new CommandConnectionClosedError());
+    }, wait);
+    marked += 1;
   }
-  return settled;
+  return marked;
 }
 
 // --- WebSocket forwarding ---
@@ -447,25 +523,37 @@ export function settleCommandsDeliveredTo(peer: ConnectedDevice): number {
  * once counted a stale connection as a delivery). The catch stays for the
  * CONNECTING case, which does throw.
  */
-export function sendToOne(candidates: ConnectedDevice[], payload: string): ConnectedDevice | null {
+export function sendToOne(
+  candidates: ConnectedDevice[],
+  payload: string,
+  // Told which peer is being tried BEFORE its `send`, and `null` if that send
+  // throws. An answer can arrive inside `send` itself (an in-process peer
+  // replies synchronously), and it is matched against the delivered peer —
+  // recorded after the send returned, that answer met an empty record and
+  // was refused.
+  onAttempt?: (peer: ConnectedDevice | null) => void,
+): ConnectedDevice | null {
   // VERIFIED first, then newest within each tier (#691 item 7, the
   // compatible half). Newest-first alone made "connect last" the way for a
   // peer that merely DECLARED a device id (any sync-token holder can) to
   // take a first-wins halt from the daemon and answer it falsely. A peer
   // whose declared id is the `did` of its signed token outranks every
   // declared-only one. Nothing is excluded: with no verified peer (device
-  // auth off, a master-token runtime, an older client) the order is
-  // exactly newest-first, as before.
+  // auth off, a master-token runtime, an older client) the order is plain
+  // newest-first — which is itself a change from main's oldest-first (item
+  // 1); that tier's exposure to a declared-only impostor is #810.
   for (const tier of [true, false]) {
     for (let i = candidates.length - 1; i >= 0; i--) {
       const peer = candidates[i]!;
       if ((peer.deviceIdVerified === true) !== tier) continue;
       if (peer.ws.readyState !== 1) continue;
+      onAttempt?.(peer);
       try {
         peer.ws.send(payload);
         return peer;
       } catch {
         // CONNECTING throws; try the next in order.
+        onAttempt?.(null);
       }
     }
   }
@@ -478,8 +566,9 @@ async function forwardCommandToAgent(
   args: string | undefined,
   // Forwarded VERBATIM — the consuming surface re-verifies fail-closed.
   envelope: unknown,
-  // From the route closure: who the request is for, and this relay's deadline.
-  target: { motebitId: string; deadlineMs: number },
+  // From the route closure: which relay, who the request is for, and this
+  // relay's deadline and close grace.
+  target: { owner: object; motebitId: string; deadlineMs: number; graceMs: number },
 ): Promise<unknown> {
   const commandId = crypto.randomUUID();
   const payload = JSON.stringify({
@@ -497,8 +586,12 @@ async function forwardCommandToAgent(
     }, target.deadlineMs);
 
     const pending: PendingCommand = {
+      owner: target.owner,
       motebitId: target.motebitId,
       deliveredTo: null,
+      deadlineAt: Date.now() + target.deadlineMs,
+      graceMs: target.graceMs,
+      closedAfterDelivery: false,
       resolve,
       reject,
       timer,
@@ -622,10 +715,12 @@ async function forwardCommandToAgent(
       return;
     }
 
-    // One delivery rule, shared: newest OPEN socket, no fall-through on
-    // silence. See `sendToOne`.
-    const deliveredTo = sendToOne(candidates, payload);
-    pending.deliveredTo = deliveredTo;
+    // One delivery rule, shared: verified peers before declared-only ones,
+    // newest OPEN socket first within each, no fall-through on silence.
+    // See `sendToOne`.
+    const deliveredTo = sendToOne(candidates, payload, (peer) => {
+      pending.deliveredTo = peer;
+    });
     const sent = deliveredTo != null;
 
     if (!sent) {

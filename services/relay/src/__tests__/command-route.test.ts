@@ -17,7 +17,7 @@ import {
 import type { TokenAudience } from "@motebit/protocol";
 import type { KeyPair } from "@motebit/crypto";
 import { JSON_AUTH, createTestRelay, createAgent } from "./test-helpers.js";
-import { sendToOne } from "../command-route.js";
+import { handleCommandResponse, sendToOne } from "../command-route.js";
 import type { ConnectedDevice } from "../websocket.js";
 
 const AGENT_ID = "36080ffe-cmd4-8000-a000-0000000000aa";
@@ -462,6 +462,38 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     void postCommand(AGENT_ID, { command: "halt", envelope: haltEnvelope });
     await new Promise((r) => setTimeout(r, 50));
     expect(worker.sentTo.length).toBeGreaterThan(0);
+  });
+
+  it("an answer that arrives INSIDE the send (an in-process peer) is matched to the delivered device", async () => {
+    // The delivered peer is recorded before its `send`, so a synchronous
+    // reply meets it — the CLI multi-runtime harness answers exactly this way.
+    const daemon = {
+      ws: {
+        readyState: 1,
+        send: (payload: string) => {
+          const { id } = JSON.parse(payload) as { id: string };
+          handleCommandResponse(
+            id,
+            { summary: "Halted." },
+            { motebitId: AGENT_ID, deviceId: "dev-1" },
+          );
+        },
+      },
+      deviceId: "dev-1",
+      deviceIdDeclared: true,
+      capabilities: ["unattended_runtime"],
+    };
+    relay.connections.set(AGENT_ID, [daemon] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "halt",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    const { status, json } = await postCommand(AGENT_ID, { command: "halt", envelope });
+    expect(status).toBe(200);
+    expect(json.summary).toBe("Halted.");
   });
 
   it("a read-only command may still be answered by any connected surface", async () => {
