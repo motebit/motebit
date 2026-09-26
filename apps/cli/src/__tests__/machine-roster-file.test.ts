@@ -109,30 +109,41 @@ describe("terminal wording", () => {
 
   it("a start says at most one line, and nothing when the line is simply active", () => {
     const p = { taken: 1, notTaken: [], rosterFull: [] };
-    expect(describeEnsureOutcome({ kind: "active", presented: p })).toBeNull();
-    expect(describeEnsureOutcome({ kind: "no-key" })).toBeNull();
+    const line = (o: Parameters<typeof describeEnsureOutcome>[0]) =>
+      describeEnsureOutcome(o, "vps-7f3a");
+    expect(line({ kind: "active", presented: p })).toBeNull();
+    expect(line({ kind: "no-key" })).toBeNull();
     expect(
-      describeEnsureOutcome({
+      line({
         kind: "active",
         presented: { ...p, notTaken: [{ id: "x", reason: "413" }] },
       }),
     ).toMatch(/1 not taken/);
     expect(
-      describeEnsureOutcome({
+      line({
         kind: "minted",
         enrollmentId: "a".repeat(64),
         firstLine: true,
         presented: { ...p, rosterFull: ["x"] },
       }),
     ).toMatch(/enrolled this machine .*roster is full/);
-    expect(describeEnsureOutcome({ kind: "retired", presented: p })).toMatch(
-      /retired from the roster but running .*machines enroll.*or rotate the key/,
+    expect(line({ kind: "retired", presented: p })).toMatch(
+      /retired from the roster but running .*`motebit machines enroll vps-7f3a`.*or rotate the key/,
     );
-    expect(describeEnsureOutcome({ kind: "superseded", frozen: null, presented: p })).toMatch(
+    // P6 — the real id, never a placeholder.
+    for (const o of [
+      { kind: "retired" as const, presented: p },
+      { kind: "superseded" as const, frozen: null, presented: p },
+      { kind: "unplaced" as const, count: 1, presented: p },
+    ]) {
+      expect(line(o)).toMatch(/machines enroll vps-7f3a/);
+      expect(line(o)).not.toMatch(/<this device_id>/);
+    }
+    expect(line({ kind: "superseded", frozen: null, presented: p })).toMatch(
       /superseded key and not covered/,
     );
     expect(
-      describeEnsureOutcome({
+      line({
         kind: "unknown",
         why: "fetch-failed",
         status: "none",
@@ -140,7 +151,7 @@ describe("terminal wording", () => {
       }),
     ).toMatch(/not updated this start — down; the daemon runs regardless/);
     expect(
-      describeEnsureOutcome({
+      line({
         kind: "refused",
         reason: "held_key_superseded",
         detail: "",
@@ -207,6 +218,42 @@ describe("terminal wording", () => {
       empty: { kind: "none-enrolled", text: "no machine has enrolled yet" },
     };
     expect(formatRosterView(view, MID).join("\n")).toMatch(/\(no machine has enrolled yet\)/);
+  });
+
+  it("P3 — retire and enroll say what the relay did with the act", () => {
+    const own = "a".repeat(64);
+    const full = describeRetire({
+      kind: "retired",
+      deviceId: "v",
+      retirementIds: [own],
+      advisory: false,
+      presented: { taken: 0, notTaken: [], rosterFull: [own] },
+    });
+    expect(full.lines.join("\n")).toMatch(
+      /REFUSED this retirement for good \(its roster is full\)/,
+    );
+    const later = describeEnroll({
+      kind: "enrolled",
+      deviceId: "v",
+      enrollmentId: own,
+      presented: { taken: 0, notTaken: [{ id: own, reason: "status 500" }], rosterFull: [] },
+    });
+    expect(later.lines.join("\n")).toMatch(/did not take this enrolment yet/);
+    const enrolFull = describeEnroll({
+      kind: "enrolled",
+      deviceId: "v",
+      enrollmentId: own,
+      presented: { taken: 1, notTaken: [], rosterFull: [own, "b".repeat(64)] },
+    });
+    expect(enrolFull.lines.join("\n")).toMatch(/REFUSED this enrolment for good/);
+    expect(enrolFull.lines.join("\n")).toMatch(/refused 1 other held entry for good/);
+    const clean = describeEnroll({
+      kind: "enrolled",
+      deviceId: "v",
+      enrollmentId: own,
+      presented: { taken: 1, notTaken: [], rosterFull: [] },
+    });
+    expect(clean.lines).toHaveLength(1);
   });
 
   it("retire and enroll outcomes", () => {

@@ -21,6 +21,11 @@
  *   - `own_device_ids` — device ids this surface minted for ITSELF, so a
  *     restore that gives a fresh `device_id` can offer to retire the prior
  *     line (§2A N12).
+ *   - `integrity` — set `suspect` when this surface's copy could not be
+ *     read (and was kept aside), cleared by the first later acquisition
+ *     that read the relay's roster AND key chain in full. While suspect, no
+ *     count is rendered (C6.10): the copy that would catch an omission is
+ *     gone, so the relay's word is all there is. Latest `at` wins.
  *   - `ambiguous` — `(device_id, key)` pairs seen with `sockets_open > 1` at
  *     the last read, stamped with that read's time; the hint needs two
  *     successive reads (C6.8, R19).
@@ -53,6 +58,8 @@ export interface MachineRosterReplica {
   own_device_ids: string[];
   /** The last read's pairs with `sockets_open > 1`; `at` = 0 means no read yet. */
   ambiguous: { at: number; pairs: string[] };
+  /** See the header: `suspect` while a corrupt read has not been re-merged. */
+  integrity: { at: number; suspect: boolean };
 }
 
 /** A cache read: `corrupt` is never `absent` (the three-way read, key-file-durability R1). */
@@ -70,6 +77,7 @@ export function emptyReplica(motebitId: string): MachineRosterReplica {
     roster_full: [],
     own_device_ids: [],
     ambiguous: { at: 0, pairs: [] },
+    integrity: { at: 0, suspect: false },
   };
 }
 
@@ -120,6 +128,11 @@ export function parseReplica(raw: unknown): MachineRosterReplica | null {
   if (!isStringArray(r.roster_full) || !isStringArray(r.own_device_ids)) return null;
   const amb = r.ambiguous;
   if (!isObj(amb) || typeof amb.at !== "number" || !isStringArray(amb.pairs)) return null;
+  // Absent in a replica written before the field existed: not suspect.
+  const integ = r.integrity ?? { at: 0, suspect: false };
+  if (!isObj(integ) || typeof integ.at !== "number" || typeof integ.suspect !== "boolean") {
+    return null;
+  }
   return {
     version: 1,
     motebit_id: r.motebit_id,
@@ -130,6 +143,7 @@ export function parseReplica(raw: unknown): MachineRosterReplica | null {
     roster_full: r.roster_full,
     own_device_ids: r.own_device_ids,
     ambiguous: { at: amb.at, pairs: amb.pairs },
+    integrity: { at: integ.at, suspect: integ.suspect },
   };
 }
 
@@ -166,6 +180,11 @@ export function mergeReplicas(
     roster_full: unionBy(stored.roster_full, incoming.roster_full, (s) => s),
     own_device_ids: unionBy(stored.own_device_ids, incoming.own_device_ids, (s) => s),
     ambiguous: incoming.ambiguous.at >= stored.ambiguous.at ? incoming.ambiguous : stored.ambiguous,
+    integrity:
+      incoming.integrity.at > stored.integrity.at ||
+      (incoming.integrity.at === stored.integrity.at && incoming.integrity.suspect)
+        ? incoming.integrity
+        : stored.integrity,
   };
 }
 

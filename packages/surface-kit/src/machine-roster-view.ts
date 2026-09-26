@@ -151,7 +151,7 @@ export type MachineRosterView =
        * otherwise `nothing-held`: this device holds nothing, and the roster
        * could not be confirmed. `null` when there are lines.
        */
-      empty: { kind: "none-enrolled" | "nothing-held"; text: string } | null;
+      empty: { kind: "none-enrolled" | "none-standing" | "nothing-held"; text: string } | null;
       suppressed: SuppressionReason[];
       lines: RosterLine[];
       notes: RosterNote[];
@@ -175,6 +175,8 @@ const SUPPRESSION_TEXT: Record<SuppressionReason, string> = {
   relay_newer_key: "the relay reports a newer key; this device has not seen that rotation",
   relay_omission: "the relay is omitting entries this device holds",
   relay_unread: "the relay's roster could not be read, so this is this device's copy alone",
+  cache_corrupt:
+    "this device's copy of the roster could not be read and has not been re-confirmed from the relay",
 };
 
 function ancestryText(a: RosterChainAncestry): string {
@@ -253,7 +255,8 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
     } else {
       const windowDays = served.liveness.retention_days;
       const since = served.liveness.observing_since;
-      const windowFull = since <= now - windowDays * DAY_MS + DAY_MS;
+      // Exact: claim "the last N days" only when N whole days were observed.
+      const windowFull = since <= now - windowDays * DAY_MS;
       liveness = { state: "not-observed", since, windowDays, windowFull };
       live = windowFull
         ? `not observed in the last ${windowDays} days`
@@ -491,12 +494,18 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
     empty:
       lines.length > 0
         ? null
-        : claim != null
-          ? { kind: "none-enrolled", text: "no machine has enrolled yet" }
-          : {
-              kind: "nothing-held",
-              text: "nothing is held on this device, and the roster could not be confirmed",
-            },
+        : claim != null && v.tombstones.length > 0
+          ? {
+              // A pending tombstone names an enrolment: one existed.
+              kind: "none-standing",
+              text: "no machine is enrolled; retirements are held for enrolments this device has not seen",
+            }
+          : claim != null
+            ? { kind: "none-enrolled", text: "no machine has enrolled yet" }
+            : {
+                kind: "nothing-held",
+                text: "nothing is held on this device, and the roster could not be confirmed",
+              },
     suppressed: acq.suppressed,
     lines,
     notes,
