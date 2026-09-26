@@ -42,6 +42,7 @@ import {
   BalanceWaiverSchema,
 } from "@motebit/wire-schemas";
 import { admitKey, recordIdentityKey, verificationKeyFor } from "./identity-keys.js";
+import type { CloseIdentityConnections, ReconcileKeyConnections } from "./connection-ports.js";
 
 const logger = createLogger({ service: "relay", module: "migration" });
 
@@ -137,12 +138,31 @@ export interface MigrationDeps {
   app: Hono;
   relayIdentity: RelayIdentity;
   federationConfig?: FederationConfig;
+  /**
+   * Arrival can overwrite a returning identity's registry and holder key, so
+   * a socket the registry fallback admitted under the previous key would no
+   * longer be admitted; it is closed after the writes (#776). Required: an
+   * optional port is an arrival that silently ends nothing.
+   */
+  reconcileKeyConnections: ReconcileKeyConnections;
+  /**
+   * Departure revokes the identity here, so every socket an identity
+   * credential admitted is closed after the write (#776). Required.
+   */
+  closeIdentityConnections: CloseIdentityConnections;
 }
 
 // === Route Registration ===
 
 export function registerMigrationRoutes(deps: MigrationDeps): void {
-  const { db, app, relayIdentity, federationConfig } = deps;
+  const {
+    db,
+    app,
+    relayIdentity,
+    federationConfig,
+    reconcileKeyConnections,
+    closeIdentityConnections,
+  } = deps;
 
   // ── POST /api/v1/agents/:motebitId/migrate (§4) ──
   // Initiate migration. Issues a MigrationToken.
@@ -603,6 +623,12 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
       "INSERT INTO relay_accepted_migrations (token_id, motebit_id, source_relay_id, accepted_at) VALUES (?, ?, ?, ?)",
     ).run(migration_token.token_id, body.motebit_id, migration_token.source_relay_id, now);
 
+    // The registry and holder key may have just moved (a returning identity
+    // that rotated elsewhere): a socket the registry fallback admitted under
+    // the previous key is no longer admitted, and is closed (#776). Resolved
+    // per (did, key) — a device-row socket this write did not touch stays.
+    reconcileKeyConnections(body.motebit_id);
+
     // Seed trust from departure attestation (§8.3)
     const attestedTrust = departure_attestation.trust_level;
     try {
@@ -797,6 +823,9 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
     db.prepare(
       "UPDATE agent_registry SET revoked = 1, delisted_at = COALESCE(delisted_at, ?), endpoint_url = '', capabilities = '[]' WHERE motebit_id = ?",
     ).run(Date.now(), motebitId);
+    // The identity lives elsewhere now and this relay refuses its tokens
+    // (`agent_revoked`): end every socket one already admitted (#776).
+    closeIdentityConnections(motebitId);
 
     logger.info("migration.departed", {
       motebitId,

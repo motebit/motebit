@@ -22,6 +22,7 @@ import {
   SuccessionRefused,
   type RetireKeyConnections,
 } from "./succession-apply.js";
+import type { CloseIdentityConnections } from "./connection-ports.js";
 import type { TaskRouter } from "./task-routing.js";
 import { evaluateSettlementEligibility } from "./task-routing.js";
 import { REFERENCE_MIN_BONDED_SIGNAL_MICRO } from "./bond-store.js";
@@ -431,6 +432,13 @@ export interface AgentsDeps {
    * Required: optional, it would be a rotation that silently ends nothing.
    */
   retireKeyConnections: RetireKeyConnections;
+  /**
+   * Closes every socket an identity credential admitted once the operator's
+   * `revoke-listing` sets `revoked = 1` (#776): the verifier then refuses
+   * every signed token of the identity (`agent_revoked`), so a socket one
+   * had already admitted must not outlive it. Required, like the other ports.
+   */
+  closeIdentityConnections: CloseIdentityConnections;
   /**
    * Durable auth-event record (auth-events.ts) for the register door's
    * succession refusals (#775). Required for the reason `/rotate-key`'s is:
@@ -1945,6 +1953,10 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
           : "UPDATE agent_registry SET revoked = 0, delisted_at = NULL WHERE motebit_id = ? AND ? IS NOT NULL",
       )
       .run(...(revoked ? [Date.now(), motebitId] : [motebitId, Date.now()]));
+    // The hold refuses every signed token of the identity from here
+    // (`isAgentRevoked`), so the sockets such tokens already admitted end
+    // with it (#776). A reinstate opens nothing: the client reconnects.
+    if (revoked) deps.closeIdentityConnections(motebitId);
 
     const record = await buildSignedRevocationRecord(relayIdentity, {
       motebitId,

@@ -39,13 +39,32 @@ export const WS_CLOSE_KEY_RETIRED = 4010;
 const WS_CLOSE_KEY_RETIRED_REASON = "Key rotated; re-authenticate";
 
 /**
- * Close every registered socket of `motebitId` whose token verified under
- * `retiredKey` (compared case-insensitively, the way `applySuccession`
- * retires device rows — retiring WIDER is fail-safe). Sockets admitted
- * under any other key stay open: a device linked without key transfer holds
- * its own key, which a rotation of the identity key is not about. Sockets
- * admitted by no identity key (master token, device auth off) stay open:
- * the retired key never admitted them.
+ * Close code for a socket whose identity was revoked (#776): its own
+ * `/revoke`, a migration departure, or the operator's `revoke-listing` hold.
+ * The verifier now refuses every signed token of the identity
+ * (`agent_revoked`), so the client must not simply reconnect. Distinct from
+ * 4010, where the identity lives on under another key.
+ */
+export const WS_CLOSE_IDENTITY_REVOKED = 4011;
+const WS_CLOSE_IDENTITY_REVOKED_REASON = "Identity revoked";
+
+/**
+ * Close code for a socket whose own token was revoked by `jti`
+ * (`/revoke-tokens`, #776). The identity and its key are unaffected: the
+ * owner re-authenticates with a fresh token.
+ */
+export const WS_CLOSE_TOKEN_REVOKED = 4012;
+const WS_CLOSE_TOKEN_REVOKED_REASON = "Token revoked; re-authenticate";
+
+/** What every retirement helper is handed (bound once in `index.ts`). */
+export interface RetirementHooks {
+  onRemoved: (motebitId: string, peer: ConnectedDevice) => void;
+  logger?: { warn: (msg: string, ctx?: Record<string, unknown>) => void };
+}
+
+/**
+ * The ONE retirement body every close-on-credential-end helper shares (#767,
+ * #776): retire the registered peers of `motebitId` that `select` picks.
  *
  * `ws.close()` only STARTS a close handshake: the socket is CLOSING until
  * the peer answers (or `ws`'s own close timer fires, ~30 s), and inbound
@@ -58,24 +77,20 @@ const WS_CLOSE_KEY_RETIRED_REASON = "Key rotated; re-authenticate";
  *  3. handed to `onRemoved` — the ONE close-time observation (the roster's
  *     `last_seen_at`), in place of the `onPeerClosed` its `onClose` will no
  *     longer make;
- * and only then asked to close with 4010. Returns the number retired.
+ * and only then asked to close with `code`. Returns the number retired.
  */
-export function closeSocketsAuthenticatedUnder(
+function retirePeers(
   connections: Map<string, ConnectedDevice[]>,
   motebitId: string,
-  retiredKey: string,
-  hooks: {
-    onRemoved: (motebitId: string, peer: ConnectedDevice) => void;
-    logger?: { warn: (msg: string, ctx?: Record<string, unknown>) => void };
-  },
+  select: (peer: ConnectedDevice) => boolean,
+  code: number,
+  reason: string,
+  hooks: RetirementHooks,
 ): number {
-  const retired = retiredKey.toLowerCase();
   const peers = connections.get(motebitId);
   if (peers == null) return 0;
   // A copy: the live array is spliced below, and by the route's onClose.
-  const retiring = peers.filter(
-    (p) => p.authenticatedUnder != null && p.authenticatedUnder.toLowerCase() === retired,
-  );
+  const retiring = peers.filter(select);
   for (const peer of retiring) {
     peer.retired = true;
     const idx = peers.indexOf(peer);
@@ -86,23 +101,160 @@ export function closeSocketsAuthenticatedUnder(
     try {
       hooks.onRemoved(motebitId, peer);
     } catch (err: unknown) {
-      hooks.logger?.warn("ws.key_retired_observe_failed", {
+      hooks.logger?.warn("ws.retired_observe_failed", {
         motebitId,
         deviceId: peer.deviceId,
+        code,
         error: err instanceof Error ? err.message : String(err),
       });
     }
     try {
-      peer.ws.close(WS_CLOSE_KEY_RETIRED, WS_CLOSE_KEY_RETIRED_REASON);
+      peer.ws.close(code, reason);
     } catch (err: unknown) {
-      hooks.logger?.warn("ws.key_retired_close_failed", {
+      hooks.logger?.warn("ws.retired_close_failed", {
         motebitId,
         deviceId: peer.deviceId,
+        code,
         error: err instanceof Error ? err.message : String(err),
       });
     }
   }
   return retiring.length;
+}
+
+/**
+ * Close every registered socket of `motebitId` whose token verified under
+ * `retiredKey` (compared case-insensitively, the way `applySuccession`
+ * retires device rows — retiring WIDER is fail-safe). Sockets admitted
+ * under any other key stay open: a device linked without key transfer holds
+ * its own key, which a rotation of the identity key is not about. Sockets
+ * admitted by no identity key (master token, device auth off) stay open:
+ * the retired key never admitted them. Closed 4010 (see `retirePeers`).
+ */
+export function closeSocketsAuthenticatedUnder(
+  connections: Map<string, ConnectedDevice[]>,
+  motebitId: string,
+  retiredKey: string,
+  hooks: RetirementHooks,
+): number {
+  const retired = retiredKey.toLowerCase();
+  return retirePeers(
+    connections,
+    motebitId,
+    (p) => p.authenticatedUnder != null && p.authenticatedUnder.toLowerCase() === retired,
+    WS_CLOSE_KEY_RETIRED,
+    WS_CLOSE_KEY_RETIRED_REASON,
+    hooks,
+  );
+}
+
+/**
+ * Close every registered socket of `motebitId` whose token would no longer
+ * verify under the key that admitted it (#776): for each socket an identity
+ * key admitted, `keyThatVerifiesNow(motebitId, did)` — the resolution the
+ * verifier performs, the device row for the token's `did`, else the
+ * agent-registry fallback — must still answer that key. It is the predicate
+ * the route applies to a socket still being verified
+ * (`credentialEndedDuringVerification`), applied to the registered ones.
+ *
+ * For a door that moves a key WITHOUT naming one key it ends: accept-migration
+ * overwriting a returning identity's registry and holder key, the receipt
+ * heal moving the registry fallback, pairing's `update-key` rewriting ONE
+ * device row. Resolved per (did, key), never per key alone: a
+ * registry-fallback socket closes when the fallback moves while a
+ * device-row socket under the same key stays (its row still admits it), and
+ * another device whose row holds the same key is untouched when one row
+ * changes. Closed 4010.
+ */
+export function closeSocketsNoLongerAdmitted(
+  connections: Map<string, ConnectedDevice[]>,
+  motebitId: string,
+  keyThatVerifiesNow: (motebitId: string, did: string) => string | null,
+  hooks: RetirementHooks,
+): number {
+  return retirePeers(
+    connections,
+    motebitId,
+    (p) => {
+      if (p.authenticatedUnder == null) return false;
+      // Admitted by an identity key with no recorded `did`: it cannot be
+      // re-resolved, and retiring WIDER is fail-safe (the client reconnects).
+      if (p.authenticatedDid == null) return true;
+      const now = keyThatVerifiesNow(motebitId, p.authenticatedDid);
+      return now == null || now.toLowerCase() !== p.authenticatedUnder.toLowerCase();
+    },
+    WS_CLOSE_KEY_RETIRED,
+    WS_CLOSE_KEY_RETIRED_REASON,
+    hooks,
+  );
+}
+
+/**
+ * Close every registered socket of `motebitId` that an identity credential
+ * admitted — under ANY key: the identity's own, a device linked without key
+ * transfer, the registry fallback — with `code` and `reason` (#776). For
+ * the doors that end the IDENTITY, not one key; after them the verifier
+ * refuses every signed token of the identity, so every socket such a token
+ * admitted is ended with it.
+ *
+ * Sockets admitted by no identity credential stay open: the master token,
+ * or device auth off. Revocation refuses neither (the master-token bypass
+ * and the no-auth path never consult `isAgentRevoked`), so closing them
+ * would end nothing — they would reconnect at once.
+ */
+export function closeSocketsOf(
+  connections: Map<string, ConnectedDevice[]>,
+  motebitId: string,
+  code: number,
+  reason: string,
+  hooks: RetirementHooks,
+): number {
+  return retirePeers(
+    connections,
+    motebitId,
+    (p) => p.authenticatedUnder != null,
+    code,
+    reason,
+    hooks,
+  );
+}
+
+/** `closeSocketsOf` for a revoked identity: 4011 "Identity revoked". */
+export function closeSocketsOfRevokedIdentity(
+  connections: Map<string, ConnectedDevice[]>,
+  motebitId: string,
+  hooks: RetirementHooks,
+): number {
+  return closeSocketsOf(
+    connections,
+    motebitId,
+    WS_CLOSE_IDENTITY_REVOKED,
+    WS_CLOSE_IDENTITY_REVOKED_REASON,
+    hooks,
+  );
+}
+
+/**
+ * Close every registered socket of `motebitId` whose token's `jti` is in
+ * `jtis` (#776): `/revoke-tokens` blacklists a token, which refuses it
+ * anew, and a socket it had already admitted is ended with it. Other tokens
+ * — of the same key or any other — are untouched. Closed 4012.
+ */
+export function closeSocketsAuthenticatedWith(
+  connections: Map<string, ConnectedDevice[]>,
+  motebitId: string,
+  jtis: readonly string[],
+  hooks: RetirementHooks,
+): number {
+  const revoked = new Set(jtis);
+  return retirePeers(
+    connections,
+    motebitId,
+    (p) => p.authenticatedJti != null && revoked.has(p.authenticatedJti),
+    WS_CLOSE_TOKEN_REVOKED,
+    WS_CLOSE_TOKEN_REVOKED_REASON,
+    hooks,
+  );
 }
 
 export interface ConnectedDevice {
@@ -164,10 +316,25 @@ export interface ConnectedDevice {
    */
   authenticatedUnder?: string;
   /**
-   * Set when the key that admitted this socket was retired
-   * (`closeSocketsAuthenticatedUnder`). The peer is out of `connections`
-   * and its close handshake may still be pending; no frame from it is acted
-   * on.
+   * The `did` claim of the signed token that admitted this socket — the
+   * device row the verifier resolved the key from, or (with no such row) the
+   * registry fallback. Captured at verification, set exactly when
+   * `authenticatedUnder` is. Lets a door that moves ONE device row's key, or
+   * the fallback, re-resolve this socket's credential
+   * (`closeSocketsNoLongerAdmitted`, #776) instead of closing by key alone.
+   */
+  authenticatedDid?: string;
+  /**
+   * The `jti` of the signed token that admitted this socket, when it carried
+   * one. `/revoke-tokens` blacklists by jti; the sockets that token already
+   * admitted are closed with it (`closeSocketsAuthenticatedWith`, #776).
+   */
+  authenticatedJti?: string;
+  /**
+   * Set when the credential that admitted this socket ended — its key
+   * retired or no longer resolving, its identity revoked, its token revoked
+   * (`retirePeers`). The peer is out of `connections` and its close
+   * handshake may still be pending; no frame from it is acted on.
    */
   retired?: boolean;
   capabilities?: string[];
@@ -207,7 +374,7 @@ export interface WebSocketDeps {
    * NOW — the resolution `verifySignedTokenForDevice` performs (the device
    * row for the `did`, else the agent-registry fallback), read SYNCHRONOUSLY,
    * so no rotation can land between this read and the registration that
-   * depends on it (`keyRetiredDuringVerification`, #767). Required: optional,
+   * depends on it (`credentialEndedDuringVerification`, #767). Required: optional,
    * the mid-verification race would silently reopen the day it was dropped.
    */
   keyThatVerifiesNow: (motebitId: string, did: string) => string | null;
@@ -282,6 +449,9 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
       // The key the token verified under, whatever its source (device row or
       // agent-registry fallback). See `ConnectedDevice.authenticatedUnder`.
       let verifiedKey: string | null = null;
+      // The verified token's `jti`, when it carried one. See
+      // `ConnectedDevice.authenticatedJti`.
+      let verifiedJti: string | null = null;
       // Track whether we're still waiting for an auth frame (connection not yet finalized)
       let awaitingAuthFrame = false;
       // The one gate for every non-auth frame: set only by finalizeConnection,
@@ -372,7 +542,9 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
           }
           // Read only AFTER verification succeeded, so "unsafe" is safe
           // here: the signature over these claims has just been checked.
-          verifiedDid = deps.parseTokenPayloadUnsafe(token)?.did ?? null;
+          const claims = deps.parseTokenPayloadUnsafe(token);
+          verifiedDid = claims?.did ?? null;
+          verifiedJti = typeof claims?.jti === "string" && claims.jti !== "" ? claims.jti : null;
           verifiedDeviceKey = keyFromDeviceRow;
           verifiedKey = keyVerified;
           return true;
@@ -389,40 +561,75 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
       }
 
       /**
-       * Was the key this socket's token verified under retired WHILE it was
-       * being verified? Verification awaits (the device-row read, then the
-       * signature), and a succession applied inside that await closes only
-       * sockets already registered — this one is not yet. Checked
-       * synchronously right before registration, so nothing can land between
-       * the check and the push into `connections`; from then on
-       * `closeSocketsAuthenticatedUnder` sees it (#767).
+       * Did the credential this socket's token verified under END while it
+       * was being verified? Verification awaits (the device-row read, then the
+       * signature), and a door applied inside that await closes only sockets
+       * already registered — this one is not yet. Checked synchronously right
+       * before registration, so nothing can land between the check and the
+       * push into `connections`; from then on the door's close pass sees it.
+       * Three ends, the same three the close passes answer (#767, #776):
+       *  - the identity was revoked (`isAgentRevoked` — the verifier read it
+       *    BEFORE its await) — closed 4011;
+       *  - the token's jti was blacklisted (`/revoke-tokens`) — closed 4012;
+       *  - the key no longer resolves for the token's `did`
+       *    (`keyThatVerifiesNow` — a rotation, a moved fallback, a rewritten
+       *    device row) — closed 4010.
+       * Only a socket a signed token admitted is checked; the master token and
+       * the no-auth path consult none of these.
        */
-      function keyRetiredDuringVerification(): boolean {
-        if (verifiedKey == null || verifiedDid == null) return false;
+      function credentialEndedDuringVerification(): {
+        reason: string;
+        code: number;
+        message: string;
+      } | null {
+        if (verifiedKey == null || verifiedDid == null) return null;
+        if (isAgentRevoked(motebitId)) {
+          return {
+            reason: "agent_revoked_during_verification",
+            code: WS_CLOSE_IDENTITY_REVOKED,
+            message: WS_CLOSE_IDENTITY_REVOKED_REASON,
+          };
+        }
+        if (verifiedJti != null && isTokenBlacklisted(verifiedJti, motebitId)) {
+          return {
+            reason: "jti_blacklisted_during_verification",
+            code: WS_CLOSE_TOKEN_REVOKED,
+            message: WS_CLOSE_TOKEN_REVOKED_REASON,
+          };
+        }
         const current = deps.keyThatVerifiesNow(motebitId, verifiedDid);
-        return current == null || current.toLowerCase() !== verifiedKey;
+        if (current == null || current.toLowerCase() !== verifiedKey) {
+          return {
+            reason: "key_retired_during_verification",
+            code: WS_CLOSE_KEY_RETIRED,
+            message: WS_CLOSE_KEY_RETIRED_REASON,
+          };
+        }
+        return null;
       }
 
       /**
-       * Refuse a socket whose key was retired during its verification: log
+       * Refuse a socket whose credential ended during its verification: log
        * it, RECORD it (relay rule 6 — every refused token is recorded), tell
-       * an auth-frame client why, and close it 4010.
+       * an auth-frame client why, and close it with the end's code.
        */
-      function refuseRetiredDuringVerification(ws: WSContext, sendAuthResult: boolean): void {
-        logger.info("ws.key_retired_during_verification", { motebitId, deviceId });
+      function refuseEndedDuringVerification(
+        ws: WSContext,
+        ended: { reason: string; code: number; message: string },
+        sendAuthResult: boolean,
+      ): void {
+        logger.info(`ws.${ended.reason}`, { motebitId, deviceId });
         deps.recordAuthEvent?.({
           kind: "device_token_rejected",
           path: `/ws/sync/${motebitId}`,
           motebitId,
           audience: "sync",
-          reason: "key_retired_during_verification",
+          reason: ended.reason,
         });
         if (sendAuthResult) {
-          ws.send(
-            JSON.stringify({ type: "auth_result", ok: false, error: WS_CLOSE_KEY_RETIRED_REASON }),
-          );
+          ws.send(JSON.stringify({ type: "auth_result", ok: false, error: ended.message }));
         }
-        ws.close(WS_CLOSE_KEY_RETIRED, WS_CLOSE_KEY_RETIRED_REASON);
+        ws.close(ended.code, ended.message);
       }
 
       /** Tell the observer a peer is bound (or re-announced); never let it take the socket down. */
@@ -475,6 +682,8 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
             ? { boundUnder: verifiedDeviceKey }
             : {}),
           ...(verifiedKey != null ? { authenticatedUnder: verifiedKey } : {}),
+          ...(verifiedKey != null && verifiedDid != null ? { authenticatedDid: verifiedDid } : {}),
+          ...(verifiedKey != null && verifiedJti != null ? { authenticatedJti: verifiedJti } : {}),
           capabilities,
         };
         connections.get(motebitId)!.push(peer);
@@ -519,8 +728,9 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
           if (queryToken != null && queryToken !== "") {
             const authResult = await validateToken(queryToken, motebitId, ws);
             if (!authResult) return; // ws already closed by validateToken
-            if (keyRetiredDuringVerification()) {
-              refuseRetiredDuringVerification(ws, false);
+            const ended = credentialEndedDuringVerification();
+            if (ended != null) {
+              refuseEndedDuringVerification(ws, ended, false);
               return;
             }
             authenticated = true;
@@ -584,8 +794,9 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
                 // validateToken already sent auth_result with ok:false and closed
                 return;
               }
-              if (keyRetiredDuringVerification()) {
-                refuseRetiredDuringVerification(ws, true);
+              const ended = credentialEndedDuringVerification();
+              if (ended != null) {
+                refuseEndedDuringVerification(ws, ended, true);
                 return;
               }
               authenticated = true;
