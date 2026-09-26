@@ -38,6 +38,7 @@
  */
 import {
   MachineRoster,
+  boundedRetryUntil,
   createMachineRosterSection,
   createRosterSigner,
   nextPresentationRecord,
@@ -272,7 +273,8 @@ export function createDesktopMachineRoster(deps: DesktopRosterDeps): DesktopMach
   let unread = false;
   const held = (): boolean => unread || now() < retryUntil;
   const remember = (record: PresentationRecord | null): PresentationRecord | null => {
-    if (record != null) retryUntil = Math.max(retryUntil, record.retry_until);
+    // #801 F1 — bounded on read: a stored or planted far-future value never freezes presenting.
+    retryUntil = Math.max(retryUntil, boundedRetryUntil(record, now()));
     return record;
   };
   const seed = async (): Promise<void> => {

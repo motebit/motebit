@@ -55,9 +55,37 @@ export async function replicaDigest(replica: MachineRosterReplica): Promise<stri
 }
 
 /**
+ * The longest a relay's `Retry-After` may hold a surface's presentations
+ * (#801 F1). A larger header (`Retry-After: 999999999`) is honoured only
+ * up to this, so one 429 can never stop a surface presenting for good.
+ */
+export const MAX_RETRY_AFTER_MS = 60 * 60 * 1000;
+
+/**
+ * The `retry_until` a surface may honour from a record it READ — the one
+ * rule every surface and the kit apply (#801 F1).
+ *
+ * A bounded writer (`nextPresentationRecord`) never stores more than
+ * `write time + MAX_RETRY_AFTER_MS`, so a stored value beyond
+ * `now + MAX_RETRY_AFTER_MS` came from before the bound, or was planted:
+ * it reads as expired (0). It is dropped, not clamped to `now + bound`:
+ * the record is re-read at every entry point, so a clamp relative to the
+ * reading time would slide forward on each read and hold forever. An
+ * unreadable value (not finite) reads as expired too. Dropping errs toward
+ * presenting, which is idempotent; the relay re-asserts any wait with a
+ * (now bounded) `Retry-After`.
+ */
+export function boundedRetryUntil(record: PresentationRecord | null, now: number): number {
+  if (record == null) return 0;
+  const r = record.retry_until;
+  if (!Number.isFinite(r) || r > now + MAX_RETRY_AFTER_MS) return 0;
+  return r;
+}
+
+/**
  * F8 — present only when the replica changed since the last presentation
  * the relay fully took, or once `everyMs` has passed; never before a
- * `Retry-After` expires.
+ * `Retry-After` expires (as bounded by `boundedRetryUntil`).
  */
 export function presentationDue(
   record: PresentationRecord | null,
@@ -66,7 +94,7 @@ export function presentationDue(
   everyMs: number,
 ): boolean {
   if (record == null) return true;
-  if (now < record.retry_until) return false;
+  if (now < boundedRetryUntil(record, now)) return false;
   if (record.digest !== digest) return true;
   return now - record.taken_at >= everyMs;
 }
@@ -84,9 +112,14 @@ export async function nextPresentationRecord(
   now: number,
 ): Promise<PresentationRecord | null> {
   if (report.refused != null) return null;
-  const base: PresentationRecord = prev ?? { digest: null, taken_at: 0, retry_until: 0 };
+  // An out-of-bound stored `retry_until` is not carried forward (#801 F1).
+  const base: PresentationRecord =
+    prev != null
+      ? { ...prev, retry_until: boundedRetryUntil(prev, now) }
+      : { digest: null, taken_at: 0, retry_until: 0 };
   if (report.retryAfterMs != null) {
-    return { ...base, retry_until: now + report.retryAfterMs };
+    const wait = Math.min(Math.max(0, report.retryAfterMs), MAX_RETRY_AFTER_MS);
+    return { ...base, retry_until: now + wait };
   }
   if (replica != null && report.notTaken.length === 0) {
     return { ...base, digest: await replicaDigest(replica), taken_at: now };

@@ -20,10 +20,11 @@
 //!  - **The `exclusive` lease** (`Leases`). The kit's `exclusive` runs
 //!    arbitrary TypeScript (read, decide, sign, save, present), so it cannot
 //!    be one Rust command (R4). It is an OS file lock on `<file>.lease` held
-//!    by this process, with an owner token and a timeout: a webview reload
-//!    that never releases, or a hung section, is released by the timer; a
-//!    crashed process is released by the OS. Only the token's holder may
-//!    release it.
+//!    by this process, with an owner token and a timeout: a lease held by a
+//!    webview that reloaded (or by a hung section) is released by the timer,
+//!    at most `ttl` later (120 s by default; the reloaded webview's own act
+//!    gives up after 30 s and fails closed); a crashed process is released by
+//!    the OS. Only the token's holder may release it.
 //!
 //! `std::fs::File::lock` / `try_lock` (Rust 1.89, `rust-version` in
 //! Cargo.toml checks it at build) is `flock` on Unix and `LockFileEx` on

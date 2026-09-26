@@ -29,7 +29,7 @@ import {
   type KeyPair,
 } from "@motebit/encryption";
 import { generate, rotate as rotateIdentityFile } from "@motebit/identity-file";
-import { emptyReplica, type MachineRosterReplica } from "@motebit/surface-kit";
+import { MAX_RETRY_AFTER_MS, emptyReplica, type MachineRosterReplica } from "@motebit/surface-kit";
 import type { HostEnrollment, HostRetirement, KeySuccessionRecord } from "@motebit/sdk";
 import {
   CONFLICT,
@@ -790,6 +790,69 @@ describe("createDesktopMachineRoster", () => {
     await fresh.section.retire("dev-host");
     expect(relay.posts).toBe(0);
     expect(fresh.section.getState().notice?.text).toMatch(/relay is missing 1 entry/);
+  });
+
+  it("#801 F1: a stored retry_until ten years out never freezes presenting — the first refresh repairs", async () => {
+    const a = await generateKeypair();
+    const disk = new FakeDisk();
+    const relay = new FetchRelay();
+    relay.current = hex(a);
+    await saveReplica(disk.io(), {
+      ...emptyReplica(MID),
+      enrollments: [await enrol(a, "dev-omitted")],
+    });
+    await putPresentationRecord(disk.io(), MID, {
+      digest: null,
+      taken_at: 0,
+      retry_until: NOW + 10 * 365 * 86_400_000,
+    });
+    const d = desktop(disk, relay, a);
+    await d.section.refresh();
+    expect(relay.posts).toBeGreaterThan(0);
+  });
+
+  it("#801 F1: a stored retry_until inside the bound holds, then presents once it elapses", async () => {
+    const a = await generateKeypair();
+    const disk = new FakeDisk();
+    const relay = new FetchRelay();
+    relay.current = hex(a);
+    await saveReplica(disk.io(), {
+      ...emptyReplica(MID),
+      enrollments: [await enrol(a, "dev-omitted")],
+    });
+    await putPresentationRecord(disk.io(), MID, {
+      digest: null,
+      taken_at: 0,
+      retry_until: NOW + 30 * 60_000,
+    });
+    let clock = NOW;
+    const d = createDesktopMachineRoster({
+      motebitId: MID,
+      deviceId: "desk-device",
+      invoke: fakeInvoke(disk, a),
+      fetchImpl: relay.fetch as typeof fetch,
+      now: () => clock,
+    });
+    await d.section.refresh();
+    expect(relay.posts).toBe(0);
+    clock = NOW + 31 * 60_000;
+    await d.section.refresh();
+    expect(relay.posts).toBeGreaterThan(0);
+  });
+
+  it("#801 F1: a 429 with Retry-After: 999999999 is stored as at most now + the bound", async () => {
+    const a = await generateKeypair();
+    const disk = new FakeDisk();
+    const relay = new FetchRelay();
+    relay.current = hex(a);
+    relay.enr.set("x", await enrol(a, "dev-host"));
+    relay.retryAfter = "999999999";
+    const d = desktop(disk, relay, a);
+    await d.section.refresh();
+    expect(relay.posts).toBeGreaterThan(0);
+    expect((await loadPresentationRecord(disk.io(), MID))?.retry_until).toBe(
+      NOW + MAX_RETRY_AFTER_MS,
+    );
   });
 
   it("an unreadable presentation store holds every presentation until it reads", async () => {

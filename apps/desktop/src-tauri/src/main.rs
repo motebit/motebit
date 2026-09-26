@@ -484,10 +484,13 @@ fn keyring_retired_copies() -> Result<Vec<String>, String> {
 // === Machine roster replica (machine-roster-surfaces-v1 S3, F3, R3, R4) ===
 //
 // `~/.motebit/machine-roster.desktop.json` — desktop-owned, never the CLI's
-// `machine-roster.json`. The rules live in `roster_replica`.
+// `machine-roster.json`. The rules live in `roster_replica`. All four are
+// `#[tauri::command(async)]`: Tauri runs them on its async runtime's worker
+// threads, not the main thread, so the CAS lock wait (≤ 2 s) and the fsyncs
+// never stall the UI. A contended wait can occupy one worker for ≤ 2 s.
 
 /// The replica file's bytes and digest (`absent` only for a true absence).
-#[tauri::command]
+#[tauri::command(async)]
 fn roster_replica_read() -> Result<roster_replica::ReplicaBytes, String> {
     roster_replica::read_at(&roster_replica::replica_path()?)
 }
@@ -495,7 +498,7 @@ fn roster_replica_read() -> Result<roster_replica::ReplicaBytes, String> {
 /// Compare-and-swap: write `contents` iff the file's digest is still
 /// `expected` (`None`: still absent), else `roster_replica_conflict`.
 /// `aside`: keep the current bytes as `.corrupt-<time>` first.
-#[tauri::command]
+#[tauri::command(async)]
 fn roster_replica_write(expected: Option<String>, contents: String, aside: bool) -> Result<(), String> {
     roster_replica::cas_write_at(
         &roster_replica::replica_path()?,
@@ -508,7 +511,7 @@ fn roster_replica_write(expected: Option<String>, contents: String, aside: bool)
 
 /// The kit's `exclusive`, as a lease: a token, or `null` while another
 /// holder has it. Released by `roster_lease_release`, or after `ttl` ms.
-#[tauri::command]
+#[tauri::command(async)]
 fn roster_lease_acquire(ttl: u64) -> Result<Option<String>, String> {
     roster_replica::LEASES
         .as_ref()
@@ -516,7 +519,7 @@ fn roster_lease_acquire(ttl: u64) -> Result<Option<String>, String> {
         .acquire(std::time::Duration::from_millis(ttl))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn roster_lease_release(token: String) -> bool {
     match roster_replica::LEASES.as_ref() {
         Ok(leases) => leases.release(&token),

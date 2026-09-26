@@ -21,9 +21,11 @@
  * replaced (R3), and the name is then freed.
  *
  * `exclusive` (the mint decision) is a lease: a Rust-held OS lock with an
- * owner token and a timeout (R4), so a reloaded webview or a crash never
- * leaves it held. It is a different lock from the CAS one: the kit saves
- * while holding `exclusive`.
+ * owner token and a timeout (R4). A crash releases it through the OS; a
+ * lease a reloaded webview held is released by its timer (≤ 120 s), and the
+ * reloaded webview's act meanwhile gives up after 30 s (LOCKED), failing
+ * closed. It is a different lock from the CAS one: the kit saves while
+ * holding `exclusive`.
  */
 import {
   mergeReplicas,
