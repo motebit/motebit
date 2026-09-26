@@ -7,8 +7,12 @@
  */
 import * as fs from "node:fs";
 import { hexToBytes, secureErase } from "@motebit/encryption";
-import { verify as verifyIdentityFile } from "@motebit/identity-file";
-import { MachineRoster, createRosterSigner, type RotationHookOutcome } from "@motebit/surface-kit";
+import {
+  MachineRoster,
+  createRosterSigner,
+  identityFileRecords,
+  type RotationHookOutcome,
+} from "@motebit/surface-kit";
 import type { KeySuccessionRecord } from "@motebit/sdk";
 import { CONFIG_DIR, loadFullConfig, type FullConfig } from "./config.js";
 import { cliRosterPorts, describeEnsureOutcome, type CliRosterContext } from "./machine-roster.js";
@@ -59,11 +63,13 @@ export async function rosterHookAfterRotate(opts: {
   try {
     const config = (opts.loadConfig ?? loadFullConfig)();
     if (!config.motebit_id || !config.device_id || !config.cli_encrypted_key) return null;
-    const onFile = await verifyIdentityFile(fs.readFileSync(opts.identityPath, "utf-8"), {
-      expectedType: "identity",
-    });
-    const chain =
-      onFile.type === "identity" && onFile.identity ? (onFile.identity.succession ?? []) : [];
+    // Only a file bound to the committed key (#800): it verifies, names this
+    // motebit, and its current key IS the rotation's new key.
+    const chain = await identityFileRecords(
+      config.motebit_id,
+      fs.readFileSync(opts.identityPath, "utf-8"),
+      opts.newPublicKeyHex,
+    );
     const record = chain.find((r) => r.new_public_key === opts.newPublicKeyHex);
     if (record == null) return null;
     key = hexToBytes(await opts.decryptPrivateKey(config.cli_encrypted_key, opts.passphrase));

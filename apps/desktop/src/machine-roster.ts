@@ -41,6 +41,7 @@ import {
   boundedRetryUntil,
   createMachineRosterSection,
   createRosterSigner,
+  identityFileRecords,
   nextPresentationRecord,
   presentationDue,
   replicaDigest,
@@ -51,7 +52,6 @@ import {
   type RosterFetch,
 } from "@motebit/surface-kit";
 import { hexToBytes, mintAudienceToken } from "@motebit/encryption";
-import { verify as verifyIdentityFile } from "@motebit/identity-file";
 import type { KeySuccessionRecord } from "@motebit/sdk";
 import {
   loadPresentationRecord,
@@ -102,23 +102,9 @@ export function retryAfterMs(header: string | null, now: number): number | undef
 /**
  * Succession records from the stored identity file — only when it verifies,
  * names THIS motebit, and its current key IS the held key. Never a guardian.
+ * The rule lives once in surface-kit (#800).
  */
-export async function identityFileRecords(
-  motebitId: string,
-  content: string | null,
-  heldPublicKeyHex: string | null,
-): Promise<KeySuccessionRecord[]> {
-  if (content == null || content === "" || heldPublicKeyHex == null) return [];
-  try {
-    const v = await verifyIdentityFile(content, { expectedType: "identity" });
-    if (v.type !== "identity" || !v.valid || !v.identity) return [];
-    if (v.identity.motebit_id !== motebitId) return [];
-    if (v.identity.identity.public_key.toLowerCase() !== heldPublicKeyHex.toLowerCase()) return [];
-    return v.identity.succession ?? [];
-  } catch {
-    return [];
-  }
-}
+export { identityFileRecords };
 
 export function desktopRosterPorts(deps: DesktopRosterDeps): MachineRosterPorts {
   const io = deps.io ?? tauriRosterIO(deps.invoke);

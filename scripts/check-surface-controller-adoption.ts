@@ -21,9 +21,20 @@
  *
  * When to add a controller here vs. leave it per-surface: the four-question
  * extraction test in `docs/doctrine/surface-controller-extraction.md`.
+ *
+ * "Consumes" is read from the syntax tree, never from the text (#800
+ * follow-up): the file must carry a VALUE import of the named symbol from
+ * `@motebit/surface-kit` (`import type` does not count), and must reference
+ * that binding outside import/export declarations. A controller name that
+ * only appears in a comment, a string, an import from anywhere else, or an
+ * unused import beside a local fork is not an adoption. The earlier textual
+ * check passed a CLI adapter swapped to a local fork of `MachineRoster`
+ * because the word stayed in three comments.
  */
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import ts from "typescript";
+import { formatRepair } from "./lib/gate-report.js";
 
 const ROOT = join(import.meta.dirname, "..");
 
@@ -102,25 +113,78 @@ const ADOPTIONS: readonly Adoption[] = [
   },
 ];
 
-const errors: string[] = [];
+const PACKAGE = "@motebit/surface-kit";
+
+interface Consumption {
+  /** The local binding of a value import of `controller` from the package, or null. */
+  localName: string | null;
+  /** References to that binding outside import/export declarations. */
+  references: number;
+}
+
+/**
+ * Read, from the syntax tree, whether `src` imports `controller` (as a value)
+ * from `@motebit/surface-kit` and references it. Comments and strings are
+ * not syntax, so they can never satisfy this.
+ */
+function consumption(rel: string, src: string, controller: string): Consumption {
+  const sf = ts.createSourceFile(
+    rel,
+    src,
+    ts.ScriptTarget.Latest,
+    true,
+    rel.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  let localName: string | null = null;
+  for (const stmt of sf.statements) {
+    if (!ts.isImportDeclaration(stmt)) continue;
+    if (!ts.isStringLiteral(stmt.moduleSpecifier) || stmt.moduleSpecifier.text !== PACKAGE)
+      continue;
+    const clause = stmt.importClause;
+    if (clause == null || clause.isTypeOnly) continue;
+    const named = clause.namedBindings;
+    if (named == null || !ts.isNamedImports(named)) continue;
+    for (const el of named.elements) {
+      if (el.isTypeOnly) continue;
+      if ((el.propertyName ?? el.name).text === controller) localName = el.name.text;
+    }
+  }
+  if (localName == null) return { localName: null, references: 0 };
+  let references = 0;
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) return;
+    if (ts.isIdentifier(node) && node.text === localName) references++;
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(sf, visit);
+  return { localName, references };
+}
+
+const sites: string[] = [];
+let filesParsed = 0;
 
 for (const adoption of ADOPTIONS) {
   for (const rel of adoption.files) {
     const abs = join(ROOT, rel);
     if (!existsSync(abs)) {
-      errors.push(`${rel}: missing — expected a thin ${adoption.controller} adapter here.`);
+      sites.push(`${rel}: missing — expected a thin ${adoption.controller} adapter here.`);
       continue;
     }
     const src = readFileSync(abs, "utf8");
+    filesParsed++;
 
-    // 1. Must import the canonical controller from the package.
-    const importsPackage =
-      /from\s+["']@motebit\/surface-kit["']/.test(src) &&
-      new RegExp(`\\b${adoption.controller}\\b`).test(src);
-    if (!importsPackage) {
-      errors.push(
-        `${rel}: does not import { ${adoption.controller} } from "@motebit/surface-kit" — ` +
-          `surface controllers must be consumed from the package, never re-forked locally.`,
+    // 1. Must import the canonical controller from the package, as a value,
+    //    and use it — read from the syntax tree, never the text.
+    const c = consumption(rel, src, adoption.controller);
+    if (c.localName == null) {
+      sites.push(
+        `${rel}: no value import of { ${adoption.controller} } from "${PACKAGE}" ` +
+          `(a comment, a string, a type-only import, or an import from elsewhere does not count).`,
+      );
+    } else if (c.references === 0) {
+      sites.push(
+        `${rel}: imports { ${adoption.controller} } from "${PACKAGE}" but never uses it ` +
+          `(an unused import beside a local fork is a re-fork).`,
       );
     }
 
@@ -128,23 +192,36 @@ for (const adoption of ADOPTIONS) {
     //    ceiling (the extracted core is ~250 lines; an adapter is ~40).
     const lineCount = src.split("\n").length;
     if (lineCount > adoption.maxLines) {
-      errors.push(
+      sites.push(
         `${rel}: ${lineCount} lines exceeds the thin-adapter ceiling (${adoption.maxLines}). ` +
-          `If logic is creeping back into the surface, push it into @motebit/surface-kit instead.`,
+          `If logic is creeping back into the surface, push it into ${PACKAGE} instead.`,
       );
     }
   }
 }
 
-if (errors.length > 0) {
-  console.error("✗ Surface-controller adoption check failed:\n");
-  for (const e of errors) console.error(`  - ${e}`);
+const fileCount = ADOPTIONS.reduce((n, a) => n + a.files.length, 0);
+
+if (sites.length > 0) {
+  process.stderr.write(
+    formatRepair({
+      invariant:
+        "Surface-controller adoption check failed — a surface re-forks an extracted controller.",
+      sites,
+      canonical:
+        "packages/surface-kit/src/index.ts (the controllers) and the ADOPTIONS registry in scripts/check-surface-controller-adoption.ts",
+      fix:
+        `import the named controller as a value from "${PACKAGE}" and call it from the adapter; ` +
+        "delete any local copy, and move logic that grew the adapter past its ceiling into @motebit/surface-kit.",
+      doctrine: "docs/doctrine/surface-controller-extraction.md",
+    }),
+  );
   console.error(
-    `\n${ADOPTIONS.length} controller(s) checked across ${ADOPTIONS.reduce((n, a) => n + a.files.length, 0)} surface file(s).`,
+    `${ADOPTIONS.length} controller(s) checked across ${fileCount} surface file(s) (${filesParsed} parsed).`,
   );
   process.exit(1);
 }
 
 console.log(
-  `Surface-controller adoption check passed — ${ADOPTIONS.length} controller(s) consumed from @motebit/surface-kit across ${ADOPTIONS.reduce((n, a) => n + a.files.length, 0)} surface file(s).`,
+  `Surface-controller adoption check passed — ${ADOPTIONS.length} controller(s) imported from ${PACKAGE} and referenced, across ${filesParsed} of ${fileCount} surface file(s) parsed.`,
 );

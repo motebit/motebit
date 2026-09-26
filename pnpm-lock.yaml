@@ -2121,6 +2121,9 @@ importers:
       '@motebit/encryption':
         specifier: workspace:*
         version: link:../encryption
+      '@motebit/identity-file':
+        specifier: workspace:*
+        version: link:../identity-file
       '@motebit/mcp-client':
         specifier: workspace:*
         version: link:../mcp-client

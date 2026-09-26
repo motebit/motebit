@@ -36,6 +36,7 @@ import {
   boundedRetryUntil,
   createMachineRosterSection,
   createRosterSigner,
+  identityFileRecords,
   nextPresentationRecord,
   presentationDue,
   replicaDigest,
@@ -46,7 +47,6 @@ import {
   type RosterFetch,
 } from "@motebit/surface-kit";
 import { hexToBytes, mintAudienceToken } from "@motebit/encryption";
-import { verify as verifyIdentityFile } from "@motebit/identity-file";
 import type { KeySuccessionRecord } from "@motebit/sdk";
 import {
   defaultRosterKV,
@@ -97,23 +97,9 @@ export function retryAfterMs(header: string | null, now: number): number | undef
  * names THIS motebit, and its current key IS the held key. A file signed by
  * any other key (left behind by another identity, or planted) contributes
  * nothing. Never a guardian (#799 W1).
+ * The rule lives once in surface-kit (#800).
  */
-export async function identityFileRecords(
-  motebitId: string,
-  content: string | null,
-  heldPublicKeyHex: string | null,
-): Promise<KeySuccessionRecord[]> {
-  if (content == null || content === "" || heldPublicKeyHex == null) return [];
-  try {
-    const v = await verifyIdentityFile(content, { expectedType: "identity" });
-    if (v.type !== "identity" || !v.valid || !v.identity) return [];
-    if (v.identity.motebit_id !== motebitId) return [];
-    if (v.identity.identity.public_key.toLowerCase() !== heldPublicKeyHex.toLowerCase()) return [];
-    return v.identity.succession ?? [];
-  } catch {
-    return [];
-  }
-}
+export { identityFileRecords };
 
 export function mobileRosterPorts(deps: MobileRosterDeps): MachineRosterPorts {
   const kv = deps.kv ?? defaultRosterKV;
