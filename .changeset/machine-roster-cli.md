@@ -8,7 +8,7 @@ A process that announces it hosts unattended work now passes through the roster'
 
 `motebit machines [--json]` reduces the roster on this machine, under a key chain it resolved itself, and prints each machine with what the relay observed of it. A count is printed only when nothing suppressed it, and the chain head is cited by key. `motebit machines retire <device_id>` signs a retirement for every standing entry of a machine; `motebit machines enroll <device_id> [--force]` undoes one, and refuses ids that could never answer unless forced.
 
-`motebit rotate` records this machine's roster status under the old key before it sends the rotation, and after the local commit enrols the machine under the new key only if that record says it was an active host — never from what the relay holds after the rotation was recorded. A rotation resumed later uses the record its first attempt took.
+`motebit rotate` records this machine's roster status under the old key before it sends the rotation, and after the local commit enrols the machine under the new key only if that record says it was an active host — never from what the relay holds after the rotation was recorded. A rotation resumed later uses the record its first attempt took. Only a line this machine enrolled itself is carried across a rotation; a machine enrolled from another surface needs `motebit machines enroll` again after rotating.
 
 The replica lives at `~/.motebit/machine-roster.json` (owner-only, written atomically under a lock; an unreadable one is moved aside with its bytes kept). Every roster request is authenticated by this machine's own device key, never the operator's master token.
 

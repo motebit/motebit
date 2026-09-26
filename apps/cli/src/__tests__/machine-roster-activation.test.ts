@@ -22,7 +22,7 @@ import {
   signHostEnrollment,
 } from "@motebit/encryption";
 import type { KeyPair } from "@motebit/encryption";
-import { MachineRoster, buildRosterView } from "@motebit/surface-kit";
+import { MachineRoster, buildRosterView, captureFor } from "@motebit/surface-kit";
 
 import type { FullConfig } from "../config.js";
 import { encryptPrivateKey, decryptPrivateKey } from "../identity.js";
@@ -569,5 +569,157 @@ describe("#785 decisive round: an old-key line presented between the link and a 
     expect(acq.kind).toBe("acquired");
     if (acq.kind !== "acquired") return;
     expect(acq.verdict.active.map((m) => m.device_id)).not.toContain(f.deviceId);
+  });
+});
+
+describe("#786 round 1", () => {
+  const rotationDeps = (f: Fixture, fetchImpl: typeof fetch) => ({
+    identityPath: f.identityPath,
+    loadConfig: () => ({ ...config }),
+    saveConfig: (c: FullConfig) => {
+      config = c;
+    },
+    pending: {
+      load: (mid: string, key: string) => loadPendingRotation(mid, key, dir),
+      loadAny: () => loadAnyPendingRotation(dir),
+      save: (p: Parameters<typeof savePendingRotation>[0]) => savePendingRotation(p, dir),
+      clear: () => clearPendingRotation(dir),
+      setAside: () => setAsidePendingRotation(dir),
+      path: pendingRotationPath(dir),
+    },
+    passphrase: PASS,
+    syncUrl: SYNC_URL,
+    fetchImpl,
+  });
+  const captureNow = (f: Fixture) =>
+    rosterCaptureBeforeRotate({
+      passphrase: PASS,
+      syncUrl: SYNC_URL,
+      identityPath: f.identityPath,
+      decryptPrivateKey,
+      loadConfig: () => ({ ...config }),
+      dir,
+      fetchImpl: viaRelay,
+    });
+  const hookNow = (newPublicKeyHex: string, fetchImpl: typeof fetch = viaRelay) =>
+    rosterHookAfterRotate({
+      identityPath: join(dir, "motebit.md"),
+      passphrase: PASS,
+      syncUrl: SYNC_URL,
+      newPublicKeyHex,
+      decryptPrivateKey,
+      loadConfig: () => ({ ...config }),
+      dir,
+      fetchImpl,
+    });
+  const lostResponse: typeof fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const resp = await viaRelay(input, init);
+    if (url.endsWith("/rotate-key") && (init?.method ?? "GET").toUpperCase() === "POST") {
+      throw new Error("socket hang up");
+    }
+    return resp;
+  };
+  const underKey = (mid: string, key: string): number =>
+    (
+      relay.moteDb.db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM relay_host_roster_entries WHERE motebit_id = ? AND kind = 'enrollment' AND signer_key = ?",
+        )
+        .get(mid, key) as { n: number }
+    ).n;
+
+  it("W1: retire D under A; the A-holder POSTs a fresh A-enrolment for D; D rotates ⇒ capture not-active, nothing minted under B", async () => {
+    const f = await registeredHost();
+    expect((await enrollOnAnnounce(ctx(f), () => {}))?.kind).toBe("minted");
+    expect((await new MachineRoster(cliRosterPorts(ctx(f))).retire(f.deviceId)).kind).toBe(
+      "retired",
+    );
+    const k = await generateKeypair();
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO devices (device_id, motebit_id, device_token, public_key, registered_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run("linked-k", f.mid, "tok-linked-k-786", hex(k), Date.now());
+    const fresh = await signHostEnrollment(
+      {
+        motebit_id: f.mid,
+        device_id: f.deviceId,
+        public_key: hex(f.a),
+        enrolled_at: Date.now() + 1,
+      },
+      f.a.privateKey,
+    );
+    const { token } = await mintAudienceToken(
+      { mid: f.mid, did: "linked-k", aud: "device:auth" },
+      k.privateKey,
+    );
+    const posted = await viaRelay(`${SYNC_URL}/api/v1/agents/${f.mid}/roster`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ enrollments: [fresh] }),
+    });
+    expect(posted.status).toBe(200);
+
+    expect(await captureNow(f)).toBe("captured");
+    const read = loadReplica(f.mid, dir);
+    const cap = read.kind === "value" ? captureFor(read.replica, f.deviceId, hex(f.a)) : null;
+    expect(cap).toMatchObject({ status: "not-active", entries: [] });
+    const o = await performRotation(rotationDeps(f, viaRelay));
+    expect(o.kind).toBe("rotated");
+    if (o.kind !== "rotated") return;
+    await hookNow(o.newPublicKeyHex);
+    expect(underKey(f.mid, o.newPublicKeyHex)).toBe(0);
+  });
+
+  it("P2: an active host's rotation is held, then resumed ⇒ the ORIGINAL capture re-enrols it (a re-capture after the link would read absent)", async () => {
+    const f = await registeredHost();
+    expect((await enrollOnAnnounce(ctx(f), () => {}))?.kind).toBe("minted");
+    expect(await captureNow(f)).toBe("captured");
+    expect((await performRotation(rotationDeps(f, lostResponse))).kind).toBe("held");
+    expect(await captureNow(f)).toBe("kept");
+    const o = await performRotation(rotationDeps(f, viaRelay));
+    expect(o.kind === "rotated" && o.relay).toBe("already-held");
+    if (o.kind !== "rotated") return;
+    const line = await hookNow(o.newPublicKeyHex);
+    expect(line).toMatch(/enrolled under the new key/);
+    expect(underKey(f.mid, o.newPublicKeyHex)).toBe(1);
+  });
+
+  it("a STALE write-ahead (another identity) does not block a fresh capture", async () => {
+    const f = await registeredHost();
+    await enrollOnAnnounce(ctx(f), () => {});
+    savePendingRotation(
+      {
+        motebit_id: "someone-else",
+        old_public_key: "1".repeat(64),
+        new_public_key: "2".repeat(64),
+        record: {} as never,
+        encrypted_new_key: config.cli_encrypted_key!,
+        written_at: 1,
+      },
+      dir,
+    );
+    expect(await captureNow(f)).toBe("captured");
+  });
+
+  it("P6: the hook says when the relay did not take the new enrolment", async () => {
+    const f = await registeredHost();
+    await enrollOnAnnounce(ctx(f), () => {});
+    expect(await captureNow(f)).toBe("captured");
+    const o = await performRotation(rotationDeps(f, viaRelay));
+    if (o.kind !== "rotated") throw new Error("expected rotated");
+    const refusePost: typeof fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/roster") && (init?.method ?? "GET").toUpperCase() === "POST") {
+        return new Response("{}", { status: 500 });
+      }
+      return viaRelay(input, init);
+    };
+    const line = await hookNow(o.newPublicKeyHex, refusePost);
+    expect(line).toMatch(/enrolled under the new key/);
+    expect(line).toMatch(
+      /did not take this enrolment yet; it is kept on this device and presented again/,
+    );
   });
 });

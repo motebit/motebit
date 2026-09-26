@@ -8,19 +8,20 @@
 import * as fs from "node:fs";
 import { hexToBytes, secureErase } from "@motebit/encryption";
 import { verify as verifyIdentityFile } from "@motebit/identity-file";
-import { MachineRoster, type RotationHookOutcome } from "@motebit/surface-kit";
+import { MachineRoster, createRosterSigner, type RotationHookOutcome } from "@motebit/surface-kit";
 import type { KeySuccessionRecord } from "@motebit/sdk";
 import { CONFIG_DIR, loadFullConfig, type FullConfig } from "./config.js";
 import { cliRosterPorts, describeEnsureOutcome, type CliRosterContext } from "./machine-roster.js";
-import { hasPendingRotation } from "./pending-rotation.js";
+import { loadAnyPendingRotation } from "./pending-rotation.js";
+import { presentationLines } from "./subcommands/machines.js";
 
 /**
- * The rotation hook (R21 option b), run by `motebit rotate` once the
- * rotation is COMMITTED locally — including the kit's resume outcomes
- * (`interrupted-commit-finished`, `already-held`), which all end
- * `rotated`. Under the NEW key: append the link to the replica, freeze
- * this device's pre-rotation status, and enrol under the new key only if
- * that status was active.
+ * The rotation hook (R21 option (a), second half), run by `motebit rotate`
+ * once the rotation is COMMITTED locally — including the kit's resume
+ * outcomes (`interrupted-commit-finished`, `already-held`), which all end
+ * `rotated`. Under the NEW key: append the link to the replica, and enrol
+ * under the new key only if the capture taken BEFORE the rotation was sent
+ * says this machine was active through a line it minted itself.
  */
 export async function rosterAfterRotation(
   ctx: Omit<CliRosterContext, "privateKey">,
@@ -80,7 +81,10 @@ export async function rosterHookAfterRotate(opts: {
     );
     if (out.kind !== "frozen" || out.decided == null) return null;
     if (out.decided.kind === "minted") {
-      return "  Machine roster: this machine was active, so it is enrolled under the new key";
+      return [
+        "  Machine roster: this machine was active, so it is enrolled under the new key",
+        ...presentationLines(out.decided.presented, [out.decided.enrollmentId], "enrolment"),
+      ].join("\n");
     }
     if (out.decided.kind === "active") return null;
     const line = describeEnsureOutcome(out.decided, config.device_id);
@@ -95,11 +99,15 @@ export async function rosterHookAfterRotate(opts: {
 /**
  * R21 option (a): `motebit rotate`'s call BEFORE the rotation is sent.
  * Under the OLD key, capture this machine's roster status into the
- * replica; the hook later reads only that. Skipped while a rotation
- * write-ahead exists: that rotation's link may already be at the relay, so
- * a capture now could read a holder of the old key's fresh enrolment as
- * "active before the rotation" (#785) — the resume uses the capture its
- * original attempt took, or none (absent: no automatic mint). Never throws.
+ * replica; the hook later reads only that. Skipped while a RESUMABLE
+ * rotation write-ahead exists (one for this identity naming the key this
+ * machine holds, on either side — the kit resumes or finishes exactly
+ * those): that rotation's link may already be at the relay, so the resume
+ * uses the capture its original attempt took, or none (absent: no
+ * automatic mint). A STALE write-ahead (another identity, or naming neither
+ * key) is set aside by the kit and a fresh rotation starts, so a fresh
+ * capture is taken. An unreadable one stops the rotation, so nothing is
+ * captured. Its two relay reads run in parallel. Never throws.
  */
 export async function rosterCaptureBeforeRotate(opts: {
   passphrase: string;
@@ -114,13 +122,24 @@ export async function rosterCaptureBeforeRotate(opts: {
   fetchImpl?: typeof fetch;
 }): Promise<"captured" | "kept" | "skipped"> {
   const dir = opts.dir ?? CONFIG_DIR;
-  if (hasPendingRotation(dir)) return "kept";
+  const inFlight = loadAnyPendingRotation(dir);
+  if (inFlight === "unreadable") return "kept";
   let key: Uint8Array | null = null;
   try {
     const config = (opts.loadConfig ?? loadFullConfig)();
     if (!config.motebit_id || !config.device_id || !config.cli_encrypted_key) return "skipped";
     key = hexToBytes(await opts.decryptPrivateKey(config.cli_encrypted_key, opts.passphrase));
     const held = key;
+    const heldKey = (
+      await createRosterSigner({ privateKey: held, authorization: () => Promise.resolve({}) })
+    ).publicKeyHex;
+    if (
+      inFlight != null &&
+      inFlight.motebit_id === config.motebit_id &&
+      (inFlight.old_public_key === heldKey || inFlight.new_public_key === heldKey)
+    ) {
+      return "kept";
+    }
     await new MachineRoster(
       cliRosterPorts({
         motebitId: config.motebit_id,

@@ -179,8 +179,9 @@ export async function handleRotate(config: CliConfig): Promise<void> {
       console.log(`  rotations    ${outcome.rotations}`);
       if (config.reason) console.log(`  reason       ${config.reason}`);
       // The machine roster's rotation hook (machine-roster-clients R21,
-      // option b): AFTER the local commit — here, on every path that ends
-      // `rotated`, the resume paths included — under the NEW key.
+      // option (a), second half): AFTER the local commit — here, on every
+      // path that ends `rotated`, the resume paths included — under the NEW
+      // key, reading only the capture taken before the rotation was sent.
       const rosterLine = await rosterHookAfterRotate({
         identityPath,
         passphrase,
