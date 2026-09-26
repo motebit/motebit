@@ -27,6 +27,7 @@ import type { TaskRouter } from "./task-routing.js";
 import { evaluateSettlementEligibility } from "./task-routing.js";
 import { REFERENCE_MIN_BONDED_SIGNAL_MICRO } from "./bond-store.js";
 import { ON_SHELF, delistRegistration } from "./registry-delist.js";
+import { isDepartureInEffect, isSelfRevoked } from "./identity-revocation.js";
 import {
   admitKey,
   holderKeyOf,
@@ -1170,6 +1171,13 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     if (!motebitId || typeof motebitId !== "string") {
       throw new HTTPException(400, { message: "Missing motebit_id" });
     }
+    // An identity that revoked itself is never registered again (#787). Its
+    // own tokens are already refused (`isAgentRevoked`); this is the master
+    // token's path, which would otherwise INSERT a fresh, unrevoked row for an
+    // identity that had none — putting a revoked identity on the shelf.
+    if (isSelfRevoked(moteDb.db, motebitId)) {
+      throw new HTTPException(403, { message: "Identity is revoked" });
+    }
 
     if (!body.endpoint_url || typeof body.endpoint_url !== "string") {
       throw new HTTPException(400, { message: "Missing or invalid 'endpoint_url'" });
@@ -1935,6 +1943,20 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       .get(motebitId) as { motebit_id: string } | undefined;
     if (!existing) {
       throw new HTTPException(404, { message: "Agent not registered" });
+    }
+    // A reinstate reverses the operator's OWN hold and nothing else (#788).
+    // The registry mark is shared with the two revocations that are not the
+    // operator's: the identity's own `/revoke` (terminal) and a migration
+    // departure (reversed only by the identity arriving back). Clearing the
+    // mark over either put a revoked identity back on the shelf.
+    if (
+      !revoked &&
+      (isSelfRevoked(moteDb.db, motebitId) || isDepartureInEffect(moteDb.db, motebitId))
+    ) {
+      throw new HTTPException(409, {
+        message:
+          "Agent revoked itself or departed by migration — restore-listing reverses only the operator's hold",
+      });
     }
 
     // Flip the discoverability flag (what Discover filters) and append the

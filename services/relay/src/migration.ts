@@ -42,6 +42,7 @@ import {
   BalanceWaiverSchema,
 } from "@motebit/wire-schemas";
 import { admitKey, recordIdentityKey, verificationKeyFor } from "./identity-keys.js";
+import { isSelfRevoked } from "./identity-revocation.js";
 import type { CloseIdentityConnections, ReconcileKeyConnections } from "./connection-ports.js";
 
 const logger = createLogger({ service: "relay", module: "migration" });
@@ -567,6 +568,14 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
     // (ii) Bundle signature against the now-bound key.
     if (!(await verifyCredentialBundle(credential_bundle, hexToBytes(body.public_key)))) {
       throw new HTTPException(400, { message: "Credential bundle signature invalid" });
+    }
+
+    // An identity that revoked itself HERE (`/revoke`) does not arrive back:
+    // the revocation is terminal (#787). Without this the upsert below would
+    // clear the registry mark and re-shelve an identity whose tokens stay
+    // refused (`isAgentRevoked` reads the revocation record).
+    if (isSelfRevoked(db, body.motebit_id)) {
+      throw new HTTPException(403, { message: "Identity is revoked" });
     }
 
     // Step 4: Check for replay (§10)
