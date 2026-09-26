@@ -17,6 +17,7 @@
   "dependencies": {
     "@motebit/core-identity": "workspace:*",
     "@motebit/encryption": "workspace:*",
+    "@motebit/identity-file": "workspace:*",
     "@motebit/mcp-client": "workspace:*",
     "@motebit/sdk": "workspace:*",
     "@motebit/sync-engine": "workspace:*"

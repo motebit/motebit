@@ -36,7 +36,7 @@ import {
   boundedRetryUntil,
   createMachineRosterSection,
   createRosterSigner,
-  identityFileRecords as kitIdentityFileRecords,
+  identityFileRecords,
   nextPresentationRecord,
   presentationDue,
   replicaDigest,
@@ -47,7 +47,6 @@ import {
   type RosterFetch,
 } from "@motebit/surface-kit";
 import { hexToBytes, mintAudienceToken } from "@motebit/encryption";
-import { verify as verifyIdentityFile } from "@motebit/identity-file";
 import type { KeySuccessionRecord } from "@motebit/sdk";
 import {
   defaultRosterKV,
@@ -100,12 +99,7 @@ export function retryAfterMs(header: string | null, now: number): number | undef
  * nothing. Never a guardian (#799 W1).
  * The rule lives once in surface-kit (#800).
  */
-export const identityFileRecords = (
-  motebitId: string,
-  content: string | null,
-  heldPublicKeyHex: string | null,
-): Promise<KeySuccessionRecord[]> =>
-  kitIdentityFileRecords(motebitId, content, heldPublicKeyHex, verifyIdentityFile);
+export { identityFileRecords };
 
 export function mobileRosterPorts(deps: MobileRosterDeps): MachineRosterPorts {
   const kv = deps.kv ?? defaultRosterKV;

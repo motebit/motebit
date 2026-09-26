@@ -10,7 +10,8 @@
  * "succession". So a file is BOUND, and contributes anything at all, only
  * when all three hold:
  *
- *   1. its signature verifies (the canonical identity-file verifier);
+ *   1. its signature verifies (`verify` from `@motebit/identity-file`, called
+ *      here — never a verifier a surface hands in);
  *   2. it names THIS motebit_id;
  *   3. its current public key is exactly the key this surface HOLDS — so the
  *      file was signed by the very key in hand, and whoever wrote it is
@@ -21,32 +22,11 @@
  * never a class. Whether a surface also PINS the bound file's guardian is
  * the surface's decision (the phone and the desktop never do; the CLI does,
  * from a bound file only).
- *
- * The verifier is injected — `verify` from `@motebit/identity-file`, which
- * every surface already carries — so this rule lives once without a new
- * package edge from the kit.
  */
+import { verify as verifyIdentityFile } from "@motebit/identity-file";
 import type { KeySuccessionRecord } from "@motebit/sdk";
 
 const HEX_32 = /^[0-9a-f]{64}$/;
-
-/** The part of an identity-file verification this rule reads. */
-export interface IdentityFileVerdict {
-  type: string;
-  valid: boolean;
-  identity?: {
-    motebit_id: string;
-    identity: { public_key: string };
-    succession?: readonly KeySuccessionRecord[];
-    guardian?: { public_key?: string };
-  } | null;
-}
-
-/** `verify` from `@motebit/identity-file` (a re-export of `@motebit/crypto`'s). */
-export type IdentityFileVerifier = (
-  content: string,
-  options: { expectedType: "identity" },
-) => Promise<IdentityFileVerdict>;
 
 /** A file that passed all three conditions. */
 export interface BoundIdentityFile {
@@ -65,13 +45,12 @@ export async function boundIdentityFile(
   motebitId: string,
   content: string | null,
   heldPublicKeyHex: string | null,
-  verify: IdentityFileVerifier,
 ): Promise<BoundIdentityFile | null> {
   if (content == null || content === "" || heldPublicKeyHex == null) return null;
   const held = heldPublicKeyHex.toLowerCase();
   if (!HEX_32.test(held)) return null;
   try {
-    const v = await verify(content, { expectedType: "identity" });
+    const v = await verifyIdentityFile(content, { expectedType: "identity" });
     if (v.type !== "identity" || v.valid !== true || v.identity == null) return null;
     if (v.identity.motebit_id !== motebitId) return null;
     const key = v.identity.identity?.public_key;
@@ -95,7 +74,6 @@ export async function identityFileRecords(
   motebitId: string,
   content: string | null,
   heldPublicKeyHex: string | null,
-  verify: IdentityFileVerifier,
 ): Promise<KeySuccessionRecord[]> {
-  return (await boundIdentityFile(motebitId, content, heldPublicKeyHex, verify))?.records ?? [];
+  return (await boundIdentityFile(motebitId, content, heldPublicKeyHex))?.records ?? [];
 }

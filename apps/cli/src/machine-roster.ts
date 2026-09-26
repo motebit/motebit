@@ -13,7 +13,6 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { verify as verifyIdentityFile } from "@motebit/identity-file";
 import { bytesToHex, getPublicKeyBySuite } from "@motebit/encryption";
 import {
   MachineRoster,
@@ -95,12 +94,7 @@ async function localIdentityEvidence(
   const records: KeySuccessionRecord[] = [];
   let guardian: string | null = null;
   for (const content of contents) {
-    const bound = await boundIdentityFile(
-      ctx.motebitId,
-      content,
-      heldPublicKeyHex,
-      verifyIdentityFile,
-    );
+    const bound = await boundIdentityFile(ctx.motebitId, content, heldPublicKeyHex);
     if (bound == null) continue;
     records.push(...bound.records);
     if (guardian == null) guardian = bound.guardian;

@@ -7,7 +7,6 @@
  */
 import * as fs from "node:fs";
 import { hexToBytes, secureErase } from "@motebit/encryption";
-import { verify as verifyIdentityFile } from "@motebit/identity-file";
 import {
   MachineRoster,
   createRosterSigner,
@@ -70,7 +69,6 @@ export async function rosterHookAfterRotate(opts: {
       config.motebit_id,
       fs.readFileSync(opts.identityPath, "utf-8"),
       opts.newPublicKeyHex,
-      verifyIdentityFile,
     );
     const record = chain.find((r) => r.new_public_key === opts.newPublicKeyHex);
     if (record == null) return null;

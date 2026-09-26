@@ -13,6 +13,9 @@
       "path": "../encryption"
     },
     {
+      "path": "../identity-file"
+    },
+    {
       "path": "../mcp-client"
     },
     {
