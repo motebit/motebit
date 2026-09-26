@@ -133,7 +133,7 @@ Each surface adds a thin adapter (ports) plus its render. `check-surface-control
   - The flag is keyed by `(motebit_id, public_key)`. It counts only when it names the key the surface holds **now**.
   - **Where `classifyHeldKey` uses it.** For a legacy id, "the custody flag names the held key" is a fourth route to `identity`, disclosed as "identity key per this device's custody record".
   - **What it does not do.** It never overrides a positive `device-key` finding or a refusal.
-  - **Stated cost.** Installs from before the flag stay `unconfirmed` (lines shown, no count) until they re-pair with a key transfer or restore. The Settings section says so, with that remedy.
+  - **Stated cost.** Installs from before the flag stay `unconfirmed` (lines shown, no count) until they re-pair with a key transfer. A **restore** does not set the flag: an identity file proves possession of a key, not that it is the identity key, and a device-only surface can export one (round 1 F2). A restored **sovereign** id is unaffected, because it roots. The Settings section says so, with that remedy.
 - **R1: the kit refuses actions unless the class is `identity`.** `retire`, `enroll` and `present` are refused when the class is not `identity`, and the Settings section hides those actions. A device-only key must never sign roster entries.
 - **R2: `acquire` repairs omissions only on the presenting surface.** Omission repair inside `acquire` counts as a presentation. On web only the lock-holding tab performs it. There is a kit option, `repairOmissions: false`, for other tabs and throttled refreshes.
   - The web leader lock is a held `navigator.locks.request("motebit-roster-present", {mode: "exclusive"})`, released when the tab dies.
