@@ -2234,3 +2234,107 @@ describe("P3 (#786) — the hook reports the value actually persisted", () => {
     expect(frozenFor(m.cache.value!, "dev-self", hex(a))).toBe("not-active");
   });
 });
+
+// ── #786 decisive round, F: never "not enrolled" for a line this device cannot place ─
+
+describe("F (#786) — a device whose only enrolments are unplaceable has enrolled", () => {
+  /** A phone holding K1 after K0 → K1, whose chain resolves to [K1] alone. */
+  async function phoneAfterRotation(how: "succession-failed" | "recovery-unpinned") {
+    const k0 = await generateKeypair();
+    const k1 = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(k0, "vps"));
+    if (how === "succession-failed") {
+      relay.chain = [await rotate(k0, k1)];
+      relay.successionFails = true; // one failed /succession read
+    } else {
+      const g = await generateKeypair();
+      relay.chain = [
+        await signGuardianRecoverySuccession(
+          g.privateKey,
+          k1.privateKey,
+          k0.publicKey,
+          k1.publicKey,
+        ),
+      ]; // and no guardian pinned here
+    }
+    relay.rows = [
+      { device_id: "vps", bound_under: hex(k0), last_seen_at: NOW, sockets_open: 1 },
+      { device_id: "vps", bound_under: hex(k1), last_seen_at: NOW, sockets_open: 1 },
+    ];
+    const phone = machine(relay, k1, { deviceId: "phone" });
+    return { k0, k1, relay, phone };
+  }
+
+  it.each(["succession-failed", "recovery-unpinned"] as const)(
+    "%s: retire says the lines are unplaceable, never 'never enrolled' / 'not on the roster'",
+    async (how) => {
+      const { phone, relay } = await phoneAfterRotation(how);
+      const acq = await acquired(phone);
+      expect(acq.chain.chain).toHaveLength(1);
+      expect(await phone.roster.retire("vps")).toEqual({
+        kind: "unplaced-lines",
+        deviceId: "vps",
+        count: 1,
+      });
+      expect(relay.ret.size).toBe(0);
+    },
+  );
+
+  it.each(["succession-failed", "recovery-unpinned"] as const)(
+    "%s: enroll refuses with `unplaced-lines`, not 'no such line'",
+    async (how) => {
+      const { phone } = await phoneAfterRotation(how);
+      expect(await phone.roster.enroll("vps")).toEqual({
+        kind: "needs-force",
+        deviceId: "vps",
+        why: "unplaced-lines",
+        count: 1,
+      });
+    },
+  );
+
+  it.each(["succession-failed", "recovery-unpinned"] as const)(
+    "%s: the view never calls it 'not in the roster'",
+    async (how) => {
+      const { phone, k0 } = await phoneAfterRotation(how);
+      const view = buildRosterView(await acquired(phone), NOW);
+      if (view.kind !== "roster") throw new Error("expected roster");
+      const vps = view.lines.filter((l) => l.device_id === "vps");
+      expect(vps.map((l) => l.kind).sort()).toEqual(
+        ["unplaced-enrollment", "unplaced-key-socket", "unplaced-key-socket"].sort(),
+      );
+      const text = vps.map((l) => l.text).join("\n");
+      expect(text).not.toMatch(/not in the roster|never enrolled|has no line/);
+      expect(text).toMatch(/cannot place/);
+      expect(view.empty).toBeNull();
+      // Rule 4 covers a device enrolled only under unplaceable keys: its
+      // socket under such a key is the "cannot place" signal, named by key.
+      const k0Row = vps.find((l) => l.kind === "unplaced-key-socket" && l.bound_under === hex(k0));
+      expect(k0Row?.text).toMatch(
+        /connected under a key this device cannot place in this motebit's chain/,
+      );
+    },
+  );
+
+  it("a device with NO enrolment anywhere is still 'not enrolled' / 'unknown'", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    relay.live = [{ device_id: "tablet", bound_under: hex(a), sockets_open: 1 }];
+    const m = machine(relay, a);
+    expect((await m.roster.retire("tablet")).kind).toBe("not-enrolled");
+    expect((await m.roster.retire("ghost")).kind).toBe("unknown-device");
+    expect(await m.roster.enroll("ghost")).toMatchObject({ why: "no-such-line" });
+  });
+
+  it("an empty roster over refused junk copies never says 'no machine has enrolled yet'", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const real = await enrol(a, "vps");
+    relay.enr.set("junk", { ...real, signature: `${"A".repeat(85)}A` });
+    const view = buildRosterView(await acquired(machine(relay, a, { deviceId: "watcher" })), NOW);
+    expect(view.kind === "roster" && view.empty?.text).toBe(
+      "no machine is enrolled that this device can verify",
+    );
+  });
+});

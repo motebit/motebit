@@ -132,11 +132,24 @@ export function describeRetire(out: RetireOutcome): { lines: string[]; ok: boole
       return { lines: [`${out.deviceId} is already retired.`], ok: true };
     case "not-enrolled":
       return {
-        lines: [`${out.deviceId} is connected but has never enrolled; there is nothing to retire.`],
+        lines: [
+          `${out.deviceId} is connected, but this device can see no enrolment for it; there is nothing it can retire.`,
+        ],
+        ok: false,
+      };
+    case "unplaced-lines":
+      return {
+        lines: [
+          `${out.deviceId} has ${out.count} ${out.count === 1 ? "enrolment" : "enrolments"} under keys this device cannot place in its chain (older or newer) — nothing is retirable from here.`,
+          "  Refresh the chain first: run `motebit machines` again once the relay's key chain can be read, or restore this device's copy of the identity file (a guardian recovery needs the guardian pinned locally).",
+        ],
         ok: false,
       };
     case "unknown-device":
-      return { lines: [`No machine ${out.deviceId} is on this roster.`], ok: false };
+      return {
+        lines: [`No machine ${out.deviceId} is on the roster this device can see.`],
+        ok: false,
+      };
   }
 }
 
@@ -153,10 +166,12 @@ export function describeEnroll(out: EnrollOutcome): { lines: string[]; ok: boole
     case "needs-force": {
       const why =
         out.why === "no-such-line"
-          ? `${out.deviceId} has no line and is not this machine's own id; a typo would become an active line that never answers`
-          : out.why === "all-superseded"
-            ? `every line of ${out.deviceId} is on a superseded key, so that machine cannot hold the current key and would never answer`
-            : `${out.deviceId} is connected under a linked device's key — a device without the identity key`;
+          ? `this device can see no line for ${out.deviceId}, and it is not this machine's own id; a typo would become an active line that never answers`
+          : out.why === "unplaced-lines"
+            ? `${out.deviceId} has ${out.count ?? 1} ${(out.count ?? 1) === 1 ? "enrolment" : "enrolments"} under keys this device cannot place in its chain — refresh the chain first, so it is not enrolled twice`
+            : out.why === "all-superseded"
+              ? `every line of ${out.deviceId} is on a superseded key, so that machine cannot hold the current key and would never answer`
+              : `${out.deviceId} is connected under a linked device's key — a device without the identity key`;
       return {
         lines: [`Not enrolled: ${why}.`, "  Re-run with --force if this is intended."],
         ok: false,
