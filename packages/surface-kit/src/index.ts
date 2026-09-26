@@ -63,12 +63,19 @@ export type {
   EnrollRefusal,
   RotationHookOutcome,
 } from "./machine-roster.js";
-export { emptyReplica, parseReplica, mergeReplicas, frozenFor } from "./machine-roster-replica.js";
+export {
+  emptyReplica,
+  parseReplica,
+  mergeReplicas,
+  frozenFor,
+  captureFor,
+} from "./machine-roster-replica.js";
 export type {
   MachineRosterReplica,
   ReplicaRead,
   FrozenValue,
   FrozenVerdict,
+  RotationCapture,
 } from "./machine-roster-replica.js";
 export { buildRosterView, keyFingerprint, suppressionText } from "./machine-roster-view.js";
 export type {

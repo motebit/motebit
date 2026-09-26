@@ -21,6 +21,11 @@
  *   - `own_device_ids` — device ids this surface minted for ITSELF, so a
  *     restore that gives a fresh `device_id` can offer to retire the prior
  *     line (§2A N12).
+ *   - `rotation_captures` — R21 option (a): this device's own status,
+ *     captured under the OLD key BEFORE the rotation is sent. The rotation
+ *     hook reads only this, keyed by the rotation's old key — never the
+ *     inputs as they stand after the relay recorded the link, which a
+ *     holder of the old key can still add to (#785). Latest `at` wins.
  *   - `integrity` — set `suspect` when this surface's copy could not be
  *     read (and was kept aside), cleared by the first later acquisition
  *     that read the relay's roster AND key chain in full. While suspect, no
@@ -47,6 +52,23 @@ export interface FrozenVerdict {
   taken_at: number;
 }
 
+/** R21 (a): the pre-rotation status, taken under the old key before the rotation POST. */
+export interface RotationCapture {
+  motebit_id: string;
+  device_id: string;
+  /** The key the rotation departs from — the capture's key (R22). */
+  from_key: string;
+  status: "active" | "not-active" | "absent";
+  /**
+   * When `active`: the ids of the enrolments that made it so. The hook
+   * mints only while one of THESE still stands: a line the sovereign
+   * retired after the capture, and a holder of the old key then re-lit
+   * with a fresh enrolment, is not the line the capture saw.
+   */
+  entries: string[];
+  at: number;
+}
+
 export interface MachineRosterReplica {
   version: 1;
   motebit_id: string;
@@ -58,6 +80,7 @@ export interface MachineRosterReplica {
   own_device_ids: string[];
   /** The last read's pairs with `sockets_open > 1`; `at` = 0 means no read yet. */
   ambiguous: { at: number; pairs: string[] };
+  rotation_captures: RotationCapture[];
   /** See the header: `suspect` while a corrupt read has not been re-merged. */
   integrity: { at: number; suspect: boolean };
 }
@@ -77,6 +100,7 @@ export function emptyReplica(motebitId: string): MachineRosterReplica {
     roster_full: [],
     own_device_ids: [],
     ambiguous: { at: 0, pairs: [] },
+    rotation_captures: [],
     integrity: { at: 0, suspect: false },
   };
 }
@@ -128,6 +152,9 @@ export function parseReplica(raw: unknown): MachineRosterReplica | null {
   if (!isStringArray(r.roster_full) || !isStringArray(r.own_device_ids)) return null;
   const amb = r.ambiguous;
   if (!isObj(amb) || typeof amb.at !== "number" || !isStringArray(amb.pairs)) return null;
+  // Absent in a replica written before the field existed: none taken.
+  const caps = r.rotation_captures ?? [];
+  if (!Array.isArray(caps) || !caps.every(isCapture)) return null;
   // Absent in a replica written before the field existed: not suspect.
   const integ = r.integrity ?? { at: 0, suspect: false };
   if (!isObj(integ) || typeof integ.at !== "number" || typeof integ.suspect !== "boolean") {
@@ -143,6 +170,7 @@ export function parseReplica(raw: unknown): MachineRosterReplica | null {
     roster_full: r.roster_full,
     own_device_ids: r.own_device_ids,
     ambiguous: { at: amb.at, pairs: amb.pairs },
+    rotation_captures: caps,
     integrity: { at: integ.at, suspect: integ.suspect },
   };
 }
@@ -152,6 +180,44 @@ function unionBy<T>(a: readonly T[], b: readonly T[], key: (v: T) => string): T[
   for (const v of a) if (!out.has(key(v))) out.set(key(v), v);
   for (const v of b) if (!out.has(key(v))) out.set(key(v), v);
   return [...out.values()];
+}
+
+const isCapture = (v: unknown): v is RotationCapture => {
+  if (!isObj(v)) return false;
+  return (
+    typeof v.motebit_id === "string" &&
+    typeof v.device_id === "string" &&
+    typeof v.from_key === "string" &&
+    (v.status === "active" || v.status === "not-active" || v.status === "absent") &&
+    Array.isArray(v.entries) &&
+    v.entries.every((e) => typeof e === "string") &&
+    typeof v.at === "number"
+  );
+};
+
+/** One capture per `(device_id, from_key)`: the latest `at` (a fresh attempt replaces a stale one). */
+function latestCaptures(a: RotationCapture[], b: RotationCapture[]): RotationCapture[] {
+  const out = new Map<string, RotationCapture>();
+  for (const c of [...a, ...b]) {
+    const k = JSON.stringify([c.device_id, c.from_key]);
+    const prev = out.get(k);
+    if (prev == null || c.at > prev.at) out.set(k, c);
+  }
+  return [...out.values()];
+}
+
+/** The capture for `(device_id, from_key)`, or `null`. */
+export function captureFor(
+  replica: MachineRosterReplica,
+  deviceId: string,
+  fromKey: string,
+): RotationCapture | null {
+  return (
+    replica.rotation_captures.find(
+      (c) =>
+        c.device_id === deviceId && c.from_key === fromKey && c.motebit_id === replica.motebit_id,
+    ) ?? null
+  );
 }
 
 const frozenKey = (f: FrozenVerdict): string => JSON.stringify([f.device_id, f.pre_rotation_key]);
@@ -180,6 +246,7 @@ export function mergeReplicas(
     roster_full: unionBy(stored.roster_full, incoming.roster_full, (s) => s),
     own_device_ids: unionBy(stored.own_device_ids, incoming.own_device_ids, (s) => s),
     ambiguous: incoming.ambiguous.at >= stored.ambiguous.at ? incoming.ambiguous : stored.ambiguous,
+    rotation_captures: latestCaptures(stored.rotation_captures, incoming.rotation_captures),
     integrity:
       incoming.integrity.at > stored.integrity.at ||
       (incoming.integrity.at === stored.integrity.at && incoming.integrity.suspect)

@@ -32,6 +32,7 @@ import {
   type RosterSigner,
 } from "../machine-roster.js";
 import {
+  captureFor,
   emptyReplica,
   mergeReplicas,
   parseReplica,
@@ -574,6 +575,7 @@ describe("R21 — the rotation hook (option b: after commit, new key, pre-rotati
     const relay = new FakeRelay();
     const m = machine(relay, a);
     await m.roster.ensureEnrolled();
+    await m.roster.captureBeforeRotation(); // R21 (a): under A, before the POST
     const record = await rotate(a, b);
     relay.chain = [record];
     relay.current = hex(b);
@@ -590,7 +592,7 @@ describe("R21 — the rotation hook (option b: after commit, new key, pre-rotati
     expect((await m.roster.ensureEnrolled()).kind).toBe("active");
   });
 
-  it("a surface that was never a host rotates → frozen not-active, and it does NOT become one (N8)", async () => {
+  it("a surface that was never a host rotates → frozen absent, and it does NOT become one (N8)", async () => {
     const a = await generateKeypair();
     const b = await generateKeypair();
     const relay = new FakeRelay();
@@ -598,7 +600,8 @@ describe("R21 — the rotation hook (option b: after commit, new key, pre-rotati
     relay.chain = [record];
     const m = machine(relay, b);
     const out = await m.roster.afterRotation({ signer: await signerOf(b), record });
-    expect(out).toEqual({ kind: "frozen", value: "not-active", decided: null });
+    // Never captured (it held only B): absent.
+    expect(out).toEqual({ kind: "frozen", value: "absent", decided: null });
     expect(relay.enr.size).toBe(0);
   });
 
@@ -609,6 +612,7 @@ describe("R21 — the rotation hook (option b: after commit, new key, pre-rotati
     const m = machine(relay, a);
     await m.roster.ensureEnrolled();
     await relay.hold(await retireEntry(a, m.cache.value!.enrollments[0]!));
+    await m.roster.captureBeforeRotation(); // R21 (a): under A, before the POST
     const record = await rotate(a, b);
     relay.chain = [record];
     m.setKey(b);
@@ -625,6 +629,7 @@ describe("R21 — the rotation hook (option b: after commit, new key, pre-rotati
     const m = machine(relay, a);
     await m.roster.ensureEnrolled();
     const e = m.cache.value!.enrollments[0]!;
+    await m.roster.captureBeforeRotation(); // R21 (a): under A, before the POST
     const record = await rotate(a, b);
     relay.chain = [record];
     await relay.hold(await retireEntry(b, e)); // the phone, on the new key
@@ -644,6 +649,7 @@ describe("R21 — the rotation hook (option b: after commit, new key, pre-rotati
     const relay = new FakeRelay();
     const m = machine(relay, a);
     await m.roster.ensureEnrolled();
+    await m.roster.captureBeforeRotation(); // R21 (a): under A, before the POST
     const record = await rotate(a, b);
     relay.chain = [record];
     m.setKey(b);
@@ -1128,6 +1134,16 @@ describe("edge cases", () => {
       own_device_ids: ["vps"],
       ambiguous: { at: 5, pairs: ["p"] },
       integrity: { at: 3, suspect: true },
+      rotation_captures: [
+        {
+          motebit_id: MID,
+          device_id: "vps",
+          from_key: hex(a),
+          status: "active",
+          entries: ["e"],
+          at: 2,
+        },
+      ],
     };
     const round = JSON.parse(JSON.stringify(full)) as unknown;
     expect(parseReplica(round)).toEqual(full);
@@ -1452,6 +1468,7 @@ describe("round 1 — P3: the rotation hook never mints after a corrupt read", (
     const relay = new FakeRelay();
     const m = machine(relay, a);
     await m.roster.ensureEnrolled();
+    await m.roster.captureBeforeRotation(); // R21 (a): under A, before the POST
     const record = await rotate(a, b);
     relay.chain = [record];
     m.cache.corrupt = true;
@@ -1526,6 +1543,7 @@ describe("rule 1 — an automatic mint needs the succession read", () => {
     const relay = new FakeRelay();
     const m = machine(relay, a);
     await m.roster.ensureEnrolled();
+    await m.roster.captureBeforeRotation(); // R21 (a): under A, before the POST
     const record = await rotate(a, b);
     relay.chain = [record];
     relay.successionFails = true;
@@ -1585,6 +1603,7 @@ describe("rule 3 — the frozen verdict and the mint are one step", () => {
     const cache = new FakeCache();
     const m = machine(relay, a, { cache });
     await m.roster.ensureEnrolled();
+    await m.roster.captureBeforeRotation(); // R21 (a): under A, before the POST
     const record = await rotate(a, b);
     relay.chain = [record];
     relay.current = hex(b);
@@ -1618,6 +1637,7 @@ describe("rule 3 — the frozen verdict and the mint are one step", () => {
     const cache = new FakeCache();
     const m = machine(relay, a, { cache });
     await m.roster.ensureEnrolled();
+    await m.roster.captureBeforeRotation(); // R21 (a): under A, before the POST
     const record = await rotate(a, b);
     relay.chain = [record];
     const good = await signerOf(b);
@@ -1636,6 +1656,7 @@ describe("rule 3 — the frozen verdict and the mint are one step", () => {
     const cache = new FakeCache();
     const m = machine(relay, a, { cache });
     await m.roster.ensureEnrolled();
+    await m.roster.captureBeforeRotation(); // R21 (a): under A, before the POST
     const record = await rotate(a, b);
     relay.chain = [record];
     const saves: MachineRosterReplica[] = [];
@@ -1688,6 +1709,8 @@ describe("property — a machine the sovereign retired never ends active at the 
   const ACTIONS = [
     "retire",
     "rotate",
+    "rotate-held",
+    "resume",
     "restart",
     "cache-delete",
     "fail-succession",
@@ -1696,19 +1719,44 @@ describe("property — a machine the sovereign retired never ends active at the 
     "old-key-add",
   ] as const;
 
-  it("over 300 seeded sequences of 10 steps", async () => {
+  it("over 300 seeded sequences of 12 steps (old-key lines may land between the link and a late hook)", async () => {
     for (let seed = 1; seed <= 300; seed++) {
       const rnd = prng(seed * 7919);
       const relay = new FakeRelay();
       const keys: KeyPair[] = [await generateKeypair()];
-      const head = () => keys[keys.length - 1]!;
+      /** The key this machine holds: behind the head while a rotation is held. */
+      let held = keys[0]!;
+      /** A rotation whose link the relay recorded, and whose hook has not run (a lost response). */
+      let pending: { record: KeySuccessionRecord; next: KeyPair } | null = null;
       let cache = new FakeCache();
       let retiredBySovereign = false;
       let clock = NOW;
-      const dev = () => machine(relay, head(), { cache, now: ++clock });
+      const head = () => keys[keys.length - 1]!;
+      const dev = (k: KeyPair = held) => machine(relay, k, { cache, now: ++clock });
       await dev().roster.ensureEnrolled();
       const trace: string[] = [];
-      for (let step = 0; step < 10; step++) {
+
+      const hook = async (interrupt: boolean): Promise<void> => {
+        const p = pending!;
+        pending = null;
+        held = p.next; // the local commit
+        const d = dev();
+        const roster = interrupt
+          ? new MachineRoster({
+              ...d.ports,
+              cache: {
+                load: () => cache.load(),
+                save: (r) => cache.save(r),
+                exclusive: () => Promise.reject(new Error("killed")),
+              },
+            })
+          : d.roster;
+        await roster
+          .afterRotation({ signer: await signerOf(p.next), record: p.record })
+          .catch(() => undefined);
+      };
+
+      for (let step = 0; step < 12; step++) {
         const act = ACTIONS[Math.floor(rnd() * ACTIONS.length)]!;
         trace.push(act);
         switch (act) {
@@ -1721,29 +1769,28 @@ describe("property — a machine the sovereign retired never ends active at the 
             break;
           }
           case "rotate":
+          case "rotate-held":
           case "interrupt-hook": {
+            if (pending != null) {
+              // A rotation is held: running rotate again resumes it.
+              await hook(act === "interrupt-hook");
+              break;
+            }
+            if (held !== head()) break; // this machine cannot rotate a key it does not hold
+            // R21 (a): capture under the old key, BEFORE the link is sent.
+            await dev().roster.captureBeforeRotation();
             const next = await generateKeypair();
-            const record = await rotate(head(), next);
+            const record = await rotate(held, next);
             keys.push(next);
             relay.chain.push(record);
             relay.current = hex(next);
-            const d = dev();
-            const roster =
-              act === "interrupt-hook"
-                ? new MachineRoster({
-                    ...d.ports,
-                    cache: {
-                      load: () => cache.load(),
-                      save: (r) => cache.save(r),
-                      exclusive: () => Promise.reject(new Error("killed")),
-                    },
-                  })
-                : d.roster;
-            await roster
-              .afterRotation({ signer: await signerOf(next), record })
-              .catch(() => undefined);
+            pending = { record, next };
+            if (act !== "rotate-held") await hook(act === "interrupt-hook");
             break;
           }
+          case "resume":
+            if (pending != null) await hook(false);
+            break;
           case "restart":
             await dev().roster.ensureEnrolled();
             relay.successionFails = false;
@@ -1760,6 +1807,7 @@ describe("property — a machine the sovereign retired never ends active at the 
             break;
           case "old-key-add": {
             if (keys.length < 2) break;
+            // Any key but the head — including the one a held rotation just left.
             const old = keys[Math.floor(rnd() * (keys.length - 1))]!;
             await relay.hold(await enrol(old, "dev-self", ++clock));
             break;
@@ -1778,7 +1826,7 @@ describe("property — a machine the sovereign retired never ends active at the 
         }
       }
     }
-  }, 120_000);
+  }, 180_000);
 });
 
 // ── #785 round 1 (precision) ─────────────────────────────────────────
@@ -1914,5 +1962,89 @@ describe("P6 — an empty roster that holds a pending tombstone never says none 
     expect(view.lines).toEqual([]);
     expect(view.empty?.kind).toBe("none-standing");
     expect(view.empty?.text).not.toMatch(/no machine has enrolled/);
+  });
+});
+
+// ── #785 decisive round: R21 option (a) ──────────────────────────────
+
+describe("R21 option (a) — the hook reads the capture taken before the link, never the inputs after it", () => {
+  it("retired D; capture not-active; the link lands; an old-key holder re-lights D under A; the hook mints nothing", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    await relay.hold(await retireEntry(a, m.cache.value!.enrollments[0]!));
+    expect((await m.roster.captureBeforeRotation()).status).toBe("not-active");
+    const record = await rotate(a, b);
+    relay.chain = [record]; // the relay recorded A → B
+    await relay.hold(await enrol(a, "dev-self", NOW + 9)); // after the link, before the hook
+    const out = await machine(relay, b, { cache: m.cache }).roster.afterRotation({
+      signer: await signerOf(b),
+      record,
+    });
+    expect(out).toEqual({ kind: "frozen", value: "not-active", decided: null });
+    expect([...relay.enr.values()].some((e) => e.public_key === hex(b))).toBe(false);
+  });
+
+  it("an active capture authorizes only the line it saw: retired after, re-lit by the old key, a late hook mints nothing", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    expect((await m.roster.captureBeforeRotation()).status).toBe("active");
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    // The phone retires the old line under B; a holder of A re-lights D under A.
+    expect((await machine(relay, b, { deviceId: "phone" }).roster.retire("dev-self")).kind).toBe(
+      "retired",
+    );
+    await relay.hold(await enrol(a, "dev-self", NOW + 9));
+    // The held rotation resumes: the hook runs late.
+    const out = await machine(relay, b, { cache: m.cache }).roster.afterRotation({
+      signer: await signerOf(b),
+      record,
+    });
+    expect(out.kind === "frozen" && out.decided?.kind).not.toBe("minted");
+    expect([...relay.enr.values()].some((e) => e.public_key === hex(b))).toBe(false);
+  });
+
+  it("no capture (an older client, a crash before it) is absent: no automatic mint", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    const out = await machine(relay, b, { cache: m.cache }).roster.afterRotation({
+      signer: await signerOf(b),
+      record,
+    });
+    expect(out).toEqual({ kind: "frozen", value: "absent", decided: null });
+    expect(await machine(relay, b, { cache: m.cache }).roster.ensureEnrolled()).toMatchObject({
+      kind: "superseded",
+    });
+  });
+
+  it("a failed read at capture time captures absent", async () => {
+    const relay = new FakeRelay();
+    const m = machine(relay, await generateKeypair());
+    await m.roster.ensureEnrolled();
+    relay.successionFails = true;
+    expect((await m.roster.captureBeforeRotation()).status).toBe("absent");
+  });
+
+  it("a fresh capture replaces an older one for the same key; the latest wins", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    await m.roster.captureBeforeRotation();
+    await relay.hold(await retireEntry(a, m.cache.value!.enrollments[0]!));
+    const later = machine(relay, a, { cache: m.cache, now: NOW + 100 });
+    expect((await later.roster.captureBeforeRotation()).status).toBe("not-active");
+    expect(captureFor(m.cache.value!, "dev-self", hex(a))?.status).toBe("not-active");
   });
 });
