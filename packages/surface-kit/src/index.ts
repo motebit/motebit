@@ -72,6 +72,13 @@ export type {
 // Settings section state holder every C-2 surface shares.
 export { classifyHeldKey, heldKeyText, rotationLinkReplica } from "./machine-roster-held-key.js";
 export type { HeldKeyClass, IdentityBasis } from "./machine-roster-held-key.js";
+// #800 — what a local motebit.md may contribute: only a file signed by the held key.
+export { boundIdentityFile, identityFileRecords } from "./machine-roster-identity-file.js";
+export type {
+  BoundIdentityFile,
+  IdentityFileVerdict,
+  IdentityFileVerifier,
+} from "./machine-roster-identity-file.js";
 export {
   createMachineRosterSection,
   rosterLineActions,

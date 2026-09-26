@@ -14,8 +14,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { verify as verifyIdentityFile } from "@motebit/identity-file";
+import { bytesToHex, getPublicKeyBySuite } from "@motebit/encryption";
 import {
   MachineRoster,
+  boundIdentityFile,
   createRosterSigner,
   type EnsureEnrolledOutcome,
   type MachineRosterPorts,
@@ -56,16 +58,25 @@ function identityFileCandidates(ctx: CliRosterContext, dir: string): string[] {
 }
 
 /**
- * Every succession record, and the guardian, from every signed identity
- * file of THIS motebit this machine can find (C1.4, C1.5): the named
- * files, `motebit.md` in the working directory and its parents,
+ * Every succession record, and the guardian, from every identity file of
+ * THIS motebit this machine can find (C1.4, C1.5): the named files,
+ * `motebit.md` in the working directory and its parents,
  * `~/.motebit/identity.md`, and the config's `_identity_file` (restore's,
- * and desktop's). A file for another motebit, or one whose signature does
- * not verify, contributes nothing.
+ * and desktop's).
+ *
+ * A file contributes only when it is BOUND (#800; surface-kit's
+ * `boundIdentityFile`): it verifies, names this motebit, AND its current
+ * key is the key this CLI holds. A self-signed file proves possession of
+ * ITS key, never that it speaks for the identity — so a file planted in a
+ * parent directory, or left by another identity, contributes no record and
+ * no guardian. The guardian is pinned only from a bound file: that file was
+ * signed by the very key in hand, so its guardian is this key's own
+ * declaration, never a third party's (machine-roster-surfaces-v1.md, #800).
  */
 async function localIdentityEvidence(
   ctx: CliRosterContext,
   dir: string,
+  heldPublicKeyHex: string,
 ): Promise<{ records: KeySuccessionRecord[]; guardian: string | null }> {
   const contents: string[] = [];
   for (const file of identityFileCandidates(ctx, dir)) {
@@ -84,18 +95,28 @@ async function localIdentityEvidence(
   const records: KeySuccessionRecord[] = [];
   let guardian: string | null = null;
   for (const content of contents) {
-    try {
-      const v = await verifyIdentityFile(content, { expectedType: "identity" });
-      if (v.type !== "identity" || !v.valid || !v.identity) continue;
-      if (v.identity.motebit_id !== ctx.motebitId) continue;
-      records.push(...((v.identity.succession ?? []) as KeySuccessionRecord[]));
-      const g = v.identity.guardian?.public_key;
-      if (guardian == null && typeof g === "string" && /^[0-9a-f]{64}$/.test(g)) guardian = g;
-    } catch {
-      // not an identity file
-    }
+    const bound = await boundIdentityFile(
+      ctx.motebitId,
+      content,
+      heldPublicKeyHex,
+      verifyIdentityFile,
+    );
+    if (bound == null) continue;
+    records.push(...bound.records);
+    if (guardian == null) guardian = bound.guardian;
   }
   return { records, guardian };
+}
+
+/** The public key of the key in hand now, or null. */
+async function heldPublicKeyHex(ctx: CliRosterContext): Promise<string | null> {
+  const key = ctx.privateKey();
+  if (key == null) return null;
+  try {
+    return bytesToHex(await getPublicKeyBySuite(key, "motebit-jcs-ed25519-hex-v1"));
+  } catch {
+    return null;
+  }
 }
 
 async function readJson(resp: Response): Promise<unknown> {
@@ -111,8 +132,20 @@ export function cliRosterPorts(ctx: CliRosterContext): MachineRosterPorts {
   const fetchImpl = ctx.fetchImpl ?? fetch;
   const base = ctx.syncUrl.replace(/\/+$/, "");
   const agent = `${base}/api/v1/agents/${encodeURIComponent(ctx.motebitId)}`;
-  let evidence: Promise<{ records: KeySuccessionRecord[]; guardian: string | null }> | null = null;
-  const local = () => (evidence ??= localIdentityEvidence(ctx, dir));
+  // Memoised per held key: the key is resolved on every call (R7), and
+  // evidence bound to one key is never reused under another.
+  type Evidence = { records: KeySuccessionRecord[]; guardian: string | null };
+  const evidence = new Map<string, Promise<Evidence>>();
+  const local = async (): Promise<Evidence> => {
+    const held = await heldPublicKeyHex(ctx);
+    if (held == null) return { records: [], guardian: null };
+    let e = evidence.get(held);
+    if (e == null) {
+      e = localIdentityEvidence(ctx, dir, held);
+      evidence.set(held, e);
+    }
+    return e;
+  };
   return {
     motebitId: ctx.motebitId,
     deviceId: ctx.deviceId,
