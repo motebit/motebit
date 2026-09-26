@@ -109,6 +109,11 @@ import { ASYNC_STORAGE_KEYS, KEYRING_KEYS } from "./storage-keys";
 import { SecureStoreAdapter } from "./adapters/secure-store";
 import { rotateMobileKey } from "./key-rotation";
 import {
+  createMobileMachineRoster,
+  rosterAfterRotationCommit,
+  type MobileMachineRoster,
+} from "./machine-roster";
+import {
   MobileGoalScheduler,
   type GoalCompleteEvent,
   type GoalApprovalEvent,
@@ -682,6 +687,8 @@ export class MobileApp {
     setIdentity: (motebitId, deviceId) => {
       this.motebitId = motebitId;
       this.deviceId = deviceId;
+      // The Machines section belonged to the previous identity (F4).
+      this.disposeMachineRoster();
     },
     setPublicKey: (pubKeyHex) => {
       this.publicKey = pubKeyHex;
@@ -1244,6 +1251,7 @@ export class MobileApp {
     this.runtime?.stop();
     this.renderer.dispose();
     this.stopSync();
+    this.disposeMachineRoster();
   }
 
   // === Rendering ===
@@ -1832,9 +1840,10 @@ export class MobileApp {
     // next action. A succession record is ALWAYS minted now — the old
     // "no identity file ⇒ raw keypair, no succession" branch produced a
     // rotation no relay could ever accept.
+    const motebitId = this.motebitId;
     return rotateMobileKey({
       keyring: this.keyring,
-      motebitId: this.motebitId,
+      motebitId,
       deviceId: this.deviceId,
       syncUrl: await this.getSyncUrl(),
       identityFile: {
@@ -1844,8 +1853,48 @@ export class MobileApp {
       onCommitted: (publicKeyHex) => {
         this.publicKey = publicKeyHex;
       },
+      // F7: the link joins the roster replica. No capture and no
+      // re-enrolment — a phone is never a host (S2).
+      afterCommit: ({ record }) => rosterAfterRotationCommit({ motebitId, record }),
       ...(reason !== undefined ? { reason } : {}),
     });
+  }
+
+  // === Machine roster (machine-roster-surfaces-v1 C-2b) ===
+
+  /** The Machines section; created on first use after bootstrap. */
+  private _machineRoster: MobileMachineRoster | null = null;
+  /** A restore wrote another identity's key: no roster until the app reloads. */
+  private _identityPendingReload = false;
+
+  /**
+   * The Machines section, one per identity: `null` before bootstrap and
+   * after a restore (until reload). A pairing that switched identity gets
+   * a fresh one (replicas are per motebit_id, F4).
+   */
+  machineRoster(): MobileMachineRoster | null {
+    const motebitId = this.motebitId;
+    const deviceId = this.deviceId;
+    if (this._identityPendingReload) return null;
+    if (motebitId === "" || motebitId === "mobile-local" || deviceId === "") return null;
+    const existing = this._machineRoster;
+    if (existing != null && existing.motebitId === motebitId && existing.deviceId === deviceId) {
+      return existing;
+    }
+    existing?.dispose();
+    this._machineRoster = createMobileMachineRoster({
+      motebitId,
+      deviceId,
+      loadPrivateKeyHex: () => this.keyring.get("device_private_key"),
+      syncUrl: () => this.getSyncUrl(),
+      loadIdentityFile: () => AsyncStorage.getItem(IDENTITY_FILE_KEY),
+    });
+    return this._machineRoster;
+  }
+
+  private disposeMachineRoster(): void {
+    this._machineRoster?.dispose();
+    this._machineRoster = null;
   }
 
   // === Governance ===
@@ -2265,8 +2314,11 @@ export class MobileApp {
     this.sync.onSyncStatus(callback);
   }
 
-  startSync(syncUrl?: string): Promise<void> {
-    return this.sync.startSync(syncUrl);
+  async startSync(syncUrl?: string): Promise<void> {
+    await this.sync.startSync(syncUrl);
+    // S4 — the roster is read (and presented, when due) whenever this
+    // phone connects.
+    if (this.sync.isSyncConnected) void this.machineRoster()?.section.refresh();
   }
 
   stopSync(): void {
@@ -2499,6 +2551,11 @@ export class MobileApp {
       await this.keyring.set("device_public_key", request.metadata.publicKey);
     } catch {
       return { ok: false, reason: "config_write_failed" };
+    } finally {
+      // The key slot now holds the restored identity's key while this
+      // process still runs as the old one: no roster until the reload.
+      this._identityPendingReload = true;
+      this.disposeMachineRoster();
     }
     return { ok: true, motebitId: request.metadata.motebitId, needsReload: true };
   }

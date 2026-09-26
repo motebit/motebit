@@ -267,6 +267,13 @@ vi.mock("@motebit/sync-engine", () => ({
   }),
 }));
 
+// @motebit/identity-file — real, except the restore validator (it derives a
+// public key through @motebit/encryption, which this suite stubs).
+vi.mock("@motebit/identity-file", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@motebit/identity-file")>()),
+  validateRestoreRequest: vi.fn(() => Promise.resolve(null)),
+}));
+
 import { MobileApp, COLOR_PRESETS, APPROVAL_PRESET_CONFIGS } from "../mobile-app";
 import type { MobileSettings } from "../mobile-app";
 
@@ -820,5 +827,96 @@ describe("MobileApp.sendRemoteCommand", () => {
     const bare = new MobileApp();
     await expect(bare.sendRemoteCommand("halt")).rejects.toThrow(/No relay configured/);
     bare.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MobileApp.machineRoster — the C-2b wiring (machine-roster-surfaces-v1)
+// ---------------------------------------------------------------------------
+
+describe("MobileApp.machineRoster", () => {
+  const MID_A = "0190f1a2-0000-7000-8000-00000000000a";
+  const MID_B = "0190f1a2-0000-7000-8000-00000000000b";
+  type Internals = {
+    pairing: { deps: { setIdentity: (m: string, d: string) => void } };
+    sync: { startSync: (u?: string) => Promise<void>; isSyncConnected: boolean };
+  };
+  const internals = (app: MobileApp) => app as unknown as Internals;
+  /** A disposed roster refuses every act before any I/O. */
+  const disposed = async (r: NonNullable<ReturnType<MobileApp["machineRoster"]>>) => {
+    await r.section.retire("some-machine");
+    return /no longer holds/.test(r.section.getState().notice?.text ?? "");
+  };
+
+  beforeEach(() => {
+    secureStoreData.clear();
+    asyncStoreData.clear();
+  });
+
+  it("is null before bootstrap, and one per identity after", () => {
+    const app = new MobileApp();
+    expect(app.machineRoster()).toBeNull();
+    app.motebitId = MID_A;
+    app.deviceId = "phone-1";
+    const r = app.machineRoster();
+    expect(r).not.toBeNull();
+    expect(app.machineRoster()).toBe(r);
+    app.stop();
+  });
+
+  it("a pairing that switches identity disposes the previous roster; the next is the new identity's", async () => {
+    const app = new MobileApp();
+    app.motebitId = MID_A;
+    app.deviceId = "phone-1";
+    const before = app.machineRoster()!;
+    internals(app).pairing.deps.setIdentity(MID_B, "phone-2");
+    expect(await disposed(before)).toBe(true);
+    const after = app.machineRoster()!;
+    expect(after).not.toBe(before);
+    expect(after.motebitId).toBe(MID_B);
+    expect(after.deviceId).toBe("phone-2");
+    app.stop();
+  });
+
+  it("stop disposes the roster", async () => {
+    const app = new MobileApp();
+    app.motebitId = MID_A;
+    app.deviceId = "phone-1";
+    const r = app.machineRoster()!;
+    app.stop();
+    expect(await disposed(r)).toBe(true);
+  });
+
+  it("a restore disposes the roster and leaves none until the app reloads", async () => {
+    const app = new MobileApp();
+    app.motebitId = MID_A;
+    app.deviceId = "phone-1";
+    const r = app.machineRoster()!;
+    const out = await app.restoreIdentity({
+      privateKeyHex: "11".repeat(32),
+      metadata: { motebitId: MID_B, publicKey: "22".repeat(32), bornAt: "not-a-date" },
+      preserveMemories: false,
+    } as unknown as Parameters<MobileApp["restoreIdentity"]>[0]);
+    expect(out.ok).toBe(true);
+    expect(await disposed(r)).toBe(true);
+    expect(app.machineRoster()).toBeNull();
+    app.stop();
+  });
+
+  it("S4: a sync connect reads the roster", async () => {
+    const app = new MobileApp();
+    app.motebitId = MID_A;
+    app.deviceId = "phone-1";
+    const r = app.machineRoster()!;
+    const refresh = vi.spyOn(r.section, "refresh").mockResolvedValue(undefined);
+    const sync = internals(app).sync;
+    vi.spyOn(sync, "startSync").mockResolvedValue(undefined);
+    const connected = vi.spyOn(sync, "isSyncConnected", "get").mockReturnValue(false);
+    await app.startSync("https://relay.test");
+    expect(refresh).not.toHaveBeenCalled();
+    connected.mockReturnValue(true);
+    await app.startSync("https://relay.test");
+    expect(refresh).toHaveBeenCalledTimes(1);
+    app.stop();
   });
 });

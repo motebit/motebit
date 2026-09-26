@@ -169,6 +169,20 @@ These record where the build departs from, or adds to, the text above.
 - **Placement.** The Machines card is built by `ui/settings.ts` inside the Identity pane, after the identity card, rather than in `index.html`. The Rotate confirmation now states N3's cost.
 - **Presentation on connect.** The section is created, and takes the leader lock, on the first sync `connected` or the first Settings → Identity open, whichever comes first.
 
+### C-2b build notes
+
+These record where the mobile build departs from, or adds to, the text above and the web reference.
+
+- **Storage keys.** The replica is `@motebit/machine_roster/<motebit_id>` (one AsyncStorage key per motebit, R3), not the single `@motebit/machine_roster` slot S3 named. A corrupt value is copied to `@motebit/machine_roster/<motebit_id>.corrupt-<t>` before the name is freed or written; if that copy fails, nothing is written over the value. The presentation record is `@motebit/machine_roster_presentation/<motebit_id>`. The helpers live in `storage-keys.ts`.
+- **Two chains.** `save` runs on a per-motebit in-process promise chain (get → set aside if corrupt → `mergeReplicas` → set); a load that finds a corrupt value moves it aside on the same chain. `exclusive` is a second, separate chain: the kit saves while holding `exclusive`, so one chain would deadlock. Both are module-level, so the rotation commit's append and the Settings section serialize with each other.
+- **The stored motebit.md is a record source.** Unlike the browser, the phone keeps an identity file (`@motebit/identity_file`). `localSuccession` and `pinnedGuardian` read it only when its signature verifies and it names this motebit_id (§1A route 1 lists identity files among the sources). It is evidence for the resolver, never a classification on its own. So a rotated sovereign identity roots offline through the file's link even when the relay has lost its chain, and a guardian pinned in the file satisfies R6.
+- **Presenter.** One JS process, so there is no leader lock: the live roster is always the presenting surface. Cadence and Retry-After are the web's (10 minutes; `presentationHeld`; repairs wait too).
+- **Presentation on connect.** `MobileApp.startSync` refreshes the section once the sync controller reports connected; opening Settings → Identity refreshes too.
+- **Disposal.** The roster is keyed by (motebit_id, device_id) and disposed on a pairing that switches identity, on stop and on restore. A disposed roster presents nothing and refuses acts. After a restore there is **no** roster until the app reloads, because the key slot then holds the restored identity's key while the process still runs as the old one.
+- **Signer key bytes.** The signer holds the SecureStore key bytes for its lifetime (the kit signs with them across an acquisition and an act), and the kit's signer has no release hook, so they are not erased after use, as on web. They are never persisted or logged.
+- **Render.** `components/settings/MachinesSection.tsx`, mounted inside `IdentityTab` after the Sync row, lays out `machinesModel` (`src/machines-render-model.ts`), which holds every render rule and is unit-tested in node. The mobile workspace has no React Native render test harness.
+- **Rotation.** `rotateMobileKey` takes `afterCommit`, which runs after the key, the published key and the identity file are stored, and appends the link. It is wrapped so a roster failure never fails the rotation. The Rotate alert states N3's cost.
+
 ## 3. Open questions for design review round 2
 
 1. Is `classifyHeldKey` sound on every surface, and is `unconfirmed` reached in any routine state where the surface does hold the identity key, so that counts stay suppressed for good?

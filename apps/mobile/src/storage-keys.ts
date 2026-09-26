@@ -80,6 +80,29 @@ export const ASYNC_STORAGE_KEYS = {
   legacyRelayUrl: "@motebit/proxy_url",
 } as const;
 
+// === Machine roster (AsyncStorage, one key per motebit) ===
+//
+// docs/proposals/machine-roster-surfaces-v1.md §1A F4 / §1B R3: the replica
+// is kept under ONE key per motebit_id, so a pairing or restore to another
+// identity neither inherits nor destroys the previous identity's replica,
+// and one corrupt value cannot take every replica with it. A corrupt value
+// is copied to `<key>.corrupt-<t>` before anything is written over it.
+
+/** The machine-roster replica of one motebit (plain JSON; no key material). */
+export function machineRosterKey(motebitId: string): string {
+  return `@motebit/machine_roster/${motebitId}`;
+}
+
+/** Where a corrupt replica value is kept aside, byte-for-byte, at time `at`. */
+export function machineRosterAsideKey(motebitId: string, at: number): string {
+  return `${machineRosterKey(motebitId)}.corrupt-${at}`;
+}
+
+/** The last presentation the relay fully took, and any Retry-After (F8). */
+export function machineRosterPresentationKey(motebitId: string): string {
+  return `@motebit/machine_roster_presentation/${motebitId}`;
+}
+
 // === Keyring (cross-device identity via expo keyring adapter) ===
 
 export const KEYRING_KEYS = {
