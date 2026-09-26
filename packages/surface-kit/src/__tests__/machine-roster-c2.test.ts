@@ -1,7 +1,7 @@
 /**
  * Machine roster C-2 kit additions — `docs/proposals/machine-roster-surfaces-v1.md`
- * §1A (F1, F2, F5b, F6, F7, F8, F9) and §1B (B1, R1, R2): the held-key
- * classification, the custody flag, the gate on every act, the non-host
+ * §1A (F1, F2, F5b, F6, F7, F8, F9) and §1B (R1, R2; B1 reversed by #797):
+ * the held-key classification, the gate on every act, the non-host
  * enrol rules, omission repair only on the presenting surface, Retry-After,
  * and the shared Settings section state holder.
  */
@@ -22,13 +22,8 @@ import {
 import {
   classifyHeldKey,
   classifyResolved,
-  custodyAfterRotation,
-  custodyFlagFor,
   heldKeyText,
-  parseCustodyFlag,
   rotationLinkReplica,
-  type CustodyFlag,
-  type HeldKeyClass,
 } from "../machine-roster-held-key.js";
 import {
   createMachineRosterSection,
@@ -45,16 +40,9 @@ import { buildRosterView, suppressionText } from "../machine-roster-view.js";
 import { emptyReplica } from "../machine-roster-replica.js";
 import { MachineRoster, ROSTER_CHUNK_SIZE } from "../machine-roster.js";
 
-const flagFor = (kp: KeyPair, motebitId = LEGACY_MID): CustodyFlag => ({
-  motebit_id: motebitId,
-  public_key: hex(kp),
-  set_at: NOW,
-  reason: "minted",
-});
-
 // ── §1A / §1B B1 — classifyHeldKey ──────────────────────────────────
 
-describe("classifyHeldKey — identity only on the four routes; device-key only on positive evidence", () => {
+describe("classifyHeldKey — identity only on the three routes; device-key only on positive evidence", () => {
   it("route 1: a sovereign id whose chain roots at its genesis key is identity (rooted), offline of any relay word", async () => {
     const g = await generateKeypair();
     const mid = await deriveSovereignMotebitId(hex(g));
@@ -107,24 +95,37 @@ describe("classifyHeldKey — identity only on the four routes; device-key only 
     expect(heldKeyText(acq.heldKey!)).toBe("identity key per the relay");
   });
 
-  it("route 4 (B1): a legacy id with no relay key is identity only when the custody flag names the HELD key", async () => {
+  it("#797: a legacy id whose relay names no key is unconfirmed even when the held key IS the identity key", async () => {
     const a = await generateKeypair();
-    const other = await generateKeypair();
-    const cases: Array<[CustodyFlag | null, HeldKeyClass]> = [
-      [null, { kind: "unconfirmed", why: "no-evidence" }],
-      [flagFor(a), { kind: "identity", basis: "custody-record" }],
-      [flagFor(other), { kind: "unconfirmed", why: "no-evidence" }],
-      [
-        flagFor(a, "0190f1a2-0000-7000-8000-00000000ffff"),
-        { kind: "unconfirmed", why: "no-evidence" },
-      ],
-    ];
-    for (const [flag, want] of cases) {
-      const acq = await acquiredOf(c2Machine(new FakeRelay(), a, { flag }));
-      expect(acq.heldKey).toEqual(want);
-    }
-    const custody = await acquiredOf(c2Machine(new FakeRelay(), a, { flag: flagFor(a) }));
-    expect(heldKeyText(custody.heldKey!)).toBe("identity key per this device's custody record");
+    const relay = new FakeRelay(); // current_public_key: null
+    await relay.hold(await enrol(a, "dev-host"));
+    const acq = await acquiredOf(c2Machine(relay, a));
+    expect(acq.heldKey).toEqual({ kind: "unconfirmed", why: "legacy-unproven" });
+    expect(heldKeyText(acq.heldKey!)).toBe(
+      "no proven key for this legacy identity — counts need the CLI or a sovereign identity; nothing can be retired or enrolled from here",
+    );
+  });
+
+  it("#797 reviewer probe: a browser paired from a device-only approver (2 identity-key enrolments, relay hint null) is never identity — no count, no Enroll", async () => {
+    const k = await generateKeypair(); // the identity key
+    const d = await generateKeypair(); // the approver's device-only key, transferred
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(k, "host-1"), await enrol(k, "host-2"));
+    relay.rows = [{ device_id: "host-3", bound_under: hex(k), last_seen_at: NOW, sockets_open: 1 }];
+    const m = c2Machine(relay, d);
+    const acq = await acquiredOf(m);
+    expect(acq.heldKey?.kind).not.toBe("identity");
+    const view = buildRosterView(acq, NOW);
+    // Never "0 machines" while the identity has 2.
+    expect(view.kind === "roster" && view.claim).toBeNull();
+    const section = createMachineRosterSection(m.roster, { deviceId: "dev-self" });
+    await section.refresh();
+    const s = section.getState();
+    expect(s.heldKey?.kind).not.toBe("identity");
+    expect(s.lineActions.some((x) => x.enroll || x.retire)).toBe(false);
+    expect((await m.roster.enroll("host-3", { force: true })).kind).toBe("held-key-not-identity");
+    expect(relay.enr.size).toBe(2);
+    expect(relay.posts).toHaveLength(0);
   });
 
   it("unconfirmed suppresses every count with `held_key_unconfirmed`, and never says 'linked without the identity key'", async () => {
@@ -141,12 +142,12 @@ describe("classifyHeldKey — identity only on the four routes; device-key only 
     expect(suppressionText("held_key_unconfirmed")).toMatch(/cannot confirm/);
   });
 
-  it("device-key: the relay names ANOTHER key, nothing verified touches the held key — and the custody flag cannot override it", async () => {
+  it("device-key: the relay names ANOTHER key and nothing verified touches the held key", async () => {
     const identity = await generateKeypair();
     const device = await generateKeypair();
     const relay = new FakeRelay();
     relay.current = hex(identity);
-    const acq = await acquiredOf(c2Machine(relay, device, { flag: flagFor(device) }));
+    const acq = await acquiredOf(c2Machine(relay, device));
     expect(acq.heldKey).toEqual({ kind: "device-key" });
     expect(heldKeyText(acq.heldKey!)).toMatch(/linked without the identity key/);
   });
@@ -171,44 +172,52 @@ describe("classifyHeldKey — identity only on the four routes; device-key only 
     relay.chain = [await rotate(x, held)];
     relay.current = hex(third);
     const acq = await acquiredOf(c2Machine(relay, held));
-    expect(acq.heldKey).toEqual({ kind: "unconfirmed", why: "no-evidence" });
+    expect(acq.heldKey).toEqual({ kind: "unconfirmed", why: "legacy-unproven" });
   });
 
-  it("routes 3 and 4 are LEGACY-only: an unrooted sovereign id stays unconfirmed whatever the relay or the flag says", async () => {
+  it("a record held ONLY in this device's replica still counts as touching (it reaches the resolver as a link)", async () => {
+    const x = await generateKeypair();
+    const held = await generateKeypair();
+    const third = await generateKeypair();
+    const relay = new FakeRelay(); // serves no chain at all (a relay DB loss)
+    relay.current = hex(third);
+    const m = c2Machine(relay, held);
+    await m.cache.save(rotationLinkReplica(LEGACY_MID, await rotate(x, held)));
+    const acq = await acquiredOf(m);
+    expect(acq.chain.links).toHaveLength(1);
+    expect(acq.heldKey).toEqual({ kind: "unconfirmed", why: "legacy-unproven" });
+  });
+
+  it("route 3 is LEGACY-only: an unrooted sovereign id stays unconfirmed whatever the relay says", async () => {
     const g = await generateKeypair();
     const b = await generateKeypair();
     const mid = await deriveSovereignMotebitId(hex(g));
     const relay = new FakeRelay(mid); // the relay lost the g → b link
     relay.current = hex(b);
-    const acq = await acquiredOf(c2Machine(relay, b, { flag: flagFor(b, mid) }));
-    expect(acq.heldKey).toEqual({ kind: "unconfirmed", why: "no-evidence" });
+    const acq = await acquiredOf(c2Machine(relay, b));
+    expect(acq.heldKey).toEqual({ kind: "unconfirmed", why: "unrooted" });
+    expect(heldKeyText(acq.heldKey!)).toMatch(/genesis key/);
   });
 
-  it("property: the custody flag never produces identity for a sovereign id, nor against device-key evidence", async () => {
+  it("property: identity off a rooted chain only when a LEGACY relay names the held key; never against device-key evidence", async () => {
     const keys = await Promise.all([0, 1, 2].map(() => generateKeypair()));
     const [held, other, third] = keys as [KeyPair, KeyPair, KeyPair];
-    const g = await generateKeypair();
-    const sovereign = await deriveSovereignMotebitId(hex(g));
     const base = await acquiredOf(c2Machine(new FakeRelay(), held));
     for (const sovereign_id of [false, true]) {
       for (const hint of [null, hex(held), hex(other), hex(third)]) {
-        for (const flag of [null, flagFor(held), flagFor(held, sovereign), flagFor(other)]) {
-          const c = classifyResolved({
-            motebitId: sovereign_id ? sovereign : LEGACY_MID,
-            held: hex(held),
-            chain: { ...base.chain, sovereign_id },
-            hint,
-            succession: [],
-            custodyFlag: flag,
-          });
-          const deviceEvidence = hint != null && hint !== hex(held);
-          if (deviceEvidence) expect(c).toEqual({ kind: "device-key" });
-          if (sovereign_id) expect(c.kind).not.toBe("identity");
-          if (c.kind === "identity" && c.basis === "custody-record") {
-            expect(sovereign_id || deviceEvidence).toBe(false);
-            expect(flag?.public_key).toBe(hex(held));
-          }
+        const c = classifyResolved({
+          held: hex(held),
+          chain: { ...base.chain, sovereign_id },
+          hint,
+        });
+        const deviceEvidence = hint != null && hint !== hex(held);
+        if (deviceEvidence) expect(c).toEqual({ kind: "device-key" });
+        if (c.kind === "identity") {
+          expect(c.basis).toBe("relay");
+          expect(sovereign_id).toBe(false);
+          expect(hint).toBe(hex(held));
         }
+        if (hint == null) expect(c.kind).toBe("unconfirmed");
       }
     }
   });
@@ -248,12 +257,13 @@ describe("R1 — a gated roster refuses retire, enroll, present, repair and the 
 
   it("an omission is not repaired under an unconfirmed key (the repair is a presentation)", async () => {
     const { a, relay, e } = await unconfirmedHost();
-    const m = c2Machine(relay, a, { flag: flagFor(a) });
-    await m.roster.retire("dev-host"); // identity via the flag: held retirement
+    const m = c2Machine(relay, a);
+    relay.current = hex(a); // identity per the relay: a held retirement
+    await m.roster.retire("dev-host");
     const [rid] = [...relay.ret.keys()];
     relay.omit.add(rid!); // the relay now omits it
     relay.posts = [];
-    m.flag.value = null; // same device, custody no longer confirmed
+    relay.current = null; // the relay no longer names a key: unconfirmed
     const acq = await acquiredOf(m);
     expect(acq.omitted).toEqual([rid]);
     expect(acq.repair).toBeNull();
@@ -279,7 +289,7 @@ describe("R1 — a gated roster refuses retire, enroll, present, repair and the 
 
   it("with the identity key, the same roster retires and presents", async () => {
     const { a, relay, m } = await unconfirmedHost();
-    m.flag.value = flagFor(a);
+    relay.current = hex(a);
     const r = await m.roster.retire("dev-host");
     expect(r.kind).toBe("retired");
     expect(relay.ret.size).toBe(1);
@@ -447,57 +457,9 @@ describe("F8 — Retry-After", () => {
   });
 });
 
-// ── B1 custody flag helpers, F7 ──────────────────────────────────────
+// ── F7 and the class words ───────────────────────────────────────────
 
-describe("custody flag (B1) and the rotation link (F7)", () => {
-  it("custodyFlagFor derives the public key from the private key", async () => {
-    const a = await generateKeypair();
-    const f = await custodyFlagFor({
-      motebitId: LEGACY_MID,
-      privateKey: a.privateKey,
-      reason: "key-transfer",
-      now: NOW,
-    });
-    expect(f).toEqual({
-      motebit_id: LEGACY_MID,
-      public_key: hex(a),
-      set_at: NOW,
-      reason: "key-transfer",
-    });
-    expect(parseCustodyFlag(f)).toEqual(f);
-  });
-
-  it("parseCustodyFlag refuses anything else", () => {
-    const good = { motebit_id: "m", public_key: "a".repeat(64), set_at: 1, reason: "minted" };
-    expect(parseCustodyFlag(good)).toEqual(good);
-    for (const bad of [
-      null,
-      [],
-      "x",
-      { ...good, motebit_id: "" },
-      { ...good, public_key: "zz" },
-      { ...good, set_at: "1" },
-      { ...good, reason: "rotation" },
-    ]) {
-      expect(parseCustodyFlag(bad)).toBeNull();
-    }
-  });
-
-  it("a rotation MOVES a flag naming the old key, idempotently; it never creates or redirects one", async () => {
-    const a = await generateKeypair();
-    const b = await generateKeypair();
-    const c = await generateKeypair();
-    const record = await rotate(a, b);
-    const at = { motebitId: LEGACY_MID, record, newPublicKeyHex: hex(b), now: NOW + 1 };
-    const moved = custodyAfterRotation(flagFor(a), at);
-    expect(moved).toEqual({ ...flagFor(a), public_key: hex(b), set_at: NOW + 1 });
-    expect(custodyAfterRotation(moved, at)).toBeNull(); // already moved
-    expect(custodyAfterRotation(null, at)).toBeNull(); // never created
-    expect(custodyAfterRotation(flagFor(c), at)).toBeNull(); // names neither key
-    expect(custodyAfterRotation(flagFor(a, "other-motebit"), at)).toBeNull();
-    expect(custodyAfterRotation(flagFor(a), { ...at, newPublicKeyHex: hex(c) })).toBeNull();
-  });
-
+describe("the rotation link (F7) and the class words", () => {
   it("rotationLinkReplica is the link alone, for the surface's merge-save", async () => {
     const a = await generateKeypair();
     const b = await generateKeypair();
@@ -513,9 +475,36 @@ describe("custody flag (B1) and the rotation link (F7)", () => {
     expect(heldKeyText({ kind: "identity", basis: "on-chain" })).toBeNull();
     expect(heldKeyText({ kind: "unconfirmed", why: "no-key" })).toBeNull();
     expect(heldKeyText({ kind: "unconfirmed", why: "malformed" })).toMatch(/malformed/);
-    expect(heldKeyText({ kind: "unconfirmed", why: "no-evidence" })).toMatch(
-      /re-pair it with a key transfer/,
+    expect(heldKeyText({ kind: "identity", basis: "relay" })).toBe("identity key per the relay");
+    expect(heldKeyText({ kind: "unconfirmed", why: "legacy-unproven" })).toMatch(
+      /counts need the CLI or a sovereign identity/,
     );
+    expect(heldKeyText({ kind: "unconfirmed", why: "unrooted" })).toMatch(/genesis key/);
+  });
+});
+
+describe("F8 — presentationHeld: an act during a pending Retry-After is kept and presented later", () => {
+  it("a retirement signed while held is saved, not sent, and reported not taken; it goes out once released", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    relay.current = hex(a);
+    await relay.hold(await enrol(a, "dev-host"));
+    let held = true;
+    const m = c2Machine(relay, a, { options: { presentationHeld: () => held } });
+    const out = await m.roster.retire("dev-host");
+    expect(out.kind).toBe("retired");
+    if (out.kind === "retired") {
+      expect(out.presented.taken).toBe(0);
+      expect(out.presented.notTaken.map((x) => x.reason)).toContain("waiting (Retry-After)");
+      expect(retireNotice(out).text).toMatch(
+        /Not yet taken by the relay; kept here and presented again/,
+      );
+    }
+    expect(relay.posts).toHaveLength(0);
+    expect(m.cache.value!.retirements).toHaveLength(1);
+    held = false;
+    await m.roster.present(await acquiredOf(m));
+    expect(relay.ret.size).toBe(1);
   });
 });
 
@@ -670,10 +659,10 @@ describe("S6 — createMachineRosterSection", () => {
     const section = createMachineRosterSection(m.roster, { deviceId: "dev-self" });
     await section.refresh();
     const s = section.getState();
-    expect(s.heldKey).toEqual({ kind: "unconfirmed", why: "no-evidence" });
+    expect(s.heldKey).toEqual({ kind: "unconfirmed", why: "legacy-unproven" });
     expect(s.rosterHidden).toBe(false); // B1's stated cost: lines shown, no count
     expect(s.lineActions.every((x) => !x.retire && !x.enroll)).toBe(true);
-    expect(s.heldKeyText).toMatch(/cannot confirm/);
+    expect(s.heldKeyText).toMatch(/no proven key for this legacy identity/);
     expect(present).not.toHaveBeenCalled();
   });
 
@@ -861,12 +850,13 @@ describe("S6 — createMachineRosterSection", () => {
     expect(s2.getState().lineActions).toEqual([]);
   });
 
-  it("an ungated roster handed to the section is treated as unconfirmed (fail-closed)", async () => {
+  it("an ungated roster handed to the section is classified all the same, and offers nothing to a device key", async () => {
     const { relay } = await world();
     const m = c2Machine(relay, (await generateKeypair()) as KeyPair, { gated: false });
     const section = createMachineRosterSection(m.roster, { deviceId: "dev-self" });
     await section.refresh();
-    expect(section.getState().heldKey).toEqual({ kind: "unconfirmed", why: "no-evidence" });
+    expect(section.getState().heldKey).toEqual({ kind: "device-key" });
+    expect(section.getState().lineActions.some((x) => x.retire || x.enroll)).toBe(false);
     void MachineRoster;
   });
 });

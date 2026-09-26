@@ -6,8 +6,9 @@
  * A browser tab is never a host (S2): it reads, keeps, retires and enrols
  * OTHER machines, and never enrols itself. So there is no enrol-on-announce,
  * no rotation capture and no rotation re-enrolment here — the rotation
- * commit only appends its link to the replica (F7) and moves the custody
- * flag (B1).
+ * commit only appends its link to the replica (F7). There is no local
+ * custody record (#797): only a rooted chain, a refusal naming the held
+ * key, or a legacy relay naming it make this browser's key the identity's.
  *
  * Ports:
  *   - `signer()` — the key in the encrypted keystore; the roster routes'
@@ -24,7 +25,6 @@ import {
   MachineRoster,
   createMachineRosterSection,
   createRosterSigner,
-  custodyFlagFor,
   nextPresentationRecord,
   presentationDue,
   replicaDigest,
@@ -37,12 +37,9 @@ import {
 import { hexToBytes, mintAudienceToken } from "@motebit/encryption";
 import type { KeySuccessionRecord } from "@motebit/sdk";
 import {
-  loadCustodyFlag,
   loadPresentationRecord,
   loadReplica,
-  moveCustodyFlag,
   openRosterDb,
-  putCustodyFlag,
   putPresentationRecord,
   saveReplica,
 } from "./machine-roster-store.js";
@@ -237,7 +234,9 @@ export function createWebMachineRoster(deps: WebRosterDeps): WebMachineRoster {
     // R2 — only the presenting tab repairs an omission, and not while the
     // relay has asked it to wait.
     repairOmissions: () => presenter && now() >= retryUntil,
-    heldKey: { custodyFlag: async () => loadCustodyFlag(await db(), deps.motebitId) },
+    // F8 — an act's own presentation waits out a pending Retry-After too:
+    // its entry is kept in the replica and presented again later.
+    presentationHeld: () => now() < retryUntil,
   });
   const section = createMachineRosterSection(roster, {
     deviceId: deps.deviceId,
@@ -279,60 +278,22 @@ export function createWebMachineRoster(deps: WebRosterDeps): WebMachineRoster {
 }
 
 /**
- * B1 — record custody after one of the two custody paths placed `privateKeyHex`
- * in the key slot: this browser minting the identity (first launch), or a
- * Link Device key transfer completing. Never called for a pairing without a
- * transfer, a restore, or a rotation (a rotation MOVES the flag instead).
- * Best-effort: a failed write leaves the key unconfirmed (fail-closed).
- */
-export async function recordCustody(opts: {
-  motebitId: string;
-  privateKey: Uint8Array;
-  reason: "minted" | "key-transfer";
-  db?: () => Promise<IDBDatabase>;
-  now?: () => number;
-}): Promise<void> {
-  try {
-    const flag = await custodyFlagFor({
-      motebitId: opts.motebitId,
-      privateKey: opts.privateKey,
-      reason: opts.reason,
-      now: (opts.now ?? Date.now)(),
-    });
-    await putCustodyFlag(await (opts.db ?? defaultDb)(), flag);
-  } catch {
-    // Unconfirmed, never wrong.
-  }
-}
-
-/**
- * The rotation commit's roster step (F7, B1): append the committed link to
- * the replica, and move a custody flag that names the old key. Idempotent
- * (a commit re-run finishes it); no capture, no mint (S2). Best-effort: the
- * key is already committed, so a failure here must not fail the rotation —
- * a flag left on the old key only leaves this browser unconfirmed.
+ * The rotation commit's roster step (F7): append the committed link to the
+ * replica. Idempotent (a commit re-run finishes it); no capture, no mint
+ * (S2). Best-effort: the key is already committed, so a failure here — an
+ * IndexedDB that will not open, which `openRosterDb` bounds — must not fail
+ * the rotation; the relay's served chain still carries the link.
  */
 export async function rosterAfterRotationCommit(opts: {
   motebitId: string;
   record: KeySuccessionRecord;
-  newPublicKeyHex: string;
   db?: () => Promise<IDBDatabase>;
-  now?: () => number;
 }): Promise<void> {
-  const db = opts.db ?? defaultDb;
-  // Two independent steps: one failing never skips the other.
   try {
-    await saveReplica(await db(), rotationLinkReplica(opts.motebitId, opts.record));
-  } catch {
-    // The relay's served chain still carries the link; see above.
-  }
-  try {
-    await moveCustodyFlag(await db(), {
-      motebitId: opts.motebitId,
-      record: opts.record,
-      newPublicKeyHex: opts.newPublicKeyHex,
-      now: (opts.now ?? Date.now)(),
-    });
+    await saveReplica(
+      await (opts.db ?? defaultDb)(),
+      rotationLinkReplica(opts.motebitId, opts.record),
+    );
   } catch {
     // See above.
   }

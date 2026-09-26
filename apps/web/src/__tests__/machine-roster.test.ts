@@ -1,7 +1,7 @@
 /**
  * The browser's machine roster — `docs/proposals/machine-roster-surfaces-v1.md`
  * C-2a: the IndexedDB replica (one transaction per merge-save, per
- * motebit_id, corrupt values kept aside), the custody flag, the ports
+ * motebit_id, corrupt values kept aside), the bounded open, the ports
  * (device token under the held key, Retry-After), the cross-tab locks and
  * the presentation leader, and the rotation commit's roster step.
  *
@@ -22,16 +22,13 @@ import {
   verifySignedToken,
   type KeyPair,
 } from "@motebit/encryption";
-import { emptyReplica, type CustodyFlag, type MachineRosterReplica } from "@motebit/surface-kit";
+import { emptyReplica, type MachineRosterReplica } from "@motebit/surface-kit";
 import type { HostEnrollment, HostRetirement, KeySuccessionRecord } from "@motebit/sdk";
 import {
   listAside,
-  loadCustodyFlag,
   loadPresentationRecord,
   loadReplica,
-  moveCustodyFlag,
   openRosterDb,
-  putCustodyFlag,
   putPresentationRecord,
   saveReplica,
 } from "../machine-roster-store.js";
@@ -39,7 +36,6 @@ import {
   NO_LOCKS,
   PRESENT_LOCK,
   createWebMachineRoster,
-  recordCustody,
   retryAfterMs,
   rosterAfterRotationCommit,
   webRosterPorts,
@@ -165,15 +161,6 @@ function tab(
   });
 }
 
-const flagOf = (kp: KeyPair, motebitId = MID): CustodyFlag => ({
-  motebit_id: motebitId,
-  public_key: hex(kp),
-  set_at: NOW,
-  reason: "minted",
-});
-
-// ── The replica store (F3, F4, R3) ───────────────────────────────────
-
 describe("IndexedDB replica — one transaction per merge-save", () => {
   it("F3: two tabs saving at once never lose a retirement", async () => {
     const a = await generateKeypair();
@@ -252,100 +239,59 @@ async function rawPut(db: IDBDatabase, key: string, value: unknown, store = "rep
   });
 }
 
-// ── B1 — the custody flag ────────────────────────────────────────────
+// ── The bounded open, and the rotation commit's link (F7) ───────────
 
-describe("B1 — the custody flag store", () => {
-  it("recordCustody derives the key from the private key, per motebit", async () => {
-    const a = await generateKeypair();
-    const db = freshDb();
-    await recordCustody({
-      motebitId: MID,
-      privateKey: a.privateKey,
-      reason: "key-transfer",
-      db,
-      now: () => NOW,
-    });
-    expect(await loadCustodyFlag(await db(), MID)).toEqual({
-      motebit_id: MID,
-      public_key: hex(a),
-      set_at: NOW,
-      reason: "key-transfer",
-    });
-    expect(await loadCustodyFlag(await db(), OTHER_MID)).toBeNull();
+describe("openRosterDb never hangs; the rotation commit appends its link", () => {
+  it("a blocked open rejects at once, and an open that never settles times out", async () => {
+    const blocked = {
+      open: () => {
+        const req = {} as IDBOpenDBRequest;
+        setTimeout(() => (req.onblocked as (() => void) | null)?.(), 0);
+        return req;
+      },
+    } as unknown as IDBFactory;
+    await expect(openRosterDb(blocked, 60_000)).rejects.toThrow(/blocked by another tab/);
+    const wedged = { open: () => ({}) as IDBOpenDBRequest } as unknown as IDBFactory;
+    await expect(openRosterDb(wedged, 10)).rejects.toThrow(/did not open in time/);
   });
 
-  it("an unreadable or mis-keyed flag is no flag", async () => {
-    const a = await generateKeypair();
-    const db = await freshDb()();
-    await rawPut(db, MID, { nope: true }, "custody");
-    expect(await loadCustodyFlag(db, MID)).toBeNull();
-    await rawPut(db, MID, flagOf(a, OTHER_MID), "custody");
-    expect(await loadCustodyFlag(db, MID)).toBeNull();
+  it("a late success after a timeout closes the connection nobody holds", async () => {
+    let req!: { onsuccess: (() => void) | null; result: IDBDatabase };
+    const closed: boolean[] = [];
+    const late = {
+      open: () => {
+        req = {
+          onsuccess: null,
+          result: { close: () => closed.push(true) } as unknown as IDBDatabase,
+        };
+        return req;
+      },
+    } as unknown as IDBFactory;
+    await expect(openRosterDb(late, 5)).rejects.toThrow(/in time/);
+    req.onsuccess?.();
+    expect(closed).toEqual([true]);
   });
 
-  it("recordCustody never throws: a failed write leaves the key unconfirmed", async () => {
-    const a = await generateKeypair();
-    await expect(
-      recordCustody({
-        motebitId: MID,
-        privateKey: a.privateKey,
-        reason: "minted",
-        db: () => Promise.reject(new Error("no idb")),
-      }),
-    ).resolves.toBeUndefined();
-  });
-
-  it("the rotation commit moves the flag and appends the link (F7); a flag naming neither key is untouched", async () => {
+  it("the rotation commit's roster step appends the link, idempotently, and never throws", async () => {
     const a = await generateKeypair();
     const b = await generateKeypair();
     const record = await signKeySuccession(a.privateKey, b.privateKey, b.publicKey, a.publicKey);
     const db = freshDb();
-    await putCustodyFlag(await db(), flagOf(a));
-    await rosterAfterRotationCommit({
-      motebitId: MID,
-      record,
-      newPublicKeyHex: hex(b),
-      db,
-      now: () => NOW + 5,
-    });
-    expect(await loadCustodyFlag(await db(), MID)).toEqual({
-      ...flagOf(a),
-      public_key: hex(b),
-      set_at: NOW + 5,
-    });
+    await rosterAfterRotationCommit({ motebitId: MID, record, db });
+    await rosterAfterRotationCommit({ motebitId: MID, record, db });
     const rep = await loadReplica(await db(), MID);
     expect(rep.kind === "value" && rep.replica.succession).toEqual([record]);
-    // Idempotent: a re-run (an interrupted commit finished later) changes nothing.
-    await rosterAfterRotationCommit({
-      motebitId: MID,
-      record,
-      newPublicKeyHex: hex(b),
-      db,
-      now: () => NOW + 9,
-    });
-    expect((await loadCustodyFlag(await db(), MID))?.set_at).toBe(NOW + 5);
-
-    const c = await generateKeypair();
-    const db2 = freshDb();
-    await putCustodyFlag(await db2(), flagOf(c));
-    await moveCustodyFlag(await db2(), {
-      motebitId: MID,
-      record,
-      newPublicKeyHex: hex(b),
-      now: NOW,
-    });
-    expect(await loadCustodyFlag(await db2(), MID)).toEqual(flagOf(c));
-    // No flag: none is created.
-    const db3 = freshDb();
-    await rosterAfterRotationCommit({ motebitId: MID, record, newPublicKeyHex: hex(b), db: db3 });
-    expect(await loadCustodyFlag(await db3(), MID)).toBeNull();
     await expect(
       rosterAfterRotationCommit({
         motebitId: MID,
         record,
-        newPublicKeyHex: hex(b),
         db: () => Promise.reject(new Error("x")),
       }),
+    ).resolves.toBeUndefined();
+    // A wedged database is bounded: the rotation proceeds.
+    const wedged = { open: () => ({}) as IDBOpenDBRequest } as unknown as IDBFactory;
+    await expect(
+      rosterAfterRotationCommit({ motebitId: MID, record, db: () => openRosterDb(wedged, 10) }),
     ).resolves.toBeUndefined();
   });
 
@@ -371,7 +317,6 @@ describe("B1 — the custody flag store", () => {
     } as unknown as EncryptedKeyStore;
     localStorage.setItem("motebit:device_public_key", hex(a));
     const db = freshDb();
-    await putCustodyFlag(await db(), flagOf(a));
     const seen: Array<{ keysStored: number; record: KeySuccessionRecord }> = [];
     const out = await rotateWebKey({
       keyStore,
@@ -379,21 +324,17 @@ describe("B1 — the custody flag store", () => {
       deviceId: "tab-device",
       syncUrl: null,
       onCommitted: () => undefined,
-      afterCommit: async ({ publicKeyHex, record }) => {
+      afterCommit: async ({ record }) => {
         seen.push({ keysStored: stored.length, record });
-        await rosterAfterRotationCommit({
-          motebitId: MID,
-          record,
-          newPublicKeyHex: publicKeyHex,
-          db,
-        });
+        await rosterAfterRotationCommit({ motebitId: MID, record, db });
       },
     });
     expect(seen).toHaveLength(1);
     expect(seen[0]!.keysStored).toBe(2); // the new key was stored first
     expect(seen[0]!.record.old_public_key).toBe(hex(a));
     expect(seen[0]!.record.new_public_key).toBe(out.newPublicKey);
-    expect((await loadCustodyFlag(await db(), MID))?.public_key).toBe(out.newPublicKey);
+    const rep = await loadReplica(await db(), MID);
+    expect(rep.kind === "value" && rep.replica.succession).toEqual([seen[0]!.record]);
   });
 });
 
@@ -578,15 +519,15 @@ describe("createWebMachineRoster", () => {
     expect(relay.posts).toBe(0);
   });
 
-  it("a legacy identity with the custody flag retires end to end; the retirement lands in IndexedDB and at the relay", async () => {
+  it("an identity key the relay names (legacy route 3) retires end to end; the retirement lands in IndexedDB and at the relay", async () => {
     const a = await generateKeypair();
     const relay = new FetchRelay();
+    relay.current = hex(a);
     relay.enr.set("x", await enrol(a, "dev-host"));
     const db = freshDb();
-    await putCustodyFlag(await db(), flagOf(a));
     const t = tab(relay, a, db, new FakeLocks());
     await t.section.refresh();
-    expect(t.section.getState().heldKey).toEqual({ kind: "identity", basis: "custody-record" });
+    expect(t.section.getState().heldKey).toEqual({ kind: "identity", basis: "relay" });
     await t.section.retire("dev-host");
     expect(t.section.getState().notice?.tone).toBe("done");
     expect(relay.ret.size).toBe(1);
@@ -595,19 +536,39 @@ describe("createWebMachineRoster", () => {
     t.dispose();
   });
 
-  it("without the flag the same browser is unconfirmed: lines, no count, no actions", async () => {
+  it("#797: a legacy identity-key browser whose relay names no key is unconfirmed — lines, no count, actions hidden and refused", async () => {
     const a = await generateKeypair();
-    const relay = new FetchRelay();
+    const relay = new FetchRelay(); // current_public_key: null
     relay.enr.set("x", await enrol(a, "dev-host"));
     const t = tab(relay, a, freshDb(), new FakeLocks());
     await t.section.refresh();
     const s = t.section.getState();
-    expect(s.heldKey).toEqual({ kind: "unconfirmed", why: "no-evidence" });
+    expect(s.heldKey).toEqual({ kind: "unconfirmed", why: "legacy-unproven" });
+    expect(s.heldKeyText).toMatch(/counts need the CLI or a sovereign identity/);
     expect(s.view?.kind === "roster" && s.view.claim).toBeNull();
     expect(s.view?.kind === "roster" && s.view.lines).toHaveLength(1);
     expect(s.lineActions.every((x) => !x.retire && !x.enroll)).toBe(true);
     await t.section.retire("dev-host");
     expect(relay.ret.size).toBe(0);
+    t.dispose();
+  });
+
+  it("#797 probe: a browser holding an approver's device-only key (2 identity enrolments, hint null) never counts and never enrols", async () => {
+    const k = await generateKeypair();
+    const d = await generateKeypair();
+    const relay = new FetchRelay();
+    relay.enr.set("1", await enrol(k, "host-1"));
+    relay.enr.set("2", await enrol(k, "host-2"));
+    relay.rows = [{ device_id: "host-3", bound_under: hex(k), last_seen_at: NOW, sockets_open: 1 }];
+    const t = tab(relay, d, freshDb(), new FakeLocks());
+    await t.section.refresh();
+    const s = t.section.getState();
+    expect(s.heldKey?.kind).not.toBe("identity");
+    expect(s.view?.kind === "roster" && s.view.claim).toBeNull();
+    expect(s.lineActions.some((x) => x.enroll || x.retire)).toBe(false);
+    await t.section.enroll("host-3", { force: true });
+    expect(relay.enr.size).toBe(2);
+    expect(relay.posts).toBe(0);
     t.dispose();
   });
 
@@ -633,6 +594,33 @@ describe("createWebMachineRoster", () => {
     const before = relay.posts;
     await t.section.refresh();
     expect(relay.posts).toBe(before); // deferred by Retry-After
+    t.dispose();
+  });
+});
+
+describe("F8 — an act while the relay has asked to wait", () => {
+  it("is kept in IndexedDB and reported not taken; it is not sent until the wait is over", async () => {
+    const a = await generateKeypair();
+    const relay = new FetchRelay();
+    relay.current = hex(a);
+    relay.enr.set("x", await enrol(a, "dev-host"));
+    const db = freshDb();
+    await putPresentationRecord(await db(), MID, {
+      digest: null,
+      taken_at: 0,
+      retry_until: NOW + 60_000,
+    });
+    const t = tab(relay, a, db, new FakeLocks());
+    await Promise.resolve();
+    await t.section.refresh(); // learns the pending Retry-After
+    expect(relay.posts).toBe(0);
+    await t.section.retire("dev-host");
+    expect(relay.posts).toBe(0);
+    expect(t.section.getState().notice?.text).toMatch(
+      /Not yet taken by the relay; kept here and presented again/,
+    );
+    const rep = await loadReplica(await db(), MID);
+    expect(rep.kind === "value" && rep.replica.retirements).toHaveLength(1);
     t.dispose();
   });
 });

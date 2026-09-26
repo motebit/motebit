@@ -92,9 +92,9 @@ describe("renderMachines", () => {
     const root = renderMachines(
       state({
         view: roster({ claim: null, suppressed: ["held_key_unconfirmed"] }),
-        heldKey: { kind: "unconfirmed", why: "no-evidence" },
+        heldKey: { kind: "unconfirmed", why: "legacy-unproven" },
         heldKeyText:
-          "this device cannot confirm it holds the identity key, so no count is shown and nothing can be retired or enrolled from here — if it was set up before this check existed, re-pair it with a key transfer from a device that holds the identity key",
+          "no proven key for this legacy identity — counts need the CLI or a sovereign identity; nothing can be retired or enrolled from here",
         lineActions: [
           { retire: false, enroll: false },
           { retire: false, enroll: false },
@@ -106,7 +106,7 @@ describe("renderMachines", () => {
     expect(root.textContent).toContain(
       "No count: this device cannot confirm it holds the identity key.",
     );
-    expect(root.textContent).toContain("re-pair it with a key transfer");
+    expect(root.textContent).toContain("counts need the CLI or a sovereign identity");
     expect(root.textContent).not.toMatch(/linked without/);
     expect(buttons(root)).toEqual([]);
   });

@@ -1,13 +1,12 @@
 /**
  * The browser's machine-roster storage — `docs/proposals/machine-roster-surfaces-v1.md`
- * S3, §1A F3/F4, §1B B1/R3. Its own IndexedDB database, `motebit-roster`:
+ * S3, §1A F3/F4, §1B R3. Its own IndexedDB database, `motebit-roster`:
  *
  *   - `replicas`     — one replica per motebit_id (F4): a pairing or restore
  *                      to another identity never inherits, or destroys, the
  *                      previous identity's.
  *   - `aside`        — unreadable values, kept with their bytes (R3), never
  *                      overwritten.
- *   - `custody`      — the custody flag per motebit_id (B1).
  *   - `presentation` — the last presentation the relay fully took, and any
  *                      Retry-After (F8).
  *
@@ -18,37 +17,62 @@
  * Locks guard only the kit's `exclusive` (the mint decision).
  */
 import {
-  custodyAfterRotation,
   mergeReplicas,
-  parseCustodyFlag,
   parseReplica,
-  type CustodyFlag,
   type MachineRosterReplica,
   type PresentationRecord,
   type ReplicaRead,
 } from "@motebit/surface-kit";
-import type { KeySuccessionRecord } from "@motebit/sdk";
 
 export const ROSTER_DB_NAME = "motebit-roster";
 const REPLICAS = "replicas";
 const ASIDE = "aside";
-const CUSTODY = "custody";
 const PRESENTATION = "presentation";
 
-export function openRosterDb(factory: IDBFactory = indexedDB): Promise<IDBDatabase> {
+/** How long an open may wait (another tab blocking an upgrade, a wedged IDB) before it gives up. */
+export const ROSTER_DB_OPEN_TIMEOUT_MS = 5_000;
+
+/**
+ * Open the roster database. Never hangs: a `blocked` open (another tab
+ * holding an older version) or one that does not settle within the timeout
+ * rejects, and every caller proceeds without the roster — a rotation, a
+ * refresh or a pairing is never held hostage by it.
+ */
+export function openRosterDb(
+  factory: IDBFactory = indexedDB,
+  timeoutMs: number = ROSTER_DB_OPEN_TIMEOUT_MS,
+): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (err: Error | null, db?: IDBDatabase): void => {
+      if (settled) {
+        // Opened after we gave up: close it, nobody holds it.
+        db?.close();
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      if (err) reject(err);
+      else resolve(db!);
+    };
+    const timer = setTimeout(
+      () => finish(new Error("the roster database did not open in time")),
+      timeoutMs,
+    );
     const req = factory.open(ROSTER_DB_NAME, 1);
+    req.onblocked = () =>
+      finish(new Error("the roster database is blocked by another tab; the roster is skipped"));
     req.onupgradeneeded = () => {
       const db = req.result;
-      for (const name of [REPLICAS, CUSTODY, PRESENTATION]) {
+      for (const name of [REPLICAS, PRESENTATION]) {
         if (!db.objectStoreNames.contains(name)) db.createObjectStore(name);
       }
       if (!db.objectStoreNames.contains(ASIDE)) {
         db.createObjectStore(ASIDE, { autoIncrement: true });
       }
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error ?? new Error("the roster database could not be opened"));
+    req.onsuccess = () => finish(null, req.result);
+    req.onerror = () => finish(req.error ?? new Error("the roster database could not be opened"));
   });
 }
 
@@ -128,42 +152,6 @@ export async function listAside(db: IDBDatabase): Promise<AsideEntry[]> {
   const req = tx.objectStore(ASIDE).getAll();
   await done(tx);
   return req.result as AsideEntry[];
-}
-
-// ── The custody flag (B1) ────────────────────────────────────────────
-
-export async function loadCustodyFlag(
-  db: IDBDatabase,
-  motebitId: string,
-): Promise<CustodyFlag | null> {
-  const tx = db.transaction(CUSTODY, "readonly");
-  const req = tx.objectStore(CUSTODY).get(motebitId);
-  await done(tx);
-  // An unreadable flag is no flag: the key stays unconfirmed (fail-closed).
-  const flag = parseCustodyFlag(req.result);
-  return flag != null && flag.motebit_id === motebitId ? flag : null;
-}
-
-/** Write the flag — called ONLY by the two custody paths (mint, key transfer). */
-export async function putCustodyFlag(db: IDBDatabase, flag: CustodyFlag): Promise<void> {
-  const tx = db.transaction(CUSTODY, "readwrite");
-  tx.objectStore(CUSTODY).put(flag, flag.motebit_id);
-  await done(tx);
-}
-
-/** B1 — a rotation commit MOVES a flag that names the old key; one transaction, idempotent. */
-export async function moveCustodyFlag(
-  db: IDBDatabase,
-  opts: { motebitId: string; record: KeySuccessionRecord; newPublicKeyHex: string; now: number },
-): Promise<void> {
-  const tx = db.transaction(CUSTODY, "readwrite");
-  const store = tx.objectStore(CUSTODY);
-  const req = store.get(opts.motebitId);
-  req.onsuccess = () => {
-    const moved = custodyAfterRotation(parseCustodyFlag(req.result), opts);
-    if (moved != null) store.put(moved, opts.motebitId);
-  };
-  await done(tx);
 }
 
 // ── Presentation cadence (F8) ────────────────────────────────────────

@@ -18,8 +18,8 @@ export interface WebRotationDeps {
   /** Called after the key is stored, so the app updates its in-memory copy. */
   onCommitted: (newPublicKeyHex: string) => void;
   /**
-   * The machine roster's commit step (machine-roster-surfaces-v1 F7, B1):
-   * append the rotation link to the replica and move the custody flag. Must
+   * The machine roster's commit step (machine-roster-surfaces-v1 F7):
+   * append the rotation link to the replica. Must
    * be idempotent and must not throw (the key is already committed).
    */
   afterCommit?: (next: { publicKeyHex: string; record: KeySuccessionRecord }) => Promise<void>;
@@ -57,8 +57,7 @@ export async function rotateWebKey(deps: WebRotationDeps): Promise<{ newPublicKe
       await deps.keyStore.storePrivateKey(privateKeyHex);
       localStorage.setItem("motebit:device_public_key", publicKeyHex);
       deps.onCommitted(publicKeyHex);
-      // After the key is stored: a flag moved before it would name a key
-      // this browser does not hold yet.
+      // After the key is stored: the link names the key now in the slot.
       await deps.afterCommit?.({ publicKeyHex, record });
     },
     ...(deps.reason !== undefined ? { reason: deps.reason } : {}),

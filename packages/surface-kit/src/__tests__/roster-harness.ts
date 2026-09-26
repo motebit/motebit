@@ -29,7 +29,6 @@ import {
   type RosterSigner,
 } from "../machine-roster.js";
 import { mergeReplicas, type MachineRosterReplica } from "../machine-roster-replica.js";
-import type { CustodyFlag } from "../machine-roster-held-key.js";
 
 export const LEGACY_MID = "0190f1a2-0000-7000-8000-000000000001";
 export const NOW = 1_800_000_000_000;
@@ -114,7 +113,6 @@ export interface C2Machine {
   ports: MachineRosterPorts;
   cache: FakeCache;
   relay: FakeRelay;
-  flag: { value: CustodyFlag | null };
 }
 
 export function c2Machine(
@@ -123,13 +121,11 @@ export function c2Machine(
   opts: {
     deviceId?: string;
     gated?: boolean;
-    flag?: CustodyFlag | null;
     knownDeviceKeys?: string[];
     options?: MachineRosterOptions;
   } = {},
 ): C2Machine {
   const cache = new FakeCache();
-  const flag = { value: opts.flag ?? null };
   const ports: MachineRosterPorts = {
     motebitId: relay.motebitId,
     deviceId: opts.deviceId ?? "dev-self",
@@ -160,11 +156,8 @@ export function c2Machine(
   const roster =
     opts.gated === false
       ? (new MachineRoster(ports, opts.options) as MachineRoster<HeldKeyRefusal>)
-      : MachineRoster.gated(ports, {
-          ...opts.options,
-          heldKey: { custodyFlag: async () => flag.value },
-        });
-  return { roster, ports, cache, relay, flag };
+      : MachineRoster.gated(ports, opts.options);
+  return { roster, ports, cache, relay };
 }
 
 export const enrol = (kp: KeyPair, deviceId: string, motebitId = LEGACY_MID, at = NOW) =>

@@ -334,12 +334,9 @@ export function createMachineRosterSection(
     set({ phase: "loading", error: null });
     try {
       const acq = await roster.acquire();
-      // A roster built without the gate never reaches here in a C-2
-      // surface; if it did, its key is unconfirmed (fail-closed).
+      // A gated roster classifies on acquisition; any other is classified here.
       const heldKey: HeldKeyClass =
-        acq.kind === "acquired"
-          ? (acq.heldKey ?? { kind: "unconfirmed", why: "no-evidence" })
-          : classifyHeldKey(acq);
+        acq.kind === "acquired" ? (acq.heldKey ?? classifyHeldKey(acq)) : classifyHeldKey(acq);
       const view = buildRosterView(acq, now());
       const writeBlocked = deps.writeBlocked?.() ?? null;
       const lineActions =

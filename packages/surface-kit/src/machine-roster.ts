@@ -58,11 +58,7 @@ import {
   type ReplicaRead,
   type RotationCapture,
 } from "./machine-roster-replica.js";
-import {
-  classifyResolved,
-  type CustodyFlag,
-  type HeldKeyClass,
-} from "./machine-roster-held-key.js";
+import { classifyHeldKey, classifyResolved, type HeldKeyClass } from "./machine-roster-held-key.js";
 
 const KEY_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
 /** The reference relay's per-request limit (spec §11); a chunk never exceeds it. */
@@ -552,12 +548,6 @@ export interface HeldKeyRefusal {
   heldKey: HeldKeyClass;
 }
 
-/** §1A / §1B — the held-key gate a C-2 surface's roster is built with. */
-export interface HeldKeyGate {
-  /** This device's custody flag (B1), or `null` when it has none. */
-  custodyFlag(): Promise<CustodyFlag | null>;
-}
-
 export interface MachineRosterOptions {
   /**
    * §1A F5b — `false` on a surface that is never a host (phone, desktop,
@@ -573,6 +563,13 @@ export interface MachineRosterOptions {
    * lock, a throttled refresh. Default `true`.
    */
   repairOmissions?: boolean | (() => boolean);
+  /**
+   * F8 — `true` while the relay has asked this surface to wait (a pending
+   * `Retry-After`): nothing is sent, and every entry a presentation would
+   * carry is reported not taken ("presented again"). It stays in the
+   * replica and goes out with the next presentation. Absent: never held.
+   */
+  presentationHeld?: () => boolean;
 }
 
 interface Item {
@@ -615,7 +612,7 @@ function authorizes(
  * unchanged), and `HeldKeyRefusal` on one built with `MachineRoster.gated`.
  */
 export class MachineRoster<Gate extends HeldKeyRefusal = never> {
-  private gate: HeldKeyGate | null = null;
+  private gated = false;
 
   constructor(
     private readonly ports: MachineRosterPorts,
@@ -630,11 +627,10 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
    */
   static gated(
     ports: MachineRosterPorts,
-    options: MachineRosterOptions & { heldKey: HeldKeyGate },
+    options: MachineRosterOptions = {},
   ): MachineRoster<HeldKeyRefusal> {
-    const { heldKey, ...rest } = options;
-    const roster = new MachineRoster<HeldKeyRefusal>(ports, rest);
-    roster.gate = heldKey;
+    const roster = new MachineRoster<HeldKeyRefusal>(ports, options);
+    roster.gated = true;
     return roster;
   }
 
@@ -649,8 +645,8 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
 
   /** The gate's refusal for this acquisition, or `null` when it may act. */
   private refusalOf(acq: RosterAcquired): Gate | null {
-    if (this.gate == null) return null;
-    const heldKey: HeldKeyClass = acq.heldKey ?? { kind: "unconfirmed", why: "no-evidence" };
+    if (!this.gated) return null;
+    const heldKey: HeldKeyClass = acq.heldKey ?? classifyHeldKey(acq);
     return heldKey.kind === "identity"
       ? null
       : ({ kind: "held-key-not-identity", heldKey } as HeldKeyRefusal as Gate);
@@ -747,17 +743,9 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
 
     // §1A — classify the held key BEFORE anything is presented: a key that
     // is not confirmed as the identity key repairs nothing (R1).
-    const heldKey: HeldKeyClass | undefined =
-      this.gate == null
-        ? undefined
-        : classifyResolved({
-            motebitId,
-            held,
-            chain: resolved,
-            hint,
-            succession: replica.succession,
-            custodyFlag: await this.gate.custodyFlag(),
-          });
+    const heldKey: HeldKeyClass | undefined = this.gated
+      ? classifyResolved({ held, chain: resolved, hint })
+      : undefined;
 
     const fetched = await rosterRead;
     let served = fetched.served;
@@ -1581,6 +1569,11 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
     const full = new Set(replica.roster_full);
     const items = all.filter((i) => !full.has(i.id)); // never retried (C5)
     const report: PresentReport = { taken: 0, notTaken: [], rosterFull: [] };
+    if (this.options.presentationHeld?.() === true) {
+      // F8 — a pending Retry-After: kept here, presented again later.
+      for (const c of items) report.notTaken.push({ id: c.id, reason: "waiting (Retry-After)" });
+      return { report, replica };
+    }
     for (let i = 0; i < items.length; i += ROSTER_CHUNK_SIZE) {
       const chunk = items.slice(i, i + ROSTER_CHUNK_SIZE);
       if (report.retryAfterMs != null) {

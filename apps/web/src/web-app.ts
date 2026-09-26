@@ -141,7 +141,6 @@ import { EncryptedKeyStore } from "./encrypted-keystore";
 import { rotateWebKey } from "./key-rotation";
 import {
   createWebMachineRoster,
-  recordCustody,
   rosterAfterRotationCommit,
   type RosterLocks,
   type WebMachineRoster,
@@ -592,21 +591,6 @@ export class UnbootedWebApp {
     this._deviceId = result.deviceId;
     this._publicKeyHex = result.publicKeyHex;
     this._divergedFromMotebitId = result.divergedFromMotebitId ?? null;
-
-    // B1 — custody path 1: this browser MINTED the identity (keypair and id
-    // generated together, just now). The only launch that sets the flag; a
-    // loaded, recovered or divergent bootstrap never does.
-    if (result.isFirstLaunch) {
-      const minted = await this.keyStore.loadPrivateKey().catch(() => null);
-      if (minted != null && minted !== "") {
-        const key = hexToBytes(minted);
-        try {
-          await recordCustody({ motebitId: result.motebitId, privateKey: key, reason: "minted" });
-        } finally {
-          secureErase(key);
-        }
-      }
-    }
     this._localEventStore = storage.eventStore;
     this._identityStorage = storage.identityStorage;
 
@@ -2346,14 +2330,10 @@ export class UnbootedWebApp {
       onCommitted: (publicKeyHex) => {
         this._publicKeyHex = publicKeyHex;
       },
-      // F7 + B1: the link joins the roster replica; the custody flag moves.
-      // No capture and no re-enrolment — a browser is never a host (S2).
-      afterCommit: ({ publicKeyHex, record }) =>
-        rosterAfterRotationCommit({
-          motebitId: this._motebitId,
-          record,
-          newPublicKeyHex: publicKeyHex,
-        }),
+      // F7: the link joins the roster replica. No capture and no
+      // re-enrolment — a browser is never a host (S2).
+      afterCommit: ({ record }) =>
+        rosterAfterRotationCommit({ motebitId: this._motebitId, record }),
       ...(reason !== undefined ? { reason } : {}),
     });
   }
@@ -4339,11 +4319,6 @@ export class UnbootedWebApp {
           if (!walletWarning) {
             const newPrivHex = bytesToHex(identitySeed);
             await this.keyStore.storePrivateKey(newPrivHex);
-            // B1 — custody path 2: a Link Device WITH key transfer completed;
-            // the transferred seed now sits in the key slot. (A pairing
-            // without a transfer, or one that failed or was refused for
-            // wallet funds, never reaches here.)
-            await recordCustody({ motebitId, privateKey: identitySeed, reason: "key-transfer" });
 
             // The new public key is identity_pubkey_check (verified during decryption)
             this._publicKeyHex = keyTransfer.identity_pubkey_check;
