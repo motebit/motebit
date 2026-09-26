@@ -168,7 +168,7 @@ The decision is taken on the **current** verdict over **the cache ∪ a successf
 5. "Connected, not in the roster".
 6. Superseded lines are advisory and shown as "not covered".
 7. "Not observed in the last 90 days" is kept distinct from "never seen".
-8. **A possibly ambiguous machine** (round 1 R10, round 2 R19): `sockets_open > 1` on one `(device_id, key)` on **two successive reads** gives a hint worded as "may": "two machines may share this id (copied `~/.motebit`)". `sockets_open` counts any bound socket, including an interactive session beside the daemon and a half-open socket next to its reconnect. So it is a hint, never a verdict, and `run` and `serve` do not print it at start until there is a heartbeat (#691).
+8. **A possibly ambiguous machine** (round 1 R10, round 2 R19): `sockets_open > 1` on one `(device_id, key)` on **two successive reads** gives a hint worded as "may": "two machines may share this id (copied `~/.motebit`)". `sockets_open` counts open host sockets (those announcing `unattended_runtime`; an interactive session beside the daemon is not counted), but a half-open socket next to its reconnect still counts. So it is a hint, never a verdict, and `run` and `serve` do not print it at start until there is a heartbeat (#691).
 9. The chain head is cited, along with the ancestry (C1) and the relay's missing links and entries.
 10. **No count or quantifier** is rendered unless it is computed over `active` in an `ok:true` verdict, and never when C1.3 or C1.7 has suppressed universal claims.
 

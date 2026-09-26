@@ -26,7 +26,10 @@
  * `(motebit_id, device_id, bound_under)`, where `bound_under` is the key the
  * socket's token verified under, captured at verification and never
  * re-read. Written only for verified sockets announcing `unattended_runtime`,
- * only through `observeHostConnection`.
+ * only through `observeHostConnection`. That rule is ONE predicate
+ * (`livenessKeyOf`), and the GET's `sockets_open` and the sweep's live-skip
+ * count sockets by it too — a live count and the persisted row never
+ * disagree about which sockets are a host.
  */
 import type { DatabaseDriver } from "@motebit/persistence";
 import { canonicalJson } from "@motebit/encryption";
@@ -38,6 +41,7 @@ import {
 } from "@motebit/crypto";
 import type { HostEnrollment, HostRetirement } from "@motebit/protocol";
 import { HostEnrollmentSchema, HostRetirementSchema } from "@motebit/wire-schemas";
+import { WS_OPEN } from "./websocket.js";
 
 /** Entries one presentation may carry. Clients chunk a larger set (proposal D8). */
 export const MAX_ROSTER_ENTRIES_PER_REQUEST = 64;
@@ -272,6 +276,58 @@ export function hostsUnattendedWork(peer: ObservedPeer): boolean {
 }
 
 /**
+ * THE liveness predicate — the ONE rule for "this socket counts as a host's
+ * liveness", used at every site: the persisted write (`observeHostConnection`,
+ * reached by bind, close, the flush and the shutdown flush), the GET's
+ * `sockets_open` on a liveness row, and the TTL sweep's live-skip
+ * (`openHostSockets`). Returns the key the socket counts under, or null.
+ *
+ * A socket counts iff it is BOUND (`boundKeyOf`) AND announces
+ * `unattended_runtime`. A bound socket that does not host — the desktop app,
+ * which shares its `device_id` with the CLI daemon on the same machine
+ * (surfaces §0), a phone, a tab — is not a host's liveness: counted, a dead
+ * daemon read "open" while only the desktop was connected, and both together
+ * read 2, which clients print as "two machines may share this id".
+ */
+export function livenessKeyOf(peer: ObservedPeer): string | null {
+  const boundUnder = boundKeyOf(peer);
+  return boundUnder != null && hostsUnattendedWork(peer) ? boundUnder : null;
+}
+
+/** A live connection as the socket-counting sites see it. */
+export interface LivePeer extends ObservedPeer {
+  ws: { readyState: number };
+}
+
+/** The (device_id, bound_under) pair as one map key. */
+export function livenessPairKey(deviceId: string, boundUnder: string): string {
+  return JSON.stringify([deviceId, boundUnder]);
+}
+
+/**
+ * The OPEN sockets of one motebit that count for liveness
+ * (`livenessKeyOf`), grouped by `livenessPairKey(device_id, bound_under)`.
+ * Only a socket OPEN right now counts (defence in depth: websocket.ts
+ * registers only open sockets, but a closed peer left in `connections` must
+ * neither count nor keep a row alive).
+ */
+export function openHostSockets(
+  peers: Iterable<LivePeer>,
+): Map<string, { device_id: string; bound_under: string; sockets: number }> {
+  const out = new Map<string, { device_id: string; bound_under: string; sockets: number }>();
+  for (const peer of peers) {
+    if (peer.ws.readyState !== WS_OPEN) continue;
+    const boundUnder = livenessKeyOf(peer);
+    if (boundUnder == null) continue;
+    const k = livenessPairKey(peer.deviceId, boundUnder);
+    const entry = out.get(k) ?? { device_id: peer.deviceId, bound_under: boundUnder, sockets: 0 };
+    entry.sockets++;
+    out.set(k, entry);
+  }
+  return out;
+}
+
+/**
  * Observe one connection — the ONLY door to the liveness record, shared by
  * bind (`onPeerBound`), close (`onPeerClosed`), the periodic flush and the
  * shutdown flush.
@@ -292,8 +348,8 @@ export function observeHostConnection(
   observedBy: string,
   at: number = Date.now(),
 ): boolean {
-  const boundUnder = boundKeyOf(peer);
-  if (boundUnder == null || !hostsUnattendedWork(peer)) return false;
+  const boundUnder = livenessKeyOf(peer);
+  if (boundUnder == null) return false;
   db.prepare(
     `INSERT INTO relay_host_liveness (motebit_id, device_id, bound_under, last_seen_at, observed_by)
      VALUES (?, ?, ?, ?, ?)
@@ -332,16 +388,20 @@ export function livenessRecordingSince(db: DatabaseDriver): number | null {
 
 /**
  * The TTL sweep: delete liveness rows whose `last_seen_at` is older than the
- * retention window, SKIPPING any row with a live bound socket — an idle
- * daemon that is connected must not age out. `isLive(motebitId, deviceId,
- * boundUnder)` answers from the live connection map. Returns the number of
- * rows deleted.
+ * retention window, SKIPPING any row with an open socket that counts for
+ * liveness (`openHostSockets`) — an idle daemon that is connected must not
+ * age out, and a row kept "alive" only by a non-host socket on the same pair
+ * (the desktop beside a dead daemon) is not. Reads the live connection map
+ * itself, so the skip and the GET's `sockets_open` are one predicate.
+ * Returns the number of rows deleted.
  */
 export function sweepHostLiveness(
   db: DatabaseDriver,
-  isLive: (motebitId: string, deviceId: string, boundUnder: string) => boolean,
+  connections: ReadonlyMap<string, readonly LivePeer[]>,
   now: number = Date.now(),
 ): number {
+  const isLive = (motebitId: string, deviceId: string, boundUnder: string): boolean =>
+    openHostSockets(connections.get(motebitId) ?? []).has(livenessPairKey(deviceId, boundUnder));
   const cutoff = now - HOST_LIVENESS_RETENTION_MS;
   const stale = db
     .prepare(

@@ -403,8 +403,10 @@ about membership.
   flush while the connection is open. With no heartbeat (#691) a half-open
   connection reads as open, so an idle, silently dead connection keeps
   refreshing it until the store notices the close; `sockets_open` likewise
-  counts connections the store **believes** open — **any** connection bound as
-  that pair, whether or not it announces unattended work. Neither is proof the
+  counts connections the store **believes** open — only connections bound as
+  that pair that announce unattended work, the same rule that writes the
+  last-seen value (a non-host connection sharing the `device_id`, such as a
+  desktop app beside its daemon, is not that host's liveness). Neither is proof the
   machine is alive. And it is a **lower bound**: a store that stops without its
   shutdown flush (a crash) loses up to one flush interval (five minutes at the
   reference relay), so a connection may have been open somewhat after the value
@@ -598,11 +600,13 @@ plus slack) whole with 413. A well-formed entry is about 400 bytes.
 `liveness` is the store's own observation, named by `observed_by`, keyed by
 device **and** by the key each connection verified under (`bound_under`, §8).
 `rows` are the persisted observations plus open bound connections that announce
-unattended work; `live_unenrolled` are open bound connections with no row.
+unattended work; `live_unenrolled` are open bound connections (necessarily
+non-host) on a pair with no row, and their `sockets_open` counts them.
 `last_seen_at` is the last time the store held a connection bound as that
 `(device_id, bound_under)` open — a lower bound after a crash (§8) — and
-`sockets_open` counts **every** connection bound as that pair the store believes
-open, host or not; with no heartbeat, a half-open connection counts (§8). Both
+`sockets_open` counts the connections bound as that pair **that announce
+unattended work** the store believes open — the one rule that also writes the
+last-seen value; with no heartbeat, a half-open connection counts (§8). Both
 are per observed pair, never over machines.
 
 **The store does not reduce.** It returns the set; the consumer reduces it (§6)

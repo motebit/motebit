@@ -240,6 +240,30 @@ export function createDualAuth(deps: MiddlewareDeps) {
   };
 }
 
+/**
+ * Response headers a cross-origin BROWSER client must be able to read.
+ *
+ * A browser (and the Tauri webview's global `fetch`) hands page JS only the
+ * CORS-safelisted response headers (Cache-Control, Content-Language,
+ * Content-Length, Content-Type, Expires, Last-Modified, Pragma) unless the
+ * response names the rest in `Access-Control-Expose-Headers`. Anything else
+ * reads as `null` — no error, just absence. React Native's fetch is not a
+ * browser and sees everything, so a header can work on mobile and silently
+ * vanish on web and desktop.
+ *
+ * The list is every header this relay sets that a browser-run client reads:
+ *   - `Retry-After` — the 429 back-off bound (rate limiter, RateLimitError,
+ *     intake). Read by the roster clients (apps/web, apps/desktop
+ *     `machine-roster.ts`) and `@motebit/runtime` `relay-delegation.ts`
+ *     (`classifyRelayError`).
+ *   - `X-Motebit-Content-Manifest` — the signed state-export manifest
+ *     (`state-export.ts`), read by `@motebit/state-export-client`
+ *     (`verified-fetch.ts`) in desktop and the inspector; unexposed, every
+ *     browser verification reads "no manifest".
+ * A new header a browser client reads is added here in the same change.
+ */
+export const CORS_EXPOSED_RESPONSE_HEADERS = ["Retry-After", "X-Motebit-Content-Manifest"] as const;
+
 // ---------------------------------------------------------------------------
 // registerMiddleware — wire up all middleware on the app
 // ---------------------------------------------------------------------------
@@ -249,7 +273,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
 
   // --- Security & CORS ---
   app.use("*", secureHeaders());
-  app.use("*", cors({ origin: corsOrigin }));
+  app.use("*", cors({ origin: corsOrigin, exposeHeaders: [...CORS_EXPOSED_RESPONSE_HEADERS] }));
 
   // --- Emergency freeze: block all state-mutating operations ---
   app.use("*", async (c, next) => {

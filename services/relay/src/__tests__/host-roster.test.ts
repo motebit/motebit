@@ -640,14 +640,57 @@ describe("liveness: per device AND key, hosts only, served beside the set (D4, D
     observe(peer("idle-daemon"), now - 91 * DAY);
     observe(peer("gone"), now - 91 * DAY);
     observe(peer("recent"), now - 89 * DAY);
-    const liveNow = new Set(["idle-daemon"]);
-    const deleted = sweepHostLiveness(
-      db,
-      (m, d, k) => m === motebitId && k === pub && liveNow.has(d),
-      now,
-    );
+    const deleted = sweepHostLiveness(db, new Map([[motebitId, [peer("idle-daemon")]]]), now);
     expect(deleted).toBe(1);
     expect(persisted().map((r) => r.device_id)).toEqual(["idle-daemon", "recent"]);
+  });
+
+  // The desktop app and the CLI daemon share one device_id on a machine
+  // (surfaces §0), so they bind as the SAME (device_id, bound_under) pair.
+  // Only the daemon hosts unattended work; the desktop is not its liveness.
+  const DESKTOP = ["sync"];
+
+  it("one predicate: a host and a non-host socket on the same pair read sockets_open 1", async () => {
+    connectPeer(peer("laptop")); // the daemon
+    connectPeer(peer("laptop", { capabilities: DESKTOP })); // the desktop app
+    const live = (await read()).json.liveness as Liveness;
+    expect(live.rows).toEqual([
+      { device_id: "laptop", bound_under: pub, last_seen_at: null, sockets_open: 1 },
+    ]);
+    expect(live.live_unenrolled).toEqual([]);
+  });
+
+  it("a dead daemon beside a connected desktop reads 0 open, its last_seen_at preserved", async () => {
+    observe(peer("laptop"), 7_000); // the daemon was seen, then went offline
+    const desktop = peer("laptop", { capabilities: DESKTOP });
+    connectPeer(desktop);
+    expect(observe(desktop, 9_000)).toBe(false); // the desktop writes nothing
+    const live = (await read()).json.liveness as Liveness;
+    expect(live.rows).toEqual([
+      { device_id: "laptop", bound_under: pub, last_seen_at: 7_000, sockets_open: 0 },
+    ]);
+    // Not folded into live_unenrolled either: the pair is served as a row.
+    expect(live.live_unenrolled).toEqual([]);
+  });
+
+  it("the TTL sweep does not skip a row kept alive only by a non-host socket", () => {
+    const now = 1_000 * DAY;
+    const db = relay.moteDb.db;
+    observe(peer("laptop"), now - 91 * DAY); // daemon, long dead
+    observe(peer("vps"), now - 91 * DAY); // daemon, idle but connected
+    const connections = new Map([
+      [motebitId, [peer("laptop", { capabilities: DESKTOP }), peer("vps")]],
+    ]);
+    expect(sweepHostLiveness(db, connections, now)).toBe(1);
+    expect(persisted().map((r) => r.device_id)).toEqual(["vps"]);
+  });
+
+  it("the TTL sweep does not skip a row kept alive only by a CLOSED host socket", () => {
+    const now = 1_000 * DAY;
+    observe(peer("vps"), now - 91 * DAY);
+    const closed = { ...peer("vps"), ws: { readyState: 3 } } as unknown as ConnectedDevice;
+    expect(sweepHostLiveness(relay.moteDb.db, new Map([[motebitId, [closed]]]), now)).toBe(1);
+    expect(persisted()).toEqual([]);
   });
 
   it("GET carries no count or quantifier over machines — only per-(device, key) socket counts", async () => {

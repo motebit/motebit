@@ -182,7 +182,7 @@ import { startBatchWithdrawalLoop, getPendingWithdrawalsSummary } from "./batch-
 import { LoopSupervisor, superviseInterval } from "./loop-supervisor.js";
 import { registerAgentRoutes, registerAgentAuthMiddleware } from "./agents.js";
 import { registerHostRosterRoutes } from "./host-roster-routes.js";
-import { observeHostConnection, sweepHostLiveness, boundKeyOf } from "./host-roster-store.js";
+import { observeHostConnection, sweepHostLiveness } from "./host-roster-store.js";
 import { createFederationCallbacks } from "./federation-callbacks.js";
 import { registerTaskRoutes, TASK_TTL_MS } from "./tasks.js";
 import { ExpoPushAdapter } from "./push-adapter.js";
@@ -945,7 +945,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // Only OPEN sockets are flushed or protect a row from the sweep — a
   // closed peer left in `connections` must neither refresh last_seen_at
   // nor keep its row alive (defence in depth; websocket.ts registers only
-  // open sockets).
+  // open sockets). Which open sockets count is `livenessKeyOf`, applied by
+  // `observeHostConnection` here and by `sweepHostLiveness` itself.
   const flushHostLiveness = (at: number): void => {
     for (const [motebitId, peers] of connections) {
       for (const peer of peers) {
@@ -953,11 +954,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       }
     }
   };
-  /** Is a socket bound as (device_id, bound_under) open right now? The sweep skips it. */
-  const isHostLive = (motebitId: string, deviceId: string, boundUnder: string): boolean =>
-    (connections.get(motebitId) ?? []).some(
-      (p) => p.ws.readyState === WS_OPEN && p.deviceId === deviceId && boundKeyOf(p) === boundUnder,
-    );
   const taskCleanupInterval = superviseInterval(loopSupervisor, "task-cleanup", 60_000, () => {
     const now = Date.now();
     // Expire completed/failed tasks and tasks past their TTL
@@ -966,14 +962,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     authEvents.sweep(now);
     // Machine roster liveness, every five minutes: refresh the one
     // overwritten last-seen value for bound host sockets open right now,
-    // then sweep rows unseen for 90 days that have no live bound socket.
+    // then sweep rows unseen for 90 days that have no open host socket.
     // Guarded: this tick also evicts the task queue and cleans the rate
     // limiters, and a corrupt row must not starve them.
     if (now - lastHostLivenessFlushAt >= HOST_LIVENESS_FLUSH_MS) {
       lastHostLivenessFlushAt = now;
       flushHostLiveness(now);
       try {
-        sweepHostLiveness(moteDb.db, isHostLive, now);
+        // The live-skip reads `connections` through the one liveness
+        // predicate (`livenessKeyOf`): only an open HOST socket keeps a row.
+        sweepHostLiveness(moteDb.db, connections, now);
       } catch (err: unknown) {
         logger.warn("host_roster.sweep_failed", {
           error: err instanceof Error ? err.message : String(err),
