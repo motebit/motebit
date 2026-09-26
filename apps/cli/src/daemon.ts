@@ -58,6 +58,7 @@ import { LIVENESS_SESSION_GAP_MS } from "./runtime-coverage.js";
 import { handleRelayCommandFrame } from "./relay-command-frame.js";
 import { fromHex, loadActiveSigningKey, IdentityKeyError } from "./identity.js";
 import { registerWithRelay, type RelayRegistrationHandle } from "./relay-registration.js";
+import { enrollOnAnnounce } from "./machine-roster.js";
 import {
   electAttachOrCoordinate,
   electCoordinatorRole,
@@ -702,6 +703,23 @@ export async function handleRun(config: CliConfig): Promise<void> {
         price: config.price,
         description: `daemon-${motebitId.slice(0, 8)}`,
       });
+      // This process announces `unattended_runtime`, so it passes through
+      // the roster's mint step (machine-roster-clients C3, N8): enrol on
+      // the first start, re-present the held bytes after. Under its own
+      // device key, never the operator's token. Never blocks the daemon.
+      if (daemonRegistration.registered) {
+        const deviceId = fullConfig.device_id;
+        void enrollOnAnnounce(
+          {
+            motebitId,
+            deviceId,
+            syncUrl,
+            privateKey: () => privKeyBytes ?? null,
+            identityPaths: [identityPath],
+          },
+          (line) => console.log(line),
+        );
+      }
     } else {
       console.log(
         "Discovery: registration skipped — no device signing key available (the daemon registers with its own key, never the operator's token)",
@@ -1637,6 +1655,22 @@ export async function handleServe(config: CliConfig): Promise<void> {
           description: serverConfig.name ?? `serve-${motebitId.slice(0, 8)}`,
           log,
         });
+        // Serve announces `unattended_runtime` too: the same mint step (C3, N8).
+        if (serveRegistration.registered) {
+          const serveDeviceId = fullConfigForServe.device_id;
+          void enrollOnAnnounce(
+            {
+              motebitId,
+              deviceId: serveDeviceId,
+              syncUrl,
+              privateKey: () => servePrivateKey ?? null,
+              ...(config.identity != null && config.identity !== ""
+                ? { identityPaths: [path.resolve(config.identity)] }
+                : {}),
+            },
+            log,
+          );
+        }
       } else {
         log(
           "Registry registration skipped — no device signing key available (serve registers with its own key, never the operator's token)",

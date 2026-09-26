@@ -118,6 +118,7 @@ import {
   handleRelayUp,
   handleRestore,
   handleRotate,
+  handleMachines,
   handleSeed,
   handleKeychain,
   seedBackupStatus,
@@ -254,6 +255,11 @@ async function main(): Promise<void> {
 
   if (subcommand === "rotate") {
     await handleRotate(config);
+    return;
+  }
+
+  if (subcommand === "machines") {
+    await handleMachines(config);
     return;
   }
 

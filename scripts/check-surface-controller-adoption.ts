@@ -64,6 +64,18 @@ const ADOPTIONS: readonly Adoption[] = [
     files: ["apps/cli/src/rotation.ts"],
     maxLines: 260,
   },
+  {
+    // Machine roster, part C (docs/proposals/machine-roster-clients-v1.md
+    // C2): the chain acquisition, the C3 status table, retire/enroll,
+    // presentation and set-pinning live in the kit. The CLI adapter carries
+    // the ports (device-token fetches, identity-file record sources), the
+    // terminal wording of outcomes, and the two doors (mint-on-announce,
+    // the rotation hook); its replica file is `machine-roster-file.ts`.
+    // Mobile / desktop / web adopt in C-2.
+    controller: "MachineRoster",
+    files: ["apps/cli/src/machine-roster.ts"],
+    maxLines: 360,
+  },
 ];
 
 const errors: string[] = [];

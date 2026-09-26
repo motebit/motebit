@@ -16,7 +16,8 @@ import * as path from "node:path";
 import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
 import { CONFIG_DIR, loadFullConfig, saveFullConfig } from "../config.js";
-import { resolveUnlockPassphrase } from "../identity.js";
+import { decryptPrivateKey, resolveUnlockPassphrase } from "../identity.js";
+import { rosterCaptureBeforeRotate, rosterHookAfterRotate } from "../machine-roster-rotation.js";
 import {
   clearPendingRotation,
   loadAnyPendingRotation,
@@ -98,6 +99,10 @@ export async function handleRotate(config: CliConfig): Promise<void> {
   const syncUrl = resolveRelayUrl(config);
   console.log(`  Relay: ${syncUrl}`);
 
+  // R21 option (a): capture this machine's roster status under the OLD
+  // key, before anything is sent (skipped while a rotation is in flight).
+  await rosterCaptureBeforeRotate({ passphrase, syncUrl, identityPath, decryptPrivateKey });
+
   let outcome;
   try {
     outcome = await performRotation({
@@ -173,6 +178,18 @@ export async function handleRotate(config: CliConfig): Promise<void> {
       console.log(`  public_key   ${outcome.newPublicKeyHex.slice(0, 16)}...`);
       console.log(`  rotations    ${outcome.rotations}`);
       if (config.reason) console.log(`  reason       ${config.reason}`);
+      // The machine roster's rotation hook (machine-roster-clients R21,
+      // option (a), second half): AFTER the local commit — here, on every
+      // path that ends `rotated`, the resume paths included — under the NEW
+      // key, reading only the capture taken before the rotation was sent.
+      const rosterLine = await rosterHookAfterRotate({
+        identityPath,
+        passphrase,
+        syncUrl,
+        newPublicKeyHex: outcome.newPublicKeyHex,
+        decryptPrivateKey,
+      });
+      if (rosterLine != null) console.log(rosterLine);
       console.log();
     }
   }

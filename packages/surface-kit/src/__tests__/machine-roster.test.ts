@@ -1,0 +1,2705 @@
+/**
+ * The machine-roster controller at its port seam —
+ * `docs/proposals/machine-roster-clients-v1.md` C1 (consumer half), C3–C6,
+ * §2A. The relay is an in-memory fake with the part-B semantics that matter
+ * here (idempotent union, 422 per-entry refusal, roster_full, 413, liveness
+ * rows); the key chain and the law are the real primitives.
+ */
+import { describe, it, expect } from "vitest";
+import {
+  bytesToHex,
+  deriveSovereignMotebitId,
+  generateKeypair,
+  hostEnrollmentId,
+  hostRetirementId,
+  signGuardianRecoverySuccession,
+  signHostEnrollment,
+  signHostRetirement,
+  signKeySuccession,
+  verifyHostRoster,
+} from "@motebit/encryption";
+import type { KeyPair } from "@motebit/encryption";
+import type { HostEnrollment, HostRetirement, KeySuccessionRecord } from "@motebit/sdk";
+
+import {
+  MachineRoster,
+  createRosterSigner,
+  parseServedRoster,
+  type LiveUnenrolled,
+  type LivenessRow,
+  type MachineRosterPorts,
+  type RosterAcquired,
+  type RosterSigner,
+} from "../machine-roster.js";
+import {
+  captureFor,
+  emptyReplica,
+  frozenFor,
+  mergeReplicas,
+  parseReplica,
+  type MachineRosterReplica,
+} from "../machine-roster-replica.js";
+import {
+  buildRosterView,
+  emptyState,
+  keyFingerprint,
+  suppressionText,
+} from "../machine-roster-view.js";
+
+const MID = "0190f1a2-0000-7000-8000-000000000001"; // a legacy (v7) id: unrooted
+const NOW = 1_800_000_000_000;
+const DAY = 86_400_000;
+const hex = (kp: KeyPair) => bytesToHex(kp.publicKey);
+
+class FakeRelay {
+  enr = new Map<string, HostEnrollment>();
+  ret = new Map<string, HostRetirement>();
+  rows: LivenessRow[] = [];
+  live: LiveUnenrolled[] = [];
+  chain: KeySuccessionRecord[] = [];
+  current: string | null = null;
+  getFails = false;
+  successionFails = false;
+  /** Ids the relay never serves, however often they are presented. */
+  omit = new Set<string>();
+  /** Ids refused `roster_full`. */
+  full = new Set<string>();
+  /** Ids refused with another reason. */
+  refuse = new Map<string, string>();
+  status413 = false;
+  presentDown = false;
+  posts: Array<{ enrollments: HostEnrollment[]; retirements: HostRetirement[] }> = [];
+  auth: Array<Record<string, string>> = [];
+  gets = 0;
+
+  async roster(s: RosterSigner) {
+    this.auth.push(await s.authorization());
+    this.gets++;
+    if (this.getFails) return { ok: false as const, reason: "relay down" };
+    return {
+      ok: true as const,
+      body: {
+        motebit_id: MID,
+        enrollments: [...this.enr].filter(([id]) => !this.omit.has(id)).map(([, v]) => v),
+        retirements: [...this.ret].filter(([id]) => !this.omit.has(id)).map(([, v]) => v),
+        liveness: {
+          observed_by: "relay-mid",
+          retention_days: 90,
+          observing_since: NOW - 90 * DAY,
+          rows: this.rows,
+          live_unenrolled: this.live,
+        },
+      },
+    };
+  }
+
+  async present(
+    s: RosterSigner,
+    body: { enrollments: HostEnrollment[]; retirements: HostRetirement[] },
+  ) {
+    this.auth.push(await s.authorization());
+    this.posts.push(body);
+    if (this.presentDown) return { status: null, reason: "network" } as const;
+    if (this.status413) return { status: 413, body: {} };
+    const refused: Array<{ kind: string; index: number; reason: string }> = [];
+    for (const [index, e] of body.enrollments.entries()) {
+      const id = await hostEnrollmentId(e);
+      if (this.full.has(id)) refused.push({ kind: "enrollment", index, reason: "roster_full" });
+      else if (this.refuse.has(id))
+        refused.push({ kind: "enrollment", index, reason: this.refuse.get(id)! });
+      else this.enr.set(id, e);
+    }
+    for (const [index, r] of body.retirements.entries()) {
+      const id = await hostRetirementId(r);
+      if (this.full.has(id)) refused.push({ kind: "retirement", index, reason: "roster_full" });
+      else this.ret.set(id, r);
+    }
+    return refused.length > 0
+      ? { status: 422, body: { refused } }
+      : { status: 200, body: { accepted: [] } };
+  }
+
+  /** Store directly (another surface presented it). */
+  async hold(...items: Array<HostEnrollment | HostRetirement>) {
+    for (const i of items) {
+      if ("device_id" in i) this.enr.set(await hostEnrollmentId(i), i);
+      else this.ret.set(await hostRetirementId(i), i);
+    }
+  }
+}
+
+class FakeCache {
+  value: MachineRosterReplica | null = null;
+  corrupt = false;
+  saves = 0;
+  async load() {
+    if (this.corrupt) {
+      this.corrupt = false; // the adapter kept it aside; the name is free
+      return { kind: "corrupt" as const };
+    }
+    return this.value
+      ? { kind: "value" as const, replica: this.value }
+      : { kind: "absent" as const };
+  }
+  async save(r: MachineRosterReplica) {
+    this.saves++;
+    this.value = this.value ? mergeReplicas(this.value, r) : r;
+  }
+  /** Set false to take the lock away (the tamper the concurrency test must catch). */
+  locking = true;
+  private queue: Promise<unknown> = Promise.resolve();
+  exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    if (!this.locking) return fn();
+    const run = this.queue.then(fn, fn);
+    this.queue = run.catch(() => {});
+    return run;
+  }
+}
+
+const signerOf = (kp: KeyPair) =>
+  createRosterSigner({
+    privateKey: kp.privateKey,
+    authorization: async () => ({ Authorization: `Bearer device-token-${hex(kp).slice(0, 8)}` }),
+  });
+
+interface Machine {
+  roster: MachineRoster;
+  ports: MachineRosterPorts;
+  cache: FakeCache;
+  setKey(kp: KeyPair | null): void;
+}
+
+function machine(
+  relay: FakeRelay,
+  key: KeyPair | null,
+  opts: {
+    deviceId?: string;
+    motebitId?: string;
+    local?: unknown[];
+    guardian?: string | null;
+    cache?: FakeCache;
+    rotationInFlight?: boolean;
+    stored?: string | null;
+    knownDeviceKeys?: string[];
+    /** Awaited before every enrolment signature (a race harness). */
+    beforeSign?: () => Promise<void>;
+    /** This process's clock (two processes never mint in the same millisecond here). */
+    now?: number;
+  } = {},
+): Machine {
+  let current = key;
+  const cache = opts.cache ?? new FakeCache();
+  const ports: MachineRosterPorts = {
+    motebitId: opts.motebitId ?? MID,
+    deviceId: opts.deviceId ?? "dev-self",
+    signer: async () => {
+      if (!current) return null;
+      const s = await signerOf(current);
+      const before = opts.beforeSign;
+      if (!before) return s;
+      return {
+        ...s,
+        signEnrollment: async (body) => {
+          await before();
+          return s.signEnrollment(body);
+        },
+      };
+    },
+    fetchSuccession: async () =>
+      relay.successionFails
+        ? { ok: false, reason: "down" }
+        : {
+            ok: true,
+            body: {
+              motebit_id: MID,
+              chain: relay.chain,
+              current_public_key: relay.current,
+              held_public_key: relay.current,
+            },
+          },
+    fetchRoster: (s) => relay.roster(s),
+    presentRoster: (s, b) => relay.present(s, b),
+    localSuccession: async () => opts.local ?? [],
+    pinnedGuardian: async () => opts.guardian ?? null,
+    cache,
+    now: () => opts.now ?? NOW,
+    ...(opts.rotationInFlight !== undefined
+      ? { rotationInFlight: async () => opts.rotationInFlight! }
+      : {}),
+    ...(opts.stored !== undefined ? { storedPublicKeyHex: async () => opts.stored! } : {}),
+    ...(opts.knownDeviceKeys ? { knownDeviceKeys: async () => opts.knownDeviceKeys! } : {}),
+  };
+  return {
+    roster: new MachineRoster(ports),
+    ports,
+    cache,
+    setKey: (kp) => {
+      current = kp;
+    },
+  };
+}
+
+/**
+ * A barrier for two racing processes: each waits until both have arrived,
+ * or `ms` pass. Unserialized minters both arrive and both sign; serialized
+ * ones never both arrive, so the first proceeds after the timeout.
+ */
+function raceGate(n = 2, ms = 60): () => Promise<void> {
+  let arrived = 0;
+  let open!: () => void;
+  const all = new Promise<void>((r) => (open = r));
+  return async () => {
+    if (++arrived >= n) open();
+    await Promise.race([all, new Promise((r) => setTimeout(r, ms))]);
+  };
+}
+
+const enrol = (kp: KeyPair, deviceId: string, at = NOW, motebitId = MID) =>
+  signHostEnrollment(
+    { motebit_id: motebitId, device_id: deviceId, public_key: hex(kp), enrolled_at: at },
+    kp.privateKey,
+  );
+const retireEntry = async (kp: KeyPair, e: HostEnrollment) =>
+  signHostRetirement(
+    {
+      motebit_id: MID,
+      enrollment_id: await hostEnrollmentId(e),
+      public_key: hex(kp),
+      retired_at: NOW,
+    },
+    kp.privateKey,
+  );
+const rotate = (from: KeyPair, to: KeyPair) =>
+  signKeySuccession(from.privateKey, to.privateKey, to.publicKey, from.publicKey);
+
+async function acquired(m: Machine): Promise<RosterAcquired> {
+  const a = await m.roster.acquire();
+  if (a.kind !== "acquired") throw new Error(`expected acquired, got ${a.kind}`);
+  return a;
+}
+
+async function withFrozen(
+  cache: FakeCache,
+  deviceId: string,
+  key: string,
+  value: "active" | "not-active" | "absent",
+) {
+  await cache.save({
+    ...emptyReplica(MID),
+    frozen: [{ device_id: deviceId, pre_rotation_key: key, value, taken_at: NOW }],
+  });
+}
+
+// ── C3: the status table ────────────────────────────────────────────
+
+describe("C3 — minting on announce, decided by status", () => {
+  it("no line → mints the first enrolment, caches it, presents it; the next start re-presents and mints nothing", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    const first = await m.roster.ensureEnrolled();
+    expect(first.kind).toBe("minted");
+    if (first.kind === "minted") expect(first.firstLine).toBe(true);
+    expect(relay.enr.size).toBe(1);
+    expect(m.cache.value!.enrollments).toHaveLength(1);
+    expect(m.cache.value!.own_device_ids).toEqual(["dev-self"]);
+
+    const second = await m.roster.ensureEnrolled();
+    expect(second.kind).toBe("active");
+    expect(relay.enr.size).toBe(1);
+    expect(m.cache.value!.enrollments).toHaveLength(1);
+  });
+
+  it("active at the head → re-presents the stored bytes, mints nothing (even after the relay lost them)", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    relay.enr.clear(); // relay DB loss
+    const again = await m.roster.ensureEnrolled();
+    expect(again.kind).toBe("active");
+    expect(relay.enr.size).toBe(1);
+    expect(m.cache.value!.enrollments).toHaveLength(1);
+  });
+
+  it("retired at the head → mints nothing, and says retired (never auto-rejoins)", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    // The phone retires this machine, under the same (current) key.
+    const e = m.cache.value!.enrollments[0]!;
+    await relay.hold(await retireEntry(a, e));
+    const out = await m.roster.ensureEnrolled();
+    expect(out.kind).toBe("retired");
+    expect(relay.enr.size).toBe(1);
+    const view = buildRosterView(await m.roster.acquire(), NOW);
+    expect(view.kind === "roster" && view.lines.find((l) => l.kind === "retired")?.text).toMatch(
+      /retired under the current key/,
+    );
+  });
+
+  it("retired at an OLD epoch, device now on the new key → still retired: mints nothing", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const e = await enrol(a, "dev-self");
+    await relay.hold(e, await retireEntry(a, e));
+    relay.chain = [await rotate(a, b)];
+    relay.current = hex(b);
+    const m = machine(relay, b);
+    await withFrozen(m.cache, "dev-self", hex(a), "active");
+    const out = await m.roster.ensureEnrolled();
+    expect(out.kind).toBe("retired");
+    expect(relay.enr.size).toBe(1);
+  });
+
+  it("superseded + frozen ACTIVE keyed by its H → mints under the head key", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(a, "dev-self"));
+    relay.chain = [await rotate(a, b)];
+    relay.current = hex(b);
+    const m = machine(relay, b);
+    await withFrozen(m.cache, "dev-self", hex(a), "active");
+    const out = await m.roster.ensureEnrolled();
+    expect(out.kind).toBe("minted");
+    if (out.kind === "minted") expect(out.firstLine).toBe(false);
+    expect([...relay.enr.values()].map((e) => e.public_key).sort()).toEqual(
+      [hex(a), hex(b)].sort(),
+    );
+  });
+
+  it.each(["not-active", "absent"] as const)(
+    "superseded + frozen %s → mints nothing; not covered until `enroll`",
+    async (value) => {
+      const a = await generateKeypair();
+      const b = await generateKeypair();
+      const relay = new FakeRelay();
+      await relay.hold(await enrol(a, "dev-self"));
+      relay.chain = [await rotate(a, b)];
+      const m = machine(relay, b);
+      await withFrozen(m.cache, "dev-self", hex(a), value);
+      const out = await m.roster.ensureEnrolled();
+      expect(out).toMatchObject({ kind: "superseded", frozen: value });
+      expect(relay.enr.size).toBe(1);
+    },
+  );
+
+  it("superseded with NO frozen value → mints nothing", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(a, "dev-self"));
+    relay.chain = [await rotate(a, b)];
+    const m = machine(relay, b);
+    const out = await m.roster.ensureEnrolled();
+    expect(out).toMatchObject({ kind: "superseded", frozen: null });
+    expect(relay.enr.size).toBe(1);
+  });
+
+  it("R22 — a frozen value left over from an EARLIER transition is never read", async () => {
+    // A→B: frozen active keyed A, minted under B. B→C elsewhere; this machine
+    // (H = B) has no frozen value keyed B. The stale A value must not mint.
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const c = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(a, "dev-self"), await enrol(b, "dev-self"));
+    relay.chain = [await rotate(a, b), await rotate(b, c)];
+    const m = machine(relay, c);
+    await withFrozen(m.cache, "dev-self", hex(a), "active");
+    const out = await m.roster.ensureEnrolled();
+    expect(out).toMatchObject({ kind: "superseded", frozen: null });
+    expect(relay.enr.size).toBe(2);
+  });
+
+  it("GET failed + no line → mints nothing (unknown: fetch-failed)", async () => {
+    const relay = new FakeRelay();
+    relay.getFails = true;
+    const m = machine(relay, await generateKeypair());
+    const out = await m.roster.ensureEnrolled();
+    expect(out).toMatchObject({ kind: "unknown", why: "fetch-failed", status: "none" });
+    expect(relay.posts).toHaveLength(0);
+    expect(m.cache.value?.enrollments ?? []).toHaveLength(0);
+  });
+
+  it("GET failed + superseded with frozen active → mints nothing", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, b, { local: [await rotate(a, b)] });
+    await m.cache.save({ ...emptyReplica(MID), enrollments: [await enrol(a, "dev-self")] });
+    await withFrozen(m.cache, "dev-self", hex(a), "active");
+    relay.getFails = true;
+    const out = await m.roster.ensureEnrolled();
+    expect(out).toMatchObject({ kind: "unknown", why: "fetch-failed", status: "superseded" });
+  });
+
+  it("a corrupt cache read → mints nothing this run", async () => {
+    const relay = new FakeRelay();
+    const cache = new FakeCache();
+    cache.corrupt = true;
+    const m = machine(relay, await generateKeypair(), { cache });
+    const out = await m.roster.ensureEnrolled();
+    expect(out).toMatchObject({ kind: "unknown", why: "cache-corrupt" });
+    expect(relay.enr.size).toBe(0);
+  });
+
+  it("R27 — a relay that keeps omitting what this replica presents: the GET counts as failed, nothing minted", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    // Another device of this motebit, enrolled and cached here.
+    const other = await enrol(a, "dev-other");
+    await m.cache.save({ ...emptyReplica(MID), enrollments: [other] });
+    relay.omit.add(await hostEnrollmentId(other));
+    const out = await m.roster.ensureEnrolled();
+    expect(out).toMatchObject({ kind: "unknown", why: "omission" });
+    const acq = await acquired(m);
+    expect(acq.suppressed).toContain("relay_omission");
+    const view = buildRosterView(acq, NOW);
+    expect(view.kind === "roster" && view.claim).toBeNull();
+  });
+
+  it("no key on this surface → no-key, nothing read or sent", async () => {
+    const relay = new FakeRelay();
+    const m = machine(relay, null);
+    expect(await m.roster.ensureEnrolled()).toEqual({ kind: "no-key" });
+    expect(relay.gets).toBe(0);
+    expect(buildRosterView({ kind: "no-key" }, NOW).kind).toBe("no-key");
+  });
+});
+
+// ── C1 refusals and R23 remedies ─────────────────────────────────────
+
+describe("C1 refusals — R23 remedies, R26 evidence kept", () => {
+  async function superseded(opts: Parameters<typeof machine>[2] = {}) {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    relay.chain = [await rotate(a, b)];
+    relay.current = hex(b);
+    const m = machine(relay, a, opts);
+    return { a, b, relay, m };
+  }
+
+  it("held_key_superseded: refused, no roster, nothing minted; remedy restore by default", async () => {
+    const { m, relay } = await superseded();
+    const out = await m.roster.ensureEnrolled();
+    expect(out).toMatchObject({
+      kind: "refused",
+      reason: "held_key_superseded",
+      remedy: "restore",
+    });
+    expect(relay.posts).toHaveLength(0);
+    const view = buildRosterView(await m.roster.acquire(), NOW);
+    expect(view.kind).toBe("no-roster");
+  });
+
+  it("R23.1 — a rotation write-ahead present → finish the rotation", async () => {
+    const { m } = await superseded({ rotationInFlight: true });
+    expect(await m.roster.ensureEnrolled()).toMatchObject({ remedy: "finish-rotation" });
+  });
+
+  it("R23.2 — the stored config key is held's verified successor → restart", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    relay.chain = [await rotate(a, b)];
+    const m = machine(relay, a, { stored: hex(b), rotationInFlight: false });
+    expect(await m.roster.ensureEnrolled()).toMatchObject({ remedy: "restart" });
+  });
+
+  it("R23.2 — a stored key that does NOT descend from held → restore", async () => {
+    const { m } = await superseded({ stored: hex(await generateKeypair()) });
+    expect(await m.roster.ensureEnrolled()).toMatchObject({ remedy: "restore" });
+  });
+
+  it("R26 — the refusal's evidence survives a relay that loses it", async () => {
+    const { m, relay } = await superseded();
+    await m.roster.ensureEnrolled();
+    expect(m.cache.value!.succession).toHaveLength(1);
+    relay.chain = []; // relay switch / DB loss
+    relay.current = null;
+    expect(await m.roster.ensureEnrolled()).toMatchObject({ reason: "held_key_superseded" });
+  });
+
+  it("duplicate_key (a rotation back to the held key) → refused, remedy rotate", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const c = await generateKeypair();
+    const relay = new FakeRelay();
+    relay.chain = [await rotate(a, b), await rotate(b, c), await rotate(c, b)];
+    const m = machine(relay, b);
+    expect(await m.roster.ensureEnrolled()).toMatchObject({
+      kind: "refused",
+      reason: "duplicate_key",
+      remedy: "rotate",
+    });
+  });
+
+  it("a malformed call (a non-hex guardian pin is ignored, not a refusal)", async () => {
+    const relay = new FakeRelay();
+    const m = machine(relay, await generateKeypair(), { guardian: "NOT-HEX" });
+    expect((await m.roster.ensureEnrolled()).kind).toBe("minted");
+  });
+
+  it("malformed id → refused malformed_input, remedy report", async () => {
+    const relay = new FakeRelay();
+    const m = machine(relay, await generateKeypair(), { motebitId: "" });
+    expect(await m.roster.ensureEnrolled()).toMatchObject({
+      reason: "malformed_input",
+      remedy: "report",
+    });
+  });
+
+  it("the cache is an input: after relay loss the cached links still resolve the chain", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    relay.chain = [await rotate(a, b)];
+    const m = machine(relay, b);
+    const first = await acquired(m);
+    expect(first.chain.chain).toEqual([hex(a), hex(b)]);
+    relay.chain = [];
+    const second = await acquired(m);
+    expect(second.chain.chain).toEqual([hex(a), hex(b)]);
+    expect(second.succession.missingLinks).toBe(1);
+    const view = buildRosterView(second, NOW);
+    expect(view.kind === "roster" && view.notes.map((n) => n.kind)).toContain("missing-links");
+  });
+});
+
+// ── R21: the rotation hook ───────────────────────────────────────────
+
+describe("R21 — the rotation hook (option (a): capture before the link, mint after the commit)", () => {
+  it("an active host rotates → frozen active, and it enrols under the new key", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    await m.roster.captureBeforeRotation(); // R21 (a): under A, before the POST
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    relay.current = hex(b);
+    m.setKey(b);
+    const out = await m.roster.afterRotation({ signer: await signerOf(b), record });
+    expect(out).toMatchObject({ kind: "frozen", value: "active", decided: { kind: "minted" } });
+    expect([...relay.enr.values()].filter((e) => e.public_key === hex(b))).toHaveLength(1);
+    // The link joined the replica (C1.4).
+    expect(m.cache.value!.succession).toHaveLength(1);
+    // Resume path: the hook again mints nothing new (one per (device, key)).
+    const again = await m.roster.afterRotation({ signer: await signerOf(b), record });
+    expect(again).toMatchObject({ kind: "frozen", value: "active", decided: { kind: "active" } });
+    expect([...relay.enr.values()].filter((e) => e.public_key === hex(b))).toHaveLength(1);
+    expect((await m.roster.ensureEnrolled()).kind).toBe("active");
+  });
+
+  it("a surface that was never a host rotates → frozen absent, and it does NOT become one (N8)", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    const m = machine(relay, b);
+    const out = await m.roster.afterRotation({ signer: await signerOf(b), record });
+    // Never captured (it held only B): absent.
+    expect(out).toMatchObject({ kind: "frozen", value: "absent", decided: null });
+    expect(relay.enr.size).toBe(0);
+  });
+
+  it("a host retired before the rotation → frozen not-active; never re-enrols on its own", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    await relay.hold(await retireEntry(a, m.cache.value!.enrollments[0]!));
+    await m.roster.captureBeforeRotation(); // R21 (a): under A, before the POST
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    m.setKey(b);
+    const out = await m.roster.afterRotation({ signer: await signerOf(b), record });
+    expect(out).toMatchObject({ kind: "frozen", value: "not-active", decided: null });
+    expect(relay.enr.size).toBe(1);
+    expect((await m.roster.ensureEnrolled()).kind).toBe("retired");
+  });
+
+  it("a retirement under the NEW key that reached this device first: current retired wins, frozen persisted not-active, no mint (R14)", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    const e = m.cache.value!.enrollments[0]!;
+    await m.roster.captureBeforeRotation(); // R21 (a): under A, before the POST
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    await relay.hold(await retireEntry(b, e)); // the phone, on the new key
+    m.setKey(b);
+    const out = await m.roster.afterRotation({ signer: await signerOf(b), record });
+    expect(out).toMatchObject({
+      kind: "frozen",
+      value: "not-active",
+      decided: { kind: "retired" },
+    });
+    expect(relay.enr.size).toBe(1);
+  });
+
+  it("the hook's GET fails → frozen absent; first write wins, so a later successful hook cannot flip it", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    await m.roster.captureBeforeRotation(); // R21 (a): under A, before the POST
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    m.setKey(b);
+    relay.getFails = true;
+    const out = await m.roster.afterRotation({ signer: await signerOf(b), record });
+    expect(out).toMatchObject({ kind: "frozen", value: "absent" });
+    relay.getFails = false;
+    const again = await m.roster.afterRotation({ signer: await signerOf(b), record });
+    expect(again).toMatchObject({ kind: "frozen", value: "absent", decided: null });
+    expect((await m.roster.ensureEnrolled()).kind).toBe("superseded");
+    expect([...relay.enr.values()].some((e) => e.public_key === hex(b))).toBe(false);
+  });
+
+  it("a hook whose new key is itself already rotated away → no verdict, frozen absent", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const c = await generateKeypair();
+    const relay = new FakeRelay();
+    const record = await rotate(a, b);
+    relay.chain = [record, await rotate(b, c)];
+    const m = machine(relay, b);
+    const out = await m.roster.afterRotation({ signer: await signerOf(b), record });
+    expect(out.kind).toBe("no-verdict");
+    expect(m.cache.value!.frozen).toEqual([
+      expect.objectContaining({ pre_rotation_key: hex(a), value: "absent" }),
+    ]);
+  });
+});
+
+// ── C4: retire and enroll ────────────────────────────────────────────
+
+describe("C4 — retire, and undo by enroll", () => {
+  it("retires every standing entry of an active machine under the signer", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(a, "vps", NOW - 1), await enrol(a, "vps", NOW - 2));
+    const m = machine(relay, a);
+    const out = await m.roster.retire("vps");
+    expect(out).toMatchObject({ kind: "retired", advisory: false });
+    if (out.kind === "retired") expect(out.retirementIds).toHaveLength(2);
+    expect(relay.ret.size).toBe(2);
+    const acq = await acquired(m);
+    expect(acq.verdict.retired.map((x) => x.device_id)).toEqual(["vps"]);
+    expect(await m.roster.retire("vps")).toEqual({ kind: "already-retired", deviceId: "vps" });
+  });
+
+  it("retiring a superseded line is advisory (N9)", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(a, "old-vps"));
+    relay.chain = [await rotate(a, b)];
+    const m = machine(relay, b);
+    expect(await m.roster.retire("old-vps")).toMatchObject({ kind: "retired", advisory: true });
+  });
+
+  it("connected but never enrolled → nothing to retire; unknown id → says so", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    relay.live = [{ device_id: "phone", bound_under: hex(a), sockets_open: 1 }];
+    const m = machine(relay, a);
+    expect(await m.roster.retire("phone")).toEqual({
+      kind: "not-enrolled",
+      deviceId: "phone",
+      socketOpen: true,
+    });
+    expect(await m.roster.retire("nope")).toEqual({ kind: "unknown-device", deviceId: "nope" });
+    expect(relay.ret.size).toBe(0);
+  });
+
+  it("retire refuses to sign on an unread relay", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    relay.getFails = true;
+    const m = machine(relay, a);
+    expect((await m.roster.retire("vps")).kind).toBe("unreadable");
+    expect((await m.roster.enroll("vps")).kind).toBe("unreadable");
+  });
+
+  it("enroll undoes a retirement (an explicit act)", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(a, "vps"));
+    const m = machine(relay, a);
+    await m.roster.retire("vps");
+    const out = await m.roster.enroll("vps");
+    expect(out.kind).toBe("enrolled");
+    const acq = await acquired(m);
+    expect(acq.verdict.active.map((x) => x.device_id)).toEqual(["vps"]);
+    expect(await m.roster.enroll("vps")).toEqual({ kind: "already-active", deviceId: "vps" });
+  });
+
+  it("R17a — an id with no line that is not this device's own needs --force", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    expect(await m.roster.enroll("typo")).toMatchObject({
+      kind: "needs-force",
+      why: "no-such-line",
+    });
+    expect(relay.enr.size).toBe(0);
+    expect((await m.roster.enroll("typo", { force: true })).kind).toBe("enrolled");
+    // Its own id needs no force.
+    expect((await m.roster.enroll("dev-self")).kind).toBe("enrolled");
+  });
+
+  it("R17b / R24 — every line superseded needs --force, except this device's own id", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(a, "old-vps"), await enrol(a, "dev-self"));
+    relay.chain = [await rotate(a, b)];
+    const m = machine(relay, b);
+    expect(await m.roster.enroll("old-vps")).toMatchObject({
+      kind: "needs-force",
+      why: "all-superseded",
+    });
+    expect((await m.roster.enroll("dev-self")).kind).toBe("enrolled");
+  });
+
+  it("R17c — liveness shows the id bound under a known device key → needs --force", async () => {
+    const a = await generateKeypair();
+    const dk = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await retireEntry(a, await enrol(a, "tablet")), await enrol(a, "tablet"));
+    relay.live = [{ device_id: "tablet", bound_under: hex(dk), sockets_open: 1 }];
+    const m = machine(relay, a, { knownDeviceKeys: [hex(dk)] });
+    expect(await m.roster.enroll("tablet")).toMatchObject({
+      kind: "needs-force",
+      why: "linked-device",
+    });
+  });
+});
+
+// ── C5: presentation ─────────────────────────────────────────────────
+
+describe("C5 — presentation, chunks, refusals, the support set", () => {
+  it("chunks of at most 64", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    const many: HostEnrollment[] = [];
+    for (let i = 0; i < 70; i++) many.push(await enrol(a, `vps-${String(i).padStart(2, "0")}`));
+    await m.cache.save({ ...emptyReplica(MID), enrollments: many });
+    relay.posts = [];
+    const acq = await acquired(m);
+    // The repair already presented all 70 (the relay held none of them).
+    expect(relay.posts.map((p) => p.enrollments.length + p.retirements.length)).toEqual([64, 6]);
+    expect(acq.omitted).toEqual([]);
+    expect(acq.repair?.taken).toBe(70);
+  });
+
+  it("422 per-entry refusal is 'not taken' (retried next time); roster_full is reported once and never retried", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, b, { local: [await rotate(a, b)] });
+    const sup = await enrol(a, "old-vps"); // foreign bucket
+    const bad = await enrol(b, "flaky");
+    await m.cache.save({ ...emptyReplica(MID), enrollments: [sup, bad] });
+    relay.full.add(await hostEnrollmentId(sup));
+    relay.refuse.set(await hostEnrollmentId(bad), "too_large");
+    const acq = await acquired(m);
+    expect(acq.repair?.rosterFull).toEqual([await hostEnrollmentId(sup)]);
+    expect(acq.repair?.notTaken).toEqual([
+      { id: await hostEnrollmentId(bad), reason: "too_large" },
+    ]);
+    // R20 — roster_full ids are excluded from the set difference; the other stays omitted.
+    expect(acq.omitted).toEqual([await hostEnrollmentId(bad)]);
+    // Never retried, never re-reported.
+    relay.posts = [];
+    relay.refuse.clear();
+    const again = await acquired(m);
+    expect(again.repair?.rosterFull).toEqual([]);
+    expect(relay.posts.flatMap((p) => p.enrollments).some((e) => e.device_id === "old-vps")).toBe(
+      false,
+    );
+    expect(again.omitted).toEqual([]);
+  });
+
+  it("413, or no response at all: the whole chunk is not taken", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.cache.save({ ...emptyReplica(MID), enrollments: [await enrol(a, "vps")] });
+    relay.status413 = true;
+    const acq = await acquired(m);
+    expect(acq.repair?.notTaken[0]?.reason).toMatch(/413/);
+    relay.status413 = false;
+    relay.presentDown = true;
+    const acq2 = await acquired(m);
+    expect(acq2.repair?.notTaken[0]?.reason).toBe("network");
+    expect(acq2.omitted).toHaveLength(1);
+  });
+
+  it("the minimal support set: no history below H, no old-epoch entries of an active machine; pending tombstones go", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const oldOfActive = await enrol(a, "moved");
+    const newOfActive = await enrol(b, "moved");
+    const superseded = await enrol(a, "left-behind");
+    const tomb = await signHostRetirement(
+      { motebit_id: MID, enrollment_id: "f".repeat(64), public_key: hex(b), retired_at: NOW },
+      b.privateKey,
+    );
+    const m = machine(relay, b, { local: [await rotate(a, b)] });
+    await m.cache.save({
+      ...emptyReplica(MID),
+      enrollments: [oldOfActive, newOfActive, superseded],
+      retirements: [tomb],
+    });
+    const acq = await acquired(m);
+    const presented = new Set(
+      await Promise.all([
+        ...relay.posts.flatMap((p) => p.enrollments).map((e) => hostEnrollmentId(e)),
+        ...relay.posts.flatMap((p) => p.retirements).map((r) => hostRetirementId(r)),
+      ]),
+    );
+    expect(presented.has(await hostEnrollmentId(newOfActive))).toBe(true);
+    expect(presented.has(await hostEnrollmentId(superseded))).toBe(true);
+    expect(presented.has(await hostRetirementId(tomb))).toBe(true);
+    expect(presented.has(await hostEnrollmentId(oldOfActive))).toBe(false);
+    expect(acq.omitted).toEqual([]);
+  });
+
+  it("verify-before-hold: a served copy under a junk signature is never held", async () => {
+    const a = await generateKeypair();
+    const stranger = await generateKeypair();
+    const relay = new FakeRelay();
+    const real = await enrol(a, "vps");
+    const junk = { ...real, signature: `${"A".repeat(85)}A` };
+    const foreign = await enrol(stranger, "evil");
+    relay.enr.set("junk", junk as HostEnrollment);
+    relay.enr.set("real", real);
+    relay.enr.set("foreign", foreign);
+    const m = machine(relay, a);
+    await acquired(m);
+    expect(m.cache.value!.enrollments).toEqual([real]);
+  });
+});
+
+// ── C6: rendering ────────────────────────────────────────────────────
+
+describe("C6 — the view", () => {
+  it("a quantifier only over an ok verdict with nothing suppressed; it cites the head by fingerprint", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    relay.chain = [await rotate(a, b)];
+    relay.current = hex(b);
+    await relay.hold(await enrol(b, "dev-self"), await enrol(b, "vps"), await enrol(a, "old"));
+    const m = machine(relay, b);
+    const view = buildRosterView(await acquired(m), NOW);
+    if (view.kind !== "roster") throw new Error("expected roster");
+    expect(view.head.fingerprint).toBe(keyFingerprint(hex(b)));
+    expect(view.claim?.text).toBe(
+      `2 machines on the current key ${keyFingerprint(hex(b))}…; not covered: 1 line on superseded keys`,
+    );
+    expect(view.lines.find((l) => l.kind === "superseded")?.text).toMatch(/advisory, not covered/);
+  });
+
+  it.each([
+    [
+      "relay_newer_key",
+      async (r: FakeRelay): Promise<void> => {
+        r.current = hex(await generateKeypair());
+      },
+    ],
+    [
+      "relay_unread",
+      async (r: FakeRelay): Promise<void> => {
+        r.getFails = true;
+      },
+    ],
+  ] as const)("suppressed (%s) → no quantifier anywhere", async (reason, arrange) => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(a, "dev-self"));
+    const m = machine(relay, a);
+    await m.roster.acquire(); // cache it
+    await arrange(relay);
+    const view = buildRosterView(await acquired(m), NOW);
+    if (view.kind !== "roster") throw new Error("expected roster");
+    expect(view.suppressed).toContain(reason);
+    expect(view.claim).toBeNull();
+    const all = [...view.lines.map((l) => l.text), ...view.notes.map((n) => n.text)].join("\n");
+    expect(all).not.toMatch(/\b\d+ machines? on the current key|every machine|all machines/);
+    expect(suppressionText(reason)).toBeTruthy();
+  });
+
+  it("C1.3 — a guardian-verified branch this device is not on suppresses; a normal branch only discloses (N11)", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const c = await generateKeypair();
+    const g = await generateKeypair();
+    const recovery = await signGuardianRecoverySuccession(
+      g.privateKey,
+      c.privateKey,
+      a.publicKey,
+      c.publicKey,
+    );
+    const relay = new FakeRelay();
+    relay.chain = [await rotate(a, b), recovery];
+    const m = machine(relay, b, { guardian: hex(g) });
+    const view = buildRosterView(await acquired(m), NOW);
+    if (view.kind !== "roster") throw new Error("expected roster");
+    expect(view.suppressed).toContain("guardian_branch");
+    expect(view.claim).toBeNull();
+
+    const d = await generateKeypair();
+    const relay2 = new FakeRelay();
+    relay2.chain = [await rotate(a, b), await rotate(a, d)];
+    const view2 = buildRosterView(await acquired(machine(relay2, b)), NOW);
+    if (view2.kind !== "roster") throw new Error("expected roster");
+    expect(view2.claim).not.toBeNull();
+    expect(view2.notes.find((n) => n.kind === "branch")?.text).toMatch(/signed two successors/);
+  });
+
+  it("precedence: superseded-key socket BEFORE the theft rule (#767); known device key; unplaceable key; not in roster", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const dk = await generateKeypair();
+    const thief = await generateKeypair();
+    const relay = new FakeRelay();
+    relay.chain = [await rotate(a, b)];
+    await relay.hold(await enrol(b, "dev-self"), await enrol(b, "vps"));
+    relay.rows = [
+      { device_id: "dev-self", bound_under: hex(b), last_seen_at: NOW, sockets_open: 1 },
+      // The rotating machine's own daemon, still on the old key.
+      { device_id: "dev-self", bound_under: hex(a), last_seen_at: NOW, sockets_open: 1 },
+      { device_id: "vps", bound_under: hex(thief), last_seen_at: NOW, sockets_open: 1 },
+      { device_id: "gone", bound_under: hex(a), last_seen_at: NOW - DAY, sockets_open: 0 },
+    ];
+    relay.live = [
+      { device_id: "tablet", bound_under: hex(dk), sockets_open: 1 },
+      { device_id: "laptop", bound_under: hex(b), sockets_open: 1 },
+    ];
+    const m = machine(relay, b, { knownDeviceKeys: [hex(dk)] });
+    const view = buildRosterView(await acquired(m), NOW);
+    if (view.kind !== "roster") throw new Error("expected roster");
+    const by = (d: string, kind: string) =>
+      view.lines.find((l) => l.device_id === d && l.kind === kind);
+    expect(by("dev-self", "active")?.text).toMatch(/the relay believes a socket is open/);
+    expect(by("dev-self", "superseded-key-socket")?.text).toMatch(
+      /socket open under a superseded key .*: this machine's daemon before it restarted, or any holder of that key/,
+    );
+    expect(by("gone", "superseded-key-socket")?.text).toMatch(/last seen under a superseded key/);
+    expect(by("vps", "unplaced-key-socket")?.text).toMatch(
+      /socket open under a key this device cannot place in this motebit's chain/,
+    );
+    expect(by("vps", "unplaced-key-socket")?.text).not.toMatch(/not this motebit/);
+    expect(by("tablet", "linked-device")?.text).toMatch(/linked device without the identity key/);
+    expect(by("laptop", "not-in-roster")?.text).toMatch(/socket open, not in the roster/);
+    expect(by("vps", "active")?.text).toMatch(/not observed in the last 90 days/);
+  });
+
+  it("R25 — an enrolment under a key this device cannot place is 'not covered'; a device key only relabels", async () => {
+    const a = await generateKeypair();
+    const k = await generateKeypair();
+    const dk = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(
+      await enrol(a, "dev-self"),
+      await enrol(k, "mystery"),
+      await enrol(dk, "tablet"),
+    );
+    const m = machine(relay, a, { knownDeviceKeys: [hex(dk)] });
+    const view = buildRosterView(await acquired(m), NOW);
+    if (view.kind !== "roster") throw new Error("expected roster");
+    expect(view.claim?.unplaced).toBe(2);
+    expect(view.lines.find((l) => l.device_id === "mystery")?.text).toMatch(
+      /cannot place in its chain \(older or newer\)/,
+    );
+    const tablet = view.lines.find((l) => l.device_id === "tablet");
+    expect(tablet).toMatchObject({ kind: "unplaced-enrollment", linked_device: true });
+    expect(view.claim?.text).toMatch(/2 under keys this device cannot place/);
+  });
+
+  it("retired, but connected", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const e = await enrol(a, "vps");
+    await relay.hold(e, await retireEntry(a, e));
+    relay.rows = [{ device_id: "vps", bound_under: hex(a), last_seen_at: NOW, sockets_open: 1 }];
+    const view = buildRosterView(await acquired(machine(relay, a)), NOW);
+    if (view.kind !== "roster") throw new Error("expected roster");
+    expect(view.lines.find((l) => l.device_id === "vps")?.text).toMatch(
+      /retired under the current key; the relay believes a socket is open \(no heartbeat yet\)/,
+    );
+  });
+
+  it("C6.8 — the ambiguity hint needs two successive reads, and says 'may'", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(a, "vps"));
+    relay.rows = [{ device_id: "vps", bound_under: hex(a), last_seen_at: NOW, sockets_open: 2 }];
+    const m = machine(relay, a);
+    const first = buildRosterView(await acquired(m), NOW);
+    expect(first.kind === "roster" && first.notes.some((n) => n.kind === "ambiguous")).toBe(false);
+    const second = buildRosterView(await acquired(m), NOW);
+    const note = second.kind === "roster" ? second.notes.find((n) => n.kind === "ambiguous") : null;
+    expect(note?.text).toMatch(
+      /vps: more than one socket open on two successive reads — two machines may share this id/,
+    );
+  });
+
+  it("N12 — after a restore with a fresh id, offer to retire the prior line", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const before = machine(relay, a, { deviceId: "old-id" });
+    await before.roster.ensureEnrolled();
+    const after = machine(relay, a, { deviceId: "new-id", cache: before.cache });
+    const view = buildRosterView(await acquired(after), NOW);
+    const note = view.kind === "roster" ? view.notes.find((n) => n.kind === "prior-line") : null;
+    expect(note).toMatchObject({ device_id: "old-id" });
+  });
+
+  it("ancestry is cited: rooted for a sovereign id's genesis key", async () => {
+    const a = await generateKeypair();
+    const mid = await deriveSovereignMotebitId(hex(a));
+    const relay = new FakeRelay();
+    const m = machine(relay, a, { motebitId: mid });
+    const view = buildRosterView(await acquired(m), NOW);
+    expect(view.kind === "roster" && view.notes[0]?.text).toMatch(/rooted/);
+  });
+
+  it("not observed since the start of the relay's observation window, when it is not yet full", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(a, "vps"));
+    const m = machine(relay, a);
+    const acq = await acquired(m);
+    acq.served!.liveness.observing_since = NOW - 3 * DAY;
+    const view = buildRosterView(acq, NOW);
+    expect(view.kind === "roster" && view.lines[0]?.text).toMatch(
+      /not observed since .* \(the relay's observation window\)/,
+    );
+    expect(view.kind === "roster" && view.lines[0]?.text).not.toMatch(/never/);
+  });
+});
+
+// ── The replica and the served parse ─────────────────────────────────
+
+describe("replica and parsing", () => {
+  it("parseReplica is strict; mergeReplicas is a union with first-write-wins frozen values", async () => {
+    expect(parseReplica(null)).toBeNull();
+    expect(parseReplica({ ...emptyReplica(MID), enrollments: [{ nope: 1 }] })).toBeNull();
+    expect(parseReplica({ ...emptyReplica(MID), frozen: [{ device_id: "x" }] })).toBeNull();
+    const r = emptyReplica(MID);
+    expect(parseReplica(JSON.parse(JSON.stringify(r)))).toEqual(r);
+    const f1 = { device_id: "d", pre_rotation_key: "k", value: "absent" as const, taken_at: 1 };
+    const f2 = { ...f1, value: "active" as const, taken_at: 2 };
+    const merged = mergeReplicas({ ...r, frozen: [f1] }, { ...r, frozen: [f2] });
+    expect(merged.frozen).toEqual([f1]);
+    expect(() => mergeReplicas(r, emptyReplica("other"))).toThrow(/two different motebits/);
+  });
+
+  it("parseServedRoster refuses a body that is not the part-B shape", () => {
+    expect(parseServedRoster(null)).toBeNull();
+    expect(parseServedRoster({ enrollments: [], retirements: [] })).toBeNull();
+    expect(
+      parseServedRoster({
+        enrollments: [],
+        retirements: [],
+        liveness: { rows: [{ device_id: 1 }], live_unenrolled: [] },
+      }),
+    ).toBeNull();
+  });
+
+  it("the signer's public key is derived from its private key", async () => {
+    const a = await generateKeypair();
+    expect((await signerOf(a)).publicKeyHex).toBe(hex(a));
+  });
+});
+
+// ── The remaining branches, each a real case ─────────────────────────
+
+describe("edge cases", () => {
+  it("parseReplica accepts a full replica and refuses each malformed field", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const e = await enrol(a, "vps");
+    const full: MachineRosterReplica = {
+      version: 1,
+      motebit_id: MID,
+      succession: [await rotate(a, b)],
+      enrollments: [e],
+      retirements: [await retireEntry(a, e)],
+      frozen: [{ device_id: "vps", pre_rotation_key: hex(a), value: "active", taken_at: 1 }],
+      roster_full: ["x"],
+      own_device_ids: ["vps"],
+      own_minted: ["e"],
+      ambiguous: { at: 5, pairs: ["p"] },
+      integrity: { at: 3, suspect: true },
+      rotation_captures: [
+        {
+          motebit_id: MID,
+          device_id: "vps",
+          from_key: hex(a),
+          status: "active",
+          entries: ["e"],
+          at: 2,
+        },
+      ],
+    };
+    const round = JSON.parse(JSON.stringify(full)) as unknown;
+    expect(parseReplica(round)).toEqual(full);
+    for (const bad of [
+      { version: 2 },
+      { motebit_id: "" },
+      { succession: [{ old_public_key: 1 }] },
+      { succession: ["x"] },
+      { retirements: [{ nope: true }] },
+      { roster_full: [1] },
+      { own_device_ids: "x" },
+      { own_minted: [1] },
+      { ambiguous: ["p"] },
+      { ambiguous: { at: "x", pairs: [] } },
+      { integrity: { at: 1, suspect: "yes" } },
+      { frozen: [null] },
+    ]) {
+      expect(parseReplica({ ...full, ...bad })).toBeNull();
+    }
+    expect(parseReplica([])).toBeNull();
+    // A newer stored ambiguity read is kept over an older incoming one.
+    expect(
+      mergeReplicas({ ...full }, { ...full, ambiguous: { at: 1, pairs: [] } }).ambiguous,
+    ).toEqual({
+      at: 5,
+      pairs: ["p"],
+    });
+  });
+
+  it("parseServedRoster defaults absent liveness fields and refuses malformed rows", () => {
+    const ok = parseServedRoster({
+      enrollments: [],
+      retirements: [],
+      liveness: {
+        rows: [{ device_id: "d", bound_under: "k" }],
+        live_unenrolled: [{ device_id: "d", bound_under: "k" }],
+      },
+    });
+    expect(ok?.liveness).toEqual({
+      observed_by: "",
+      retention_days: 0,
+      observing_since: 0,
+      rows: [{ device_id: "d", bound_under: "k", last_seen_at: null, sockets_open: 0 }],
+      live_unenrolled: [{ device_id: "d", bound_under: "k", sockets_open: 0 }],
+    });
+    expect(
+      parseServedRoster({
+        enrollments: [],
+        retirements: [],
+        liveness: { rows: [], live_unenrolled: [{ device_id: 1 }] },
+      }),
+    ).toBeNull();
+    expect(
+      parseServedRoster({ enrollments: [], retirements: [], liveness: { rows: 1 } }),
+    ).toBeNull();
+    expect(parseServedRoster({ enrollments: [], retirements: 1 })).toBeNull();
+  });
+
+  it("a relay answer that is not a roster is a failed GET, never an empty set", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    const roster = new MachineRoster({
+      ...m.ports,
+      fetchRoster: async () => ({ ok: true, body: { nope: 1 } }),
+    });
+    const out = await roster.ensureEnrolled();
+    expect(out).toMatchObject({ kind: "unknown", why: "fetch-failed" });
+    expect(out.kind === "unknown" && out.detail).toMatch(/not a roster/);
+  });
+
+  it("no key: retire and enroll stop without reading; the hook uses its explicit signer", async () => {
+    const relay = new FakeRelay();
+    const m = machine(relay, null);
+    expect(await m.roster.retire("x")).toEqual({ kind: "no-key" });
+    expect(await m.roster.enroll("x")).toEqual({ kind: "no-key" });
+    expect(relay.gets).toBe(0);
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const out = await m.roster.afterRotation({
+      signer: await signerOf(b),
+      record: await rotate(a, b),
+    });
+    expect(out.kind).toBe("frozen");
+    expect(relay.gets).toBeGreaterThan(0);
+  });
+
+  it("refusals reach retire and enroll too", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    relay.chain = [await rotate(a, b)];
+    const m = machine(relay, a);
+    expect(await m.roster.retire("x")).toMatchObject({
+      kind: "refused",
+      reason: "held_key_superseded",
+    });
+    expect(await m.roster.enroll("x")).toMatchObject({
+      kind: "refused",
+      reason: "held_key_superseded",
+    });
+  });
+
+  it("retire says why nothing was signed: a corrupt cache, an omission", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const cache = new FakeCache();
+    cache.corrupt = true;
+    const m = machine(relay, a, { cache });
+    expect(await m.roster.retire("vps")).toEqual({
+      kind: "unreadable",
+      detail: "the local roster replica could not be read; it was kept aside",
+    });
+    const other = await enrol(a, "vps");
+    await cache.save({ ...emptyReplica(MID), enrollments: [other] });
+    relay.omit.add(await hostEnrollmentId(other));
+    expect(await m.roster.retire("vps")).toEqual({
+      kind: "unreadable",
+      detail: "the relay is missing 1 entry this device holds",
+    });
+  });
+
+  it("a connected-only id is found in persisted rows too", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    relay.rows = [{ device_id: "host", bound_under: hex(a), last_seen_at: NOW, sockets_open: 0 }];
+    expect(await machine(relay, a).roster.retire("host")).toEqual({
+      kind: "not-enrolled",
+      deviceId: "host",
+      socketOpen: false,
+    });
+  });
+
+  it("a roster_full met on a later presentation is remembered", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    const other = await enrol(a, "vps");
+    await relay.hold(other);
+    await m.cache.save({ ...emptyReplica(MID), enrollments: [other] });
+    relay.full.add(await hostEnrollmentId(other));
+    const out = await m.roster.ensureEnrolled();
+    expect(out.kind === "active" && out.presented.rosterFull).toEqual([
+      await hostEnrollmentId(other),
+    ]);
+    expect(m.cache.value!.roster_full).toEqual([await hostEnrollmentId(other)]);
+  });
+
+  it("a 422 whose refusals are junk counts the chunk as taken; another status takes none", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.cache.save({ ...emptyReplica(MID), enrollments: [await enrol(a, "vps")] });
+    const junk = new MachineRoster({
+      ...m.ports,
+      presentRoster: async () => ({
+        status: 422,
+        body: { refused: [null, { index: "x" }, { kind: "enrollment", index: 99 }] },
+      }),
+    });
+    const acq = await junk.acquire();
+    expect(acq.kind === "acquired" && acq.repair?.taken).toBe(1);
+    const five = new MachineRoster({
+      ...m.ports,
+      presentRoster: async () => ({ status: 500, body: null }),
+    });
+    const again = await five.acquire();
+    expect(again.kind === "acquired" && again.repair?.notTaken[0]?.reason).toBe("status 500");
+  });
+
+  it.each([
+    [
+      "forked_below",
+      async (a: KeyPair, b: KeyPair): Promise<KeySuccessionRecord[]> => {
+        const x = await generateKeypair();
+        const y = await generateKeypair();
+        return [await rotate(x, a), await rotate(y, a), await rotate(a, b)];
+      },
+      /signed two predecessors/,
+    ],
+    [
+      "recovery_limited",
+      async (a: KeyPair, b: KeyPair): Promise<KeySuccessionRecord[]> => {
+        const g = await generateKeypair();
+        const x = await generateKeypair();
+        return [
+          await signGuardianRecoverySuccession(
+            g.privateKey,
+            a.privateKey,
+            x.publicKey,
+            a.publicKey,
+          ),
+          await rotate(a, b),
+        ];
+      },
+      /cannot be checked here/,
+    ],
+    [
+      "cycle_below",
+      async (a: KeyPair, b: KeyPair): Promise<KeySuccessionRecord[]> => {
+        const x = await generateKeypair();
+        return [await rotate(x, a), await rotate(a, x), await rotate(a, b)];
+      },
+      /repeats a key/,
+    ],
+  ] as const)("ancestry %s is disclosed, never refused", async (kind, records, text) => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    relay.chain = await records(a, b);
+    const acq = await acquired(machine(relay, b));
+    expect(acq.chain.ancestry.kind).toBe(kind);
+    const view = buildRosterView(acq, NOW);
+    expect(view.kind === "roster" && view.notes[0]?.text).toMatch(text);
+    expect(view.kind === "roster" && view.claim).not.toBeNull();
+  });
+
+  it("liveness says last seen when no socket is open; an unplaceable enrolment of a device with a line is not double-counted", async () => {
+    const a = await generateKeypair();
+    const k = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(a, "vps"), await enrol(k, "vps"));
+    relay.rows = [
+      { device_id: "vps", bound_under: hex(a), last_seen_at: NOW - DAY, sockets_open: 0 },
+    ];
+    const view = buildRosterView(await acquired(machine(relay, a)), NOW);
+    if (view.kind !== "roster") throw new Error("expected roster");
+    expect(view.lines[0]?.text).toMatch(/last seen 20/);
+    expect(view.claim?.unplaced).toBe(0);
+  });
+
+  it("the prior-line offer skips this device's own id and ids with no standing line", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const cache = new FakeCache();
+    await cache.save({ ...emptyReplica(MID), own_device_ids: ["new-id", "gone-id"] });
+    const view = buildRosterView(
+      await acquired(machine(relay, a, { deviceId: "new-id", cache })),
+      NOW,
+    );
+    expect(view.kind === "roster" && view.notes.some((n) => n.kind === "prior-line")).toBe(false);
+  });
+});
+
+// ── Review round 1 ───────────────────────────────────────────────────
+
+describe("round 1 — W2: the mint decision is atomic across processes", () => {
+  it("a run and a serve starting together mint exactly one enrolment", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const cache = new FakeCache();
+    const beforeSign = raceGate();
+    const run = machine(relay, a, { cache, beforeSign });
+    const serve = machine(relay, a, { cache, beforeSign, now: NOW + 1 });
+    const outs = await Promise.all([run.roster.ensureEnrolled(), serve.roster.ensureEnrolled()]);
+    expect(outs.map((o) => o.kind).sort()).toEqual(["active", "minted"]);
+    expect(cache.value!.enrollments).toHaveLength(1);
+    expect(relay.enr.size).toBe(1);
+  });
+
+  it("the reviewer's sequence: one POST lost, a fresh surface retires what it sees, the restart stays retired", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const cache = new FakeCache();
+    const beforeSign = raceGate();
+    await Promise.all([
+      machine(relay, a, { cache, beforeSign }).roster.ensureEnrolled(),
+      machine(relay, a, { cache, beforeSign, now: NOW + 1 }).roster.ensureEnrolled(),
+    ]);
+    // Any second enrolment's POST was lost: the relay keeps only the first.
+    const [first] = [...relay.enr.keys()];
+    for (const id of [...relay.enr.keys()]) if (id !== first) relay.enr.delete(id);
+    // The phone, with an empty replica, retires what it sees.
+    const phone = machine(relay, a, { deviceId: "phone" });
+    expect(await phone.roster.retire("dev-self")).toMatchObject({ kind: "retired" });
+    // The machine restarts: it stays retired, and nothing it held revives it.
+    const restart = await machine(relay, a, { cache }).roster.ensureEnrolled();
+    expect(restart.kind).toBe("retired");
+    const acq = await acquired(machine(relay, a, { cache }));
+    expect(acq.verdict.active.map((m) => m.device_id)).toEqual([]);
+  });
+
+  it("an explicit enroll racing an automatic start also yields one line", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const cache = new FakeCache();
+    const beforeSign = raceGate();
+    const outs = await Promise.all([
+      machine(relay, a, { cache, beforeSign }).roster.ensureEnrolled(),
+      machine(relay, a, { cache, beforeSign, now: NOW + 1 }).roster.enroll("dev-self"),
+    ]);
+    // Whichever wins the lock mints; the other sees its line.
+    expect([
+      ["minted", "already-active"],
+      ["active", "enrolled"],
+    ]).toContainEqual(outs.map((o) => o.kind));
+    expect(cache.value!.enrollments).toHaveLength(1);
+  });
+
+  it("a mint whose locked re-read is corrupt mints nothing", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const cache = new FakeCache();
+    const m = machine(relay, a, { cache });
+    let loads = 0;
+    const roster = new MachineRoster({
+      ...m.ports,
+      cache: {
+        load: async () => (++loads === 2 ? { kind: "corrupt" } : cache.load()),
+        save: (r) => cache.save(r),
+        exclusive: (fn) => cache.exclusive(fn),
+      },
+    });
+    expect(await roster.ensureEnrolled()).toMatchObject({ kind: "unknown", why: "cache-corrupt" });
+    expect(relay.enr.size).toBe(0);
+  });
+});
+
+describe("round 1 — P3: the rotation hook never mints after a corrupt read", () => {
+  it("an active host whose replica was unreadable at the hook freezes absent and mints nothing", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    await m.roster.captureBeforeRotation(); // R21 (a): under A, before the POST
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    m.cache.corrupt = true;
+    const out = await m.roster.afterRotation({ signer: await signerOf(b), record });
+    expect(out).toMatchObject({ kind: "frozen", value: "absent", decided: null });
+    expect([...relay.enr.values()].some((e) => e.public_key === hex(b))).toBe(false);
+  });
+});
+
+describe("round 1 — P4: the ambiguity hint needs two reads that happened", () => {
+  it("a failed second read never completes the pair", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(a, "vps"));
+    relay.rows = [{ device_id: "vps", bound_under: hex(a), last_seen_at: NOW, sockets_open: 2 }];
+    const m = machine(relay, a);
+    await acquired(m);
+    relay.getFails = true;
+    const view = buildRosterView(await acquired(m), NOW);
+    expect(view.kind === "roster" && view.notes.some((n) => n.kind === "ambiguous")).toBe(false);
+  });
+});
+
+describe("round 1 — W1: the view owns what an empty roster means", () => {
+  it("no lines over an ok verdict: none enrolled", async () => {
+    const view = buildRosterView(
+      await acquired(machine(new FakeRelay(), await generateKeypair())),
+      NOW,
+    );
+    expect(view.kind === "roster" && view.empty).toEqual({
+      kind: "none-enrolled",
+      text: "no machine has enrolled yet",
+    });
+  });
+
+  it("no lines over a suppressed verdict (relay unreadable): nothing held here — never 'no machine has enrolled'", async () => {
+    const relay = new FakeRelay();
+    relay.getFails = true;
+    const view = buildRosterView(await acquired(machine(relay, await generateKeypair())), NOW);
+    if (view.kind !== "roster") throw new Error("expected roster");
+    expect(view.claim).toBeNull();
+    expect(view.empty?.kind).toBe("nothing-held");
+    expect(view.empty?.text).not.toMatch(/enrolled/);
+  });
+
+  it("lines present: nothing to say about emptiness", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(a, "vps"));
+    const view = buildRosterView(await acquired(machine(relay, a)), NOW);
+    expect(view.kind === "roster" && view.empty).toBeNull();
+  });
+});
+
+// ── Decisive round (#783 withdrawn): a retired machine never re-activates ─
+
+describe("rule 1 — an automatic mint needs the succession read", () => {
+  it("no line, roster read, succession unread → unknown, nothing minted", async () => {
+    const relay = new FakeRelay();
+    relay.successionFails = true;
+    const m = machine(relay, await generateKeypair());
+    expect(await m.roster.ensureEnrolled()).toMatchObject({
+      kind: "unknown",
+      why: "succession-unread",
+    });
+    expect(relay.enr.size).toBe(0);
+  });
+
+  it("the rotation hook with an unread succession freezes absent and mints nothing", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    await m.roster.captureBeforeRotation(); // R21 (a): under A, before the POST
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    relay.successionFails = true;
+    const out = await m.roster.afterRotation({ signer: await signerOf(b), record });
+    expect(out).toMatchObject({ kind: "frozen", value: "absent", decided: null });
+    expect([...relay.enr.values()].some((e) => e.public_key === hex(b))).toBe(false);
+  });
+
+  it("explicit enroll is still allowed without the succession read", async () => {
+    const relay = new FakeRelay();
+    relay.successionFails = true;
+    const m = machine(relay, await generateKeypair());
+    expect((await m.roster.enroll("dev-self")).kind).toBe("enrolled");
+  });
+});
+
+describe("rule 2 — no auto-mint while this device has lines the chain cannot place", () => {
+  /** F1's shape: retired under A, rotated to B, replica lost, the chain reduced to [B]. */
+  async function retiredThenLost() {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const e = await enrol(a, "dev-self");
+    await relay.hold(e, await retireEntry(a, e));
+    // The relay lost its succession chain (a new relay, or a restore): it
+    // answers, but with nothing — the device holds B and cannot place A.
+    relay.chain = [];
+    return { a, b, relay };
+  }
+
+  it("the own A-enrolment is unplaceable → `unplaced`, nothing minted", async () => {
+    const { b, relay } = await retiredThenLost();
+    const m = machine(relay, b);
+    const out = await m.roster.ensureEnrolled();
+    expect(out).toMatchObject({ kind: "unplaced", count: 1 });
+    expect(relay.enr.size).toBe(1);
+  });
+
+  it("explicit enroll still rejoins", async () => {
+    const { b, relay } = await retiredThenLost();
+    expect((await machine(relay, b).roster.enroll("dev-self")).kind).toBe("enrolled");
+  });
+
+  it("another device's unplaceable line does not block this device's first enrolment", async () => {
+    const { b, relay } = await retiredThenLost();
+    expect((await machine(relay, b, { deviceId: "fresh" }).roster.ensureEnrolled()).kind).toBe(
+      "minted",
+    );
+  });
+});
+
+describe("rule 3 — the frozen verdict and the mint are one step", () => {
+  it("F2: a hook interrupted at the lock leaves no frozen active; an old-key line then never mints", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const cache = new FakeCache();
+    const m = machine(relay, a, { cache });
+    await m.roster.ensureEnrolled();
+    await m.roster.captureBeforeRotation(); // R21 (a): under A, before the POST
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    relay.current = hex(b);
+    const broken = new MachineRoster({
+      ...m.ports,
+      cache: {
+        load: () => cache.load(),
+        save: (r) => cache.save(r),
+        exclusive: () => Promise.reject(new Error("killed")),
+      },
+    });
+    await expect(broken.afterRotation({ signer: await signerOf(b), record })).rejects.toThrow(
+      /killed/,
+    );
+    expect(cache.value!.frozen.filter((f) => f.value === "active")).toEqual([]);
+    // The phone retires the old line under B; a holder of A adds a fresh one.
+    const phone = machine(relay, b, { deviceId: "phone" });
+    expect((await phone.roster.retire("dev-self")).kind).toBe("retired");
+    await relay.hold(await enrol(a, "dev-self", NOW + 5));
+    // The machine restarts on B.
+    const restart = await machine(relay, b, { cache }).roster.ensureEnrolled();
+    expect(restart.kind).not.toBe("minted");
+    const acq = await acquired(machine(relay, b, { cache }));
+    expect(acq.verdict.active.map((x) => x.device_id)).not.toContain("dev-self");
+  });
+
+  it("a signature that fails inside the mint persists nothing", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const cache = new FakeCache();
+    const m = machine(relay, a, { cache });
+    await m.roster.ensureEnrolled();
+    await m.roster.captureBeforeRotation(); // R21 (a): under A, before the POST
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    const good = await signerOf(b);
+    const bad: RosterSigner = {
+      ...good,
+      signEnrollment: () => Promise.reject(new Error("signer died")),
+    };
+    await expect(m.roster.afterRotation({ signer: bad, record })).rejects.toThrow(/signer died/);
+    expect(cache.value!.frozen.filter((f) => f.value === "active")).toEqual([]);
+  });
+
+  it("the successful hook persists frozen active in the same save as the new line", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const cache = new FakeCache();
+    const m = machine(relay, a, { cache });
+    await m.roster.ensureEnrolled();
+    await m.roster.captureBeforeRotation(); // R21 (a): under A, before the POST
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    const saves: MachineRosterReplica[] = [];
+    const watching = new MachineRoster({
+      ...m.ports,
+      cache: {
+        load: () => cache.load(),
+        save: (r) => {
+          saves.push(r);
+          return cache.save(r);
+        },
+        exclusive: (fn) => cache.exclusive(fn),
+      },
+    });
+    const out = await watching.afterRotation({ signer: await signerOf(b), record });
+    expect(out).toMatchObject({ value: "active", decided: { kind: "minted" } });
+    const firstActive = saves.findIndex((r) => r.frozen.some((f) => f.value === "active"));
+    expect(firstActive).toBeGreaterThanOrEqual(0);
+    expect(saves[firstActive]!.enrollments.some((e) => e.public_key === hex(b))).toBe(true);
+  });
+});
+
+describe("view — a line retired under the current key, enrolled under an older one", () => {
+  it("says retired (advisory), never 'retired at an older key'", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const e = await enrol(a, "vps");
+    await relay.hold(e, await retireEntry(b, e));
+    relay.chain = [await rotate(a, b)];
+    const view = buildRosterView(await acquired(machine(relay, b)), NOW);
+    const line = view.kind === "roster" ? view.lines.find((l) => l.device_id === "vps") : null;
+    expect(line?.text).toMatch(/retired \(advisory: its enrolment is on an older key\)/);
+    expect(line?.text).not.toMatch(/retired at an older key/);
+  });
+});
+
+describe("property — a machine the sovereign retired never ends active at the head without `enroll`", () => {
+  // A small seeded PRNG: the same sequences on every run, and a failure
+  // names the seed that reproduces it.
+  function prng(seed: number): () => number {
+    let x = seed >>> 0 || 1;
+    return () => {
+      x ^= x << 13;
+      x ^= x >>> 17;
+      x ^= x << 5;
+      return (x >>> 0) / 0x100000000;
+    };
+  }
+  const ACTIONS = [
+    "retire",
+    "rotate",
+    "rotate-held",
+    "resume",
+    "restart",
+    "cache-delete",
+    "fail-succession",
+    "fail-roster",
+    "interrupt-hook",
+    "old-key-add",
+    "old-key-add-while-current",
+  ] as const;
+
+  it("over 300 seeded sequences of 12 steps (old-key lines may land between the link and a late hook)", async () => {
+    for (let seed = 1; seed <= 300; seed++) {
+      const rnd = prng(seed * 7919);
+      const relay = new FakeRelay();
+      const keys: KeyPair[] = [await generateKeypair()];
+      /** The key this machine holds: behind the head while a rotation is held. */
+      let held = keys[0]!;
+      /** A rotation whose link the relay recorded, and whose hook has not run (a lost response). */
+      let pending: { record: KeySuccessionRecord; next: KeyPair } | null = null;
+      let cache = new FakeCache();
+      let retiredBySovereign = false;
+      /** Lines lit by a holder of the key (never this device): allowed to stand, never to be carried. */
+      const thiefIds = new Set<string>();
+      /** Every enrolment this device ever minted for itself, across cache deletions. */
+      const deviceMinted = new Set<string>();
+      let mintedAtRetire = -1;
+      let clock = NOW;
+      const head = () => keys[keys.length - 1]!;
+      const dev = (k: KeyPair = held) => machine(relay, k, { cache, now: ++clock });
+      await dev().roster.ensureEnrolled();
+      const trace: string[] = [];
+
+      const hook = async (interrupt: boolean): Promise<void> => {
+        const p = pending!;
+        pending = null;
+        held = p.next; // the local commit
+        const d = dev();
+        const roster = interrupt
+          ? new MachineRoster({
+              ...d.ports,
+              cache: {
+                load: () => cache.load(),
+                save: (r) => cache.save(r),
+                exclusive: () => Promise.reject(new Error("killed")),
+              },
+            })
+          : d.roster;
+        await roster
+          .afterRotation({ signer: await signerOf(p.next), record: p.record })
+          .catch(() => undefined);
+      };
+
+      for (let step = 0; step < 12; step++) {
+        const act = ACTIONS[Math.floor(rnd() * ACTIONS.length)]!;
+        trace.push(act);
+        switch (act) {
+          case "retire": {
+            const out = await machine(relay, head(), {
+              deviceId: "phone",
+              now: ++clock,
+            }).roster.retire("dev-self");
+            if (out.kind === "retired" || out.kind === "already-retired") retiredBySovereign = true;
+            break;
+          }
+          case "rotate":
+          case "rotate-held":
+          case "interrupt-hook": {
+            if (pending != null) {
+              // A rotation is held: running rotate again resumes it.
+              await hook(act === "interrupt-hook");
+              break;
+            }
+            if (held !== head()) break; // this machine cannot rotate a key it does not hold
+            // R21 (a): capture under the old key, BEFORE the link is sent.
+            await dev().roster.captureBeforeRotation();
+            const next = await generateKeypair();
+            const record = await rotate(held, next);
+            keys.push(next);
+            relay.chain.push(record);
+            relay.current = hex(next);
+            pending = { record, next };
+            if (act !== "rotate-held") await hook(act === "interrupt-hook");
+            break;
+          }
+          case "resume":
+            if (pending != null) await hook(false);
+            break;
+          case "restart":
+            await dev().roster.ensureEnrolled();
+            relay.successionFails = false;
+            relay.getFails = false;
+            break;
+          case "cache-delete":
+            cache = new FakeCache();
+            break;
+          case "fail-succession":
+            relay.successionFails = true;
+            break;
+          case "fail-roster":
+            relay.getFails = true;
+            break;
+          case "old-key-add": {
+            if (keys.length < 2) break;
+            // Any key but the head — including the one a held rotation just left.
+            const old = keys[Math.floor(rnd() * (keys.length - 1))]!;
+            await relay.hold(await enrol(old, "dev-self", ++clock));
+            break;
+          }
+          case "old-key-add-while-current": {
+            // #786: a holder of the key this machine is about to rotate away
+            // re-lights it while that key is still the head.
+            if (held !== head()) break;
+            const e = await enrol(head(), "dev-self", ++clock);
+            thiefIds.add(await hostEnrollmentId(e));
+            await relay.hold(e);
+            break;
+          }
+        }
+        for (const id of cache.value?.own_minted ?? []) deviceMinted.add(id);
+        if (retiredBySovereign && mintedAtRetire < 0) mintedAtRetire = deviceMinted.size;
+        if (retiredBySovereign) {
+          // This device never mints for itself again without `enroll`.
+          expect(deviceMinted.size, `seed ${seed} (device minted): ${trace.join(" → ")}`).toBe(
+            mintedAtRetire,
+          );
+          // The truth: the full chain, over everything anyone holds.
+          const truth = await verifyHostRoster({
+            motebitId: MID,
+            keyChain: keys.map(hex),
+            enrollments: [...relay.enr.values(), ...(cache.value?.enrollments ?? [])],
+            retirements: [...relay.ret.values(), ...(cache.value?.retirements ?? [])],
+          });
+          // Active only by the key holder's own visible act at the head —
+          // never through a line the rotation carried into a new epoch.
+          const line = truth.ok ? truth.active.find((m) => m.device_id === "dev-self") : undefined;
+          const carried = line != null && line.entries.some((x) => !thiefIds.has(x.enrollment_id));
+          expect(carried, `seed ${seed}: ${trace.join(" → ")}`).toBe(false);
+        }
+      }
+    }
+  }, 180_000);
+});
+
+// ── #785 round 1 (precision) ─────────────────────────────────────────
+
+/** A cache whose lock first lets `before` land — a concurrent writer between decide() and the mint. */
+function interleaving(cache: FakeCache, before: () => Promise<void>): MachineRosterPorts["cache"] {
+  let fired = false;
+  return {
+    load: () => cache.load(),
+    save: (r) => cache.save(r),
+    exclusive: async (fn) => {
+      if (!fired) {
+        fired = true;
+        await before();
+      }
+      return cache.exclusive(fn);
+    },
+  };
+}
+
+describe("P1 — the re-checks under the mint lock bite", () => {
+  it("a retirement that lands between decide() and the mint: retired, nothing minted", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const e = await enrol(a, "dev-self");
+    await relay.hold(e);
+    relay.chain = [await rotate(a, b)];
+    const cache = new FakeCache();
+    await withFrozen(cache, "dev-self", hex(a), "active"); // decide() will mint
+    const m = machine(relay, b, { cache });
+    const retirement = await retireEntry(b, e);
+    const roster = new MachineRoster({
+      ...m.ports,
+      cache: interleaving(cache, () =>
+        cache.save({ ...emptyReplica(MID), retirements: [retirement] }),
+      ),
+    });
+    const out = await roster.ensureEnrolled();
+    expect(out.kind).toBe("retired");
+    expect([...relay.enr.values()].some((x) => x.public_key === hex(b))).toBe(false);
+  });
+
+  it("an unplaceable line of this device that lands between decide() and the mint: unplaced, nothing minted", async () => {
+    const a = await generateKeypair();
+    const stranger = await generateKeypair();
+    const relay = new FakeRelay();
+    const cache = new FakeCache();
+    const m = machine(relay, a, { cache });
+    const foreign = await enrol(stranger, "dev-self");
+    const roster = new MachineRoster({
+      ...m.ports,
+      cache: interleaving(cache, () =>
+        cache.save({ ...emptyReplica(MID), enrollments: [foreign] }),
+      ),
+    });
+    const out = await roster.ensureEnrolled();
+    expect(out).toMatchObject({ kind: "unplaced", count: 1 });
+    expect(relay.enr.size).toBe(0);
+  });
+});
+
+describe("P2 — a succession body of the wrong shape is a failed read", () => {
+  it.each([null, [], "garbage", {}, { chain: "x" }])(
+    "body %j → unknown, nothing minted",
+    async (body) => {
+      const relay = new FakeRelay();
+      const m = machine(relay, await generateKeypair());
+      const roster = new MachineRoster({
+        ...m.ports,
+        fetchSuccession: async () => ({ ok: true, body }),
+      });
+      expect(await roster.ensureEnrolled()).toMatchObject({
+        kind: "unknown",
+        why: "succession-unread",
+      });
+      expect(relay.enr.size).toBe(0);
+    },
+  );
+});
+
+describe("P4 — no count over a copy that could not be read, until a full read re-merges", () => {
+  it("corrupt → suppressed; a later partial read → still suppressed; a full read → cleared", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(a, "vps"));
+    const cache = new FakeCache();
+    cache.corrupt = true;
+    const m = machine(relay, a, { cache });
+    const first = buildRosterView(await acquired(m), NOW);
+    expect(first.kind === "roster" && first.suppressed).toContain("cache_corrupt");
+    expect(first.kind === "roster" && first.claim).toBeNull();
+    // The next run reads the fresh file: still suspect while a read fails.
+    relay.successionFails = true;
+    const second = await acquired(m);
+    expect(second.cache).toBe("value");
+    expect(second.suppressed).toContain("cache_corrupt");
+    relay.successionFails = false;
+    const third = await acquired(m);
+    expect(third.suppressed).not.toContain("cache_corrupt");
+    const fourth = buildRosterView(await acquired(m), NOW);
+    expect(fourth.kind === "roster" && fourth.claim?.text).toMatch(/^1 machine on the current key/);
+  });
+});
+
+describe("P5 — the observed window is exact", () => {
+  it.each([
+    [89, /not observed since .* \(the relay's observation window\)/],
+    [90, /not observed in the last 90 days/],
+  ] as const)("observing for %i days", async (days, text) => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(a, "vps"));
+    const acq = await acquired(machine(relay, a));
+    acq.served!.liveness.observing_since = NOW - days * DAY;
+    const view = buildRosterView(acq, NOW);
+    expect(view.kind === "roster" && view.lines[0]?.text).toMatch(text);
+  });
+});
+
+describe("P6 — an empty roster that holds a pending tombstone never says none enrolled", () => {
+  it("a retirement for an enrolment this device has not seen", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(
+      await signHostRetirement(
+        { motebit_id: MID, enrollment_id: "e".repeat(64), public_key: hex(a), retired_at: NOW },
+        a.privateKey,
+      ),
+    );
+    const view = buildRosterView(await acquired(machine(relay, a, { deviceId: "watcher" })), NOW);
+    if (view.kind !== "roster") throw new Error("expected roster");
+    expect(view.lines).toEqual([]);
+    expect(view.empty?.kind).toBe("none-standing");
+    expect(view.empty?.text).not.toMatch(/no machine has enrolled/);
+  });
+});
+
+// ── #785 decisive round: R21 option (a) ──────────────────────────────
+
+describe("R21 option (a) — the hook reads the capture taken before the link, never the inputs after it", () => {
+  it("retired D; capture not-active; the link lands; an old-key holder re-lights D under A; the hook mints nothing", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    await relay.hold(await retireEntry(a, m.cache.value!.enrollments[0]!));
+    expect((await m.roster.captureBeforeRotation()).status).toBe("not-active");
+    const record = await rotate(a, b);
+    relay.chain = [record]; // the relay recorded A → B
+    await relay.hold(await enrol(a, "dev-self", NOW + 9)); // after the link, before the hook
+    const out = await machine(relay, b, { cache: m.cache }).roster.afterRotation({
+      signer: await signerOf(b),
+      record,
+    });
+    expect(out).toMatchObject({ kind: "frozen", value: "not-active", decided: null });
+    expect([...relay.enr.values()].some((e) => e.public_key === hex(b))).toBe(false);
+  });
+
+  it("an active capture authorizes only the line it saw: retired after, re-lit by the old key, a late hook mints nothing", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    expect((await m.roster.captureBeforeRotation()).status).toBe("active");
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    // The phone retires the old line under B; a holder of A re-lights D under A.
+    expect((await machine(relay, b, { deviceId: "phone" }).roster.retire("dev-self")).kind).toBe(
+      "retired",
+    );
+    await relay.hold(await enrol(a, "dev-self", NOW + 9));
+    // The held rotation resumes: the hook runs late.
+    const out = await machine(relay, b, { cache: m.cache }).roster.afterRotation({
+      signer: await signerOf(b),
+      record,
+    });
+    expect(out.kind === "frozen" && out.decided?.kind).not.toBe("minted");
+    expect([...relay.enr.values()].some((e) => e.public_key === hex(b))).toBe(false);
+  });
+
+  it("no capture (an older client, a crash before it) is absent: no automatic mint", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    const out = await machine(relay, b, { cache: m.cache }).roster.afterRotation({
+      signer: await signerOf(b),
+      record,
+    });
+    expect(out).toMatchObject({ kind: "frozen", value: "absent", decided: null });
+    expect(await machine(relay, b, { cache: m.cache }).roster.ensureEnrolled()).toMatchObject({
+      kind: "superseded",
+    });
+  });
+
+  it("a failed read at capture time captures absent", async () => {
+    const relay = new FakeRelay();
+    const m = machine(relay, await generateKeypair());
+    await m.roster.ensureEnrolled();
+    relay.successionFails = true;
+    expect((await m.roster.captureBeforeRotation()).status).toBe("absent");
+  });
+
+  it("a fresh capture replaces an older one for the same key; the latest wins", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    await m.roster.captureBeforeRotation();
+    await relay.hold(await retireEntry(a, m.cache.value!.enrollments[0]!));
+    const later = machine(relay, a, { cache: m.cache, now: NOW + 100 });
+    expect((await later.roster.captureBeforeRotation()).status).toBe("not-active");
+    expect(captureFor(m.cache.value!, "dev-self", hex(a))?.status).toBe("not-active");
+  });
+});
+
+// ── #786 round 1 ─────────────────────────────────────────────────────
+
+describe("W1 (#786) — a rotation never carries a line this device did not mint into the new epoch", () => {
+  /** D self-enrolled under A; the sovereign retires it; a holder of A (still current) re-lights it. */
+  async function relit() {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    await relay.hold(await retireEntry(a, m.cache.value!.enrollments[0]!));
+    const thief = await enrol(a, "dev-self", NOW + 3);
+    await relay.hold(thief);
+    return { a, b, relay, m, thief };
+  }
+
+  it("the capture reads not-active: D's standing line under A is not one it minted", async () => {
+    const { m } = await relit();
+    const acq = await acquired(m);
+    expect(acq.verdict.active.map((x) => x.device_id)).toEqual(["dev-self"]); // the thief's line
+    expect(await m.roster.captureBeforeRotation()).toMatchObject({
+      status: "not-active",
+      entries: [],
+    });
+  });
+
+  it("the hook mints nothing under B", async () => {
+    const { a, b, relay, m } = await relit();
+    await m.roster.captureBeforeRotation();
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    const out = await machine(relay, b, { cache: m.cache }).roster.afterRotation({
+      signer: await signerOf(b),
+      record,
+    });
+    expect(out).toMatchObject({ kind: "frozen", value: "not-active", decided: null });
+    expect([...relay.enr.values()].some((e) => e.public_key === hex(b))).toBe(false);
+  });
+
+  it("even a capture that names the thief's entry (an older client wrote it) authorizes nothing", async () => {
+    const { a, b, relay, m, thief } = await relit();
+    await m.cache.save({
+      ...emptyReplica(MID),
+      rotation_captures: [
+        {
+          motebit_id: MID,
+          device_id: "dev-self",
+          from_key: hex(a),
+          status: "active",
+          entries: [await hostEnrollmentId(thief)],
+          at: NOW,
+        },
+      ],
+    });
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    const out = await machine(relay, b, { cache: m.cache }).roster.afterRotation({
+      signer: await signerOf(b),
+      record,
+    });
+    expect(out.kind === "frozen" && out.decided?.kind).not.toBe("minted");
+    expect([...relay.enr.values()].some((e) => e.public_key === hex(b))).toBe(false);
+  });
+
+  it("the honest case still re-enrols: D minted its own line, active, rotates", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    expect(m.cache.value!.own_minted).toHaveLength(1);
+    expect((await m.roster.captureBeforeRotation()).status).toBe("active");
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    const out = await machine(relay, b, { cache: m.cache }).roster.afterRotation({
+      signer: await signerOf(b),
+      record,
+    });
+    expect(out).toMatchObject({ value: "active", decided: { kind: "minted" } });
+  });
+
+  it("the stated cost: a line enrolled for D from ANOTHER surface is not carried (enroll again after rotating)", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    // The phone enrols D explicitly; D itself never minted.
+    await machine(relay, a, { deviceId: "phone" }).roster.enroll("dev-self", { force: true });
+    const d = machine(relay, a);
+    expect((await d.roster.captureBeforeRotation()).status).toBe("not-active");
+  });
+});
+
+describe("P1 (#786) — the under-lock authorizes() re-check bites", () => {
+  it("a retirement of D's own line and a thief's re-light land between decide() and the lock ⇒ nothing minted", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const cache = new FakeCache();
+    const m = machine(relay, a, { cache });
+    await m.roster.ensureEnrolled();
+    const own = cache.value!.enrollments[0]!;
+    await m.roster.captureBeforeRotation(); // active, entries = [own]
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    const retirement = await retireEntry(b, own);
+    const thief = await enrol(a, "dev-self", NOW + 7);
+    const d = machine(relay, b, { cache });
+    const roster = new MachineRoster({
+      ...d.ports,
+      cache: interleaving(cache, () =>
+        cache.save({ ...emptyReplica(MID), enrollments: [thief], retirements: [retirement] }),
+      ),
+    });
+    const out = await roster.afterRotation({ signer: await signerOf(b), record });
+    expect(out.kind === "frozen" && out.decided?.kind).not.toBe("minted");
+    expect([...relay.enr.values()].some((e) => e.public_key === hex(b))).toBe(false);
+  });
+});
+
+describe("P3 (#786) — the hook reports the value actually persisted", () => {
+  it("already active under the new key: `already-active`, nothing frozen", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    await m.roster.captureBeforeRotation();
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    const d = machine(relay, b, { cache: m.cache });
+    expect((await d.roster.enroll("dev-self")).kind).toBe("enrolled"); // explicit, before the hook
+    const out = await d.roster.afterRotation({ signer: await signerOf(b), record });
+    expect(out).toMatchObject({
+      kind: "frozen",
+      value: "already-active",
+      decided: { kind: "active" },
+    });
+    expect(frozenFor(m.cache.value!, "dev-self", hex(a))).toBeNull();
+  });
+
+  it("retired before the lock: `not-active`, and that is what is stored", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    const own = m.cache.value!.enrollments[0]!;
+    await m.roster.captureBeforeRotation();
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    await relay.hold(await retireEntry(b, own));
+    const out = await machine(relay, b, { cache: m.cache }).roster.afterRotation({
+      signer: await signerOf(b),
+      record,
+    });
+    expect(out).toMatchObject({ value: "not-active", decided: { kind: "retired" } });
+    expect(frozenFor(m.cache.value!, "dev-self", hex(a))).toBe("not-active");
+  });
+});
+
+// ── #786 decisive round, F: never "not enrolled" for a line this device cannot place ─
+
+describe("F (#786) — a device whose only enrolments are unplaceable has enrolled", () => {
+  /** A phone holding K1 after K0 → K1, whose chain resolves to [K1] alone. */
+  async function phoneAfterRotation(how: "succession-failed" | "recovery-unpinned") {
+    const k0 = await generateKeypair();
+    const k1 = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(k0, "vps"));
+    if (how === "succession-failed") {
+      relay.chain = [await rotate(k0, k1)];
+      relay.successionFails = true; // one failed /succession read
+    } else {
+      const g = await generateKeypair();
+      relay.chain = [
+        await signGuardianRecoverySuccession(
+          g.privateKey,
+          k1.privateKey,
+          k0.publicKey,
+          k1.publicKey,
+        ),
+      ]; // and no guardian pinned here
+    }
+    relay.rows = [
+      { device_id: "vps", bound_under: hex(k0), last_seen_at: NOW, sockets_open: 1 },
+      { device_id: "vps", bound_under: hex(k1), last_seen_at: NOW, sockets_open: 1 },
+    ];
+    const phone = machine(relay, k1, { deviceId: "phone" });
+    return { k0, k1, relay, phone };
+  }
+
+  it.each(["succession-failed", "recovery-unpinned"] as const)(
+    "%s: retire says the lines are unplaceable, never 'never enrolled' / 'not on the roster'",
+    async (how) => {
+      const { phone, relay } = await phoneAfterRotation(how);
+      const acq = await acquired(phone);
+      expect(acq.chain.chain).toHaveLength(1);
+      expect(await phone.roster.retire("vps")).toEqual({
+        kind: "unplaced-lines",
+        deviceId: "vps",
+        count: 1,
+      });
+      expect(relay.ret.size).toBe(0);
+    },
+  );
+
+  it.each(["succession-failed", "recovery-unpinned"] as const)(
+    "%s: enroll refuses with `unplaced-lines`, not 'no such line'",
+    async (how) => {
+      const { phone } = await phoneAfterRotation(how);
+      expect(await phone.roster.enroll("vps")).toEqual({
+        kind: "needs-force",
+        deviceId: "vps",
+        why: "unplaced-lines",
+        count: 1,
+      });
+    },
+  );
+
+  it.each(["succession-failed", "recovery-unpinned"] as const)(
+    "%s: the view never calls it 'not in the roster'",
+    async (how) => {
+      const { phone, k0 } = await phoneAfterRotation(how);
+      const view = buildRosterView(await acquired(phone), NOW);
+      if (view.kind !== "roster") throw new Error("expected roster");
+      const vps = view.lines.filter((l) => l.device_id === "vps");
+      expect(vps.map((l) => l.kind).sort()).toEqual(
+        ["unplaced-enrollment", "unplaced-key-socket", "unplaced-key-socket"].sort(),
+      );
+      const text = vps.map((l) => l.text).join("\n");
+      expect(text).not.toMatch(/not in the roster|never enrolled|has no line/);
+      expect(text).toMatch(/cannot place/);
+      expect(view.empty).toBeNull();
+      // Rule 4 covers a device enrolled only under unplaceable keys: its
+      // socket under such a key is the "cannot place" signal, named by key.
+      const k0Row = vps.find((l) => l.kind === "unplaced-key-socket" && l.bound_under === hex(k0));
+      expect(k0Row?.text).toMatch(
+        /socket open under a key this device cannot place in this motebit's chain/,
+      );
+    },
+  );
+
+  it("a device with NO enrolment anywhere is still 'not enrolled' / 'unknown'", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    relay.live = [{ device_id: "tablet", bound_under: hex(a), sockets_open: 1 }];
+    const m = machine(relay, a);
+    expect((await m.roster.retire("tablet")).kind).toBe("not-enrolled");
+    expect((await m.roster.retire("ghost")).kind).toBe("unknown-device");
+    expect(await m.roster.enroll("ghost")).toMatchObject({ why: "no-such-line" });
+  });
+
+  it("an empty roster over refused junk copies never says 'no machine has enrolled yet'", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const real = await enrol(a, "vps");
+    relay.enr.set("junk", { ...real, signature: `${"A".repeat(85)}A` });
+    const view = buildRosterView(await acquired(machine(relay, a, { deviceId: "watcher" })), NOW);
+    expect(view.kind === "roster" && view.empty?.text).toBe(
+      "no machine is enrolled that this device can verify",
+    );
+  });
+});
+
+// ── #790 round 1 ─────────────────────────────────────────────────────
+
+describe("W1 (#790) — the empty state is derived from what is held, over the whole product", () => {
+  const cases: Array<[number, boolean, number, number]> = [];
+  for (const lines of [0, 1])
+    for (const confirmed of [false, true])
+      for (const tombstones of [0, 1])
+        for (const refused of [0, 1]) cases.push([lines, confirmed, tombstones, refused]);
+
+  it.each(cases)(
+    "lines=%i confirmed=%s tombstones=%i refused=%i",
+    (lines, confirmed, tombstones, refused) => {
+      const e = emptyState({ lines, confirmed, tombstones, refused });
+      if (lines > 0) {
+        expect(e).toBeNull();
+        return;
+      }
+      const text = e!.text;
+      // C6.10 (#792 W1): unconfirmed, NO text quantifies over the motebit's
+      // machines — it describes only what this device sees.
+      if (!confirmed) {
+        expect(text).not.toMatch(/\bno machines?\b|\bmachines\b|\benrolled\b/);
+        expect(text).toMatch(/^this device /);
+      }
+      // Each absolute is conditioned on what is held.
+      if (/no machine has enrolled yet/.test(text)) {
+        expect([confirmed, tombstones, refused]).toEqual([true, 0, 0]);
+      }
+      if (/holds no roster entries/.test(text)) {
+        expect([confirmed, tombstones, refused]).toEqual([false, 0, 0]);
+      }
+      if (tombstones > 0) expect(text).toMatch(/retirements? .*for enrolments/);
+      else if (refused > 0) expect(text).toMatch(/can verify/);
+    },
+  );
+
+  it("a watcher holding only a retirement (its enrolment under a key it cannot place, /succession down): tombstone wording, not 'nothing held'", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const e = await enrol(a, "vps");
+    // The phone retired the A-line under B; this relay holds the retirement only.
+    await relay.hold(await retireEntry(b, e));
+    relay.chain = [await rotate(a, b)];
+    relay.successionFails = true;
+    const acq = await acquired(machine(relay, b, { deviceId: "watcher" }));
+    expect(acq.verdict.tombstones).toHaveLength(1);
+    const view = buildRosterView(acq, NOW);
+    if (view.kind !== "roster") throw new Error("expected roster");
+    expect(view.claim).toBeNull();
+    expect(view.empty?.text).toBe(
+      "this device sees no enrolment; it holds 1 retirement for enrolments it has not seen",
+    );
+  });
+
+  it("a relay omitting the tombstones this device holds: tombstone wording, consistent with the omission note", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const tomb = await signHostRetirement(
+      { motebit_id: MID, enrollment_id: "d".repeat(64), public_key: hex(a), retired_at: NOW },
+      a.privateKey,
+    );
+    const cache = new FakeCache();
+    await cache.save({ ...emptyReplica(MID), retirements: [tomb] });
+    relay.omit.add(await hostRetirementId(tomb));
+    const view = buildRosterView(
+      await acquired(machine(relay, a, { deviceId: "watcher", cache })),
+      NOW,
+    );
+    if (view.kind !== "roster") throw new Error("expected roster");
+    expect(view.suppressed).toContain("relay_omission");
+    expect(view.notes.some((n) => n.kind === "omitted")).toBe(true);
+    expect(view.empty?.text).toBe(
+      "this device sees no enrolment; it holds 1 retirement for enrolments it has not seen",
+    );
+  });
+});
+
+describe("P3 (#790) — a failed /succession read suppresses the count", () => {
+  it("chain_unread", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(a, "vps"));
+    relay.successionFails = true;
+    const view = buildRosterView(await acquired(machine(relay, a)), NOW);
+    if (view.kind !== "roster") throw new Error("expected roster");
+    expect(view.suppressed).toContain("chain_unread");
+    expect(view.claim).toBeNull();
+    expect(suppressionText("chain_unread")).toBe(
+      "the key chain could not be refreshed from the relay",
+    );
+  });
+});
+
+describe("P4 (#790) — the hook never mints a first line (decide()'s guard, exercised)", () => {
+  it("an active capture whose line has vanished from every input: superseded, nothing minted", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    await m.roster.captureBeforeRotation();
+    // The line is gone from the replica and from the relay (test-only surgery).
+    m.cache.value = { ...m.cache.value!, enrollments: [] };
+    relay.enr.clear();
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    const out = await machine(relay, b, { cache: m.cache }).roster.afterRotation({
+      signer: await signerOf(b),
+      record,
+    });
+    expect(out).toMatchObject({ kind: "frozen", value: "absent", decided: { kind: "superseded" } });
+    expect(relay.enr.size).toBe(0);
+  });
+});
+
+describe("P5 (#790) — liveness is per (device, key)", () => {
+  it("an active line beside its own superseded-key row says whose key its liveness is", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    relay.chain = [await rotate(a, b)];
+    await relay.hold(await enrol(b, "vps"), await enrol(b, "solo"));
+    relay.rows = [{ device_id: "vps", bound_under: hex(a), last_seen_at: NOW, sockets_open: 1 }];
+    const view = buildRosterView(await acquired(machine(relay, b)), NOW);
+    if (view.kind !== "roster") throw new Error("expected roster");
+    const vps = view.lines.find((l) => l.kind === "active" && l.device_id === "vps");
+    const solo = view.lines.find((l) => l.kind === "active" && l.device_id === "solo");
+    expect(vps?.text).toMatch(/active; under the current key: not observed/);
+    expect(solo?.text).toMatch(/— active; not observed/);
+  });
+});
+
+// ── #790 decisive round: R17b states only what is seen ───────────────
+
+describe("R17b (#790) — enroll never claims a superseded machine cannot hold the current key", () => {
+  /** D rotated itself A → B, its hook's read failed (absent), it restarted: superseded under A. */
+  async function selfRotatedNotReenrolled() {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const d = machine(relay, a, { deviceId: "vps" });
+    await d.roster.ensureEnrolled();
+    await d.roster.captureBeforeRotation();
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    relay.successionFails = true; // the hook's read fails
+    const hook = await machine(relay, b, { deviceId: "vps", cache: d.cache }).roster.afterRotation({
+      signer: await signerOf(b),
+      record,
+    });
+    expect(hook).toMatchObject({ value: "absent", captured: "active", decided: null });
+    relay.successionFails = false;
+    expect(
+      (await machine(relay, b, { deviceId: "vps", cache: d.cache }).roster.ensureEnrolled()).kind,
+    ).toBe("superseded");
+    return { a, b, relay };
+  }
+
+  it("connected under the HEAD key: the phone's enroll is not refused", async () => {
+    const { b, relay } = await selfRotatedNotReenrolled();
+    relay.rows = [{ device_id: "vps", bound_under: hex(b), last_seen_at: NOW, sockets_open: 1 }];
+    const out = await machine(relay, b, { deviceId: "phone" }).roster.enroll("vps");
+    expect(out.kind).toBe("enrolled");
+  });
+
+  it("not seen under the head key: refused with only what is seen (the superseded key)", async () => {
+    const { a, b, relay } = await selfRotatedNotReenrolled();
+    const out = await machine(relay, b, { deviceId: "phone" }).roster.enroll("vps");
+    expect(out).toEqual({
+      kind: "needs-force",
+      deviceId: "vps",
+      why: "all-superseded",
+      key: hex(a),
+    });
+  });
+});
+
+describe("(a) #790 — 'still missing' only when a re-read confirmed it", () => {
+  it("a failed re-read after re-presenting: 'not re-checked'", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const cache = new FakeCache();
+    const other = await enrol(a, "vps");
+    await cache.save({ ...emptyReplica(MID), enrollments: [other] });
+    relay.omit.add(await hostEnrollmentId(other));
+    const m = machine(relay, a, { cache });
+    let gets = 0;
+    const roster = new MachineRoster({
+      ...m.ports,
+      fetchRoster: async (s) => (++gets === 1 ? relay.roster(s) : { ok: false, reason: "down" }),
+    });
+    const acq = await roster.acquire();
+    if (acq.kind !== "acquired") throw new Error("expected acquired");
+    expect(acq.omissionRechecked).toBe(false);
+    const view = buildRosterView(acq, NOW);
+    const note = view.kind === "roster" ? view.notes.find((n) => n.kind === "omitted") : null;
+    expect(note?.text).toMatch(/re-presented; not re-checked/);
+    // And a confirmed one says so.
+    const confirmed = buildRosterView(await acquired(m), NOW);
+    const note2 =
+      confirmed.kind === "roster" ? confirmed.notes.find((n) => n.kind === "omitted") : null;
+    expect(note2?.text).toMatch(/still missing on re-read/);
+  });
+});
+
+// ── #792 round 1 ─────────────────────────────────────────────────────
+
+describe("W2 (#792) — 'connected' / 'socket open' only when a socket is open now", () => {
+  /** Every liveness-bearing row class, each with `sockets_open` = n. */
+  async function everyRowClass(n: number) {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const dk = await generateKeypair();
+    const stranger = await generateKeypair();
+    const relay = new FakeRelay();
+    relay.chain = [await rotate(a, b)];
+    const ret = await enrol(b, "ret");
+    await relay.hold(
+      await enrol(b, "act"),
+      await enrol(a, "sup"),
+      ret,
+      await retireEntry(b, ret),
+      await enrol(stranger, "unp"),
+    );
+    const row = (device_id: string, key: KeyPair) => ({
+      device_id,
+      bound_under: hex(key),
+      last_seen_at: NOW - DAY,
+      sockets_open: n,
+    });
+    relay.rows = [
+      row("act", b), // 1. active join
+      row("ret", b), // retired join
+      row("sup", a), // 2. superseded-key socket
+      row("tab", dk), // 3. linked device
+      row("act", stranger), // 4. a lined device under an unplaceable key
+      row("unp", b), // 4b. enrolled only under unplaceable keys
+      row("nol", b), // 5. no line
+    ];
+    const view = buildRosterView(
+      await acquired(machine(relay, b, { deviceId: "phone", knownDeviceKeys: [hex(dk)] })),
+      NOW,
+    );
+    if (view.kind !== "roster") throw new Error("expected roster");
+    return { view, relay, a, b };
+  }
+
+  it("with sockets_open 0, no line says connected or socket open; each says when it was last seen", async () => {
+    const { view } = await everyRowClass(0);
+    for (const l of view.lines) {
+      expect(l.text, l.kind).not.toMatch(/\bconnected\b|socket open|socket is open/);
+    }
+    const withRows = view.lines.filter(
+      (l) => l.kind !== "superseded" && l.kind !== "unplaced-enrollment",
+    );
+    for (const l of withRows) {
+      if (l.kind === "active" || l.kind === "retired") continue;
+      expect(l.text, l.kind).toMatch(/last seen /);
+    }
+    expect(view.lines.find((l) => l.kind === "active" && l.device_id === "act")?.text).toMatch(
+      /last seen /,
+    );
+  });
+
+  it("with a socket open, the same rows say so", async () => {
+    const { view } = await everyRowClass(1);
+    for (const l of view.lines) {
+      if (l.kind === "superseded" || l.kind === "unplaced-enrollment") continue;
+      expect(l.text, l.kind).toMatch(/socket open|socket is open/);
+    }
+  });
+
+  it("retire's not-enrolled and R17b's lift both need an OPEN socket", async () => {
+    const { relay, a, b } = await everyRowClass(0);
+    const phone = machine(relay, b, { deviceId: "phone" });
+    expect(await phone.roster.retire("nol")).toMatchObject({
+      kind: "not-enrolled",
+      socketOpen: false,
+    });
+    // R17b: a persisted head-key row with no socket open does not lift the refusal.
+    relay.rows = [{ device_id: "sup", bound_under: hex(b), last_seen_at: NOW, sockets_open: 0 }];
+    expect(await phone.roster.enroll("sup")).toMatchObject({
+      kind: "needs-force",
+      why: "all-superseded",
+      key: hex(a),
+    });
+  });
+});
+
+describe("W3 (#792) — a status read without the relay is this device's copy", () => {
+  it("enrolled; retired elsewhere; the roster read fails at the next start ⇒ active, but unconfirmed", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    expect((await machine(relay, a, { deviceId: "phone" }).roster.retire("dev-self")).kind).toBe(
+      "retired",
+    );
+    relay.getFails = true;
+    expect(await m.roster.ensureEnrolled()).toMatchObject({ kind: "active", confirmed: false });
+    relay.getFails = false;
+    expect(await m.roster.ensureEnrolled()).toMatchObject({ kind: "retired", confirmed: true });
+  });
+});
+
+describe("P3 (#792) — the hook says why an active capture was not carried", () => {
+  it("read-incomplete, then prior-frozen on the resumed run", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    await m.roster.captureBeforeRotation();
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    relay.getFails = true;
+    const d = machine(relay, b, { cache: m.cache });
+    expect(await d.roster.afterRotation({ signer: await signerOf(b), record })).toMatchObject({
+      value: "absent",
+      captured: "active",
+      notCarried: "read-incomplete",
+    });
+    relay.getFails = false;
+    expect(await d.roster.afterRotation({ signer: await signerOf(b), record })).toMatchObject({
+      value: "absent",
+      captured: "active",
+      notCarried: "prior-frozen",
+    });
+  });
+});
+
+describe("P5 (#792) — 'retired (advisory…)' only from a retirement the law admitted", () => {
+  it("a junk head-key retirement naming the line does not change the wording", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const e = await enrol(a, "old");
+    const byA = await retireEntry(a, e);
+    const junk = { ...(await retireEntry(b, e)), signature: `${"A".repeat(85)}A` };
+    relay.chain = [await rotate(a, b)];
+    await relay.hold(e, byA);
+    relay.ret.set("junk", junk as HostRetirement);
+    const view = buildRosterView(await acquired(machine(relay, b, { deviceId: "phone" })), NOW);
+    const line = view.kind === "roster" ? view.lines.find((l) => l.device_id === "old") : null;
+    expect(line?.text).toMatch(/retired at an older key \(advisory\)/);
+  });
+});

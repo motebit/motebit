@@ -64,6 +64,7 @@ export { handleRestore } from "./restore.js";
 export { handleSeed, seedBackupStatus } from "./seed.js";
 export { handleKeychain } from "./keychain.js";
 export { handleRelayUp } from "./relay.js";
+export { handleMachines } from "./machines.js";
 export { handleRotate } from "./rotate.js";
 export { handleSchema } from "./schema.js";
 export { handleSmokeReconciliation } from "./smoke.js";
