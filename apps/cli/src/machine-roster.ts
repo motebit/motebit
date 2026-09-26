@@ -199,15 +199,15 @@ export function cliRosterPorts(ctx: CliRosterContext): MachineRosterPorts {
 export function remedyText(remedy: RosterRemedy): string {
   switch (remedy) {
     case "finish-rotation":
-      return "finish the rotation: `motebit rotate` resumes it";
+      return "a rotation is in flight — `motebit rotate` finishes it";
     case "restart":
-      return "this process holds a key the local config has rotated past; restart it";
+      return "the local config holds this key's successor — restart this process";
     case "restore":
-      return "this machine's key was rotated away; restore with the current key's seed or motebit.md (`motebit restore`) to rejoin";
+      return "this device's key was rotated away — `motebit restore` with the current motebit.md or a key transfer";
     case "rotate":
-      return "rotate to a fresh key (`motebit rotate`); the chain then resolves past it";
+      return "`motebit rotate`";
     case "report":
-      return "this is a bug in the roster call — please report it";
+      return "a malformed roster call — report it";
   }
 }
 
@@ -220,12 +220,13 @@ export function describeEnsureOutcome(
   deviceId: string,
   context: "start" | "rotate" = "start",
 ): string | null {
-  const rotate = context === "rotate";
+  const when = context === "rotate" ? "after the rotation" : "this start";
+  const enroll = `\`motebit machines enroll ${deviceId}\``;
   const notTaken = (p: { notTaken: unknown[]; rosterFull: string[] }): string =>
     p.rosterFull.length > 0
-      ? ` (the relay's roster is full for ${p.rosterFull.length} entr${p.rosterFull.length === 1 ? "y" : "ies"}; not retried)`
+      ? ` (relay roster full: ${p.rosterFull.length} not taken, not retried)`
       : p.notTaken.length > 0
-        ? ` (${p.notTaken.length} not taken by the relay; presented again ${rotate ? "at the next start" : "next start"})`
+        ? ` (${p.notTaken.length} not taken by the relay; presented again)`
         : "";
   switch (out.kind) {
     case "no-key":
@@ -237,17 +238,15 @@ export function describeEnsureOutcome(
     case "minted":
       return `Machine roster: enrolled this machine (${out.enrollmentId.slice(0, 12)}…)${notTaken(out.presented)}`;
     case "retired":
-      return rotate
-        ? `Machine roster: this machine is retired from the roster, so it was not enrolled under the new key — \`motebit machines enroll ${deviceId}\` to rejoin`
-        : `Machine roster: this machine is retired from the roster but running — \`motebit machines enroll ${deviceId}\` to rejoin, or rotate the key if the retirement was not yours`;
+      return context === "rotate"
+        ? `Machine roster: this machine is retired; not enrolled under the new key — ${enroll} to rejoin`
+        : `Machine roster: this machine is retired — ${enroll} to rejoin; \`motebit rotate\` if you did not retire it`;
     case "superseded":
-      return `Machine roster: this machine's line is on a superseded key and not covered — \`motebit machines enroll ${deviceId}\` to enrol it under the current key (a rotation re-enrols only a line this machine minted itself)`;
+      return `Machine roster: this machine's line is on a superseded key; not covered — ${enroll}`;
     case "unplaced":
-      return `Machine roster: this machine's roster entries are under keys this device cannot place in its key chain, or could not be verified — not updated ${rotate ? "after the rotation" : "this start"}; if it should host, \`motebit machines enroll ${deviceId}\``;
+      return `Machine roster: this machine's entries are under keys this device cannot place, or unverified; not updated ${when} — ${enroll} if it should host`;
     case "unknown":
-      return rotate
-        ? `Machine roster: not updated after the rotation — ${out.detail}; the rotation itself is complete`
-        : `Machine roster: not updated this start — ${out.detail}; the daemon runs regardless`;
+      return `Machine roster: not updated ${when} — ${out.detail}`;
     case "refused":
       return `Machine roster: no roster — ${remedyText(out.remedy)}`;
   }

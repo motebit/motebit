@@ -79,10 +79,16 @@ export async function rosterHookAfterRotate(opts: {
       },
       { newPrivateKey: key, record },
     );
-    if (out.kind !== "frozen" || out.decided == null) return null;
+    if (out.kind !== "frozen") return null;
+    if (out.decided == null) {
+      // (c) An active capture that could not be carried: say so, and how.
+      return out.captured === "active" && out.value === "absent"
+        ? `  Machine roster: active before the rotation; not enrolled under the new key (the read after the rotation was incomplete) — \`motebit machines enroll ${config.device_id}\``
+        : null;
+    }
     if (out.decided.kind === "minted") {
       return [
-        "  Machine roster: this machine was active, so it is enrolled under the new key",
+        "  Machine roster: enrolled under the new key",
         ...presentationLines(out.decided.presented, [out.decided.enrollmentId], "enrolment"),
       ].join("\n");
     }

@@ -187,7 +187,7 @@ describe("mint-on-announce against a real relay", () => {
     const lines: string[] = [];
     const out = await enrollOnAnnounce(ctx(f), (l) => lines.push(l));
     expect(out?.kind).toBe("retired");
-    expect(lines[0]).toMatch(/retired from the roster but running/);
+    expect(lines[0]).toMatch(/this machine is retired — `motebit machines enroll/);
     expect(relayEntries(f.mid, "enrollment")).toBe(1);
 
     expect((await roster.enroll(f.deviceId)).kind).toBe("enrolled");
@@ -718,8 +718,61 @@ describe("#786 round 1", () => {
     };
     const line = await hookNow(o.newPublicKeyHex, refusePost);
     expect(line).toMatch(/enrolled under the new key/);
-    expect(line).toMatch(
-      /did not take this enrolment yet; it is kept on this device and presented again/,
+    expect(line).toMatch(/Not yet taken by the relay; kept on this device, presented again/);
+  });
+});
+
+describe("BUILD 5 (c) — the hook says when an active capture was not carried", () => {
+  it("active before the rotation; the read after it fails ⇒ a line naming it, and the enroll remedy", async () => {
+    const f = await registeredHost();
+    expect((await enrollOnAnnounce(ctx(f), () => {}))?.kind).toBe("minted");
+    expect(
+      await rosterCaptureBeforeRotate({
+        passphrase: PASS,
+        syncUrl: SYNC_URL,
+        identityPath: f.identityPath,
+        decryptPrivateKey,
+        loadConfig: () => ({ ...config }),
+        dir,
+        fetchImpl: viaRelay,
+      }),
+    ).toBe("captured");
+    const o = await performRotation({
+      identityPath: f.identityPath,
+      loadConfig: () => ({ ...config }),
+      saveConfig: (c) => {
+        config = c;
+      },
+      pending: {
+        load: (mid, key) => loadPendingRotation(mid, key, dir),
+        loadAny: () => loadAnyPendingRotation(dir),
+        save: (p) => savePendingRotation(p, dir),
+        clear: () => clearPendingRotation(dir),
+        setAside: () => setAsidePendingRotation(dir),
+        path: pendingRotationPath(dir),
+      },
+      passphrase: PASS,
+      syncUrl: SYNC_URL,
+      fetchImpl: viaRelay,
+    });
+    if (o.kind !== "rotated") throw new Error("expected rotated");
+    const noChain: typeof fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/succession")) return new Response("{}", { status: 503 });
+      return viaRelay(input, init);
+    };
+    const line = await rosterHookAfterRotate({
+      identityPath: f.identityPath,
+      passphrase: PASS,
+      syncUrl: SYNC_URL,
+      newPublicKeyHex: o.newPublicKeyHex,
+      decryptPrivateKey,
+      loadConfig: () => ({ ...config }),
+      dir,
+      fetchImpl: noChain,
+    });
+    expect(line).toBe(
+      `  Machine roster: active before the rotation; not enrolled under the new key (the read after the rotation was incomplete) — \`motebit machines enroll ${f.deviceId}\``,
     );
   });
 });

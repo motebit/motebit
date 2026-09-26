@@ -165,8 +165,7 @@ const iso = (ms: number): string => new Date(ms).toISOString().replace(/\.\d{3}Z
 const REFUSAL_TEXT: Record<RosterRefusalReason, string> = {
   held_key_superseded:
     "no roster: this device's key has a verified successor — it was rotated away",
-  duplicate_key:
-    "no roster: the key this device holds is its own ancestor (a rotation back to it), so the chain has no order",
+  duplicate_key: "no roster: the key this device holds is its own ancestor (a rotation back to it)",
   fork_at_held: "no roster: two verified histories lead to the key this device holds",
   malformed_input: "no roster: the question was malformed",
 };
@@ -175,7 +174,7 @@ const SUPPRESSION_TEXT: Record<SuppressionReason, string> = {
   guardian_branch: "the chain has a branch this device is not on",
   relay_newer_key: "the relay reports a newer key; this device has not seen that rotation",
   relay_omission: "the relay is omitting entries this device holds",
-  relay_unread: "the relay's roster could not be read, so this is this device's copy alone",
+  relay_unread: "the relay's roster could not be read; shown from this device's copy",
   cache_corrupt:
     "this device's copy of the roster could not be read and has not been re-confirmed from the relay",
   chain_unread: "the key chain could not be refreshed from the relay",
@@ -263,7 +262,7 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
       liveness = { state: "not-observed", since, windowDays, windowFull };
       live = windowFull
         ? `not observed in the last ${windowDays} days`
-        : `not observed since ${iso(since)}, when this relay began observing`;
+        : `not observed since ${iso(since)} (the relay's observation window)`;
     }
     activeLive.set(m.device_id, live);
     lines.push({
@@ -349,7 +348,7 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
       lines.push({
         kind: "unplaced-key-socket",
         ...base,
-        text: `${r.device_id} — connected; its enrolments are under keys this device cannot place in its chain, so its line cannot be read from here`,
+        text: `${r.device_id} — connected; enrolled only under keys this device cannot place in its chain`,
       });
     } else {
       lines.push({
@@ -433,7 +432,7 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
     notes.push({
       kind: "omitted",
       count: n,
-      text: `the relay is missing ${n} ${plural(n, "entry", "entries")} this device holds (re-presented; still missing)`,
+      text: `the relay is missing ${n} ${plural(n, "entry", "entries")} this device holds (re-presented; ${acq.omissionRechecked ? "still missing on re-read" : "not re-checked"})`,
     });
   }
   if (acq.suppressed.includes("relay_newer_key") && acq.succession.hint != null) {
@@ -453,7 +452,7 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
   if (acq.cache === "corrupt") {
     notes.push({
       kind: "cache-corrupt",
-      text: "this device's roster copy could not be read and was kept aside; nothing was minted",
+      text: "this device's roster copy could not be read; it was kept aside",
     });
   }
   // 8. Two successive reads, and still only "may".
@@ -467,7 +466,7 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
       kind: "ambiguous",
       device_id,
       key,
-      text: `two machines may share the id ${device_id} (a copied configuration); more than one socket is open for it`,
+      text: `${device_id}: more than one socket open on two successive reads — two machines may share this id`,
     });
   }
   // N12 — after a restore gave this device a fresh id, offer to retire the prior line.
@@ -481,7 +480,7 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
         notes.push({
           kind: "prior-line",
           device_id: prior,
-          text: `this device enrolled earlier as ${prior}; if that was this machine before a restore, its line can be retired`,
+          text: `this device enrolled earlier as ${prior}`,
         });
       }
     }

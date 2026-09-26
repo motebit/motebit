@@ -607,7 +607,7 @@ describe("R21 — the rotation hook (option (a): capture before the link, mint a
     const m = machine(relay, b);
     const out = await m.roster.afterRotation({ signer: await signerOf(b), record });
     // Never captured (it held only B): absent.
-    expect(out).toEqual({ kind: "frozen", value: "absent", decided: null });
+    expect(out).toMatchObject({ kind: "frozen", value: "absent", decided: null });
     expect(relay.enr.size).toBe(0);
   });
 
@@ -623,7 +623,7 @@ describe("R21 — the rotation hook (option (a): capture before the link, mint a
     relay.chain = [record];
     m.setKey(b);
     const out = await m.roster.afterRotation({ signer: await signerOf(b), record });
-    expect(out).toEqual({ kind: "frozen", value: "not-active", decided: null });
+    expect(out).toMatchObject({ kind: "frozen", value: "not-active", decided: null });
     expect(relay.enr.size).toBe(1);
     expect((await m.roster.ensureEnrolled()).kind).toBe("retired");
   });
@@ -1050,7 +1050,9 @@ describe("C6 — the view", () => {
     expect(first.kind === "roster" && first.notes.some((n) => n.kind === "ambiguous")).toBe(false);
     const second = buildRosterView(await acquired(m), NOW);
     const note = second.kind === "roster" ? second.notes.find((n) => n.kind === "ambiguous") : null;
-    expect(note?.text).toMatch(/may share the id vps/);
+    expect(note?.text).toMatch(
+      /vps: more than one socket open on two successive reads — two machines may share this id/,
+    );
   });
 
   it("N12 — after a restore with a fresh id, offer to retire the prior line", async () => {
@@ -1073,7 +1075,7 @@ describe("C6 — the view", () => {
     expect(view.kind === "roster" && view.notes[0]?.text).toMatch(/rooted/);
   });
 
-  it("not observed since the relay began observing, when its window is not yet full", async () => {
+  it("not observed since the start of the relay's observation window, when it is not yet full", async () => {
     const a = await generateKeypair();
     const relay = new FakeRelay();
     await relay.hold(await enrol(a, "vps"));
@@ -1082,7 +1084,7 @@ describe("C6 — the view", () => {
     acq.served!.liveness.observing_since = NOW - 3 * DAY;
     const view = buildRosterView(acq, NOW);
     expect(view.kind === "roster" && view.lines[0]?.text).toMatch(
-      /not observed since .* began observing/,
+      /not observed since .* \(the relay's observation window\)/,
     );
     expect(view.kind === "roster" && view.lines[0]?.text).not.toMatch(/never/);
   });
@@ -1481,7 +1483,7 @@ describe("round 1 — P3: the rotation hook never mints after a corrupt read", (
     relay.chain = [record];
     m.cache.corrupt = true;
     const out = await m.roster.afterRotation({ signer: await signerOf(b), record });
-    expect(out).toEqual({ kind: "frozen", value: "absent", decided: null });
+    expect(out).toMatchObject({ kind: "frozen", value: "absent", decided: null });
     expect([...relay.enr.values()].some((e) => e.public_key === hex(b))).toBe(false);
   });
 });
@@ -1556,7 +1558,7 @@ describe("rule 1 — an automatic mint needs the succession read", () => {
     relay.chain = [record];
     relay.successionFails = true;
     const out = await m.roster.afterRotation({ signer: await signerOf(b), record });
-    expect(out).toEqual({ kind: "frozen", value: "absent", decided: null });
+    expect(out).toMatchObject({ kind: "frozen", value: "absent", decided: null });
     expect([...relay.enr.values()].some((e) => e.public_key === hex(b))).toBe(false);
   });
 
@@ -1966,7 +1968,7 @@ describe("P4 — no count over a copy that could not be read, until a full read 
 
 describe("P5 — the observed window is exact", () => {
   it.each([
-    [89, /not observed since .* began observing/],
+    [89, /not observed since .* \(the relay's observation window\)/],
     [90, /not observed in the last 90 days/],
   ] as const)("observing for %i days", async (days, text) => {
     const a = await generateKeypair();
@@ -2015,7 +2017,7 @@ describe("R21 option (a) — the hook reads the capture taken before the link, n
       signer: await signerOf(b),
       record,
     });
-    expect(out).toEqual({ kind: "frozen", value: "not-active", decided: null });
+    expect(out).toMatchObject({ kind: "frozen", value: "not-active", decided: null });
     expect([...relay.enr.values()].some((e) => e.public_key === hex(b))).toBe(false);
   });
 
@@ -2054,7 +2056,7 @@ describe("R21 option (a) — the hook reads the capture taken before the link, n
       signer: await signerOf(b),
       record,
     });
-    expect(out).toEqual({ kind: "frozen", value: "absent", decided: null });
+    expect(out).toMatchObject({ kind: "frozen", value: "absent", decided: null });
     expect(await machine(relay, b, { cache: m.cache }).roster.ensureEnrolled()).toMatchObject({
       kind: "superseded",
     });
@@ -2116,7 +2118,7 @@ describe("W1 (#786) — a rotation never carries a line this device did not mint
       signer: await signerOf(b),
       record,
     });
-    expect(out).toEqual({ kind: "frozen", value: "not-active", decided: null });
+    expect(out).toMatchObject({ kind: "frozen", value: "not-active", decided: null });
     expect([...relay.enr.values()].some((e) => e.public_key === hex(b))).toBe(false);
   });
 
@@ -2474,5 +2476,78 @@ describe("P5 (#790) — liveness is per (device, key)", () => {
     const solo = view.lines.find((l) => l.kind === "active" && l.device_id === "solo");
     expect(vps?.text).toMatch(/active; under the current key: not observed/);
     expect(solo?.text).toMatch(/— active; not observed/);
+  });
+});
+
+// ── #790 decisive round: R17b states only what is seen ───────────────
+
+describe("R17b (#790) — enroll never claims a superseded machine cannot hold the current key", () => {
+  /** D rotated itself A → B, its hook's read failed (absent), it restarted: superseded under A. */
+  async function selfRotatedNotReenrolled() {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const d = machine(relay, a, { deviceId: "vps" });
+    await d.roster.ensureEnrolled();
+    await d.roster.captureBeforeRotation();
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    relay.successionFails = true; // the hook's read fails
+    const hook = await machine(relay, b, { deviceId: "vps", cache: d.cache }).roster.afterRotation({
+      signer: await signerOf(b),
+      record,
+    });
+    expect(hook).toMatchObject({ value: "absent", captured: "active", decided: null });
+    relay.successionFails = false;
+    expect(
+      (await machine(relay, b, { deviceId: "vps", cache: d.cache }).roster.ensureEnrolled()).kind,
+    ).toBe("superseded");
+    return { a, b, relay };
+  }
+
+  it("connected under the HEAD key: the phone's enroll is not refused", async () => {
+    const { b, relay } = await selfRotatedNotReenrolled();
+    relay.rows = [{ device_id: "vps", bound_under: hex(b), last_seen_at: NOW, sockets_open: 1 }];
+    const out = await machine(relay, b, { deviceId: "phone" }).roster.enroll("vps");
+    expect(out.kind).toBe("enrolled");
+  });
+
+  it("not seen under the head key: refused with only what is seen (the superseded key)", async () => {
+    const { a, b, relay } = await selfRotatedNotReenrolled();
+    const out = await machine(relay, b, { deviceId: "phone" }).roster.enroll("vps");
+    expect(out).toEqual({
+      kind: "needs-force",
+      deviceId: "vps",
+      why: "all-superseded",
+      key: hex(a),
+    });
+  });
+});
+
+describe("(a) #790 — 'still missing' only when a re-read confirmed it", () => {
+  it("a failed re-read after re-presenting: 'not re-checked'", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const cache = new FakeCache();
+    const other = await enrol(a, "vps");
+    await cache.save({ ...emptyReplica(MID), enrollments: [other] });
+    relay.omit.add(await hostEnrollmentId(other));
+    const m = machine(relay, a, { cache });
+    let gets = 0;
+    const roster = new MachineRoster({
+      ...m.ports,
+      fetchRoster: async (s) => (++gets === 1 ? relay.roster(s) : { ok: false, reason: "down" }),
+    });
+    const acq = await roster.acquire();
+    if (acq.kind !== "acquired") throw new Error("expected acquired");
+    expect(acq.omissionRechecked).toBe(false);
+    const view = buildRosterView(acq, NOW);
+    const note = view.kind === "roster" ? view.notes.find((n) => n.kind === "omitted") : null;
+    expect(note?.text).toMatch(/re-presented; not re-checked/);
+    // And a confirmed one says so.
+    const confirmed = buildRosterView(await acquired(m), NOW);
+    const note2 =
+      confirmed.kind === "roster" ? confirmed.notes.find((n) => n.kind === "omitted") : null;
+    expect(note2?.text).toMatch(/still missing on re-read/);
   });
 });

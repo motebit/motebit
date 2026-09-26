@@ -100,9 +100,13 @@ describe("the replica file", () => {
 
 describe("terminal wording", () => {
   it("remedies name the command", () => {
-    expect(remedyText("finish-rotation")).toMatch(/`motebit rotate` resumes it/);
-    expect(remedyText("restart")).toMatch(/restart it/);
-    expect(remedyText("restore")).toMatch(/restore with the current key's seed or motebit.md/);
+    expect(remedyText("finish-rotation")).toMatch(
+      /a rotation is in flight — `motebit rotate` finishes it/,
+    );
+    expect(remedyText("restart")).toMatch(/restart this process/);
+    expect(remedyText("restore")).toMatch(
+      /`motebit restore` with the current motebit.md or a key transfer/,
+    );
     expect(remedyText("rotate")).toMatch(/motebit rotate/);
     expect(remedyText("report")).toMatch(/report/);
   });
@@ -126,9 +130,9 @@ describe("terminal wording", () => {
         firstLine: true,
         presented: { ...p, rosterFull: ["x"] },
       }),
-    ).toMatch(/enrolled this machine .*roster is full/);
+    ).toMatch(/enrolled this machine .*relay roster full/);
     expect(line({ kind: "retired", presented: p })).toMatch(
-      /retired from the roster but running .*`motebit machines enroll vps-7f3a`.*or rotate the key/,
+      /this machine is retired — `motebit machines enroll vps-7f3a` to rejoin; `motebit rotate` if you did not retire it/,
     );
     // P6 — the real id, never a placeholder.
     for (const o of [
@@ -140,7 +144,7 @@ describe("terminal wording", () => {
       expect(line(o)).not.toMatch(/<this device_id>/);
     }
     expect(line({ kind: "superseded", frozen: null, presented: p })).toMatch(
-      /superseded key and not covered/,
+      /superseded key; not covered/,
     );
     expect(
       line({
@@ -149,7 +153,7 @@ describe("terminal wording", () => {
         status: "none",
         detail: "down",
       }),
-    ).toMatch(/not updated this start — down; the daemon runs regardless/);
+    ).toMatch(/not updated this start — down$/);
     expect(
       line({
         kind: "refused",
@@ -157,7 +161,7 @@ describe("terminal wording", () => {
         detail: "",
         remedy: "restart",
       }),
-    ).toMatch(/no roster — this process holds a key/);
+    ).toMatch(/no roster — the local config holds this key's successor — restart this process/);
   });
 
   it("a refused roster prints no roster and its remedy — never an empty roster", () => {
@@ -172,7 +176,7 @@ describe("terminal wording", () => {
     const out = formatRosterView(view, MID).join("\n");
     expect(out).toMatch(/^No roster for/);
     expect(out).not.toMatch(/machines? on the current key/);
-    expect(out).toMatch(/Next: this machine's key was rotated away/);
+    expect(out).toMatch(/Next: this device's key was rotated away/);
   });
 
   it("no count when suppressed, and the reason is said", () => {
@@ -229,24 +233,22 @@ describe("terminal wording", () => {
       advisory: false,
       presented: { taken: 0, notTaken: [], rosterFull: [own] },
     });
-    expect(full.lines.join("\n")).toMatch(
-      /REFUSED this retirement for good \(its roster is full\)/,
-    );
+    expect(full.lines.join("\n")).toMatch(/refused this retirement permanently \(roster full\)/);
     const later = describeEnroll({
       kind: "enrolled",
       deviceId: "v",
       enrollmentId: own,
       presented: { taken: 0, notTaken: [{ id: own, reason: "status 500" }], rosterFull: [] },
     });
-    expect(later.lines.join("\n")).toMatch(/did not take this enrolment yet/);
+    expect(later.lines.join("\n")).toMatch(/Not yet taken by the relay/);
     const enrolFull = describeEnroll({
       kind: "enrolled",
       deviceId: "v",
       enrollmentId: own,
       presented: { taken: 1, notTaken: [], rosterFull: [own, "b".repeat(64)] },
     });
-    expect(enrolFull.lines.join("\n")).toMatch(/REFUSED this enrolment for good/);
-    expect(enrolFull.lines.join("\n")).toMatch(/refused 1 other held entry for good/);
+    expect(enrolFull.lines.join("\n")).toMatch(/refused this enrolment permanently/);
+    expect(enrolFull.lines.join("\n")).toMatch(/refused 1 other held entry permanently/);
     const clean = describeEnroll({
       kind: "enrolled",
       deviceId: "v",
@@ -268,7 +270,9 @@ describe("terminal wording", () => {
       }),
     ).toMatchObject({
       ok: true,
-      lines: expect.arrayContaining([expect.stringMatching(/advisory/)]),
+      lines: expect.arrayContaining([
+        expect.stringMatching(/Advisory: its line is on a superseded key/),
+      ]),
     });
     expect(describeRetire({ kind: "not-enrolled", deviceId: "v" }).ok).toBe(false);
     expect(describeRetire({ kind: "unknown-device", deviceId: "v" }).ok).toBe(false);
@@ -278,7 +282,7 @@ describe("terminal wording", () => {
     );
     expect(
       describeEnroll({ kind: "needs-force", deviceId: "v", why: "no-such-line" }).lines.join(" "),
-    ).toMatch(/typo .*--force/);
+    ).toMatch(/--force/);
     expect(
       describeEnroll({ kind: "needs-force", deviceId: "v", why: "all-superseded" }).lines[0],
     ).toMatch(/superseded key/);
@@ -339,13 +343,13 @@ describe("F (#786) — the CLI's words for lines this device cannot place", () =
     const text = out.lines.join("\n");
     expect(out.ok).toBe(false);
     expect(text).toMatch(/vps has 2 enrolments under keys this device cannot place in its chain/);
-    expect(text).toMatch(/nothing is retirable from here/);
+    expect(text).toMatch(/none retirable from here/);
     expect(text).not.toMatch(/never enrolled|not on this roster|nothing to retire\./);
   });
 
   it("retire: the no-enrolment wordings are conditioned on what this device can see", () => {
     expect(describeRetire({ kind: "not-enrolled", deviceId: "t" }).lines[0]).toMatch(
-      /this device can see no enrolment for it/,
+      /this device sees no enrolment for it to retire/,
     );
     expect(describeRetire({ kind: "unknown-device", deviceId: "t" }).lines[0]).toMatch(
       /on the roster this device can see/,
@@ -363,7 +367,7 @@ describe("F (#786) — the CLI's words for lines this device cannot place", () =
     expect(out.lines[0]).not.toMatch(/no line/);
     expect(
       describeEnroll({ kind: "needs-force", deviceId: "x", why: "no-such-line" }).lines[0],
-    ).toMatch(/this device can see no line for x/);
+    ).toMatch(/this device sees no line for x/);
   });
 
   it("after `motebit rotate`: no daemon wording", () => {
@@ -376,9 +380,7 @@ describe("F (#786) — the CLI's words for lines this device cannot place", () =
       "vps",
       "rotate",
     );
-    expect(unknown).toMatch(
-      /not updated after the rotation — down; the rotation itself is complete/,
-    );
+    expect(unknown).toMatch(/not updated after the rotation — down$/);
     expect(unknown).not.toMatch(/daemon|this start/);
   });
 });
@@ -389,9 +391,7 @@ describe("#790 round 1 — CLI wording", () => {
   it("P1: the unplaced start/rotate line says what is known, never 'not enrolled'", () => {
     for (const ctx of ["start", "rotate"] as const) {
       const line = describeEnsureOutcome({ kind: "unplaced", count: 1, presented: p }, "vps", ctx);
-      expect(line).toMatch(
-        /under keys this device cannot place in its key chain, or could not be verified/,
-      );
+      expect(line).toMatch(/under keys this device cannot place, or unverified/);
       expect(line).toMatch(
         ctx === "rotate" ? /not updated after the rotation/ : /not updated this start/,
       );
@@ -409,9 +409,70 @@ describe("#790 round 1 — CLI wording", () => {
       presented: { taken: 0, notTaken: [{ id: own, reason: "status 401" }], rosterFull: [] },
     });
     const text = out.lines.join("\n");
-    expect(text).toMatch(
-      /refused this retirement \(not authorized\): this device's key may have been rotated away/,
-    );
+    expect(text).toMatch(/refused this retirement \(not authorized\); kept on this device/);
     expect(text).not.toMatch(/presented again/);
+  });
+});
+
+describe("BUILD 5 — refusal and remedy wording states only what is proved", () => {
+  it("R17b: the superseded refusal names what is seen, and the remedy", () => {
+    const out = describeEnroll({
+      kind: "needs-force",
+      deviceId: "vps",
+      why: "all-superseded",
+      key: "ab".repeat(32),
+    });
+    expect(out.lines).toEqual([
+      "Not enrolled: every line of vps this device can see is on a superseded key (abababababababab…).",
+      "  If vps now holds the current key: `motebit machines enroll vps --force`.",
+    ]);
+  });
+
+  it("no speculation left in the wording sources", () => {
+    const files = [
+      join(__dirname, "..", "machine-roster.ts"),
+      join(__dirname, "..", "machine-roster-rotation.ts"),
+      join(__dirname, "..", "subcommands", "machines.ts"),
+      join(
+        __dirname,
+        "..",
+        "..",
+        "..",
+        "..",
+        "packages",
+        "surface-kit",
+        "src",
+        "machine-roster-view.ts",
+      ),
+    ];
+    const banned =
+      /cannot hold the current key|would never answer|so that machine|a rotation re-enrols only|current key's seed|when this relay began observing|Undo:|Rotation is the durable remedy|a typo would become/;
+    for (const f of files) {
+      const code = readFileSync(f, "utf-8")
+        .split("\n")
+        .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+        .join("\n");
+      expect(code, f).not.toMatch(banned);
+    }
+  });
+
+  it("the advisory retirement says what enroll does, not 'undo'", () => {
+    const out = describeRetire({
+      kind: "retired",
+      deviceId: "v",
+      retirementIds: ["x"],
+      advisory: true,
+      presented: { taken: 1, notTaken: [], rosterFull: [] },
+    });
+    expect(out.lines).toContain("  Advisory: its line is on a superseded key.");
+    expect(out.lines).toContain(
+      "  To enrol it again under the current key: `motebit machines enroll v`.",
+    );
+  });
+
+  it("the restore remedy never offers the seed", () => {
+    expect(remedyText("restore")).toBe(
+      "this device's key was rotated away — `motebit restore` with the current motebit.md or a key transfer",
+    );
   });
 });

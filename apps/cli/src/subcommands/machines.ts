@@ -50,9 +50,9 @@ export function formatRosterView(view: MachineRosterView, motebitId: string): st
   for (const line of view.lines) out.push(`  ${line.text}`);
   const notes = view.notes.map((n) =>
     n.kind === "prior-line"
-      ? `${n.text} — \`motebit machines retire ${n.device_id}\``
+      ? `${n.text} — if that was this machine before a restore: \`motebit machines retire ${n.device_id}\``
       : n.kind === "ambiguous"
-        ? `${n.text} — \`motebit doctor\` on each machine shows its device_id`
+        ? `${n.text} — \`motebit doctor\` on each machine prints its device_id`
         : n.text,
   );
   if (notes.length > 0) {
@@ -61,7 +61,7 @@ export function formatRosterView(view: MachineRosterView, motebitId: string): st
   }
   if (view.relay != null) {
     out.push(
-      `  · liveness is what the relay observed (${view.relay.observed_by.slice(0, 12)}…), not proof of life — there is no heartbeat yet`,
+      `  · liveness as observed by relay ${view.relay.observed_by.slice(0, 12)}…; no heartbeat`,
     );
   }
   return out;
@@ -79,40 +79,29 @@ export function presentationLines(
 ): string[] {
   const own = new Set(ownIds);
   const ownFull = presented.rosterFull.filter((id) => own.has(id)).length;
-  // A 401/403 is not "later": this device's credential was refused — most
-  // often its key was rotated away meanwhile — so it will not be presented
-  // again from here until that is resolved.
+  // 401/403: this device's credential was refused (its key may have been
+  // rotated away); not "presented again" until that is resolved.
   const refusedAuth = (r: string): boolean => /\bstatus 40[13]\b/.test(r);
   const ownAuth = presented.notTaken.filter((n) => own.has(n.id) && refusedAuth(n.reason)).length;
   const ownNot = presented.notTaken.filter((n) => own.has(n.id) && !refusedAuth(n.reason)).length;
   const otherFull = presented.rosterFull.length - ownFull;
   const otherNot = presented.notTaken.length - ownNot - ownAuth;
+  const entries = (n: number): string => `${n} other held ${n === 1 ? "entry" : "entries"}`;
   const out: string[] = [];
   if (ownFull > 0) {
     out.push(
-      `  The relay REFUSED this ${noun} for good (its roster is full): it is kept on this device, but surfaces that read this relay will not see it.`,
+      `  The relay refused this ${noun} permanently (roster full); kept on this device only.`,
     );
   }
   if (ownAuth > 0) {
     out.push(
-      `  The relay refused this ${noun} (not authorized): this device's key may have been rotated away — run \`motebit machines\` to see. It is kept on this device.`,
+      `  The relay refused this ${noun} (not authorized); kept on this device — \`motebit machines\` to check this device's key.`,
     );
   }
-  if (ownNot > 0) {
-    out.push(
-      `  The relay did not take this ${noun} yet; it is kept on this device and presented again.`,
-    );
-  }
-  if (otherFull > 0) {
-    out.push(
-      `  The relay refused ${otherFull} other held ${otherFull === 1 ? "entry" : "entries"} for good (its roster is full).`,
-    );
-  }
-  if (otherNot > 0) {
-    out.push(
-      `  The relay did not take ${otherNot} other held ${otherNot === 1 ? "entry" : "entries"}; they are presented again.`,
-    );
-  }
+  if (ownNot > 0) out.push(`  Not yet taken by the relay; kept on this device, presented again.`);
+  if (otherFull > 0)
+    out.push(`  The relay refused ${entries(otherFull)} permanently (roster full).`);
+  if (otherNot > 0) out.push(`  ${entries(otherNot)} not yet taken; presented again.`);
   return out;
 }
 
@@ -128,13 +117,9 @@ export function describeRetire(out: RetireOutcome): { lines: string[]; ok: boole
       return {
         lines: [
           `Retired ${out.deviceId} (${out.retirementIds.length} ${out.retirementIds.length === 1 ? "entry" : "entries"}).`,
-          ...(out.advisory
-            ? [
-                "  Its line was on a superseded key, so this is advisory: a holder of that older key can undo it. Rotation is the durable remedy.",
-              ]
-            : []),
+          ...(out.advisory ? ["  Advisory: its line is on a superseded key."] : []),
           ...presentationLines(out.presented, out.retirementIds, "retirement"),
-          `  Undo: \`motebit machines enroll ${out.deviceId}\`.`,
+          `  To enrol it again under the current key: \`motebit machines enroll ${out.deviceId}\`.`,
         ],
         ok: true,
       };
@@ -142,16 +127,14 @@ export function describeRetire(out: RetireOutcome): { lines: string[]; ok: boole
       return { lines: [`${out.deviceId} is already retired.`], ok: true };
     case "not-enrolled":
       return {
-        lines: [
-          `${out.deviceId} is connected, but this device can see no enrolment for it; there is nothing it can retire.`,
-        ],
+        lines: [`${out.deviceId} is connected; this device sees no enrolment for it to retire.`],
         ok: false,
       };
     case "unplaced-lines":
       return {
         lines: [
-          `${out.deviceId} has ${out.count} ${out.count === 1 ? "enrolment" : "enrolments"} under keys this device cannot place in its chain (older or newer) — nothing is retirable from here.`,
-          "  Refresh the chain first: run `motebit machines` again once the relay's key chain can be read, or restore this device's copy of the identity file (a guardian recovery needs the guardian pinned locally).",
+          `${out.deviceId} has ${out.count} ${out.count === 1 ? "enrolment" : "enrolments"} under keys this device cannot place in its chain; none retirable from here.`,
+          "  Rerun once the relay's key chain can be read.",
         ],
         ok: false,
       };
@@ -174,18 +157,29 @@ export function describeEnroll(out: EnrollOutcome): { lines: string[]; ok: boole
     case "already-active":
       return { lines: [`${out.deviceId} is already active on the current key.`], ok: true };
     case "needs-force": {
-      const why =
+      const force = `\`motebit machines enroll ${out.deviceId} --force\``;
+      const n = out.count ?? 1;
+      const [why, next] =
         out.why === "no-such-line"
-          ? `this device can see no line for ${out.deviceId}, and it is not this machine's own id; a typo would become an active line that never answers`
+          ? [
+              `this device sees no line for ${out.deviceId}, and it is not this machine's id`,
+              `If the id is right: ${force}.`,
+            ]
           : out.why === "unplaced-lines"
-            ? `${out.deviceId} has ${out.count ?? 1} ${(out.count ?? 1) === 1 ? "enrolment" : "enrolments"} under keys this device cannot place in its chain — refresh the chain first, so it is not enrolled twice`
+            ? [
+                `${out.deviceId} has ${n} ${n === 1 ? "enrolment" : "enrolments"} under keys this device cannot place in its chain`,
+                `Rerun once the relay's key chain can be read, or ${force}.`,
+              ]
             : out.why === "all-superseded"
-              ? `every line of ${out.deviceId} is on a superseded key, so that machine cannot hold the current key and would never answer`
-              : `${out.deviceId} is connected under a linked device's key — a device without the identity key`;
-      return {
-        lines: [`Not enrolled: ${why}.`, "  Re-run with --force if this is intended."],
-        ok: false,
-      };
+              ? [
+                  `every line of ${out.deviceId} this device can see is on a superseded key${out.key ? ` (${out.key.slice(0, 16)}…)` : ""}`,
+                  `If ${out.deviceId} now holds the current key: ${force}.`,
+                ]
+              : [
+                  `${out.deviceId} is connected under a linked device's key (not the identity key)`,
+                  `If intended: ${force}.`,
+                ];
+      return { lines: [`Not enrolled: ${why}.`, `  ${next}`], ok: false };
     }
     case "enrolled":
       return {

@@ -300,6 +300,11 @@ export interface RosterAcquired {
   };
   /** Ids this replica presents that the relay still omits after a re-present and re-read (R27). */
   omitted: string[];
+  /**
+   * `omitted` was confirmed by a re-read after re-presenting. False when the
+   * re-read failed: the omission is then the first read's, not re-checked.
+   */
+  omissionRechecked: boolean;
   suppressed: SuppressionReason[];
   cache: ReplicaRead["kind"];
   replica: MachineRosterReplica;
@@ -459,7 +464,14 @@ export type EnrollOutcome =
   | { kind: "refused"; reason: RosterRefusalReason; detail: string; remedy: RosterRemedy }
   | { kind: "unreadable"; detail: string }
   | { kind: "already-active"; deviceId: string }
-  | { kind: "needs-force"; deviceId: string; why: EnrollRefusal; count?: number }
+  | {
+      kind: "needs-force";
+      deviceId: string;
+      why: EnrollRefusal;
+      count?: number;
+      /** `all-superseded`: the key of the superseded line seen. */
+      key?: string;
+    }
   | { kind: "enrolled"; deviceId: string; enrollmentId: string; presented: PresentReport };
 
 export type RotationHookOutcome =
@@ -479,6 +491,8 @@ export type RotationHookOutcome =
        * announcing `unattended_runtime`, N8).
        */
       decided: EnsureEnrolledOutcome | null;
+      /** The capture taken before the rotation was sent (`null`: none). */
+      captured: "active" | "not-active" | "absent" | null;
     };
 
 // ── The controller ───────────────────────────────────────────────────
@@ -619,6 +633,7 @@ export class MachineRoster {
     // R27 — set-pinning over the ids this replica PRESENTS.
     let omitted: string[] = [];
     let repair: PresentReport | null = null;
+    let omissionRechecked = false;
     if (served != null) {
       omitted = await this.omissions(reduced.verdict, replica, served);
       if (omitted.length > 0) {
@@ -630,6 +645,7 @@ export class MachineRoster {
         replica = p.replica;
         const again = await this.readRoster(signer);
         if (again.served != null) {
+          omissionRechecked = true;
           served = again.served;
           reduced = await this.reduceAndHold(resolved.chain, replica, served);
           replica = reduced.replica;
@@ -689,6 +705,7 @@ export class MachineRoster {
       fetchError,
       succession: { served: successionRead, hint, missingLinks },
       omitted,
+      omissionRechecked,
       suppressed,
       cache: read.kind,
       replica,
@@ -757,8 +774,7 @@ export class MachineRoster {
                   kind: "unknown",
                   why: "succession-unread",
                   status,
-                  detail:
-                    "the relay's key chain could not be read, so this machine's older lines cannot be placed",
+                  detail: "the relay's key chain could not be read",
                 }
               : null;
 
@@ -850,7 +866,25 @@ export class MachineRoster {
       }
       // R24 — this device's own signer holds the head key by construction.
       if (status === "superseded" && !own) {
-        return { kind: "needs-force", deviceId, why: "all-superseded" };
+        // R17b, stating only what is seen: every line of this device that
+        // this surface can see is on a superseded key. If liveness shows it
+        // bound under the head key right now, it demonstrably holds the
+        // current key, and the refusal would be false — no refusal (#790).
+        const head = acq.verdict.chain_head.public_key;
+        const boundUnderHead = [
+          ...(acq.served?.liveness.rows ?? []),
+          ...(acq.served?.liveness.live_unenrolled ?? []),
+        ].some((r) => r.device_id === deviceId && r.bound_under === head);
+        if (!boundUnderHead) {
+          const line = acq.verdict.superseded.find((m) => m.device_id === deviceId);
+          const key = line ? acq.chain.chain[line.epoch] : undefined;
+          return {
+            kind: "needs-force",
+            deviceId,
+            why: "all-superseded",
+            ...(key ? { key } : {}),
+          };
+        }
       }
       const known = new Set(acq.knownDeviceKeys);
       const bound = [
@@ -981,7 +1015,7 @@ export class MachineRoster {
     if (value !== "active" || (prior != null && prior !== "active")) {
       // First write wins; and nothing but a frozen `active` goes further.
       const f = await freeze(value, acq.replica);
-      return { kind: "frozen", value: f.value, decided: null };
+      return { kind: "frozen", value: f.value, decided: null, captured: capture?.status ?? null };
     }
     // A frozen `active` is NEVER persisted on its own (F2): it is saved in
     // the mint's own critical section, in the same save as the head-key
@@ -1000,10 +1034,13 @@ export class MachineRoster {
     // an already-active line, for which nothing is frozen at all.
     const after = await this.ports.cache.load();
     const saved = after.kind === "value" ? frozenFor(after.replica, deviceId, oldKey) : null;
-    if (saved != null) return { kind: "frozen", value: saved, decided };
-    if (decided.kind === "active") return { kind: "frozen", value: "already-active", decided };
+    const captured = capture?.status ?? null;
+    if (saved != null) return { kind: "frozen", value: saved, decided, captured };
+    if (decided.kind === "active") {
+      return { kind: "frozen", value: "already-active", decided, captured };
+    }
     const f = await freeze(decided.kind === "retired" ? "not-active" : "absent", acq.replica);
-    return { kind: "frozen", value: f.value, decided };
+    return { kind: "frozen", value: f.value, decided, captured };
   }
 
   /** C5 — present this replica's presentation set, in chunks. */
