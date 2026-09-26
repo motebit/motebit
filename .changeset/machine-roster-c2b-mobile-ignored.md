@@ -1,5 +1,6 @@
 ---
 "@motebit/mobile": minor
+"@motebit/web": patch
 ---
 
 Machine roster C-2b: the phone's Machines section (`docs/proposals/machine-roster-surfaces-v1.md`, §1B then §1A over §1), on the shared kit from C-2a.
@@ -8,10 +9,12 @@ Machine roster C-2b: the phone's Machines section (`docs/proposals/machine-roste
 
 **Roster.** `MachineRoster.gated` with `selfIsHost: false`: no enrol-on-announce, no rotation capture, and `enroll` of this phone's own id is refused ("This device is not a host."). The signer is the SecureStore key; the roster routes carry a `device:auth` token minted over the same bytes, never a master token. The stored motebit.md is a succession-record source only when it verifies, names this motebit and its current key is the held key; the phone never pins a guardian, so a guardian-recovered identity stays unconfirmed on the phone (R6's remedy is not available here). A legacy identity whose relay names no key shows lines, no count and no actions; a device-only key shows only the reason.
 
-**Presentation.** On every sync connect, when the replica changed since the last presentation the relay fully took or at most every ten minutes; a 429's `Retry-After` holds every presentation, an act's own included.
+**Presentation.** On every sync connect, when the replica changed since the last presentation the relay fully took or at most every ten minutes; a 429's `Retry-After` holds every presentation, an act's own included, and a stored one is read before every replica load, so it also holds the first omission repair after a restart.
 
 **Rotation.** The commit appends its succession link to the replica after the key is stored; a roster failure never fails the rotation. The Rotate confirmation states the cost: machines need enrolling again under the new key.
 
 **Settings.** Settings → Identity gains a Machines section (Retire without confirmation, Enroll per F6 with a second tap for `needs-force`, results inline, no toasts). The roster is disposed on a pairing that switches identity, on restore (before the key slot is written; none until reload) and on stop (none until start).
 
 No published package changes.
+
+**Web (#799 F1, same fix).** A fresh tab reads the stored `Retry-After` before every replica load, so its first omission repair waits too.

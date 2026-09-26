@@ -247,7 +247,17 @@ export function createMobileMachineRoster(deps: MobileRosterDeps): MobileMachine
     if (record != null) retryUntil = Math.max(retryUntil, record.retry_until);
     return record;
   };
-  const roster = MachineRoster.gated(mobileRosterPorts(deps), {
+  // #799 F1 — the stored Retry-After is read BEFORE the replica, on every
+  // load. Every acquisition (and every act) loads the replica before it
+  // repairs or presents, so a Retry-After a previous run stored holds the
+  // first presentation after a restart too — never only after `due`.
+  const ports = mobileRosterPorts(deps);
+  const load = ports.cache.load.bind(ports.cache);
+  ports.cache.load = async () => {
+    remember(await loadPresentationRecord(deps.motebitId, kv).catch(() => null));
+    return load();
+  };
+  const roster = MachineRoster.gated(ports, {
     selfIsHost: false,
     repairOmissions: () => isPresenter() && now() >= retryUntil,
     presentationHeld: () => now() < retryUntil,

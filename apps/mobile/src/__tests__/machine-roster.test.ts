@@ -565,6 +565,24 @@ describe("createMobileMachineRoster", () => {
     expect(relay.posts).toBe(before);
   });
 
+  for (const stored of [true, false]) {
+    it(`#799 F1: after a restart, a stored Retry-After ${stored ? "holds" : "(control: absent) does not hold"} the omission repair on the first refresh`, async () => {
+      const a = await generateKeypair();
+      const relay = new FetchRelay();
+      relay.current = hex(a);
+      relay.enr.set("x", await enrol(a, "dev-host"));
+      // The replica holds an enrolment the relay omits: acquire repairs it.
+      await saveReplica({ ...emptyReplica(MID), enrollments: [await enrol(a, "dev-omitted")] });
+      if (stored) {
+        await putPresentationRecord(MID, { digest: null, taken_at: 0, retry_until: NOW + 60_000 });
+      }
+      const p = phone(relay, a); // a fresh process: nothing in memory
+      await p.section.refresh();
+      if (stored) expect(relay.posts).toBe(0);
+      else expect(relay.posts).toBeGreaterThan(0);
+    });
+  }
+
   it("F8: an act while the relay has asked to wait is kept and reported not taken", async () => {
     const a = await generateKeypair();
     const relay = new FetchRelay();
