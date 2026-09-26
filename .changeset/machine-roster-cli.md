@@ -11,3 +11,5 @@ A process that announces it hosts unattended work now passes through the roster'
 `motebit rotate` now runs the roster's rotation hook after the local commit: if this machine was an active host before the rotation, it enrols under the new key.
 
 The replica lives at `~/.motebit/machine-roster.json` (owner-only, written atomically under a lock; an unreadable one is moved aside with its bytes kept). Every roster request is authenticated by this machine's own device key, never the operator's master token.
+
+`motebit machines retire` and `enroll` say plainly when the relay did not take the act, or refused it for good because its roster is full. No count is printed while this machine's own copy of the roster could not be read and has not since been re-confirmed from the relay.

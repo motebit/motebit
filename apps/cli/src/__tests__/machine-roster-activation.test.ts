@@ -417,3 +417,21 @@ describe("F1 (#783 decisive round): a retired host that loses its replica never 
     },
   );
 });
+
+describe("P2 (#785): a 200 from /succession that is not a key chain is a failed read", () => {
+  it.each(["null", "[]", "not json", "{}", '{"chain":"x"}'])(
+    "body %s → nothing minted",
+    async (body) => {
+      const f = await registeredHost();
+      const garbage: typeof fetch = async (input, init) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url.endsWith("/succession")) return new Response(body, { status: 200 });
+        return viaRelay(input, init);
+      };
+      const out = await enrollOnAnnounce({ ...ctx(f), fetchImpl: garbage }, () => {});
+      expect(out).toMatchObject({ kind: "unknown", why: "succession-unread" });
+      expect(relayEntries(f.mid, "enrollment")).toBe(0);
+    },
+  );
+});

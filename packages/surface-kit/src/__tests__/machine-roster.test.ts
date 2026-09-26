@@ -1127,6 +1127,7 @@ describe("edge cases", () => {
       roster_full: ["x"],
       own_device_ids: ["vps"],
       ambiguous: { at: 5, pairs: ["p"] },
+      integrity: { at: 3, suspect: true },
     };
     const round = JSON.parse(JSON.stringify(full)) as unknown;
     expect(parseReplica(round)).toEqual(full);
@@ -1140,6 +1141,7 @@ describe("edge cases", () => {
       { own_device_ids: "x" },
       { ambiguous: ["p"] },
       { ambiguous: { at: "x", pairs: [] } },
+      { integrity: { at: 1, suspect: "yes" } },
       { frozen: [null] },
     ]) {
       expect(parseReplica({ ...full, ...bad })).toBeNull();
@@ -1777,4 +1779,140 @@ describe("property — a machine the sovereign retired never ends active at the 
       }
     }
   }, 120_000);
+});
+
+// ── #785 round 1 (precision) ─────────────────────────────────────────
+
+/** A cache whose lock first lets `before` land — a concurrent writer between decide() and the mint. */
+function interleaving(cache: FakeCache, before: () => Promise<void>): MachineRosterPorts["cache"] {
+  let fired = false;
+  return {
+    load: () => cache.load(),
+    save: (r) => cache.save(r),
+    exclusive: async (fn) => {
+      if (!fired) {
+        fired = true;
+        await before();
+      }
+      return cache.exclusive(fn);
+    },
+  };
+}
+
+describe("P1 — the re-checks under the mint lock bite", () => {
+  it("a retirement that lands between decide() and the mint: retired, nothing minted", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const e = await enrol(a, "dev-self");
+    await relay.hold(e);
+    relay.chain = [await rotate(a, b)];
+    const cache = new FakeCache();
+    await withFrozen(cache, "dev-self", hex(a), "active"); // decide() will mint
+    const m = machine(relay, b, { cache });
+    const retirement = await retireEntry(b, e);
+    const roster = new MachineRoster({
+      ...m.ports,
+      cache: interleaving(cache, () =>
+        cache.save({ ...emptyReplica(MID), retirements: [retirement] }),
+      ),
+    });
+    const out = await roster.ensureEnrolled();
+    expect(out.kind).toBe("retired");
+    expect([...relay.enr.values()].some((x) => x.public_key === hex(b))).toBe(false);
+  });
+
+  it("an unplaceable line of this device that lands between decide() and the mint: unplaced, nothing minted", async () => {
+    const a = await generateKeypair();
+    const stranger = await generateKeypair();
+    const relay = new FakeRelay();
+    const cache = new FakeCache();
+    const m = machine(relay, a, { cache });
+    const foreign = await enrol(stranger, "dev-self");
+    const roster = new MachineRoster({
+      ...m.ports,
+      cache: interleaving(cache, () =>
+        cache.save({ ...emptyReplica(MID), enrollments: [foreign] }),
+      ),
+    });
+    const out = await roster.ensureEnrolled();
+    expect(out).toMatchObject({ kind: "unplaced", count: 1 });
+    expect(relay.enr.size).toBe(0);
+  });
+});
+
+describe("P2 — a succession body of the wrong shape is a failed read", () => {
+  it.each([null, [], "garbage", {}, { chain: "x" }])(
+    "body %j → unknown, nothing minted",
+    async (body) => {
+      const relay = new FakeRelay();
+      const m = machine(relay, await generateKeypair());
+      const roster = new MachineRoster({
+        ...m.ports,
+        fetchSuccession: async () => ({ ok: true, body }),
+      });
+      expect(await roster.ensureEnrolled()).toMatchObject({
+        kind: "unknown",
+        why: "succession-unread",
+      });
+      expect(relay.enr.size).toBe(0);
+    },
+  );
+});
+
+describe("P4 — no count over a copy that could not be read, until a full read re-merges", () => {
+  it("corrupt → suppressed; a later partial read → still suppressed; a full read → cleared", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(a, "vps"));
+    const cache = new FakeCache();
+    cache.corrupt = true;
+    const m = machine(relay, a, { cache });
+    const first = buildRosterView(await acquired(m), NOW);
+    expect(first.kind === "roster" && first.suppressed).toContain("cache_corrupt");
+    expect(first.kind === "roster" && first.claim).toBeNull();
+    // The next run reads the fresh file: still suspect while a read fails.
+    relay.successionFails = true;
+    const second = await acquired(m);
+    expect(second.cache).toBe("value");
+    expect(second.suppressed).toContain("cache_corrupt");
+    relay.successionFails = false;
+    const third = await acquired(m);
+    expect(third.suppressed).not.toContain("cache_corrupt");
+    const fourth = buildRosterView(await acquired(m), NOW);
+    expect(fourth.kind === "roster" && fourth.claim?.text).toMatch(/^1 machine on the current key/);
+  });
+});
+
+describe("P5 — the observed window is exact", () => {
+  it.each([
+    [89, /not observed since .* began observing/],
+    [90, /not observed in the last 90 days/],
+  ] as const)("observing for %i days", async (days, text) => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(a, "vps"));
+    const acq = await acquired(machine(relay, a));
+    acq.served!.liveness.observing_since = NOW - days * DAY;
+    const view = buildRosterView(acq, NOW);
+    expect(view.kind === "roster" && view.lines[0]?.text).toMatch(text);
+  });
+});
+
+describe("P6 — an empty roster that holds a pending tombstone never says none enrolled", () => {
+  it("a retirement for an enrolment this device has not seen", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(
+      await signHostRetirement(
+        { motebit_id: MID, enrollment_id: "e".repeat(64), public_key: hex(a), retired_at: NOW },
+        a.privateKey,
+      ),
+    );
+    const view = buildRosterView(await acquired(machine(relay, a, { deviceId: "watcher" })), NOW);
+    if (view.kind !== "roster") throw new Error("expected roster");
+    expect(view.lines).toEqual([]);
+    expect(view.empty?.kind).toBe("none-standing");
+    expect(view.empty?.text).not.toMatch(/no machine has enrolled/);
+  });
 });

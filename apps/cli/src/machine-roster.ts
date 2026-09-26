@@ -137,7 +137,19 @@ export function cliRosterPorts(ctx: CliRosterContext): MachineRosterPorts {
           signal: AbortSignal.timeout(10_000),
         });
         if (!resp.ok) return { ok: false, reason: `succession route answered ${resp.status}` };
-        return { ok: true, body: await readJson(resp) };
+        const body = await readJson(resp);
+        // Not the succession shape (unparseable, `null`, a list, no `chain`
+        // list): a failed read, never an empty chain — the same strictness
+        // `parseServedRoster` holds the roster body to.
+        if (
+          typeof body !== "object" ||
+          body === null ||
+          Array.isArray(body) ||
+          !Array.isArray((body as { chain?: unknown }).chain)
+        ) {
+          return { ok: false, reason: "the succession route's answer was not a key chain" };
+        }
+        return { ok: true, body };
       } catch (err) {
         return { ok: false, reason: err instanceof Error ? err.message : String(err) };
       }
@@ -205,7 +217,7 @@ export function remedyText(remedy: RosterRemedy): string {
  * The one line a host start says about its roster line — or nothing, when
  * nothing needs saying (calm: an active line re-presented is not news).
  */
-export function describeEnsureOutcome(out: EnsureEnrolledOutcome): string | null {
+export function describeEnsureOutcome(out: EnsureEnrolledOutcome, deviceId: string): string | null {
   const notTaken = (p: { notTaken: unknown[]; rosterFull: string[] }): string =>
     p.rosterFull.length > 0
       ? ` (the relay's roster is full for ${p.rosterFull.length} entr${p.rosterFull.length === 1 ? "y" : "ies"}; not retried)`
@@ -222,11 +234,11 @@ export function describeEnsureOutcome(out: EnsureEnrolledOutcome): string | null
     case "minted":
       return `Machine roster: enrolled this machine (${out.enrollmentId.slice(0, 12)}…)${notTaken(out.presented)}`;
     case "retired":
-      return "Machine roster: this machine is retired from the roster but running — `motebit machines enroll <this device_id>` to rejoin, or rotate the key if the retirement was not yours";
+      return `Machine roster: this machine is retired from the roster but running — \`motebit machines enroll ${deviceId}\` to rejoin, or rotate the key if the retirement was not yours`;
     case "superseded":
-      return "Machine roster: this machine's line is on a superseded key and not covered — `motebit machines enroll <this device_id>` to enrol it under the current key";
+      return `Machine roster: this machine's line is on a superseded key and not covered — \`motebit machines enroll ${deviceId}\` to enrol it under the current key`;
     case "unplaced":
-      return "Machine roster: not enrolled — this machine has lines this device cannot place in its key chain; if it should host, `motebit machines enroll <this device_id>`";
+      return `Machine roster: not enrolled — this machine has lines this device cannot place in its key chain; if it should host, \`motebit machines enroll ${deviceId}\``;
     case "unknown":
       return `Machine roster: not updated this start — ${out.detail}; the daemon runs regardless`;
     case "refused":
@@ -245,7 +257,7 @@ export async function enrollOnAnnounce(
 ): Promise<EnsureEnrolledOutcome | null> {
   try {
     const out = await new MachineRoster(cliRosterPorts(ctx)).ensureEnrolled();
-    const line = describeEnsureOutcome(out);
+    const line = describeEnsureOutcome(out, ctx.deviceId);
     if (line != null) log(line);
     return out;
   } catch (err) {
@@ -325,7 +337,7 @@ export async function rosterHookAfterRotate(opts: {
       return "  Machine roster: this machine was active, so it is enrolled under the new key";
     }
     if (out.decided.kind === "active") return null;
-    const line = describeEnsureOutcome(out.decided);
+    const line = describeEnsureOutcome(out.decided, config.device_id);
     return line == null ? null : `  ${line}`;
   } catch (err) {
     return `  Machine roster: not updated after the rotation (${err instanceof Error ? err.message : String(err)})`;

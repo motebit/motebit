@@ -16,6 +16,7 @@ import {
   suppressionText,
   type EnrollOutcome,
   type MachineRosterView,
+  type PresentReport,
   type RetireOutcome,
 } from "@motebit/surface-kit";
 import type { CliConfig } from "../args.js";
@@ -66,6 +67,45 @@ export function formatRosterView(view: MachineRosterView, motebitId: string): st
   return out;
 }
 
+/**
+ * What the relay did with a presentation, said plainly. The act is signed
+ * and kept on this device either way; what differs is whether this relay
+ * holds it — and a `roster_full` refusal is permanent, never retried.
+ */
+export function presentationLines(
+  presented: PresentReport,
+  ownIds: string[],
+  noun: "retirement" | "enrolment",
+): string[] {
+  const own = new Set(ownIds);
+  const ownFull = presented.rosterFull.filter((id) => own.has(id)).length;
+  const ownNot = presented.notTaken.filter((n) => own.has(n.id)).length;
+  const otherFull = presented.rosterFull.length - ownFull;
+  const otherNot = presented.notTaken.length - ownNot;
+  const out: string[] = [];
+  if (ownFull > 0) {
+    out.push(
+      `  The relay REFUSED this ${noun} for good (its roster is full): it is kept on this device, but surfaces that read this relay will not see it.`,
+    );
+  }
+  if (ownNot > 0) {
+    out.push(
+      `  The relay did not take this ${noun} yet; it is kept on this device and presented again.`,
+    );
+  }
+  if (otherFull > 0) {
+    out.push(
+      `  The relay refused ${otherFull} other held ${otherFull === 1 ? "entry" : "entries"} for good (its roster is full).`,
+    );
+  }
+  if (otherNot > 0) {
+    out.push(
+      `  The relay did not take ${otherNot} other held ${otherNot === 1 ? "entry" : "entries"}; they are presented again.`,
+    );
+  }
+  return out;
+}
+
 export function describeRetire(out: RetireOutcome): { lines: string[]; ok: boolean } {
   switch (out.kind) {
     case "no-key":
@@ -83,11 +123,7 @@ export function describeRetire(out: RetireOutcome): { lines: string[]; ok: boole
                 "  Its line was on a superseded key, so this is advisory: a holder of that older key can undo it. Rotation is the durable remedy.",
               ]
             : []),
-          ...(out.presented.notTaken.length > 0
-            ? [
-                `  The relay did not take ${out.presented.notTaken.length} of them; they are kept here and presented again.`,
-              ]
-            : []),
+          ...presentationLines(out.presented, out.retirementIds, "retirement"),
           `  Undo: \`motebit machines enroll ${out.deviceId}\`.`,
         ],
         ok: true,
@@ -130,6 +166,7 @@ export function describeEnroll(out: EnrollOutcome): { lines: string[]; ok: boole
       return {
         lines: [
           `Enrolled ${out.deviceId} under the current key (${out.enrollmentId.slice(0, 12)}…).`,
+          ...presentationLines(out.presented, [out.enrollmentId], "enrolment"),
         ],
         ok: true,
       };

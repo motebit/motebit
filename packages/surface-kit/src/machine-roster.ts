@@ -246,7 +246,13 @@ export type SuppressionReason =
    * The relay's roster could not be read: the verdict is over this
    * replica alone, which may be stale — no count is made from it.
    */
-  | "relay_unread";
+  | "relay_unread"
+  /**
+   * This device's copy of the roster could not be read (it was kept
+   * aside), and no acquisition since has read the relay's roster and key
+   * chain in full: the copy that would catch an omission is gone.
+   */
+  | "cache_corrupt";
 
 export interface PresentReport {
   /** Entries the relay took (stored or already held). */
@@ -472,10 +478,16 @@ export class MachineRoster {
     const guardian = guardianRaw != null && HEX_32.test(guardianRaw) ? guardianRaw : undefined;
     let servedChain: unknown[] = [];
     let hint: string | null = null;
-    if (succession.ok && isObj(succession.body)) {
-      if (Array.isArray(succession.body.chain)) servedChain = succession.body.chain;
-      if (typeof succession.body.current_public_key === "string") {
-        hint = succession.body.current_public_key.toLowerCase();
+    // A body that is not the succession shape — `null`, a list, a string, an
+    // object with no `chain` list — is a FAILED read, never an empty chain:
+    // rule 1 must not be satisfiable by a garbage 200.
+    const successionRead =
+      succession.ok && isObj(succession.body) && Array.isArray(succession.body.chain);
+    if (successionRead) {
+      const body = succession.body as Record<string, unknown>;
+      servedChain = body.chain as unknown[];
+      if (typeof body.current_public_key === "string") {
+        hint = body.current_public_key.toLowerCase();
       }
     }
     const records = [...replica.succession, ...local, ...servedChain];
@@ -517,7 +529,7 @@ export class MachineRoster {
       if (isObj(r) && typeof r.old_public_key === "string" && typeof r.new_public_key === "string")
         servedPairs.add(pairKey(r.old_public_key, r.new_public_key));
     }
-    const missingLinks = succession.ok
+    const missingLinks = successionRead
       ? resolved.links.filter((l) => !servedPairs.has(pairKey(l.old_public_key, l.new_public_key)))
           .length
       : 0;
@@ -557,6 +569,19 @@ export class MachineRoster {
     if (hint != null && !resolved.chain.includes(hint)) suppressed.push("relay_newer_key");
     if (omitted.length > 0) suppressed.push("relay_omission");
     if (served == null) suppressed.push("relay_unread");
+    // P4 — this device's copy could not be read (this run), or was lost on
+    // an earlier run and no acquisition has since read the relay in full.
+    const fullRead = served != null && omitted.length === 0 && successionRead;
+    const suspectBefore = replica.integrity.suspect;
+    if (read.kind === "corrupt" || (suspectBefore && !fullRead)) suppressed.push("cache_corrupt");
+    if (read.kind === "corrupt") {
+      replica = { ...replica, integrity: { at: this.now(), suspect: true } };
+    } else if (suspectBefore && fullRead) {
+      replica = {
+        ...replica,
+        integrity: { at: Math.max(this.now(), replica.integrity.at + 1), suspect: false },
+      };
+    }
 
     const previousAmbiguous = replica.ambiguous.pairs;
     if (served != null) {
@@ -583,7 +608,7 @@ export class MachineRoster {
       verdict: reduced.verdict,
       served,
       fetchError,
-      succession: { served: succession.ok, hint, missingLinks },
+      succession: { served: successionRead, hint, missingLinks },
       omitted,
       suppressed,
       cache: read.kind,
