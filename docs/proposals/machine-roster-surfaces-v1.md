@@ -213,9 +213,13 @@ These record where the desktop build departs from, or adds to, the text above an
   - After `stop()` there is none until `start()`. A disposed roster never reads the key slot again.
 - **Rotation (F7).** `rotateDesktopKey`'s `onCommitted` now receives the succession `record` and is awaited. `IdentityManager.rotateKey` appends the link to the replica there, best-effort. The Rotate dialog states N3's cost.
 - **Render.** `machines-render-model.ts` holds every rule and is unit-tested, a copy of the phone's model. `ui/machines-section.ts` only lays it out, as a card after the identity card in Settings → Identity.
-- **Not done here (outside this build's fence).**
-  - The shared-names row for `machine-roster.desktop.json` (and its `.lock` / `.lease`) in `key-file-durability-v1.md`.
-  - The desktop's entry in `check-surface-controller-adoption`. The adapter is 357 lines, under the entry's 360 ceiling.
+- **The file-key rule is defense in depth.** With `pinnedGuardian` null, an unpinned recovery cannot make a successor, so the #799 probe stays green even without the rule. A unit case pins the rule on its own: a file self-signed by a key other than the held one, carrying genuine verifying records, contributes nothing.
+- **Gate and shared names.** The desktop adapter is in `check-surface-controller-adoption` (357 lines, ceiling 360). `machine-roster.desktop.json`, `.corrupt-<t>`, `.lock` and `.lease` have a row in `key-file-durability-v1.md`'s shared-names table.
+- **Decisions (lead, C-2c review):**
+  - **Multi-process presenting: accepted.** The shared cadence record in the replica file bounds it; there is no leader lock.
+  - **Guardian-recovered identities stay `unconfirmed` on the desktop.** Stated cost, the same as on the phone.
+  - **A pairing that throws after the dispose stays latched until reload** (fail-closed).
+  - **Whole-file set-aside: accepted.** One unreadable replica sets the whole file aside for every identity, as on the CLI. Stated cost: the bytes are kept aside.
 
 ## 3. Open questions for design review round 2
 

@@ -526,6 +526,33 @@ describe("desktop ports", () => {
     expect(await ports.rotationInFlight!()).toBe(true);
   });
 
+  it("the file-key rule alone decides: a file self-signed by a key other than the held key, with genuine verifying succession records, contributes nothing", async () => {
+    const k0 = await generateKeypair();
+    const x = await generateKeypair(); // the file's current key — NOT held
+    const held = await generateKeypair();
+    const base = await generate(
+      { motebitId: MID, ownerId: "o", publicKeyHex: hex(k0) },
+      k0.privateKey,
+    );
+    const genuine = await signKeySuccession(k0.privateKey, x.privateKey, x.publicKey, k0.publicKey);
+    const file = await rotateIdentityFile({
+      existingContent: base,
+      newPublicKey: x.publicKey,
+      newPrivateKey: x.privateKey,
+      successionRecord: genuine,
+    });
+    // Everything else passes: the file verifies, names THIS motebit, and its record is genuine.
+    expect(await identityFileRecords(MID, file, hex(x))).toEqual([genuine]);
+    // Only the held-key rule stands between the file and the resolver.
+    expect(await identityFileRecords(MID, file, hex(held))).toEqual([]);
+    const ports = desktopRosterPorts({
+      motebitId: MID,
+      deviceId: "desk-device",
+      invoke: fakeInvoke(new FakeDisk(), held, { _identity_file: file }),
+    });
+    expect(await ports.localSuccession()).toEqual([]);
+  });
+
   it("the config's motebit.md is a record source only when it verifies, names THIS motebit, and its key is the held key", async () => {
     const a = await generateKeypair();
     const b = await generateKeypair();
