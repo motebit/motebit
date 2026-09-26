@@ -1,5 +1,13 @@
 # @motebit/crypto-tpm
 
+## 1.1.35
+
+### Patch Changes
+
+- Updated dependencies [fa009df]
+- Updated dependencies [36f4432]
+  - @motebit/crypto@3.21.0
+
 ## 1.1.34
 
 ### Patch Changes
