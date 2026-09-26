@@ -19,7 +19,7 @@
     "@xenova/transformers": "^2.17.2"
   },
   "devDependencies": {
-    "@types/node": "^22.20.1",
+    "@types/node": "^22.20.3",
     "tsx": "^4.23.12",
     "typescript": "^5.6.0",
     "vitest": "^4.1.10"
