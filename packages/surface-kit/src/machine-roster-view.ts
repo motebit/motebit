@@ -116,6 +116,23 @@ export type RosterNote =
   | { kind: "branch"; at: string; to: string; guardian_verified: boolean; text: string }
   | { kind: "missing-links"; count: number; text: string }
   | { kind: "omitted"; count: number; text: string }
+  /**
+   * Entries this device holds that the relay refused permanently (#802):
+   * still members (they are counted), never presented again.
+   */
+  | {
+      kind: "relay-will-not-hold";
+      count: number;
+      reasons: string[];
+      /**
+       * `counted`: enrolments on an active line; `not-counted`: entries the
+       * law refuses, and admitted enrolments whose line is retired or
+       * superseded (#817 F1); `retirement`: admitted retirements, which are
+       * acts, not members (#813 F2, round 2).
+       */
+      standing: "counted" | "not-counted" | "retirement";
+      text: string;
+    }
   | { kind: "relay-newer-key"; key: string; text: string }
   | { kind: "relay-unread"; reason: string; text: string }
   | { kind: "cache-corrupt"; text: string }
@@ -453,6 +470,29 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
       kind: "omitted",
       count: n,
       text: `the relay is missing ${n} ${plural(n, "entry", "entries")} this device holds (re-presented; ${acq.omissionRechecked ? "still missing on re-read" : "not re-checked"})`,
+    });
+  }
+  // While a suppression applies there is no count to be in (C6.10): say
+  // "would be counted", never "counted" (#813 round 2).
+  const countShown = acq.suppressed.length === 0;
+  const standingOf = (r: RosterAcquired["relayWillNotHold"][number]) =>
+    r.admitted && r.kind === "retirement" ? "retirement" : r.counted ? "counted" : "not-counted";
+  const kept = {
+    counted: countShown ? "kept here and counted" : "kept here; would be counted",
+    "not-counted": "kept here, not counted",
+    retirement: "kept here",
+  } as const;
+  for (const standing of ["counted", "not-counted", "retirement"] as const) {
+    const group = acq.relayWillNotHold.filter((r) => standingOf(r) === standing);
+    if (group.length === 0) continue;
+    const n = group.length;
+    const reasons = [...new Set(group.map((r) => r.reason))].sort();
+    notes.push({
+      kind: "relay-will-not-hold",
+      count: n,
+      reasons,
+      standing,
+      text: `the relay will not hold ${n} ${plural(n, "entry", "entries")} this device holds (${reasons.join(", ")}); ${kept[standing]}, not presented again`,
     });
   }
   if (acq.suppressed.includes("relay_newer_key") && acq.succession.hint != null) {

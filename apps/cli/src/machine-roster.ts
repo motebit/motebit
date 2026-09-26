@@ -19,6 +19,7 @@ import {
   boundIdentityFile,
   createRosterSigner,
   type EnsureEnrolledOutcome,
+  type PresentReport,
   type MachineRosterPorts,
   type RosterRemedy,
 } from "@motebit/surface-kit";
@@ -249,12 +250,21 @@ export function describeEnsureOutcome(
 ): string | null {
   const when = context === "rotate" ? "after the rotation" : "this start";
   const enroll = `\`motebit machines enroll ${deviceId}\``;
-  const notTaken = (p: { notTaken: unknown[]; rosterFull: string[] }): string =>
-    p.rosterFull.length > 0
-      ? ` (relay roster full: ${p.rosterFull.length} not taken, not retried)`
-      : p.notTaken.length > 0
-        ? ` (${p.notTaken.length} not taken by the relay; presented again)`
-        : "";
+  // Only what may yet be taken is "presented again" (#802).
+  const notTaken = (p: PresentReport): string => {
+    const parts: string[] = [];
+    if (p.rosterFull.length > 0) {
+      parts.push(`relay roster full: ${p.rosterFull.length} not taken, not retried`);
+    }
+    if (p.willNotHold.length > 0) {
+      const why = [...new Set(p.willNotHold.map((w) => w.reason))].join(", ");
+      parts.push(`the relay will not hold ${p.willNotHold.length}: ${why}; not presented again`);
+    }
+    if (p.notTaken.length > 0) {
+      parts.push(`${p.notTaken.length} not taken by the relay; presented again`);
+    }
+    return parts.length > 0 ? ` (${parts.join("; ")})` : "";
+  };
   switch (out.kind) {
     case "no-key":
       return null;
@@ -283,6 +293,8 @@ export function describeEnsureOutcome(
       return `Machine roster: this machine's entries are under keys this device cannot place, or unverified; not updated ${when} — ${enroll} if it should host`;
     case "unknown":
       return `Machine roster: not updated ${when} — ${out.detail}`;
+    case "entry-too-large":
+      return `Machine roster: not enrolled ${when} — this machine's entry would be ${out.bytes} bytes, and a relay holds at most ${out.limit}; nothing was kept`;
     case "refused":
       return `Machine roster: no roster — ${remedyText(out.remedy)}`;
   }

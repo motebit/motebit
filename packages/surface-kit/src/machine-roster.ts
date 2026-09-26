@@ -59,6 +59,13 @@ import {
   type RotationCapture,
 } from "./machine-roster-replica.js";
 import { classifyHeldKey, classifyResolved, type HeldKeyClass } from "./machine-roster-held-key.js";
+import {
+  MAX_ROSTER_ENTRY_BYTES,
+  classifyEntryRefusal,
+  corroboratesRefusal,
+  rosterEntryBytes,
+  type EntryRefusalReason,
+} from "./machine-roster-refusals.js";
 
 const KEY_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
 /** The reference relay's per-request limit (spec §11); a chunk never exceeds it. */
@@ -300,10 +307,28 @@ export type SuppressionReason =
 export interface PresentReport {
   /** Entries the relay took (stored or already held). */
   taken: number;
-  /** Not taken this time; retried at the next presentation. */
-  notTaken: Array<{ id: string; reason: string }>;
+  /**
+   * Not taken this time; retried at the next presentation. Only what may
+   * yet be taken: a status, no answer, or a refusal reason this surface
+   * does not know (`machine-roster-refusals.ts`).
+   */
+  notTaken: Array<{
+    id: string;
+    reason: string;
+    /**
+     * #813 F3 — the relay refused it for this reason, and this device's own
+     * check did not agree: presented again, and still an omission.
+     */
+    unconfirmed?: EntryRefusalReason;
+  }>;
   /** Refused `roster_full` for the FIRST time — permanent, reported once (C5). */
   rosterFull: string[];
+  /**
+   * Refused for their own bytes for the FIRST time (`too_large`,
+   * `malformed`, …) — the relay will never hold them: permanent, reported
+   * once, never presented again (#802).
+   */
+  willNotHold: Array<{ id: string; reason: EntryRefusalReason }>;
   /** The relay asked to wait (a 429's `Retry-After`); no further chunk was sent. */
   retryAfterMs?: number;
   /** Nothing was presented: the held key is not confirmed as the identity key (§1B R1). */
@@ -343,6 +368,27 @@ export interface RosterAcquired {
   };
   /** Ids this replica presents that the relay still omits after a re-present and re-read (R27). */
   omitted: string[];
+  /**
+   * Ids this replica would present that the relay refused permanently
+   * (`roster_full`, or for their own bytes), with the reason. Not an
+   * omission: the relay said so. The entries stay members — membership is
+   * what the sovereign signed — and are not presented again (#802).
+   * Empty unless the relay's roster was READ this acquisition: without the
+   * served set, "will not hold" cannot be told apart from "now holds"
+   * (#813 round 2).
+   */
+  relayWillNotHold: Array<{
+    id: string;
+    reason: string;
+    kind: "enrollment" | "retirement";
+    /** The law admits it on its own under the resolved chain (#813 F2). */
+    admitted: boolean;
+    /**
+     * An admitted enrolment on an ACTIVE line: in the count (#817 F1). A
+     * retired or superseded one is not; retirements never are.
+     */
+    counted: boolean;
+  }>;
   /**
    * `omitted` was confirmed by a re-read after re-presenting. False when the
    * re-read failed: the omission is then the first read's, not re-checked.
@@ -481,6 +527,8 @@ export type EnsureEnrolledOutcome =
    * chain cannot place (rule 2): not auto-minted — `enroll` is the act.
    */
   | { kind: "unplaced"; count: number; presented: PresentReport }
+  /** The entry this machine would mint is larger than a relay holds: nothing was signed (#802). */
+  | EntryTooLarge
   /** Minting was the answer, but the state could not be read reliably enough to mint. */
   | {
       kind: "unknown";
@@ -488,6 +536,18 @@ export type EnsureEnrolledOutcome =
       status: ThisDeviceStatus;
       detail: string;
     };
+
+/**
+ * The enrolment would exceed the relay's per-entry bound (spec §11,
+ * `MAX_ROSTER_ENTRY_BYTES`): nothing was kept or presented, because the
+ * relay would refuse it `too_large` forever (#802).
+ */
+export interface EntryTooLarge {
+  kind: "entry-too-large";
+  deviceId: string;
+  bytes: number;
+  limit: number;
+}
 
 export type RetireOutcome =
   | { kind: "no-key" }
@@ -535,7 +595,8 @@ export type EnrollOutcome =
       /** `all-superseded`: the key of the superseded line seen. */
       key?: string;
     }
-  | { kind: "enrolled"; deviceId: string; enrollmentId: string; presented: PresentReport };
+  | { kind: "enrolled"; deviceId: string; enrollmentId: string; presented: PresentReport }
+  | EntryTooLarge;
 
 /** Why an active capture was not carried into the new epoch. */
 export type NotCarried =
@@ -850,6 +911,42 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
     }
     await this.ports.cache.save(replica);
 
+    // #802 — what this replica would present that the relay said it will
+    // never hold. Beside the count, never a suppression of it. What the
+    // relay SERVES it holds, whatever it once refused (#813 F1: a
+    // roster_full entry another key presented lands in the foreign bucket).
+    const refusedWhy = new Map<string, string>([
+      ...replica.roster_full.map((id): [string, string] => [id, "roster_full"]),
+      ...replica.relay_refused.map((r): [string, string] => [r.id, r.reason]),
+    ]);
+    // Only over a roster READ this acquisition (#813 round 2): with no served
+    // set, an entry the relay now holds would be said to be one it will not.
+    const holds = served != null ? await servedIdsOf(served) : null;
+    const relayWillNotHold: RosterAcquired["relayWillNotHold"] = [];
+    // #817 F1 — "counted" is a STANDING, not a signature: only an enrolment
+    // on an active line is in the count. Retired or superseded ones are not.
+    const activeIds = new Set(
+      reduced.verdict.active.flatMap((m) => m.entries.map((e) => e.enrollment_id)),
+    );
+    for (const i of holds == null ? [] : await this.presentationSet(reduced.verdict, replica)) {
+      if (!refusedWhy.has(i.id) || holds!.has(i.id)) continue;
+      // #813 F2 — "counted" only for what the law counts.
+      const alone = await verifyHostRoster({
+        motebitId,
+        keyChain: resolved.chain,
+        enrollments: i.kind === "enrollment" ? [i.artifact as HostEnrollment] : [],
+        retirements: i.kind === "retirement" ? [i.artifact as HostRetirement] : [],
+      });
+      const admitted = alone.ok && alone.rejected.length === 0;
+      relayWillNotHold.push({
+        id: i.id,
+        reason: refusedWhy.get(i.id)!,
+        kind: i.kind,
+        admitted,
+        counted: admitted && i.kind === "enrollment" && activeIds.has(i.id),
+      });
+    }
+
     return {
       kind: "acquired",
       motebitId,
@@ -861,6 +958,7 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
       fetchError,
       succession: { served: successionRead, hint, missingLinks },
       omitted,
+      relayWillNotHold,
       omissionRechecked,
       suppressed,
       cache: read.kind,
@@ -1084,6 +1182,7 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
       if (bound) return { kind: "needs-force", deviceId, why: "linked-device" };
     }
     const minted = await this.mint(acq, deviceId, "explicit");
+    if (minted.kind === "entry-too-large") return minted;
     if (minted.kind === "cache-corrupt") {
       return { kind: "unreadable", detail: unreadableDetail({ ...acq, cache: "corrupt" }) };
     }
@@ -1252,7 +1351,13 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
   /** C5 — present this replica's presentation set, in chunks. */
   async present(acq: RosterAcquired): Promise<PresentReport> {
     if (this.refusalOf(acq) != null) {
-      return { taken: 0, notTaken: [], rosterFull: [], refused: "held-key-not-identity" };
+      return {
+        taken: 0,
+        notTaken: [],
+        rosterFull: [],
+        willNotHold: [],
+        refused: "held-key-not-identity",
+      };
     }
     return this.presentFrom(acq);
   }
@@ -1283,6 +1388,8 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
           status: "none",
           detail: "the local roster replica could not be read; it was kept aside",
         };
+      case "entry-too-large":
+        return m;
     }
   }
 
@@ -1306,13 +1413,15 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
     | { kind: "superseded"; frozen: FrozenValue | null; presented: PresentReport }
     | { kind: "unplaced"; count: number; presented: PresentReport }
     | { kind: "cache-corrupt" }
+    | EntryTooLarge
   > {
     type Decision =
       | { kind: "minted" | "held"; id: string; replica: MachineRosterReplica }
       | { kind: "retired"; replica: MachineRosterReplica }
       | { kind: "superseded"; frozen: FrozenValue | null; replica: MachineRosterReplica }
       | { kind: "unplaced"; count: number; replica: MachineRosterReplica }
-      | { kind: "cache-corrupt" };
+      | { kind: "cache-corrupt" }
+      | EntryTooLarge;
     // The rotation hook's frozen verdict is persisted INSIDE this critical
     // section, in the same save as what it authorizes: `active` only beside
     // the head-key line (minted here, or already held), `not-active` when
@@ -1415,6 +1524,13 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
         if (!named.has(id)) break;
         enrolledAt++;
       }
+      // #802 — never mint what the relay refuses `too_large` forever: it
+      // would be kept, re-presented, and never held. Decided on the signed
+      // bytes, as the relay measures them; nothing is saved.
+      const bytes = rosterEntryBytes(enrollment);
+      if (bytes > MAX_ROSTER_ENTRY_BYTES) {
+        return { kind: "entry-too-large", deviceId, bytes, limit: MAX_ROSTER_ENTRY_BYTES };
+      }
       const next = mergeReplicas(replica, {
         ...emptyReplica(acq.motebitId),
         enrollments: [enrollment],
@@ -1430,7 +1546,7 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
       await this.ports.cache.save(next);
       return { kind: "minted", id, replica: next };
     });
-    if (decided.kind === "cache-corrupt") return decided;
+    if (decided.kind === "cache-corrupt" || decided.kind === "entry-too-large") return decided;
     // Presented outside the lock: the network is no part of the decision.
     const presented = await this.presentFrom({ ...acq, replica: decided.replica });
     if (decided.kind === "superseded") {
@@ -1450,10 +1566,12 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
       retirements: acq.replica.retirements,
     });
     /* c8 ignore next -- the chain came from resolveRosterKeyChain, which never yields one the law refuses */
-    if (!verdict.ok) return { taken: 0, notTaken: [], rosterFull: [] };
+    if (!verdict.ok) return { taken: 0, notTaken: [], rosterFull: [], willNotHold: [] };
     const items = await this.presentationSet(verdict, acq.replica);
     const { report, replica } = await this.presentItems(acq.signer, items, acq.replica);
-    if (report.rosterFull.length > 0) await this.ports.cache.save(replica);
+    if (report.rosterFull.length > 0 || report.willNotHold.length > 0) {
+      await this.ports.cache.save(replica);
+    }
     return report;
   }
 
@@ -1578,23 +1696,17 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
     return [...out.values()];
   }
 
-  /** R27 — `(presented \ roster_full) \ served`, as ids. */
+  /** R27 — `(presented \ refused permanently) \ served`, as ids (R20, #802). */
   private async omissions(
     verdict: HostRosterVerdict,
     replica: MachineRosterReplica,
     served: ServedRoster,
   ): Promise<string[]> {
-    const servedIds = new Set<string>();
-    for (const e of served.enrollments) {
-      if (isHostEnrollment(e)) servedIds.add(await hostEnrollmentId(e));
-    }
-    for (const r of served.retirements) {
-      if (isHostRetirement(r)) servedIds.add(await hostRetirementId(r));
-    }
-    const full = new Set(replica.roster_full);
+    const servedIds = await servedIdsOf(served);
+    const gone = permanentlyRefused(replica);
     return (await this.presentationSet(verdict, replica))
       .map((i) => i.id)
-      .filter((id) => !full.has(id) && !servedIds.has(id));
+      .filter((id) => !gone.has(id) && !servedIds.has(id));
   }
 
   private async presentItems(
@@ -1602,16 +1714,27 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
     all: Item[],
     replica: MachineRosterReplica,
   ): Promise<{ report: PresentReport; replica: MachineRosterReplica }> {
-    const full = new Set(replica.roster_full);
-    const items = all.filter((i) => !full.has(i.id)); // never retried (C5)
-    const report: PresentReport = { taken: 0, notTaken: [], rosterFull: [] };
+    const gone = permanentlyRefused(replica);
+    const items = all.filter((i) => !gone.has(i.id)); // never presented again (C5, #802)
+    const report: PresentReport = { taken: 0, notTaken: [], rosterFull: [], willNotHold: [] };
     if (this.options.presentationHeld?.() === true) {
       // F8 — a pending Retry-After: kept here, presented again later.
       for (const c of items) report.notTaken.push({ id: c.id, reason: "waiting (Retry-After)" });
       return { report, replica };
     }
-    for (let i = 0; i < items.length; i += ROSTER_CHUNK_SIZE) {
-      const chunk = items.slice(i, i + ROSTER_CHUNK_SIZE);
+    // #802 — an entry past the per-entry bound is presented ALONE: in a
+    // chunk it could push the body past the request limit, and a 413 then
+    // takes none of its neighbours, every time.
+    const oversized = new Set(
+      items.filter((i) => rosterEntryBytes(i.artifact) > MAX_ROSTER_ENTRY_BYTES).map((i) => i.id),
+    );
+    const fit = items.filter((i) => !oversized.has(i.id));
+    const chunks: Item[][] = [];
+    for (let i = 0; i < fit.length; i += ROSTER_CHUNK_SIZE) {
+      chunks.push(fit.slice(i, i + ROSTER_CHUNK_SIZE));
+    }
+    for (const i of items) if (oversized.has(i.id)) chunks.push([i]);
+    for (const chunk of chunks) {
       if (report.retryAfterMs != null) {
         // The relay asked to wait (F8): nothing more is sent this time.
         for (const c of chunk) report.notTaken.push({ id: c.id, reason: "rate limited (429)" });
@@ -1628,19 +1751,37 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
         continue;
       }
       if (res.status === 422 && isObj(res.body) && Array.isArray(res.body.refused)) {
-        const refused = new Map<string, string>();
+        const refused = new Map<string, unknown>();
         for (const r of res.body.refused) {
           if (!isObj(r) || typeof r.index !== "number") continue;
           const list = r.kind === "retirement" ? ret : enr;
           const hit = list[r.index];
-          if (hit) refused.set(hit.id, typeof r.reason === "string" ? r.reason : "refused");
+          if (hit) refused.set(hit.id, r.reason);
         }
         for (const c of chunk) {
-          const reason = refused.get(c.id);
-          if (reason == null) report.taken++;
-          else if (reason === "roster_full") report.rosterFull.push(c.id);
-          else report.notTaken.push({ id: c.id, reason });
+          if (!refused.has(c.id)) {
+            report.taken++;
+            continue;
+          }
+          // The ONE classification (machine-roster-refusals.ts): an unknown
+          // reason is retryable.
+          const why = classifyEntryRefusal(refused.get(c.id));
+          if (why.class === "retryable") report.notTaken.push({ id: c.id, reason: why.reason });
+          else if (why.reason === "roster_full") report.rosterFull.push(c.id);
+          // #813 F3 — permanent only when this device's own check agrees: a
+          // relay's word alone must not clear the omission check.
+          else if (await corroboratesRefusal(why.reason, c.kind, c.artifact, replica.motebit_id)) {
+            report.willNotHold.push({ id: c.id, reason: why.reason });
+          } else {
+            report.notTaken.push({ id: c.id, reason: why.reason, unconfirmed: why.reason });
+          }
         }
+        continue;
+      }
+      // An entry past the bound, presented alone, refused whole for its size:
+      // its own bytes are the cause, and they will be every time.
+      if (res.status === 413 && chunk.length === 1 && oversized.has(chunk[0]!.id)) {
+        report.willNotHold.push({ id: chunk[0]!.id, reason: "too_large" });
         continue;
       }
       // 413, any other status, or no response: the whole chunk was not taken.
@@ -1660,6 +1801,7 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
       replica: mergeReplicas(replica, {
         ...emptyReplica(replica.motebit_id),
         roster_full: report.rosterFull,
+        relay_refused: report.willNotHold,
       }),
     };
   }
@@ -1682,6 +1824,23 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
     }
     return "restore";
   }
+}
+
+/** The ids of every well-formed entry a relay serves. */
+async function servedIdsOf(served: ServedRoster): Promise<Set<string>> {
+  const ids = new Set<string>();
+  for (const e of served.enrollments) {
+    if (isHostEnrollment(e)) ids.add(await hostEnrollmentId(e));
+  }
+  for (const r of served.retirements) {
+    if (isHostRetirement(r)) ids.add(await hostRetirementId(r));
+  }
+  return ids;
+}
+
+/** Ids this replica will never present again: refused `roster_full` or for their own bytes. */
+function permanentlyRefused(replica: MachineRosterReplica): Set<string> {
+  return new Set([...replica.roster_full, ...replica.relay_refused.map((r) => r.id)]);
 }
 
 /** Ids named by admissible retirements under the head key — admissible = not refused by the law. */
