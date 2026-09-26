@@ -19,7 +19,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
-    "fast-check": "^4.9.0",
+    "fast-check": "^4.10.1",
     "typescript": "^5.6.0",
     "vitest": "^4.1.10"
   }
