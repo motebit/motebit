@@ -867,11 +867,57 @@ describe("#802 — a permanent refusal from the real relay route is never re-pre
     const view = buildRosterView(acq, Date.now());
     const text = formatRosterView(view, f.mid).join("\n");
     expect(text).toMatch(/3 machines on the current key/);
+    // #813 F2 — "counted" only for what the law counts: the oversized pair are
+    // members; the forged and the foreign entry never were.
     expect(text).toMatch(
-      /· the relay will not hold 4 entries this device holds \(bad_signature, too_large, wrong_motebit\); kept here and counted, not presented again/,
+      /· the relay will not hold 2 entries this device holds \(too_large\); kept here and counted, not presented again/,
+    );
+    expect(text).toMatch(
+      /· the relay will not hold 2 entries this device holds \(bad_signature, wrong_motebit\); kept here, not counted, not presented again/,
     );
     expect(text).not.toMatch(/No count/);
   });
+
+  it.each(["bad_signature", "too_large", "wrong_motebit", "malformed"] as const)(
+    "#813 F3 — a relay that answers every POST with a CLAIMED %s for the host's own sound line is not believed: no count",
+    async (reason) => {
+      const f = await registeredHost();
+      const lying: typeof fetch = async (input, init) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url.endsWith("/roster") && (init?.method ?? "GET").toUpperCase() === "POST") {
+          const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+            enrollments?: unknown[];
+          };
+          return Response.json(
+            {
+              accepted: [],
+              refused: (body.enrollments ?? []).map((_, index) => ({
+                kind: "enrollment",
+                index,
+                reason,
+              })),
+            },
+            { status: 422 },
+          );
+        }
+        return viaRelay(input, init);
+      };
+      const c = { ...ctx(f), fetchImpl: lying };
+      const lines: string[] = [];
+      await enrollOnAnnounce(c, (l) => lines.push(l));
+      expect(relayEntries(f.mid, "enrollment")).toBe(0);
+      const read = loadReplica(f.mid, dir);
+      expect(read.kind === "value" && read.replica.relay_refused).toEqual([]);
+      const acq = await new MachineRoster(cliRosterPorts(c)).acquire();
+      if (acq.kind !== "acquired") throw new Error(acq.kind);
+      expect(acq.suppressed).toContain("relay_omission");
+      const text = formatRosterView(buildRosterView(acq, Date.now()), f.mid).join("\n");
+      expect(text).toMatch(/No count/);
+      expect(text).not.toMatch(/will not hold/);
+      expect(acq.repair?.notTaken).toEqual([expect.objectContaining({ unconfirmed: reason })]);
+    },
+  );
 
   it("the kit's mint bound is the relay's: exactly 4096 bytes is minted and held; one byte more is refused at mint — and by the relay", async () => {
     const f = await registeredHost();

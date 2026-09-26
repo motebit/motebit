@@ -62,6 +62,7 @@ import { classifyHeldKey, classifyResolved, type HeldKeyClass } from "./machine-
 import {
   MAX_ROSTER_ENTRY_BYTES,
   classifyEntryRefusal,
+  corroboratesRefusal,
   rosterEntryBytes,
   type EntryRefusalReason,
 } from "./machine-roster-refusals.js";
@@ -311,7 +312,15 @@ export interface PresentReport {
    * yet be taken: a status, no answer, or a refusal reason this surface
    * does not know (`machine-roster-refusals.ts`).
    */
-  notTaken: Array<{ id: string; reason: string }>;
+  notTaken: Array<{
+    id: string;
+    reason: string;
+    /**
+     * #813 F3 — the relay refused it for this reason, and this device's own
+     * check did not agree: presented again, and still an omission.
+     */
+    unconfirmed?: EntryRefusalReason;
+  }>;
   /** Refused `roster_full` for the FIRST time — permanent, reported once (C5). */
   rosterFull: string[];
   /**
@@ -365,7 +374,12 @@ export interface RosterAcquired {
    * omission: the relay said so. The entries stay members — membership is
    * what the sovereign signed — and are not presented again (#802).
    */
-  relayWillNotHold: Array<{ id: string; reason: string }>;
+  relayWillNotHold: Array<{
+    id: string;
+    reason: string;
+    /** The law admits it on its own under the resolved chain: it is counted (#813 F2). */
+    counted: boolean;
+  }>;
   /**
    * `omitted` was confirmed by a re-read after re-presenting. False when the
    * re-read failed: the omission is then the first read's, not re-checked.
@@ -889,14 +903,30 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
     await this.ports.cache.save(replica);
 
     // #802 — what this replica would present that the relay said it will
-    // never hold. Beside the count, never a suppression of it.
+    // never hold. Beside the count, never a suppression of it. What the
+    // relay SERVES it holds, whatever it once refused (#813 F1: a
+    // roster_full entry another key presented lands in the foreign bucket).
     const refusedWhy = new Map<string, string>([
       ...replica.roster_full.map((id): [string, string] => [id, "roster_full"]),
       ...replica.relay_refused.map((r): [string, string] => [r.id, r.reason]),
     ]);
-    const relayWillNotHold = (await this.presentationSet(reduced.verdict, replica))
-      .filter((i) => refusedWhy.has(i.id))
-      .map((i) => ({ id: i.id, reason: refusedWhy.get(i.id)! }));
+    const holds = served != null ? await servedIdsOf(served) : new Set<string>();
+    const relayWillNotHold: RosterAcquired["relayWillNotHold"] = [];
+    for (const i of await this.presentationSet(reduced.verdict, replica)) {
+      if (!refusedWhy.has(i.id) || holds.has(i.id)) continue;
+      // #813 F2 — "counted" only for what the law counts.
+      const alone = await verifyHostRoster({
+        motebitId,
+        keyChain: resolved.chain,
+        enrollments: i.kind === "enrollment" ? [i.artifact as HostEnrollment] : [],
+        retirements: i.kind === "retirement" ? [i.artifact as HostRetirement] : [],
+      });
+      relayWillNotHold.push({
+        id: i.id,
+        reason: refusedWhy.get(i.id)!,
+        counted: alone.ok && alone.rejected.length === 0,
+      });
+    }
 
     return {
       kind: "acquired",
@@ -1653,13 +1683,7 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
     replica: MachineRosterReplica,
     served: ServedRoster,
   ): Promise<string[]> {
-    const servedIds = new Set<string>();
-    for (const e of served.enrollments) {
-      if (isHostEnrollment(e)) servedIds.add(await hostEnrollmentId(e));
-    }
-    for (const r of served.retirements) {
-      if (isHostRetirement(r)) servedIds.add(await hostRetirementId(r));
-    }
+    const servedIds = await servedIdsOf(served);
     const gone = permanentlyRefused(replica);
     return (await this.presentationSet(verdict, replica))
       .map((i) => i.id)
@@ -1725,7 +1749,13 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
           const why = classifyEntryRefusal(refused.get(c.id));
           if (why.class === "retryable") report.notTaken.push({ id: c.id, reason: why.reason });
           else if (why.reason === "roster_full") report.rosterFull.push(c.id);
-          else report.willNotHold.push({ id: c.id, reason: why.reason });
+          // #813 F3 — permanent only when this device's own check agrees: a
+          // relay's word alone must not clear the omission check.
+          else if (await corroboratesRefusal(why.reason, c.kind, c.artifact, replica.motebit_id)) {
+            report.willNotHold.push({ id: c.id, reason: why.reason });
+          } else {
+            report.notTaken.push({ id: c.id, reason: why.reason, unconfirmed: why.reason });
+          }
         }
         continue;
       }
@@ -1775,6 +1805,18 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
     }
     return "restore";
   }
+}
+
+/** The ids of every well-formed entry a relay serves. */
+async function servedIdsOf(served: ServedRoster): Promise<Set<string>> {
+  const ids = new Set<string>();
+  for (const e of served.enrollments) {
+    if (isHostEnrollment(e)) ids.add(await hostEnrollmentId(e));
+  }
+  for (const r of served.retirements) {
+    if (isHostRetirement(r)) ids.add(await hostRetirementId(r));
+  }
+  return ids;
 }
 
 /** Ids this replica will never present again: refused `roster_full` or for their own bytes. */

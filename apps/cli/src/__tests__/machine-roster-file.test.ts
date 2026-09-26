@@ -286,6 +286,28 @@ describe("terminal wording", () => {
       /The relay will not hold 1 other held entry: malformed; not presented again\./,
     );
     expect(mine).not.toMatch(/, presented again|; presented again/);
+    // #813 F3 — a claimed reason this device could not confirm: retried, and said so.
+    const claimed = describeEnroll({
+      kind: "enrolled",
+      deviceId: "v",
+      enrollmentId: own,
+      presented: {
+        taken: 0,
+        notTaken: [
+          { id: own, reason: "bad_signature", unconfirmed: "bad_signature" },
+          { id: "d".repeat(64), reason: "too_large", unconfirmed: "too_large" },
+        ],
+        rosterFull: [],
+        willNotHold: [],
+      },
+    }).lines.join("\n");
+    expect(claimed).toMatch(
+      /The relay refused this enrolment as bad_signature, which this device could not confirm; kept on this device, presented again\./,
+    );
+    expect(claimed).toMatch(
+      /The relay refused 1 other held entry as too_large, which this device could not confirm; presented again\./,
+    );
+    expect(claimed).not.toMatch(/Not yet taken|not yet taken|will not hold/);
     const start = describeEnsureOutcome(
       {
         kind: "minted",

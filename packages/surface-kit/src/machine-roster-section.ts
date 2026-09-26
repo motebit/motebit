@@ -250,9 +250,14 @@ function refusalReasonsText(reasons: ReadonlyArray<string>): string {
  */
 function notTakenText(p: PresentReport): string {
   let out = "";
+  const unconfirmed = p.notTaken.filter((n) => n.unconfirmed != null);
   if (p.retryAfterMs != null) out += " The relay asked to wait; kept here and presented later.";
-  else if (p.notTaken.length > 0) {
+  else if (p.notTaken.length > unconfirmed.length) {
     out += " Not yet taken by the relay; kept here and presented again.";
+  }
+  if (unconfirmed.length > 0) {
+    // #813 F3 — the relay's reason, which this device's own check did not confirm.
+    out += ` The relay refused ${entries(unconfirmed.length)} as ${refusalReasonsText(unconfirmed.map((n) => n.unconfirmed!))}, which this device could not confirm; kept here and presented again.`;
   }
   if (p.rosterFull.length > 0) {
     out += ` The relay refused ${entries(p.rosterFull.length)} permanently (roster full).`;
