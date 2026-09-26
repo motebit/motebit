@@ -919,3 +919,15 @@ describe("WebApp.announceMotebit — sovereign-binding skip is terminal, not cac
     expect(localStorage.getItem("motebit-announced")).toBe("1");
   });
 });
+
+describe("Machine roster (machine-roster-surfaces-v1 C-2a)", () => {
+  it("machineRoster() is null before bootstrap and one section per identity after", async () => {
+    const app = new WebApp();
+    expect(app.machineRoster()).toBeNull();
+    await app.bootstrap();
+    const r = app.machineRoster();
+    expect(r).not.toBeNull();
+    expect(app.machineRoster()).toBe(r);
+    app.stop();
+  });
+});

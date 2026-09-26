@@ -178,6 +178,7 @@ const SUPPRESSION_TEXT: Record<SuppressionReason, string> = {
   cache_corrupt:
     "this device's copy of the roster could not be read and has not been re-confirmed from the relay",
   chain_unread: "the key chain could not be refreshed from the relay",
+  held_key_unconfirmed: "this device cannot confirm it holds the identity key",
 };
 
 function ancestryText(a: RosterChainAncestry): string {

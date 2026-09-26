@@ -139,6 +139,12 @@ import {
 import { LocalStorageKeyringAdapter } from "./browser-keyring";
 import { EncryptedKeyStore } from "./encrypted-keystore";
 import { rotateWebKey } from "./key-rotation";
+import {
+  createWebMachineRoster,
+  rosterAfterRotationCommit,
+  type RosterLocks,
+  type WebMachineRoster,
+} from "./machine-roster.js";
 import { createWebGoalsScheduler } from "./goal-scheduler";
 import { createWebGoalsAdapter } from "./goals-adapter";
 import type { GoalsEngine } from "./goal-engine";
@@ -444,6 +450,8 @@ export class UnbootedWebApp {
   private _planStore: IdbPlanStore | null = null;
   private _planSyncEngine: PlanSyncEngine | null = null;
   private keyStore = new EncryptedKeyStore();
+  /** The Machines section (machine-roster-surfaces-v1 C-2a); created on first use after bootstrap. */
+  private _machineRoster: WebMachineRoster | null = null;
   private mcpAdapters = new Map<string, McpClientAdapter>();
   private _mcpServers: McpServerConfig[] = [];
   private _convStore: IdbConversationStore | null = null;
@@ -1398,6 +1406,8 @@ export class UnbootedWebApp {
 
   stop(): void {
     this.cursorPresence.stop();
+    this._machineRoster?.dispose();
+    this._machineRoster = null;
     if (this.cuesTickInterval != null) {
       clearInterval(this.cuesTickInterval);
       this.cuesTickInterval = null;
@@ -2320,6 +2330,10 @@ export class UnbootedWebApp {
       onCommitted: (publicKeyHex) => {
         this._publicKeyHex = publicKeyHex;
       },
+      // F7: the link joins the roster replica. No capture and no
+      // re-enrolment — a browser is never a host (S2).
+      afterCommit: ({ record }) =>
+        rosterAfterRotationCommit({ motebitId: this._motebitId, record }),
       ...(reason !== undefined ? { reason } : {}),
     });
   }
@@ -3524,6 +3538,9 @@ export class UnbootedWebApp {
   private setSyncStatus(status: WebSyncStatus): void {
     const changed = this._syncStatus !== status;
     this._syncStatus = status;
+    // S4 — the roster is read (and, from the presenting tab, presented)
+    // whenever this browser connects.
+    if (changed && status === "connected") void this.machineRoster()?.section.refresh();
     for (const cb of this._syncStatusListeners) cb(status);
     // Config-state changed while the slab rests on home → re-derive the
     // seed (a relay connecting mid-rest surfaces Find-an-agent; a
@@ -3531,6 +3548,39 @@ export class UnbootedWebApp {
     if (changed && (this._onHomeRegister || this._homeOverlayActive)) {
       this.mountHomeViewIntoBodySlot();
     }
+  }
+
+  /**
+   * The Machines section (machine-roster-surfaces-v1 C-2a). `null` before
+   * bootstrap. One per identity: a pairing that switched identity gets a
+   * fresh one (replicas are per motebit_id, F4).
+   */
+  machineRoster(): WebMachineRoster | null {
+    if (this._motebitId === "" || this._deviceId === "") return null;
+    const existing = this._machineRoster;
+    if (existing != null) return existing;
+    const identityStorage = this._identityStorage;
+    const motebitId = this._motebitId;
+    const locks =
+      typeof navigator !== "undefined" && "locks" in navigator
+        ? (navigator.locks as unknown as RosterLocks)
+        : null;
+    this._machineRoster = createWebMachineRoster({
+      motebitId,
+      deviceId: this._deviceId,
+      loadPrivateKeyHex: () => this.keyStore.loadPrivateKey(),
+      syncUrl: () => loadSyncUrl() ?? null,
+      ...(identityStorage?.listDevices
+        ? {
+            listDeviceKeys: async () =>
+              (await identityStorage.listDevices!(motebitId))
+                .map((d) => d.public_key)
+                .filter((k) => k !== ""),
+          }
+        : {}),
+      locks,
+    });
+    return this._machineRoster;
   }
 
   async createSyncToken(aud: TokenAudience = "sync"): Promise<string | null> {
@@ -4238,6 +4288,9 @@ export class UnbootedWebApp {
     // Update in-memory identity state
     this._motebitId = motebitId;
     this._deviceId = deviceId;
+    // The Machines section belonged to the previous identity (F4).
+    this._machineRoster?.dispose();
+    this._machineRoster = null;
     let walletWarning: string | undefined;
 
     if (keyTransferOpts) {

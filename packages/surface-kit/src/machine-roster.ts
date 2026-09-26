@@ -58,6 +58,7 @@ import {
   type ReplicaRead,
   type RotationCapture,
 } from "./machine-roster-replica.js";
+import { classifyHeldKey, classifyResolved, type HeldKeyClass } from "./machine-roster-held-key.js";
 
 const KEY_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
 /** The reference relay's per-request limit (spec §11); a chunk never exceeds it. */
@@ -99,9 +100,13 @@ export async function createRosterSigner(opts: {
 /** A read that reached the relay (`ok`) or did not, with why. */
 export type RosterFetch = { ok: true; body: unknown } | { ok: false; reason: string };
 
-/** What a presentation got back: an HTTP status and body, or none (transport failure). */
+/**
+ * What a presentation got back: an HTTP status and body, or none (transport
+ * failure). `retryAfterMs` carries a `Retry-After` the relay sent (a 429):
+ * the kit then sends no further chunk this presentation (§1B R2, F8).
+ */
 export type RosterPresentResponse =
-  { status: number; body: unknown } | { status: null; reason: string };
+  { status: number; body: unknown; retryAfterMs?: number } | { status: null; reason: string };
 
 export interface MachineRosterPorts {
   motebitId: string;
@@ -256,7 +261,12 @@ export type SuppressionReason =
    */
   | "cache_corrupt"
   /** The key chain could not be refreshed from the relay this read (rule 1's failed read). */
-  | "chain_unread";
+  | "chain_unread"
+  /**
+   * C-2 surfaces only (machine-roster-surfaces-v1 §1A): this device cannot
+   * confirm that the key it holds is the identity key.
+   */
+  | "held_key_unconfirmed";
 
 export interface PresentReport {
   /** Entries the relay took (stored or already held). */
@@ -265,6 +275,10 @@ export interface PresentReport {
   notTaken: Array<{ id: string; reason: string }>;
   /** Refused `roster_full` for the FIRST time — permanent, reported once (C5). */
   rosterFull: string[];
+  /** The relay asked to wait (a 429's `Retry-After`); no further chunk was sent. */
+  retryAfterMs?: number;
+  /** Nothing was presented: the held key is not confirmed as the identity key (§1B R1). */
+  refused?: "held-key-not-identity";
 }
 
 export type RosterAcquisition =
@@ -323,6 +337,12 @@ export interface RosterAcquired {
   enrollmentIndex: Array<{ id: string; device_id: string; public_key: string }>;
   /** A re-presentation made to repair an omission, if one was needed. */
   repair: PresentReport | null;
+  /**
+   * Whether the held key is the identity key (machine-roster-surfaces-v1
+   * §1A). Set only on a roster built with `MachineRoster.gated` (a C-2
+   * surface); absent on the CLI (R5).
+   */
+  heldKey?: HeldKeyClass;
 }
 
 /** True iff C3 may MINT from this acquisition (a successful GET, no omission, a readable cache). */
@@ -522,6 +542,36 @@ export type RotationHookOutcome =
 
 // ── The controller ───────────────────────────────────────────────────
 
+/** §1B R1 — what a gated roster answers when the held key is not the identity key. */
+export interface HeldKeyRefusal {
+  kind: "held-key-not-identity";
+  heldKey: HeldKeyClass;
+}
+
+export interface MachineRosterOptions {
+  /**
+   * §1A F5b — `false` on a surface that is never a host (phone, desktop,
+   * browser): `enroll` of this device's own id goes through the R17
+   * refusals (never the R24 exemption) and records nothing in `own_minted`
+   * or `own_device_ids`, which hold a host's OWN mints only. Default `true`.
+   */
+  selfIsHost?: boolean;
+  /**
+   * §1B R2 — whether `acquire` repairs an omission by re-presenting (a
+   * presentation). `false` (or a function answering `false`) for a surface
+   * that is not the presenting one: a browser tab without the presentation
+   * lock, a throttled refresh. Default `true`.
+   */
+  repairOmissions?: boolean | (() => boolean);
+  /**
+   * F8 — `true` while the relay has asked this surface to wait (a pending
+   * `Retry-After`): nothing is sent, and every entry a presentation would
+   * carry is reported not taken ("presented again"). It stays in the
+   * replica and goes out with the next presentation. Absent: never held.
+   */
+  presentationHeld?: () => boolean;
+}
+
 interface Item {
   kind: "enrollment" | "retirement";
   id: string;
@@ -557,8 +607,50 @@ function authorizes(
   );
 }
 
-export class MachineRoster {
-  constructor(private readonly ports: MachineRosterPorts) {}
+/**
+ * `Gate` is `never` on an ungated roster (the CLI: its outcome types are
+ * unchanged), and `HeldKeyRefusal` on one built with `MachineRoster.gated`.
+ */
+export class MachineRoster<Gate extends HeldKeyRefusal = never> {
+  private gated = false;
+
+  constructor(
+    private readonly ports: MachineRosterPorts,
+    private readonly options: MachineRosterOptions = {},
+  ) {}
+
+  /**
+   * A roster for a C-2 surface (machine-roster-surfaces-v1 §1A, §1B R1):
+   * every acquisition classifies the held key, counts are suppressed
+   * unless it is the identity key, and `retire`, `enroll`, `present`,
+   * omission repair and the rotation hook are refused unless it is.
+   */
+  static gated(
+    ports: MachineRosterPorts,
+    options: MachineRosterOptions = {},
+  ): MachineRoster<HeldKeyRefusal> {
+    const roster = new MachineRoster<HeldKeyRefusal>(ports, options);
+    roster.gated = true;
+    return roster;
+  }
+
+  private get selfIsHost(): boolean {
+    return this.options.selfIsHost !== false;
+  }
+
+  private repairs(): boolean {
+    const r = this.options.repairOmissions;
+    return typeof r === "function" ? r() : r !== false;
+  }
+
+  /** The gate's refusal for this acquisition, or `null` when it may act. */
+  private refusalOf(acq: RosterAcquired): Gate | null {
+    if (!this.gated) return null;
+    const heldKey: HeldKeyClass = acq.heldKey ?? classifyHeldKey(acq);
+    return heldKey.kind === "identity"
+      ? null
+      : ({ kind: "held-key-not-identity", heldKey } as HeldKeyRefusal as Gate);
+  }
 
   private now(): number {
     return Math.floor((this.ports.now ?? Date.now)());
@@ -649,6 +741,12 @@ export class MachineRoster {
           .length
       : 0;
 
+    // §1A — classify the held key BEFORE anything is presented: a key that
+    // is not confirmed as the identity key repairs nothing (R1).
+    const heldKey: HeldKeyClass | undefined = this.gated
+      ? classifyResolved({ held, chain: resolved, hint })
+      : undefined;
+
     const fetched = await rosterRead;
     let served = fetched.served;
     const fetchError = fetched.error;
@@ -661,7 +759,8 @@ export class MachineRoster {
     let omissionRechecked = false;
     if (served != null) {
       omitted = await this.omissions(reduced.verdict, replica, served);
-      if (omitted.length > 0) {
+      const mayRepair = this.repairs() && (heldKey == null || heldKey.kind === "identity");
+      if (omitted.length > 0 && mayRepair) {
         const items = (await this.presentationSet(reduced.verdict, replica)).filter((i) =>
           omitted.includes(i.id),
         );
@@ -689,6 +788,7 @@ export class MachineRoster {
     // P3 — like rule 1 for minting: a key chain not refreshed from the relay
     // may be missing a rotation, so no count is made from it.
     if (!successionRead) suppressed.push("chain_unread");
+    if (heldKey != null && heldKey.kind !== "identity") suppressed.push("held_key_unconfirmed");
     // P4 — this device's copy could not be read (this run), or was lost on
     // an earlier run and no acquisition has since read the relay in full.
     const fullRead = served != null && omitted.length === 0 && successionRead;
@@ -735,7 +835,11 @@ export class MachineRoster {
       cache: read.kind,
       replica,
       previousAmbiguous,
-      knownDeviceKeys: (await this.ports.knownDeviceKeys?.()) ?? [],
+      // F1 — the chain's own keys are never "a linked device's": at first
+      // launch the bootstrap registers the local device under the genesis key.
+      knownDeviceKeys: ((await this.ports.knownDeviceKeys?.()) ?? []).filter(
+        (k) => !resolved.chain.includes(k),
+      ),
       inputs: reduced.inputs,
       retiredByHead: await retiredByHead(reduced.verdict, reduced.inputs.retirements),
       enrollmentIndex: await Promise.all(
@@ -746,6 +850,7 @@ export class MachineRoster {
         })),
       ),
       repair,
+      ...(heldKey != null ? { heldKey } : {}),
     };
   }
 
@@ -754,10 +859,12 @@ export class MachineRoster {
    * Called by whatever announces `unattended_runtime` (N8), after it has
    * registered with the relay.
    */
-  async ensureEnrolled(): Promise<EnsureEnrolledOutcome> {
+  async ensureEnrolled(): Promise<EnsureEnrolledOutcome | Gate> {
     const acq = await this.acquire();
     if (acq.kind === "no-key") return acq;
     if (acq.kind === "refused") return refusedOf(acq);
+    const gated = this.refusalOf(acq);
+    if (gated) return gated;
     return this.decide(acq);
   }
 
@@ -838,10 +945,12 @@ export class MachineRoster {
   }
 
   /** C4 — sign one retirement per standing entry of `deviceId`, under the signer. */
-  async retire(deviceId: string): Promise<RetireOutcome> {
+  async retire(deviceId: string): Promise<RetireOutcome | Gate> {
     const acq = await this.acquire();
     if (acq.kind === "no-key") return acq;
     if (acq.kind === "refused") return refusedOf(acq);
+    const gated = this.refusalOf(acq);
+    if (gated) return gated;
     if (!mayMint(acq)) return { kind: "unreadable", detail: unreadableDetail(acq) };
     const v = acq.verdict;
     const line =
@@ -890,14 +999,18 @@ export class MachineRoster {
   }
 
   /** C4 undo — an explicit act by the key holder; R17 refusals unless `force`. */
-  async enroll(deviceId: string, opts: { force?: boolean } = {}): Promise<EnrollOutcome> {
+  async enroll(deviceId: string, opts: { force?: boolean } = {}): Promise<EnrollOutcome | Gate> {
     const acq = await this.acquire();
     if (acq.kind === "no-key") return acq;
     if (acq.kind === "refused") return refusedOf(acq);
+    const gated = this.refusalOf(acq);
+    if (gated) return gated;
     if (!mayMint(acq)) return { kind: "unreadable", detail: unreadableDetail(acq) };
     const { status } = statusOf(acq.verdict, deviceId);
     if (status === "active") return { kind: "already-active", deviceId };
-    const own = deviceId === acq.deviceId;
+    // R24's exemption is a HOST's: its signer holds the head key by
+    // construction. A surface that is never a host gets none (F5b).
+    const own = this.selfIsHost && deviceId === acq.deviceId;
     if (opts.force !== true) {
       if (status === "none" && !own) {
         const unplaced = unplaceableEnrollments(acq.verdict, acq.enrollmentIndex).get(deviceId);
@@ -1040,6 +1153,10 @@ export class MachineRoster {
       await freeze("absent", base);
       return { kind: "no-verdict", detail: acq.detail };
     }
+    if (this.refusalOf(acq) != null) {
+      await freeze("absent", acq.replica);
+      return { kind: "no-verdict", detail: "the held key is not confirmed as the identity key" };
+    }
     const pre = acq.chain.chain.slice(0, -1);
     // The ONLY input to the frozen decision: the capture taken before the
     // rotation was sent.
@@ -1098,6 +1215,9 @@ export class MachineRoster {
 
   /** C5 — present this replica's presentation set, in chunks. */
   async present(acq: RosterAcquired): Promise<PresentReport> {
+    if (this.refusalOf(acq) != null) {
+      return { taken: 0, notTaken: [], rosterFull: [], refused: "held-key-not-identity" };
+    }
     return this.presentFrom(acq);
   }
 
@@ -1262,8 +1382,10 @@ export class MachineRoster {
       const next = mergeReplicas(replica, {
         ...emptyReplica(acq.motebitId),
         enrollments: [enrollment],
-        own_device_ids: deviceId === acq.deviceId ? [deviceId] : [],
-        own_minted: deviceId === acq.deviceId ? [id] : [],
+        // A host's OWN mints only (F5b): a surface that is never a host
+        // records nothing here, whatever id it enrols.
+        own_device_ids: this.selfIsHost && deviceId === acq.deviceId ? [deviceId] : [],
+        own_minted: this.selfIsHost && deviceId === acq.deviceId ? [id] : [],
         ...frozenAs("active"),
       });
       // Cached BEFORE it is presented, and before the lock is released: a
@@ -1447,8 +1569,18 @@ export class MachineRoster {
     const full = new Set(replica.roster_full);
     const items = all.filter((i) => !full.has(i.id)); // never retried (C5)
     const report: PresentReport = { taken: 0, notTaken: [], rosterFull: [] };
+    if (this.options.presentationHeld?.() === true) {
+      // F8 — a pending Retry-After: kept here, presented again later.
+      for (const c of items) report.notTaken.push({ id: c.id, reason: "waiting (Retry-After)" });
+      return { report, replica };
+    }
     for (let i = 0; i < items.length; i += ROSTER_CHUNK_SIZE) {
       const chunk = items.slice(i, i + ROSTER_CHUNK_SIZE);
+      if (report.retryAfterMs != null) {
+        // The relay asked to wait (F8): nothing more is sent this time.
+        for (const c of chunk) report.notTaken.push({ id: c.id, reason: "rate limited (429)" });
+        continue;
+      }
       const enr = chunk.filter((c) => c.kind === "enrollment");
       const ret = chunk.filter((c) => c.kind === "retirement");
       const res = await this.ports.presentRoster(signer, {
@@ -1476,6 +1608,9 @@ export class MachineRoster {
         continue;
       }
       // 413, any other status, or no response: the whole chunk was not taken.
+      if (res.status != null && res.retryAfterMs != null) {
+        report.retryAfterMs = Math.max(0, res.retryAfterMs);
+      }
       const why =
         res.status == null
           ? res.reason
