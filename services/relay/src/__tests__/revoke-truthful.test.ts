@@ -586,7 +586,7 @@ describe("terminality follows authority the relay can verify (#794)", () => {
     expect(await httpStatus(mid, k1)).toBe(403);
   });
 
-  it("no holder on file: a key the id is the sovereign commitment to revokes terminally; the registry key does too", async () => {
+  it("no holder on file: a key the id is the sovereign commitment to revokes terminally; a registry key does NOT (a device token can write it)", async () => {
     // A device row with no holder behind it (a legacy link — no evidence was
     // presented), so the binding is what proves the key.
     const plantDevice = (id: string, kp: KeyPair): string => {
@@ -607,7 +607,8 @@ describe("terminality follows authority the relay can verify (#794)", () => {
     expect((await revokeAs(mid, did, owner)).status).toBe(200);
     expect(standing(mid)).toBe("terminal");
 
-    // A legacy id: the registry key is the proven one when there is no holder.
+    // A legacy id: a registry key proves nothing (a device token can write it
+    // after a first-come squat) — the revocation holds but is liftable.
     const svc = await generateKeypair();
     const legacy = `legacy-${crypto.randomUUID()}`;
     const legacyDid = plantDevice(legacy, svc);
@@ -618,7 +619,42 @@ describe("terminality follows authority the relay can verify (#794)", () => {
       .run(legacy, hex(svc));
     expect(holderRow(legacy)).toBeUndefined();
     expect((await revokeAs(legacy, legacyDid, svc)).status).toBe(200);
-    expect(standing(legacy)).toBe("terminal");
+    expect(standing(legacy)).toBe("liftable");
+  });
+
+  it("a stranger squats a never-seen sovereign id, plants the registry key with its own token, and revokes: still liftable — the owner's arrival and the operator's restore both recover", async () => {
+    const sourceKp = await pinSourceRelay();
+    const owner = await generateKeypair();
+    const stranger = await generateKeypair();
+    const mid = await deriveSovereignMotebitId(hex(owner));
+    await registerSelf(mid, "evil", stranger);
+    await registerAgent(mid, "evil", stranger); // the stranger's own token writes the registry key
+    expect(
+      (
+        relay.moteDb.db
+          .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+          .get(mid) as { public_key: string }
+      ).public_key,
+    ).toBe(hex(stranger));
+
+    expect((await revokeAs(mid, "evil", stranger)).status).toBe(200);
+    expect(standing(mid)).toBe("liftable");
+    expect(await syncStatusAs(mid, "evil", stranger)).toBe(403);
+
+    expect((await acceptMigration(mid, owner, sourceKp)).status).toBe(200);
+    expect(standing(mid)).toBe("none");
+  });
+
+  it("a stranger plants the registry key of a keyless operator-registered id and revokes: the operator's restore-listing still lifts it", async () => {
+    const mid = `legacy-${crypto.randomUUID()}`;
+    expect(await masterRegister(mid)).toBe(200);
+    const stranger = await generateKeypair();
+    await registerSelf(mid, "evil", stranger);
+    await registerAgent(mid, "evil", stranger);
+    expect((await revokeAs(mid, "evil", stranger)).status).toBe(200);
+    expect(standing(mid)).toBe("liftable");
+    expect((await operator(mid, "restore-listing")).status).toBe(200);
+    expect(standing(mid)).toBe("none");
   });
 
   it("the lift statement itself cannot touch a terminal record", async () => {

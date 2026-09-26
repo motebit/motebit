@@ -44,7 +44,7 @@
 
 import { verifySovereignBinding } from "@motebit/crypto";
 import type { DatabaseDriver } from "@motebit/persistence";
-import { holderKeyOf, registryKeyOf } from "./identity-keys.js";
+import { holderKeyOf } from "./identity-keys.js";
 
 /**
  * Does the relay know this identity at all — does any table it authenticates
@@ -77,8 +77,10 @@ export type Revoker = { kind: "operator" } | { kind: "key"; publicKey: string };
  * operator act, like every master-token door). A key: yes only when it is the
  * identity's PROVEN key — the holder when one exists (exactly that; a genesis
  * key the identity rotated away from is not it), else a key the id is the
- * sovereign commitment to, else the registry key. A first-come device key
- * (register-self for an id the relay holds no key for) proves nothing.
+ * sovereign commitment to. NOT the registry key: a device token can write it
+ * through /agents/register for an id with no key on file, so after a
+ * first-come register-self squat (#707) it proves nothing (#794 decisive
+ * review). A first-come device key proves nothing either.
  */
 export async function revokerIsAuthoritative(
   db: DatabaseDriver,
@@ -89,9 +91,7 @@ export async function revokerIsAuthoritative(
   const key = revoker.publicKey.toLowerCase();
   const holder = holderKeyOf(db, motebitId);
   if (holder !== null) return holder.toLowerCase() === key;
-  if (await verifySovereignBinding(motebitId, key)) return true;
-  const registry = registryKeyOf(db, motebitId);
-  return registry !== null && registry.toLowerCase() === key;
+  return verifySovereignBinding(motebitId, key);
 }
 
 /**
