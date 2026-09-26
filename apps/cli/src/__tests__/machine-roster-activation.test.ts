@@ -14,15 +14,17 @@ import { createSyncRelay } from "@motebit/relay";
 import type { SyncRelay } from "@motebit/relay";
 import { generate } from "@motebit/identity-file";
 import {
+  canonicalJson,
   deriveSovereignMotebitId,
   generateKeypair,
   bytesToHex,
   hexToBytes,
+  hostEnrollmentId,
   mintAudienceToken,
   signHostEnrollment,
 } from "@motebit/encryption";
 import type { KeyPair } from "@motebit/encryption";
-import { MachineRoster, buildRosterView, captureFor } from "@motebit/surface-kit";
+import { MachineRoster, buildRosterView, captureFor, emptyReplica } from "@motebit/surface-kit";
 
 import type { FullConfig } from "../config.js";
 import { encryptPrivateKey, decryptPrivateKey } from "../identity.js";
@@ -37,9 +39,9 @@ import {
 import { registerWithRelay } from "../relay-registration.js";
 import { performRotation } from "../rotation.js";
 import { cliRosterPorts, enrollOnAnnounce, type CliRosterContext } from "../machine-roster.js";
-import { formatRosterView } from "../subcommands/machines.js";
+import { describeEnroll, formatRosterView } from "../subcommands/machines.js";
 import { rosterCaptureBeforeRotate, rosterHookAfterRotate } from "../machine-roster-rotation.js";
-import { loadReplica } from "../machine-roster-file.js";
+import { loadReplica, saveReplica } from "../machine-roster-file.js";
 
 const PASS = "correct horse";
 const SYNC_URL = "http://relay.test";
@@ -51,12 +53,16 @@ let dir: string;
 let config: FullConfig;
 /** Authorization headers every roster request carried. */
 let rosterAuth: string[];
+/** The body of every roster POST, as sent. */
+let rosterPosts: string[];
 
 const viaRelay: typeof fetch = async (input, init) => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   if (url.includes("/roster")) {
     const h = new Headers(init?.headers);
     rosterAuth.push(h.get("authorization") ?? "");
+    if ((init?.method ?? "GET").toUpperCase() === "POST")
+      rosterPosts.push(typeof init?.body === "string" ? init.body : "");
   }
   return relay.app.request(url, init);
 };
@@ -74,6 +80,7 @@ beforeEach(async () => {
   });
   dir = mkdtempSync(join(tmpdir(), "motebit-roster-activation-"));
   rosterAuth = [];
+  rosterPosts = [];
   // The operator's master token is in the environment: the roster doors
   // must not pick it up (it would be refused 403 — and it is not this
   // motebit's credential).
@@ -800,5 +807,111 @@ describe("W3 (#792) — the start line qualifies a status the relay did not conf
     expect(lines).toEqual([
       "Machine roster: not updated this start — the relay could not be read; this device's copy shows this machine active",
     ]);
+  });
+});
+
+describe("#802 — a permanent refusal from the real relay route is never re-presented", () => {
+  const bytesOf = (v: unknown): number => new TextEncoder().encode(canonicalJson(v)).length;
+
+  it("too_large (a 422, and a 413 for one past the request limit), bad_signature, wrong_motebit: kept, never presented again, the count stands, the host line is taken beside them", async () => {
+    const f = await registeredHost();
+    const x = await generateKeypair();
+    const at = Date.now();
+    const sign = (motebitId: string, deviceId: string) =>
+      signHostEnrollment(
+        { motebit_id: motebitId, device_id: deviceId, public_key: hex(f.a), enrolled_at: at },
+        f.a.privateKey,
+      );
+    // `machines enroll <4KB id> --force` before the mint bound: a real, signed member.
+    const big = await sign(f.mid, "b".repeat(5000));
+    // Past the relay's REQUEST limit on its own: in a chunk it would 413 every neighbour.
+    const huge = await sign(f.mid, "h".repeat(300_000));
+    // A canonical-looking signature over other bytes.
+    const forged = {
+      ...(await sign(f.mid, "forged")),
+      signature: (await sign(f.mid, "other")).signature,
+    };
+    const elsewhere = await sign(await deriveSovereignMotebitId(hex(x)), "elsewhere");
+    saveReplica({ ...emptyReplica(f.mid), enrollments: [big, huge, forged, elsewhere] }, dir);
+
+    const lines: string[] = [];
+    const first = await enrollOnAnnounce(ctx(f), (l) => lines.push(l));
+    expect(first?.kind).toBe("minted"); // the host's own line is minted and taken beside them
+    expect(relayEntries(f.mid, "enrollment")).toBe(1);
+
+    const read = loadReplica(f.mid, dir);
+    if (read.kind !== "value") throw new Error(read.kind);
+    const byId = new Map(read.replica.relay_refused.map((r) => [r.id, r.reason]));
+    expect(byId.get(await hostEnrollmentId(big))).toBe("too_large"); // the relay's 422
+    expect(byId.get(await hostEnrollmentId(huge))).toBe("too_large"); // its 413, presented alone
+    expect(byId.get(await hostEnrollmentId(forged))).toBe("bad_signature");
+    expect(byId.get(await hostEnrollmentId(elsewhere))).toBe("wrong_motebit");
+    expect(byId.size).toBe(4);
+    // The huge one went ALONE (never in a chunk with a neighbour).
+    const withHuge = rosterPosts.filter((b) => b.includes("h".repeat(1000)));
+    expect(withHuge).toHaveLength(1);
+    expect((JSON.parse(withHuge[0]!) as { enrollments: unknown[] }).enrollments).toHaveLength(1);
+
+    // Never presented again — not at the next start, not by `machines`.
+    rosterPosts = [];
+    expect((await enrollOnAnnounce(ctx(f), () => {}))?.kind).toBe("active");
+    const acq = await new MachineRoster(cliRosterPorts(ctx(f))).acquire();
+    const planted = ["b".repeat(1000), "h".repeat(1000), '"forged"', '"elsewhere"'];
+    for (const b of rosterPosts) for (const p of planted) expect(b).not.toContain(p);
+    expect(rosterPosts.length).toBeGreaterThan(0); // the own line is still re-presented
+
+    // Not an omission: the count stands. The two authentic ones are members
+    // (membership is what was signed); the note says the relay will not hold them.
+    if (acq.kind !== "acquired") throw new Error(acq.kind);
+    expect(acq.suppressed).toEqual([]);
+    const view = buildRosterView(acq, Date.now());
+    const text = formatRosterView(view, f.mid).join("\n");
+    expect(text).toMatch(/3 machines on the current key/);
+    expect(text).toMatch(
+      /· the relay will not hold 4 entries this device holds \(bad_signature, too_large, wrong_motebit\); kept here and counted, not presented again/,
+    );
+    expect(text).not.toMatch(/No count/);
+  });
+
+  it("the kit's mint bound is the relay's: exactly 4096 bytes is minted and held; one byte more is refused at mint — and by the relay", async () => {
+    const f = await registeredHost();
+    const roster = new MachineRoster(cliRosterPorts(ctx(f)));
+    const probe = await signHostEnrollment(
+      { motebit_id: f.mid, device_id: "x", public_key: hex(f.a), enrolled_at: Date.now() },
+      f.a.privateKey,
+    );
+    const atBound = "x".repeat(4096 - bytesOf(probe) + 1);
+
+    const held = await roster.enroll(atBound, { force: true });
+    if (held.kind !== "enrolled") throw new Error(held.kind);
+    expect(held.presented.willNotHold).toEqual([]);
+    expect(held.presented.notTaken).toEqual([]);
+    expect(relayEntries(f.mid, "enrollment")).toBe(1);
+
+    const over = await roster.enroll(`${atBound}y`, { force: true });
+    expect(over).toMatchObject({ kind: "entry-too-large", bytes: 4097, limit: 4096 });
+    expect(describeEnroll(over as Parameters<typeof describeEnroll>[0]).lines[0]).toMatch(
+      /^Not enrolled: the entry for x{32}… \(\d+ characters\) would be 4097 bytes; a relay holds at most 4096\.$/,
+    );
+    const kept = loadReplica(f.mid, dir);
+    expect(kept.kind === "value" && kept.replica.enrollments).toHaveLength(1);
+
+    // The relay's side of the same line: the 4097-byte entry, presented, is refused too_large.
+    const past = await signHostEnrollment(
+      {
+        motebit_id: f.mid,
+        device_id: `${atBound}y`,
+        public_key: hex(f.a),
+        enrolled_at: Date.now(),
+      },
+      f.a.privateKey,
+    );
+    expect(bytesOf(past)).toBe(4097);
+    saveReplica({ ...emptyReplica(f.mid), enrollments: [past] }, dir);
+    const acq = await roster.acquire();
+    expect(acq.kind === "acquired" && acq.repair?.willNotHold).toEqual([
+      { id: await hostEnrollmentId(past), reason: "too_large" },
+    ]);
+    expect(relayEntries(f.mid, "enrollment")).toBe(1);
   });
 });

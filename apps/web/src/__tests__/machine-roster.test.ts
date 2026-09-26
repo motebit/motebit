@@ -100,6 +100,10 @@ class FetchRelay {
     sockets_open: number;
   }> = [];
   retryAfter: string | null = null;
+  /** Entry id → the per-entry refusal reason this relay answers (spec §11's 422 shape). */
+  refuse = new Map<string, string>();
+  /** Every POSTed body, as sent. */
+  bodies: string[] = [];
   auth: string[] = [];
   posts = 0;
   fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -130,12 +134,20 @@ class FetchRelay {
           headers: { "Retry-After": this.retryAfter },
         });
       }
+      this.bodies.push(init!.body as string);
       const body = JSON.parse(init!.body as string) as {
         enrollments: HostEnrollment[];
         retirements: HostRetirement[];
       };
-      for (const e of body.enrollments) this.enr.set(await hostEnrollmentId(e), e);
+      const refused: Array<{ kind: string; index: number; reason: string }> = [];
+      for (const [index, e] of body.enrollments.entries()) {
+        const id = await hostEnrollmentId(e);
+        const reason = this.refuse.get(id);
+        if (reason != null) refused.push({ kind: "enrollment", index, reason });
+        else this.enr.set(id, e);
+      }
       for (const r of body.retirements) this.ret.set(await hostRetirementId(r), r);
+      if (refused.length > 0) return Response.json({ accepted: [], refused }, { status: 422 });
       return Response.json({ accepted: [] });
     }
     return new Response("not found", { status: 404 });
@@ -694,6 +706,68 @@ describe("#801 F1 — a Retry-After is bounded (MAX_RETRY_AFTER_MS)", () => {
     expect(relay.posts).toBeGreaterThan(0);
     const rec = await loadPresentationRecord(await db(), MID);
     expect(rec?.retry_until).toBe(NOW + MAX_RETRY_AFTER_MS);
+    t.dispose();
+  });
+});
+
+describe("#802 — a permanent refusal, through the browser's ports and IndexedDB", () => {
+  it("too_large is kept in IndexedDB with its reason, never presented again, and the count stands with a note", async () => {
+    const a = await generateKeypair();
+    const relay = new FetchRelay();
+    relay.current = hex(a);
+    relay.enr.set("x", await enrol(a, "dev-host"));
+    const big = await enrol(a, "b".repeat(5000));
+    const id = await hostEnrollmentId(big);
+    relay.refuse.set(id, "too_large");
+    const db = freshDb();
+    await saveReplica(await db(), { ...emptyReplica(MID), enrollments: [big] });
+    const t = tab(relay, a, db, new FakeLocks());
+    await Promise.resolve();
+    await t.section.refresh();
+
+    const rep = await loadReplica(await db(), MID);
+    expect(rep.kind === "value" && rep.replica.relay_refused).toEqual([
+      { id, reason: "too_large" },
+    ]);
+    const sentBig = () => relay.bodies.filter((b) => b.includes("b".repeat(1000))).length;
+    expect(sentBig()).toBe(1); // once: the omission repair
+    const view = t.section.getState().view;
+    if (view?.kind !== "roster") throw new Error(String(view?.kind));
+    expect(view.claim).not.toBeNull(); // not an omission: the count stands
+    expect(view.notes.map((n) => n.text)).toContain(
+      "the relay will not hold 1 entry this device holds (too_large); kept here and counted, not presented again",
+    );
+    // The presentation was taken in full (nothing left to retry): the digest is stamped.
+    expect((await loadPresentationRecord(await db(), MID))?.digest).toEqual(expect.any(String));
+
+    // A later act presents again — never the refused entry, and never promised it.
+    await t.section.retire("dev-host");
+    expect(t.section.getState().notice?.text).not.toMatch(/presented again/);
+    await t.section.refresh();
+    expect(sentBig()).toBe(1);
+    t.dispose();
+  });
+
+  it("a reason this browser does not know stays retryable: presented again, and the count suppressed", async () => {
+    const a = await generateKeypair();
+    const relay = new FetchRelay();
+    relay.current = hex(a);
+    relay.enr.set("x", await enrol(a, "dev-host"));
+    const odd = await enrol(a, "odd");
+    relay.refuse.set(await hostEnrollmentId(odd), "some_future_reason");
+    const db = freshDb();
+    await saveReplica(await db(), { ...emptyReplica(MID), enrollments: [odd] });
+    const t = tab(relay, a, db, new FakeLocks());
+    await Promise.resolve();
+    await t.section.refresh();
+    const rep = await loadReplica(await db(), MID);
+    expect(rep.kind === "value" && rep.replica.relay_refused).toEqual([]);
+    const view = t.section.getState().view;
+    expect(view?.kind === "roster" && view.claim).toBeNull();
+    const sentOdd = () => relay.bodies.filter((b) => b.includes('"odd"')).length;
+    const before = sentOdd();
+    await t.section.refresh();
+    expect(sentOdd()).toBeGreaterThan(before);
     t.dispose();
   });
 });

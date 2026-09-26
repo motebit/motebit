@@ -18,6 +18,12 @@
  *     old-key holder could have influenced) never replaces it.
  *   - `roster_full` — ids a relay refused `roster_full`: permanent, reported
  *     once, never retried, and excluded from set-pinning (C5, R20).
+ *   - `relay_refused` — ids a relay refused for their own bytes (`too_large`,
+ *     `malformed`, `wrong_motebit`, `bad_signature`), with the reason: the
+ *     relay will never hold them, so, like `roster_full`, they are reported
+ *     once, never presented again, and excluded from set-pinning (#802;
+ *     `machine-roster-refusals.ts` is the classification). The entry itself
+ *     stays: membership is what the sovereign signed, not what a relay holds.
  *   - `own_minted` — ids of the enrolments this surface minted for ITSELF
  *     (its own device id). A rotation capture counts only these (R21, #786):
  *     a line a holder of the departing key lit for this device is not this
@@ -84,6 +90,8 @@ export interface MachineRosterReplica {
   retirements: HostRetirement[];
   frozen: FrozenVerdict[];
   roster_full: string[];
+  /** See the header: refused for their own bytes; first reason kept. */
+  relay_refused: Array<{ id: string; reason: string }>;
   own_device_ids: string[];
   own_minted: string[];
   /** The last read's pairs with `hostSocketsOpen > 1`; `at` = 0 means no read yet. */
@@ -106,6 +114,7 @@ export function emptyReplica(motebitId: string): MachineRosterReplica {
     retirements: [],
     frozen: [],
     roster_full: [],
+    relay_refused: [],
     own_device_ids: [],
     own_minted: [],
     ambiguous: { at: 0, pairs: [] },
@@ -159,6 +168,9 @@ export function parseReplica(raw: unknown): MachineRosterReplica | null {
   }
   if (!Array.isArray(r.frozen) || !r.frozen.every(isFrozen)) return null;
   if (!isStringArray(r.roster_full) || !isStringArray(r.own_device_ids)) return null;
+  // Absent in a replica written before the field existed: none refused.
+  const relayRefused = r.relay_refused ?? [];
+  if (!Array.isArray(relayRefused) || !relayRefused.every(isRefusal)) return null;
   // Absent in a replica written before the field existed: none recorded.
   const ownMinted = r.own_minted ?? [];
   if (!isStringArray(ownMinted)) return null;
@@ -180,6 +192,7 @@ export function parseReplica(raw: unknown): MachineRosterReplica | null {
     retirements: r.retirements,
     frozen: r.frozen,
     roster_full: r.roster_full,
+    relay_refused: relayRefused,
     own_device_ids: r.own_device_ids,
     own_minted: ownMinted,
     ambiguous: { at: amb.at, pairs: amb.pairs },
@@ -194,6 +207,9 @@ function unionBy<T>(a: readonly T[], b: readonly T[], key: (v: T) => string): T[
   for (const v of b) if (!out.has(key(v))) out.set(key(v), v);
   return [...out.values()];
 }
+
+const isRefusal = (v: unknown): v is { id: string; reason: string } =>
+  isObj(v) && typeof v.id === "string" && typeof v.reason === "string";
 
 const isCapture = (v: unknown): v is RotationCapture => {
   if (!isObj(v)) return false;
@@ -257,6 +273,7 @@ export function mergeReplicas(
     retirements: unionBy(stored.retirements, incoming.retirements, canonicalJson),
     frozen: unionBy(stored.frozen, incoming.frozen, frozenKey),
     roster_full: unionBy(stored.roster_full, incoming.roster_full, (s) => s),
+    relay_refused: unionBy(stored.relay_refused, incoming.relay_refused, (x) => x.id),
     own_device_ids: unionBy(stored.own_device_ids, incoming.own_device_ids, (s) => s),
     own_minted: unionBy(stored.own_minted, incoming.own_minted, (s) => s),
     ambiguous: incoming.ambiguous.at >= stored.ambiguous.at ? incoming.ambiguous : stored.ambiguous,

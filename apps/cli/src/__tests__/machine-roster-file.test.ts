@@ -112,7 +112,7 @@ describe("terminal wording", () => {
   });
 
   it("a start says at most one line, and nothing when the line is simply active", () => {
-    const p = { taken: 1, notTaken: [], rosterFull: [] };
+    const p = { taken: 1, notTaken: [], rosterFull: [], willNotHold: [] };
     const line = (o: Parameters<typeof describeEnsureOutcome>[0]) =>
       describeEnsureOutcome(o, "vps-7f3a");
     expect(line({ kind: "active", presented: p })).toBeNull();
@@ -231,21 +231,26 @@ describe("terminal wording", () => {
       deviceId: "v",
       retirementIds: [own],
       advisory: false,
-      presented: { taken: 0, notTaken: [], rosterFull: [own] },
+      presented: { taken: 0, notTaken: [], rosterFull: [own], willNotHold: [] },
     });
     expect(full.lines.join("\n")).toMatch(/refused this retirement permanently \(roster full\)/);
     const later = describeEnroll({
       kind: "enrolled",
       deviceId: "v",
       enrollmentId: own,
-      presented: { taken: 0, notTaken: [{ id: own, reason: "status 500" }], rosterFull: [] },
+      presented: {
+        taken: 0,
+        notTaken: [{ id: own, reason: "status 500" }],
+        rosterFull: [],
+        willNotHold: [],
+      },
     });
     expect(later.lines.join("\n")).toMatch(/Not yet taken by the relay/);
     const enrolFull = describeEnroll({
       kind: "enrolled",
       deviceId: "v",
       enrollmentId: own,
-      presented: { taken: 1, notTaken: [], rosterFull: [own, "b".repeat(64)] },
+      presented: { taken: 1, notTaken: [], rosterFull: [own, "b".repeat(64)], willNotHold: [] },
     });
     expect(enrolFull.lines.join("\n")).toMatch(/refused this enrolment permanently/);
     expect(enrolFull.lines.join("\n")).toMatch(/refused 1 other held entry permanently/);
@@ -253,13 +258,74 @@ describe("terminal wording", () => {
       kind: "enrolled",
       deviceId: "v",
       enrollmentId: own,
-      presented: { taken: 1, notTaken: [], rosterFull: [] },
+      presented: { taken: 1, notTaken: [], rosterFull: [], willNotHold: [] },
     });
     expect(clean.lines).toHaveLength(1);
   });
 
+  it("#802 — a permanent refusal says the relay will not hold it, never 'presented again'", () => {
+    const own = "a".repeat(64);
+    const mine = describeEnroll({
+      kind: "enrolled",
+      deviceId: "v",
+      enrollmentId: own,
+      presented: {
+        taken: 0,
+        notTaken: [],
+        rosterFull: [],
+        willNotHold: [
+          { id: own, reason: "too_large" },
+          { id: "b".repeat(64), reason: "malformed" },
+        ],
+      },
+    }).lines.join("\n");
+    expect(mine).toMatch(
+      /The relay will not hold this enrolment: too_large; kept on this device only, not presented again\./,
+    );
+    expect(mine).toMatch(
+      /The relay will not hold 1 other held entry: malformed; not presented again\./,
+    );
+    expect(mine).not.toMatch(/, presented again|; presented again/);
+    const start = describeEnsureOutcome(
+      {
+        kind: "minted",
+        enrollmentId: own,
+        firstLine: true,
+        presented: {
+          taken: 1,
+          notTaken: [{ id: "c".repeat(64), reason: "status 500" }],
+          rosterFull: [],
+          willNotHold: [{ id: "b".repeat(64), reason: "bad_signature" }],
+        },
+      },
+      "vps",
+    );
+    expect(start).toMatch(
+      /\(the relay will not hold 1: bad_signature; not presented again; 1 not taken by the relay; presented again\)$/,
+    );
+    // Refused at mint time: nothing kept, the id not echoed whole.
+    const big = describeEnroll({
+      kind: "entry-too-large",
+      deviceId: "z".repeat(5000),
+      bytes: 5321,
+      limit: 4096,
+    });
+    expect(big.ok).toBe(false);
+    expect(big.lines[0]).toBe(
+      `Not enrolled: the entry for ${"z".repeat(32)}… (5000 characters) would be 5321 bytes; a relay holds at most 4096.`,
+    );
+    expect(
+      describeEnsureOutcome(
+        { kind: "entry-too-large", deviceId: "vps", bytes: 5000, limit: 4096 },
+        "vps",
+      ),
+    ).toBe(
+      "Machine roster: not enrolled this start — this machine's entry would be 5000 bytes, and a relay holds at most 4096; nothing was kept",
+    );
+  });
+
   it("retire and enroll outcomes", () => {
-    const p = { taken: 1, notTaken: [], rosterFull: [] };
+    const p = { taken: 1, notTaken: [], rosterFull: [], willNotHold: [] };
     expect(
       describeRetire({
         kind: "retired",
@@ -379,7 +445,7 @@ describe("F (#786) — the CLI's words for lines this device cannot place", () =
   });
 
   it("after `motebit rotate`: no daemon wording", () => {
-    const p = { taken: 1, notTaken: [], rosterFull: [] };
+    const p = { taken: 1, notTaken: [], rosterFull: [], willNotHold: [] };
     const retired = describeEnsureOutcome({ kind: "retired", presented: p }, "vps", "rotate");
     expect(retired).toMatch(/not enrolled under the new key/);
     expect(retired).not.toMatch(/running|daemon/);
@@ -394,7 +460,7 @@ describe("F (#786) — the CLI's words for lines this device cannot place", () =
 });
 
 describe("#790 round 1 — CLI wording", () => {
-  const p = { taken: 1, notTaken: [], rosterFull: [] };
+  const p = { taken: 1, notTaken: [], rosterFull: [], willNotHold: [] };
 
   it("P1: the unplaced start/rotate line says what is known, never 'not enrolled'", () => {
     for (const ctx of ["start", "rotate"] as const) {
@@ -414,7 +480,12 @@ describe("#790 round 1 — CLI wording", () => {
       deviceId: "vps",
       retirementIds: [own],
       advisory: false,
-      presented: { taken: 0, notTaken: [{ id: own, reason: "status 401" }], rosterFull: [] },
+      presented: {
+        taken: 0,
+        notTaken: [{ id: own, reason: "status 401" }],
+        rosterFull: [],
+        willNotHold: [],
+      },
     });
     const text = out.lines.join("\n");
     expect(text).toMatch(/refused this retirement \(not authorized\); kept on this device/);
@@ -470,7 +541,7 @@ describe("BUILD 5 — refusal and remedy wording states only what is proved", ()
       deviceId: "v",
       retirementIds: ["x"],
       advisory: true,
-      presented: { taken: 1, notTaken: [], rosterFull: [] },
+      presented: { taken: 1, notTaken: [], rosterFull: [], willNotHold: [] },
     });
     expect(out.lines).toContain("  Advisory: its line is on a superseded key.");
     expect(out.lines).toContain(
@@ -486,7 +557,7 @@ describe("BUILD 5 — refusal and remedy wording states only what is proved", ()
 });
 
 describe("#792 round 1 — CLI wording", () => {
-  const p = { taken: 1, notTaken: [], rosterFull: [] };
+  const p = { taken: 1, notTaken: [], rosterFull: [], willNotHold: [] };
   it("W3: a status from this device's copy alone is said to be the copy's", () => {
     for (const [o, shows] of [
       [{ kind: "active", presented: p, confirmed: false }, "shows this machine active"],
