@@ -45,6 +45,7 @@ import type { TokenAudience } from "@motebit/protocol";
 import type { SyncRelay } from "../index.js";
 import { API_TOKEN, JSON_AUTH, createTestRelay } from "./test-helpers.js";
 import { WS_CLOSE_IDENTITY_REVOKED } from "../websocket.js";
+import { liftRevocation } from "../identity-revocation.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 const hex = (kp: KeyPair) => bytesToHex(kp.publicKey);
@@ -167,11 +168,24 @@ async function httpStatus(mid: string, kp: KeyPair): Promise<number> {
 }
 
 async function revokeOwn(mid: string, kp: KeyPair): Promise<Response> {
+  return revokeAs(mid, "laptop", kp);
+}
+
+/** `/revoke` under the token of device `did` of `mid`, signed by `kp`. */
+async function revokeAs(mid: string, did: string, kp: KeyPair): Promise<Response> {
   return relay.app.request(`/api/v1/agents/${mid}/revoke`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${await token(mid, "laptop", kp, "admin:query")}` },
+    headers: { Authorization: `Bearer ${await token(mid, did, kp, "admin:query")}` },
   });
 }
+
+/** What kind of revocation the record holds: absent, terminal or liftable (#794). */
+const standing = (mid: string): "none" | "terminal" | "liftable" => {
+  const row = relay.moteDb.db
+    .prepare("SELECT authoritative FROM relay_identity_revocations WHERE motebit_id = ?")
+    .get(mid) as { authoritative: number } | undefined;
+  return row === undefined ? "none" : row.authoritative === 1 ? "terminal" : "liftable";
+};
 
 async function onShelf(mid: string): Promise<boolean> {
   const res = await relay.app.request(`/api/v1/discover/${mid}`);
@@ -310,6 +324,8 @@ describe("/revoke for an identity with NO registry row (#787)", () => {
     expect(res.status).toBe(200);
     expect(((await res.json()) as { revoked: boolean }).revoked).toBe(true);
     expect(hasRecord(mid)).toBe(true);
+    // The id is the sovereign commitment to the key the token verified under.
+    expect(standing(mid)).toBe("terminal");
 
     // The socket its token admitted ends; the master token's stays.
     expect(await closeCodeOf(sock)).toBe(WS_CLOSE_IDENTITY_REVOKED);
@@ -361,6 +377,8 @@ describe("/revoke for an identity with NO registry row (#787)", () => {
     });
     expect(res.status).toBe(200);
     expect(hasRecord(mid)).toBe(true);
+    // The operator acting for the identity is authoritative.
+    expect(standing(mid)).toBe("terminal");
     expect(await closeCodeOf(sock)).toBe(WS_CLOSE_IDENTITY_REVOKED);
     expect(await httpStatus(mid, kp)).toBe(403);
   });
@@ -443,6 +461,204 @@ describe("/revoke for a registered identity is unchanged, and terminal (#788)", 
     expect((await operator(mid, "revoke-listing")).status).toBe(200);
     expect((await operator(mid, "restore-listing")).status).toBe(200);
     expect(await httpStatus(mid, kp)).toBe(200);
+  });
+});
+
+/** A device linked by the operator WITHOUT key transfer: it holds its own key. */
+async function registerOwnKeyDevice(mid: string, kp: KeyPair): Promise<string> {
+  const res = await relay.app.request("/device/register", {
+    method: "POST",
+    headers: JSON_AUTH,
+    body: JSON.stringify({ motebit_id: mid, device_name: "phone", public_key: hex(kp) }),
+  });
+  expect(res.status).toBe(201);
+  return ((await res.json()) as { device_id: string }).device_id;
+}
+
+async function masterRegister(mid: string, publicKey?: string): Promise<number> {
+  const res = await relay.app.request("/api/v1/agents/register", {
+    method: "POST",
+    headers: JSON_AUTH,
+    body: JSON.stringify({
+      motebit_id: mid,
+      endpoint_url: "http://localhost:9999/mcp",
+      capabilities: ["summarize"],
+      ...(publicKey != null ? { public_key: publicKey } : {}),
+    }),
+  });
+  return res.status;
+}
+
+async function syncStatusAs(mid: string, did: string, kp: KeyPair): Promise<number> {
+  const res = await relay.app.request(`/sync/${mid}/clock`, {
+    headers: { Authorization: `Bearer ${await token(mid, did, kp, "sync")}` },
+  });
+  return res.status;
+}
+
+describe("terminality follows authority the relay can verify (#794)", () => {
+  beforeEach(async () => {
+    relay = await createTestRelay();
+    await listen(relay);
+  });
+  afterEach(stop);
+
+  it("a stranger squats a never-seen sovereign id and revokes it: effective at once, but liftable — the owner's verified migration arrival lifts it", async () => {
+    const sourceKp = await pinSourceRelay();
+    const owner = await generateKeypair();
+    const stranger = await generateKeypair();
+    const mid = await deriveSovereignMotebitId(hex(owner));
+    await registerSelf(mid, "evil", stranger);
+
+    expect((await revokeAs(mid, "evil", stranger)).status).toBe(200);
+    // No false success: the revocation holds at once.
+    expect(standing(mid)).toBe("liftable");
+    expect(await syncStatusAs(mid, "evil", stranger)).toBe(403);
+
+    // The owner proves the key the id commits to — the arrival is admitted
+    // and the unproven revocation ends.
+    expect((await acceptMigration(mid, owner, sourceKp)).status).toBe(200);
+    expect(standing(mid)).toBe("none");
+    expect(registryRow(mid)!.revoked).toBe(0);
+    await connect(mid, `token=${await token(mid, "svc", owner, "sync")}&device_id=svc`);
+  });
+
+  it("a stranger squats a keyless operator-registered id and revokes it: the operator's restore-listing lifts it, and re-registration is admitted again", async () => {
+    const mid = `legacy-${crypto.randomUUID()}`;
+    expect(await masterRegister(mid)).toBe(200);
+    const stranger = await generateKeypair();
+    await registerSelf(mid, "evil", stranger);
+
+    expect((await revokeAs(mid, "evil", stranger)).status).toBe(200);
+    expect(standing(mid)).toBe("liftable");
+    expect(await syncStatusAs(mid, "evil", stranger)).toBe(403);
+    // Registration is not a lifting door.
+    expect(await masterRegister(mid)).toBe(409);
+
+    expect((await operator(mid, "restore-listing")).status).toBe(200);
+    expect(standing(mid)).toBe("none");
+    expect(await masterRegister(mid)).toBe(200);
+    expect(await onShelf(mid)).toBe(true);
+  });
+
+  it("a legacy (non-sovereign) id known only through register-self: its revoke holds but is liftable — first-come is not proof — and restore-listing lifts it with no registry row", async () => {
+    const kp = await generateKeypair();
+    const mid = `legacy-${crypto.randomUUID()}`;
+    await registerSelf(mid, "laptop", kp);
+
+    expect((await revokeOwn(mid, kp)).status).toBe(200);
+    expect(standing(mid)).toBe("liftable");
+    expect(await httpStatus(mid, kp)).toBe(403);
+
+    expect((await operator(mid, "restore-listing")).status).toBe(200);
+    expect(standing(mid)).toBe("none");
+    expect(await httpStatus(mid, kp)).toBe(200);
+  });
+
+  it("a paired device's own key revokes liftably; the owner's key then makes it terminal, and nothing lifts it after", async () => {
+    const k1 = await generateKeypair();
+    const kd = await generateKeypair();
+    const mid = await deriveSovereignMotebitId(hex(k1));
+    await registerSelf(mid, "laptop", k1);
+    await registerAgent(mid, "laptop", k1);
+    const phone = await registerOwnKeyDevice(mid, kd);
+
+    expect((await revokeAs(mid, phone, kd)).status).toBe(200);
+    expect(standing(mid)).toBe("liftable");
+    expect((await operator(mid, "restore-listing")).status).toBe(200);
+    expect(standing(mid)).toBe("none");
+    expect(await httpStatus(mid, k1)).toBe(200);
+
+    expect((await revokeAs(mid, phone, kd)).status).toBe(200);
+    expect(standing(mid)).toBe("liftable");
+    // The owner revokes through the operator (its own tokens are refused
+    // now): an authoritative act upgrades the record.
+    expect(
+      (
+        await relay.app.request(`/api/v1/agents/${mid}/revoke`, {
+          method: "POST",
+          headers: JSON_AUTH,
+        })
+      ).status,
+    ).toBe(200);
+    expect(standing(mid)).toBe("terminal");
+    expect((await operator(mid, "restore-listing")).status).toBe(409);
+    expect(await httpStatus(mid, k1)).toBe(403);
+  });
+
+  it("no holder on file: a key the id is the sovereign commitment to revokes terminally; the registry key does too", async () => {
+    // A device row with no holder behind it (a legacy link — no evidence was
+    // presented), so the binding is what proves the key.
+    const plantDevice = (id: string, kp: KeyPair): string => {
+      const deviceId = `dev-${crypto.randomUUID()}`;
+      relay.moteDb.db
+        .prepare(
+          "INSERT INTO devices (device_id, motebit_id, device_token, public_key, registered_at) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run(deviceId, id, `tok-${deviceId}`, hex(kp), Date.now());
+      return deviceId;
+    };
+    const holderRow = (id: string) =>
+      relay.moteDb.db.prepare("SELECT 1 FROM identity_keys WHERE motebit_id = ?").get(id);
+    const owner = await generateKeypair();
+    const mid = await deriveSovereignMotebitId(hex(owner));
+    const did = plantDevice(mid, owner);
+    expect(holderRow(mid)).toBeUndefined();
+    expect((await revokeAs(mid, did, owner)).status).toBe(200);
+    expect(standing(mid)).toBe("terminal");
+
+    // A legacy id: the registry key is the proven one when there is no holder.
+    const svc = await generateKeypair();
+    const legacy = `legacy-${crypto.randomUUID()}`;
+    const legacyDid = plantDevice(legacy, svc);
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, registered_at, last_heartbeat, expires_at) VALUES (?, ?, '', 0, 0, 0)",
+      )
+      .run(legacy, hex(svc));
+    expect(holderRow(legacy)).toBeUndefined();
+    expect((await revokeAs(legacy, legacyDid, svc)).status).toBe(200);
+    expect(standing(legacy)).toBe("terminal");
+  });
+
+  it("the lift statement itself cannot touch a terminal record", async () => {
+    const { kp, mid } = await selfOnlyIdentity();
+    expect((await revokeOwn(mid, kp)).status).toBe(200);
+    expect(standing(mid)).toBe("terminal");
+    liftRevocation(relay.moteDb.db, mid);
+    expect(standing(mid)).toBe("terminal");
+  });
+
+  it("with a holder on file, only the holder is proven: a key the id merely commits to (a rotated-away genesis key) revokes liftably", async () => {
+    const genesis = await generateKeypair();
+    const current = await generateKeypair();
+    const mid = await deriveSovereignMotebitId(hex(genesis));
+    const deviceId = `dev-${crypto.randomUUID()}`;
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO devices (device_id, motebit_id, device_token, public_key, registered_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(deviceId, mid, `tok-${deviceId}`, hex(genesis), Date.now());
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO identity_keys (motebit_id, public_key, guardian_public_key, source, first_seen, updated_at) VALUES (?, ?, NULL, 'succession', ?, ?)",
+      )
+      .run(mid, hex(current), Date.now(), Date.now());
+    expect((await revokeAs(mid, deviceId, genesis)).status).toBe(200);
+    expect(standing(mid)).toBe("liftable");
+  });
+
+  it("the owner's own proven-key revoke is terminal: arrival, re-registration and restore-listing all refused", async () => {
+    const sourceKp = await pinSourceRelay();
+    const { kp, mid } = await selfOnlyIdentity();
+    await registerAgent(mid, "laptop", kp);
+    expect((await revokeOwn(mid, kp)).status).toBe(200);
+    expect(standing(mid)).toBe("terminal");
+    expect((await acceptMigration(mid, kp, sourceKp)).status).toBe(403);
+    expect(await masterRegister(mid, hex(kp))).toBe(403);
+    expect((await operator(mid, "restore-listing")).status).toBe(409);
+    expect(standing(mid)).toBe("terminal");
+    expect(await httpStatus(mid, kp)).toBe(403);
   });
 });
 

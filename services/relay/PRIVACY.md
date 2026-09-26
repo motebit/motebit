@@ -56,7 +56,7 @@ Observable:
 - every pending aggregated withdrawal intent enqueued by the sweep, with state machine history until fired or failed
 - every credential issued, anchored, or revoked
 - every operator agent de-listing and reinstatement — the signed, append-only `AgentRevocationRecord` history (motebit_id, reason, actor, note, effective_at) served publicly at GET /api/v1/agents/revocations and verifiable against the relay's pinned key; a de-list removes an agent from Discover only — its identity, key, succession chain, and receipts stay served
-- every identity's revocation of itself (POST /api/v1/agents/:motebitId/revoke) — motebit_id and the time it was recorded; kept for every identity the relay authenticates, registered or not, and never cleared (#787)
+- every identity revocation (POST /api/v1/agents/:motebitId/revoke) — motebit_id, the time it was recorded, the key the revoking token verified under (or `operator`), and whether that key was the identity's proven key; kept for every identity the relay authenticates, registered or not. A revocation under the proven key, or by the operator, is never cleared; one under an unproven first-come device key is removed when the owner proves the key by migrating in or the operator reinstates the listing (#787, #794)
 - every dispute, evidence submission, and resolution
 - every federation peer relationship
 - every onchain settlement proof attached

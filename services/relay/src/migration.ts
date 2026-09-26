@@ -42,7 +42,7 @@ import {
   BalanceWaiverSchema,
 } from "@motebit/wire-schemas";
 import { admitKey, recordIdentityKey, verificationKeyFor } from "./identity-keys.js";
-import { isSelfRevoked } from "./identity-revocation.js";
+import { liftRevocation, revocationStanding } from "./identity-revocation.js";
 import type { CloseIdentityConnections, ReconcileKeyConnections } from "./connection-ports.js";
 
 const logger = createLogger({ service: "relay", module: "migration" });
@@ -570,11 +570,14 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
       throw new HTTPException(400, { message: "Credential bundle signature invalid" });
     }
 
-    // An identity that revoked itself HERE (`/revoke`) does not arrive back:
-    // the revocation is terminal (#787). Without this the upsert below would
-    // clear the registry mark and re-shelve an identity whose tokens stay
-    // refused (`isAgentRevoked` reads the revocation record).
-    if (isSelfRevoked(db, body.motebit_id)) {
+    // An identity AUTHORITATIVELY revoked here (`/revoke` under its proven key,
+    // or the operator) does not arrive back: that revocation is terminal
+    // (#787). Without this the upsert below would clear the registry mark and
+    // re-shelve an identity whose tokens stay refused. A LIFTABLE revocation —
+    // made under an unproven, first-come device key (#794) — never blocks the
+    // owner: the binding verified above proves the key, and step 5 lifts it.
+    const revocation = revocationStanding(db, body.motebit_id);
+    if (revocation === "terminal") {
       throw new HTTPException(403, { message: "Identity is revoked" });
     }
 
@@ -588,6 +591,9 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
 
     // Step 5: Onboard the agent — register in agent_registry
     const now = Date.now();
+    // The owner proved the key (step 3b): a revocation made under an unproven
+    // key ends here. The statement cannot touch a terminal record.
+    if (revocation === "liftable") liftRevocation(db, body.motebit_id);
     // An UPSERT, not INSERT OR REPLACE: REPLACE named eight columns and so
     // dropped `guardian_public_key`, `settlement_address`, `settlement_modes`,
     // `metadata` and `sweep_threshold` for a returning identity (#703 F2).
