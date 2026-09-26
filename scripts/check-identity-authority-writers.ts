@@ -53,6 +53,7 @@ const TABLES = [
   "relay_key_successions",
   "relay_revoked_credentials",
   "identity_keys",
+  "relay_identity_revocations",
 ] as const;
 
 /** Columns that carry authority. An UPDATE touching none of these is routine. */
@@ -78,6 +79,14 @@ interface Writer {
  * still fails — which is exactly how #713 and #719 were added.
  */
 const WRITERS: readonly Writer[] = [
+  {
+    file: "services/relay/src/identity-revocation.ts",
+    verb: "INSERT",
+    table: "relay_identity_revocations",
+    count: 1,
+    principal:
+      "`recordIdentityRevocation`, called only by /api/v1/agents/:id/revoke after the route proved the caller IS the path identity (its own bearer, caller === path id) or the operator via the master token acting for it (#787). The record is terminal — `isAgentRevoked` reads it on every authenticated request, and restore-listing refuses to clear a self-revocation (#788). This function proves nothing itself",
+  },
   {
     file: "services/relay/src/identity-keys.ts",
     verb: "INSERT",
