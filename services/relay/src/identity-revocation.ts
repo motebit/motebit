@@ -17,14 +17,34 @@
  * `isAgentRevoked` (schema.ts) beside the registry mark — the verifier on
  * every authenticated request, HTTP and WebSocket.
  *
- * TERMINAL. Nothing updates or deletes a row: no operator door (restore-listing
- * refuses — #788), no re-registration, no migration arrival clears it. The
- * registry mark stays the carrier of the two REVERSIBLE revocations — the
- * operator's moderation hold (revoke-listing ↔ restore-listing) and migration
- * departure (undone only by the identity arriving back, accept-migration).
+ * Every record takes effect at once (`isAgentRevoked` honours it — no false
+ * success). Whether it is TERMINAL depends on authority the relay can verify
+ * (#794). `register-self` is first-come for an id the relay holds no key for,
+ * so a stranger can hold a device row under someone else's id; a revocation
+ * made under that row's key must not end the real owner forever. So each
+ * record carries `authoritative` (`revokerIsAuthoritative`):
+ *
+ *  - AUTHORITATIVE — the operator (master token acting for the id), or a token
+ *    that verified under the identity's PROVEN key: the holder when there is
+ *    one (`identity_keys`; a rotated-away genesis key is not it), else a key
+ *    the id sovereign-binds to (`verifySovereignBinding`), else the registry
+ *    key. Terminal: never cleared, and accept-migration, `/agents/register`
+ *    and restore-listing refuse the identity.
+ *  - LIFTABLE — any other key (a first-come device row). Lifted
+ *    (`liftRevocation`, the one DELETE, `authoritative = 0` in the statement)
+ *    by accept-migration after it verified the sovereign binding — the owner
+ *    proved the key — or by the operator's restore-listing.
+ *
+ * A later authoritative `/revoke` upgrades a liftable record; nothing
+ * downgrades one. The registry mark stays the carrier of the two REVERSIBLE
+ * registry revocations — the operator's moderation hold (revoke-listing ↔
+ * restore-listing) and migration departure (undone only by the identity
+ * arriving back, accept-migration).
  */
 
+import { verifySovereignBinding } from "@motebit/crypto";
 import type { DatabaseDriver } from "@motebit/persistence";
+import { holderKeyOf, registryKeyOf } from "./identity-keys.js";
 
 /**
  * Does the relay know this identity at all — does any table it authenticates
@@ -49,28 +69,74 @@ export function isKnownIdentity(db: DatabaseDriver, motebitId: string): boolean 
   );
 }
 
+/** Who revoked: the operator (master token), or the key a token verified under. */
+export type Revoker = { kind: "operator" } | { kind: "key"; publicKey: string };
+
 /**
- * Record the identity's own revocation. Idempotent: a repeated `/revoke`
- * keeps the FIRST recording time. Returns true — a row now exists — so the
- * caller answers from what was recorded, never from what was attempted.
+ * Did the revoker prove it speaks for the identity? The operator: yes (an
+ * operator act, like every master-token door). A key: yes only when it is the
+ * identity's PROVEN key — the holder when one exists (exactly that; a genesis
+ * key the identity rotated away from is not it), else a key the id is the
+ * sovereign commitment to, else the registry key. A first-come device key
+ * (register-self for an id the relay holds no key for) proves nothing.
+ */
+export async function revokerIsAuthoritative(
+  db: DatabaseDriver,
+  motebitId: string,
+  revoker: Revoker,
+): Promise<boolean> {
+  if (revoker.kind === "operator") return true;
+  const key = revoker.publicKey.toLowerCase();
+  const holder = holderKeyOf(db, motebitId);
+  if (holder !== null) return holder.toLowerCase() === key;
+  if (await verifySovereignBinding(motebitId, key)) return true;
+  const registry = registryKeyOf(db, motebitId);
+  return registry !== null && registry.toLowerCase() === key;
+}
+
+/**
+ * Record the identity's revocation. A repeated `/revoke` keeps the FIRST
+ * recording time; an authoritative one upgrades a liftable record, and nothing
+ * downgrades. Returns true — a row now exists — so the caller answers from
+ * what was recorded, never from what was attempted.
  */
 export function recordIdentityRevocation(
   db: DatabaseDriver,
   motebitId: string,
   now: number,
+  authoritative: boolean,
+  revokedUnder: string,
 ): boolean {
   db.prepare(
-    "INSERT OR IGNORE INTO relay_identity_revocations (motebit_id, revoked_at) VALUES (?, ?)",
-  ).run(motebitId, now);
-  return isSelfRevoked(db, motebitId);
+    `INSERT INTO relay_identity_revocations (motebit_id, revoked_at, authoritative, revoked_under)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(motebit_id) DO UPDATE SET authoritative = 1, revoked_under = excluded.revoked_under
+       WHERE excluded.authoritative = 1 AND relay_identity_revocations.authoritative = 0`,
+  ).run(motebitId, now, authoritative ? 1 : 0, revokedUnder);
+  return revocationStanding(db, motebitId) !== "none";
 }
 
-/** Has the identity revoked itself (terminal)? */
-export function isSelfRevoked(db: DatabaseDriver, motebitId: string): boolean {
-  return (
-    db.prepare("SELECT 1 FROM relay_identity_revocations WHERE motebit_id = ?").get(motebitId) !==
-    undefined
-  );
+/** The identity's own revocation: none, TERMINAL (authoritative), or LIFTABLE. */
+export function revocationStanding(
+  db: DatabaseDriver,
+  motebitId: string,
+): "none" | "terminal" | "liftable" {
+  const row = db
+    .prepare("SELECT authoritative FROM relay_identity_revocations WHERE motebit_id = ?")
+    .get(motebitId) as { authoritative: number } | undefined;
+  if (row === undefined) return "none";
+  return row.authoritative === 1 ? "terminal" : "liftable";
+}
+
+/**
+ * Lift a LIFTABLE revocation — called only by accept-migration after the
+ * sovereign binding verified, and by the operator's restore-listing. The
+ * statement itself cannot touch a terminal record (`authoritative = 0`).
+ */
+export function liftRevocation(db: DatabaseDriver, motebitId: string): void {
+  db.prepare(
+    "DELETE FROM relay_identity_revocations WHERE motebit_id = ? AND authoritative = 0",
+  ).run(motebitId);
 }
 
 /**

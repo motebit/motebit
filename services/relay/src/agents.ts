@@ -27,7 +27,7 @@ import type { TaskRouter } from "./task-routing.js";
 import { evaluateSettlementEligibility } from "./task-routing.js";
 import { REFERENCE_MIN_BONDED_SIGNAL_MICRO } from "./bond-store.js";
 import { ON_SHELF, delistRegistration } from "./registry-delist.js";
-import { isDepartureInEffect, isSelfRevoked } from "./identity-revocation.js";
+import { isDepartureInEffect, liftRevocation, revocationStanding } from "./identity-revocation.js";
 import {
   admitKey,
   holderKeyOf,
@@ -1171,12 +1171,21 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     if (!motebitId || typeof motebitId !== "string") {
       throw new HTTPException(400, { message: "Missing motebit_id" });
     }
-    // An identity that revoked itself is never registered again (#787). Its
-    // own tokens are already refused (`isAgentRevoked`); this is the master
-    // token's path, which would otherwise INSERT a fresh, unrevoked row for an
-    // identity that had none — putting a revoked identity on the shelf.
-    if (isSelfRevoked(moteDb.db, motebitId)) {
+    // A revoked identity is not registered (#787). Its own tokens are already
+    // refused (`isAgentRevoked`); this is the master token's path, which would
+    // otherwise INSERT a fresh, unrevoked row — a revoked identity on the
+    // shelf. A terminal revocation is final; a liftable one (#794) is lifted
+    // only by restore-listing or the owner's migration arrival, never as a
+    // side effect of registration.
+    const standing = revocationStanding(moteDb.db, motebitId);
+    if (standing === "terminal") {
       throw new HTTPException(403, { message: "Identity is revoked" });
+    }
+    if (standing === "liftable") {
+      throw new HTTPException(409, {
+        message:
+          "Identity is revoked under an unproven key — restore-listing or a verified migration arrival lifts it",
+      });
     }
 
     if (!body.endpoint_url || typeof body.endpoint_url !== "string") {
@@ -1941,23 +1950,24 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     const existing = moteDb.db
       .prepare("SELECT motebit_id FROM agent_registry WHERE motebit_id = ?")
       .get(motebitId) as { motebit_id: string } | undefined;
-    if (!existing) {
+    const standing = revocationStanding(moteDb.db, motebitId);
+    // A liftable revocation (#794) may exist with no registry row (a
+    // register-self-only identity): restore-listing is its operator door.
+    if (!existing && !(!revoked && standing === "liftable")) {
       throw new HTTPException(404, { message: "Agent not registered" });
     }
-    // A reinstate reverses the operator's OWN hold and nothing else (#788).
-    // The registry mark is shared with the two revocations that are not the
-    // operator's: the identity's own `/revoke` (terminal) and a migration
-    // departure (reversed only by the identity arriving back). Clearing the
-    // mark over either put a revoked identity back on the shelf.
-    if (
-      !revoked &&
-      (isSelfRevoked(moteDb.db, motebitId) || isDepartureInEffect(moteDb.db, motebitId))
-    ) {
+    // A reinstate reverses the operator's OWN hold, and lifts a LIFTABLE
+    // revocation (one made under an unproven, first-come key — #794), and
+    // nothing else (#788). The registry mark is shared with two ends that are
+    // not the operator's: an authoritative `/revoke` (terminal) and a
+    // migration departure (reversed only by the identity arriving back).
+    if (!revoked && (standing === "terminal" || isDepartureInEffect(moteDb.db, motebitId))) {
       throw new HTTPException(409, {
         message:
           "Agent revoked itself or departed by migration — restore-listing reverses only the operator's hold",
       });
     }
+    if (!revoked && standing === "liftable") liftRevocation(moteDb.db, motebitId);
 
     // Flip the discoverability flag (what Discover filters) and append the
     // signed record in the same path. Append-only: never an update/delete.

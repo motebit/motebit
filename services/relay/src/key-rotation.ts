@@ -28,7 +28,12 @@ import { createLogger } from "./logger.js";
 import type { AuthEvent } from "./auth-events.js";
 import type { CloseIdentityConnections, CloseTokenConnections } from "./connection-ports.js";
 import { admitKey, identityGuardianFor, identityKey, verificationKeyFor } from "./identity-keys.js";
-import { isKnownIdentity, recordIdentityRevocation } from "./identity-revocation.js";
+import {
+  isKnownIdentity,
+  recordIdentityRevocation,
+  revokerIsAuthoritative,
+  type Revoker,
+} from "./identity-revocation.js";
 
 const logger = createLogger({ service: "key-rotation" });
 
@@ -456,8 +461,27 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     // below exists only for an identity that has a registry row, and one
     // registered only through register-self has none — it was answered
     // `{revoked: true}` while its tokens kept verifying. `isAgentRevoked`
-    // reads this record beside the mark. Terminal: nothing clears it.
-    const recorded = recordIdentityRevocation(moteDb.db, motebitId, now);
+    // reads this record beside the mark. TERMINAL only when the revoker proved
+    // it speaks for the identity (#794): the operator, or a token verified
+    // under the identity's proven key. A first-come device key (register-self
+    // for an id the relay holds no key for) revokes at once but liftably —
+    // else a stranger could end the real owner forever.
+    const verifiedKey = c.get("callerVerifiedKey" as never) as string | undefined;
+    const revoker: Revoker =
+      callerMotebitId == null
+        ? { kind: "operator" }
+        : { kind: "key", publicKey: verifiedKey ?? "" };
+    const authoritative =
+      revoker.kind === "key" && revoker.publicKey === ""
+        ? false
+        : await revokerIsAuthoritative(moteDb.db, motebitId, revoker);
+    const recorded = recordIdentityRevocation(
+      moteDb.db,
+      motebitId,
+      now,
+      authoritative,
+      revoker.kind === "operator" ? "operator" : revoker.publicKey,
+    );
     // Revocation also DELISTS (identity-key-state-v1 §10 Q1): a revoked
     // identity cannot act, so it must not be for hire; one statement, one
     // audit site. The row itself stays — the identity log keeps the

@@ -2027,15 +2027,21 @@ export const relayMigrations: Migration[] = [
       // `agent_registry.revoked = 1`, so for an identity with no registry row
       // — register-self only — the UPDATE touched nothing, the route still
       // answered `{revoked: true}`, and the identity kept authenticating.
-      // Read by `isAgentRevoked` beside the registry mark; terminal — nothing
-      // updates or deletes a row (identity-revocation.ts). Not backfilled:
-      // no durable record distinguishes a past `/revoke` from the operator's
-      // reversible hold (both set the same registry mark), so registered
-      // identities keep that mark exactly as before.
+      // Read by `isAgentRevoked` beside the registry mark. `authoritative`
+      // says whether the revoker PROVED it speaks for the identity (its
+      // proven key, or the operator) — only such a record is terminal; one
+      // made under an unproven, first-come device key is lifted by the owner
+      // proving the key or by the operator (identity-revocation.ts, #794).
+      // `revoked_under` is the key the token verified under, or `operator`.
+      // Not backfilled: no durable record distinguishes a past `/revoke` from
+      // the operator's reversible hold (both set the same registry mark), so
+      // registered identities keep that mark exactly as before.
       db.exec(`
         CREATE TABLE IF NOT EXISTS relay_identity_revocations (
           motebit_id TEXT PRIMARY KEY,
-          revoked_at INTEGER NOT NULL
+          revoked_at INTEGER NOT NULL,
+          authoritative INTEGER NOT NULL CHECK (authoritative IN (0, 1)),
+          revoked_under TEXT NOT NULL
         );
       `);
     },

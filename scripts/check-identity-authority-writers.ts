@@ -85,7 +85,7 @@ const WRITERS: readonly Writer[] = [
     table: "relay_identity_revocations",
     count: 1,
     principal:
-      "`recordIdentityRevocation`, called only by /api/v1/agents/:id/revoke after the route proved the caller IS the path identity (its own bearer, caller === path id) or the operator via the master token acting for it (#787). The record is terminal — `isAgentRevoked` reads it on every authenticated request, and restore-listing refuses to clear a self-revocation (#788). This function proves nothing itself",
+      "`recordIdentityRevocation`, called only by /api/v1/agents/:id/revoke after the route proved the caller IS the path identity (its own bearer, caller === path id) or the operator via the master token acting for it (#787). The row records WHO revoked (`revoked_under`: the verified key, or `operator`) and whether that revoker is AUTHORITATIVE (`revokerIsAuthoritative`: the operator, or the identity's proven key — the holder when one exists, else a key the id sovereign-binds to, else the registry key). Only an authoritative record is terminal (accept-migration, /agents/register, restore-listing refuse); a record under a first-come device key takes effect at once but is lifted by `liftRevocation` — whose DELETE names `authoritative = 0`, so it cannot touch a terminal record — at a verified migration arrival or the operator's restore-listing (#794). The upsert only ever upgrades a liftable record to authoritative. This function proves nothing itself",
   },
   {
     file: "services/relay/src/identity-keys.ts",
