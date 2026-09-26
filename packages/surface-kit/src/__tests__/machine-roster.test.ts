@@ -46,6 +46,12 @@ import {
   keyFingerprint,
   suppressionText,
 } from "../machine-roster-view.js";
+import {
+  MAX_ROSTER_ENTRY_BYTES,
+  RELAY_ENTRY_REFUSALS,
+  classifyEntryRefusal,
+  rosterEntryBytes,
+} from "../machine-roster-refusals.js";
 
 const MID = "0190f1a2-0000-7000-8000-000000000001"; // a legacy (v7) id: unrooted
 const NOW = 1_800_000_000_000;
@@ -809,7 +815,7 @@ describe("C5 — presentation, chunks, refusals, the support set", () => {
     expect(acq.repair?.taken).toBe(70);
   });
 
-  it("422 per-entry refusal is 'not taken' (retried next time); roster_full is reported once and never retried", async () => {
+  it("a 422 reason this surface does not know is 'not taken' (retried next time); roster_full is reported once and never retried", async () => {
     const a = await generateKeypair();
     const b = await generateKeypair();
     const relay = new FakeRelay();
@@ -818,22 +824,25 @@ describe("C5 — presentation, chunks, refusals, the support set", () => {
     const bad = await enrol(b, "flaky");
     await m.cache.save({ ...emptyReplica(MID), enrollments: [sup, bad] });
     relay.full.add(await hostEnrollmentId(sup));
-    relay.refuse.set(await hostEnrollmentId(bad), "too_large");
+    // A reason a newer relay might send: unknown here, so retryable (#802).
+    relay.refuse.set(await hostEnrollmentId(bad), "busy_try_later");
     const acq = await acquired(m);
     expect(acq.repair?.rosterFull).toEqual([await hostEnrollmentId(sup)]);
     expect(acq.repair?.notTaken).toEqual([
-      { id: await hostEnrollmentId(bad), reason: "too_large" },
+      { id: await hostEnrollmentId(bad), reason: "busy_try_later" },
     ]);
+    expect(acq.repair?.willNotHold).toEqual([]);
     // R20 — roster_full ids are excluded from the set difference; the other stays omitted.
     expect(acq.omitted).toEqual([await hostEnrollmentId(bad)]);
-    // Never retried, never re-reported.
+    expect(acq.suppressed).toContain("relay_omission");
+    // The unknown one IS presented again; roster_full never is, nor re-reported.
     relay.posts = [];
     relay.refuse.clear();
     const again = await acquired(m);
     expect(again.repair?.rosterFull).toEqual([]);
-    expect(relay.posts.flatMap((p) => p.enrollments).some((e) => e.device_id === "old-vps")).toBe(
-      false,
-    );
+    const sent = relay.posts.flatMap((p) => p.enrollments).map((e) => e.device_id);
+    expect(sent).toContain("flaky");
+    expect(sent).not.toContain("old-vps");
     expect(again.omitted).toEqual([]);
   });
 
@@ -850,6 +859,53 @@ describe("C5 — presentation, chunks, refusals, the support set", () => {
     const acq2 = await acquired(m);
     expect(acq2.repair?.notTaken[0]?.reason).toBe("network");
     expect(acq2.omitted).toHaveLength(1);
+  });
+
+  it("an oversized entry is presented ALONE: its 413 takes none of its neighbours, and is permanent (#802)", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    const huge = await enrol(a, "h".repeat(MAX_ROSTER_ENTRY_BYTES));
+    const fine = await enrol(a, "vps");
+    await m.cache.save({ ...emptyReplica(MID), enrollments: [huge, fine] });
+    // A relay (or a proxy before it) that refuses any body carrying the huge entry, whole.
+    const posts: number[] = [];
+    const ports: MachineRosterPorts = {
+      ...m.ports,
+      presentRoster: async (s, body) => {
+        posts.push(body.enrollments.length + body.retirements.length);
+        if (body.enrollments.some((e) => e.device_id.length > 1000))
+          return { status: 413, body: {} };
+        return relay.present(s, body);
+      },
+    };
+    const r = new MachineRoster(ports);
+    const acq = await r.acquire();
+    if (acq.kind !== "acquired") throw new Error(acq.kind);
+    expect(posts).toEqual([1, 1]);
+    expect(acq.repair?.taken).toBe(1);
+    expect(acq.repair?.notTaken).toEqual([]);
+    expect(acq.repair?.willNotHold).toEqual([
+      { id: await hostEnrollmentId(huge), reason: "too_large" },
+    ]);
+    expect(relay.enr.has(await hostEnrollmentId(fine))).toBe(true);
+    expect(acq.omitted).toEqual([]);
+    // Never sent again.
+    posts.length = 0;
+    await r.acquire();
+    expect(posts).toEqual([]);
+  });
+
+  it("a 413 on an entry within the bound stays retryable: a proxy's limit is not the entry's fault", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.cache.save({ ...emptyReplica(MID), enrollments: [await enrol(a, "vps")] });
+    relay.status413 = true;
+    const acq = await acquired(m);
+    expect(acq.repair?.willNotHold).toEqual([]);
+    expect(acq.repair?.notTaken[0]?.reason).toMatch(/413/);
+    expect(m.cache.value!.relay_refused).toEqual([]);
   });
 
   it("the minimal support set: no history below H, no old-epoch entries of an active machine; pending tombstones go", async () => {
@@ -1133,6 +1189,133 @@ describe("replica and parsing", () => {
   });
 });
 
+// ── #802: permanent refusals ─────────────────────────────────────────
+
+describe("#802 — a refusal for the entry's own bytes is permanent; an unknown reason is retryable", () => {
+  it("the classification: every relay reason permanent; anything else (or a non-string) retryable", () => {
+    expect(Object.keys(RELAY_ENTRY_REFUSALS).sort()).toEqual([
+      "bad_signature",
+      "malformed",
+      "roster_full",
+      "too_large",
+      "wrong_motebit",
+    ]);
+    for (const r of Object.keys(RELAY_ENTRY_REFUSALS)) {
+      expect(classifyEntryRefusal(r)).toEqual({ class: "permanent", reason: r });
+    }
+    expect(classifyEntryRefusal("rate_limited")).toEqual({
+      class: "retryable",
+      reason: "rate_limited",
+    });
+    expect(classifyEntryRefusal(undefined)).toEqual({ class: "retryable", reason: "refused" });
+    expect(classifyEntryRefusal(7)).toEqual({ class: "retryable", reason: "refused" });
+    // Never a prototype key read as a known reason.
+    for (const r of ["toString", "__proto__", "constructor", "hasOwnProperty"]) {
+      expect(classifyEntryRefusal(r).class).toBe("retryable");
+    }
+  });
+
+  it.each(["too_large", "malformed", "wrong_motebit", "bad_signature"] as const)(
+    "%s: reported once, kept, never presented again, not an omission, and the machine is still counted",
+    async (reason) => {
+      const a = await generateKeypair();
+      const relay = new FakeRelay();
+      const m = machine(relay, a);
+      await m.roster.ensureEnrolled(); // this device's own line, taken
+      const vps = await enrol(a, "vps");
+      await m.cache.save({ ...emptyReplica(MID), enrollments: [vps] });
+      const id = await hostEnrollmentId(vps);
+      relay.refuse.set(id, reason);
+
+      const acq = await acquired(m);
+      expect(acq.repair?.willNotHold).toEqual([{ id, reason }]);
+      expect(acq.repair?.notTaken).toEqual([]);
+      // Persisted with its reason, in the replica, through the one save port.
+      expect(m.cache.value!.relay_refused).toEqual([{ id, reason }]);
+      // Not an omission: the relay said so. The count stands, and says what it holds.
+      expect(acq.omitted).toEqual([]);
+      expect(acq.suppressed).not.toContain("relay_omission");
+      expect(acq.relayWillNotHold).toEqual([{ id, reason }]);
+      const view = buildRosterView(acq, NOW);
+      if (view.kind !== "roster") throw new Error(view.kind);
+      expect(view.claim?.active).toBe(2); // membership is what was signed
+      const note = view.notes.find((n) => n.kind === "relay-will-not-hold");
+      expect(note?.text).toBe(
+        `the relay will not hold 1 entry this device holds (${reason}); kept here and counted, not presented again`,
+      );
+
+      // The next presentations never carry it, and never re-report it.
+      relay.posts = [];
+      const again = await acquired(m);
+      const out = await m.roster.present(again);
+      expect(relay.posts.flatMap((p) => p.enrollments).map((e) => e.device_id)).not.toContain(
+        "vps",
+      );
+      expect(out.willNotHold).toEqual([]);
+      expect(out.notTaken).toEqual([]);
+      expect(again.relayWillNotHold).toEqual([{ id, reason }]);
+    },
+  );
+
+  it("a permanent refusal met by an act's own presentation is persisted too, and reported with it", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    const r = new MachineRoster({
+      ...m.ports,
+      presentRoster: async (s, body) => {
+        const i = body.enrollments.findIndex((e) => e.device_id === "vps");
+        if (i < 0) return relay.present(s, body);
+        return {
+          status: 422,
+          body: { refused: [{ kind: "enrollment", index: i, reason: "bad_signature" }] },
+        };
+      },
+    });
+    const out = await r.enroll("vps", { force: true });
+    if (out.kind !== "enrolled") throw new Error(out.kind);
+    expect(out.presented.willNotHold).toEqual([{ id: out.enrollmentId, reason: "bad_signature" }]);
+    expect(m.cache.value!.relay_refused).toEqual([
+      { id: out.enrollmentId, reason: "bad_signature" },
+    ]);
+  });
+
+  it("an explicit enroll whose entry would pass the bound is refused before anything is kept or sent", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    const probe = await enrol(a, "x");
+    // The device id that makes the entry EXACTLY the bound, and one past it.
+    const atBound = "x".repeat(MAX_ROSTER_ENTRY_BYTES - rosterEntryBytes(probe) + 1);
+    const over = await m.roster.enroll(`${atBound}y`, { force: true });
+    expect(over).toEqual({
+      kind: "entry-too-large",
+      deviceId: `${atBound}y`,
+      bytes: MAX_ROSTER_ENTRY_BYTES + 1,
+      limit: MAX_ROSTER_ENTRY_BYTES,
+    });
+    expect(m.cache.value!.enrollments).toEqual([]);
+    expect(relay.posts).toEqual([]);
+    const ok = await m.roster.enroll(atBound, { force: true });
+    expect(ok.kind).toBe("enrolled");
+    expect(m.cache.value!.enrollments.map((e) => rosterEntryBytes(e))).toEqual([
+      MAX_ROSTER_ENTRY_BYTES,
+    ]);
+  });
+
+  it("an automatic mint under an oversized own device id mints nothing", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a, { deviceId: "d".repeat(MAX_ROSTER_ENTRY_BYTES) });
+    const out = await m.roster.ensureEnrolled();
+    expect(out.kind).toBe("entry-too-large");
+    expect(m.cache.value?.enrollments ?? []).toEqual([]);
+    expect(m.cache.value?.own_minted ?? []).toEqual([]);
+    expect(relay.posts).toEqual([]);
+  });
+});
+
 // ── The remaining branches, each a real case ─────────────────────────
 
 describe("edge cases", () => {
@@ -1148,6 +1331,7 @@ describe("edge cases", () => {
       retirements: [await retireEntry(a, e)],
       frozen: [{ device_id: "vps", pre_rotation_key: hex(a), value: "active", taken_at: 1 }],
       roster_full: ["x"],
+      relay_refused: [{ id: "y", reason: "too_large" }],
       own_device_ids: ["vps"],
       own_minted: ["e"],
       ambiguous: { at: 5, pairs: ["p"] },
@@ -1172,6 +1356,8 @@ describe("edge cases", () => {
       { succession: ["x"] },
       { retirements: [{ nope: true }] },
       { roster_full: [1] },
+      { relay_refused: ["y"] },
+      { relay_refused: [{ id: "y" }] },
       { own_device_ids: "x" },
       { own_minted: [1] },
       { ambiguous: ["p"] },

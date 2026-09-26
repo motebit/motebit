@@ -116,6 +116,11 @@ export type RosterNote =
   | { kind: "branch"; at: string; to: string; guardian_verified: boolean; text: string }
   | { kind: "missing-links"; count: number; text: string }
   | { kind: "omitted"; count: number; text: string }
+  /**
+   * Entries this device holds that the relay refused permanently (#802):
+   * still members (they are counted), never presented again.
+   */
+  | { kind: "relay-will-not-hold"; count: number; reasons: string[]; text: string }
   | { kind: "relay-newer-key"; key: string; text: string }
   | { kind: "relay-unread"; reason: string; text: string }
   | { kind: "cache-corrupt"; text: string }
@@ -453,6 +458,16 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
       kind: "omitted",
       count: n,
       text: `the relay is missing ${n} ${plural(n, "entry", "entries")} this device holds (re-presented; ${acq.omissionRechecked ? "still missing on re-read" : "not re-checked"})`,
+    });
+  }
+  if (acq.relayWillNotHold.length > 0) {
+    const n = acq.relayWillNotHold.length;
+    const reasons = [...new Set(acq.relayWillNotHold.map((r) => r.reason))].sort();
+    notes.push({
+      kind: "relay-will-not-hold",
+      count: n,
+      reasons,
+      text: `the relay will not hold ${n} ${plural(n, "entry", "entries")} this device holds (${reasons.join(", ")}); kept here and counted, not presented again`,
     });
   }
   if (acq.suppressed.includes("relay_newer_key") && acq.succession.hint != null) {
