@@ -18,13 +18,23 @@
  * Every write is idempotent and scoped to the key being retired, so a retry
  * after a lost response converges on the same state as the first attempt.
  * The chain grows only when the link is not already its head — "held" means
- * HEAD, not "some earlier row with these two keys": a legitimate rotation
- * back to a previously used key (K1→K2, K2→K1, K1→K2 again) is a new link
- * and must append, or the served chain stops at a key the registry has left
- * and every external verifier reports it broken.
+ * HEAD, not "some earlier row with these two keys".
+ *
+ * A key never enters an identity's history twice (#775). A rotation back to
+ * a key the identity has held (K1→K2, K2→K1) used to be recorded as a new
+ * link; every roster consumer then refuses the chain as `duplicate_key`
+ * (`spec/machine-roster-v1.md` §6) with no way back, and the rotate-back put
+ * the holder on K1 again, which made an earlier guardian recovery K1→K2
+ * re-presentable by anyone inside its freshness window — undoing it. So
+ * `applySuccession` refuses, before writing anything, a record that is not
+ * the head retry and either re-presents a link already recorded, departs
+ * from a key the history has already retired, or introduces a key the
+ * identity has held (`successionReuse`) — the history never repeats a key,
+ * on either side of a link.
  */
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { KeySuccessionRecord } from "@motebit/encryption";
+import { bytesToHex, hexToBytes } from "@motebit/encryption";
 import {
   chainHeadOf,
   holderKeyOf,
@@ -65,6 +75,119 @@ export function successionAtHead(
     head.old_public_key === record.old_public_key &&
     head.new_public_key === record.new_public_key
   );
+}
+
+/** Why a succession was refused as a reuse of the identity's key history. */
+export type SuccessionReuse = "replays_recorded_link" | "departs_from_retired_key" | "reuses_key";
+
+export const SUCCESSION_REUSE_MESSAGES: Readonly<Record<SuccessionReuse, string>> = {
+  replays_recorded_link:
+    "Succession link is already recorded for this identity and is not its latest link — a recorded link is never applied again",
+  departs_from_retired_key:
+    "Succession old_public_key is a key this identity's recorded history has already retired — a link departs only from the latest recorded key",
+  reuses_key:
+    "Succession new_public_key is a key this identity has already held — a key never enters an identity's history twice",
+};
+
+/** Thrown by `applySuccession` for a record `successionReuse` refuses. Nothing was written. */
+export class SuccessionRefused extends Error {
+  constructor(readonly reason: SuccessionReuse) {
+    super(SUCCESSION_REUSE_MESSAGES[reason]);
+    this.name = "SuccessionRefused";
+  }
+}
+
+/**
+ * Would recording this link repeat the identity's key history? (#775,
+ * `spec/identity-v1.md` §7.5 obligation 3.)
+ *
+ *  - The head link re-presented is a retry (`successionAtHead`), never a
+ *    reuse: it changes nothing.
+ *  - Any other link whose `(old, new)` pair is already recorded, at any
+ *    position, is `replays_recorded_link`: a recorded link is never applied
+ *    a second time (a guardian recovery re-presented after the identity
+ *    moved on would otherwise drag the holder back). This names the reason;
+ *    it does not change the outcome — a recorded pair's new key is already
+ *    history, so `reuses_key` would refuse it too.
+ *  - An `old_public_key` the recorded chain names anywhere but as the head's
+ *    `new_public_key` is `departs_from_retired_key`: the history never
+ *    repeats a key on the DEPARTURE side either. Without it, a holder-less
+ *    identity whose registry was emptied and re-filled with a retired key
+ *    (keyless master-token registration, then register-self and a keyed
+ *    registration by whoever still holds that key) could record K1→K2 and
+ *    then K1→K3 — a fork no verifier can walk.
+ *  - A `new_public_key` equal to any key the recorded chain names (either
+ *    side of any link), the holder's key or the registry key is
+ *    `reuses_key`. The holder clause is a backstop at the route: departure
+ *    already requires `old = holder` whenever a holder exists, so a new key
+ *    equal to the holder is refused earlier as going nowhere; it binds a
+ *    caller of `applySuccession` that did not run departure.
+ *
+ * Compared as a verifier reads the key (`keyIdentity`, the decoded bytes):
+ * spellings of one key are one key, and a history that repeated a key under
+ * another spelling repeats it for every verifier that decodes the hex. Device rows are not consulted — a paired device holds
+ * its own key, which is not the identity's history.
+ */
+/**
+ * The key a verifier would read from this spelling. Lowercasing is not
+ * canonicalization: `hexToBytes` decodes leniently (`parseInt` per pair), so
+ * `"0a"`, `"a "` and `"A!"` are one byte to every verifier. A history compared
+ * by spelling could hold one key twice — so compare the DECODED bytes, the way
+ * the signature check reads them. The decoder does not throw on string input
+ * (an odd length truncates, as it does for the verifier); the `catch` is a
+ * guard, not a path.
+ */
+function keyIdentity(k: string): string {
+  try {
+    return bytesToHex(hexToBytes(k));
+  } catch {
+    return k.toLowerCase();
+  }
+}
+
+export function successionReuse(
+  db: DatabaseDriver,
+  motebitId: string,
+  record: Pick<KeySuccessionRecord, "old_public_key" | "new_public_key">,
+): SuccessionReuse | null {
+  if (successionAtHead(db, motebitId, record)) return null;
+  const links = db
+    .prepare(
+      "SELECT old_public_key, new_public_key FROM relay_key_successions WHERE motebit_id = ?",
+    )
+    .all(motebitId) as ChainHead[];
+  const oldKey = keyIdentity(record.old_public_key);
+  const newKey = keyIdentity(record.new_public_key);
+  if (
+    links.some(
+      (l) => keyIdentity(l.old_public_key) === oldKey && keyIdentity(l.new_public_key) === newKey,
+    )
+  ) {
+    return "replays_recorded_link";
+  }
+  const head = successionHead(db, motebitId);
+  const headNew = head ? keyIdentity(head.new_public_key) : undefined;
+  if (
+    oldKey !== headNew &&
+    links.some(
+      (l) => keyIdentity(l.old_public_key) === oldKey || keyIdentity(l.new_public_key) === oldKey,
+    )
+  ) {
+    return "departs_from_retired_key";
+  }
+  // The key this link departs from is history the moment the link is
+  // recorded: a link whose two sides are one key, spelled twice
+  // (`UPPER(K)` → `k`, reachable from a legacy non-canonical device row
+  // through the device departure rung), repeats a key on its own.
+  const history = new Set<string>([oldKey]);
+  for (const l of links) {
+    history.add(keyIdentity(l.old_public_key));
+    history.add(keyIdentity(l.new_public_key));
+  }
+  for (const k of [holderKeyOf(db, motebitId), registryKeyOf(db, motebitId)]) {
+    if (k != null && k !== "") history.add(keyIdentity(k));
+  }
+  return history.has(newKey) ? "reuses_key" : null;
 }
 
 /**
@@ -194,7 +317,10 @@ export interface SuccessionApplied {
  * one.
  *
  * The caller has verified the record's signatures and decided whether it is
- * admissible (freshness, key on file). This function only applies it.
+ * admissible (freshness, key on file). This function applies it — except a
+ * record that would repeat the identity's key history, which it refuses by
+ * throwing `SuccessionRefused` before writing anything (#775). Every door
+ * maps that to its own recorded refusal.
  *
  * After the rows commit, the retired key's open connections are closed
  * (`retireConnections`): rewriting the rows stops the key admitting a NEW
@@ -211,6 +337,10 @@ export function applySuccession(
   retireConnections: RetireKeyConnections,
 ): SuccessionApplied {
   const result = db.transaction((): SuccessionApplied => {
+    // Refused before any write, inside the transaction, so no door — and no
+    // interleaving of two doors — can record a key twice (#775).
+    const reuse = successionReuse(db, motebitId, record);
+    if (reuse !== null) throw new SuccessionRefused(reuse);
     const atHead = successionAtHead(db, motebitId, record);
 
     // The old key stops being a credential HERE. A device row's `public_key`

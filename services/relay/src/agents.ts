@@ -17,7 +17,11 @@ import { scoreAttestation } from "@motebit/market";
 import type { ConnectedDevice } from "./index.js";
 import type { RelayIdentity } from "./federation.js";
 import { insertRevocationEvent, signDiscoverBody } from "./federation.js";
-import { applySuccession, type RetireKeyConnections } from "./succession-apply.js";
+import {
+  applySuccession,
+  SuccessionRefused,
+  type RetireKeyConnections,
+} from "./succession-apply.js";
 import type { TaskRouter } from "./task-routing.js";
 import { evaluateSettlementEligibility } from "./task-routing.js";
 import { REFERENCE_MIN_BONDED_SIGNAL_MICRO } from "./bond-store.js";
@@ -427,6 +431,12 @@ export interface AgentsDeps {
    * Required: optional, it would be a rotation that silently ends nothing.
    */
   retireKeyConnections: RetireKeyConnections;
+  /**
+   * Durable auth-event record (auth-events.ts) for the register door's
+   * succession refusals (#775). Required for the reason `/rotate-key`'s is:
+   * optional, a refusal stops being recorded the day a refactor drops it.
+   */
+  recordAuthEvent: (event: AuthEvent) => void;
 }
 
 /** Subset of AgentsDeps the auth middleware needs. */
@@ -1256,12 +1266,35 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       // device row on the retired key — a rotation that ended nothing, and a
       // state a second route then had to finish (#702 relay half). One
       // writer for both doors makes that state unrepresentable.
-      const { applied } = applySuccession(
-        moteDb.db,
-        motebitId,
-        succession,
-        deps.retireKeyConnections,
-      );
+      // The same writer refuses a record that would repeat the identity's
+      // key history (#775) — a registration back to a key the identity has
+      // held is refused here exactly as at /rotate-key, and recorded.
+      let applied: boolean;
+      try {
+        ({ applied } = applySuccession(
+          moteDb.db,
+          motebitId,
+          succession,
+          deps.retireKeyConnections,
+        ));
+      } catch (err) {
+        if (!(err instanceof SuccessionRefused)) throw err;
+        logger.warn("agent.key.succession_refused", {
+          motebitId,
+          caller: callerMotebitId ?? null,
+          reason: err.reason,
+        });
+        deps.recordAuthEvent({
+          kind: "agent_token_rejected",
+          method: "POST",
+          path: c.req.path,
+          // The presenter is the subject (rule 21); the master token carries none.
+          motebitId: callerMotebitId,
+          reason: `succession:${err.reason}`,
+          correlationId: c.req.header("x-correlation-id") ?? null,
+        });
+        throw new HTTPException(409, { message: err.message });
+      }
 
       logger.info("agent.key.succession_on_register", {
         motebitId,

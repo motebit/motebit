@@ -19,6 +19,7 @@ import {
   departureFrom,
   keyOnFile,
   successionAtHead,
+  SuccessionRefused,
   type RetireKeyConnections,
 } from "./succession-apply.js";
 import { readSuccessionChain } from "./identity-transparency.js";
@@ -103,7 +104,7 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
      * key history is exactly what the operator's auth-event record exists
      * to show (`services/relay/CLAUDE.md` rule 6).
      */
-    const refuse = (status: 400 | 403, reason: string, message: string): HTTPException => {
+    const refuse = (status: 400 | 403 | 409, reason: string, message: string): HTTPException => {
       logger.warn("key_rotation.refused", { motebitId, caller: caller ?? null, reason });
       recordAuthEvent({
         kind: "agent_token_rejected",
@@ -227,9 +228,9 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     // first recorded the link; refusing the retry as "too old" tells a
     // client its rotation failed when it succeeded) and key-on-file (the key
     // it departs from has by definition moved on). Head, not "any earlier
-    // row with these keys": a rotation back to a previously used key is a
-    // NEW link and must append, or the served chain stops at a key the
-    // registry has left. `applySuccession` is idempotent and scoped to the
+    // row with these keys": an earlier link re-presented is not a retry, and
+    // `applySuccession` refuses it, as it refuses any link whose new key the
+    // identity has already held (#775). `applySuccession` is idempotent and scoped to the
     // retired key, so both doors and every retry converge on one state —
     // #710's "fully applied" precheck, which had to reproduce the law to
     // decide whether to run the law, is gone with the state it modelled.
@@ -276,7 +277,19 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
       }
     }
 
-    const { applied } = applySuccession(moteDb.db, motebitId, body, retireKeyConnections);
+    // A key never enters the identity's history twice, and a recorded link
+    // that is not the head is never applied again (#775) — refused by the
+    // one writer, before it writes anything, and recorded here like every
+    // other refusal on this route. A guardian recovery re-presented after a
+    // later rotation lands here too: recovery skips the caller check, so an
+    // unrecorded refusal would be a free probe.
+    let applied: boolean;
+    try {
+      ({ applied } = applySuccession(moteDb.db, motebitId, body, retireKeyConnections));
+    } catch (err) {
+      if (err instanceof SuccessionRefused) throw refuse(409, err.reason, err.message);
+      throw err;
+    }
 
     if (applied) {
       // The old key ceased to be authoritative at the rotation moment, not
