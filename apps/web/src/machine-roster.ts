@@ -229,7 +229,21 @@ export function createWebMachineRoster(deps: WebRosterDeps): WebMachineRoster {
     if (record != null) retryUntil = Math.max(retryUntil, record.retry_until);
     return record;
   };
-  const roster = MachineRoster.gated(webRosterPorts(deps), {
+  // #799 F1 — the stored Retry-After (this tab's or another's) is read
+  // BEFORE the replica, on every load. Every acquisition (and every act)
+  // loads the replica before it repairs or presents, so a Retry-After
+  // stored earlier holds the first presentation too — never only after `due`.
+  const ports = webRosterPorts(deps);
+  const load = ports.cache.load.bind(ports.cache);
+  ports.cache.load = async () => {
+    remember(
+      await db()
+        .then((d) => loadPresentationRecord(d, deps.motebitId))
+        .catch(() => null),
+    );
+    return load();
+  };
+  const roster = MachineRoster.gated(ports, {
     selfIsHost: false,
     // R2 — only the presenting tab repairs an omission, and not while the
     // relay has asked it to wait.

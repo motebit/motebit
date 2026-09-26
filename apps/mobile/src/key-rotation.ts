@@ -7,6 +7,7 @@
 import { parseHeldRotation, rotateOrThrow } from "@motebit/surface-kit";
 import { parse as parseIdentityFile, rotate as rotateIdentityFile } from "@motebit/identity-file";
 import { hexToBytes } from "@motebit/encryption";
+import type { KeySuccessionRecord } from "@motebit/sdk";
 
 interface SecureStore {
   get(key: string): Promise<string | null>;
@@ -21,6 +22,13 @@ export interface MobileRotationDeps {
   syncUrl: string | null;
   identityFile: { load(): Promise<string | null>; save(content: string): Promise<void> };
   onCommitted: (newPublicKeyHex: string) => void;
+  /**
+   * The machine roster's commit step (machine-roster-surfaces-v1 F7):
+   * append the rotation link to the replica. Runs after the key is stored;
+   * a failure is swallowed — the key is already committed, and a rotation
+   * never fails because of the roster.
+   */
+  afterCommit?: (next: { publicKeyHex: string; record: KeySuccessionRecord }) => Promise<void>;
   reason?: string;
   fetchImpl?: typeof fetch;
 }
@@ -76,6 +84,12 @@ export async function rotateMobileKey(deps: MobileRotationDeps): Promise<{ newPu
         await deps.identityFile.save(rotated);
       }
       deps.onCommitted(publicKeyHex);
+      // After the key is stored: the link names the key now in the slot.
+      try {
+        await deps.afterCommit?.({ publicKeyHex, record });
+      } catch {
+        // See afterCommit: never fails the rotation.
+      }
     },
     ...(deps.reason !== undefined ? { reason: deps.reason } : {}),
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),

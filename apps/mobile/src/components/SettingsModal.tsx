@@ -469,10 +469,13 @@ export function SettingsModal({
               }}
               onLinkDevice={onLinkDevice}
               onClaimDevice={onClaimDevice}
+              machineRoster={app.machineRoster()?.section ?? null}
               onRotateKey={() => {
                 Alert.alert(
                   "Rotate Key",
-                  "Generate a new keypair with a signed succession record? The old key will sign over authority to the new key.",
+                  "Generate a new keypair with a signed succession record? The old key will sign over authority to the new key.\n\n" +
+                    // machine-roster-surfaces-v1 N3 — the C-1 cost, stated.
+                    "Your machines will need to be enrolled again under the new key.",
                   [
                     { text: "Cancel", style: "cancel" },
                     {

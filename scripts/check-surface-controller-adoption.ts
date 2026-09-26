@@ -84,9 +84,12 @@ const ADOPTIONS: readonly Adoption[] = [
     // fetches, Retry-After), the Web Locks (mint lock + presentation leader),
     // the cadence store wiring and the two custody doors; its IndexedDB
     // replica is `machine-roster-store.ts`, its render `ui/machines-section.ts`.
-    // Mobile (C-2b) and desktop (C-2c) join this entry.
+    // Mobile (C-2b) carries the same ports over SecureStore + the stored
+    // motebit.md, in-process save/exclusive chains, and no leader lock (one
+    // JS process); its AsyncStorage replica is `machine-roster-store.ts`, its
+    // render model `machines-render-model.ts`. Desktop (C-2c) joins this entry.
     controller: "createMachineRosterSection",
-    files: ["apps/web/src/machine-roster.ts"],
+    files: ["apps/web/src/machine-roster.ts", "apps/mobile/src/machine-roster.ts"],
     maxLines: 360,
   },
 ];

@@ -7,7 +7,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import { View, Text, TouchableOpacity, Clipboard, Linking, Alert } from "react-native";
 import { hexPublicKeyToDidKey } from "@motebit/encryption";
+import type { MachineRosterSection } from "@motebit/surface-kit";
 import { useSettingsStyles } from "./settings-shared";
+import { MachinesSection } from "./MachinesSection";
 
 export interface IdentityTabProps {
   motebitId: string;
@@ -33,6 +35,8 @@ export interface IdentityTabProps {
   onLinkDevice?: () => void;
   onClaimDevice?: () => void;
   onRotateKey?: () => void;
+  /** The Machines section (machine-roster-surfaces-v1 C-2b); null before bootstrap. */
+  machineRoster?: MachineRosterSection | null;
 }
 
 const RECOVERY_SEED_AUTOHIDE_MS = 60_000;
@@ -52,6 +56,7 @@ export function IdentityTab({
   onLinkDevice,
   onClaimDevice,
   onRotateKey,
+  machineRoster,
 }: IdentityTabProps): React.ReactElement {
   const styles = useSettingsStyles();
   const [copiedField, setCopiedField] = useState<string | null>(null);
@@ -213,6 +218,10 @@ export function IdentityTab({
                 : "Not connected"}
         </Text>
       </View>
+
+      {/* Beside the device id, under Identity — "what I am": the machines
+          this motebit runs on (machine-roster-surfaces-v1 S5). */}
+      {machineRoster != null ? <MachinesSection section={machineRoster} /> : null}
 
       {solanaAddress ? (
         <>

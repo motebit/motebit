@@ -598,6 +598,38 @@ describe("createWebMachineRoster", () => {
   });
 });
 
+describe("#799 F1 — a stored Retry-After holds the first presentation of a fresh tab", () => {
+  for (const stored of [true, false]) {
+    it(`omission repair on the first refresh ${stored ? "waits" : "(control: nothing stored) runs"}`, async () => {
+      const a = await generateKeypair();
+      const relay = new FetchRelay();
+      relay.current = hex(a);
+      relay.enr.set("x", await enrol(a, "dev-host"));
+      const db = freshDb();
+      // The replica holds an enrolment the relay omits: acquire repairs it.
+      await saveReplica(await db(), {
+        ...emptyReplica(MID),
+        enrollments: [await enrol(a, "dev-omitted")],
+      });
+      if (stored) {
+        await putPresentationRecord(await db(), MID, {
+          digest: null,
+          taken_at: 0,
+          retry_until: NOW + 60_000,
+        });
+      }
+      const t = tab(relay, a, db, new FakeLocks()); // a fresh tab: nothing in memory
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(t.isPresenter()).toBe(true);
+      await t.section.refresh();
+      if (stored) expect(relay.posts).toBe(0);
+      else expect(relay.posts).toBeGreaterThan(0);
+      t.dispose();
+    });
+  }
+});
+
 describe("F8 — an act while the relay has asked to wait", () => {
   it("is kept in IndexedDB and reported not taken; it is not sent until the wait is over", async () => {
     const a = await generateKeypair();
