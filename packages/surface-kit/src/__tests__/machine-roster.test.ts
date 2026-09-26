@@ -1421,6 +1421,56 @@ describe("#802 — a refusal for the entry's own bytes is permanent; an unknown 
     );
   });
 
+  it.each([
+    ["retired", "422"],
+    ["retired", "413"],
+    ["superseded", "422"],
+    ["superseded", "413"],
+  ] as const)(
+    "#817 F1 — an oversized enrolment whose line is %s, refused too_large (%s), is 'not counted'",
+    async (standing, mode) => {
+      const a = await generateKeypair();
+      const b = await generateKeypair();
+      const relay = new FakeRelay();
+      // Superseded: the big line was enrolled under `a`, and this device now holds `b`.
+      const m =
+        standing === "superseded"
+          ? machine(relay, b, { local: [await rotate(a, b)] })
+          : machine(relay, a);
+      await m.roster.ensureEnrolled();
+      const big = await enrol(a, "big-" + "b".repeat(5000));
+      const bigId = await hostEnrollmentId(big);
+      const extra = standing === "retired" ? [await retireEntry(a, big)] : [];
+      await m.cache.save({ ...emptyReplica(MID), enrollments: [big], retirements: extra });
+      const ports: MachineRosterPorts =
+        mode === "422"
+          ? m.ports
+          : {
+              ...m.ports,
+              presentRoster: async (s, body) =>
+                body.enrollments.some((e) => e.device_id.startsWith("big-"))
+                  ? { status: 413, body: {} }
+                  : relay.present(s, body),
+            };
+      if (mode === "422") relay.refuse.set(bigId, "too_large");
+      const acq = await new MachineRoster(ports).acquire();
+      if (acq.kind !== "acquired") throw new Error(acq.kind);
+      expect(acq.relayWillNotHold).toEqual([
+        { id: bigId, reason: "too_large", kind: "enrollment", admitted: true, counted: false },
+      ]);
+      const view = buildRosterView(acq, NOW);
+      if (view.kind !== "roster") throw new Error(view.kind);
+      expect(view.lines.some((l) => l.device_id.startsWith("big-") && l.kind === standing)).toBe(
+        true,
+      );
+      const notes = view.notes.filter((n) => n.kind === "relay-will-not-hold").map((n) => n.text);
+      expect(notes).toEqual([
+        "the relay will not hold 1 entry this device holds (too_large); kept here, not counted, not presented again",
+      ]);
+      expect(notes.join()).not.toMatch(/and counted|would be counted/);
+    },
+  );
+
   it("a permanent refusal met by an act's own presentation is persisted too, and reported with it", async () => {
     const a = await generateKeypair();
     const relay = new FakeRelay();

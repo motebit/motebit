@@ -383,7 +383,10 @@ export interface RosterAcquired {
     kind: "enrollment" | "retirement";
     /** The law admits it on its own under the resolved chain (#813 F2). */
     admitted: boolean;
-    /** An admitted ENROLMENT: a member the count includes. Retirements are never counted members. */
+    /**
+     * An admitted enrolment on an ACTIVE line: in the count (#817 F1). A
+     * retired or superseded one is not; retirements never are.
+     */
     counted: boolean;
   }>;
   /**
@@ -920,6 +923,11 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
     // set, an entry the relay now holds would be said to be one it will not.
     const holds = served != null ? await servedIdsOf(served) : null;
     const relayWillNotHold: RosterAcquired["relayWillNotHold"] = [];
+    // #817 F1 — "counted" is a STANDING, not a signature: only an enrolment
+    // on an active line is in the count. Retired or superseded ones are not.
+    const activeIds = new Set(
+      reduced.verdict.active.flatMap((m) => m.entries.map((e) => e.enrollment_id)),
+    );
     for (const i of holds == null ? [] : await this.presentationSet(reduced.verdict, replica)) {
       if (!refusedWhy.has(i.id) || holds!.has(i.id)) continue;
       // #813 F2 — "counted" only for what the law counts.
@@ -935,7 +943,7 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
         reason: refusedWhy.get(i.id)!,
         kind: i.kind,
         admitted,
-        counted: admitted && i.kind === "enrollment",
+        counted: admitted && i.kind === "enrollment" && activeIds.has(i.id),
       });
     }
 

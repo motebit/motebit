@@ -125,11 +125,12 @@ export type RosterNote =
       count: number;
       reasons: string[];
       /**
-       * `counted`: admitted enrolments (members); `rejected`: entries the law
-       * refuses, never counted; `retirement`: admitted retirements, which
-       * are acts, not members (#813 F2, round 2).
+       * `counted`: enrolments on an active line; `not-counted`: entries the
+       * law refuses, and admitted enrolments whose line is retired or
+       * superseded (#817 F1); `retirement`: admitted retirements, which are
+       * acts, not members (#813 F2, round 2).
        */
-      standing: "counted" | "rejected" | "retirement";
+      standing: "counted" | "not-counted" | "retirement";
       text: string;
     }
   | { kind: "relay-newer-key"; key: string; text: string }
@@ -475,13 +476,13 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
   // "would be counted", never "counted" (#813 round 2).
   const countShown = acq.suppressed.length === 0;
   const standingOf = (r: RosterAcquired["relayWillNotHold"][number]) =>
-    !r.admitted ? "rejected" : r.kind === "retirement" ? "retirement" : "counted";
+    r.admitted && r.kind === "retirement" ? "retirement" : r.counted ? "counted" : "not-counted";
   const kept = {
     counted: countShown ? "kept here and counted" : "kept here; would be counted",
-    rejected: "kept here, not counted",
+    "not-counted": "kept here, not counted",
     retirement: "kept here",
   } as const;
-  for (const standing of ["counted", "rejected", "retirement"] as const) {
+  for (const standing of ["counted", "not-counted", "retirement"] as const) {
     const group = acq.relayWillNotHold.filter((r) => standingOf(r) === standing);
     if (group.length === 0) continue;
     const n = group.length;
