@@ -1984,4 +1984,38 @@ export const relayMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 44,
+    name: "token_blacklist_scoped_to_identity",
+    up: (db) => {
+      // The jti blacklist was keyed by `jti` ALONE and read ignoring the
+      // identity (#776 review A). Any identity could therefore blacklist
+      // ANOTHER identity's token relay-wide through its own
+      // `/revoke-tokens`: a cross-identity denial whose socket the per-identity
+      // close pass never closed. `INSERT OR IGNORE` on the jti key also let
+      // one identity pre-plant another's jti and silently drop that
+      // identity's own later revocation. A revocation is now an act BY an
+      // identity OVER its own tokens: the key is (motebit_id, jti), and
+      // `isTokenBlacklisted(jti, motebitId)` reads both.
+      //
+      // Existing rows are kept with the identity that wrote them (the column
+      // was NOT NULL from v1, so every row names one). A row an identity
+      // wrote for another identity's jti now binds only to the writer, and
+      // stops denying the other identity's token — which is the fix. Rows
+      // live six minutes, so nothing long-lived rides on the carry-over.
+      db.exec(`
+        CREATE TABLE relay_token_blacklist_v44 (
+          motebit_id TEXT NOT NULL,
+          jti TEXT NOT NULL,
+          revoked_at TEXT DEFAULT (datetime('now')),
+          expires_at INTEGER NOT NULL,
+          PRIMARY KEY (motebit_id, jti)
+        );
+        INSERT OR IGNORE INTO relay_token_blacklist_v44 (motebit_id, jti, revoked_at, expires_at)
+          SELECT motebit_id, jti, revoked_at, expires_at FROM relay_token_blacklist;
+        DROP TABLE relay_token_blacklist;
+        ALTER TABLE relay_token_blacklist_v44 RENAME TO relay_token_blacklist;
+      `);
+    },
+  },
 ];

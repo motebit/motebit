@@ -102,6 +102,7 @@ import {
 import { listRevokedGrantIds } from "./delegation-revocations.js";
 import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
 import { identityGuardianFor, verificationKeyFor } from "./identity-keys.js";
+import type { ReconcileKeyConnections } from "./connection-ports.js";
 
 const logger = createLogger({ service: "tasks" });
 
@@ -224,6 +225,13 @@ export interface TasksDeps {
   railRegistry?: import("@motebit/settlement-rails").SettlementRailRegistry;
   /** Push adapter for waking offline mobile devices. */
   pushAdapter?: import("./push-adapter.js").PushAdapter;
+  /**
+   * The receipt heal moves the registry key — the fallback a service-mode
+   * socket was admitted under — so the sockets it no longer admits are
+   * closed after the write (#776). Required: optional, the heal would
+   * silently leave them open.
+   */
+  reconcileKeyConnections: ReconcileKeyConnections;
 }
 
 // ---------------------------------------------------------------------------
@@ -448,6 +456,8 @@ export async function handleReceiptIngestion(
     platformFeeRate: number;
     /** Maximum delegation chain depth for multi-hop settlement. Default: 10. */
     maxSettlementDepth?: number;
+    /** Closes the sockets the heal's moved registry key no longer admits (#776). */
+    reconcileKeyConnections: ReconcileKeyConnections;
   },
 ): Promise<
   | { verified: true; credential_id: string | null; already_settled?: boolean }
@@ -536,6 +546,12 @@ export async function handleReceiptIngestion(
           motebitId: receipt.motebit_id,
           reason: "embedded key is a registered device, registry reconciled",
         });
+        // The registry key is the fallback a socket with no device row was
+        // admitted under; a socket the previous value admitted is no longer
+        // admitted and is closed (#776). A holder, when the identity has
+        // one, still answers the fallback — then nothing moved and nothing
+        // closes; a device-row socket is resolved by its own row.
+        deps.reconcileKeyConnections(receipt.motebit_id);
       }
     }
   }
@@ -1854,6 +1870,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     taskQueue,
     issueCredentials,
     platformFeeRate,
+    reconcileKeyConnections: deps.reconcileKeyConnections,
   };
 
   // Capture x402 settlement proof so the task handler can link it to the task queue entry.

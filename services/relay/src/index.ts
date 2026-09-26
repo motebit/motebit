@@ -79,8 +79,20 @@ import { createRelaySchema } from "./schema.js";
 import { createRelayConfigTable, loadFreezeState, persistFreeze } from "./freeze.js";
 import { parseTokenPayloadUnsafe, verifySignedTokenForDevice } from "./auth.js";
 import { registerMiddleware, registerAuthMiddleware } from "./middleware.js";
-import { closeSocketsAuthenticatedUnder, registerWebSocketRoutes, WS_OPEN } from "./websocket.js";
+import {
+  closeSocketsAuthenticatedUnder,
+  closeSocketsAuthenticatedWith,
+  closeSocketsNoLongerAdmitted,
+  closeSocketsOfRevokedIdentity,
+  registerWebSocketRoutes,
+  WS_OPEN,
+} from "./websocket.js";
 import type { RetireKeyConnections } from "./succession-apply.js";
+import type {
+  CloseIdentityConnections,
+  CloseTokenConnections,
+  ReconcileKeyConnections,
+} from "./connection-ports.js";
 import { createAuthEventSink } from "./auth-events.js";
 import type { ConnectedDevice } from "./websocket.js";
 import { registerSyncRoutes, redactSensitiveEvents } from "./sync-routes.js";
@@ -898,18 +910,37 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     }
   };
 
-  // The one binding of "a key was retired" to the sockets it admitted (#767).
-  // Every door that retires a key a socket can have been admitted under takes
-  // it as a REQUIRED dep: `/rotate-key` and the `/agents/register` succession
-  // path through `applySuccession`, and pairing's `update-key`. A retired
+  // The one binding of "a credential ended" to the sockets it admitted (#767,
+  // #776; the door table is in `connection-ports.ts`). Every door that ends a
+  // key or an identity takes the matching port as a REQUIRED dep. A retired
   // peer leaves `connections` synchronously, so its later `onClose` makes no
   // `onPeerClosed`; its one close-time roster observation is made here.
+  const retirementHooks = { onRemoved: observeHost, logger };
   const retireKeyConnections: RetireKeyConnections = (motebitId, retiredKey) => {
-    const closed = closeSocketsAuthenticatedUnder(connections, motebitId, retiredKey, {
-      onRemoved: (mid, peer) => observeHost(mid, peer),
-      logger,
-    });
+    const closed = closeSocketsAuthenticatedUnder(
+      connections,
+      motebitId,
+      retiredKey,
+      retirementHooks,
+    );
     if (closed > 0) logger.info("ws.key_retired_sockets_closed", { motebitId, closed });
+  };
+  const reconcileKeyConnections: ReconcileKeyConnections = (motebitId) => {
+    const closed = closeSocketsNoLongerAdmitted(
+      connections,
+      motebitId,
+      keyThatVerifiesNow,
+      retirementHooks,
+    );
+    if (closed > 0) logger.info("ws.key_moved_sockets_closed", { motebitId, closed });
+  };
+  const closeIdentityConnections: CloseIdentityConnections = (motebitId) => {
+    const closed = closeSocketsOfRevokedIdentity(connections, motebitId, retirementHooks);
+    if (closed > 0) logger.info("ws.identity_revoked_sockets_closed", { motebitId, closed });
+  };
+  const closeTokenConnections: CloseTokenConnections = (motebitId, jtis) => {
+    const closed = closeSocketsAuthenticatedWith(connections, motebitId, jtis, retirementHooks);
+    if (closed > 0) logger.info("ws.token_revoked_sockets_closed", { motebitId, closed });
   };
   // Only OPEN sockets are flushed or protect a row from the sweep — a
   // closed peer left in `connections` must neither refresh last_seen_at
@@ -1146,6 +1177,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     app,
     relayIdentity,
     federationConfig,
+    reconcileKeyConnections,
+    closeIdentityConnections,
   });
 
   // --- Dispute routes (dispute-v1.md) ---
@@ -1457,7 +1490,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     verifySignedTokenForDevice: verifySignedTokenForDeviceWithFallback,
     isTokenBlacklisted,
     isAgentRevoked,
-    retireKeyConnections,
+    reconcileKeyConnections,
   });
 
   // --- State export routes (read-only agent state queries) ---
@@ -1488,6 +1521,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     relayIdentity,
     recordAuthEvent: authEvents.record,
     retireKeyConnections,
+    closeIdentityConnections,
+    closeTokenConnections,
   });
 
   // --- Browser-sandbox dispatcher-token endpoint ---
@@ -1605,6 +1640,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     isTokenBlacklisted,
     isAgentRevoked,
     retireKeyConnections,
+    closeIdentityConnections,
     recordAuthEvent: authEvents.record,
   });
 
@@ -2074,6 +2110,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     platformFeeRate,
     railRegistry,
     pushAdapter,
+    reconcileKeyConnections,
   });
 
   // --- Helper: count all connected WebSocket clients ---

@@ -26,6 +26,7 @@ import { readSuccessionChain } from "./identity-transparency.js";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
 import type { AuthEvent } from "./auth-events.js";
+import type { CloseIdentityConnections, CloseTokenConnections } from "./connection-ports.js";
 import { admitKey, identityGuardianFor, identityKey, verificationKeyFor } from "./identity-keys.js";
 
 const logger = createLogger({ service: "key-rotation" });
@@ -46,11 +47,29 @@ export interface KeyRotationDeps {
    * that silently stops ending anything the day a refactor drops the field.
    */
   retireKeyConnections: RetireKeyConnections;
+  /**
+   * Closes every socket an identity credential admitted, under any key, once
+   * `/revoke` has revoked the identity (#776). Required for the same reason.
+   */
+  closeIdentityConnections: CloseIdentityConnections;
+  /**
+   * Closes the sockets the tokens `/revoke-tokens` blacklists had already
+   * admitted (#776). Required for the same reason.
+   */
+  closeTokenConnections: CloseTokenConnections;
 }
 
 /** Initialize approval tables and register all key-rotation/revocation/approval routes. */
 export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
-  const { app, moteDb, relayIdentity, recordAuthEvent, retireKeyConnections } = deps;
+  const {
+    app,
+    moteDb,
+    relayIdentity,
+    recordAuthEvent,
+    retireKeyConnections,
+    closeIdentityConnections,
+    closeTokenConnections,
+  } = deps;
 
   // --- Approval tables (idempotent) ---
   moteDb.db.exec(`
@@ -363,17 +382,31 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
     if (callerMotebitId && callerMotebitId !== motebitId)
       throw new HTTPException(403, { message: "Cannot revoke tokens for another agent" });
-    const body = await c.req.json<{ jtis: string[] }>();
+    const body = await c.req.json<{ jtis?: unknown }>();
     if (!Array.isArray(body.jtis) || body.jtis.length === 0)
       throw new HTTPException(400, { message: "jtis must be a non-empty array" });
+    // A jti is a non-empty string (spec/auth-token-v1.md; the verifier refuses
+    // any other token). Refused before any write, so the rows written and the
+    // sockets closed are the same set of strings (#776 review B2).
+    const jtis = body.jtis as unknown[];
+    if (!jtis.every((j): j is string => typeof j === "string" && j !== ""))
+      throw new HTTPException(400, { message: "every jti must be a non-empty string" });
     const expiresAt = Date.now() + 6 * 60 * 1000;
+    // Keyed (motebit_id, jti) since v44 (#776 review A): an identity revokes
+    // only its OWN tokens. The row names the identity in the path — the
+    // caller itself, or the identity the operator acts for — and is read
+    // only for tokens whose `mid` is that identity.
     const stmt = moteDb.db.prepare(
       "INSERT OR IGNORE INTO relay_token_blacklist (jti, motebit_id, expires_at) VALUES (?, ?, ?)",
     );
-    for (const jti of body.jtis) {
+    for (const jti of jtis) {
       stmt.run(jti, motebitId, expiresAt);
     }
-    return c.json({ ok: true, revoked: body.jtis.length });
+    // A blacklisted jti is refused anew; a socket it had already admitted is
+    // ended with it (#776) — after the writes, so a refused request closes
+    // nothing. The same identity's sockets only: the rows deny nothing else.
+    closeTokenConnections(motebitId, jtis);
+    return c.json({ ok: true, revoked: jtis.length });
   });
 
   // --- Agent revocation ---
@@ -418,11 +451,18 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     // The SET clause is written out here, not imported: the writers gate
     // reads statement text, and an authority write hidden in a constant is
     // an authority write the gate cannot see.
-    moteDb.db
+    const revokedRow = moteDb.db
       .prepare(
         "UPDATE agent_registry SET revoked = 1, delisted_at = COALESCE(delisted_at, ?), endpoint_url = '', capabilities = '[]' WHERE motebit_id = ?",
       )
       .run(Date.now(), motebitId);
+    // The identity now admits no signed token (`agent_revoked`); end every
+    // socket one already admitted, under ANY of its keys (#776). Right after
+    // the write and before the awaited revocation event, so no frame from a
+    // revoked identity is acted on in that window. Only when a row was
+    // marked: with no registry row nothing is revoked, and a closed socket
+    // would simply reconnect.
+    if (revokedRow.changes > 0) closeIdentityConnections(motebitId);
     try {
       await insertRevocationEvent(moteDb.db, relayIdentity, "agent_revoked", motebitId, {
         revokedPublicKey: verificationKeyFor(moteDb.db, motebitId, agent?.public_key) ?? undefined,

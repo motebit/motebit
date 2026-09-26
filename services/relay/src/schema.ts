@@ -33,9 +33,13 @@ export function createRelaySchema(db: DatabaseDriver): {
 
   // --- Revocation callback helpers ---
 
-  function isTokenBlacklisted(jti: string, _motebitId: string): boolean {
-    const row = db.prepare("SELECT 1 FROM relay_token_blacklist WHERE jti = ?").get(jti) as
-      Record<string, unknown> | undefined;
+  // Scoped to the identity (#776 review A, migration v44): a revocation is an
+  // act by an identity over its OWN tokens, so another identity's row for the
+  // same jti never denies this one. Callers pass the token's verified `mid`.
+  function isTokenBlacklisted(jti: string, motebitId: string): boolean {
+    const row = db
+      .prepare("SELECT 1 FROM relay_token_blacklist WHERE motebit_id = ? AND jti = ?")
+      .get(motebitId, jti) as Record<string, unknown> | undefined;
     return row !== undefined;
   }
   function isAgentRevoked(motebitId: string): boolean {
