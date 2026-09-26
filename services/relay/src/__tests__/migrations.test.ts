@@ -505,3 +505,59 @@ describe("migration 37 — scrub_unredacted_conversation_sync_content", () => {
     expect(() => m37.up(db)).not.toThrow();
   });
 });
+
+describe("migration 44 — token_blacklist_scoped_to_identity (#776 review A)", () => {
+  // The native driver, as in production (rule 14). The table as v1 created
+  // it (jti-only key), rows written under that key, then the real v44 up().
+  const m44 = relayMigrations.find((m) => m.version === 44)!;
+  let ndb: MotebitDatabase;
+  beforeEach(() => {
+    ndb = createMotebitDatabase(":memory:");
+  });
+  afterEach(() => {
+    ndb.db.close();
+  });
+
+  it("keeps every existing row with the identity that wrote it, and re-keys the table by (motebit_id, jti)", () => {
+    const ndbDb = ndb.db;
+    ndbDb.exec(`CREATE TABLE relay_token_blacklist (
+      jti TEXT PRIMARY KEY,
+      motebit_id TEXT NOT NULL,
+      revoked_at TEXT DEFAULT (datetime('now')),
+      expires_at INTEGER NOT NULL
+    )`);
+    const exp = Date.now() + 60_000;
+    const put = () =>
+      ndbDb.prepare(
+        "INSERT OR IGNORE INTO relay_token_blacklist (jti, motebit_id, expires_at) VALUES (?, ?, ?)",
+      );
+    put().run("j-own", "motebit-v", exp);
+    // X planted V's jti under X — under the old key this row denied V's
+    // token relay-wide and swallowed V's own later revocation of it.
+    put().run("j-planted", "motebit-x", exp);
+    put().run("j-planted", "motebit-v", exp); // dropped by INSERT OR IGNORE on the old key
+    expect(
+      (ndbDb.prepare("SELECT COUNT(*) AS n FROM relay_token_blacklist").get() as { n: number }).n,
+    ).toBe(2);
+
+    m44.up(ndbDb);
+
+    expect(
+      ndbDb
+        .prepare(
+          "SELECT motebit_id, jti, expires_at FROM relay_token_blacklist ORDER BY jti, motebit_id",
+        )
+        .all(),
+    ).toEqual([
+      { motebit_id: "motebit-v", jti: "j-own", expires_at: exp },
+      { motebit_id: "motebit-x", jti: "j-planted", expires_at: exp },
+    ]);
+    // The planted row no longer blocks V's own revocation of the same jti.
+    put().run("j-planted", "motebit-v", exp);
+    expect(
+      ndbDb
+        .prepare("SELECT motebit_id FROM relay_token_blacklist WHERE jti = ? ORDER BY motebit_id")
+        .all("j-planted"),
+    ).toEqual([{ motebit_id: "motebit-v" }, { motebit_id: "motebit-x" }]);
+  });
+});

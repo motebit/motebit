@@ -382,21 +382,31 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
     if (callerMotebitId && callerMotebitId !== motebitId)
       throw new HTTPException(403, { message: "Cannot revoke tokens for another agent" });
-    const body = await c.req.json<{ jtis: string[] }>();
+    const body = await c.req.json<{ jtis?: unknown }>();
     if (!Array.isArray(body.jtis) || body.jtis.length === 0)
       throw new HTTPException(400, { message: "jtis must be a non-empty array" });
+    // A jti is a non-empty string (spec/auth-token-v1.md; the verifier refuses
+    // any other token). Refused before any write, so the rows written and the
+    // sockets closed are the same set of strings (#776 review B2).
+    const jtis = body.jtis as unknown[];
+    if (!jtis.every((j): j is string => typeof j === "string" && j !== ""))
+      throw new HTTPException(400, { message: "every jti must be a non-empty string" });
     const expiresAt = Date.now() + 6 * 60 * 1000;
+    // Keyed (motebit_id, jti) since v44 (#776 review A): an identity revokes
+    // only its OWN tokens. The row names the identity in the path — the
+    // caller itself, or the identity the operator acts for — and is read
+    // only for tokens whose `mid` is that identity.
     const stmt = moteDb.db.prepare(
       "INSERT OR IGNORE INTO relay_token_blacklist (jti, motebit_id, expires_at) VALUES (?, ?, ?)",
     );
-    for (const jti of body.jtis) {
+    for (const jti of jtis) {
       stmt.run(jti, motebitId, expiresAt);
     }
     // A blacklisted jti is refused anew; a socket it had already admitted is
     // ended with it (#776) — after the writes, so a refused request closes
-    // nothing.
-    closeTokenConnections(motebitId, body.jtis);
-    return c.json({ ok: true, revoked: body.jtis.length });
+    // nothing. The same identity's sockets only: the rows deny nothing else.
+    closeTokenConnections(motebitId, jtis);
+    return c.json({ ok: true, revoked: jtis.length });
   });
 
   // --- Agent revocation ---

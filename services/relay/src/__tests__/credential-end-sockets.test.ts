@@ -375,6 +375,69 @@ describe("/revoke-tokens closes the sockets the revoked token admitted", () => {
   });
 });
 
+describe("the jti blacklist is an identity's act over its OWN tokens (#776 review A)", () => {
+  // Before v44 the blacklist was keyed and read by jti alone: X's
+  // `/revoke-tokens` naming V's jti denied V's token relay-wide, while the
+  // per-identity close left V's socket open on a credential that no longer
+  // verified; and X could pre-plant V's jti so V's own revocation was dropped.
+  async function twoIdentities() {
+    const kv = await generateKeypair();
+    const kx = await generateKeypair();
+    const v = await deriveSovereignMotebitId(hex(kv));
+    const x = await deriveSovereignMotebitId(hex(kx));
+    await registerSelf(v, "laptop", kv);
+    await registerSelf(x, "desk", kx);
+    const vToken = await mintAudienceToken({ mid: v, did: "laptop", aud: "sync" }, kv.privateKey);
+    const vSock = await connect(v, `token=${vToken.token}&device_id=laptop`);
+    return { kv, kx, v, x, vToken, vSock };
+  }
+
+  async function revokeTokens(mid: string, did: string, kp: KeyPair, jtis: unknown[]) {
+    return relay.app.request(`/api/v1/agents/${mid}/revoke-tokens`, {
+      method: "POST",
+      headers: {
+        ...JSON_HEADERS,
+        Authorization: `Bearer ${await bearer(mid, did, kp, "admin:query")}`,
+      },
+      body: JSON.stringify({ jtis }),
+    });
+  }
+
+  it("X naming V's jti denies nothing of V's: V's socket stays open and V reconnects with that very token", async () => {
+    const { kx, v, x, vToken, vSock } = await twoIdentities();
+    const res = await revokeTokens(x, "desk", kx, [vToken.payload.jti]);
+    expect(res.status).toBe(200);
+    await expectStillOpen(v, vSock);
+    await connect(v, `token=${vToken.token}&device_id=laptop`);
+    expect(peers(v)).toHaveLength(2);
+  });
+
+  it("V revoking its own jti closes V's socket 4012 and refuses the token on reconnect — even after X pre-planted it", async () => {
+    const { kv, kx, v, x, vToken, vSock } = await twoIdentities();
+    // The pre-plant: X blacklists V's jti first.
+    expect((await revokeTokens(x, "desk", kx, [vToken.payload.jti])).status).toBe(200);
+    // V's own revocation of the same jti must land.
+    expect((await revokeTokens(v, "laptop", kv, [vToken.payload.jti])).status).toBe(200);
+    expect(await closeCodeOf(vSock)).toBe(WS_CLOSE_TOKEN_REVOKED);
+    expect(await refused(v, `token=${vToken.token}&device_id=laptop`)).toBe(4003);
+  });
+
+  it("a non-string jti is refused before any write (the verifier admits no token without a string jti)", async () => {
+    const k = await generateKeypair();
+    const mid = await deriveSovereignMotebitId(hex(k));
+    await registerSelf(mid, "laptop", k);
+    const res = await revokeTokens(mid, "laptop", k, [42]);
+    expect(res.status).toBe(400);
+    expect(
+      (
+        relay.moteDb.db
+          .prepare("SELECT COUNT(*) AS n FROM relay_token_blacklist WHERE motebit_id = ?")
+          .get(mid) as { n: number }
+      ).n,
+    ).toBe(0);
+  });
+});
+
 // ── Key-moving doors: per (did, key), 4010 ──
 
 describe("pairing's update-key closes per (device, key), not per key (#776 B4)", () => {
