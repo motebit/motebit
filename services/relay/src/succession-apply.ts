@@ -123,9 +123,9 @@ export class SuccessionRefused extends Error {
  *    equal to the holder is refused earlier as going nowhere; it binds a
  *    caller of `applySuccession` that did not run departure.
  *
- * Compared lowercase: spellings of one key are one key, and a history that
- * repeated a key under another spelling repeats it for every verifier that
- * decodes the hex. Device rows are not consulted — a paired device holds
+ * Compared as a verifier reads the key (`keyIdentity`, the decoded bytes):
+ * spellings of one key are one key, and a history that repeated a key under
+ * another spelling repeats it for every verifier that decodes the hex. Device rows are not consulted — a paired device holds
  * its own key, which is not the identity's history.
  */
 /**
@@ -133,8 +133,9 @@ export class SuccessionRefused extends Error {
  * canonicalization: `hexToBytes` decodes leniently (`parseInt` per pair), so
  * `"0a"`, `"a "` and `"A!"` are one byte to every verifier. A history compared
  * by spelling could hold one key twice — so compare the DECODED bytes, the way
- * the signature check reads them. An undecodable spelling (odd length) falls
- * back to its lowercase string: it names no key a verifier would accept.
+ * the signature check reads them. The decoder does not throw on string input
+ * (an odd length truncates, as it does for the verifier); the `catch` is a
+ * guard, not a path.
  */
 function keyIdentity(k: string): string {
   try {
