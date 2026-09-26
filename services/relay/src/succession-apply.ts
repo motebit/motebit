@@ -34,6 +34,7 @@
  */
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { KeySuccessionRecord } from "@motebit/encryption";
+import { bytesToHex, hexToBytes } from "@motebit/encryption";
 import {
   chainHeadOf,
   holderKeyOf,
@@ -127,6 +128,22 @@ export class SuccessionRefused extends Error {
  * decodes the hex. Device rows are not consulted — a paired device holds
  * its own key, which is not the identity's history.
  */
+/**
+ * The key a verifier would read from this spelling. Lowercasing is not
+ * canonicalization: `hexToBytes` decodes leniently (`parseInt` per pair), so
+ * `"0a"`, `"a "` and `"A!"` are one byte to every verifier. A history compared
+ * by spelling could hold one key twice — so compare the DECODED bytes, the way
+ * the signature check reads them. An undecodable spelling (odd length) falls
+ * back to its lowercase string: it names no key a verifier would accept.
+ */
+function keyIdentity(k: string): string {
+  try {
+    return bytesToHex(hexToBytes(k));
+  } catch {
+    return k.toLowerCase();
+  }
+}
+
 export function successionReuse(
   db: DatabaseDriver,
   motebitId: string,
@@ -138,20 +155,21 @@ export function successionReuse(
       "SELECT old_public_key, new_public_key FROM relay_key_successions WHERE motebit_id = ?",
     )
     .all(motebitId) as ChainHead[];
-  const oldKey = record.old_public_key.toLowerCase();
-  const newKey = record.new_public_key.toLowerCase();
+  const oldKey = keyIdentity(record.old_public_key);
+  const newKey = keyIdentity(record.new_public_key);
   if (
     links.some(
-      (l) => l.old_public_key.toLowerCase() === oldKey && l.new_public_key.toLowerCase() === newKey,
+      (l) => keyIdentity(l.old_public_key) === oldKey && keyIdentity(l.new_public_key) === newKey,
     )
   ) {
     return "replays_recorded_link";
   }
-  const headNew = successionHead(db, motebitId)?.new_public_key.toLowerCase();
+  const head = successionHead(db, motebitId);
+  const headNew = head ? keyIdentity(head.new_public_key) : undefined;
   if (
     oldKey !== headNew &&
     links.some(
-      (l) => l.old_public_key.toLowerCase() === oldKey || l.new_public_key.toLowerCase() === oldKey,
+      (l) => keyIdentity(l.old_public_key) === oldKey || keyIdentity(l.new_public_key) === oldKey,
     )
   ) {
     return "departs_from_retired_key";
@@ -162,11 +180,11 @@ export function successionReuse(
   // through the device departure rung), repeats a key on its own.
   const history = new Set<string>([oldKey]);
   for (const l of links) {
-    history.add(l.old_public_key.toLowerCase());
-    history.add(l.new_public_key.toLowerCase());
+    history.add(keyIdentity(l.old_public_key));
+    history.add(keyIdentity(l.new_public_key));
   }
   for (const k of [holderKeyOf(db, motebitId), registryKeyOf(db, motebitId)]) {
-    if (k != null) history.add(k.toLowerCase());
+    if (k != null && k !== "") history.add(keyIdentity(k));
   }
   return history.has(newKey) ? "reuses_key" : null;
 }

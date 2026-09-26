@@ -1534,6 +1534,108 @@ describe("a recorded rotation ends the old key here", () => {
     expect(registryKey(mid)).toBe(hex(other));
   });
 
+  // Lowercasing is not canonicalization: `hexToBytes` decodes leniently, so a
+  // legacy chain row may spell a key in a form only the verifier recognises
+  // (#782 round 1). These build that legacy state directly — no current door
+  // can write it (`admitKey`), and production holds none (2026-09-25: 0
+  // successions, 0 non-canonical device or registry keys).
+  const signAs = async (
+    oldKp: KeyPair,
+    oldSpelling: string,
+    newKp: KeyPair,
+    newSpelling: string,
+  ) => {
+    const timestamp = Date.now();
+    const suite = "motebit-jcs-ed25519-hex-v1";
+    const msg = new TextEncoder().encode(
+      canonicalJson({ old_public_key: oldSpelling, new_public_key: newSpelling, timestamp, suite }),
+    );
+    return {
+      old_public_key: oldSpelling,
+      new_public_key: newSpelling,
+      timestamp,
+      suite,
+      old_key_signature: bytesToHex(await ed25519Sign(msg, oldKp.privateKey)),
+      new_key_signature: bytesToHex(await ed25519Sign(msg, newKp.privateKey)),
+    };
+  };
+  const insertLegacyLink = (mid: string, oldKey: string, newKey: string) =>
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature, recovery, guardian_signature) VALUES (?, ?, ?, ?, NULL, 'x', 'x', 0, NULL)",
+      )
+      .run(mid, oldKey, newKey, Date.now());
+  /** A key whose hex has a '0' opening some byte, and a lenient re-spelling of it ("0a" → "a "). */
+  const keyWithLenientSpelling = async (): Promise<{ kp: KeyPair; alt: string }> => {
+    for (;;) {
+      const kp = await generateKeypair();
+      const h = hex(kp);
+      for (let i = 0; i < h.length; i += 2) {
+        if (h[i] === "0") return { kp, alt: h.slice(0, i) + h[i + 1] + " " + h.slice(i + 2) };
+      }
+    }
+  };
+
+  it("a key spelled leniently in a legacy link is still that key: rotating to its canonical spelling is refused", async () => {
+    const mid = crypto.randomUUID();
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const { kp: k, alt } = await keyWithLenientSpelling();
+    expect(alt).not.toBe(hex(k));
+    expect(alt.toLowerCase()).not.toBe(hex(k)); // lowercasing alone cannot see it
+    const reg = await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify({
+        motebit_id: mid,
+        endpoint_url: "http://localhost:9999/mcp",
+        capabilities: [],
+        public_key: hex(b),
+      }),
+    });
+    expect(reg.status).toBe(200);
+    insertLegacyLink(mid, hex(a), alt);
+    insertLegacyLink(mid, alt, hex(b));
+    const toK = await signKeySuccession(b.privateKey, k.privateKey, k.publicKey, b.publicKey);
+    const res = await relay.app.request(`/api/v1/agents/${mid}/rotate-key`, {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify(toK),
+    });
+    expect(res.status).toBe(409);
+    expect(successions(mid)).toBe(2);
+  });
+
+  it("departing from a retired key spelled in UPPERCASE is still departing from a retired key", async () => {
+    const mid = crypto.randomUUID();
+    const k = await generateKeypair();
+    const b = await generateKeypair();
+    const c = await generateKeypair();
+    insertLegacyLink(mid, hex(k), hex(b));
+    const reg = await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify({
+        motebit_id: mid,
+        endpoint_url: "http://localhost:9999/mcp",
+        capabilities: [],
+      }),
+    });
+    expect(reg.status).toBe(200);
+    relay.moteDb.db
+      .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
+      .run(hex(k).toUpperCase(), mid);
+    relay.moteDb.db.prepare("DELETE FROM identity_keys WHERE motebit_id = ?").run(mid);
+    const fork = await signAs(k, hex(k).toUpperCase(), c, hex(c));
+    const res = await relay.app.request(`/api/v1/agents/${mid}/rotate-key`, {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify(fork),
+    });
+    expect(res.status).toBe(409);
+    expect(successions(mid)).toBe(1);
+  });
+
   it("refuses a link whose two sides are one key spelled twice (UPPER(K) → k, from a legacy device row)", async () => {
     // A legacy device row stored non-canonically (main's older case-folding
     // guard admitted these; `admitKey` stops new ones). With no holder, no
