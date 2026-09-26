@@ -525,7 +525,7 @@ describe("F8 — the presentation cadence", () => {
   it("record: Retry-After defers; a full take stamps the digest; a partial take or a refusal changes nothing", async () => {
     const a = await generateKeypair();
     const replica = { ...emptyReplica(LEGACY_MID), enrollments: [await enrol(a, "d")] };
-    const empty = { taken: 0, notTaken: [], rosterFull: [] };
+    const empty = { taken: 0, notTaken: [], rosterFull: [], willNotHold: [] };
     expect(await nextPresentationRecord(null, { ...empty, retryAfterMs: 5 }, replica, NOW)).toEqual(
       {
         digest: null,
@@ -547,6 +547,16 @@ describe("F8 — the presentation cadence", () => {
       ),
     ).toBeNull();
     expect(await nextPresentationRecord(null, empty, null, NOW)).toBeNull();
+    // #802 — a permanent refusal leaves nothing to retry: the take is full, the digest stamped,
+    // so the cadence does not re-present what the relay will never hold.
+    expect(
+      await nextPresentationRecord(
+        null,
+        { ...empty, taken: 1, willNotHold: [{ id: "x", reason: "too_large" }] },
+        replica,
+        NOW,
+      ),
+    ).toEqual({ digest: await replicaDigest(replica), taken_at: NOW, retry_until: 0 });
     expect(
       await nextPresentationRecord(
         null,
@@ -560,7 +570,7 @@ describe("F8 — the presentation cadence", () => {
   it("#801 F1 write: an unbounded Retry-After is stored as at most now + MAX_RETRY_AFTER_MS", async () => {
     const a = await generateKeypair();
     const replica = { ...emptyReplica(LEGACY_MID), enrollments: [await enrol(a, "d")] };
-    const empty = { taken: 0, notTaken: [], rosterFull: [] };
+    const empty = { taken: 0, notTaken: [], rosterFull: [], willNotHold: [] };
     const huge = await nextPresentationRecord(
       null,
       { ...empty, retryAfterMs: 999_999_999 * 1000 },
@@ -905,7 +915,7 @@ describe("S6 — createMachineRosterSection", () => {
 });
 
 describe("notices — every outcome has words", () => {
-  const presented = { taken: 1, notTaken: [], rosterFull: [] };
+  const presented = { taken: 1, notTaken: [], rosterFull: [], willNotHold: [] };
   it("retire", () => {
     expect(retireNotice({ kind: "no-key" }).text).toMatch(/no identity key/);
     expect(
@@ -950,6 +960,35 @@ describe("notices — every outcome has words", () => {
         presented: { ...presented, rosterFull: ["r"] },
       }).text,
     ).toMatch(/1 entry permanently/);
+    // #802 — a permanent refusal is never promised a second presentation.
+    const wont = retireNotice({
+      kind: "retired",
+      deviceId: "d",
+      retirementIds: ["r"],
+      advisory: false,
+      presented: { ...presented, taken: 0, willNotHold: [{ id: "r", reason: "too_large" }] },
+    }).text;
+    expect(wont).toMatch(
+      /The relay will not hold 1 entry: too large; kept here, not presented again\./,
+    );
+    expect(wont).not.toMatch(/presented again\.$|and presented again/);
+    // Both at once: each said, neither swallowed by the other.
+    const both = retireNotice({
+      kind: "retired",
+      deviceId: "d",
+      retirementIds: ["r"],
+      advisory: false,
+      presented: {
+        ...presented,
+        notTaken: [{ id: "q", reason: "status 500" }],
+        willNotHold: [
+          { id: "r", reason: "malformed" },
+          { id: "s", reason: "bad_signature" },
+        ],
+      },
+    }).text;
+    expect(both).toMatch(/Not yet taken by the relay; kept here and presented again\./);
+    expect(both).toMatch(/will not hold 2 entries: malformed, bad signature;/);
     expect(retireNotice({ kind: "already-retired", deviceId: "d" }).tone).toBe("done");
     expect(retireNotice({ kind: "not-enrolled", deviceId: "d", socketOpen: true }).text).toMatch(
       /socket is open/,
@@ -972,5 +1011,19 @@ describe("notices — every outcome has words", () => {
     expect(needsForceText("unplaced-lines", "d")).toMatch(/cannot place/);
     expect(needsForceText("all-superseded", "d", "ab".repeat(32))).toMatch(/abababab/);
     expect(needsForceText("all-superseded", "d")).not.toMatch(/\(/);
+    // #802 — refused at mint time; an oversized id is not echoed whole.
+    const big = enrollNotice({
+      kind: "entry-too-large",
+      deviceId: "z".repeat(5000),
+      bytes: 5321,
+      limit: 4096,
+    });
+    expect(big.tone).toBe("error");
+    expect(big.text).toBe(
+      `Not enrolled: the entry for ${"z".repeat(32)}… (5000 characters) would be 5321 bytes, and a relay holds at most 4096. Nothing was kept.`,
+    );
+    expect(
+      enrollNotice({ kind: "entry-too-large", deviceId: "vps", bytes: 5000, limit: 4096 }).text,
+    ).toMatch(/entry for vps would be/);
   });
 });

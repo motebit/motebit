@@ -34,6 +34,7 @@ import type {
 import type { MachineRosterReplica } from "./machine-roster-replica.js";
 import { classifyHeldKey, heldKeyText, type HeldKeyClass } from "./machine-roster-held-key.js";
 import { buildRosterView, type MachineRosterView } from "./machine-roster-view.js";
+import { ENTRY_REFUSAL_TEXT, type RelayEntryRefusalReason } from "./machine-roster-refusals.js";
 
 // ── Presentation cadence (F8) ────────────────────────────────────────
 
@@ -231,14 +232,40 @@ export function rosterLineActions(
 
 const entries = (n: number): string => `${n} ${n === 1 ? "entry" : "entries"}`;
 
-function notTakenText(p: PresentReport): string {
-  if (p.retryAfterMs != null) return " The relay asked to wait; kept here and presented later.";
-  if (p.notTaken.length > 0) return " Not yet taken by the relay; kept here and presented again.";
-  if (p.rosterFull.length > 0) {
-    return ` The relay refused ${entries(p.rosterFull.length)} permanently (roster full).`;
-  }
-  return "";
+/** The distinct reasons of a set of permanent refusals, in words. */
+function refusalReasonsText(reasons: ReadonlyArray<string>): string {
+  return [...new Set(reasons)]
+    .map((r) =>
+      Object.prototype.hasOwnProperty.call(ENTRY_REFUSAL_TEXT, r)
+        ? ENTRY_REFUSAL_TEXT[r as RelayEntryRefusalReason]
+        : r,
+    )
+    .join(", ");
 }
+
+/**
+ * What the relay did with a presentation. Only an entry that may yet be
+ * taken is "presented again"; one the relay refused for its own bytes is
+ * said to be one the relay will not hold (#802).
+ */
+function notTakenText(p: PresentReport): string {
+  let out = "";
+  if (p.retryAfterMs != null) out += " The relay asked to wait; kept here and presented later.";
+  else if (p.notTaken.length > 0) {
+    out += " Not yet taken by the relay; kept here and presented again.";
+  }
+  if (p.rosterFull.length > 0) {
+    out += ` The relay refused ${entries(p.rosterFull.length)} permanently (roster full).`;
+  }
+  if (p.willNotHold.length > 0) {
+    out += ` The relay will not hold ${entries(p.willNotHold.length)}: ${refusalReasonsText(p.willNotHold.map((w) => w.reason))}; kept here, not presented again.`;
+  }
+  return out;
+}
+
+/** A device id short enough to say: an oversized one is what `entry-too-large` is about. */
+const shortId = (id: string): string =>
+  id.length <= 40 ? id : `${id.slice(0, 32)}… (${id.length} characters)`;
 
 type NothingSigned = Extract<
   RetireOutcome | EnrollOutcome | HeldKeyRefusal,
@@ -331,6 +358,11 @@ export function enrollNotice(out: EnrollOutcome | HeldKeyRefusal): Notice {
       return { tone: "done", text: `${out.deviceId} is already active on the current key.` };
     case "needs-force":
       return { tone: "error", text: needsForceText(out.why, out.deviceId, out.key) };
+    case "entry-too-large":
+      return {
+        tone: "error",
+        text: `Not enrolled: the entry for ${shortId(out.deviceId)} would be ${out.bytes} bytes, and a relay holds at most ${out.limit}. Nothing was kept.`,
+      };
   }
 }
 
