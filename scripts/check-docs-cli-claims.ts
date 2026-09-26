@@ -88,6 +88,11 @@ function findFiles(dir: string, predicate: (p: string) => boolean): string[] {
     for (const e of entries) {
       if (SKIP_DIRS.has(e.name)) continue;
       const full = path.join(d, e.name);
+      // An agent's isolated worktree is a second copy of the repo, holding
+      // another branch's unmerged docs; from the primary checkout it read as
+      // this branch's claims. Matched RELATIVE to the repo root, so a checkout
+      // that is itself a worktree still scans its own tree.
+      if (path.relative(REPO_ROOT, full) === path.join(".claude", "worktrees")) continue;
       if (e.isDirectory()) walk(full);
       else if (predicate(full)) out.push(full);
     }

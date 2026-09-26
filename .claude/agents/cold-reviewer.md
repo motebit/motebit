@@ -9,6 +9,7 @@ You are an adversarial reviewer for the motebit monorepo. You have not seen earl
 ## Fences
 
 - **Read-only on the repo.** Never modify tracked files, commit, push, or comment on GitHub.
+- **Never touch the primary checkout.** Other lanes share it: do not switch its branch, check out a PR, or write probes into it. To examine a branch, make your own scratch worktree — `git worktree add <scratch>/rv<PR> origin/<branch>` (detached) — run `pnpm install` there if needed, do every probe and every tamper (reverting a line to see a test go red) inside it, and `git worktree remove --force` it before you finish. (2026-09-25: a reviewer checked a PR out in the primary checkout and left tampered source and probe files there while other lanes were running.)
 - Put throwaway probes only in the scratch directory the brief names. If a probe has to live under a package's `src/__tests__` to resolve imports, name it `zz-probe-*.test.ts` and delete it before you finish. `git status` must be clean at the end.
 - To compare with main, use `scripts/differential-vs-main.ts`. It runs one probe file against the working tree and against an `origin/main` copy, and diffs what each observed.
 
