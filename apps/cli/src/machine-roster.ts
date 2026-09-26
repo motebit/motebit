@@ -25,7 +25,7 @@ import {
 } from "@motebit/surface-kit";
 import type { KeySuccessionRecord } from "@motebit/sdk";
 import { CONFIG_DIR, loadFullConfig, type FullConfig } from "./config.js";
-import { loadReplica, saveReplica } from "./machine-roster-file.js";
+import { loadReplica, saveReplica, withMintLock } from "./machine-roster-file.js";
 import { hasPendingRotation } from "./pending-rotation.js";
 import { signedRelayHeaders } from "./relay-registration.js";
 
@@ -172,6 +172,7 @@ export function cliRosterPorts(ctx: CliRosterContext): MachineRosterPorts {
     cache: {
       load: () => Promise.resolve(loadReplica(ctx.motebitId, dir)),
       save: (replica) => Promise.resolve(saveReplica(replica, dir)),
+      exclusive: (fn) => withMintLock(fn, dir),
     },
     rotationInFlight: () => Promise.resolve(hasPendingRotation(dir)),
     storedPublicKeyHex: () => {

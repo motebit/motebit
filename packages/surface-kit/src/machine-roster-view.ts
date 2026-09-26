@@ -144,6 +144,14 @@ export type MachineRosterView =
       this_device: string;
       /** `null` whenever C6.10 forbids a quantifier. */
       claim: RosterClaim | null;
+      /**
+       * What to say when there are no lines — owned here so no surface can
+       * say "no machine has enrolled" over a verdict that cannot know it.
+       * `none-enrolled` only over an ok, unsuppressed verdict (`claim` set);
+       * otherwise `nothing-held`: this device holds nothing, and the roster
+       * could not be confirmed. `null` when there are lines.
+       */
+      empty: { kind: "none-enrolled" | "nothing-held"; text: string } | null;
       suppressed: SuppressionReason[];
       lines: RosterLine[];
       notes: RosterNote[];
@@ -407,7 +415,9 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
     });
   }
   // 8. Two successive reads, and still only "may".
-  const before = new Set(acq.previousAmbiguous);
+  // Only over a read that happened: with no GET the replica's pairs are the
+  // previous read's, and "two successive reads" would be one read twice.
+  const before = new Set(served != null ? acq.previousAmbiguous : []);
   for (const p of acq.replica.ambiguous.pairs) {
     if (!before.has(p)) continue;
     const [device_id, key] = JSON.parse(p) as [string, string];
@@ -465,6 +475,15 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
     head: { public_key: head, fingerprint: keyFingerprint(head) },
     this_device: me,
     claim,
+    empty:
+      lines.length > 0
+        ? null
+        : claim != null
+          ? { kind: "none-enrolled", text: "no machine has enrolled yet" }
+          : {
+              kind: "nothing-held",
+              text: "nothing is held on this device, and the roster could not be confirmed",
+            },
     suppressed: acq.suppressed,
     lines,
     notes,
