@@ -329,7 +329,14 @@ function discoverSignedTypes(): Map<string, string> {
         if (m) {
           name = m[1] ?? null;
           open = true;
-        } else if (open && name && /signature\??\s*:/.test(line)) {
+        } else if (
+          open &&
+          name &&
+          // A doc-comment sentence ("…new-key signature: the holder…") is
+          // prose, not a field; only a declaration line can make a type signed.
+          !/^\s*(\*|\/\/|\/\*)/.test(line) &&
+          /signature\??\s*:/.test(line)
+        ) {
           // Substring (not \b): catches `signature`, `issuer_signature`,
           // `skill_signature`, … — every field whose name ends in `signature`.
           if (!found.has(name)) found.set(name, rel);

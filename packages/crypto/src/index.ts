@@ -2671,6 +2671,7 @@ export async function verify(artifact: unknown, options?: VerifyOptions): Promis
 export * from "./signing.js";
 export * from "./artifacts.js";
 export * from "./host-roster.js";
+export * from "./roster-key-chain.js";
 export {
   signVerifiableCredential,
   verifyVerifiableCredential,

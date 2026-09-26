@@ -207,7 +207,12 @@ const ALLOWED_EXTENSIONS = new Set([".md", ".mdx", ".ts", ".tsx"]);
 function walk(dir: string, out: string[]): void {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
-    if (EXCLUDED_PATTERNS.some((p) => p.test(full))) continue;
+    // Match against the path RELATIVE to the repo root: when this checkout is
+    // itself an agent worktree, every absolute path contains
+    // `/.claude/worktrees/`, and matching the absolute path excluded the whole
+    // repo — the gate scanned nothing and passed.
+    const rel = "/" + path.relative(REPO_ROOT, full);
+    if (EXCLUDED_PATTERNS.some((p) => p.test(rel))) continue;
     if (entry.isDirectory()) {
       walk(full, out);
     } else if (entry.isFile() && ALLOWED_EXTENSIONS.has(path.extname(entry.name))) {
