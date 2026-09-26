@@ -332,3 +332,53 @@ describe("R21 option (a) — `motebit rotate` captures BEFORE it sends the rotat
     expect(hook).toBeGreaterThan(rotate);
   });
 });
+
+describe("F (#786) — the CLI's words for lines this device cannot place", () => {
+  it("retire: unplaceable lines are named, never 'never enrolled' or 'not on this roster'", () => {
+    const out = describeRetire({ kind: "unplaced-lines", deviceId: "vps", count: 2 });
+    const text = out.lines.join("\n");
+    expect(out.ok).toBe(false);
+    expect(text).toMatch(/vps has 2 enrolments under keys this device cannot place in its chain/);
+    expect(text).toMatch(/nothing is retirable from here/);
+    expect(text).not.toMatch(/never enrolled|not on this roster|nothing to retire\./);
+  });
+
+  it("retire: the no-enrolment wordings are conditioned on what this device can see", () => {
+    expect(describeRetire({ kind: "not-enrolled", deviceId: "t" }).lines[0]).toMatch(
+      /this device can see no enrolment for it/,
+    );
+    expect(describeRetire({ kind: "unknown-device", deviceId: "t" }).lines[0]).toMatch(
+      /on the roster this device can see/,
+    );
+  });
+
+  it("enroll: unplaceable lines are not 'no line'", () => {
+    const out = describeEnroll({
+      kind: "needs-force",
+      deviceId: "vps",
+      why: "unplaced-lines",
+      count: 1,
+    });
+    expect(out.lines[0]).toMatch(/vps has 1 enrolment under keys this device cannot place/);
+    expect(out.lines[0]).not.toMatch(/no line/);
+    expect(
+      describeEnroll({ kind: "needs-force", deviceId: "x", why: "no-such-line" }).lines[0],
+    ).toMatch(/this device can see no line for x/);
+  });
+
+  it("after `motebit rotate`: no daemon wording", () => {
+    const p = { taken: 1, notTaken: [], rosterFull: [] };
+    const retired = describeEnsureOutcome({ kind: "retired", presented: p }, "vps", "rotate");
+    expect(retired).toMatch(/not enrolled under the new key/);
+    expect(retired).not.toMatch(/running|daemon/);
+    const unknown = describeEnsureOutcome(
+      { kind: "unknown", why: "fetch-failed", status: "none", detail: "down" },
+      "vps",
+      "rotate",
+    );
+    expect(unknown).toMatch(
+      /not updated after the rotation — down; the rotation itself is complete/,
+    );
+    expect(unknown).not.toMatch(/daemon|this start/);
+  });
+});

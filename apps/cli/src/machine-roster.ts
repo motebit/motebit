@@ -215,12 +215,17 @@ export function remedyText(remedy: RosterRemedy): string {
  * The one line a host start says about its roster line — or nothing, when
  * nothing needs saying (calm: an active line re-presented is not news).
  */
-export function describeEnsureOutcome(out: EnsureEnrolledOutcome, deviceId: string): string | null {
+export function describeEnsureOutcome(
+  out: EnsureEnrolledOutcome,
+  deviceId: string,
+  context: "start" | "rotate" = "start",
+): string | null {
+  const rotate = context === "rotate";
   const notTaken = (p: { notTaken: unknown[]; rosterFull: string[] }): string =>
     p.rosterFull.length > 0
       ? ` (the relay's roster is full for ${p.rosterFull.length} entr${p.rosterFull.length === 1 ? "y" : "ies"}; not retried)`
       : p.notTaken.length > 0
-        ? ` (${p.notTaken.length} not taken by the relay; presented again next start)`
+        ? ` (${p.notTaken.length} not taken by the relay; presented again ${rotate ? "at the next start" : "next start"})`
         : "";
   switch (out.kind) {
     case "no-key":
@@ -232,13 +237,17 @@ export function describeEnsureOutcome(out: EnsureEnrolledOutcome, deviceId: stri
     case "minted":
       return `Machine roster: enrolled this machine (${out.enrollmentId.slice(0, 12)}…)${notTaken(out.presented)}`;
     case "retired":
-      return `Machine roster: this machine is retired from the roster but running — \`motebit machines enroll ${deviceId}\` to rejoin, or rotate the key if the retirement was not yours`;
+      return rotate
+        ? `Machine roster: this machine is retired from the roster, so it was not enrolled under the new key — \`motebit machines enroll ${deviceId}\` to rejoin`
+        : `Machine roster: this machine is retired from the roster but running — \`motebit machines enroll ${deviceId}\` to rejoin, or rotate the key if the retirement was not yours`;
     case "superseded":
       return `Machine roster: this machine's line is on a superseded key and not covered — \`motebit machines enroll ${deviceId}\` to enrol it under the current key (a rotation re-enrols only a line this machine minted itself)`;
     case "unplaced":
       return `Machine roster: not enrolled — this machine has lines this device cannot place in its key chain; if it should host, \`motebit machines enroll ${deviceId}\``;
     case "unknown":
-      return `Machine roster: not updated this start — ${out.detail}; the daemon runs regardless`;
+      return rotate
+        ? `Machine roster: not updated after the rotation — ${out.detail}; the rotation itself is complete`
+        : `Machine roster: not updated this start — ${out.detail}; the daemon runs regardless`;
     case "refused":
       return `Machine roster: no roster — ${remedyText(out.remedy)}`;
   }

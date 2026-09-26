@@ -332,6 +332,33 @@ export function mayAutoMint(acq: RosterAcquired): boolean {
 }
 
 /**
+ * Per device: its enrolments in the reduced input that the verdict refused
+ * as `untrusted_key` — signed by a key this device cannot place in its
+ * chain (older or newer). Such a device HAS enrolled, as far as anyone can
+ * tell from here; it is never "not in the roster", "never enrolled" or
+ * "has no line" (#786 decisive round, F). Junk copies (malformed, bad
+ * signature, another motebit) are not enrolments of this motebit and are
+ * not counted.
+ */
+export function unplaceableEnrollments(
+  verdict: HostRosterVerdict,
+  index: ReadonlyArray<{ id: string; device_id: string; public_key: string }>,
+): Map<string, { count: number; key: string }> {
+  const untrusted = new Set(
+    verdict.rejected
+      .filter((r) => r.kind === "enrollment" && r.reason === "untrusted_key" && r.id != null)
+      .map((r) => r.id!),
+  );
+  const out = new Map<string, { count: number; key: string }>();
+  for (const e of index) {
+    if (!untrusted.has(e.id)) continue;
+    const prev = out.get(e.device_id);
+    out.set(e.device_id, { count: (prev?.count ?? 0) + 1, key: prev?.key ?? e.public_key });
+  }
+  return out;
+}
+
+/**
  * Rule 2: enrolments naming `deviceId` in the reduced input that the
  * verdict could not place (any rejection: an older key this surface
  * cannot place, a junk copy). While any exists, "no line" is not a fact
@@ -401,13 +428,21 @@ export type RetireOutcome =
       presented: PresentReport;
     }
   | { kind: "already-retired"; deviceId: string }
-  /** Connected but never enrolled — nothing to retire (C4). */
+  /** Connected, and no enrolment this device can see (placeable or not) — nothing to retire (C4). */
   | { kind: "not-enrolled"; deviceId: string }
+  /**
+   * Its only enrolments are under keys this device cannot place in its
+   * chain: it HAS enrolled, but nothing is retirable from here until the
+   * chain is refreshed.
+   */
+  | { kind: "unplaced-lines"; deviceId: string; count: number }
   | { kind: "unknown-device"; deviceId: string };
 
 export type EnrollRefusal =
   /** R17a — no line, and not this device's own id: a typo would be a permanently unreached active line. */
   | "no-such-line"
+  /** Its only enrolments are under keys this device cannot place: not "no line" — refresh the chain first. */
+  | "unplaced-lines"
   /** R17b — every line superseded: it cannot hold the head key (R24: never this device's own id). */
   | "all-superseded"
   /** R17c — liveness shows it bound under a device key: a device linked without the identity key. */
@@ -418,7 +453,7 @@ export type EnrollOutcome =
   | { kind: "refused"; reason: RosterRefusalReason; detail: string; remedy: RosterRemedy }
   | { kind: "unreadable"; detail: string }
   | { kind: "already-active"; deviceId: string }
-  | { kind: "needs-force"; deviceId: string; why: EnrollRefusal }
+  | { kind: "needs-force"; deviceId: string; why: EnrollRefusal; count?: number }
   | { kind: "enrolled"; deviceId: string; enrollmentId: string; presented: PresentReport };
 
 export type RotationHookOutcome =
@@ -758,6 +793,8 @@ export class MachineRoster {
       if (v.retired.some((m) => m.device_id === deviceId)) {
         return { kind: "already-retired", deviceId };
       }
+      const unplaced = unplaceableEnrollments(v, acq.enrollmentIndex).get(deviceId);
+      if (unplaced) return { kind: "unplaced-lines", deviceId, count: unplaced.count };
       const connected =
         acq.served?.liveness.rows.some((r) => r.device_id === deviceId) === true ||
         acq.served?.liveness.live_unenrolled.some((r) => r.device_id === deviceId) === true;
@@ -796,7 +833,12 @@ export class MachineRoster {
     if (status === "active") return { kind: "already-active", deviceId };
     const own = deviceId === acq.deviceId;
     if (opts.force !== true) {
-      if (status === "none" && !own) return { kind: "needs-force", deviceId, why: "no-such-line" };
+      if (status === "none" && !own) {
+        const unplaced = unplaceableEnrollments(acq.verdict, acq.enrollmentIndex).get(deviceId);
+        return unplaced
+          ? { kind: "needs-force", deviceId, why: "unplaced-lines", count: unplaced.count }
+          : { kind: "needs-force", deviceId, why: "no-such-line" };
+      }
       // R24 — this device's own signer holds the head key by construction.
       if (status === "superseded" && !own) {
         return { kind: "needs-force", deviceId, why: "all-superseded" };

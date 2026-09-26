@@ -87,7 +87,7 @@ export async function rosterHookAfterRotate(opts: {
       ].join("\n");
     }
     if (out.decided.kind === "active") return null;
-    const line = describeEnsureOutcome(out.decided, config.device_id);
+    const line = describeEnsureOutcome(out.decided, config.device_id, "rotate");
     return line == null ? null : `  ${line}`;
   } catch (err) {
     return `  Machine roster: not updated after the rotation (${err instanceof Error ? err.message : String(err)})`;

@@ -38,6 +38,7 @@ export {
   parseServedRoster,
   mayMint,
   statusOf,
+  unplaceableEnrollments,
   ROSTER_CHUNK_SIZE,
 } from "./machine-roster.js";
 export type {

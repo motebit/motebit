@@ -25,6 +25,7 @@
  *      suppressed universal claims.
  */
 import type { RosterChainAncestry } from "@motebit/encryption";
+import { unplaceableEnrollments } from "./machine-roster.js";
 import type {
   RosterAcquired,
   RosterAcquisition,
@@ -305,6 +306,10 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
 
   // 2–5. What is left, by precedence.
   const hasLine = new Set([...v.active, ...v.retired, ...v.superseded].map((m) => m.device_id));
+  // Devices whose only enrolments are under keys this device cannot place:
+  // they HAVE enrolled — never "not in the roster" (#786 F).
+  const unplaceable = unplaceableEnrollments(v, acq.enrollmentIndex);
+  const enrolledSomehow = (d: string): boolean => hasLine.has(d) || unplaceable.has(d);
   rows.forEach((r, i) => {
     if (consumed.has(i)) return;
     const base = {
@@ -329,11 +334,19 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
         ...base,
         text: `${r.device_id} — a linked device without the identity key (${kf}…)`,
       });
-    } else if (hasLine.has(r.device_id) && !chain.has(r.bound_under)) {
+    } else if (enrolledSomehow(r.device_id) && !chain.has(r.bound_under)) {
       lines.push({
         kind: "unplaced-key-socket",
         ...base,
         text: `${r.device_id} — connected under a key this device cannot place in this motebit's chain (${kf}…)`,
+      });
+    } else if (!hasLine.has(r.device_id) && unplaceable.has(r.device_id)) {
+      // Connected under a key on the chain, but enrolled only under keys it
+      // cannot place: its line exists, this device just cannot read it.
+      lines.push({
+        kind: "unplaced-key-socket",
+        ...base,
+        text: `${r.device_id} — connected; its enrolments are under keys this device cannot place in its chain, so its line cannot be read from here`,
       });
     } else {
       lines.push({
@@ -500,12 +513,19 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
               kind: "none-standing",
               text: "no machine is enrolled; retirements are held for enrolments this device has not seen",
             }
-          : claim != null
+          : claim != null && !v.rejected.some((r) => r.kind === "enrollment")
             ? { kind: "none-enrolled", text: "no machine has enrolled yet" }
-            : {
-                kind: "nothing-held",
-                text: "nothing is held on this device, and the roster could not be confirmed",
-              },
+            : claim != null
+              ? {
+                  // Refused copies exist (junk, or another motebit's): no
+                  // enrolment this device can verify — not "none ever".
+                  kind: "none-standing",
+                  text: "no machine is enrolled that this device can verify",
+                }
+              : {
+                  kind: "nothing-held",
+                  text: "nothing is held on this device, and the roster could not be confirmed",
+                },
     suppressed: acq.suppressed,
     lines,
     notes,
