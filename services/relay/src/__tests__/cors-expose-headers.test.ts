@@ -13,6 +13,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 import { CORS_EXPOSED_RESPONSE_HEADERS } from "../middleware.js";
+import { RateLimitError } from "../errors.js";
 
 const ORIGIN = "https://motebit.com";
 const ROSTER = "/api/v1/agents/019a0000-0000-7000-8000-000000000001/roster";
@@ -65,6 +66,22 @@ describe("CORS: headers a browser client reads are exposed", () => {
     const list = exposed(res);
     for (const h of CORS_EXPOSED_RESPONSE_HEADERS) expect(list).toContain(h.toLowerCase());
     expect(list).toContain("x-motebit-content-manifest");
+  });
+
+  it("a RateLimitError thrown into onError still lets a browser read Retry-After", async () => {
+    // No production door throws it today; the error handler sets
+    // Retry-After for any that does. Mounted AFTER the real middleware, so
+    // it runs behind the real CORS layer and ends in the real onError.
+    relay.app.get("/__test/throws-rate-limit", () => {
+      throw new RateLimitError("slow down", 42);
+    });
+    const res = await relay.app.request("/__test/throws-rate-limit", {
+      headers: { Origin: ORIGIN },
+    });
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBe("42");
+    expect(res.headers.get("access-control-allow-origin")).toBe("*");
+    expect(exposed(res)).toContain("retry-after");
   });
 
   it("preflight is otherwise unchanged: 204, any origin, the default methods", async () => {
