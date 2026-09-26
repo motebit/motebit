@@ -236,6 +236,25 @@ describe("resolveRosterKeyChain — ancestry is disclosed, never refused", () =>
     expect(r.ancestry).toEqual({ kind: "recovery_limited", key: hex[1], predecessors: [hex[0]] });
   });
 
+  it("an uncheckable 'recovery' held → ancestor, minted by the ancestor's holder, cannot force duplicate_key", async () => {
+    // The holder of an OLD key (K0) signs a "recovery" record held (K2) → K0:
+    // its new-key signature is K0's own, the guardian signature is a stranger's,
+    // and no guardian is pinned — so it is unchecked. Counted in the pre-walk
+    // cycle search, it would close held → … → K0 → held and refuse the chain.
+    // An unchecked recovery is never a link in that search (the §2A rule that
+    // only held's holder or the pinned guardian can cause a refusal).
+    const fake = await recover(S, K[2]!, K[0]!);
+    const records = [await rotate(K[0]!, K[1]!), await rotate(K[1]!, K[2]!), fake];
+    const r = ok(await resolve(K[2]!, records));
+    expect(r.head).toBe(hex[2]);
+    expect(r.chain[r.chain.length - 1]).toBe(hex[2]);
+    // And under a sovereign id rooted at K0, likewise never refused.
+    const sov = ok(
+      await resolve(K[2]!, records, { motebitId: await deriveSovereignMotebitId(h(K[0]!)) }),
+    );
+    expect(sov.head).toBe(hex[2]);
+  });
+
   it("a 'recovery' predecessor whose NEW-key signature fails is junk anyone could mint — ignored", async () => {
     // A stranger signs a recovery INTO K1 with its own key standing in for K1's.
     const forged = await recover(S, K[0]!, S);
