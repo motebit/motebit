@@ -22,7 +22,12 @@
  * Runtime-side commands use a request/response correlation over WebSocket:
  * relay sends { type: "command_request", id, command, args, envelope }
  * agent responds { type: "command_response", id, result }
- * relay returns result to HTTP caller with 30s timeout.
+ * relay returns result to HTTP caller. Delivery is to ONE socket, the newest
+ * open one (`sendToOne`); only a socket of the target motebit may answer.
+ * Two 504s, both "delivered, no answer", told apart by an additive
+ * `outcome`: `silent` (the deadline — 30 s unless the relay passes its own
+ * `commandTimeoutMs`) and `closed_after_delivery` (the socket it went to
+ * closed or was retired first, settled at once).
  */
 
 import { verifyAgentCommandEnvelope } from "@motebit/crypto";
@@ -195,23 +200,62 @@ const INFO_COMMANDS: Record<string, string> = {
   propose: "Collaborative proposals require the CLI. Run: motebit propose",
 };
 
-/** Pending command requests waiting for WebSocket response. */
-const pendingCommands = new Map<
-  string,
-  { resolve: (result: unknown) => void; timer: ReturnType<typeof setTimeout> }
->();
+/**
+ * A first-wins request waiting for its runtime's `command_response`.
+ *
+ * The map is module-scoped because `handleCommandResponse` is a module
+ * export (the CLI's multi-runtime harness answers through it). Nothing
+ * PER RELAY lives here: each entry carries its own deadline timer, armed
+ * from the route closure's `commandTimeoutMs` (#691 item 5), the motebit
+ * it was sent to (item 6) and the socket it was delivered to (item 4).
+ * Ids are fresh UUIDs, so two relays in one process never share an entry.
+ */
+interface PendingCommand {
+  /** The motebit the request was sent to — only its sockets may answer. */
+  motebitId: string;
+  /** The one socket the frame went to; null until `sendToOne` delivers. */
+  deliveredTo: ConnectedDevice | null;
+  resolve: (result: unknown) => void;
+  reject: (err: unknown) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
 
-const COMMAND_TIMEOUT_MS = 30_000;
+const pendingCommands = new Map<string, PendingCommand>();
+
+/** Production deadline for a runtime's answer. A relay may pass its own. */
+export const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
+
+/**
+ * The socket a command was delivered to left before it answered — closed,
+ * or retired because the credential that admitted it ended. Its answer can
+ * no longer arrive (a retired peer's frames are acted on for nothing, and a
+ * reply written to a closed socket goes nowhere), so waiting out the
+ * deadline would only cost the caller the rest of it.
+ */
+export class CommandConnectionClosedError extends Error {
+  constructor() {
+    super("The runtime's connection closed after the command was delivered");
+    this.name = "CommandConnectionClosedError";
+  }
+}
 
 export interface CommandRouteDeps {
   app: Hono;
   db: DatabaseDriver;
   connections: Map<string, ConnectedDevice[]>;
   logger: ReturnType<typeof createLogger>;
+  /**
+   * How long a forwarded command waits for the runtime's answer. Held by
+   * THIS route's closure and passed into every forward, never written to
+   * module state — the last relay built in a process must not set the
+   * deadline for all of them (#691 item 5). Default 30 s.
+   */
+  commandTimeoutMs?: number;
 }
 
 export function registerCommandRoutes(deps: CommandRouteDeps): void {
   const { app, db, connections } = deps;
+  const deadlineMs = deps.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
 
   /** @internal */
   app.post("/api/v1/agents/:motebitId/command", async (c) => {
@@ -274,7 +318,10 @@ export function registerCommandRoutes(deps: CommandRouteDeps): void {
       }
 
       try {
-        const result = await forwardCommandToAgent(peers, command, args, body.envelope);
+        const result = await forwardCommandToAgent(peers, command, args, body.envelope, {
+          motebitId,
+          deadlineMs,
+        });
         return c.json(result);
       } catch (err: unknown) {
         // A typed rejection already says what happened and with what
@@ -282,9 +329,28 @@ export function registerCommandRoutes(deps: CommandRouteDeps): void {
         // delivered" into "the relay broke", and a consent surface
         // cannot tell those apart.
         if (err instanceof HTTPException) throw err;
+        // Delivered, and the connection it went to is gone (#691 item 4).
+        // 504, the status every client already reads as "DELIVERED, no
+        // answer" — the honest reading here, since the runtime may have
+        // acted before its connection went. A 502 would be read by the CLI
+        // as "not delivered … nothing has been stopped", which is exactly
+        // the untruth a halt surface must never print. `outcome` is the
+        // additive, machine-readable difference from the deadline 504; a
+        // client that ignores it still reads "delivered, no answer".
+        if (err instanceof CommandConnectionClosedError) {
+          return c.json(
+            {
+              summary: MUTATING_UNATTENDED_COMMANDS.has(command)
+                ? "Delivered, then the runtime's connection closed before it answered — whether it acted is unknown, so this is neither a confirmation nor a report that nothing was stopped or decided."
+                : "Delivered, then the runtime's connection closed before it answered — there is no answer, and this is not a report that nothing happened.",
+              outcome: "closed_after_delivery",
+            },
+            504,
+          );
+        }
         const msg = err instanceof Error ? err.message : String(err);
         if (msg === "Command timed out") {
-          return c.json({ summary: "Agent did not respond in time." }, 504);
+          return c.json({ summary: "Agent did not respond in time.", outcome: "silent" }, 504);
         }
         throw new HTTPException(500, { message: `Command failed: ${msg}` });
       }
@@ -307,18 +373,92 @@ export function registerCommandRoutes(deps: CommandRouteDeps): void {
 }
 
 /**
- * Called by the WebSocket message handler when an agent sends a command_response.
- * Resolves the pending Promise so the HTTP handler can return the result.
+ * Called by the WebSocket message handler when an agent sends a
+ * command_response. Resolves the pending Promise so the HTTP handler can
+ * return the result — but only for an answer that arrived on a socket of
+ * the motebit the request was SENT to (#691 item 6). The command id is an
+ * unguessable UUID, but one map spans every motebit on this relay, and an
+ * id is not a relationship: an answer from any other motebit's socket is
+ * refused and the request keeps waiting for its own runtime.
+ *
+ * `from` is required, so a caller cannot forget it: an answer with no
+ * origin is not an answer to anyone.
  */
-export function handleCommandResponse(commandId: string, result: unknown): void {
+export function handleCommandResponse(
+  commandId: string,
+  result: unknown,
+  from: { motebitId: string },
+): "settled" | "no_pending" | "foreign_motebit" {
   const pending = pendingCommands.get(commandId);
-  if (!pending) return;
+  if (!pending) return "no_pending";
+  if (pending.motebitId !== from.motebitId) return "foreign_motebit";
   clearTimeout(pending.timer);
   pendingCommands.delete(commandId);
   pending.resolve(result);
+  return "settled";
+}
+
+/**
+ * A peer left — its socket closed, or it was retired when the credential
+ * that admitted it ended. Every request delivered to it and still waiting
+ * settles now as `CommandConnectionClosedError` (#691 item 4): its answer
+ * cannot arrive. Requests delivered to any OTHER socket are untouched.
+ */
+export function settleCommandsDeliveredTo(peer: ConnectedDevice): number {
+  let settled = 0;
+  for (const [commandId, pending] of pendingCommands) {
+    if (pending.deliveredTo == null || pending.deliveredTo.ws !== peer.ws) continue;
+    clearTimeout(pending.timer);
+    pendingCommands.delete(commandId);
+    pending.reject(new CommandConnectionClosedError());
+    settled += 1;
+  }
+  return settled;
 }
 
 // --- WebSocket forwarding ---
+
+/**
+ * The ONE delivery rule for a single-use frame: deliver to exactly one
+ * OPEN socket, preferring the NEWEST (#691 items 1 and 2). Returns the
+ * peer it went to, or null when none would take it.
+ *
+ * Newest, because `connections` is append-ordered (a peer is pushed when
+ * its connection is finalized) and there is no ping/pong reaper: after a
+ * sleep or a network flap the old socket can still read `readyState` 1,
+ * half-open, beside the live reconnect. Oldest-first sent the frame into
+ * the dead one and never tried the live process.
+ *
+ * No fall-through on SILENCE — deliberately. The envelope is single-use per
+ * machine: the daemon's replay guard (`handleRelayCommandFrame`, keyed on
+ * the envelope signature, shared by `motebit run` and `motebit serve`)
+ * refuses a second delivery as a replay rather than de-duplicating it by
+ * command id, and the desktop app shares the daemon's device id without
+ * sharing that guard. So a second socket would either answer "rejected:
+ * replay" — which first-wins would take as THE answer while the first
+ * executor had in fact acted — or execute a second time. Neither is
+ * at-most-once with a truthful answer, so a frame goes to one socket, and
+ * silence is reported as silence.
+ *
+ * A CLOSED socket does not throw — it swallows. `ws@8` only throws from
+ * `send` while CONNECTING; on CLOSING or CLOSED it calls `sendAfterClose`
+ * and returns silently. So `readyState` is asked first (a try/catch alone
+ * once counted a stale connection as a delivery). The catch stays for the
+ * CONNECTING case, which does throw.
+ */
+export function sendToOne(candidates: ConnectedDevice[], payload: string): ConnectedDevice | null {
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    const peer = candidates[i]!;
+    if (peer.ws.readyState !== 1) continue;
+    try {
+      peer.ws.send(payload);
+      return peer;
+    } catch {
+      // CONNECTING throws; try the next-newest.
+    }
+  }
+  return null;
+}
 
 async function forwardCommandToAgent(
   peers: ConnectedDevice[],
@@ -326,6 +466,8 @@ async function forwardCommandToAgent(
   args: string | undefined,
   // Forwarded VERBATIM — the consuming surface re-verifies fail-closed.
   envelope: unknown,
+  // From the route closure: who the request is for, and this relay's deadline.
+  target: { motebitId: string; deadlineMs: number },
 ): Promise<unknown> {
   const commandId = crypto.randomUUID();
   const payload = JSON.stringify({
@@ -340,9 +482,16 @@ async function forwardCommandToAgent(
     const timer = setTimeout(() => {
       pendingCommands.delete(commandId);
       reject(new Error("Command timed out"));
-    }, COMMAND_TIMEOUT_MS);
+    }, target.deadlineMs);
 
-    pendingCommands.set(commandId, { resolve, timer });
+    const pending: PendingCommand = {
+      motebitId: target.motebitId,
+      deliveredTo: null,
+      resolve,
+      reject,
+      timer,
+    };
+    pendingCommands.set(commandId, pending);
 
     // For most commands any connected surface can answer. For the
     // unattended-runtime set, only a peer that actually runs unattended
@@ -461,30 +610,11 @@ async function forwardCommandToAgent(
       return;
     }
 
-    // A CLOSED socket does not throw — it swallows.
-    //
-    // `ws@8` only throws from `send` while CONNECTING; on CLOSING or
-    // CLOSED it calls `sendAfterClose` and returns silently, with no
-    // callback to surface an error. So a try/catch counted a stale
-    // connection as a delivery, `some` short-circuited, the live
-    // process beside it on the same machine was never tried, and the
-    // halt was lost — the caller learning nothing until a 30-second
-    // timeout answered "the agent did not respond", about a runtime
-    // that was connected and willing the whole time. That is the
-    // ordinary case moments after a process restarts, and it is the
-    // worst possible verb to lose.
-    //
-    // Every other send site in this relay already asks. The catch stays
-    // for the CONNECTING case, which does throw.
-    const sent = candidates.some((peer) => {
-      if (peer.ws.readyState !== 1) return false;
-      try {
-        peer.ws.send(payload);
-        return true;
-      } catch {
-        return false;
-      }
-    });
+    // One delivery rule, shared: newest OPEN socket, no fall-through on
+    // silence. See `sendToOne`.
+    const deliveredTo = sendToOne(candidates, payload);
+    pending.deliveredTo = deliveredTo;
+    const sent = deliveredTo != null;
 
     if (!sent) {
       clearTimeout(timer);

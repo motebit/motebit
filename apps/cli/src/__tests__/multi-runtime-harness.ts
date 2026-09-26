@@ -297,9 +297,11 @@ export function attachRuntime(
         // machine sent it. Attribution arrives with the broadcast
         // (issue #681), and this call gains that argument then — which
         // is the point at which the harness can assert who answered and
-        // who stayed silent.
+        // who stayed silent. The MOTEBIT it arrived from is already
+        // required: the relay settles a request only from the motebit it
+        // was sent to (#691 item 6), as its socket handler passes it.
         try {
-          handleCommandResponse(msg.id, msg.result);
+          handleCommandResponse(msg.id, msg.result, { motebitId: deps.motebitId });
         } catch (err) {
           // Never swallowed. A reply that cannot be delivered is the
           // harness being broken, not the subject.

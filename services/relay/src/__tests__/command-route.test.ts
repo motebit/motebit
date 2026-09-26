@@ -17,6 +17,8 @@ import {
 import type { TokenAudience } from "@motebit/protocol";
 import type { KeyPair } from "@motebit/crypto";
 import { JSON_AUTH, createTestRelay, createAgent } from "./test-helpers.js";
+import { sendToOne } from "../command-route.js";
+import type { ConnectedDevice } from "../websocket.js";
 
 const AGENT_ID = "36080ffe-cmd4-8000-a000-0000000000aa";
 
@@ -475,6 +477,53 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     void postCommand(AGENT_ID, { command: "state", envelope });
     await new Promise((r) => setTimeout(r, 50));
     expect(phone.sentTo).toHaveLength(1);
+  });
+});
+
+/**
+ * `sendToOne` — the one delivery rule for a single-use frame (#691 items
+ * 1–2). Newest OPEN socket first; a socket that is not OPEN, or throws
+ * (CONNECTING), is skipped for the next-newest. Exactly one socket gets the
+ * frame. (Silence is not a reason to try another — see
+ * `command-delivery.test.ts`.)
+ */
+describe("sendToOne delivers to exactly one socket, the newest that will take it", () => {
+  function peer(label: string, readyState: number, throws = false) {
+    const got: string[] = [];
+    const p = {
+      deviceId: label,
+      ws: {
+        readyState,
+        send: (payload: string) => {
+          if (throws) throw new Error("CONNECTING");
+          got.push(payload);
+        },
+      },
+    } as unknown as ConnectedDevice;
+    return { p, got };
+  }
+
+  it("the newest OPEN socket wins over an older OPEN one", () => {
+    const old = peer("old", 1);
+    const young = peer("young", 1);
+    expect(sendToOne([old.p, young.p], "f")).toBe(young.p);
+    expect(young.got).toEqual(["f"]);
+    expect(old.got).toEqual([]);
+  });
+
+  it("a newest socket that is CLOSING, or throws, is passed over for the next-newest", () => {
+    const old = peer("old", 1);
+    const mid = peer("mid", 1, true);
+    const closing = peer("closing", 2);
+    expect(sendToOne([old.p, mid.p, closing.p], "f")).toBe(old.p);
+    expect(old.got).toEqual(["f"]);
+    expect(closing.got).toEqual([]);
+  });
+
+  it("none OPEN ⇒ null, nothing sent", () => {
+    const a = peer("a", 3);
+    expect(sendToOne([a.p], "f")).toBeNull();
+    expect(a.got).toEqual([]);
   });
 });
 

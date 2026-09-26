@@ -1,0 +1,5 @@
+---
+"@motebit/relay": patch
+---
+
+**Remote commands reach the live socket, settle when their socket goes, keep their relay's deadline, and are answered only by their own motebit** (#691 items 1, 2, 4, 5, 6). `POST /api/v1/agents/:id/command` delivers through ONE rule, `sendToOne`: the NEWEST open socket, so a half-open socket left after a sleep no longer takes the frame from the live reconnect beside it. It never falls through to a second socket on silence, because a machine's replay guard would answer a second delivery "rejected: replay" (or a second executor would run it). A socket that closes or is retired after delivery settles the request at once as a 504 with `outcome: "closed_after_delivery"`, instead of after the full deadline. The deadline-expiry 504 now carries `outcome: "silent"`. Both fields are additive, and both stay 504, which every client already reads as "delivered, no answer". The deadline is `SyncRelayConfig.commandTimeoutMs` (default 30 s), held per relay. `handleCommandResponse` now takes the motebit the answer arrived from, as a required argument, and settles only a request sent to that motebit.

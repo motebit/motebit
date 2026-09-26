@@ -187,7 +187,11 @@ import { createFederationCallbacks } from "./federation-callbacks.js";
 import { registerTaskRoutes, TASK_TTL_MS } from "./tasks.js";
 import { ExpoPushAdapter } from "./push-adapter.js";
 import { TaskQueue } from "./task-queue.js";
-import { registerCommandRoutes, handleCommandResponse } from "./command-route.js";
+import {
+  registerCommandRoutes,
+  handleCommandResponse,
+  settleCommandsDeliveredTo,
+} from "./command-route.js";
 import { registerDelegationRevocationRoutes } from "./delegation-revocations.js";
 import Stripe from "stripe";
 import {
@@ -357,6 +361,13 @@ export interface SyncRelayConfig {
    * amplifies contention flakes under parallel `turbo run test`).
    */
   drainGraceMs?: number;
+  /**
+   * How long a runtime-side command (`POST /api/v1/agents/:id/command`)
+   * waits for the runtime's answer before answering 504. Default 30000.
+   * Held per relay — the route closure passes it into every forward — so
+   * two relays in one process each keep their own (issue #691 item 5).
+   */
+  commandTimeoutMs?: number;
   /** Federation configuration. Omit to disable federation. */
   federation?: {
     /** Display name for this relay in the federation. */
@@ -915,7 +926,17 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // key or an identity takes the matching port as a REQUIRED dep. A retired
   // peer leaves `connections` synchronously, so its later `onClose` makes no
   // `onPeerClosed`; its one close-time roster observation is made here.
-  const retirementHooks = { onRemoved: observeHost, logger };
+  //
+  // A peer leaving — closed, or retired here — is also the end of any
+  // command delivered to it and not yet answered: its answer can no longer
+  // arrive (a retired peer's frames are acted on for nothing), so the
+  // pending request settles now instead of at the deadline (#691 item 4).
+  // ONE function for both departures, so neither can forget it.
+  const peerLeft = (motebitId: string, peer: ConnectedDevice): void => {
+    observeHost(motebitId, peer);
+    settleCommandsDeliveredTo(peer);
+  };
+  const retirementHooks = { onRemoved: peerLeft, logger };
   const retireKeyConnections: RetireKeyConnections = (motebitId, retiredKey) => {
     const closed = closeSocketsAuthenticatedUnder(
       connections,
@@ -1062,7 +1083,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     // close, and by the flush — only for verified host sockets, keyed by
     // the key each socket's token verified under.
     onPeerBound: (motebitId, peer) => observeHost(motebitId, peer),
-    onPeerClosed: (motebitId, peer) => observeHost(motebitId, peer),
+    onPeerClosed: peerLeft,
     isDraining: () => draining,
   });
 
@@ -1668,7 +1689,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   });
 
   // --- Command endpoint (unified remote execution) ---
-  registerCommandRoutes({ app, db: moteDb.db, connections, logger });
+  registerCommandRoutes({
+    app,
+    db: moteDb.db,
+    connections,
+    logger,
+    ...(config.commandTimeoutMs !== undefined ? { commandTimeoutMs: config.commandTimeoutMs } : {}),
+  });
 
   // --- Delegation-revocation cache (standing-delegation §5; signed artifacts,
   // relay is cache-not-authority) ---
