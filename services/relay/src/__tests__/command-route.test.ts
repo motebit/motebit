@@ -538,18 +538,26 @@ describe("sendToOne delivers to exactly one socket, the newest that will take it
     return { p, got };
   }
 
-  it("the newest OPEN socket wins over an older OPEN one", () => {
-    const old = peer("old", 1);
-    const young = peer("young", 1);
+  it("VERIFIED tier: the newest OPEN socket wins over an older OPEN one", () => {
+    const old = peer("old", 1, false, true);
+    const young = peer("young", 1, false, true);
     expect(sendToOne([old.p, young.p], "f")).toBe(young.p);
     expect(young.got).toEqual(["f"]);
     expect(old.got).toEqual([]);
   });
 
-  it("a newest socket that is CLOSING, or throws, is passed over for the next-newest", () => {
+  it("DECLARED-ONLY tier keeps main's order: the OLDEST OPEN socket wins", () => {
     const old = peer("old", 1);
-    const mid = peer("mid", 1, true);
-    const closing = peer("closing", 2);
+    const young = peer("young", 1);
+    expect(sendToOne([old.p, young.p], "f")).toBe(old.p);
+    expect(old.got).toEqual(["f"]);
+    expect(young.got).toEqual([]);
+  });
+
+  it("VERIFIED tier: a newest socket that is CLOSING, or throws, is passed over for the next-newest", () => {
+    const old = peer("old", 1, false, true);
+    const mid = peer("mid", 1, true, true);
+    const closing = peer("closing", 2, false, true);
     expect(sendToOne([old.p, mid.p, closing.p], "f")).toBe(old.p);
     expect(old.got).toEqual(["f"]);
     expect(closing.got).toEqual([]);

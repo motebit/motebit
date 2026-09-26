@@ -933,8 +933,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // nothing: the runtime may still answer on its reconnect. ONE function
   // for both departures, so neither can forget it.
   const peerLeft = (motebitId: string, peer: ConnectedDevice): void => {
-    observeHost(motebitId, peer);
+    // The mark first: nothing the roster observer does can skip it.
     markCommandsDeliveredTo(peer);
+    observeHost(motebitId, peer);
   };
   const retirementHooks = { onRemoved: peerLeft, logger };
   const retireKeyConnections: RetireKeyConnections = (motebitId, retiredKey) => {

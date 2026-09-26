@@ -24,8 +24,8 @@
  * agent responds { type: "command_response", id, result }
  * relay returns result to HTTP caller. Delivery is to ONE socket
  * (`sendToOne`): verified peers (declared device id === the signed token's
- * `did`) before declared-only ones, the newest open socket first within
- * each. An answer is accepted from the delivered peer's STABLE identity —
+ * `did`) first, newest first; then every other peer in main's order,
+ * oldest first. An answer is accepted from the delivered peer's STABLE identity —
  * the same declared device id, else the same token `did`, else (a peer with
  * neither) any socket of the motebit — so the runtime's answer on its
  * reconnect lands exactly as it did before. The request waits until its
@@ -209,15 +209,22 @@ const INFO_COMMANDS: Record<string, string> = {
 /**
  * Who may answer a delivered command: the delivered peer's STABLE identity,
  * chosen in this order (#691 item 6):
- *  - `device` — the peer DECLARED a device id: only a socket declaring the
- *    same id may answer (its own reconnect included);
+ *  - `device` — the peer DECLARED a device id D: a socket declaring D may
+ *    answer (its own reconnect included), and so may one that declares
+ *    nothing but whose signed token's `did` is D (the same runtime
+ *    reconnecting undeclared);
  *  - `did` — it declared none but authenticated with a signed token: only a
  *    socket whose token carried the same `did`;
  *  - `motebit` — neither (master token, device auth off): any socket of the
- *    motebit, which is main's rule, so no answer main accepted is lost.
+ *    motebit may answer, as on main (which also let other motebits' sockets
+ *    answer — that part is closed), so no answer main accepted is lost.
  * A relay-made device id (the one invented per connection for a peer that
  * declared none) is NEVER a key: it changes on every reconnect, so binding
  * to it would refuse the runtime's own answer on its new socket.
+ *
+ * Not covered, deliberately: a runtime delivered to under a signed token
+ * that reconnects under the MASTER token (no declared id, no `did`) cannot
+ * answer — no shipped client switches credential kind mid-run.
  */
 export type AnswerKey =
   { kind: "device"; deviceId: string } | { kind: "did"; did: string } | { kind: "motebit" };
@@ -241,7 +248,10 @@ export function answerKeyOf(peer: ConnectedDevice): AnswerKey {
 function answersFor(key: AnswerKey, from: CommandResponseOrigin): boolean {
   switch (key.kind) {
     case "device":
-      return from.declaredDeviceId === key.deviceId;
+      return (
+        from.declaredDeviceId === key.deviceId ||
+        (from.declaredDeviceId == null && from.authenticatedDid === key.deviceId)
+      );
     case "did":
       return from.authenticatedDid === key.did;
     case "motebit":
@@ -466,8 +476,12 @@ export function registerCommandRoutes(deps: CommandRouteDeps): CommandRoutesHand
  * the motebit the request was SENT to, presenting the delivered peer's
  * stable identity (`AnswerKey`, #691 item 6). The command id is an
  * unguessable UUID, but one map spans every motebit on this relay, and an
- * id is not a relationship: an answer from another motebit, or from another
- * device of the same motebit, is refused and the request keeps waiting.
+ * id is not a relationship: an answer from another motebit is always
+ * refused. An answer from another device of the same motebit is refused
+ * when the delivered peer has a declared device id or a token `did`; with a
+ * motebit-only key (master token, device auth off) any socket of the
+ * motebit may answer, as on main. A refused answer leaves the request
+ * waiting.
  *
  * `from` is required, so a caller cannot forget it: an answer with no
  * origin is not an answer to anyone. Its fields are the SOCKET's, never the
@@ -512,15 +526,17 @@ export function markCommandsDeliveredTo(peer: ConnectedDevice): number {
 
 /**
  * The ONE delivery rule for a single-use frame: deliver to exactly one
- * OPEN socket — VERIFIED peers before declared-only ones, the NEWEST first
- * within each (#691 items 1, 2 and the compatible half of 7). Returns the
+ * OPEN socket — VERIFIED peers first, newest first; then everyone else in
+ * main's order, oldest first (#691 items 1, 2 and the compatible half of 7). Returns the
  * peer it went to, or null when none would take it.
  *
- * Newest, because `connections` is append-ordered (a peer is pushed when
- * its connection is finalized) and there is no ping/pong reaper: after a
- * sleep or a network flap the old socket can still read `readyState` 1,
- * half-open, beside the live reconnect. Oldest-first sent the frame into
- * the dead one and never tried the live process.
+ * `connections` is append-ordered (a peer is pushed when its connection is
+ * finalized). Verified peers go newest first because there is no ping/pong
+ * reaper: after a sleep or a network flap a daemon's old socket can still
+ * read `readyState` 1, half-open, beside the live reconnect, and
+ * oldest-first sent the frame into the dead one. Every other peer keeps
+ * main's oldest-first order, because for undeclared clients the OLDEST
+ * socket is the one listening (see the tier comment below).
  *
  * No fall-through on SILENCE — deliberately. The envelope is single-use per
  * machine: the daemon's replay guard (`handleRelayCommandFrame`, keyed on
@@ -549,17 +565,22 @@ export function sendToOne(
   // empty-key rejection) must meet a filled record, not an empty one.
   onAttempt?: (peer: ConnectedDevice | null) => void,
 ): ConnectedDevice | null {
-  // VERIFIED first, then newest within each tier (#691 item 7, the
-  // compatible half). Newest-first alone made "connect last" the way for a
-  // peer that merely DECLARED a device id (any sync-token holder can) to
-  // take a first-wins halt from the daemon and answer it falsely. A peer
-  // whose declared id is the `did` of its signed token outranks every
-  // declared-only one. Nothing is excluded: with no verified peer (device
-  // auth off, a master-token runtime, an older client) the order is plain
-  // newest-first — which is itself a change from main's oldest-first (item
-  // 1); that tier's exposure to a declared-only impostor is #810.
+  // Two tiers, each in its own order (#691 items 1 and 7):
+  //  - VERIFIED peers (declared id === the signed token's `did`) first,
+  //    NEWEST first. Daemons declare and verify, and for them the newest
+  //    socket is the live one: a half-open socket left after a sleep or a
+  //    flap must not take the frame from the reconnect beside it (item 1).
+  //    A verified peer also outranks every declared-only one, so a peer
+  //    that merely DECLARED an id cannot "connect last" and take a halt.
+  //  - Everyone else in MAIN's order, OLDEST first. For undeclared clients
+  //    the newest socket is NOT the live one: web and desktop attach their
+  //    command handler only to their FIRST adapter, and every token refresh
+  //    leaves the earlier socket open, so newer sockets are deaf. With no
+  //    verified peer the choice is therefore exactly main's. That tier's
+  //    exposure to a declared-only impostor is #810.
   for (const tier of [true, false]) {
-    for (let i = candidates.length - 1; i >= 0; i--) {
+    const order = tier ? [...candidates.keys()].reverse() : [...candidates.keys()];
+    for (const i of order) {
       const peer = candidates[i]!;
       if ((peer.deviceIdVerified === true) !== tier) continue;
       if (peer.ws.readyState !== 1) continue;
@@ -735,8 +756,8 @@ async function forwardCommandToAgent(
       return;
     }
 
-    // One delivery rule, shared: verified peers before declared-only ones,
-    // newest OPEN socket first within each, no fall-through on silence.
+    // One delivery rule, shared: verified peers newest first, then everyone
+    // else oldest first (main's order), no fall-through on silence.
     // See `sendToOne`.
     const deliveredTo = sendToOne(candidates, payload, (peer) => {
       pending.deliveredTo = peer;

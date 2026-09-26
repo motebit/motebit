@@ -10,8 +10,9 @@
  * `createTestRelay` behind `@hono/node-server` with `ws` clients presenting
  * signed `sync` tokens, and posts signed commands to the real route.
  *
- *  1. Delivery prefers the NEWEST open socket (verified peers first), and
- *     never falls through to another socket of the machine on silence (the
+ *  1. Delivery: verified peers first, NEWEST first; everyone else in
+ *     main's order, OLDEST first (undeclared clients' newer sockets are
+ *     deaf). It never falls through to another socket of the machine on silence (the
  *     envelope is single-use per machine; see `sendToOne`).
  *  4. A socket that closes — or is retired — after delivery settles NOTHING:
  *     the runtime answers on whatever socket is current, so its reconnect's
@@ -224,7 +225,7 @@ function tracked<T>(p: Promise<T>): { p: Promise<T>; settled: () => boolean } {
   return { p, settled: () => done };
 }
 
-describe("item 1 — delivery prefers the newest open socket, and never falls through", () => {
+describe("item 1 — among VERIFIED sockets the newest wins, and delivery never falls through", () => {
   it("of two OPEN sockets on one machine, the NEWER one gets the frame and answers", async () => {
     const s = await startRelay({ commandTimeoutMs: 5_000 });
     const who = await identity(s);
@@ -300,35 +301,57 @@ describe("item 7 (compatible half) — a verified socket outranks a declared-onl
     expect(impostor.commands()).toEqual([]);
   });
 
-  // NOT "as before": main delivered to the OLDEST open socket. With no
-  // verified peer the order is now newest-first (#691 item 1 — a stale
-  // half-open socket must not win over the live reconnect). The exposure of
-  // master-token / device-auth-off relays to a declared-only impostor is #810.
-  it("only declared-only sockets (master token) ⇒ the NEWEST of them (main was oldest-first)", async () => {
-    const s = await startRelay({ commandTimeoutMs: 5_000 });
-    const who = await identity(s);
-    const older = await daemon(s, who, { token: API_TOKEN });
-    const newer = await daemon(s, who, { token: API_TOKEN });
+  // The declared-only tier keeps MAIN's order, oldest first: for undeclared
+  // clients the newest socket is NOT the live one. Web and desktop attach
+  // their command handler only to their FIRST adapter, and every token
+  // refresh leaves the earlier socket open, so newer sockets are deaf. With
+  // no verified peer the choice is exactly main's. (#810 tracks the
+  // declared-only impostor exposure of this tier.)
+  async function oldestAnswersNewerDeaf(
+    s: Stack,
+    who: Identity,
+    as: () => Promise<{ token: string; deviceId?: string | null }>,
+  ): Promise<void> {
+    const first = await daemon(s, who, await as());
+    const deaf = await daemon(s, who, await as());
     expect(s.relay.connections.get(who.mid)!.every((p) => p.deviceIdVerified !== true)).toBe(true);
 
     const pending = post(s, who, "halt");
-    await waitFor(() => newer.commands().length === 1, "delivery to the newest");
-    newer.answer(newer.commands()[0]!.id!, { summary: "Halted." });
-    expect((await pending).status).toBe(200);
-    expect(older.commands()).toEqual([]);
+    await waitFor(() => first.commands().length === 1, "delivery to the first socket");
+    first.answer(first.commands()[0]!.id!, { summary: "Halted." });
+    const { status, json } = await pending;
+    expect(status).toBe(200);
+    expect(json.summary).toBe("Halted.");
+    expect(deaf.commands()).toEqual([]);
+  }
+
+  it("C1: undeclared signed sockets (token did, no device_id) ⇒ the OLDEST gets it, as main — the newer one is deaf", async () => {
+    const s = await startRelay({ commandTimeoutMs: 5_000 });
+    const who = await identity(s);
+    await oldestAnswersNewerDeaf(s, who, async () => ({
+      token: (
+        await mintAudienceToken({ mid: who.mid, did: who.did, aud: "sync" }, who.kp.privateKey)
+      ).token,
+      deviceId: null,
+    }));
   });
 
-  it("a device-auth-OFF relay (nothing is ever verified): no verified tier, so newest wins", async () => {
+  it("C2: undeclared master-token sockets ⇒ the OLDEST gets it, as main", async () => {
+    const s = await startRelay({ commandTimeoutMs: 5_000 });
+    const who = await identity(s);
+    await oldestAnswersNewerDeaf(s, who, async () => ({ token: API_TOKEN, deviceId: null }));
+  });
+
+  it("C3: declared master-token sockets (declared-only, never verified) ⇒ the OLDEST gets it, as main", async () => {
+    const s = await startRelay({ commandTimeoutMs: 5_000 });
+    const who = await identity(s);
+    await oldestAnswersNewerDeaf(s, who, async () => ({ token: API_TOKEN }));
+  });
+
+  it("a device-auth-OFF relay (nothing is ever verified) ⇒ the OLDEST gets it, as main", async () => {
     const s = await startRelay({ commandTimeoutMs: 5_000, enableDeviceAuth: false });
     const who = await identity(s);
-    const older = await daemon(s, who, { token: API_TOKEN });
-    const newer = await daemon(s, who, { token: API_TOKEN });
-
-    const pending = post(s, who, "halt");
-    await waitFor(() => newer.commands().length === 1, "delivery to the newest");
-    newer.answer(newer.commands()[0]!.id!, { summary: "Halted." });
-    expect((await pending).status).toBe(200);
-    expect(older.commands()).toEqual([]);
+    await oldestAnswersNewerDeaf(s, who, async () => ({ token: API_TOKEN }));
   });
 });
 
@@ -354,6 +377,26 @@ describe("item 4 — the delivered socket leaving settles nothing; a valid answe
     await drop(s, who, first);
     await new Promise((r) => setTimeout(r, 1_000));
     const reconnect = await daemon(s, who);
+    reconnect.answer(id, { summary: "Halted." });
+    const { status, json } = await pending;
+
+    expect(status).toBe(200);
+    expect(json.summary).toBe("Halted.");
+  });
+
+  it("K2: a DECLARED daemon reconnects UNDECLARED with a token whose did is its device id, and answers ⇒ 200", async () => {
+    const s = await startRelay({ commandTimeoutMs: 5_000 });
+    const who = await identity(s);
+    const first = await daemon(s, who);
+
+    const pending = post(s, who, "halt");
+    await waitFor(() => first.commands().length === 1, "delivery");
+    const id = first.commands()[0]!.id!;
+    await drop(s, who, first);
+    const token = (
+      await mintAudienceToken({ mid: who.mid, did: who.did, aud: "sync" }, who.kp.privateKey)
+    ).token;
+    const reconnect = await daemon(s, who, { token, deviceId: null });
     reconnect.answer(id, { summary: "Halted." });
     const { status, json } = await pending;
 
