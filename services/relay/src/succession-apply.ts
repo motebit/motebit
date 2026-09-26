@@ -156,7 +156,11 @@ export function successionReuse(
   ) {
     return "departs_from_retired_key";
   }
-  const history = new Set<string>();
+  // The key this link departs from is history the moment the link is
+  // recorded: a link whose two sides are one key, spelled twice
+  // (`UPPER(K)` → `k`, reachable from a legacy non-canonical device row
+  // through the device departure rung), repeats a key on its own.
+  const history = new Set<string>([oldKey]);
   for (const l of links) {
     history.add(l.old_public_key.toLowerCase());
     history.add(l.new_public_key.toLowerCase());

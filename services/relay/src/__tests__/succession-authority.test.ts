@@ -1534,6 +1534,45 @@ describe("a recorded rotation ends the old key here", () => {
     expect(registryKey(mid)).toBe(hex(other));
   });
 
+  it("refuses a link whose two sides are one key spelled twice (UPPER(K) → k, from a legacy device row)", async () => {
+    // A legacy device row stored non-canonically (main's older case-folding
+    // guard admitted these; `admitKey` stops new ones). With no holder, no
+    // registry and no chain, departure falls to the exact device row, and
+    // `goes_nowhere` compares exactly — so a correctly signed
+    // { old: UPPER(K), new: k } was recorded: one key on both sides of a link
+    // (#780's decisive review).
+    const mid = crypto.randomUUID();
+    const k = await generateKeypair();
+    expect(await registerSelf(mid, `${mid}-legacy`, k)).toBe(201);
+    const upper = hex(k).toUpperCase();
+    relay.moteDb.db
+      .prepare("UPDATE devices SET public_key = ? WHERE motebit_id = ?")
+      .run(upper, mid);
+    relay.moteDb.db.prepare("DELETE FROM agent_registry WHERE motebit_id = ?").run(mid);
+    relay.moteDb.db.prepare("DELETE FROM identity_keys WHERE motebit_id = ?").run(mid);
+    const timestamp = Date.now();
+    const suite = "motebit-jcs-ed25519-hex-v1";
+    const msg = new TextEncoder().encode(
+      canonicalJson({ old_public_key: upper, new_public_key: hex(k), timestamp, suite }),
+    );
+    const sig = bytesToHex(await ed25519Sign(msg, k.privateKey));
+    const record = {
+      old_public_key: upper,
+      new_public_key: hex(k),
+      timestamp,
+      suite,
+      old_key_signature: sig,
+      new_key_signature: sig,
+    };
+    const res = await relay.app.request(`/api/v1/agents/${mid}/rotate-key`, {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify(record),
+    });
+    expect(res.status).toBe(409);
+    expect(successions(mid)).toBe(0);
+  });
+
   it("refuses a link that DEPARTS from a retired key — a holder-less identity cannot fork its chain (K1→K2, then K1→K3)", async () => {
     // A legacy identity with no holder row, whose registry is emptied by a
     // keyless master-token registration and then re-filled with the retired
