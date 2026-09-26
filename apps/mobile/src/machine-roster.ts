@@ -15,9 +15,16 @@
  *   - `signer()` — the key in SecureStore (`device_private_key`); the
  *     roster routes' bearer is a `device:auth` token minted over the SAME
  *     bytes, never the operator's master token.
- *   - `localSuccession()` / `pinnedGuardian()` — the stored motebit.md, only
- *     when its signature verifies and it names THIS motebit (§1A route 1:
- *     identity files are a record source, never evidence on their own).
+ *   - `localSuccession()` — the succession records of the stored motebit.md,
+ *     only when it verifies, names THIS motebit AND its current key is the
+ *     key this phone holds. A file proves possession, not identity (§1A F2):
+ *     a file signed by any other key contributes nothing. The records are
+ *     self-verifying; they are evidence for the resolver, never a class.
+ *   - `pinnedGuardian()` — always null. Nothing on the phone ever writes a
+ *     guardian from a trusted source, and a guardian read from a
+ *     self-signed file would let that file's author sign a recovery onto
+ *     any key (#799 W1). R6's stated cost applies: guardian-recovered
+ *     identities stay unconfirmed here.
  *   - the replica — `machine-roster-store.ts` (AsyncStorage, one key per
  *     motebit, merge-save on its own in-process chain).
  *   - `exclusive` — a separate in-process chain (one JS process).
@@ -84,30 +91,26 @@ export function retryAfterMs(header: string | null, now: number): number | undef
   return Number.isFinite(at) ? Math.max(0, at - now) : undefined;
 }
 
-const HEX_32 = /^[0-9a-f]{64}$/;
-
 /**
- * Succession records and the guardian from the stored identity file — only
- * when it verifies and names THIS motebit (a file left behind by another
- * identity contributes nothing).
+ * Succession records from the stored identity file — only when it verifies,
+ * names THIS motebit, and its current key IS the held key. A file signed by
+ * any other key (left behind by another identity, or planted) contributes
+ * nothing. Never a guardian (#799 W1).
  */
-export async function identityFileEvidence(
+export async function identityFileRecords(
   motebitId: string,
   content: string | null,
-): Promise<{ records: KeySuccessionRecord[]; guardian: string | null }> {
-  const none = { records: [], guardian: null };
-  if (content == null || content === "") return none;
+  heldPublicKeyHex: string | null,
+): Promise<KeySuccessionRecord[]> {
+  if (content == null || content === "" || heldPublicKeyHex == null) return [];
   try {
     const v = await verifyIdentityFile(content, { expectedType: "identity" });
-    if (v.type !== "identity" || !v.valid || !v.identity) return none;
-    if (v.identity.motebit_id !== motebitId) return none;
-    const g = v.identity.guardian?.public_key;
-    return {
-      records: v.identity.succession ?? [],
-      guardian: typeof g === "string" && HEX_32.test(g) ? g : null,
-    };
+    if (v.type !== "identity" || !v.valid || !v.identity) return [];
+    if (v.identity.motebit_id !== motebitId) return [];
+    if (v.identity.identity.public_key.toLowerCase() !== heldPublicKeyHex.toLowerCase()) return [];
+    return v.identity.succession ?? [];
   } catch {
-    return none;
+    return [];
   }
 }
 
@@ -134,18 +137,15 @@ export function mobileRosterPorts(deps: MobileRosterDeps): MachineRosterPorts {
       return { ok: false, reason: err instanceof Error ? err.message : String(err) };
     }
   };
-  // One read of the identity file per acquisition (both ports ask).
-  let evidence: Promise<{ records: KeySuccessionRecord[]; guardian: string | null }> | null = null;
-  const local = () => {
-    const p = (evidence ??= deps
-      .loadIdentityFile()
-      .catch(() => null)
-      .then((c) => identityFileEvidence(deps.motebitId, c)));
-    // Re-read next time: a rotation re-signs the file.
-    void p.finally(() => {
-      if (evidence === p) evidence = null;
+  /** The public key of the key this phone holds now, or null. */
+  const heldPublicKey = async (): Promise<string | null> => {
+    const hex = await deps.loadPrivateKeyHex();
+    if (hex == null || hex === "") return null;
+    const s = await createRosterSigner({
+      privateKey: hexToBytes(hex),
+      authorization: () => Promise.resolve({}),
     });
-    return p;
+    return s.publicKeyHex;
   };
   return {
     motebitId: deps.motebitId,
@@ -206,8 +206,15 @@ export function mobileRosterPorts(deps: MobileRosterDeps): MachineRosterPorts {
         return { status: null, reason: err instanceof Error ? err.message : String(err) };
       }
     },
-    localSuccession: async () => (await local()).records,
-    pinnedGuardian: async () => (await local()).guardian,
+    localSuccession: async () => {
+      const [content, held] = await Promise.all([
+        deps.loadIdentityFile().catch(() => null),
+        heldPublicKey().catch(() => null),
+      ]);
+      return identityFileRecords(deps.motebitId, content, held);
+    },
+    // Never a local pin on the phone (#799 W1; R6 stated cost).
+    pinnedGuardian: () => Promise.resolve(null),
     cache: {
       load: () => loadReplica(deps.motebitId, kv, now),
       save: (replica) => saveReplica(replica, kv, now),

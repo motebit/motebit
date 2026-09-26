@@ -38,6 +38,7 @@ import {
   hostRetirementId,
   signHostEnrollment,
   signHostRetirement,
+  signGuardianRecoverySuccession,
   signKeySuccession,
   verifySignedToken,
   type KeyPair,
@@ -56,7 +57,7 @@ import {
 import {
   DISPOSED,
   createMobileMachineRoster,
-  identityFileEvidence,
+  identityFileRecords,
   mobileRosterPorts,
   retryAfterMs,
   rosterAfterRotationCommit,
@@ -376,14 +377,39 @@ describe("mobile ports", () => {
       newPrivateKey: b.privateKey,
       successionRecord: record,
     });
-    const ev = await identityFileEvidence(MID, rotated);
-    expect(ev.records).toHaveLength(1);
-    expect(ev.records[0]!.new_public_key).toBe(hex(b));
-    expect(ev.guardian).toBe(hex(g));
-    expect(await identityFileEvidence(OTHER_MID, rotated)).toEqual({ records: [], guardian: null });
-    const tampered = rotated.replace(hex(g), hex(b));
-    expect(await identityFileEvidence(MID, tampered)).toEqual({ records: [], guardian: null });
-    expect(await identityFileEvidence(MID, null)).toEqual({ records: [], guardian: null });
+    const recs = await identityFileRecords(MID, rotated, hex(b));
+    expect(recs).toHaveLength(1);
+    expect(recs[0]!.new_public_key).toBe(hex(b));
+    // #799 W1 — a file whose current key is not the held key contributes nothing.
+    expect(await identityFileRecords(MID, rotated, hex(a))).toEqual([]);
+    expect(await identityFileRecords(MID, rotated, null)).toEqual([]);
+    expect(await identityFileRecords(OTHER_MID, rotated, hex(b))).toEqual([]);
+    const tampered = rotated.replace(hex(g), hex(a));
+    expect(await identityFileRecords(MID, tampered, hex(b))).toEqual([]);
+    expect(await identityFileRecords(MID, null, hex(b))).toEqual([]);
+  });
+
+  it("#799 W1: the phone never pins a guardian, whatever its stored file names", async () => {
+    const a = await generateKeypair();
+    const g = await generateKeypair();
+    const file = await generate(
+      {
+        motebitId: MID,
+        ownerId: "owner",
+        publicKeyHex: hex(a),
+        guardian: { public_key: hex(g), established_at: "2026-01-01T00:00:00.000Z" },
+      },
+      a.privateKey,
+    );
+    const ports = mobileRosterPorts({
+      motebitId: MID,
+      deviceId: "phone-device",
+      loadPrivateKeyHex: async () => bytesToHex(a.privateKey),
+      syncUrl: async () => null,
+      loadIdentityFile: async () => file,
+    });
+    expect(await ports.pinnedGuardian()).toBeNull();
+    expect(await ports.localSuccession()).toEqual([]); // no records, and the key matches
   });
 });
 
@@ -454,6 +480,50 @@ describe("createMobileMachineRoster", () => {
     expect(relay.enr.size).toBe(1);
     expect(relay.posts).toBe(0);
   });
+
+  for (const fileKey of ["held", "foreign"] as const) {
+    it(`#799 W1 probe (${fileKey} file key): a planted self-signed motebit.md naming a guardian with a recovery onto the device-only key never makes it the identity key`, async () => {
+      const g = await generateKeypair(); // the sovereign genesis key
+      const d = await generateKeypair(); // the phone's device-only key
+      const a = await generateKeypair(); // the planted file's signer
+      const gg = await generateKeypair(); // the guardian the planted file names
+      const y = await deriveSovereignMotebitId(hex(g));
+      const recovery = await signGuardianRecoverySuccession(
+        gg.privateKey,
+        d.privateKey,
+        g.publicKey,
+        d.publicKey,
+      );
+      const planted = await generate(
+        {
+          motebitId: y,
+          ownerId: "o",
+          publicKeyHex: hex(a),
+          guardian: { public_key: hex(gg), established_at: "2026-01-01T00:00:00.000Z" },
+        },
+        a.privateKey,
+      );
+      const to = fileKey === "held" ? d : await generateKeypair();
+      const file = await rotateIdentityFile({
+        existingContent: planted,
+        newPublicKey: to.publicKey,
+        newPrivateKey: to.privateKey,
+        successionRecord: recovery,
+      });
+      const relay = new FetchRelay();
+      relay.enr.set("1", await enrol(g, "host-1", y));
+      relay.enr.set("2", await enrol(g, "host-2", y));
+      const p = phone(relay, d, { motebitId: y, identityFile: file });
+      await p.section.refresh();
+      const s = p.section.getState();
+      expect(s.heldKey?.kind).not.toBe("identity");
+      expect(s.view?.kind === "roster" ? s.view.claim : null).toBeNull();
+      expect(s.lineActions.some((x) => x.retire || x.enroll)).toBe(false);
+      await p.section.retire("host-1");
+      expect(relay.ret.size).toBe(0);
+      expect(relay.posts).toBe(0);
+    });
+  }
 
   it("route 1 on the phone: a rotated sovereign identity roots through the stored motebit.md's link while the relay serves no chain", async () => {
     const g = await generateKeypair();

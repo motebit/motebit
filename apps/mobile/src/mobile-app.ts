@@ -1244,6 +1244,7 @@ export class MobileApp {
   // === Lifecycle ===
 
   start(): void {
+    this._rosterStopped = false;
     this.runtime?.start();
   }
 
@@ -1251,6 +1252,8 @@ export class MobileApp {
     this.runtime?.stop();
     this.renderer.dispose();
     this.stopSync();
+    // Stays disposed: machineRoster() creates none until start().
+    this._rosterStopped = true;
     this.disposeMachineRoster();
   }
 
@@ -1866,6 +1869,8 @@ export class MobileApp {
   private _machineRoster: MobileMachineRoster | null = null;
   /** A restore wrote another identity's key: no roster until the app reloads. */
   private _identityPendingReload = false;
+  /** Between stop() and the next start(): no roster. */
+  private _rosterStopped = false;
 
   /**
    * The Machines section, one per identity: `null` before bootstrap and
@@ -1875,7 +1880,7 @@ export class MobileApp {
   machineRoster(): MobileMachineRoster | null {
     const motebitId = this.motebitId;
     const deviceId = this.deviceId;
-    if (this._identityPendingReload) return null;
+    if (this._identityPendingReload || this._rosterStopped) return null;
     if (motebitId === "" || motebitId === "mobile-local" || deviceId === "") return null;
     const existing = this._machineRoster;
     if (existing != null && existing.motebitId === motebitId && existing.deviceId === deviceId) {
@@ -2540,6 +2545,11 @@ export class MobileApp {
     }
 
     const newDeviceId = crypto.randomUUID();
+    // BEFORE the key slot is written: from here the slot may hold the
+    // restored identity's key while this process still runs as the old
+    // one, so no roster reads it until the reload.
+    this._identityPendingReload = true;
+    this.disposeMachineRoster();
     try {
       await this.keyring.set("device_private_key", request.privateKeyHex);
     } catch {
@@ -2551,11 +2561,6 @@ export class MobileApp {
       await this.keyring.set("device_public_key", request.metadata.publicKey);
     } catch {
       return { ok: false, reason: "config_write_failed" };
-    } finally {
-      // The key slot now holds the restored identity's key while this
-      // process still runs as the old one: no roster until the reload.
-      this._identityPendingReload = true;
-      this.disposeMachineRoster();
     }
     return { ok: true, motebitId: request.metadata.motebitId, needsReload: true };
   }

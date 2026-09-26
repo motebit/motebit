@@ -885,6 +885,11 @@ describe("MobileApp.machineRoster", () => {
     const r = app.machineRoster()!;
     app.stop();
     expect(await disposed(r)).toBe(true);
+    // Stays disposed: none is re-created until start().
+    expect(app.machineRoster()).toBeNull();
+    app.start();
+    expect(app.machineRoster()).not.toBeNull();
+    app.stop();
   });
 
   it("a restore disposes the roster and leaves none until the app reloads", async () => {
@@ -892,12 +897,25 @@ describe("MobileApp.machineRoster", () => {
     app.motebitId = MID_A;
     app.deviceId = "phone-1";
     const r = app.machineRoster()!;
+    // At the moment the key slot is written, no live roster may exist.
+    const keyring = (
+      app as unknown as { keyring: { set: (k: string, v: string) => Promise<void> } }
+    ).keyring;
+    const realSet = keyring.set.bind(keyring);
+    const atKeyWrite: Array<{ live: boolean; disposed: boolean }> = [];
+    vi.spyOn(keyring, "set").mockImplementation(async (k: string, v: string) => {
+      if (k === "device_private_key") {
+        atKeyWrite.push({ live: app.machineRoster() != null, disposed: await disposed(r) });
+      }
+      return realSet(k, v);
+    });
     const out = await app.restoreIdentity({
       privateKeyHex: "11".repeat(32),
       metadata: { motebitId: MID_B, publicKey: "22".repeat(32), bornAt: "not-a-date" },
       preserveMemories: false,
     } as unknown as Parameters<MobileApp["restoreIdentity"]>[0]);
     expect(out.ok).toBe(true);
+    expect(atKeyWrite).toEqual([{ live: false, disposed: true }]);
     expect(await disposed(r)).toBe(true);
     expect(app.machineRoster()).toBeNull();
     app.stop();
