@@ -64,7 +64,40 @@ export type {
   EnrollRefusal,
   RotationHookOutcome,
   NotCarried,
+  MachineRosterOptions,
+  HeldKeyGate,
+  HeldKeyRefusal,
 } from "./machine-roster.js";
+// Machine roster C-2 (docs/proposals/machine-roster-surfaces-v1.md §1A/§1B):
+// whether the held key is the identity key, the custody flag, and the
+// Settings section state holder every C-2 surface shares.
+export {
+  classifyHeldKey,
+  heldKeyText,
+  parseCustodyFlag,
+  custodyFlagFor,
+  custodyAfterRotation,
+  rotationLinkReplica,
+} from "./machine-roster-held-key.js";
+export type { HeldKeyClass, IdentityBasis, CustodyFlag } from "./machine-roster-held-key.js";
+export {
+  createMachineRosterSection,
+  rosterLineActions,
+  retireNotice,
+  enrollNotice,
+  needsForceText,
+  replicaDigest,
+  presentationDue,
+  nextPresentationRecord,
+} from "./machine-roster-section.js";
+export type {
+  MachineRosterSection,
+  MachineRosterSectionDeps,
+  MachineRosterSectionState,
+  PresentationCadence,
+  PresentationRecord,
+  RosterLineActions,
+} from "./machine-roster-section.js";
 export {
   emptyReplica,
   parseReplica,

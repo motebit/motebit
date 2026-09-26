@@ -76,6 +76,19 @@ const ADOPTIONS: readonly Adoption[] = [
     files: ["apps/cli/src/machine-roster.ts"],
     maxLines: 360,
   },
+  {
+    // Machine roster C-2 (docs/proposals/machine-roster-surfaces-v1.md S6):
+    // the held-key gate, the non-host rules and the Settings section state
+    // holder live in the kit (`createMachineRosterSection` over
+    // `MachineRoster.gated`). The web adapter carries the ports (device-token
+    // fetches, Retry-After), the Web Locks (mint lock + presentation leader),
+    // the cadence store wiring and the two custody doors; its IndexedDB
+    // replica is `machine-roster-store.ts`, its render `ui/machines-section.ts`.
+    // Mobile (C-2b) and desktop (C-2c) join this entry.
+    controller: "createMachineRosterSection",
+    files: ["apps/web/src/machine-roster.ts"],
+    maxLines: 360,
+  },
 ];
 
 const errors: string[] = [];

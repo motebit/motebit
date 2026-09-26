@@ -155,6 +155,23 @@ Each surface adds a thin adapter (ports) plus its render. `check-surface-control
 
 Each increment is one PR with its own two review rounds under the amended rule.
 
+### C-2a build notes
+
+These record where the build departs from, or adds to, the text above.
+
+- **The gate is a constructor, not an option.** `MachineRoster.gated(ports, { heldKey: { custodyFlag } })` classifies the held key on every acquisition (before anything is presented) and refuses `retire`, `enroll`, `ensureEnrolled` (`held-key-not-identity`), `present` (a report marked `refused`), omission repair, and the rotation hook (`no-verdict`, frozen `absent`). The roster class carries the refusal in a type parameter that is `never` on an ungated roster, so the CLI's outcome types and behaviour are unchanged (R5).
+- **`classifyHeldKey(acq, { custodyFlag })`.** The flag is read through the gate's port; `classifyResolved` is the shared core. The "record touches the held key" test for `device-key` reads the resolved links, the branch records and the replica's verified records.
+- **`selfIsHost: false` is the kit's half of F5b; the own-id refusal is the section's.** With `selfIsHost: false`, `enroll(own)` takes the R17 refusals and records no own mint (the desktop's shape). The browser additionally refuses `enroll(own)` outright ("This device is not a host.") through the section's `refuseOwnEnroll`, which defaults to true.
+- **A device-only key hides the roster.** The section sets `rosterHidden` for `device-key`, and the browser then renders only the reason. `unconfirmed` shows the lines with no count (B1's stated cost).
+- **The bearer is minted over the signer's own bytes.** The adapter calls `mintAudienceToken` with audience `device:auth` over the same private key the signer holds (the primitive `createSyncToken` wraps), rather than `createSyncToken`, which re-reads the keystore. So the bearer and the entry signatures are one key even if another tab rotates in between (C2 R7). Never the master token.
+- **Retry-After also holds back omission repair.** A repair is a presentation (R2), so the web tab repairs only while it holds the presentation lock AND no Retry-After is pending, and the section records a repair's report as it records any other. When a 429 carries `Retry-After`, the kit sends no further chunk; without the header (the CLI's port never passes one), every chunk is still sent.
+- **Cadence.** N is 10 minutes (`PRESENT_EVERY_MS`). The digest is SHA-256 over the replica's sorted canonical entries. A presentation counts as fully taken when nothing is left to retry (`roster_full` ids are permanent and count as taken).
+- **Storage.** The database is `motebit-roster`. It has four stores: `replicas` and `custody`, both keyed by motebit_id, plus `presentation` and `aside`. A load that finds an unreadable value moves it aside in the same transaction and frees the name, as the CLI does. An unreadable custody flag reads as no flag, so the key stays unconfirmed. No shared-names row is added, because the table lists `~/.motebit` files and the browser's storage is origin-scoped.
+- **Custody paths.** A first-launch bootstrap (`isFirstLaunch`) records the key it just stored. `completePairing` records the transferred seed right after `storePrivateKey`, and only on that branch; a pairing without a transfer, a failed decrypt, or a wallet-funds refusal never reaches it. The rotation commit (`rotateWebKey`'s new `afterCommit`, which runs after the key is stored) appends the link and moves the flag, and each of those two steps is best-effort and independent.
+- **Stated gap: restore does not set the flag** (the brief names only mint and key transfer). A restored sovereign id roots anyway (route 1). A restored legacy id whose relay holds no proven key stays `unconfirmed`, so the browser's remedy text says "re-pair it with a key transfer" and does not mention restore. B1's stated cost mentions restore; that sentence needs a founder decision.
+- **Placement.** The Machines card is built by `ui/settings.ts` inside the Identity pane, after the identity card, rather than in `index.html`. The Rotate confirmation now states N3's cost.
+- **Presentation on connect.** The section is created, and takes the leader lock, on the first sync `connected` or the first Settings → Identity open, whichever comes first.
+
 ## 3. Open questions for design review round 2
 
 1. Is `classifyHeldKey` sound on every surface, and is `unconfirmed` reached in any routine state where the surface does hold the identity key, so that counts stay suppressed for good?

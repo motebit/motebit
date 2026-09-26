@@ -919,3 +919,119 @@ describe("WebApp.announceMotebit — sovereign-binding skip is terminal, not cac
     expect(localStorage.getItem("motebit-announced")).toBe("1");
   });
 });
+
+describe("Machine roster custody flag (machine-roster-surfaces-v1 B1) — set only by the two custody paths", () => {
+  const flagFor = async (motebitId: string) => {
+    const { openRosterDb, loadCustodyFlag } = await import("../machine-roster-store.js");
+    return loadCustodyFlag(await openRosterDb(), motebitId);
+  };
+
+  it("path 1: a first-launch mint records custody of the minted key; a later launch never re-records it", async () => {
+    const app = new WebApp();
+    await app.bootstrap();
+    const flag = await flagFor(app.motebitId);
+    expect(flag).toMatchObject({
+      motebit_id: app.motebitId,
+      public_key: app.publicKeyHex,
+      reason: "minted",
+    });
+    app.stop();
+
+    // Clear it; a second launch of the same identity is not a mint.
+    const { openRosterDb } = await import("../machine-roster-store.js");
+    const db = await openRosterDb();
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction("custody", "readwrite");
+      tx.objectStore("custody").delete(app.motebitId);
+      tx.oncomplete = () => resolve();
+    });
+    // The same browser, relaunched: its key slot holds the same key.
+    type WithKeyStore = {
+      keyStore: { loadPrivateKey(): Promise<string>; storePrivateKey(h: string): Promise<void> };
+    };
+    const again = new WebApp();
+    await (again as unknown as WithKeyStore).keyStore.storePrivateKey(
+      await (app as unknown as WithKeyStore).keyStore.loadPrivateKey(),
+    );
+    await again.bootstrap();
+    expect(again.motebitId).toBe(app.motebitId);
+    expect(await flagFor(again.motebitId)).toBeNull();
+    again.stop();
+  });
+
+  it("path 2: a Link Device WITH key transfer records custody of the transferred key", async () => {
+    const enc = await import("@motebit/encryption");
+    const identity = await enc.generateKeypair();
+    const motebitId = "0190f1a2-0000-7000-8000-0000000c0de1";
+    const claimer = enc.generateX25519Keypair();
+    const pairingCode = "ABC123";
+    const keyTransfer = await enc.buildKeyTransferPayload(
+      identity.privateKey,
+      enc.bytesToHex(identity.publicKey),
+      claimer.publicKey,
+      pairingCode,
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("{}", { status: 200 })),
+    );
+    const app = new WebApp(); // a fresh device: nothing in its key slot
+    await app.completePairing(
+      { motebitId, deviceId: "dev-b" },
+      {
+        keyTransfer,
+        ephemeralPrivateKey: claimer.privateKey,
+        pairingCode,
+        syncUrl: "https://relay.test",
+        pairingId: "p1",
+      },
+    );
+    expect(await flagFor(motebitId)).toMatchObject({
+      motebit_id: motebitId,
+      public_key: enc.bytesToHex(identity.publicKey),
+      reason: "key-transfer",
+    });
+  });
+
+  it("a pairing WITHOUT key transfer never records custody", async () => {
+    const motebitId = "0190f1a2-0000-7000-8000-0000000c0de2";
+    const app = new WebApp();
+    await app.completePairing({ motebitId, deviceId: "dev-c" });
+    expect(await flagFor(motebitId)).toBeNull();
+  });
+
+  it("a transfer that fails to decrypt records nothing", async () => {
+    const enc = await import("@motebit/encryption");
+    const identity = await enc.generateKeypair();
+    const motebitId = "0190f1a2-0000-7000-8000-0000000c0de3";
+    const claimer = enc.generateX25519Keypair();
+    const keyTransfer = await enc.buildKeyTransferPayload(
+      identity.privateKey,
+      enc.bytesToHex(identity.publicKey),
+      claimer.publicKey,
+      "RIGHT1",
+    );
+    const app = new WebApp();
+    await app.completePairing(
+      { motebitId, deviceId: "dev-d" },
+      {
+        keyTransfer,
+        ephemeralPrivateKey: claimer.privateKey,
+        pairingCode: "WRONG1",
+        syncUrl: "https://relay.test",
+        pairingId: "p2",
+      },
+    );
+    expect(await flagFor(motebitId)).toBeNull();
+  });
+
+  it("machineRoster() is null before bootstrap and one section per identity after", async () => {
+    const app = new WebApp();
+    expect(app.machineRoster()).toBeNull();
+    await app.bootstrap();
+    const r = app.machineRoster();
+    expect(r).not.toBeNull();
+    expect(app.machineRoster()).toBe(r);
+    app.stop();
+  });
+});

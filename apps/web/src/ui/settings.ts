@@ -22,6 +22,7 @@ import { rebuildTTSProvider } from "../main";
 import { ELEVENLABS_VOICES, DEEPGRAM_VOICES } from "@motebit/voice";
 import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { ColorPickerAPI } from "./color-picker";
+import { mountMachines } from "./machines-section";
 import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_GOOGLE_MODEL, isLocalServerUrl } from "@motebit/sdk";
 
 /** Which provider tab the UI is showing. Maps from `UnifiedProviderConfig.mode`. */
@@ -212,6 +213,38 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     identityPublicKey.textContent = pubHex || "—";
     populateWalletFields();
     resetRecoverySeedUi();
+    populateMachines();
+  }
+
+  // === Machines (machine-roster-surfaces-v1 S5) ===
+  //
+  // Beside the device id, under Identity — "what I am": the machines this
+  // motebit runs on. A record in a panel, never a toast. The card is built
+  // here (not in index.html) and re-mounted when the identity changes.
+  let machinesMounted: { section: unknown; unmount: () => void } | null = null;
+  function populateMachines(): void {
+    const roster = ctx.app.machineRoster();
+    const pane = document.getElementById("pane-identity");
+    if (roster == null || pane == null) return;
+    let card = document.getElementById("settings-machines");
+    if (card == null) {
+      card = document.createElement("div");
+      card.id = "settings-machines";
+      card.className = "settings-card";
+      card.style.marginTop = "8px";
+      const title = document.createElement("div");
+      title.className = "card-title";
+      title.textContent = "Machines";
+      card.append(title);
+      const identityCard = pane.querySelector(".settings-card");
+      if (identityCard?.nextSibling) pane.insertBefore(card, identityCard.nextSibling);
+      else pane.append(card);
+    }
+    if (machinesMounted?.section !== roster.section) {
+      machinesMounted?.unmount();
+      machinesMounted = { section: roster.section, unmount: mountMachines(card, roster.section) };
+    }
+    void roster.section.refresh();
   }
 
   /** Reset the recovery seed UI to the hidden state. Called every time
@@ -573,7 +606,9 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   // Rotate Key button
   document.getElementById("settings-rotate-key")?.addEventListener("click", () => {
     const confirmed = confirm(
-      "Rotate your Ed25519 keypair? The old key signs a succession record transferring trust to the new key.",
+      "Rotate your Ed25519 keypair? The old key signs a succession record transferring trust to the new key.\n\n" +
+        // machine-roster-surfaces-v1 N3 — the C-1 cost, stated.
+        "Your machines will need to be enrolled again under the new key.",
     );
     if (!confirmed) return;
     void ctx.app
