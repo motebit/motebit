@@ -91,9 +91,8 @@ export interface HostLiveUnenrolled {
   /** Sockets the relay believes open — see `HostLivenessRow.sockets_open`. */
   sockets_open: number;
   /**
-   * See `HostLivenessRow.host_sockets_open`. Always 0 here unless a row was
-   * swept while its host socket stayed open (it cannot be: the sweep skips
-   * such a row) — a live host socket makes a row.
+   * See `HostLivenessRow.host_sockets_open`. Always 0 here: the GET puts
+   * every pair with a live host socket in `rows`, persisted or not.
    */
   host_sockets_open: number;
 }

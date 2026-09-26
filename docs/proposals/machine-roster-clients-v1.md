@@ -228,7 +228,7 @@ The decision is taken on the **current** verdict over **the cache ∪ a successf
 - **N10: the genesis key ends the walk.** For a sovereign-shaped id, a key that binds to the id ends the walk. Any predecessor of it is disclosed, never walked.
 - **N11: fork wording.** The disclosure says "the holder of A signed two successors", not "A was compromised"; two offline rotations on two surfaces produce the same thing honestly. C1.7 still suppresses when a normal sibling is the relay's head.
 - **N12: two C6 wording fixes.**
-  - C6.2 says "socket open" only when `host_sockets_open > 0` (else `sockets_open` from an older relay), and otherwise "last seen under a superseded key".
+  - C6.2 says "socket open" only when `sockets_open > 0` (any bound socket: on a superseded key the question is what is attached, not whether a host is alive), and otherwise "last seen under a superseded key".
   - After a restore that gives a fresh `device_id`, offer to retire the prior line.
 - **N13: ordering with #775.** C-0 lands after #775, or its tests pin the behaviour against it.
 - **C-0 build notes.** These record where the primitive (`resolveRosterKeyChain`) departs from this text:

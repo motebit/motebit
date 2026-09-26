@@ -11,7 +11,7 @@
  *   unattended work, is not refreshed by the flush — and is NOT kept by
  *   the sweep's live-skip either: a non-host socket on the pair (the desktop
  *   app shares the CLI daemon's device_id) is not that host's liveness. The
- *   flush, the live-skip and the GET's `sockets_open` are one predicate
+ *   flush, the live-skip and the GET's `host_sockets_open` are one predicate
  *   (`livenessKeyOf`).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
