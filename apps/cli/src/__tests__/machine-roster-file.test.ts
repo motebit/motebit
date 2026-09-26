@@ -320,3 +320,15 @@ describe("N8 — whatever announces unattended_runtime passes through the mint s
     expect(announcers).toBeGreaterThan(0);
   });
 });
+
+describe("R21 option (a) — `motebit rotate` captures BEFORE it sends the rotation", () => {
+  it("rotate.ts calls rosterCaptureBeforeRotate before performRotation, and the hook after", () => {
+    const src = readFileSync(join(__dirname, "..", "subcommands", "rotate.ts"), "utf-8");
+    const capture = src.indexOf("await rosterCaptureBeforeRotate(");
+    const rotate = src.indexOf("await performRotation(");
+    const hook = src.indexOf("await rosterHookAfterRotate(");
+    expect(capture).toBeGreaterThan(0);
+    expect(rotate).toBeGreaterThan(capture);
+    expect(hook).toBeGreaterThan(rotate);
+  });
+});

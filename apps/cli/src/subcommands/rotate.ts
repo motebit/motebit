@@ -17,7 +17,7 @@ import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { CliConfig } from "../args.js";
 import { CONFIG_DIR, loadFullConfig, saveFullConfig } from "../config.js";
 import { decryptPrivateKey, resolveUnlockPassphrase } from "../identity.js";
-import { rosterHookAfterRotate } from "../machine-roster.js";
+import { rosterCaptureBeforeRotate, rosterHookAfterRotate } from "../machine-roster-rotation.js";
 import {
   clearPendingRotation,
   loadAnyPendingRotation,
@@ -98,6 +98,10 @@ export async function handleRotate(config: CliConfig): Promise<void> {
 
   const syncUrl = resolveRelayUrl(config);
   console.log(`  Relay: ${syncUrl}`);
+
+  // R21 option (a): capture this machine's roster status under the OLD
+  // key, before anything is sent (skipped while a rotation is in flight).
+  await rosterCaptureBeforeRotate({ passphrase, syncUrl, identityPath, decryptPrivateKey });
 
   let outcome;
   try {

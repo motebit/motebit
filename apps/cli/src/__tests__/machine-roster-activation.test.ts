@@ -18,6 +18,8 @@ import {
   generateKeypair,
   bytesToHex,
   hexToBytes,
+  mintAudienceToken,
+  signHostEnrollment,
 } from "@motebit/encryption";
 import type { KeyPair } from "@motebit/encryption";
 import { MachineRoster, buildRosterView } from "@motebit/surface-kit";
@@ -34,13 +36,9 @@ import {
 } from "../pending-rotation.js";
 import { registerWithRelay } from "../relay-registration.js";
 import { performRotation } from "../rotation.js";
-import {
-  cliRosterPorts,
-  enrollOnAnnounce,
-  rosterHookAfterRotate,
-  type CliRosterContext,
-} from "../machine-roster.js";
+import { cliRosterPorts, enrollOnAnnounce, type CliRosterContext } from "../machine-roster.js";
 import { formatRosterView } from "../subcommands/machines.js";
+import { rosterCaptureBeforeRotate, rosterHookAfterRotate } from "../machine-roster-rotation.js";
 import { loadReplica } from "../machine-roster-file.js";
 
 const PASS = "correct horse";
@@ -254,6 +252,18 @@ describe("the rotation hook after a real rotation (R21, option b)", () => {
   it("an active host rotates: enrolled under the new key; the old line is history; `machines` still counts one", async () => {
     const f = await registeredHost();
     await enrollOnAnnounce(ctx(f), () => {});
+    // R21 (a): the capture under A, before the rotation is sent.
+    expect(
+      await rosterCaptureBeforeRotate({
+        passphrase: PASS,
+        syncUrl: SYNC_URL,
+        identityPath: f.identityPath,
+        decryptPrivateKey,
+        loadConfig: () => ({ ...config }),
+        dir,
+        fetchImpl: viaRelay,
+      }),
+    ).toBe("captured");
     const o = await performRotation({
       identityPath: f.identityPath,
       loadConfig: () => ({ ...config }),
@@ -340,6 +350,18 @@ describe("F1 (#783 decisive round): a retired host that loses its replica never 
         "retired",
       );
       // Rotate A → B for real; the hook freezes not-active and mints nothing.
+      // R21 (a): the capture under A, before the rotation is sent.
+      expect(
+        await rosterCaptureBeforeRotate({
+          passphrase: PASS,
+          syncUrl: SYNC_URL,
+          identityPath: f.identityPath,
+          decryptPrivateKey,
+          loadConfig: () => ({ ...config }),
+          dir,
+          fetchImpl: viaRelay,
+        }),
+      ).toBe("captured");
       const o = await performRotation({
         identityPath: f.identityPath,
         loadConfig: () => ({ ...config }),
@@ -434,4 +456,118 @@ describe("P2 (#785): a 200 from /succession that is not a key chain is a failed 
       expect(relayEntries(f.mid, "enrollment")).toBe(0);
     },
   );
+});
+
+describe("#785 decisive round: an old-key line presented between the link and a resumed hook never re-activates a retired machine", () => {
+  it("retired D; linked device K; rotate → held (lost response); the old-key holder presents a fresh A-enrolment via K; rotate resumes ⇒ D stays retired", async () => {
+    const f = await registeredHost();
+    expect((await enrollOnAnnounce(ctx(f), () => {}))?.kind).toBe("minted");
+    expect((await new MachineRoster(cliRosterPorts(ctx(f))).retire(f.deviceId)).kind).toBe(
+      "retired",
+    );
+    // A device linked without the identity key: its own key K, its own row.
+    const k = await generateKeypair();
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO devices (device_id, motebit_id, device_token, public_key, registered_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run("linked-k", f.mid, "tok-linked-k", hex(k), Date.now());
+
+    const deps = (fetchImpl: typeof fetch) => ({
+      identityPath: f.identityPath,
+      loadConfig: () => ({ ...config }),
+      saveConfig: (c: FullConfig) => {
+        config = c;
+      },
+      pending: {
+        load: (mid: string, key: string) => loadPendingRotation(mid, key, dir),
+        loadAny: () => loadAnyPendingRotation(dir),
+        save: (p: Parameters<typeof savePendingRotation>[0]) => savePendingRotation(p, dir),
+        clear: () => clearPendingRotation(dir),
+        setAside: () => setAsidePendingRotation(dir),
+        path: pendingRotationPath(dir),
+      },
+      passphrase: PASS,
+      syncUrl: SYNC_URL,
+      fetchImpl,
+    });
+    const capture = () =>
+      rosterCaptureBeforeRotate({
+        passphrase: PASS,
+        syncUrl: SYNC_URL,
+        identityPath: f.identityPath,
+        decryptPrivateKey,
+        loadConfig: () => ({ ...config }),
+        dir,
+        fetchImpl: viaRelay,
+      });
+
+    // Attempt 1: captured under A (not active — D is retired); the relay
+    // RECORDS A → B, and the response is lost.
+    expect(await capture()).toBe("captured");
+    const lost: typeof fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const resp = await viaRelay(input, init);
+      if (url.endsWith("/rotate-key") && (init?.method ?? "GET").toUpperCase() === "POST") {
+        throw new Error("socket hang up");
+      }
+      return resp;
+    };
+    const held = await performRotation(deps(lost));
+    expect(held.kind).toBe("held");
+
+    // The holder of A re-lights D with a fresh A-enrolment, presented under K's device token.
+    const fresh = await signHostEnrollment(
+      {
+        motebit_id: f.mid,
+        device_id: f.deviceId,
+        public_key: hex(f.a),
+        enrolled_at: Date.now() + 1,
+      },
+      f.a.privateKey,
+    );
+    const { token } = await mintAudienceToken(
+      { mid: f.mid, did: "linked-k", aud: "device:auth" },
+      k.privateKey,
+    );
+    const posted = await viaRelay(`${SYNC_URL}/api/v1/agents/${f.mid}/roster`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ enrollments: [fresh] }),
+    });
+    expect(posted.status).toBe(200);
+
+    // Attempt 2 resumes: no fresh capture (a rotation is in flight), the
+    // relay already holds B, the commit finishes, the hook runs.
+    expect(await capture()).toBe("kept");
+    const o = await performRotation(deps(viaRelay));
+    expect(o.kind).toBe("rotated");
+    if (o.kind !== "rotated") return;
+    expect(o.relay).toBe("already-held");
+    await rosterHookAfterRotate({
+      identityPath: f.identityPath,
+      passphrase: PASS,
+      syncUrl: SYNC_URL,
+      newPublicKeyHex: o.newPublicKeyHex,
+      decryptPrivateKey,
+      loadConfig: () => ({ ...config }),
+      dir,
+      fetchImpl: viaRelay,
+    });
+
+    // Nothing was minted under B, and D is not active.
+    const underB = (
+      relay.moteDb.db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM relay_host_roster_entries WHERE motebit_id = ? AND kind = 'enrollment' AND signer_key = ?",
+        )
+        .get(f.mid, o.newPublicKeyHex) as { n: number }
+    ).n;
+    expect(underB).toBe(0);
+    const newKey = hexToBytes(await decryptPrivateKey(config.cli_encrypted_key!, PASS));
+    const acq = await new MachineRoster(cliRosterPorts(ctx(f, () => newKey))).acquire();
+    expect(acq.kind).toBe("acquired");
+    if (acq.kind !== "acquired") return;
+    expect(acq.verdict.active.map((m) => m.device_id)).not.toContain(f.deviceId);
+  });
 });

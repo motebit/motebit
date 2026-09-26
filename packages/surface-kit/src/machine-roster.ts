@@ -49,12 +49,14 @@ import {
 import { isHostEnrollment, isHostRetirement } from "@motebit/sdk";
 import type { HostEnrollment, HostRetirement, KeySuccessionRecord } from "@motebit/sdk";
 import {
+  captureFor,
   emptyReplica,
   frozenFor,
   mergeReplicas,
   type FrozenValue,
   type MachineRosterReplica,
   type ReplicaRead,
+  type RotationCapture,
 } from "./machine-roster-replica.js";
 
 const KEY_SUITE = "motebit-jcs-ed25519-hex-v1" as const;
@@ -446,6 +448,25 @@ const pairKey = (deviceId: string, key: string): string => JSON.stringify([devic
 
 type FrozenVerdictEntry = MachineRosterReplica["frozen"][number];
 
+/** The rotation hook's authority: the frozen entry it would persist, and the capture's line. */
+type RotationAuthority = FrozenVerdictEntry & { entries: string[] };
+
+/**
+ * A capture authorizes a mint on a superseded line only for the epoch it
+ * was taken at AND while one of the enrolments it saw still stands there.
+ */
+function authorizes(
+  rotation: RotationAuthority | undefined,
+  hKey: string,
+  standing: ReadonlyArray<{ enrollment_id: string }>,
+): boolean {
+  return (
+    rotation != null &&
+    rotation.pre_rotation_key === hKey &&
+    standing.some((e) => rotation.entries.includes(e.enrollment_id))
+  );
+}
+
 export class MachineRoster {
   constructor(private readonly ports: MachineRosterPorts) {}
 
@@ -642,7 +663,7 @@ export class MachineRoster {
   /** The C3 status table over one acquisition. */
   private async decide(
     acq: RosterAcquired,
-    rotation?: FrozenVerdictEntry,
+    rotation?: RotationAuthority,
   ): Promise<EnsureEnrolledOutcome> {
     const { status, epoch } = statusOf(acq.verdict, acq.deviceId);
 
@@ -686,10 +707,10 @@ export class MachineRoster {
     if (status === "superseded") {
       // R22 — read only the value keyed by the key of this machine's CURRENT H.
       const hKey = acq.chain.chain[epoch!]!;
-      const frozen =
-        rotation != null && rotation.pre_rotation_key === hKey
-          ? "active"
-          : frozenFor(acq.replica, acq.deviceId, hKey);
+      const line = acq.verdict.superseded.find((m) => m.device_id === acq.deviceId);
+      const frozen = authorizes(rotation, hKey, line?.entries ?? [])
+        ? "active"
+        : frozenFor(acq.replica, acq.deviceId, hKey);
       if (frozen !== "active") {
         return { kind: "superseded", frozen, presented: await this.present(acq) };
       }
@@ -782,12 +803,59 @@ export class MachineRoster {
   }
 
   /**
-   * The rotation hook, R21 option (b): AFTER the local commit, under the
-   * NEW key, reduce over the PRE-rotation chain (the chain minus its new
-   * head) and freeze this device's status there. Never between the relay
-   * recording the link and the local commit. A frozen `active` then runs
-   * the C3 table under the new key. Idempotent on the resume paths: the
-   * first frozen write wins, and one enrolment per `(device_id, key)`.
+   * R21 option (a), the first half: BEFORE the rotation is sent, under the
+   * OLD key, capture this device's status — active or not at the head it is
+   * about to leave — over the replica ∪ a successful roster GET ∪ a
+   * successful succession read. Any failed read captures `absent`. The
+   * capture replaces an older one for the same `(device_id, key)`: a
+   * surface calls this only when no rotation from this key is in flight
+   * (the CLI checks its write-ahead), so a resumed rotation keeps the
+   * capture its original attempt took.
+   */
+  async captureBeforeRotation(): Promise<RotationCapture> {
+    const { motebitId, deviceId } = this.ports;
+    const signer = await this.ports.signer();
+    const at = this.now();
+    let status: RotationCapture["status"] = "absent";
+    let entries: string[] = [];
+    let fromKey = "";
+    if (signer != null) {
+      fromKey = signer.publicKeyHex;
+      const acq = await this.acquire(signer);
+      if (acq.kind === "acquired" && mayAutoMint(acq)) {
+        const line = acq.verdict.active.find((m) => m.device_id === deviceId);
+        status = line ? "active" : "not-active";
+        entries = line ? line.entries.map((e) => e.enrollment_id) : [];
+      }
+    }
+    const capture: RotationCapture = {
+      motebit_id: motebitId,
+      device_id: deviceId,
+      from_key: fromKey,
+      status,
+      entries,
+      at,
+    };
+    if (fromKey !== "") {
+      await this.ports.cache.exclusive(async () => {
+        await this.ports.cache.save({ ...emptyReplica(motebitId), rotation_captures: [capture] });
+      });
+    }
+    return capture;
+  }
+
+  /**
+   * R21 option (a), the second half: AFTER the local commit, under the NEW
+   * key. The frozen verdict is the capture taken BEFORE the rotation was
+   * sent, keyed by the rotation's old key — never a reduction of the inputs
+   * as they stand now: after the relay records the link, a holder of the
+   * old key can still present a fresh old-key enrolment for this device,
+   * and re-reducing would read that as "active before the rotation" (#785).
+   * No capture (an older client, a crash before it) is `absent`: no
+   * automatic mint, the `enroll` remedy. A capture of `active` still mints
+   * only through the locked C3 table (a retirement in the current verdict
+   * wins, R14), and is persisted as frozen `active` only in the mint's own
+   * save (F2). Idempotent on the resume paths.
    */
   async afterRotation(opts: {
     signer: RosterSigner;
@@ -798,9 +866,8 @@ export class MachineRoster {
     // The new link joins the replica first (C1.4): it is a record source
     // whatever the relay later serves.
     const read = await this.ports.cache.load();
-    // C3: nothing mints on a corrupt read. The adapter keeps the unreadable
-    // bytes aside, so the hook's own save below makes the next read look
-    // clean — the corrupt read is carried through to the gate instead.
+    // C3: nothing mints on a corrupt read — and a corrupt read lost the
+    // capture too.
     const corruptAtStart = read.kind === "corrupt";
     const base =
       read.kind === "value" && read.replica.motebit_id === motebitId
@@ -830,20 +897,17 @@ export class MachineRoster {
       return { kind: "no-verdict", detail: acq.detail };
     }
     const pre = acq.chain.chain.slice(0, -1);
-    let value: FrozenValue = "absent";
-    // A failed GET, or one that counts as failed (R27), freezes `absent`.
-    if (pre.length > 0 && pre[pre.length - 1] === oldKey && mayAutoMint(acq) && !corruptAtStart) {
-      const preVerdict = await verifyHostRoster({
-        motebitId,
-        keyChain: pre,
-        enrollments: acq.inputs.enrollments as HostEnrollment[],
-        retirements: acq.inputs.retirements as HostRetirement[],
-      });
-      value =
-        preVerdict.ok && preVerdict.active.some((m) => m.device_id === deviceId)
-          ? "active"
-          : "not-active";
-    }
+    // The ONLY input to the frozen decision: the capture taken before the
+    // rotation was sent.
+    const capture = corruptAtStart ? null : captureFor(acq.replica, deviceId, oldKey);
+    const value: FrozenValue =
+      capture == null ||
+      capture.status === "absent" ||
+      pre.length === 0 ||
+      pre[pre.length - 1] !== oldKey ||
+      !mayAutoMint(acq)
+        ? "absent"
+        : capture.status;
     const prior = frozenFor(acq.replica, deviceId, oldKey);
     if (value !== "active" || (prior != null && prior !== "active")) {
       // First write wins; and nothing but a frozen `active` goes further.
@@ -853,13 +917,13 @@ export class MachineRoster {
     // A frozen `active` is NEVER persisted on its own (F2): it is saved in
     // the mint's own critical section, in the same save as the head-key
     // line it authorizes — or as `not-active` if, under the lock, the
-    // machine turns out retired in the current verdict (R14). An
-    // interruption before that save leaves no `active` behind.
+    // machine turns out retired in the current verdict (R14).
     const decided = await this.decide(acq, {
       device_id: deviceId,
       pre_rotation_key: oldKey,
       value: "active",
       taken_at: this.now(),
+      entries: capture!.entries,
     });
     let persisted: FrozenValue;
     if (decided.kind === "minted" || decided.kind === "active") persisted = "active";
@@ -880,7 +944,7 @@ export class MachineRoster {
   private async mintOwn(
     acq: RosterAcquired,
     firstLine: boolean,
-    rotation?: FrozenVerdictEntry,
+    rotation?: RotationAuthority,
   ): Promise<EnsureEnrolledOutcome> {
     const m = await this.mint(acq, acq.deviceId, "auto", rotation);
     switch (m.kind) {
@@ -917,7 +981,7 @@ export class MachineRoster {
     acq: RosterAcquired,
     deviceId: string,
     mode: "auto" | "explicit",
-    rotation?: FrozenVerdictEntry,
+    rotation?: RotationAuthority,
   ): Promise<
     | { kind: "minted" | "held"; id: string; presented: PresentReport }
     | { kind: "retired"; presented: PresentReport }
@@ -937,7 +1001,18 @@ export class MachineRoster {
     // the machine turned out retired. An interruption anywhere before that
     // save leaves no frozen `active` behind (F2).
     const frozenAs = (value: FrozenValue): Partial<MachineRosterReplica> =>
-      rotation != null ? { frozen: [{ ...rotation, value }] } : {};
+      rotation != null
+        ? {
+            frozen: [
+              {
+                device_id: rotation.device_id,
+                pre_rotation_key: rotation.pre_rotation_key,
+                value,
+                taken_at: rotation.taken_at,
+              },
+            ],
+          }
+        : {};
     const decided = await this.ports.cache.exclusive(async (): Promise<Decision> => {
       const read = await this.ports.cache.load();
       if (read.kind === "corrupt") return { kind: "cache-corrupt" };
@@ -980,10 +1055,10 @@ export class MachineRoster {
           }
           if (status === "superseded") {
             const hKey = acq.chain.chain[epoch!]!;
-            const frozen =
-              rotation != null && rotation.pre_rotation_key === hKey
-                ? "active"
-                : frozenFor(replica, deviceId, hKey);
+            const line = now.superseded.find((m) => m.device_id === deviceId);
+            const frozen = authorizes(rotation, hKey, line?.entries ?? [])
+              ? "active"
+              : frozenFor(replica, deviceId, hKey);
             if (frozen !== "active") return { kind: "superseded", frozen, replica };
           }
           if (status === "none") {
