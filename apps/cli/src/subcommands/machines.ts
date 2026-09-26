@@ -45,7 +45,7 @@ export function formatRosterView(view: MachineRosterView, motebitId: string): st
       : `  No count: ${view.suppressed.map(suppressionText).join("; ")}.`,
   );
   out.push("");
-  if (view.lines.length === 0) out.push("  (no machine has enrolled yet)");
+  if (view.empty != null) out.push(`  (${view.empty.text})`);
   for (const line of view.lines) out.push(`  ${line.text}`);
   const notes = view.notes.map((n) =>
     n.kind === "prior-line"

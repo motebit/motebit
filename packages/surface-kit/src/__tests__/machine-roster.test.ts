@@ -137,6 +137,15 @@ class FakeCache {
     this.saves++;
     this.value = this.value ? mergeReplicas(this.value, r) : r;
   }
+  /** Set false to take the lock away (the tamper the concurrency test must catch). */
+  locking = true;
+  private queue: Promise<unknown> = Promise.resolve();
+  exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    if (!this.locking) return fn();
+    const run = this.queue.then(fn, fn);
+    this.queue = run.catch(() => {});
+    return run;
+  }
 }
 
 const signerOf = (kp: KeyPair) =>
@@ -164,6 +173,10 @@ function machine(
     rotationInFlight?: boolean;
     stored?: string | null;
     knownDeviceKeys?: string[];
+    /** Awaited before every enrolment signature (a race harness). */
+    beforeSign?: () => Promise<void>;
+    /** This process's clock (two processes never mint in the same millisecond here). */
+    now?: number;
   } = {},
 ): Machine {
   let current = key;
@@ -171,7 +184,19 @@ function machine(
   const ports: MachineRosterPorts = {
     motebitId: opts.motebitId ?? MID,
     deviceId: opts.deviceId ?? "dev-self",
-    signer: async () => (current ? signerOf(current) : null),
+    signer: async () => {
+      if (!current) return null;
+      const s = await signerOf(current);
+      const before = opts.beforeSign;
+      if (!before) return s;
+      return {
+        ...s,
+        signEnrollment: async (body) => {
+          await before();
+          return s.signEnrollment(body);
+        },
+      };
+    },
     fetchSuccession: async () =>
       relay.successionFails
         ? { ok: false, reason: "down" }
@@ -189,7 +214,7 @@ function machine(
     localSuccession: async () => opts.local ?? [],
     pinnedGuardian: async () => opts.guardian ?? null,
     cache,
-    now: () => NOW,
+    now: () => opts.now ?? NOW,
     ...(opts.rotationInFlight !== undefined
       ? { rotationInFlight: async () => opts.rotationInFlight! }
       : {}),
@@ -203,6 +228,21 @@ function machine(
     setKey: (kp) => {
       current = kp;
     },
+  };
+}
+
+/**
+ * A barrier for two racing processes: each waits until both have arrived,
+ * or `ms` pass. Unserialized minters both arrive and both sign; serialized
+ * ones never both arrive, so the first proceeds after the timeout.
+ */
+function raceGate(n = 2, ms = 60): () => Promise<void> {
+  let arrived = 0;
+  let open!: () => void;
+  const all = new Promise<void>((r) => (open = r));
+  return async () => {
+    if (++arrived >= n) open();
+    await Promise.race([all, new Promise((r) => setTimeout(r, ms))]);
   };
 }
 
@@ -1321,5 +1361,140 @@ describe("edge cases", () => {
       NOW,
     );
     expect(view.kind === "roster" && view.notes.some((n) => n.kind === "prior-line")).toBe(false);
+  });
+});
+
+// ── Review round 1 ───────────────────────────────────────────────────
+
+describe("round 1 — W2: the mint decision is atomic across processes", () => {
+  it("a run and a serve starting together mint exactly one enrolment", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const cache = new FakeCache();
+    const beforeSign = raceGate();
+    const run = machine(relay, a, { cache, beforeSign });
+    const serve = machine(relay, a, { cache, beforeSign, now: NOW + 1 });
+    const outs = await Promise.all([run.roster.ensureEnrolled(), serve.roster.ensureEnrolled()]);
+    expect(outs.map((o) => o.kind).sort()).toEqual(["active", "minted"]);
+    expect(cache.value!.enrollments).toHaveLength(1);
+    expect(relay.enr.size).toBe(1);
+  });
+
+  it("the reviewer's sequence: one POST lost, a fresh surface retires what it sees, the restart stays retired", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const cache = new FakeCache();
+    const beforeSign = raceGate();
+    await Promise.all([
+      machine(relay, a, { cache, beforeSign }).roster.ensureEnrolled(),
+      machine(relay, a, { cache, beforeSign, now: NOW + 1 }).roster.ensureEnrolled(),
+    ]);
+    // Any second enrolment's POST was lost: the relay keeps only the first.
+    const [first] = [...relay.enr.keys()];
+    for (const id of [...relay.enr.keys()]) if (id !== first) relay.enr.delete(id);
+    // The phone, with an empty replica, retires what it sees.
+    const phone = machine(relay, a, { deviceId: "phone" });
+    expect(await phone.roster.retire("dev-self")).toMatchObject({ kind: "retired" });
+    // The machine restarts: it stays retired, and nothing it held revives it.
+    const restart = await machine(relay, a, { cache }).roster.ensureEnrolled();
+    expect(restart.kind).toBe("retired");
+    const acq = await acquired(machine(relay, a, { cache }));
+    expect(acq.verdict.active.map((m) => m.device_id)).toEqual([]);
+  });
+
+  it("an explicit enroll racing an automatic start also yields one line", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const cache = new FakeCache();
+    const beforeSign = raceGate();
+    const outs = await Promise.all([
+      machine(relay, a, { cache, beforeSign }).roster.ensureEnrolled(),
+      machine(relay, a, { cache, beforeSign, now: NOW + 1 }).roster.enroll("dev-self"),
+    ]);
+    // Whichever wins the lock mints; the other sees its line.
+    expect([
+      ["minted", "already-active"],
+      ["active", "enrolled"],
+    ]).toContainEqual(outs.map((o) => o.kind));
+    expect(cache.value!.enrollments).toHaveLength(1);
+  });
+
+  it("a mint whose locked re-read is corrupt mints nothing", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const cache = new FakeCache();
+    const m = machine(relay, a, { cache });
+    let loads = 0;
+    const roster = new MachineRoster({
+      ...m.ports,
+      cache: {
+        load: async () => (++loads === 2 ? { kind: "corrupt" } : cache.load()),
+        save: (r) => cache.save(r),
+        exclusive: (fn) => cache.exclusive(fn),
+      },
+    });
+    expect(await roster.ensureEnrolled()).toMatchObject({ kind: "unknown", why: "cache-corrupt" });
+    expect(relay.enr.size).toBe(0);
+  });
+});
+
+describe("round 1 — P3: the rotation hook never mints after a corrupt read", () => {
+  it("an active host whose replica was unreadable at the hook freezes absent and mints nothing", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    m.cache.corrupt = true;
+    const out = await m.roster.afterRotation({ signer: await signerOf(b), record });
+    expect(out).toEqual({ kind: "frozen", value: "absent", decided: null });
+    expect([...relay.enr.values()].some((e) => e.public_key === hex(b))).toBe(false);
+  });
+});
+
+describe("round 1 — P4: the ambiguity hint needs two reads that happened", () => {
+  it("a failed second read never completes the pair", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(a, "vps"));
+    relay.rows = [{ device_id: "vps", bound_under: hex(a), last_seen_at: NOW, sockets_open: 2 }];
+    const m = machine(relay, a);
+    await acquired(m);
+    relay.getFails = true;
+    const view = buildRosterView(await acquired(m), NOW);
+    expect(view.kind === "roster" && view.notes.some((n) => n.kind === "ambiguous")).toBe(false);
+  });
+});
+
+describe("round 1 — W1: the view owns what an empty roster means", () => {
+  it("no lines over an ok verdict: none enrolled", async () => {
+    const view = buildRosterView(
+      await acquired(machine(new FakeRelay(), await generateKeypair())),
+      NOW,
+    );
+    expect(view.kind === "roster" && view.empty).toEqual({
+      kind: "none-enrolled",
+      text: "no machine has enrolled yet",
+    });
+  });
+
+  it("no lines over a suppressed verdict (relay unreadable): nothing held here — never 'no machine has enrolled'", async () => {
+    const relay = new FakeRelay();
+    relay.getFails = true;
+    const view = buildRosterView(await acquired(machine(relay, await generateKeypair())), NOW);
+    if (view.kind !== "roster") throw new Error("expected roster");
+    expect(view.claim).toBeNull();
+    expect(view.empty?.kind).toBe("nothing-held");
+    expect(view.empty?.text).not.toMatch(/enrolled/);
+  });
+
+  it("lines present: nothing to say about emptiness", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(a, "vps"));
+    const view = buildRosterView(await acquired(machine(relay, a)), NOW);
+    expect(view.kind === "roster" && view.empty).toBeNull();
   });
 });

@@ -176,10 +176,37 @@ describe("terminal wording", () => {
         { kind: "prior-line", device_id: "old", text: "this device enrolled earlier as old" },
       ],
       relay: null,
+      empty: {
+        kind: "nothing-held",
+        text: "nothing is held on this device, and the roster could not be confirmed",
+      },
     };
     const out = formatRosterView(view, MID).join("\n");
     expect(out).toMatch(/No count: the relay reports a newer key/);
     expect(out).toMatch(/motebit machines retire old/);
+    // W1 — a suppressed, empty view never claims that no machine enrolled.
+    expect(out).toMatch(/nothing is held on this device/);
+    expect(out).not.toMatch(/no machine has enrolled/);
+  });
+
+  it("an empty roster over an ok verdict says no machine has enrolled", () => {
+    const view: MachineRosterView = {
+      kind: "roster",
+      head: { public_key: "ab".repeat(32), fingerprint: "abababababababab" },
+      this_device: "d",
+      claim: {
+        active: 0,
+        superseded: 0,
+        unplaced: 0,
+        text: "0 machines on the current key abababababababab…",
+      },
+      suppressed: [],
+      lines: [],
+      notes: [],
+      relay: null,
+      empty: { kind: "none-enrolled", text: "no machine has enrolled yet" },
+    };
+    expect(formatRosterView(view, MID).join("\n")).toMatch(/\(no machine has enrolled yet\)/);
   });
 
   it("retire and enroll outcomes", () => {

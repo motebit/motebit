@@ -126,6 +126,14 @@ export interface MachineRosterPorts {
      * (`mergeReplicas`) under its own lock — saving never removes anything.
      */
     save(replica: MachineRosterReplica): Promise<void>;
+    /**
+     * Run `fn` holding a lock that serializes every process of this surface
+     * that may MINT for this replica (a `run` beside a `serve`). The kit
+     * re-reads the replica inside it and decides, signs and saves before
+     * releasing, so two concurrent starts never both mint (spec §4:
+     * re-present, never mint per start). Must not be the lock `save` takes.
+     */
+    exclusive<T>(fn: () => Promise<T>): Promise<T>;
   };
   now?(): number;
   /** R23 remedy 1: a rotation write-ahead is present on this surface. */
@@ -680,7 +688,11 @@ export class MachineRoster {
       ].some((r) => r.device_id === deviceId && known.has(r.bound_under));
       if (bound) return { kind: "needs-force", deviceId, why: "linked-device" };
     }
-    const minted = await this.mint(acq, deviceId);
+    const minted = await this.mint(acq, deviceId, "explicit");
+    if (minted.kind === "cache-corrupt") {
+      return { kind: "unreadable", detail: unreadableDetail({ ...acq, cache: "corrupt" }) };
+    }
+    if (minted.kind !== "minted") return { kind: "already-active", deviceId };
     return { kind: "enrolled", deviceId, enrollmentId: minted.id, presented: minted.presented };
   }
 
@@ -701,6 +713,10 @@ export class MachineRoster {
     // The new link joins the replica first (C1.4): it is a record source
     // whatever the relay later serves.
     const read = await this.ports.cache.load();
+    // C3: nothing mints on a corrupt read. The adapter keeps the unreadable
+    // bytes aside, so the hook's own save below makes the next read look
+    // clean — the corrupt read is carried through to the gate instead.
+    const corruptAtStart = read.kind === "corrupt";
     const base =
       read.kind === "value" && read.replica.motebit_id === motebitId
         ? read.replica
@@ -731,7 +747,7 @@ export class MachineRoster {
     const pre = acq.chain.chain.slice(0, -1);
     let value: FrozenValue = "absent";
     // A failed GET, or one that counts as failed (R27), freezes `absent`.
-    if (pre.length > 0 && pre[pre.length - 1] === oldKey && mayMint(acq)) {
+    if (pre.length > 0 && pre[pre.length - 1] === oldKey && mayMint(acq) && !corruptAtStart) {
       const preVerdict = await verifyHostRoster({
         motebitId,
         keyChain: pre,
@@ -759,42 +775,117 @@ export class MachineRoster {
   // ── internals ──────────────────────────────────────────────────────
 
   private async mintOwn(acq: RosterAcquired, firstLine: boolean): Promise<EnsureEnrolledOutcome> {
-    const minted = await this.mint(acq, acq.deviceId);
-    return { kind: "minted", enrollmentId: minted.id, firstLine, presented: minted.presented };
+    const m = await this.mint(acq, acq.deviceId, "auto");
+    switch (m.kind) {
+      case "minted":
+        return { kind: "minted", enrollmentId: m.id, firstLine, presented: m.presented };
+      case "held":
+        return { kind: "active", presented: m.presented };
+      case "retired":
+        return { kind: "retired", presented: m.presented };
+      case "superseded":
+        return { kind: "superseded", frozen: m.frozen, presented: m.presented };
+      case "cache-corrupt":
+        return {
+          kind: "unknown",
+          why: "cache-corrupt",
+          status: "none",
+          detail: "the local roster replica could not be read; it was kept aside",
+        };
+    }
   }
 
+  /**
+   * The mint decision, the signature and the save, ATOMIC under
+   * `cache.exclusive`. Inside the lock the replica is re-read and the
+   * machine's status re-derived, so a concurrent start that minted first is
+   * seen: its line is re-presented, never doubled (two enrolments of one
+   * machine let a surface that sees only one retire half of it). An
+   * automatic mint (`auto`) also re-applies the C3 rows that forbid it; an
+   * explicit `enroll` mints unless the line is already active.
+   */
   private async mint(
     acq: RosterAcquired,
     deviceId: string,
-  ): Promise<{ id: string; presented: PresentReport }> {
-    // A fresh body is a fresh id (spec §4). Never one a held retirement
-    // already names: a re-enrolment minted in the same millisecond as the
-    // line it rejoins would be born retired.
-    const named = new Set(acq.replica.retirements.map((r) => r.enrollment_id));
-    let enrolledAt = this.now();
-    let enrollment: HostEnrollment;
-    let id: string;
-    for (;;) {
-      enrollment = await acq.signer.signEnrollment({
-        motebit_id: acq.motebitId,
-        device_id: deviceId,
-        public_key: acq.signer.publicKeyHex,
-        enrolled_at: enrolledAt,
+    mode: "auto" | "explicit",
+  ): Promise<
+    | { kind: "minted" | "held"; id: string; presented: PresentReport }
+    | { kind: "retired"; presented: PresentReport }
+    | { kind: "superseded"; frozen: FrozenValue | null; presented: PresentReport }
+    | { kind: "cache-corrupt" }
+  > {
+    type Decision =
+      | { kind: "minted" | "held"; id: string; replica: MachineRosterReplica }
+      | { kind: "retired"; replica: MachineRosterReplica }
+      | { kind: "superseded"; frozen: FrozenValue | null; replica: MachineRosterReplica }
+      | { kind: "cache-corrupt" };
+    const decided = await this.ports.cache.exclusive(async (): Promise<Decision> => {
+      const read = await this.ports.cache.load();
+      if (read.kind === "corrupt") return { kind: "cache-corrupt" };
+      const replica =
+        read.kind === "value" && read.replica.motebit_id === acq.motebitId
+          ? mergeReplicas(acq.replica, read.replica)
+          : acq.replica;
+      const now = await verifyHostRoster({
+        motebitId: acq.motebitId,
+        keyChain: acq.chain.chain,
+        enrollments: [
+          ...replica.enrollments,
+          ...(acq.served?.enrollments ?? []),
+        ] as HostEnrollment[],
+        retirements: [
+          ...replica.retirements,
+          ...(acq.served?.retirements ?? []),
+        ] as HostRetirement[],
       });
-      id = await hostEnrollmentId(enrollment);
-      if (!named.has(id)) break;
-      enrolledAt++;
-    }
-    const replica = mergeReplicas(acq.replica, {
-      ...emptyReplica(acq.motebitId),
-      enrollments: [enrollment],
-      own_device_ids: deviceId === acq.deviceId ? [deviceId] : [],
+      if (now.ok) {
+        const line = now.active.find((m) => m.device_id === deviceId);
+        if (line) return { kind: "held", id: line.entries[0]!.enrollment_id, replica };
+        if (mode === "auto") {
+          const { status, epoch } = statusOf(now, deviceId);
+          if (status === "retired") return { kind: "retired", replica };
+          if (status === "superseded") {
+            const frozen = frozenFor(replica, deviceId, acq.chain.chain[epoch!]!);
+            if (frozen !== "active") return { kind: "superseded", frozen, replica };
+          }
+        }
+      }
+      // A fresh body is a fresh id (spec §4). Never one a held retirement
+      // already names: a re-enrolment minted in the same millisecond as the
+      // line it rejoins would be born retired.
+      const named = new Set(replica.retirements.map((r) => r.enrollment_id));
+      let enrolledAt = this.now();
+      let enrollment: HostEnrollment;
+      let id: string;
+      for (;;) {
+        enrollment = await acq.signer.signEnrollment({
+          motebit_id: acq.motebitId,
+          device_id: deviceId,
+          public_key: acq.signer.publicKeyHex,
+          enrolled_at: enrolledAt,
+        });
+        id = await hostEnrollmentId(enrollment);
+        if (!named.has(id)) break;
+        enrolledAt++;
+      }
+      const next = mergeReplicas(replica, {
+        ...emptyReplica(acq.motebitId),
+        enrollments: [enrollment],
+        own_device_ids: deviceId === acq.deviceId ? [deviceId] : [],
+      });
+      // Cached BEFORE it is presented, and before the lock is released: a
+      // machine re-presents what it holds rather than minting per start.
+      await this.ports.cache.save(next);
+      return { kind: "minted", id, replica: next };
     });
-    // Cached BEFORE it is presented: a machine re-presents what it holds
-    // rather than minting per start (spec §4).
-    await this.ports.cache.save(replica);
-    const presented = await this.presentFrom({ ...acq, replica });
-    return { id, presented };
+    if (decided.kind === "cache-corrupt") return decided;
+    // Presented outside the lock: the network is no part of the decision.
+    const presented = await this.presentFrom({ ...acq, replica: decided.replica });
+    if (decided.kind === "superseded") {
+      return { kind: "superseded", frozen: decided.frozen, presented };
+    }
+    if (decided.kind === "retired") return { kind: "retired", presented };
+    return { kind: decided.kind, id: decided.id, presented };
   }
 
   private async presentFrom(acq: RosterAcquired): Promise<PresentReport> {

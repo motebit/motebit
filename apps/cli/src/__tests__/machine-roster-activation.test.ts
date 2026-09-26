@@ -207,6 +207,33 @@ describe("mint-on-announce against a real relay", () => {
     expect(rosterAuth).toEqual([]);
   });
 
+  it("W2 — `run` and `serve` starting together on one machine mint one enrolment (the mint lock)", async () => {
+    const f = await registeredHost();
+    const outs = await Promise.all([
+      enrollOnAnnounce(ctx(f), () => {}),
+      enrollOnAnnounce(ctx(f), () => {}),
+    ]);
+    expect(outs.map((o) => o?.kind).sort()).toEqual(["active", "minted"]);
+    expect(relayEntries(f.mid, "enrollment")).toBe(1);
+    const read = loadReplica(f.mid, dir);
+    expect(read.kind === "value" && read.replica.enrollments).toHaveLength(1);
+  });
+
+  it("W1 — a machine with an empty replica that cannot read the roster never says no machine has enrolled", async () => {
+    const f = await registeredHost();
+    await enrollOnAnnounce(ctx(f), () => {});
+    // A second machine of this motebit whose device was never registered: 403.
+    const other = { ...ctx(f), deviceId: `${f.mid}-laptop`, dir: `${dir}/other` };
+    const view = buildRosterView(
+      await new MachineRoster(cliRosterPorts(other)).acquire(),
+      Date.now(),
+    );
+    const text = formatRosterView(view, f.mid).join("\n");
+    expect(text).toMatch(/No count: /);
+    expect(text).not.toMatch(/no machine has enrolled/);
+    expect(text).toMatch(/nothing is held on this device/);
+  });
+
   it("an unreachable relay never blocks the start: one line, nothing minted", async () => {
     const f = await registeredHost();
     const lines: string[] = [];
