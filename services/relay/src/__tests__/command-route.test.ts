@@ -17,6 +17,8 @@ import {
 import type { TokenAudience } from "@motebit/protocol";
 import type { KeyPair } from "@motebit/crypto";
 import { JSON_AUTH, createTestRelay, createAgent } from "./test-helpers.js";
+import { handleCommandResponse, sendToOne } from "../command-route.js";
+import type { ConnectedDevice } from "../websocket.js";
 
 const AGENT_ID = "36080ffe-cmd4-8000-a000-0000000000aa";
 
@@ -462,6 +464,38 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     expect(worker.sentTo.length).toBeGreaterThan(0);
   });
 
+  it("an answer that arrives INSIDE the send (an in-process peer) is matched to the delivered device", async () => {
+    // The delivered peer is recorded before its `send`, so a synchronous
+    // reply meets it — the CLI multi-runtime harness answers exactly this way.
+    const daemon = {
+      ws: {
+        readyState: 1,
+        send: (payload: string) => {
+          const { id } = JSON.parse(payload) as { id: string };
+          handleCommandResponse(
+            id,
+            { summary: "Halted." },
+            { motebitId: AGENT_ID, deviceId: "dev-1" },
+          );
+        },
+      },
+      deviceId: "dev-1",
+      deviceIdDeclared: true,
+      capabilities: ["unattended_runtime"],
+    };
+    relay.connections.set(AGENT_ID, [daemon] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "halt",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    const { status, json } = await postCommand(AGENT_ID, { command: "halt", envelope });
+    expect(status).toBe(200);
+    expect(json.summary).toBe("Halted.");
+  });
+
   it("a read-only command may still be answered by any connected surface", async () => {
     const phone = fakePeer("phone", ["push_wake"]);
     relay.connections.set(AGENT_ID, [phone.peer] as unknown as Parameters<
@@ -475,6 +509,78 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     void postCommand(AGENT_ID, { command: "state", envelope });
     await new Promise((r) => setTimeout(r, 50));
     expect(phone.sentTo).toHaveLength(1);
+  });
+});
+
+/**
+ * `sendToOne` — the one delivery rule for a single-use frame (#691 items
+ * 1–2). Newest OPEN socket first; a socket that is not OPEN, or throws
+ * (CONNECTING), is skipped for the next-newest. Exactly one socket gets the
+ * frame. (Silence is not a reason to try another — see
+ * `command-delivery.test.ts`.)
+ */
+describe("sendToOne delivers to exactly one socket, the newest that will take it", () => {
+  function peer(label: string, readyState: number, throws = false, verified = false) {
+    const got: string[] = [];
+    const p = {
+      deviceId: label,
+      deviceIdDeclared: true,
+      deviceIdVerified: verified,
+      ws: {
+        readyState,
+        send: (payload: string) => {
+          if (throws) throw new Error("CONNECTING");
+          got.push(payload);
+        },
+      },
+    } as unknown as ConnectedDevice;
+    return { p, got };
+  }
+
+  it("the newest OPEN socket wins over an older OPEN one", () => {
+    const old = peer("old", 1);
+    const young = peer("young", 1);
+    expect(sendToOne([old.p, young.p], "f")).toBe(young.p);
+    expect(young.got).toEqual(["f"]);
+    expect(old.got).toEqual([]);
+  });
+
+  it("a newest socket that is CLOSING, or throws, is passed over for the next-newest", () => {
+    const old = peer("old", 1);
+    const mid = peer("mid", 1, true);
+    const closing = peer("closing", 2);
+    expect(sendToOne([old.p, mid.p, closing.p], "f")).toBe(old.p);
+    expect(old.got).toEqual(["f"]);
+    expect(closing.got).toEqual([]);
+  });
+
+  it("a VERIFIED socket outranks a newer declared-only one", () => {
+    const verified = peer("daemon", 1, false, true);
+    const declaredOnly = peer("impostor", 1);
+    expect(sendToOne([verified.p, declaredOnly.p], "f")).toBe(verified.p);
+    expect(verified.got).toEqual(["f"]);
+    expect(declaredOnly.got).toEqual([]);
+  });
+
+  it("two verified ⇒ the newest of them; declared-only still never outranks either", () => {
+    const oldV = peer("old", 1, false, true);
+    const newV = peer("new", 1, false, true);
+    const declaredOnly = peer("impostor", 1);
+    expect(sendToOne([oldV.p, newV.p, declaredOnly.p], "f")).toBe(newV.p);
+    expect(oldV.got).toEqual([]);
+    expect(declaredOnly.got).toEqual([]);
+  });
+
+  it("a verified socket that is not OPEN falls back to the declared-only tier (nothing excluded)", () => {
+    const deadV = peer("dead", 3, false, true);
+    const declaredOnly = peer("legacy", 1);
+    expect(sendToOne([declaredOnly.p, deadV.p], "f")).toBe(declaredOnly.p);
+  });
+
+  it("none OPEN ⇒ null, nothing sent", () => {
+    const a = peer("a", 3);
+    expect(sendToOne([a.p], "f")).toBeNull();
+    expect(a.got).toEqual([]);
   });
 });
 
