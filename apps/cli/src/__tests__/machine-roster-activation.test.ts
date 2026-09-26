@@ -6,14 +6,19 @@
  * doors: mint-on-announce (C3), `motebit machines` (C4, C6), and the
  * rotation hook after a real `performRotation` (R21).
  */
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createSyncRelay } from "@motebit/relay";
 import type { SyncRelay } from "@motebit/relay";
 import { generate } from "@motebit/identity-file";
-import { deriveSovereignMotebitId, generateKeypair, bytesToHex } from "@motebit/encryption";
+import {
+  deriveSovereignMotebitId,
+  generateKeypair,
+  bytesToHex,
+  hexToBytes,
+} from "@motebit/encryption";
 import type { KeyPair } from "@motebit/encryption";
 import { MachineRoster, buildRosterView } from "@motebit/surface-kit";
 
@@ -322,4 +327,93 @@ describe("the rotation hook after a real rotation (R21, option b)", () => {
     };
     expect(stored.replicas[f.mid]!.succession.length).toBe(1);
   });
+});
+
+describe("F1 (#783 decisive round): a retired host that loses its replica never re-enrols itself", () => {
+  it.each([409, 429])(
+    "retire → rotate → replica deleted → identity file unfindable → /succession %i once → the start mints nothing",
+    async (status) => {
+      const f = await registeredHost();
+      expect((await enrollOnAnnounce(ctx(f), () => {}))?.kind).toBe("minted");
+      // `motebit machines retire <own>` under A.
+      expect((await new MachineRoster(cliRosterPorts(ctx(f))).retire(f.deviceId)).kind).toBe(
+        "retired",
+      );
+      // Rotate A → B for real; the hook freezes not-active and mints nothing.
+      const o = await performRotation({
+        identityPath: f.identityPath,
+        loadConfig: () => ({ ...config }),
+        saveConfig: (c) => {
+          config = c;
+        },
+        pending: {
+          load: (mid, key) => loadPendingRotation(mid, key, dir),
+          loadAny: () => loadAnyPendingRotation(dir),
+          save: (p) => savePendingRotation(p, dir),
+          clear: () => clearPendingRotation(dir),
+          setAside: () => setAsidePendingRotation(dir),
+          path: pendingRotationPath(dir),
+        },
+        passphrase: PASS,
+        syncUrl: SYNC_URL,
+        fetchImpl: viaRelay,
+      });
+      expect(o.kind).toBe("rotated");
+      if (o.kind !== "rotated") return;
+      expect(
+        await rosterHookAfterRotate({
+          identityPath: f.identityPath,
+          passphrase: PASS,
+          syncUrl: SYNC_URL,
+          newPublicKeyHex: o.newPublicKeyHex,
+          decryptPrivateKey,
+          loadConfig: () => ({ ...config }),
+          dir,
+          fetchImpl: viaRelay,
+        }),
+      ).toBeNull();
+      const enrolledBefore = relayEntries(f.mid, "enrollment");
+
+      // The replica is lost, and the rotated motebit.md is not findable.
+      rmSync(join(dir, "machine-roster.json"), { force: true });
+      const hidden = join(dir, "elsewhere");
+      mkdirSync(hidden);
+      renameSync(f.identityPath, join(hidden, "motebit.md"));
+      // /succession answers `status` once.
+      let failed = false;
+      const flaky: typeof fetch = async (input, init) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (!failed && url.endsWith("/succession")) {
+          failed = true;
+          return new Response("{}", { status });
+        }
+        return viaRelay(input, init);
+      };
+      const newKey = hexToBytes(await decryptPrivateKey(config.cli_encrypted_key!, PASS));
+      const lines: string[] = [];
+      const out = await enrollOnAnnounce(
+        {
+          ...ctx(f, () => newKey),
+          identityPaths: [],
+          cwd: join(dir, "nowhere"),
+          fetchImpl: flaky,
+        },
+        (l) => lines.push(l),
+      );
+      expect(failed).toBe(true);
+      expect(out?.kind).not.toBe("minted");
+      expect(relayEntries(f.mid, "enrollment")).toBe(enrolledBefore);
+      // The truth, under the full chain: the machine is not active.
+      const view = buildRosterView(
+        await new MachineRoster(
+          cliRosterPorts({ ...ctx(f, () => newKey), identityPaths: [join(hidden, "motebit.md")] }),
+        ).acquire(),
+        Date.now(),
+      );
+      expect(view.kind).toBe("roster");
+      if (view.kind !== "roster") return;
+      expect(view.lines.some((l) => l.kind === "active" && l.device_id === f.deviceId)).toBe(false);
+    },
+  );
 });

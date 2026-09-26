@@ -16,6 +16,7 @@ import {
   signHostEnrollment,
   signHostRetirement,
   signKeySuccession,
+  verifyHostRoster,
 } from "@motebit/encryption";
 import type { KeyPair } from "@motebit/encryption";
 import type { HostEnrollment, HostRetirement, KeySuccessionRecord } from "@motebit/sdk";
@@ -617,7 +618,7 @@ describe("R21 — the rotation hook (option b: after commit, new key, pre-rotati
     expect((await m.roster.ensureEnrolled()).kind).toBe("retired");
   });
 
-  it("a retirement under the NEW key that reached this device first: frozen active, current retired → no mint (R14)", async () => {
+  it("a retirement under the NEW key that reached this device first: current retired wins, frozen persisted not-active, no mint (R14)", async () => {
     const a = await generateKeypair();
     const b = await generateKeypair();
     const relay = new FakeRelay();
@@ -629,7 +630,11 @@ describe("R21 — the rotation hook (option b: after commit, new key, pre-rotati
     await relay.hold(await retireEntry(b, e)); // the phone, on the new key
     m.setKey(b);
     const out = await m.roster.afterRotation({ signer: await signerOf(b), record });
-    expect(out).toMatchObject({ kind: "frozen", value: "active", decided: { kind: "retired" } });
+    expect(out).toMatchObject({
+      kind: "frozen",
+      value: "not-active",
+      decided: { kind: "retired" },
+    });
     expect(relay.enr.size).toBe(1);
   });
 
@@ -1497,4 +1502,279 @@ describe("round 1 — W1: the view owns what an empty roster means", () => {
     const view = buildRosterView(await acquired(machine(relay, a)), NOW);
     expect(view.kind === "roster" && view.empty).toBeNull();
   });
+});
+
+// ── Decisive round (#783 withdrawn): a retired machine never re-activates ─
+
+describe("rule 1 — an automatic mint needs the succession read", () => {
+  it("no line, roster read, succession unread → unknown, nothing minted", async () => {
+    const relay = new FakeRelay();
+    relay.successionFails = true;
+    const m = machine(relay, await generateKeypair());
+    expect(await m.roster.ensureEnrolled()).toMatchObject({
+      kind: "unknown",
+      why: "succession-unread",
+    });
+    expect(relay.enr.size).toBe(0);
+  });
+
+  it("the rotation hook with an unread succession freezes absent and mints nothing", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    relay.successionFails = true;
+    const out = await m.roster.afterRotation({ signer: await signerOf(b), record });
+    expect(out).toEqual({ kind: "frozen", value: "absent", decided: null });
+    expect([...relay.enr.values()].some((e) => e.public_key === hex(b))).toBe(false);
+  });
+
+  it("explicit enroll is still allowed without the succession read", async () => {
+    const relay = new FakeRelay();
+    relay.successionFails = true;
+    const m = machine(relay, await generateKeypair());
+    expect((await m.roster.enroll("dev-self")).kind).toBe("enrolled");
+  });
+});
+
+describe("rule 2 — no auto-mint while this device has lines the chain cannot place", () => {
+  /** F1's shape: retired under A, rotated to B, replica lost, the chain reduced to [B]. */
+  async function retiredThenLost() {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const e = await enrol(a, "dev-self");
+    await relay.hold(e, await retireEntry(a, e));
+    // The relay lost its succession chain (a new relay, or a restore): it
+    // answers, but with nothing — the device holds B and cannot place A.
+    relay.chain = [];
+    return { a, b, relay };
+  }
+
+  it("the own A-enrolment is unplaceable → `unplaced`, nothing minted", async () => {
+    const { b, relay } = await retiredThenLost();
+    const m = machine(relay, b);
+    const out = await m.roster.ensureEnrolled();
+    expect(out).toMatchObject({ kind: "unplaced", count: 1 });
+    expect(relay.enr.size).toBe(1);
+  });
+
+  it("explicit enroll still rejoins", async () => {
+    const { b, relay } = await retiredThenLost();
+    expect((await machine(relay, b).roster.enroll("dev-self")).kind).toBe("enrolled");
+  });
+
+  it("another device's unplaceable line does not block this device's first enrolment", async () => {
+    const { b, relay } = await retiredThenLost();
+    expect((await machine(relay, b, { deviceId: "fresh" }).roster.ensureEnrolled()).kind).toBe(
+      "minted",
+    );
+  });
+});
+
+describe("rule 3 — the frozen verdict and the mint are one step", () => {
+  it("F2: a hook interrupted at the lock leaves no frozen active; an old-key line then never mints", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const cache = new FakeCache();
+    const m = machine(relay, a, { cache });
+    await m.roster.ensureEnrolled();
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    relay.current = hex(b);
+    const broken = new MachineRoster({
+      ...m.ports,
+      cache: {
+        load: () => cache.load(),
+        save: (r) => cache.save(r),
+        exclusive: () => Promise.reject(new Error("killed")),
+      },
+    });
+    await expect(broken.afterRotation({ signer: await signerOf(b), record })).rejects.toThrow(
+      /killed/,
+    );
+    expect(cache.value!.frozen.filter((f) => f.value === "active")).toEqual([]);
+    // The phone retires the old line under B; a holder of A adds a fresh one.
+    const phone = machine(relay, b, { deviceId: "phone" });
+    expect((await phone.roster.retire("dev-self")).kind).toBe("retired");
+    await relay.hold(await enrol(a, "dev-self", NOW + 5));
+    // The machine restarts on B.
+    const restart = await machine(relay, b, { cache }).roster.ensureEnrolled();
+    expect(restart.kind).not.toBe("minted");
+    const acq = await acquired(machine(relay, b, { cache }));
+    expect(acq.verdict.active.map((x) => x.device_id)).not.toContain("dev-self");
+  });
+
+  it("a signature that fails inside the mint persists nothing", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const cache = new FakeCache();
+    const m = machine(relay, a, { cache });
+    await m.roster.ensureEnrolled();
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    const good = await signerOf(b);
+    const bad: RosterSigner = {
+      ...good,
+      signEnrollment: () => Promise.reject(new Error("signer died")),
+    };
+    await expect(m.roster.afterRotation({ signer: bad, record })).rejects.toThrow(/signer died/);
+    expect(cache.value!.frozen.filter((f) => f.value === "active")).toEqual([]);
+  });
+
+  it("the successful hook persists frozen active in the same save as the new line", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const cache = new FakeCache();
+    const m = machine(relay, a, { cache });
+    await m.roster.ensureEnrolled();
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    const saves: MachineRosterReplica[] = [];
+    const watching = new MachineRoster({
+      ...m.ports,
+      cache: {
+        load: () => cache.load(),
+        save: (r) => {
+          saves.push(r);
+          return cache.save(r);
+        },
+        exclusive: (fn) => cache.exclusive(fn),
+      },
+    });
+    const out = await watching.afterRotation({ signer: await signerOf(b), record });
+    expect(out).toMatchObject({ value: "active", decided: { kind: "minted" } });
+    const firstActive = saves.findIndex((r) => r.frozen.some((f) => f.value === "active"));
+    expect(firstActive).toBeGreaterThanOrEqual(0);
+    expect(saves[firstActive]!.enrollments.some((e) => e.public_key === hex(b))).toBe(true);
+  });
+});
+
+describe("view — a line retired under the current key, enrolled under an older one", () => {
+  it("says retired (advisory), never 'retired at an older key'", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const e = await enrol(a, "vps");
+    await relay.hold(e, await retireEntry(b, e));
+    relay.chain = [await rotate(a, b)];
+    const view = buildRosterView(await acquired(machine(relay, b)), NOW);
+    const line = view.kind === "roster" ? view.lines.find((l) => l.device_id === "vps") : null;
+    expect(line?.text).toMatch(/retired \(advisory: its enrolment is on an older key\)/);
+    expect(line?.text).not.toMatch(/retired at an older key/);
+  });
+});
+
+describe("property — a machine the sovereign retired never ends active at the head without `enroll`", () => {
+  // A small seeded PRNG: the same sequences on every run, and a failure
+  // names the seed that reproduces it.
+  function prng(seed: number): () => number {
+    let x = seed >>> 0 || 1;
+    return () => {
+      x ^= x << 13;
+      x ^= x >>> 17;
+      x ^= x << 5;
+      return (x >>> 0) / 0x100000000;
+    };
+  }
+  const ACTIONS = [
+    "retire",
+    "rotate",
+    "restart",
+    "cache-delete",
+    "fail-succession",
+    "fail-roster",
+    "interrupt-hook",
+    "old-key-add",
+  ] as const;
+
+  it("over 300 seeded sequences of 10 steps", async () => {
+    for (let seed = 1; seed <= 300; seed++) {
+      const rnd = prng(seed * 7919);
+      const relay = new FakeRelay();
+      const keys: KeyPair[] = [await generateKeypair()];
+      const head = () => keys[keys.length - 1]!;
+      let cache = new FakeCache();
+      let retiredBySovereign = false;
+      let clock = NOW;
+      const dev = () => machine(relay, head(), { cache, now: ++clock });
+      await dev().roster.ensureEnrolled();
+      const trace: string[] = [];
+      for (let step = 0; step < 10; step++) {
+        const act = ACTIONS[Math.floor(rnd() * ACTIONS.length)]!;
+        trace.push(act);
+        switch (act) {
+          case "retire": {
+            const out = await machine(relay, head(), {
+              deviceId: "phone",
+              now: ++clock,
+            }).roster.retire("dev-self");
+            if (out.kind === "retired" || out.kind === "already-retired") retiredBySovereign = true;
+            break;
+          }
+          case "rotate":
+          case "interrupt-hook": {
+            const next = await generateKeypair();
+            const record = await rotate(head(), next);
+            keys.push(next);
+            relay.chain.push(record);
+            relay.current = hex(next);
+            const d = dev();
+            const roster =
+              act === "interrupt-hook"
+                ? new MachineRoster({
+                    ...d.ports,
+                    cache: {
+                      load: () => cache.load(),
+                      save: (r) => cache.save(r),
+                      exclusive: () => Promise.reject(new Error("killed")),
+                    },
+                  })
+                : d.roster;
+            await roster
+              .afterRotation({ signer: await signerOf(next), record })
+              .catch(() => undefined);
+            break;
+          }
+          case "restart":
+            await dev().roster.ensureEnrolled();
+            relay.successionFails = false;
+            relay.getFails = false;
+            break;
+          case "cache-delete":
+            cache = new FakeCache();
+            break;
+          case "fail-succession":
+            relay.successionFails = true;
+            break;
+          case "fail-roster":
+            relay.getFails = true;
+            break;
+          case "old-key-add": {
+            if (keys.length < 2) break;
+            const old = keys[Math.floor(rnd() * (keys.length - 1))]!;
+            await relay.hold(await enrol(old, "dev-self", ++clock));
+            break;
+          }
+        }
+        if (retiredBySovereign) {
+          // The truth: the full chain, over everything anyone holds.
+          const truth = await verifyHostRoster({
+            motebitId: MID,
+            keyChain: keys.map(hex),
+            enrollments: [...relay.enr.values(), ...(cache.value?.enrollments ?? [])],
+            retirements: [...relay.ret.values(), ...(cache.value?.retirements ?? [])],
+          });
+          const active = truth.ok && truth.active.some((m) => m.device_id === "dev-self");
+          expect(active, `seed ${seed}: ${trace.join(" → ")}`).toBe(false);
+        }
+      }
+    }
+  }, 120_000);
 });

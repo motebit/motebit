@@ -274,9 +274,22 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
   for (const m of v.retired) {
     const row = take(m.device_id, head);
     const connected = row != null && row.sockets_open > 0;
+    // Retired under the CURRENT key, but its enrolment is on an older one:
+    // the retirement is the sovereign's, the status is still advisory
+    // (spec §6 Step 4) — never "retired at an older key".
+    const ids = new Set(m.entries.map((e) => e.enrollment_id));
+    const byHead = acq.inputs.retirements.some(
+      (r) =>
+        typeof r === "object" &&
+        r !== null &&
+        (r as { public_key?: unknown }).public_key === head &&
+        ids.has((r as { enrollment_id?: unknown }).enrollment_id as string),
+    );
     const how = m.authenticated
       ? "retired under the current key"
-      : "retired at an older key (advisory)";
+      : byHead
+        ? "retired (advisory: its enrolment is on an older key)"
+        : "retired at an older key (advisory)";
     retiredLines.push({
       kind: "retired",
       device_id: m.device_id,
