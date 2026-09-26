@@ -17,6 +17,8 @@ import {
 import type { TokenAudience } from "@motebit/protocol";
 import type { KeyPair } from "@motebit/crypto";
 import { JSON_AUTH, createTestRelay, createAgent } from "./test-helpers.js";
+import { handleCommandResponse, sendToOne } from "../command-route.js";
+import type { ConnectedDevice } from "../websocket.js";
 
 const AGENT_ID = "36080ffe-cmd4-8000-a000-0000000000aa";
 
@@ -462,6 +464,39 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     expect(worker.sentTo.length).toBeGreaterThan(0);
   });
 
+  it("an answer that arrives INSIDE the send (an in-process peer) is matched to the delivered device", async () => {
+    // The relay's own contract: the delivered peer is recorded before its
+    // `send`, so an answer arriving inside the send meets a filled record.
+    // (The CLI harness replies in-send only on its empty-key rejection.)
+    const daemon = {
+      ws: {
+        readyState: 1,
+        send: (payload: string) => {
+          const { id } = JSON.parse(payload) as { id: string };
+          handleCommandResponse(
+            id,
+            { summary: "Halted." },
+            { motebitId: AGENT_ID, declaredDeviceId: "dev-1", authenticatedDid: null },
+          );
+        },
+      },
+      deviceId: "dev-1",
+      deviceIdDeclared: true,
+      capabilities: ["unattended_runtime"],
+    };
+    relay.connections.set(AGENT_ID, [daemon] as unknown as Parameters<
+      typeof relay.connections.set
+    >[1]);
+    const envelope = await signAgentCommandEnvelope({
+      command: "halt",
+      motebitId: AGENT_ID,
+      identityPrivateKey: keys.privateKey,
+    });
+    const { status, json } = await postCommand(AGENT_ID, { command: "halt", envelope });
+    expect(status).toBe(200);
+    expect(json.summary).toBe("Halted.");
+  });
+
   it("a read-only command may still be answered by any connected surface", async () => {
     const phone = fakePeer("phone", ["push_wake"]);
     relay.connections.set(AGENT_ID, [phone.peer] as unknown as Parameters<
@@ -475,6 +510,95 @@ describe("unattended-runtime commands are routed to a runtime that can serve the
     void postCommand(AGENT_ID, { command: "state", envelope });
     await new Promise((r) => setTimeout(r, 50));
     expect(phone.sentTo).toHaveLength(1);
+  });
+});
+
+/**
+ * `sendToOne` — the one delivery rule for a single-use frame (#691 items
+ * 1–2): exactly main's pick (the first OPEN candidate whose send does not
+ * throw, in `connections` order), with one substitution — a VERIFIED pick
+ * goes to the newest open verified socket of the SAME device id. Exactly one
+ * socket gets the frame. (Silence is not a reason to try another — see
+ * `command-delivery.test.ts`.)
+ */
+describe("sendToOne: main's pick, a verified pick swapped for its own machine's newest socket", () => {
+  function peer(
+    label: string,
+    readyState: number,
+    opts: { throws?: boolean; verified?: boolean; deviceId?: string } = {},
+  ) {
+    const got: string[] = [];
+    const p = {
+      deviceId: opts.deviceId ?? label,
+      deviceIdDeclared: true,
+      deviceIdVerified: opts.verified === true,
+      ws: {
+        readyState,
+        send: (payload: string) => {
+          if (opts.throws === true) throw new Error("CONNECTING");
+          got.push(payload);
+        },
+      },
+    } as unknown as ConnectedDevice;
+    return { p, got };
+  }
+
+  it("unverified candidates: main's pick, the OLDEST open one", () => {
+    const old = peer("old", 1);
+    const young = peer("young", 1);
+    expect(sendToOne([old.p, young.p], "f")).toBe(old.p);
+    expect(old.got).toEqual(["f"]);
+    expect(young.got).toEqual([]);
+  });
+
+  it("a verified pick is swapped for the NEWEST open verified socket of the same device", () => {
+    const stale = peer("stale", 1, { verified: true, deviceId: "laptop" });
+    const live = peer("live", 1, { verified: true, deviceId: "laptop" });
+    expect(sendToOne([stale.p, live.p], "f")).toBe(live.p);
+    expect(live.got).toEqual(["f"]);
+    expect(stale.got).toEqual([]);
+  });
+
+  it("never swapped ACROSS devices: main's verified pick stays when the newer verified socket is another device", () => {
+    const laptop = peer("laptop", 1, { verified: true });
+    const phone = peer("phone", 1, { verified: true });
+    expect(sendToOne([laptop.p, phone.p], "f")).toBe(laptop.p);
+    expect(phone.got).toEqual([]);
+  });
+
+  it("an unverified pick is never swapped, even for a newer verified socket", () => {
+    const declaredOnly = peer("x", 1, { deviceId: "laptop" });
+    const verified = peer("v", 1, { verified: true, deviceId: "laptop" });
+    expect(sendToOne([declaredOnly.p, verified.p], "f")).toBe(declaredOnly.p);
+    expect(verified.got).toEqual([]);
+  });
+
+  it("a declared-only socket of the same id is not a swap target for a verified pick", () => {
+    const verified = peer("v", 1, { verified: true, deviceId: "laptop" });
+    const declaredOnly = peer("x", 1, { deviceId: "laptop" });
+    expect(sendToOne([verified.p, declaredOnly.p], "f")).toBe(verified.p);
+    expect(declaredOnly.got).toEqual([]);
+  });
+
+  it("CLOSING or throwing candidates are passed over in main's order", () => {
+    const closing = peer("closing", 2);
+    const connecting = peer("connecting", 1, { throws: true });
+    const open = peer("open", 1);
+    expect(sendToOne([closing.p, connecting.p, open.p], "f")).toBe(open.p);
+    expect(open.got).toEqual(["f"]);
+  });
+
+  it("a swap target that throws falls back to main's own verified pick", () => {
+    const pick = peer("pick", 1, { verified: true, deviceId: "laptop" });
+    const newer = peer("newer", 1, { verified: true, deviceId: "laptop", throws: true });
+    expect(sendToOne([pick.p, newer.p], "f")).toBe(pick.p);
+    expect(pick.got).toEqual(["f"]);
+  });
+
+  it("none OPEN ⇒ null, nothing sent", () => {
+    const a = peer("a", 3);
+    expect(sendToOne([a.p], "f")).toBeNull();
+    expect(a.got).toEqual([]);
   });
 });
 
