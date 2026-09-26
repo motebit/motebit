@@ -85,13 +85,19 @@ export function presentationLines(
   // rotated away); not "presented again" until that is resolved.
   const refusedAuth = (r: string): boolean => /\bstatus 40[13]\b/.test(r);
   const ownAuth = presented.notTaken.filter((n) => own.has(n.id) && refusedAuth(n.reason)).length;
-  const ownNot = presented.notTaken.filter((n) => own.has(n.id) && !refusedAuth(n.reason)).length;
+  const isUnconfirmed = (n: { unconfirmed?: string }): boolean => n.unconfirmed != null;
+  const ownUnconfirmed = presented.notTaken.filter((n) => own.has(n.id) && isUnconfirmed(n));
+  const otherUnconfirmed = presented.notTaken.filter((n) => !own.has(n.id) && isUnconfirmed(n));
+  const ownNot = presented.notTaken.filter(
+    (n) => own.has(n.id) && !refusedAuth(n.reason) && !isUnconfirmed(n),
+  ).length;
   const ownWont = presented.willNotHold.filter((w) => own.has(w.id));
   const otherWont = presented.willNotHold.filter((w) => !own.has(w.id));
   const reasons = (ws: Array<{ reason: string }>): string =>
     [...new Set(ws.map((w) => w.reason))].join(", ");
   const otherFull = presented.rosterFull.length - ownFull;
-  const otherNot = presented.notTaken.length - ownNot - ownAuth;
+  const otherNot =
+    presented.notTaken.length - ownNot - ownAuth - ownUnconfirmed.length - otherUnconfirmed.length;
   const entries = (n: number): string => `${n} other held ${n === 1 ? "entry" : "entries"}`;
   const out: string[] = [];
   if (ownFull > 0) {
@@ -109,12 +115,23 @@ export function presentationLines(
       `  The relay will not hold this ${noun}: ${reasons(ownWont)}; kept on this device only, not presented again.`,
     );
   }
+  // #813 F3 — a reason the relay gave that this device's own check does not confirm.
+  if (ownUnconfirmed.length > 0) {
+    out.push(
+      `  The relay refused this ${noun} as ${reasons(ownUnconfirmed.map((n) => ({ reason: n.unconfirmed! })))}, which this device could not confirm; kept on this device, presented again.`,
+    );
+  }
   if (ownNot > 0) out.push(`  Not yet taken by the relay; kept on this device, presented again.`);
   if (otherFull > 0)
     out.push(`  The relay refused ${entries(otherFull)} permanently (roster full).`);
   if (otherWont.length > 0) {
     out.push(
       `  The relay will not hold ${entries(otherWont.length)}: ${reasons(otherWont)}; not presented again.`,
+    );
+  }
+  if (otherUnconfirmed.length > 0) {
+    out.push(
+      `  The relay refused ${entries(otherUnconfirmed.length)} as ${reasons(otherUnconfirmed.map((n) => ({ reason: n.unconfirmed! })))}, which this device could not confirm; presented again.`,
     );
   }
   if (otherNot > 0) out.push(`  ${entries(otherNot)} not yet taken; presented again.`);

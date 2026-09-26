@@ -989,6 +989,23 @@ describe("notices — every outcome has words", () => {
     }).text;
     expect(both).toMatch(/Not yet taken by the relay; kept here and presented again\./);
     expect(both).toMatch(/will not hold 2 entries: malformed, bad signature;/);
+    // #813 F3 — a reason the relay gave that this device's own check did not confirm.
+    const claimed = retireNotice({
+      kind: "retired",
+      deviceId: "d",
+      retirementIds: ["r"],
+      advisory: false,
+      presented: {
+        ...presented,
+        taken: 0,
+        notTaken: [{ id: "r", reason: "bad_signature", unconfirmed: "bad_signature" }],
+      },
+    }).text;
+    expect(claimed).toMatch(
+      /The relay refused 1 entry as bad signature, which this device could not confirm; kept here and presented again\./,
+    );
+    expect(claimed).not.toMatch(/Not yet taken/);
+    expect(claimed).not.toMatch(/will not hold/);
     expect(retireNotice({ kind: "already-retired", deviceId: "d" }).tone).toBe("done");
     expect(retireNotice({ kind: "not-enrolled", deviceId: "d", socketOpen: true }).text).toMatch(
       /socket is open/,
