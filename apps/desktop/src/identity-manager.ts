@@ -77,6 +77,8 @@ import {
   type RestoreIdentityResult,
 } from "@motebit/identity-file";
 import { rotateDesktopKey } from "./key-rotation";
+import { rosterAfterRotationCommit } from "./machine-roster";
+import { tauriRosterIO } from "./machine-roster-store";
 import { updateConfig } from "./config-update";
 import type { BootstrapResult } from "./index.js";
 import { createTauriStorage } from "./index.js";
@@ -103,6 +105,13 @@ export class IdentityManager {
    * the recovery banner with restore CTAs.
    */
   divergedFromMotebitId: string | null = null;
+  /**
+   * Called just BEFORE an identity switch writes anything that may replace
+   * the key slot (restore, pairing). The machine roster is disposed here:
+   * from the switch on, the slot may hold another identity's key while
+   * this process still runs as the old one (machine-roster-surfaces-v1 C-2c).
+   */
+  beforeIdentitySwitch: ((kind: "restore" | "pair") => void) | null = null;
 
   /**
    * Bootstrap identity on first launch or load existing identity.
@@ -475,6 +484,8 @@ export class IdentityManager {
       // one is kept with the replaced config, never destroyed.)
       identity_file: request.originalContent !== undefined ? request.originalContent : null,
     };
+    // Before the write-ahead: from here on the key slot may change.
+    this.beforeIdentitySwitch?.("restore");
     try {
       // Written ahead first: from here on a crash is finished at the next
       // launch, so the key and the config can never be left mismatched.
@@ -516,8 +527,16 @@ export class IdentityManager {
       invoke,
       motebitId: this.motebitId,
       deviceId: this.deviceId,
-      onCommitted: (publicKeyHex) => {
+      onCommitted: async (publicKeyHex, record) => {
         this.publicKey = publicKeyHex;
+        // F7 (machine-roster-surfaces-v1): the link joins the roster
+        // replica — no capture, no re-enrolment (the desktop is never a
+        // host). Best-effort: never fails the committed rotation.
+        await rosterAfterRotationCommit({
+          motebitId: this.motebitId,
+          record,
+          io: tauriRosterIO(invoke),
+        });
       },
       ...(reason !== undefined ? { reason } : {}),
     });
@@ -728,6 +747,7 @@ export class IdentityManager {
 
     // One switch: the old identity's rotation write-ahead is set aside, the
     // replaced key and binding are kept, and a crash is finished at launch.
+    this.beforeIdentitySwitch?.("pair");
     await switchIdentity(invoke, sw);
 
     if (adoptedPublicKey !== undefined) this.publicKey = adoptedPublicKey;

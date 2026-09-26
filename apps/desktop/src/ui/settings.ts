@@ -32,6 +32,7 @@ import {
 import { ELEVENLABS_VOICES, DEEPGRAM_VOICES } from "@motebit/voice";
 import { settingsPatch } from "./settings-config";
 import { updateConfig } from "../config-update";
+import { mountMachines } from "./machines-section";
 
 // === DOM Refs ===
 
@@ -674,6 +675,8 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     // value never persists across opens.
     resetRecoverySeedUi();
 
+    populateMachines();
+
     // Credentials + Budget render in the Sovereign panel, not Settings —
     // per CLAUDE.md "Settings vs Sovereign — identity vs state": Settings
     // is what you ARE (identity, device, keys, config); Sovereign is what
@@ -682,6 +685,45 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     // the cross-surface alignment with web; sov-pane-credentials and
     // sov-pane-budget in apps/desktop/src/ui/sovereign.ts remain the
     // canonical home.
+  }
+
+  // === Machines (machine-roster-surfaces-v1 S5, C-2c) ===
+  //
+  // Under Identity, after the identity card — "what I am": the machines
+  // this motebit runs on. A record in a panel, never a toast. The card is
+  // built here (not in index.html) and re-mounted when the identity changes.
+  let machinesMounted: { section: unknown; unmount: () => void } | null = null;
+  function populateMachines(): void {
+    const invoke = ctx.getConfig()?.invoke;
+    const roster = invoke != null ? ctx.app.machineRoster(invoke) : null;
+    const pane = document.getElementById("pane-identity");
+    if (pane == null) return;
+    let card = document.getElementById("settings-machines");
+    if (roster == null) {
+      // No roster now (stopped, switching or restored identity): nothing stale shown.
+      machinesMounted?.unmount();
+      machinesMounted = null;
+      card?.remove();
+      return;
+    }
+    if (card == null) {
+      card = document.createElement("div");
+      card.id = "settings-machines";
+      card.className = "settings-card";
+      card.style.marginTop = "8px";
+      const title = document.createElement("div");
+      title.className = "card-title";
+      title.textContent = "Machines";
+      card.append(title);
+      const identityCard = pane.querySelector(".settings-card");
+      if (identityCard?.nextSibling) pane.insertBefore(card, identityCard.nextSibling);
+      else pane.append(card);
+    }
+    if (machinesMounted?.section !== roster.section) {
+      machinesMounted?.unmount();
+      machinesMounted = { section: roster.section, unmount: mountMachines(card, roster.section) };
+    }
+    void roster.section.refresh();
   }
 
   // === Recovery Seed Reveal ===
