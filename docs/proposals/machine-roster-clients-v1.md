@@ -168,7 +168,7 @@ The decision is taken on the **current** verdict over **the cache ∪ a successf
 5. "Connected, not in the roster".
 6. Superseded lines are advisory and shown as "not covered".
 7. "Not observed in the last 90 days" is kept distinct from "never seen".
-8. **A possibly ambiguous machine** (round 1 R10, round 2 R19): `sockets_open > 1` on one `(device_id, key)` on **two successive reads** gives a hint worded as "may": "two machines may share this id (copied `~/.motebit`)". `sockets_open` counts any bound socket, including an interactive session beside the daemon and a half-open socket next to its reconnect. So it is a hint, never a verdict, and `run` and `serve` do not print it at start until there is a heartbeat (#691).
+8. **A possibly ambiguous machine** (round 1 R10, round 2 R19): `host_sockets_open > 1` (falling back to `sockets_open` from a relay that does not serve it) on one `(device_id, key)` on **two successive reads** gives a hint worded as "may": "two machines may share this id (copied `~/.motebit`)". `host_sockets_open` counts only sockets announcing `unattended_runtime`, so an interactive session beside the daemon no longer trips it; a half-open socket next to its reconnect still can. So it is a hint, never a verdict, and `run` and `serve` do not print it at start until there is a heartbeat (#691).
 9. The chain head is cited, along with the ancestry (C1) and the relay's missing links and entries.
 10. **No count or quantifier** is rendered unless it is computed over `active` in an `ok:true` verdict, and never when C1.3 or C1.7 has suppressed universal claims.
 
@@ -228,7 +228,7 @@ The decision is taken on the **current** verdict over **the cache ∪ a successf
 - **N10: the genesis key ends the walk.** For a sovereign-shaped id, a key that binds to the id ends the walk. Any predecessor of it is disclosed, never walked.
 - **N11: fork wording.** The disclosure says "the holder of A signed two successors", not "A was compromised"; two offline rotations on two surfaces produce the same thing honestly. C1.7 still suppresses when a normal sibling is the relay's head.
 - **N12: two C6 wording fixes.**
-  - C6.2 says "socket open" only when `sockets_open > 0`, and otherwise "last seen under a superseded key".
+  - C6.2 says "socket open" only when `host_sockets_open > 0` (else `sockets_open` from an older relay), and otherwise "last seen under a superseded key".
   - After a restore that gives a fresh `device_id`, offer to retire the prior line.
 - **N13: ordering with #775.** C-0 lands after #775, or its tests pin the behaviour against it.
 - **C-0 build notes.** These record where the primitive (`resolveRosterKeyChain`) departs from this text:

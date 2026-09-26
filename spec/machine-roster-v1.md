@@ -404,7 +404,9 @@ about membership.
   connection reads as open, so an idle, silently dead connection keeps
   refreshing it until the store notices the close; `sockets_open` likewise
   counts connections the store **believes** open — **any** connection bound as
-  that pair, whether or not it announces unattended work. Neither is proof the
+  that pair, whether or not it announces unattended work — and
+  `host_sockets_open` counts the subset that announces unattended work, by the
+  same rule that writes the last-seen value. None of them is proof the
   machine is alive. And it is a **lower bound**: a store that stops without its
   shutdown flush (a crash) loses up to one flush interval (five minutes at the
   reference relay), so a connection may have been open somewhat after the value
@@ -415,7 +417,10 @@ about membership.
 - A store that expires last-seen values MUST serve its retention window and the
   time from which it has been observing, so that a consumer can say "not
   observed in the last N days" rather than "never seen", and MUST NOT expire a
-  value while a connection bound as it is open.
+  value while a connection bound as it that announces unattended work is open.
+  (A connection that does not host — a desktop session sharing the machine's
+  `device_id` — does not keep a host's value alive; once the value expires, that
+  connection is served as `live_unenrolled`.)
 - Liveness MUST be served visibly apart from the signed entries, so that no
   consumer can mistake a store's observation for the sovereign's statement.
 
@@ -590,8 +595,10 @@ plus slack) whole with 413. A well-formed entry is about 400 bytes.
 ```
 { motebit_id, enrollments, retirements,
   liveness: { observed_by, retention_days, observing_since,
-              rows: [{ device_id, bound_under, last_seen_at, sockets_open }],
-              live_unenrolled: [{ device_id, bound_under, sockets_open }] } }
+              rows: [{ device_id, bound_under, last_seen_at, sockets_open,
+                       host_sockets_open }],
+              live_unenrolled: [{ device_id, bound_under, sockets_open,
+                                  host_sockets_open }] } }
 ```
 
 `enrollments` and `retirements` are served as the motebit signed them.
@@ -602,8 +609,15 @@ unattended work; `live_unenrolled` are open bound connections with no row.
 `last_seen_at` is the last time the store held a connection bound as that
 `(device_id, bound_under)` open — a lower bound after a crash (§8) — and
 `sockets_open` counts **every** connection bound as that pair the store believes
-open, host or not; with no heartbeat, a half-open connection counts (§8). Both
-are per observed pair, never over machines.
+open, host or not — something is attached — and `host_sockets_open` counts the
+subset that announces unattended work, the connections that are the host's
+liveness; with no heartbeat, a half-open connection counts in both (§8). They
+are two quantities and a consumer MUST NOT read one for the other: "the machine
+is running" is `host_sockets_open > 0`; "something is still connected as this
+machine" (the signal a retired machine's owner needs) is `sockets_open > 0`.
+`host_sockets_open` was added after `sockets_open`; a consumer that finds it
+absent (an older store) falls back to `sockets_open` for both. All are per
+observed pair, never over machines.
 
 **The store does not reduce.** It returns the set; the consumer reduces it (§6)
 against a key chain the consumer verified, and joins liveness to it: an active

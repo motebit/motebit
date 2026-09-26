@@ -36,7 +36,9 @@
  *     that read the relay's roster AND key chain in full. While suspect, no
  *     count is rendered (C6.10): the copy that would catch an omission is
  *     gone, so the relay's word is all there is. Latest `at` wins.
- *   - `ambiguous` — `(device_id, key)` pairs seen with `sockets_open > 1` at
+ *   - `ambiguous` — `(device_id, key)` pairs seen with more than one HOST
+ *     socket (`hostSocketsOpen > 1`, falling back to `sockets_open` on an
+ *     older relay) at
  *     the last read, stamped with that read's time; the hint needs two
  *     successive reads (C6.8, R19).
  *
@@ -84,7 +86,7 @@ export interface MachineRosterReplica {
   roster_full: string[];
   own_device_ids: string[];
   own_minted: string[];
-  /** The last read's pairs with `sockets_open > 1`; `at` = 0 means no read yet. */
+  /** The last read's pairs with `hostSocketsOpen > 1`; `at` = 0 means no read yet. */
   ambiguous: { at: number; pairs: string[] };
   rotation_captures: RotationCapture[];
   /** See the header: `suspect` while a corrupt read has not been re-merged. */
