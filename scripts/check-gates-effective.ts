@@ -181,14 +181,25 @@ const PROBES: ReadonlyArray<Probe> = [
   {
     script: "check-surface-controller-adoption",
     proves:
-      "flags a surface that re-forks an extracted controller locally instead of consuming it — here, the mobile MCP-manager adapter losing its `@motebit/surface-kit` import (the re-fork signature)",
+      "flags a surface that re-forks an extracted controller locally while keeping the canonical import as decoration — here, the mobile MCP-manager adapter extending a local fork, with `McpManager` still imported from `@motebit/surface-kit` and named only in a type position (`typeof McpManager`). The gate must resolve references through the type checker, not match their text (#805)",
     perturb: () =>
-      // Rename the package specifier so the adapter no longer imports the
-      // canonical McpManager from @motebit/surface-kit. The gate scans
-      // textually, so no build is needed; cleanup restores verbatim.
-      mutateFile("apps/mobile/src/mcp-manager.ts", (src) =>
-        src.split("@motebit/surface-kit").join("@motebit/surface-kit-PROBE"),
-      ),
+      // Keep the import; swap the superclass for a local fork; leave the
+      // canonical name in an erased position. Two lines, well under the
+      // adapter's 60-line ceiling, so only the reference rule can catch it.
+      // The gate reads the syntax tree (no build needed); cleanup restores
+      // verbatim.
+      mutateFile("apps/mobile/src/mcp-manager.ts", (src) => {
+        const anchor = "export class MobileMcpManager extends McpManager {";
+        if (!src.includes(anchor)) {
+          throw new Error(`probe anchor not found in apps/mobile/src/mcp-manager.ts: ${anchor}`);
+        }
+        return src.replace(
+          anchor,
+          "class McpManagerFork { constructor(_deps: unknown) {} }\n" +
+            "type _KeepCanonical = typeof McpManager;\n" +
+            "export class MobileMcpManager extends McpManagerFork {",
+        );
+      }),
   },
   {
     script: "check-felt-interior-honesty",
