@@ -28,6 +28,7 @@ import { createLogger } from "./logger.js";
 import type { AuthEvent } from "./auth-events.js";
 import type { CloseIdentityConnections, CloseTokenConnections } from "./connection-ports.js";
 import { admitKey, identityGuardianFor, identityKey, verificationKeyFor } from "./identity-keys.js";
+import { isKnownIdentity, recordIdentityRevocation } from "./identity-revocation.js";
 
 const logger = createLogger({ service: "key-rotation" });
 
@@ -414,8 +415,22 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
   app.post("/api/v1/agents/:motebitId/revoke", async (c) => {
     const motebitId = c.req.param("motebitId");
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
+    // Every refusal on this route is recorded, naming the PRESENTER as
+    // subject (rule 6; the target is in `path`).
+    const refuse = (status: 403 | 404, reason: string, message: string): never => {
+      logger.warn("agent.revoke.refused", { motebitId, caller: callerMotebitId ?? null, reason });
+      recordAuthEvent({
+        kind: "agent_token_rejected",
+        method: "POST",
+        path: c.req.path,
+        motebitId: callerMotebitId ?? null,
+        reason: `revoke:${reason}`,
+        correlationId: c.req.header("x-correlation-id") ?? null,
+      });
+      throw new HTTPException(status, { message });
+    };
     if (callerMotebitId && callerMotebitId !== motebitId)
-      throw new HTTPException(403, { message: "Cannot revoke another agent" });
+      refuse(403, "not_own_identity", "Cannot revoke another agent");
 
     // Optional `compromised_at` (epoch ms) backdates the on-chain revocation
     // memo to the true compromise moment, narrowing the verifier's poison
@@ -441,9 +456,29 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
       }
     }
 
+    // Truthful (#787): an id the relay has never seen has nothing to revoke.
+    // A token-authenticated caller is always known (its token verified under
+    // a device or registry key); only the master token can name a stranger.
+    if (!isKnownIdentity(moteDb.db, motebitId)) refuse(404, "unknown_identity", "Unknown identity");
+
     const agent = moteDb.db
       .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
       .get(motebitId) as { public_key: string } | undefined;
+    const now = Date.now();
+    // The revocation itself, for EVERY identity (#787): the registry mark
+    // below exists only for an identity that has a registry row, and one
+    // registered only through register-self has none — it was answered
+    // `{revoked: true}` while its tokens kept verifying. `isAgentRevoked`
+    // reads this record beside the mark. No record is terminal (#794/#796
+    // withdrawn): a verified migration arrival or the operator's
+    // restore-listing lifts it. `revoked_under` names who revoked.
+    const verifiedKey = c.get("callerVerifiedKey" as never) as string | undefined;
+    const recorded = recordIdentityRevocation(
+      moteDb.db,
+      motebitId,
+      now,
+      callerMotebitId == null ? "operator" : (verifiedKey ?? "unknown"),
+    );
     // Revocation also DELISTS (identity-key-state-v1 §10 Q1): a revoked
     // identity cannot act, so it must not be for hire; one statement, one
     // audit site. The row itself stays — the identity log keeps the
@@ -451,18 +486,19 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     // The SET clause is written out here, not imported: the writers gate
     // reads statement text, and an authority write hidden in a constant is
     // an authority write the gate cannot see.
-    const revokedRow = moteDb.db
+    moteDb.db
       .prepare(
         "UPDATE agent_registry SET revoked = 1, delisted_at = COALESCE(delisted_at, ?), endpoint_url = '', capabilities = '[]' WHERE motebit_id = ?",
       )
-      .run(Date.now(), motebitId);
+      .run(now, motebitId);
     // The identity now admits no signed token (`agent_revoked`); end every
     // socket one already admitted, under ANY of its keys (#776). Right after
-    // the write and before the awaited revocation event, so no frame from a
-    // revoked identity is acted on in that window. Only when a row was
-    // marked: with no registry row nothing is revoked, and a closed socket
-    // would simply reconnect.
-    if (revokedRow.changes > 0) closeIdentityConnections(motebitId);
+    // the writes and before the awaited revocation event, so no frame from a
+    // revoked identity is acted on in that window. Gated on the RECORD, not
+    // on a registry row being marked: a register-self-only identity is
+    // revoked too, and its sockets would otherwise stay open (#787).
+    if (!recorded) throw new HTTPException(500, { message: "Revocation was not recorded" });
+    closeIdentityConnections(motebitId);
     try {
       await insertRevocationEvent(moteDb.db, relayIdentity, "agent_revoked", motebitId, {
         revokedPublicKey: verificationKeyFor(moteDb.db, motebitId, agent?.public_key) ?? undefined,

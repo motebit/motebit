@@ -2018,4 +2018,29 @@ export const relayMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 45,
+    name: "identity_revocations",
+    up: (db) => {
+      // An identity's OWN revocation (`/revoke`), recorded for every identity
+      // the relay authenticates (#787). It lived only as
+      // `agent_registry.revoked = 1`, so for an identity with no registry row
+      // — register-self only — the UPDATE touched nothing, the route still
+      // answered `{revoked: true}`, and the identity kept authenticating.
+      // Read by `isAgentRevoked` beside the registry mark. No record is
+      // terminal: a verified migration arrival or the operator's
+      // restore-listing lifts it (identity-revocation.ts; #794/#796 withdrawn
+      // for deriving terminality from a key). `revoked_under` is the key the
+      // revoking token verified under, or `operator`. Not backfilled: no
+      // durable record distinguishes a past `/revoke` from the operator's
+      // reversible hold (both set the same registry mark).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_identity_revocations (
+          motebit_id TEXT PRIMARY KEY,
+          revoked_at INTEGER NOT NULL,
+          revoked_under TEXT NOT NULL
+        );
+      `);
+    },
+  },
 ];

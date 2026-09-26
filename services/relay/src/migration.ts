@@ -42,6 +42,7 @@ import {
   BalanceWaiverSchema,
 } from "@motebit/wire-schemas";
 import { admitKey, recordIdentityKey, verificationKeyFor } from "./identity-keys.js";
+import { liftRevocation } from "./identity-revocation.js";
 import type { CloseIdentityConnections, ReconcileKeyConnections } from "./connection-ports.js";
 
 const logger = createLogger({ service: "relay", module: "migration" });
@@ -579,6 +580,12 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
 
     // Step 5: Onboard the agent — register in agent_registry
     const now = Date.now();
+    // The owner proved the key (step 3b — the sovereign binding, possibly
+    // through a rotated chain this relay never saw): a `/revoke` record ends
+    // here. No record is terminal (#794/#796 withdrawn): the key a `/revoke`
+    // token verified under may be a first-come squat or a genesis key the owner
+    // already rotated away from, so it cannot outrank this proof.
+    liftRevocation(db, body.motebit_id);
     // An UPSERT, not INSERT OR REPLACE: REPLACE named eight columns and so
     // dropped `guardian_public_key`, `settlement_address`, `settlement_modes`,
     // `metadata` and `sweep_threshold` for a returning identity (#703 F2).
