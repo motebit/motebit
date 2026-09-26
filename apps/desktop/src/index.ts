@@ -115,6 +115,7 @@ export type {
   GoalApprovalEvent,
 } from "./goal-scheduler.js";
 import { SyncController, type SyncStatusEvent } from "./sync-controller.js";
+import { createDesktopMachineRoster, type DesktopMachineRoster } from "./machine-roster.js";
 export type { SyncStatusEvent, SyncIndicatorStatus } from "./sync-controller.js";
 import { ConversationManager } from "./conversation-manager.js";
 export type { InvokeFn } from "./tauri-storage.js";
@@ -571,6 +572,63 @@ export class DesktopApp {
 
   constructor() {
     this.renderer = new ThreeJSAdapter();
+    // Before any identity switch touches the key slot: no roster may read
+    // it from then on (machine-roster-surfaces-v1 C-2c).
+    this.identity.beforeIdentitySwitch = (kind) => {
+      if (kind === "restore") this._rosterPendingReload = true;
+      else this._rosterSwitching = true;
+      this.disposeMachineRoster();
+    };
+  }
+
+  // === Machine roster (machine-roster-surfaces-v1 C-2c) ===
+
+  /** The Machines section; created on first use after bootstrap. */
+  private _machineRoster: DesktopMachineRoster | null = null;
+  /** Between stop() and the next start(): no roster. */
+  private _rosterStopped = false;
+  /** A pairing is switching identity: no roster until it completes. */
+  private _rosterSwitching = false;
+  /** A restore wrote another identity's key: no roster until the app reloads. */
+  private _rosterPendingReload = false;
+
+  /**
+   * The Machines section, one per identity: `null` before bootstrap, after
+   * stop() until start(), while a pairing switches identity, and after a
+   * restore until the reload. A pairing that switched identity gets a
+   * fresh one (replicas are per motebit_id, F4).
+   */
+  machineRoster(invoke: InvokeFn): DesktopMachineRoster | null {
+    if (this._rosterStopped || this._rosterSwitching || this._rosterPendingReload) return null;
+    const motebitId = this.motebitId;
+    const deviceId = this.deviceId;
+    const unset = (v: string): boolean => v === "" || v === "desktop-local";
+    if (unset(motebitId) || unset(deviceId)) return null;
+    const existing = this._machineRoster;
+    if (existing != null && existing.motebitId === motebitId && existing.deviceId === deviceId) {
+      return existing;
+    }
+    existing?.dispose();
+    const devices = createTauriStorage(invoke).identityStorage;
+    this._machineRoster = createDesktopMachineRoster({
+      motebitId,
+      deviceId,
+      invoke,
+      ...(devices.listDevices
+        ? {
+            listDeviceKeys: async () =>
+              (await devices.listDevices!(motebitId))
+                .map((d) => d.public_key)
+                .filter((k) => k !== ""),
+          }
+        : {}),
+    });
+    return this._machineRoster;
+  }
+
+  private disposeMachineRoster(): void {
+    this._machineRoster?.dispose();
+    this._machineRoster = null;
   }
 
   // === Identity bootstrap + keypair + relay registration ===
@@ -685,10 +743,14 @@ export class DesktopApp {
   }
 
   start(): void {
+    this._rosterStopped = false;
     this.runtime?.start();
   }
 
   stop(): void {
+    // Stays disposed: machineRoster() creates none until start().
+    this._rosterStopped = true;
+    this.disposeMachineRoster();
     if (this.slabBridgeUnsub) {
       this.slabBridgeUnsub();
       this.slabBridgeUnsub = null;
@@ -2207,12 +2269,16 @@ export class DesktopApp {
     return this.identity.pollPairingStatus(syncUrl, pairingId);
   }
 
-  completePairing(
+  async completePairing(
     invoke: InvokeFn,
     result: { motebitId: string; deviceId: string },
     keyTransferOpts?: Parameters<typeof this.identity.completePairing>[2],
   ): Promise<string | undefined> {
-    return this.identity.completePairing(invoke, result, keyTransferOpts);
+    const out = await this.identity.completePairing(invoke, result, keyTransferOpts);
+    // The switch completed and this process now runs as the new identity;
+    // a switch that threw stays latched (no roster until reload).
+    this._rosterSwitching = false;
+    return out;
   }
 
   // === Goal Scheduling ===
@@ -2355,8 +2421,13 @@ export class DesktopApp {
   }
 
   /** Start full sync: event-level WS + one-shot conversation sync. */
-  startSync(invoke: InvokeFn, syncUrl: string, authToken?: string): Promise<void> {
-    return this.sync.startSync(invoke, syncUrl, authToken);
+  async startSync(invoke: InvokeFn, syncUrl: string, authToken?: string): Promise<void> {
+    await this.sync.startSync(invoke, syncUrl, authToken);
+    // S4 — the roster is read (and presented, when due) whenever this
+    // desktop connects. Under its own device:auth token, never `authToken`.
+    if (this.sync.syncStatus.status === "connected") {
+      void this.machineRoster(invoke)?.section.refresh();
+    }
   }
 
   /** Start serving — register with relay and accept delegations. */

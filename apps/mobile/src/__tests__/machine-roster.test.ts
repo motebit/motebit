@@ -44,7 +44,7 @@ import {
   type KeyPair,
 } from "@motebit/encryption";
 import { generate, rotate as rotateIdentityFile } from "@motebit/identity-file";
-import { emptyReplica, type MachineRosterReplica } from "@motebit/surface-kit";
+import { MAX_RETRY_AFTER_MS, emptyReplica, type MachineRosterReplica } from "@motebit/surface-kit";
 import type { HostEnrollment, HostRetirement, KeySuccessionRecord } from "@motebit/sdk";
 import {
   loadPresentationRecord,
@@ -151,7 +151,12 @@ class FetchRelay {
 function phone(
   relay: FetchRelay,
   key: KeyPair,
-  opts: { deviceId?: string; motebitId?: string; identityFile?: string | null } = {},
+  opts: {
+    deviceId?: string;
+    motebitId?: string;
+    identityFile?: string | null;
+    now?: () => number;
+  } = {},
 ) {
   return createMobileMachineRoster({
     motebitId: opts.motebitId ?? MID,
@@ -160,7 +165,7 @@ function phone(
     syncUrl: async () => "https://relay.test/",
     loadIdentityFile: async () => opts.identityFile ?? null,
     fetchImpl: relay.fetch as typeof fetch,
-    now: () => NOW,
+    now: opts.now ?? (() => NOW),
   });
 }
 
@@ -582,6 +587,48 @@ describe("createMobileMachineRoster", () => {
       else expect(relay.posts).toBeGreaterThan(0);
     });
   }
+
+  it("#801 F1: a stored retry_until ten years out never freezes presenting — the first refresh repairs", async () => {
+    const a = await generateKeypair();
+    const relay = new FetchRelay();
+    relay.current = hex(a);
+    await saveReplica({ ...emptyReplica(MID), enrollments: [await enrol(a, "dev-omitted")] });
+    await putPresentationRecord(MID, {
+      digest: null,
+      taken_at: 0,
+      retry_until: NOW + 10 * 365 * 86_400_000,
+    });
+    const p = phone(relay, a);
+    await p.section.refresh();
+    expect(relay.posts).toBeGreaterThan(0);
+  });
+
+  it("#801 F1: a stored retry_until inside the bound holds, then presents once it elapses", async () => {
+    const a = await generateKeypair();
+    const relay = new FetchRelay();
+    relay.current = hex(a);
+    await saveReplica({ ...emptyReplica(MID), enrollments: [await enrol(a, "dev-omitted")] });
+    await putPresentationRecord(MID, { digest: null, taken_at: 0, retry_until: NOW + 30 * 60_000 });
+    let clock = NOW;
+    const p = phone(relay, a, { now: () => clock });
+    await p.section.refresh();
+    expect(relay.posts).toBe(0);
+    clock = NOW + 31 * 60_000;
+    await p.section.refresh();
+    expect(relay.posts).toBeGreaterThan(0);
+  });
+
+  it("#801 F1: a 429 with Retry-After: 999999999 is stored as at most now + the bound", async () => {
+    const a = await generateKeypair();
+    const relay = new FetchRelay();
+    relay.current = hex(a);
+    relay.enr.set("x", await enrol(a, "dev-host"));
+    relay.retryAfter = "999999999";
+    const p = phone(relay, a);
+    await p.section.refresh();
+    expect(relay.posts).toBeGreaterThan(0);
+    expect((await loadPresentationRecord(MID))?.retry_until).toBe(NOW + MAX_RETRY_AFTER_MS);
+  });
 
   it("F8: an act while the relay has asked to wait is kept and reported not taken", async () => {
     const a = await generateKeypair();

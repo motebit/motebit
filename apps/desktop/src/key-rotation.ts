@@ -9,6 +9,7 @@ import { parseHeldRotation, rotateOrThrow, type KeyRotationPorts } from "@motebi
 import { parse as parseIdentityFile, rotate as rotateIdentityFile } from "@motebit/identity-file";
 import { hexToBytes } from "@motebit/encryption";
 import { updateConfig } from "./config-update";
+import type { KeySuccessionRecord } from "@motebit/sdk";
 
 export type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -16,7 +17,8 @@ export interface DesktopRotationDeps {
   invoke: InvokeFn;
   motebitId: string;
   deviceId: string;
-  onCommitted: (newPublicKeyHex: string) => void;
+  /** After the key and config are stored; awaited (F7: the roster appends `record`). */
+  onCommitted: (newPublicKeyHex: string, record: KeySuccessionRecord) => void | Promise<void>;
   reason?: string;
   fetchImpl?: typeof fetch;
 }
@@ -63,7 +65,7 @@ export async function rotateDesktopKey(
       // another writer (a CLI rotation, a restore) that changed it since the
       // read above makes this refuse instead of reverting it.
       await updateConfig(deps.invoke, patch, { _identity_file: existing ?? null });
-      deps.onCommitted(publicKeyHex);
+      await deps.onCommitted(publicKeyHex, record);
     },
     ...(deps.reason !== undefined ? { reason: deps.reason } : {}),
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),

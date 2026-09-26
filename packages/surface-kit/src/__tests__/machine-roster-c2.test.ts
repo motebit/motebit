@@ -26,6 +26,8 @@ import {
   rotationLinkReplica,
 } from "../machine-roster-held-key.js";
 import {
+  MAX_RETRY_AFTER_MS,
+  boundedRetryUntil,
   createMachineRosterSection,
   enrollNotice,
   needsForceText,
@@ -553,6 +555,47 @@ describe("F8 — the presentation cadence", () => {
         NOW,
       ),
     ).toBeNull();
+  });
+
+  it("#801 F1 write: an unbounded Retry-After is stored as at most now + MAX_RETRY_AFTER_MS", async () => {
+    const a = await generateKeypair();
+    const replica = { ...emptyReplica(LEGACY_MID), enrollments: [await enrol(a, "d")] };
+    const empty = { taken: 0, notTaken: [], rosterFull: [] };
+    const huge = await nextPresentationRecord(
+      null,
+      { ...empty, retryAfterMs: 999_999_999 * 1000 },
+      replica,
+      NOW,
+    );
+    expect(huge?.retry_until).toBe(NOW + MAX_RETRY_AFTER_MS);
+    expect(MAX_RETRY_AFTER_MS).toBe(60 * 60 * 1000);
+    // A NaN wait is stored as the longest bounded wait, never as NaN.
+    const nan = await nextPresentationRecord(
+      null,
+      { ...empty, retryAfterMs: Number.NaN },
+      replica,
+      NOW,
+    );
+    expect(nan?.retry_until).toBe(NOW + MAX_RETRY_AFTER_MS);
+    // An out-of-bound value already stored is not carried into the next record.
+    const planted = { digest: null, taken_at: 0, retry_until: NOW + 10 * 365 * 86_400_000 };
+    const next = await nextPresentationRecord(planted, { ...empty, taken: 1 }, replica, NOW);
+    expect(next?.retry_until).toBe(0);
+  });
+
+  it("#801 F1 read: a stored retry_until beyond now + bound reads as expired, never as a freeze", () => {
+    const rec = { digest: "d", taken_at: 0, retry_until: 0 };
+    const tenYears = NOW + 10 * 365 * 86_400_000;
+    expect(boundedRetryUntil({ ...rec, retry_until: tenYears }, NOW)).toBe(0);
+    expect(boundedRetryUntil({ ...rec, retry_until: Number.NaN }, NOW)).toBe(0);
+    expect(boundedRetryUntil({ ...rec, retry_until: NOW + 30 * 60_000 }, NOW)).toBe(
+      NOW + 30 * 60_000,
+    );
+    expect(boundedRetryUntil(null, NOW)).toBe(0);
+    expect(presentationDue({ ...rec, retry_until: tenYears }, "e", NOW, 60_000)).toBe(true);
+    expect(presentationDue({ ...rec, retry_until: NOW + 30 * 60_000 }, "e", NOW, 60_000)).toBe(
+      false,
+    );
   });
 
   it("the digest changes when an entry joins, and not with order", async () => {

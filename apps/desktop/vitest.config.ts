@@ -53,6 +53,8 @@ export default defineMotebitTest({
     "src/ui/drop.ts",
     "src/ui/focus.ts",
     "src/ui/goals.ts",
+    // DOM layout only; every rule is in machines-render-model.ts (tested).
+    "src/ui/machines-section.ts",
     "src/ui/keyboard.ts",
     "src/ui/memory.ts",
     "src/ui/pairing.ts",

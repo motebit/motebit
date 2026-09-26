@@ -2,6 +2,9 @@
 name = "motebit-desktop"
 version = "0.1.0"
 edition = "2021"
+# std::fs::File::lock / try_lock (the machine-roster replica lock and lease,
+# src/roster_replica.rs) are stable from 1.89.
+rust-version = "1.89"
 
 [dependencies]
 tauri = { version = "2", features = ["macos-private-api"] }

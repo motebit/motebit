@@ -187,6 +187,46 @@ These record where the mobile build departs from, or adds to, the text above and
 - **Render.** `components/settings/MachinesSection.tsx`, mounted inside `IdentityTab` after the Sync row, lays out `machinesModel` (`src/machines-render-model.ts`), which holds every render rule and is unit-tested in node. The mobile workspace has no React Native render test harness.
 - **Rotation.** `rotateMobileKey` takes `afterCommit`, which runs after the key, the published key and the identity file are stored, and appends the link. It is wrapped so a roster failure never fails the rotation. The Rotate alert states N3's cost.
 
+### C-2c build notes
+
+These record where the desktop build departs from, or adds to, the text above and the web and phone references.
+
+- **The file.** `~/.motebit/machine-roster.desktop.json` holds `{ version: 1, replicas: { <motebit_id>: … }, presentation: { <motebit_id>: … } }` (F4). A read is strict, as on the CLI: one unreadable replica makes the whole file unreadable, because read as a smaller file the next save would drop what it held. The presentation records are hints, so a malformed one reads as none.
+- **Four Tauri commands, not two** (`src-tauri/src/roster_replica.rs`).
+  - `roster_replica_read` returns the bytes and their SHA-256 digest. Only a true absence reads as absent; damage is an error (durable-file R1).
+  - `roster_replica_write(expected, contents, aside)` is the compare-and-swap. It runs under a Rust in-process mutex and an OS lock on `<file>.lock`, re-reads, and refuses `roster_replica_conflict` unless the digest is still `expected`. The write is `write_file_atomic_owner_only`, so a crash between the staged write and the rename leaves the prior replica. `aside` keeps the current bytes as `<file>.corrupt-<time>` before the rename, and nothing is written if they cannot be kept (R3).
+  - `roster_lease_acquire(ttl)` / `roster_lease_release(token)` are the kit's `exclusive` (R4). The critical section is TypeScript (it signs and presents), so it cannot be one Rust command. The lease is an OS lock on `<file>.lease` held by the Rust process, with an owner token and a timeout: 120 s, clamped to 1–600 s. A process crash releases it through the OS. A lease held by a webview that reloaded is released by its timer, at most 120 s later with the default TTL. Until then the reloaded webview's own act polls for 30 s, then gives up with "locked by another desktop window" and fails closed: nothing is signed or sent (#801 F2).
+  - All four commands are `#[tauri::command(async)]`, so they run on Tauri's async-runtime worker threads, never the main thread. The compare-and-swap's lock wait (at most 2 s) and its fsyncs therefore cannot stall the UI. A contended wait can occupy one worker thread for up to 2 s. Acquiring the lease never waits in Rust (`try_lock`); the polling is in TypeScript.
+  - `File::lock` / `try_lock` need Rust 1.89. `rust-version` in `Cargo.toml` checks that at build time. They are `flock` on Unix and `LockFileEx` on Windows.
+- **Saves.** Each save reads, merges (`mergeReplicas`), then does the compare-and-swap, retried up to 16 times on a conflict. That is what makes it safe beside a second desktop process (a runtime-host frontend). One webview's writers also run one at a time, which only spares retries. A load that finds an unreadable file sets it aside through the same compare-and-swap, so a file another process has just repaired is never moved.
+- **Ports.**
+  - The signer is `device_private_key` via `keyring_get`, and the bearer is a `device:auth` token minted over the same bytes. The master token's slot is never read (a test pins that).
+  - `storedPublicKeyHex` is the public key of the key in `dev-keyring.json`. `rotationInFlight` is whether that store holds `pending_rotation` (F5a). Neither reads `config.json` or the CLI's write-ahead.
+  - `knownDeviceKeys` is the local `devices` table (`listDevices`).
+- **The identity file is the config's `_identity_file`.** It gives succession records only when it verifies, names this motebit_id **and** its current key is the key the desktop holds. Any other file contributes nothing (#799).
+  - **`pinnedGuardian` is always null.** R6's remedy (restore the identity file to pin the guardian) is not available on the desktop either, because a restore stores the file in the same self-signed slot. A guardian-recovered identity stays `unconfirmed` here.
+- **Own id (F5b).** `refuseOwnEnroll: false`: `enroll(own id)` takes the kit's R17 path (a second tap where the kit says `needs-force`) and records no own mint.
+- **Retry-After survives a restart.** The kit repairs an omission inside `acquire`, before `presentation.due` is asked. So every section entry point (`refresh`, `retire`, `enroll`) first re-reads the stored presentation record, and `repairOmissions` / `presentationHeld` read that value. If the record cannot be read, every presentation is held until it can.
+- **Retry-After is bounded (#801 F1, on all three surfaces).** Before this fix, one 429 with `Retry-After: 999999999` stored a `retry_until` decades out. The value is re-read at every entry point and kept at its maximum, so a surface would never present again. The rule now lives once, in the kit:
+  - `MAX_RETRY_AFTER_MS` is 1 hour. `nextPresentationRecord` stores at most `now + MAX_RETRY_AFTER_MS`, and never carries forward an out-of-bound value it finds in the stored record.
+  - `boundedRetryUntil(record, now)` is the read rule. `presentationDue` uses it, and so does each surface's `remember` (web, mobile, desktop). A stored value beyond `now + MAX_RETRY_AFTER_MS` could only have been written before the bound, or planted, so it reads as expired (0).
+  - The out-of-bound value is dropped, not clamped to `now + bound`. It is re-read on every entry point, so a clamp relative to the time of reading would slide forward with each read and hold forever.
+  - Stated cost: dropping errs toward presenting early. Presenting is idempotent, and the relay re-asserts any wait with a now-bounded `Retry-After`. A clock that jumps back more than an hour can have the same effect on a legitimate value.
+- **Presenter.** There is no leader lock. Every live desktop process may present, and the cadence record in the shared file bounds how often.
+- **Disposal.**
+  - `IdentityManager.beforeIdentitySwitch` fires before the identity-switch write-ahead, which is the first key-store write of both a restore and a pairing. The IPC sequence (`fixtures/identity-switch-restore.json`) is unchanged.
+  - After a restore there is no roster until reload. During a pairing there is none, and after it a new roster is made for the new identity. A pairing whose switch threw stays latched until reload.
+  - After `stop()` there is none until `start()`. A disposed roster never reads the key slot again.
+- **Rotation (F7).** `rotateDesktopKey`'s `onCommitted` now receives the succession `record` and is awaited. `IdentityManager.rotateKey` appends the link to the replica there, best-effort. The Rotate dialog states N3's cost.
+- **Render.** `machines-render-model.ts` holds every rule and is unit-tested, a copy of the phone's model. `ui/machines-section.ts` only lays it out, as a card after the identity card in Settings → Identity.
+- **The file-key rule is defense in depth.** With `pinnedGuardian` null, an unpinned recovery cannot make a successor, so the #799 probe stays green even without the rule. A unit case pins the rule on its own: a file self-signed by a key other than the held one, carrying genuine verifying records, contributes nothing.
+- **Gate and shared names.** The desktop adapter is in `check-surface-controller-adoption` (at its 360-line ceiling, by the gate's count; no headroom left). `machine-roster.desktop.json`, `.corrupt-<t>`, `.lock` and `.lease` have a row in `key-file-durability-v1.md`'s shared-names table.
+- **Decisions (lead, C-2c review):**
+  - **Multi-process presenting: accepted.** The shared cadence record in the replica file bounds it; there is no leader lock.
+  - **Guardian-recovered identities stay `unconfirmed` on the desktop.** Stated cost, the same as on the phone.
+  - **A pairing that throws after the dispose stays latched until reload** (fail-closed).
+  - **Whole-file set-aside: accepted.** One unreadable replica sets the whole file aside for every identity, as on the CLI. Stated cost: the bytes are kept aside.
+
 ## 3. Open questions for design review round 2
 
 1. Is `classifyHeldKey` sound on every surface, and is `unconfirmed` reached in any routine state where the surface does hold the identity key, so that counts stay suppressed for good?

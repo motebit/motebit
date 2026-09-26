@@ -87,9 +87,17 @@ const ADOPTIONS: readonly Adoption[] = [
     // Mobile (C-2b) carries the same ports over SecureStore + the stored
     // motebit.md, in-process save/exclusive chains, and no leader lock (one
     // JS process); its AsyncStorage replica is `machine-roster-store.ts`, its
-    // render model `machines-render-model.ts`. Desktop (C-2c) joins this entry.
+    // render model `machines-render-model.ts`. Desktop (C-2c) carries them
+    // over its own key store (dev-keyring.json) and the config's motebit.md,
+    // with a Rust-backed compare-and-swap replica file and a lease for
+    // `exclusive` (`machine-roster-store.ts`, `src-tauri/src/roster_replica.rs`);
+    // its render model is `machines-render-model.ts`.
     controller: "createMachineRosterSection",
-    files: ["apps/web/src/machine-roster.ts", "apps/mobile/src/machine-roster.ts"],
+    files: [
+      "apps/web/src/machine-roster.ts",
+      "apps/mobile/src/machine-roster.ts",
+      "apps/desktop/src/machine-roster.ts",
+    ],
     maxLines: 360,
   },
 ];

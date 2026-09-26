@@ -81,6 +81,8 @@ export {
   replicaDigest,
   presentationDue,
   nextPresentationRecord,
+  boundedRetryUntil,
+  MAX_RETRY_AFTER_MS,
 } from "./machine-roster-section.js";
 export type {
   MachineRosterSection,
