@@ -5,6 +5,7 @@
 
 import type { DatabaseDriver } from "@motebit/persistence";
 import { runMigrations, relayMigrations } from "./migrations.js";
+import { isIdentityRevoked } from "./identity-revocation.js";
 
 /**
  * Create all relay-owned tables, apply schema migrations, and run startup cleanup.
@@ -42,11 +43,11 @@ export function createRelaySchema(db: DatabaseDriver): {
       .get(motebitId, jti) as Record<string, unknown> | undefined;
     return row !== undefined;
   }
+  // The identity's own revocation (every identity, #787) OR the registry's
+  // revoked mark (operator hold, migration departure). Reading the registry
+  // alone let an identity with no registry row stay live after `/revoke`.
   function isAgentRevoked(motebitId: string): boolean {
-    const row = db
-      .prepare("SELECT revoked FROM agent_registry WHERE motebit_id = ?")
-      .get(motebitId) as { revoked: number } | undefined;
-    return row?.revoked === 1;
+    return isIdentityRevoked(db, motebitId);
   }
 
   return { isTokenBlacklisted, isAgentRevoked };
