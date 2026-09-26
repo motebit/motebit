@@ -79,13 +79,23 @@ export function presentationLines(
 ): string[] {
   const own = new Set(ownIds);
   const ownFull = presented.rosterFull.filter((id) => own.has(id)).length;
-  const ownNot = presented.notTaken.filter((n) => own.has(n.id)).length;
+  // A 401/403 is not "later": this device's credential was refused — most
+  // often its key was rotated away meanwhile — so it will not be presented
+  // again from here until that is resolved.
+  const refusedAuth = (r: string): boolean => /\bstatus 40[13]\b/.test(r);
+  const ownAuth = presented.notTaken.filter((n) => own.has(n.id) && refusedAuth(n.reason)).length;
+  const ownNot = presented.notTaken.filter((n) => own.has(n.id) && !refusedAuth(n.reason)).length;
   const otherFull = presented.rosterFull.length - ownFull;
-  const otherNot = presented.notTaken.length - ownNot;
+  const otherNot = presented.notTaken.length - ownNot - ownAuth;
   const out: string[] = [];
   if (ownFull > 0) {
     out.push(
       `  The relay REFUSED this ${noun} for good (its roster is full): it is kept on this device, but surfaces that read this relay will not see it.`,
+    );
+  }
+  if (ownAuth > 0) {
+    out.push(
+      `  The relay refused this ${noun} (not authorized): this device's key may have been rotated away — run \`motebit machines\` to see. It is kept on this device.`,
     );
   }
   if (ownNot > 0) {

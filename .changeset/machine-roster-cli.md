@@ -14,4 +14,4 @@ The replica lives at `~/.motebit/machine-roster.json` (owner-only, written atomi
 
 `motebit machines retire` and `enroll` say plainly when the relay did not take the act, or refused it for good because its roster is full. No count is printed while this machine's own copy of the roster could not be read and has not since been re-confirmed from the relay.
 
-When this device cannot place a machine's enrolments in its key chain (a failed key-chain read, or a guardian recovery with no guardian pinned here), `motebit machines`, `retire` and `enroll` say so, and never call that machine unenrolled.
+When this device cannot place a machine's enrolments in its key chain (a failed key-chain read, or a guardian recovery with no guardian pinned here), `motebit machines`, `retire` and `enroll` say so, and never call that machine unenrolled. An empty roster says what this device actually holds (for example, retirements for enrolments it has not seen), and no count is printed when the key chain could not be refreshed from the relay.

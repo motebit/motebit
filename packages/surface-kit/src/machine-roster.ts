@@ -254,7 +254,9 @@ export type SuppressionReason =
    * aside), and no acquisition since has read the relay's roster and key
    * chain in full: the copy that would catch an omission is gone.
    */
-  | "cache_corrupt";
+  | "cache_corrupt"
+  /** The key chain could not be refreshed from the relay this read (rule 1's failed read). */
+  | "chain_unread";
 
 export interface PresentReport {
   /** Entries the relay took (stored or already held). */
@@ -332,12 +334,16 @@ export function mayAutoMint(acq: RosterAcquired): boolean {
 }
 
 /**
- * Per device: its enrolments in the reduced input that the verdict refused
- * as `untrusted_key` — signed by a key this device cannot place in its
- * chain (older or newer). Such a device HAS enrolled, as far as anyone can
- * tell from here; it is never "not in the roster", "never enrolled" or
- * "has no line" (#786 decisive round, F). Junk copies (malformed, bad
- * signature, another motebit) are not enrolments of this motebit and are
+ * Per device: the enrolment copies in the reduced input that the verdict
+ * refused as `untrusted_key` — naming a key this device cannot place in its
+ * chain (older or newer). The law decides `untrusted_key` BEFORE it checks
+ * the signature, so a copy under an unplaceable key is counted whether or
+ * not its signature is good: it may be a real enrolment under an older or
+ * newer key, or junk. Either way nothing about it can be verified here, so
+ * no absolute "not in the roster", "never enrolled" or "has no line" may be
+ * said of that device (#786 decisive round, F), and the wording says
+ * "cannot place", never "has enrolled". Copies refused for another reason
+ * (malformed, another motebit, a bad signature under a PLACEABLE key) are
  * not counted.
  */
 export function unplaceableEnrollments(
@@ -639,6 +645,9 @@ export class MachineRoster {
     if (hint != null && !resolved.chain.includes(hint)) suppressed.push("relay_newer_key");
     if (omitted.length > 0) suppressed.push("relay_omission");
     if (served == null) suppressed.push("relay_unread");
+    // P3 — like rule 1 for minting: a key chain not refreshed from the relay
+    // may be missing a rotation, so no count is made from it.
+    if (!successionRead) suppressed.push("chain_unread");
     // P4 — this device's copy could not be read (this run), or was lost on
     // an earlier run and no acquisition has since read the relay in full.
     const fullRead = served != null && omitted.length === 0 && successionRead;
@@ -1134,7 +1143,11 @@ export class MachineRoster {
             }
             const count = unplacedOwnEnrollments(now, index, deviceId);
             if (count > 0) return { kind: "unplaced", count, replica };
-            if (rotation != null) return { kind: "superseded", frozen: null, replica };
+            // No rotation twin of decide()'s "never a first line" guard here:
+            // the hook reaches the lock only through decide()'s superseded row
+            // (its "no line" row answers first, and is tested), and the input
+            // under the lock is a superset of decide()'s, so a line cannot
+            // vanish between them.
           }
         }
       }

@@ -178,6 +178,7 @@ const SUPPRESSION_TEXT: Record<SuppressionReason, string> = {
   relay_unread: "the relay's roster could not be read, so this is this device's copy alone",
   cache_corrupt:
     "this device's copy of the roster could not be read and has not been re-confirmed from the relay",
+  chain_unread: "the key chain could not be refreshed from the relay",
 };
 
 function ancestryText(a: RosterChainAncestry): string {
@@ -240,6 +241,7 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
   const suffix = (d: string): string => (d === me ? " (this device)" : "");
 
   // 1. Active, joined on (device_id, head).
+  const activeLive = new Map<string, string>();
   for (const m of v.active) {
     const row = take(m.device_id, head);
     let liveness: LineLiveness;
@@ -263,6 +265,7 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
         ? `not observed in the last ${windowDays} days`
         : `not observed since ${iso(since)}, when this relay began observing`;
     }
+    activeLive.set(m.device_id, live);
     lines.push({
       kind: "active",
       device_id: m.device_id,
@@ -356,6 +359,16 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
       });
     }
   });
+
+  // P5 — liveness is per (device, key): when another row of an active
+  // device renders (under another key), its own liveness says whose key.
+  for (const l of lines) {
+    if (l.kind !== "active") continue;
+    const others = lines.some((o) => o !== l && o.kind !== "active" && o.device_id === l.device_id);
+    if (others) {
+      l.text = `${l.device_id}${suffix(l.device_id)} — active; under the current key: ${activeLive.get(l.device_id) ?? ""}`;
+    }
+  }
 
   // 6. Superseded lines: advisory, not covered.
   for (const m of v.superseded) {
@@ -504,28 +517,12 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
     head: { public_key: head, fingerprint: keyFingerprint(head) },
     this_device: me,
     claim,
-    empty:
-      lines.length > 0
-        ? null
-        : claim != null && v.tombstones.length > 0
-          ? {
-              // A pending tombstone names an enrolment: one existed.
-              kind: "none-standing",
-              text: "no machine is enrolled; retirements are held for enrolments this device has not seen",
-            }
-          : claim != null && !v.rejected.some((r) => r.kind === "enrollment")
-            ? { kind: "none-enrolled", text: "no machine has enrolled yet" }
-            : claim != null
-              ? {
-                  // Refused copies exist (junk, or another motebit's): no
-                  // enrolment this device can verify — not "none ever".
-                  kind: "none-standing",
-                  text: "no machine is enrolled that this device can verify",
-                }
-              : {
-                  kind: "nothing-held",
-                  text: "nothing is held on this device, and the roster could not be confirmed",
-                },
+    empty: emptyState({
+      lines: lines.length,
+      confirmed: claim != null,
+      tombstones: v.tombstones.length,
+      refused: v.rejected.length,
+    }),
     suppressed: acq.suppressed,
     lines,
     notes,
@@ -537,6 +534,49 @@ function viewOf(acq: RosterAcquired, now: number): MachineRosterView {
         }
       : null,
   };
+}
+
+/**
+ * What an EMPTY roster says — derived from what the verdict actually holds,
+ * whatever `claim` is (#790 W1). Every absolute ("no machine", "nothing")
+ * is conditioned on the replica and verdict; `confirmed` (a count may be
+ * made) only adds or drops "not confirmed with the relay".
+ *   - lines                 → null (nothing to say about emptiness)
+ *   - pending tombstones    → "no machine is enrolled; retirements are held
+ *                              for enrolments this device has not seen"
+ *   - refused copies        → "no machine is enrolled that this device can verify"
+ *   - nothing, confirmed    → "no machine has enrolled yet"
+ *   - nothing, unconfirmed  → "nothing is held on this device, and the
+ *                              roster could not be confirmed"
+ */
+export function emptyState(held: {
+  lines: number;
+  confirmed: boolean;
+  tombstones: number;
+  refused: number;
+}): { kind: "none-enrolled" | "none-standing" | "nothing-held"; text: string } | null {
+  if (held.lines > 0) return null;
+  const unconfirmed = held.confirmed ? "" : " (not confirmed with the relay)";
+  if (held.tombstones > 0) {
+    // A pending tombstone names an enrolment: one existed.
+    return {
+      kind: "none-standing",
+      text: `no machine is enrolled; retirements are held for enrolments this device has not seen${unconfirmed}`,
+    };
+  }
+  if (held.refused > 0) {
+    // Refused copies exist: no enrolment this device can verify — not "none ever".
+    return {
+      kind: "none-standing",
+      text: `no machine is enrolled that this device can verify${unconfirmed}`,
+    };
+  }
+  return held.confirmed
+    ? { kind: "none-enrolled", text: "no machine has enrolled yet" }
+    : {
+        kind: "nothing-held",
+        text: "nothing is held on this device, and the roster could not be confirmed",
+      };
 }
 
 /** The words for a suppression reason (why no count is shown). */

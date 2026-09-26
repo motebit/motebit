@@ -243,7 +243,7 @@ export function describeEnsureOutcome(
     case "superseded":
       return `Machine roster: this machine's line is on a superseded key and not covered — \`motebit machines enroll ${deviceId}\` to enrol it under the current key (a rotation re-enrols only a line this machine minted itself)`;
     case "unplaced":
-      return `Machine roster: not enrolled — this machine has lines this device cannot place in its key chain; if it should host, \`motebit machines enroll ${deviceId}\``;
+      return `Machine roster: this machine's roster entries are under keys this device cannot place in its key chain, or could not be verified — not updated ${rotate ? "after the rotation" : "this start"}; if it should host, \`motebit machines enroll ${deviceId}\``;
     case "unknown":
       return rotate
         ? `Machine roster: not updated after the rotation — ${out.detail}; the rotation itself is complete`

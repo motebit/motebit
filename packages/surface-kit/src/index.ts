@@ -78,7 +78,12 @@ export type {
   FrozenVerdict,
   RotationCapture,
 } from "./machine-roster-replica.js";
-export { buildRosterView, keyFingerprint, suppressionText } from "./machine-roster-view.js";
+export {
+  buildRosterView,
+  emptyState,
+  keyFingerprint,
+  suppressionText,
+} from "./machine-roster-view.js";
 export type {
   MachineRosterView,
   RosterLine,

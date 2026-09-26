@@ -39,7 +39,12 @@ import {
   parseReplica,
   type MachineRosterReplica,
 } from "../machine-roster-replica.js";
-import { buildRosterView, keyFingerprint, suppressionText } from "../machine-roster-view.js";
+import {
+  buildRosterView,
+  emptyState,
+  keyFingerprint,
+  suppressionText,
+} from "../machine-roster-view.js";
 
 const MID = "0190f1a2-0000-7000-8000-000000000001"; // a legacy (v7) id: unrooted
 const NOW = 1_800_000_000_000;
@@ -2336,5 +2341,138 @@ describe("F (#786) — a device whose only enrolments are unplaceable has enroll
     expect(view.kind === "roster" && view.empty?.text).toBe(
       "no machine is enrolled that this device can verify",
     );
+  });
+});
+
+// ── #790 round 1 ─────────────────────────────────────────────────────
+
+describe("W1 (#790) — the empty state is derived from what is held, over the whole product", () => {
+  const cases: Array<[number, boolean, number, number]> = [];
+  for (const lines of [0, 1])
+    for (const confirmed of [false, true])
+      for (const tombstones of [0, 1])
+        for (const refused of [0, 1]) cases.push([lines, confirmed, tombstones, refused]);
+
+  it.each(cases)(
+    "lines=%i confirmed=%s tombstones=%i refused=%i",
+    (lines, confirmed, tombstones, refused) => {
+      const e = emptyState({ lines, confirmed, tombstones, refused });
+      if (lines > 0) {
+        expect(e).toBeNull();
+        return;
+      }
+      const text = e!.text;
+      // Each absolute is conditioned on what is held.
+      if (/no machine has enrolled yet/.test(text)) {
+        expect([confirmed, tombstones, refused]).toEqual([true, 0, 0]);
+      }
+      if (/nothing is held on this device/.test(text)) {
+        expect([confirmed, tombstones, refused]).toEqual([false, 0, 0]);
+      }
+      if (tombstones > 0) expect(text).toMatch(/retirements are held for enrolments/);
+      else if (refused > 0)
+        expect(text).toMatch(/no machine is enrolled that this device can verify/);
+      // Unconfirmed never reads as settled.
+      if (!confirmed) {
+        expect(text).toMatch(/not confirmed with the relay|could not be confirmed/);
+      }
+    },
+  );
+
+  it("a watcher holding only a retirement (its enrolment under a key it cannot place, /succession down): tombstone wording, not 'nothing held'", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const e = await enrol(a, "vps");
+    // The phone retired the A-line under B; this relay holds the retirement only.
+    await relay.hold(await retireEntry(b, e));
+    relay.chain = [await rotate(a, b)];
+    relay.successionFails = true;
+    const acq = await acquired(machine(relay, b, { deviceId: "watcher" }));
+    expect(acq.verdict.tombstones).toHaveLength(1);
+    const view = buildRosterView(acq, NOW);
+    if (view.kind !== "roster") throw new Error("expected roster");
+    expect(view.claim).toBeNull();
+    expect(view.empty?.text).toBe(
+      "no machine is enrolled; retirements are held for enrolments this device has not seen (not confirmed with the relay)",
+    );
+  });
+
+  it("a relay omitting the tombstones this device holds: tombstone wording, consistent with the omission note", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const tomb = await signHostRetirement(
+      { motebit_id: MID, enrollment_id: "d".repeat(64), public_key: hex(a), retired_at: NOW },
+      a.privateKey,
+    );
+    const cache = new FakeCache();
+    await cache.save({ ...emptyReplica(MID), retirements: [tomb] });
+    relay.omit.add(await hostRetirementId(tomb));
+    const view = buildRosterView(
+      await acquired(machine(relay, a, { deviceId: "watcher", cache })),
+      NOW,
+    );
+    if (view.kind !== "roster") throw new Error("expected roster");
+    expect(view.suppressed).toContain("relay_omission");
+    expect(view.notes.some((n) => n.kind === "omitted")).toBe(true);
+    expect(view.empty?.text).toMatch(
+      /retirements are held for enrolments this device has not seen/,
+    );
+    expect(view.empty?.text).not.toMatch(/nothing is held/);
+  });
+});
+
+describe("P3 (#790) — a failed /succession read suppresses the count", () => {
+  it("chain_unread", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    await relay.hold(await enrol(a, "vps"));
+    relay.successionFails = true;
+    const view = buildRosterView(await acquired(machine(relay, a)), NOW);
+    if (view.kind !== "roster") throw new Error("expected roster");
+    expect(view.suppressed).toContain("chain_unread");
+    expect(view.claim).toBeNull();
+    expect(suppressionText("chain_unread")).toBe(
+      "the key chain could not be refreshed from the relay",
+    );
+  });
+});
+
+describe("P4 (#790) — the hook never mints a first line (decide()'s guard, exercised)", () => {
+  it("an active capture whose line has vanished from every input: superseded, nothing minted", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    await m.roster.captureBeforeRotation();
+    // The line is gone from the replica and from the relay (test-only surgery).
+    m.cache.value = { ...m.cache.value!, enrollments: [] };
+    relay.enr.clear();
+    const record = await rotate(a, b);
+    relay.chain = [record];
+    const out = await machine(relay, b, { cache: m.cache }).roster.afterRotation({
+      signer: await signerOf(b),
+      record,
+    });
+    expect(out).toMatchObject({ kind: "frozen", value: "absent", decided: { kind: "superseded" } });
+    expect(relay.enr.size).toBe(0);
+  });
+});
+
+describe("P5 (#790) — liveness is per (device, key)", () => {
+  it("an active line beside its own superseded-key row says whose key its liveness is", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const relay = new FakeRelay();
+    relay.chain = [await rotate(a, b)];
+    await relay.hold(await enrol(b, "vps"), await enrol(b, "solo"));
+    relay.rows = [{ device_id: "vps", bound_under: hex(a), last_seen_at: NOW, sockets_open: 1 }];
+    const view = buildRosterView(await acquired(machine(relay, b)), NOW);
+    if (view.kind !== "roster") throw new Error("expected roster");
+    const vps = view.lines.find((l) => l.kind === "active" && l.device_id === "vps");
+    const solo = view.lines.find((l) => l.kind === "active" && l.device_id === "solo");
+    expect(vps?.text).toMatch(/active; under the current key: not observed/);
+    expect(solo?.text).toMatch(/— active; not observed/);
   });
 });
