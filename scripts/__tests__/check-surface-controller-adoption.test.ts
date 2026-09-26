@@ -39,6 +39,7 @@ const TAMPERS: Record<string, (x: string) => string> = {
   "a property named X": (x) => `\nconst _o = { ${x}: 1 };\nvoid _o;\n`,
   "a used shadowing parameter X": (x) =>
     `\nexport function _shadow(${x}: number): number { return ${x} + 1; }\n`,
+  "a namespace X merged with the import": (x) => `\nnamespace ${x} {}\n`,
 };
 
 /**
@@ -123,6 +124,7 @@ describe("check-surface-controller-adoption — value references resolved by the
     ["a re-export only", "export { Ctl };"],
     ["a default export only", "export default Ctl;"],
     ["a string", `export const s = "Ctl";`],
+    ["a merged namespace declaration", "namespace Ctl {}"],
   ])("does not count %s", (_label, body) => {
     expect(refs(IMPORT + body, "Ctl")).toBe(0);
   });

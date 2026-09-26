@@ -36,9 +36,10 @@
  * binding's own symbol. `typeof X` in a type, a property named `X`, and a
  * parameter or local that shadows `X` all carry the text and none is a use —
  * the textual visitor passed a local fork beside `type _Keep = typeof X` on
- * every adapter. The residue is honest: a deliberate dead reference
- * (`void X;`) beside a fork is still a value use and still passes; the
- * line ceiling below is the other half of this gate.
+ * every adapter. A declaration's own name (`namespace X {}`, which merges
+ * with the import) is not a use either. The residue is honest: a deliberate
+ * dead reference (`void X;`) beside a fork is still a value use and still
+ * passes; the line ceiling below is the other half of this gate.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -237,9 +238,16 @@ function consumption(sf: ts.SourceFile, checker: ts.TypeChecker, controller: str
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node) || ts.isExportAssignment(node))
       return;
     if (ts.isIdentifier(node) && node.text === localName && !isErasedPosition(node)) {
-      const sym =
-        ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node
-          ? checker.getShorthandAssignmentValueSymbol(node.parent)
+      const shorthand = ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node;
+      // A declaration's own name is never a use: `namespace X {}` merges with
+      // the import alias, so its name resolves to the import's symbol while
+      // nothing is used at runtime (#809 review).
+      const declName =
+        !shorthand && ts.getNameOfDeclaration(node.parent as ts.Declaration) === node;
+      const sym = shorthand
+        ? checker.getShorthandAssignmentValueSymbol(node.parent)
+        : declName
+          ? undefined
           : checker.getSymbolAtLocation(node);
       if (sym === importSymbol) references++;
     }
